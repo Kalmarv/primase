@@ -10,6 +10,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod prepare;
+mod rig;
 pub mod write;
 
 use std::path::PathBuf;

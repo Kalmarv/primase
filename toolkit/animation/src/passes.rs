@@ -319,6 +319,220 @@ fn rig_to_occurrence(w: &World, rig: Entity, e: Entity) -> Result<Affine, String
     Ok(compose(&inverse, &r))
 }
 
+/// `normalize-skin-weights`: every skinned primitive's weights (`core.skin` with [`Influences::Streams`]) made to sum
+/// to 1 per vertex, as glTF and most engines require: float weights divided by their sum; normalised byte or short
+/// weights requantised to sum to exactly 255 or 65535 (each influence's share rounded down, the remainder given to the
+/// largest fractional parts, ties to the earlier influence). The skin's rule becomes `SumsToOne`. A vertex whose
+/// weights are all zero is refused (nothing to normalise). Counted: vertices changed, and the largest change of one
+/// weight.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NormalizeSkinWeights;
+
+/// Weights summing to `unit` from shares `w` (any non-negative values with a positive sum), by largest remainder.
+fn quantize(w: &[f64], unit: u64) -> Vec<u64> {
+    let sum: f64 = w.iter().sum();
+    let exact: Vec<f64> = w.iter().map(|x| x / sum * unit as f64).collect();
+    let mut q: Vec<u64> = exact.iter().map(|x| x.floor() as u64).collect();
+    let mut left = unit - q.iter().sum::<u64>();
+    let mut order: Vec<usize> = (0..w.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (fa, fb) = (exact[a] - exact[a].floor(), exact[b] - exact[b].floor());
+        fb.partial_cmp(&fa)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(&b))
+    });
+    for &k in &order {
+        if left == 0 {
+            break;
+        }
+        q[k] += 1;
+        left -= 1;
+    }
+    q
+}
+
+impl Pass for NormalizeSkinWeights {
+    fn name(&self) -> &'static str {
+        "normalize-skin-weights"
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[Mesh::NAME, Skin::NAME]
+    }
+    fn approximates(&self) -> &'static str {
+        "skin weights rescaled to sum to 1 (requantised for integer weights)"
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let skinned: Vec<Entity> = w.iter::<Skin>().map(|(e, _)| e).collect();
+        let mut changed = 0u64;
+        let mut largest = 0.0f64;
+        for e in skinned {
+            let skin = w.get::<Skin>(e).expect("listed").clone();
+            let Some(mut mesh) = w.get::<Mesh>(e).cloned() else {
+                continue;
+            };
+            for (i, mut p) in mesh.primitives_mut().enumerate() {
+                let Some(Some(primase_core::Influences::Streams { sets })) = skin.influences.get(i).copied()
+                else {
+                    continue;
+                };
+                let n = p.vertex_count();
+                // every vertex's weights over all its sets, as floats in [0, 1]
+                let mut all: Vec<Vec<f64>> = vec![Vec::new(); n];
+                let mut units = Vec::new();
+                for k in 0..sets {
+                    let (values, unit): (Vec<[f64; 4]>, u64) = match p.streams.get(&Semantic::Weights(k)) {
+                        Some(Stream::F32x4(v)) => (v.iter().map(|x| x.map(f64::from)).collect(), 0),
+                        Some(Stream::U8x4(v)) => {
+                            (v.iter().map(|x| x.map(|y| f64::from(y) / 255.0)).collect(), 255)
+                        }
+                        Some(Stream::U16x4(v)) => (
+                            v.iter().map(|x| x.map(|y| f64::from(y) / 65535.0)).collect(),
+                            65535,
+                        ),
+                        _ => {
+                            return Err(format!(
+                                "{e:?} primitive {i}: Weights({k}) is not a four-value stream"
+                            ));
+                        }
+                    };
+                    units.push(unit);
+                    for (v, x) in all.iter_mut().zip(values) {
+                        v.extend(x);
+                    }
+                }
+                if units.iter().any(|&u| u != units[0]) {
+                    return Err(format!("{e:?} primitive {i}: weight sets of different types"));
+                }
+                let unit = units[0];
+                for (v, ws) in all.iter_mut().enumerate() {
+                    let sum: f64 = ws.iter().sum();
+                    if sum <= 0.0 {
+                        return Err(format!(
+                            "{e:?} primitive {i}: vertex {v} has no weight to normalise"
+                        ));
+                    }
+                    let new: Vec<f64> = if unit == 0 {
+                        ws.iter().map(|x| x / sum).collect()
+                    } else {
+                        quantize(ws, unit)
+                            .iter()
+                            .map(|&q| q as f64 / unit as f64)
+                            .collect()
+                    };
+                    let delta = ws
+                        .iter()
+                        .zip(&new)
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0.0, f64::max);
+                    if delta > 0.0 {
+                        changed += 1;
+                        largest = largest.max(delta);
+                    }
+                    *ws = new;
+                }
+                let streams = p.streams_mut();
+                for k in 0..sets {
+                    let at = |v: &Vec<f64>, c: usize| v[usize::from(k) * 4 + c];
+                    let stream = match unit {
+                        0 => Stream::F32x4(
+                            all.iter()
+                                .map(|v| std::array::from_fn(|c| at(v, c) as f32))
+                                .collect(),
+                        ),
+                        255 => Stream::U8x4(
+                            all.iter()
+                                .map(|v| std::array::from_fn(|c| (at(v, c) * 255.0).round() as u8))
+                                .collect(),
+                        ),
+                        _ => Stream::U16x4(
+                            all.iter()
+                                .map(|v| std::array::from_fn(|c| (at(v, c) * 65535.0).round() as u16))
+                                .collect(),
+                        ),
+                    };
+                    streams.insert(Semantic::Weights(k), stream);
+                }
+            }
+            w.insert(e, mesh);
+            if let Some(s) = w.get_mut::<Skin>(e) {
+                s.weights = primase_core::WeightRule::SumsToOne;
+            }
+        }
+        log.approximate(
+            "skinned vertices whose weights were rescaled to sum to 1",
+            changed,
+        );
+        log.count(
+            "largest change of one weight, in millionths",
+            (largest * 1e6).round() as u64,
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::*;
+    use primase_core::{Binding, BindingId, Deformation, Influences, Primitive, Topology, WeightRule};
+
+    /// Hand-worked: bytes 128 + 125 (253) become 129 + 126 by largest remainder (exact shares 128.99 and 126.01:
+    /// floors 128 + 126 = 254, the one left to the larger fraction, the first); floats 0.5 + 0.25 become 2/3 + 1/3.
+    #[test]
+    fn weights_sum_to_one_after() {
+        assert_eq!(quantize(&[128.0, 125.0, 0.0, 0.0], 255), [129, 126, 0, 0]);
+        let mut w = World::new();
+        let skeleton = w.spawn();
+        let e = w.spawn();
+        let prim = |weights: Stream| Primitive {
+            topology: Topology::Points,
+            streams: [
+                (Semantic::Position, Stream::F32x3(vec![[0.0; 3]])),
+                (Semantic::Joints(0), Stream::U8x4(vec![[0, 1, 0, 0]])),
+                (Semantic::Weights(0), weights),
+            ]
+            .into(),
+            indices: None,
+            material: None,
+        };
+        w.insert(
+            e,
+            Mesh::new(vec![
+                prim(Stream::U8x4(vec![[128, 125, 0, 0]])),
+                prim(Stream::F32x4(vec![[0.5, 0.25, 0.0, 0.0]])),
+            ]),
+        );
+        w.insert(
+            e,
+            Skin {
+                influences: vec![Some(Influences::Streams { sets: 1 }); 2],
+                weights: WeightRule::AsStored,
+                bindings: vec![Binding {
+                    id: BindingId(0),
+                    skeleton,
+                    palettes: vec![None, None],
+                    deformation: Deformation::Linear,
+                }],
+            },
+        );
+        let mut log = PassLog::default();
+        NormalizeSkinWeights.run(&mut w, &mut log).unwrap();
+        let m = w.get::<Mesh>(e).unwrap();
+        assert_eq!(
+            m.primitives()[0].streams[&Semantic::Weights(0)],
+            Stream::U8x4(vec![[129, 126, 0, 0]])
+        );
+        let Stream::F32x4(f) = &m.primitives()[1].streams[&Semantic::Weights(0)] else {
+            panic!("floats stay floats")
+        };
+        assert!((f[0][0] - 2.0 / 3.0).abs() < 1e-6 && (f[0][1] - 1.0 / 3.0).abs() < 1e-6);
+        assert_eq!(w.get::<Skin>(e).unwrap().weights, WeightRule::SumsToOne);
+        assert_eq!(
+            log.approximations["skinned vertices whose weights were rescaled to sum to 1"],
+            2
+        );
+    }
+}
+
 /// Register this crate's passes.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register_requiring(
@@ -326,6 +540,10 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         |o| Ok(Box::new(EvaluateClip::from_options(o)?)),
         &[("time", "0"), ("root", "ignore")],
     );
+    reg.register("normalize-skin-weights", |o| match o.keys().next() {
+        Some(k) => Err(format!("unknown option {k}")),
+        None => Ok(Box::new(NormalizeSkinWeights)),
+    });
     reg.register("pose-skin", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(PoseSkin)),

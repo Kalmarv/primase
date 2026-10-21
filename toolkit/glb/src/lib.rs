@@ -27,7 +27,7 @@ pub use container::{Chunks, Document, assemble, parse};
 pub use encode::{Buffers, PrimitiveAccessors, encode_mesh};
 pub use load::{LoadReport, load_mesh_files, mesh_file_box};
 pub use material::{material_shading, sampler_filters};
-pub use read::{AccessorData, ComponentType, ElementType, Gltf, ReadMesh, ReadPrimitive};
+pub use read::{AccessorData, ComponentType, ElementType, Gltf, ReadMesh, ReadPrimitive, bounds};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

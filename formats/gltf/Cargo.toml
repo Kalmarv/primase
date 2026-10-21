@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 primase-core.workspace = true
+primase-animation.workspace = true
 primase-glb.workspace = true
 primase-image.workspace = true
 thiserror.workspace = true

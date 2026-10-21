@@ -160,6 +160,54 @@ impl Buffers {
         })
     }
 
+    /// An accessor over `values`, `kind` (`SCALAR`, `VEC3`, `VEC4`, `MAT4`, ...) of floats, its view targeting vertex
+    /// data when `vertex` (attributes, morph targets) and nothing otherwise (inverse binds, animation keys); `min`
+    /// and `max` written when given (glTF requires them of positions and animation inputs).
+    pub fn float_accessor(
+        &mut self,
+        values: &[f32],
+        kind: &str,
+        min_max: Option<(Vec<f32>, Vec<f32>)>,
+        vertex: bool,
+    ) -> usize {
+        let width = match kind {
+            "SCALAR" => 1,
+            "VEC2" => 2,
+            "VEC3" => 3,
+            "VEC4" => 4,
+            "MAT4" => 16,
+            other => panic!("accessor type {other} is not one the writers use"),
+        };
+        let view = self.view(bytemuck::cast_slice(values), vertex.then_some(ARRAY_BUFFER));
+        let mut a = Map::new();
+        a.insert("bufferView".into(), json!(view));
+        a.insert("componentType".into(), json!(5126));
+        a.insert("count".into(), json!(values.len() / width));
+        a.insert("type".into(), json!(kind));
+        if let Some((lo, hi)) = min_max {
+            a.insert("min".into(), f32s_value(&lo));
+            a.insert("max".into(), f32s_value(&hi));
+        }
+        self.accessors.push(Value::Object(a));
+        self.accessors.len() - 1
+    }
+
+    /// A `VEC4` vertex accessor over integer `bytes` (`count` elements) of `component` (5121 unsigned byte, 5123
+    /// unsigned short), `normalized` for weights, not for joint indices.
+    pub fn int_accessor(&mut self, bytes: &[u8], count: usize, component: u32, normalized: bool) -> usize {
+        let view = self.view(bytes, Some(ARRAY_BUFFER));
+        let mut a = Map::new();
+        a.insert("bufferView".into(), json!(view));
+        a.insert("componentType".into(), json!(component));
+        if normalized {
+            a.insert("normalized".into(), json!(true));
+        }
+        a.insert("count".into(), json!(count));
+        a.insert("type".into(), json!("VEC4"));
+        self.accessors.push(Value::Object(a));
+        self.accessors.len() - 1
+    }
+
     fn positions(&mut self, p: &[[f32; 3]]) -> usize {
         let (lo, hi) = bounds(p).expect("primitive() rejects empty primitives");
         self.floats(bytemuck::cast_slice(p), p.len(), "VEC3", Some((&lo, &hi)))

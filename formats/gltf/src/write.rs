@@ -66,6 +66,26 @@
 //!   glTF's `minFilter` names both filters at once: a texture stating only one of the two has no `minFilter`
 //!   written, counted (`filters_unexpressed`).
 //!
+//! - **Rigs** (`core.rig_instance`) become a node tree: a root node at the rig's placement, one node per joint of its
+//!   skeleton under its parent, each with the joint's local transform (its rig's `core.rig_pose`, else its rest) as
+//!   translation, rotation and scale (a matrix where it has no such form, which no animation may then drive).
+//! - **Skins**: a placement with `core.skin_instance` draws its prototype's mesh with that binding's skin: one glTF skin
+//!   per (rig, prototype, binding), its joints the rig's joint nodes ([`crate::rig`]: the binding's palettes unified
+//!   into one list; slot indices rewritten; a whole-bound primitive spelled out as `JOINTS_0`/`WEIGHTS_0`), the inverse
+//!   binds as stored. The skinned node has no transform (glTF places a skinned mesh by its joints) and sits at the
+//!   scene's root. Weights must sum to 1 as stored (glTF requires it): others are refused, naming the pass that
+//!   normalises them. A skinned prototype placed without a rig is drawn in its bind pose, without its skin, counted.
+//! - **Morph targets** (`core.morphs`, each target one frame at weight 1) become the primitives' `targets` (dense
+//!   deltas; a primitive without deltas for a target gets a zero accessor), the mesh's `weights` (defaults) and
+//!   `extras.targetNames`; a placement's `core.morph_weights` its node's `weights`. Targets with in-between frames
+//!   have no glTF form: not written, counted (`flatten` them first by choice).
+//! - **Clips** bound by `core.clip_binding` become animations: a joint channel drives its rig's joint node, the morph
+//!   channels of one mesh occurrence one `weights` channel (they must share key times and interpolation; else they
+//!   are left out, counted). Interpolation as stated (`STEP`, `LINEAR`, `CUBICSPLINE`: core's rules are glTF's).
+//!   What glTF has no form for is left out and counted: additive clips, root motion, source controls; a looping
+//!   clip is marked in the animation's extras (`primase.loop`). Nothing is resampled.
+//! - Rigs, skins and animations are written for a whole world, not with a [`Selection`] (tiles).
+//!
 //! The output is a function of the world: every list is built in entity order or first-use order over entities in
 //! order, so the same world gives the same bytes (`tests::output_is_deterministic`).
 
@@ -76,6 +96,10 @@ use std::path::Path;
 use primase_core::layered::{Channel, Composition, Source};
 use primase_core::pbr::{
     AlphaMode, Filter, Filters, MipFilter, PbrMaterial, Shading, TextureRef, UvTransform, Wrap,
+};
+use primase_core::{
+    BindingId, Clip, ClipBinding, ClipTarget, Extrapolation, Interpolation, JointId, MorphWeights, Morphs,
+    Property, Rest, RigInstance, RigPose, Skeleton, Skin, SkinInstance,
 };
 use primase_core::{
     Component, ComponentJson, Entity, Instance, Light, LightKind, Lods, MaterialVariants, Mesh, MeshFile,
@@ -201,6 +225,25 @@ pub struct WriteReport {
     pub streams_skipped: BTreeMap<String, u64>,
     /// Components with no JSON form, by name: not in the extras.
     pub extras_unencoded: BTreeMap<String, u64>,
+    /// Rigs written as node trees, and their joint nodes.
+    pub rigs: u64,
+    pub joint_nodes: u64,
+    /// glTF skins written.
+    pub skins: u64,
+    /// Placements of a skinned prototype without a `core.skin_instance` (or with a selection): drawn in the bind pose.
+    pub skinned_without_rig: u64,
+    /// Morph targets written (per mesh), and meshes whose targets have in-between frames (no glTF form, not written).
+    pub morph_targets: u64,
+    pub morphs_with_frames: u64,
+    /// Animations and channels written.
+    pub animations: u64,
+    pub animation_channels: u64,
+    /// Left out, with no glTF form: additive clips, clips' root motion, source control channels, and morph channels
+    /// of one occurrence that do not share key times and interpolation.
+    pub clips_additive: u64,
+    pub root_motions: u64,
+    pub control_channels: u64,
+    pub morph_channels_unaligned: u64,
     /// `core.environment`'s ambient, 1 when the world has one: glTF has no ambient light, so nothing is lit by it
     /// (the scene's extras still carry it as data, unless the selection omits the environment).
     pub ambient_unlit: u64,
@@ -266,6 +309,24 @@ impl fmt::Display for WriteReport {
         )?;
         writeln!(f, "streams skipped {:?}", self.streams_skipped)?;
         writeln!(f, "extras unencoded {:?}", self.extras_unencoded)?;
+        writeln!(
+            f,
+            "rigs {} ({} joint nodes), skins {}, skinned placements without a rig (bind pose) {}, morph targets {} \
+             (meshes with in-between frames, not written {}), animations {} ({} channels); left out: additive clips \
+             {}, root motions {}, control channels {}, unaligned morph channels {}",
+            self.rigs,
+            self.joint_nodes,
+            self.skins,
+            self.skinned_without_rig,
+            self.morph_targets,
+            self.morphs_with_frames,
+            self.animations,
+            self.animation_channels,
+            self.clips_additive,
+            self.root_motions,
+            self.control_channels,
+            self.morph_channels_unaligned
+        )?;
         writeln!(f, "ambient not lit (no glTF form) {}", self.ambient_unlit)?;
         write!(
             f,
@@ -284,7 +345,14 @@ const UNLIT: &str = "KHR_materials_unlit";
 /// The extension lights are written as.
 const LIGHTS: &str = "KHR_lights_punctual";
 const CONSUMED_LIGHT: &[&str] = &[Name::NAME, Transform::NAME, Light::NAME];
-const CONSUMED_PLACEMENT: &[&str] = &[Name::NAME, Transform::NAME, Instance::NAME, Shadows::NAME];
+const CONSUMED_PLACEMENT: &[&str] = &[
+    Name::NAME,
+    Transform::NAME,
+    Instance::NAME,
+    Shadows::NAME,
+    SkinInstance::NAME,
+    MorphWeights::NAME,
+];
 /// A placement's shadows are its node's, also when an entity with a mesh is placed as itself.
 const CONSUMED_PROTOTYPE: &[&str] = &[
     Name::NAME,
@@ -292,6 +360,8 @@ const CONSUMED_PROTOTYPE: &[&str] = &[
     MaterialVariants::NAME,
     MeshFile::NAME,
     Shadows::NAME,
+    Skin::NAME,
+    Morphs::NAME,
 ];
 /// The extras key shadows are written under (see the module docs).
 const SHADOWS: &str = "primase.shadows";
@@ -334,6 +404,14 @@ pub fn write_document(world: &World, options: &WriteOptions) -> Result<(Document
         layered_weights: BTreeMap::new(),
         handled: BTreeSet::new(),
         left_out: Vec::new(),
+        joint_nodes: BTreeMap::new(),
+        matrix_joints: BTreeSet::new(),
+        rig_roots: BTreeMap::new(),
+        skins: Vec::new(),
+        skin_index: BTreeMap::new(),
+        layouts: BTreeMap::new(),
+        morph_targets: BTreeMap::new(),
+        animations: Vec::new(),
     };
     let json = w.document()?;
     Ok((Document::new(json, std::mem::take(&mut w.buffers.bin)), w.report))
@@ -383,6 +461,8 @@ enum ExtrasOf {
 enum Src {
     Prototype(Entity),
     Piece(Entity),
+    /// A prototype's mesh drawn with one binding of its skin (its accessors carry the skin attributes).
+    Skinned(Entity, BindingId),
 }
 
 /// Group a placement belongs to; the derived order is the order of the group nodes.
@@ -426,6 +506,26 @@ struct Writer<'w> {
     handled: BTreeSet<Entity>,
     /// Entities left out whole under a counted cause, with what they reach.
     left_out: Vec<Entity>,
+    /// Each rig's joint nodes, and which of them carry a matrix (no animation may drive those).
+    joint_nodes: BTreeMap<(Entity, JointId), usize>,
+    matrix_joints: BTreeSet<usize>,
+    /// Each rig's root node.
+    rig_roots: BTreeMap<Entity, usize>,
+    skins: Vec<Value>,
+    skin_index: BTreeMap<(Entity, Entity, BindingId), usize>,
+    layouts: BTreeMap<(Entity, BindingId), crate::rig::SkinLayout>,
+    /// Per prototype with written morph targets: per primitive its targets, the defaults and the names.
+    morph_targets: BTreeMap<Entity, Option<MorphAccessors>>,
+    animations: Vec<Value>,
+}
+
+/// A prototype's morph targets as written.
+#[derive(Clone, Debug)]
+struct MorphAccessors {
+    targets: Vec<Vec<Value>>,
+    defaults: Vec<f32>,
+    names: Vec<String>,
+    ids: Vec<primase_core::MorphId>,
 }
 
 impl Writer<'_> {
@@ -434,16 +534,26 @@ impl Writer<'_> {
         let mut nodes: Vec<Value> = Vec::new();
         let mut groups: BTreeMap<GroupKey, Vec<usize>> = BTreeMap::new();
         let mut roots: Vec<usize> = Vec::new();
+        if self.options.selection.is_none() {
+            self.rigs(&mut nodes, &mut roots)?;
+        }
+        let mut placement_nodes: BTreeMap<Entity, usize> = BTreeMap::new();
         for place in &places {
             let Some(node) = self.placement_node(place)? else {
                 continue;
             };
+            let skinned = node.get("skin").is_some();
             nodes.push(node);
             let index = nodes.len() - 1;
+            placement_nodes.insert(place.entity, index);
             match self.group_key(place) {
-                Some(key) => groups.entry(key).or_default().push(index),
-                None => roots.push(index),
+                // glTF places a skinned mesh by its joints: its node is a root
+                Some(key) if !skinned => groups.entry(key).or_default().push(index),
+                _ => roots.push(index),
             }
+        }
+        if self.options.selection.is_none() {
+            self.animations(&placement_nodes)?;
         }
         // lights: root nodes placed by their transform, the light in KHR_lights_punctual
         let mut lights = Vec::new();
@@ -563,6 +673,8 @@ impl Writer<'_> {
         root.insert("scenes".into(), json!([Value::Object(scene)]));
         root.insert("nodes".into(), Value::Array(nodes));
         let lists = [
+            ("skins", std::mem::take(&mut self.skins)),
+            ("animations", std::mem::take(&mut self.animations)),
             ("meshes", std::mem::take(&mut self.meshes)),
             ("materials", std::mem::take(&mut self.materials)),
             ("textures", std::mem::take(&mut self.textures)),
@@ -710,7 +822,7 @@ impl Writer<'_> {
                 (
                     mesh,
                     MeshFrom {
-                        src: Src::Prototype(place.prototype),
+                        src: self.skinned_src(place),
                         name: self.name_of(place.prototype, "prototype"),
                         extras_of: ExtrasOf::Prototype(place.prototype),
                     },
@@ -720,7 +832,7 @@ impl Writer<'_> {
         let kind = place.transform.classify();
         let materials = match from.src {
             Src::Piece(_) => mesh.primitives().iter().map(|p| p.material).collect(),
-            Src::Prototype(_) => self.resolve_materials(place, mesh)?,
+            Src::Prototype(_) | Src::Skinned(..) => self.resolve_materials(place, mesh)?,
         };
         let mut node = Map::new();
         let name = match world.get::<Name>(place.entity) {
@@ -751,7 +863,10 @@ impl Writer<'_> {
                 if kind == TransformKind::Mirrored {
                     self.report.placements_mirrored += 1;
                 }
-                if c[..3] == Transform::IDENTITY.cols[..3] {
+                if let Src::Skinned(prototype, binding) = from.src {
+                    let skin = self.skin(place, prototype, binding)?;
+                    node.insert("skin".into(), json!(skin));
+                } else if c[..3] == Transform::IDENTITY.cols[..3] {
                     if c[3] != [0.0; 3] {
                         node.insert("translation".into(), f32s_value(&c[3]));
                     }
@@ -769,6 +884,9 @@ impl Writer<'_> {
                     node.insert("matrix".into(), f32s_value(&m));
                 }
             }
+        }
+        if let Some(weights) = self.node_weights(place, from.src)? {
+            node.insert("weights".into(), weights);
         }
         let extras = match selected.filter(|s| !s.extras.is_empty()) {
             None => self.extras(place.entity, CONSUMED_PLACEMENT)?,
@@ -859,21 +977,24 @@ impl Writer<'_> {
         if key.1 != base {
             name = format!("{name}.v{variant}");
         }
-        let index = self.push_mesh(&from.extras_of, name, &accessors, &key.1, mesh)?;
+        let index = self.push_mesh(from.src, &from.extras_of, name, &accessors, &key.1, mesh)?;
         self.mesh_index.insert(key, index);
         Ok(index)
     }
 
     fn push_mesh(
         &mut self,
+        src: Src,
         extras_of: &ExtrasOf,
         name: String,
         accessors: &[PrimitiveAccessors],
         materials: &[Option<Entity>],
         mesh: &Mesh,
     ) -> Result<usize> {
+        let morphs = self.morph_accessors(src, mesh)?;
         let mut prims = Vec::with_capacity(accessors.len());
-        for ((acc, material), prim) in accessors.iter().zip(materials).zip(mesh.primitives()) {
+        for (i, ((acc, material), prim)) in accessors.iter().zip(materials).zip(mesh.primitives()).enumerate()
+        {
             let mut p = Map::new();
             let mut attrs: Map<String, Value> = acc
                 .attributes
@@ -930,6 +1051,9 @@ impl Writer<'_> {
             if let Some(mode) = acc.mode {
                 p.insert("mode".into(), json!(mode));
             }
+            if let Some(m) = &morphs {
+                p.insert("targets".into(), Value::Array(m.targets[i].clone()));
+            }
             prims.push(Value::Object(p));
             self.report.primitives += 1;
             if prim.topology == Topology::Triangles {
@@ -946,6 +1070,18 @@ impl Writer<'_> {
         };
         let (ExtrasOf::Prototype(prototype) | ExtrasOf::Piece { prototype, .. }) = extras_of;
         self.handled.insert(*prototype);
+        let extras = match &morphs {
+            Some(mo) => {
+                m.insert("weights".into(), f32s_value(&mo.defaults));
+                let mut e = match extras {
+                    Some(Value::Object(e)) => e,
+                    _ => Map::new(),
+                };
+                e.insert("targetNames".into(), json!(mo.names));
+                Some(Value::Object(e))
+            }
+            None => extras,
+        };
         if let Some(extras) = extras {
             m.insert("extras".into(), extras);
         }
@@ -959,7 +1095,7 @@ impl Writer<'_> {
         if let Some(a) = self.proto_accessors.get(&src) {
             return Ok(a.clone());
         }
-        let (Src::Prototype(prototype) | Src::Piece(prototype)) = src;
+        let (Src::Prototype(prototype) | Src::Piece(prototype) | Src::Skinned(prototype, _)) = src;
         if mesh.primitives().is_empty() {
             return Err(Error::World {
                 entity: prototype,
@@ -970,7 +1106,9 @@ impl Writer<'_> {
         for (i, prim) in mesh.primitives().iter().enumerate() {
             // a piece's materials are final; a prototype's primitive is also drawn with its variants' materials
             let color0 = match src {
-                Src::Prototype(_) => primase_core::color0_drawn(self.world, prototype, mesh, i),
+                Src::Prototype(_) | Src::Skinned(..) => {
+                    primase_core::color0_drawn(self.world, prototype, mesh, i)
+                }
                 Src::Piece(_) => prim
                     .material
                     .is_none_or(|m| primase_core::uses_color0(self.world, m)),
@@ -982,8 +1120,13 @@ impl Writer<'_> {
                     entity: prototype,
                     detail: format!("primitive {i}: {detail}"),
                 })?;
-            for name in &a.skipped {
-                *self.report.streams_skipped.entry(name.clone()).or_default() += 1;
+            let mut a = a;
+            if let Src::Skinned(prototype, binding) = src {
+                self.add_skin_attributes(prototype, binding, i, prim, &mut a)?;
+            } else {
+                for name in &a.skipped {
+                    *self.report.streams_skipped.entry(name.clone()).or_default() += 1;
+                }
             }
             out.push(a);
         }
@@ -1499,6 +1642,441 @@ impl Writer<'_> {
 
     /// Without a selection, count the components of every entity neither handled nor reached from one left out under a
     /// counted cause: what the glTF does not hold and no other field of the report names.
+    /// The source a placement draws: its prototype skinned by its binding when it follows a written rig and its
+    /// prototype has that binding; else the prototype as it is (a skinned one counted, drawn in its bind pose).
+    fn skinned_src(&mut self, place: &Place) -> Src {
+        let world = self.world;
+        let skin = world.get::<Skin>(place.prototype);
+        if let (Some(si), Some(skin)) = (world.get::<SkinInstance>(place.entity), skin)
+            && self.rig_roots.contains_key(&si.rig)
+            && skin.binding(si.binding).is_some()
+        {
+            return Src::Skinned(place.prototype, si.binding);
+        }
+        if skin.is_some() {
+            self.report.skinned_without_rig += 1;
+        }
+        Src::Prototype(place.prototype)
+    }
+
+    /// The skin layout of a prototype's binding, made once.
+    fn layout(&mut self, prototype: Entity, binding: BindingId) -> Result<crate::rig::SkinLayout> {
+        if let Some(l) = self.layouts.get(&(prototype, binding)) {
+            return Ok(l.clone());
+        }
+        let world = self.world;
+        let failed = |detail: String| Error::World {
+            entity: prototype,
+            detail,
+        };
+        let skin = world
+            .get::<Skin>(prototype)
+            .ok_or_else(|| failed("no core.skin".into()))?;
+        let b = skin
+            .binding(binding)
+            .ok_or_else(|| failed(format!("no binding {binding:?}")))?;
+        let layout = crate::rig::skin_layout(skin, b).map_err(failed)?;
+        self.layouts.insert((prototype, binding), layout.clone());
+        Ok(layout)
+    }
+
+    /// A skinned primitive's `JOINTS_n`/`WEIGHTS_n` accessors, added to its attributes.
+    fn add_skin_attributes(
+        &mut self,
+        prototype: Entity,
+        binding: BindingId,
+        i: usize,
+        prim: &primase_core::Primitive,
+        a: &mut PrimitiveAccessors,
+    ) -> Result<()> {
+        use crate::rig::SkinValues;
+        let layout = self.layout(prototype, binding)?;
+        let skin = self.world.get::<Skin>(prototype).expect("its layout was made");
+        let failed = |detail: String| Error::World {
+            entity: prototype,
+            detail: format!("primitive {i}: {detail}"),
+        };
+        let (Some(how), Some(Some(map))) = (skin.influences.get(i).copied().flatten(), layout.slots.get(i))
+        else {
+            return Err(failed(
+                "not skinned, in a skinned mesh: glTF draws every primitive of a skinned node by its skin"
+                    .into(),
+            ));
+        };
+        let narrow = layout.joints.len() <= 256;
+        let n = prim.vertex_count();
+        for (name, values) in crate::rig::skin_attributes(prim, how, map, narrow).map_err(failed)? {
+            let index = match &values {
+                SkinValues::JointsU8(v) => self.buffers.int_accessor(bytemuck::cast_slice(v), n, 5121, false),
+                SkinValues::JointsU16(v) => {
+                    self.buffers.int_accessor(bytemuck::cast_slice(v), n, 5123, false)
+                }
+                SkinValues::WeightsU8(v) => self.buffers.int_accessor(bytemuck::cast_slice(v), n, 5121, true),
+                SkinValues::WeightsU16(v) => {
+                    self.buffers.int_accessor(bytemuck::cast_slice(v), n, 5123, true)
+                }
+                SkinValues::WeightsF32(v) => {
+                    self.buffers.float_accessor(v.as_flattened(), "VEC4", None, true)
+                }
+            };
+            a.attributes.push((name, index));
+        }
+        a.skipped.clear();
+        Ok(())
+    }
+
+    /// The glTF skin a skinned placement draws with, one per (rig, prototype, binding): the rig's joint nodes in the
+    /// layout's order, their inverse binds, the rig's root node as its skeleton.
+    fn skin(&mut self, place: &Place, prototype: Entity, binding: BindingId) -> Result<usize> {
+        let rig = self
+            .world
+            .get::<SkinInstance>(place.entity)
+            .expect("a skinned source has a skin instance")
+            .rig;
+        if let Some(&i) = self.skin_index.get(&(rig, prototype, binding)) {
+            return Ok(i);
+        }
+        let layout = self.layout(prototype, binding)?;
+        let mut joints = Vec::with_capacity(layout.joints.len());
+        let mut ibm = Vec::with_capacity(layout.joints.len() * 16);
+        for (j, b) in &layout.joints {
+            let node = self.joint_nodes.get(&(rig, *j)).ok_or_else(|| Error::World {
+                entity: place.entity,
+                detail: format!("its skin binds joint {j:?}, which its rig's skeleton lacks"),
+            })?;
+            joints.push(*node);
+            let c = b.cols;
+            ibm.extend([
+                c[0][0], c[0][1], c[0][2], 0.0, c[1][0], c[1][1], c[1][2], 0.0, c[2][0], c[2][1], c[2][2],
+                0.0, c[3][0], c[3][1], c[3][2], 1.0,
+            ]);
+        }
+        let accessor = self.buffers.float_accessor(&ibm, "MAT4", None, false);
+        self.skins.push(json!({
+            "name": format!("{}.skin{}", self.name_of(prototype, "prototype"), binding.0),
+            "joints": joints,
+            "inverseBindMatrices": accessor,
+            "skeleton": self.rig_roots[&rig],
+        }));
+        self.report.skins += 1;
+        let index = self.skins.len() - 1;
+        self.skin_index.insert((rig, prototype, binding), index);
+        Ok(index)
+    }
+
+    /// A prototype's morph targets as accessors, made once: `None` when it has none, when its targets have in-between
+    /// frames (counted), or for a piece cut from it.
+    fn morph_accessors(&mut self, src: Src, mesh: &Mesh) -> Result<Option<MorphAccessors>> {
+        let (Src::Prototype(prototype) | Src::Skinned(prototype, _)) = src else {
+            return Ok(None);
+        };
+        if let Some(m) = self.morph_targets.get(&prototype) {
+            return Ok(m.clone());
+        }
+        let world = self.world;
+        let made = match world.get::<Morphs>(prototype) {
+            None => None,
+            Some(m) if m.targets.is_empty() => None,
+            Some(m) if !crate::rig::morphs_writable(m) => {
+                self.report.morphs_with_frames += 1;
+                None
+            }
+            Some(m) => {
+                let mut targets = vec![Vec::new(); mesh.primitives().len()];
+                for t in &m.targets {
+                    let frame = &t.frames[0];
+                    for (i, prim) in mesh.primitives().iter().enumerate() {
+                        let n = prim.vertex_count();
+                        let d = frame.primitives.get(i).cloned().flatten().unwrap_or_default();
+                        // dense deltas, zero where a sparse list or a missing attribute has none
+                        let dense = |values: &Option<Vec<[f32; 3]>>| -> Option<Vec<[f32; 3]>> {
+                            let values = values.as_ref()?;
+                            let mut out = vec![[0.0f32; 3]; n];
+                            match &d.indices {
+                                None => out.copy_from_slice(&values[..n.min(values.len())]),
+                                Some(idx) => idx.iter().zip(values).for_each(|(&k, v)| out[k as usize] = *v),
+                            }
+                            Some(out)
+                        };
+                        let mut target = Map::new();
+                        let positions = dense(&d.positions).unwrap_or_else(|| vec![[0.0; 3]; n]);
+                        let (lo, hi) = primase_glb::bounds(&positions).unwrap_or(([0.0; 3], [0.0; 3]));
+                        let index = self.buffers.float_accessor(
+                            positions.as_flattened(),
+                            "VEC3",
+                            Some((lo.to_vec(), hi.to_vec())),
+                            true,
+                        );
+                        target.insert("POSITION".into(), json!(index));
+                        if prim.streams.contains_key(&Semantic::Normal)
+                            && let Some(nd) = dense(&d.normals)
+                        {
+                            let index = self.buffers.float_accessor(nd.as_flattened(), "VEC3", None, true);
+                            target.insert("NORMAL".into(), json!(index));
+                        }
+                        if prim.streams.contains_key(&Semantic::Tangent)
+                            && let Some(td) = dense(&d.tangents)
+                        {
+                            let index = self.buffers.float_accessor(td.as_flattened(), "VEC3", None, true);
+                            target.insert("TANGENT".into(), json!(index));
+                        }
+                        targets[i].push(Value::Object(target));
+                    }
+                }
+                self.report.morph_targets += m.targets.len() as u64;
+                Some(MorphAccessors {
+                    targets,
+                    defaults: m.targets.iter().map(|t| t.default_weight).collect(),
+                    names: m.targets.iter().map(|t| t.name.clone()).collect(),
+                    ids: m.targets.iter().map(|t| t.id).collect(),
+                })
+            }
+        };
+        self.morph_targets.insert(prototype, made.clone());
+        Ok(made)
+    }
+
+    /// A placement's morph weights as its node's `weights` (every target, a default where it sets none), when its
+    /// prototype's targets are written.
+    fn node_weights(&mut self, place: &Place, src: Src) -> Result<Option<Value>> {
+        let Some(weights) = self.world.get::<MorphWeights>(place.entity) else {
+            return Ok(None);
+        };
+        let (Src::Prototype(prototype) | Src::Skinned(prototype, _)) = src else {
+            return Ok(None);
+        };
+        let Some(Some(m)) = self.morph_targets.get(&prototype) else {
+            return Ok(None);
+        };
+        let values: Vec<f32> = m
+            .ids
+            .iter()
+            .zip(&m.defaults)
+            .map(|(id, d)| weights.0.iter().find(|(t, _)| t == id).map_or(*d, |(_, v)| *v))
+            .collect();
+        Ok(Some(f32s_value(&values)))
+    }
+
+    /// Every rig as a node tree: a root at its placement, a node per joint under its parent's, with the joint's local
+    /// transform (its rig's pose, else its rest).
+    fn rigs(&mut self, nodes: &mut Vec<Value>, roots: &mut Vec<usize>) -> Result<()> {
+        let world = self.world;
+        for (rig, r) in world.iter::<RigInstance>() {
+            let failed = |detail: String| Error::World { entity: rig, detail };
+            let skeleton = world
+                .get::<Skeleton>(r.skeleton)
+                .ok_or_else(|| failed("its skeleton holds no core.skeleton".into()))?;
+            let pose: BTreeMap<JointId, Rest> = {
+                let mut p: BTreeMap<JointId, Rest> = skeleton.joints.iter().map(|j| (j.id, j.rest)).collect();
+                if let Some(rp) = world.get::<RigPose>(rig) {
+                    p.extend(rp.joints.iter().copied());
+                }
+                p
+            };
+            let root = nodes.len();
+            let placed = world
+                .get::<Transform>(rig)
+                .copied()
+                .unwrap_or(Transform::IDENTITY);
+            let c = placed.cols;
+            nodes.push(json!({
+                "name": self.name_of(rig, "rig"),
+                "matrix": f32s_value(&[
+                    c[0][0], c[0][1], c[0][2], 0.0, c[1][0], c[1][1], c[1][2], 0.0, c[2][0], c[2][1], c[2][2], 0.0,
+                    c[3][0], c[3][1], c[3][2], 1.0,
+                ]),
+            }));
+            roots.push(root);
+            self.rig_roots.insert(rig, root);
+            for j in &skeleton.joints {
+                let mut node = Map::new();
+                node.insert("name".into(), json!(j.name));
+                match primase_animation::pose::Trs::of(&pose[&j.id]) {
+                    Ok(t) => {
+                        let f = |v: &[f64]| v.iter().map(|&x| x as f32).collect::<Vec<f32>>();
+                        if t.translation != [0.0; 3] {
+                            node.insert("translation".into(), f32s_value(&f(&t.translation)));
+                        }
+                        if t.rotation != [0.0, 0.0, 0.0, 1.0] {
+                            node.insert("rotation".into(), f32s_value(&f(&t.rotation)));
+                        }
+                        if t.scale != [1.0; 3] {
+                            node.insert("scale".into(), f32s_value(&f(&t.scale)));
+                        }
+                    }
+                    Err(_) => {
+                        let c = pose[&j.id].matrix().cols;
+                        node.insert(
+                            "matrix".into(),
+                            f32s_value(&[
+                                c[0][0], c[0][1], c[0][2], 0.0, c[1][0], c[1][1], c[1][2], 0.0, c[2][0],
+                                c[2][1], c[2][2], 0.0, c[3][0], c[3][1], c[3][2], 1.0,
+                            ]),
+                        );
+                        self.matrix_joints.insert(nodes.len());
+                    }
+                }
+                self.joint_nodes.insert((rig, j.id), nodes.len());
+                nodes.push(Value::Object(node));
+                self.report.joint_nodes += 1;
+            }
+            // children: each joint under its parent, roots under the rig's node
+            for j in &skeleton.joints {
+                let child = self.joint_nodes[&(rig, j.id)];
+                let parent = match j.parent {
+                    Some(p) => self.joint_nodes[&(rig, p)],
+                    None => root,
+                };
+                let children = nodes[parent]
+                    .as_object_mut()
+                    .expect("nodes are objects")
+                    .entry("children")
+                    .or_insert_with(|| json!([]));
+                children
+                    .as_array_mut()
+                    .expect("children is an array")
+                    .push(json!(child));
+            }
+            self.handled.extend([rig, r.skeleton]);
+            self.report.rigs += 1;
+        }
+        Ok(())
+    }
+
+    /// An input accessor (key times, with their range) and an output accessor (the values, `kind` a key).
+    fn sampler(&mut self, times: &[f32], values: &[f32], kind: &str, interpolation: Interpolation) -> Value {
+        let lo = times.iter().copied().fold(f32::INFINITY, f32::min);
+        let hi = times.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let input = self
+            .buffers
+            .float_accessor(times, "SCALAR", Some((vec![lo], vec![hi])), false);
+        let output = self.buffers.float_accessor(values, kind, None, false);
+        let interpolation = match interpolation {
+            Interpolation::Step => "STEP",
+            Interpolation::Linear => "LINEAR",
+            Interpolation::Hermite => "CUBICSPLINE",
+        };
+        json!({"input": input, "output": output, "interpolation": interpolation})
+    }
+
+    /// Every clip binding as an animation (see the module docs).
+    fn animations(&mut self, placement_nodes: &BTreeMap<Entity, usize>) -> Result<()> {
+        let world = self.world;
+        for (be, b) in world.iter::<ClipBinding>() {
+            let failed = |detail: String| Error::World { entity: be, detail };
+            let clip: &Clip = world
+                .get::<Clip>(b.clip)
+                .ok_or_else(|| failed("its clip is gone".into()))?;
+            self.handled.extend([be, b.clip]);
+            if clip.additive.is_some() {
+                self.report.clips_additive += 1;
+                continue;
+            }
+            if clip.root_motion.is_some() {
+                self.report.root_motions += 1;
+            }
+            let mut channels = Vec::new();
+            let mut samplers = Vec::new();
+            for c in &clip.channels {
+                match &c.target {
+                    ClipTarget::Joint { joint, .. } => {
+                        let rig = b
+                            .rig
+                            .ok_or_else(|| failed("joint channels without a rig".into()))?;
+                        let Some(&node) = self.joint_nodes.get(&(rig, *joint)) else {
+                            return Err(failed(format!("joint {joint:?} has no node in its rig")));
+                        };
+                        if self.matrix_joints.contains(&node) {
+                            return Err(failed(format!(
+                                "joint {joint:?} is animated but its pose has no translation-rotation-scale form"
+                            )));
+                        }
+                        let (path, kind) = match c.property {
+                            Property::Translation => ("translation", "VEC3"),
+                            Property::Rotation => ("rotation", "VEC4"),
+                            Property::Scale => ("scale", "VEC3"),
+                            Property::Scalar => return Err(failed("a scalar channel on a joint".into())),
+                        };
+                        samplers.push(self.sampler(&c.times, &c.values, kind, c.interpolation));
+                        channels.push(
+                            json!({"sampler": samplers.len() - 1, "target": {"node": node, "path": path}}),
+                        );
+                    }
+                    ClipTarget::Control { .. } => self.report.control_channels += 1,
+                    ClipTarget::Morph { .. } => {}
+                }
+            }
+            // morph channels: one weights channel per mesh occurrence, its targets' channels aligned
+            for &m in &b.meshes {
+                let drawn = world.get::<Instance>(m).map_or(m, |i| i.prototype);
+                let Some(&node) = placement_nodes.get(&m) else {
+                    continue;
+                };
+                let Some(Some(acc)) = self.morph_targets.get(&drawn).cloned() else {
+                    continue;
+                };
+                let mine: Vec<_> = clip
+                    .channels
+                    .iter()
+                    .filter(|c| matches!(c.target, ClipTarget::Morph { geometry, .. } if geometry == drawn))
+                    .collect();
+                let Some(first) = mine.first() else { continue };
+                if mine
+                    .iter()
+                    .any(|c| c.times != first.times || c.interpolation != first.interpolation)
+                {
+                    self.report.morph_channels_unaligned += mine.len() as u64;
+                    continue;
+                }
+                let base = world.get::<MorphWeights>(m);
+                let per_key = if first.interpolation == Interpolation::Hermite {
+                    3
+                } else {
+                    1
+                };
+                let mut values = Vec::with_capacity(first.times.len() * per_key * acc.ids.len());
+                for k in 0..first.times.len() {
+                    for part in 0..per_key {
+                        for (id, default) in acc.ids.iter().zip(&acc.defaults) {
+                            let driven = mine.iter().find(
+                                |c| matches!(c.target, ClipTarget::Morph { morph, .. } if morph == *id),
+                            );
+                            values.push(match driven {
+                                Some(c) => c.values[k * per_key + part],
+                                // an undriven target holds its occurrence's weight (zero tangents)
+                                None if per_key == 3 && part != 1 => 0.0,
+                                None => base
+                                    .and_then(|w| w.0.iter().find(|(t, _)| t == id))
+                                    .map_or(*default, |(_, v)| *v),
+                            });
+                        }
+                    }
+                }
+                samplers.push(self.sampler(&first.times, &values, "SCALAR", first.interpolation));
+                channels.push(
+                    json!({"sampler": samplers.len() - 1, "target": {"node": node, "path": "weights"}}),
+                );
+            }
+            if channels.is_empty() {
+                continue;
+            }
+            self.report.animation_channels += channels.len() as u64;
+            let mut a = Map::new();
+            a.insert("name".into(), json!(clip.name));
+            a.insert("channels".into(), Value::Array(channels));
+            a.insert("samplers".into(), Value::Array(samplers));
+            if clip.extrapolation == Extrapolation::Loop {
+                a.insert(
+                    "extras".into(),
+                    json!({"primase.loop": true, "primase.duration": clip.duration}),
+                );
+            }
+            self.animations.push(Value::Object(a));
+            self.report.animations += 1;
+        }
+        Ok(())
+    }
+
     fn count_unwritten(&mut self) {
         if self.options.selection.is_some() {
             return;

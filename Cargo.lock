@@ -949,6 +949,7 @@ name = "primase-gltf"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "primase-animation",
  "primase-core",
  "primase-glb",
  "primase-image",

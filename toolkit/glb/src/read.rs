@@ -701,7 +701,7 @@ impl Accessor<'_> {
 }
 
 /// Component-wise bounds of points; `None` for none.
-pub(crate) fn bounds(p: &[[f32; 3]]) -> Option<([f32; 3], [f32; 3])> {
+pub fn bounds(p: &[[f32; 3]]) -> Option<([f32; 3], [f32; 3])> {
     let first = *p.first()?;
     Some(p.iter().fold((first, first), |(lo, hi), v| {
         (
