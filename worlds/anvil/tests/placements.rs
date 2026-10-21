@@ -427,3 +427,51 @@ fn instanced_collision_is_placed_per_instance_as_stated() {
     };
     assert!((1..10).all(|k| at(k) != at(0)));
 }
+
+/// A group some of whose meshes can't be read (MAD_GRP_CITYSCHOOL_Building_Dormitory_A_015: Meshes whose tail states
+/// a range's vertex count other than the range's, 441 against 401 and 72 against 24): they are recorded and left
+/// out, the group's other Visuals and its collision placed.
+#[test]
+fn a_refused_mesh_leaves_out_only_what_needs_it() {
+    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+        return;
+    };
+    let order = [
+        "DataPC_MAD_USNAT_patch_01.forge",
+        "DataPC_MAD_USNAT.forge",
+        "DataPC_patch_01.forge",
+        "DataPC.forge",
+    ];
+    let mut archive = Archive::open(&order.map(|f| dir.join(f))).expect("archive");
+    let name = "MAD_GRP_CITYSCHOOL_Building_Dormitory_A_015";
+    let at = (0..2)
+        .find_map(|forge| {
+            let names = &archive.forge(forge)?.names;
+            names
+                .iter()
+                .position(|n| n.name == name)
+                .map(|entry| At { forge, entry })
+        })
+        .expect(name);
+    let mut w = World::new();
+    let mut placed = Placed::default();
+    let mut placer = Placer::new(
+        &mut archive,
+        &mut w,
+        SourceFrame::WORLD,
+        InstancedLevels::Selector,
+    );
+    placer.place(at, &mut placed).expect("place");
+    // two of its meshes (entries 97266 and 97267 of the patch), both refused for a tail range's vertex count
+    assert!(
+        !placed.refused.is_empty() && placed.refused.iter().all(|(_, why)| why.contains("tail ranges")),
+        "{:?}",
+        placed.refused
+    );
+    assert!(
+        placed.placements.len() > 8,
+        "{} placements",
+        placed.placements.len()
+    );
+    assert!(!placed.collisions.is_empty());
+}

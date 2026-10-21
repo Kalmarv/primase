@@ -28,7 +28,7 @@
 //! established ([`Placed::scaled_collision`]). An instanced Entity's is placed at each instance or not, as the caller
 //! states ([`InstancedCollision`]).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
@@ -147,6 +147,9 @@ pub struct Placed {
     pub members: Vec<u64>,
     /// The collision placements: each RigidBodyComponent's shape, at its owner's T R s.
     pub collisions: Vec<Entity>,
+    /// Objects (meshes, LODSelectors, collision shapes) that couldn't be read, by ClassID, and why, once each: a mesh
+    /// level left out of its object, an object's Visuals or a shape's RigidBodies left out.
+    pub refused: Vec<(u64, String)>,
     /// RigidBodyComponents whose shape is of a type this reader doesn't read, by the type (or 0: an id in no forge).
     pub shapes_unread: BTreeMap<u32, u64>,
     /// RigidBodyComponents of instanced Entities not placed (under [`InstancedCollision::Skip`]).
@@ -264,6 +267,8 @@ pub struct Placer<'a> {
     wholes: HashMap<u64, Entity>,
     /// Per shape id: what it places (see [`Placer::shape`]).
     shapes: HashMap<u64, Result<Parts, u32>>,
+    /// The (object, level) pairs whose mesh was refused.
+    refused_levels: HashSet<(u64, u8)>,
 }
 
 impl<'a> Placer<'a> {
@@ -289,6 +294,7 @@ impl<'a> Placer<'a> {
             objects: HashMap::new(),
             wholes: HashMap::new(),
             shapes: HashMap::new(),
+            refused_levels: HashSet::new(),
         }
     }
 
@@ -307,7 +313,13 @@ impl<'a> Placer<'a> {
         let parts = match self.shapes.get(&id) {
             Some(parts) => parts.clone(),
             None => {
-                let parts = self.read_shape(id, placed)?;
+                let parts = match self.read_shape(id, placed) {
+                    Ok(parts) => parts,
+                    Err(e) => {
+                        placed.refused.push((id, e.to_string()));
+                        Ok(Vec::new())
+                    }
+                };
                 self.shapes.insert(id, parts.clone());
                 parts
             }
@@ -429,6 +441,20 @@ impl<'a> Placer<'a> {
         if let Some(levels) = self.objects.get(&id) {
             return Ok(levels.clone());
         }
+        let levels = match self.read_levels(id, placed) {
+            Ok(levels) => levels,
+            Err(e) => {
+                placed.refused.push((id, e.to_string()));
+                None
+            }
+        };
+        self.objects.insert(id, levels.clone());
+        Ok(levels)
+    }
+
+    /// The mesh levels of the object `id` names (see [`Placer::levels`]); a mesh level that can't be read is recorded
+    /// in `placed` and left out.
+    fn read_levels(&mut self, id: u64, placed: &mut Placed) -> Result<Option<Levels>, Error> {
         let levels = match self.archive.find(id) {
             None => None,
             Some(at) => {
@@ -449,7 +475,13 @@ impl<'a> Placer<'a> {
                             };
                             match mesh {
                                 Some((m, r)) if r.type_id == MESH => {
-                                    levels.push((level, self.mesh(m, &r.body, reference.id)?));
+                                    match self.mesh(m, &r.body, reference.id) {
+                                        Ok(e) => levels.push((level, e)),
+                                        Err(e) => {
+                                            placed.refused.push((reference.id, e.to_string()));
+                                            self.refused_levels.insert((id, level));
+                                        }
+                                    }
                                 }
                                 _ => placed.impostor_levels = placed.impostor_levels.saturating_add(1),
                             }
@@ -460,7 +492,6 @@ impl<'a> Placer<'a> {
                 }
             }
         };
-        self.objects.insert(id, levels.clone());
         Ok(levels)
     }
 
@@ -496,6 +527,10 @@ impl<'a> Placer<'a> {
 
     /// The Entity or EntityGroup at `at` placed into the world: one placement per Visual with something to show, or per
     /// instance. A group's own Visuals place as an Entity's (it is an Entity's body and its member list).
+    ///
+    /// An error refuses the owner: its body, or how its Visuals' instances are stored, can't be read as placed. An
+    /// object it shows or a shape its RigidBody names that can't be read is recorded in [`Placed::refused`] instead,
+    /// and only what needs it is left out.
     pub fn place(&mut self, at: At, placed: &mut Placed) -> Result<(), Error> {
         let r = self.archive.resource(at)?;
         let (e, group) = match r.type_id {
@@ -543,6 +578,10 @@ impl<'a> Placer<'a> {
                         return Err(Error::InstancedScale(at, e.scale));
                     }
                     let Some(&(_, mesh)) = levels.iter().find(|(l, _)| *l == level) else {
+                        if self.refused_levels.contains(&(object, level)) {
+                            placed.visuals_skipped = placed.visuals_skipped.saturating_add(1);
+                            continue;
+                        }
                         return Err(Error::Slot(at, level));
                     };
                     let every = self.instanced == InstancedLevels::Selector;
