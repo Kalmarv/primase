@@ -2,6 +2,8 @@
 //! No implicit gamma conversion: filtering averages the stored channel values.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+mod atlas;
+pub use atlas::{GUTTER, PackTextureAtlas};
 mod cap;
 pub use cap::{Beyond, CapMode, CapRole, CapTextures, Capped, NormalDownscale, cap_texture, cap_textures};
 mod channels;
@@ -33,6 +35,7 @@ use thiserror::Error;
 /// This crate's source files, for the keys of disk caches whose values its code computes (`primase-cache`): editing
 /// any of them retires those entries. A test keeps the list equal to the `src` folder.
 pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
+    ("image/atlas.rs", include_bytes!("atlas.rs")),
     ("image/cap.rs", include_bytes!("cap.rs")),
     ("image/channels.rs", include_bytes!("channels.rs")),
     ("image/frames.rs", include_bytes!("frames.rs")),

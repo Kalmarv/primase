@@ -19,6 +19,12 @@ use primase_texcodec::{Decoder, TexDecoder};
 /// Register this crate's passes.
 pub fn register(reg: &mut PassRegistry) {
     // the cap is the program's: no default
+    // the atlas size is the destination's: no default
+    reg.register_requiring(
+        "pack-texture-atlas",
+        |o: &Options| Ok(Box::new(crate::PackTextureAtlas::from_options(o)?)),
+        &[("size", "2048")],
+    );
     reg.register_requiring("cap-textures", crate::cap_textures, &[("max", "256")]);
     reg.register("bake-layer-channels", |o: &Options| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
