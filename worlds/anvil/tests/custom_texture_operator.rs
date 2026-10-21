@@ -1,15 +1,20 @@
 //! The ShaderCustomTextureOperators of Riders Republic's MaterialTemplates (build 25394987), their own TextureSelectors
 //! read ([`template::custom_texture`]), and what resolves through them. All 36 operators of the base and USNAT forges
-//! with their patches decode; Waterfall's selects its TextureSet's slot 3, a HeightMap.
+//! with their patches decode; Waterfall's selects its TextureSet's slot 3, a HeightMap. The Area 52 Tex2 Materials
+//! m_MAD_MAT_TIL_Concrete_BareGraffitiBlend_A, Concrete_PanelsHeatDamagedBlend_A and Roof_WornBitumenBlend_A are read
+//! and lowered: which bindings resolve, from where.
 use std::collections::BTreeMap;
 
 use primase_anvil::components::{AnvilMaterial, TextureFrom};
+use primase_anvil::passes::{AlphaChoice, LowerAnvilMaterial, ShaderUv};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::material::MATERIAL;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_anvil::read::template::{self, MATERIAL_TEMPLATE, SHADER_CUSTOM_TEXTURE_OPERATOR};
 use primase_core::frame::SourceFrame;
-use primase_core::{Name, World};
+use primase_core::layered::LayeredMaterial;
+use primase_core::pass::{Pass, PassLog};
+use primase_core::{Name, NormalGreen, World};
 use primase_testdata::real_data;
 
 const ORDER: [&str; 4] = [
@@ -17,6 +22,13 @@ const ORDER: [&str; 4] = [
     "DataPC_MAD_USNAT.forge",
     "DataPC_patch_01.forge",
     "DataPC.forge",
+];
+
+/// The three Area 52 Tex2 Materials, by name.
+const AREA_52: [&str; 3] = [
+    "MAD_MAT_TIL_Concrete_BareGraffitiBlend_A",
+    "MAD_MAT_TIL_Concrete_PanelsHeatDamagedBlend_A",
+    "MAD_MAT_TIL_Roof_WornBitumenBlend_A",
 ];
 
 /// Every ShaderCustomTextureOperator in the templates of the four forges, read by its class id's place: each walked
@@ -101,6 +113,74 @@ fn material(archive: &mut Archive, name: &str) -> u64 {
         }
     }
     panic!("{name}");
+}
+
+/// The Materials of the three Area 52 Tex2 blends have no ShaderCustomTextureOperator behind them: their template,
+/// MAD_Tex2, binds ordinary TextureObjects, and what leaves each drawing a placeholder is a mask the Material records
+/// with a null texture (t79, layer B's, and t80, layer A's) while its TextureSet's slot 7 is empty too. Under the
+/// stated `unset=white` the blend lowers, the masks counted.
+#[test]
+fn the_area_52_tex2_blends_lower_with_their_unset_masks_white() {
+    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+        return;
+    };
+    let mut archive = Archive::open(&ORDER.map(|f| dir.join(f))).expect("archive");
+    let ids: Vec<u64> = AREA_52.iter().map(|n| material(&mut archive, n)).collect();
+    let mut w = World::new();
+    let mut placed = Placed::default();
+    let mut entities = Vec::new();
+    {
+        let mut placer = Placer::new(&mut archive, &mut w, SourceFrame::WORLD, InstancedLevels::Slot);
+        for &id in &ids {
+            entities.push(placer.material(id, &mut placed).expect("read"));
+        }
+    }
+    // t75 to t78 (both layers' normal maps and diffuses) are the Materials' own records; the masks t79 and t80 are
+    // records with no texture, and nothing in the TextureSet or the template's record to fall back on
+    let mut null_masks = 0;
+    for &e in &entities {
+        let m = w.get::<AnvilMaterial>(e).expect("material");
+        assert_eq!(m.template_name.as_deref(), Some("MAD_Tex2"));
+        for t in &m.textures {
+            match t.shader_slot {
+                0..=3 => assert!(t.texture.is_some() && t.from == TextureFrom::Record, "{t:?}"),
+                _ => {
+                    assert!(
+                        matches!(t.from, TextureFrom::NullRecord { fallback: None }) || t.texture.is_some(),
+                        "{t:?}"
+                    );
+                    null_masks += u64::from(t.texture.is_none());
+                }
+            }
+        }
+    }
+    assert_eq!(null_masks, 5);
+    let pass = LowerAnvilMaterial {
+        normal_green: NormalGreen::Up,
+        alpha: AlphaChoice::Opaque,
+        shader_uv: ShaderUv::TexCoord,
+        emissive_exposure: 1.0,
+        underground_view: 0.5,
+        fake_river_s: 0.0,
+    };
+    let mut log = PassLog::default();
+    pass.run(&mut w, &mut log).expect("lower");
+    println!("{log:?}");
+    assert_eq!(
+        log.counts
+            .get("MAD_Tex2 Materials lowered (a height blend of two layers)"),
+        Some(&3)
+    );
+    assert_eq!(log.counts.get("Tex2 masks unset: white (stated)"), Some(&5));
+    assert!(
+        !log.omitted.keys().any(|k| k.contains("Tex2 Materials missing")),
+        "{:?}",
+        log.omitted
+    );
+    for &e in &entities {
+        let layered = w.get::<LayeredMaterial>(e).expect("a height blend");
+        assert!(layered.layers.iter().all(Option::is_some), "both layers");
+    }
 }
 
 /// A binding that links a ShaderCustomTextureOperator is read through the operator's own selector, as a TextureObject's

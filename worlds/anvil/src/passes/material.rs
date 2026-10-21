@@ -20,7 +20,8 @@
 //!   `b` of its normal map, occlusion `1 + OnOffAO (mask.b - 1)`; B weighted by
 //!   `w = sat((COLOR0.a - 0.5) Alpha Contrast + 0.5 + Alpha Contrast Alpha Offset)`, A by `1 - w`, each by its
 //!   diffuse's alpha as its height, at the Height Contrast. Its colour factor `1 + Vertex Color Intensity
-//!   (COLOR0.rgb - 1)` isn't lowered, reported.
+//!   (COLOR0.rgb - 1)` isn't lowered, reported. A layer's mask the Material records with no texture and its TextureSet's
+//!   slot 7 leaves empty (three Area 52 Materials: five of six) is white under `unset=white`, counted.
 //! - **MAD_Clutters_Grass** (layout B, §15.2: [`GRASS`]): base colour its diffuse, alpha its `1 - Alpha` map's red
 //!   (TextureSet slot 18), roughness its normal map's alpha, metalness 0, occlusion `1 + OnOffAO (mask.b - 1)`,
 //!   two-sided. Its noise tint (weighted by a noise tiled in world space), translucency, specular occlusion and
@@ -1635,9 +1636,17 @@ impl Pass for LowerAnvilMaterial {
                     for (((diffuse, normals, mask, hsl, offset), uv), which) in
                         parts.into_iter().zip([uv_a, uv_b]).zip(["A", "B"])
                     {
-                        let (Some(d), Some(n), Some(k)) = (diffuse, normals, mask) else {
+                        let (Some(d), Some(n)) = (diffuse, normals) else {
                             layers.push(None);
                             continue;
+                        };
+                        // a mask the Material and its TextureSet leave unset: white, as the other templates' (stated)
+                        let k = match mask {
+                            Some(k) => k,
+                            None => {
+                                log.count("Tex2 masks unset: white (stated)", 1);
+                                *white.get_or_insert_with(|| white_texture(w))
+                            }
                         };
                         let base = base_colour(w, &mut made, d, hsl.map(scalar), Some(k), None)?;
                         let rough = offset.map_or(Rough::Raw, |o| Rough::Tex2(scalar(o)));
@@ -1713,7 +1722,7 @@ impl Pass for LowerAnvilMaterial {
                         placeholder()
                     } else {
                         log.omit(
-                            "Tex2 Materials missing a layer's diffuse, normal map or mask: a placeholder",
+                            "Tex2 Materials missing a layer's diffuse or normal map: a placeholder",
                             1,
                         );
                         placeholder()
