@@ -220,3 +220,33 @@ impl Component for AnvilFloorHeight {
         u64::try_from(self.blocks.len() * 8).unwrap_or(u64::MAX)
     }
 }
+
+/// One terrain node's decoded heights: its row (along y) and column (along x) at its level, and its 132 x 132
+/// samples row by row (its 128 x 128 and the 4 its +x and +y neighbours start with), as the fraction of the terrain's
+/// range the node stores (units of 2^(level - 28)).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerrainTile {
+    pub row: u32,
+    pub column: u32,
+    pub heights: Vec<i32>,
+}
+
+/// Terrain nodes of one level (`anvil.terrain`): their tiles, where the program states the quadtree's square lies
+/// (`origin`, its corner with the least x and y, and `side`), and the frame it states for their points.
+/// `lower-anvil-terrain` makes ground of them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilTerrain {
+    pub frame: primase_core::frame::SourceFrame,
+    pub level: u32,
+    pub origin: [f64; 2],
+    pub side: f64,
+    pub tiles: Vec<TerrainTile>,
+}
+
+impl Component for AnvilTerrain {
+    const NAME: &'static str = "anvil.terrain";
+    fn payload_bytes(&self) -> u64 {
+        let samples: usize = self.tiles.iter().map(|t| t.heights.len()).sum();
+        u64::try_from(samples * 4).unwrap_or(u64::MAX)
+    }
+}

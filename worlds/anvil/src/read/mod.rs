@@ -16,4 +16,7 @@ pub mod placements;
 pub mod reference;
 pub mod shapes;
 pub mod template;
+pub mod terrain;
 pub mod texture;
+pub mod tnl;
+pub mod tnl_code;

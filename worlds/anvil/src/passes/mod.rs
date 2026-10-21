@@ -9,7 +9,7 @@ use primase_core::{
     Topology, Transform, World,
 };
 
-use crate::components::{AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape};
+use crate::components::{AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape, AnvilTerrain};
 
 /// `lower-anvil-collision{surface=NAME}`: every MeshShape's geometry ([`AnvilMeshShape`]) becomes `core.collision` on
 /// its prototype, every triangle of the surface `surface` names (unclassified: what a MeshShape's surfaces are isn't
@@ -380,6 +380,67 @@ pub enum CellPoint {
     Centre,
 }
 
+/// A ground lowering's stated choices: its rectangle, step, height offset and where a sample lies in its cell.
+struct Ground {
+    rect: [f64; 4],
+    step: u32,
+    offset: f64,
+    sample: CellPoint,
+}
+
+/// `o`'s ground options, `rect`, `step`, `offset` and `sample`, all required, besides which only `extra` names are
+/// taken; `usage` lists them for a missing one.
+fn ground_options(o: &Options, extra: &[&str], usage: &str) -> Result<Ground, String> {
+    if let Some(k) = o
+        .keys()
+        .find(|k| !["rect", "step", "offset", "sample"].contains(&k.as_str()) && !extra.contains(&k.as_str()))
+    {
+        return Err(format!("unknown option {k}"));
+    }
+    let get = |k: &str| {
+        o.get(k)
+            .map(String::as_str)
+            .ok_or_else(|| format!("{k} is required: {usage}"))
+    };
+    let rect: Vec<f64> = get("rect")?
+        .split(',')
+        .map(|v| {
+            v.trim()
+                .parse::<f64>()
+                .map_err(|_| format!("rect: {v} is not a number"))
+        })
+        .collect::<Result<_, _>>()?;
+    let [x0, y0, x1, y1] = rect[..] else {
+        return Err("rect takes four numbers, x0,y0,x1,y1".to_owned());
+    };
+    if !(x0.is_finite() && y0.is_finite() && x1 > x0 && y1 > y0) {
+        return Err(format!("rect {x0},{y0},{x1},{y1}: x0 < x1 and y0 < y1"));
+    }
+    let step: u32 = get("step")?
+        .parse()
+        .map_err(|_| "step is a whole number".to_owned())?;
+    if step == 0 {
+        return Err("step is at least 1".to_owned());
+    }
+    let offset: f64 = get("offset")?
+        .parse()
+        .map_err(|_| "offset is a number".to_owned())?;
+    if !offset.is_finite() {
+        return Err(format!("offset {offset}: a finite number"));
+    }
+    let sample = match get("sample")? {
+        "corner" => CellPoint::Corner,
+        "centre" => CellPoint::Centre,
+        v => return Err(format!("sample={v} is not corner or centre")),
+    };
+    Ok(Ground {
+        rect: [x0, y0, x1, y1],
+        step,
+        offset,
+        sample,
+    })
+}
+
 /// `lower-anvil-floor`: every FloorHeightData grid ([`AnvilFloorHeight`]) becomes ground: a core mesh of the cells
 /// whose samples lie in `rect` (x0, y0, x1, y1, in the grid's own units), every `step`-th column and row, two
 /// triangles to each square of samples, placed once. A sample's height is the trailer's scale times its word plus
@@ -396,53 +457,16 @@ pub struct LowerAnvilFloor {
 impl LowerAnvilFloor {
     /// From its options: `rect=x0,y0,x1,y1`, `step=N`, `offset=METRES`, `sample=corner|centre`, all required.
     pub fn from_options(o: &Options) -> Result<LowerAnvilFloor, String> {
-        if let Some(k) = o
-            .keys()
-            .find(|k| !["rect", "step", "offset", "sample"].contains(&k.as_str()))
-        {
-            return Err(format!("unknown option {k}"));
-        }
-        let get = |k: &str| {
-            o.get(k).map(String::as_str).ok_or_else(|| {
-                format!("{k} is required: rect=x0,y0,x1,y1, step=N, offset=METRES (not stored), sample=corner|centre")
-            })
-        };
-        let rect: Vec<f64> = get("rect")?
-            .split(',')
-            .map(|v| {
-                v.trim()
-                    .parse::<f64>()
-                    .map_err(|_| format!("rect: {v} is not a number"))
-            })
-            .collect::<Result<_, _>>()?;
-        let [x0, y0, x1, y1] = rect[..] else {
-            return Err("rect takes four numbers, x0,y0,x1,y1".to_owned());
-        };
-        if !(x0.is_finite() && y0.is_finite() && x1 > x0 && y1 > y0) {
-            return Err(format!("rect {x0},{y0},{x1},{y1}: x0 < x1 and y0 < y1"));
-        }
-        let step: u32 = get("step")?
-            .parse()
-            .map_err(|_| "step is a whole number".to_owned())?;
-        if step == 0 {
-            return Err("step is at least 1".to_owned());
-        }
-        let offset: f64 = get("offset")?
-            .parse()
-            .map_err(|_| "offset is a number".to_owned())?;
-        if !offset.is_finite() {
-            return Err(format!("offset {offset}: a finite number"));
-        }
-        let sample = match get("sample")? {
-            "corner" => CellPoint::Corner,
-            "centre" => CellPoint::Centre,
-            v => return Err(format!("sample={v} is not corner or centre")),
-        };
+        let g = ground_options(
+            o,
+            &[],
+            "rect=x0,y0,x1,y1, step=N, offset=METRES (not stored), sample=corner|centre",
+        )?;
         Ok(LowerAnvilFloor {
-            rect: [x0, y0, x1, y1],
-            step,
-            offset,
-            sample,
+            rect: g.rect,
+            step: g.step,
+            offset: g.offset,
+            sample: g.sample,
         })
     }
 
@@ -572,6 +596,182 @@ impl Pass for LowerAnvilFloor {
     }
 }
 
+/// `lower-anvil-terrain`: terrain tiles ([`AnvilTerrain`]) become ground: a core mesh of the samples in `rect`
+/// (x0, y0, x1, y1), every `step`-th along each axis, two triangles to each square, placed once. A node's 128 x 128
+/// samples cover its square (the 4 more it stores are its +x and +y neighbours' first, which the census finds equal
+/// on all 173,740 same-level pairs), sample (i, j) at a 128th of the node's side from its corner (or a half further
+/// along each axis, by `sample`), at height `range` x (the value x 2^(level - 28)) + `offset`. Every option is
+/// required: the range (an f32 5000 in the Terrain entity, its meaning a tool claim) and the offset (0 by the Riders
+/// Republic notes' 101 props on one plaza) aren't stored as such, and the half-sample convention isn't tested.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LowerAnvilTerrain {
+    pub rect: [f64; 4],
+    pub step: u32,
+    pub range: f64,
+    pub offset: f64,
+    pub sample: CellPoint,
+}
+
+/// A terrain tile's side in samples, and the samples of it its node covers.
+const TERRAIN_TILE: usize = 132;
+const TERRAIN_CORE: u32 = 128;
+
+impl LowerAnvilTerrain {
+    /// From its options: `rect=x0,y0,x1,y1`, `step=N`, `range=METRES`, `offset=METRES`, `sample=corner|centre`, all
+    /// required.
+    pub fn from_options(o: &Options) -> Result<LowerAnvilTerrain, String> {
+        let usage = "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES (neither stored as such), sample=corner|centre";
+        let g = ground_options(o, &["range"], usage)?;
+        let range: f64 = o
+            .get("range")
+            .ok_or_else(|| format!("range is required: {usage}"))?
+            .parse()
+            .map_err(|_| "range is a number".to_owned())?;
+        if !(range.is_finite() && range > 0.0) {
+            return Err(format!("range {range}: a positive number"));
+        }
+        Ok(LowerAnvilTerrain {
+            rect: g.rect,
+            step: g.step,
+            range,
+            offset: g.offset,
+            sample: g.sample,
+        })
+    }
+}
+
+impl Pass for LowerAnvilTerrain {
+    fn name(&self) -> &'static str {
+        "lower-anvil-terrain"
+    }
+    fn options(&self) -> Options {
+        let [x0, y0, x1, y1] = self.rect;
+        let sample = match self.sample {
+            CellPoint::Corner => "corner",
+            CellPoint::Centre => "centre",
+        };
+        Options::from([
+            ("rect".to_owned(), format!("{x0},{y0},{x1},{y1}")),
+            ("step".to_owned(), self.step.to_string()),
+            ("range".to_owned(), self.range.to_string()),
+            ("offset".to_owned(), self.offset.to_string()),
+            ("sample".to_owned(), sample.to_owned()),
+        ])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[AnvilTerrain::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[Mesh::NAME, Instance::NAME, Transform::NAME]
+    }
+    fn removes(&self) -> &[&'static str] {
+        &[AnvilTerrain::NAME]
+    }
+    fn approximates(&self) -> &'static str {
+        "ground heights from a stated range and offset"
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let terrains: Vec<Entity> = w.iter::<AnvilTerrain>().map(|(e, _)| e).collect();
+        for e in terrains {
+            let Some(t) = w.remove::<AnvilTerrain>(e) else {
+                continue;
+            };
+            let level = t.level.min(30);
+            let nodes = 1u32 << level;
+            let spacing = t.side / f64::from(nodes) / f64::from(TERRAIN_CORE);
+            let shift = match self.sample {
+                CellPoint::Corner => 0.0,
+                CellPoint::Centre => spacing / 2.0,
+            };
+            let samples = nodes.saturating_mul(TERRAIN_CORE);
+            let [x0, y0, x1, y1] = self.rect;
+            let indices = |origin: f64, (from, to): (f64, f64)| -> Vec<u32> {
+                let first = ((from - origin - shift) / spacing).ceil().max(0.0);
+                let last = ((to - origin - shift) / spacing)
+                    .floor()
+                    .min(f64::from(samples) - 1.0);
+                if first.is_nan() || last.is_nan() || first > last {
+                    return Vec::new();
+                }
+                // in range of u32: clamped to 0..samples above
+                (first as u32..=last as u32).step_by(self.step as usize).collect()
+            };
+            let columns = indices(t.origin[0], (x0, x1));
+            let rows = indices(t.origin[1], (y0, y1));
+            if columns.len() < 2 || rows.len() < 2 {
+                log.omit("terrains with under 2 by 2 samples in the rectangle", 1);
+                continue;
+            }
+            let tiles: BTreeMap<(u32, u32), &Vec<i32>> = t
+                .tiles
+                .iter()
+                .filter(|tile| tile.heights.len() == TERRAIN_TILE * TERRAIN_TILE)
+                .map(|tile| ((tile.row, tile.column), &tile.heights))
+                .collect();
+            let unit = self.range * 2f64.powi(level as i32 - 28);
+            let mut positions = Vec::with_capacity(columns.len() * rows.len());
+            for &gy in &rows {
+                for &gx in &columns {
+                    let node = (gy / TERRAIN_CORE, gx / TERRAIN_CORE);
+                    let (i, j) = ((gy % TERRAIN_CORE) as usize, (gx % TERRAIN_CORE) as usize);
+                    let tile = tiles
+                        .get(&node)
+                        .ok_or_else(|| format!("sample ({gx}, {gy}): node {node:?} not read"))?;
+                    let value = f64::from(tile[i * TERRAIN_TILE + j]);
+                    let x = t.origin[0] + spacing * f64::from(gx) + shift;
+                    let y = t.origin[1] + spacing * f64::from(gy) + shift;
+                    positions.push(
+                        t.frame
+                            .point([x as f32, y as f32, (unit * value + self.offset) as f32]),
+                    );
+                }
+            }
+            let width = u32::try_from(columns.len()).map_err(|_| "too many columns".to_owned())?;
+            let height = u32::try_from(rows.len()).map_err(|_| "too many rows".to_owned())?;
+            let flip = t.frame.flips_winding();
+            let mut indices = Vec::new();
+            for r in 0..height - 1 {
+                for c in 0..width - 1 {
+                    let [a, b] = [r * width + c, r * width + c + 1];
+                    let [d, f] = [a + width, b + width];
+                    for tri in [[a, b, f], [a, f, d]] {
+                        indices.extend(if flip { [tri[0], tri[2], tri[1]] } else { tri });
+                    }
+                }
+            }
+            log.count("terrain nodes used", tiles.len() as u64);
+            log.count("ground samples", positions.len() as u64);
+            log.count("ground triangles", (indices.len() / 3) as u64);
+            log.approximate(
+                "ground samples at a stated range and offset",
+                positions.len() as u64,
+            );
+            let mut streams = BTreeMap::new();
+            streams.insert(Semantic::Position, Stream::F32x3(positions));
+            w.insert(
+                e,
+                Mesh::new(vec![Primitive {
+                    topology: Topology::Triangles,
+                    streams,
+                    indices: Some(indices),
+                    material: None,
+                }]),
+            );
+            let placed = w.spawn();
+            w.insert(
+                placed,
+                Instance {
+                    prototype: e,
+                    variant: 0,
+                },
+            );
+            w.insert(placed, Transform::IDENTITY);
+            log.place(placed);
+        }
+        Ok(())
+    }
+}
+
 /// Register Anvil's passes by name.
 pub fn register(reg: &mut PassRegistry) {
     reg.register_requiring(
@@ -586,6 +786,17 @@ pub fn register(reg: &mut PassRegistry) {
         &[
             ("rect", "-64,-64,64,64"),
             ("step", "1"),
+            ("offset", "0"),
+            ("sample", "corner"),
+        ],
+    );
+    reg.register_requiring(
+        "lower-anvil-terrain",
+        |o| Ok(Box::new(LowerAnvilTerrain::from_options(o)?)),
+        &[
+            ("rect", "-64,-64,64,64"),
+            ("step", "1"),
+            ("range", "1"),
             ("offset", "0"),
             ("sample", "corner"),
         ],
