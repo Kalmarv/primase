@@ -114,11 +114,14 @@ pub enum LodChoice {
 
 /// `select-lod{form=finest|default|N}` (no options: `default`): every prototype with [`Lods`] is left with the one
 /// form [`Lods::choose`] takes (with `default`, the finest where the source authored no default, counted as an
-/// approximation). Another form than its own replaces the prototype's `core.mesh`, `core.mesh_file`
-/// and `core.material_variants`, and every component the form holds replaces the prototype's of that name
-/// ([`World::move_components`]), so the form's dialect data travels with it without the pass knowing it; a form
-/// that draws nothing leaves the prototype without a mesh. The other forms are despawned and `core.lods` removed.
-/// The whole selection is checked before anything changes: an invalid one is an error and leaves the world as it was.
+/// approximation). Another form than its own takes the prototype's own geometry away with everything that describes
+/// it ([`World::remove_mesh`]: `core.mesh`, `core.mesh_file` and every per-primitive component, dialect data
+/// included, so nothing describing the discarded form stays behind when the chosen form lacks it), then every
+/// component the form holds replaces the prototype's of that name ([`World::move_components`]), so the form's
+/// dialect data travels with it without the pass knowing it; a form that draws nothing leaves the prototype without a
+/// mesh. The other forms are despawned and `core.lods` removed. The whole selection is checked before anything
+/// changes: an invalid one (a prototype drawn with another form while it holds an opaque component, which can't be
+/// told to follow, among them) is an error and leaves the world as it was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SelectLod {
     pub choice: LodChoice,
@@ -179,6 +182,11 @@ impl Pass for SelectLod {
     fn despawns_entities(&self) -> bool {
         true
     }
+    /// The per-primitive data of a prototype's own form ([`World::remove_mesh`]) is whatever its reader attached; each
+    /// name taken from a prototype the chosen form doesn't give back is recorded.
+    fn removes_by_log(&self) -> bool {
+        true
+    }
     fn approximates(&self) -> &'static str {
         match self.choice {
             LodChoice::Default => "the finest form where the source authored no default",
@@ -194,6 +202,9 @@ impl Pass for SelectLod {
                 if !forms.insert(f.form) {
                     return Err(format!("form {:?} belongs to more than one prototype", f.form));
                 }
+            }
+            if lods.choose(self.choice) != 0 {
+                w.check_remove_mesh(*proto)?;
             }
         }
         if let Some((name, holder, form)) = w
@@ -219,9 +230,9 @@ impl Pass for SelectLod {
                             n,
                         );
                     }
-                    w.remove::<Mesh>(proto);
-                    w.remove::<MeshFile>(proto);
-                    w.remove::<MaterialVariants>(proto);
+                    for name in w.remove_mesh(proto)? {
+                        log.record_removed(name);
+                    }
                     let moved = w.move_components(f.form, proto);
                     debug_assert!(moved, "checked alive above");
                     let draws = w.has::<Mesh>(proto) || w.has::<MeshFile>(proto);
@@ -442,6 +453,98 @@ mod tests {
         assert!(select_lod(&Options::new()).unwrap().options().is_empty());
         assert!(select_lod(&Options::from([("form".into(), "high".into())])).is_err());
         assert!(select_lod(&Options::from([("lod".into(), "1".into())])).is_err());
+    }
+
+    /// Dialect data per primitive of its entity's mesh, as a reader attaches it.
+    #[derive(Clone, Debug, PartialEq)]
+    struct PerPrimitive(Vec<u8>);
+    impl Component for PerPrimitive {
+        const NAME: &'static str = "game.per_primitive";
+        fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+            Some(crate::remap_list(&self.0, from).map(PerPrimitive))
+        }
+    }
+
+    /// The prototype's own form takes its per-primitive data with it when another form is drawn, whether its mesh is
+    /// loaded or still only in its file (a world before its load): nothing describing the discarded form stays on the
+    /// prototype when the chosen form has no such data of its own.
+    #[test]
+    fn the_own_forms_per_primitive_data_leaves_with_it() {
+        for loaded in [true, false] {
+            let (mut w, proto, _) = world();
+            if !loaded {
+                w.remove::<Mesh>(proto);
+                w.insert(
+                    proto,
+                    MeshFile {
+                        path: "own.glb".into(),
+                        mesh: 0,
+                        materials: vec![],
+                    },
+                );
+            }
+            w.insert(proto, PerPrimitive(vec![]));
+            w.insert(proto, MaterialVariants(vec![]));
+            let m = manager().with_pass_checks(true);
+            let mut report = RunReport::default();
+            m.run(&mut w, &m.registry.parse("select-lod").unwrap(), &mut report)
+                .unwrap();
+            assert_eq!(w.get::<Name>(proto).unwrap().0, "coarse");
+            assert!(
+                !w.has::<PerPrimitive>(proto) && !w.has::<MaterialVariants>(proto),
+                "loaded {loaded}: the own form's per-primitive data stayed"
+            );
+            assert_eq!(
+                w.get::<MeshFile>(proto).unwrap().path,
+                std::path::Path::new("p.glb")
+            );
+            let removed = &report.steps[0].removed;
+            for name in [PerPrimitive::NAME, MaterialVariants::NAME] {
+                assert!(removed.iter().any(|n| n == name), "loaded {loaded}: {removed:?}");
+            }
+        }
+        // the own form drawn: its data stays
+        let (mut w, proto, _) = world();
+        w.insert(proto, PerPrimitive(vec![]));
+        let m = manager().with_pass_checks(true);
+        m.run(
+            &mut w,
+            &m.registry.parse("select-lod{form=finest}").unwrap(),
+            &mut RunReport::default(),
+        )
+        .unwrap();
+        assert!(w.has::<PerPrimitive>(proto) && w.has::<Mesh>(proto));
+    }
+
+    /// An opaque component on a prototype drawn with another form can't be told to follow its own form's removal: the
+    /// selection is refused before anything changes. Drawn with its own form, nothing is removed and it passes.
+    #[test]
+    fn an_opaque_component_on_a_prototype_drawn_with_another_form_is_refused() {
+        let opaque = || Opaque {
+            version: 1,
+            data: OpaqueData::Bytes(vec![1]),
+        };
+        let (mut w, proto, forms) = world();
+        w.insert_opaque(proto, "game.thing", opaque());
+        let m = manager().with_pass_checks(true);
+        let err = m
+            .run(
+                &mut w,
+                &m.registry.parse("select-lod").unwrap(),
+                &mut RunReport::default(),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("game.thing"), "{err}");
+        assert!(w.has::<Mesh>(proto) && w.has::<Lods>(proto));
+        assert!(forms.iter().all(|f| w.is_alive(*f)));
+        assert_eq!(w.get::<Name>(proto).unwrap().0, "finest");
+        m.run(
+            &mut w,
+            &m.registry.parse("select-lod{form=finest}").unwrap(),
+            &mut RunReport::default(),
+        )
+        .unwrap();
+        assert!(w.get_opaque(proto, "game.thing").is_some() && w.has::<Mesh>(proto));
     }
 
     #[test]

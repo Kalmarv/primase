@@ -795,28 +795,18 @@ impl World {
 
     /// Take `e`'s mesh away with every per-primitive component it has (each typed component that follows its
     /// primitives, [`Component::remap_primitives`]) and its file link (`core.mesh_file`, which a load would restore it
-    /// from): for an entity left drawing nothing, whose per-primitive data would describe no primitive. Returns the
-    /// names taken, the mesh's first; none when `e` has no mesh. Refused, changing nothing, while `e` has an opaque
-    /// component, as [`World::remap_primitives`] refuses a change to the primitives then (whether it describes
-    /// primitives can't be known).
+    /// from): for an entity left drawing nothing, whose per-primitive data would describe no primitive, or one whose
+    /// geometry another replaces (`select-lod`). A mesh still only in its file (`core.mesh_file` without `core.mesh`, as
+    /// a world is before its load) goes the same way, with the per-primitive data describing it. Returns the names
+    /// taken, the mesh's first; none when `e` has neither. Refused, changing nothing, while `e` has an opaque component
+    /// ([`World::check_remove_mesh`]).
     pub fn remove_mesh(&mut self, e: Entity) -> Result<Vec<&'static str>, String> {
-        if !self.has::<crate::Mesh>(e) {
+        let mesh = self.has::<crate::Mesh>(e);
+        if !mesh && !self.has::<crate::MeshFile>(e) {
             return Ok(Vec::new());
         }
-        let mut opaque: Vec<&String> = self
-            .opaque
-            .iter()
-            .filter(|(_, values)| values.contains_key(&e))
-            .map(|(name, _)| name)
-            .collect();
-        if !opaque.is_empty() {
-            opaque.sort();
-            return Err(format!(
-                "{e:?}: opaque components can't follow its mesh's removal: {opaque:?} (remove them, or give them a \
-                 typed form, before the pass)"
-            ));
-        }
-        let mut names = vec![crate::Mesh::NAME];
+        self.check_remove_mesh(e)?;
+        let mut names: Vec<&'static str> = mesh.then_some(crate::Mesh::NAME).into_iter().collect();
         let mut per_primitive: Vec<(&'static str, TypeId)> = self
             .columns
             .iter()
@@ -835,6 +825,26 @@ impl World {
             names.push(crate::MeshFile::NAME);
         }
         Ok(names)
+    }
+
+    /// Why [`World::remove_mesh`] would refuse `e`, so a pass can check every entity before it changes any: an opaque
+    /// component on it, as [`World::remap_primitives`] refuses a change to the primitives then (whether it describes
+    /// primitives can't be known).
+    pub fn check_remove_mesh(&self, e: Entity) -> Result<(), String> {
+        let mut opaque: Vec<&String> = self
+            .opaque
+            .iter()
+            .filter(|(_, values)| values.contains_key(&e))
+            .map(|(name, _)| name)
+            .collect();
+        if opaque.is_empty() {
+            return Ok(());
+        }
+        opaque.sort();
+        Err(format!(
+            "{e:?}: opaque components can't follow its mesh's removal: {opaque:?} (remove them, or give them a typed \
+             form, before the pass)"
+        ))
     }
 
     /// Every component of `from`, typed and opaque, copied onto `to`, replacing `to`'s of the same name (`to` keeps
@@ -1787,6 +1797,21 @@ mod tests {
         // what does not follow primitives stays
         assert!(w.has::<A>(e));
         assert!(w.remove_mesh(e).unwrap().is_empty());
+        // a mesh still only in its file goes the same way, with the per-primitive data that describes it
+        w.insert(e, MaterialVariants(Vec::new()));
+        w.insert(
+            e,
+            MeshFile {
+                path: "a.glb".into(),
+                mesh: 0,
+                materials: Vec::new(),
+            },
+        );
+        assert_eq!(
+            w.remove_mesh(e).unwrap(),
+            ["core.material_variants", "core.mesh_file"]
+        );
+        assert!(!w.has::<MaterialVariants>(e) && !w.has::<MeshFile>(e) && w.has::<A>(e));
     }
 
     #[test]
