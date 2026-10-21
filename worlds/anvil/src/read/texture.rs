@@ -4,9 +4,14 @@
 //!
 //! Width, height, mip count, format code and the references are established by the fixtures: the levels they give
 //! fill the pixels exactly, the referenced CompiledMips are exactly the missing levels' sizes, and the levels decode
-//! (worlds/anvil/tests/texture.rs). The reference tool's names for the u32s at 9, 13, 21 and 25 (depth, array size,
-//! dimension, gamma) are its claims, not established here: the first three are 1 on every fixture and only 1 is read,
-//! the fourth is kept as stored.
+//! (worlds/anvil/tests/texture.rs). The u32s at 9, 13 and 21 are read by the reference tool's names, depth, array size
+//! and dimension (1 flat, 2 cube, 3 volume; another is refused): with `layers = depth x array size x (6 for a cube)`
+//! each level holds its layers in turn, and the pixels are exactly the layers times the levels' sizes on every one of
+//! Riders Republic's 25 cube and volume maps (the Riders Republic notes, docs/texture-formats.md, the 49 refused maps;
+//! the order within a level's bytes the tool's, the lengths established). The u32 at 25 is kept as stored. A mip count
+//! of 0 is one level (15 maps hold exactly one level's pixels so). A body that ends after a reference count of 0 and
+//! one byte 3 (a null reference's tag, its nine zeros not stored) holds no image (two debug font maps, filled at run
+//! time): it reads with no levels.
 //!
 //! The body (little-endian, after the resource's class id and extension): a byte (1); u32 width, height, the u32 at 9,
 //! the u32 at 13, the engine format code, the u32 at 21, the u32 at 25 and the mip count; 14 bytes; the reference
@@ -44,7 +49,10 @@ pub const COMPILED_TEXTURE_MAP: u32 = 0x1323_7FE9;
 /// and RGBA16F also to RRAssetStudio's). 0 is B8G8R8A8, where the two tools disagree (BGRA8 or RGBA8), by what the
 /// game's own data means: the engine's built-in default normal texture (DataPC entry 139325) stores `ff 80 80 ff`, a
 /// flat normal only as B, G, R, A, and the skin-colour palette decodes to skin tones only so (the Riders Republic notes,
-/// docs/material-spec.md §7). Not 11 (A8 or R8) or a code only one tool names. Colour space and role are not read:
+/// docs/material-spec.md §7). 11 is A8 (the tools disagree, A8 or R8) by the engine itself: its create-resource record
+/// in a memory snapshot of the game gives DXGI format 65 (A8_UNORM) to the one TextureMap of its size and mip count,
+/// a code-11 map (the notes, docs/texture-formats.md). Not a code only one tool names (1, 8, 9: their storage is
+/// established, [`storage`], their codec only one tool's). Colour space and role are not read:
 /// neither tool's table holds an sRGB format. Another code is `None`: not refused as stored, but its codec isn't
 /// established.
 pub fn format(code: u32) -> Option<TexFormat> {
@@ -56,6 +64,7 @@ pub fn format(code: u32) -> Option<TexFormat> {
         6 => Some(TexFormat::Bc4Unorm),
         7 => Some(TexFormat::Bc5Unorm),
         10 => Some(TexFormat::Bc7),
+        11 => Some(TexFormat::A8Unorm),
         12 => Some(TexFormat::R8Unorm),
         20 => Some(TexFormat::Rgba16Float),
         _ => None,
@@ -88,9 +97,9 @@ impl Storage {
 pub fn storage(code: u32) -> Option<Storage> {
     match code {
         2 | 3 | 6 => Some(Storage::Blocks(8)),
-        4 | 5 | 7 | 10 => Some(Storage::Blocks(16)),
+        4 | 5 | 7 | 8 | 9 | 10 => Some(Storage::Blocks(16)),
         11 | 12 => Some(Storage::Pixels(1)),
-        0 | 15 => Some(Storage::Pixels(4)),
+        0 | 1 | 15 => Some(Storage::Pixels(4)),
         20 => Some(Storage::Pixels(8)),
         _ => None,
     }
@@ -131,6 +140,10 @@ pub struct StoredTextureMap {
     pub height: u32,
     /// The engine's format code ([`format`]).
     pub format: u32,
+    /// The u32s at 9, 13 and 21: depth, array size and dimension (the reference tool's names).
+    pub depth: u32,
+    pub array_size: u32,
+    pub dimension: u32,
     /// The u32 at 25, as stored (1 on map 217, 0 on 218 and 31; what it selects is not established).
     pub field_25: u32,
     pub mip_count: u32,
@@ -138,9 +151,10 @@ pub struct StoredTextureMap {
     pub head_rest: [u8; 14],
     /// The CompiledMips holding the first levels, in level order.
     pub references: Vec<MipReference>,
-    /// The 9 bytes after the references.
-    pub references_end: [u8; 9],
-    /// The compiled header's 16 bytes before its pixel byte length.
+    /// The 9 bytes after the references; `None` where the body ends after a reference count of 0 and one byte 3 (no
+    /// image stored).
+    pub references_end: Option<[u8; 9]>,
+    /// The compiled header's 16 bytes before its pixel byte length (zeros where no image is stored).
     pub compiled_rest: [u8; 16],
     /// Levels `references.len()` onwards, as stored.
     pub pixels: Vec<u8>,
@@ -202,10 +216,17 @@ impl StoredTextureMap {
         }
         let width = c.u32("width")?;
         let height = c.u32("height")?;
-        c.only("u32 at 9", 1)?;
-        c.only("u32 at 13", 1)?;
+        let depth = c.u32("u32 at 9")?;
+        let array_size = c.u32("u32 at 13")?;
         let format = c.u32("format")?;
-        c.only("u32 at 21", 1)?;
+        let dimension = c.u32("u32 at 21")?;
+        if !(1..=3).contains(&dimension) {
+            return Err(Error::Value {
+                what: "u32 at 21 (dimension)",
+                found: u64::from(dimension),
+                read: 1,
+            });
+        }
         let field_25 = c.u32("u32 at 25")?;
         let mip_count = c.u32("mip count")?;
         let head_rest = c.array::<14>("bytes after the mip count")?;
@@ -224,17 +245,34 @@ impl StoredTextureMap {
                 id: u64::from_le_bytes(c.array::<8>("reference")?),
             });
         }
-        let references_end = c.array::<9>("bytes after the references")?;
+        if count == 0 && body.get(c.at..) == Some(&[3][..]) {
+            return Ok(StoredTextureMap {
+                width,
+                height,
+                format,
+                depth,
+                array_size,
+                dimension,
+                field_25,
+                mip_count,
+                head_rest,
+                references,
+                references_end: None,
+                compiled_rest: [0; 16],
+                pixels: Vec::new(),
+            });
+        }
+        let references_end = Some(c.array::<9>("bytes after the references")?);
         c.only("compiled header marker", COMPILED_TEXTURE_MAP)?;
         c.only("compiled header", 1)?;
         let again = [
             ("width", width),
             ("height", height),
-            ("u32 at 9", 1),
-            ("u32 at 13", 1),
+            ("u32 at 9", depth),
+            ("u32 at 13", array_size),
             ("mip count", mip_count),
             ("format", format),
-            ("u32 at 21", 1),
+            ("u32 at 21", dimension),
             ("u32 at 25", field_25),
         ];
         for (what, stored) in again {
@@ -255,6 +293,9 @@ impl StoredTextureMap {
             width,
             height,
             format,
+            depth,
+            array_size,
+            dimension,
             field_25,
             mip_count,
             head_rest,
@@ -263,6 +304,17 @@ impl StoredTextureMap {
             compiled_rest,
             pixels: pixels.to_vec(),
         })
+    }
+
+    /// The layers each level holds: depth x array size, times 6 for a cube.
+    pub fn layers(&self) -> u32 {
+        let cube = if self.dimension == 2 { 6 } else { 1 };
+        self.depth.saturating_mul(self.array_size).saturating_mul(cube)
+    }
+
+    /// Whether the body stores an image.
+    pub fn has_image(&self) -> bool {
+        self.references_end.is_some()
     }
 
     /// Level `i`'s width and height (each halved per level, at least 1).
@@ -276,12 +328,15 @@ impl StoredTextureMap {
     /// count, 2, is less than the ten levels the pixels hold; RRAssetStudio reads them the same way). Refused unless
     /// the format code's storage is established ([`storage`]) and one of the two fills the pixels exactly.
     pub fn levels(&self) -> Result<Vec<&[u8]>, Error> {
+        if !self.has_image() {
+            return Ok(Vec::new());
+        }
         let f = storage(self.format).ok_or_else(|| Error::Pixels {
             why: format!("format code {}: its storage isn't established", self.format),
         })?;
         let first = u32::try_from(self.references.len()).unwrap_or(u32::MAX);
         let chain = self.width.max(self.height).max(1).ilog2().saturating_add(1);
-        for last in [self.mip_count, chain] {
+        for last in [self.mip_count.max(1), chain] {
             if let Some(levels) = self.slice(f, first, last) {
                 return Ok(levels);
             }
@@ -299,9 +354,10 @@ impl StoredTextureMap {
     fn slice(&self, f: Storage, first: u32, last: u32) -> Option<Vec<&[u8]>> {
         let mut out = Vec::new();
         let mut at = 0usize;
+        let layers = usize::try_from(self.layers()).ok()?;
         for i in first..last {
             let (w, h) = self.level_size(i);
-            let end = at.checked_add(f.level_size(w, h)?)?;
+            let end = at.checked_add(f.level_size(w, h)?.checked_mul(layers)?)?;
             out.push(self.pixels.get(at..end)?);
             at = end;
         }
@@ -383,7 +439,7 @@ mod tests {
         // pixels not filling the levels, and an unestablished format
         let t = StoredTextureMap::parse(&body(8, 4, 2, 3, &[77], &[1; 20])).expect("parse");
         assert!(t.levels().is_err());
-        let t = StoredTextureMap::parse(&body(8, 4, 9, 3, &[77], &[1; 32])).expect("parse");
+        let t = StoredTextureMap::parse(&body(8, 4, 13, 3, &[77], &[1; 32])).expect("parse");
         assert!(t.levels().is_err());
     }
 }

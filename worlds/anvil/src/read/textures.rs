@@ -26,6 +26,8 @@ pub enum Error {
         #[source]
         source: crate::read::material::TextureSetError,
     },
+    #[error("{at:?}: {layers} layers a level (a cube or volume map): a core texture holds one")]
+    Layers { at: At, layers: u32 },
     #[error("{at:?}: format code {code}: its codec isn't established")]
     Codec { at: At, code: u32 },
     #[error("{at:?}: its CompiledMip for level {level} isn't found, or is another's")]
@@ -48,6 +50,15 @@ pub fn read_texture_map(archive: &mut Archive, w: &mut World, id: u64) -> Result
         return Ok(None);
     }
     let t = StoredTextureMap::parse(&r.body).map_err(|source| Error::Texture { at, source })?;
+    if !t.has_image() {
+        return Ok(None);
+    }
+    if t.layers() != 1 {
+        return Err(Error::Layers {
+            at,
+            layers: t.layers(),
+        });
+    }
     let Some(format) = texture::format(t.format) else {
         return Err(Error::Codec { at, code: t.format });
     };

@@ -887,11 +887,13 @@ impl StoredMesh {
         Ok(out)
     }
 
-    /// Each range's material: its descriptor's Material ClassID, refused unless the descriptor's count is the range's
-    /// vertex count's low 16 bits and the range has a `MeshPrimitive` entry. In the ranged layout the entries
-    /// themselves aren't checked against the ranges (see [`StoredMesh::stale_entries`]): on some meshes they describe
-    /// another layout, where the range records, the descriptors and RRAssetStudio agree on the ranges. In the inline
-    /// layout, which has no range records, they must agree.
+    /// Each range's material: its descriptor's Material ClassID, refused unless the range has a descriptor and a
+    /// `MeshPrimitive` entry. In the ranged layout neither the entries nor the descriptors' counts are checked against
+    /// the ranges ([`StoredMesh::stale_entries`], [`StoredMesh::stale_descriptors`]): on some meshes they describe
+    /// another layout, where the range records, the buffers and RRAssetStudio agree on the ranges (GFX_WireFrame_Wall_01
+    /// LOD0, DataPC 38624: entry and descriptor 8,845 vertices, the buffers 2,490, which the bounds, the compiled head
+    /// and RRAssetStudio agree with: the Riders Republic notes, docs/format.md). In the inline layout, which has no range
+    /// records, the descriptor's count must be the range's vertex count's low 16 bits and the entries must agree.
     pub fn materials(&self) -> Result<Vec<u64>, Error> {
         let ranges = self.ranges()?;
         let primitives = self.primitives();
@@ -904,7 +906,7 @@ impl StoredMesh {
                 });
             };
             let count = r.vertices.len() & 0xFFFF;
-            if usize::from(d.vertex_count) != count {
+            if matches!(self.layout, Layout::Inline(_)) && usize::from(d.vertex_count) != count {
                 return Err(Error::Tail {
                     what: "ranges",
                     why: format!(
@@ -920,6 +922,22 @@ impl StoredMesh {
             return Err(Error::Tail { what: "ranges", why });
         }
         Ok(out)
+    }
+
+    /// Where the material descriptors' vertex counts disagree with the ranges' (their low 16 bits): the first range that
+    /// does, and how; `None` where they agree.
+    pub fn stale_descriptors(&self) -> Result<Option<String>, Error> {
+        let ranges = self.ranges()?;
+        for (k, (r, d)) in ranges.iter().zip(&self.material_list.descriptors).enumerate() {
+            let count = r.vertices.len() & 0xFFFF;
+            if usize::from(d.vertex_count) != count {
+                return Ok(Some(format!(
+                    "range {k}: the descriptor's count {}, the range's {count} (low 16 bits)",
+                    d.vertex_count
+                )));
+            }
+        }
+        Ok(None)
     }
 
     /// Where the `MeshPrimitive` entries disagree with the ranges (vertex base and count, first index, triangle count):
@@ -1136,13 +1154,11 @@ mod tests {
         }
         assert_eq!(stale.materials().expect("materials"), [11, 22]);
         assert!(stale.stale_entries().expect("entries").is_some());
-        // a descriptor's count disagreeing with its range: refused
+        // a descriptor's count disagreeing with its range: the ranges hold, the descriptor stale
         let mut wrong = m;
         wrong.material_list.descriptors[0].vertex_count = 4;
-        assert!(matches!(
-            wrong.materials(),
-            Err(Error::Tail { what: "ranges", .. })
-        ));
+        assert_eq!(wrong.materials().expect("materials"), [11, 22]);
+        assert!(wrong.stale_descriptors().expect("descriptors").is_some());
     }
 
     #[test]
