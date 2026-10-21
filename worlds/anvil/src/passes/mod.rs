@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 mod material;
-pub use material::{AlphaChoice, LowerAnvilMaterial};
+pub use material::{AlphaChoice, LowerAnvilMaterial, ShaderUv};
 
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::pbr::{PbrMaterial, TextureRef, Wrap};
@@ -1248,7 +1248,12 @@ pub fn register(reg: &mut PassRegistry) {
     reg.register_requiring(
         "lower-anvil-material",
         |o| Ok(Box::new(LowerAnvilMaterial::from_options(o)?)),
-        &[("normal-green", "up"), ("alpha", "opaque"), ("unset", "white")],
+        &[
+            ("normal-green", "up"),
+            ("alpha", "opaque"),
+            ("unset", "white"),
+            ("shader-uv", "texcoord"),
+        ],
     );
     reg.register_requiring(
         "lower-anvil-data-layers",
