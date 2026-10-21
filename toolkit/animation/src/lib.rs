@@ -12,10 +12,12 @@ pub mod passes;
 pub mod pose;
 pub mod quat;
 pub mod retarget;
+pub mod retarget_skin;
 
 pub use map::{MapClip, Rests, Unmapped, map_clip};
 pub use passes::{EvaluateClip, NormalizeSkinWeights, PoseSkin, RootChoice, register};
 pub use retarget::{Reference, RetargetClip, Translation, retarget_clip};
+pub use retarget_skin::{RetargetSkin, UnmappedJoints, retarget_skin};
 
 /// What evaluation could not do, with why.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

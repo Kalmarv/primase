@@ -555,6 +555,11 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &[("time", "0"), ("root", "ignore")],
     );
     reg.register_requiring(
+        "retarget-skin",
+        crate::retarget_skin::retarget_skin,
+        &[("unmapped", "refuse")],
+    );
+    reg.register_requiring(
         "retarget-clip",
         crate::retarget::retarget_clip,
         &[("reference", "rest"), ("translation", "none")],

@@ -159,7 +159,7 @@ pub fn apply_morphs(
 }
 
 /// Integer-or-float influence streams of a primitive, per vertex (slot, weight) pairs.
-fn influences(p: &Primitive, how: Influences, rule: WeightRule) -> Result<Vec<Vec<(usize, f64)>>> {
+pub(crate) fn influences(p: &Primitive, how: Influences, rule: WeightRule) -> Result<Vec<Vec<(usize, f64)>>> {
     let n = p.vertex_count();
     let stream = |s: Semantic| p.streams.get(&s).ok_or_else(|| Error(format!("no {s:?} stream")));
     let ints = |s: &Stream| -> Result<Vec<[u32; 4]>> {

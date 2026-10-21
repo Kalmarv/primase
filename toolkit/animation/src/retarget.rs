@@ -79,7 +79,7 @@ pub fn retarget_clip(o: &Options) -> Result<Box<dyn Pass>, String> {
 }
 
 /// The rotation part of an affine map with no shear (its columns normalised).
-fn rotation(m: &Affine) -> [f64; 4] {
+pub(crate) fn rotation(m: &Affine) -> [f64; 4] {
     let len = |c: &[f64; 3]| c.iter().map(|x| x * x).sum::<f64>().sqrt();
     let u: [[f64; 3]; 3] = std::array::from_fn(|i| {
         let l = len(&m[i]);
@@ -100,13 +100,13 @@ fn rotation_matrix(q: [f64; 4]) -> [[f64; 3]; 3] {
 }
 
 /// `q` applied to `v`.
-fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
+pub(crate) fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
     let m = rotation_matrix(q);
     std::array::from_fn(|r| (0..3).map(|c| m[c][r] * v[c]).sum())
 }
 
 /// The least rotation taking direction `a` to direction `b` (none when either is zero).
-fn between(a: [f64; 3], b: [f64; 3]) -> [f64; 4] {
+pub(crate) fn between(a: [f64; 3], b: [f64; 3]) -> [f64; 4] {
     let n = |v: [f64; 3]| {
         let l = v.iter().map(|x| x * x).sum::<f64>().sqrt();
         (l > 1e-12).then(|| v.map(|x| x / l))
@@ -134,7 +134,7 @@ fn between(a: [f64; 3], b: [f64; 3]) -> [f64; 4] {
 }
 
 /// An affine map from a translation, a rotation and the scale columns of `scale_of`.
-fn with_rotation(translation: [f64; 3], q: [f64; 4], scale_of: &Affine) -> Affine {
+pub(crate) fn with_rotation(translation: [f64; 3], q: [f64; 4], scale_of: &Affine) -> Affine {
     let len = |c: &[f64; 3]| c.iter().map(|x| x * x).sum::<f64>().sqrt();
     let r = rotation_matrix(q);
     let mut m: Affine = [[0.0; 3]; 4];
@@ -147,7 +147,7 @@ fn with_rotation(translation: [f64; 3], q: [f64; 4], scale_of: &Affine) -> Affin
 }
 
 /// Target joints in an order where every parent comes before its children.
-fn parents_first(s: &Skeleton) -> Result<Vec<usize>, String> {
+pub(crate) fn parents_first(s: &Skeleton) -> Result<Vec<usize>, String> {
     let index: BTreeMap<JointId, usize> = s.joints.iter().enumerate().map(|(i, j)| (j.id, i)).collect();
     let mut order = Vec::with_capacity(s.joints.len());
     let mut done = vec![false; s.joints.len()];

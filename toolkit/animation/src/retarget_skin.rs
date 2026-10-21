@@ -1,0 +1,674 @@
+//! `retarget-skin`: a skinned mesh moved onto another skeleton (a costume onto the skeleton a game poses it with), an
+//! approximation that states its choices and reports them.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::{
+    Asset, Binding, Component, Entity, Influences, JointId, JointMap, Mesh, Morphs, Role, Semantic, Skeleton,
+    Skin, SkinInstance, Slot, Stream, World,
+};
+
+use crate::deform::{Vertices, influences, skin};
+use crate::pose::{Affine, affine, compose, inverse, locals, model_transforms, transform};
+use crate::retarget::{between, parents_first, rotate, rotation, with_rotation};
+
+/// Where the weight of a source joint the map does not list goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnmappedJoints {
+    /// Refuse the mesh, naming the first such joint that carries weight.
+    Refuse,
+    /// To its nearest mapped ancestor; refused for a joint with none.
+    Ancestor,
+    /// To the mapped joint nearest it at rest (in the source's model space; of equally near ones, the first in joint
+    /// order).
+    Nearest,
+}
+
+/// `retarget-skin{unmapped=refuse|ancestor|nearest}` (required): every skinned prototype bound to the `from` skeleton
+/// of a `core.joint_map` is moved onto its `to` skeleton, in three steps:
+///
+/// 1. **Fit.** The source skeleton is posed onto the target's proportions: each mapped joint placed at its target
+///    joint's rest position, and turned (the least rotation) so its bone points the way its target's bone does (the
+///    bone to its one mapped joint below; a joint with none or several keeps its parent's turn); joints the map does
+///    not list keep their rest relative to their parent. Bone directions, not whole rotations, are matched: two rigs'
+///    bone axes need not agree.
+/// 2. **Deform.** The mesh is skinned into that pose by its own weights (positions, normals, tangents): it now stands
+///    in the target's rest pose with the target's proportions.
+/// 3. **Rebind.** Each influence moves to its joint's target joint, the weight of joints the map does not list as
+///    `unmapped` says; weights on one target joint are summed (each vertex's sum is unchanged). The new binding names the
+///    target skeleton, one palette of the target joints used (in joint order), each inverse bind the inverse of its
+///    joint's rest in the target's model space; influences as `Streams` of as many sets of four as the most influences
+///    a vertex has, weights as floats (`quantize-skin-weights` and `limit-skin-influences` make them a destination's).
+///
+/// Both skeletons must share a model space (metres, the same up and facing): the program turns one first. A prototype
+/// already placed with a skin instance is refused (retarget, then place), as is one with morph targets (their deltas
+/// are not carried yet) or more than one binding. An asset listing the source skeleton as the prototype's rig lists the
+/// target instead.
+///
+/// Approximations, reported: the fit (a body of other proportions), and each unmapped joint's weight moved to another
+/// joint, by name, with the vertices it touched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetargetSkin {
+    pub unmapped: UnmappedJoints,
+}
+
+/// The pass factory.
+pub fn retarget_skin(o: &Options) -> Result<Box<dyn Pass>, String> {
+    let mut unmapped = None;
+    for (k, v) in o {
+        match k.as_str() {
+            "unmapped" => {
+                unmapped = Some(match v.as_str() {
+                    "refuse" => UnmappedJoints::Refuse,
+                    "ancestor" => UnmappedJoints::Ancestor,
+                    "nearest" => UnmappedJoints::Nearest,
+                    _ => return Err(format!("unmapped={v}: refuse, ancestor or nearest")),
+                });
+            }
+            _ => return Err(format!("unknown option {k}")),
+        }
+    }
+    Ok(Box::new(RetargetSkin {
+        unmapped: unmapped.ok_or("unmapped=refuse|ancestor|nearest is required")?,
+    }))
+}
+
+/// The source skeleton posed onto the target's proportions (see [`RetargetSkin`], step 1): each source joint's model
+/// transform.
+fn fit(
+    source: &Skeleton,
+    target_rest: &BTreeMap<JointId, Affine>,
+    pairs: &BTreeMap<JointId, JointId>,
+) -> Result<BTreeMap<JointId, Affine>, String> {
+    let local: BTreeMap<JointId, Affine> = locals(source, None)
+        .into_iter()
+        .map(|(j, r)| (j, affine(&r.matrix())))
+        .collect();
+    let parent: BTreeMap<JointId, Option<JointId>> = source.joints.iter().map(|j| (j.id, j.parent)).collect();
+    // each mapped joint's mapped joints below it with no mapped joint between
+    let mut below: BTreeMap<JointId, Vec<JointId>> = BTreeMap::new();
+    for j in source.joints.iter().filter(|j| pairs.contains_key(&j.id)) {
+        let mut at = parent[&j.id];
+        while let Some(p) = at {
+            if pairs.contains_key(&p) {
+                below.entry(p).or_default().push(j.id);
+                break;
+            }
+            at = parent[&p];
+        }
+    }
+    let mut out: BTreeMap<JointId, Affine> = BTreeMap::new();
+    for i in parents_first(source)? {
+        let j = &source.joints[i];
+        let mut m = match j.parent {
+            Some(p) => compose(&out[&p], &local[&j.id]),
+            None => local[&j.id],
+        };
+        if let Some(&t) = pairs.get(&j.id) {
+            m[3] = target_rest[&t][3];
+            if let Some([child]) = below.get(&j.id).map(Vec::as_slice) {
+                // the child's offset in this joint's space, through the rests between them
+                let mut chain = affine(&primase_core::Transform::IDENTITY);
+                let mut at = *child;
+                while at != j.id {
+                    chain = compose(&local[&at], &chain);
+                    at = parent[&at].ok_or("a mapped joint below another is not under it")?;
+                }
+                let now = rotate(rotation(&m), chain[3]);
+                let want: [f64; 3] =
+                    std::array::from_fn(|k| target_rest[&pairs[child]][3][k] - target_rest[&t][3][k]);
+                m = with_rotation(m[3], crate::quat::mul(between(now, want), rotation(&m)), &m);
+            }
+        }
+        out.insert(j.id, m);
+    }
+    Ok(out)
+}
+
+/// Joint to joint.
+type JointMapping = BTreeMap<JointId, JointId>;
+
+/// Per vertex, its joints and weights.
+type VertexJoints = Vec<Vec<(JointId, f64)>>;
+
+/// Each source joint's target joint, the unmapped ones by `policy` (those that carry weight only: `used`); for each
+/// moved joint, the joint it went to.
+fn resolve(
+    policy: UnmappedJoints,
+    source: &Skeleton,
+    source_rest: &BTreeMap<JointId, Affine>,
+    pairs: &BTreeMap<JointId, JointId>,
+    used: &BTreeSet<JointId>,
+) -> Result<(JointMapping, JointMapping), String> {
+    let parent: BTreeMap<JointId, Option<JointId>> = source.joints.iter().map(|j| (j.id, j.parent)).collect();
+    let name = |j: JointId| {
+        source
+            .joints
+            .iter()
+            .find(|x| x.id == j)
+            .map_or_else(|| format!("{j:?}"), |x| x.name.clone())
+    };
+    let mut to = pairs.clone();
+    let mut moved = BTreeMap::new();
+    for &j in used.iter().filter(|j| !pairs.contains_key(j)) {
+        let via = match policy {
+            UnmappedJoints::Refuse => {
+                return Err(format!(
+                    "joint {} carries weight and the map does not list it",
+                    name(j)
+                ));
+            }
+            UnmappedJoints::Ancestor => {
+                let mut at = parent[&j];
+                loop {
+                    match at {
+                        Some(p) if pairs.contains_key(&p) => break p,
+                        Some(p) => at = parent[&p],
+                        None => {
+                            return Err(format!(
+                                "joint {} carries weight and has no mapped ancestor (unmapped=nearest places it)",
+                                name(j)
+                            ));
+                        }
+                    }
+                }
+            }
+            UnmappedJoints::Nearest => {
+                let p = source_rest[&j][3];
+                *pairs
+                    .keys()
+                    .min_by(|a, b| {
+                        let d =
+                            |k: &JointId| (0..3).map(|i| (source_rest[k][3][i] - p[i]).powi(2)).sum::<f64>();
+                        d(a).total_cmp(&d(b))
+                    })
+                    .ok_or("the map lists no joint")?
+            }
+        };
+        to.insert(j, pairs[&via]);
+        moved.insert(j, via);
+    }
+    Ok((to, moved))
+}
+
+impl Pass for RetargetSkin {
+    fn name(&self) -> &'static str {
+        "retarget-skin"
+    }
+    fn options(&self) -> Options {
+        let v = match self.unmapped {
+            UnmappedJoints::Refuse => "refuse",
+            UnmappedJoints::Ancestor => "ancestor",
+            UnmappedJoints::Nearest => "nearest",
+        };
+        Options::from([("unmapped".to_owned(), v.to_owned())])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[Skin::NAME, JointMap::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[Mesh::NAME, Skin::NAME, Asset::NAME]
+    }
+    fn approximates(&self) -> &'static str {
+        "a skinned mesh fitted onto a skeleton of other proportions; weight of joints the map does not list moved"
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let maps: Vec<JointMap> = w.iter::<JointMap>().map(|(_, m)| m.clone()).collect();
+        let drawn: BTreeSet<Entity> = w
+            .iter::<SkinInstance>()
+            .filter_map(|(e, _)| w.get::<primase_core::Instance>(e).map(|i| i.prototype))
+            .collect();
+        for map in maps {
+            let source = w
+                .get::<Skeleton>(map.from)
+                .ok_or("the map's source is no skeleton")?
+                .clone();
+            let target = w
+                .get::<Skeleton>(map.to)
+                .ok_or("the map's target is no skeleton")?
+                .clone();
+            let pairs: BTreeMap<JointId, JointId> = map.pairs.iter().copied().collect();
+            let source_rest = model_transforms(&source, &locals(&source, None)).map_err(|e| e.0)?;
+            let target_rest = model_transforms(&target, &locals(&target, None)).map_err(|e| e.0)?;
+            let fitted = fit(&source, &target_rest, &pairs)?;
+            let prototypes: Vec<Entity> = w
+                .iter::<Skin>()
+                .filter(|(_, s)| s.bindings.iter().any(|b| b.skeleton == map.from))
+                .map(|(e, _)| e)
+                .collect();
+            for p in prototypes {
+                if drawn.contains(&p) {
+                    return Err(format!(
+                        "prototype {p:?} is placed with a skin instance: retarget it, then place it"
+                    ));
+                }
+                if w.has::<Morphs>(p) {
+                    return Err(format!(
+                        "prototype {p:?} has morph targets: their deltas are not carried yet"
+                    ));
+                }
+                let skin_c = w.get::<Skin>(p).ok_or("a skin is gone")?.clone();
+                let [binding] = skin_c.bindings.as_slice() else {
+                    return Err(format!(
+                        "prototype {p:?} has {} bindings: one is retargeted",
+                        skin_c.bindings.len()
+                    ));
+                };
+                let mesh = w.get::<Mesh>(p).ok_or("a skinned prototype has no mesh")?.clone();
+                // the joints carrying weight, and where each goes
+                let mut per_prim: Vec<Option<VertexJoints>> = Vec::new();
+                let mut used = BTreeSet::new();
+                for (i, prim) in mesh.primitives().iter().enumerate() {
+                    let (Some(Some(how)), Some(Some(palette))) =
+                        (skin_c.influences.get(i), binding.palettes.get(i))
+                    else {
+                        per_prim.push(None);
+                        continue;
+                    };
+                    let inf = influences(prim, *how, skin_c.weights)
+                        .map_err(|e| format!("{p:?} primitive {i}: {}", e.0))?;
+                    let named: Vec<Vec<(JointId, f64)>> = inf
+                        .iter()
+                        .map(|v| {
+                            v.iter()
+                                .filter(|(_, wt)| *wt > 0.0)
+                                .map(|&(s, wt)| (palette[s].joint, wt))
+                                .collect()
+                        })
+                        .collect();
+                    used.extend(named.iter().flatten().map(|(j, _)| *j));
+                    per_prim.push(Some(named));
+                }
+                let (to, moved) = resolve(self.unmapped, &source, &source_rest, &pairs, &used)?;
+                // the target joints used, as one palette in joint order
+                let palette_joints: BTreeSet<JointId> = used.iter().map(|j| to[j]).collect();
+                let palette: Vec<Slot> = palette_joints
+                    .iter()
+                    .map(|&j| {
+                        let ib = inverse(&target_rest[&j]).ok_or("a target joint's rest has no inverse")?;
+                        Ok(Slot {
+                            joint: j,
+                            inverse_bind: transform(&ib),
+                        })
+                    })
+                    .collect::<Result<_, String>>()?;
+                let slot_of: BTreeMap<JointId, usize> =
+                    palette_joints.iter().enumerate().map(|(k, j)| (*j, k)).collect();
+                let mut new_mesh = mesh.clone();
+                let mut new_influences = Vec::with_capacity(per_prim.len());
+                let mut moved_vertices: BTreeMap<JointId, u64> = BTreeMap::new();
+                let mut fitted_vertices = 0u64;
+                for (i, mut prim) in new_mesh.primitives_mut().enumerate() {
+                    let Some(named) = &per_prim[i] else {
+                        new_influences.push(None);
+                        continue;
+                    };
+                    let src = mesh.primitives()[i].clone();
+                    let how = skin_c.influences[i].ok_or("influences")?;
+                    let posed = skin(
+                        &Vertices::of(&src).map_err(|e| e.0)?,
+                        &src,
+                        how,
+                        skin_c.weights,
+                        binding.deformation,
+                        binding.palettes[i].as_ref().ok_or("palette")?,
+                        &fitted,
+                    )
+                    .map_err(|e| format!("{p:?} primitive {i}: {}", e.0))?;
+                    fitted_vertices += posed.positions.len() as u64;
+                    // the new influences, merged per target joint, heaviest first (ties by slot)
+                    let merged: Vec<Vec<(usize, f32)>> = named
+                        .iter()
+                        .map(|v| {
+                            let mut acc: BTreeMap<usize, f64> = BTreeMap::new();
+                            for &(j, wt) in v {
+                                if moved.contains_key(&j) {
+                                    *moved_vertices.entry(j).or_default() += 1;
+                                }
+                                *acc.entry(slot_of[&to[&j]]).or_default() += wt;
+                            }
+                            let mut out: Vec<(usize, f32)> =
+                                acc.into_iter().map(|(s, wt)| (s, wt as f32)).collect();
+                            out.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+                            out
+                        })
+                        .collect();
+                    let most = merged.iter().map(Vec::len).max().unwrap_or(1).max(1);
+                    let sets = most.div_ceil(4);
+                    let wide = palette.len() > 256;
+                    let streams = prim.streams_mut();
+                    streams.retain(|s, _| !matches!(s, Semantic::Joints(_) | Semantic::Weights(_)));
+                    for k in 0..sets {
+                        let (mut js, mut ws): (Vec<[u32; 4]>, Vec<[f32; 4]>) = (Vec::new(), Vec::new());
+                        for v in &merged {
+                            let pad = v.first().map_or(0, |x| x.0) as u32;
+                            let mut jj = [pad; 4];
+                            let mut ww = [0.0f32; 4];
+                            for c in 0..4 {
+                                if let Some(&(s, wt)) = v.get(k * 4 + c) {
+                                    jj[c] = s as u32;
+                                    ww[c] = wt;
+                                }
+                            }
+                            js.push(jj);
+                            ws.push(ww);
+                        }
+                        streams.insert(
+                            Semantic::Joints(k as u8),
+                            if wide {
+                                Stream::U16x4(js.iter().map(|j| j.map(|x| x as u16)).collect())
+                            } else {
+                                Stream::U8x4(js.iter().map(|j| j.map(|x| x as u8)).collect())
+                            },
+                        );
+                        streams.insert(Semantic::Weights(k as u8), Stream::F32x4(ws));
+                    }
+                    streams.insert(Semantic::Position, Stream::F32x3(posed.positions));
+                    if let Some(n) = posed.normals {
+                        streams.insert(Semantic::Normal, Stream::F32x3(n));
+                    }
+                    if let Some(t) = posed.tangents {
+                        streams.insert(Semantic::Tangent, Stream::F32x4(t));
+                    }
+                    new_influences.push(Some(Influences::Streams { sets: sets as u8 }));
+                }
+                let palettes = new_influences
+                    .iter()
+                    .map(|i| i.map(|_| palette.clone()))
+                    .collect();
+                w.insert(p, new_mesh);
+                w.insert(
+                    p,
+                    Skin {
+                        influences: new_influences,
+                        weights: skin_c.weights,
+                        bindings: vec![Binding {
+                            id: binding.id,
+                            skeleton: map.to,
+                            palettes,
+                            deformation: binding.deformation,
+                        }],
+                    },
+                );
+                // the assets drawing it name the target as their rig
+                let assets: Vec<Entity> = w
+                    .iter::<Asset>()
+                    .filter(|(_, a)| a.members.iter().any(|(m, r)| *m == p && *r == Role::Part))
+                    .map(|(e, _)| e)
+                    .collect();
+                for a in assets {
+                    let asset = w.get_mut::<Asset>(a).ok_or("an asset is gone")?;
+                    asset
+                        .members
+                        .retain(|(m, r)| !(*m == map.from && *r == Role::Rig));
+                    if !asset.members.iter().any(|(m, _)| *m == map.to) {
+                        asset.members.push((map.to, Role::Rig));
+                    }
+                }
+                log.approximate(
+                    "skinned vertices fitted onto the target skeleton's proportions",
+                    fitted_vertices,
+                );
+                for (j, n) in moved_vertices {
+                    let name = |s: &Skeleton, j: JointId| {
+                        s.joints
+                            .iter()
+                            .find(|x| x.id == j)
+                            .map_or_else(|| format!("{j:?}"), |x| x.name.clone())
+                    };
+                    log.approximate(
+                        &format!(
+                            "vertex weight of unmapped joint {} moved to {} ({})",
+                            name(&source, j),
+                            name(&target, to[&j]),
+                            match self.unmapped {
+                                UnmappedJoints::Ancestor => "its mapped ancestor",
+                                _ => "the mapped joint nearest it",
+                            }
+                        ),
+                        n,
+                    );
+                }
+                log.count("skinned prototypes retargeted", 1);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::pass::{PassManager, PassRegistry, RunReport};
+    use primase_core::{BindingId, Deformation, Joint, Primitive, Rest, Topology, WeightRule};
+
+    fn trs(t: [f32; 3], q: [f32; 4]) -> Rest {
+        Rest::Trs {
+            translation: t,
+            rotation: q,
+            scale: [1.0; 3],
+        }
+    }
+
+    fn joint(id: u32, parent: Option<u32>, rest: Rest) -> Joint {
+        Joint {
+            id: JointId(id),
+            name: format!("j{id}"),
+            parent: parent.map(JointId),
+            rest,
+        }
+    }
+
+    /// Source: root 1 at y=1, arm 2 at (0.2, 1.5, 0) pointing +x, hand 3 at (0.7, 1.5, 0), and a cloth joint 4 under the
+    /// arm the map does not list. Target, taller: root 10 at y=2, arm 20 at (0.3, 2.6, 0) turned 45 degrees down, hand
+    /// 30 0.6 along it. A mesh of three points: one on the hand (weighted to it), one halfway along the arm (half arm,
+    /// half hand), one on the cloth joint: (world, prototype, target skeleton, map entity).
+    fn world() -> (World, Entity, Entity) {
+        let mut w = World::new();
+        let id = [0.0, 0.0, 0.0, 1.0];
+        let source = w.spawn();
+        w.insert(
+            source,
+            Skeleton {
+                joints: vec![
+                    joint(1, None, trs([0.0, 1.0, 0.0], id)),
+                    joint(2, Some(1), trs([0.2, 0.5, 0.0], id)),
+                    joint(3, Some(2), trs([0.5, 0.0, 0.0], id)),
+                    joint(4, Some(2), trs([0.4, -0.1, 0.0], id)),
+                ],
+            },
+        );
+        let (s8, c8) = (
+            (std::f32::consts::PI / 8.0).sin(),
+            (std::f32::consts::PI / 8.0).cos(),
+        );
+        let target = w.spawn();
+        w.insert(
+            target,
+            Skeleton {
+                joints: vec![
+                    joint(10, None, trs([0.0, 2.0, 0.0], id)),
+                    joint(20, Some(10), trs([0.3, 0.6, 0.0], [0.0, 0.0, -s8, c8])),
+                    joint(30, Some(20), trs([0.6, 0.0, 0.0], id)),
+                ],
+            },
+        );
+        let m = w.spawn();
+        w.insert(
+            m,
+            JointMap {
+                from: source,
+                to: target,
+                pairs: vec![
+                    (JointId(1), JointId(10)),
+                    (JointId(2), JointId(20)),
+                    (JointId(3), JointId(30)),
+                ],
+            },
+        );
+        // inverse binds: the inverse of each source joint's rest in the model's space (translations only here)
+        let slot = |j: u32, t: [f32; 3]| Slot {
+            joint: JointId(j),
+            inverse_bind: {
+                let mut m = primase_core::Transform::IDENTITY;
+                m.cols[3] = t.map(|x| -x);
+                m
+            },
+        };
+        let proto = w.spawn();
+        w.insert(
+            proto,
+            Mesh::new(vec![Primitive {
+                topology: Topology::Points,
+                streams: [
+                    (
+                        Semantic::Position,
+                        Stream::F32x3(vec![[0.7, 1.5, 0.0], [0.45, 1.5, 0.0], [0.6, 1.4, 0.0]]),
+                    ),
+                    (
+                        Semantic::Joints(0),
+                        Stream::U8x4(vec![[2, 0, 0, 0], [1, 2, 0, 0], [3, 0, 0, 0]]),
+                    ),
+                    (
+                        Semantic::Weights(0),
+                        Stream::F32x4(vec![
+                            [1.0, 0.0, 0.0, 0.0],
+                            [0.5, 0.5, 0.0, 0.0],
+                            [1.0, 0.0, 0.0, 0.0],
+                        ]),
+                    ),
+                ]
+                .into(),
+                indices: None,
+                material: None,
+            }]),
+        );
+        w.insert(
+            proto,
+            Skin {
+                influences: vec![Some(Influences::Streams { sets: 1 })],
+                weights: WeightRule::SumsToOne,
+                bindings: vec![Binding {
+                    id: BindingId(0),
+                    skeleton: source,
+                    palettes: vec![Some(vec![
+                        slot(1, [0.0, 1.0, 0.0]),
+                        slot(2, [0.2, 1.5, 0.0]),
+                        slot(3, [0.7, 1.5, 0.0]),
+                        slot(4, [0.6, 1.4, 0.0]),
+                    ])],
+                    deformation: Deformation::Linear,
+                }],
+            },
+        );
+        assert_eq!(w.verify_components(), vec![]);
+        (w, proto, target)
+    }
+
+    fn run(w: &mut World, pipeline: &str) -> Result<RunReport, String> {
+        let mut r = PassRegistry::new();
+        crate::register(&mut r);
+        let m = PassManager::new(r).with_pass_checks(true);
+        let mut report = RunReport::default();
+        m.run(
+            w,
+            &m.registry.parse(pipeline).map_err(|e| e.to_string())?,
+            &mut report,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(report)
+    }
+
+    fn near(a: [f32; 3], b: [f64; 3]) -> bool {
+        a.iter().zip(b).all(|(x, y)| (f64::from(*x) - y).abs() < 1e-5)
+    }
+
+    /// Fitted: the hand point lands on the target's hand, the mid-arm point halfway along the target's arm; the cloth
+    /// point rides its ancestor (the arm), reported by name; the mesh is bound to the target, its weights summing as
+    /// before, and at the target's rest it is where it stands.
+    #[test]
+    fn a_skin_moves_onto_the_target_skeleton() {
+        let (mut w, proto, target) = world();
+        let report = run(&mut w, "retarget-skin{unmapped=ancestor}").unwrap();
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let arm = [0.3, 2.6, 0.0];
+        let hand = [0.3 + 0.6 * h, 2.6 - 0.6 * h, 0.0];
+        let mesh = w.get::<Mesh>(proto).unwrap();
+        let Stream::F32x3(p) = &mesh.primitives()[0].streams[&Semantic::Position] else {
+            panic!("positions")
+        };
+        assert!(near(p[0], hand), "{:?} vs {hand:?}", p[0]);
+        let mid: [f64; 3] = std::array::from_fn(|k| (arm[k] + hand[k]) / 2.0);
+        assert!(near(p[1], mid), "{:?} vs {mid:?}", p[1]);
+        let sk = w.get::<Skin>(proto).unwrap();
+        assert_eq!(sk.bindings[0].skeleton, target);
+        let joints: Vec<JointId> = sk.bindings[0].palettes[0]
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|s| s.joint)
+            .collect();
+        assert_eq!(joints, [JointId(20), JointId(30)]);
+        assert_eq!(w.verify_components(), vec![]);
+        let log = &report.steps[0].log;
+        assert_eq!(
+            log.approximations["vertex weight of unmapped joint j4 moved to j20 (its mapped ancestor)"],
+            1
+        );
+        assert_eq!(
+            log.approximations["skinned vertices fitted onto the target skeleton's proportions"],
+            3
+        );
+        // at the target's rest the skin leaves the mesh where it stands
+        let target_rest = model_transforms(
+            w.get::<Skeleton>(target).unwrap(),
+            &locals(w.get::<Skeleton>(target).unwrap(), None),
+        )
+        .unwrap();
+        let prim = &mesh.primitives()[0];
+        let posed = skin(
+            &Vertices::of(prim).unwrap(),
+            prim,
+            sk.influences[0].unwrap(),
+            sk.weights,
+            Deformation::Linear,
+            sk.bindings[0].palettes[0].as_ref().unwrap(),
+            &target_rest,
+        )
+        .unwrap();
+        for (a, b) in posed.positions.iter().zip(p) {
+            assert!(near(*a, b.map(f64::from)));
+        }
+    }
+
+    #[test]
+    fn retarget_skin_refuses_what_it_was_not_told() {
+        let (mut w, ..) = world();
+        let err = run(&mut w, "retarget-skin{unmapped=refuse}").unwrap_err();
+        assert!(
+            err.contains("joint j4 carries weight and the map does not list it"),
+            "{err}"
+        );
+        let (mut w, ..) = world();
+        let err = run(&mut w, "retarget-skin").unwrap_err();
+        assert!(
+            err.contains("unmapped=refuse|ancestor|nearest is required"),
+            "{err}"
+        );
+        // nearest: the cloth point goes to the mapped joint nearest the cloth joint at rest (the hand, 0.14 away; the arm is 0.41)
+        let (mut w, proto, _) = world();
+        let report = run(&mut w, "retarget-skin{unmapped=nearest}").unwrap();
+        assert_eq!(
+            report.steps[0].log.approximations["vertex weight of unmapped joint j4 moved to j30 (the mapped joint nearest it)"],
+            1
+        );
+        assert_eq!(
+            w.get::<Skin>(proto).unwrap().bindings[0].palettes[0]
+                .as_ref()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+}
