@@ -856,6 +856,7 @@ impl Shader {
                 *samples += 1;
                 let rgba = sampler
                     .sample(Sample {
+                        bias: 0.0,
                         texture,
                         sampler: s,
                         uv,

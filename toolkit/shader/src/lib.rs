@@ -25,6 +25,9 @@ pub struct Sample {
     /// The UV's screen derivatives the program states (`sample_d`: d/dx, then d/dy); `None` for an implicit-LOD
     /// sample, whose footprint a scalar evaluation leaves to the sampler.
     pub gradients: Option<[[f32; 2]; 2]>,
+    /// The level-of-detail bias the program states (`sample_b`, as given: the sampler clamps it to D3D's -16..15.99),
+    /// added to the implicit level; 0 for a plain sample.
+    pub bias: f32,
 }
 /// Answers sample requests; an error stops the evaluation.
 pub trait Sampler {

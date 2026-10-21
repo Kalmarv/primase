@@ -285,7 +285,7 @@ impl Program {
                     return Err(error(ins.word, "a derivative's source needs a swizzle"));
                 };
                 result = std::array::from_fn(|i| lanes[swizzle[i] as usize]);
-            } else if matches!(ins.opcode, 69 | 73) {
+            } else if matches!(ins.opcode, 69 | 73 | 74) {
                 let texture = a[2].indices[0].base;
                 if self.volumes.contains(&texture) {
                     return Err(error(
@@ -306,6 +306,11 @@ impl Program {
                         sampler: a[3].indices[0].base,
                         uv: [float(xy[0]), float(xy[1])],
                         gradients,
+                        bias: if ins.opcode == 74 {
+                            float(s.source(&a[4], 1, ins.word)?[0])
+                        } else {
+                            0.0
+                        },
                     })
                     .map_err(|e| error(ins.word, e))?;
                 let Selection::Swizzle(swizzle) = a[2].selection else {
@@ -328,6 +333,11 @@ impl Program {
                 };
                 let z = if a.len() > 3 {
                     s.source(&a[3], needed, ins.word)?
+                } else {
+                    [0; 4]
+                };
+                let w = if a.len() > 4 {
+                    s.source(&a[4], needed, ins.word)?
                 } else {
                     [0; 4]
                 };
@@ -405,6 +415,12 @@ impl Program {
                             85 => x[i] >> (y[i] & 31),
                             86 => bits(x[i] as f32),
                             87 => x[i] ^ y[i],
+                            // bfi: z's low (x & 31) bits put at bit (y & 31) of w
+                            140 => {
+                                let (width, offset) = (x[i] & 31, y[i] & 31);
+                                let mask = ((1u32 << width).wrapping_sub(1)) << offset;
+                                ((z[i] << offset) & mask) | (w[i] & !mask)
+                            }
                             _ => unreachable!("prevalidated opcode"),
                         };
                     }

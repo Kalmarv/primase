@@ -72,13 +72,13 @@ fn non_float(opcode: u16) -> bool {
     flow(opcode)
         || matches!(
             opcode,
-            1 | 24 | 27..=30 | 32..=42 | 49 | 57 | 59 | 60 | 79 | 80 | 83..=85 | 87
+            1 | 24 | 27..=30 | 32..=42 | 49 | 57 | 59 | 60 | 79 | 80 | 83..=85 | 87 | 140
         )
 }
 
 /// Instructions reading integer sources (and the flow conditions, which test bits): source modifiers are refused.
 fn integer_sources(opcode: u16) -> bool {
-    matches!(opcode, 1 | 3 | 8 | 30..=43 | 59 | 60 | 79 | 80 | 83..=87)
+    matches!(opcode, 1 | 3 | 8 | 30..=43 | 59 | 60 | 79 | 80 | 83..=87 | 140)
 }
 
 /// The screen-derivative instructions (`deriv_rtx`, `deriv_rty` and their SM5 coarse and fine forms).
@@ -305,6 +305,8 @@ impl Program {
                 | 83..=85
                 | 87 => 3,
                 35 | 38 | 50 | 55 | 69 => 4,
+                // sample_b (an LOD bias after the sampler); bfi (width, offset, insert, base)
+                74 | 140 => 5,
                 73 => 6,
                 _ => return Err(error(at, format!("unsupported {name} ({opcode})"))),
             };
@@ -325,7 +327,7 @@ impl Program {
             while extended {
                 let ext = c.take()?;
                 let kind = ext & 63;
-                if !matches!(opcode, 69 | 73) || kind > 3 || kind == 0 || seen & (1 << kind) != 0 {
+                if !matches!(opcode, 69 | 73 | 74) || kind > 3 || kind == 0 || seen & (1 << kind) != 0 {
                     return Err(error(at, "unsupported or repeated opcode extension"));
                 }
                 seen |= 1 << kind;
@@ -517,7 +519,7 @@ impl Program {
     }
     fn validate(&self, ins: &Instruction) -> Result<()> {
         let fail = |detail| error(ins.word, detail);
-        let sampling = matches!(ins.opcode, 69 | 73);
+        let sampling = matches!(ins.opcode, 69 | 73 | 74);
         let dests = if matches!(ins.opcode, 38 | 77) {
             2
         } else if flow(ins.opcode) {
