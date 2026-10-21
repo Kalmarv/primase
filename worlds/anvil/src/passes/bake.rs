@@ -1,7 +1,8 @@
 //! `bake-anvil-material{size=N,normal-green=up|down,shader-uv=texcoord|one-minus-v,mip-bias=X,terrain-ao=X}`: Anvil
 //! Materials
 //! whose templates the lowering can't express as texture lookups ([`AnvilMaterial`]; MAD_Tex1_Rocks and
-//! MAD_Tex1_UniqueNormalGradient, which combine maps at several UV sets per pixel, and MAD_Road, whose paint its
+//! MAD_Tex1_UniqueNormalGradient and MAD_Tex1_UniqueNormal_DiffuseBlend, which combine maps at several UV sets per
+//! pixel, and MAD_Road, whose paint its
 //! shader computes per pixel) become metal-rough PBR by running the game's own G-buffer pixel shader
 //! over the Material's texture space and decoding what it writes (Riders Republic docs/shaders.md §6,
 //! docs/material-spec.md §14.6, §15.4).
@@ -135,9 +136,9 @@ struct Recipe {
     rows: &'static [u32],
     /// Texture slots (`t(75 + slot)`).
     slots: &'static [u32],
-    /// Slots whose value reaches only outputs the bake doesn't keep (emission): bound to 0 where the Material sets
-    /// none.
-    unkept: &'static [u32],
+    /// Slots whose value reaches the kept outputs only times a row's scalar (`Some(row)`), or not at all (`None`:
+    /// only the emission): bound to 0 where the Material sets none and that scalar is 0 (or always, for `None`).
+    unkept: &'static [(u32, Option<u32>)],
     /// The engine's textures the program reads, each bound to a value (the terrain's ambient occlusion to
     /// `terrain-ao`).
     engine: &'static [(u32, f32)],
@@ -199,7 +200,7 @@ const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
 /// line frequency along u, one over its lane width along v.
 const ROAD: Recipe = Recipe {
     template: "MAD_Road",
-    unkept: &[1],
+    unkept: &[(1, None)],
     interpolants: Interpolants::NoWorldPosition,
     pattern: Some(Pattern {
         uv: 13,
@@ -212,7 +213,23 @@ const ROAD: Recipe = Recipe {
     camera: false,
 };
 
-const RECIPES: &[Recipe] = &[ROCKS, UNIQUE_NORMAL_GRADIENT, ROAD];
+/// MAD_Tex1_UniqueNormal_DiffuseBlend (§27.8; its G-buffer program read): `Use AO` 1, `3 - DETAILS -Tiling` 2 and
+/// 3; `Albedo And Opacity` t75 and `Normal` t76 at the mesh's UV, `Details` (a normal map) t77 and `AO Details` t79 at
+/// the tiling, the generic `Texture` t78 at the mesh's UV; layout A. The two masks reach its occlusion only, times
+/// `Use AO`.
+const UNIQUE_NORMAL_DIFFUSE_BLEND: Recipe = Recipe {
+    template: "MAD_Tex1_UniqueNormal_DiffuseBlend",
+    unkept: &[(3, Some(1)), (4, Some(1))],
+    interpolants: Interpolants::NoWorldPosition,
+    pattern: None,
+    rows: &[1, 2, 3],
+    slots: &[0, 1, 2, 3, 4],
+    engine: &[],
+    terrain: None,
+    camera: false,
+};
+
+const RECIPES: &[Recipe] = &[ROCKS, UNIQUE_NORMAL_GRADIENT, ROAD, UNIQUE_NORMAL_DIFFUSE_BLEND];
 
 /// The pass (see the module documentation).
 #[derive(Clone, Debug, PartialEq)]
@@ -502,7 +519,10 @@ impl BakeAnvilMaterial {
             });
             let e = match set {
                 Some(e) => e,
-                None if recipe.unkept.contains(&slot) => {
+                None if recipe.unkept.iter().any(|&(s, row)| {
+                    s == slot && row.is_none_or(|r| rows.get(&r).is_some_and(|v| v[0] == 0.0))
+                }) =>
+                {
                     textures.insert(75 + slot, primase_shader::Texture::Constant([0.0; 4]));
                     continue;
                 }
