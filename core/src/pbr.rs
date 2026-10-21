@@ -199,7 +199,7 @@ pub struct PbrMaterial {
     pub normal_texture: Option<TextureRef>,
     /// Scales the normal map's X and Y.
     pub normal_scale: f32,
-    /// Linear RGB, multiplied into `emissive_texture`.
+    /// Linear RGB, each channel within 0-1 (verified), multiplied into `emissive_texture`.
     pub emissive: [f32; 3],
     /// sRGB colour.
     pub emissive_texture: Option<TextureRef>,
@@ -226,6 +226,12 @@ impl Component for PbrMaterial {
         crate::json::to_value(self).map(Some)
     }
     fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
+        if !self.emissive.iter().all(|c| (0.0..=1.0).contains(c)) {
+            return Err(format!(
+                "emissive {:?} is not within 0-1 (brighter emission is carried by emissive_strength)",
+                self.emissive
+            ));
+        }
         if !self.emissive_strength.is_finite() || self.emissive_strength < 0.0 {
             return Err(format!(
                 "emissive strength {} is not finite and >= 0",
@@ -451,5 +457,41 @@ mod tests {
         }
         assert!(failures(0.0).is_empty());
         assert!(failures(1.0).is_empty());
+    }
+
+    /// The emissive colour is within 0-1 (glTF's `emissiveFactor`): a channel above 1, below 0 or not finite fails
+    /// verification, brighter emission being the strength's; the bounds themselves pass.
+    #[test]
+    fn emissive_is_within_0_to_1() {
+        use crate::World;
+
+        let failures = |emissive: [f32; 3]| {
+            let mut w = World::new();
+            let e = w.spawn();
+            w.insert(
+                e,
+                PbrMaterial {
+                    emissive,
+                    emissive_strength: 4.0,
+                    ..PbrMaterial::default()
+                },
+            );
+            w.verify_components()
+                .into_iter()
+                .map(|(_, _, detail)| detail)
+                .collect::<Vec<_>>()
+        };
+        for emissive in [
+            [1.5, 0.0, 0.0],
+            [0.0, -0.25, 0.0],
+            [0.0, 0.0, f32::NAN],
+            [f32::INFINITY, 1.0, 1.0],
+        ] {
+            let failures = failures(emissive);
+            assert_eq!(failures.len(), 1, "{emissive:?}");
+            assert!(failures[0].contains("emissive"), "{failures:?}");
+        }
+        assert!(failures([0.0; 3]).is_empty());
+        assert!(failures([1.0, 0.5, 0.0]).is_empty());
     }
 }
