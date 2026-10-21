@@ -425,7 +425,8 @@ mod tests {
 
     #[test]
     fn malformed_occurrences_fail_verification() {
-        let fails = |edit: &dyn Fn(&mut World, [Entity; 2], [Entity; 2], Entity), what: &str| {
+        type Edit<'a> = &'a dyn Fn(&mut World, [Entity; 2], [Entity; 2], Entity);
+        let fails = |edit: Edit, what: &str| {
             let (mut w, _, rigs, placements, skeleton) = world();
             edit(&mut w, rigs, placements, skeleton);
             let e = errors(&w);
@@ -433,7 +434,9 @@ mod tests {
         };
         // a pose missing a joint, posing one twice, or naming one the skeleton lacks
         fails(
-            &|w, r, _, _| drop(w.get_mut::<RigPose>(r[0]).unwrap().joints.pop()),
+            &|w, r, _, _| {
+                w.get_mut::<RigPose>(r[0]).unwrap().joints.pop();
+            },
             "1 of the skeleton's 2",
         );
         fails(
@@ -449,7 +452,9 @@ mod tests {
         );
         // a rig unplaced; a skin instance with a binding the skin lacks, or following a rig of another skeleton
         fails(
-            &|w, r, _, _| drop(w.remove::<Transform>(r[0])),
+            &|w, r, _, _| {
+                w.remove::<Transform>(r[0]);
+            },
             "a rig without a core.transform",
         );
         fails(

@@ -538,7 +538,9 @@ mod tests {
             "within [0, 1]",
         );
         fails(
-            &|w, c, _| drop(w.get_mut::<Clip>(c).unwrap().channels[0].values.pop()),
+            &|w, c, _| {
+                w.get_mut::<Clip>(c).unwrap().channels[0].values.pop();
+            },
             "7 values for 2 keys of 4",
         );
         fails(
@@ -546,7 +548,9 @@ mod tests {
             "rotation of length",
         );
         fails(
-            &|w, c, _| drop(w.get_mut::<Clip>(c).unwrap().channels[1].values.pop()),
+            &|w, c, _| {
+                w.get_mut::<Clip>(c).unwrap().channels[1].values.pop();
+            },
             "values for 2 keys of 9",
         );
         fails(
