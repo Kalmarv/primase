@@ -23,6 +23,11 @@ fn material(row: u32, column: u32, j: usize) -> u8 {
 }
 
 const NOISE: u8 = 128;
+
+/// Node (row, column)'s block 8 value.
+fn occlusion(row: u32, column: u32) -> u8 {
+    (40 * (row * 3 + column) % 256) as u8
+}
 const K: f64 = 12.0;
 
 fn world() -> (World, Vec<Entity>) {
@@ -44,6 +49,9 @@ fn world() -> (World, Vec<Entity>) {
         e
     };
     let noise = texture(&mut w, vec![NOISE; 16], 2);
+    let normals: Vec<Entity> = (0..8u8)
+        .map(|_| texture(&mut w, [128, 128, 255, 255].repeat(4), 2))
+        .collect();
     let details: Vec<Entity> = (0..8u8)
         .map(|m| {
             let e = texture(&mut w, [m * 30, 100, 200, 255].repeat(4), 2);
@@ -76,7 +84,8 @@ fn world() -> (World, Vec<Entity>) {
                 heights: vec![0; 132 * 132],
                 colour: vec![0; 33 * 33 * 8],
                 material: raster,
-                block_8: vec![0; 33 * 33 * 8],
+                // block 8 one value a node (BC4 blocks of equal endpoints)
+                block_8: [occlusion(row, column), occlusion(row, column), 0, 0, 0, 0, 0, 0].repeat(33 * 33),
             });
         }
     }
@@ -92,11 +101,13 @@ fn world() -> (World, Vec<Entity>) {
             materials: Vec::new(),
             details: details
                 .iter()
-                .map(|&d| {
+                .zip(&normals)
+                .map(|(&d, &n)| {
                     Some(TerrainDetail {
                         uv_scale: 1.0,
                         f32_6: 4.0,
                         diffuse: Some(d),
+                        normal: Some(n),
                     })
                 })
                 .collect(),
@@ -146,6 +157,10 @@ fn blend(x: f64, y: f64) -> Vec<(u8, f64)> {
 }
 
 fn lowered(pieces: Pieces) -> World {
+    lowered_with(pieces, false)
+}
+
+fn lowered_with(pieces: Pieces, occlusion: bool) -> World {
     let (mut w, _) = world();
     let pass = LowerAnvilTerrain {
         rect: [0.0, 0.0, 128.0, 64.0],
@@ -160,6 +175,7 @@ fn lowered(pieces: Pieces) -> World {
             k: K,
             uv: SplatUv::Factor(0.25),
             noise_srgb: false,
+            occlusion,
         }),
         pieces,
     };
@@ -259,4 +275,45 @@ fn layers_weigh_each_vertex_as_the_engine_blends() {
     all.sort_unstable();
     want.sort_unstable();
     assert_eq!(all, want);
+}
+
+/// With the occlusion tint: each vertex's COLOR_0 the shader's factor 0.5 + block 8 (bilinear: at a vertex a texel or
+/// more inside its node, its node's value); every layer its material's detail normal, marked green-down, z rebuilt.
+#[test]
+fn layers_carry_their_normals_and_the_occlusion_tint() {
+    let w = lowered_with(Pieces::PerNode, true);
+    let mut inside = 0;
+    for (p, o) in placed(&w) {
+        let Some(Stream::F32x4(tint)) = p.streams.get(&Semantic::Color(0)) else {
+            panic!("no occlusion tint")
+        };
+        for (q, t) in p.positions().expect("positions").iter().zip(tint) {
+            let (x, y) = (f64::from(q[0] + o[0]), f64::from(q[1] + o[1]));
+            let (tx, ty) = (x / 0.5, y / 0.5);
+            let (lx, ly) = (tx.rem_euclid(128.0), ty.rem_euclid(128.0));
+            if (1.0..=127.0).contains(&lx) && (1.0..=127.0).contains(&ly) {
+                let v = f64::from(occlusion((ty / 128.0) as u32, (tx / 128.0) as u32)) / 255.0;
+                assert!((f64::from(t[0]) - (0.5 + v)).abs() < 1e-6, "{t:?} at ({x}, {y})");
+                assert_eq!((t[0], t[1], t[2], t[3]), (t[0], t[0], t[0], 1.0));
+                inside += 1;
+            }
+        }
+        let layered = w
+            .get::<LayeredMaterial>(p.material.expect("material"))
+            .expect("layered");
+        for l in layered.layers.iter().flatten() {
+            let pbr = w.get::<primase_core::pbr::PbrMaterial>(l.material).expect("pbr");
+            let n = pbr.normal_texture.as_ref().expect("a detail normal").texture;
+            let c = w
+                .get::<Texture>(n)
+                .expect("texture")
+                .normal
+                .expect("a convention");
+            assert_eq!(
+                (c.green, c.z),
+                (primase_core::NormalGreen::Down, primase_core::NormalZ::Rebuild)
+            );
+        }
+    }
+    assert!(inside > 1000, "{inside}");
 }

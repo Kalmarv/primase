@@ -405,6 +405,8 @@ pub struct TerrainDetail {
     pub uv_scale: f32,
     pub f32_6: f32,
     pub diffuse: Option<Entity>,
+    /// Its TextureSet's slot 1 map: the detail normal (BC7, x and y; the notes, terrain.md §3.4).
+    pub normal: Option<Entity>,
 }
 
 /// Terrain nodes of one level (`anvil.terrain`): their tiles, where the program states the quadtree's square lies
@@ -431,6 +433,7 @@ impl Component for AnvilTerrain {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.details.iter().flatten().filter_map(|d| d.diffuse));
+        out.extend(self.details.iter().flatten().filter_map(|d| d.normal));
         out.extend(self.noise);
     }
     fn payload_bytes(&self) -> u64 {

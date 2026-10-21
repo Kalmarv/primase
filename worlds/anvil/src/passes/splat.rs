@@ -261,6 +261,19 @@ impl<'t> Lookup<'t> {
         n.tile.material.get(i * 132 + j).copied()
     }
 
+    /// The occlusion factor at global texel coordinate `(gx, gy)`: `0.5 + b`, `b` block 8 bilinear there (step 5).
+    pub fn occlusion(&self, gx: f64, gy: f64) -> f64 {
+        let b = across(gx, gy, |tx, ty| {
+            let (n, i, j) = self.locate(tx, ty)?;
+            Some(unorm(
+                n.block_8
+                    .as_ref()?
+                    .texel(0, j as i64, i as i64, [Address::Wrap; 2])[0],
+            ))
+        });
+        0.5 + b
+    }
+
     /// The four material texels about `(x, y)` (source units) and their blend; `None` where the point's own node
     /// isn't read.
     pub fn corners(&self, x: f64, y: f64) -> Option<Corners> {
@@ -295,16 +308,16 @@ impl<'t> Lookup<'t> {
     }
 }
 
-/// A terrain material's detail as a layer: its TextureSet's diffuse and its uv per source unit (step 4), `None` where
-/// it has no detail diffuse (or, over its tile size, none of that).
-pub fn layer_detail(t: &AnvilTerrain, uv: SplatUv, m: u8) -> Option<(Entity, f64)> {
+/// A terrain material's detail as a layer: its TextureSet's diffuse, its detail normal if it has one, and its uv per
+/// source unit (step 4); `None` where it has no detail diffuse (or, over its tile size, none of that).
+pub fn layer_detail(t: &AnvilTerrain, uv: SplatUv, m: u8) -> Option<(Entity, Option<Entity>, f64)> {
     let d = t.details.get(usize::from(m))?.as_ref()?;
     let g = match uv {
         SplatUv::Factor(f) => f64::from(d.uv_scale) * f,
         SplatUv::OverTileSize if d.f32_6 > 0.0 => f64::from(d.uv_scale) / f64::from(d.f32_6),
         SplatUv::OverTileSize => return None,
     };
-    Some((d.diffuse?, g))
+    Some((d.diffuse?, d.normal, g))
 }
 
 /// Each rectangle of `rects` (x0, y0, x1, y1, source units) of the terrain `t`'s ground baked as `s` states, an sRGB
@@ -391,15 +404,8 @@ pub fn bake(
                 let lerp = |a: [f64; 3], b: [f64; 3], t: f64| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t);
                 let mut c = lerp(lerp(c00, c10, wx), lerp(c01, c11, wx), wy);
                 if s.occlusion {
-                    let b = across(gx, gy, |tx, ty| {
-                        let (n, i, j) = locate(tx, ty)?;
-                        Some(unorm(
-                            n.block_8
-                                .as_ref()?
-                                .texel(0, j as i64, i as i64, [Address::Wrap; 2])[0],
-                        ))
-                    });
-                    c = c.map(|v| v * (0.5 + b));
+                    let o = lookup.occlusion(gx, gy);
+                    c = c.map(|v| v * o);
                 }
                 let i = (py as usize * width as usize + px as usize) * 4;
                 for k in 0..3 {

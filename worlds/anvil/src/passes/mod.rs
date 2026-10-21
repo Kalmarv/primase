@@ -19,8 +19,9 @@ use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::world::Resource;
 use primase_core::{Collider, Shape};
 use primase_core::{
-    Collision, ColorSpace, Component, Entity, Instance, LodForm, Lods, Mesh, Primitive, Semantic, Stream,
-    Surfaces, TexFormat, TexRole, Texture, Topology, Transform, World,
+    Collision, ColorSpace, Component, Entity, Instance, LodForm, Lods, Mesh, NormalBasis, NormalConvention,
+    NormalGreen, NormalX, NormalZ, Primitive, Semantic, Stream, Surfaces, TexFormat, TexRole, Texture,
+    Topology, Transform, World,
 };
 
 use crate::components::{
@@ -984,10 +985,14 @@ impl Pass for LowerAnvilFloor {
 /// module `splat`), its weight at each vertex the engine's blend there (the noise-jittered lookup of the material
 /// raster and the 2 x 2 sigmoid at `splat-k`, `splat-noise`: steps 1 to 3), summed per material over the four texels
 /// and interpolated across each triangle (the engine evaluates it per pixel: the approximation); a material without a
-/// detail diffuse, or a texel past every read node, has no layer, its weight shared out over the others. A piece takes
+/// detail diffuse, or a texel past every read node, has no layer, its weight shared out over the others. Each layer's
+/// normal map is its material's detail normal (its TextureSet's slot 1: x and y, z rebuilt; red along the tangent +x,
+/// green toward -y with v along +y, the notes' reading of the terrain shader's frame: against core's bitangent
+/// `cross(N, T) w` a green-down map). With `splat-occlusion=block-8` each vertex's `COLOR_0` is the shader's occlusion
+/// factor `0.5 + b` there (block 8, bilinear), which the colour is multiplied by (it may pass 1). A piece takes
 /// at most 4 layers (core's weights are one vec4 a vertex): one using more is cut in quarters, down to 16 squares a
 /// side, and one still using more keeps its 4 heaviest, the others' weight shared out over them, counted. Left out
-/// (counted): the occlusion term, the ramps, the detail normals and masks, the per-cell uv rotation.
+/// (counted): the ramps, the masks, the detail normals' flattening on flat ground and the per-cell uv rotation.
 ///
 /// `pieces=whole` draws the ground as one primitive with one texture over `rect`; `pieces=per-node` (with
 /// `ground=splat`) as a primitive per terrain node, each square of the grid in the node of its corner sample with the
@@ -1039,12 +1044,14 @@ pub enum GroundColour {
     Layers(TerrainLayers),
 }
 
-/// `ground=layers`' stated choices: the blend's `k`, the detail uv and the noise's decoding, as the splat's.
+/// `ground=layers`' stated choices: the blend's `k`, the detail uv, the noise's decoding and the occlusion tint, as
+/// the splat's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerrainLayers {
     pub k: f64,
     pub uv: SplatUv,
     pub noise_srgb: bool,
+    pub occlusion: bool,
 }
 
 /// A terrain tile's side in samples (and in colour texels), the samples of it its node covers, and its colour tile's
@@ -1061,7 +1068,7 @@ impl LowerAnvilTerrain {
             "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES (neither stored as such), sample=corner|centre, ",
             "colour=srgb|linear, collision=none|collision-material|one, surface=NAME unless collision=none, ",
             "ground=tile|splat|layers (with splat-k=K, splat-px=UNITS (splat), splat-uv=FACTOR|over-tile-size, splat-noise=raw|srgb, ",
-            "splat-occlusion=block-8|none (splat)), pieces=whole|per-node (per-node with ground=splat or layers)"
+            "splat-occlusion=block-8|none (splat, layers)), pieces=whole|per-node (per-node with ground=splat or layers)"
         );
         let splat_keys = [
             "splat-k",
@@ -1112,11 +1119,8 @@ impl LowerAnvilTerrain {
                 },
             }),
             "layers" => {
-                if let Some(k) = ["splat-px", "splat-occlusion"]
-                    .iter()
-                    .find(|k| o.contains_key(**k))
-                {
-                    return Err(format!("{k} is only taken with ground=splat"));
+                if o.contains_key("splat-px") {
+                    return Err("splat-px is only taken with ground=splat".into());
                 }
                 GroundColour::Layers(TerrainLayers {
                     k: number("splat-k")?,
@@ -1128,6 +1132,11 @@ impl LowerAnvilTerrain {
                         "raw" => false,
                         "srgb" => true,
                         v => return Err(format!("splat-noise={v} is not raw or srgb")),
+                    },
+                    occlusion: match get("splat-occlusion")? {
+                        "block-8" => true,
+                        "none" => false,
+                        v => return Err(format!("splat-occlusion={v} is not block-8 or none")),
                     },
                 })
             }
@@ -1260,6 +1269,10 @@ impl Pass for LowerAnvilTerrain {
                 (
                     "splat-noise".to_owned(),
                     if l.noise_srgb { "srgb" } else { "raw" }.to_owned(),
+                ),
+                (
+                    "splat-occlusion".to_owned(),
+                    if l.occlusion { "block-8" } else { "none" }.to_owned(),
                 ),
             ],
         })
@@ -1660,8 +1673,18 @@ impl Pass for LowerAnvilTerrain {
                 }
                 let mut streams = BTreeMap::new();
                 let material = match (piece.layered, piece.texture) {
-                    (Some((layered, weights)), _) => {
+                    (
+                        Some(LayeredPiece {
+                            material: layered,
+                            weights,
+                            occlusion,
+                        }),
+                        _,
+                    ) => {
                         streams.insert(Semantic::Color(1), Stream::F32x4(weights));
+                        if let Some(o) = occlusion {
+                            streams.insert(Semantic::Color(0), Stream::F32x4(o));
+                        }
                         layered
                     }
                     (None, Some(texture)) => {
@@ -1708,6 +1731,14 @@ impl Pass for LowerAnvilTerrain {
     }
 }
 
+/// A `ground=layers` piece's colour: its layered material, its layer weights per vertex and its occlusion tint per
+/// vertex, where stated.
+struct LayeredPiece {
+    material: Entity,
+    weights: Vec<[f32; 4]>,
+    occlusion: Option<Vec<[f32; 4]>>,
+}
+
 /// Squares of the ground grid, by (row, column).
 type Squares = Vec<(u32, u32)>;
 
@@ -1738,10 +1769,20 @@ impl LowerAnvilTerrain {
         // each vertex's weight per material (the engine's blend at it), on the materials with a detail diffuse
         let (mut outside, mut undetailed) = (0u64, 0u64);
         let mut weights: Vec<Vec<(u8, f64)>> = Vec::with_capacity(width * height);
+        // each vertex's occlusion factor, where stated
+        let mut occlusion: Vec<f32> = Vec::with_capacity(if layers.occlusion { width * height } else { 0 });
         for &gy in g.rows {
             for &gx in g.columns {
                 let mut at: Vec<(u8, f64)> = Vec::new();
-                match lookup.corners(x_of(gx), y_of(gy)) {
+                let corners = lookup.corners(x_of(gx), y_of(gy));
+                if layers.occlusion {
+                    occlusion.push(
+                        corners
+                            .as_ref()
+                            .map_or(1.0, |c| lookup.occlusion(c.gx, c.gy) as f32),
+                    );
+                }
+                match corners {
                     None => outside += 1,
                     Some(c) => {
                         for (m, wt) in c.materials.into_iter().zip(c.weights()) {
@@ -1829,7 +1870,7 @@ impl LowerAnvilTerrain {
             let (ox, oy) = (x_of(g.columns[c0]), y_of(g.rows[r0]));
             let mut layer_list = Vec::with_capacity(kept.len());
             for &m in &kept {
-                let (diffuse, scale) =
+                let (diffuse, normal, scale) =
                     splat::layer_detail(t, layers.uv, m).ok_or("a kept layer without its detail")?;
                 let material = match layer_materials.get(&m) {
                     Some(&e) => e,
@@ -1843,11 +1884,24 @@ impl LowerAnvilTerrain {
                                 ColorSpace::Linear
                             };
                         }
+                        if let Some(n) = normal
+                            && let Some(tex) = w.get_mut::<Texture>(n)
+                        {
+                            tex.role = TexRole::Normal;
+                            tex.color_space = ColorSpace::Linear;
+                            tex.normal = Some(NormalConvention {
+                                green: NormalGreen::Down,
+                                z: NormalZ::Rebuild,
+                                x: NormalX::Red,
+                                basis: NormalBasis::TangentBitangent,
+                            });
+                        }
                         let e = w.spawn();
                         w.insert(
                             e,
                             PbrMaterial {
                                 base_color_texture: Some(TextureRef::new(diffuse)),
+                                normal_texture: normal.map(TextureRef::new),
                                 metallic: 0.0,
                                 ..PbrMaterial::default()
                             },
@@ -1895,6 +1949,15 @@ impl LowerAnvilTerrain {
                 }
             }
             let mut piece_weights = Vec::with_capacity(vertices.len());
+            let piece_occlusion: Option<Vec<[f32; 4]>> = layers.occlusion.then(|| {
+                vertices
+                    .iter()
+                    .map(|&v| {
+                        let o = occlusion[v as usize];
+                        [o, o, o, 1.0]
+                    })
+                    .collect()
+            });
             let mut uvs = Vec::with_capacity(vertices.len());
             for &v in &vertices {
                 let (r, c) = (v as usize / width, v as usize % width);
@@ -1922,7 +1985,11 @@ impl LowerAnvilTerrain {
             );
             pieces.push(GroundPiece {
                 texture: None,
-                layered: Some((layered, piece_weights)),
+                layered: Some(LayeredPiece {
+                    material: layered,
+                    weights: piece_weights,
+                    occlusion: piece_occlusion,
+                }),
                 uvs,
                 vertices: Some(vertices),
                 indices,
@@ -1960,7 +2027,7 @@ impl LowerAnvilTerrain {
             );
         }
         log.omit(
-            "ground layers' occlusion, altitude ramps, detail normals and masks and per-cell uv rotation (not lowered)",
+            "ground layers' altitude ramps, masks, detail normals' flattening and per-cell uv rotation (not lowered)",
             1,
         );
         Ok(pieces)
@@ -1972,7 +2039,8 @@ impl LowerAnvilTerrain {
 struct GroundPiece {
     /// Its colour: a texture, or a layered material and its weights per vertex.
     texture: Option<Entity>,
-    layered: Option<(Entity, Vec<[f32; 4]>)>,
+    /// With its occlusion tint per vertex (`COLOR_0`), where stated.
+    layered: Option<LayeredPiece>,
     uvs: Vec<[f32; 2]>,
     vertices: Option<Vec<u32>>,
     indices: Vec<u32>,

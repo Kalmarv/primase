@@ -91,6 +91,7 @@ fn bank_materials(archive: &mut Archive, bank: At) -> Result<BankMaterials, Erro
                 uv_scale: t.uv_scale,
                 f32_6: t.f32_6,
                 diffuse: None,
+                normal: None,
             },
             t.texture_set,
         )));
@@ -222,21 +223,25 @@ pub fn read_terrain(
             block_8,
         });
     }
-    // the diffuse of each material the tiles' rasters use, read once per TextureSet
+    // the diffuse and normal of each material the tiles' rasters use, read once per TextureSet and slot
     let used: BTreeSet<u8> = tiles.iter().flat_map(|t| t.material.iter().copied()).collect();
-    let mut sets: HashMap<u64, Option<Entity>> = HashMap::new();
+    let mut sets: HashMap<(u64, usize), Option<Entity>> = HashMap::new();
     let mut read = Vec::with_capacity(details.len());
     for (index, d) in (0u8..=u8::MAX).zip(details) {
         read.push(match d {
             Some((mut detail, Some(set))) if used.contains(&index) => {
-                detail.diffuse = match sets.get(&set) {
-                    Some(&e) => e,
-                    None => {
-                        let e = read_texture_set_slot(archive, w, set, 0)?;
-                        sets.insert(set, e);
-                        e
-                    }
+                let mut slot = |s: usize| -> Result<Option<Entity>, Error> {
+                    Ok(match sets.get(&(set, s)) {
+                        Some(&e) => e,
+                        None => {
+                            let e = read_texture_set_slot(archive, w, set, s)?;
+                            sets.insert((set, s), e);
+                            e
+                        }
+                    })
                 };
+                detail.diffuse = slot(0)?;
+                detail.normal = slot(1)?;
                 Some(detail)
             }
             Some((detail, _)) => Some(detail),
