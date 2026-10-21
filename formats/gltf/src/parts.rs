@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use primase_core::convert::{Finished, Notice, NoticeKind, Writer};
 use primase_core::pass::Target;
-use primase_core::state::{Condition, StateOverride};
+use primase_core::state::{Condition, PrimitiveCondition, StateAxis, StateOverride};
 use primase_core::{
     Asset, Clip, ClipBinding, Component, Entity, Instance, LayeredMaterial, Light, Lods, MaterialVariants,
     Mesh, MeshFile, MorphWeights, Morphs, Name, RigInstance, RigPose, Shadows, Skeleton, Skin, SkinInstance,
@@ -25,7 +25,19 @@ use crate::{WriteOptions, WriteReport, write_file};
 /// `resolve-state` chooses one). Levels of detail are counted, not chosen (`select-lod` chooses). Every other name is
 /// carried: into the extras where it has a JSON form, counted where it has none (see [`crate::write`]).
 pub fn target() -> Target {
-    Target::new("gltf")
+    target_for(false)
+}
+
+/// What the preview writer writes ([`crate::preview::PreviewParts`]): [`target`]'s rules, except that the state a
+/// preview leaves unresolved is legal, since the manifest carries it: axes, conditions on placements and on an
+/// asset's parts, per-primitive conditions and overrides.
+pub fn preview_target() -> Target {
+    target_for(true)
+}
+
+fn target_for(preview: bool) -> Target {
+    let state = |t: Target, name: &str| if preview { t.legal(name) } else { t.illegal(name) };
+    let t = Target::new("gltf")
         .check::<Transform>("no transform sheared (bake-nonrigid first)", |t| {
             t.classify() != TransformKind::Sheared
         })
@@ -51,10 +63,15 @@ pub fn target() -> Target {
         .legal(MorphWeights::NAME)
         .legal(Clip::NAME)
         .legal(ClipBinding::NAME)
-        .illegal(Condition::NAME)
-        .illegal(StateOverride::NAME)
-        .carry_unknown()
+        .carry_unknown();
+    let t = state(t, Condition::NAME);
+    let t = state(t, PrimitiveCondition::NAME);
+    let t = state(t, StateOverride::NAME);
+    if preview { t.legal(StateAxis::NAME) } else { t }
 }
+
+/// Counts, by component name, of what a part's consumer carries beyond the glTF.
+pub(crate) type Carried = fn(&World) -> BTreeMap<&'static str, u64>;
 
 /// One GLB per part, into a folder (see the module documentation), each written as [`crate::write_file`] writes a
 /// world with the given options. What the writer leaves out is told once per reason over every part, the files as
@@ -67,6 +84,9 @@ pub struct GlbParts {
     files: Vec<(String, u64)>,
     /// What every part left out: (kind, reason) -> (count, files).
     omitted: BTreeMap<(NoticeKind, String), (u64, Vec<String>)>,
+    /// What a consumer of the files carries elsewhere (the preview manifest), per part: components on entities the
+    /// glTF does not write, by name and count, not told as left out.
+    carried: Option<Carried>,
 }
 
 impl GlbParts {
@@ -93,7 +113,53 @@ impl GlbParts {
             options,
             files: Vec::new(),
             omitted: BTreeMap::new(),
+            carried: None,
         })
+    }
+
+    /// Components carried elsewhere than in the glTF (`carried` counts them per part, by name), so not told as left
+    /// out on entities the glTF does not write.
+    pub(crate) fn carrying(mut self, carried: Carried) -> GlbParts {
+        self.carried = Some(carried);
+        self
+    }
+
+    /// Write one part (named as the module documentation says) and take what it left out into the totals: its file
+    /// name and the writer's report, which says where each thing is in the file.
+    pub(crate) fn write_part(
+        &mut self,
+        part: &World,
+    ) -> primase_core::convert::Result<(String, WriteReport)> {
+        let name = file_name(part, self.files.len());
+        if self.files.iter().any(|(f, _)| *f == name) {
+            return Err(format!(
+                "two parts are written to {name}: their assets' sources (or names) make one file name"
+            )
+            .into());
+        }
+        let mut report = write_file(part, &self.options, &self.folder.join(&name))?;
+        for (name, n) in self.carried.map(|c| c(part)).unwrap_or_default() {
+            if let Some(left) = report.components_unwritten.get_mut(name) {
+                *left = left.saturating_sub(n);
+                if *left == 0 {
+                    report.components_unwritten.remove(name);
+                }
+            }
+        }
+        for (kind, reason, n) in omissions(&report, self.options.include_unplaced) {
+            let (count, files) = self.omitted.entry((kind, reason)).or_default();
+            *count += n;
+            if files.len() < primase_core::convert::NOTICE_EXAMPLES {
+                files.push(name.clone());
+            }
+        }
+        self.files.push((name.clone(), report.glb_bytes));
+        Ok((name, report))
+    }
+
+    /// Each file written so far, its bytes, in order.
+    pub(crate) fn files(&self) -> &[(String, u64)] {
+        &self.files
     }
 }
 
@@ -263,23 +329,7 @@ impl Writer for GlbParts {
     }
 
     fn write(&mut self, part: &World) -> primase_core::convert::Result<()> {
-        let name = file_name(part, self.files.len());
-        if self.files.iter().any(|(f, _)| *f == name) {
-            return Err(format!(
-                "two parts are written to {name}: their assets' sources (or names) make one file name"
-            )
-            .into());
-        }
-        let report = write_file(part, &self.options, &self.folder.join(&name))?;
-        for (kind, reason, n) in omissions(&report, self.options.include_unplaced) {
-            let (count, files) = self.omitted.entry((kind, reason)).or_default();
-            *count += n;
-            if files.len() < primase_core::convert::NOTICE_EXAMPLES {
-                files.push(name.clone());
-            }
-        }
-        self.files.push((name, report.glb_bytes));
-        Ok(())
+        self.write_part(part).map(|_| ())
     }
 
     fn finish(self: Box<Self>) -> primase_core::convert::Result<Finished> {

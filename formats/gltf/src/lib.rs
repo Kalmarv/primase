@@ -4,6 +4,8 @@
 //!   nodes, `pbr.material`s, embedded PNGs, dialect components in extras); see [`write`](mod@write) for the rules.
 //! - [`prepare`]: `prepare-gltf-materials` and `fill-missing-texcoords`.
 //! - [`read`](mod@read): a glTF document into a world of one asset (skeletons, skins, morphs, placements, clips).
+//! - [`preview`]: the preview export, GLBs plus a documented manifest of the choices they leave open, and the recipe a
+//!   site hands back.
 //! - [`parts`]: the writer in a conversion, its [`target`] and [`GlbParts`] (one GLB per part: one per object).
 //!
 //! The GLB container, the strict reader and the vertex encoding are `primase-glb`'s.
@@ -13,6 +15,7 @@
 
 pub mod parts;
 pub mod prepare;
+pub mod preview;
 pub mod read;
 mod rig;
 pub mod write;
@@ -21,10 +24,12 @@ use std::path::PathBuf;
 
 use primase_core::Entity;
 
-pub use parts::{GlbParts, target};
+pub use parts::{GlbParts, preview_target, target};
+pub use preview::{Manifest, PreviewParts, Recipe};
 pub use read::{ReadReport, read_glb};
 pub use write::{
-    GroupBy, Piece, Selected, Selection, WriteOptions, WriteReport, write, write_document, write_file,
+    Drawn, GroupBy, Layout, Piece, RigNodes, Selected, Selection, WriteOptions, WriteReport, write,
+    write_document, write_file,
 };
 
 /// Register this crate's passes.

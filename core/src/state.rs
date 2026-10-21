@@ -5,8 +5,8 @@
 //!   default where the source states one (none where a script the reader doesn't read sets it), a scope (the whole
 //!   world, or one entity such as a door) and a class tools act on (`door`, `ipl`, ...).
 //!   Axes are variables, so independent toggles never multiply into enumerated variants.
-//! - A **condition** ([`Condition`]) on a placed entity, or on a part or alternative of an asset (`core.asset`: an
-//!   outfit's pieces), says when it exists: an OR of clauses, each an AND of literals "axis is one of these values"
+//! - A **condition** ([`Condition`]) on a placed entity, on a prototype or on a part or alternative of an asset
+//!   (`core.asset`: an outfit's pieces), says when it exists: an OR of clauses, each an AND of literals "axis is one of these values"
 //!   (a value mask). No condition: always present. A [`PrimitiveCondition`] says the same of each primitive of one
 //!   mesh (a hat drawn as one primitive of the body's mesh), and follows the primitives through every edit
 //!   ([`Component::remap_primitives`]).
@@ -207,6 +207,11 @@ fn placed(e: Entity, w: &World) -> Result<(), String> {
     }
 }
 
+/// Whether `e` is a prototype: it has a mesh (loaded or still in its file), so placements of it may share it.
+fn is_prototype(e: Entity, w: &World) -> bool {
+    w.has::<Mesh>(e) || w.has::<crate::MeshFile>(e)
+}
+
 /// Whether `e` is a part or an alternative of some asset: a member whose presence a choice decides.
 fn is_choosable_member(e: Entity, w: &World) -> bool {
     w.iter::<Asset>().any(|(_, a)| {
@@ -216,8 +221,8 @@ fn is_choosable_member(e: Entity, w: &World) -> bool {
     })
 }
 
-/// When a placed entity, or a part or alternative member of an asset, exists: an OR of clauses. Zero clauses: never
-/// (resolve-state counts these).
+/// When a placed entity, a prototype (an entity with a mesh, which placements share) or a part or alternative member
+/// of an asset exists: an OR of clauses. Zero clauses: never (resolve-state counts these).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Condition(pub Vec<Clause>);
 
@@ -232,9 +237,9 @@ impl Component for Condition {
         crate::json::to_value(self).map(Some)
     }
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
-        if !is_choosable_member(e, w) {
+        if !is_prototype(e, w) && !is_choosable_member(e, w) {
             placed(e, w).map_err(|_| {
-                "on an entity without a transform that is not a part or alternative of an asset: only placed things and chosen members carry state"
+                "on an entity without a transform that is neither a prototype (a mesh) nor a part or alternative of an asset: only placed things, prototypes and chosen members carry state"
                     .to_owned()
             })?;
         }
@@ -389,11 +394,12 @@ fn reduce_condition(c: &Condition, values: &BTreeMap<Entity, u32>) -> Reduced {
 }
 
 /// Take `e`, which is not present in the resolved state, out of the world. A part or alternative of an asset also
-/// leaves its asset's member list, and the placements of it go with it (counted): a member nothing draws any more
-/// leaves nothing referring to it. Any other entity is despawned as it is, and what still references it is left to the
-/// verifier.
+/// leaves its asset's member list, and the placements of a prototype go with it (counted): a prototype nothing draws
+/// any more leaves nothing referring to it. Any other entity is despawned as it is, and what still references it is
+/// left to the verifier.
 fn remove_not_present(w: &mut World, e: Entity, log: &mut PassLog, why: &str) {
-    if is_choosable_member(e, w) {
+    let member = is_choosable_member(e, w);
+    if member || (is_prototype(e, w) && !w.has::<Transform>(e)) {
         let roots: Vec<Entity> = w
             .iter::<Asset>()
             .filter(|(_, a)| a.members.iter().any(|&(m, _)| m == e))
@@ -413,7 +419,9 @@ fn remove_not_present(w: &mut World, e: Entity, log: &mut PassLog, why: &str) {
             crate::ledger::despawn(w, p, log, "its prototype is not present in the resolved state");
             log.count("placements of an absent member, despawned", 1);
         }
-        log.count("asset members despawned", 1);
+        if member {
+            log.count("asset members despawned", 1);
+        }
     }
     crate::ledger::despawn(w, e, log, why);
 }
@@ -1647,7 +1655,7 @@ mod tests {
             (
                 "core.condition",
                 e,
-                "on an entity without a transform that is not a part or alternative of an asset: only placed things and chosen members carry state".to_owned(),
+                "on an entity without a transform that is neither a prototype (a mesh) nor a part or alternative of an asset: only placed things, prototypes and chosen members carry state".to_owned(),
             )
         });
         // overrides

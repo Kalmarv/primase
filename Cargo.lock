@@ -969,6 +969,7 @@ dependencies = [
  "primase-image",
  "primase-meshops",
  "primase-testdata",
+ "serde",
  "serde_json",
  "sha2",
  "thiserror",

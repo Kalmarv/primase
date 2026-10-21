@@ -397,9 +397,7 @@ fn verify_accepts_members_and_primitives_and_refuses_the_rest() {
     assert!(
         f.w.verify_components()
             .iter()
-            .any(|(n, e, m)| *n == Condition::NAME
-                && *e == f.skeleton
-                && m.contains("not a part or alternative"))
+            .any(|(n, e, m)| *n == Condition::NAME && *e == f.skeleton && m.contains("neither a prototype"))
     );
     f.w.remove::<Condition>(f.skeleton);
     // a body that is a member and placed by nobody still takes one

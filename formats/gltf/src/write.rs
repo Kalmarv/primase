@@ -97,6 +97,7 @@ use primase_core::layered::{Channel, Composition, Source};
 use primase_core::pbr::{
     AlphaMode, Filter, Filters, MipFilter, PbrMaterial, Shading, TextureRef, UvTransform, Wrap,
 };
+use primase_core::state::{Condition, PrimitiveCondition, StateOverride};
 use primase_core::{
     BindingId, Clip, ClipBinding, ClipTarget, Extrapolation, Interpolation, JointId, MorphWeights, Morphs,
     Property, Rest, RigInstance, RigPose, Skeleton, Skin, SkinInstance,
@@ -137,6 +138,11 @@ pub struct WriteOptions {
     pub scene_name: Option<String>,
     /// Write only part of the world (a tile of it); `None`: everything.
     pub selection: Option<Selection>,
+    /// Also write, for each placed prototype with [`MaterialVariants`], one glTF mesh per variant it can be drawn with
+    /// (the variants its material maps name, its placements' own and those their `core.state_override`s switch to)
+    /// that no placement draws, so a viewer that switches a placement's variant finds its mesh
+    /// ([`Drawn::variants`]). Not with a [`Selection`].
+    pub all_variants: bool,
 }
 
 /// What to write of the world a tiled writer is given, without changing it: only these placements (instances or
@@ -253,6 +259,39 @@ pub struct WriteReport {
     /// Their components, by name.
     pub components_unwritten: BTreeMap<String, u64>,
     pub glb_bytes: u64,
+    /// Where each thing written is in the glTF, by entity (see [`Layout`]).
+    pub layout: Layout,
+}
+
+/// Where the writer put what it wrote, by the entity it came from, so a consumer that carries more than glTF says
+/// (the preview manifest) can point into the file.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Layout {
+    /// Each placement written as a node.
+    pub placements: BTreeMap<Entity, Drawn>,
+    /// Each rig written as a node tree.
+    pub rigs: BTreeMap<Entity, RigNodes>,
+}
+
+/// A placement as written.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Drawn {
+    /// Its glTF node.
+    pub node: usize,
+    /// The glTF mesh its node draws.
+    pub mesh: usize,
+    /// With [`WriteOptions::all_variants`]: the glTF mesh of each variant the placement can be drawn with (its own
+    /// among them), by [`Instance::variant`] value; empty otherwise.
+    pub variants: BTreeMap<u32, usize>,
+}
+
+/// A rig as written.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RigNodes {
+    /// The rig's root node.
+    pub root: usize,
+    /// Each joint's node.
+    pub joints: BTreeMap<JointId, usize>,
 }
 
 impl fmt::Display for WriteReport {
@@ -352,6 +391,10 @@ const CONSUMED_PLACEMENT: &[&str] = &[
     Shadows::NAME,
     SkinInstance::NAME,
     MorphWeights::NAME,
+    // what the preview manifest carries, by id (the plain writer refuses these: resolve-state first)
+    Condition::NAME,
+    PrimitiveCondition::NAME,
+    StateOverride::NAME,
 ];
 /// A placement's shadows are its node's, also when an entity with a mesh is placed as itself.
 const CONSUMED_PROTOTYPE: &[&str] = &[
@@ -362,6 +405,9 @@ const CONSUMED_PROTOTYPE: &[&str] = &[
     Shadows::NAME,
     Skin::NAME,
     Morphs::NAME,
+    Condition::NAME,
+    PrimitiveCondition::NAME,
+    StateOverride::NAME,
 ];
 /// The extras key shadows are written under (see the module docs).
 const SHADOWS: &str = "primase.shadows";
@@ -412,6 +458,7 @@ pub fn write_document(world: &World, options: &WriteOptions) -> Result<(Document
         layouts: BTreeMap::new(),
         morph_targets: BTreeMap::new(),
         animations: Vec::new(),
+        drawn: BTreeMap::new(),
     };
     let json = w.document()?;
     Ok((Document::new(json, std::mem::take(&mut w.buffers.bin)), w.report))
@@ -517,6 +564,8 @@ struct Writer<'w> {
     /// Per prototype with written morph targets: per primitive its targets, the defaults and the names.
     morph_targets: BTreeMap<Entity, Option<MorphAccessors>>,
     animations: Vec<Value>,
+    /// Each written placement's mesh and variant meshes ([`Drawn`], without its node).
+    drawn: BTreeMap<Entity, (usize, BTreeMap<u32, usize>)>,
 }
 
 /// A prototype's morph targets as written.
@@ -546,10 +595,34 @@ impl Writer<'_> {
             nodes.push(node);
             let index = nodes.len() - 1;
             placement_nodes.insert(place.entity, index);
+            if let Some((mesh, variants)) = self.drawn.remove(&place.entity) {
+                self.report.layout.placements.insert(
+                    place.entity,
+                    Drawn {
+                        node: index,
+                        mesh,
+                        variants,
+                    },
+                );
+            }
             match self.group_key(place) {
                 // glTF places a skinned mesh by its joints: its node is a root
                 Some(key) if !skinned => groups.entry(key).or_default().push(index),
                 _ => roots.push(index),
+            }
+        }
+        for (&(rig, joint), &node) in &self.joint_nodes {
+            if let Some(&root) = self.rig_roots.get(&rig) {
+                self.report
+                    .layout
+                    .rigs
+                    .entry(rig)
+                    .or_insert_with(|| RigNodes {
+                        root,
+                        joints: BTreeMap::new(),
+                    })
+                    .joints
+                    .insert(joint, node);
             }
         }
         if self.options.selection.is_none() {
@@ -860,6 +933,8 @@ impl Writer<'_> {
             TransformKind::Regular | TransformKind::Mirrored => {
                 let mesh_index = self.shared_mesh(&from, mesh, materials, place.variant)?;
                 node.insert("mesh".into(), json!(mesh_index));
+                let variants = self.variant_meshes(place, &from, mesh, mesh_index)?;
+                self.drawn.insert(place.entity, (mesh_index, variants));
                 if kind == TransformKind::Mirrored {
                     self.report.placements_mirrored += 1;
                 }
@@ -957,6 +1032,48 @@ impl Writer<'_> {
                     .or(p.material)
             })
             .collect())
+    }
+
+    /// With [`WriteOptions::all_variants`]: the glTF mesh of each variant `place` can be drawn with (see there), its
+    /// own `mesh_index` for its own; none otherwise, and for a piece (its materials are final).
+    fn variant_meshes(
+        &mut self,
+        place: &Place,
+        from: &MeshFrom,
+        mesh: &Mesh,
+        mesh_index: usize,
+    ) -> Result<BTreeMap<u32, usize>> {
+        let mut out = BTreeMap::new();
+        if !self.options.all_variants || matches!(from.src, Src::Piece(_)) {
+            return Ok(out);
+        }
+        let world = self.world;
+        let mut ids: BTreeSet<u32> = BTreeSet::from([place.variant]);
+        if let Some(v) = world.get::<MaterialVariants>(place.prototype) {
+            ids.extend(v.0.iter().flat_map(|m| m.keys().copied()));
+        }
+        if let Some(o) = world.get::<primase_core::state::StateOverride>(place.entity) {
+            ids.extend(o.0.iter().filter_map(|(_, o)| match o {
+                primase_core::state::Override::Variant(v) => Some(*v),
+                _ => None,
+            }));
+        }
+        for v in ids {
+            let index = if v == place.variant {
+                mesh_index
+            } else {
+                let as_variant = Place {
+                    entity: place.entity,
+                    prototype: place.prototype,
+                    variant: v,
+                    transform: place.transform,
+                };
+                let materials = self.resolve_materials(&as_variant, mesh)?;
+                self.shared_mesh(from, mesh, materials, v)?
+            };
+            out.insert(v, index);
+        }
+        Ok(out)
     }
 
     /// The glTF mesh of a prototype (or a piece) with these materials, made on first use.

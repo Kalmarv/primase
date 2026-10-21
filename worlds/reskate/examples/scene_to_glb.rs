@@ -80,6 +80,7 @@ fn main() -> Result<(), BoxError> {
         include_unplaced: false,
         scene_name: Some(scene_name),
         selection: None,
+        all_variants: false,
     };
     let written = write_file(&world, &options, &out)?;
     println!(
