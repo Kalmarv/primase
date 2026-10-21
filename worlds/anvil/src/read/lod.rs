@@ -1,6 +1,9 @@
 //! A LODSelector resource's body: its five levels (each a reference to a Mesh or none) and its dependencies, read as
-//! stored. Which level a dependency stands for is not read: the reference tool claims dependencies fill the leading
-//! levels without a reference, which no byte here establishes.
+//! stored. The dependencies are the leading levels without a reference, in order ([`StoredLodSelector::level_ids`]):
+//! on every LODSelector of Riders Republic (24,430 by ClassID, a patch's copy replacing its base's) the dependency
+//! count equals the number of leading levels without a reference, and each of the 19,623 dependencies i is a Mesh
+//! whose name ends `_LODi` (the census; RRAssetStudio's claim, which this measures). A selector whose count differs is
+//! refused there.
 //!
 //! The body (little-endian, after the resource's class id and extension): a byte (1), a u32, 7 bytes; five levels of
 //! 48 + 4n bytes, each a u64, 0xA360319A (equal to the CRC-32 of `LODDescriptor`, the name a label), a 10-byte reference
@@ -122,6 +125,25 @@ impl Cursor<'_> {
 }
 
 impl StoredLodSelector {
+    /// Each level's ClassID, none where it has none: its reference, or for the leading levels without one the
+    /// dependencies in order. Refused where the dependency count isn't the number of those leading levels.
+    pub fn level_ids(&self) -> Result<Vec<Option<u64>>, Error> {
+        let leading = self.levels.iter().take_while(|l| l.reference.is_none()).count();
+        if self.dependencies.len() != leading {
+            return Err(Error::Value {
+                what: "dependency count",
+                found: u64::try_from(self.dependencies.len()).unwrap_or(u64::MAX),
+                read: "the number of leading levels without a reference",
+            });
+        }
+        let mut dependencies = self.dependencies.iter();
+        Ok(self
+            .levels
+            .iter()
+            .map(|l| l.reference.map(|r| r.id).or_else(|| dependencies.next().copied()))
+            .collect())
+    }
+
     /// The body parsed.
     pub fn parse(body: &[u8]) -> Result<StoredLodSelector, Error> {
         let mut c = Cursor { b: body, at: 0 };

@@ -146,7 +146,10 @@ pub enum InstancedLevels {
     /// The level whose slot holds the matrices; the object's other mesh levels aren't placed
     /// ([`Placed::levels_unplaced`]).
     Slot,
-    /// Every mesh level, as for a Visual without instances. The census measures what each instance's stored
+    /// Every mesh level from the slot's on, as for a Visual without instances. The levels a LODSelector's dependencies
+    /// fill before it aren't placed at the instances ([`Placed::dependency_levels_unplaced`]): no slot holds them (on
+    /// each of the 45,805 instanced Visuals of Riders Republic whose selector has dependencies, their slots are none
+    /// and the matrices are in the first referenced level's: the census). The census measures what each instance's stored
     /// bounds cover: on an Entity, its matrix (then the Entity's rotation) applied to the LODSelectorInstance's
     /// bounds, within 1e-3 on all 6,422,618 (2 bit-equal), those bounds being the union of every mesh level's stored
     /// bounds (bit-equal on 349,004 of 349,009 instanced Visuals, the finest level's alone on 45,716); on an
@@ -180,6 +183,9 @@ pub struct Placed {
     pub impostor_levels: u64,
     /// Mesh levels of instanced Visuals not placed at their instances (see [`InstancedLevels`]), once per Visual.
     pub levels_unplaced: u64,
+    /// Mesh levels a LODSelector's dependencies fill that an instanced Visual doesn't place at its instances (no slot
+    /// holds them; see [`InstancedLevels::Selector`]), once per Visual.
+    pub dependency_levels_unplaced: u64,
     /// The member references of the EntityGroups placed, in order. Members aren't placed through their group: each is
     /// an Entity or EntityGroup of its own, which the caller places where it lists it.
     pub members: Vec<u64>,
@@ -307,8 +313,10 @@ pub struct Placer<'a> {
     textures: HashMap<u64, Option<Entity>>,
     /// Per object id: its mesh levels (`None`: not a LODSelector or Mesh, none of its levels a Mesh, or in no forge).
     objects: HashMap<u64, Option<Levels>>,
-    /// Per object id: the prototype placing every mesh level.
-    wholes: HashMap<u64, Entity>,
+    /// Per object id: how many of its leading levels its LODSelector's dependencies fill.
+    dependency_levels: HashMap<u64, u8>,
+    /// Per object id and level: the prototype placing every mesh level from that level on.
+    wholes: HashMap<(u64, u8), Entity>,
     /// Per shape id: what it places (see [`Placer::shape`]).
     shapes: HashMap<u64, Result<Parts, u32>>,
     /// The (object, level) pairs whose mesh was refused.
@@ -346,6 +354,7 @@ impl<'a> Placer<'a> {
             materials: HashMap::new(),
             textures: HashMap::new(),
             objects: HashMap::new(),
+            dependency_levels: HashMap::new(),
             wholes: HashMap::new(),
             shapes: HashMap::new(),
             refused_levels: HashSet::new(),
@@ -691,21 +700,24 @@ impl<'a> Placer<'a> {
                     LOD_SELECTOR => {
                         let s =
                             StoredLodSelector::parse(&r.body).map_err(|source| Error::Lod { at, source })?;
+                        let ids = s.level_ids().map_err(|source| Error::Lod { at, source })?;
+                        let filled = u8::try_from(s.dependencies.len()).unwrap_or(u8::MAX);
+                        self.dependency_levels.insert(id, filled);
                         let mut levels = Vec::new();
-                        for (level, l) in (0u8..).zip(&s.levels) {
-                            let Some(reference) = l.reference else {
+                        for (level, id_at) in (0u8..).zip(ids) {
+                            let Some(reference) = id_at else {
                                 continue;
                             };
-                            let mesh = match self.archive.find(reference.id) {
+                            let mesh = match self.archive.find(reference) {
                                 Some(m) => Some((m, self.archive.resource(m)?)),
                                 None => None,
                             };
                             match mesh {
                                 Some((m, r)) if r.type_id == MESH => {
-                                    match self.mesh(m, &r.body, reference.id, placed) {
+                                    match self.mesh(m, &r.body, reference, placed) {
                                         Ok(e) => levels.push((level, e)),
                                         Err(e) => {
-                                            placed.refused.push((reference.id, e.to_string()));
+                                            placed.refused.push((reference, e.to_string()));
                                             self.refused_levels.insert((id, level));
                                         }
                                     }
@@ -722,13 +734,13 @@ impl<'a> Placer<'a> {
         Ok(levels)
     }
 
-    /// The prototype placing every one of `levels` (the object `id`'s): the finest's mesh entity where it is the only
-    /// one, else an entity holding a copy of its AnvilMesh and the others as [`AnvilLods`].
+    /// The prototype placing every one of `levels` (the object `id`'s, from one level on): the finest's mesh entity
+    /// where it is the only one, else an entity holding a copy of its AnvilMesh and the others as [`AnvilLods`].
     fn whole(&mut self, id: u64, levels: &[(u8, Entity)]) -> Option<Entity> {
-        if let Some(&p) = self.wholes.get(&id) {
+        let (&(detail, own), forms) = levels.split_first()?;
+        if let Some(&p) = self.wholes.get(&(id, detail)) {
             return Some(p);
         }
-        let (&(detail, own), forms) = levels.split_first()?;
         let p = if forms.is_empty() {
             own
         } else {
@@ -748,7 +760,7 @@ impl<'a> Placer<'a> {
             );
             p
         };
-        self.wholes.insert(id, p);
+        self.wholes.insert((id, detail), p);
         Some(p)
     }
 
@@ -820,9 +832,19 @@ impl<'a> Placer<'a> {
                         return Err(Error::Slot(at, level));
                     };
                     let every = self.instanced == InstancedLevels::Selector;
+                    // the levels the selector's dependencies fill before the slot's: no slot holds them
+                    let filled = self.dependency_levels.get(&object).copied().unwrap_or(0);
+                    let before = levels.iter().filter(|(l, _)| *l < level).count();
+                    // the slot is the first level after the filled ones, so every level before it is a filled one
+                    let only_filled = filled > 0 && level == filled;
+                    if only_filled {
+                        placed.dependency_levels_unplaced =
+                            placed.dependency_levels_unplaced.saturating_add(before as u64);
+                    }
                     let (prototype, overrides) = match (every, levels.first()) {
-                        (true, Some(&(finest, _))) if finest == level => {
-                            (self.whole(object, &levels).unwrap_or(mesh), shows.overrides)
+                        (true, Some(&(finest, _))) if finest == level || only_filled => {
+                            let from: Levels = levels.iter().copied().filter(|(l, _)| *l >= level).collect();
+                            (self.whole(object, &from).unwrap_or(mesh), shows.overrides)
                         }
                         (true, _) => {
                             return Err(Error::Instances(

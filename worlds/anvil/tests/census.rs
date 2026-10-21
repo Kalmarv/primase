@@ -337,6 +337,14 @@ type GroupInstances = (u64, [f32; 16], Vec<([f32; 16], BoundingVolume)>);
 struct Levels {
     meshes: std::collections::HashMap<u64, [[f32; 3]; 2]>,
     selectors: std::collections::HashMap<u64, Vec<u64>>,
+    /// Each LODSelector's levels' references (none or a ClassID) and its dependencies, by ClassID (later forges
+    /// replacing).
+    lod_shapes: std::collections::HashMap<u64, (Vec<Option<u64>>, Vec<u64>)>,
+    /// Each instanced Visual's object and its slots' kinds (`m` a MeshInstanceData with instance matrices, `M`
+    /// without, `i` an Impostor, `.` none).
+    slot_kinds: Vec<(u64, String)>,
+    /// Every Mesh entry's name by its index id (its ClassID), later forges replacing.
+    mesh_names: std::collections::HashMap<u64, String>,
     groups: Vec<GroupInstances>,
     /// Instanced Entity Visuals: the object and the LODSelectorInstance's bounds.
     entities: Vec<(u64, BoundingVolume)>,
@@ -360,6 +368,16 @@ impl Levels {
             if instances.is_empty() {
                 continue;
             }
+            let kinds = slots
+                .iter()
+                .map(|s| match s {
+                    Slot::Mesh(m) if m.instances.is_empty() => 'M',
+                    Slot::Mesh(_) => 'm',
+                    Slot::Impostor(_) => 'i',
+                    Slot::None => '.',
+                })
+                .collect();
+            self.slot_kinds.push((object.id, kinds));
             if group {
                 self.groups.push((object.id, e.matrix, instances));
             } else {
@@ -383,6 +401,58 @@ impl Levels {
 
     /// The measurements, as tallies.
     fn measure(&self, tallies: &mut BTreeMap<&'static str, Tally>) {
+        // a LODSelector's dependencies against its levels without a reference: the pattern (- none, R a reference)
+        // with the dependency count, whether the count is the leading none levels', and the names' _LODi suffixes
+        let suffix = |id: u64, i: usize| match self.mesh_names.get(&id) {
+            None => "name not in any forge's Meshes",
+            Some(n) if n.ends_with(&format!("_LOD{i}")) => "named _LODi",
+            Some(n) if n.to_ascii_lowercase().contains("_lod") => "named with _LOD, not ending _LODi",
+            Some(_) => "named without _LOD",
+        };
+        // an instanced Visual's slots against its selector's levels (D a dependency, R a reference, - none)
+        let t2 = tallies
+            .entry("instanced Visual slots vs its selector's levels")
+            .or_default();
+        for (object, kinds) in &self.slot_kinds {
+            let Some((refs, deps)) = self.lod_shapes.get(object) else {
+                t2.outcome("object not a LODSelector read");
+                continue;
+            };
+            let levels: String = refs
+                .iter()
+                .enumerate()
+                .map(|(i, r)| match r {
+                    Some(_) => 'R',
+                    None if i < deps.len() => 'D',
+                    None => '-',
+                })
+                .collect();
+            t2.outcome(format!("levels {levels}, slots {kinds}"));
+        }
+        let t = tallies
+            .entry("LODSelector dependencies vs its levels")
+            .or_default();
+        for (refs, deps) in self.lod_shapes.values() {
+            let pattern: String = refs.iter().map(|r| if r.is_some() { 'R' } else { '-' }).collect();
+            let leading = refs.iter().take_while(|r| r.is_none()).count();
+            t.outcome(format!("pattern {pattern}, {} dependencies", deps.len()));
+            t.outcome(if deps.len() == leading {
+                "dependency count = leading none levels"
+            } else {
+                "dependency count != leading none levels"
+            });
+            for (i, &d) in deps.iter().enumerate() {
+                t.outcome(format!("dependency i: {}", suffix(d, i)));
+            }
+            for (j, r) in refs.iter().enumerate() {
+                if let Some(id) = r {
+                    t.outcome(format!(
+                        "reference at level j: {}",
+                        suffix(*id, j).replace("LODi", "LODj")
+                    ));
+                }
+            }
+        }
         let t = tallies
             .entry("EntityGroup instance bounds vs R I (its levels' mesh bounds)")
             .or_default();
@@ -465,6 +535,11 @@ fn census_forge(
         std::collections::HashMap::new();
     let mut labels: std::collections::HashMap<u64, std::collections::HashSet<u32>> =
         std::collections::HashMap::new();
+    for (i, n) in forge.index.iter().zip(&forge.names) {
+        if n.type_id == MESH {
+            levels.mesh_names.insert(i.id, n.name.clone());
+        }
+    }
     for k in 0..forge.names.len() {
         let name_type = forge.names[k].type_id;
         let Some(&(type_id, kind)) = KINDS.iter().find(|(t, _)| *t == name_type) else {
@@ -812,12 +887,12 @@ fn census_forge(
                 }),
             LOD_SELECTOR => StoredLodSelector::parse(&r.body)
                 .map(|s| {
-                    let ids = s
-                        .levels
-                        .iter()
-                        .filter_map(|l| l.reference.map(|x| x.id))
-                        .collect();
+                    let ids = s.level_ids().unwrap_or_default().into_iter().flatten().collect();
                     levels.selectors.insert(r.class_id, ids);
+                    let refs = s.levels.iter().map(|l| l.reference.map(|x| x.id)).collect();
+                    levels
+                        .lod_shapes
+                        .insert(r.class_id, (refs, s.dependencies.clone()));
                 })
                 .map_err(|e| e.to_string()),
             MESH_SHAPE => MeshShape::parse(&r.body)
