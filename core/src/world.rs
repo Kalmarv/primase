@@ -917,6 +917,20 @@ impl World {
         ))
     }
 
+    /// The names of `e`'s typed components that hold something per vertex of its mesh ([`Geometry::PerVertex`]), in
+    /// name order: what a pass that joins primitives into one (whose vertices a source primitive's per-vertex data
+    /// does not cover) must refuse, since [`Component::remap_vertices`] maps only one source primitive's vertices.
+    pub fn per_vertex_components(&self, e: Entity) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = self
+            .columns
+            .values()
+            .filter(|c| c.contains(e) && c.geometry() == Geometry::PerVertex)
+            .map(|c| c.name())
+            .collect();
+        names.sort_unstable();
+        names
+    }
+
     /// Every component of `from`, typed and opaque, copied onto `to`, replacing `to`'s of the same name (`to` keeps
     /// the others): for a pass that makes another entity like one it knows only partly (a prototype per tint row,
     /// keeping whatever dialect data the reader attached). References are copied as they are. False, and nothing

@@ -17,6 +17,8 @@ pub use layered_plan::{
 };
 mod draw_collision;
 pub use draw_collision::DrawCollision;
+mod group_primitives;
+pub use group_primitives::GroupPrimitives;
 mod hull;
 mod omit_placements;
 pub use omit_placements::{OmitPlacements, PlacementCollision};
@@ -34,6 +36,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(DrawCollision)),
     });
+    // the limits are the destination's: no default
+    reg.register_requiring(
+        "group-primitives",
+        |o| Ok(Box::new(GroupPrimitives::from_options(o)?)),
+        &[("max-groups", "7"), ("max-vertices", "60000")],
+    );
     reg.register("omit-materialless-primitives", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(OmitMateriallessPrimitives)),
