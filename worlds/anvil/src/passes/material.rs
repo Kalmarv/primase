@@ -47,8 +47,9 @@
 //!   its strength (z rebuilt from the unscaled map, as its shader does); roughness and metalness its `3 - Metalness`.
 //! - **SHD_Nat_Veg_Grass_AO** (§27.14.8; layout B): base colour its diffuse t75 times `1 + AO Mult (COLOR0.a - 1)`,
 //!   that factor written into `COLOR_0` (`(f, f, f, 1)`) of every primitive drawn with it alone, as MAD_FakeForest's
-//!   (an `AO Mult` outside 0 to 1 is the placeholder, reported); its normal map the generic `Texture` t76, the
-//!   TextureSet's slot 1; roughness 1, metalness 0; two-sided where its flags say. Its specular occlusion (0.2) has no
+//!   (an `AO Mult` outside 0 to 1 is the placeholder, reported); its normal map t76 as its binding resolves (on the
+//!   placed two it links a custom texture operator, which isn't read: the mesh's normal, reported); roughness 1,
+//!   metalness 0; two-sided where its flags say. Its specular occlusion (0.2) has no
 //!   PBR place, reported.
 //! - **MAD_Outskirt** (§27.14.3; layout B): its textures sampled at the world position, `uv = (P.xy + offset) scale`
 //!   (`P` the vertex through its placement's matrix, in the source's frame; `offset by 16k`, `divide by 32k`): base
@@ -820,7 +821,7 @@ pub fn world_uv_rows(frame: primase_core::frame::SourceFrame, offset: [f64; 2], 
 }
 
 /// SHD_Nat_Veg_Grass_AO's (§27.14.8): `0: Layer1 Diffuse + Alpha Map` t75, the generic `Texture` t76 (its normal
-/// map, the TextureSet's slot 1); `AO Mult` 1.
+/// map); `AO Mult` 1.
 pub const GRASS_AO: Reads = Reads {
     textures: &[(0, 0x74B9_1491), (1, 0x4DDB_34EE)],
     constants: &[(1, 0x5E05_FBCF)],
@@ -931,38 +932,40 @@ impl Inputs<'_> {
             .and_then(|t| t.texture)
     }
 
-    /// The scalar its template binds at the constant buffer's vec4 `vec4`; 0 where the Material sets none.
-    fn scalar(&self, vec4: u32) -> f64 {
-        let Some(&(key, _)) = self
-            .m
-            .bindings
-            .iter()
-            .find(|(_, b)| *b == MaterialBinding::Scalar { vec4 })
-        else {
-            return 0.0;
-        };
+    /// The value its template binds as `binding`: the Material's property of that key, else the template's default
+    /// (its Operator's).
+    fn bound(&self, binding: MaterialBinding) -> Option<&MaterialValue> {
+        let &(key, _) = self.m.bindings.iter().find(|(_, b)| *b == binding)?;
         self.m
             .values
             .iter()
-            .find_map(|(k, v)| match v {
-                MaterialValue::Float(x) if *k == key => Some(f64::from(*x)),
-                _ => None,
+            .find(|(k, v)| *k == key && !matches!(v, MaterialValue::Texture { .. }))
+            .map(|(_, v)| v)
+            .or_else(|| {
+                self.m
+                    .defaults
+                    .iter()
+                    .find(|(b, _)| *b == binding)
+                    .map(|(_, v)| v)
             })
-            .unwrap_or(0.0)
     }
 
-    /// The vec4 its template binds at the constant buffer's vec4 `vec4`: `None` where it binds none there or the
-    /// Material sets none.
+    /// The scalar its template binds at the constant buffer's vec4 `vec4` (the template's default where the Material
+    /// sets none); 0 where the template binds none there or holds no default.
+    fn scalar(&self, vec4: u32) -> f64 {
+        match self.bound(MaterialBinding::Scalar { vec4 }) {
+            Some(MaterialValue::Float(x)) => f64::from(*x),
+            _ => 0.0,
+        }
+    }
+
+    /// The vec4 its template binds at the constant buffer's vec4 `vec4` (the template's default where the Material sets
+    /// none): `None` where it binds none there or neither holds one.
     fn vector(&self, vec4: u32) -> Option<[f64; 4]> {
-        let &(key, _) = self
-            .m
-            .bindings
-            .iter()
-            .find(|(_, b)| *b == MaterialBinding::Vector { vec4 })?;
-        self.m.values.iter().find_map(|(k, v)| match v {
-            MaterialValue::Float4(x) if *k == key => Some(x.map(f64::from)),
+        match self.bound(MaterialBinding::Vector { vec4 }) {
+            Some(MaterialValue::Float4(x)) => Some(x.map(f64::from)),
             _ => None,
-        })
+        }
     }
 
     /// The texture `source` names.
@@ -982,18 +985,15 @@ impl Inputs<'_> {
         }
     }
 
-    /// The floats of the UV transform its template binds at the constant buffer's vec4 `vec4`: `None` where the
-    /// template binds none there, `Some(None)` where the Material sets none.
+    /// The floats of the UV transform its template binds at the constant buffer's vec4 `vec4` (the template's default
+    /// where the Material sets none): `None` where the template binds none there, `Some(None)` where neither holds one.
     fn uv(&self, vec4: u32) -> Option<Option<&[f32]>> {
-        let &(key, _) = self
-            .m
-            .bindings
-            .iter()
-            .find(|(_, b)| *b == MaterialBinding::UvTransform { vec4 })?;
-        Some(self.m.values.iter().find_map(|(k, v)| match v {
-            MaterialValue::Floats(f) if *k == key => Some(f.as_slice()),
+        let binding = MaterialBinding::UvTransform { vec4 };
+        self.m.bindings.iter().find(|(_, b)| *b == binding)?;
+        Some(match self.bound(binding) {
+            Some(MaterialValue::Floats(f)) => Some(f.as_slice()),
             _ => None,
-        }))
+        })
     }
 }
 
@@ -1516,9 +1516,14 @@ impl Pass for LowerAnvilMaterial {
                     if let Some(d) = diffuse {
                         set_colour(w, d, TexRole::Color);
                     }
-                    let normals = i.source(TextureSource::Set(1));
-                    if let Some(n) = normals {
-                        set_normal(w, n, normal);
+                    let normals = i.texture(1);
+                    match normals {
+                        Some(n) => set_normal(w, n, normal),
+                        None => log.omit(
+                            "Grass_AO normal maps its binding doesn't resolve (a custom texture operator, not read): \
+                             the mesh's normal",
+                            1,
+                        ),
                     }
                     let ao_mult = i.scalar(1);
                     if ao_mult != 0.0 {

@@ -451,14 +451,21 @@ impl BakeAnvilMaterial {
 /// absent): a scalar in `.x`, a vector as stored, a UV transform's 8 floats `su, sv, tu, tv`, speeds, `t`, rotation
 /// speed as the rows `(su cos t, -su sin t, tu, 0)`, `(sv sin t, sv cos t, tv, 0)`, `(0, 0, 1, 0)` (docs/material-spec.md
 /// §12.2) where `t` and the speeds are 0 (`(su, 0, tu, 0)`, `(0, sv, tv, 0)`: a rotation's rows were matched to 5
-/// digits only, and the time term isn't known). A bound property the Material doesn't set, or a UV transform of
-/// another form, is an error naming it.
+/// digits only, and the time term isn't known). A bound property neither the Material nor its template (its
+/// Operator's default) sets, or a UV transform of another form, is an error naming it.
 fn material_rows(m: &AnvilMaterial) -> Result<BTreeMap<u32, [f32; 4]>, String> {
-    let value = |key: u32| m.values.iter().find(|(k, _)| *k == key).map(|(_, v)| v);
+    // the Material's property of the binding's key, else the template's default for the binding
+    let value = |key: u32, binding: MaterialBinding| {
+        m.values
+            .iter()
+            .find(|(k, v)| *k == key && !matches!(v, MaterialValue::Texture { .. }))
+            .map(|(_, v)| v)
+            .or_else(|| m.defaults.iter().find(|(b, _)| *b == binding).map(|(_, v)| v))
+    };
     let mut rows = BTreeMap::new();
     for &(key, binding) in &m.bindings {
         match binding {
-            MaterialBinding::Scalar { vec4 } => match value(key) {
+            MaterialBinding::Scalar { vec4 } => match value(key, binding) {
                 Some(MaterialValue::Float(x)) => {
                     rows.insert(vec4, [*x, 0.0, 0.0, 0.0]);
                 }
@@ -468,7 +475,7 @@ fn material_rows(m: &AnvilMaterial) -> Result<BTreeMap<u32, [f32; 4]>, String> {
                     ));
                 }
             },
-            MaterialBinding::Vector { vec4 } => match value(key) {
+            MaterialBinding::Vector { vec4 } => match value(key, binding) {
                 Some(MaterialValue::Float4(v)) => {
                     rows.insert(vec4, *v);
                 }
@@ -478,7 +485,7 @@ fn material_rows(m: &AnvilMaterial) -> Result<BTreeMap<u32, [f32; 4]>, String> {
                     ));
                 }
             },
-            MaterialBinding::UvTransform { vec4 } => match value(key) {
+            MaterialBinding::UvTransform { vec4 } => match value(key, binding) {
                 Some(MaterialValue::Floats(f)) => {
                     let &[su, sv, tu, tv, speed_u, speed_v, t, speed_t] = f.as_slice() else {
                         return Err(format!("UV transform {key:08X}: not 8 floats"));

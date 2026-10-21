@@ -22,6 +22,7 @@ fn material(w: &mut World, template: &str) -> Entity {
             values: Vec::new(),
             texture_set: Vec::new(),
             textures: Vec::new(),
+            defaults: Vec::new(),
             frame: primase_core::frame::SourceFrame::WORLD,
             flags: MaterialFlags {
                 blend_mode: 0,

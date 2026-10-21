@@ -116,6 +116,16 @@ fn decal_fx_is_its_team_colour_cut_out_at_its_cell() {
         log.counts["DecalFX Materials lowered (a flat team colour, cut out)"],
         1
     );
+    // its emissive mask's tiling (row 11), which the Material doesn't set: the template's default (its
+    // UVTransformOperator's), no longer reported unset
+    assert!(m.defaults.iter().any(|(b, v)| {
+        *b == MaterialBinding::UvTransform { vec4: 11 }
+            && matches!(v, MaterialValue::Floats(f) if f.len() == 8)
+    }));
+    assert!(
+        !log.omitted.keys().any(|k| k.contains("UV transforms unset")),
+        "{log:?}"
+    );
     // its emission: EmissiveMult g^2 over the exposure (1), coloured by the albedo; g from the template's default mask
     let em = row(&m, 7)[0];
     let k: [f64; 3] = std::array::from_fn(|c| f64::from(pbr.base_color[c]) * em);

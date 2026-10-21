@@ -606,6 +606,8 @@ impl<'a> Placer<'a> {
         let mut shaders = None;
         // each texture binding's key, shader slot and TextureParameter
         let mut texture_bindings: Vec<(u32, u32, Option<template::TextureParameter>)> = Vec::new();
+        // each other binding's default, from its Operator
+        let mut defaults = Vec::new();
         if let Some((id, t)) = template.and_then(|id| Some((id, self.archive.find(id)?))) {
             let body = self.archive.resource(t)?.body;
             if self.read_shaders {
@@ -617,7 +619,25 @@ impl<'a> Placer<'a> {
                     let p = template::texture_parameter(&body, b)
                         .map_err(|source| Error::Bindings { at: t, source })?;
                     texture_bindings.push((b.key, slot, p));
+                    continue;
                 }
+                let binding = match b.kind() {
+                    BindingKind::Scalar { vec4 } => MaterialBinding::Scalar { vec4 },
+                    BindingKind::Vector { vec4 } => MaterialBinding::Vector { vec4 },
+                    BindingKind::UvTransform { vec4 } => MaterialBinding::UvTransform { vec4 },
+                    BindingKind::Texture { .. } | BindingKind::Other => continue,
+                };
+                let value =
+                    match template::operator(&body, b).map_err(|source| Error::Bindings { at: t, source })? {
+                        Some(template::OperatorDefault::Float(x)) => MaterialValue::Float(x),
+                        Some(template::OperatorDefault::Vector(v)) => MaterialValue::Float4(v),
+                        Some(template::OperatorDefault::Integer(v)) => MaterialValue::Int(v),
+                        Some(template::OperatorDefault::Uv { floats, .. }) => {
+                            MaterialValue::Floats(floats.to_vec())
+                        }
+                        _ => continue,
+                    };
+                defaults.push((binding, value));
             }
             bindings = read
                 .iter()
@@ -721,6 +741,7 @@ impl<'a> Placer<'a> {
                 values,
                 texture_set,
                 textures,
+                defaults,
                 frame: self.frame,
                 flags: m.flags(),
                 shaders,

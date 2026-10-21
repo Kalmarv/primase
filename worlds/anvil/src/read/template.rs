@@ -21,15 +21,14 @@
 //! game's pixel shaders on values so placed reproduces their outputs); how far the run extends isn't established, so
 //! every record found is returned, none inferred.
 //!
-//! A texture binding's TextureParameter record ([`texture_parameter`]; Riders Republic docs/material-spec.md §27.0):
-//! its marker 0x7D08460D, a byte 0, its TextureSet channel and slot (u32 each), a u32 0, and two references, the
-//! default set and the default texture (each null where the template names none). It is found as the notes find it,
-//! not by walking the template's object tree (whose layout isn't read): the binding's 10 bytes link a property object
-//! by its u64 id; the object starts where that id first occurs in the body, and its record is the first marker at or
-//! after it. The census (worlds/anvil/tests/template_defaults.rs) checks it on every texture binding of every
-//! MaterialTemplate: a record found and parsed for each (but the two generic bindings of MAD_CHR_Classic_noVWIND_Screen
-//! and _ScreenFlipbook, whose links occur nowhere but in themselves: none), none shared by two bindings of a
-//! template.
+//! Each binding record is a ShaderParameter whose 10 bytes link an Operator of the template's material graph
+//! ([`operator`]; registry-named-fields §12, read by the class registry on every template body): a ConstantFloatValue,
+//! ConstantVectorValue or ConstantIntegerValue holding the property's default `Value`, a UVTransformOperator holding
+//! its default UVTransform, a TextureObject holding its TextureSelector (the TextureParameter record of material-spec
+//! §27.0, [`texture_parameter`]: marker 0x7D08460D, a byte 0, its `TextureSpecificationMethod` (the channel) and
+//! `MapType` (the TextureSet slot), a u32 0, and the default set and texture, each null where the template names none)
+//! and its `SamplerMode`. The census (worlds/anvil/tests/template_defaults.rs) reads every binding's Operator on every
+//! MaterialTemplate, against the registry's worked examples.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -205,35 +204,132 @@ impl Binding {
     }
 }
 
-/// The TextureParameter record of the texture binding `b` of `body` (see the module documentation): `None` where it
-/// isn't a texture binding, links nothing, or its link or a marker after it isn't in the body.
-pub fn texture_parameter(body: &[u8], b: &Binding) -> Result<Option<TextureParameter>, BindingError> {
-    if !matches!(b.kind(), BindingKind::Texture { .. }) {
-        return Ok(None);
+/// The class of each Operator a ShaderParameter links (registry-named-fields §12).
+pub const CONSTANT_FLOAT: u32 = 0xA475_5364;
+pub const CONSTANT_VECTOR: u32 = 0x6497_30E3;
+pub const CONSTANT_INTEGER: u32 = 0xA026_AFF2;
+pub const UV_TRANSFORM_OPERATOR: u32 = 0xEADF_9820;
+/// The UVTransformOperator's owned parameters.
+pub const UV_TRANSFORM: u32 = 0xC52E_2125;
+pub const TEXTURE_OBJECT: u32 = 0x5EF9_EA65;
+pub const TEXTURE_ARRAY: u32 = 0x4C6B_3C62;
+
+/// A binding's linked Operator's default (see the module documentation).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OperatorDefault {
+    /// A ConstantFloatValue's `Value`.
+    Float(f32),
+    /// A ConstantVectorValue's `Value`.
+    Vector([f32; 4]),
+    /// A ConstantIntegerValue's `Value`.
+    Integer(i32),
+    /// A UVTransformOperator's UVTransform: `ScaleU`, `ScaleV`, `TranslationU`, `TranslationV`, their speeds,
+    /// `Rotation`, `RotationSpeed` (a Material's UV-transform property's order), then `ForceDynamic`,
+    /// `AnimateTranslation` and `AnimateRotation`.
+    Uv { floats: [f32; 8], flags: [u8; 3] },
+    /// A TextureObject's (or TextureArray's) TextureSelector and `SamplerMode`.
+    Texture {
+        selector: TextureParameter,
+        sampler_mode: u32,
+    },
+    /// Another Operator, its class: no default read.
+    Other(u32),
+}
+
+/// The length of the input pin at `at` (its u64 id, class and Tag, then its `Source`: `03`, or `02` or `05` and a u64).
+fn input_pin(body: &[u8], at: usize) -> Result<usize, BindingError> {
+    let tag_at = at.checked_add(20).ok_or(BindingError::Short(at))?;
+    match body.get(tag_at) {
+        Some(3) => Ok(21),
+        Some(2 | 5) => Ok(29),
+        Some(_) => Err(BindingError::Parameter(at)),
+        None => Err(BindingError::Short(at)),
     }
+}
+
+/// The Operator the binding `b` of `body` links (registry-named-fields §12): its header `[tag][u64 id][u32 class]` where
+/// the linked id first occurs, its body after the class (the offsets below from the class's first byte: a constant's
+/// `Value` at 31, after its byte, `Active`, `ConstantID`, `Private` and its output pin; a UVTransformOperator's input
+/// pin at 26 and its owned UVTransform after it; a TextureObject's eight output pins from 6, its TextureCoords input
+/// pin at 166, its TextureSelector after it, then MipmapLODBias's input pin and `SamplerMode`). `None` where the binding
+/// links nothing or its id occurs nowhere but in the binding itself (two character templates' generic textures).
+pub fn operator(body: &[u8], b: &Binding) -> Result<Option<OperatorDefault>, BindingError> {
     let Some(link) = b.link() else {
         return Ok(None);
     };
     let id = link.to_le_bytes();
-    // the binding's own link (at its marker + 26) is no object: on two character templates' generic bindings the
-    // linked u64 occurs nowhere else
     let own = b.at.checked_add(26);
-    let Some(object) = body
+    let Some(header) = body
         .windows(8)
         .enumerate()
         .position(|(at, w)| w == id && Some(at) != own)
     else {
         return Ok(None);
     };
-    let marker = TEXTURE_PARAMETER.to_le_bytes();
-    let Some(after) = body
-        .get(object..)
-        .and_then(|rest| rest.windows(4).position(|w| w == marker))
-    else {
-        return Ok(None);
+    let short = BindingError::Short(header);
+    let class_at = header.checked_add(8).ok_or(BindingError::Short(header))?;
+    let at = |offset: usize| class_at.checked_add(offset).ok_or(BindingError::Short(class_at));
+    let word = |offset: usize| -> Result<[u8; 4], BindingError> {
+        let from = at(offset)?;
+        body.get(from..from.saturating_add(4))
+            .and_then(|w| w.try_into().ok())
+            .ok_or(BindingError::Short(from))
     };
-    let at = object.checked_add(after).ok_or(BindingError::Short(object))?;
-    TextureParameter::parse(body, at).map(Some)
+    let f32_at = |offset: usize| word(offset).map(f32::from_le_bytes);
+    let class = u32::from_le_bytes(word(0).map_err(|_| short)?);
+    Ok(Some(match class {
+        CONSTANT_FLOAT => OperatorDefault::Float(f32_at(31)?),
+        CONSTANT_INTEGER => OperatorDefault::Integer(i32::from_le_bytes(word(31)?)),
+        CONSTANT_VECTOR => OperatorDefault::Vector([f32_at(31)?, f32_at(35)?, f32_at(39)?, f32_at(43)?]),
+        UV_TRANSFORM_OPERATOR => {
+            let pin = input_pin(body, at(26)?)?;
+            // the owned UVTransform: its u64 id, its class, then its fields
+            let uv = 26usize.checked_add(pin).ok_or(BindingError::Short(class_at))?;
+            let uv_class = u32::from_le_bytes(word(uv.saturating_add(8))?);
+            if uv_class != UV_TRANSFORM {
+                return Err(BindingError::Parameter(at(uv)?));
+            }
+            let first = uv.saturating_add(12);
+            let mut floats = [0.0f32; 8];
+            for (k, f) in floats.iter_mut().enumerate() {
+                *f = f32_at(first.saturating_add(k.saturating_mul(4)))?;
+            }
+            let flags_at = at(first.saturating_add(32))?;
+            let flags: [u8; 3] = body
+                .get(flags_at..flags_at.saturating_add(3))
+                .and_then(|w| w.try_into().ok())
+                .ok_or(BindingError::Short(flags_at))?;
+            OperatorDefault::Uv { floats, flags }
+        }
+        TEXTURE_OBJECT | TEXTURE_ARRAY => {
+            let pin = input_pin(body, at(166)?)?;
+            // the owned TextureSelector: its u64 id, then its class (the record's marker) and its fields
+            let selector = 166usize.checked_add(pin).ok_or(BindingError::Short(class_at))?;
+            let marker = at(selector.saturating_add(8))?;
+            let parsed = TextureParameter::parse(body, marker)?;
+            // after the selector's 37 bytes from its marker: MipmapLODBias's input pin, then SamplerMode
+            let bias = selector.saturating_add(8).saturating_add(37);
+            let bias_pin = input_pin(body, at(bias)?)?;
+            let sampler_mode = u32::from_le_bytes(word(bias.saturating_add(bias_pin))?);
+            OperatorDefault::Texture {
+                selector: parsed,
+                sampler_mode,
+            }
+        }
+        other => OperatorDefault::Other(other),
+    }))
+}
+
+/// The TextureParameter (TextureSelector) record of the texture binding `b` of `body`: its linked TextureObject's or
+/// TextureArray's ([`operator`]); `None` where it isn't a texture binding or links another Operator or none.
+pub fn texture_parameter(body: &[u8], b: &Binding) -> Result<Option<TextureParameter>, BindingError> {
+    if !matches!(b.kind(), BindingKind::Texture { .. }) {
+        return Ok(None);
+    }
+    Ok(match operator(body, b)? {
+        Some(OperatorDefault::Texture { selector, .. }) => Some(selector),
+        _ => None,
+    })
 }
 
 /// Why a binding record can't be read.

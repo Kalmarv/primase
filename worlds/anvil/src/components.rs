@@ -670,6 +670,10 @@ pub struct AnvilMaterial {
     pub texture_set: Vec<Option<Entity>>,
     /// Its template's texture bindings, each resolved.
     pub textures: Vec<BoundTexture>,
+    /// Its template's default value for each non-texture binding whose Operator holds one (a ConstantFloatValue's,
+    /// ConstantVectorValue's or ConstantIntegerValue's `Value`, a UVTransformOperator's UVTransform as a Material's UV
+    /// property's 8 floats): what the shader reads where the Material sets none (registry-named-fields §12).
+    pub defaults: Vec<(MaterialBinding, MaterialValue)>,
     pub frame: primase_core::frame::SourceFrame,
     pub flags: MaterialFlags,
     /// Its template's shader permutations ([`AnvilShaders`]), where the reader reads them.
