@@ -461,6 +461,8 @@ fn census_forge(
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mut textured: Vec<(Option<u64>, Vec<u32>)> = Vec::new();
+    let mut binding_keys: std::collections::HashMap<u64, std::collections::HashSet<u32>> =
+        std::collections::HashMap::new();
     let mut labels: std::collections::HashMap<u64, std::collections::HashSet<u32>> =
         std::collections::HashMap::new();
     for k in 0..forge.names.len() {
@@ -728,10 +730,27 @@ fn census_forge(
                     Ok(())
                 }),
             MATERIAL_TEMPLATE => template::descriptors(&r.body)
-                .map(|d| {
+                .map_err(|e| e.to_string())
+                .and_then(|d| {
                     labels.insert(r.class_id, d.iter().map(template::Descriptor::key).collect());
-                })
-                .map_err(|e| e.to_string()),
+                    let b = template::bindings(&r.body).map_err(|e| e.to_string())?;
+                    for x in &b {
+                        tally.outcome(match x.kind() {
+                            template::BindingKind::Texture { .. } => "binding: texture",
+                            template::BindingKind::Scalar { .. } => "binding: scalar",
+                            template::BindingKind::Vector { .. } => "binding: vec4",
+                            template::BindingKind::UvTransform { .. } => "binding: uv transform",
+                            template::BindingKind::Other => "binding: another (f3, f4)",
+                        });
+                    }
+                    tally.outcome(match b.len().cmp(&d.len()) {
+                        std::cmp::Ordering::Equal => "bindings as many as descriptors",
+                        std::cmp::Ordering::Less => "bindings fewer than descriptors",
+                        std::cmp::Ordering::Greater => "bindings more than descriptors",
+                    });
+                    binding_keys.insert(r.class_id, b.iter().map(|x| x.key).collect());
+                    Ok(())
+                }),
             LOD_SELECTOR => StoredLodSelector::parse(&r.body)
                 .map(|s| {
                     let ids = s
@@ -756,12 +775,25 @@ fn census_forge(
     let join = tallies
         .entry("Material texture key vs its template's labels")
         .or_default();
-    for (template, keys) in textured {
+    for (template, keys) in &textured {
         for key in keys {
             match template.and_then(|t| labels.get(&t)) {
                 None => join.outcome("template not read in this forge"),
-                Some(set) if set.contains(&key) => join.read += 1,
+                Some(set) if set.contains(key) => join.read += 1,
                 Some(_) => join.refuse(&format!("key {key:#010x} no label of its template"), &label),
+            }
+        }
+    }
+    // and against their own template's binding records' keys
+    let join = tallies
+        .entry("Material texture key vs its template's binding keys")
+        .or_default();
+    for (template, keys) in textured {
+        for key in keys {
+            match template.and_then(|t| binding_keys.get(&t)) {
+                None => join.outcome("template not read in this forge"),
+                Some(set) if set.contains(&key) => join.read += 1,
+                Some(_) => join.refuse(&format!("key {key:#010x} no binding of its template"), &label),
             }
         }
     }

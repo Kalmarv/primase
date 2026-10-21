@@ -12,6 +12,14 @@
 //! join it measures: a Material's texture-property key equals the CRC-32 of the second string of a descriptor in its
 //! own template. What the strings, the byte, the u64 and the u32 mean is not read (the second string reads as a
 //! label: "2 - Normal Map").
+//!
+//! Its binding records ([`bindings`]), found the same way, by their marker: each 0x92D220DD, a u32 key (a property's,
+//! as a Material's records carry it), four u32 f1 to f4, a reference (or a tag-0 form, kept), then 8 bytes kept as
+//! stored. By (f3, f4) the
+//! Riders Republic notes read a record as a texture at shader slot t(75 + f1), a scalar in the material constant
+//! buffer's vec4 f2, a vec4 there, or a UV transform's two rows from vec4 f2 (docs/material-spec.md §2: executing the
+//! game's pixel shaders on values so placed reproduces their outputs); how far the run extends isn't established, so
+//! every record found is returned, none inferred.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -23,6 +31,114 @@ pub use crate::read::material::MATERIAL_TEMPLATE;
 
 /// A descriptor's marker, after its eight zero bytes.
 pub const DESCRIPTOR: u32 = 0xD933_DB50;
+/// A binding record's marker.
+pub const BINDING: u32 = 0x92D2_20DD;
+
+/// One binding record as stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Binding {
+    /// Where its marker starts in the body.
+    pub at: usize,
+    /// Its property's key.
+    pub key: u32,
+    pub f: [u32; 4],
+    pub target: Target,
+    /// The 8 bytes after the reference, as stored (fewer where the body ends first).
+    pub after: Vec<u8>,
+}
+
+/// A binding record's 10 bytes after its four fields.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// A reference (tag 1) or none (tag 3).
+    Reference(Option<crate::read::reference::Reference>),
+    /// Another form, as stored: tag 0 (then a byte and a u64; the generic `Texture` bindings hold it), not read.
+    Stored([u8; 10]),
+}
+
+/// What a binding record binds, by its (f3, f4), as the Riders Republic notes read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BindingKind {
+    /// (0, 3): a texture, at shader slot t(75 + f1).
+    Texture { slot: u32 },
+    /// (1, 0): a scalar, the x of the constant buffer's vec4 f2.
+    Scalar { vec4: u32 },
+    /// (1, 2): a vec4, the constant buffer's vec4 f2.
+    Vector { vec4: u32 },
+    /// (3, 6): a UV transform, its two rows the constant buffer's vec4s f2 and f2 + 1.
+    UvTransform { vec4: u32 },
+    /// Another (f3, f4).
+    Other,
+}
+
+impl Binding {
+    pub fn kind(&self) -> BindingKind {
+        let [f1, f2, f3, f4] = self.f;
+        match (f3, f4) {
+            (0, 3) => BindingKind::Texture { slot: f1 },
+            (1, 0) => BindingKind::Scalar { vec4: f2 },
+            (1, 2) => BindingKind::Vector { vec4: f2 },
+            (3, 6) => BindingKind::UvTransform { vec4: f2 },
+            _ => BindingKind::Other,
+        }
+    }
+}
+
+/// Every binding record of a MaterialTemplate body, in body order: each place the marker starts a record. A record
+/// whose 10 bytes are neither a reference nor the tag-0 form is refused, naming where.
+pub fn bindings(body: &[u8]) -> Result<Vec<Binding>, BindingError> {
+    let marker = BINDING.to_le_bytes();
+    let mut out = Vec::new();
+    for (at, w) in body.windows(4).enumerate() {
+        if w != marker {
+            continue;
+        }
+        let mut c = Cursor { b: body, at };
+        let mut word = || c.take(4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+        let short = BindingError::Short(at);
+        let (Some(_), Some(key), Some(f1), Some(f2), Some(f3), Some(f4)) =
+            (word(), word(), word(), word(), word(), word())
+        else {
+            return Err(short);
+        };
+        let bytes: [u8; crate::read::reference::LENGTH] = c
+            .take(crate::read::reference::LENGTH)
+            .and_then(|b| b.try_into().ok())
+            .ok_or(BindingError::Short(at))?;
+        let target = match bytes {
+            [0, ..] => Target::Stored(bytes),
+            _ => Target::Reference(
+                crate::read::reference::parse(bytes)
+                    .map_err(|source| BindingError::Reference { at, source })?,
+            ),
+        };
+        let after =
+            c.b.get(c.at..c.at.saturating_add(8).min(c.b.len()))
+                .unwrap_or_default()
+                .to_vec();
+        out.push(Binding {
+            at,
+            key,
+            f: [f1, f2, f3, f4],
+            target,
+            after,
+        });
+    }
+    Ok(out)
+}
+
+/// Why a binding record can't be read.
+#[derive(Debug, thiserror::Error)]
+pub enum BindingError {
+    #[error("MaterialTemplate binding at {0}: the body ends inside it")]
+    Short(usize),
+    #[error("MaterialTemplate binding at {at}: {source}")]
+    Reference {
+        at: usize,
+        #[source]
+        source: crate::read::reference::Error,
+    },
+}
 
 /// One descriptor as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
