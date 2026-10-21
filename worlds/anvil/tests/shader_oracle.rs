@@ -598,3 +598,37 @@ fn mad_tex1_uge() {
     };
     emissive(&s, 0x0042_6740_0009_798B, 9, 3, "MAD_Tex1_UGE");
 }
+
+/// MAD_Tex1_Graffiti_Mode (USNAT 181398, at 0x07B7D4): t75 mask, t76 normal map, t77 diffuse; cb3[1] On Off AO,
+/// [3] Color - Logo 0, [4..6] Hue, Saturation, Luminosity, [7] and [8] the team and custom colours with alpha 0 (as
+/// all four Materials ship them; their colour, the blend ratio [9], the shutter tiling [10] and the state value [2]
+/// decoys), the UV rows at 11. o0 = (Tex1's albedo, roughness raw), o1.w metalness raw, o3.x AO, o2.z no emission.
+#[test]
+fn mad_tex1_graffiti_mode() {
+    let Some(s) = shader("DataPC_MAD_USNAT.forge", 181_398, 0x07_B7D4) else {
+        return;
+    };
+    let mut r = Random(0x0181_3980_0007_B7D4);
+    let mut worst = Worst::default();
+    for _ in 0..40 {
+        let (mask, normal, diffuse) = (r.texel(), r.texel(), r.texel());
+        let hsl = [r.range(-0.5, 0.5), r.range(-0.5, 0.5), r.range(-0.5, 0.5)];
+        let ao_on = r.next();
+        let mut cb3 = r.decoys(13);
+        set(&mut cb3, 1, ao_on);
+        set(&mut cb3, 3, 0.0);
+        for (row, v) in hsl.into_iter().enumerate() {
+            set(&mut cb3, row + 4, v);
+        }
+        cb3[7][3] = 0.0;
+        cb3[8][3] = 0.0;
+        uv_rows(&mut cb3, 11);
+        let out = run(&s, &[(75, mask), (76, normal), (77, diffuse)], &cb3, r.texel());
+        worst.rgb("albedo", out[0], tinted(rgb(diffuse), mask[0], hsl));
+        worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
+        worst.see("metalness", out[1][3], metalness(normal[2], None));
+        worst.see("occlusion", out[3][0], occlusion(mask[2], ao_on));
+        worst.see("emission", out[2][2], 0.0);
+    }
+    worst.check("MAD_Tex1_Graffiti_Mode");
+}

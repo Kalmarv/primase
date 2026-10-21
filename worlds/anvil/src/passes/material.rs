@@ -33,13 +33,16 @@
 //!   [`DECALS1`] §13.2, [`TEX1_TERRAIN_BLEND`] §15.1: Tex1 with its UV at 15 and metalness 0 (layout B), its blend
 //!   toward the terrain's colour near the ground left out, reported), and only if its template binds those
 //!   properties there; otherwise the placeholder, reported.
+//! - **MAD_Tex1_Graffiti_Mode** (§17.2, [`TEX1_GRAFFITI`]): as MAD_Tex1 (its mask and normal map from the TextureSet's
+//!   slots 7 and 1, metalness and roughness raw, no vertex colour) where its logo is 0 and its team and custom
+//!   colours' alphas 0, as on all four of its Materials; otherwise the placeholder, reported (runtime state).
 //! - **MAD_Tex1_Emissive, MAD_Tex1_UGE** (§14.3, [`TEX1_EMISSIVE`], [`TEX1_UGE`]): Tex1's shape without a mask:
 //!   the diffuse t76 tinted everywhere, its alpha times `Alpha`; roughness the normal map t75's alpha raw, metalness
 //!   `b * Metalness`; no occlusion. Emission the emissive mask t77's red (UGE: its alpha) times `Emissive Scale`
 //!   over the stated `emissive-exposure` (the shader divides by the engine's exposure texture t23, whose value isn't
-//!   known: §17.1), a texture of that lane and a factor (above 1 carried in the emissive strength). The G-buffer holds
-//!   the emission's intensity only: its colour (drawn white) is reported, as is UGE's `Overriden Emissive Scale`
-//!   (read only by the instanced permutations).
+//!   known: §17.1), coloured by the albedo (the ambient pass emits albedo times that intensity: §23 (4)): a texture of
+//!   the tinted diffuse times that lane, and a factor (above 1 carried in the emissive strength). UGE's `Overriden
+//!   Emissive Scale` (read only by the instanced permutations) is reported.
 //!   Tex1's vertex-colour factor `1 + Vertex Color Intensity (COLOR0.rgb - 1)` is the mesh's COLOR_0 product where the
 //!   intensity is 1 (a consumer multiplies COLOR0's alpha in too, which the shader doesn't: reported), none where 0,
 //!   and otherwise not lowered, reported. Every other Material is marked [`VertexColor::Ignored`] (its shader takes no
@@ -228,20 +231,33 @@ pub struct Tex1Layout {
     pub translucency: Option<u32>,
     /// Its switch blending toward the terrain's colour near the ground (none: no such blend).
     pub terrain_blend: Option<u32>,
-    /// Whether it samples a mask (t77, the TextureSet's slot 7).
-    pub mask: bool,
+    /// Its normal map's and diffuse's textures.
+    pub normal: TextureSource,
+    pub diffuse: TextureSource,
+    /// Its mask (tint by red, occlusion by blue), if it samples one.
+    pub mask: Option<TextureSource>,
     /// Its emission (none: it emits nothing).
     pub emission: Option<Emission>,
     /// Its `Alpha`, multiplying the diffuse's alpha (none: the alpha as sampled).
     pub alpha: Option<u32>,
 }
 
-/// An emissive template's emission: its emissive mask (t77)'s lane `lane` times the scalar at vec4 `scale`, over the
+/// An emissive template's emission: its emissive mask's lane `lane` times the scalar at vec4 `scale`, over the
 /// exposure.
 #[derive(Clone, Copy, Debug)]
 pub struct Emission {
+    pub mask: TextureSource,
     pub scale: u32,
     pub lane: usize,
+}
+
+/// Where a template's texture comes from.
+#[derive(Clone, Copy, Debug)]
+pub enum TextureSource {
+    /// The Material's texture its template binds at shader slot `t(75 + n)`.
+    Bound(u32),
+    /// The Material's TextureSet's slot (a generic `Texture` binding, docs/material-spec.md §4.2, §17.2).
+    Set(usize),
 }
 
 /// MAD_Tex1 (docs/material-spec.md §4.2): `3 - Metalness` 1, `Hue` 2, `Saturation` 3, `Luminosity` 4,
@@ -265,7 +281,9 @@ pub const TEX1: Tex1Layout = Tex1Layout {
     uv: Some(8),
     translucency: None,
     terrain_blend: None,
-    mask: true,
+    normal: TextureSource::Bound(0),
+    diffuse: TextureSource::Bound(1),
+    mask: Some(TextureSource::Set(7)),
     emission: None,
     alpha: None,
 };
@@ -309,7 +327,9 @@ pub const TEX1_WIND: Tex1Layout = Tex1Layout {
     uv: Some(19),
     translucency: Some(18),
     terrain_blend: None,
-    mask: true,
+    normal: TextureSource::Bound(0),
+    diffuse: TextureSource::Bound(1),
+    mask: Some(TextureSource::Set(7)),
     emission: None,
     alpha: None,
 };
@@ -332,7 +352,9 @@ pub const DECALS1: Tex1Layout = Tex1Layout {
     uv: None,
     translucency: None,
     terrain_blend: None,
-    mask: false,
+    normal: TextureSource::Bound(0),
+    diffuse: TextureSource::Bound(1),
+    mask: None,
     emission: None,
     alpha: None,
 };
@@ -359,8 +381,14 @@ pub const TEX1_EMISSIVE: Tex1Layout = Tex1Layout {
     uv: Some(8),
     translucency: None,
     terrain_blend: None,
-    mask: false,
-    emission: Some(Emission { scale: 2, lane: 0 }),
+    normal: TextureSource::Bound(0),
+    diffuse: TextureSource::Bound(1),
+    mask: None,
+    emission: Some(Emission {
+        mask: TextureSource::Bound(2),
+        scale: 2,
+        lane: 0,
+    }),
     alpha: Some(6),
 };
 
@@ -379,8 +407,47 @@ pub const TEX1_UGE: Tex1Layout = Tex1Layout {
         (9, 0x7091_389B),
     ],
     uv: Some(9),
-    emission: Some(Emission { scale: 2, lane: 3 }),
+    emission: Some(Emission {
+        mask: TextureSource::Bound(2),
+        scale: 2,
+        lane: 3,
+    }),
     ..TEX1_EMISSIVE
+};
+
+/// MAD_Tex1_Graffiti_Mode (§17.2: t75 mask, the TextureSet's slot 7; t76 normal map, its slot 1; t77 `1 - Diffuse
+/// Alpha`, bound): `3 - On Off - AO` 1, State Value 2, `Color - Logo` 3, Hue 4, Saturation 5, Luminosity 6, `Color -
+/// Team` 7 and `Color - Custom` 8 (vec4s), TeamBlendRatio 9, ShutterTiling 10, `Base tiling` 11. Metalness and
+/// roughness the normal map's blue and alpha raw. Tex1's formulas where its team and custom colours' alphas are 0
+/// and its logo 0 (all four Materials): the team colour, its screen-space stripes and the logo atlas are runtime
+/// state.
+pub const TEX1_GRAFFITI: Tex1Layout = Tex1Layout {
+    reads: &[
+        (1, 0x41C2_6236),
+        (2, 0xD2CD_C3FF),
+        (3, 0x89C6_17B6),
+        (4, 0xEE58_1D0E),
+        (5, 0x6577_AE58),
+        (6, 0xFD62_B19F),
+        (7, 0xA9A8_2BBA),
+        (8, 0xB5FD_CCE2),
+        (9, 0xDF0B_BE34),
+        (10, 0xB66D_7487),
+        (11, 0x5FD1_46F2),
+    ],
+    metalness: Metalness::Blue,
+    tint: [4, 5, 6],
+    roughness_offset: None,
+    ao: Some(1),
+    vertex_colour: None,
+    uv: Some(11),
+    translucency: None,
+    terrain_blend: None,
+    normal: TextureSource::Set(1),
+    diffuse: TextureSource::Bound(2),
+    mask: Some(TextureSource::Set(7)),
+    emission: None,
+    alpha: None,
 };
 
 /// The textures (by shader slot `t(75 + slot)` and key) and constants (by vec4 and key) a template's evaluated pixel
@@ -488,7 +555,8 @@ fn binds(m: &AnvilMaterial, layout: &Tex1Layout) -> bool {
     layout.reads.iter().all(|&(at, key)| {
         m.bindings.iter().any(|(k, b)| {
             *k == key
-                && matches!(b, MaterialBinding::Scalar { vec4 } | MaterialBinding::UvTransform { vec4 } if *vec4 == at)
+                && matches!(b, MaterialBinding::Scalar { vec4 } | MaterialBinding::Vector { vec4 }
+                    | MaterialBinding::UvTransform { vec4 } if *vec4 == at)
         })
     })
 }
@@ -547,6 +615,28 @@ impl Inputs<'_> {
                 _ => None,
             })
             .unwrap_or(0.0)
+    }
+
+    /// The vec4 its template binds at the constant buffer's vec4 `vec4`: `None` where it binds none there or the
+    /// Material sets none.
+    fn vector(&self, vec4: u32) -> Option<[f64; 4]> {
+        let &(key, _) = self
+            .m
+            .bindings
+            .iter()
+            .find(|(_, b)| *b == MaterialBinding::Vector { vec4 })?;
+        self.m.values.iter().find_map(|(k, v)| match v {
+            MaterialValue::Float4(x) if *k == key => Some(x.map(f64::from)),
+            _ => None,
+        })
+    }
+
+    /// The texture `source` names.
+    fn source(&self, source: TextureSource) -> Option<Entity> {
+        match source {
+            TextureSource::Bound(n) => self.texture(n),
+            TextureSource::Set(k) => self.m.texture_set.get(k).copied().flatten(),
+        }
     }
 
     /// The floats of the UV transform its template binds at the constant buffer's vec4 `vec4`: `None` where the
@@ -725,6 +815,7 @@ impl Pass for LowerAnvilMaterial {
                 "MAD_Decals1" => Some(DECALS1),
                 "MAD_Tex1_Emissive" => Some(TEX1_EMISSIVE),
                 "MAD_Tex1_UGE" => Some(TEX1_UGE),
+                "MAD_Tex1_Graffiti_Mode" => Some(TEX1_GRAFFITI),
                 _ => None,
             };
             // whether the Material's shader takes COLOR0 as a factor of the base colour, as COLOR_0 is
@@ -1072,6 +1163,18 @@ impl Pass for LowerAnvilMaterial {
                         ..PbrMaterial::default()
                     }
                 }
+                ("MAD_Tex1_Graffiti_Mode", Some(layout))
+                    if binds(&m, &layout)
+                        && !(i.scalar(3) == 0.0
+                            && [7, 8].iter().all(|&v| i.vector(v).is_some_and(|c| c[3] <= 0.0))) =>
+                {
+                    log.omit(
+                        "Graffiti Materials with a logo or a team or custom colour (alpha above 0, or unset): runtime \
+                         state, a neutral placeholder drawn",
+                        1,
+                    );
+                    placeholder()
+                }
                 (_, Some(layout)) if !binds(&m, &layout) => {
                     log.omit(
                         &format!(
@@ -1083,19 +1186,15 @@ impl Pass for LowerAnvilMaterial {
                     placeholder()
                 }
                 (_, Some(layout)) => {
-                    let normals = i.texture(0);
-                    let diffuse = i.texture(1);
-                    let mask = if layout.mask {
-                        Some(match m.texture_set.get(7).copied().flatten() {
-                            Some(t) => t,
-                            None => {
-                                log.count("Tex1 masks unset: white (stated)", 1);
-                                *white.get_or_insert_with(|| white_texture(w))
-                            }
-                        })
-                    } else {
-                        None
-                    };
+                    let normals = i.source(layout.normal);
+                    let diffuse = i.source(layout.diffuse);
+                    let mask = layout.mask.map(|source| match i.source(source) {
+                        Some(t) => t,
+                        None => {
+                            log.count("Tex1 masks unset: white (stated)", 1);
+                            *white.get_or_insert_with(|| white_texture(w))
+                        }
+                    });
                     let [hue, saturation, luminosity] = layout.tint.map(|v| i.scalar(v));
                     let metal = match layout.metalness {
                         Metalness::Blue => None,
@@ -1146,7 +1245,17 @@ impl Pass for LowerAnvilMaterial {
                         ..TextureRef::new(texture)
                     };
                     let (emissive, emissive_texture, emissive_strength) = match layout.emission {
-                        Some(em) => emission_of(w, &mut made, &i, em, self.emissive_exposure, log)?,
+                        Some(em) => emission_of(
+                            w,
+                            &mut made,
+                            &i,
+                            em,
+                            diffuse,
+                            [hue, saturation, luminosity],
+                            takes_colour,
+                            self.emissive_exposure,
+                            log,
+                        )?,
                         None => ([0.0; 3], None, 1.0),
                     };
                     let alpha = layout.alpha.map_or(1.0, |v| i.scalar(v) as f32);
@@ -1309,14 +1418,24 @@ fn base_colour(
     })
 }
 
-/// An emissive template's emission: the factor, texture and strength of `mask.lane * Scale / exposure`, the mask
-/// t77 its Material binds. A factor above 1 is carried in the strength (the factor within 0-1); none where the
-/// Material binds no mask or its emission is 0, reported where it binds none or its scale is negative.
+/// An emissive template's emission: the factor, texture and strength of `albedo * mask.lane * Scale / exposure`
+/// (docs/material-spec.md §23 (4): the ambient pass emits the G-buffer's albedo times the stored intensity), the
+/// texture the diffuse tinted as the base colour is, times the mask's lane (sampled at the diffuse's texel, as the
+/// tint mask is). A factor above 1 is carried in the strength (the factor within 0-1); none where the Material binds
+/// no diffuse or mask or its emission is 0, reported where it binds none or its scale is negative, and the vertex
+/// colour factor (in the G-buffer's albedo, not in a glTF emission) reported where it is on.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the template's inputs the emission is made of"
+)]
 fn emission_of(
     w: &mut World,
     made: &mut BTreeMap<MadeKey, Entity>,
     i: &Inputs<'_>,
     em: Emission,
+    diffuse: Option<Entity>,
+    hsl: [f64; 3],
+    vertex_colour: bool,
     exposure: f64,
     log: &mut PassLog,
 ) -> Result<([f32; 3], Option<Entity>, f32), String> {
@@ -1333,22 +1452,41 @@ fn emission_of(
         );
         return Ok(none);
     }
-    let Some(mask) = i.texture(2) else {
+    let (Some(mask), Some(diffuse)) = (i.source(em.mask), diffuse) else {
         log.omit(
-            "Emissive Materials' emissive masks unset (the engine's default not known): no emission drawn",
+            "Emissive Materials' emissive masks or diffuses unset (the engine's defaults not known): no emission \
+             drawn",
             1,
         );
         return Ok(none);
     };
-    log.approximate(
-        "Emissive Materials' emission colour (the G-buffer holds its intensity only): drawn white",
-        1,
-    );
+    if vertex_colour {
+        log.omit(
+            "Emissive Materials' vertex-colour factor in their emission (a glTF COLOR_0 multiplies the base colour \
+             only): left out of the emission",
+            1,
+        );
+    }
     let lane = em.lane;
-    let texture = made_texture(w, made, (mask, "emissive", [lane as u64, 0, 0, 0, 0]), |w| {
-        derived(w, mask, TexRole::Color, ColorSpace::Srgb, |_, c| {
-            let v = primase_image::linear_to_srgb8(c[lane]);
-            [v, v, v, 255]
+    let [h, s, l] = hsl.map(f64::to_bits);
+    let key = (
+        diffuse,
+        "emissive",
+        [h, s, l, u64::from(mask.index()), lane as u64],
+    );
+    let Some((mask_image, mask_srgb)) = level_0(w, mask)? else {
+        log.omit(
+            "Emissive Materials' emissive masks without an image: no emission drawn",
+            1,
+        );
+        return Ok(none);
+    };
+    let texture = made_texture(w, made, key, |w| {
+        derived(w, diffuse, TexRole::Color, ColorSpace::Srgb, |t, c| {
+            let rgb = tinted([c[0], c[1], c[2]], 1.0, hsl);
+            let m = sampled(nearest(&mask_image, t), mask_srgb)[lane];
+            let enc = |x: f64| primase_image::linear_to_srgb8(x * m);
+            [enc(rgb[0]), enc(rgb[1]), enc(rgb[2]), 255]
         })
     })?;
     let (factor, strength) = if e <= 1.0 { (e, 1.0) } else { (1.0, e) };
