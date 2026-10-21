@@ -434,7 +434,13 @@ mod tests {
             Some(&definition),
             |_| true,
         );
-        assert_eq!(serde_json::to_value(&source.layered)?, src["layered"]);
+        // the oracle predates Binding::available (the area's catalog holding the texture): the catalog above holds
+        // every texture, so each binding is available
+        let mut expected = src["layered"].clone();
+        for binding in expected["bindings"].as_object_mut().unwrap().values_mut() {
+            binding["available"] = serde_json::Value::Bool(true);
+        }
+        assert_eq!(serde_json::to_value(&source.layered)?, expected);
         assert_eq!(source.mtd, "M[m11_01]_OBJ_Pot1");
         let mut images = BTreeMap::new();
         for (name, entry) in oracle["images"].as_object().unwrap() {
