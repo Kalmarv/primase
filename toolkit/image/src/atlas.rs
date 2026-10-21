@@ -36,16 +36,20 @@
 //! `lower-textures-rgba8` otherwise). Slot atlases with identical pixels and metadata share one texture. The atlases
 //! have their base level only, sampled with clamped wrap and each slot's own filters.
 //!
-//! The new material carries only `pbr.material` (no dialect data of the materials it replaces, which stay as they
-//! are, unused by these meshes). A changed mesh is no longer its file's: the file link goes.
+//! The new material carries `pbr.material` and the core facts its materials state alike: `core.vertex_color`,
+//! `core.draw_order` (compared as drawn, [`DrawOrder::of`]: a material without one draws by its alpha mode) and
+//! `core.material_usage`; materials that differ in one are refused naming it, and a layered material
+//! (`core.layered`) is refused. No dialect data of the materials it replaces is carried (they stay as they are, unused
+//! by these meshes). A changed mesh is no longer its file's: the file link goes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use primase_core::layered::LayeredMaterial;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, Filters, PbrMaterial, TextureRef, TextureSlot, Wrap};
 use primase_core::{
-    ColorSpace, Component, Entity, MaterialVariants, Mesh, MeshFile, Name, NormalConvention, Semantic,
-    Stream, TexFormat, TexRole, Texture, TextureFile, World,
+    ColorSpace, Component, DrawOrder, Entity, MaterialUsage, MaterialVariants, Mesh, MeshFile, Name,
+    NormalConvention, Semantic, Stream, TexFormat, TexRole, Texture, TextureFile, VertexColor, World,
 };
 
 use crate::{Image, Samples, linear_to_srgb8, resize_normals, rgba8_exact, scale_normal, srgb_to_linear};
@@ -327,6 +331,11 @@ type Coordinates = (usize, Vec<[f32; 2]>);
 struct Atlas {
     /// The new material, its texture slots not yet pointing at the textures.
     material: PbrMaterial,
+    /// The core facts every material of the set states alike, carried to the new material (see the module
+    /// documentation).
+    vertex_color: Option<VertexColor>,
+    draw_order: Option<DrawOrder>,
+    usage: Option<MaterialUsage>,
     textures: Vec<(TextureSlot, Texture)>,
     filters: BTreeMap<TextureSlot, Filters>,
     rects: Vec<Rect>,
@@ -384,7 +393,33 @@ impl PackTextureAtlas {
             if m.specular != first.specular {
                 return Err(differs("the specular extension"));
             }
+            if w.get::<VertexColor>(e) != w.get::<VertexColor>(set[0]) {
+                return Err(differs("vertex colour (core.vertex_color)"));
+            }
+            if DrawOrder::of(w, e) != DrawOrder::of(w, set[0]) {
+                return Err(differs(&format!(
+                    "draw order ({:?} against {:?})",
+                    DrawOrder::of(w, set[0]),
+                    DrawOrder::of(w, e)
+                )));
+            }
+            if w.get::<MaterialUsage>(e) != w.get::<MaterialUsage>(set[0]) {
+                return Err(differs("usage (core.material_usage)"));
+            }
         }
+        if let Some(&e) = set.iter().find(|&&e| w.has::<LayeredMaterial>(e)) {
+            return Err(format!(
+                "material {} is layered (core.layered), which an atlas does not hold",
+                label(w, e)
+            ));
+        }
+        // the facts carried: the set's draw order where any material states one (they all draw alike)
+        let vertex_color = w.get::<VertexColor>(set[0]).copied();
+        let draw_order = set
+            .iter()
+            .any(|&e| w.has::<DrawOrder>(e))
+            .then(|| DrawOrder::of(w, set[0]));
+        let usage = w.get::<MaterialUsage>(set[0]).copied();
         for (m, &e) in mats.iter().zip(set) {
             let textured = m
                 .specular
@@ -574,6 +609,9 @@ impl PackTextureAtlas {
         }
         Ok(Atlas {
             material,
+            vertex_color,
+            draw_order,
+            usage,
             textures,
             filters,
             rects,
@@ -654,9 +692,16 @@ impl Pass for PackTextureAtlas {
     fn modifies(&self) -> &[&'static str] {
         &[Mesh::NAME]
     }
-    /// The atlas textures and materials, their names.
+    /// The atlas textures and materials (with the core facts carried), their names.
     fn provides(&self) -> &[&'static str] {
-        &[Texture::NAME, PbrMaterial::NAME, Name::NAME]
+        &[
+            Texture::NAME,
+            PbrMaterial::NAME,
+            VertexColor::NAME,
+            DrawOrder::NAME,
+            MaterialUsage::NAME,
+            Name::NAME,
+        ]
     }
     /// A changed mesh's file link.
     fn removes(&self) -> &[&'static str] {
@@ -730,6 +775,15 @@ impl Pass for PackTextureAtlas {
             }
             let drawn_with = w.spawn();
             w.insert(drawn_with, material);
+            if let Some(v) = atlas.vertex_color {
+                w.insert(drawn_with, v);
+            }
+            if let Some(d) = atlas.draw_order {
+                w.insert(drawn_with, d);
+            }
+            if let Some(u) = atlas.usage {
+                w.insert(drawn_with, u);
+            }
             w.insert(drawn_with, Name(format!("atlas of {} materials", set.len())));
             for (e, coordinates) in edits {
                 let mesh = w.get_mut::<Mesh>(e).expect("listed");

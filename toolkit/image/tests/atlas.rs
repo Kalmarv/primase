@@ -611,3 +611,76 @@ fn grouping_after_the_atlas_joins_a_mesh_drawn_with_several_materials_into_one_p
         Some(&[0, 1, 2, 3, 4, 5, 6, 7, 8][..])
     );
 }
+
+/// The core facts the materials state alike are carried to the atlas material: two decal materials that ignore the
+/// vertex colour give a decal material that ignores it (not an opaque, depth-writing one taking `COLOR_0`); materials
+/// that differ in one, or a layered one, are refused naming it.
+#[test]
+fn the_core_facts_the_materials_share_are_carried_and_those_that_differ_refused() {
+    use primase_core::layered::{LayerWeights, LayeredMaterial, WeightMapping};
+    use primase_core::{DrawLayer, DrawOrder, MaterialUsage, VertexColor};
+    let decal = DrawOrder::conventional(DrawLayer::Decal, 2500);
+    let two = |tweak: &dyn Fn(&mut World, Entity, Entity)| {
+        let mut w = World::new();
+        let (r, g) = (
+            solid(&mut w, (4, 4), [255, 0, 0, 255], TexRole::Color),
+            solid(&mut w, (4, 4), [0, 255, 0, 255], TexRole::Color),
+        );
+        let (a, b) = (coloured(&mut w, Some(r)), coloured(&mut w, Some(g)));
+        for m in [a, b] {
+            w.insert(m, decal);
+            w.insert(m, VertexColor::Ignored);
+            w.insert(m, MaterialUsage::Foliage);
+        }
+        tweak(&mut w, a, b);
+        let e = mesh_with(&mut w, &[a, b]);
+        (run(&mut w, 64), w, e)
+    };
+    let (report, w, e) = two(&|_, _, _| {});
+    report.unwrap();
+    let (m, _) = material_of(&w, e, 0);
+    assert_eq!(material_of(&w, e, 1).0, m, "one atlas material");
+    assert_eq!(w.get::<DrawOrder>(m), Some(&decal));
+    assert!(!w.get::<DrawOrder>(m).unwrap().depth_write);
+    assert_eq!(w.get::<VertexColor>(m), Some(&VertexColor::Ignored));
+    assert_eq!(w.get::<MaterialUsage>(m), Some(&MaterialUsage::Foliage));
+
+    let err = two(&|w, _, b| {
+        w.insert(b, DrawOrder::conventional(DrawLayer::Opaque, 2000));
+    })
+    .0
+    .unwrap_err();
+    assert!(err.contains("draw order") && err.contains("Decal"), "{err}");
+    let err = two(&|w, _, b| {
+        w.remove::<VertexColor>(b);
+    })
+    .0
+    .unwrap_err();
+    assert!(err.contains("vertex colour"), "{err}");
+    let err = two(&|w, _, b| {
+        w.insert(b, MaterialUsage::Water);
+    })
+    .0
+    .unwrap_err();
+    assert!(err.contains("usage"), "{err}");
+    let err = two(&|w, a, _| {
+        w.insert(
+            a,
+            LayeredMaterial {
+                layers: Vec::new(),
+                weights: LayerWeights::new(Semantic::Color(1), WeightMapping::Identity),
+            },
+        );
+    })
+    .0
+    .unwrap_err();
+    assert!(err.contains("layered"), "{err}");
+
+    // no draw order stated: none is carried (the atlas material draws by its alpha mode, as they did)
+    let (report, w, e) = two(&|w, a, b| {
+        w.remove::<DrawOrder>(a);
+        w.remove::<DrawOrder>(b);
+    });
+    report.unwrap();
+    assert!(!w.has::<DrawOrder>(material_of(&w, e, 0).0));
+}

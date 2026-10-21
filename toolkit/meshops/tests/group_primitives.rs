@@ -115,6 +115,28 @@ fn primitives_of_a_material_are_joined_in_order_and_the_file_link_goes() {
     assert_eq!(log.counts["primitives joined by material"], 1);
     assert_eq!(log.declared(Measure::Primitives), 1);
     assert_eq!(log.declared(Measure::Triangles), 0);
+    // the second A now drawn before B: the reorder is an approximation, counted once
+    let reordered = |log: &primase_core::pass::PassLog| {
+        log.approximations
+            .iter()
+            .find(|(k, _)| k.starts_with("primitives drawn earlier than the source"))
+            .map(|(_, &n)| n)
+    };
+    assert_eq!(reordered(log), Some(1));
+    // A, A, B joins without moving anything past B: no approximation
+    let mut w = World::new();
+    let m = materials(&mut w, 2);
+    mesh_of(
+        &mut w,
+        vec![
+            triangle(Some(m[0]), 0.0),
+            triangle(Some(m[0]), 20.0),
+            triangle(Some(m[1]), 10.0),
+        ],
+    );
+    let report = run(&mut w, 2, 100).unwrap();
+    assert_eq!(report.steps[0].log.counts["primitives joined by material"], 1);
+    assert_eq!(reordered(&report.steps[0].log), None);
 }
 
 #[test]

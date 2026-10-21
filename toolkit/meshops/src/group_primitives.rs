@@ -14,7 +14,10 @@
 //!    groups of one material are already one, and a split's parts are filled to within two vertices of `V` (except
 //!    the last), so no two of them fit in `V`.
 //!
-//! The result keeps the draw order of the first primitive each one holds. A primitive that is joined to nothing and
+//! The result keeps the draw order of the first primitive each one holds, so a primitive joined to an earlier one of
+//! its material past a primitive of another (A, B, A: the second A's triangles now drawn before B's) is drawn earlier
+//! than the source draws it: where the surfaces overlap without writing depth the picture can differ (an approximation,
+//! counted per primitive moved). A primitive that is joined to nothing and
 //! needs no split is kept exactly, and a mesh in which none changes is not touched. Primitives are joined only when
 //! they carry the same streams (same semantics and types, refused naming the stream otherwise), and triangle lists
 //! are the only topology (refused otherwise). Joined skinned primitives are given one palette: its slots are the
@@ -271,6 +274,8 @@ struct Plan {
     by_material: u64,
     split_off: u64,
     lost_triangles: u64,
+    /// Primitives drawn earlier than the source draws them: joined to an earlier one past another group's.
+    reordered: u64,
 }
 
 /// A joined primitive's palette and how it is bound: `piece` is its index in the new primitive list.
@@ -335,7 +340,17 @@ impl GroupPrimitives {
                 None => groups.push((p.material, vec![i])),
             }
         }
-        let (mut by_material, mut split_off) = (0u64, 0u64);
+        let (mut by_material, mut split_off, mut reordered) = (0u64, 0u64, 0u64);
+        // the group each primitive is in
+        let group_of: Vec<usize> = prims
+            .iter()
+            .map(|p| {
+                groups
+                    .iter()
+                    .position(|(m, _)| *m == p.material)
+                    .expect("grouped")
+            })
+            .collect();
         let mut pieces: Vec<Piece> = Vec::new();
         for (_, members) in &groups {
             let first = members[0];
@@ -352,6 +367,10 @@ impl GroupPrimitives {
                 join_check(first, j)?;
                 built.append(Built::of(&prims[j], j))?;
                 by_material += 1;
+                // drawn now with the group's first: earlier than a primitive of another group between them
+                if (first + 1..j).any(|k| group_of[k] != group_of[first]) {
+                    reordered += 1;
+                }
             }
             // 2. split by triangles
             let parts = built.split(self.max_vertices)?;
@@ -374,7 +393,8 @@ impl GroupPrimitives {
         if pieces.len() > self.max_groups {
             return Err(if groups.len() > 1 {
                 format!(
-                    "{} primitives drawn with {} materials remain, more than max-groups={}: joining primitives of                      different materials would draw one with the other's; run pack-texture-atlas to give them one",
+                    "{} primitives drawn with {} materials remain, more than max-groups={}: joining primitives of \
+                     different materials would draw one with the other's; run pack-texture-atlas to give them one",
                     pieces.len(),
                     groups.len(),
                     self.max_groups
@@ -468,6 +488,7 @@ impl GroupPrimitives {
             by_material,
             split_off,
             lost_triangles,
+            reordered,
         }))
     }
 }
@@ -617,6 +638,9 @@ impl Pass for GroupPrimitives {
     fn removes(&self) -> &[&'static str] {
         &[MeshFile::NAME]
     }
+    fn approximates(&self) -> &'static str {
+        "the draw order of a primitive joined to an earlier one of its material past another material's"
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let meshes: Vec<Entity> = w.iter::<Mesh>().map(|(e, _)| e).collect();
         // every mesh planned before any changes
@@ -634,6 +658,7 @@ impl Pass for GroupPrimitives {
                 by_material,
                 split_off,
                 lost_triangles,
+                reordered,
             } = plan;
             let (before, made) = (
                 w.get::<Mesh>(e).expect("planned").primitives().len(),
@@ -655,6 +680,13 @@ impl Pass for GroupPrimitives {
             log.count("primitives made", made as u64);
             log.count("primitives joined by material", by_material);
             log.count("parts split off by triangles", split_off);
+            if reordered > 0 {
+                log.approximate(
+                    "primitives drawn earlier than the source draws them (joined to an earlier one of their material \
+                     past another material's)",
+                    reordered,
+                );
+            }
             log.dropped(
                 Measure::Primitives,
                 "joined into another primitive of the mesh, triangles kept",
