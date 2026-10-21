@@ -97,24 +97,28 @@ fn the_reader_declares_every_name_it_emits() {
         oodle: Some(&dll),
         max_output: 1024 * 1024 * 1024,
     };
-    let options = sekiro::Options {
-        region: Some([-170.0, 180.0, -50.0, 300.0]),
-        ..Default::default()
-    };
-    let mut reader = AreaReader::new(&root, "m11_01", decoder, options);
-    let (world, _) = reader.read().unwrap();
-    let all: BTreeSet<_> = world.iter::<Instance>().map(|(e, _)| e).collect();
-    let (loaded, _) = reader.load(&world, &all).unwrap();
+    // read without states and with the event-flag states (the only read that emits conditions and state axes)
+    let mut seen = BTreeSet::new();
+    for states in [sekiro::StateClasses::None, sekiro::StateClasses::Event] {
+        let options = sekiro::Options {
+            region: Some([-170.0, 180.0, -50.0, 300.0]),
+            states,
+            ..Default::default()
+        };
+        let mut reader = AreaReader::new(&root, "m11_01", decoder, options);
+        let (world, _) = reader.read().unwrap();
+        let all: BTreeSet<_> = world.iter::<Instance>().map(|(e, _)| e).collect();
+        let (loaded, _) = reader.load(&world, &all).unwrap();
+        for w in [&world, &loaded] {
+            for n in w.component_names().into_iter().chain(w.resource_names()) {
+                seen.insert(n.to_owned());
+            }
+        }
+    }
     let declared: BTreeSet<&str> = primase_fromsoft::sekiro::convert::EMITTED_NAMES
         .iter()
         .copied()
         .collect();
-    let mut seen = BTreeSet::new();
-    for w in [&world, &loaded] {
-        for n in w.component_names().into_iter().chain(w.resource_names()) {
-            seen.insert(n.to_owned());
-        }
-    }
     let undeclared: Vec<&String> = seen.iter().filter(|n| !declared.contains(n.as_str())).collect();
     assert!(undeclared.is_empty(), "emitted but not declared: {undeclared:?}");
     let unseen: Vec<&&str> = declared.iter().filter(|n| !seen.contains(**n)).collect();
