@@ -43,7 +43,7 @@ use crate::read::entity::{
     StoredEntityGroup, Visual,
 };
 use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
-use crate::read::material::{Payload, StoredMaterial, TEXTURE_MAP};
+use crate::read::material::{Payload, StoredMaterial, StoredTextureSet, TEXTURE_MAP};
 use crate::read::mesh::{MATERIAL, MESH, StoredMesh};
 use crate::read::mesh_shape::{MESH_SHAPE, MeshShape};
 use crate::read::meshes::anvil_mesh;
@@ -114,6 +114,12 @@ pub enum Error {
         at: At,
         #[source]
         source: crate::read::texture::Error,
+    },
+    #[error("{at:?}: {source}")]
+    TextureSet {
+        at: At,
+        #[source]
+        source: crate::read::material::TextureSetError,
     },
     #[error("{at:?}: format code {code}: its codec isn't established")]
     Codec { at: At, code: u32 },
@@ -515,6 +521,17 @@ impl<'a> Placer<'a> {
         }
         let m = StoredMaterial::parse(&r.body).map_err(|source| Error::Material { at, source })?;
         let template = m.references[0].map(|t| t.id);
+        let mut texture_set = Vec::new();
+        if let Some(set_at) = m.references[1].and_then(|s| self.archive.find(s.id)) {
+            let body = self.archive.resource(set_at)?.body;
+            let set =
+                StoredTextureSet::parse(&body).map_err(|source| Error::TextureSet { at: set_at, source })?;
+            texture_set = set
+                .references
+                .iter()
+                .map(|r| r.and_then(|r| self.texture(r.id, placed)))
+                .collect();
+        }
         let mut bindings = Vec::new();
         if let Some(t) = template.and_then(|t| self.archive.find(t)) {
             let body = self.archive.resource(t)?.body;
@@ -548,7 +565,9 @@ impl<'a> Placer<'a> {
                     slot: *slot,
                     channel: *channel,
                 },
-                _ => MaterialValue::Other,
+                Payload::Floats8 { floats, .. } => MaterialValue::Floats(floats.to_vec()),
+                Payload::Floats6 { floats, .. } => MaterialValue::Floats(floats.to_vec()),
+                Payload::Raw45 { .. } => MaterialValue::Other,
             };
             values.push((p.key, value));
         }
@@ -565,6 +584,7 @@ impl<'a> Placer<'a> {
                 template_name,
                 bindings,
                 values,
+                texture_set,
             },
         );
         Ok(Some(e))

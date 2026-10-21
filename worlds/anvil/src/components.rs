@@ -366,6 +366,8 @@ pub enum MaterialValue {
         slot: u32,
         channel: u32,
     },
+    /// Eight or six f32 (two payloads that differ only in their count), as stored.
+    Floats(Vec<f32>),
     /// Another payload, not read here.
     Other,
 }
@@ -379,6 +381,8 @@ pub struct AnvilMaterial {
     pub template_name: Option<String>,
     pub bindings: Vec<(u32, MaterialBinding)>,
     pub values: Vec<(u32, MaterialValue)>,
+    /// Its TextureSet's 19 slots, each its TextureMap's texture entity (empty where it has no TextureSet).
+    pub texture_set: Vec<Option<Entity>>,
 }
 
 impl Component for AnvilMaterial {
@@ -388,6 +392,7 @@ impl Component for AnvilMaterial {
             MaterialValue::Texture { texture, .. } => *texture,
             _ => None,
         }));
+        out.extend(self.texture_set.iter().flatten());
     }
 }
 

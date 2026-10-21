@@ -13,6 +13,7 @@ thiserror.workspace = true
 primase-core.workspace = true
 primase-compress.workspace = true
 primase-hash.workspace = true
+primase-image.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true

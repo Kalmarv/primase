@@ -781,6 +781,7 @@ dependencies = [
  "primase-compress",
  "primase-core",
  "primase-hash",
+ "primase-image",
  "primase-meshops",
  "primase-testdata",
  "primase-texcodec",

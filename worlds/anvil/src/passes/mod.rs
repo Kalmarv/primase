@@ -2,6 +2,9 @@
 
 use std::collections::BTreeMap;
 
+mod material;
+pub use material::{AlphaChoice, LowerAnvilMaterial};
+
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::pbr::{PbrMaterial, TextureRef, Wrap};
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
@@ -1242,6 +1245,11 @@ pub fn register(reg: &mut PassRegistry) {
         &[("by", "one"), ("surface", "rr-diagnostic-unknown")],
     );
     reg.register("lower-anvil-lods", |_| Ok(Box::new(LowerAnvilLods)));
+    reg.register_requiring(
+        "lower-anvil-material",
+        |o| Ok(Box::new(LowerAnvilMaterial::from_options(o)?)),
+        &[("normal-green", "up"), ("alpha", "opaque"), ("unset", "white")],
+    );
     reg.register_requiring(
         "lower-anvil-data-layers",
         |o| Ok(Box::new(LowerAnvilDataLayers::from_options(o)?)),
