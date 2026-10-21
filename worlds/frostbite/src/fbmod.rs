@@ -472,4 +472,29 @@ impl Fbmod {
         self.payloads.push(encoded);
         Ok(self.payloads.len() - 1)
     }
+
+    /// Remove the payloads no entry points at (what an entry given a new payload leaves behind), keeping the others in
+    /// order and renumbering the entries' indices; return how many were removed.
+    pub fn drop_unused_payloads(&mut self) -> usize {
+        let mut used = vec![false; self.payloads.len()];
+        for s in self.entries.iter().filter_map(|e| e.stored.as_ref()) {
+            if let Some(u) = used.get_mut(s.index) {
+                *u = true;
+            }
+        }
+        let mut renumbered = Vec::with_capacity(used.len());
+        let mut next = 0;
+        for &u in &used {
+            renumbered.push(next);
+            next += usize::from(u);
+        }
+        let mut keep = used.iter();
+        self.payloads.retain(|_| keep.next().copied().unwrap_or(false));
+        for s in self.entries.iter_mut().filter_map(|e| e.stored.as_mut()) {
+            if let Some(&n) = renumbered.get(s.index) {
+                s.index = n;
+            }
+        }
+        used.len() - next
+    }
 }

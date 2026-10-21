@@ -276,8 +276,8 @@ impl Source<'_> {
         Ok(out)
     }
 
-    /// The resource with id `rid` of the bundle named `bundle_name` in the TOC at `toc`: its type and its bytes.
-    pub fn resource(&self, toc: &str, bundle_name: &str, rid: u64) -> Result<(u32, Vec<u8>)> {
+    /// The resource with id `rid` of the bundle named `bundle_name` in the TOC at `toc`.
+    pub fn resource(&self, toc: &str, bundle_name: &str, rid: u64) -> Result<Resource> {
         let t = self.folder.toc(toc)?;
         let (_, region) = t
             .bundles
@@ -294,16 +294,28 @@ impl Source<'_> {
             .enumerate()
             .find(|(_, a)| a.rid == rid)
             .ok_or_else(|| Error::Missing(format!("{bundle_name} has no resource {rid:#x}")))?;
-        Ok((
-            a.rtype,
-            self.payload(files[first + m.ebx.len() + i], a.size as usize)?,
-        ))
+        Ok(Resource {
+            name: a.name.clone(),
+            rtype: a.rtype,
+            meta: a.rmeta,
+            bytes: self.payload(files[first + m.ebx.len() + i], a.size as usize)?,
+        })
     }
 
     /// The EBX document at `entry`, read.
     pub fn read_ebx(&self, entry: &EbxEntry) -> Result<crate::ebx::Document> {
         crate::ebx::read(&self.payload(entry.file, entry.size)?)
     }
+}
+
+/// A resource of a bundle ([`Source::resource`]): its name, type and metadata as its manifest states them, and its
+/// bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Resource {
+    pub name: String,
+    pub rtype: u32,
+    pub meta: [u8; 16],
+    pub bytes: Vec<u8>,
 }
 
 /// Where an EBX document of a bundle lies ([`Source::ebx_index`]).

@@ -169,6 +169,27 @@ fn payloads_decode_and_are_shared() -> R {
     Ok(())
 }
 
+#[test]
+fn unused_payloads_are_dropped_and_indices_follow() -> R {
+    let mut m = sample();
+    // the EBX entry is given a new payload; the resource still shares the first
+    let fresh = m.add_payload(b"fresh")?;
+    m.entries[1].stored.as_mut().unwrap().index = fresh;
+    assert_eq!(m.drop_unused_payloads(), 0);
+    // now nothing points at "hello": it goes, the others move down by one
+    m.entries[2].stored.as_mut().unwrap().index = fresh;
+    assert_eq!(m.drop_unused_payloads(), 1);
+    assert_eq!(m.payloads.len(), 2);
+    assert_eq!(
+        m.entries.iter().map(Entry::index).collect::<Vec<_>>(),
+        [None, Some(1), Some(1), Some(0)]
+    );
+    assert_eq!(m.payload(1, None)?, b"fresh");
+    assert_eq!(m.payload(0, None)?.len(), 70_000);
+    assert_eq!(fbmod::read(&fbmod::write(&m)?)?, m);
+    Ok(())
+}
+
 fn refused(bytes: &[u8], what: &str) {
     let e = fbmod::read(bytes).unwrap_err().to_string();
     assert!(e.contains(what), "{e:?} does not say {what:?}");

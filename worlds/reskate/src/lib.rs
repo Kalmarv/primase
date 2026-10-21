@@ -13,6 +13,7 @@ pub mod collision;
 mod collision_pack;
 pub mod compile;
 pub mod components;
+pub mod costume;
 pub mod decal;
 pub mod exact_sum;
 pub mod game;

@@ -39,4 +39,4 @@ workspace = true
 kind = "destination"
 names = ["skate", "reskate", "studio", "frostbite"]
 engine = "primase-frostbite"
-stages = ["compile", "postcompile", "spool"]
+stages = ["compile", "costume", "postcompile", "spool"]

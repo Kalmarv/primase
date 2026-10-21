@@ -16,6 +16,7 @@ pub mod ebx;
 pub mod fbmod;
 pub mod lookup;
 mod read;
+pub mod texture;
 pub mod toc;
 
 pub use read::folder;

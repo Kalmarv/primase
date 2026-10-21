@@ -611,7 +611,7 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_RESKATE_FBMOD",
         kind: Kind::Input,
         gate: false,
-        about: r#"a folder of `.fbmod` files (searched recursively); each is read, written again byte for byte and every payload decoded (`PRIMASE_OODLE9` for Oodle blocks); worlds/frostbite/tests/fbmod.rs"#,
+        about: r#"a folder of `.fbmod` files (searched recursively); each is read, written again byte for byte and every payload decoded (`PRIMASE_OODLE9` for Oodle blocks); worlds/frostbite/tests/fbmod.rs. The costume files among them (top level, with Studio's `<name>.readback.glb` beside them when present) also gate the costume steps with `PRIMASE_SKATE_DATA`: worlds/reskate/tests/costume.rs"#,
         status: Status::Live,
         source: "ReSkate Studio 2026-10-12 `cosmetic-mesh-import` output: our own producer's files, a round-trip baseline, not an oracle",
     },

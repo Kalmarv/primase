@@ -59,7 +59,11 @@ pub fn read_clip(
     let clip = clip_from(
         name,
         &doc,
-        &|rid| src.resource(toc, &bundle, rid).map_err(|e| e.to_string()),
+        &|rid| {
+            src.resource(toc, &bundle, rid)
+                .map(|r| (r.rtype, r.bytes))
+                .map_err(|e| e.to_string())
+        },
         &|d, v, what| import(src, &index, d, v, what),
         skeleton,
     )?;
