@@ -17,6 +17,7 @@ use crate::material_usage::MaterialUsage;
 use crate::pbr::PbrMaterial;
 use crate::priority::Priority;
 use crate::provenance::Provenance;
+use crate::skeleton::Skeleton;
 use crate::state::{Condition, StateAssignment, StateAxis, StateOverride};
 use crate::vertex_color::VertexColor;
 use crate::world::{Component, Resource};
@@ -47,7 +48,7 @@ macro_rules! declared {
 declared! {
     components: Collider, Heightfield, Name, Source, Transform, Instance, Shadows, Mesh, Texture, Light, Collision,
         TextureFile, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, Marker, Curve, MaterialUsage,
-        PbrMaterial, Priority, Provenance, StateAxis, Condition, StateOverride, VertexColor;
+        PbrMaterial, Priority, Provenance, StateAxis, Condition, StateOverride, VertexColor, Skeleton;
     resources: PartScope, PartitionPlan, Environment, StateAssignment, Surfaces,
 }
 
