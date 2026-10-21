@@ -164,12 +164,12 @@ and do not create an origin tile merely because their empty bounds default to ze
 A skate-scene folder's tiles are a conversion like any other: a program runs `convert` with the skate-scene reader,
 the selection `select-lod{form=finest}, lower-skate-lights`, the passes `lower-skate-pbr, normalize-normals,
 fill-missing-texcoords, prepare-gltf-materials{base-color=0.8/0.8/0.8/1,metallic=0,roughness=0.85}` and the web
-writer; with `--features ktx2`, KTX2 encoding on and `prepare-web-textures{...,memo-mib=512}` after those passes for KTX2
-tiles, the memo keeping each texture's preparation, in memory, for the parts that share it (the pass does no
+writer; for KTX2 tiles (`--features ktx2`), KTX2 encoding on and `prepare-web-textures{...,memo-mib=512}` after
+those passes, the memo keeping each texture's preparation, in memory, for the parts that share it (the pass does no
 I/O: a later item could keep budget-fit encodings across runs, stored and restored at the program or writer
-boundary, not by the pass); the
-plain comparison set is a second conversion, plain and without `prepare-web-textures`), one cell at a time,
-so memory holds one cell's closure. The tile parts file a placement by element centre (`split_by_tile`) when its
+boundary, not by the pass), and a plain comparison set written by the same conversion (a second set of
+`convert::tiles`, PNG, uncompressed and not instanced), so it holds the prepared pixels the KTX2 audit compares
+with; one cell at a time, so memory holds one cell's closure. The tile parts file a placement by element centre (`split_by_tile`) when its
 pivot does not locate its geometry: its world-space box, from its prototype GLB's POSITION bounds (the reader's
 prototype box), is wider than a cell on a ground axis, or does not contain its pivot (beyond 1 m), as with a model
 placed at the origin with world-space vertices. A small prop across a cell edge keeps pivot filing and instancing.
@@ -244,20 +244,22 @@ an independent WASM transcoder and peak browser memory are measured separately
 for each export.
 
 `tests/ktx2_audit.rs` is the KTX2 gate: it decodes every mip of every KTX2
-image with the pure-Rust oracle and prints their hashes, which primase-viewer's
-`audit-ktx2.mjs` compares with Three.js' pinned WASM transcoder; against the
-export's `plain/` set it requires PNG images to equal the prepared pixels, the
-cut-out and blend bounds above, and reports per-role channel maxima/means and
-normal-angle maxima/means/p99. It runs on the synthetic fixture
-(`fixture::synthetic_world`; colour p99 within 8) and on a real export,
-`PRIMASE_WEB_KTX2_TILES` (`scene_to_tiles <scene> <out> --ktx2`; colour p99
-within 5, as measured on slice A). A reference image is found in the plain set by
-its name, in whichever plain tile holds it: the plain set tiles on its own (its
-PNG tiles are larger, so a cell may split where the KTX2 one does not).
-Quality samples are deduplicated by source content, role, output dimensions and encoded content.
-Two comparisons distinguish codec error against capped reference pixels from
-end-to-end error against original pixels with nearest-centre reconstruction.
-The latter includes resolution loss and does not model GPU filtering.
+image with the pure-Rust Basis Universal transcoder and prints their hashes,
+which primase-viewer's `audit-ktx2.mjs` compares with Three.js' pinned WASM
+transcoder. The export's `plain/` set is written from the same prepared world
+(one conversion writing both sets), so its PNG images are the encoder's input:
+the audit requires the KTX2 set's PNG images to equal them and the cut-out and
+blend bounds above, and reports per-role channel maxima/means and normal-angle
+maxima/means/p99 of the codec error; an image whose plain twin has another size
+is an error (nothing independent gives its input). It runs on the synthetic
+fixture (`fixture::synthetic_world`; colour p99 within 8) and on a real export,
+`PRIMASE_WEB_KTX2_TILES` (colour p99 within 5, as measured on slice A; blocked:
+the export on hand came from a removed command, its plain set not prepared
+alike). A reference image is found in the plain set by its name, in whichever
+plain tile holds it: the plain set tiles on its own (its PNG tiles are larger, so
+a cell may split where the KTX2 one does not). Quality samples are deduplicated
+by source content, role, output dimensions and encoded content. The resize itself
+is checked with hand-worked values (`ktx2::tests`).
 The p99 angle is an upper bound using 0.001-degree bins; max and mean use the
 unbinned angles. The geometry audit treats both PNG and KTX2 as dimension-only
 textures; these independent pixel audits supply the separate texture gate.

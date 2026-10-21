@@ -531,9 +531,9 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_WEB_KTX2_TILES",
         kind: Kind::Input,
         gate: true,
-        about: r#"a web tile export with KTX2 textures and its plain set: tiles.json, the tiles, images/, plain/tiles.json and its tiles (scene_to_tiles <scene> <out> --ktx2); formats/web/tests/ktx2_audit.rs"#,
-        status: Status::Live,
-        source: r#"our own output (scene_to_tiles --ktx2 of PRIMASE_FROMSOFT_SCENE), checked with an independent decoder (the pure-Rust basisu transcoder) against its own plain set; the hashes it prints are compared with the viewer's WASM transcoder by the viewer's audit"#,
+        about: r#"a web tile export with KTX2 textures and its plain set, both written from the same prepared cell worlds (one conversion writing both sets, `primase_web::convert::tiles`): tiles.json, the tiles, images/, plain/tiles.json and its tiles; formats/web/tests/ktx2_audit.rs"#,
+        status: Status::Blocked,
+        source: r#"the existing export's producer is gone (scene_to_tiles --ktx2 of PRIMASE_FROMSOFT_SCENE, removed) and its plain set was not prepared alike (16 of 172 images at their source size), so nothing independent gives those images' encoder input; replacement: a program converting a scene to both sets in one conversion, its KTX2 images then checked with an independent decoder (the pure-Rust basisu transcoder) against the plain set and the printed hashes with the viewer's WASM transcoder"#,
     },
     Variable {
         name: "PRIMASE_FROMSOFT_BHD_ORACLE",

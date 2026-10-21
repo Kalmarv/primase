@@ -1173,6 +1173,27 @@ mod tests {
         );
     }
 
+    /// The box filter, hand-worked: black and white averaged in linear light is 0.5, which sRGB encodes as
+    /// 1.055 * 0.5^(1/2.4) - 0.055 = 0.73536, 187.5 of 255, so 188; as stored values (a mask) 127.5, so 128; an odd
+    /// edge's three texels all in the one bin, 255 / 3 = 85.
+    #[test]
+    fn resize_averages_colour_in_linear_light_and_keeps_odd_edges() {
+        let black_white = [0, 0, 0, 255, 255, 255, 255, 255];
+        assert_eq!(
+            resize(2, 1, &black_white, Role::Colour, 1, 1),
+            (1, 1, vec![188, 188, 188, 255])
+        );
+        assert_eq!(
+            resize(2, 1, &black_white, Role::Mask, 1, 1),
+            (1, 1, vec![128, 128, 128, 255])
+        );
+        let odd = [0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255];
+        assert_eq!(
+            resize(3, 1, &odd, Role::Mask, 1, 1),
+            (1, 1, vec![85, 85, 85, 255])
+        );
+    }
+
     /// A version 3 material's height maps are masks, and each binding names the texture of its own role: the image
     /// bound as base colour and as a height map is written twice, the height binding moved to the mask's texture.
     #[test]

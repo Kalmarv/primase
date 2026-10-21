@@ -1,9 +1,10 @@
 //! The KTX2 web textures checked from the files a web export wrote, with an independent decoder: every KTX2 image's
 //! every mip level decoded by the pure-Rust Basis Universal transcoder (their hashes printed for the viewer's WASM
-//! transcoder to compare), each image against its plain (PNG) set's: PNG images exactly the prepared pixels, cut-out
-//! visibility changed for fewer than 0.1% of pixels at each material's cutoff, blended alpha p99 within 8 levels, and
-//! per-role codec quality against role-aware prepared reference pixels. Runs on the synthetic fixture always, and on a
-//! real export (`PRIMASE_WEB_KTX2_TILES`) when configured, against the bounds the README states.
+//! transcoder to compare), each image against its plain (PNG) set's, which is the encoder's input (the plain set is
+//! written from the same prepared world; an image of another size there is an error): PNG images exactly those
+//! pixels, cut-out visibility changed for fewer than 0.1% of pixels at each material's cutoff, blended alpha p99
+//! within 8 levels, and per-role codec quality. Runs on the synthetic fixture always, and on a real export
+//! (`PRIMASE_WEB_KTX2_TILES`) when configured, against the bounds the README states.
 #![cfg(feature = "ktx2")]
 #![allow(clippy::unwrap_used)]
 use basisu::{DecodeFlags, TargetFormat, Transcoder};
@@ -16,83 +17,6 @@ mod quality;
 use quality::Quality;
 
 type R<T> = Result<T, Box<dyn std::error::Error>>;
-
-// Independent reference: integer source bins, linear-light colour and normalized normals.
-fn reference(
-    image: primase_image::Image,
-    w: u32,
-    h: u32,
-    role: &str,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let primase_image::Samples::U8(data) = image.samples else {
-        return Err("16-bit reference".into());
-    };
-    if image.width == w && image.height == h {
-        return Ok(data);
-    }
-    let mut out = Vec::new();
-    for y in 0..h {
-        for x in 0..w {
-            let (x0, y0) = (x * image.width / w, y * image.height / h);
-            let (x1, y1) = (
-                ((x + 1) * image.width / w).max(x0 + 1),
-                ((y + 1) * image.height / h).max(y0 + 1),
-            );
-            let mut c = [0.; 4];
-            for sy in y0..y1 {
-                for sx in x0..x1 {
-                    if role == "normal" {
-                        let pos = ((sy * image.width + sx) * 4) as usize;
-                        let v = [data[pos], data[pos + 1], data[pos + 2]].map(|v| v as f64 / 127.5 - 1.);
-                        let length = v.iter().map(|v| v * v).sum::<f64>().sqrt();
-                        for k in 0..3 {
-                            c[k] += v[k] / length;
-                        }
-                        c[3] += data[pos + 3] as f64 / 255.;
-                        continue;
-                    }
-                    for k in 0..4 {
-                        let v = data[((sy * image.width + sx) * 4) as usize + k] as f64 / 255.;
-                        c[k] += if role == "colour" && k < 3 {
-                            if v <= 0.04045 {
-                                v / 12.92
-                            } else {
-                                ((v + 0.055) / 1.055).powf(2.4)
-                            }
-                        } else {
-                            v
-                        };
-                    }
-                }
-            }
-            for v in &mut c {
-                *v /= f64::from((x1 - x0) * (y1 - y0));
-            }
-            if role == "normal" {
-                let normal = [c[0], c[1], c[2]];
-                let length = normal.iter().map(|v| v * v).sum::<f64>().sqrt();
-                for k in 0..3 {
-                    c[k] = if length >= 3f64.sqrt() / 255. {
-                        (normal[k] / length + 1.) / 2.
-                    } else {
-                        [0.5, 0.5, 1.][k]
-                    };
-                }
-            }
-            for (k, mut v) in c.into_iter().enumerate() {
-                if role == "colour" && k < 3 {
-                    v = if v <= 0.0031308 {
-                        12.92 * v
-                    } else {
-                        1.055 * v.powf(1. / 2.4) - 0.055
-                    };
-                }
-                out.push((v * 255.).round().clamp(0., 255.) as u8);
-            }
-        }
-    }
-    Ok(out)
-}
 
 /// An image's bytes: its file beside the tiles (format 2.0, `uri`), or its view of the GLB's binary chunk (1.x).
 fn image_bytes(
@@ -124,7 +48,7 @@ struct Audit {
     compared: u64,
     png: u64,
     near_zero: u64,
-    /// Codec error against the prepared reference, by role.
+    /// Codec error against the encoder's input, by role.
     quality: BTreeMap<String, Quality>,
 }
 
@@ -247,7 +171,20 @@ fn audit(folder: &Path) -> R<Audit> {
             out.near_zero += image["extras"]["primase.web_texture"]["near_zero_cap_average_to_flat"]
                 .as_u64()
                 .unwrap_or(0);
-            let reference = reference(primase_image::read_png(png)?.image, width, height, role)?;
+            // the encoder's input: the plain set's image, written from the same prepared world, is the prepared
+            // pixels; at another size it is not, and nothing independent gives them
+            let plain = primase_image::read_png(png)?.image;
+            let primase_image::Samples::U8(reference) = plain.samples else {
+                return Err(format!("{source_name}: the plain set's image is not RGBA8").into());
+            };
+            if (plain.width, plain.height) != (width, height) {
+                return Err(format!(
+                    "{name} image {i} ({source_name}): {width} x {height}, its plain twin {} x {}: the plain set must \
+                     be written from the same prepared world, so it holds the encoder's input",
+                    plain.width, plain.height
+                )
+                .into());
+            }
             // the consumer's alpha rules, from the materials that bind the image as base colour, in every plain tile
             let bindings = plain_docs.iter().flat_map(|(plain_doc, _)| {
                 plain_doc["materials"]
@@ -401,29 +338,4 @@ fn counted_channel_and_angle_statistics() {
     q.add(&[128, 128, 255, 255], &[128, 128, 0, 255], true);
     assert_eq!(q.report()["normal_over_10_deg"], 1);
     assert_eq!(q.report()["normal_over_10_share"], 0.5);
-}
-#[test]
-fn reference_filters_linear_colour_and_retains_odd_edges() {
-    let image = primase_image::Image {
-        width: 2,
-        height: 1,
-        samples: primase_image::Samples::U8(vec![0, 0, 0, 255, 255, 255, 255, 255]),
-    };
-    assert_eq!(
-        reference(image.clone(), 1, 1, "colour").expect("colour"),
-        [188, 188, 188, 255]
-    );
-    assert_eq!(
-        reference(image, 1, 1, "mask").expect("mask"),
-        [128, 128, 128, 255]
-    );
-    let image = primase_image::Image {
-        width: 3,
-        height: 1,
-        samples: primase_image::Samples::U8(vec![0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255]),
-    };
-    assert_eq!(
-        reference(image, 1, 1, "mask").expect("odd edge"),
-        [85, 85, 85, 255]
-    );
 }
