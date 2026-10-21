@@ -249,6 +249,28 @@ impl Component for AnvilMaterialOverrides {
     }
 }
 
+/// A lake's surface as its WaterComponent stores it (`anvil.water`, on an entity of its own): its patches (each a
+/// square of side `512 >> level` metres from its position, at the water level; in world coordinates, the owner's
+/// matrix not applied: every one of the 2,062 lies in its owner's 1 km cell, which its matrix's translation
+/// centres) and its three atlases (Flow, Params, LocalProfile; `None` where the lake has none or one can't be read).
+/// `lower-anvil-water` makes surfaces of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilWater {
+    pub frame: primase_core::frame::SourceFrame,
+    pub patches: Vec<crate::read::water::WaterPatch>,
+    pub atlases: [Option<Entity>; 3],
+}
+
+impl Component for AnvilWater {
+    const NAME: &'static str = "anvil.water";
+    fn payload_bytes(&self) -> u64 {
+        u64::try_from(self.patches.len() * 49).unwrap_or(u64::MAX)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.atlases.iter().flatten());
+    }
+}
+
 /// A placement's DataLayerActions as its Entity stores them (`anvil.data_layers`), in stored order.
 /// `lower-anvil-data-layers` makes world state of them.
 #[derive(Clone, Debug, PartialEq, Eq)]

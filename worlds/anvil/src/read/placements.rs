@@ -35,7 +35,7 @@ use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{
     AnvilCollisionShape, AnvilDataLayers, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh,
-    CollisionMaterialRef, DataLayerAction, MaterialBinding, MaterialValue, ShapeGeometry,
+    AnvilWater, CollisionMaterialRef, DataLayerAction, MaterialBinding, MaterialValue, ShapeGeometry,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::entity::{
@@ -54,6 +54,7 @@ use crate::read::shape::{
 use crate::read::shapes::anvil_mesh_shape;
 use crate::read::template::{self, BindingKind};
 use crate::read::textures;
+use crate::read::water::{StoredWater, WATER_COMPONENT};
 
 /// Why an Entity can't be placed.
 #[derive(Debug, thiserror::Error)]
@@ -190,6 +191,10 @@ pub struct Placed {
     /// (the notes: of 298 scaled owners of ReferenceList or Sphere shapes, 154 fit only unscaled, 67 only scaled), so
     /// not placed.
     pub scaled_collision: u64,
+    /// The lakes: an entity each, holding its WaterComponent's [`AnvilWater`].
+    pub lakes: Vec<Entity>,
+    /// WaterComponents whose body can't be read as a lake's (recorded in `refused` too, by the owner's ClassID).
+    pub lakes_unread: u64,
 }
 
 /// The column-major 4x4 `m` as a transform, its linear part times `s`.
@@ -874,6 +879,38 @@ impl<'a> Placer<'a> {
                     placed.static_decals = placed.static_decals.saturating_add(1);
                 }
             }
+        }
+        // lakes: each WaterComponent's patches and atlases, on an entity of its own
+        for c in &e.components {
+            let ComponentBody::Raw(body) = &c.body else {
+                continue;
+            };
+            if c.kind != WATER_COMPONENT {
+                continue;
+            }
+            let stored = match StoredWater::parse(body) {
+                Ok(stored) => stored,
+                Err(why) => {
+                    placed.lakes_unread = placed.lakes_unread.saturating_add(1);
+                    placed.refused.push((c.id, why.to_string()));
+                    continue;
+                }
+            };
+            let atlases = stored.atlases.map(|r| r.and_then(|r| self.texture(r.id, placed)));
+            let lake = self.world.spawn();
+            self.world.insert(lake, Name(name.clone()));
+            self.world.insert(
+                lake,
+                AnvilWater {
+                    frame: self.frame,
+                    patches: stored.patches,
+                    atlases,
+                },
+            );
+            if let Some(layers) = &layers {
+                self.world.insert(lake, layers.clone());
+            }
+            placed.lakes.push(lake);
         }
         // collision: each RigidBodyComponent's shape at its owner's T R (an EntityGroup's merged shape spans its
         // instances: the notes, docs/skate-plan.md), where the owner's scale is 1; an instanced Entity's at each of its
