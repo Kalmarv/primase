@@ -746,6 +746,12 @@ impl Pass for LowerAnvilFloor {
 /// is required: the range (an f32 5000 in the Terrain entity, its meaning a tool claim) and the offset (0 by the Riders
 /// Republic notes' 101 props on one plaza) aren't stored as such, and neither the half-sample convention nor the colour
 /// tiles' colour space is established.
+///
+/// With `collision` other than none the ground is also its own collision, on the same prototype: each square's two
+/// triangles of the surface its corner sample with the least x and y names (a square spans four samples, whose
+/// materials may differ: that sample is this pass's choice), by the CollisionMaterial of that sample's material in the
+/// terrain's bank (`collision=collision-material`; `surface` where the bank wasn't read or names none) or `surface`
+/// (`collision=one`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerAnvilTerrain {
     pub rect: [f64; 4],
@@ -754,6 +760,10 @@ pub struct LowerAnvilTerrain {
     pub offset: f64,
     pub sample: CellPoint,
     pub colour: ColorSpace,
+    /// The ground's collision: none, or its triangles' surfaces as [`SurfaceBy`] names them.
+    pub collision: Option<SurfaceBy>,
+    /// The surface of a square whose material has no named CollisionMaterial (or of every square, by one).
+    pub surface: String,
 }
 
 /// A terrain tile's side in samples (and in colour texels), the samples of it its node covers, and its colour tile's
@@ -766,8 +776,23 @@ impl LowerAnvilTerrain {
     /// From its options: `rect=x0,y0,x1,y1`, `step=N`, `range=METRES`, `offset=METRES`, `sample=corner|centre`, all
     /// required.
     pub fn from_options(o: &Options) -> Result<LowerAnvilTerrain, String> {
-        let usage = "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES (neither stored as such),                      sample=corner|centre, colour=srgb|linear";
-        let g = ground_options(o, &["range", "colour"], usage)?;
+        let usage = concat!(
+            "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES (neither stored as such), sample=corner|centre, ",
+            "colour=srgb|linear, collision=none|collision-material|one, and surface=NAME unless collision=none"
+        );
+        let g = ground_options(o, &["range", "colour", "collision", "surface"], usage)?;
+        let collision = match o.get("collision").map(String::as_str) {
+            Some("none") => None,
+            Some("collision-material") => Some(SurfaceBy::CollisionMaterial),
+            Some("one") => Some(SurfaceBy::One),
+            Some(v) => return Err(format!("collision={v} is not none, collision-material or one")),
+            None => return Err(format!("collision is required: {usage}")),
+        };
+        let surface = match (collision, o.get("surface").filter(|s| !s.is_empty())) {
+            (None, None) => String::new(),
+            (_, Some(s)) => s.clone(),
+            (Some(_), None) => return Err(format!("surface is required with collision: {usage}")),
+        };
         let colour = match o.get("colour").map(String::as_str) {
             Some("srgb") => ColorSpace::Srgb,
             Some("linear") => ColorSpace::Linear,
@@ -789,6 +814,8 @@ impl LowerAnvilTerrain {
             offset: g.offset,
             sample: g.sample,
             colour,
+            collision,
+            surface,
         })
     }
 }
@@ -817,7 +844,14 @@ impl Pass for LowerAnvilTerrain {
                 }
                 .to_owned(),
             ),
+            (
+                "collision".to_owned(),
+                self.collision.map_or("none", by_text).to_owned(),
+            ),
         ])
+        .into_iter()
+        .chain((!self.surface.is_empty()).then(|| ("surface".to_owned(), self.surface.clone())))
+        .collect()
     }
     fn requires(&self) -> &[&'static str] {
         &[AnvilTerrain::NAME]
@@ -829,7 +863,12 @@ impl Pass for LowerAnvilTerrain {
             Transform::NAME,
             Texture::NAME,
             PbrMaterial::NAME,
+            Collision::NAME,
+            Surfaces::NAME,
         ]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[Surfaces::NAME]
     }
     fn removes(&self) -> &[&'static str] {
         &[AnvilTerrain::NAME]
@@ -906,12 +945,29 @@ impl Pass for LowerAnvilTerrain {
             let height = u32::try_from(rows.len()).map_err(|_| "too many rows".to_owned())?;
             let flip = t.frame.flips_winding();
             let mut indices = Vec::new();
+            // each square's collision surface: the material at its corner sample with the least x and y
+            let mut square_names: Vec<&str> = Vec::new();
             for r in 0..height - 1 {
                 for c in 0..width - 1 {
                     let [a, b] = [r * width + c, r * width + c + 1];
                     let [d, f] = [a + width, b + width];
                     for tri in [[a, b, f], [a, f, d]] {
                         indices.extend(if flip { [tri[0], tri[2], tri[1]] } else { tri });
+                    }
+                    if let Some(by) = self.collision {
+                        let (gy, gx) = (rows[r as usize], columns[c as usize]);
+                        let node = (gy / TERRAIN_CORE, gx / TERRAIN_CORE);
+                        let at = (gy % TERRAIN_CORE) as usize * TERRAIN_TILE + (gx % TERRAIN_CORE) as usize;
+                        let material = tiles
+                            .get(&node)
+                            .and_then(|tile| tile.material.get(at))
+                            .and_then(|&v| t.materials.get(usize::from(v)))
+                            .and_then(|m| m.as_ref())
+                            .and_then(|m| m.name.as_deref());
+                        square_names.push(match (by, material) {
+                            (SurfaceBy::CollisionMaterial, Some(name)) => name,
+                            _ => &self.surface,
+                        });
                     }
                 }
             }
@@ -979,6 +1035,25 @@ impl Pass for LowerAnvilTerrain {
                     ..PbrMaterial::default()
                 },
             );
+            if self.collision.is_some() {
+                let mut surfaces = w.remove_resource::<Surfaces>().unwrap_or_default();
+                let mut per_square = Vec::with_capacity(square_names.len());
+                for name in &square_names {
+                    per_square.push(surfaces.index(name).map_err(|e| e.to_string())?);
+                    log.count(&format!("ground collision squares of surface {name}"), 1);
+                }
+                w.insert_resource(surfaces);
+                let triangles: Vec<[u32; 3]> = indices.as_chunks::<3>().0.to_vec();
+                let surfaces = per_square.iter().flat_map(|&s| [s, s]).collect();
+                w.insert(
+                    e,
+                    Collision {
+                        positions: positions.clone(),
+                        triangles,
+                        surfaces,
+                    },
+                );
+            }
             let mut streams = BTreeMap::new();
             streams.insert(Semantic::Position, Stream::F32x3(positions));
             streams.insert(Semantic::TexCoord(0), Stream::F32x2(uvs));
@@ -1039,6 +1114,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("offset", "0"),
             ("sample", "corner"),
             ("colour", "srgb"),
+            ("collision", "none"),
         ],
     );
     reg.register_requiring(

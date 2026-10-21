@@ -258,6 +258,9 @@ pub struct TerrainTile {
     /// Its colour tile as stored: 33 x 33 BC1 blocks row by row (8 bytes each, two RGB565 words then sixteen 2-bit
     /// indices), 132 x 132 texels, texel (i, j) at sample (i, j).
     pub colour: Vec<u8>,
+    /// Its material raster (block 2), 132 x 132 values row by row, each an index into the terrain's material bank
+    /// (empty where no bank was read).
+    pub material: Vec<u8>,
 }
 
 /// Terrain nodes of one level (`anvil.terrain`): their tiles, where the program states the quadtree's square lies
@@ -270,6 +273,9 @@ pub struct AnvilTerrain {
     pub origin: [f64; 2],
     pub side: f64,
     pub tiles: Vec<TerrainTile>,
+    /// Each material of the terrain's bank, in the order its rasters index them: its TerrainMaterial's
+    /// CollisionMaterial (empty where no bank was read).
+    pub materials: Vec<Option<CollisionMaterialRef>>,
 }
 
 impl Component for AnvilTerrain {

@@ -2,16 +2,19 @@
 //! read and lowered to ground under the pass manager with its checks on, in the frame the Riders Republic notes place
 //! the quadtree in (docs/terrain.md §3.3: ShortRange cell 9380, x -3584..-3456, y 1152..1280).
 use primase_anvil::components::AnvilTerrain;
-use primase_anvil::passes::{CellPoint, LowerAnvilTerrain};
+use primase_anvil::passes::{CellPoint, LowerAnvilTerrain, SurfaceBy};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::grid::{self, StoredGridCellDataBlock, StoredGridPartition, WORLD};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_anvil::read::terrain::{TerrainRead, read_terrain};
+use primase_anvil::read::terrain_material::TERRAIN_MATERIAL_BANK;
 use primase_anvil::read::tnl::TERRAIN_NODE_LAYER;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::PbrMaterial;
-use primase_core::{ColorSpace, Mesh, Semantic, Stream, TexFormat, Texture, Transform, World};
+use primase_core::{
+    Collision, ColorSpace, Mesh, Semantic, Stream, Surfaces, TexFormat, Texture, Transform, World,
+};
 use primase_testdata::real_data;
 
 #[test]
@@ -26,6 +29,13 @@ fn the_campus_ground_reads_and_lowers() {
         .position(|n| n.type_id == TERRAIN_NODE_LAYER)
         .expect("a TerrainNodeLayer");
     let rect = [-3584.0, 1152.0, -3456.0, 1280.0];
+    let bank = At {
+        forge: 0,
+        entry: names
+            .iter()
+            .position(|n| n.type_id == TERRAIN_MATERIAL_BANK)
+            .expect("a TerrainMaterialBank"),
+    };
     let mut w = World::new();
     let ground = read_terrain(
         &mut w,
@@ -37,6 +47,7 @@ fn the_campus_ground_reads_and_lowers() {
             level: 8,
             rect,
             frame: SourceFrame::WORLD,
+            bank: Some(bank),
         },
     )
     .expect("terrain");
@@ -69,6 +80,8 @@ fn the_campus_ground_reads_and_lowers() {
         offset: 0.0,
         sample: CellPoint::Corner,
         colour: ColorSpace::Srgb,
+        collision: Some(SurfaceBy::CollisionMaterial),
+        surface: "rr-ground-unnamed".to_owned(),
     };
     let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
     let mut report = RunReport::default();
@@ -113,6 +126,15 @@ fn the_campus_ground_reads_and_lowers() {
         panic!("texture coordinates");
     };
     assert_eq!(uv[0], [0.5 / 384.0, 0.5 / 384.0]);
+    // the ground's collision: its triangles, each square's surface its corner sample's material's CollisionMaterial
+    let collision = w.get::<Collision>(ground).expect("collision");
+    assert_eq!(collision.triangles.len(), 256 * 256 * 2);
+    let surfaces = &w.resource::<Surfaces>().expect("surfaces").0;
+    let names: Vec<&str> = surfaces.iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        names.len() > 1 && names.iter().all(|n| n.starts_with("CM_")),
+        "{names:?}"
+    );
 }
 
 /// The ground at (x, y), bilinear between the 0.5 m samples of `t`'s level-8 tiles, at range 5000 and offset 0.
@@ -187,6 +209,7 @@ fn the_campus_placements_stand_on_the_ground() {
         level: 8,
         rect,
         frame: SourceFrame::WORLD,
+        bank: None,
     };
     let g = read_terrain(&mut w, &mut archive, layer, read).expect("terrain");
     let t = w.get::<AnvilTerrain>(g).expect("tiles");

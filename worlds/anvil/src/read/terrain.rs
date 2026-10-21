@@ -11,8 +11,11 @@ use primase_core::Entity;
 use primase_core::World;
 use primase_core::frame::SourceFrame;
 
-use crate::components::{AnvilTerrain, TerrainTile};
+use crate::components::{AnvilTerrain, CollisionMaterialRef, TerrainTile};
 use crate::read::archive::{Archive, At};
+use crate::read::terrain_material::{
+    StoredMaterialBank, StoredTerrainMaterial, TERRAIN_MATERIAL, TERRAIN_MATERIAL_BANK,
+};
 use crate::read::tnl::{StoredNodeLayer, StoredTnlChunk, TERRAIN_NODE_LAYER, TNL_CHUNK, node};
 use crate::read::tnl_code;
 
@@ -40,6 +43,49 @@ pub enum Error {
     Missing { position: u32, chunk: u64 },
     #[error("node {position}: a height outside 32 bits")]
     Range { position: u32 },
+    #[error("{at:?}: {source}")]
+    Material {
+        at: At,
+        #[source]
+        source: crate::read::terrain_material::Error,
+    },
+}
+
+/// The CollisionMaterial of each TerrainMaterial of the bank at `bank`, in its order.
+fn bank_materials(archive: &mut Archive, bank: At) -> Result<Vec<Option<CollisionMaterialRef>>, Error> {
+    let r = archive.resource(bank)?;
+    if r.type_id != TERRAIN_MATERIAL_BANK {
+        return Err(Error::Type {
+            at: bank,
+            found: r.type_id,
+            what: "a TerrainMaterialBank",
+        });
+    }
+    let b = StoredMaterialBank::parse(&r.body).map_err(|source| Error::Material { at: bank, source })?;
+    let mut out = Vec::with_capacity(b.materials.len());
+    for m in &b.materials {
+        let Some(at) = archive.find(m.id) else {
+            out.push(None);
+            continue;
+        };
+        let r = archive.resource(at)?;
+        if r.type_id != TERRAIN_MATERIAL {
+            return Err(Error::Type {
+                at,
+                found: r.type_id,
+                what: "a TerrainMaterial",
+            });
+        }
+        let t = StoredTerrainMaterial::parse(&r.body).map_err(|source| Error::Material { at, source })?;
+        out.push(t.collision_material.map(|c| {
+            let name = archive
+                .find(c.id)
+                .and_then(|at| archive.forge(at.forge)?.names.get(at.entry))
+                .map(|n| n.name.clone());
+            CollisionMaterialRef { id: c.id, name }
+        }));
+    }
+    Ok(out)
 }
 
 /// Where the program states the quadtree lies, and what of it to read.
@@ -53,6 +99,9 @@ pub struct TerrainRead {
     /// x0, y0, x1, y1: the nodes whose squares meet it are read.
     pub rect: [f64; 4],
     pub frame: SourceFrame,
+    /// The TerrainMaterialBank the nodes' material rasters index, where they are read with it (the terrain names
+    /// none the layer reaches: the Riders Republic notes find it through the Terrain Entity, docs/terrain.md §4).
+    pub bank: Option<At>,
 }
 
 /// The nodes of the layer at `layer` that `what` names, as an entity holding their [`AnvilTerrain`].
@@ -76,6 +125,11 @@ pub fn read_terrain(
     let node_side = what.side / f64::from(1u32 << what.level.min(30));
     let [x0, y0, x1, y1] = what.rect;
     let [ox, oy] = what.origin;
+    let materials = match what.bank {
+        Some(bank) => bank_materials(archive, bank)?,
+        None => Vec::new(),
+    };
+    let order = what.bank.map(|_| tnl_code::hilbert());
     let mut tiles = Vec::new();
     for item in items {
         let Some((level, row, column)) = node(item.position) else {
@@ -110,11 +164,20 @@ pub fn read_terrain(
             .collect::<Result<_, _>>()?;
         let colour =
             tnl_code::tile(&chunk.blocks[1], false).map_err(|source| Error::Code { position, at, source })?;
+        let material = match &order {
+            Some(order) => {
+                tnl_code::raster(&chunk.blocks[2], order)
+                    .map_err(|source| Error::Code { position, at, source })?
+                    .samples
+            }
+            None => Vec::new(),
+        };
         tiles.push(TerrainTile {
             row,
             column,
             heights,
             colour,
+            material,
         });
     }
     let e = w.spawn();
@@ -126,6 +189,7 @@ pub fn read_terrain(
             origin: what.origin,
             side: what.side,
             tiles,
+            materials,
         },
     );
     Ok(e)

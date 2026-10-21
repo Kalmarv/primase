@@ -18,6 +18,7 @@ pub mod shape;
 pub mod shapes;
 pub mod template;
 pub mod terrain;
+pub mod terrain_material;
 pub mod texture;
 pub mod tnl;
 pub mod tnl_code;

@@ -128,6 +128,9 @@ use primase_anvil::read::shape::{
 };
 use primase_anvil::read::shapes::MAX_RECORD;
 use primase_anvil::read::template::{self, MATERIAL_TEMPLATE};
+use primase_anvil::read::terrain_material::{
+    COLLISION_MATERIAL, StoredMaterialBank, StoredTerrainMaterial, TERRAIN_MATERIAL, TERRAIN_MATERIAL_BANK,
+};
 use primase_anvil::read::texture::{self, StoredTextureMap};
 use primase_core::TexFormat;
 use primase_testdata::real_data;
@@ -135,7 +138,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// The kinds read, by their type ids.
-const KINDS: [(u32, &str); 17] = [
+const KINDS: [(u32, &str); 19] = [
+    (TERRAIN_MATERIAL_BANK, "TerrainMaterialBank"),
+    (TERRAIN_MATERIAL, "TerrainMaterial"),
     (SPHERE_SHAPE, "SphereShape"),
     (CAPSULE_SHAPE, "CapsuleShape"),
     (BOX_SHAPE, "BoxShape"),
@@ -646,6 +651,31 @@ fn census_forge(
                             None => "child: an id in no entry of this forge",
                         });
                     }
+                })
+                .map_err(|e| e.to_string()),
+            TERRAIN_MATERIAL_BANK => StoredMaterialBank::parse(&r.body)
+                .map(|b| {
+                    tally.outcome(format!(
+                        "{} details, {} materials, {} regions",
+                        b.details.len(),
+                        b.materials.len(),
+                        b.regions.len()
+                    ));
+                })
+                .map_err(|e| e.to_string()),
+            TERRAIN_MATERIAL => StoredTerrainMaterial::parse(&r.body)
+                .map(|m| {
+                    tally.outcome(
+                        match m
+                            .collision_material
+                            .map(|r| forge.find(r.id).map(|k| forge.names[k].type_id))
+                        {
+                            None => "collision material: none",
+                            Some(Some(COLLISION_MATERIAL)) => "collision material: a CollisionMaterial",
+                            Some(Some(_)) => "collision material: another type",
+                            Some(None) => "collision material: an id in no entry of this forge",
+                        },
+                    );
                 })
                 .map_err(|e| e.to_string()),
             GRID_PARTITION => StoredGridPartition::parse(&r.body)
