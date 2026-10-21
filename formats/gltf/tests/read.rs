@@ -461,3 +461,104 @@ fn khronos_models_read_as_pygltflib_reads_them() {
         println!("{model}: {report:?}");
     }
 }
+
+/// Every placement's posed vertices in world space after the clips are evaluated at `t`, by placement name.
+fn posed_by_name(mut w: World, t: f32) -> BTreeMap<String, Vec<[f32; 3]>> {
+    let m = manager();
+    let pipeline = m
+        .registry
+        .parse(&format!("evaluate-clip{{time={t},root=ignore}}, pose-skin"))
+        .unwrap();
+    m.run(&mut w, &pipeline, &mut RunReport::default()).unwrap();
+    w.iter::<Instance>()
+        .map(|(e, i)| {
+            let at = *w.get::<Transform>(e).unwrap();
+            let points = w
+                .get::<Mesh>(i.prototype)
+                .unwrap()
+                .primitives()
+                .iter()
+                .flat_map(|p| match &p.streams[&Semantic::Position] {
+                    Stream::F32x3(v) => v.iter().map(|&q| at.apply(q)).collect::<Vec<_>>(),
+                    _ => panic!("positions"),
+                })
+                .collect();
+            (w.get::<primase_core::Name>(e).unwrap().0.clone(), points)
+        })
+        .collect()
+}
+
+/// Oracle: Blender 4.3.2's importer and evaluator on the Khronos skin and morph models (`blender_pose.json`, written
+/// by primase-oracles' `fixtures/khronos-gltf/blender_pose.py` at key times of each model's animation): read by us,
+/// the clip evaluated at those times and the skins posed, every vertex where Blender puts it, by index, within 1e-4
+/// m. Objects match placements by name, or one to one when each side has a single mesh (Blender names an unnamed
+/// node itself); Blender's bone display shape (`Icosphere`) is not a glTF node.
+#[test]
+fn khronos_models_pose_as_blender_poses_them() {
+    let mut checked = 0;
+    for dir in khronos() {
+        let model = dir.file_name().unwrap().to_string_lossy().into_owned();
+        let Ok(text) = std::fs::read_to_string(dir.join("blender_pose.json")) else {
+            continue;
+        };
+        let oracle: Value = serde_json::from_str(&text).unwrap();
+        let glb = dir.join(format!("{model}.glb"));
+        let gltf = if glb.exists() {
+            primase_glb::Gltf::from_glb(&std::fs::read(&glb).unwrap()).unwrap()
+        } else {
+            let json = std::fs::read(dir.join(format!("{model}.gltf"))).unwrap();
+            primase_glb::Gltf::from_gltf(&json, |_, uri| {
+                std::fs::read(dir.join(uri)).map_err(|e| e.to_string())
+            })
+            .unwrap()
+        };
+        let mut w = World::new();
+        primase_gltf::read::read(&gltf, &model, &mut w).unwrap();
+        for pose in oracle["poses"].as_array().unwrap() {
+            let t = pose["time"].as_f64().unwrap() as f32;
+            let ours = posed_by_name(w.subset(&w.entities().collect()), t);
+            let theirs: BTreeMap<&str, Vec<[f32; 3]>> = pose["objects"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(k, _)| k.as_str() != "Icosphere")
+                .map(|(k, v)| {
+                    let points = v
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|p| std::array::from_fn(|i| p[i].as_f64().unwrap() as f32))
+                        .collect();
+                    (k.as_str(), points)
+                })
+                .collect();
+            let pairs: Vec<(&Vec<[f32; 3]>, &Vec<[f32; 3]>, String)> = if theirs.len() == 1 && ours.len() == 1
+            {
+                let (a, b) = (ours.iter().next().unwrap(), theirs.iter().next().unwrap());
+                vec![(a.1, b.1, format!("{} / {}", a.0, b.0))]
+            } else {
+                theirs
+                    .iter()
+                    .map(|(k, v)| (&ours[*k], v, (*k).to_owned()))
+                    .collect()
+            };
+            for (a, b, name) in pairs {
+                assert_eq!(a.len(), b.len(), "{model} {name} at {t}: vertex counts");
+                let worst = a
+                    .iter()
+                    .zip(b)
+                    .map(|(p, q)| (0..3).map(|k| (p[k] - q[k]).abs()).fold(0.0f32, f32::max))
+                    .fold(0.0f32, f32::max);
+                assert!(worst <= 1e-4, "{model} {name} at {t}: off by {worst}");
+                println!(
+                    "{model} {name} at {t}: {} vertices, largest difference {worst:e}",
+                    a.len()
+                );
+                checked += 1;
+            }
+        }
+    }
+    if primase_testdata::real_data("PRIMASE_KHRONOS_GLTF").is_some() {
+        assert!(checked > 0, "no blender_pose.json beside the fixtures");
+    }
+}
