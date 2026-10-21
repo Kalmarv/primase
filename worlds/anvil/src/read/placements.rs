@@ -317,6 +317,11 @@ pub struct Placer<'a> {
     dependency_levels: HashMap<u64, u8>,
     /// Per object id and level: the prototype placing every mesh level from that level on.
     wholes: HashMap<(u64, u8), Entity>,
+    /// The entities some prototype holds as a level-of-detail form (each form belongs to one prototype).
+    forms: HashSet<Entity>,
+    /// The entities placed as prototypes themselves, and the copy placed for one that is also a form.
+    prototypes: HashSet<Entity>,
+    prototype_copies: HashMap<Entity, Entity>,
     /// Per shape id: what it places (see [`Placer::shape`]).
     shapes: HashMap<u64, Result<Parts, u32>>,
     /// The (object, level) pairs whose mesh was refused.
@@ -356,6 +361,9 @@ impl<'a> Placer<'a> {
             objects: HashMap::new(),
             dependency_levels: HashMap::new(),
             wholes: HashMap::new(),
+            forms: HashSet::new(),
+            prototypes: HashSet::new(),
+            prototype_copies: HashMap::new(),
             shapes: HashMap::new(),
             refused_levels: HashSet::new(),
         }
@@ -744,7 +752,7 @@ impl<'a> Placer<'a> {
             return Some(p);
         }
         let p = if forms.is_empty() {
-            own
+            self.as_prototype(own)
         } else {
             let p = self.world.spawn();
             if let Some(name) = self.archive.find(id).and_then(|at| self.name(at)) {
@@ -753,17 +761,42 @@ impl<'a> Placer<'a> {
             if let Some(mesh) = self.world.get::<AnvilMesh>(own).cloned() {
                 self.world.insert(p, mesh);
             }
-            self.world.insert(
-                p,
-                AnvilLods {
-                    detail,
-                    forms: forms.to_vec(),
-                },
-            );
+            let forms = forms
+                .iter()
+                .map(|&(level, form)| (level, self.as_form(form)))
+                .collect();
+            self.world.insert(p, AnvilLods { detail, forms });
             p
         };
         self.wholes.insert((id, detail), p);
         Some(p)
+    }
+
+    /// `e` (a mesh level's entity) as a form of one prototype: itself the first time, else a copy (another
+    /// prototype holds it as a form, or it is placed itself: the same mesh a level of several prototypes).
+    fn as_form(&mut self, e: Entity) -> Entity {
+        let e = if self.forms.contains(&e) || self.prototypes.contains(&e) {
+            self.world.duplicate(e).unwrap_or(e)
+        } else {
+            e
+        };
+        self.forms.insert(e);
+        e
+    }
+
+    /// `e` (a mesh level's entity) placed as a prototype itself: itself, or, where it is a form, one copy of it.
+    fn as_prototype(&mut self, e: Entity) -> Entity {
+        if let Some(&c) = self.prototype_copies.get(&e) {
+            return c;
+        }
+        if !self.forms.contains(&e) {
+            self.prototypes.insert(e);
+            return e;
+        }
+        let c = self.world.duplicate(e).unwrap_or(e);
+        self.prototype_copies.insert(e, c);
+        self.prototypes.insert(c);
+        c
     }
 
     /// The Entity or EntityGroup at `at` placed into the world: one placement per Visual with something to show, or per
@@ -846,7 +879,11 @@ impl<'a> Placer<'a> {
                     let (prototype, overrides) = match (every, levels.first()) {
                         (true, Some(&(finest, _))) if finest == level || only_filled => {
                             let from: Levels = levels.iter().copied().filter(|(l, _)| *l >= level).collect();
-                            (self.whole(object, &from).unwrap_or(mesh), shows.overrides)
+                            let p = match self.whole(object, &from) {
+                                Some(p) => p,
+                                None => self.as_prototype(mesh),
+                            };
+                            (p, shows.overrides)
                         }
                         (true, _) => {
                             return Err(Error::Instances(
@@ -858,7 +895,7 @@ impl<'a> Placer<'a> {
                             let others = shows.mesh_slots.saturating_sub(1);
                             placed.levels_unplaced = placed.levels_unplaced.saturating_add(others);
                             let own = shows.overrides.into_iter().filter(|(l, _)| *l == level).collect();
-                            (mesh, own)
+                            (self.as_prototype(mesh), own)
                         }
                     };
                     let entity = transform(&e.matrix, 1.0);
