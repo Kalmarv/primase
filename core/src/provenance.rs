@@ -266,8 +266,9 @@ mod tests {
         assert_eq!(w.verify_components(), []);
         let mut p = w.get::<Provenance>(e).unwrap().clone();
         p.derived_by("split{max=2}");
-        // provenance without parts does not follow primitives
-        assert_eq!(Provenance::new(flver(0)).remap_primitives(&[0, 0]), None);
+        // provenance without parts holds nothing per primitive: it answers a rebuild with itself
+        let whole = Provenance::new(flver(0));
+        assert_eq!(whole.remap_primitives(&[0, 0]), Some(Ok(whole.clone())));
 
         // indices out of range, repeated or missing origins are refused
         for bad in [
