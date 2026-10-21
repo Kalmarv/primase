@@ -182,7 +182,9 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
     }
     assert_eq!(first.materials, second.materials);
     assert_eq!(first.parts, second.parts);
-    assert_eq!((water, foliage, decal_count), (1, 79, 4));
+    // 79 leaves materials lowered, and 3 two-sided copies of them (face sets that don't cull, split off): 82 drawn
+    assert_eq!(pbr.counts["materials of class leaves given their usage"], 79);
+    assert_eq!((water, foliage, decal_count), (1, 82, 4));
     Ok(())
 }
 
