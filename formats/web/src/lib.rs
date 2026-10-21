@@ -575,8 +575,9 @@ impl std::fmt::Debug for TilePlan {
 /// the core and PBR components it interprets are legal; a `core.mesh_file` or `core.texture_file` only on an entity
 /// with the mesh or texture loaded. What it has no form for is legal and left out, reported ([`TilePlan::notices`]):
 /// a placement whose prototype has levels of detail (`select-lod` chooses a form), a parametric collider
-/// (`tessellate-colliders` makes its triangles), a Bezier curve's record (`flatten-curves` makes a polyline). Every
-/// other name is carried (glTF extras). Transforms must be rigid or degenerate (skipped): `bake-nonrigid` bakes a mirror or shear
+/// (`tessellate-colliders` makes its triangles), a Bezier curve's record (`flatten-curves` makes a polyline). A tile
+/// set is one world state: `core.condition` and `core.state_override` are illegal (`resolve-state` chooses the state
+/// first; an axis it cannot resolve fails there, with its reason). Every other name is carried (glTF extras). Transforms must be rigid or degenerate (skipped): `bake-nonrigid` bakes a mirror or shear
 /// into geometry. As in glTF, a material entity without `pbr.material` is written as no material, and a primitive
 /// lacking a texture coordinate set its material samples is refused (`prepare-gltf-materials`,
 /// `fill-missing-texcoords` are a program's choices).
@@ -606,6 +607,9 @@ pub fn target() -> primase_core::pass::Target {
         // left out and reported: no form chosen, no triangles, no polyline
         .legal(Lods::NAME)
         .legal(Collider::NAME)
+        // one world state: drawing or leaving out a conditional placement would be choosing one
+        .illegal(primase_core::state::Condition::NAME)
+        .illegal(primase_core::state::StateOverride::NAME)
         .carry_unknown()
 }
 /// Plan `world`'s tiles. Geometry may still be in files: each cell's content is read from its world when it is
@@ -713,6 +717,17 @@ pub fn plan_with_geometry(
     }
     if let Some((name, detail)) = world.verify_resources().into_iter().next() {
         return Err(Error::Invalid(format!("{name}: {detail}")));
+    }
+    // a tile set is one world state (see [`target`])
+    for name in [
+        primase_core::state::Condition::NAME,
+        primase_core::state::StateOverride::NAME,
+    ] {
+        if let Some(&e) = world.entities_named(name).first() {
+            return Err(Error::Invalid(format!(
+                "{e:?}: {name}: the tiles draw one world state; resolve-state chooses it first"
+            )));
+        }
     }
     for (e, _) in world.iter::<Instance>() {
         if !world.has::<Transform>(e) {

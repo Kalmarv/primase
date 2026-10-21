@@ -38,7 +38,9 @@ The glTF writer's report of each tile is counted once per published tile; a
 tile written only to measure it against the byte budget, then split, counts
 nothing.
 `target()` declares what a cell's world may hold when it is written (a converter
-checks it after the cell's passes): its files loaded, transforms rigid. What
+checks it after the cell's passes): its files loaded, transforms rigid, one world
+state (`core.condition` and `core.state_override` illegal: `resolve-state` chooses
+the state first, and `plan` refuses a world still holding them). What
 the tiles have no form for is left out and reported, as the glTF writer does: a
 placement whose prototype has levels of detail (`select-lod` chooses a form), a
 parametric collider (`tessellate-colliders` makes triangles), a Bezier curve's

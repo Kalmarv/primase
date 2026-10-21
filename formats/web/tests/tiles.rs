@@ -2077,3 +2077,47 @@ fn mesh_files_are_shared_by_the_tiles_that_place_them() {
     }
     std::fs::remove_dir_all(&out).unwrap();
 }
+
+/// A tile set is one world state: a placement with a state condition is refused by the writer and its target (the
+/// planner runs resolve-state first), naming the pass; resolved, it is written.
+#[test]
+fn state_conditions_are_resolved_before_tiles_are_written() {
+    use primase_core::Component;
+    use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis, StateOverride};
+    let t = primase_web::target();
+    for name in [Condition::NAME, StateOverride::NAME] {
+        assert!(matches!(
+            t.legality(name),
+            Some(primase_core::pass::Legality::Illegal)
+        ));
+    }
+    let mut w = World::new();
+    let axis = w.spawn();
+    w.insert(
+        axis,
+        StateAxis {
+            key: "test.door".into(),
+            domain: Domain::Bool,
+            default: Some(1),
+            scope: Scope::Global,
+            class: "door".into(),
+            source: "a hand-made axis".into(),
+        },
+    );
+    let proto = w.spawn();
+    w.insert(proto, mesh());
+    let door = place(&mut w, proto, 10.);
+    w.insert(
+        door,
+        Condition(vec![Clause(vec![Literal { axis, values: 0b10 }])]),
+    );
+    let err = write(&w, &plain()).unwrap_err().to_string();
+    assert!(err.contains("resolve-state"), "{err}");
+    let mut reg = primase_core::pass::PassRegistry::new();
+    reg.register("resolve-state", primase_core::state::resolve_state);
+    let pipeline = reg.parse("resolve-state").unwrap();
+    primase_core::pass::PassManager::new(reg)
+        .run(&mut w, &pipeline, &mut primase_core::pass::RunReport::default())
+        .unwrap();
+    assert_eq!(write(&w, &plain()).unwrap().index.tiles[0].placements, 1);
+}
