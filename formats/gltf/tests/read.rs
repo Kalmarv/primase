@@ -462,6 +462,9 @@ fn khronos_models_read_as_pygltflib_reads_them() {
     }
 }
 
+/// Ours and Blender's vertices of one mesh, and a name for messages.
+type Pair<'a> = (&'a Vec<[f32; 3]>, &'a Vec<[f32; 3]>, String);
+
 /// Every placement's posed vertices in world space after the clips are evaluated at `t`, by placement name.
 fn posed_by_name(mut w: World, t: f32) -> BTreeMap<String, Vec<[f32; 3]>> {
     let m = manager();
@@ -532,8 +535,7 @@ fn khronos_models_pose_as_blender_poses_them() {
                     (k.as_str(), points)
                 })
                 .collect();
-            let pairs: Vec<(&Vec<[f32; 3]>, &Vec<[f32; 3]>, String)> = if theirs.len() == 1 && ours.len() == 1
-            {
+            let pairs: Vec<Pair<'_>> = if theirs.len() == 1 && ours.len() == 1 {
                 let (a, b) = (ours.iter().next().unwrap(), theirs.iter().next().unwrap());
                 vec![(a.1, b.1, format!("{} / {}", a.0, b.0))]
             } else {

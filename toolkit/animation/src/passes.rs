@@ -764,7 +764,7 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(e.options()["time"], "0.25");
-        let (mut w, _, rigs, placed) = world();
+        let (mut w, _, rigs, _) = world();
         let clip = w.get::<ClipBinding>(Entity::from_index(9)).map(|b| b.clip);
         let clip = clip.unwrap_or_else(|| w.iter::<ClipBinding>().next().unwrap().1.clip);
         let second = w.spawn();

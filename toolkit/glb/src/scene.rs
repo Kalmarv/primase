@@ -327,7 +327,9 @@ impl Gltf {
                             ));
                         }
                         let (_, v) = self.floats(a).map_err(|e| e.context(&apath))?;
-                        v.chunks_exact(16)
+                        v.as_chunks::<16>()
+                            .0
+                            .iter()
                             .enumerate()
                             .map(|(k, m)| affine(m, &format!("{apath}[{k}]")))
                             .collect::<Result<Vec<_>>>()?
