@@ -30,9 +30,9 @@
 //!   and metalness of the normal map t75's alpha and blue, `S(sat(a + Roughness Offset))` and `b * Metalness` on Tex1
 //!   and Decals1 (`S(x) = x x (3 - 2 x)`), raw on Wind; occlusion `1 + OnOffAO (mask.b - 1)` (none on Decals1). Each
 //!   template's constants are read where its evaluated pixel shaders read them ([`TEX1`], [`TEX1_WIND`] §13.1,
-//!   [`DECALS1`] §13.2, [`TEX1_TERRAIN_BLEND`] §15.1: Tex1 with its UV at 15, its blend toward the terrain's colour
-//!   near the ground left out, reported), and only if its template binds those properties there; otherwise the
-//!   placeholder, reported.
+//!   [`DECALS1`] §13.2, [`TEX1_TERRAIN_BLEND`] §15.1: Tex1 with its UV at 15 and metalness 0 (layout B), its blend
+//!   toward the terrain's colour near the ground left out, reported), and only if its template binds those
+//!   properties there; otherwise the placeholder, reported.
 //!   Tex1's vertex-colour factor `1 + Vertex Color Intensity (COLOR0.rgb - 1)` is the mesh's COLOR_0 product where the
 //!   intensity is 1 (a consumer multiplies COLOR0's alpha in too, which the shader doesn't: reported), none where 0,
 //!   and otherwise not lowered, reported. Every other Material is marked [`VertexColor::Ignored`] (its shader takes no
@@ -175,14 +175,25 @@ fn byte(x: f64) -> u8 {
     (sat(x) * 255.0).round() as u8
 }
 
+/// A Tex1-family template's metalness.
+#[derive(Clone, Copy, Debug)]
+pub enum Metalness {
+    /// The normal map's blue as is.
+    Blue,
+    /// The normal map's blue times the constant at this vec4.
+    Scaled(u32),
+    /// None written: its G-buffer layout has no metalness target (docs/material-spec.md §15.4: F0 0.04), so 0.
+    Absent,
+}
+
 /// Where a Tex1-family template's evaluated pixel shader reads its constants (each a `cb3` vec4), and which
 /// properties the template must bind there: `reads`, by vec4 and key. A constant it has none of is `None`: then
-/// metalness and roughness are the normal map's blue and alpha raw, and there is no tint mask, AO, vertex-colour
-/// factor, UV transform or translucency.
+/// roughness is the normal map's alpha raw, and there is no tint mask, AO, vertex-colour factor, UV transform or
+/// translucency.
 #[derive(Clone, Copy, Debug)]
 pub struct Tex1Layout {
     pub reads: &'static [(u32, u32)],
-    pub metalness: Option<u32>,
+    pub metalness: Metalness,
     /// Hue, saturation, luminosity.
     pub tint: [u32; 3],
     pub roughness_offset: Option<u32>,
@@ -209,7 +220,7 @@ pub const TEX1: Tex1Layout = Tex1Layout {
         (7, 0x95DD_8185),
         (8, 0x7091_389B),
     ],
-    metalness: Some(1),
+    metalness: Metalness::Scaled(1),
     tint: [2, 3, 4],
     roughness_offset: Some(5),
     ao: Some(6),
@@ -220,10 +231,11 @@ pub const TEX1: Tex1Layout = Tex1Layout {
     mask: true,
 };
 
-/// MAD_Tex1_TerrainBlend (§14.7, §15.1): MAD_Tex1's cb3[1..7], `EnableTerrainBlend` 14, `Base tiling` 15.
+/// MAD_Tex1_TerrainBlend (§14.7, §15.1): MAD_Tex1's cb3[2..7], `EnableTerrainBlend` 14, `Base tiling` 15. Its
+/// G-buffer permutations write shading class 3 (layout B, §15.4) on every path and read no `3 - Metalness` (cb3[1]):
+/// metalness 0.
 pub const TEX1_TERRAIN_BLEND: Tex1Layout = Tex1Layout {
     reads: &[
-        (1, 0xC7C3_A6D7),
         (2, 0xEE58_1D0E),
         (3, 0x6577_AE58),
         (4, 0xFD62_B19F),
@@ -233,6 +245,7 @@ pub const TEX1_TERRAIN_BLEND: Tex1Layout = Tex1Layout {
         (14, 0x6D30_6588),
         (15, 0x7091_389B),
     ],
+    metalness: Metalness::Absent,
     uv: Some(15),
     terrain_blend: Some(14),
     ..TEX1
@@ -249,7 +262,7 @@ pub const TEX1_WIND: Tex1Layout = Tex1Layout {
         (18, 0xFEAC_9469),
         (19, 0x7091_389B),
     ],
-    metalness: None,
+    metalness: Metalness::Blue,
     tint: [14, 15, 16],
     roughness_offset: None,
     ao: Some(17),
@@ -270,7 +283,7 @@ pub const DECALS1: Tex1Layout = Tex1Layout {
         (4, 0xFD62_B19F),
         (5, 0x89D1_84DE),
     ],
-    metalness: Some(1),
+    metalness: Metalness::Scaled(1),
     tint: [2, 3, 4],
     roughness_offset: Some(5),
     ao: None,
@@ -992,7 +1005,11 @@ impl Pass for LowerAnvilMaterial {
                         None
                     };
                     let [hue, saturation, luminosity] = layout.tint.map(|v| i.scalar(v));
-                    let metal = layout.metalness.map(|v| i.scalar(v));
+                    let metal = match layout.metalness {
+                        Metalness::Blue => None,
+                        Metalness::Scaled(v) => Some(i.scalar(v)),
+                        Metalness::Absent => Some(0.0),
+                    };
                     let rough_offset = layout.roughness_offset.map(|v| i.scalar(v));
                     let ao_on = layout.ao.map_or(0.0, |v| i.scalar(v));
                     match layout.vertex_colour.map(|v| i.scalar(v)) {

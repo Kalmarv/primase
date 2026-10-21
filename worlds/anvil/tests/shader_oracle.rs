@@ -481,9 +481,10 @@ fn mad_fake_sediment() {
     worst.check("MAD_Fake_Sediment");
 }
 
-/// MAD_Tex1_TerrainBlend (USNAT 61916, at 0x081AB2; shading class 3, layout B: no metalness output): MAD_Tex1's
-/// cb3[1..7] and textures, EnableTerrainBlend (cb3[14]) 0, the UV rows at 15. The engine's terrain constants are the
-/// notes' (cb1[3..5].w 1000, cb0[47], [48], [50]), its terrain textures unset. o0 = (albedo, roughness), o1.w AO.
+/// MAD_Tex1_TerrainBlend (USNAT 61916, at 0x081AB2; layout B: no metalness output, `3 - Metalness` cb3[1] a decoy):
+/// MAD_Tex1's cb3[2..7] and textures, EnableTerrainBlend (cb3[14]) 0, the UV rows at 15. The engine's terrain
+/// constants are the notes' (cb1[3..5].w 1000, cb0[47], [48], [50]), its terrain textures unset. o0 = (albedo,
+/// roughness), o1.w AO, o1.z's byte the shading class 3 in its upper five bits (metalness 0 in the lighting pass).
 #[test]
 fn mad_tex1_terrain_blend() {
     let Some(s) = shader("DataPC_MAD_USNAT.forge", 61916, 0x08_1AB2) else {
@@ -506,11 +507,11 @@ fn mad_tex1_terrain_blend() {
         let (offset, ao_on) = (r.range(-0.5, 0.5), r.next());
         let vci = f64::from(case % 2);
         let mut cb3 = r.decoys(17);
-        for (row, v) in [r.next(), hsl[0], hsl[1], hsl[2], offset, ao_on, vci]
+        for (row, v) in [hsl[0], hsl[1], hsl[2], offset, ao_on, vci]
             .into_iter()
             .enumerate()
         {
-            set(&mut cb3, row + 1, v);
+            set(&mut cb3, row + 2, v);
         }
         set(&mut cb3, 14, 0.0);
         uv_rows(&mut cb3, 15);
@@ -530,6 +531,8 @@ fn mad_tex1_terrain_blend() {
             roughness(normal[3], Rough::Offset(offset)),
         );
         worst.see("occlusion", out[1][3], occlusion(mask[2], ao_on));
+        let class = ((sat(out[1][2]) * 255.0).round() as u32) >> 3;
+        worst.see("class", f64::from(class), 3.0);
     }
     worst.check("MAD_Tex1_TerrainBlend");
 }
