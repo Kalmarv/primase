@@ -30,7 +30,9 @@ written as a `primase_gltf::Selection` of the cell's world, which stays unchange
 so one loaded cell can be written by several plans (the example's plain set).
 What the tiles leave out, choose or draw approximately (a material without
 `pbr.material`, a skin stream, a component without a JSON form, a degenerate
-placement, a marker anchored at height 0) is returned as notices:
+placement, a marker anchored at height 0; and what the tile encoding itself
+approximates: instanced placements' f32 translation, rotation and scale, 16-bit
+vertex streams, each lossy KTX2 image) is returned as notices:
 `TilePlan::notices`, `TileSet::notices`, and the conversion writer's finish.
 The glTF writer's report of each tile is counted once per published tile; a
 tile written only to measure it against the byte budget, then split, counts
@@ -100,8 +102,8 @@ instance streams, node JSON as written); a mesh whose error would exceed
 `POSITION_BUDGET` (0.25 mm) keeps f32 positions and its placements unchanged.
 Meshes sharing a position accessor share a frame. Normals and tangents use signed
 normalized 16-bit components. UV streams wholly in `[0,1]` use unsigned normalized
-16-bit components; repeating UVs remain f32. This is an explicit lossy
-approximation made by the web lowering; `asset.extras["primase.quantization"]`
+16-bit components; repeating UVs remain f32. This is a lossy encoding, reported
+as approximation notices (the quantized streams, counted per tile); `asset.extras["primase.quantization"]`
 records `position_max_world_error`, `position_max_local_error`,
 `position_max_local_step`, `meshes_float_positions` and the budget. Indices retain
 their exact original bytes/order.

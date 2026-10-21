@@ -1169,7 +1169,9 @@ impl TilePlan {
     }
     /// What the tiles published so far left out, chose or drew approximately, as notices (stage `web`): what their
     /// glTF documents did not write (counted once per published tile, as each document counts it; a tile written to
-    /// measure it and then split counts nothing), viewer records' components without a JSON form, placements skipped
+    /// measure it and then split counts nothing), what the tile encoding approximated (instanced placements' f32
+    /// translation, rotation and scale; 16-bit vertex streams, counted per tile; each KTX2 image once), viewer records'
+    /// components without a JSON form, placements skipped
     /// for a degenerate transform, markers anchored at height 0, and the environment's ambient light (once, when a
     /// written cell's world held one, or the planning world when no cell is written: the viewer has no ambient, the
     /// index carries only the sun).
@@ -1299,7 +1301,16 @@ impl TilePlan {
             self.omit(kind, reason, count, &tile.info.file);
         }
         for (name, bytes) in &tile.images {
-            self.images.insert(name.clone(), bytes.len() as u64);
+            if self.images.insert(name.clone(), bytes.len() as u64).is_none() && name.ends_with(".ktx2") {
+                self.omit(
+                    NoticeKind::Approximation,
+                    "images encoded as KTX2 UASTC LDR 4x4 with Zstandard: lossy, each image's codec in its extras \
+                     (primase.web_texture)"
+                        .into(),
+                    1,
+                    name,
+                );
+            }
         }
         self.tiles.push(tile.info.clone());
         out.push(tile);
@@ -1486,10 +1497,10 @@ impl TilePlan {
                 } else {
                     doc
                 };
-                let doc = if self.options.compress {
+                let (doc, quantized) = if self.options.compress {
                     compression::apply(doc)?
                 } else {
-                    doc
+                    (doc, compression::Quantized::default())
                 };
                 let (doc, files) = images::externalize(doc)?;
                 Ok(Some(TileInfo {
@@ -1515,7 +1526,10 @@ impl TilePlan {
                     info,
                     doc,
                     files,
-                    omitted: omitted(&report),
+                    omitted: omitted(&report)
+                        .into_iter()
+                        .chain(approximated(instanced_placements, quantized))
+                        .collect(),
                 }))
             })()
         };
@@ -1802,7 +1816,8 @@ fn omitted(report: &primase_gltf::WriteReport) -> Vec<Omitted> {
         ),
         (
             NoticeKind::Unsupported,
-            "texture filters glTF cannot express (a minification filter stated without a mip filter, or the              reverse): no minFilter written, the renderer's default"
+            "texture filters glTF cannot express (a minification filter stated without a mip filter, or the \
+             reverse): no minFilter written, the renderer's default"
                 .into(),
             report.filters_unexpressed,
         ),
@@ -1828,6 +1843,37 @@ fn omitted(report: &primase_gltf::WriteReport) -> Vec<Omitted> {
             n,
         ));
     }
+    out.retain(|o| o.2 > 0);
+    out
+}
+/// What the tile writer's own encoding of a tile approximated: placements stored as instance streams, and vertex
+/// streams quantized to 16 bits.
+fn approximated(instanced: u64, quantized: compression::Quantized) -> Vec<Omitted> {
+    let mut out: Vec<Omitted> = vec![
+        (
+            NoticeKind::Approximation,
+            "placements instanced (EXT_mesh_gpu_instancing): each matrix stored as f32 translation, rotation and \
+             scale, rebuilding its scale-free basis within 1e-6 per element"
+                .into(),
+            instanced,
+        ),
+        (
+            NoticeKind::Approximation,
+            format!(
+                "position streams stored as 16-bit integers, every vertex within {:.2} mm of where it was in the world \
+                 (counted per tile)",
+                compression::POSITION_BUDGET * 1000.
+            ),
+            quantized.positions,
+        ),
+        (
+            NoticeKind::Approximation,
+            "normal, tangent and 0-1 texture coordinate streams stored as 16-bit normalized integers (counted per \
+             tile)"
+                .into(),
+            quantized.directions_and_texcoords,
+        ),
+    ];
     out.retain(|o| o.2 > 0);
     out
 }

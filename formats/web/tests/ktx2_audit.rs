@@ -349,7 +349,16 @@ fn the_synthetic_export_decodes_and_keeps_its_bounds() -> R<()> {
     PassManager::new(PassRegistry::new()).run(&mut world, &Pipeline { passes }, &mut RunReport::default())?;
     let mut options = primase_web::Options::new(primase_web::TileSize::new(200.)?);
     options.ktx2 = true;
-    primase_web::write(&world, &options)?.write_to(&dir)?;
+    let set = primase_web::write(&world, &options)?;
+    set.write_to(&dir)?;
+    // the one KTX2 image is reported as a lossy encoding, once
+    let lossy: Vec<u64> = set
+        .notices
+        .iter()
+        .filter(|n| n.reason.starts_with("images encoded as KTX2"))
+        .map(|n| n.count)
+        .collect();
+    assert_eq!(lossy, [1]);
     options.ktx2 = false;
     primase_web::write(&world, &options)?.write_to(&dir.join("plain"))?;
     let a = audit(&dir)?;

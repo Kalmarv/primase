@@ -405,6 +405,22 @@ fn quantized_streams_decode_exactly_and_validate() {
             assert_eq!(v, vec![[0., 0.], [2., 0.], [0., 2.]]);
         }
     }
+    // what the encoding approximated is reported: the two instanced placements, the one quantized position stream,
+    // and NORMAL, TANGENT and TEXCOORD_0 (TEXCOORD_1 repeats, kept f32)
+    let approximated: Vec<(String, u64)> = set
+        .notices
+        .iter()
+        .filter(|n| n.kind == primase_core::convert::NoticeKind::Approximation)
+        .map(|n| (n.reason.split(' ').take(2).collect::<Vec<_>>().join(" "), n.count))
+        .collect();
+    assert_eq!(
+        approximated,
+        [
+            ("normal, tangent".to_owned(), 3),
+            ("placements instanced".to_owned(), 2),
+            ("position streams".to_owned(), 1),
+        ]
+    );
     if let Some(validator) = primase_testdata::real_data("PRIMASE_GLTF_VALIDATOR") {
         let path = std::env::temp_dir().join(format!("primase-web-compressed-{}.glb", std::process::id()));
         std::fs::write(&path, bytes).unwrap();

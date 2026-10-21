@@ -433,9 +433,18 @@ fn positions(doc: &mut Value, bin: &mut [u8]) -> Result<Positions> {
     Ok(out)
 }
 
+/// The vertex streams a tile's compression stored in 16 bits: an approximation of their f32 values.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Quantized {
+    /// POSITION streams, each vertex within [`POSITION_BUDGET`] of where it was in the world.
+    pub(super) positions: u64,
+    /// NORMAL and TANGENT streams (signed normalized) and texture coordinates within 0-1 (unsigned normalized).
+    pub(super) directions_and_texcoords: u64,
+}
+
 /// Bounds-centred signed-16 positions within [`POSITION_BUDGET`] (see [`positions`]); normal/tangent signed
-/// normalized 16-bit; unit UVs unsigned normalized 16-bit.
-pub(super) fn apply(input: Document) -> Result<Document> {
+/// normalized 16-bit; unit UVs unsigned normalized 16-bit. Returns the tile and the streams it quantized.
+pub(super) fn apply(input: Document) -> Result<(Document, Quantized)> {
     let Document {
         json: mut doc,
         bin: mut source,
@@ -453,7 +462,7 @@ pub(super) fn apply(input: Document) -> Result<Document> {
     let mut bin = Vec::new();
     let mut views = Vec::new();
     let mut fallback = 0usize;
-    let mut quantized = false;
+    let mut quantized = Quantized::default();
     for a in 0..old["accessors"].as_array().expect("accessors").len() {
         let original = &old["accessors"][a];
         let count = number(&original["count"]);
@@ -498,8 +507,10 @@ pub(super) fn apply(input: Document) -> Result<Document> {
                 if name == "POSITION" {
                     accessor["min"] = json!(min);
                     accessor["max"] = json!(max);
+                    quantized.positions += 1;
+                } else {
+                    quantized.directions_and_texcoords += 1;
                 }
-                quantized = true;
             }
         }
         align(&mut bin);
@@ -542,7 +553,7 @@ pub(super) fn apply(input: Document) -> Result<Document> {
     doc["buffers"] =
         json!([{ "byteLength":bin.len() }, {"byteLength":fallback,"extensions":{EXT:{"fallback":true}}}]);
     extension(&mut doc, EXT);
-    if quantized {
+    if quantized != Quantized::default() {
         extension(&mut doc, "KHR_mesh_quantization");
     }
     doc["asset"]["extras"]["primase.quantization"] = json!({
@@ -556,5 +567,5 @@ pub(super) fn apply(input: Document) -> Result<Document> {
         "normal_bits": 16,
         "uv_bits": 16,
     });
-    Ok(Document::new(doc, bin))
+    Ok((Document::new(doc, bin), quantized))
 }
