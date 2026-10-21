@@ -6,6 +6,7 @@
 
 pub mod curve;
 pub mod deform;
+pub mod joint_table;
 pub mod map;
 pub mod passes;
 pub mod pose;
