@@ -26,12 +26,13 @@
 
 use primase_compress::oodle::Oodle;
 use primase_frostbite::ebx::{Document, ImportReference, Value};
-use primase_frostbite::fbmod::{Body, ChunkInfo, Entry, Fbmod, ResInfo, Stored};
+use primase_frostbite::fbmod::Fbmod;
 use primase_frostbite::folder::{EbxEntry, Source};
 use primase_frostbite::texture::{self, TextureHeader};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+use super::asset::{Base, assign_identity, derived, derived_rid, read_donor, write_checked};
+pub use super::asset::{HeaderUnknowns, guid_text};
 use super::{Error, Result, costume_presets, set_document};
 
 /// A texture of the costume: one slice's levels, largest first, in format `format` (a Frostbite ordinal
@@ -53,19 +54,6 @@ pub struct Donor<'a> {
     pub bundle: &'a str,
 }
 
-/// What a new texture's header holds in the two fields whose meaning is not established and which ReSkate does not
-/// read: `unknown_00` (8 bytes) and byte 0x20. The caller states it; there is no default. Context, not proof: among
-/// the textures of `Win32/items.toc` whose first mip is 0 (every level in the chunk, as the costume's), 6654 of 7733
-/// have `unknown_00` zero (elsewhere it looks like a pair of compressed sizes) and 7726 have byte 0x20 zero; the
-/// donor's were written for its own chunk, not the costume's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HeaderUnknowns {
-    /// Both zero.
-    Zero,
-    /// Both the donor texture's.
-    Donor,
-}
-
 /// What [`retexture`] did: the header choice it was given; per new asset, its name and the donor textures redirected
 /// to it; per preset, how many imports it redirected; the donor texture imports left as they were, by name.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,28 +62,6 @@ pub struct Retextured {
     pub assets: Vec<(String, Vec<String>)>,
     pub presets: Vec<(String, usize)>,
     pub kept: Vec<String>,
-}
-
-/// 16 bytes derived from `identity`.
-fn derived(identity: &str) -> [u8; 16] {
-    let d = Sha256::digest(identity.as_bytes());
-    let mut g = [0u8; 16];
-    g.copy_from_slice(&d[..16]);
-    g
-}
-
-/// A GUID's text form (`8-4-4-4-12`) from its stored bytes (the first three groups little-endian).
-pub fn guid_text(g: &[u8; 16]) -> String {
-    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
-    let rev = |r: std::ops::Range<usize>| hex(&g[r].iter().rev().copied().collect::<Vec<_>>());
-    format!(
-        "{}-{}-{}-{}-{}",
-        rev(0..4),
-        rev(4..6),
-        rev(6..8),
-        hex(&g[8..10]),
-        hex(&g[10..16])
-    )
 }
 
 fn check(r: &Replacement) -> Result<()> {
@@ -122,13 +88,11 @@ fn check(r: &Replacement) -> Result<()> {
     Ok(())
 }
 
-/// The new asset for `r`, from the donor texture at `entry`: its EBX document, header, resource metadata, chunk GUID
-/// and id.
+/// The new asset for `r`, from the donor texture at `entry`: its EBX document, header, resource metadata and id.
 struct Made {
     doc: Document,
-    header: Vec<u8>,
-    meta: Vec<u8>,
-    chunk: [u8; 16],
+    header: TextureHeader,
+    meta: [u8; 16],
     rid: u64,
 }
 
@@ -140,64 +104,25 @@ fn make(
     r: &Replacement,
     unknowns: HeaderUnknowns,
 ) -> Result<Made> {
-    let mut doc = src.read_ebx(entry)?;
-    let what = |d: &str| Error::Missing(format!("donor texture {}: {d}", entry.name));
-    let rid_field = doc
-        .instances
-        .first()
-        .and_then(|i| i.object.as_ref())
-        .and_then(|o| o.field("Resource"))
-        .cloned();
-    let Some(Value::Resource(donor_rid)) = rid_field else {
-        return Err(what("its first instance has no Resource"));
-    };
-    let res = src.resource(donor.toc, donor.bundle, donor_rid)?;
-    if res.rtype != primase_frostbite::TEXTURE {
-        return Err(what(&format!(
-            "its resource is of type {:#x}, not a texture",
-            res.rtype
-        )));
-    }
-    let t: TextureHeader = texture::read(&res.bytes)?;
-
-    let chunk = derived(&format!("{name}/chunk"));
-    let rid = u64::from_le_bytes(
-        derived(&format!("{name}/rid"))[..8]
-            .try_into()
-            .unwrap_or_default(),
-    ) | 1;
-    doc.file_guid = derived(&format!("{name}/file"));
-    let inst = doc.instances.first_mut().ok_or_else(|| what("no instance"))?;
-    inst.guid = derived(&format!("{name}/instance"));
-    let o = inst
-        .object
-        .as_mut()
-        .ok_or_else(|| what("its first instance is not read"))?;
-    for (field, value) in [
-        ("Name", Value::Str(name.as_bytes().to_vec())),
-        ("Resource", Value::Resource(rid)),
-        ("AuthoredWidth", Value::UInt(u64::from(r.width))),
-        ("AuthoredHeight", Value::UInt(u64::from(r.height))),
-    ] {
-        *o.field_mut(field).ok_or_else(|| what(&format!("no {field}")))? = value;
-    }
+    let d = read_donor(src, donor, entry)?;
+    let rid = derived_rid(name);
+    let mut doc = d.doc;
+    assign_identity(
+        &mut doc,
+        name,
+        vec![
+            ("Resource", Value::Resource(rid)),
+            ("AuthoredWidth", Value::UInt(u64::from(r.width))),
+            ("AuthoredHeight", Value::UInt(u64::from(r.height))),
+        ],
+    )?;
 
     let levels = r.levels.len();
     let mut mip_sizes = [0u32; 15];
     for (s, l) in mip_sizes.iter_mut().zip(&r.levels) {
         *s = l.len() as u32;
     }
-    let mut unknown_20 = t.unknown_20;
-    let unknown_00 = match unknowns {
-        HeaderUnknowns::Zero => {
-            unknown_20[0] = 0;
-            [0; 8]
-        }
-        HeaderUnknowns::Donor => t.unknown_00,
-    };
-    unknown_20[1] = levels as u8;
-    let header = TextureHeader {
-        unknown_00,
+    let mut header = TextureHeader {
         format: r.format,
         width: r.width,
         height: r.height,
@@ -205,25 +130,25 @@ fn make(
         slices: 1,
         mip_count: levels as u8,
         first_mip: 0,
-        unknown_20,
-        chunk,
+        chunk: derived(&format!("{name}/chunk")),
         mip_sizes,
         chunk_size: mip_sizes.iter().sum(),
-        ..t
+        ..d.header.clone()
     };
+    unknowns.apply(&mut header, &d.header, levels as u8);
     Ok(Made {
         doc,
-        header: texture::write(&header)?,
-        meta: res.meta.to_vec(),
-        chunk,
+        header,
+        meta: d.meta,
         rid,
     })
 }
 
 /// Point the costume's presets at its own textures (see the module documentation). `costume` names the costume's
 /// assets (Studio's item name, `c1010_first7`); `pick` maps a donor texture's name to its replacement, or `None` to
-/// keep it; `unknowns` the header choice ([`HeaderUnknowns`]). Refused: a replacement whose levels are not the chain of its format and size, a donor texture that is not
-/// a texture, a mod without presets or without a mesh chunk entry (whose bundles the new chunks join).
+/// keep it; `unknowns` the header choice ([`HeaderUnknowns`]). Refused: a replacement whose levels are not the chain
+/// of its format and size, a donor texture that is not a texture, a mod without presets or without a mesh chunk entry
+/// (whose bundles the new chunks join).
 pub fn retexture<'r>(
     m: &mut Fbmod,
     src: &Source,
@@ -237,20 +162,10 @@ pub fn retexture<'r>(
     let (first, _) = presets
         .first()
         .ok_or_else(|| Error::Missing("the mod has no costume presets".into()))?;
-    let base = m.entries[*first].clone();
-    let base_stored = base
-        .stored
-        .clone()
-        .ok_or_else(|| Error::Missing("a preset without a payload".into()))?;
-    let dir = base.name.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
-    let added_bundles = m
-        .entries
-        .iter()
-        .find_map(|e| match &e.body {
-            Body::Chunk(c) => Some(c.added_bundles.clone()),
-            _ => None,
-        })
-        .ok_or_else(|| Error::Missing("the mod has no chunk entry".into()))?;
+    let preset = m.entries[*first].clone();
+    let user = preset.stored.as_ref().map(|s| s.user.clone()).unwrap_or_default();
+    let base = Base::new(m, &preset, &user)?;
+    let dir = preset.name.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
     let index = src.ebx_index(donor.toc, donor.bundle)?;
 
     let mut report = Retextured {
@@ -292,46 +207,15 @@ pub fn retexture<'r>(
                 file_guid: a.doc.file_guid,
                 class_guid: a.doc.instances[0].guid,
             };
-            let ebx_bytes = primase_frostbite::ebx::write(&a.doc)?;
-            primase_frostbite::ebx::read(&ebx_bytes)?;
+            let ebx_bytes = write_checked(&a.doc)?;
             let pixels: Vec<u8> = r.levels.concat();
-            let stored = |m: &mut Fbmod, raw: &[u8]| -> Result<Option<Stored>> {
-                Ok(Some(Stored {
-                    index: m.add_payload(raw)?,
-                    size: raw.len() as u64,
-                    ..base_stored.clone()
-                }))
-            };
-            new_entries.push(Entry {
-                name: name.clone(),
-                stored: stored(m, &ebx_bytes)?,
-                bundles: base.bundles.clone(),
-                body: Body::Ebx,
-            });
-            new_entries.push(Entry {
-                name: name.clone(),
-                stored: stored(m, &a.header)?,
-                bundles: base.bundles.clone(),
-                body: Body::Res(ResInfo {
-                    res_type: primase_frostbite::TEXTURE,
-                    rid: a.rid,
-                    meta: a.meta,
-                }),
-            });
-            new_entries.push(Entry {
-                name: guid_text(&a.chunk),
-                stored: stored(m, &pixels)?,
-                bundles: base.bundles.clone(),
-                body: Body::Chunk(ChunkInfo {
-                    range_start: 0,
-                    range_end: 0,
-                    logical_offset: 0,
-                    logical_size: pixels.len() as u32,
-                    h32: 0,
-                    first_mip: 0,
-                    added_bundles: added_bundles.clone(),
-                }),
-            });
+            new_entries.extend(base.texture_asset(
+                m,
+                &name,
+                &ebx_bytes,
+                (&a.header, a.rid, &a.meta),
+                &pixels,
+            )?);
             made.insert(r.role.clone(), (name.clone(), to));
             redirect.insert(im.file_guid, to);
             report.assets.push((name, vec![entry.name.clone()]));

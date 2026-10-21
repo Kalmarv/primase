@@ -1,14 +1,16 @@
 //! Steps on the `.fbmod` ReSkate Studio's `cosmetic-mesh-import` writes, run before its `compile-mod`: the repair of
 //! the appearance presets Studio writes ([`presets`]), the costume's own textures in place of the donor's
-//! ([`textures`]) and neutral body-shape targets ([`morphs`]). Each edits the [`Fbmod`] in place (reading its payloads needs the game's Oodle); writing it is the
+//! ([`textures`]), the menu thumbnail ([`thumbnail`]) and neutral body-shape targets ([`morphs`]). Each edits the [`Fbmod`] in place (reading its payloads needs the game's Oodle); writing it is the
 //! caller's.
 //!
 //! A costume's presets are the `AppearanceShaderExpressionPreset` documents Studio adds for it: the EBX entries whose
 //! payload's user string is Studio's `reskate-cosmetic-addition` (its registrations of the item are others).
 
+mod asset;
 pub mod morphs;
 pub mod presets;
 pub mod textures;
+pub mod thumbnail;
 
 use primase_compress::oodle::Oodle;
 use primase_frostbite::ebx::{self, Document};
@@ -40,9 +42,7 @@ pub fn costume_presets(m: &Fbmod, oodle: Option<&Oodle>) -> Result<Vec<(usize, D
 
 /// Give entry `i` the document `doc`, written; the payload it had stays until [`Fbmod::drop_unused_payloads`].
 pub(crate) fn set_document(m: &mut Fbmod, i: usize, doc: &Document) -> Result<()> {
-    let bytes = ebx::write(doc)?;
-    // what is written must read back
-    ebx::read(&bytes)?;
+    let bytes = asset::write_checked(doc)?;
     let index = m.add_payload(&bytes)?;
     let e = &mut m.entries[i];
     let s = e

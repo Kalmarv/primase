@@ -5,6 +5,8 @@
 //! - `textures::retexture` with colour and normal replacements: one asset each, every preset's import of a donor
 //!   colour or normal texture array pointed at it, the masks kept; the new documents, headers and chunks as the module
 //!   documentation states; the mod written reads back; a rebuild is byte-identical;
+//! - `thumbnail::set_thumbnail`: the item's two thumbnail imports pointed at new CDN documents and texture assets, nothing
+//!   else changed (see its test);
 //! - `morphs::neutralise`: both target chunks (LODs 0-1 and 2-5), every section's six targets the mesh's own stored
 //!   positions and tangent frames, every other byte of the chunks unchanged; the LOD 0 positions are the positions of
 //!   Studio's own readback GLB of the import (`<name>.readback.glb` beside the file, when present).
@@ -12,14 +14,18 @@
 #![allow(clippy::unwrap_used)]
 
 use primase_compress::oodle::{Oodle, Version};
-use primase_frostbite::ebx::{self, Value};
+use primase_core::TexFormat;
+use primase_frostbite::ebx::{self, Pointer, Value};
 use primase_frostbite::fbmod::{self, Body, Fbmod};
 use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::texture;
 use primase_reskate::costume::textures::{Donor, HeaderUnknowns, Replacement, guid_text, retexture};
-use primase_reskate::costume::{costume_presets, morphs, presets};
+use primase_reskate::costume::thumbnail::{CdnContentHash, Choices};
+use primase_reskate::costume::{ADDITION, costume_presets, morphs, presets, thumbnail};
 use primase_reskate::postcompile::meshset;
 use primase_testdata::real_data;
+use primase_texcodec::{Bcdec, TexDecoder};
+use sha1::Digest;
 
 type R = Result<(), Box<dyn std::error::Error>>;
 
@@ -62,6 +68,38 @@ fn studio_files(oodle: &Oodle) -> Result<Vec<(String, Fbmod)>, Box<dyn std::erro
     Ok(out)
 }
 
+/// The entries `added` carry the user string, flags and handler of Studio's own additions in `original`: every
+/// addition entry of the file (the user strings that start with `ADDITION`) has the same user string up to its `|`
+/// suffix, and each added entry's string, flags and handler are those.
+fn assert_added_as_studio(original: &Fbmod, added: &[fbmod::Entry], path: &str) {
+    let studio: Vec<_> = original
+        .entries
+        .iter()
+        .filter_map(|e| e.stored.as_ref())
+        .filter(|s| s.user.starts_with(ADDITION))
+        .collect();
+    assert!(!studio.is_empty(), "{path}: no Studio additions");
+    let user = studio[0].user.split('|').next().unwrap();
+    for s in &studio {
+        assert_eq!(s.user.split('|').next().unwrap(), user, "{path}");
+        assert_eq!(
+            (s.flags, s.handler),
+            (studio[0].flags, studio[0].handler),
+            "{path}"
+        );
+    }
+    assert!(!added.is_empty());
+    for e in added {
+        let s = e.stored.as_ref().unwrap();
+        assert_eq!(s.user, user, "{path}: {}", e.name);
+        assert_eq!(
+            (s.flags, s.handler),
+            (studio[0].flags, studio[0].handler),
+            "{path}: {}",
+            e.name
+        );
+    }
+}
 #[test]
 fn studio_presets_are_repaired_and_retextured() -> R {
     let (Some(data), Some(dll)) = (real_data("PRIMASE_SKATE_DATA"), real_data("PRIMASE_OODLE9")) else {
@@ -131,6 +169,7 @@ fn studio_presets_are_repaired_and_retextured() -> R {
         )?;
         assert_eq!(report.assets.len(), 2, "{path}: {report:?}");
         assert_eq!(m.entries.len(), entries + 6);
+        assert_added_as_studio(&original, &m.entries[entries..], &path);
         assert!(
             report
                 .kept
@@ -412,4 +451,260 @@ fn guids_print_in_their_text_form() {
         0x3f, 0x54, 0x6b, 0x76, 0x28, 0x80, 0xea, 0x4f, 0x92, 0xe9, 0x0d, 0x9a, 0x5c, 0x25, 0x6d, 0x3e,
     ];
     assert_eq!(guid_text(&g), "766b543f-8028-4fea-92e9-0d9a5c256d3e");
+}
+
+/// A picture of `side` pixels square whose texels vary smoothly (so BC7 reproduces them closely), with a soft edge of
+/// transparency.
+fn picture(side: u32) -> thumbnail::Picture {
+    let mut rgba = Vec::new();
+    for y in 0..side {
+        for x in 0..side {
+            let a = if x < 4 || y < 4 { 128 } else { 255 };
+            rgba.extend_from_slice(&[
+                (x * 255 / side) as u8,
+                (y * 255 / side) as u8,
+                ((x + y) * 127 / side) as u8,
+                a,
+            ]);
+        }
+    }
+    thumbnail::Picture {
+        width: side,
+        height: side,
+        rgba,
+    }
+}
+
+/// The thumbnail step on Studio's own files (`PRIMASE_RESKATE_FBMOD`) and the game's donor thumbnails
+/// (`PRIMASE_SKATE_DATA`, `PRIMASE_OODLE9`):
+/// - the game's own CDN documents state the `NameHash` rule: `name_hash` of the donor texture's `Name` is the donor
+///   CDN document's `NameHash`, for every stock costume thumbnail;
+/// - `set_thumbnail`: the item's `Thumbnail` and `ThumbnailLarge` imports point at the new CDN documents (they were
+///   the donor's), which point at the new texture assets; the assets read (a new `Resource` id with bit 0 set, the
+///   donor's format, size, crop and authored size, the chunk the header names); a third-party decoder (bcdec) reads
+///   the chunk back as the picture, within BC7's error; the item's objects and every other import are as they were,
+///   every other entry is unchanged; the mod written reads back and a rebuild is byte-identical;
+/// - a picture of another size is refused by name and leaves the mod as it was.
+#[test]
+fn studio_item_gets_its_own_thumbnails() -> R {
+    let (Some(data), Some(dll)) = (real_data("PRIMASE_SKATE_DATA"), real_data("PRIMASE_OODLE9")) else {
+        return Ok(());
+    };
+    // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.
+    #[allow(unsafe_code)]
+    let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
+    let folder = Folder::open(data)?;
+    let src = Source {
+        folder: &folder,
+        base: Some(&folder),
+        oodle: Some(&oodle),
+    };
+    let donor = Donor {
+        toc: "Win32/items.toc",
+        bundle: "win32/characters/customization/configs/cas_main_sharedbundle",
+    };
+    let index = src.ebx_index(donor.toc, donor.bundle)?;
+    let name_of = |d: &ebx::Document| match d.instances[0].object.as_ref().unwrap().field("Name") {
+        Some(Value::Str(s)) => String::from_utf8(s.clone()).unwrap(),
+        other => panic!("Name: {other:?}"),
+    };
+    // the hash rule, against the game's stock documents
+    let mut stock = 0;
+    for e in index
+        .values()
+        .filter(|e| e.name.starts_with("thumbnail/cdn/img_own_costume_gen_"))
+    {
+        let cdn = src.read_ebx(e)?;
+        let tex = src.read_ebx(&index[&cdn.imports[0].file_guid])?;
+        assert_eq!(
+            cdn.instances[0].object.as_ref().unwrap().field("NameHash"),
+            Some(&Value::UInt(u64::from(thumbnail::name_hash(&name_of(&tex))))),
+            "{}",
+            e.name
+        );
+        stock += 1;
+    }
+    assert!(stock >= 2, "{stock} stock CDN documents");
+
+    let pictures = thumbnail::Thumbnails {
+        small: picture(256),
+        large: picture(768),
+    };
+    let choices = Choices {
+        header_unknowns: HeaderUnknowns::Zero,
+        content_hash: CdnContentHash::PixelsSha1,
+    };
+    for (path, original) in studio_files(&oodle)? {
+        let mut m = original.clone();
+        let report = thumbnail::set_thumbnail(
+            &mut m,
+            &src,
+            Some(&oodle),
+            &donor,
+            "c1010_test",
+            &pictures,
+            choices,
+        )?;
+        assert!(
+            report.item.starts_with("items/cust_fullbodycostume/own_"),
+            "{}",
+            report.item
+        );
+        assert_eq!(report.thumbnails.len(), 2);
+        assert_eq!(m.entries.len(), original.entries.len() + 8, "{path}");
+        assert_added_as_studio(&original, &m.entries[original.entries.len()..], &path);
+
+        let read = |m: &Fbmod, name: &str| -> ebx::Document {
+            let e = m
+                .entries
+                .iter()
+                .find(|e| e.name == name && matches!(e.body, Body::Ebx))
+                .unwrap_or_else(|| panic!("{name}"));
+            ebx::read(&m.payload(e.index().unwrap(), Some(&oodle)).unwrap()).unwrap()
+        };
+        let (was, now) = (read(&original, &report.item), read(&m, &report.item));
+        let objects = |d: &ebx::Document| d.instances.iter().map(|i| i.object.clone()).collect::<Vec<_>>();
+        assert_eq!(objects(&was), objects(&now), "{path}");
+        let changed: Vec<usize> = (0..was.imports.len())
+            .filter(|&i| was.imports[i] != now.imports[i])
+            .collect();
+        assert_eq!(changed.len(), 2, "{path}");
+
+        for (t, side, pic, donor_cdn) in [
+            (
+                &report.thumbnails[0],
+                256u32,
+                &pictures.small,
+                "thumbnail/cdn/img_own_costume_gen_isaacclarke_00001",
+            ),
+            (
+                &report.thumbnails[1],
+                768,
+                &pictures.large,
+                "thumbnail/cdn/img_own_costume_gen_isaacclarke_00001_lrg",
+            ),
+        ] {
+            assert_eq!(
+                (u32::from(t.width), u32::from(t.height), t.format),
+                (side, side, 67)
+            );
+            let Some(Value::Pointer(Pointer::External(slot))) =
+                now.instances[0].object.as_ref().unwrap().field(t.field).cloned()
+            else {
+                panic!("{}", t.field)
+            };
+            assert!(changed.contains(&slot));
+            assert_eq!(index[&was.imports[slot].file_guid].name, donor_cdn);
+            // the item's import is the new CDN document, which refers to the new texture asset
+            let cdn = read(&m, &t.cdn);
+            assert_eq!(now.imports[slot].file_guid, cdn.file_guid);
+            assert_eq!(now.imports[slot].class_guid, cdn.instances[0].guid);
+            let tex = read(&m, &t.texture);
+            assert_eq!(cdn.imports[0].file_guid, tex.file_guid);
+            assert_eq!(cdn.imports[0].class_guid, tex.instances[0].guid);
+            let c = cdn.instances[0].object.as_ref().unwrap();
+            assert_eq!(c.field("Name"), Some(&Value::Str(t.cdn.as_bytes().to_vec())));
+            assert_eq!(
+                c.field("NameHash"),
+                Some(&Value::UInt(u64::from(thumbnail::name_hash(&t.texture))))
+            );
+            let o = tex.instances[0].object.as_ref().unwrap();
+            assert_eq!(o.field("Name"), Some(&Value::Str(t.texture.as_bytes().to_vec())));
+            let Some(Value::Resource(rid)) = o.field("Resource") else {
+                panic!("Resource")
+            };
+            assert_eq!(rid & 1, 1);
+            // the donor's crop and authored size stay (the slot's layout)
+            let donor_tex = src.read_ebx(index.values().find(|e| e.name == t.donor).unwrap())?;
+            let od = donor_tex.instances[0].object.as_ref().unwrap();
+            for f in ["CropInfo", "AuthoredWidth", "AuthoredHeight"] {
+                assert_eq!(o.field(f), od.field(f), "{f}");
+            }
+            let res = m
+                .entries
+                .iter()
+                .find(|e| e.name == t.texture && matches!(&e.body, Body::Res(x) if x.rid == *rid))
+                .unwrap();
+            let h = texture::read(&m.payload(res.index().unwrap(), Some(&oodle))?)?;
+            assert_eq!(
+                (h.format, h.width, h.height, h.mip_count, h.slices),
+                (67, side as u16, side as u16, 1, 1)
+            );
+            assert_eq!(h.chunk_size, side * side);
+            let chunk = m.entries.iter().find(|e| e.name == guid_text(&h.chunk)).unwrap();
+            let bytes = m.payload(chunk.index().unwrap(), Some(&oodle))?;
+            assert_eq!(bytes.len() as u32, h.chunk_size);
+            assert_eq!(
+                c.field("ContentHash"),
+                Some(&Value::Sha1(sha1::Sha1::digest(&bytes).into())),
+                "the chosen ContentHash"
+            );
+            let px = Bcdec.decode_rgba8(TexFormat::Bc7, side, side, &bytes)?;
+            let err: u64 = px
+                .iter()
+                .zip(&pic.rgba)
+                .map(|(a, b)| u64::from(a.abs_diff(*b)))
+                .sum();
+            let mean = err as f64 / px.len() as f64;
+            assert!(mean < 2.0, "{}: mean error {mean}", t.texture);
+            println!("{path}: {} mean abs error {mean:.3}", t.texture);
+        }
+
+        // nothing else changed
+        for e in &original.entries {
+            let x = m
+                .entries
+                .iter()
+                .find(|x| x.name == e.name && x.kind() == e.kind())
+                .unwrap_or_else(|| panic!("{} gone", e.name));
+            assert_eq!((&x.body, &x.bundles), (&e.body, &e.bundles), "{}", e.name);
+            if e.name != report.item {
+                assert_eq!(
+                    e.index().map(|i| original.payload(i, Some(&oodle)).unwrap()),
+                    x.index().map(|i| m.payload(i, Some(&oodle)).unwrap()),
+                    "{}",
+                    e.name
+                );
+            }
+        }
+        assert_eq!(report.choices, choices); // the other choices: the donor's ContentHash kept, the header bytes the donor's (zero in both fields here)        let mut kept = original.clone();        let other = Choices {            header_unknowns: HeaderUnknowns::Donor,            content_hash: CdnContentHash::Donor,        };        let r = thumbnail::set_thumbnail(&mut kept, &src, Some(&oodle), &donor, "c1010_test", &pictures, other)?;        assert_eq!(r.choices, other);        for (t, want) in r.thumbnails.iter().zip(&report.thumbnails) {            let donor_cdn = index.values().find(|e| e.name == want.donor.replace("/tool/", "/cdn/img_")).unwrap();            let stock = src.read_ebx(donor_cdn)?;            let got = read(&kept, &t.cdn);            assert_eq!(                got.instances[0].object.as_ref().unwrap().field("ContentHash"),                stock.instances[0].object.as_ref().unwrap().field("ContentHash")            );            let header = |m: &Fbmod| {                let e = m.entries.iter().find(|e| e.name == t.texture && matches!(e.body, Body::Res(_))).unwrap();                m.payload(e.index().unwrap(), Some(&oodle)).unwrap()            };            let mut zero = texture::read(&header(&m))?;            let mut donor_h = texture::read(&header(&kept))?;            zero.chunk = [0; 16];            donor_h.chunk = [0; 16];            assert_eq!(zero, donor_h);        }
+        let bytes = fbmod::write(&m)?;
+        assert_eq!(fbmod::read(&bytes)?, m);
+
+        // a rebuild makes the same bytes
+        let mut again = original.clone();
+        thumbnail::set_thumbnail(
+            &mut again,
+            &src,
+            Some(&oodle),
+            &donor,
+            "c1010_test",
+            &pictures,
+            choices,
+        )?;
+        assert_eq!(fbmod::write(&again)?, bytes);
+
+        // a picture of another size is refused, naming both sizes
+        let mut wrong = original.clone();
+        let bad = thumbnail::Thumbnails {
+            small: picture(128),
+            large: picture(768),
+        };
+        let e = thumbnail::set_thumbnail(
+            &mut wrong,
+            &src,
+            Some(&oodle),
+            &donor,
+            "c1010_test",
+            &bad,
+            choices,
+        )
+        .unwrap_err();
+        assert!(
+            e.to_string().contains("128x128") && e.to_string().contains("256x256"),
+            "{e}"
+        );
+        assert_eq!(wrong, original);
+    }
+    Ok(())
 }
