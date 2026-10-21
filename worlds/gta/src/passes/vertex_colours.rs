@@ -1,5 +1,6 @@
-//! `gta-vertex-colours`: GTA's vertex colours given glTF's meaning. Vertex colour 0 kept where it fades the surface (as
-//! white with GTA's alpha), vertex colour 1 kept where it weighs a layered material, both dropped elsewhere (glTF
+//! `gta-vertex-colours`: GTA's vertex colours given glTF's meaning. Vertex colour 0 kept where it fades the surface or
+//! its alpha weighs a layered material's layers (as white with GTA's alpha), vertex colour 1 kept where it weighs a
+//! layered material, both dropped elsewhere (glTF
 //! multiplies COLOR_0 into the base colour; GTA's red and green are ambient occlusion and its blue a palette column,
 //! none of them a colour).
 use std::collections::BTreeSet;
@@ -14,8 +15,9 @@ use crate::passes::shader_class::Class;
 
 /// `gta-vertex-colours`: on a primitive whose shader fades by vertex alpha
 /// ([`crate::passes::shader_class::ShaderClass::vertex_alpha`]) and is blended (alpha, decal, glass), with some vertex alpha below 255, COLOR_0
-/// becomes (255, 255, 255, alpha); elsewhere it is dropped, except where `gta-tint` wrote the tint into it (kept,
-/// its alpha only where it fades). COLOR_1 stays on primitives drawn with a layered material
+/// becomes (255, 255, 255, alpha), as it does on a primitive whose layered material's weights read it (the lookup-blended
+/// terrain mixes by its alpha); elsewhere it is dropped, except where `gta-tint` wrote the tint into it (kept, its
+/// alpha only where it fades). COLOR_1 stays on primitives drawn with a layered material
 /// (its layer weights) and is dropped elsewhere. Terrain primitives whose material is neither layered nor lowered are
 /// left as they are (`gta-terrain-layers` has not run). Counted: primitives whose COLOR_0 red or green (GTA's per-vertex ambient
 /// occlusion) is not all 255, which no PBR channel carries.
@@ -37,6 +39,11 @@ impl Pass for GtaVertexColours {
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let classes = classes(w)?;
         let layered: BTreeSet<Entity> = w.iter::<LayeredMaterial>().map(|(e, _)| e).collect();
+        let weighed_by_colour0: BTreeSet<Entity> = w
+            .iter::<LayeredMaterial>()
+            .filter(|(_, l)| l.reads(Semantic::Color(0)))
+            .map(|(e, _)| e)
+            .collect();
         let lowered: BTreeSet<Entity> = w.iter::<PbrMaterial>().map(|(e, _)| e).collect();
         let tinted: BTreeSet<Entity> = w.resource::<GtaTinted>().map_or(BTreeSet::new(), |t| t.0.clone());
         for_each_mesh(w, |mesh| {
@@ -55,10 +62,18 @@ impl Pass for GtaVertexColours {
                         let fades = c.vertex_alpha
                             && matches!(c.class, Class::Alpha | Class::Decal | Class::Glass)
                             && v.iter().any(|c| c[3] < 255);
-                        if fades {
+                        let weighs = weighed_by_colour0.contains(&m);
+                        if fades || weighs {
                             let white = v.iter().map(|c| [255, 255, 255, c[3]]).collect();
                             p.streams_mut().insert(Semantic::Color(0), Stream::U8x4(white));
-                            log.count("COLOR_0 kept as vertex alpha", 1);
+                            log.count(
+                                if weighs {
+                                    "COLOR_0 kept as the alpha a layered material's weights read"
+                                } else {
+                                    "COLOR_0 kept as vertex alpha"
+                                },
+                                1,
+                            );
                         } else {
                             log.count("COLOR_0 dropped", 1);
                         }

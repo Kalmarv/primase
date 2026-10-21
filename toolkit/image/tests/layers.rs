@@ -142,3 +142,32 @@ fn over_is_baked_to_summed_slot_weights() {
         &vec![[1., 0., 0., 0.], [0., 1., 0., 0.], [0.5, 0.5, 0., 0.]]
     );
 }
+
+/// A mask whose reference states a nearest magnification filter is read at the nearest texel: u 0.5 is texel
+/// floor(0.5 * 2) = 1, the right one (red 255), where bilinear gives the mean.
+#[test]
+fn a_stated_nearest_filter_samples_the_nearest_texel() {
+    use primase_core::pbr::{Filter, Filters};
+    let (mut w, host, proto) = world(Composition::Sum);
+    let mut l = w.get::<LayeredMaterial>(host).unwrap().clone();
+    if let Some(Channel::Source(Source::Mask { texture, .. })) =
+        l.weights.channels.as_mut().unwrap().get_mut(1)
+    {
+        texture.filters = Filters {
+            mag: Some(Filter::Nearest),
+            ..Filters::default()
+        };
+    }
+    w.insert(host, l);
+    bake(&mut w);
+    let Some(Stream::F32x4(baked)) = w.get::<Mesh>(proto).unwrap().primitives()[0]
+        .streams
+        .get(&Semantic::Color(1))
+    else {
+        panic!("no baked stream")
+    };
+    assert_eq!(
+        baked,
+        &vec![[0.2, 0., 0., 0.], [0.4, 1., 0., 0.], [0.6, 1., 0., 0.]]
+    );
+}

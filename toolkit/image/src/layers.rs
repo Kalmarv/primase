@@ -2,14 +2,15 @@
 //! only (skate). Each layered material with channels or the over or height composition gets a new colour stream on
 //! every primitive drawn with it, holding the channels evaluated at that vertex (masks and heights sampled at its UVs),
 //! and becomes the original form: that stream, the same mapping (with over or height, the slot weights themselves and
-//! the identity mapping), summed. Between vertices the weights then interpolate instead of
-//! following the mask: an approximation, counted.
+//! the identity mapping), summed. Masks are sampled bilinearly, or at the nearest texel where their reference states
+//! a nearest magnification filter. Between vertices the weights then interpolate instead of following the mask: an
+//! approximation, counted.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::layered::{Composition, Source, height_blend, over_as_sum};
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
-use primase_core::pbr::{TextureRef, Wrap};
+use primase_core::pbr::{Filter, TextureRef, Wrap};
 use primase_core::{
     Component, Entity, LayeredMaterial, Mesh, Semantic, Stream, Texture, WeightMapping, World,
 };
@@ -261,8 +262,9 @@ fn source(
     }
 }
 
-/// Bilinear sample (texel centres at (i + 0.5) / size, v down the image as glTF) with the reference's wrap and
-/// transform, 0..1 per channel.
+/// A sample at `uv` (texel centres at (i + 0.5) / size, v down the image as glTF) with the reference's wrap and
+/// transform, 0..1 per channel: the nearest texel where the reference states a nearest magnification filter (a point
+/// at a vertex is magnified), else bilinear.
 fn sample(m: &Decoded, r: &TextureRef, uv: [f32; 2]) -> [f32; 4] {
     let uv = r.transform.map_or(uv, |t| t.apply(uv));
     let texel = |x: i64, y: i64| -> [f32; 4] {
@@ -282,6 +284,10 @@ fn sample(m: &Decoded, r: &TextureRef, uv: [f32; 2]) -> [f32; 4] {
         let o = (y * m.width as usize + x) * 4;
         std::array::from_fn(|c| f32::from(m.rgba[o + c]) / 255.0)
     };
+    if r.filters.mag == Some(Filter::Nearest) {
+        let at = |t: f32, n: u32| (t * n as f32).floor() as i64;
+        return texel(at(uv[0], m.width), at(uv[1], m.height));
+    }
     let fx = uv[0] * m.width as f32 - 0.5;
     let fy = uv[1] * m.height as f32 - 0.5;
     let (x0, y0) = (fx.floor(), fy.floor());
