@@ -76,13 +76,13 @@ pub enum InstancedLevels {
     /// The level whose slot holds the matrices; the object's other mesh levels aren't placed
     /// ([`Placed::levels_unplaced`]).
     Slot,
-    /// For an Entity, every mesh level, as for a Visual without instances. The census finds each Entity
-    /// instance's stored bounds equal to its matrix (then the Entity's rotation) applied to the
-    /// LODSelectorInstance's bounds within 1e-3 on all 6,422,618 (2 bit-equal), and applied to the slot's
-    /// MeshInstanceData bounds (its finest level's, by the notes) off by more than 0.1, up to 10, on 2,842,279;
-    /// the LODSelectorInstance's bounds are the union of every level's mesh bounds (the notes: 400 of 400). An
-    /// EntityGroup's instance bounds don't fit its LODSelectorInstance's bounds (off by more than 0.1, up to 1,000,
-    /// on all 241,747), so a group's instanced Visual places as for [`InstancedLevels::Slot`].
+    /// Every mesh level, as for a Visual without instances. The census measures what each instance's stored
+    /// bounds cover: on an Entity, its matrix (then the Entity's rotation) applied to the LODSelectorInstance's
+    /// bounds, within 1e-3 on all 6,422,618 (2 bit-equal), those bounds being the union of every mesh level's stored
+    /// bounds (bit-equal on 349,004 of 349,009 instanced Visuals, the finest level's alone on 45,716); on an
+    /// EntityGroup (whose LODSelectorInstance bounds are unset), R I applied to that union is contained in them on
+    /// 241,706 of 241,747 (within 1e-3) and equal to them within 1e-3 on 84,666, against 50,573 for the finest
+    /// level's. So each instance's bounds cover every level; that the game draws them there isn't read.
     Selector,
 }
 
@@ -298,15 +298,12 @@ impl<'a> Placer<'a> {
     /// instance. A group's own Visuals place as an Entity's (it is an Entity's body and its member list).
     pub fn place(&mut self, w: &mut World, at: At, placed: &mut Placed) -> Result<(), Error> {
         let r = self.archive.resource(at)?;
-        let (e, group) = match r.type_id {
-            ENTITY => (
-                StoredEntity::parse(&r.body).map_err(|source| Error::Entity { at, source })?,
-                false,
-            ),
+        let e = match r.type_id {
+            ENTITY => StoredEntity::parse(&r.body).map_err(|source| Error::Entity { at, source })?,
             ENTITY_GROUP => {
                 let g = StoredEntityGroup::parse(&r.body).map_err(|source| Error::Entity { at, source })?;
                 placed.members.extend(g.members.iter().map(|m| m.id));
-                (g.entity, true)
+                g.entity
             }
             found => {
                 return Err(Error::Type {
@@ -345,7 +342,7 @@ impl<'a> Placer<'a> {
                     let Some(&(_, mesh)) = levels.iter().find(|(l, _)| *l == level) else {
                         return Err(Error::Slot(at, level));
                     };
-                    let every = self.instanced == InstancedLevels::Selector && !group;
+                    let every = self.instanced == InstancedLevels::Selector;
                     let (prototype, overrides) = match (every, levels.first()) {
                         (true, Some(&(finest, _))) if finest == level => {
                             (self.whole(w, object, &levels).unwrap_or(mesh), shows.overrides)

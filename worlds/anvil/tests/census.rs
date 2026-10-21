@@ -310,11 +310,106 @@ fn entity_outcomes(tally: &mut Tally, e: &StoredEntity) {
     }
 }
 
+/// A box as two corners.
+type Corners = ([f32; 3], [f32; 3]);
+
+/// An instanced EntityGroup Visual: its object, the group's matrix, each instance's matrix and stored bounds.
+type GroupInstances = (u64, [f32; 16], Vec<([f32; 16], BoundingVolume)>);
+
+/// What the cross-forge bounds measurements gather: every Mesh's stored bounds and LODSelector's level references by
+/// ClassID (a later forge's copy replacing an earlier's: each patch sorts after its base), and the instanced Visuals.
+#[derive(Default)]
+struct Levels {
+    meshes: std::collections::HashMap<u64, [[f32; 3]; 2]>,
+    selectors: std::collections::HashMap<u64, Vec<u64>>,
+    groups: Vec<GroupInstances>,
+    /// Instanced Entity Visuals: the object and the LODSelectorInstance's bounds.
+    entities: Vec<(u64, BoundingVolume)>,
+}
+
+impl Levels {
+    /// The instanced Visuals of an Entity (or group).
+    fn gather(&mut self, e: &StoredEntity, group: bool) {
+        for v in e.visuals() {
+            let (Some(object), Instance::Lod { bounds, slots, .. }) = (v.object, &v.instance) else {
+                continue;
+            };
+            let instances: Vec<([f32; 16], BoundingVolume)> = slots
+                .iter()
+                .filter_map(|s| match s {
+                    Slot::Mesh(m) => Some(m.instances.iter().copied().zip(m.instance_bounds.iter().copied())),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            if instances.is_empty() {
+                continue;
+            }
+            if group {
+                self.groups.push((object.id, e.matrix, instances));
+            } else {
+                self.entities.push((object.id, *bounds));
+            }
+        }
+    }
+
+    /// The union of the object's mesh levels' stored bounds, and its finest's alone; `None` where none is read.
+    fn union(&self, object: u64) -> Option<(Corners, Corners)> {
+        let levels = self.selectors.get(&object)?;
+        let mut found = levels.iter().filter_map(|id| self.meshes.get(id));
+        let first = *found.next()?;
+        let mut u = (first[0], first[1]);
+        for b in found {
+            u.0 = [0, 1, 2].map(|a| u.0[a].min(b[0][a]));
+            u.1 = [0, 1, 2].map(|a| u.1[a].max(b[1][a]));
+        }
+        Some((u, (first[0], first[1])))
+    }
+
+    /// The measurements, as tallies.
+    fn measure(&self, tallies: &mut BTreeMap<&'static str, Tally>) {
+        let t = tallies
+            .entry("EntityGroup instance bounds vs R I (its levels' mesh bounds)")
+            .or_default();
+        for (object, owner, instances) in &self.groups {
+            let Some((all, finest)) = self.union(*object) else {
+                t.outcome("object's mesh levels not read");
+                continue;
+            };
+            for (i, b) in instances {
+                for (what, of) in [("every level", all), ("finest level", finest)] {
+                    let (lo, hi) = transformed_box(owner, i, of);
+                    t.outcome(format!("{what}: {}", bound_fit(b, (lo, hi))));
+                    let inside = (0..3)
+                        .all(|a| f64::from(b.min[a]) <= lo[a] + 1e-3 && f64::from(b.max[a]) >= hi[a] - 1e-3);
+                    if inside {
+                        t.outcome(format!("{what}: contained (1e-3)"));
+                    }
+                }
+            }
+        }
+        let t = tallies
+            .entry("Entity LODSelectorInstance bounds vs its levels' mesh bounds")
+            .or_default();
+        for (object, bounds) in &self.entities {
+            let Some((all, finest)) = self.union(*object) else {
+                t.outcome("object's mesh levels not read");
+                continue;
+            };
+            for (what, (lo, hi)) in [("every level", all), ("finest level", finest)] {
+                let fit = bound_fit(bounds, (lo.map(f64::from), hi.map(f64::from)));
+                t.outcome(format!("{what}: {fit}"));
+            }
+        }
+    }
+}
+
 fn census_forge(
     path: &Path,
     tallies: &mut BTreeMap<&'static str, Tally>,
     oracle: Option<&Oracle>,
     rras: &mut Tally,
+    levels: &mut Levels,
 ) {
     let forge = Forge::open(path).expect("forge");
     let mut file = File::open(path).expect("open");
@@ -356,6 +451,7 @@ fn census_forge(
                     Ok(m)
                 })
                 .map(|m| {
+                    levels.meshes.insert(r.class_id, m.bounds);
                     let (layout, first_byte) = match &m.layout {
                         Layout::Ranged(r) => ("ranged", r.mesh_data[0]),
                         Layout::Inline(i) => ("inline", i.declaration[0]),
@@ -456,11 +552,15 @@ fn census_forge(
                 })
                 .map_err(|e| e.to_string()),
             ENTITY => StoredEntity::parse(&r.body)
-                .map(|e| entity_outcomes(tally, &e))
+                .map(|e| {
+                    entity_outcomes(tally, &e);
+                    levels.gather(&e, false);
+                })
                 .map_err(|e| e.to_string()),
             ENTITY_GROUP => StoredEntityGroup::parse(&r.body)
                 .map(|g| {
                     entity_outcomes(tally, &g.entity);
+                    levels.gather(&g.entity, true);
                     tally.outcome(format!(
                         "{} members, last word {}",
                         if g.members.is_empty() { "no" } else { "with" },
@@ -523,7 +623,14 @@ fn census_forge(
                 })
                 .map_err(|e| e.to_string()),
             LOD_SELECTOR => StoredLodSelector::parse(&r.body)
-                .map(|_| ())
+                .map(|s| {
+                    let ids = s
+                        .levels
+                        .iter()
+                        .filter_map(|l| l.reference.map(|x| x.id))
+                        .collect();
+                    levels.selectors.insert(r.class_id, ids);
+                })
                 .map_err(|e| e.to_string()),
             MESH_SHAPE => MeshShape::parse(&r.body)
                 .and_then(|s| s.surfaces().map(|_| ()))
@@ -565,10 +672,12 @@ fn every_entry_of_the_kinds_read() {
     let mut tallies = BTreeMap::new();
     let oracle = oracle();
     let mut rras = Tally::default();
+    let mut levels = Levels::default();
     for path in &forges {
         eprintln!("census: {}", path.display());
-        census_forge(path, &mut tallies, oracle.as_ref(), &mut rras);
+        census_forge(path, &mut tallies, oracle.as_ref(), &mut rras, &mut levels);
     }
+    levels.measure(&mut tallies);
     if oracle.is_some() {
         tallies.insert("Mesh vs RRAssetStudio", rras);
     }

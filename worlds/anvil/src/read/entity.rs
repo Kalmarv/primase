@@ -463,7 +463,7 @@ impl Cursor<'_> {
                 self.object("RigidBodyComponent", 0x18D5_28B6)?;
                 self.take(4, "RigidBodyComponent")?;
             }
-            // 4 bytes, a count c, 87 c bytes, 4 bytes
+            // AmbientEffectGeneratorComponent: 4 bytes, a count c, 87 c bytes, 4 bytes
             0x713F_0C7D => {
                 self.take(4, "component")?;
                 let c = self.count("component count", 87)?;
@@ -520,6 +520,26 @@ impl Cursor<'_> {
                     self.take(k.saturating_mul(100), "HoudiniDecalInstancerComponent item")?;
                 }
                 self.take(46, "HoudiniDecalInstancerComponent")?;
+            }
+            // StartingGridComponent: 4 bytes, a count n, n 78-byte objects (GameplayPositionWithLocal: the notes'
+            // 8 + 78 n on 1,362 of 1,362)
+            0x1725_EC54 => {
+                self.take(4, "component")?;
+                let n = self.count("component count", 78)?;
+                self.take(n.saturating_mul(78), "component")?;
+            }
+            // QuestInteractiveComponent: 89 bytes, a null handle 03, an EventListener's 13 bytes (the notes: 532 of 532; a 120-byte form with
+            // another byte there is seen 4 times, without a rule)
+            0x733E_6F5A => {
+                self.take(89, "component")?;
+                if self.u8("component handle")? != 3 {
+                    return Ok(None);
+                }
+                self.take(13, "component")?;
+            }
+            // OutOfBoundsVisualComponent (the notes: 169 on 716 of 716)
+            0x2994_1A30 => {
+                self.take(169, "component")?;
             }
             // fixed sizes, observed on every body measured
             0x5139_1C93 => {
