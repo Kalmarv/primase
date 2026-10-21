@@ -14,6 +14,7 @@ pub use passes::extras;
 pub use passes::object_collision as objects;
 pub use passes::{blockers, layers, lights, normals, pbr, settings};
 pub use read::area::{Options, Report, StateClasses, read_area, world_bounds};
+pub use read::character::{CharacterReader, CharacterReport, read_character};
 pub use read::collision::Report as CollisionReport;
 pub use read::extras::{Report as ExtrasReport, light_record};
 pub use read::objects::Report as ObjectCollisionReport;

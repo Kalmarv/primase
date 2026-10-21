@@ -906,6 +906,7 @@ dependencies = [
  "aes",
  "encoding_rs",
  "num-bigint",
+ "primase-animation",
  "primase-bytes",
  "primase-compress",
  "primase-core",

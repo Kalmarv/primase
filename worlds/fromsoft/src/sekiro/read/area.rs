@@ -298,6 +298,24 @@ pub fn world_bounds(model: &Model) -> std::result::Result<Option<[[f32; 3]; 2]>,
         .map(|[min, max]| [[min[0], min[1], -max[2]], [max[0], max[1], -min[2]]]))
 }
 
+/// Every material definition (MTD) of the install, by stem: what a model's materials resolve against.
+pub(super) fn material_definitions(
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+) -> Result<BTreeMap<String, MaterialDefinition>> {
+    let mut definitions = BTreeMap::new();
+    for f in Binder::read(&archive.read("/mtd/allmaterialbnd.mtdbnd.dcx", decoder)?, decoder)?.files {
+        let name = f.name.as_deref().unwrap_or("");
+        if name.to_lowercase().ends_with(".mtd") {
+            definitions.insert(
+                materials::stem(name),
+                MaterialDefinition::read(&decoder.decode_if_dcx(&f.bytes)?)?,
+            );
+        }
+    }
+    Ok(definitions)
+}
+
 pub fn read_area(
     install: impl AsRef<Path>,
     area: &str,
@@ -320,16 +338,7 @@ pub fn read_area(
     let archive = Archive::open(install.as_ref())?;
     let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
     let mut catalog = textures::Catalog::discover(&archive, decoder, &area[..3])?;
-    let mut definitions = BTreeMap::new();
-    for f in Binder::read(&archive.read("/mtd/allmaterialbnd.mtdbnd.dcx", decoder)?, decoder)?.files {
-        let name = f.name.as_deref().unwrap_or("");
-        if name.to_lowercase().ends_with(".mtd") {
-            definitions.insert(
-                materials::stem(name),
-                MaterialDefinition::read(&decoder.decode_if_dcx(&f.bytes)?)?,
-            );
-        }
-    }
+    let definitions = material_definitions(&archive, decoder)?;
     let mut report = Report::default();
     let mut placements = Vec::new();
     let mut requests = BTreeSet::new();
@@ -533,7 +542,7 @@ pub fn read_area(
 }
 
 /// The G-buffer programs of the given layered materials, from the installed shader bundles.
-fn shader_programs<'a>(
+pub(super) fn shader_programs<'a>(
     archive: &Archive,
     decoder: &Decoder<'_>,
     materials: impl Iterator<Item = &'a materials::LayeredMaterial>,

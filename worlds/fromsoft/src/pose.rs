@@ -72,6 +72,32 @@ pub(crate) fn normal_matrix(m: &Matrix) -> Result<(Matrix, f64), String> {
         det,
     ))
 }
+/// A FLVER's bones as a `core.skeleton` in the world frame: joint `i` is bone `i` with its stored name and parent
+/// (a negative parent: a root), its rest the bone's local transform as [`bone_matrices`] composes it (scale, then
+/// rotation about X, Z, Y in that order, then translation), converted from the file's frame exactly
+/// ([`primase_core::Rest::converted`]).
+pub fn skeleton(model: &Model) -> primase_core::Skeleton {
+    primase_core::Skeleton {
+        joints: model
+            .bones
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let m = local(b);
+                let rest = primase_core::Rest::Affine(Transform {
+                    cols: m.map(|c| c.map(|x| x as f32)),
+                });
+                primase_core::Joint {
+                    id: primase_core::JointId(i as u32),
+                    name: b.name.clone(),
+                    parent: u32::try_from(b.parent).ok().map(primase_core::JointId),
+                    rest: rest.converted(&FRAME),
+                }
+            })
+            .collect(),
+    }
+}
+
 /// Each bone's model-space matrix, through its parents.
 pub(crate) fn bone_matrices(bones: &[Bone]) -> Result<Vec<Matrix>, String> {
     let mut worlds = Vec::with_capacity(bones.len());

@@ -26,6 +26,26 @@ pub fn compose(a: &Affine, b: &Affine) -> Affine {
     ]
 }
 
+/// The inverse of an affine map; `None` for a singular one.
+pub fn inverse(m: &Affine) -> Option<Affine> {
+    let c = |a: [f64; 3], b: [f64; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let cof = [c(m[1], m[2]), c(m[2], m[0]), c(m[0], m[1])];
+    let det: f64 = (0..3).map(|r| m[0][r] * cof[0][r]).sum();
+    if det == 0.0 || !det.is_finite() {
+        return None;
+    }
+    // row i of M^-1 is cof[i] / det: column j holds entry j of each
+    let lin: [[f64; 3]; 3] = std::array::from_fn(|j| std::array::from_fn(|i| cof[i][j] / det));
+    let t: [f64; 3] = std::array::from_fn(|r| -(0..3).map(|k| lin[k][r] * m[3][k]).sum::<f64>());
+    Some([lin[0], lin[1], lin[2], t])
+}
+
 /// A transform's entries as f64.
 pub fn affine(t: &Transform) -> Affine {
     t.cols.map(|c| c.map(f64::from))

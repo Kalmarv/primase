@@ -448,6 +448,14 @@ pub const VARIABLES: &[Variable] = &[
         source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`rigid` mode)"#,
     },
     Variable {
+        name: "PRIMASE_FROMSOFT_SKIN_ORACLE",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"a folder of SoulsFormats dumps of Sekiro characters, one folder per character id (`c1010`): skeleton.json (every FLVER bone's name, parent, stored transform and ComputeLocalTransform), meshes.jsonl (each mesh's dynamic flag, palette, face sets and layouts), meshes/<i>.bin (per vertex position, normal, bone indices and weights as stored), dummies.json, anibnd.json; worlds/fromsoft/tests/character_skin.rs"#,
+        status: Status::Live,
+        source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`skin` mode)"#,
+    },
+    Variable {
         name: "PRIMASE_FROMSOFT_OBJECT_ORACLE",
         kind: Kind::Input,
         gate: true,

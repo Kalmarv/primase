@@ -1,6 +1,14 @@
 //! `lower-fromsoft-geometry`: the prototypes' models as core meshes, with the choices it takes as typed options.
+//!
+//! A prototype bound to a skeleton (`fromsoft.skeleton`, the character reader's) lowered with `pose=stored` keeps its
+//! skin: each primitive of a dynamic mesh gets `Joints(0)` (the bones its vertices name, as stored: the FLVER's bone
+//! indices, which index the skeleton directly when the mesh has no palette) and `Weights(0)` (as stored), and each form
+//! a `core.skin` binding them to that skeleton, every joint a slot with the inverse of its rest in the skeleton's space
+//! as its inverse bind (dynamic vertices are stored in that bind pose), the weights `AsStored` (the game's rule for
+//! their sum is not established) and the deformation linear. A mesh with a palette (palette-relative indices) or a
+//! static mesh (vertices in their bone's space) in a bound model is refused: neither is established for these files.
 use super::blockers::BlockerCards;
-use crate::components::models::{RigidModel, SourceModel};
+use crate::components::models::{RigidModel, SkeletonOf, SourceModel};
 use crate::flver::{FaceSetKind, Model, Part};
 use crate::materials::{self, Material};
 use crate::sekiro::components::lowered::UvTiling;
@@ -8,8 +16,8 @@ use crate::sekiro::source::{FaceCull, LayerInputs, MaterialSlots, PrototypeSourc
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::world::Resource;
 use primase_core::{
-    Component, Entity, Instance, LodForm, Lods, Mesh, Primitive, Semantic, Source, Stream, Topology,
-    Transform, World,
+    Binding, BindingId, Component, Deformation, Entity, Influences, Instance, LodForm, Lods, Mesh, Primitive,
+    Semantic, Skeleton, Skin, Slot, Source, Stream, Topology, Transform, WeightRule, World,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -168,11 +176,31 @@ struct Level {
     primitives: Vec<Primitive>,
     inputs: Vec<Vec<u8>>,
     cull: Vec<bool>,
+    /// Per primitive, its influences when its prototype keeps a skin.
+    skin: Vec<Option<Influences>>,
 }
 
 impl Level {
-    /// Its primitives on `e` as a mesh, with their face-set cull and any layer inputs.
-    fn insert(self, world: &mut World, e: Entity) {
+    /// Its primitives on `e` as a mesh, with their face-set cull, any layer inputs, and its skin (bound by `palette`:
+    /// the skeleton and its slots) when its primitives have influences.
+    fn insert(self, world: &mut World, e: Entity, palette: Option<&(Entity, Vec<Slot>)>) {
+        if let Some((skeleton, slots)) = palette
+            && self.skin.iter().any(Option::is_some)
+        {
+            world.insert(
+                e,
+                Skin {
+                    bindings: vec![Binding {
+                        id: BindingId(0),
+                        skeleton: *skeleton,
+                        palettes: self.skin.iter().map(|i| i.map(|_| slots.clone())).collect(),
+                        deformation: Deformation::Linear,
+                    }],
+                    influences: self.skin,
+                    weights: WeightRule::AsStored,
+                },
+            );
+        }
         world.insert(e, Mesh::new(self.primitives));
         world.insert(
             e,
@@ -196,6 +224,31 @@ impl Level {
 struct Lowered {
     levels: BTreeMap<u8, Level>,
     cards: Vec<super::blockers::Card>,
+    /// The skeleton its skin binds to and every joint's slot, when it keeps one.
+    palette: Option<(Entity, Vec<Slot>)>,
+}
+
+/// Every joint of the skeleton held by `skeleton` as a palette slot, its inverse bind the inverse of the joint's rest
+/// in the skeleton's space.
+fn skeleton_palette(world: &World, skeleton: Entity) -> Result<(Entity, Vec<Slot>), String> {
+    let s = world
+        .get::<Skeleton>(skeleton)
+        .ok_or_else(|| format!("{skeleton:?} holds no core.skeleton"))?;
+    let rests = primase_animation::pose::model_transforms(s, &primase_animation::pose::locals(s, None))
+        .map_err(|e| e.0)?;
+    let slots = s
+        .joints
+        .iter()
+        .map(|j| {
+            let inverse = primase_animation::pose::inverse(&rests[&j.id])
+                .ok_or_else(|| format!("joint {:?}'s rest has no inverse", j.id))?;
+            Ok(Slot {
+                joint: j.id,
+                inverse_bind: primase_animation::pose::transform(&inverse),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((skeleton, slots))
 }
 
 impl LowerFromSoftGeometry {
@@ -242,8 +295,24 @@ impl LowerFromSoftGeometry {
             .ok_or_else(|| format!("{prototype:?}: no fromsoft.material_slots"))?
             .0;
         let mut out = Lowered::default();
+        if self.pose == Pose::Stored
+            && let Some(s) = world.get::<SkeletonOf>(prototype)
+        {
+            out.palette = Some(skeleton_palette(world, s.0)?);
+        }
+        let wide = model.bones.len() > 256;
         let mut mesh_levels = Vec::new();
         for (index, mesh) in model.meshes.iter().enumerate() {
+            if out.palette.is_some() && (!mesh.palette.is_empty() || !mesh.dynamic) {
+                return Err(format!(
+                    "{prototype:?}: mesh {index} is {} in a model bound to a skeleton: not established for these files",
+                    if mesh.dynamic {
+                        "palette-relative"
+                    } else {
+                        "static (vertices in their bone's space)"
+                    }
+                ));
+            }
             let entity = *slots
                 .get(mesh.material)
                 .ok_or_else(|| format!("{prototype:?}: mesh {index} material slot {}", mesh.material))?;
@@ -308,7 +377,30 @@ impl LowerFromSoftGeometry {
                 for (n, values) in layer {
                     streams.insert(Semantic::Color(n), Stream::U8x4(values));
                 }
+                let skinned = out.palette.is_some();
+                if skinned {
+                    let vertex = |k: &u32| &mesh.vertices[*k as usize];
+                    let joints = part.source_vertices.iter().map(|k| vertex(k).bone_indices);
+                    streams.insert(
+                        Semantic::Joints(0),
+                        if wide {
+                            Stream::U16x4(joints.collect())
+                        } else {
+                            Stream::U8x4(joints.map(|j| j.map(|x| x as u8)).collect())
+                        },
+                    );
+                    streams.insert(
+                        Semantic::Weights(0),
+                        Stream::F32x4(
+                            part.source_vertices
+                                .iter()
+                                .map(|k| vertex(k).bone_weights)
+                                .collect(),
+                        ),
+                    );
+                }
                 let out = out.levels.entry(level).or_default();
+                out.skin.push(skinned.then_some(Influences::Streams { sets: 1 }));
                 out.primitives.push(Primitive {
                     topology: Topology::Triangles,
                     streams,
@@ -362,6 +454,7 @@ impl Pass for LowerFromSoftGeometry {
     fn provides(&self) -> &[&'static str] {
         &[
             Mesh::NAME,
+            Skin::NAME,
             Lods::NAME,
             LayerInputs::NAME,
             FaceCull::NAME,
@@ -463,13 +556,17 @@ impl Pass for LowerFromSoftGeometry {
                 continue;
             }
             let finest = out.levels.remove(&0).unwrap_or_default();
+            let palette = out.palette.take();
             let mut forms = Vec::new();
             for (level, lowered) in out.levels {
                 let form = world.spawn();
-                lowered.insert(world, form);
+                lowered.insert(world, form, palette.as_ref());
                 forms.push(LodForm { detail: level, form });
             }
-            finest.insert(world, prototype);
+            finest.insert(world, prototype, palette.as_ref());
+            if palette.is_some() {
+                log.count("prototypes lowered with their skin", 1);
+            }
             if !forms.is_empty() {
                 log.count("prototypes with other levels of detail", 1);
                 world.insert(

@@ -148,7 +148,7 @@ impl Reader for AreaReader<'_> {
 
 /// Keep in `part` only the source files its materials bind: their bindings' texture files and their layered
 /// definitions' programs. Returns how many of each it keeps.
-fn scope_sources(part: &mut World) -> Result<(usize, usize)> {
+pub(super) fn scope_sources(part: &mut World) -> Result<(usize, usize)> {
     let mut textures = BTreeSet::new();
     let mut programs = BTreeSet::new();
     for (_, m) in part.iter::<Material>() {

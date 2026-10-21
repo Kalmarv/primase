@@ -25,6 +25,7 @@ fn semantic_indices_are_not_uv_storage_slots() {
         layouts: vec![vec![member(3, 0), member(0x13, 2), member(0x13, 3)]],
         meshes: vec![Mesh {
             dynamic: false,
+            palette: vec![],
             material: 0,
             layouts: vec![0],
             vertices: vec![vertex],

@@ -18,6 +18,7 @@ serde.workspace = true
 serde_json.workspace = true
 encoding_rs.workspace = true
 primase-core.workspace = true
+primase-animation.workspace = true
 primase-dds.workspace = true
 primase-vertex.workspace = true
 primase-meshops.workspace = true

@@ -17,3 +17,29 @@ impl Component for RigidModel {
     const NAME: &'static str = "fromsoft.rigid_model";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
+
+/// The skeleton a prototype's model is bound to (`fromsoft.skeleton`, on the prototype): the entity holding the
+/// `core.skeleton` the reader made of its FLVER's bones, which `lower-fromsoft-geometry` binds its skinned meshes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct SkeletonOf(pub primase_core::Entity);
+impl Component for SkeletonOf {
+    const NAME: &'static str = "fromsoft.skeleton";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn references(&self, out: &mut Vec<primase_core::Entity>) {
+        out.push(self.0);
+    }
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
+        primase_core::Linearity::Invariant
+    }
+    fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+    /// The entity holds a `core.skeleton`.
+    fn verify(&self, _e: primase_core::Entity, w: &primase_core::World) -> Result<(), String> {
+        if w.has::<primase_core::Skeleton>(self.0) {
+            Ok(())
+        } else {
+            Err(format!("{:?} holds no core.skeleton", self.0))
+        }
+    }
+}

@@ -17,6 +17,7 @@ fn model() -> Model {
             gx: vec![],
         }],
         bones: vec![Bone {
+            name: "root".into(),
             translation: [1., 2., 3.],
             rotation: [0.; 3],
             scale: [2., 3., 4.],
@@ -24,6 +25,7 @@ fn model() -> Model {
         }],
         meshes: vec![Mesh {
             dynamic: false,
+            palette: vec![],
             material: 0,
             layouts: vec![],
             vertices: vec![Vertex {
@@ -72,6 +74,7 @@ fn hierarchy_rotation_reflection_and_invalid_hierarchy() {
     m.bones[0].translation = [0.; 3];
     m.bones[0].parent = 1;
     m.bones.push(Bone {
+        name: "parent".into(),
         translation: [0., 2., 0.],
         rotation: [0., std::f32::consts::FRAC_PI_2, 0.],
         scale: [1.; 3],

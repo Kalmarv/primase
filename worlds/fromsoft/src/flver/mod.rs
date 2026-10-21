@@ -74,12 +74,16 @@ impl FaceSet {
 pub struct Mesh {
     pub dynamic: bool,
     pub material: usize,
+    /// The mesh's bone palette as stored (bone indices): empty when its vertices name bones directly.
+    pub palette: Vec<u32>,
     pub layouts: Vec<usize>,
     pub vertices: Vec<Vertex>,
     pub faces: Vec<FaceSet>,
 }
 #[derive(Clone, Debug)]
 pub struct Bone {
+    /// The bone's name as stored.
+    pub name: String,
     pub translation: [f32; 3],
     pub rotation: [f32; 3],
     pub scale: [f32; 3],
@@ -220,9 +224,10 @@ impl Model {
         let mut bones = Vec::new();
         for i in 0..bone_count {
             let o = bone + i * 128;
-            string(&meta, count(&v, o + 12)?)?;
+            let name = string(&meta, count(&v, o + 12)?)?;
             v.expect(o + 76, &[0; 52])?;
             bones.push(Bone {
+                name,
                 translation: [float(&v, o)?, float(&v, o + 4)?, float(&v, o + 8)?],
                 rotation: [float(&v, o + 16)?, float(&v, o + 20)?, float(&v, o + 24)?],
                 scale: [float(&v, o + 32)?, float(&v, o + 36)?, float(&v, o + 40)?],
@@ -377,8 +382,12 @@ impl Model {
             if material >= materials.len() {
                 return Err(invalid(v.format, o + 4, "material index"));
             }
-            let mut bone_list = count(&v, o + 28)?;
-            table(&meta, &mut bone_list, count(&v, o + 20)?, 4)?;
+            let palette_len = count(&v, o + 20)?;
+            let mut at = count(&v, o + 28)?;
+            let start = table(&meta, &mut at, palette_len, 4)?;
+            let palette = (0..palette_len)
+                .map(|i| meta.u32(start + i * 4))
+                .collect::<Result<Vec<u32>>>()?;
             let bounds = count(&v, o + 24)?;
             if bounds != 0 {
                 for j in 0..if version == 0x2001a { 9 } else { 6 } {
@@ -453,6 +462,7 @@ impl Model {
             meshes.push(Mesh {
                 dynamic,
                 material,
+                palette,
                 layouts: streams.iter().map(|s| s.0).collect(),
                 vertices,
                 faces: mesh_faces,
