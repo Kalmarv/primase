@@ -345,3 +345,75 @@ fn a_static_decal_is_placed_with_its_owner() {
         "the decal's prototype holds its geometry"
     );
 }
+
+/// An instanced EntityGroup Visual whose LODSelector's dependencies fill its first two levels:
+/// MAD_HWIGRP_AREA52_VansPark_TowerBuildingD_Part2_01's MAD_MOD_AREA52_ResearchFacilityKit_Railings90d_A (levels
+/// D D R R -, its five instance matrices in slot 2, slots 0 and 1 none). Under [`InstancedLevels::Selector`] each
+/// instance places from level 2 on (its `_LOD2`, 204 triangles), the two filled levels counted unplaced; under
+/// [`InstancedLevels::Every`] from level 0 (its `_LOD0`, 1,288 triangles), the others its forms. The meshes' ClassIDs
+/// are the forge index's for `_LOD0` and `_LOD2`, and their triangle counts RRAssetStudio v3's (the
+/// PRIMASE_ANVIL_RRAS_MESHES summary rows of those ClassIDs).
+#[test]
+fn instances_place_the_levels_dependencies_fill_under_every() {
+    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+        return;
+    };
+    const SELECTOR: u64 = 0x1E2_1A3D_63DF;
+    const LOD0: u64 = 0x1E2_1A3D_63EC;
+    const LOD2: u64 = 0x1E3_F07A_26E5;
+    let order = ["DataPC_MAD_USNAT_patch_01.forge", "DataPC_MAD_USNAT.forge"];
+    let mut found = Vec::new();
+    for choice in [InstancedLevels::Selector, InstancedLevels::Every] {
+        let mut archive = Archive::open(&order.map(|f| dir.join(f))).expect("archive");
+        let at = named(&archive, 1, "MAD_HWIGRP_AREA52_VansPark_TowerBuildingD_Part2_01");
+        let r = archive.resource(at).expect("resource");
+        let g = StoredEntityGroup::parse(&r.body).expect("group");
+        assert!(
+            g.entity
+                .visuals()
+                .any(|v| v.object.map(|o| o.id) == Some(SELECTOR))
+        );
+        let mut w = World::new();
+        let mut placed = Placed::default();
+        let mut placer = Placer::new(&mut archive, &mut w, SourceFrame::WORLD, choice);
+        placer.place(at, &mut placed).expect("place");
+        let world = placer.world();
+        let railings: Vec<_> = placed
+            .placements
+            .iter()
+            .map(|&p| world.get::<Instance>(p).expect("placed").prototype)
+            .filter(|&p| {
+                world
+                    .get::<Name>(p)
+                    .is_some_and(|n| n.0 == "MAD_MOD_AREA52_ResearchFacilityKit_Railings90d_A")
+            })
+            .collect();
+        assert_eq!(railings.len(), 5, "{choice:?}: one placement per instance");
+        let p = railings[0];
+        assert!(railings.iter().all(|&q| q == p), "one prototype");
+        let mesh = world.get::<AnvilMesh>(p).expect("the finest level's mesh");
+        let lods = world.get::<AnvilLods>(p).expect("its other levels");
+        let forms: Vec<u8> = lods.forms.iter().map(|(l, _)| *l).collect();
+        found.push((
+            mesh.index_id,
+            mesh.triangles.len(),
+            lods.detail,
+            forms,
+            placed.dependency_levels_unplaced,
+            placed.placements.len(),
+        ));
+    }
+    let [selector, every] = [&found[0], &found[1]];
+    assert_eq!(
+        (selector.0, selector.1, selector.2, &selector.3),
+        (LOD2, 204, 2, &vec![3])
+    );
+    assert_eq!(
+        (every.0, every.1, every.2, &every.3),
+        (LOD0, 1288, 0, &vec![1, 2, 3])
+    );
+    // the filled levels counted unplaced under Selector only; the same placements under both
+    assert!(selector.4 >= 2);
+    assert_eq!(every.4, 0);
+    assert_eq!(selector.5, every.5);
+}

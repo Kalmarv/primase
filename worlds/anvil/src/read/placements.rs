@@ -157,6 +157,19 @@ pub enum InstancedLevels {
     /// 241,706 of 241,747 (within 1e-3) and equal to them within 1e-3 on 84,666, against 50,573 for the finest
     /// level's. So each instance's bounds cover every level; that the game draws them there isn't read.
     Selector,
+    /// Every mesh level, as for a Visual without instances: as [`InstancedLevels::Selector`], and the levels a
+    /// LODSelector's dependencies fill before the slot's too (its `_LOD0`, `_LOD1` meshes, which no slot holds), the
+    /// finest of them the prototype's own mesh. Nothing in an instance names those levels; what supports placing them
+    /// there is the instances' stored bounds. Where the dependencies' meshes widen the union of the selector's
+    /// referenced levels' bounds (115,136 EntityGroup instances of the six Riders Republic forges), an instance's
+    /// stored bounds follow the union with the dependencies on 94,159 of them and the union without on 3,800 (17,177
+    /// as near both), and lie within 1e-3 of the former on 58,544 against 13,572 of the latter (the census,
+    /// `instanced bounds where the dependencies widen the levels' union`, worlds/anvil/tests/census.rs). On Entities
+    /// the dependencies never widen that union, so their bounds don't tell the two apart (the census prints no
+    /// Entity row). That the game draws the dependencies' meshes at the instances isn't read: it is the reading that
+    /// the stored bounds are the instance's whole selector's, the one the game's own picture agrees with (the thin
+    /// poles of Area 52's towers, which the slot's level alone draws as flat triangles).
+    Every,
 }
 
 /// What an instanced Entity's RigidBody places: the caller's stated choice, as how its one shape stands for the
@@ -184,7 +197,8 @@ pub struct Placed {
     /// Mesh levels of instanced Visuals not placed at their instances (see [`InstancedLevels`]), once per Visual.
     pub levels_unplaced: u64,
     /// Mesh levels a LODSelector's dependencies fill that an instanced Visual doesn't place at its instances (no slot
-    /// holds them; see [`InstancedLevels::Selector`]), once per Visual.
+    /// holds them; see [`InstancedLevels::Selector`]; under [`InstancedLevels::Every`] they are placed), once per
+    /// Visual.
     pub dependency_levels_unplaced: u64,
     /// The member references of the EntityGroups placed, in order. Members aren't placed through their group: each is
     /// an Entity or EntityGroup of its own, which the caller places where it lists it.
@@ -1095,19 +1109,25 @@ impl<'a> Placer<'a> {
                         }
                         return Err(Error::Slot(at, level));
                     };
-                    let every = self.instanced == InstancedLevels::Selector;
+                    let every = matches!(self.instanced, InstancedLevels::Selector | InstancedLevels::Every);
+                    let with_filled = self.instanced == InstancedLevels::Every;
                     // the levels the selector's dependencies fill before the slot's: no slot holds them
                     let filled = self.dependency_levels.get(&object).copied().unwrap_or(0);
                     let before = levels.iter().filter(|(l, _)| *l < level).count();
                     // the slot is the first level after the filled ones, so every level before it is a filled one
                     let only_filled = filled > 0 && level == filled;
-                    if only_filled {
+                    if only_filled && !with_filled {
                         placed.dependency_levels_unplaced =
                             placed.dependency_levels_unplaced.saturating_add(before as u64);
                     }
                     let (prototype, overrides) = match (every, levels.first()) {
                         (true, Some(&(finest, _))) if finest == level || only_filled => {
-                            let from: Levels = levels.iter().copied().filter(|(l, _)| *l >= level).collect();
+                            // Every: the filled levels too, the finest first; Selector: from the slot's level on
+                            let from: Levels = levels
+                                .iter()
+                                .copied()
+                                .filter(|(l, _)| with_filled || *l >= level)
+                                .collect();
                             let p = match self.whole(object, &from) {
                                 Some(p) => p,
                                 None => self.as_prototype(mesh),

@@ -401,8 +401,97 @@ impl Levels {
         Some((u, (first[0], first[1])))
     }
 
+    /// The union of the stored bounds of the meshes `ids` names; `None` where one isn't read.
+    fn union_of(&self, ids: impl IntoIterator<Item = u64>) -> Option<Corners> {
+        let mut u: Option<Corners> = None;
+        for id in ids {
+            let b = self.meshes.get(&id)?;
+            u = Some(match u {
+                None => (b[0], b[1]),
+                Some((lo, hi)) => (
+                    [0, 1, 2].map(|a| lo[a].min(b[0][a])),
+                    [0, 1, 2].map(|a| hi[a].max(b[1][a])),
+                ),
+            });
+        }
+        u
+    }
+
+    /// For an instanced Visual's object whose LODSelector has dependencies: the union of every level's stored bounds
+    /// (the dependencies' meshes included) and of its referenced levels' alone, where the dependencies widen it
+    /// (`None` otherwise, or where a mesh isn't read).
+    fn widened(&self, object: u64) -> Option<(Corners, Corners)> {
+        let (refs, deps) = self.lod_shapes.get(&object)?;
+        if deps.is_empty() {
+            return None;
+        }
+        let referenced = self.union_of(refs.iter().flatten().copied())?;
+        let every = self.union_of(deps.iter().copied().chain(refs.iter().flatten().copied()))?;
+        (every != referenced).then_some((every, referenced))
+    }
+
     /// The measurements, as tallies.
     fn measure(&self, tallies: &mut BTreeMap<&'static str, Tally>) {
+        // where a selector's dependencies widen its levels' union: which union the instances' stored bounds follow
+        // (an Entity's LODSelectorInstance bounds; a group's per-instance bounds against R I applied to each union)
+        let worst = |b: &BoundingVolume, (lo, hi): ([f64; 3], [f64; 3])| {
+            (0..3)
+                .map(|a| {
+                    (f64::from(b.min[a]) - lo[a])
+                        .abs()
+                        .max((f64::from(b.max[a]) - hi[a]).abs())
+                })
+                .fold(0.0, f64::max)
+        };
+        let nearer = |with: f64, without: f64| match with.partial_cmp(&without) {
+            Some(std::cmp::Ordering::Less) => "nearer the union with the dependencies",
+            Some(std::cmp::Ordering::Greater) => "nearer the union without them",
+            _ => "as near both",
+        };
+        let t = tallies
+            .entry("instanced bounds where the dependencies widen the levels' union")
+            .or_default();
+        for (object, bounds) in &self.entities {
+            let Some((every, referenced)) = self.widened(*object) else {
+                continue;
+            };
+            let f = |c: Corners| (c.0.map(f64::from), c.1.map(f64::from));
+            t.outcome(format!(
+                "Entity: with the dependencies {}",
+                bound_fit(bounds, f(every))
+            ));
+            t.outcome(format!(
+                "Entity: without them {}",
+                bound_fit(bounds, f(referenced))
+            ));
+            t.outcome(format!(
+                "Entity: {}",
+                nearer(worst(bounds, f(every)), worst(bounds, f(referenced)))
+            ));
+        }
+        for (object, owner, instances) in &self.groups {
+            let Some((every, referenced)) = self.widened(*object) else {
+                continue;
+            };
+            for (i, b) in instances {
+                let (with, without) = (
+                    transformed_box(owner, i, every),
+                    transformed_box(owner, i, referenced),
+                );
+                t.outcome(format!(
+                    "EntityGroup instance: with the dependencies {}",
+                    bound_fit(b, with)
+                ));
+                t.outcome(format!(
+                    "EntityGroup instance: without them {}",
+                    bound_fit(b, without)
+                ));
+                t.outcome(format!(
+                    "EntityGroup instance: {}",
+                    nearer(worst(b, with), worst(b, without))
+                ));
+            }
+        }
         // a dependency's stored bounds against its selector's first referenced level's, in the larger of their steps
         let t3 = tallies
             .entry("LODSelector dependency bounds vs its first referenced level's")
