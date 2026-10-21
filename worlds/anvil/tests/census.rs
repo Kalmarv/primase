@@ -336,6 +336,8 @@ type GroupInstances = (u64, [f32; 16], Vec<([f32; 16], BoundingVolume)>);
 #[derive(Default)]
 struct Levels {
     meshes: std::collections::HashMap<u64, [[f32; 3]; 2]>,
+    /// Every Mesh's quantization step (see the bounds measurement), by ClassID.
+    steps: std::collections::HashMap<u64, f32>,
     selectors: std::collections::HashMap<u64, Vec<u64>>,
     /// Each LODSelector's levels' references (none or a ClassID) and its dependencies, by ClassID (later forges
     /// replacing).
@@ -401,6 +403,43 @@ impl Levels {
 
     /// The measurements, as tallies.
     fn measure(&self, tallies: &mut BTreeMap<&'static str, Tally>) {
+        // a dependency's stored bounds against its selector's first referenced level's, in the larger of their steps
+        let t3 = tallies
+            .entry("LODSelector dependency bounds vs its first referenced level's")
+            .or_default();
+        for (refs, deps) in self.lod_shapes.values() {
+            let Some(first) = refs.iter().flatten().next() else {
+                continue;
+            };
+            for d in deps {
+                let (Some(a), Some(b)) = (self.meshes.get(d), self.meshes.get(first)) else {
+                    t3.outcome("a mesh's bounds not read");
+                    continue;
+                };
+                let off = (0..2)
+                    .flat_map(|k| (0..3).map(move |i| (k, i)))
+                    .map(|(k, i)| (a[k][i] - b[k][i]).abs())
+                    .fold(0.0f32, f32::max);
+                let step = self
+                    .steps
+                    .get(d)
+                    .copied()
+                    .unwrap_or(0.0)
+                    .max(self.steps.get(first).copied().unwrap_or(0.0));
+                let fit = match (off, step) {
+                    (0.0, _) => "equal".to_owned(),
+                    (_, s) if s <= 0.0 => "unequal, no step".to_owned(),
+                    (o, s) if o <= s => "within 1 step".to_owned(),
+                    (o, s) if o <= 3.0 * s => "within 3 steps".to_owned(),
+                    (o, s) if o <= 10.0 * s => "within 10 steps".to_owned(),
+                    (o, _) if o <= 0.01 => "beyond 10 steps, within 1 cm".to_owned(),
+                    (o, _) if o <= 0.1 => "beyond 10 steps, within 10 cm".to_owned(),
+                    (o, _) if o <= 1.0 => "beyond 10 steps, within 1 m".to_owned(),
+                    _ => "beyond 1 m".to_owned(),
+                };
+                t3.outcome(fit);
+            }
+        }
         // a LODSelector's dependencies against its levels without a reference: the pattern (- none, R a reference)
         // with the dependency count, whether the count is the leading none levels', and the names' _LODi suffixes
         let suffix = |id: u64, i: usize| match self.mesh_names.get(&id) {
@@ -616,6 +655,9 @@ fn census_forge(
                             f32::from_le_bytes([d.rest[4], d.rest[5], d.rest[6], d.rest[7]]).abs() / 32768.0
                         })
                     };
+                    if let Some(s) = step {
+                        levels.steps.insert(r.class_id, s);
+                    }
                     let records = if m.records_81.is_empty() {
                         "no records"
                     } else {
