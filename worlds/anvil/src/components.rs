@@ -70,7 +70,11 @@ impl Component for AnvilMeshShape {
 /// engine binds them is not established); the compiled mesh's `kind` byte, `stride` and each vertex's primary record
 /// as stored (`vertex_records`, `stride` bytes each), their meaning beyond the position not established; and each
 /// vertex's two little-endian u16 where its layout keeps its texture coordinates (`uv_words`, from `uv_at`; empty
-/// where that isn't known). `entry` and `index_id` name the forge entry it came from.
+/// where that isn't known); and for kind 2 (stride 24) each vertex's bytes 16..20 as stored (`colour`, empty
+/// otherwise): its vertex colour COLOR0, four UNORM8 (the Riders Republic notes, docs/vertex.md: the vertex programs pass
+/// COLOR0 on and the pixel programs multiply it in, the bytes 255 on unpainted meshes, MAD_Tex2's alpha varying where its
+/// shader blends by it; the channel order R, G, B, A likely, one asymmetry). `entry` and `index_id` name the forge
+/// entry it came from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilMesh {
     pub entry: u32,
@@ -87,6 +91,7 @@ pub struct AnvilMesh {
     pub vertex_records: Vec<u8>,
     pub uv_at: UvWordsAt,
     pub uv_words: Vec<[u16; 2]>,
+    pub colour: Vec<[u8; 4]>,
 }
 
 /// Where in each vertex's primary record a Mesh's texture-coordinate words are read, by its layout (the Riders
@@ -144,6 +149,9 @@ impl Component for AnvilMesh {
                 self.stride,
                 self.vertex_records.len()
             ));
+        }
+        if !self.colour.is_empty() && self.colour.len() != n {
+            return Err(format!("{n} positions, {} vertex colours", self.colour.len()));
         }
         if !self.uv_words.is_empty() && self.uv_words.len() != n {
             return Err(format!(

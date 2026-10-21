@@ -361,6 +361,16 @@ pub enum UvWords {
     Signed,
 }
 
+/// Whether `lower-anvil-mesh` writes the vertex colour, and in which channel order its four bytes are read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeshColour {
+    Omit,
+    /// Bytes 16, 17, 18, 19 as R, G, B, A.
+    Rgba,
+    /// As B, G, R, A.
+    Bgra,
+}
+
 /// What `lower-anvil-mesh` makes of the second u16 of each vertex's bytes 20..24.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UvV {
@@ -370,14 +380,15 @@ pub enum UvV {
     OneMinus,
 }
 
-/// `lower-anvil-mesh{uv-words=unsigned|signed,uv-divisor=N,uv-v=as-stored|one-minus,uv-tool=omit|read,normals=omit|packed|packed-127}`:
+/// `lower-anvil-mesh{uv-words=unsigned|signed,uv-divisor=N,uv-v=as-stored|one-minus,uv-tool=omit|read,colour=omit|rgba|bgra,normals=omit|packed|packed-127}`:
 /// a diagnostic lowering. Every Mesh's buffers ([`AnvilMesh`]) become a core mesh on its prototype: one triangle
 /// primitive with no material, or, where the reader read its Materials, a primitive per stored range, of the vertices
 /// its triangles use, drawn with the range's Material entity; positions and triangles as read; normals per `normals`.
 /// Texture coordinates 0: each vertex's two words where its layout keeps them ([`UvWordsAt`]), read per `uv-words`
 /// over `uv-divisor`, the second per `uv-v`. The words of kinds 2 and 3 (bytes 20..24) are lowered always; those
 /// whose place is RRAssetStudio's reading alone (kind 11's bytes 12..16, the split layouts' primary bytes 4..8) as
-/// `uv-tool` states (`omit` leaves those meshes without texture coordinates, reported). (RRAssetStudio reads the
+/// `uv-tool` states (`omit` leaves those meshes without texture coordinates, reported). Colour 0: the vertex colour
+/// ([`AnvilMesh`]'s `colour`, kind 2's) in the channel order `colour` states, as UNORM8 (`omit`: none). (RRAssetStudio reads the
 /// words as signed over 2048; read so, the triangles of 196 meshes spanning more than 16 units drop from 10,773 to 650
 /// against unsigned, by a separate count; neither proves what the game does.) The words' divisor and origin, and that
 /// bytes 8..11 are a normal, are not established: each reading is the program's stated choice, every lowered mesh
@@ -389,22 +400,22 @@ pub struct LowerAnvilMesh {
     pub uv_v: UvV,
     /// Whether the texture coordinates whose place is a tool's reading alone are lowered.
     pub uv_tool: bool,
+    pub colour: MeshColour,
     pub normals: MeshNormals,
 }
 
 impl LowerAnvilMesh {
     /// From its options, every one required.
     pub fn from_options(o: &Options) -> Result<LowerAnvilMesh, String> {
-        if let Some(k) = o
-            .keys()
-            .find(|k| !["uv-words", "uv-divisor", "uv-v", "uv-tool", "normals"].contains(&k.as_str()))
-        {
+        if let Some(k) = o.keys().find(|k| {
+            !["uv-words", "uv-divisor", "uv-v", "uv-tool", "colour", "normals"].contains(&k.as_str())
+        }) {
             return Err(format!("unknown option {k}"));
         }
         let get = |k: &str| {
             o.get(k).map(String::as_str).ok_or_else(|| {
                 format!(
-                    "{k} is required: uv-words=unsigned|signed, uv-divisor=N, uv-v=as-stored|one-minus, uv-tool=omit|read, normals=omit|packed|packed-127"
+                    "{k} is required: uv-words=unsigned|signed, uv-divisor=N, uv-v=as-stored|one-minus, uv-tool=omit|read, colour=omit|rgba|bgra, normals=omit|packed|packed-127"
                 )
             })
         };
@@ -429,6 +440,12 @@ impl LowerAnvilMesh {
             "read" => true,
             v => return Err(format!("uv-tool={v} is not omit or read")),
         };
+        let colour = match get("colour")? {
+            "omit" => MeshColour::Omit,
+            "rgba" => MeshColour::Rgba,
+            "bgra" => MeshColour::Bgra,
+            v => return Err(format!("colour={v} is not omit, rgba or bgra")),
+        };
         let normals = match get("normals")? {
             "omit" => MeshNormals::Omit,
             "packed" => MeshNormals::Packed,
@@ -440,6 +457,7 @@ impl LowerAnvilMesh {
             uv_divisor,
             uv_v,
             uv_tool,
+            colour,
             normals,
         })
     }
@@ -471,6 +489,15 @@ impl Pass for LowerAnvilMesh {
             (
                 "uv-tool".to_owned(),
                 if self.uv_tool { "read" } else { "omit" }.to_owned(),
+            ),
+            (
+                "colour".to_owned(),
+                match self.colour {
+                    MeshColour::Omit => "omit",
+                    MeshColour::Rgba => "rgba",
+                    MeshColour::Bgra => "bgra",
+                }
+                .to_owned(),
             ),
             (
                 "normals".to_owned(),
@@ -581,6 +608,24 @@ impl Pass for LowerAnvilMesh {
                     1,
                 ),
                 MeshNormals::Omit => log.count("meshes lowered without normals (stated)", 1),
+            }
+            if self.colour != MeshColour::Omit && m.colour.len() == m.positions.len() && !m.colour.is_empty()
+            {
+                let order = |[a, b, c, d]: [u8; 4]| match self.colour {
+                    MeshColour::Bgra => [c, b, a, d],
+                    _ => [a, b, c, d],
+                };
+                streams.insert(
+                    Semantic::Color(0),
+                    Stream::U8x4(m.colour.iter().map(|&c| order(c)).collect()),
+                );
+                log.approximate(
+                    &format!(
+                        "vertex colour: bytes 16..20 as UNORM8, {:?} (the order a stated reading)",
+                        self.colour
+                    ),
+                    1,
+                );
             }
             let triangles = m.triangles.len() as u64;
             streams.insert(Semantic::Position, Stream::F32x3(m.positions));
@@ -1315,6 +1360,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("uv-divisor", "2048"),
             ("uv-v", "as-stored"),
             ("uv-tool", "omit"),
+            ("colour", "omit"),
             ("normals", "omit"),
         ],
     );

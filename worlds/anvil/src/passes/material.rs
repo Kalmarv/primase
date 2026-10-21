@@ -11,9 +11,11 @@
 //!   and Decals1 (`S(x) = x x (3 - 2 x)`), raw on Wind; occlusion `1 + OnOffAO (mask.b - 1)` (none on Decals1). Each
 //!   template's constants are read where its evaluated pixel shaders read them ([`TEX1`], [`TEX1_WIND`] §13.1,
 //!   [`DECALS1`] §13.2), and only if its template binds those properties there; otherwise the placeholder, reported.
-//!   Tex1's vertex-colour factor (`Vertex Color Intensity`) needs the mesh's vertex colour, which isn't read: a
-//!   Material with it other than 0 is lowered without it, reported; Wind's `6 - Translucency` (written to the G-buffer
-//!   as is) has no PBR place, left out, reported.
+//!   Tex1's vertex-colour factor `1 + Vertex Color Intensity (COLOR0.rgb - 1)` is the mesh's COLOR_0 product where the
+//!   intensity is 1 (a consumer multiplies COLOR0's alpha in too, which the shader doesn't: reported), none where 0,
+//!   and otherwise not lowered, reported. Every other Material is marked [`VertexColor::Ignored`] (its shader takes no
+//!   COLOR0 as a colour; Tex2's blend weight is its own). Wind's `6 - Translucency` (written to the G-buffer as is) has
+//!   no PBR place, left out, reported.
 //!
 //! A texture's colour space follows its TextureMap's u32 at 25 (1: sampled as sRGB, the notes' rule from the game's
 //! texture-creation records; not a role's); values are made linear as the shader samples them before any arithmetic,
@@ -54,7 +56,7 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
     ColorSpace, Component, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat,
-    TexRole, Texture, World,
+    TexRole, Texture, VertexColor, World,
 };
 use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, srgb_to_linear};
 
@@ -455,7 +457,7 @@ impl Pass for LowerAnvilMaterial {
         &[AnvilMaterial::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[PbrMaterial::NAME, Texture::NAME]
+        &[PbrMaterial::NAME, Texture::NAME, VertexColor::NAME]
     }
     fn modifies(&self) -> &[&'static str] {
         &[Texture::NAME]
@@ -501,6 +503,8 @@ impl Pass for LowerAnvilMaterial {
                 "MAD_Decals1" => Some(DECALS1),
                 _ => None,
             };
+            // whether the Material's shader takes COLOR0 as a factor of the base colour, as COLOR_0 is
+            let mut takes_colour = false;
             let pbr = match (name.as_str(), layout) {
                 ("MAD_Fake" | "MAD_CHR_Basic", _) => {
                     let albedo = i.texture(0);
@@ -555,11 +559,21 @@ impl Pass for LowerAnvilMaterial {
                     let metal = layout.metalness.map(|v| i.scalar(v));
                     let rough_offset = layout.roughness_offset.map(|v| i.scalar(v));
                     let ao_on = layout.ao.map_or(0.0, |v| i.scalar(v));
-                    if layout.vertex_colour.is_some_and(|v| i.scalar(v) != 0.0) {
-                        log.omit(
-                            "Tex1 Materials' vertex-colour factor (the mesh's vertex colour isn't read)",
+                    match layout.vertex_colour.map(|v| i.scalar(v)) {
+                        None | Some(0.0) => {}
+                        Some(1.0) => {
+                            takes_colour = true;
+                            log.approximate(
+                                "Tex1 Materials' vertex-colour factor 1 as the mesh's COLOR_0 (a consumer multiplies \
+                                 its alpha in too; the shader doesn't)",
+                                1,
+                            );
+                        }
+                        Some(_) => log.omit(
+                            "Tex1 Materials' vertex-colour factor other than 0 and 1 (1 + f (COLOR0 - 1) isn't a \
+                             COLOR_0 product): drawn without it",
                             1,
-                        );
+                        ),
                     }
                     if layout.translucency.is_some_and(|v| i.scalar(v) != 0.0) {
                         log.omit(
@@ -679,6 +693,9 @@ impl Pass for LowerAnvilMaterial {
                 }
             };
             w.insert(e, pbr);
+            if !takes_colour {
+                w.insert(e, VertexColor::Ignored);
+            }
         }
         Ok(())
     }

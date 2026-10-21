@@ -5,7 +5,7 @@ use std::fs::File;
 use std::path::Path;
 
 use primase_anvil::components::AnvilMesh;
-use primase_anvil::passes::{LowerAnvilMesh, MeshNormals, UvV, UvWords};
+use primase_anvil::passes::{LowerAnvilMesh, MeshColour, MeshNormals, UvV, UvWords};
 use primase_anvil::read::data::{Resource, read_entry};
 use primase_anvil::read::forge::Forge;
 use primase_anvil::read::mesh::{self, StoredMesh};
@@ -34,6 +34,7 @@ fn lower(w: &mut World, normals: MeshNormals) {
             uv_divisor: 2048.0,
             uv_v: UvV::AsStored,
             uv_tool: false,
+            colour: MeshColour::Omit,
             normals,
         })],
     };
@@ -258,6 +259,7 @@ fn the_lowering_states_every_choice() {
         ("uv-divisor", "2048"),
         ("uv-v", "one-minus"),
         ("uv-tool", "omit"),
+        ("colour", "omit"),
         ("normals", "packed"),
     ];
     assert_eq!(
@@ -267,6 +269,7 @@ fn the_lowering_states_every_choice() {
             uv_divisor: 2048.0,
             uv_v: UvV::OneMinus,
             uv_tool: false,
+            colour: MeshColour::Omit,
             normals: MeshNormals::Packed,
         })
     );

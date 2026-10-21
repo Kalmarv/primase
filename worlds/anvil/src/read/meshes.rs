@@ -128,6 +128,13 @@ pub fn anvil_mesh(
         kind: stored.kind,
         stride: u32::try_from(v.stride).map_err(|_| Error::Entry(entry))?,
         vertex_records: v.bytes.clone(),
+        colour: if (stored.kind, v.stride) == (2, 24) {
+            v.iter()
+                .map(|r| r.get(16..20).and_then(|b| b.try_into().ok()).unwrap_or([255; 4]))
+                .collect()
+        } else {
+            Vec::new()
+        },
         uv_at: UvWordsAt::of(stored.kind, v.stride),
         uv_words: UvWordsAt::of(stored.kind, v.stride)
             .offset()

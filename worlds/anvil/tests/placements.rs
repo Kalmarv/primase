@@ -4,7 +4,7 @@
 use primase_anvil::components::{
     AnvilCollisionShape, AnvilLods, AnvilMaterialOverrides, AnvilMesh, AnvilMeshShape, ShapeGeometry,
 };
-use primase_anvil::passes::{LowerAnvilLods, LowerAnvilMesh, MeshNormals, UvV, UvWords};
+use primase_anvil::passes::{LowerAnvilLods, LowerAnvilMesh, MeshColour, MeshNormals, UvV, UvWords};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::entity::{ComponentBody, ENTITY, ENTITY_GROUP, StoredEntity, StoredEntityGroup};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -119,6 +119,7 @@ fn fixtures_place_and_lower() {
                 uv_divisor: 2048.0,
                 uv_v: UvV::AsStored,
                 uv_tool: false,
+                colour: MeshColour::Omit,
                 normals: MeshNormals::Packed127,
             }),
             Box::new(LowerAnvilLods),
