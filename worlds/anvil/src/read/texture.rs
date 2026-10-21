@@ -51,18 +51,25 @@ pub const COMPILED_TEXTURE_MAP: u32 = 0x1323_7FE9;
 /// flat normal only as B, G, R, A, and the skin-colour palette decodes to skin tones only so (the Riders Republic notes,
 /// docs/material-spec.md §7). 11 is A8 (the tools disagree, A8 or R8) by the engine itself: its create-resource record
 /// in a memory snapshot of the game gives DXGI format 65 (A8_UNORM) to the one TextureMap of its size and mip count,
-/// a code-11 map (the notes, docs/texture-formats.md). Not a code only one tool names (1, 8, 9: their storage is
-/// established, [`storage`], their codec only one tool's). Colour space and role are not read:
+/// a code-11 map (the notes, docs/texture-formats.md). 1 is R8G8B8A8_SNORM, 8 BC6H unsigned and 9 BC6H signed:
+/// AnvilToolkit's table names them (RRAssetStudio's reader refuses them), and the content agrees, the rule for these
+/// three Caleb's (content evidence counts): read as signed bytes the code-1 noise map is exactly Perlin's gradient
+/// table (12 cube-edge directions, two components of +-127 and one 0 on all 256 pixels), and the code-8 and 9 maps'
+/// 2,066,602 blocks are valid BC6H on every one and decode to coherent images (the notes, docs/texture-formats.md,
+/// the 49 refused maps). Colour space and role are not read:
 /// neither tool's table holds an sRGB format. Another code is `None`: not refused as stored, but its codec isn't
 /// established.
 pub fn format(code: u32) -> Option<TexFormat> {
     match code {
         0 => Some(TexFormat::Bgra8Unorm),
+        1 => Some(TexFormat::Rgba8Snorm),
         2 | 3 => Some(TexFormat::Bc1),
         4 => Some(TexFormat::Bc2),
         5 => Some(TexFormat::Bc3),
         6 => Some(TexFormat::Bc4Unorm),
         7 => Some(TexFormat::Bc5Unorm),
+        8 => Some(TexFormat::Bc6hUfloat),
+        9 => Some(TexFormat::Bc6hSfloat),
         10 => Some(TexFormat::Bc7),
         11 => Some(TexFormat::A8Unorm),
         12 => Some(TexFormat::R8Unorm),
