@@ -30,7 +30,7 @@ use primase_core::{
 
 use crate::components::{
     AnvilCollisionShape, AnvilDataLayers, AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape,
-    AnvilTerrain, AnvilTextureMap, CollisionMaterialRef, ShapeGeometry, TerrainTile, UvWordsAt,
+    AnvilTerrain, AnvilTextureMap, CollisionMaterialRef, ShapeGeometry, TerrainTile,
 };
 
 /// What names a lowered collision surface.
@@ -351,129 +351,48 @@ impl Pass for LowerAnvilDataLayers {
     }
 }
 
-/// Whether `lower-anvil-mesh` reads normals from each vertex's bytes 8..11.
+/// What `lower-anvil-mesh` takes as a static16 mesh's normal (the far terrain's cells: two spherical vectors, which the
+/// pixel stage takes as its normal not read).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MeshNormals {
-    /// No normals (the writer's or viewer's flat shading).
+pub enum Static16Normal {
+    /// `P` (bytes 10, 11): up on every cell measured (23,951 vertices).
+    P,
+    /// None (the consumer's flat shading).
     Omit,
-    /// Bytes 8, 9 and 10 each read as `b / 127.5 - 1`, normalized, converted through the reader's frame.
-    Packed,
-    /// Bytes 8, 9 and 10 each read as `(b - 127) / 127`, normalized, converted through the reader's frame. (Against
-    /// area-weighted face normals of the positions, this reading's median angle is 0.45 to 0.50 degrees on static
-    /// 24-byte meshes of Riders Republic, against 0.72 to 0.79 for `Packed`, by a separate measurement; neither is
-    /// the game's own decode.)
-    Packed127,
 }
 
-/// How `lower-anvil-mesh` reads the two 16-bit words of each vertex's bytes 20..24.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UvWords {
-    /// Each as unsigned.
-    Unsigned,
-    /// Each as signed (two's complement).
-    Signed,
-}
-
-/// Whether `lower-anvil-mesh` writes the vertex colour, and in which channel order its four bytes are read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MeshColour {
-    Omit,
-    /// Bytes 16, 17, 18, 19 as R, G, B, A.
-    Rgba,
-    /// As B, G, R, A.
-    Bgra,
-}
-
-/// What `lower-anvil-mesh` makes of the second u16 of each vertex's bytes 20..24.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UvV {
-    /// v as stored, over the divisor.
-    AsStored,
-    /// 1 minus that (a bottom-left origin).
-    OneMinus,
-}
-
-/// `lower-anvil-mesh{uv-words=unsigned|signed,uv-divisor=N,uv-v=as-stored|one-minus,uv-tool=omit|read,colour=omit|rgba|bgra,normals=omit|packed|packed-127}`:
-/// a diagnostic lowering. Every Mesh's buffers ([`AnvilMesh`]) become a core mesh on its prototype: one triangle
-/// primitive with no material, or, where the reader read its Materials, a primitive per stored range, of the vertices
-/// its triangles use, drawn with the range's Material entity; positions and triangles as read; normals per `normals`.
-/// Texture coordinates 0: each vertex's two words where its layout keeps them ([`UvWordsAt`]), read per `uv-words`
-/// over `uv-divisor`, the second per `uv-v`. The words of kinds 2 and 3 (bytes 20..24) are lowered always; those
-/// whose place is RRAssetStudio's reading alone (kind 11's bytes 12..16, the split layouts' primary bytes 4..8) as
-/// `uv-tool` states (`omit` leaves those meshes without texture coordinates, reported). Colour 0: the vertex colour
-/// ([`AnvilMesh`]'s `colour`, kind 2's) in the channel order `colour` states, as UNORM8 (`omit`: none). (RRAssetStudio reads the
-/// words as signed over 2048; read so, the triangles of 196 meshes spanning more than 16 units drop from 10,773 to 650
-/// against unsigned, by a separate count; neither proves what the game does.) The words' divisor and origin, and that
-/// bytes 8..11 are a normal, are not established: each reading is the program's stated choice, every lowered mesh
-/// reports it as an approximation, and the output is not evidence of the format. The buffers are consumed.
+/// `lower-anvil-mesh{static16-normal=p|omit}`: every Mesh's buffers ([`AnvilMesh`]) become a core mesh on its
+/// prototype: one triangle primitive with no material, or, where the reader read its Materials, a primitive per stored
+/// range, of the vertices its triangles use, drawn with the range's Material entity. Its streams are the attributes the
+/// engine's vertex declarations give ([`crate::read::vertex`], converted through the reader's frame): positions;
+/// normals and tangents (unit length, as glTF requires: the vertex programs don't normalise; the tangent's w the
+/// bitangent's sign, flipped where the frame mirrors); texture coordinates 0 and 1; the vertex colour as UNORM8 RGBA.
+/// static16 meshes take `static16-normal`'s choice (the one reading not established). The buffers are consumed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerAnvilMesh {
-    pub uv_words: UvWords,
-    pub uv_divisor: f32,
-    pub uv_v: UvV,
-    /// Whether the texture coordinates whose place is a tool's reading alone are lowered.
-    pub uv_tool: bool,
-    pub colour: MeshColour,
-    pub normals: MeshNormals,
+    pub static16_normal: Static16Normal,
 }
 
 impl LowerAnvilMesh {
     /// From its options, every one required.
     pub fn from_options(o: &Options) -> Result<LowerAnvilMesh, String> {
-        if let Some(k) = o.keys().find(|k| {
-            !["uv-words", "uv-divisor", "uv-v", "uv-tool", "colour", "normals"].contains(&k.as_str())
-        }) {
+        if let Some(k) = o.keys().find(|k| k.as_str() != "static16-normal") {
             return Err(format!("unknown option {k}"));
         }
-        let get = |k: &str| {
-            o.get(k).map(String::as_str).ok_or_else(|| {
-                format!(
-                    "{k} is required: uv-words=unsigned|signed, uv-divisor=N, uv-v=as-stored|one-minus, uv-tool=omit|read, colour=omit|rgba|bgra, normals=omit|packed|packed-127"
-                )
-            })
+        let static16_normal = match o.get("static16-normal").map(String::as_str) {
+            Some("p") => Static16Normal::P,
+            Some("omit") => Static16Normal::Omit,
+            Some(v) => return Err(format!("static16-normal={v} is not p or omit")),
+            None => return Err("static16-normal is required: static16-normal=p|omit".into()),
         };
-        let uv_words = match get("uv-words")? {
-            "unsigned" => UvWords::Unsigned,
-            "signed" => UvWords::Signed,
-            v => return Err(format!("uv-words={v} is not unsigned or signed")),
-        };
-        let uv_divisor: f32 = get("uv-divisor")?
-            .parse()
-            .map_err(|_| "uv-divisor is a number".to_owned())?;
-        if !(uv_divisor.is_finite() && uv_divisor > 0.0) {
-            return Err(format!("uv-divisor {uv_divisor}: a positive number"));
-        }
-        let uv_v = match get("uv-v")? {
-            "as-stored" => UvV::AsStored,
-            "one-minus" => UvV::OneMinus,
-            v => return Err(format!("uv-v={v} is not as-stored or one-minus")),
-        };
-        let uv_tool = match get("uv-tool")? {
-            "omit" => false,
-            "read" => true,
-            v => return Err(format!("uv-tool={v} is not omit or read")),
-        };
-        let colour = match get("colour")? {
-            "omit" => MeshColour::Omit,
-            "rgba" => MeshColour::Rgba,
-            "bgra" => MeshColour::Bgra,
-            v => return Err(format!("colour={v} is not omit, rgba or bgra")),
-        };
-        let normals = match get("normals")? {
-            "omit" => MeshNormals::Omit,
-            "packed" => MeshNormals::Packed,
-            "packed-127" => MeshNormals::Packed127,
-            v => return Err(format!("normals={v} is not omit, packed or packed-127")),
-        };
-        Ok(LowerAnvilMesh {
-            uv_words,
-            uv_divisor,
-            uv_v,
-            uv_tool,
-            colour,
-            normals,
-        })
+        Ok(LowerAnvilMesh { static16_normal })
     }
+}
+
+/// `v` at unit length (`None` for a zero vector).
+fn unit_length(v: [f32; 3]) -> Option<[f32; 3]> {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    (len > 0.0).then(|| v.map(|x| x / len))
 }
 
 impl Pass for LowerAnvilMesh {
@@ -481,47 +400,14 @@ impl Pass for LowerAnvilMesh {
         "lower-anvil-mesh"
     }
     fn options(&self) -> Options {
-        Options::from([
-            (
-                "uv-words".to_owned(),
-                match self.uv_words {
-                    UvWords::Unsigned => "unsigned",
-                    UvWords::Signed => "signed",
-                }
-                .to_owned(),
-            ),
-            ("uv-divisor".to_owned(), self.uv_divisor.to_string()),
-            (
-                "uv-v".to_owned(),
-                match self.uv_v {
-                    UvV::AsStored => "as-stored",
-                    UvV::OneMinus => "one-minus",
-                }
-                .to_owned(),
-            ),
-            (
-                "uv-tool".to_owned(),
-                if self.uv_tool { "read" } else { "omit" }.to_owned(),
-            ),
-            (
-                "colour".to_owned(),
-                match self.colour {
-                    MeshColour::Omit => "omit",
-                    MeshColour::Rgba => "rgba",
-                    MeshColour::Bgra => "bgra",
-                }
-                .to_owned(),
-            ),
-            (
-                "normals".to_owned(),
-                match self.normals {
-                    MeshNormals::Omit => "omit",
-                    MeshNormals::Packed => "packed",
-                    MeshNormals::Packed127 => "packed-127",
-                }
-                .to_owned(),
-            ),
-        ])
+        Options::from([(
+            "static16-normal".to_owned(),
+            match self.static16_normal {
+                Static16Normal::P => "p",
+                Static16Normal::Omit => "omit",
+            }
+            .to_owned(),
+        )])
     }
     fn requires(&self) -> &[&'static str] {
         &[AnvilMesh::NAME]
@@ -533,7 +419,7 @@ impl Pass for LowerAnvilMesh {
         &[AnvilMesh::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "texture coordinates and normals from stated readings of bytes whose meaning isn't established"
+        "static16 meshes' normal a stated choice of their two stored vectors"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let meshes: Vec<Entity> = w.iter::<AnvilMesh>().map(|(e, _)| e).collect();
@@ -541,104 +427,64 @@ impl Pass for LowerAnvilMesh {
             let Some(m) = w.remove::<AnvilMesh>(e) else {
                 continue;
             };
+            let n = m.positions.len();
+            let a = &m.attributes;
+            let flip = m.frame.flips_winding();
             let mut streams = BTreeMap::new();
-            let tool = matches!(m.uv_at, UvWordsAt::Bytes12 | UvWordsAt::Primary4);
-            if tool && !self.uv_tool && !m.uv_words.is_empty() {
+            for (set, uvs) in (0u8..).zip(&a.uvs) {
+                if !uvs.is_empty() && uvs.len() == n {
+                    streams.insert(Semantic::TexCoord(set), Stream::F32x2(uvs.clone()));
+                }
+            }
+            if a.uvs[0].is_empty() {
                 log.omit(
                     &format!(
-                        "texture coordinates: {:?} (kind {} stride {}) not lowered (a tool's reading; uv-tool=omit)",
-                        m.uv_at, m.kind, m.stride
+                        "texture coordinates: none declared for kind {} stride {}",
+                        m.kind, m.stride
                     ),
                     1,
                 );
-            } else if !m.uv_words.is_empty() && m.uv_words.len() == m.positions.len() {
-                let uv = m
-                    .uv_words
+            }
+            // normals: the declared ones, or static16's stated vector
+            let normals: Vec<[f32; 3]> = match (m.kind, self.static16_normal) {
+                (11, Static16Normal::P) => a.spherical.iter().map(|[p, _]| *p).collect(),
+                (11, Static16Normal::Omit) => Vec::new(),
+                _ => a.normals.clone(),
+            };
+            if m.kind == 11 && self.static16_normal == Static16Normal::P {
+                log.approximate("static16 meshes' normal their spherical vector P (stated)", 1);
+            }
+            if !normals.is_empty() && normals.len() == n {
+                let mut zero = 0u64;
+                let converted = normals
                     .iter()
-                    .map(|&[u, v]| {
-                        let word = |x: u16| match self.uv_words {
-                            UvWords::Unsigned => f32::from(x),
-                            UvWords::Signed => f32::from(x.cast_signed()),
-                        };
-                        let (u, v) = (word(u) / self.uv_divisor, word(v) / self.uv_divisor);
-                        [u, if self.uv_v == UvV::OneMinus { 1.0 - v } else { v }]
+                    .map(|&v| {
+                        m.frame.direction(unit_length(v).unwrap_or_else(|| {
+                            zero += 1;
+                            [0.0, 0.0, 1.0]
+                        }))
                     })
                     .collect();
-                streams.insert(Semantic::TexCoord(0), Stream::F32x2(uv));
-                log.approximate(
-                    &format!(
-                        "texture coordinates: {:?} as two {:?} words over {} (a stated reading), v {:?}",
-                        m.uv_at, self.uv_words, self.uv_divisor, self.uv_v
-                    ),
-                    1,
-                );
-            } else {
-                log.omit(
-                    &format!(
-                        "texture coordinates: not read for kind {} stride {} (where they are isn't established)",
-                        m.kind, m.stride
-                    ),
-                    1,
-                );
-            }
-            match self.normals {
-                MeshNormals::Packed | MeshNormals::Packed127 if m.kind == 2 && m.stride == 24 => {
-                    let decode = |x: u8| match self.normals {
-                        MeshNormals::Packed127 => (f32::from(x) - 127.0) / 127.0,
-                        _ => f32::from(x) / 127.5 - 1.0,
-                    };
-                    let normals = m
-                        .vertex_records
-                        .as_chunks::<24>()
-                        .0
+                streams.insert(Semantic::Normal, Stream::F32x3(converted));
+                if zero > 0 {
+                    log.omit("vertices with a zero normal: up", zero);
+                }
+                if a.tangents.len() == n {
+                    let tangents = a
+                        .tangents
                         .iter()
-                        .map(|r| {
-                            let b = [r[8], r[9], r[10]];
-                            let d = [b[0], b[1], b[2]].map(decode);
-                            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                            let d = if len > 0.0 {
-                                d.map(|x| x / len)
-                            } else {
-                                [0.0, 1.0, 0.0]
-                            };
-                            m.frame.direction(d)
+                        .map(|&[x, y, z, sign]| {
+                            let t = m
+                                .frame
+                                .direction(unit_length([x, y, z]).unwrap_or([1.0, 0.0, 0.0]));
+                            [t[0], t[1], t[2], if flip { -sign } else { sign }]
                         })
                         .collect();
-                    streams.insert(Semantic::Normal, Stream::F32x3(normals));
-                    log.approximate(
-                        &format!(
-                            "normals: bytes 8..11 read as a normal, {:?} (stated)",
-                            self.normals
-                        ),
-                        1,
-                    );
+                    streams.insert(Semantic::Tangent, Stream::F32x4(tangents));
                 }
-                MeshNormals::Packed | MeshNormals::Packed127 => log.omit(
-                    &format!(
-                        "normals: not read for kind {} stride {} (where they are isn't established)",
-                        m.kind, m.stride
-                    ),
-                    1,
-                ),
-                MeshNormals::Omit => log.count("meshes lowered without normals (stated)", 1),
             }
-            if self.colour != MeshColour::Omit && m.colour.len() == m.positions.len() && !m.colour.is_empty()
-            {
-                let order = |[a, b, c, d]: [u8; 4]| match self.colour {
-                    MeshColour::Bgra => [c, b, a, d],
-                    _ => [a, b, c, d],
-                };
-                streams.insert(
-                    Semantic::Color(0),
-                    Stream::U8x4(m.colour.iter().map(|&c| order(c)).collect()),
-                );
-                log.approximate(
-                    &format!(
-                        "vertex colour: bytes 16..20 as UNORM8, {:?} (the order a stated reading)",
-                        self.colour
-                    ),
-                    1,
-                );
+            if !a.colour.is_empty() && a.colour.len() == n {
+                streams.insert(Semantic::Color(0), Stream::U8x4(a.colour.clone()));
             }
             let triangles = m.triangles.len() as u64;
             streams.insert(Semantic::Position, Stream::F32x3(m.positions));
@@ -2232,13 +2078,6 @@ pub fn register(reg: &mut PassRegistry) {
     reg.register_requiring(
         "lower-anvil-mesh",
         |o| Ok(Box::new(LowerAnvilMesh::from_options(o)?)),
-        &[
-            ("uv-words", "signed"),
-            ("uv-divisor", "2048"),
-            ("uv-v", "as-stored"),
-            ("uv-tool", "omit"),
-            ("colour", "omit"),
-            ("normals", "omit"),
-        ],
+        &[("static16-normal", "p")],
     );
 }

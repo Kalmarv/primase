@@ -14,7 +14,7 @@ use std::path::Path;
 use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
-use crate::components::{AnvilMesh, UvWordsAt};
+use crate::components::AnvilMesh;
 use crate::read::data::{Resource, read_entry};
 use crate::read::forge::Forge;
 use crate::read::mesh::{MESH, StoredMesh};
@@ -128,16 +128,11 @@ pub fn anvil_mesh(
         kind: stored.kind,
         stride: u32::try_from(v.stride).map_err(|_| Error::Entry(entry))?,
         vertex_records: v.bytes.clone(),
-        colour: if (stored.kind, v.stride) == (2, 24) {
-            v.iter()
-                .map(|r| r.get(16..20).and_then(|b| b.try_into().ok()).unwrap_or([255; 4]))
-                .collect()
-        } else {
-            Vec::new()
-        },
-        uv_at: UvWordsAt::of(stored.kind, v.stride),
-        uv_words: UvWordsAt::of(stored.kind, v.stride)
-            .offset()
-            .map_or_else(Vec::new, |at| v.words_at(at)),
+        attributes: crate::read::vertex::attributes(
+            stored.kind,
+            v.stride,
+            &v.bytes,
+            &stored.positions_stream,
+        ),
     })
 }

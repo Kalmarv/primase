@@ -5,7 +5,7 @@ use std::fs::File;
 use std::path::Path;
 
 use primase_anvil::components::AnvilMesh;
-use primase_anvil::passes::{LowerAnvilMesh, MeshColour, MeshNormals, UvV, UvWords};
+use primase_anvil::passes::{LowerAnvilMesh, Static16Normal};
 use primase_anvil::read::data::{Resource, read_entry};
 use primase_anvil::read::forge::Forge;
 use primase_anvil::read::mesh::{self, StoredMesh};
@@ -26,16 +26,11 @@ fn read(path: &Path, entry: usize) -> (World, AnvilMesh) {
     (w, mesh)
 }
 
-fn lower(w: &mut World, normals: MeshNormals) {
+fn lower(w: &mut World) {
     let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
     let pipeline = Pipeline {
         passes: vec![Box::new(LowerAnvilMesh {
-            uv_words: UvWords::Signed,
-            uv_divisor: 2048.0,
-            uv_v: UvV::AsStored,
-            uv_tool: false,
-            colour: MeshColour::Omit,
-            normals,
+            static16_normal: Static16Normal::P,
         })],
     };
     let mut report = RunReport::default();
@@ -103,18 +98,43 @@ fn black_box_and_reversed_sphere_read_and_lower() {
         }
         ranges_tile(&m);
         let prototype = w.iter::<AnvilMesh>().map(|(e, _)| e).next().expect("one");
-        lower(&mut w, MeshNormals::Packed);
+        lower(&mut w);
         assert!(!w.has::<AnvilMesh>(prototype));
         let p = &w.get::<Mesh>(prototype).expect("lowered").primitives()[0];
         assert_eq!(p.indices.as_ref().expect("indexed").len(), triangles * 3);
         let Some(Stream::F32x3(normals)) = p.streams.get(&Semantic::Normal) else {
-            panic!("normals stated packed");
+            panic!("normals");
         };
         assert_eq!(normals.len(), vertices);
         let Some(Stream::F32x2(uv)) = p.streams.get(&Semantic::TexCoord(0)) else {
             panic!("texture coordinates");
         };
         assert_eq!(uv.len(), vertices);
+        // the engine's declarations worked by hand on the first and last vertices (static24: the frame the
+        // diagnostic one, so directions as stored): the normal (b - 127) / 127 at unit length, the tangent likewise
+        // with the position word's sign, the colour bytes 16..19, the coordinates two snorm16 words times 16
+        let Some(Stream::F32x4(tangents)) = p.streams.get(&Semantic::Tangent) else {
+            panic!("tangents");
+        };
+        let Some(Stream::U8x4(colours)) = p.streams.get(&Semantic::Color(0)) else {
+            panic!("colours");
+        };
+        for i in [0, vertices - 1] {
+            let r = &m.vertex_records[i * 24..(i + 1) * 24];
+            let unit = |b: &[u8]| {
+                let v = [b[0], b[1], b[2]].map(|c| (f32::from(c) - 127.0) / 127.0);
+                let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                v.map(|c| c / len)
+            };
+            assert_eq!(normals[i], unit(&r[8..11]));
+            let w = i16::from_le_bytes([r[6], r[7]]);
+            let t = unit(&r[12..15]);
+            assert_eq!(tangents[i], [t[0], t[1], t[2], if w < 0 { -1.0 } else { 1.0 }]);
+            assert_eq!(colours[i], [r[16], r[17], r[18], r[19]]);
+            let word =
+                |at: usize| (f32::from(i16::from_le_bytes([r[at], r[at + 1]])) / 32767.0).max(-1.0) * 16.0;
+            assert_eq!(uv[i], [word(20), word(22)]);
+        }
     }
     // a Mesh entry is found by the record's type; the MeshShape a few entries on is refused
     let mut w = World::new();
@@ -140,9 +160,16 @@ fn stand_reads_its_two_ranges() {
     ranges_tile(&m);
     assert!(m.triangles[672..].iter().flatten().all(|&i| i >= 904));
     assert_eq!(facing(&m), (864, 0));
-    lower(&mut w, MeshNormals::Omit);
+    lower(&mut w);
     let (_, mesh) = w.iter::<Mesh>().next().expect("lowered");
-    assert!(!mesh.primitives()[0].streams.contains_key(&Semantic::Normal));
+    let Some(Stream::F32x3(normals)) = mesh.primitives()[0].streams.get(&Semantic::Normal) else {
+        panic!("normals")
+    };
+    assert!(
+        normals
+            .iter()
+            .all(|n| ((n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) - 1.0).abs() < 1e-6)
+    );
 }
 
 /// Every range's triangles name only its own vertices, from its base up to the next range's, and together they name
@@ -248,57 +275,26 @@ fn bowls_read_every_range() {
 }
 
 #[test]
-fn the_lowering_states_every_choice() {
+fn the_lowering_states_its_one_choice() {
     let o = |kv: &[(&str, &str)]| -> Options {
         kv.iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect()
     };
-    let all = [
-        ("uv-words", "signed"),
-        ("uv-divisor", "2048"),
-        ("uv-v", "one-minus"),
-        ("uv-tool", "omit"),
-        ("colour", "omit"),
-        ("normals", "packed"),
-    ];
     assert_eq!(
-        LowerAnvilMesh::from_options(&o(&all)),
+        LowerAnvilMesh::from_options(&o(&[("static16-normal", "p")])),
         Ok(LowerAnvilMesh {
-            uv_words: UvWords::Signed,
-            uv_divisor: 2048.0,
-            uv_v: UvV::OneMinus,
-            uv_tool: false,
-            colour: MeshColour::Omit,
-            normals: MeshNormals::Packed,
+            static16_normal: Static16Normal::P
         })
     );
-    for missing in 0..all.len() {
-        let mut some = all.to_vec();
-        some.remove(missing);
-        assert!(LowerAnvilMesh::from_options(&o(&some)).is_err());
-    }
-    for bad in [
-        ("uv-words", "both"),
-        ("uv-divisor", "0"),
-        ("uv-v", "flip"),
-        ("normals", "guess"),
-    ] {
-        let mut some = all.to_vec();
-        some.retain(|(k, _)| *k != bad.0);
-        some.push(bad);
-        assert!(LowerAnvilMesh::from_options(&o(&some)).is_err());
-    }
-    let mut centred = all.to_vec();
-    centred.retain(|(k, _)| *k != "normals");
-    centred.push(("normals", "packed-127"));
     assert_eq!(
-        LowerAnvilMesh::from_options(&o(&centred)).map(|l| l.normals),
-        Ok(MeshNormals::Packed127)
+        LowerAnvilMesh::from_options(&o(&[("static16-normal", "omit")])).map(|l| l.static16_normal),
+        Ok(Static16Normal::Omit)
     );
-    let mut extra = all.to_vec();
-    extra.push(("scale", "1"));
-    assert!(LowerAnvilMesh::from_options(&o(&extra)).is_err());
+    assert!(LowerAnvilMesh::from_options(&o(&[])).is_err());
+    assert!(LowerAnvilMesh::from_options(&o(&[("static16-normal", "q")])).is_err());
+    // the readings the engine's declarations settled are no longer options
+    assert!(LowerAnvilMesh::from_options(&o(&[("static16-normal", "p"), ("uv-divisor", "2048")])).is_err());
 }
 
 /// The entry's body parsed as stored.

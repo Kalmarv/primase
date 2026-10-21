@@ -25,4 +25,5 @@ pub mod texture;
 pub mod textures;
 pub mod tnl;
 pub mod tnl_code;
+pub mod vertex;
 pub mod water;

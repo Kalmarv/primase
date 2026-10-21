@@ -794,11 +794,12 @@ impl StoredMesh {
         })
     }
 
-    /// Each vertex's position. In the split layouts each positions-stream record's first three i16 times a scale over
-    /// 32768, the scale the f32 at bytes 4..8 of the last material descriptor's last 8 bytes (whose first four hold
-    /// 31); otherwise [`StoredVertices::positions`]. A zero product is +0. Equal bit for bit to RRAssetStudio's on
-    /// every mesh both read (the census gate); for the split layouts the decoded extrema also lie within three steps of
-    /// the compiled mesh's stored centre and extent (marker+38, +50) on every one.
+    /// Each vertex's position. In the split layouts each positions-stream record's first three words as the engine
+    /// declares them, `R16G16B16A16_SNORM` (`max(w / 32767, -1)`, docs/vertex.md "The engine's vertex declarations"),
+    /// times a scale, the f32 at bytes 4..8 of the last material descriptor's last 8 bytes (whose first four hold 31)
+    /// (RRAssetStudio divides by 32768: 3e-5 relative); otherwise [`StoredVertices::positions`], equal bit for bit to
+    /// RRAssetStudio's on every mesh both read (the census gate). A zero product is +0. For the split layouts the decoded
+    /// extrema lie within three steps of the compiled mesh's stored centre and extent (marker+38, +50) on every one.
     pub fn positions(&self) -> Result<Vec<[f32; 3]>, Error> {
         if self.positions_stream.is_empty() {
             return Ok(self.vertices.positions().collect());
@@ -825,7 +826,7 @@ impl StoredMesh {
             .map(|r| {
                 let [x0, x1, y0, y1, z0, z1, ..] = *r;
                 [[x0, x1], [y0, y1], [z0, z1]].map(|w| {
-                    let p = f32::from(i16::from_le_bytes(w)) * scale / 32768.0;
+                    let p = (f32::from(i16::from_le_bytes(w)) / 32767.0).max(-1.0) * scale;
                     if p == 0.0 { 0.0 } else { p }
                 })
             })
