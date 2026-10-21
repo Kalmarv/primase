@@ -732,6 +732,13 @@ fn census_forge(
                         .map(|p| p.key)
                         .collect::<Vec<_>>();
                     textured.push((template, keys));
+                    // a measurement: the u32 at 20 of the bytes after the references (body 41), and whether the
+                    // byte at 28 (body 49) is 0
+                    let (word, byte) = m.prelude_20_28();
+                    tally.outcome(format!(
+                        "u32 at body 41: {word}, byte at body 49 {}",
+                        if byte == 0 { "0" } else { "not 0" }
+                    ));
                 })
                 .map_err(|e| e.to_string()),
             ENTITY => StoredEntity::parse(&r.body)

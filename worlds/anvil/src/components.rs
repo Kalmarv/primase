@@ -383,6 +383,10 @@ pub struct AnvilMaterial {
     pub values: Vec<(u32, MaterialValue)>,
     /// Its TextureSet's 19 slots, each its TextureMap's texture entity (empty where it has no TextureSet).
     pub texture_set: Vec<Option<Entity>>,
+    /// The u32 at 20 and the byte at 28 of the 102 bytes after its two references (body 41 and 49), as stored
+    /// ([`crate::read::material::StoredMaterial::prelude_20_28`]).
+    pub prelude_20: u32,
+    pub prelude_28: u8,
 }
 
 impl Component for AnvilMaterial {

@@ -594,6 +594,8 @@ impl<'a> Placer<'a> {
                 bindings,
                 values,
                 texture_set,
+                prelude_20: m.prelude_20_28().0,
+                prelude_28: m.prelude_20_28().1,
             },
         );
         Ok(Some(e))

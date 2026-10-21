@@ -179,6 +179,17 @@ impl Cursor<'_> {
 }
 
 impl StoredMaterial {
+    /// The u32 at 20 of the bytes after the references (body 41) and their byte at 28 (body 49): the Riders Republic
+    /// notes' blend mode and alpha-test value (docs/material-spec.md §13.3, AnvilToolkit's names; not established).
+    pub fn prelude_20_28(&self) -> (u32, u8) {
+        let word = self
+            .unread
+            .get(20..24)
+            .and_then(|w| w.try_into().ok())
+            .map_or(0, u32::from_le_bytes);
+        (word, self.unread.get(28).copied().unwrap_or(0))
+    }
+
     /// The body parsed.
     pub fn parse(body: &[u8]) -> Result<StoredMaterial, MaterialError> {
         let prefix = StoredReferences::parse(body)?;

@@ -1,24 +1,26 @@
-//! `lower-anvil-material{normal-green=up|down,alpha=opaque|mask[,alpha-cutoff=X],unset=white,shader-uv=texcoord|one-minus-v}`:
+//! `lower-anvil-material{normal-green=up|down,alpha=opaque|mask[,alpha-cutoff=X]|prelude,unset=white,shader-uv=texcoord|one-minus-v}`:
 //! Anvil Materials ([`AnvilMaterial`]) become metal-rough PBR, for the templates whose pixel shaders the Riders
 //! Republic notes evaluated (docs/material-spec.md §4: the game's own shaders run on WARP against these formulas,
 //! within 5.5e-7):
 //!
 //! - **MAD_Fake** (and MAD_CHR_Basic): base colour the texture at t75; the normal map t76's red and green, z rebuilt;
 //!   roughness t76's alpha, metalness its blue (a metallic-roughness texture made of them); two-sided.
-//! - **MAD_Tex1, MAD_Tex1_Wind, MAD_Decals1**: base colour t76, tinted where its mask (t77, the Material's TextureSet
-//!   slot 7; none on Decals1) has red, by `Hue`, `Saturation` and `Luminosity` in HSV; roughness `S(sat(a + Roughness
-//!   Offset))` and metalness `b * Metalness` of the normal map t75 (`S(x) = x x (3 - 2 x)`); occlusion
-//!   `1 + OnOffAO (mask.b - 1)`. The scalars are the constant buffer's `cb3[1..7]` and the UV transform `cb3[8]`, as
-//!   MAD_Tex1 binds them ([`TEX1_CB3`]); a template binding any other property at one of those is drawn with the
-//!   placeholder, reported (MAD_Tex1_Wind does: its `cb3[1]` is `0x43A22CD6`, its Hue `cb3[14]`, which `cb3` its pixel
-//!   shader reads isn't established). The vertex-colour factor (`Vertex Color Intensity`) needs the mesh's vertex
-//!   colour, which isn't read: a Material with it other than 0 is lowered without it, reported.
+//! - **MAD_Tex1, MAD_Tex1_Wind, MAD_Decals1**: base colour t76, tinted by `Hue`, `Saturation` and `Luminosity` in
+//!   HSV where its mask (t77, the Material's TextureSet slot 7) has red, everywhere on Decals1 (no mask); roughness
+//!   and metalness of the normal map t75's alpha and blue, `S(sat(a + Roughness Offset))` and `b * Metalness` on Tex1
+//!   and Decals1 (`S(x) = x x (3 - 2 x)`), raw on Wind; occlusion `1 + OnOffAO (mask.b - 1)` (none on Decals1). Each
+//!   template's constants are read where its evaluated pixel shaders read them ([`TEX1`], [`TEX1_WIND`] §13.1,
+//!   [`DECALS1`] §13.2), and only if its template binds those properties there; otherwise the placeholder, reported.
+//!   Tex1's vertex-colour factor (`Vertex Color Intensity`) needs the mesh's vertex colour, which isn't read: a
+//!   Material with it other than 0 is lowered without it, reported; Wind's `6 - Translucency` (written to the G-buffer
+//!   as is) has no PBR place, left out, reported.
 //!
 //! A texture's colour space follows its TextureMap's u32 at 25 (1: sampled as sRGB, the notes' rule from the game's
 //! texture-creation records; not a role's); values are made linear as the shader samples them before any arithmetic,
 //! and a made texture is linear except a tinted base colour, sRGB.
 //!
-//! **UV transform** (Tex1 family: its one transform, the property bound at `cb3[8]`, samples all three textures). Of
+//! **UV transform** (Tex1 and Wind: the one transform `Base tiling`, at `cb3[8]` and `cb3[19]`, samples all three
+//! textures; Decals1 has none, sampling `TEXCOORD0` as is). Of
 //! the property's 8 f32 `su, sv, tu, tv`, speeds u and v, `t`, rotation speed, the shader dots `(u, v, 1)` with the
 //! rows `(su cos t, -su sin t, tu)` and `(sv sin t, sv cos t, tv)` (docs/material-spec.md §12: eleven resident
 //! constant-buffer matrices, each equal to one stored combination). That is `uv' = S R(t) uv + (tu, tv)` on the
@@ -34,8 +36,13 @@
 //! `uv-v=one-minus`); conjugating by that flip `D` gives rotation `-t` and offset `(tu - su sin t, 1 - sv cos t - tv)`
 //! (`D R(t) D = R(-t)`, `D` commutes with `S`, and where lowered `S` commutes with `R`).
 //!
+//! `alpha=prelude` draws each Material as its prelude (the 102 bytes after its references) reads in the notes
+//! (docs/material-spec.md §13.3; AnvilToolkit's BlendMode and alpha-test fields at those places, not checked in the
+//! game): its u32 at 20 4, blended with the base colour's alpha; 0, alpha-tested at its byte at 28 over 255 (opaque
+//! where 0); 1 and 6 (additive-looking) aren't lowered, drawn opaque, reported.
+//!
 //! Every option is the program's: the normal map's green sign against glTF's isn't established, nor the alpha test's
-//! reference (alpha=mask states one), nor what the game binds for a texture a Material leaves unset (unset=white: the
+//! reference (alpha=mask states one; alpha=prelude the prelude's reading), nor what the game binds for a texture a Material leaves unset (unset=white: the
 //! notes find the masks' settings make sense only so), nor the shader's coordinates against the mesh's (shader-uv).
 //! Other templates are drawn with a neutral placeholder, reported by name. The Materials are consumed.
 
@@ -56,6 +63,8 @@ use crate::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, Materia
 pub enum AlphaChoice {
     Opaque,
     Mask(f32),
+    /// Each Material's as its prelude states it ([`prelude_alpha`]).
+    Prelude,
 }
 
 /// What the shader's texture coordinates are in terms of the mesh's `TexCoord(0)`: the program's statement.
@@ -83,7 +92,7 @@ impl LowerAnvilMaterial {
         if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
         }
-        let usage = "normal-green=up|down, alpha=opaque|mask (with alpha-cutoff=X), unset=white, \
+        let usage = "normal-green=up|down, alpha=opaque|mask (with alpha-cutoff=X)|prelude, unset=white, \
                      shader-uv=texcoord|one-minus-v";
         let get = |k: &str| {
             o.get(k)
@@ -106,7 +115,8 @@ impl LowerAnvilMaterial {
                 }
                 AlphaChoice::Mask(c)
             }
-            v => return Err(format!("alpha={v} is not opaque or mask")),
+            "prelude" => AlphaChoice::Prelude,
+            v => return Err(format!("alpha={v} is not opaque, mask or prelude")),
         };
         match get("unset")? {
             "white" => {}
@@ -172,30 +182,111 @@ fn byte(x: f64) -> u8 {
     (sat(x) * 255.0).round() as u8
 }
 
-/// The properties MAD_Tex1 binds at `cb3[1..8]`, by vec4 and key: `3 - Metalness`, `Hue`, `Saturation`, `Luminosity`,
-/// `4 - Roughness Offset`, `5 - On Off - AO`, `6 - Vertex Color Intensity` and the UV transform `Base tiling`, the
-/// constants its evaluated shader reads (docs/material-spec.md §4.2).
-pub const TEX1_CB3: [(u32, u32); 8] = [
-    (1, 0xC7C3_A6D7),
-    (2, 0xEE58_1D0E),
-    (3, 0x6577_AE58),
-    (4, 0xFD62_B19F),
-    (5, 0x89D1_84DE),
-    (6, 0x6338_B6C4),
-    (7, 0x95DD_8185),
-    (8, 0x7091_389B),
-];
+/// Where a Tex1-family template's evaluated pixel shader reads its constants (each a `cb3` vec4), and which
+/// properties the template must bind there: `reads`, by vec4 and key. A constant it has none of is `None`: then
+/// metalness and roughness are the normal map's blue and alpha raw, and there is no tint mask, AO, vertex-colour
+/// factor, UV transform or translucency.
+#[derive(Clone, Copy, Debug)]
+pub struct Tex1Layout {
+    pub reads: &'static [(u32, u32)],
+    pub metalness: Option<u32>,
+    /// Hue, saturation, luminosity.
+    pub tint: [u32; 3],
+    pub roughness_offset: Option<u32>,
+    pub ao: Option<u32>,
+    pub vertex_colour: Option<u32>,
+    pub uv: Option<u32>,
+    pub translucency: Option<u32>,
+    /// Whether it samples a mask (t77, the TextureSet's slot 7).
+    pub mask: bool,
+}
 
-/// Whether every property `m`'s template binds at `cb3[1..8]` is MAD_Tex1's there.
-fn tex1_cb3(m: &AnvilMaterial) -> bool {
-    m.bindings.iter().all(|(key, b)| match b {
-        MaterialBinding::Scalar { vec4 }
-        | MaterialBinding::Vector { vec4 }
-        | MaterialBinding::UvTransform { vec4 } => {
-            !(1..=8).contains(vec4) || TEX1_CB3.contains(&(*vec4, *key))
-        }
-        _ => true,
+/// MAD_Tex1 (docs/material-spec.md §4.2): `3 - Metalness` 1, `Hue` 2, `Saturation` 3, `Luminosity` 4,
+/// `4 - Roughness Offset` 5, `5 - On Off - AO` 6, `6 - Vertex Color Intensity` 7, the UV transform `Base tiling` 8.
+pub const TEX1: Tex1Layout = Tex1Layout {
+    reads: &[
+        (1, 0xC7C3_A6D7),
+        (2, 0xEE58_1D0E),
+        (3, 0x6577_AE58),
+        (4, 0xFD62_B19F),
+        (5, 0x89D1_84DE),
+        (6, 0x6338_B6C4),
+        (7, 0x95DD_8185),
+        (8, 0x7091_389B),
+    ],
+    metalness: Some(1),
+    tint: [2, 3, 4],
+    roughness_offset: Some(5),
+    ao: Some(6),
+    vertex_colour: Some(7),
+    uv: Some(8),
+    translucency: None,
+    mask: true,
+};
+
+/// MAD_Tex1_Wind (§13.1: its pixel shaders read cb3[14..20] only, cb3[1..13] the vertex shader's wind): Hue 14,
+/// Saturation 15, Luminosity 16, `5 - On Off - AO` 17, `6 - Translucency` 18, `Base tiling` 19 (rows 19 and 20).
+pub const TEX1_WIND: Tex1Layout = Tex1Layout {
+    reads: &[
+        (14, 0xEE58_1D0E),
+        (15, 0x6577_AE58),
+        (16, 0xFD62_B19F),
+        (17, 0x6338_B6C4),
+        (18, 0xFEAC_9469),
+        (19, 0x7091_389B),
+    ],
+    metalness: None,
+    tint: [14, 15, 16],
+    roughness_offset: None,
+    ao: Some(17),
+    vertex_colour: None,
+    uv: Some(19),
+    translucency: Some(18),
+    mask: true,
+};
+
+/// MAD_Decals1 (§13.2: its CB3 has 6 vec4s; textures sampled at TEXCOORD0 directly): `3 - Metalness` 1, Hue 2,
+/// Saturation 3, Luminosity 4, `4 - Roughness Offset` 5; no mask.
+pub const DECALS1: Tex1Layout = Tex1Layout {
+    reads: &[
+        (1, 0xC7C3_A6D7),
+        (2, 0xEE58_1D0E),
+        (3, 0x6577_AE58),
+        (4, 0xFD62_B19F),
+        (5, 0x89D1_84DE),
+    ],
+    metalness: Some(1),
+    tint: [2, 3, 4],
+    roughness_offset: Some(5),
+    ao: None,
+    vertex_colour: None,
+    uv: None,
+    translucency: None,
+    mask: false,
+};
+
+/// Whether `m`'s template binds every property `layout` reads at its vec4.
+fn binds(m: &AnvilMaterial, layout: &Tex1Layout) -> bool {
+    layout.reads.iter().all(|&(at, key)| {
+        m.bindings.iter().any(|(k, b)| {
+            *k == key
+                && matches!(b, MaterialBinding::Scalar { vec4 } | MaterialBinding::UvTransform { vec4 } if *vec4 == at)
+        })
     })
+}
+
+/// The blend mode a Material's prelude states (its u32 at 20, the alpha-test byte at 28): the notes' reading
+/// (docs/material-spec.md §13.3), not checked in the game. 4: blended; 0: alpha-tested at the byte over 255 (opaque
+/// where it is 0); otherwise (1, 6: additive-looking) not lowered, `None`.
+fn prelude_alpha(m: &AnvilMaterial) -> Option<AlphaMode> {
+    match (m.prelude_20, m.prelude_28) {
+        (4, _) => Some(AlphaMode::Blend),
+        (0, 0) => Some(AlphaMode::Opaque),
+        (0, t) => Some(AlphaMode::Mask {
+            cutoff: f32::from(t) / 255.0,
+        }),
+        _ => None,
+    }
 }
 
 /// What lowering one Material reads of it.
@@ -350,6 +441,9 @@ impl Pass for LowerAnvilMaterial {
                 o.insert("alpha".to_owned(), "mask".to_owned());
                 o.insert("alpha-cutoff".to_owned(), c.to_string());
             }
+            AlphaChoice::Prelude => {
+                o.insert("alpha".to_owned(), "prelude".to_owned());
+            }
         }
         o
     }
@@ -366,15 +460,11 @@ impl Pass for LowerAnvilMaterial {
         &[AnvilMaterial::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "Riders Republic materials as metal-rough PBR: no vertex-colour factor, UV transforms only of the forms seen, other templates a placeholder"
+        "Riders Republic materials as metal-rough PBR: no vertex-colour factor or translucency, UV transforms only of the forms seen, other templates a placeholder"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let materials: Vec<Entity> = w.iter::<AnvilMaterial>().map(|(e, _)| e).collect();
         let mut white: Option<Entity> = None;
-        let alpha_mode = match self.alpha {
-            AlphaChoice::Opaque => AlphaMode::Opaque,
-            AlphaChoice::Mask(cutoff) => AlphaMode::Mask { cutoff },
-        };
         let normal = NormalConvention {
             green: self.normal_green,
             z: NormalZ::Rebuild,
@@ -389,19 +479,33 @@ impl Pass for LowerAnvilMaterial {
             };
             let name = m.template_name.clone().unwrap_or_default();
             let i = Inputs { m: &m };
-            let pbr = match name.as_str() {
-                "MAD_Fake" | "MAD_CHR_Basic" => {
+            let alpha_mode = match self.alpha {
+                AlphaChoice::Opaque => AlphaMode::Opaque,
+                AlphaChoice::Mask(cutoff) => AlphaMode::Mask { cutoff },
+                AlphaChoice::Prelude => prelude_alpha(&m).unwrap_or_else(|| {
+                    log.omit(
+                        "Materials' prelude blend modes other than 0 and 4 (additive-looking, not lowered): drawn \
+                         opaque",
+                        1,
+                    );
+                    AlphaMode::Opaque
+                }),
+            };
+            let layout = match name.as_str() {
+                "MAD_Tex1" => Some(TEX1),
+                "MAD_Tex1_Wind" => Some(TEX1_WIND),
+                "MAD_Decals1" => Some(DECALS1),
+                _ => None,
+            };
+            let pbr = match (name.as_str(), layout) {
+                ("MAD_Fake" | "MAD_CHR_Basic", _) => {
                     let albedo = i.texture(0);
                     let normals = i.texture(1);
                     if let Some(a) = albedo {
                         set_colour(w, a, TexRole::Color);
                     }
                     let mr = match normals {
-                        Some(n) => Some(made_texture(w, &mut made, (n, "fake mr", [0; 3]), |w| {
-                            derived(w, n, TexRole::Mask, ColorSpace::Linear, |_, c| {
-                                [255, byte(c[3]), byte(c[2]), 255]
-                            })
-                        })?),
+                        Some(n) => Some(metal_rough(w, &mut made, n, None, None)?),
                         None => None,
                     };
                     if let Some(n) = normals {
@@ -419,21 +523,20 @@ impl Pass for LowerAnvilMaterial {
                         ..PbrMaterial::default()
                     }
                 }
-                "MAD_Tex1" | "MAD_Tex1_Wind" | "MAD_Decals1" if !tex1_cb3(&m) => {
+                (_, Some(layout)) if !binds(&m, &layout) => {
                     log.omit(
                         &format!(
-                            "Materials of template {name:?} (its cb3[1..8] bindings aren't MAD_Tex1's: a neutral \
-                             placeholder drawn)"
+                            "Materials of template {name:?} (it doesn't bind the properties its evaluated shader \
+                             reads: a neutral placeholder drawn)"
                         ),
                         1,
                     );
                     placeholder()
                 }
-                "MAD_Tex1" | "MAD_Tex1_Wind" | "MAD_Decals1" => {
-                    let masked = name != "MAD_Decals1";
+                (_, Some(layout)) => {
                     let normals = i.texture(0);
                     let diffuse = i.texture(1);
-                    let mask = if masked {
+                    let mask = if layout.mask {
                         Some(match m.texture_set.get(7).copied().flatten() {
                             Some(t) => t,
                             None => {
@@ -444,31 +547,32 @@ impl Pass for LowerAnvilMaterial {
                     } else {
                         None
                     };
-                    let [metal, hue, saturation, luminosity, rough_offset, ao_on, vci] =
-                        [1, 2, 3, 4, 5, 6, 7].map(|v| i.scalar(v));
-                    if vci != 0.0 {
+                    let [hue, saturation, luminosity] = layout.tint.map(|v| i.scalar(v));
+                    let metal = layout.metalness.map(|v| i.scalar(v));
+                    let rough_offset = layout.roughness_offset.map(|v| i.scalar(v));
+                    let ao_on = layout.ao.map_or(0.0, |v| i.scalar(v));
+                    if layout.vertex_colour.is_some_and(|v| i.scalar(v) != 0.0) {
                         log.omit(
                             "Tex1 Materials' vertex-colour factor (the mesh's vertex colour isn't read)",
                             1,
                         );
                     }
-                    let uv = match i.uv(8) {
-                        None => {
-                            log.omit(
-                                "Tex1 UV transforms not bound (what the shader reads at cb3[8] isn't known): \
-                                 untransformed",
-                                1,
-                            );
-                            None
-                        }
-                        Some(None) => {
+                    if layout.translucency.is_some_and(|v| i.scalar(v) != 0.0) {
+                        log.omit(
+                            "Tex1_Wind Materials' translucency (written to the G-buffer as is, not PBR): left out",
+                            1,
+                        );
+                    }
+                    let uv = match layout.uv.map(|v| i.uv(v)) {
+                        None => None,
+                        Some(None) | Some(Some(None)) => {
                             log.omit(
                                 "Tex1 UV transforms unset (the default isn't known): untransformed",
                                 1,
                             );
                             None
                         }
-                        Some(Some(f)) => match uv_transform(f, self.shader_uv) {
+                        Some(Some(Some(f))) => match uv_transform(f, self.shader_uv) {
                             Ok(t) => {
                                 log.count("Tex1 UV transforms lowered", 1);
                                 t
@@ -484,31 +588,38 @@ impl Pass for LowerAnvilMaterial {
                         ..TextureRef::new(texture)
                     };
                     let tinted = (hue, saturation, luminosity) != (0.0, 0.0, 0.0);
-                    let base = match (diffuse, mask) {
-                        (Some(d), Some(k)) if tinted => {
+                    let base = match diffuse {
+                        Some(d) if tinted => {
                             let key = (
                                 d,
                                 "tint",
                                 [hue.to_bits(), saturation.to_bits(), luminosity.to_bits()],
                             );
-                            let mask_srgb = srgb(w, k);
-                            let mask_image = w
-                                .get::<Texture>(k)
-                                .map(|t| {
-                                    let meta = TextureMetadata {
-                                        color_space: ColorSpace::Linear,
-                                        role: TexRole::Mask,
-                                        normal: None,
-                                    };
-                                    map_rgba8_levels(t, 0..1, meta, |texel| Ok(texel.rgba))
-                                })
-                                .transpose()
-                                .map_err(|e| e.to_string())?;
+                            let key = match mask {
+                                Some(_) => key,
+                                None => (d, "tint unmasked", key.2),
+                            };
+                            let mask_image = match mask {
+                                Some(k) => w
+                                    .get::<Texture>(k)
+                                    .map(|t| {
+                                        let meta = TextureMetadata {
+                                            color_space: ColorSpace::Linear,
+                                            role: TexRole::Mask,
+                                            normal: None,
+                                        };
+                                        map_rgba8_levels(t, 0..1, meta, |texel| Ok(texel.rgba))
+                                    })
+                                    .transpose()
+                                    .map_err(|e| e.to_string())?
+                                    .map(|img| (img, srgb(w, k))),
+                                None => None,
+                            };
                             Some(made_texture(w, &mut made, key, |w| {
                                 derived(w, d, TexRole::Color, ColorSpace::Srgb, |t, c| {
                                     let m = mask_image
                                         .as_ref()
-                                        .map_or(1.0, |img| sampled(nearest(img, t), mask_srgb)[0]);
+                                        .map_or(1.0, |(img, srgb)| sampled(nearest(img, t), *srgb)[0]);
                                     let tc = tint([c[0], c[1], c[2]], hue, saturation, luminosity);
                                     let out = [0, 1, 2].map(|k| c[k] + (tc[k] - c[k]) * m);
                                     let enc = |x: f64| primase_image::linear_to_srgb8(x);
@@ -516,26 +627,14 @@ impl Pass for LowerAnvilMaterial {
                                 })
                             })?)
                         }
-                        (Some(d), _) => {
+                        Some(d) => {
                             set_colour(w, d, TexRole::Color);
                             Some(d)
                         }
-                        (None, _) => None,
+                        None => None,
                     };
                     let mr = match normals {
-                        Some(n) => {
-                            let key = (n, "tex1 mr", [metal.to_bits(), rough_offset.to_bits(), 0]);
-                            Some(made_texture(w, &mut made, key, |w| {
-                                derived(w, n, TexRole::Mask, ColorSpace::Linear, |_, c| {
-                                    [
-                                        255,
-                                        byte(smooth(sat(c[3] + rough_offset))),
-                                        byte(c[2] * metal),
-                                        255,
-                                    ]
-                                })
-                            })?)
-                        }
+                        Some(n) => Some(metal_rough(w, &mut made, n, metal, rough_offset)?),
                         None => None,
                     };
                     let occlusion = match mask {
@@ -565,7 +664,7 @@ impl Pass for LowerAnvilMaterial {
                         ..PbrMaterial::default()
                     }
                 }
-                other => {
+                (other, None) => {
                     log.omit(
                         &format!(
                             "Materials of template {other:?} (not lowered: a neutral placeholder drawn)"
@@ -579,6 +678,25 @@ impl Pass for LowerAnvilMaterial {
         }
         Ok(())
     }
+}
+
+/// The metallic-roughness texture made of the normal map `n`'s blue and alpha: metalness `b * metal` (`b` where
+/// `None`), roughness `S(sat(a + offset))` (`a` where `None`).
+fn metal_rough(
+    w: &mut World,
+    made: &mut BTreeMap<(Entity, &'static str, [u64; 3]), Entity>,
+    n: Entity,
+    metal: Option<f64>,
+    offset: Option<f64>,
+) -> Result<Entity, String> {
+    let bits = |x: Option<f64>| x.map_or(u64::MAX, f64::to_bits);
+    made_texture(w, made, (n, "mr", [bits(metal), bits(offset), 0]), |w| {
+        derived(w, n, TexRole::Mask, ColorSpace::Linear, |_, c| {
+            let rough = offset.map_or(c[3], |o| smooth(sat(c[3] + o)));
+            let metal = metal.map_or(c[2], |m| c[2] * m);
+            [255, byte(rough), byte(metal), 255]
+        })
+    })
 }
 
 /// The neutral grey a Material not lowered is drawn with.
