@@ -9,7 +9,7 @@ use primase_anvil::passes::{
 };
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::entity::{ComponentBody, ENTITY, ENTITY_GROUP, StoredEntity, StoredEntityGroup};
-use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
+use primase_anvil::read::placements::{InstancedCollision, InstancedLevels, Placed, Placer};
 use primase_anvil::read::shape::{BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
@@ -369,4 +369,46 @@ fn collision_lies_within_its_owners_bounds() {
         w.iter::<AnvilCollisionShape>().count() + w.iter::<AnvilMeshShape>().count(),
         0
     );
+}
+
+/// The aspen's RigidBody, its collision placed at each of its 10 instances where the caller states so.
+#[test]
+fn instanced_collision_is_placed_per_instance_as_stated() {
+    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+        return;
+    };
+    let order = [
+        "DataPC_MAD_USNAT_patch_01.forge",
+        "DataPC_MAD_USNAT.forge",
+        "DataPC_patch_01.forge",
+        "DataPC.forge",
+    ];
+    let mut archive = Archive::open(&order.map(|f| dir.join(f))).expect("archive");
+    let mut w = World::new();
+    let mut placed = Placed::default();
+    let mut placer = Placer::new(
+        &mut archive,
+        &mut w,
+        SourceFrame::WORLD,
+        InstancedLevels::Selector,
+    )
+    .with_instanced_collision(InstancedCollision::PerInstance);
+    placer
+        .place(At { forge: 1, entry: 2 }, &mut placed)
+        .expect("place");
+    let n = placed.collisions.len();
+    assert!(
+        n >= 10 && n % 10 == 0 && placed.instanced_collision == 0,
+        "{n} collisions"
+    );
+    // each instance's shapes at that instance's transform: the first part's translation differs instance by instance
+    let per = n / 10;
+    let at = |k: usize| {
+        placer
+            .world()
+            .get::<Transform>(placed.collisions[k * per])
+            .expect("transform")
+            .cols[3]
+    };
+    assert!((1..10).all(|k| at(k) != at(0)));
 }

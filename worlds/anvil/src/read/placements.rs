@@ -24,8 +24,9 @@
 //! a prototype holding the shape's collision in the owner's local frame; an EntityGroup's (a merged shape spanning
 //! its instances, the notes find) likewise. MeshShapes, SphereShapes, CapsuleShapes and BoxShapes (at their own
 //! transform) are read, a ReferenceListShape placing each child at its transform in the list; another type is counted
-//! ([`Placed::shapes_unread`]), and so are the RigidBodies of instanced Entities and of owners with a scale other than
-//! 1, whose placement isn't established ([`Placed::instanced_collision`], [`Placed::scaled_collision`]).
+//! ([`Placed::shapes_unread`]), and so are the RigidBodies of owners with a scale other than 1, whose placement isn't
+//! established ([`Placed::scaled_collision`]). An instanced Entity's is placed at each instance or not, as the caller
+//! states ([`InstancedCollision`]).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -116,6 +117,20 @@ pub enum InstancedLevels {
     Selector,
 }
 
+/// What an instanced Entity's RigidBody places: the caller's stated choice, as how its one shape stands for the
+/// instances isn't established (the Riders Republic notes: 5,076 of 5,087 capsule owners are instanced, one capsule
+/// for their N instances).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstancedCollision {
+    /// Nothing; counted in [`Placed::instanced_collision`].
+    Skip,
+    /// The shape at each instance, at T + R (I v) as the instance's meshes are, I's own scale with it (whether the
+    /// game scales the shape so isn't read either). On the first 400 instanced, unscaled owners of a RigidBody in
+    /// DataPC_MAD_USNAT, 17,948 of the 19,637 shapes so placed lie within their instance's stored bounds (of its
+    /// meshes) to 1 cm, and all within 0.87 m.
+    PerInstance,
+}
+
 /// What placing the Entities did, beyond the placements.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Placed {
@@ -133,8 +148,7 @@ pub struct Placed {
     pub collisions: Vec<Entity>,
     /// RigidBodyComponents whose shape is of a type this reader doesn't read, by the type (or 0: an id in no forge).
     pub shapes_unread: BTreeMap<u32, u64>,
-    /// RigidBodyComponents of instanced Entities: how one shape stands for the instances isn't established, so not
-    /// placed.
+    /// RigidBodyComponents of instanced Entities not placed (under [`InstancedCollision::Skip`]).
     pub instanced_collision: u64,
     /// StaticDecalComponents: decal geometry made for its one placement, not placed (the Entity's own Visuals are).
     pub static_decals: u64,
@@ -236,6 +250,7 @@ pub struct Placer<'a> {
     world: &'a mut World,
     frame: SourceFrame,
     instanced: InstancedLevels,
+    instanced_collision: InstancedCollision,
     /// Per object id: its mesh levels (`None`: not a LODSelector or Mesh, none of its levels a Mesh, or in no forge).
     objects: HashMap<u64, Option<Levels>>,
     /// Per object id: the prototype placing every mesh level.
@@ -245,6 +260,12 @@ pub struct Placer<'a> {
 }
 
 impl<'a> Placer<'a> {
+    /// The placer placing instanced Entities' collision as `choice` states ([`InstancedCollision::Skip`] by default).
+    pub fn with_instanced_collision(mut self, choice: InstancedCollision) -> Placer<'a> {
+        self.instanced_collision = choice;
+        self
+    }
+
     /// A placer reading through `archive` into `world`.
     pub fn new(
         archive: &'a mut Archive,
@@ -257,6 +278,7 @@ impl<'a> Placer<'a> {
             world,
             frame,
             instanced,
+            instanced_collision: InstancedCollision::Skip,
             objects: HashMap::new(),
             wholes: HashMap::new(),
             shapes: HashMap::new(),
@@ -569,11 +591,21 @@ impl<'a> Placer<'a> {
                 .filter(|c| matches!(c.body, ComponentBody::StaticDecal(_)))
                 .count() as u64,
         );
-        // collision: each RigidBodyComponent's shape, once at its owner's T R (an EntityGroup's merged shape spans its
-        // instances: the notes, docs/skate-plan.md), where the owner's scale is 1
-        let instanced = e
+        // collision: each RigidBodyComponent's shape at its owner's T R (an EntityGroup's merged shape spans its
+        // instances: the notes, docs/skate-plan.md), where the owner's scale is 1; an instanced Entity's at each of its
+        // instances, where the caller states so
+        let mut instance_sets = e
             .visuals()
-            .any(|v| shows(v, at).is_ok_and(|s| s.instances.is_some()));
+            .filter_map(|v| shows(v, at).ok().and_then(|s| s.instances).map(|(_, i)| i));
+        let instances = match (instance_sets.next(), group) {
+            (Some(first), false) => {
+                if instance_sets.any(|other| other != first) {
+                    return Err(Error::Instances(at, "of two Visuals differ, for one RigidBody"));
+                }
+                Some(first)
+            }
+            _ => None,
+        };
         for c in &e.components {
             let ComponentBody::RigidBody {
                 shape: Some(shape), ..
@@ -581,7 +613,7 @@ impl<'a> Placer<'a> {
             else {
                 continue;
             };
-            if instanced && !group {
+            if instances.is_some() && self.instanced_collision == InstancedCollision::Skip {
                 placed.instanced_collision = placed.instanced_collision.saturating_add(1);
                 continue;
             }
@@ -593,22 +625,31 @@ impl<'a> Placer<'a> {
                 continue;
             };
             let owner = transform(&e.matrix, 1.0);
-            for (prototype, local) in parts {
-                let p = self.world.spawn();
-                self.world.insert(p, Name(name.clone()));
-                self.world.insert(
-                    p,
-                    Instance {
-                        prototype,
-                        variant: 0,
-                    },
-                );
-                let t = local.map_or(owner, |l| compose(&owner, &l));
-                self.world.insert(p, self.frame.transform(&t));
-                if let Some(layers) = &layers {
-                    self.world.insert(p, layers.clone());
+            let owners: Vec<Transform> = match &instances {
+                Some(instances) => instances
+                    .iter()
+                    .map(|i| compose(&owner, &transform(i, 1.0)))
+                    .collect(),
+                None => vec![owner],
+            };
+            for owner in owners {
+                for &(prototype, local) in &parts {
+                    let p = self.world.spawn();
+                    self.world.insert(p, Name(name.clone()));
+                    self.world.insert(
+                        p,
+                        Instance {
+                            prototype,
+                            variant: 0,
+                        },
+                    );
+                    let t = local.map_or(owner, |l| compose(&owner, &l));
+                    self.world.insert(p, self.frame.transform(&t));
+                    if let Some(layers) = &layers {
+                        self.world.insert(p, layers.clone());
+                    }
+                    placed.collisions.push(p);
                 }
-                placed.collisions.push(p);
             }
         }
         Ok(())
