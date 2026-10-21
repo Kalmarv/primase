@@ -341,7 +341,8 @@ impl Pass for PrepareReskatePauseMap {
                             None => {
                                 super::require_whole_map(w, self.name()).map_err(|e| {
                                     format!(
-                                        "{e}: extent=content over a map in parts is its content merged over every                                          part (summarize-reskate-content)"
+                                        "{e}: extent=content over a map in parts is its content merged over every \
+                                         part (summarize-reskate-content)"
                                     )
                                 })?;
                                 None

@@ -81,7 +81,8 @@ impl BuildReport {
             (
                 "reskate".into(),
                 format!(
-                    "{}: tiles={} merged_tris={} instances={} prototypes={} materials={} textures={} collision_tris={}                      peak_mesh_bytes={}",
+                    "{}: tiles={} merged_tris={} instances={} prototypes={} materials={} textures={} collision_tris={} \
+                     peak_mesh_bytes={}",
                     self.out_dir.display(),
                     self.tiles,
                     self.merged_tris,

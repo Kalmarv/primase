@@ -115,7 +115,8 @@ fn renderers_match_the_scan() {
     let stats = &scan["stats"];
     println!("{records}\n{matrices}");
     println!(
-        "ours: {} renderers, {inactive} off as stored, {lod_rest} only in a coarser LOD level; skipped {skipped:?}; the          scan's stats: inactive {}, LOD 1+ {}",
+        "ours: {} renderers, {inactive} off as stored, {lod_rest} only in a coarser LOD level; skipped {skipped:?}; the \
+         scan's stats: inactive {}, LOD 1+ {}",
         all.len(),
         stats["renderer_inactive"],
         stats["renderer_lod1plus"]
