@@ -1,6 +1,7 @@
 //! Every texture binding of every MaterialTemplate of Riders Republic's base and USNAT forges with their patches
 //! (build 25394987) that links a TextureObject has its TextureSelector read ([`texture_parameter`]), none shared by
-//! two bindings of one template; the others link another Operator (a custom texture operator, not read) or nothing.
+//! two bindings of one template; a binding may link a ShaderCustomTextureOperator, whose own selector is read the same
+//! way ([`template::custom_texture`]); the others link another Operator or nothing.
 //! Against the notes' worked examples (material-spec §27.0): MAD_Screens_Simple's t76 (slot 0, channel 1, the
 //! Pixels_Screen_A set and its DiffuseMap), MAD_Tex1_Graffiti_Mode_DecalFX's t76 (slot 11, channel 2, the bare
 //! texture GFX_Jammer_NormalMap) and MAD_Screens_Simple's t75 (slot 0, channel 0, no default).
@@ -75,8 +76,9 @@ fn every_texture_binding_has_its_parameter() {
     println!(
         "{templates} templates, {bindings} texture bindings, {defaults} with a default texture; by (channel, set, texture) {kinds:?}; missing {missing:?}"
     );
-    // 34 texture bindings link a custom texture operator, 8 nothing (the character screens' generic two)
-    assert_eq!(missing.len(), 42);
+    // 8 texture bindings link nothing (the character screens' generic two); the 34 that link a custom texture
+    // operator are read
+    assert_eq!(missing.len(), 8);
     // no channel-0 record names a default; a channel-1 default is a set and its texture; a channel-2 one a bare
     // texture (the resolution's steps, material-spec §27.0)
     assert!(kinds.keys().all(|&(channel, set, texture)| match channel {
@@ -165,6 +167,11 @@ fn every_binding_links_its_operator() {
                         selectors += 1;
                         agree += u64::from(searched(&body, b) == Some(selector.at));
                         template::TEXTURE_OBJECT
+                    }
+                    Some(OperatorDefault::CustomTexture { selector, .. }) => {
+                        selectors += 1;
+                        agree += u64::from(searched(&body, b) == Some(selector.at));
+                        template::SHADER_CUSTOM_TEXTURE_OPERATOR
                     }
                     Some(OperatorDefault::Other(c)) => c,
                 };

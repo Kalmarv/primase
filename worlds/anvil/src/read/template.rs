@@ -27,8 +27,11 @@
 //! its default UVTransform, a TextureObject holding its TextureSelector (the TextureParameter record of material-spec
 //! §27.0, [`texture_parameter`]: marker 0x7D08460D, a byte 0, its `TextureSpecificationMethod` (the channel) and
 //! `MapType` (the TextureSet slot), a u32 0, and the default set and texture, each null where the template names none)
-//! and its `SamplerMode`. The census (worlds/anvil/tests/template_defaults.rs) reads every binding's Operator on every
-//! MaterialTemplate, against the registry's worked examples.
+//! and its `SamplerMode`. A texture binding may instead link a ShaderCustomTextureOperator (36 in the game's templates,
+//! 14 templates): the TextureObject definition instanced through the custom-operator mechanism, with the same
+//! TextureSelector (docs/material-spec.md §27.0), read by walking its stored pins ([`custom_texture`]). The census
+//! (worlds/anvil/tests/template_defaults.rs) reads every binding's Operator on every MaterialTemplate, against the
+//! registry's worked examples.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -213,6 +216,14 @@ pub const UV_TRANSFORM_OPERATOR: u32 = 0xEADF_9820;
 pub const UV_TRANSFORM: u32 = 0xC52E_2125;
 pub const TEXTURE_OBJECT: u32 = 0x5EF9_EA65;
 pub const TEXTURE_ARRAY: u32 = 0x4C6B_3C62;
+/// A texture binding's custom operator (see [`custom_texture`]).
+pub const SHADER_CUSTOM_TEXTURE_OPERATOR: u32 = 0x1181_BD58;
+/// The pin classes of a ShaderCustomOperator's output and input lists: FloatOutput, VectorOutput, TextureOutput and
+/// IntegerOutput; FloatInput, VectorInput and TextureInput (registry-named-fields §12).
+const OUTPUT_PINS: [u32; 4] = [0x63AD_2CDD, 0x1603_ED4D, 0x3A8A_5517, 0x2C74_BF29];
+const INPUT_PINS: [u32; 3] = [0xA10B_3D7E, 0x6569_31BC, 0x354F_E002];
+/// The name of the definition a custom texture operator instances: the TextureObject's.
+const TEXTURE_OBJECT_DEFINITION: &[u8] = b"TextureObject";
 
 /// A binding's linked Operator's default (see the module documentation).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -229,6 +240,12 @@ pub enum OperatorDefault {
     Uv { floats: [f32; 8], flags: [u8; 3] },
     /// A TextureObject's (or TextureArray's) TextureSelector and `SamplerMode`.
     Texture {
+        selector: TextureParameter,
+        sampler_mode: u32,
+    },
+    /// A ShaderCustomTextureOperator's own TextureSelector and `SamplerMode`: it selects a texture as a TextureObject's
+    /// selector does ([`custom_texture`]).
+    CustomTexture {
         selector: TextureParameter,
         sampler_mode: u32,
     },
@@ -316,18 +333,102 @@ pub fn operator(body: &[u8], b: &Binding) -> Result<Option<OperatorDefault>, Bin
                 sampler_mode,
             }
         }
+        SHADER_CUSTOM_TEXTURE_OPERATOR => {
+            let (selector, sampler_mode) = custom_texture(body, class_at)?;
+            OperatorDefault::CustomTexture {
+                selector,
+                sampler_mode,
+            }
+        }
         other => OperatorDefault::Other(other),
     }))
 }
 
-/// The TextureParameter (TextureSelector) record of the texture binding `b` of `body`: its linked TextureObject's or
-/// TextureArray's ([`operator`]); `None` where it isn't a texture binding or links another Operator or none.
+/// A ShaderCustomTextureOperator whose class id starts at `class_at`: its body walked field by field (the
+/// registry's order, base classes first; verified on all 36 in the game's templates, docs/material-spec
+/// §27.0). After the class: a byte (0 or 1), the Operator's `Active` byte (1), a string (the `ShaderCustomOperator`'s
+/// definition name, which must be `TextureObject`: this operator is that definition instanced, so its selector
+/// selects as a TextureObject's does), a u32 count and that many output pins (a tag byte 0 or 4, then a pin of 20
+/// bytes: a u64 id, its class and a u64 tag), a u32 count and that many input pins (a tag byte, a pin of 20 bytes and
+/// its `Source`: `03`, or `02` or `05` and a u64), a string, a u32 (the `SamplerMode`), then the owned
+/// TextureSelector: its u64 id and the TextureParameter record. Anything else is refused, naming where: a pin of
+/// another class, another definition, a longer list than the body holds.
+pub fn custom_texture(body: &[u8], class_at: usize) -> Result<(TextureParameter, u32), BindingError> {
+    let mut at = class_at.checked_add(4).ok_or(BindingError::Short(class_at))?;
+    let take = |at: &mut usize, n: usize| -> Result<&[u8], BindingError> {
+        let from = *at;
+        let end = from.checked_add(n).ok_or(BindingError::Short(from))?;
+        let s = body.get(from..end).ok_or(BindingError::Short(from))?;
+        *at = end;
+        Ok(s)
+    };
+    let u32_at = |at: &mut usize| -> Result<u32, BindingError> {
+        let s: [u8; 4] = take(at, 4)?.try_into().map_err(|_| BindingError::Short(*at))?;
+        Ok(u32::from_le_bytes(s))
+    };
+    // a string: a u32 length, that many bytes, and a zero byte when it isn't empty
+    let string = |at: &mut usize| -> Result<&[u8], BindingError> {
+        let n = usize::try_from(u32_at(at)?).map_err(|_| BindingError::Short(*at))?;
+        let s = take(at, n)?;
+        if n > 0 && take(at, 1)? != [0] {
+            return Err(BindingError::Parameter(*at));
+        }
+        Ok(s)
+    };
+    let first = *take(&mut at, 1)?.first().ok_or(BindingError::Short(at))?;
+    let active = *take(&mut at, 1)?.first().ok_or(BindingError::Short(at))?;
+    if first > 1 || active != 1 {
+        return Err(BindingError::Parameter(class_at));
+    }
+    if string(&mut at)? != TEXTURE_OBJECT_DEFINITION {
+        return Err(BindingError::Parameter(at));
+    }
+    let outputs = u32_at(&mut at)?;
+    for _ in 0..outputs {
+        let pin = take(&mut at, 21)?;
+        let class = pin
+            .get(9..13)
+            .and_then(|w| <[u8; 4]>::try_from(w).ok())
+            .map(u32::from_le_bytes);
+        let tag = pin.first().copied();
+        if !matches!(tag, Some(0 | 4)) || !class.is_some_and(|c| OUTPUT_PINS.contains(&c)) {
+            return Err(BindingError::Parameter(at.saturating_sub(21)));
+        }
+    }
+    let inputs = u32_at(&mut at)?;
+    for _ in 0..inputs {
+        let start = at;
+        let head = take(&mut at, 21)?;
+        let class = head
+            .get(9..13)
+            .and_then(|w| <[u8; 4]>::try_from(w).ok())
+            .map(u32::from_le_bytes);
+        if !matches!(head.first(), Some(0 | 4)) || !class.is_some_and(|c| INPUT_PINS.contains(&c)) {
+            return Err(BindingError::Parameter(start));
+        }
+        // the pin after its tag byte: its Source is at 20 from there
+        let pin = input_pin(body, start.checked_add(1).ok_or(BindingError::Short(start))?)?;
+        at = start
+            .checked_add(1)
+            .and_then(|s| s.checked_add(pin))
+            .ok_or(BindingError::Short(start))?;
+    }
+    string(&mut at)?;
+    let sampler_mode = u32_at(&mut at)?;
+    let marker = at.checked_add(8).ok_or(BindingError::Short(at))?;
+    Ok((TextureParameter::parse(body, marker)?, sampler_mode))
+}
+
+/// The TextureParameter (TextureSelector) record of the texture binding `b` of `body`: its linked TextureObject's,
+/// TextureArray's or ShaderCustomTextureOperator's ([`operator`]); `None` where it isn't a texture binding or links another Operator or none.
 pub fn texture_parameter(body: &[u8], b: &Binding) -> Result<Option<TextureParameter>, BindingError> {
     if !matches!(b.kind(), BindingKind::Texture { .. }) {
         return Ok(None);
     }
     Ok(match operator(body, b)? {
-        Some(OperatorDefault::Texture { selector, .. }) => Some(selector),
+        Some(OperatorDefault::Texture { selector, .. } | OperatorDefault::CustomTexture { selector, .. }) => {
+            Some(selector)
+        }
         _ => None,
     })
 }
@@ -736,5 +837,155 @@ mod tests {
         b.extend(1u32.to_le_bytes());
         descriptor(&mut b, b"b");
         assert!(matches!(descriptors(&b), Err(Error::Several(2, _))));
+    }
+
+    /// A ShaderCustomTextureOperator's header and body worked by hand: the tag, id and class, a byte, `Active`, the
+    /// definition name, `outputs` output pins and `inputs` input pins (each with an optional `Source` id), an empty
+    /// string, the sampler mode, then the selector with the default texture `texture` (an id) in channel `channel`,
+    /// slot `slot`. Returns the body and where the class id starts.
+    fn custom_operator(
+        name: &[u8],
+        outputs: &[u32],
+        inputs: &[(u32, Option<u64>)],
+        texture: Option<u64>,
+    ) -> (Vec<u8>, usize) {
+        let mut b = vec![9; 5];
+        b.push(0);
+        b.extend(0x77u64.to_le_bytes());
+        let class_at = b.len();
+        b.extend(SHADER_CUSTOM_TEXTURE_OPERATOR.to_le_bytes());
+        b.extend([1, 1]);
+        string(&mut b, name);
+        b.extend(u32::try_from(outputs.len()).expect("short").to_le_bytes());
+        for &class in outputs {
+            b.push(0);
+            b.extend(0x100u64.to_le_bytes());
+            b.extend(class.to_le_bytes());
+            b.extend(0x200u64.to_le_bytes());
+        }
+        b.extend(u32::try_from(inputs.len()).expect("short").to_le_bytes());
+        for &(class, source) in inputs {
+            b.push(4);
+            b.extend(0x300u64.to_le_bytes());
+            b.extend(class.to_le_bytes());
+            b.extend(0x400u64.to_le_bytes());
+            match source {
+                None => b.push(3),
+                Some(id) => {
+                    b.push(2);
+                    b.extend(id.to_le_bytes());
+                }
+            }
+        }
+        string(&mut b, b"");
+        b.extend(2u32.to_le_bytes());
+        // the selector: its id, then the record
+        b.extend(0x500u64.to_le_bytes());
+        b.extend(TEXTURE_PARAMETER.to_le_bytes());
+        b.push(0);
+        b.extend(2u32.to_le_bytes());
+        b.extend(5u32.to_le_bytes());
+        b.extend(0u32.to_le_bytes());
+        b.extend([3, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        match texture {
+            None => b.extend([3, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            Some(id) => {
+                b.extend([1, 1]);
+                b.extend(id.to_le_bytes());
+            }
+        }
+        (b, class_at)
+    }
+
+    const PINS: ([u32; 3], [(u32, Option<u64>); 3]) = (
+        [0x1603_ED4D, 0x63AD_2CDD, 0x3A8A_5517],
+        [
+            (0x6569_31BC, Some(0x42)),
+            (0xA10B_3D7E, None),
+            (0x354F_E002, None),
+        ],
+    );
+
+    #[test]
+    fn a_custom_texture_operator_is_walked_pin_by_pin_to_its_selector() {
+        let (b, class_at) = custom_operator(b"TextureObject", &PINS.0, &PINS.1, Some(0x1122));
+        let (selector, mode) = custom_texture(&b, class_at).expect("walks");
+        assert_eq!((selector.channel, selector.slot, mode), (2, 5, 2));
+        assert_eq!(selector.set, None);
+        assert_eq!(selector.texture.map(|r| r.id), Some(0x1122));
+        assert_eq!(
+            Some(selector.at),
+            b.windows(4).position(|w| w == TEXTURE_PARAMETER.to_le_bytes())
+        );
+        // no pins at all walks too; a null default reads as none
+        let (b, class_at) = custom_operator(b"TextureObject", &[], &[], None);
+        assert_eq!(custom_texture(&b, class_at).expect("walks").0.texture, None);
+    }
+
+    #[test]
+    fn a_binding_linking_one_reads_its_selector_as_a_texture_objects() {
+        let (mut b, class_at) = custom_operator(b"TextureObject", &PINS.0, &PINS.1, Some(0x1122));
+        // a binding record linking the operator's id 0x77, before the operator
+        let mut binding = BINDING.to_le_bytes().to_vec();
+        binding.extend(0xABu32.to_le_bytes());
+        for f in [3u32, 0, 0, 3] {
+            binding.extend(f.to_le_bytes());
+        }
+        binding.extend([1, 1]);
+        binding.extend(0x77u64.to_le_bytes());
+        binding.extend([0; 8]);
+        let shift = binding.len();
+        binding.extend(&b);
+        b = binding;
+        let all = bindings(&b).expect("binding");
+        assert_eq!(all.len(), 1);
+        let Some(OperatorDefault::CustomTexture {
+            selector,
+            sampler_mode,
+        }) = operator(&b, &all[0]).expect("reads")
+        else {
+            panic!("a custom texture operator");
+        };
+        assert_eq!((selector.channel, selector.slot, sampler_mode), (2, 5, 2));
+        assert_eq!(
+            Some(selector.at),
+            b.windows(4).position(|w| w == TEXTURE_PARAMETER.to_le_bytes())
+        );
+        assert!(selector.at > shift + class_at);
+        assert_eq!(texture_parameter(&b, &all[0]).expect("reads"), Some(selector));
+    }
+
+    #[test]
+    fn a_custom_texture_operator_that_does_not_walk_is_refused() {
+        let ok = custom_operator(b"TextureObject", &PINS.0, &PINS.1, None);
+        // another definition than the TextureObject's
+        let (b, at) = custom_operator(b"Other", &PINS.0, &PINS.1, None);
+        assert!(matches!(custom_texture(&b, at), Err(BindingError::Parameter(_))));
+        // a pin of a class that isn't a pin's, in either list
+        let (b, at) = custom_operator(b"TextureObject", &[0x1234_5678], &[], None);
+        assert!(matches!(custom_texture(&b, at), Err(BindingError::Parameter(_))));
+        let (b, at) = custom_operator(b"TextureObject", &[], &[(0x63AD_2CDD, None)], None);
+        assert!(matches!(custom_texture(&b, at), Err(BindingError::Parameter(_))));
+        // the Active byte not 1, the leading byte past 1
+        for k in [4 + 1, 4] {
+            let mut b = ok.0.clone();
+            b[ok.1 + k] = 2;
+            assert!(
+                matches!(custom_texture(&b, ok.1), Err(BindingError::Parameter(_))),
+                "byte {k}"
+            );
+        }
+        // the selector's record marker overwritten
+        let mut b = ok.0.clone();
+        let marker = b.len() - 37;
+        b[marker] ^= 0xFF;
+        assert!(matches!(
+            custom_texture(&b, ok.1),
+            Err(BindingError::Parameter(_))
+        ));
+        // the body ending anywhere inside it
+        for cut in ok.1..ok.0.len() {
+            assert!(custom_texture(&ok.0[..cut], ok.1).is_err(), "cut at {cut}");
+        }
     }
 }

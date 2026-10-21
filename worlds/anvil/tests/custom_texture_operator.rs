@@ -1,0 +1,152 @@
+//! The ShaderCustomTextureOperators of Riders Republic's MaterialTemplates (build 25394987), their own TextureSelectors
+//! read ([`template::custom_texture`]), and what resolves through them. All 36 operators of the base and USNAT forges
+//! with their patches decode; Waterfall's selects its TextureSet's slot 3, a HeightMap.
+use std::collections::BTreeMap;
+
+use primase_anvil::components::{AnvilMaterial, TextureFrom};
+use primase_anvil::read::archive::{Archive, At};
+use primase_anvil::read::material::MATERIAL;
+use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
+use primase_anvil::read::template::{self, MATERIAL_TEMPLATE, SHADER_CUSTOM_TEXTURE_OPERATOR};
+use primase_core::frame::SourceFrame;
+use primase_core::{Name, World};
+use primase_testdata::real_data;
+
+const ORDER: [&str; 4] = [
+    "DataPC_MAD_USNAT_patch_01.forge",
+    "DataPC_MAD_USNAT.forge",
+    "DataPC_patch_01.forge",
+    "DataPC.forge",
+];
+
+/// Every ShaderCustomTextureOperator in the templates of the four forges, read by its class id's place: each walked
+/// ([`template::custom_texture`]), with its template's name and forge.
+#[test]
+fn all_36_operators_decode_and_waterfalls_selects_slot_3() {
+    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+        return;
+    };
+    let class = SHADER_CUSTOM_TEXTURE_OPERATOR.to_le_bytes();
+    let mut selects: BTreeMap<(u32, u32), u64> = BTreeMap::new();
+    let mut sampler: BTreeMap<u32, u64> = BTreeMap::new();
+    let mut found = 0u64;
+    let mut waterfall = None;
+    let mut bindings = 0u64;
+    for forge in ORDER {
+        let mut archive = Archive::open(&[dir.join(forge)]).expect("archive");
+        let names = archive.forge(0).expect("forge").names.clone();
+        for (entry, n) in names.iter().enumerate() {
+            if n.type_id != MATERIAL_TEMPLATE {
+                continue;
+            }
+            let body = archive.resource(At { forge: 0, entry }).expect("template").body;
+            for (at, w) in body.windows(4).enumerate() {
+                if w != class {
+                    continue;
+                }
+                let (selector, mode) = template::custom_texture(&body, at)
+                    .unwrap_or_else(|e| panic!("{} in {forge}: {e}", n.name));
+                found += 1;
+                *selects.entry((selector.channel, selector.slot)).or_default() += 1;
+                *sampler.entry(mode).or_default() += 1;
+                if n.name == "MAD_Waterfall" {
+                    waterfall = Some((selector.channel, selector.slot));
+                }
+            }
+            let Ok(all) = template::bindings(&body) else {
+                continue;
+            };
+            bindings += all
+                .iter()
+                .filter(|b| {
+                    matches!(
+                        template::operator(&body, b),
+                        Ok(Some(template::OperatorDefault::CustomTexture { .. }))
+                    )
+                })
+                .count() as u64;
+        }
+    }
+    println!("{found} operators; selects {selects:?}; sampler modes {sampler:?}; {bindings} bindings");
+    assert_eq!(found, 36);
+    // an independent walk of the stored bytes (a script over the same bodies) finds these
+    assert_eq!(
+        selects,
+        BTreeMap::from([
+            ((0, 0), 2),
+            ((0, 1), 6),
+            ((0, 3), 2),
+            ((0, 7), 2),
+            ((0, 11), 10),
+            ((2, 11), 12),
+            ((2, 17), 2)
+        ])
+    );
+    assert_eq!(sampler, BTreeMap::from([(0, 30), (1, 2), (2, 4)]));
+    assert_eq!(
+        bindings, 34,
+        "the bindings that link one: two operators are linked by none"
+    );
+    assert_eq!(waterfall, Some((0, 3)));
+}
+
+/// The first Material called `name` in the forges (patches first), read by a placer.
+fn material(archive: &mut Archive, name: &str) -> u64 {
+    for f in 0..ORDER.len() {
+        let forge = archive.forge(f).expect("forge");
+        for (entry, n) in forge.names.iter().enumerate() {
+            if n.type_id == MATERIAL && n.name == name {
+                return forge.index.get(entry).map(|i| i.id).expect("id");
+            }
+        }
+    }
+    panic!("{name}");
+}
+
+/// A binding that links a ShaderCustomTextureOperator is read through the operator's own selector, as a TextureObject's
+/// is: Waterfall's t75 names channel 0, slot 3, and its Material's texture there is its TextureSet's slot 3, the
+/// HeightMap; Grass_AO's t76 names channel 0, slot 1, the cactus Material's NormalMap.
+#[test]
+fn custom_operator_bindings_name_the_set_slot_their_materials_texture_comes_from() {
+    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+        return;
+    };
+    let mut archive = Archive::open(&ORDER.map(|f| dir.join(f))).expect("archive");
+    let waterfall = material(&mut archive, "MAD_MAT_Waterfall");
+    let cactus = material(&mut archive, "VEG-Des-CactusSkin01");
+    let mut w = World::new();
+    let mut placed = Placed::default();
+    let (wf, cs) = {
+        let mut placer = Placer::new(&mut archive, &mut w, SourceFrame::WORLD, InstancedLevels::Slot);
+        (
+            placer.material(waterfall, &mut placed).expect("read"),
+            placer.material(cactus, &mut placed).expect("read"),
+        )
+    };
+    let name_of = |e| w.get::<Name>(e).map(|n| n.0.clone());
+    for (e, shader_slot, want, set_slot, texture_name) in [
+        (wf, 0, (3, 0), 3, "MAD_TEX_TIL_Waterfall_HeightMap"),
+        (cs, 1, (1, 0), 1, "VEG-Des-CactusSkin01_NormalMap"),
+    ] {
+        let m = w.get::<AnvilMaterial>(e).expect("material");
+        let t = m
+            .textures
+            .iter()
+            .find(|t| t.shader_slot == shader_slot)
+            .expect("bound");
+        // (slot, channel) of the operator's selector
+        assert_eq!(t.parameter, Some(want), "{t:?}");
+        let texture = t.texture.expect("a texture");
+        assert_eq!(
+            m.texture_set.get(set_slot).copied().flatten(),
+            Some(texture),
+            "{t:?}"
+        );
+        assert_eq!(name_of(texture).as_deref(), Some(texture_name));
+        assert!(
+            matches!(t.from, TextureFrom::Record | TextureFrom::Set),
+            "{:?}",
+            t.from
+        );
+    }
+}
