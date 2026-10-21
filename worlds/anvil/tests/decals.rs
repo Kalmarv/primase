@@ -9,7 +9,7 @@ use primase_anvil::components::{
     AnvilDecalModel, AnvilDeferredDecals, AnvilTerrain, AnvilTextureMap, DeferredDecal, TerrainTile,
 };
 use primase_anvil::passes::{
-    CellPoint, FamilyRule, GroundColour, LowerAnvilDecals, LowerAnvilTerrain, Pieces,
+    CellPoint, FamilyRule, GroundColour, LowerAnvilDecals, LowerAnvilTerrain, Pieces, TerrainDecals,
 };
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::ddecal::{DDECAL_MODEL, StoredDecalModel};
@@ -159,6 +159,7 @@ fn pass() -> LowerAnvilDecals {
         family: FamilyRule::WriteGBufferRoughness,
         cutoff: CUTOFF,
         lift: LIFT,
+        terrain: TerrainDecals::Out,
     }
 }
 
@@ -476,6 +477,38 @@ fn every_decal_model_of_the_game_lowers_or_is_left_out_by_its_family() {
     let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
         return;
     };
+    // the box family alone
+    let mut w = game_models(&dir);
+    let mut log = PassLog::default();
+    pass().run(&mut w, &mut log).expect("lower");
+    println!("{log:?}");
+    assert_eq!(log.counts["deferred decal materials"], 16);
+    assert_eq!(log.counts["deferred decals drawn"], 16);
+    assert_eq!(
+        log.omitted["deferred decals of the terrain family (PS 353: the terrain's bake)"],
+        53
+    );
+    // and the terrain family blended: every model of it drawn but one without a Diffuse (Footprint_A)
+    let mut w = game_models(&dir);
+    let mut log = PassLog::default();
+    LowerAnvilDecals {
+        terrain: TerrainDecals::Blend { steps: 255 },
+        ..pass()
+    }
+    .run(&mut w, &mut log)
+    .expect("lower");
+    println!("{log:?}");
+    assert_eq!(log.counts["terrain-family decals drawn"], 52);
+    assert_eq!(log.counts["deferred decal materials"], 16 + 52);
+    assert_eq!(
+        log.omitted["decal models without a Diffuse, Normal or Mask1 map read"],
+        1
+    );
+}
+
+/// A world of every DDecalModel of the game, each read as the Placer reads it with one decal of its own (69 by name:
+/// the patch's copy of a name replacing the base forge's, as the archive's order says), on a flat terrain.
+fn game_models(dir: &std::path::Path) -> World {
     let order = [
         "DataPC_MAD_USNAT_patch_01.forge",
         "DataPC_MAD_USNAT.forge",
@@ -485,8 +518,6 @@ fn every_decal_model_of_the_game_lowers_or_is_left_out_by_its_family() {
     let mut archive = Archive::open(&order.map(|f| dir.join(f))).expect("archive");
     let mut w = World::new();
     terrain(&mut w, |_, _| 0);
-    // each model, read as the Placer reads it, with one decal of its own (the patch's copy of a name replacing the
-    // base forge's, as the archive's order says)
     let mut names = std::collections::BTreeSet::new();
     for forge in [0, 1] {
         let entries = archive.forge(forge).expect("forge").names.clone();
@@ -515,13 +546,73 @@ fn every_decal_model_of_the_game_lowers_or_is_left_out_by_its_family() {
         }
     }
     assert_eq!(names.len(), 69);
-    let mut log = PassLog::default();
-    pass().run(&mut w, &mut log).expect("lower");
-    println!("{log:?}");
-    assert_eq!(log.counts["deferred decal models drawn"], 16);
-    assert_eq!(log.counts["deferred decals drawn"], 16);
-    assert_eq!(
-        log.omitted["deferred decals of the terrain family (PS 353: the terrain's bake)"],
-        53
+    w
+}
+
+/// `terrain-family=blend`: the terrain family's decals draped as the box family's, a blended material per model and
+/// quantised factor (two fades, two materials: one primitive each), its alpha `Mask1.B q` where that reaches the
+/// cutoff, else 0, baked per texel (worked by hand from the mask's texels 200 to 231); every decal material in the decal
+/// layer, the box family's too.
+#[test]
+fn the_terrain_family_blends_at_its_quantised_factors() {
+    use primase_core::{DrawLayer, DrawOrder};
+    let mut w = World::new();
+    terrain(&mut w, |gx, gy| (gx + 2 * gy) as i32);
+    let plane = |x: f64, y: f64| (x + 2.0 * y) * UNIT;
+    let at = |x: f32, y: f32| [x, y, plane(f64::from(x), f64::from(y)) as f32];
+    let (road, _) = model(&mut w, false);
+    let (trail, [_, _, mask]) = model(&mut w, true);
+    decals(&mut w, road, vec![decal(at(40.3, 30.7), 0.0)]);
+    let set = decals(
+        &mut w,
+        trail,
+        vec![
+            decal(at(60.0, 60.0), 0.0),
+            decal(at(80.0, 60.0), 0.3),
+            decal(at(90.0, 60.0), 0.7),
+        ],
     );
+    let mask_texels: Vec<u8> = w.get::<Texture>(mask).expect("mask").levels[0].clone();
+    let mut log = PassLog::default();
+    LowerAnvilDecals {
+        terrain: TerrainDecals::Blend { steps: 255 },
+        ..pass()
+    }
+    .run(&mut w, &mut log)
+    .expect("lower");
+    println!("{log:?}");
+    assert_eq!(log.counts["terrain-family decals drawn"], 2);
+    assert_eq!(log.counts["deferred decals drawn"], 1);
+    // fade 0.7: q = round(0.3 x 255) / 255 = 77 / 255, under the cutoff: no texel visible
+    assert_eq!(
+        log.omitted["terrain-family decals whose quantised factor leaves no texel visible"],
+        1
+    );
+    let mesh = w.get::<Mesh>(set).expect("the set's mesh");
+    assert_eq!(mesh.primitives().len(), 2, "a primitive per factor");
+    let mut factors = Vec::new();
+    for p in mesh.primitives() {
+        let material = p.material.expect("material");
+        let pbr = w.get::<PbrMaterial>(material).expect("pbr");
+        assert_eq!(pbr.alpha_mode, AlphaMode::Blend);
+        assert_eq!(DrawOrder::of(&w, material).layer, DrawLayer::Decal);
+        assert!(!p.streams.contains_key(&Semantic::Color(0)));
+        // its alpha worked from the mask's blue at one of the two factors: 255 / 255 (fade 0), or 178 / 255 (the f32
+        // fade 0.3: (1 - 0.30000001) 255 = 178.49999, rounded)
+        let base = w
+            .get::<Texture>(pbr.base_color_texture.as_ref().expect("base").texture)
+            .expect("texture");
+        let texels = base.levels[0].as_chunks::<4>().0;
+        let matches = |q: f64| {
+            texels.iter().enumerate().all(|(t, texel)| {
+                let a = f64::from(mask_texels[t * 4 + 2]) / 255.0 * q;
+                texel[3] == if a >= CUTOFF { (a * 255.0).round() as u8 } else { 0 }
+            })
+        };
+        assert!(matches(1.0) || matches(178.0 / 255.0));
+        factors.push(matches(1.0));
+    }
+    factors.sort_unstable();
+    assert_eq!(factors, [false, true], "one material at each factor");
+    assert_eq!(DrawOrder::of(&w, road).layer, DrawLayer::Decal);
 }

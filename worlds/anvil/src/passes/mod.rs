@@ -10,7 +10,7 @@ mod splat;
 mod water;
 mod world_uv;
 pub use bake::{BakeAnvilMaterial, gbuffer_pixel_key};
-pub use decals::{Family, FamilyRule, LowerAnvilDecals, family};
+pub use decals::{Family, FamilyRule, LowerAnvilDecals, TerrainDecals, family};
 pub use material::{AlphaChoice, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo, world_uv_rows};
 pub use splat::{Splat, SplatUv};
 pub use water::{LowerAnvilWater, Shore};
@@ -2196,6 +2196,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("family", "write-gbuffer-roughness"),
             ("cutoff", "0.4"),
             ("lift", "0.01"),
+            ("terrain-family", "out"),
         ],
     );
     reg.register_requiring(

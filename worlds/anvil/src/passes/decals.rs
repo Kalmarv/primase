@@ -1,12 +1,12 @@
 //! `lower-anvil-decals{rect=x0,y0,x1,y1,step=N,range=METRES,offset=METRES,sample=corner|centre,
-//! family=write-gbuffer-roughness,cutoff=X,lift=UNITS}`:
+//! family=write-gbuffer-roughness,cutoff=X,lift=UNITS,terrain-family=out|blend[,terrain-steps=N]}`:
 //! the deferred decals ([`AnvilDeferredDecals`]) of the box family (`ddecal.hlsl` PS 381 with VS 382, material-spec
-//! §23) become meshes draped on the ground `lower-anvil-terrain` draws with the same `rect`, `step`, `range`, `offset`
+//! §23), and of the terrain family where `terrain-family=blend`, become meshes draped on the ground `lower-anvil-terrain` draws with the same `rect`, `step`, `range`, `offset`
 //! and `sample` (run before it, while the terrain is read). Each value is the engine's, read, or a stated choice:
 //!
 //! - **Which** (stated): the decals whose box's centre lies in `rect` (x0 <= x < x1, y0 <= y < y1), of a DDecalModel
-//!   of the box family by `family`'s rule; the terrain family (PS 353: the engine writes those into the terrain's
-//!   bake, not the G-buffer) and models without a Diffuse, Normal or Mask1 left out, counted. Which permutation a
+//!   of the box family by `family`'s rule (the terrain family's too with `terrain-family=blend`, else left out,
+//!   counted); models without a Diffuse, Normal or Mask1 left out, counted. Which permutation a
 //!   model draws with isn't read (the engine's selector wasn't found): `family=write-gbuffer-roughness` states the
 //!   rule [`family`] (material-spec §23.8, §23.9: body byte 49 is the model's `WriteGBufferRoughness`, by the class
 //!   registry; 1 on the 17 models whose names and textures are road lines, cracks, tire traces and guidance, 0 on the
@@ -30,18 +30,28 @@
 //!   have: the same test exactly, `cutoff` standing for `ref / scale` (0.4 by §23.5's fit; neither constant's
 //!   binding is read). A decal whose `(1 - fade) m` is under `cutoff` passes the test at no texel (Mask1.B at most 1):
 //!   left out, counted; so `k` is at least `cutoff` and the material's cutoff at most 1.
+//! - **The terrain family** (PS 353, 349 and 373, executed in §23.9: the engine writes them into the terrain's bake
+//!   tiles, blended by `alpha = Mask1.B (1 - fade) m` where that reaches the cutoff): with `terrain-family=blend` each
+//!   is draped as the box family's, its material blended (glTF's blend has no cutoff, and the factor varies per
+//!   decal): one material per model and factor quantised to `1 / terrain-steps` (the fades are f32 noise around 0 on
+//!   most), its alpha `Mask1.B q` where that reaches `cutoff`, else 0, baked per texel; its colour, roughness and
+//!   normal map the box family's. Its displacement and Mask1's red and green (the bake's data layers) are left out.
+//!   Reported as approximate: the quantised factor, the cut per texel (the engine cuts the filtered alpha), and the
+//!   blend over the ground (the engine's into its bake).
+//! - **Draw order**: every decal material is drawn in the decal layer (`core.draw_order`), after the alpha-tested
+//!   surfaces (queue 2500, the convention): what a consumer draws over the surface beneath.
 //!
 //! Left out, counted: the decals' angle test (its threshold `cb3[4].z` not read), the terrain-mask colour term
 //! (`k = t18.z`, `cb0[49].x`, not read: taken 0), the Height maps (read only by parallax permutations, which models
 //! select those not read), decals on props (the ground alone is draped).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
 use primase_core::{
-    ColorSpace, Component, Entity, Instance, Mesh, Name, NormalBasis, NormalConvention, NormalGreen, NormalX,
-    NormalZ, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology, World,
+    ColorSpace, Component, DrawLayer, DrawOrder, Entity, Instance, Mesh, Name, NormalBasis, NormalConvention,
+    NormalGreen, NormalX, NormalZ, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology, World,
 };
 
 use super::{CellPoint, GroundGrid, ground_options, local_origin, placed_at};
@@ -61,6 +71,17 @@ pub struct LowerAnvilDecals {
     pub cutoff: f64,
     /// How far the decals lie above the ground, along the source's up (source units).
     pub lift: f64,
+    /// What the terrain family's decals become.
+    pub terrain: TerrainDecals,
+}
+
+/// What `lower-anvil-decals` does with the terrain family's decals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerrainDecals {
+    /// Left out, counted.
+    Out,
+    /// Blended over the ground, their factors quantised to `1 / steps`.
+    Blend { steps: u32 },
 }
 
 /// Which `ddecal.hlsl` family a DDecalModel draws with.
@@ -94,8 +115,20 @@ impl LowerAnvilDecals {
     /// `lower-anvil-terrain` it lies on), `family`, `cutoff` and `lift`.
     pub fn from_options(o: &Options) -> Result<LowerAnvilDecals, String> {
         let usage = "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES, sample=corner|centre (the ground's, as \
-                     lower-anvil-terrain's), family=write-gbuffer-roughness, cutoff=X (ref / scale), lift=UNITS";
-        let g = ground_options(o, &["range", "family", "cutoff", "lift"], usage)?;
+                     lower-anvil-terrain's), family=write-gbuffer-roughness, cutoff=X (ref / scale), lift=UNITS, \
+                     terrain-family=out|blend (with terrain-steps=N)";
+        let g = ground_options(
+            o,
+            &[
+                "range",
+                "family",
+                "cutoff",
+                "lift",
+                "terrain-family",
+                "terrain-steps",
+            ],
+            usage,
+        )?;
         let number = |k: &str| -> Result<f64, String> {
             let v: f64 = o
                 .get(k)
@@ -117,6 +150,27 @@ impl LowerAnvilDecals {
         if range <= 0.0 {
             return Err(format!("range {range}: above 0"));
         }
+        let terrain = match o.get("terrain-family").map(String::as_str) {
+            Some("out") => {
+                if o.contains_key("terrain-steps") {
+                    return Err("terrain-steps is only taken with terrain-family=blend".into());
+                }
+                TerrainDecals::Out
+            }
+            Some("blend") => {
+                let steps: u32 = o
+                    .get("terrain-steps")
+                    .ok_or_else(|| format!("terrain-steps is required with terrain-family=blend: {usage}"))?
+                    .parse()
+                    .map_err(|_| "terrain-steps is a whole number".to_owned())?;
+                if !(1..=65535).contains(&steps) {
+                    return Err(format!("terrain-steps {steps}: 1 to 65535"));
+                }
+                TerrainDecals::Blend { steps }
+            }
+            Some(v) => return Err(format!("terrain-family={v} is not out or blend")),
+            None => return Err(format!("terrain-family is required: {usage}")),
+        };
         Ok(LowerAnvilDecals {
             rect: g.rect,
             step: g.step,
@@ -126,6 +180,7 @@ impl LowerAnvilDecals {
             family,
             cutoff: number("cutoff")?,
             lift: number("lift")?,
+            terrain,
         })
     }
 }
@@ -250,22 +305,37 @@ fn drape(d: &DeferredDecal, g: &GroundGrid<'_>) -> Result<Vec<([P; 3], P)>, Stri
     Ok(out)
 }
 
-/// A model's material and its alpha divisor `k`.
-struct ModelMaterial {
-    material: Entity,
-    k: f64,
+/// How a decal material draws its alpha.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Draw {
+    /// The box family's: masked at `cutoff / k`, each decal's factor over `k` in its vertices' `COLOR_0` alpha.
+    Mask { k: f64 },
+    /// The terrain family's: blended, its alpha `Mask1.B q` where that reaches `cutoff`, else 0, baked into the texture.
+    Blend { q: f64 },
 }
 
+/// What a draped decal draws with: the box family's model material, or the terrain family's at a quantised factor
+/// (its index of `terrain-steps`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum DrawKey {
+    Box,
+    Terrain(u32),
+}
+
+/// The queue a decal material is given: after the alpha-tested surfaces, before the blended ones (the convention other
+/// readers' decals take; the engine's pass sequence draws its deferred decals after the opaque surfaces they cover).
+const DECAL_QUEUE: i32 = 2500;
+
 impl LowerAnvilDecals {
-    /// The model's material (on its own entity), its textures composed: base colour the Diffuse with the Mask1's blue
-    /// as alpha, roughness the Normal's alpha in green; its Normal marked as the decal's normal map. `Err` names why a
-    /// model can't be drawn.
+    /// A decal material on `target`, of the model `m`'s textures composed: base colour the Diffuse with its alpha
+    /// (`Mask1`'s blue, as `draw` takes it), roughness the Normal's alpha in green; its Normal marked as the decal's normal
+    /// map; drawn in the decal layer. `Err` names why a model can't be drawn.
     fn material(
         &self,
         w: &mut World,
-        e: Entity,
+        target: Entity,
         m: &AnvilDecalModel,
-        k: f64,
+        draw: Draw,
         log: &mut PassLog,
     ) -> Result<Entity, &'static str> {
         let [Some(diffuse), Some(normal), _, Some(mask)] = m.textures else {
@@ -295,12 +365,13 @@ impl LowerAnvilDecals {
         if (colour.width, colour.height) != (shape.width, shape.height) {
             return Err("decal models whose Diffuse and Mask1 differ in size");
         }
-        // the alpha the shader reads: Mask1's blue, made linear where it's viewed sRGB (to the nearest 8-bit value)
+        // the alpha the shader reads: Mask1's blue, made linear where it's viewed sRGB
         let blue = |b: u8| {
+            let x = f64::from(b) / 255.0;
             if mask_srgb {
-                (primase_image::srgb_to_linear(f64::from(b) / 255.0) * 255.0).round() as u8
+                primase_image::srgb_to_linear(x)
             } else {
-                b
+                x
             }
         };
         if mask_srgb {
@@ -309,12 +380,23 @@ impl LowerAnvilDecals {
                 1,
             );
         }
+        let alpha = |b: u8| -> u8 {
+            let a = match draw {
+                Draw::Mask { .. } => blue(b),
+                // the cut baked in: what passes keeps its blend weight, the rest is clear
+                Draw::Blend { q } => {
+                    let a = blue(b) * q;
+                    if a >= self.cutoff { a } else { 0.0 }
+                }
+            };
+            (a.clamp(0.0, 1.0) * 255.0).round() as u8
+        };
         let base: Vec<u8> = colour.levels[0]
             .as_chunks::<4>()
             .0
             .iter()
             .zip(shape.levels[0].as_chunks::<4>().0)
-            .flat_map(|(c, s)| [c[0], c[1], c[2], blue(s[2])])
+            .flat_map(|(c, s)| [c[0], c[1], c[2], alpha(s[2])])
             .collect();
         let roughness: Vec<u8> = rough.levels[0]
             .as_chunks::<4>()
@@ -359,20 +441,24 @@ impl LowerAnvilDecals {
             });
         }
         w.insert(
-            e,
+            target,
             PbrMaterial {
                 base_color_texture: Some(TextureRef::new(base_texture)),
                 metallic: 0.0,
                 roughness: 1.0,
                 metallic_roughness_texture: Some(TextureRef::new(rough_texture)),
                 normal_texture: Some(TextureRef::new(normal)),
-                alpha_mode: AlphaMode::Mask {
-                    cutoff: (self.cutoff / k) as f32,
+                alpha_mode: match draw {
+                    Draw::Mask { k } => AlphaMode::Mask {
+                        cutoff: (self.cutoff / k) as f32,
+                    },
+                    Draw::Blend { .. } => AlphaMode::Blend,
                 },
                 ..PbrMaterial::default()
             },
         );
-        Ok(e)
+        w.insert(target, DrawOrder::conventional(DrawLayer::Decal, DECAL_QUEUE));
+        Ok(target)
     }
 }
 
@@ -382,7 +468,7 @@ impl Pass for LowerAnvilDecals {
     }
     fn options(&self) -> Options {
         let [x0, y0, x1, y1] = self.rect;
-        Options::from([
+        let mut o = Options::from([
             ("rect".to_owned(), format!("{x0},{y0},{x1},{y1}")),
             ("step".to_owned(), self.step.to_string()),
             ("range".to_owned(), self.range.to_string()),
@@ -404,7 +490,17 @@ impl Pass for LowerAnvilDecals {
             ),
             ("cutoff".to_owned(), self.cutoff.to_string()),
             ("lift".to_owned(), self.lift.to_string()),
-        ])
+        ]);
+        match self.terrain {
+            TerrainDecals::Out => {
+                o.insert("terrain-family".to_owned(), "out".to_owned());
+            }
+            TerrainDecals::Blend { steps } => {
+                o.insert("terrain-family".to_owned(), "blend".to_owned());
+                o.insert("terrain-steps".to_owned(), steps.to_string());
+            }
+        }
+        o
     }
     fn requires(&self) -> &[&'static str] {
         &[AnvilDeferredDecals::NAME, AnvilTerrain::NAME]
@@ -413,6 +509,7 @@ impl Pass for LowerAnvilDecals {
         &[
             Mesh::NAME,
             PbrMaterial::NAME,
+            DrawOrder::NAME,
             Texture::NAME,
             Instance::NAME,
             primase_core::Transform::NAME,
@@ -427,7 +524,7 @@ impl Pass for LowerAnvilDecals {
     }
     fn approximates(&self) -> &'static str {
         "deferred decals draped on the ground alone, lifted by a stated height; their angle test and terrain-mask \
-         colour term left out"
+         colour term left out; the terrain family blended over the ground at quantised factors"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         // the terrains, set aside while the world changes (lower-anvil-terrain lowers them after)
@@ -444,12 +541,12 @@ impl Pass for LowerAnvilDecals {
     }
 }
 
-/// A set's drawn decals: its entity, model, frame and each decal draped.
+/// A set's drawn decals: its entity, model, frame and each decal draped with what it draws with.
 struct DrapedSet {
     set: Entity,
     model: Entity,
     frame: primase_core::frame::SourceFrame,
-    decals: Vec<(DeferredDecal, Draped)>,
+    decals: Vec<(DeferredDecal, Draped, DrawKey)>,
 }
 
 impl LowerAnvilDecals {
@@ -498,34 +595,54 @@ impl LowerAnvilDecals {
                 continue;
             };
             let FamilyRule::WriteGBufferRoughness = self.family;
-            match family(&m) {
-                Some(Family::Box) => {}
-                Some(Family::Terrain) => {
+            let terrain_family = match (family(&m), self.terrain) {
+                (Some(Family::Box), _) => false,
+                (Some(Family::Terrain), TerrainDecals::Blend { .. }) => true,
+                (Some(Family::Terrain), TerrainDecals::Out) => {
                     log.omit(
                         "deferred decals of the terrain family (PS 353: the terrain's bake)",
                         inside.len() as u64,
                     );
                     continue;
                 }
-                None => {
+                (None, _) => {
                     log.omit(
                         "deferred decals of a model of neither family",
                         inside.len() as u64,
                     );
                     continue;
                 }
-            }
+            };
             let mut decals = Vec::new();
             for d in inside {
-                let alpha = (1.0 - f64::from(d.fade)) * f64::from(m.opacity);
-                // even a texel of Mask1.B 1 fails the test (B (1 - fade) m >= cutoff): the engine draws none of it
-                if alpha < self.cutoff || alpha <= 0.0 {
-                    log.omit(
-                        "deferred decals whose fade leaves no texel visible ((1 - fade) m under the cutoff)",
-                        1,
-                    );
-                    continue;
-                }
+                let factor = (1.0 - f64::from(d.fade)) * f64::from(m.opacity);
+                // what it draws with; even a texel of Mask1.B 1 fails the test where the factor is under the cutoff:
+                // the engine draws none of it
+                let key = match self.terrain {
+                    TerrainDecals::Blend { steps } if terrain_family => {
+                        let index = (factor * f64::from(steps)).round().max(0.0);
+                        // in range of u32: at most steps times the factor's bound
+                        let q = index / f64::from(steps);
+                        if q < self.cutoff || q <= 0.0 {
+                            log.omit(
+                                "terrain-family decals whose quantised factor leaves no texel visible",
+                                1,
+                            );
+                            continue;
+                        }
+                        DrawKey::Terrain(index as u32)
+                    }
+                    _ => {
+                        if factor < self.cutoff || factor <= 0.0 {
+                            log.omit(
+                                "deferred decals whose fade leaves no texel visible ((1 - fade) m under the cutoff)",
+                                1,
+                            );
+                            continue;
+                        }
+                        DrawKey::Box
+                    }
+                };
                 let [cx, cy] = [f64::from(d.centre[0]), f64::from(d.centre[1])];
                 let Some(g) = grids.iter().find(|g| {
                     let (gx0, gx1) = (g.x_of(g.columns[0]), g.x_of(g.columns[g.columns.len() - 1]));
@@ -546,7 +663,14 @@ impl LowerAnvilDecals {
                         1,
                     );
                 }
-                decals.push((*d, Draped { triangles, alpha }));
+                decals.push((
+                    *d,
+                    Draped {
+                        triangles,
+                        alpha: factor,
+                    },
+                    key,
+                ));
             }
             if !decals.is_empty() {
                 draped.push(DrapedSet {
@@ -557,34 +681,64 @@ impl LowerAnvilDecals {
                 });
             }
         }
-        // each model's material, its k the greatest alpha factor of its drawn decals
+        // each material: the box family's per model, its k the greatest factor of its drawn decals; the terrain
+        // family's per model and quantised factor
         let mut ks: BTreeMap<Entity, f64> = BTreeMap::new();
+        let mut terrain_keys: BTreeSet<(Entity, u32)> = BTreeSet::new();
         for s in &draped {
-            for (_, d) in &s.decals {
-                let k = ks.entry(s.model).or_insert(0.0);
-                *k = k.max(d.alpha);
+            for (_, d, key) in &s.decals {
+                match key {
+                    DrawKey::Box => {
+                        let k = ks.entry(s.model).or_insert(0.0);
+                        *k = k.max(d.alpha);
+                    }
+                    DrawKey::Terrain(index) => {
+                        terrain_keys.insert((s.model, *index));
+                    }
+                }
             }
         }
-        let mut materials: BTreeMap<Entity, Option<ModelMaterial>> = BTreeMap::new();
+        // per (model, key): its material entity and the box family's k
+        let mut materials: BTreeMap<(Entity, DrawKey), Option<(Entity, f64)>> = BTreeMap::new();
         for (&model, &k) in &ks {
             let Some(m) = w.get::<AnvilDecalModel>(model).cloned() else {
                 continue;
             };
-            let made = match self.material(w, model, &m, k, log) {
-                Ok(material) => Some(ModelMaterial { material, k }),
+            let made = match self.material(w, model, &m, Draw::Mask { k }, log) {
+                Ok(material) => Some((material, k)),
                 Err(why) => {
                     log.omit(why, 1);
                     None
                 }
             };
-            materials.insert(model, made);
+            materials.insert((model, DrawKey::Box), made);
         }
-        // every model read is consumed: drawn as its material, or left out
+        if let TerrainDecals::Blend { steps } = self.terrain {
+            for &(model, index) in &terrain_keys {
+                let Some(m) = w.get::<AnvilDecalModel>(model).cloned() else {
+                    continue;
+                };
+                let q = f64::from(index) / f64::from(steps);
+                let target = w.spawn();
+                if let Some(Name(name)) = w.get::<Name>(model).cloned() {
+                    w.insert(target, Name(format!("{name} at {q}")));
+                }
+                let made = match self.material(w, target, &m, Draw::Blend { q }, log) {
+                    Ok(material) => Some((material, q)),
+                    Err(why) => {
+                        log.omit(why, 1);
+                        None
+                    }
+                };
+                materials.insert((model, DrawKey::Terrain(index)), made);
+            }
+        }
+        // every model read is consumed: drawn as its materials, or left out
         let models: Vec<Entity> = w.iter::<AnvilDecalModel>().map(|(e, _)| e).collect();
         for e in models {
             w.remove::<AnvilDecalModel>(e);
         }
-        let (mut drawn, mut triangles_drawn, mut sets_drawn) = (0u64, 0u64, 0u64);
+        let (mut drawn, mut terrain_drawn, mut triangles_drawn, mut sets_drawn) = (0u64, 0u64, 0u64, 0u64);
         for DrapedSet {
             set: e,
             model,
@@ -592,82 +746,108 @@ impl LowerAnvilDecals {
             decals,
         } in draped
         {
-            let Some(Some(mm)) = materials.get(&model) else {
-                log.omit("deferred decals whose model can't be drawn", decals.len() as u64);
-                continue;
-            };
             let flip = frame.flips_winding();
-            let (mut positions, mut normals, mut tangents, mut uvs, mut colours, mut indices) = (
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            );
-            for (d, piece) in &decals {
-                let (c, x, y) = (
-                    d.centre.map(f64::from),
-                    d.axis_x.map(f64::from),
-                    d.axis_y.map(f64::from),
+            // a primitive per material the set's decals draw with
+            let mut groups: BTreeMap<DrawKey, Vec<(DeferredDecal, Draped)>> = BTreeMap::new();
+            for (d, piece, key) in decals {
+                groups.entry(key).or_default().push((d, piece));
+            }
+            let mut primitives = Vec::new();
+            let mut all_positions: Vec<[f32; 3]> = Vec::new();
+            for (key, group) in groups {
+                let Some(Some((material, k))) = materials.get(&(model, key)) else {
+                    log.omit("deferred decals whose model can't be drawn", group.len() as u64);
+                    continue;
+                };
+                let (mut positions, mut normals, mut tangents, mut uvs, mut colours, mut indices) = (
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
                 );
-                let (xx, yy) = (dot(x, x), dot(y, y));
-                // the window packed as the engine packs it (f32 arithmetic, truncated)
-                let [offset, width] = d.window;
-                let lo = f64::from(((offset + width / 2.0) * 65535.0).trunc());
-                let hi = f64::from((width / 2.0 * 65535.0).trunc());
-                let tangent = unit(x).map(|v| -v);
-                let alpha = (piece.alpha / mm.k) as f32;
-                for (tri, n) in &piece.triangles {
-                    // the bitangent's sign: cross(N, T) w along -Y^
-                    let mut sign = if dot(cross(*n, tangent), y) < 0.0 {
-                        1.0
-                    } else {
-                        -1.0
+                for (d, piece) in &group {
+                    let (c, x, y) = (
+                        d.centre.map(f64::from),
+                        d.axis_x.map(f64::from),
+                        d.axis_y.map(f64::from),
+                    );
+                    let (xx, yy) = (dot(x, x), dot(y, y));
+                    // the window packed as the engine packs it (f32 arithmetic, truncated)
+                    let [offset, width] = d.window;
+                    let lo = f64::from(((offset + width / 2.0) * 65535.0).trunc());
+                    let hi = f64::from((width / 2.0 * 65535.0).trunc());
+                    let tangent = unit(x).map(|v| -v);
+                    let alpha = match key {
+                        DrawKey::Box => (piece.alpha / k) as f32,
+                        DrawKey::Terrain(_) => 1.0,
                     };
-                    if flip {
-                        sign = -sign;
+                    for (tri, n) in &piece.triangles {
+                        // the bitangent's sign: cross(N, T) w along -Y^
+                        let mut sign = if dot(cross(*n, tangent), y) < 0.0 {
+                            1.0
+                        } else {
+                            -1.0
+                        };
+                        if flip {
+                            sign = -sign;
+                        }
+                        let first = u32::try_from(positions.len()).map_err(|_| "too many decal vertices")?;
+                        for p in tri {
+                            let (lx, ly) = (dot(sub(*p, c), x) / xx, dot(sub(*p, c), y) / yy);
+                            uvs.push([((lo - hi * lx) / 65536.0) as f32, (0.5 + ly / 2.0) as f32]);
+                            positions.push(frame.point([
+                                p[0] as f32,
+                                p[1] as f32,
+                                (p[2] + self.lift) as f32,
+                            ]));
+                            normals.push(frame.direction(n.map(|v| v as f32)));
+                            let t = frame.direction(tangent.map(|v| v as f32));
+                            tangents.push([t[0], t[1], t[2], sign]);
+                            colours.push([1.0, 1.0, 1.0, alpha]);
+                        }
+                        indices.extend(if flip {
+                            [first, first + 2, first + 1]
+                        } else {
+                            [first, first + 1, first + 2]
+                        });
                     }
-                    let first = u32::try_from(positions.len()).map_err(|_| "too many decal vertices")?;
-                    for p in tri {
-                        let (lx, ly) = (dot(sub(*p, c), x) / xx, dot(sub(*p, c), y) / yy);
-                        uvs.push([((lo - hi * lx) / 65536.0) as f32, (0.5 + ly / 2.0) as f32]);
-                        positions.push(frame.point([p[0] as f32, p[1] as f32, (p[2] + self.lift) as f32]));
-                        normals.push(frame.direction(n.map(|v| v as f32)));
-                        let t = frame.direction(tangent.map(|v| v as f32));
-                        tangents.push([t[0], t[1], t[2], sign]);
-                        colours.push([1.0, 1.0, 1.0, alpha]);
-                    }
-                    indices.extend(if flip {
-                        [first, first + 2, first + 1]
-                    } else {
-                        [first, first + 1, first + 2]
-                    });
+                    triangles_drawn += piece.triangles.len() as u64;
                 }
-                triangles_drawn += piece.triangles.len() as u64;
-            }
-            drawn += decals.len() as u64;
-            let origin = local_origin(&positions);
-            for p in &mut positions {
-                *p = std::array::from_fn(|k| p[k] - origin[k]);
-            }
-            let mut streams = BTreeMap::new();
-            streams.insert(Semantic::Position, Stream::F32x3(positions));
-            streams.insert(Semantic::Normal, Stream::F32x3(normals));
-            streams.insert(Semantic::Tangent, Stream::F32x4(tangents));
-            streams.insert(Semantic::TexCoord(0), Stream::F32x2(uvs));
-            if colours.iter().any(|c| c[3] != 1.0) {
-                streams.insert(Semantic::Color(0), Stream::F32x4(colours));
-            }
-            w.insert(
-                e,
-                Mesh::new(vec![Primitive {
+                match key {
+                    DrawKey::Box => drawn += group.len() as u64,
+                    DrawKey::Terrain(_) => terrain_drawn += group.len() as u64,
+                }
+                all_positions.extend(&positions);
+                let mut streams = BTreeMap::new();
+                streams.insert(Semantic::Position, Stream::F32x3(positions));
+                streams.insert(Semantic::Normal, Stream::F32x3(normals));
+                streams.insert(Semantic::Tangent, Stream::F32x4(tangents));
+                streams.insert(Semantic::TexCoord(0), Stream::F32x2(uvs));
+                if colours.iter().any(|c| c[3] != 1.0) {
+                    streams.insert(Semantic::Color(0), Stream::F32x4(colours));
+                }
+                primitives.push(Primitive {
                     topology: Topology::Triangles,
                     streams,
                     indices: Some(indices),
-                    material: Some(mm.material),
-                }]),
-            );
+                    material: Some(*material),
+                });
+            }
+            if primitives.is_empty() {
+                continue;
+            }
+            // the set's vertices local to its origin
+            let origin = local_origin(&all_positions);
+            for p in &mut primitives {
+                if let Some(Stream::F32x3(v)) = p.streams.get_mut(&Semantic::Position) {
+                    for q in v.iter_mut() {
+                        *q = std::array::from_fn(|k| q[k] - origin[k]);
+                    }
+                }
+            }
+            w.insert(e, Mesh::new(primitives));
             let placed = w.spawn();
             w.insert(
                 placed,
@@ -685,16 +865,29 @@ impl LowerAnvilDecals {
         }
         if drawn > 0 {
             log.count("deferred decals drawn", drawn);
+        }
+        if terrain_drawn > 0 {
+            log.count("terrain-family decals drawn", terrain_drawn);
+            log.approximate(
+                "terrain-family decals blended over the ground, their factor to 1/terrain-steps and their cut baked per \
+                 texel (the engine blends them into the terrain's bake and cuts the filtered alpha)",
+                terrain_drawn,
+            );
+        }
+        if drawn + terrain_drawn > 0 {
             log.count("deferred decal sets drawn", sets_drawn);
             log.count("deferred decal triangles", triangles_drawn);
             log.count(
-                "deferred decal models drawn",
+                "deferred decal materials",
                 materials.values().filter(|m| m.is_some()).count() as u64,
             );
-            log.approximate("deferred decals draped on the ground alone, lifted", drawn);
+            log.approximate(
+                "deferred decals draped on the ground alone, lifted",
+                drawn + terrain_drawn,
+            );
             log.omit(
                 "deferred decals' angle test (its threshold not read) and terrain-mask colour term (not read: 0)",
-                drawn,
+                drawn + terrain_drawn,
             );
         }
         Ok(())
