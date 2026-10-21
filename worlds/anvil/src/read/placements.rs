@@ -22,7 +22,8 @@
 //!
 //! Collision: each RigidBodyComponent's shape (the reference at its offset 748) is placed once at its owner's T R, as
 //! a prototype holding the shape's collision in the owner's local frame; an EntityGroup's (a merged shape spanning
-//! its instances, the notes find) likewise. MeshShapes are read; other shape types are counted
+//! its instances, the notes find) likewise. MeshShapes, SphereShapes, CapsuleShapes and BoxShapes (at their own
+//! transform) are read, a ReferenceListShape placing each child at its transform in the list; another type is counted
 //! ([`Placed::shapes_unread`]), and so are the RigidBodies of instanced Entities and of owners with a scale other than
 //! 1, whose placement isn't established ([`Placed::instanced_collision`], [`Placed::scaled_collision`]).
 
@@ -31,7 +32,9 @@ use std::collections::{BTreeMap, HashMap};
 use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
-use crate::components::{AnvilDataLayers, AnvilLods, AnvilMaterialOverrides, AnvilMesh};
+use crate::components::{
+    AnvilCollisionShape, AnvilDataLayers, AnvilLods, AnvilMaterialOverrides, AnvilMesh, ShapeGeometry,
+};
 use crate::read::archive::{Archive, At};
 use crate::read::entity::{
     ComponentBody, ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, Slot, StoredEntity,
@@ -41,6 +44,10 @@ use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use crate::read::mesh::{MESH, StoredMesh};
 use crate::read::mesh_shape::{MESH_SHAPE, MeshShape};
 use crate::read::meshes::anvil_mesh;
+use crate::read::shape::{
+    BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE, StoredBox, StoredCapsule,
+    StoredReferenceList, StoredSphere,
+};
 use crate::read::shapes::anvil_mesh_shape;
 
 /// Why an Entity can't be placed.
@@ -84,6 +91,12 @@ pub enum Error {
     },
     #[error(transparent)]
     Shapes(#[from] crate::read::shapes::Error),
+    #[error("{at:?}: {source}")]
+    ShapeBody {
+        at: At,
+        #[source]
+        source: crate::read::shape::Error,
+    },
 }
 
 /// What an instanced Visual places at each instance: the caller's stated choice, as whether the game draws an
@@ -152,6 +165,9 @@ fn compose(outer: &Transform, inner: &Transform) -> Transform {
     }
 }
 
+/// A shape's parts: each a collision prototype and its transform within the shape's owner, if any.
+type Parts = Vec<(Entity, Option<Transform>)>;
+
 /// An object's mesh levels, each `(level, the entity holding its AnvilMesh)`, finest first (a Mesh: its level 0).
 type Levels = Vec<(u8, Entity)>;
 
@@ -216,20 +232,29 @@ fn shows(v: &Visual, at: At) -> Result<Shows, Error> {
 #[derive(Debug)]
 pub struct Placer<'a> {
     archive: &'a mut Archive,
+    /// The world placed into: the prototypes kept below are its entities.
+    world: &'a mut World,
     frame: SourceFrame,
     instanced: InstancedLevels,
     /// Per object id: its mesh levels (`None`: not a LODSelector or Mesh, none of its levels a Mesh, or in no forge).
     objects: HashMap<u64, Option<Levels>>,
     /// Per object id: the prototype placing every mesh level.
     wholes: HashMap<u64, Entity>,
-    /// Per shape id: the prototype holding its collision (`None`: a type not read, or in no forge).
-    shapes: HashMap<u64, Option<Entity>>,
+    /// Per shape id: what it places (see [`Placer::shape`]).
+    shapes: HashMap<u64, Result<Parts, u32>>,
 }
 
 impl<'a> Placer<'a> {
-    pub fn new(archive: &'a mut Archive, frame: SourceFrame, instanced: InstancedLevels) -> Placer<'a> {
+    /// A placer reading through `archive` into `world`.
+    pub fn new(
+        archive: &'a mut Archive,
+        world: &'a mut World,
+        frame: SourceFrame,
+        instanced: InstancedLevels,
+    ) -> Placer<'a> {
         Placer {
             archive,
+            world,
             frame,
             instanced,
             objects: HashMap::new(),
@@ -238,42 +263,112 @@ impl<'a> Placer<'a> {
         }
     }
 
-    /// The collision prototype of the shape `id` names, read once: a MeshShape's [`AnvilMeshShape`](crate::components::AnvilMeshShape)
-    /// in the frame meshes are read in (the shape is in its owner's local frame, as its meshes are: the Riders
-    /// Republic notes find the owner's stored bounds holding mesh and shape under s R on 213 of 213 and 218 of 218).
-    /// Other shape types are counted in `placed`.
-    fn shape(&mut self, w: &mut World, id: u64, placed: &mut Placed) -> Result<Option<Entity>, Error> {
-        if let Some(&p) = self.shapes.get(&id) {
-            if p.is_none() {
-                let kind = self
-                    .archive
-                    .find(id)
-                    .and_then(|at| self.archive.forge(at.forge)?.names.get(at.entry))
-                    .map_or(0, |n| n.type_id);
-                *placed.shapes_unread.entry(kind).or_default() += 1;
+    /// The world placed into.
+    pub fn world(&self) -> &World {
+        self.world
+    }
+
+    /// What the shape `id` names places, read once: each part a prototype holding collision in its owner's local frame
+    /// (the Riders Republic notes find the owner's stored bounds holding mesh and shape under s R on 213 of 213 and 218
+    /// of 218) and its transform within the owner, if any. A MeshShape's
+    /// [`AnvilMeshShape`](crate::components::AnvilMeshShape); a SphereShape's or CapsuleShape's [`AnvilCollisionShape`];
+    /// a BoxShape's, at its own transform; a ReferenceListShape's children, each at its transform in the list. `Err`
+    /// holds the type of a shape not read (0: an id in no forge), counted in `placed` for every body naming it.
+    fn shape(&mut self, id: u64, placed: &mut Placed) -> Result<Result<Parts, u32>, Error> {
+        let parts = match self.shapes.get(&id) {
+            Some(parts) => parts.clone(),
+            None => {
+                let parts = self.read_shape(id, placed)?;
+                self.shapes.insert(id, parts.clone());
+                parts
             }
-            return Ok(p);
+        };
+        if let Err(kind) = parts {
+            *placed.shapes_unread.entry(kind).or_default() += 1;
         }
+        Ok(parts)
+    }
+
+    /// The parts of the shape `id` names (see [`Placer::shape`]).
+    fn read_shape(&mut self, id: u64, placed: &mut Placed) -> Result<Result<Parts, u32>, Error> {
         let Some(at) = self.archive.find(id) else {
-            *placed.shapes_unread.entry(0).or_default() += 1;
-            self.shapes.insert(id, None);
-            return Ok(None);
+            return Ok(Err(0));
         };
         let r = self.archive.resource(at)?;
-        if r.type_id != MESH_SHAPE {
-            *placed.shapes_unread.entry(r.type_id).or_default() += 1;
-            self.shapes.insert(id, None);
-            return Ok(None);
-        }
-        let shape = MeshShape::parse(&r.body).map_err(|source| Error::Shape { at, source })?;
-        let component = anvil_mesh_shape(&shape, at.entry, id, self.frame)?;
-        let e = w.spawn();
+        let frame = self.frame;
+        let shape_err = |source| Error::ShapeBody { at, source };
+        let scale = frame.metres_per_unit() as f32;
+        let xyz = |v: [f32; 4]| [v[0], v[1], v[2]];
+        let (geometry, material, local) = match r.type_id {
+            MESH_SHAPE => {
+                let shape = MeshShape::parse(&r.body).map_err(|source| Error::Shape { at, source })?;
+                let component = anvil_mesh_shape(&shape, at.entry, id, frame)?;
+                let e = self.prototype(at);
+                self.world.insert(e, component);
+                return Ok(Ok(vec![(e, None)]));
+            }
+            SPHERE_SHAPE => {
+                let s = StoredSphere::parse(&r.body).map_err(shape_err)?;
+                let geometry = ShapeGeometry::Sphere {
+                    centre: frame.point(xyz(s.centre)),
+                    radius: s.radius * scale,
+                };
+                (geometry, s.material, None)
+            }
+            CAPSULE_SHAPE => {
+                let s = StoredCapsule::parse(&r.body).map_err(shape_err)?;
+                let geometry = ShapeGeometry::Capsule {
+                    a: frame.point(xyz(s.a)),
+                    b: frame.point(xyz(s.b)),
+                    radius: s.radius * scale,
+                };
+                (geometry, s.material, None)
+            }
+            BOX_SHAPE => {
+                let s = StoredBox::parse(&r.body).map_err(shape_err)?;
+                let geometry = ShapeGeometry::Box {
+                    half_extents: frame.direction(xyz(s.half_extents)).map(|v| v.abs() * scale),
+                };
+                (geometry, s.material, Some(transform(&s.matrix, 1.0)))
+            }
+            REFERENCE_LIST_SHAPE => {
+                let list = StoredReferenceList::parse(&r.body).map_err(shape_err)?;
+                let mut parts = Vec::new();
+                for (child, m) in list.children.iter().zip(&list.matrices) {
+                    let within = transform(m, 1.0);
+                    match self.shape(child.id, placed)? {
+                        Ok(child_parts) => parts.extend(
+                            child_parts
+                                .into_iter()
+                                .map(|(e, local)| (e, Some(local.map_or(within, |l| compose(&within, &l))))),
+                        ),
+                        Err(kind) => return Ok(Err(kind)),
+                    }
+                }
+                return Ok(Ok(parts));
+            }
+            kind => return Ok(Err(kind)),
+        };
+        let e = self.prototype(at);
+        self.world.insert(
+            e,
+            AnvilCollisionShape {
+                entry: u32::try_from(at.entry).unwrap_or(u32::MAX),
+                index_id: id,
+                geometry,
+                material: material.map(|m| m.id),
+            },
+        );
+        Ok(Ok(vec![(e, local)]))
+    }
+
+    /// A new entity named for the entry at `at`.
+    fn prototype(&mut self, at: At) -> Entity {
+        let e = self.world.spawn();
         if let Some(name) = self.name(at) {
-            w.insert(e, Name(name));
+            self.world.insert(e, Name(name));
         }
-        w.insert(e, component);
-        self.shapes.insert(id, Some(e));
-        Ok(Some(e))
+        e
     }
 
     /// The name of the entry at `at`, if its forge names it.
@@ -285,18 +380,19 @@ impl<'a> Placer<'a> {
     }
 
     /// An entity holding the AnvilMesh of the Mesh at `at`, whose body is `body` and ClassID `id`.
-    fn mesh(&mut self, w: &mut World, at: At, body: &[u8], id: u64) -> Result<Entity, Error> {
+    fn mesh(&mut self, at: At, body: &[u8], id: u64) -> Result<Entity, Error> {
         let stored = StoredMesh::parse(body).map_err(|source| Error::Mesh { at, source })?;
-        let e = w.spawn();
+        let e = self.world.spawn();
         if let Some(name) = self.name(at) {
-            w.insert(e, Name(name));
+            self.world.insert(e, Name(name));
         }
-        w.insert(e, anvil_mesh(&stored, at.entry, id, self.frame)?);
+        self.world
+            .insert(e, anvil_mesh(&stored, at.entry, id, self.frame)?);
         Ok(e)
     }
 
     /// The mesh levels of the object `id` names, read once.
-    fn levels(&mut self, w: &mut World, id: u64, placed: &mut Placed) -> Result<Option<Levels>, Error> {
+    fn levels(&mut self, id: u64, placed: &mut Placed) -> Result<Option<Levels>, Error> {
         if let Some(levels) = self.objects.get(&id) {
             return Ok(levels.clone());
         }
@@ -305,7 +401,7 @@ impl<'a> Placer<'a> {
             Some(at) => {
                 let r = self.archive.resource(at)?;
                 match r.type_id {
-                    MESH => Some(vec![(0, self.mesh(w, at, &r.body, id)?)]),
+                    MESH => Some(vec![(0, self.mesh(at, &r.body, id)?)]),
                     LOD_SELECTOR => {
                         let s =
                             StoredLodSelector::parse(&r.body).map_err(|source| Error::Lod { at, source })?;
@@ -320,7 +416,7 @@ impl<'a> Placer<'a> {
                             };
                             match mesh {
                                 Some((m, r)) if r.type_id == MESH => {
-                                    levels.push((level, self.mesh(w, m, &r.body, reference.id)?));
+                                    levels.push((level, self.mesh(m, &r.body, reference.id)?));
                                 }
                                 _ => placed.impostor_levels = placed.impostor_levels.saturating_add(1),
                             }
@@ -337,7 +433,7 @@ impl<'a> Placer<'a> {
 
     /// The prototype placing every one of `levels` (the object `id`'s): the finest's mesh entity where it is the only
     /// one, else an entity holding a copy of its AnvilMesh and the others as [`AnvilLods`].
-    fn whole(&mut self, w: &mut World, id: u64, levels: &[(u8, Entity)]) -> Option<Entity> {
+    fn whole(&mut self, id: u64, levels: &[(u8, Entity)]) -> Option<Entity> {
         if let Some(&p) = self.wholes.get(&id) {
             return Some(p);
         }
@@ -345,14 +441,14 @@ impl<'a> Placer<'a> {
         let p = if forms.is_empty() {
             own
         } else {
-            let p = w.spawn();
+            let p = self.world.spawn();
             if let Some(name) = self.archive.find(id).and_then(|at| self.name(at)) {
-                w.insert(p, Name(name));
+                self.world.insert(p, Name(name));
             }
-            if let Some(mesh) = w.get::<AnvilMesh>(own).cloned() {
-                w.insert(p, mesh);
+            if let Some(mesh) = self.world.get::<AnvilMesh>(own).cloned() {
+                self.world.insert(p, mesh);
             }
-            w.insert(
+            self.world.insert(
                 p,
                 AnvilLods {
                     detail,
@@ -365,9 +461,9 @@ impl<'a> Placer<'a> {
         Some(p)
     }
 
-    /// The Entity or EntityGroup at `at` placed into `w`: one placement per Visual with something to show, or per
+    /// The Entity or EntityGroup at `at` placed into the world: one placement per Visual with something to show, or per
     /// instance. A group's own Visuals place as an Entity's (it is an Entity's body and its member list).
-    pub fn place(&mut self, w: &mut World, at: At, placed: &mut Placed) -> Result<(), Error> {
+    pub fn place(&mut self, at: At, placed: &mut Placed) -> Result<(), Error> {
         let r = self.archive.resource(at)?;
         let (e, group) = match r.type_id {
             ENTITY => (
@@ -394,7 +490,7 @@ impl<'a> Placer<'a> {
         for v in e.visuals() {
             let shows = shows(v, at)?;
             let found = match v.object {
-                Some(object) => self.levels(w, object.id, placed)?.map(|l| (object.id, l)),
+                Some(object) => self.levels(object.id, placed)?.map(|l| (object.id, l)),
                 None => None,
             };
             let Some((object, levels)) = found else {
@@ -403,7 +499,7 @@ impl<'a> Placer<'a> {
             };
             let (prototype, transforms, overrides) = match shows.instances {
                 None => {
-                    let Some(p) = self.whole(w, object, &levels) else {
+                    let Some(p) = self.whole(object, &levels) else {
                         placed.visuals_skipped = placed.visuals_skipped.saturating_add(1);
                         continue;
                     };
@@ -419,7 +515,7 @@ impl<'a> Placer<'a> {
                     let every = self.instanced == InstancedLevels::Selector;
                     let (prototype, overrides) = match (every, levels.first()) {
                         (true, Some(&(finest, _))) if finest == level => {
-                            (self.whole(w, object, &levels).unwrap_or(mesh), shows.overrides)
+                            (self.whole(object, &levels).unwrap_or(mesh), shows.overrides)
                         }
                         (true, _) => {
                             return Err(Error::Instances(
@@ -443,18 +539,18 @@ impl<'a> Placer<'a> {
                 }
             };
             for t in transforms {
-                let p = w.spawn();
-                w.insert(p, Name(name.clone()));
-                w.insert(
+                let p = self.world.spawn();
+                self.world.insert(p, Name(name.clone()));
+                self.world.insert(
                     p,
                     Instance {
                         prototype,
                         variant: 0,
                     },
                 );
-                w.insert(p, self.frame.transform(&t));
+                self.world.insert(p, self.frame.transform(&t));
                 if !overrides.is_empty() {
-                    w.insert(
+                    self.world.insert(
                         p,
                         AnvilMaterialOverrides {
                             levels: overrides.clone(),
@@ -462,7 +558,7 @@ impl<'a> Placer<'a> {
                     );
                 }
                 if let Some(layers) = &layers {
-                    w.insert(p, layers.clone());
+                    self.world.insert(p, layers.clone());
                 }
                 placed.placements.push(p);
             }
@@ -493,23 +589,27 @@ impl<'a> Placer<'a> {
                 placed.scaled_collision = placed.scaled_collision.saturating_add(1);
                 continue;
             }
-            let Some(prototype) = self.shape(w, shape.id, placed)? else {
+            let Ok(parts) = self.shape(shape.id, placed)? else {
                 continue;
             };
-            let p = w.spawn();
-            w.insert(p, Name(name.clone()));
-            w.insert(
-                p,
-                Instance {
-                    prototype,
-                    variant: 0,
-                },
-            );
-            w.insert(p, self.frame.transform(&transform(&e.matrix, 1.0)));
-            if let Some(layers) = &layers {
-                w.insert(p, layers.clone());
+            let owner = transform(&e.matrix, 1.0);
+            for (prototype, local) in parts {
+                let p = self.world.spawn();
+                self.world.insert(p, Name(name.clone()));
+                self.world.insert(
+                    p,
+                    Instance {
+                        prototype,
+                        variant: 0,
+                    },
+                );
+                let t = local.map_or(owner, |l| compose(&owner, &l));
+                self.world.insert(p, self.frame.transform(&t));
+                if let Some(layers) = &layers {
+                    self.world.insert(p, layers.clone());
+                }
+                placed.collisions.push(p);
             }
-            placed.collisions.push(p);
         }
         Ok(())
     }

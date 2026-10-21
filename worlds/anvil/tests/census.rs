@@ -122,6 +122,10 @@ use primase_anvil::read::material::{
 use primase_anvil::read::mesh::{Layout, MESH, StoredMesh};
 use primase_anvil::read::mesh_shape::{MESH_SHAPE, MeshShape};
 use primase_anvil::read::mip::{COMPILED_MIP, StoredMip};
+use primase_anvil::read::shape::{
+    BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE, StoredBox, StoredCapsule,
+    StoredReferenceList, StoredSphere,
+};
 use primase_anvil::read::shapes::MAX_RECORD;
 use primase_anvil::read::template::{self, MATERIAL_TEMPLATE};
 use primase_anvil::read::texture::{self, StoredTextureMap};
@@ -131,7 +135,11 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// The kinds read, by their type ids.
-const KINDS: [(u32, &str); 13] = [
+const KINDS: [(u32, &str); 17] = [
+    (SPHERE_SHAPE, "SphereShape"),
+    (CAPSULE_SHAPE, "CapsuleShape"),
+    (BOX_SHAPE, "BoxShape"),
+    (REFERENCE_LIST_SHAPE, "ReferenceListShape"),
     (ENTITY, "Entity"),
     (ENTITY_GROUP, "EntityGroup"),
     (GRID_PARTITION, "GridPartition"),
@@ -601,6 +609,42 @@ fn census_forge(
                     ));
                     for v in g.entity.visuals() {
                         tally.outcome(format!("Visual head {:02x?}", v.head));
+                    }
+                })
+                .map_err(|e| e.to_string()),
+            SPHERE_SHAPE => StoredSphere::parse(&r.body)
+                .map(|x| {
+                    tally.outcome(if x.material.is_some() {
+                        "with a CollisionMaterial"
+                    } else {
+                        "without"
+                    })
+                })
+                .map_err(|e| e.to_string()),
+            CAPSULE_SHAPE => StoredCapsule::parse(&r.body)
+                .map(|x| {
+                    tally.outcome(if x.material.is_some() {
+                        "with a CollisionMaterial"
+                    } else {
+                        "without"
+                    })
+                })
+                .map_err(|e| e.to_string()),
+            BOX_SHAPE => StoredBox::parse(&r.body)
+                .map(|x| tally.outcome(format!("byte {:#04x}", x.byte)))
+                .map_err(|e| e.to_string()),
+            REFERENCE_LIST_SHAPE => StoredReferenceList::parse(&r.body)
+                .map(|x| {
+                    for c in &x.children {
+                        tally.outcome(match forge.find(c.id).map(|k| forge.names[k].type_id) {
+                            Some(0xB22B_3E61) => "child: a MeshShape",
+                            Some(SPHERE_SHAPE) => "child: a SphereShape",
+                            Some(CAPSULE_SHAPE) => "child: a CapsuleShape",
+                            Some(BOX_SHAPE) => "child: a BoxShape",
+                            Some(REFERENCE_LIST_SHAPE) => "child: a ReferenceListShape",
+                            Some(_) => "child: another type",
+                            None => "child: an id in no entry of this forge",
+                        });
                     }
                 })
                 .map_err(|e| e.to_string()),

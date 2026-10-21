@@ -14,6 +14,7 @@ pub mod meshes;
 pub mod mip;
 pub mod placements;
 pub mod reference;
+pub mod shape;
 pub mod shapes;
 pub mod template;
 pub mod terrain;

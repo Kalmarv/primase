@@ -257,3 +257,37 @@ impl Component for AnvilTerrain {
         u64::try_from(bytes).unwrap_or(u64::MAX)
     }
 }
+
+/// A collision primitive's geometry in its owner's local frame, converted through the frame the reader was given.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ShapeGeometry {
+    Sphere {
+        centre: [f32; 3],
+        radius: f32,
+    },
+    /// The segment `a`-`b` swept by `radius`.
+    Capsule {
+        a: [f32; 3],
+        b: [f32; 3],
+        radius: f32,
+    },
+    /// Centred on its placement's origin, along its axes (a BoxShape's own transform is in its placement's).
+    Box {
+        half_extents: [f32; 3],
+    },
+}
+
+/// A SphereShape, CapsuleShape or BoxShape on its prototype (`anvil.collision_shape`): its geometry and its
+/// CollisionMaterial's ClassID as stored. `entry` and `index_id` name the forge entry it came from.
+/// `lower-anvil-shapes` makes core colliders of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilCollisionShape {
+    pub entry: u32,
+    pub index_id: u64,
+    pub geometry: ShapeGeometry,
+    pub material: Option<u64>,
+}
+
+impl Component for AnvilCollisionShape {
+    const NAME: &'static str = "anvil.collision_shape";
+}

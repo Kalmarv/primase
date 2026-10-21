@@ -5,12 +5,16 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::pbr::{PbrMaterial, TextureRef, Wrap};
 use primase_core::world::Resource;
+use primase_core::{Collider, Shape};
 use primase_core::{
     Collision, ColorSpace, Component, Entity, Instance, LodForm, Lods, Mesh, Primitive, Semantic, Stream,
     Surfaces, TexFormat, TexRole, Texture, Topology, Transform, World,
 };
 
-use crate::components::{AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape, AnvilTerrain, TerrainTile};
+use crate::components::{
+    AnvilCollisionShape, AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape, AnvilTerrain, ShapeGeometry,
+    TerrainTile,
+};
 
 /// `lower-anvil-collision{surface=NAME}`: every MeshShape's geometry ([`AnvilMeshShape`]) becomes `core.collision` on
 /// its prototype, every triangle of the surface `surface` names (unclassified: what a MeshShape's surfaces are isn't
@@ -80,6 +84,76 @@ impl Pass for LowerAnvilCollision {
                 &format!("collision triangles of surface {}", self.surface),
                 triangles as u64,
             );
+        }
+        w.insert_resource(surfaces);
+        Ok(())
+    }
+}
+
+/// `lower-anvil-shapes`: every SphereShape, CapsuleShape and BoxShape ([`AnvilCollisionShape`]) becomes a core
+/// collider of that shape, its surface the one `surface` names (what a CollisionMaterial is as a surface isn't
+/// lowered here yet).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LowerAnvilShapes {
+    pub surface: String,
+}
+
+impl LowerAnvilShapes {
+    /// From its options: `surface`, required.
+    pub fn from_options(o: &Options) -> Result<LowerAnvilShapes, String> {
+        LowerAnvilCollision::from_options(o).map(|c| LowerAnvilShapes { surface: c.surface })
+    }
+}
+
+impl Pass for LowerAnvilShapes {
+    fn name(&self) -> &'static str {
+        "lower-anvil-shapes"
+    }
+    fn options(&self) -> Options {
+        Options::from([("surface".to_owned(), self.surface.clone())])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[AnvilCollisionShape::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[Collider::NAME, Surfaces::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[Surfaces::NAME]
+    }
+    fn removes(&self) -> &[&'static str] {
+        &[AnvilCollisionShape::NAME]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let shapes: Vec<Entity> = w.iter::<AnvilCollisionShape>().map(|(e, _)| e).collect();
+        if shapes.is_empty() {
+            return Ok(());
+        }
+        let mut surfaces = w.remove_resource::<Surfaces>().unwrap_or_default();
+        let surface = surfaces.index(&self.surface).map_err(|e| e.to_string())?;
+        for e in shapes {
+            let Some(s) = w.remove::<AnvilCollisionShape>(e) else {
+                continue;
+            };
+            let (shape, what) = match s.geometry {
+                ShapeGeometry::Sphere { centre, radius } => (
+                    Shape::Sphere {
+                        center: centre,
+                        radius,
+                    },
+                    "spheres",
+                ),
+                ShapeGeometry::Capsule { a, b, radius } => (Shape::Capsule { a, b, radius }, "capsules"),
+                ShapeGeometry::Box { half_extents } => (
+                    Shape::Box {
+                        center: [0.0; 3],
+                        half_extents,
+                    },
+                    "boxes",
+                ),
+            };
+            w.insert(e, Collider { shape, surface });
+            log.count(&format!("collision {what} lowered"), 1);
         }
         w.insert_resource(surfaces);
         Ok(())
@@ -873,6 +947,11 @@ pub fn register(reg: &mut PassRegistry) {
     reg.register_requiring(
         "lower-anvil-collision",
         |o| Ok(Box::new(LowerAnvilCollision::from_options(o)?)),
+        &[("surface", "rr-diagnostic-unknown")],
+    );
+    reg.register_requiring(
+        "lower-anvil-shapes",
+        |o| Ok(Box::new(LowerAnvilShapes::from_options(o)?)),
         &[("surface", "rr-diagnostic-unknown")],
     );
     reg.register("lower-anvil-lods", |_| Ok(Box::new(LowerAnvilLods)));

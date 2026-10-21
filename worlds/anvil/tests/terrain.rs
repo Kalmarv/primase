@@ -170,9 +170,14 @@ fn the_campus_placements_stand_on_the_ground() {
     let listed: Vec<At> = block.objects.iter().filter_map(|o| archive.find(o.id)).collect();
     let mut w = World::new();
     let mut placed = Placed::default();
-    let mut placer = Placer::new(&mut archive, SourceFrame::WORLD, InstancedLevels::Selector);
+    let mut placer = Placer::new(
+        &mut archive,
+        &mut w,
+        SourceFrame::WORLD,
+        InstancedLevels::Selector,
+    );
     for at in listed {
-        let _ = placer.place(&mut w, at, &mut placed);
+        let _ = placer.place(at, &mut placed);
     }
     let layer = of(&archive, 1, TERRAIN_NODE_LAYER);
     let rect = [-3648.0, 1088.0, -3392.0, 1344.0];
