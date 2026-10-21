@@ -83,6 +83,7 @@ use primase_core::{
 };
 use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, srgb_to_linear};
 
+use super::formulas::{Rough, metalness, occlusion, roughness, sat, tinted};
 use crate::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialValue};
 
 /// How the alpha channel is drawn: the program's statement.
@@ -160,41 +161,6 @@ impl LowerAnvilMaterial {
             shader_uv,
         })
     }
-}
-
-/// `S(x) = x x (3 - 2 x)`.
-fn smooth(x: f64) -> f64 {
-    x * x * (3.0 - 2.0 * x)
-}
-
-fn sat(x: f64) -> f64 {
-    x.clamp(0.0, 1.0)
-}
-
-/// The notes' HSV tint `T(c; h, s, v)`: to HSV, hue shifted (wrapping), saturation and value offset (clamped), back.
-fn tint(c: [f64; 3], dh: f64, ds: f64, dv: f64) -> [f64; 3] {
-    let [r, g, b] = c;
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let d = max - min;
-    let h = if d == 0.0 {
-        0.0
-    } else if max == r {
-        ((g - b) / d) / 6.0
-    } else if max == g {
-        (2.0 + (b - r) / d) / 6.0
-    } else {
-        (4.0 + (r - g) / d) / 6.0
-    };
-    let s = if max > 0.0 { d / max } else { 0.0 };
-    let h = (h + dh).rem_euclid(1.0);
-    let (s, v) = (sat(s + ds), sat(max + dv));
-    let hue = [
-        (6.0 * h - 3.0).abs() - 1.0,
-        2.0 - (6.0 * h - 2.0).abs(),
-        2.0 - (6.0 * h - 4.0).abs(),
-    ];
-    hue.map(|x| ((sat(x) - 1.0) * s + 1.0) * v)
 }
 
 /// A texel's channels as the shader samples them: red, green and blue made linear where the texture is sampled as
@@ -1182,8 +1148,8 @@ fn base_colour(
     tint_mask: Option<Entity>,
     opacity: Option<Entity>,
 ) -> Result<Entity, String> {
-    let tinted = hsl != [0.0; 3];
-    if !tinted && opacity.is_none() {
+    let tint_on = hsl != [0.0; 3];
+    if !tint_on && opacity.is_none() {
         set_colour(w, diffuse, TexRole::Color);
         return Ok(diffuse);
     }
@@ -1201,12 +1167,11 @@ fn base_colour(
     let opacity_image = opacity.map(|k| level_0(w, k)).transpose()?.flatten();
     made_texture(w, made, key, |w| {
         derived(w, diffuse, TexRole::Color, ColorSpace::Srgb, |t, c| {
-            let rgb = if tinted {
+            let rgb = if tint_on {
                 let m = mask_image
                     .as_ref()
                     .map_or(1.0, |(img, srgb)| sampled(nearest(img, t), *srgb)[0]);
-                let tc = tint([c[0], c[1], c[2]], hsl[0], hsl[1], hsl[2]);
-                [0, 1, 2].map(|k| c[k] + (tc[k] - c[k]) * m)
+                tinted([c[0], c[1], c[2]], m, hsl)
             } else {
                 [c[0], c[1], c[2]]
             };
@@ -1228,21 +1193,10 @@ fn occlusion_of(
 ) -> Result<Entity, String> {
     made_texture(w, made, (mask, "ao", [on.to_bits(), 0, 0, 0, 0]), |w| {
         derived(w, mask, TexRole::Mask, ColorSpace::Linear, |_, c| {
-            let ao = byte(1.0 + on * (c[2] - 1.0));
+            let ao = byte(occlusion(c[2], on));
             [ao, ao, ao, 255]
         })
     })
-}
-
-/// How a template makes roughness of its normal map's alpha `a`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Rough {
-    /// `a`.
-    Raw,
-    /// `S(sat(a + offset))` (Tex1, Decals1).
-    Offset(f64),
-    /// `S(sat((a + offset - 0.1) 1.25))` (Tex2).
-    Tex2(f64),
 }
 
 /// The metallic-roughness texture made of the normal map `n`'s blue and alpha: metalness `b * metal` (`b` where
@@ -1266,12 +1220,8 @@ fn metal_rough(
         (n, "mr", [bits(metal), bits(offset), curve, 0, 0]),
         |w| {
             derived(w, n, TexRole::Mask, ColorSpace::Linear, |_, c| {
-                let rough = match rough {
-                    Rough::Raw => c[3],
-                    Rough::Offset(o) => smooth(sat(c[3] + o)),
-                    Rough::Tex2(o) => smooth(sat((c[3] + o - 0.1) * 1.25)),
-                };
-                let metal = metal.map_or(c[2], |m| c[2] * m);
+                let rough = roughness(c[3], rough);
+                let metal = metalness(c[2], metal);
                 [255, byte(rough), byte(metal), 255]
             })
         },
@@ -1356,20 +1306,6 @@ fn set_normal(w: &mut World, e: Entity, n: NormalConvention) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_tint_with_no_offsets_returns_the_colour() {
-        for c in [[0.2, 0.5, 0.9], [1.0, 0.0, 0.0], [0.3, 0.3, 0.3], [0.0, 0.0, 0.0]] {
-            let t = tint(c, 0.0, 0.0, 0.0);
-            assert!((0..3).all(|k| (t[k] - c[k]).abs() < 1e-12), "{c:?} -> {t:?}");
-        }
-        // a full turn of hue is no change; pure red a third of a turn on is pure green
-        let t = tint([1.0, 0.0, 0.0], 1.0 / 3.0, 0.0, 0.0);
-        assert!(
-            (t[0]).abs() < 1e-12 && (t[1] - 1.0).abs() < 1e-12 && t[2].abs() < 1e-12,
-            "{t:?}"
-        );
-    }
 
     /// Against shader rows the notes read in the world snapshot (docs/material-spec.md §12.2): the translated one as
     /// stored, `(3.25, 0, -1.875 | 0, 1.7, -0.75)`, and a rotated combination (`su = sv = 30`, `t = 2.57`) by the

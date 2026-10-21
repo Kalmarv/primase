@@ -1,0 +1,427 @@
+//! The shader oracle: each template `lower-anvil-material` lowers has its own pixel shader run in primase-dxbc (the
+//! container its MaterialTemplate body holds, unmodified) on random inputs, and its outputs compared with the formulas
+//! the pass makes its textures of ([`primase_anvil::passes::formulas`]). The method is the Riders Republic notes'
+//! (docs/material-spec.md §8: uniform textures, chosen constants and interpolants, decoys in the constants the shader
+//! shouldn't read), the evaluator primase's own; the permutations are the notes' (their opaque G-buffer one per
+//! template). Each test asserts its largest differences under 1e-6 and prints them.
+
+use primase_anvil::passes::formulas::{Rough, metalness, occlusion, roughness, sat, tint, tinted};
+use primase_anvil::read::archive::{Archive, At};
+use primase_anvil::read::template;
+use primase_core::layered::height_blend;
+use primase_dxbc::Shader;
+use primase_shader::{PixelShader, Sample};
+use primase_testdata::real_data;
+
+/// A small deterministic generator (xorshift64*), so every run checks the same cases.
+struct Random(u64);
+
+impl Random {
+    fn next(&mut self) -> f64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        (self.0.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+    }
+    /// Uniform in `lo..hi`.
+    fn range(&mut self, lo: f64, hi: f64) -> f64 {
+        lo + (hi - lo) * self.next()
+    }
+    fn texel(&mut self) -> [f64; 4] {
+        [self.next(), self.next(), self.next(), self.next()]
+    }
+    /// `rows` rows of `cb3`, every lane a decoy; the test sets the ones its shader reads.
+    fn decoys(&mut self, rows: usize) -> Vec<[f64; 4]> {
+        (0..rows).map(|_| self.texel()).collect()
+    }
+}
+
+/// The pixel shader at body offset `offset` of the MaterialTemplate at entry `entry` of the forge file `forge`.
+fn shader(forge: &str, entry: usize, offset: usize) -> Option<Shader> {
+    let dir = real_data("PRIMASE_ANVIL_DIR")?;
+    let mut archive = Archive::open(&[dir.join(forge)]).expect("archive");
+    let body = archive.resource(At { forge: 0, entry }).expect("template").body;
+    let all = template::shaders(&body);
+    let (_, container) = all.iter().find(|(at, _)| *at == offset).unwrap_or_else(|| {
+        panic!(
+            "no container at {offset:#x}; at {:x?}",
+            all.iter().map(|(a, _)| a).collect::<Vec<_>>()
+        )
+    });
+    Some(Shader::parse_stripped(container).expect("the shader parses"))
+}
+
+fn bits(v: [f64; 4]) -> [u32; 4] {
+    v.map(|x| (x as f32).to_bits())
+}
+
+fn float(v: u32) -> f64 {
+    f64::from(f32::from_bits(v))
+}
+
+/// A scalar in a cb3 row's first lane, the rest decoys kept.
+fn set(cb3: &mut [[f64; 4]], row: usize, v: f64) {
+    cb3[row][0] = v;
+}
+
+/// Identity UV rows at `row` and `row + 1`.
+fn uv_rows(cb3: &mut [[f64; 4]], row: usize) {
+    cb3[row] = [1.0, 0.0, 0.0, 0.0];
+    cb3[row + 1] = [0.0, 1.0, 0.0, 0.0];
+}
+
+/// The shader's outputs for one case: uniform textures by slot, `cb3`'s rows, the vertex colour; every other
+/// constant buffer zeros (no LOD bias, no instance position), the frame inputs a fixed plausible frame.
+fn run(s: &Shader, textures: &[(u32, [f64; 4])], cb3: &[[f64; 4]], colour: [f64; 4]) -> Vec<[f64; 4]> {
+    let inputs: Vec<[u32; 4]> = s
+        .reflection()
+        .inputs
+        .iter()
+        .map(|i| match (i.name.as_str(), i.register) {
+            ("SV_Position", _) => bits([0.5, 0.5, 0.5, 1.0]),
+            ("COLOR", _) => bits(colour),
+            ("SV_IsFrontFace", _) => [u32::MAX; 4],
+            (_, 1) => bits([0.3, 0.6, 0.0, 0.0]),
+            (_, r) if r % 2 == 1 => bits([1.0, 0.0, 0.0, 0.0]),
+            _ => bits([0.0, 0.0, 1.0, 1.0]),
+        })
+        .collect();
+    let buffers: Vec<(u32, Vec<[u32; 4]>)> = s
+        .constant_buffers()
+        .iter()
+        .map(|&(slot, size)| {
+            let rows = (0..size as usize)
+                .map(|r| {
+                    if slot == 3 {
+                        cb3.get(r).copied().map_or([0; 4], bits)
+                    } else {
+                        [0; 4]
+                    }
+                })
+                .collect();
+            (slot, rows)
+        })
+        .collect();
+    let views: Vec<(u32, &[[u32; 4]])> = buffers.iter().map(|(s, v)| (*s, v.as_slice())).collect();
+    let mut sampler = |r: Sample| -> Result<[f32; 4], String> {
+        textures
+            .iter()
+            .find(|(t, _)| *t == r.texture)
+            .map(|(_, v)| v.map(|x| x as f32))
+            .ok_or_else(|| format!("t{} not given", r.texture))
+    };
+    s.execute(&inputs, &views, &mut sampler)
+        .expect("the shader runs")
+        .outputs
+        .into_iter()
+        .map(|o| o.map(float))
+        .collect()
+}
+
+/// The largest difference of each named quantity.
+#[derive(Default)]
+struct Worst(Vec<(&'static str, f64)>);
+
+impl Worst {
+    fn see(&mut self, what: &'static str, got: f64, want: f64) {
+        let d = (got - want).abs();
+        match self.0.iter_mut().find(|(w, _)| *w == what) {
+            Some((_, m)) => *m = m.max(d),
+            None => self.0.push((what, d)),
+        }
+    }
+    fn rgb(&mut self, what: &'static str, got: [f64; 4], want: [f64; 3]) {
+        for k in 0..3 {
+            self.see(what, got[k], want[k]);
+        }
+    }
+    /// Prints them, and asserts each under 1e-6.
+    fn check(&self, template: &str) {
+        println!("{template}: {:?}", self.0);
+        for (what, d) in &self.0 {
+            assert!(*d < 1e-6, "{template} {what}: {d}");
+        }
+    }
+}
+
+fn rgb(t: [f64; 4]) -> [f64; 3] {
+    [t[0], t[1], t[2]]
+}
+
+/// MAD_Tex1 (DataPC 61047, at 0x0B8247): t75 normal map, t76 diffuse, t77 mask; cb3[1..7] Metalness, Hue,
+/// Saturation, Luminosity, Roughness Offset, On Off AO, Vertex Color Intensity (0 or 1, the values the pass lowers);
+/// cb3[8..9] the UV rows. o0 = (albedo, roughness), o1.w metalness, o3.x AO.
+#[test]
+fn mad_tex1() {
+    let Some(s) = shader("DataPC.forge", 61047, 0x0B_8247) else {
+        return;
+    };
+    let mut r = Random(0x6104_7000_0B82_47);
+    let mut worst = Worst::default();
+    for case in 0..40 {
+        let (normal, diffuse, mask, colour) = (r.texel(), r.texel(), r.texel(), r.texel());
+        let (metal, offset, ao_on) = (r.next(), r.range(-0.5, 0.5), r.next());
+        let hsl = [r.range(-0.5, 0.5), r.range(-0.5, 0.5), r.range(-0.5, 0.5)];
+        let vci = f64::from(case % 2);
+        let mut cb3 = r.decoys(10);
+        for (row, v) in [metal, hsl[0], hsl[1], hsl[2], offset, ao_on, vci]
+            .into_iter()
+            .enumerate()
+        {
+            set(&mut cb3, row + 1, v);
+        }
+        uv_rows(&mut cb3, 8);
+        let out = run(&s, &[(75, normal), (76, diffuse), (77, mask)], &cb3, colour);
+        let albedo = tinted(rgb(diffuse), mask[0], hsl);
+        let factor = |k: usize| if vci == 1.0 { colour[k] } else { 1.0 };
+        worst.rgb("albedo", out[0], [0, 1, 2].map(|k| albedo[k] * factor(k)));
+        worst.see(
+            "roughness",
+            out[0][3],
+            roughness(normal[3], Rough::Offset(offset)),
+        );
+        worst.see("metalness", out[1][3], metalness(normal[2], Some(metal)));
+        worst.see("occlusion", out[3][0], occlusion(mask[2], ao_on));
+    }
+    worst.check("MAD_Tex1");
+}
+
+/// MAD_Fake (DataPC 62269, at 0x0436A1): t75 albedo, t76 normal map; no constants. o0 = (albedo, the normal map's
+/// alpha), o1.w its blue, o3.x 1.
+#[test]
+fn mad_fake() {
+    let Some(s) = shader("DataPC.forge", 62269, 0x04_36A1) else {
+        return;
+    };
+    let mut r = Random(0x6226_9000_0436_A1);
+    let mut worst = Worst::default();
+    for _ in 0..40 {
+        let (albedo, normal) = (r.texel(), r.texel());
+        let out = run(&s, &[(75, albedo), (76, normal)], &[], r.texel());
+        worst.rgb("albedo", out[0], rgb(albedo));
+        worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
+        worst.see("metalness", out[1][3], metalness(normal[2], None));
+        worst.see("occlusion", out[3][0], 1.0);
+    }
+    worst.check("MAD_Fake");
+}
+
+/// MAD_Decals1 (DataPC 42665, at 0x0405CC): t75 normal map, t76 diffuse; cb3[1] Metalness, [2..4] Hue, Saturation,
+/// Luminosity, [5] Roughness Offset (its CB3 6 rows). The tint unmasked.
+#[test]
+fn mad_decals1() {
+    let Some(s) = shader("DataPC.forge", 42665, 0x04_05CC) else {
+        return;
+    };
+    let mut r = Random(0x4266_5000_0405_CC);
+    let mut worst = Worst::default();
+    for _ in 0..40 {
+        let (normal, diffuse) = (r.texel(), r.texel());
+        let (metal, offset) = (r.next(), r.range(-0.5, 0.5));
+        let hsl = [r.range(-0.5, 0.5), r.range(-0.5, 0.5), r.range(-0.5, 0.5)];
+        let mut cb3 = r.decoys(6);
+        for (row, v) in [metal, hsl[0], hsl[1], hsl[2], offset].into_iter().enumerate() {
+            set(&mut cb3, row + 1, v);
+        }
+        let out = run(&s, &[(75, normal), (76, diffuse)], &cb3, r.texel());
+        worst.rgb("albedo", out[0], tinted(rgb(diffuse), 1.0, hsl));
+        worst.see(
+            "roughness",
+            out[0][3],
+            roughness(normal[3], Rough::Offset(offset)),
+        );
+        worst.see("metalness", out[1][3], metalness(normal[2], Some(metal)));
+    }
+    worst.check("MAD_Decals1");
+}
+
+/// MAD_Tex1_Wind (DataPC 62255, at 0x0B96A2): t75 normal map, t76 diffuse, t77 mask; cb3[1..13] the vertex shader's
+/// wind (decoys here), [14..16] Hue, Saturation, Luminosity, [17] On Off AO, [18] Translucency, [19..20] the UV rows.
+/// Roughness and metalness the normal map's alpha and blue raw.
+#[test]
+fn mad_tex1_wind() {
+    let Some(s) = shader("DataPC.forge", 62255, 0x0B_96A2) else {
+        return;
+    };
+    let mut r = Random(0x6225_5000_0B96_A2);
+    let mut worst = Worst::default();
+    for _ in 0..40 {
+        let (normal, diffuse, mask) = (r.texel(), r.texel(), r.texel());
+        let hsl = [r.range(-0.5, 0.5), r.range(-0.5, 0.5), r.range(-0.5, 0.5)];
+        let ao_on = r.next();
+        let mut cb3 = r.decoys(21);
+        for (row, v) in [hsl[0], hsl[1], hsl[2], ao_on].into_iter().enumerate() {
+            set(&mut cb3, row + 14, v);
+        }
+        uv_rows(&mut cb3, 19);
+        let out = run(&s, &[(75, normal), (76, diffuse), (77, mask)], &cb3, r.texel());
+        worst.rgb("albedo", out[0], tinted(rgb(diffuse), mask[0], hsl));
+        worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
+        worst.see("metalness", out[1][3], metalness(normal[2], None));
+        worst.see("occlusion", out[3][0], occlusion(mask[2], ao_on));
+    }
+    worst.check("MAD_Tex1_Wind");
+}
+
+/// MAD_Bark (USNAT 16714, at 0x052F93; layout B): t75 wind noise, t76 normal map, t77 diffuse, t78 mask; cb3[15]
+/// Metalness (read by no pixel shader), [16] On Off AO, [17] Wind Debug (0), [18..19] the UV rows. o0 = (albedo,
+/// the normal map's alpha), o1.w AO times the vertex alpha: 1 here, the factor the pass leaves out.
+#[test]
+fn mad_bark() {
+    let Some(s) = shader("DataPC_MAD_USNAT.forge", 16714, 0x05_2F93) else {
+        return;
+    };
+    let mut r = Random(0x1671_4000_052F_93);
+    let mut worst = Worst::default();
+    for _ in 0..40 {
+        let (noise, normal, diffuse, mask) = (r.texel(), r.texel(), r.texel(), r.texel());
+        let ao_on = r.next();
+        let mut cb3 = r.decoys(20);
+        set(&mut cb3, 16, ao_on);
+        cb3[17] = [0.0; 4];
+        uv_rows(&mut cb3, 18);
+        let colour = [r.next(), r.next(), r.next(), 1.0];
+        let out = run(
+            &s,
+            &[(75, noise), (76, normal), (77, diffuse), (78, mask)],
+            &cb3,
+            colour,
+        );
+        worst.rgb("albedo", out[0], rgb(diffuse));
+        worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
+        worst.see("occlusion", out[1][3], occlusion(mask[2], ao_on));
+    }
+    worst.check("MAD_Bark");
+}
+
+/// MAD_Tex1_Leaves (USNAT 16742, at 0x08E817; layout B): t75 wind noise, t76 normal map, t77 diffuse, t78 Mask 1;
+/// cb3[22] Saturate, [23] Hue, [25] Vertex AO, [26] Color Tint Debug (0: the tint everywhere), [27] On Off AO, [28]
+/// Luminosity, [32] Wind Debug (0), [33..34] the UV rows. Vertex AO at least 1, so `sat(COLOR0.a + Vertex AO)` is 1
+/// whatever the vertex alpha (the pass's claim); o1.w's vertex-alpha factor, which the pass leaves out, at alpha 1.
+#[test]
+fn mad_tex1_leaves() {
+    let Some(s) = shader("DataPC_MAD_USNAT.forge", 16742, 0x08_E817) else {
+        return;
+    };
+    let mut r = Random(0x1674_2000_08E8_17);
+    let mut worst = Worst::default();
+    for case in 0..40 {
+        let (noise, normal, diffuse, mask) = (r.texel(), r.texel(), r.texel(), r.texel());
+        let (saturation, hue, luminosity) = (r.range(-0.5, 0.5), r.range(-0.5, 0.5), r.range(-0.5, 0.5));
+        let (vertex_ao, ao_on) = (r.range(1.0, 2.0), r.next());
+        let mut cb3 = r.decoys(35);
+        for (row, v) in [
+            (22, saturation),
+            (23, hue),
+            (25, vertex_ao),
+            (26, 0.0),
+            (27, ao_on),
+            (28, luminosity),
+        ] {
+            set(&mut cb3, row, v);
+        }
+        cb3[32] = [0.0; 4];
+        uv_rows(&mut cb3, 33);
+        // the vertex alpha: any (albedo) on even cases, 1 (AO compared) on odd ones
+        let alpha = if case % 2 == 0 { r.next() } else { 1.0 };
+        let out = run(
+            &s,
+            &[(75, noise), (76, normal), (77, diffuse), (78, mask)],
+            &cb3,
+            [0.0, 0.0, 0.0, alpha],
+        );
+        worst.rgb("albedo", out[0], tint(rgb(diffuse), hue, saturation, luminosity));
+        worst.see("roughness (mask green)", out[0][3], mask[1]);
+        if alpha == 1.0 {
+            worst.see("occlusion", out[1][3], occlusion(mask[2], ao_on));
+        }
+    }
+    worst.check("MAD_Tex1_Leaves");
+}
+
+/// MAD_Clutters_Grass (USNAT 256868, at 0x054B67; layout B): t75 mask, t76 alpha, t77 diffuse, t78 normal map, t79
+/// the tint noise; cb3[1..9] the vertex shader's (decoys), [13] Value, [14] Saturation, [15] the noise tint's On-Off
+/// (0: the pass's exact case), [16] On Off AO, [17] Hue.
+#[test]
+fn mad_clutters_grass() {
+    let Some(s) = shader("DataPC_MAD_USNAT.forge", 256_868, 0x05_4B67) else {
+        return;
+    };
+    let mut r = Random(0x2568_6800_054B_67);
+    let mut worst = Worst::default();
+    for _ in 0..40 {
+        let (mask, alpha, diffuse, normal, noise) = (r.texel(), r.texel(), r.texel(), r.texel(), r.texel());
+        let ao_on = r.next();
+        let mut cb3 = r.decoys(18);
+        set(&mut cb3, 15, 0.0);
+        set(&mut cb3, 16, ao_on);
+        let out = run(
+            &s,
+            &[(75, mask), (76, alpha), (77, diffuse), (78, normal), (79, noise)],
+            &cb3,
+            r.texel(),
+        );
+        worst.rgb("albedo", out[0], rgb(diffuse));
+        worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
+        worst.see("occlusion", out[1][3], occlusion(mask[2], ao_on));
+    }
+    worst.check("MAD_Clutters_Grass");
+}
+
+/// MAD_Tex2 (WhiteRoom 211, at 0x07FD79): layers A = (t78 diffuse, t75 normal map, t80 mask) and B = (t76, t77,
+/// t79); cb3[1] Vertex Color Intensity (0: the pass doesn't lower it), [2] Height Contrast, [3] Alpha Offset, [4]
+/// Alpha Contrast, [5..7] and [8..10] the layers' HSL, [11..12] their Roughness Offsets, [13] On Off AO, [14..15] and
+/// [17..18] their UV rows. The weights the pass gives its LayeredMaterial: B `sat((a - 0.5) AC + 0.5 + AC AO)`, A one
+/// minus that, by the core height blend of the diffuses' alphas; each output their weighted sum.
+#[test]
+fn mad_tex2() {
+    let Some(s) = shader("DataPC_MAD_WhiteRoom.forge", 211, 0x07_FD79) else {
+        return;
+    };
+    let mut r = Random(0x0211_0000_07FD_79);
+    let mut worst = Worst::default();
+    for _ in 0..50 {
+        let (d_a, d_b, n_a, n_b, m_a, m_b) =
+            (r.texel(), r.texel(), r.texel(), r.texel(), r.texel(), r.texel());
+        let (contrast, alpha_offset, alpha_contrast) =
+            (r.range(0.1, 0.99), r.range(-0.5, 0.5), r.range(0.0, 4.0));
+        let hsl_a = [r.range(-0.2, 0.2), r.range(-0.3, 0.3), r.range(-0.2, 0.2)];
+        let hsl_b = [r.range(-0.2, 0.2), r.range(-0.3, 0.3), r.range(-0.2, 0.2)];
+        let (off_a, off_b, ao_on) = (r.range(-0.2, 0.2), r.range(-0.2, 0.2), r.next());
+        let colour = r.texel();
+        let mut cb3 = r.decoys(20);
+        let scalars = [0.0, contrast, alpha_offset, alpha_contrast];
+        for (row, v) in scalars
+            .into_iter()
+            .chain(hsl_a)
+            .chain(hsl_b)
+            .chain([off_a, off_b, ao_on])
+            .enumerate()
+        {
+            set(&mut cb3, row + 1, v);
+        }
+        uv_rows(&mut cb3, 14);
+        uv_rows(&mut cb3, 17);
+        let textures = [(75, n_a), (76, d_b), (77, n_b), (78, d_a), (79, m_b), (80, m_a)];
+        let out = run(&s, &textures, &cb3, colour);
+        let w = sat((colour[3] - 0.5) * alpha_contrast + 0.5 + alpha_contrast * alpha_offset);
+        let mapped = [1.0 - w, w, 0.0, 0.0].map(|x| x as f32);
+        let heights = [d_a[3], d_b[3], 0.0, 0.0].map(|x| x as f32);
+        let k = height_blend(mapped, heights, 2, contrast as f32).map(f64::from);
+        let (a, b) = (tinted(rgb(d_a), m_a[0], hsl_a), tinted(rgb(d_b), m_b[0], hsl_b));
+        worst.rgb("albedo", out[0], [0, 1, 2].map(|i| k[0] * a[i] + k[1] * b[i]));
+        let (ra, rb) = (
+            roughness(n_a[3], Rough::Tex2(off_a)),
+            roughness(n_b[3], Rough::Tex2(off_b)),
+        );
+        worst.see("roughness", out[0][3], k[0] * ra + k[1] * rb);
+        worst.see(
+            "metalness",
+            out[1][3],
+            k[0] * metalness(n_a[2], None) + k[1] * metalness(n_b[2], None),
+        );
+        let (oa, ob) = (occlusion(m_a[2], ao_on), occlusion(m_b[2], ao_on));
+        worst.see("occlusion", out[3][0], k[0] * oa + k[1] * ob);
+    }
+    worst.check("MAD_Tex2");
+}

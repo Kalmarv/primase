@@ -282,6 +282,38 @@ pub fn descriptors(body: &[u8]) -> Result<Vec<Descriptor>, Error> {
     }
 }
 
+/// The shader programs a template's body holds: each DXBC container, by the offset of its magic in the body, found
+/// by that magic and proven by its own stored checksum ([`primase_dxbc::checksum`]): a `DXBC` whose stated size
+/// runs past the body, or whose checksum isn't its bytes', isn't one (the bytes there are something else). The
+/// Riders Republic notes read 24 bytes before each (a hash, a u32, 0x7C7AC9C7 and the size: docs/material-spec.md
+/// §13.3); which material state selects which program isn't read.
+pub fn shaders(body: &[u8]) -> Vec<(usize, &[u8])> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    while let Some(found) = body
+        .get(at..)
+        .and_then(|rest| rest.windows(4).position(|w| w == b"DXBC"))
+    {
+        let start = at.saturating_add(found);
+        at = start.saturating_add(4);
+        let size = body
+            .get(start.saturating_add(24)..start.saturating_add(28))
+            .and_then(|w| w.try_into().ok())
+            .map(u32::from_le_bytes)
+            .and_then(|s| usize::try_from(s).ok());
+        let Some(container) = size.and_then(|s| body.get(start..start.checked_add(s)?)) else {
+            continue;
+        };
+        if container.len() >= 32
+            && primase_dxbc::checksum(container).as_ref().map(|c| c.as_slice()) == container.get(4..20)
+        {
+            out.push((start, container));
+            at = start.saturating_add(container.len());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, reason = "test fixtures built by hand")]
 mod tests {

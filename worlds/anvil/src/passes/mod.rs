@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+pub mod formulas;
 mod material;
 mod splat;
 pub use material::{AlphaChoice, LowerAnvilMaterial, ShaderUv};

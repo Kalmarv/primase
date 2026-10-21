@@ -20,6 +20,7 @@ primase-dxbc.workspace = true
 primase-testdata.workspace = true
 primase-meshops.workspace = true
 primase-texcodec.workspace = true
+primase-shader.workspace = true
 sha2.workspace = true
 serde_json.workspace = true
 
