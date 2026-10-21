@@ -2,6 +2,7 @@
 
 pub mod archive;
 pub mod data;
+pub mod ddecal;
 pub mod entity;
 pub mod floor;
 pub mod forge;

@@ -253,6 +253,57 @@ impl Component for AnvilMaterialOverrides {
     }
 }
 
+/// A DDecalModel on its own entity (`anvil.decal_model`, named as its entry): its Diffuse, Normal, Height and Mask1
+/// maps' textures (`None` where its reference is null or unread), its byte at 1, flags and parameters as stored
+/// (docs/entity-grammar.md §9.3).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilDecalModel {
+    pub textures: [Option<Entity>; 4],
+    pub byte: u8,
+    pub flags: [u8; 20],
+    pub parameters: Vec<u8>,
+}
+
+impl Component for AnvilDecalModel {
+    const NAME: &'static str = "anvil.decal_model";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.textures.iter().flatten());
+    }
+}
+
+/// One deferred decal: a projection box in the world (its two half-axes and its centre, in the source's frame; the
+/// owner's matrix not applied) and its atlas window (the record's f32 at 56 and 72), its 100-byte record as stored.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DeferredDecal {
+    pub axis_x: [f32; 3],
+    pub axis_y: [f32; 3],
+    pub centre: [f32; 3],
+    pub window: [f32; 2],
+    pub record: [u8; 100],
+}
+
+/// One DDecalStaticInstancers item's decals (`anvil.deferred_decals`, on an entity of its own): the frame the program
+/// states for their points, their DDecalModel's entity (`None` where it isn't read), the decals.
+/// `lower-anvil-decals` makes quads of them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilDeferredDecals {
+    pub frame: primase_core::frame::SourceFrame,
+    pub model: Option<Entity>,
+    pub decals: Vec<DeferredDecal>,
+}
+
+impl Component for AnvilDeferredDecals {
+    const NAME: &'static str = "anvil.deferred_decals";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn payload_bytes(&self) -> u64 {
+        u64::try_from(self.decals.len() * 144).unwrap_or(u64::MAX)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.model);
+    }
+}
+
 /// One WaterPatchDesc.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WaterPatch {

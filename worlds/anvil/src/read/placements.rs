@@ -34,11 +34,12 @@ use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{
-    AnvilCollisionShape, AnvilDataLayers, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh,
-    AnvilShaders, AnvilWater, CollisionMaterialRef, DataLayerAction, MaterialBinding, MaterialValue,
-    ShapeGeometry,
+    AnvilCollisionShape, AnvilDataLayers, AnvilDecalModel, AnvilDeferredDecals, AnvilLods, AnvilMaterial,
+    AnvilMaterialOverrides, AnvilMesh, AnvilShaders, AnvilWater, CollisionMaterialRef, DataLayerAction,
+    DeferredDecal, MaterialBinding, MaterialValue, ShapeGeometry,
 };
 use crate::read::archive::{Archive, At};
+use crate::read::ddecal::{DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, StoredDecalModel, StoredDeferredDecals};
 use crate::read::entity::{
     ComponentBody, ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, Slot, StoredEntity,
     StoredEntityGroup, Visual,
@@ -202,6 +203,10 @@ pub struct Placed {
     pub lakes: Vec<Entity>,
     /// WaterComponents whose body can't be read as a lake's (recorded in `refused` too, by the owner's ClassID).
     pub lakes_unread: u64,
+    /// The deferred decals: an entity per DDecalStaticInstancers item, holding its [`AnvilDeferredDecals`].
+    pub deferred_decals: Vec<Entity>,
+    /// HoudiniDecalInstancerComponents whose body can't be read (recorded in `refused` too).
+    pub deferred_decals_unread: u64,
 }
 
 /// The column-major 4x4 `m` as a transform, its linear part times `s`.
@@ -313,6 +318,8 @@ pub struct Placer<'a> {
     materials: HashMap<u64, Option<Entity>>,
     /// Per TextureMap id, its texture's entity.
     textures: HashMap<u64, Option<Entity>>,
+    /// Per DDecalModel id, its entity (`None`: not a DDecalModel, or not read).
+    decal_models: HashMap<u64, Option<Entity>>,
     /// Per object id: its mesh levels (`None`: not a LODSelector or Mesh, none of its levels a Mesh, or in no forge).
     objects: HashMap<u64, Option<Levels>>,
     /// Per object id: how many of its leading levels its LODSelector's dependencies fill.
@@ -369,6 +376,7 @@ impl<'a> Placer<'a> {
             shaders: HashMap::new(),
             materials: HashMap::new(),
             textures: HashMap::new(),
+            decal_models: HashMap::new(),
             objects: HashMap::new(),
             dependency_levels: HashMap::new(),
             wholes: HashMap::new(),
@@ -662,6 +670,48 @@ impl<'a> Placer<'a> {
     /// The entity holding the TextureMap `id` names, read once: a core texture of its levels (its CompiledMips', then
     /// its own), colour space linear and role other until a lowering states them, and its [`AnvilTextureMap`]. `None`
     /// where it isn't a TextureMap, its format code's codec isn't established, or it can't be read (recorded).
+    /// The entity holding the DDecalModel `id` names, read once: its [`AnvilDecalModel`], its textures read too.
+    /// `None` where it isn't a DDecalModel or can't be read (recorded in `placed`).
+    fn decal_model(&mut self, id: u64, placed: &mut Placed) -> Option<Entity> {
+        if let Some(&e) = self.decal_models.get(&id) {
+            return e;
+        }
+        let read = (|| -> Result<Option<Entity>, String> {
+            let Some(at) = self.archive.find(id) else {
+                return Ok(None);
+            };
+            let r = self.archive.resource(at).map_err(|e| e.to_string())?;
+            if r.type_id != DDECAL_MODEL {
+                return Ok(None);
+            }
+            let m = StoredDecalModel::parse(&r.body).map_err(|e| e.to_string())?;
+            let textures = m.textures.map(|t| t.and_then(|t| self.texture(t.id, placed)));
+            let e = self.world.spawn();
+            if let Some(name) = self.name(at) {
+                self.world.insert(e, Name(name));
+            }
+            self.world.insert(
+                e,
+                AnvilDecalModel {
+                    textures,
+                    byte: m.byte,
+                    flags: m.flags,
+                    parameters: m.parameters,
+                },
+            );
+            Ok(Some(e))
+        })();
+        let e = match read {
+            Ok(e) => e,
+            Err(why) => {
+                placed.refused.push((id, why));
+                None
+            }
+        };
+        self.decal_models.insert(id, e);
+        e
+    }
+
     fn texture(&mut self, id: u64, placed: &mut Placed) -> Option<Entity> {
         if let Some(&e) = self.textures.get(&id) {
             return e;
@@ -968,6 +1018,56 @@ impl<'a> Placer<'a> {
                 self.world.insert(lake, layers.clone());
             }
             placed.lakes.push(lake);
+        }
+        // deferred decals: each item of each HoudiniDecalInstancerComponent, on an entity of its own
+        for c in &e.components {
+            let ComponentBody::Raw(body) = &c.body else {
+                continue;
+            };
+            if c.kind != HOUDINI_DECAL_INSTANCER {
+                continue;
+            }
+            let stored = match StoredDeferredDecals::parse(body) {
+                Ok(stored) => stored,
+                Err(why) => {
+                    placed.deferred_decals_unread = placed.deferred_decals_unread.saturating_add(1);
+                    placed.refused.push((c.id, why.to_string()));
+                    continue;
+                }
+            };
+            for item in &stored.items {
+                let model = stored
+                    .models
+                    .get(item.model())
+                    .copied()
+                    .flatten()
+                    .and_then(|r| self.decal_model(r.id, placed));
+                let decals = item
+                    .decals
+                    .iter()
+                    .map(|d| DeferredDecal {
+                        axis_x: d.axis_x(),
+                        axis_y: d.axis_y(),
+                        centre: d.centre(),
+                        window: d.window(),
+                        record: d.0,
+                    })
+                    .collect();
+                let set = self.world.spawn();
+                self.world.insert(set, Name(name.clone()));
+                self.world.insert(
+                    set,
+                    AnvilDeferredDecals {
+                        frame: self.frame,
+                        model,
+                        decals,
+                    },
+                );
+                if let Some(layers) = &layers {
+                    self.world.insert(set, layers.clone());
+                }
+                placed.deferred_decals.push(set);
+            }
         }
         // collision: each RigidBodyComponent's shape at its owner's T R (an EntityGroup's merged shape spans its
         // instances: the notes, docs/skate-plan.md), where the owner's scale is 1; an instanced Entity's at each of its
