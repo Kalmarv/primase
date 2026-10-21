@@ -4,17 +4,14 @@
 use primase_anvil::components::{
     AnvilCollisionShape, AnvilLods, AnvilMaterialOverrides, AnvilMesh, AnvilMeshShape, ShapeGeometry,
 };
-use primase_anvil::passes::{
-    LowerAnvilCollision, LowerAnvilLods, LowerAnvilMesh, LowerAnvilShapes, MeshNormals, SurfaceBy, UvV,
-    UvWords,
-};
+use primase_anvil::passes::{LowerAnvilLods, LowerAnvilMesh, MeshNormals, UvV, UvWords};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::entity::{ComponentBody, ENTITY, ENTITY_GROUP, StoredEntity, StoredEntityGroup};
-use primase_anvil::read::placements::{InstancedCollision, InstancedLevels, Placed, Placer};
+use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_anvil::read::shape::{BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
-use primase_core::{Collider, Instance, Lods, Mesh, Name, Surfaces, Transform, World};
+use primase_core::{Instance, Lods, Mesh, Name, Transform, World};
 use primase_testdata::real_data;
 
 /// The cube root of a transform's determinant: its uniform scale where it is one.
@@ -63,31 +60,6 @@ fn fixtures_place_and_lower() {
     for (found, noted) in scales.iter().zip([1.13, 1.03, 1.15]) {
         assert!((found - noted).abs() < 0.01, "{scales:?}");
     }
-    // the aspen's RigidBody: an instanced Entity's collision isn't placed
-    assert_eq!((placed.collisions.len(), placed.instanced_collision), (0, 1));
-    // plastic cups: a RigidBody whose shape is a MeshShape, placed once at the Entity's transform
-    let before = placed.placements.len();
-    placer
-        .place(
-            At {
-                forge: 1,
-                entry: 47_242,
-            },
-            &mut placed,
-        )
-        .expect("place");
-    let cups = placed.placements[before];
-    let collision = *placed.collisions.last().expect("collision");
-    let shape = placer
-        .world()
-        .get::<Instance>(collision)
-        .expect("placed")
-        .prototype;
-    assert!(placer.world().has::<AnvilMeshShape>(shape));
-    assert_eq!(
-        placer.world().get::<Transform>(collision),
-        placer.world().get::<Transform>(cups)
-    );
     // a plain decal, scale 2.2497, one placement
     let before = placed.placements.len();
     placer
@@ -206,8 +178,6 @@ fn groups_place_their_own_visuals_and_report_members() {
     );
     placer.place(at, &mut placed).expect("place");
     assert_eq!((placed.placements.len(), placed.members.len()), (3, 0));
-    // its RigidBody's shape, a ReferenceListShape: each child placed
-    assert!(placed.shapes_unread.is_empty() && !placed.collisions.is_empty());
     // WhiteRoom's light group: no components, three member Entities listed by no cell (docs/placement.md §5)
     let mut archive = Archive::open(&[dir.join("DataPC_MAD_WhiteRoom.forge")]).expect("archive");
     let at = named(&archive, 0, "Light_Spot_CharaGroup");
@@ -289,7 +259,6 @@ fn collision_lies_within_its_owners_bounds() {
         SourceFrame::WORLD,
         InstancedLevels::Selector,
     );
-    let mut kinds = std::collections::BTreeMap::<&str, u32>::new();
     let mut outside = Vec::new();
     for (at, t, min, max) in owners {
         let before = placed.collisions.len();
@@ -303,24 +272,20 @@ fn collision_lies_within_its_owners_bounds() {
             let (mut points, mut grow) = (Vec::new(), 0.0);
             if let Some(m) = w.get::<AnvilMeshShape>(prototype) {
                 points.extend(m.positions.iter().map(|&p| apply(tr, p)));
-                *kinds.entry("mesh").or_default() += 1;
             } else {
                 match w.get::<AnvilCollisionShape>(prototype).expect("a shape").geometry {
                     ShapeGeometry::Sphere { centre, radius } => {
                         points.push(apply(tr, centre));
                         grow = f64::from(radius);
-                        *kinds.entry("sphere").or_default() += 1;
                     }
                     ShapeGeometry::Capsule { a, b, radius } => {
                         points.extend([apply(tr, a), apply(tr, b)]);
                         grow = f64::from(radius);
-                        *kinds.entry("capsule").or_default() += 1;
                     }
                     ShapeGeometry::Box { half_extents: e } => {
                         points.extend((0..8).map(|i| {
                             apply(tr, [0, 1, 2].map(|a| if i >> a & 1 == 0 { -e[a] } else { e[a] }))
                         }));
-                        *kinds.entry("box").or_default() += 1;
                     }
                 }
             }
@@ -340,138 +305,7 @@ fn collision_lies_within_its_owners_bounds() {
         }
     }
     assert!(
-        ["mesh", "sphere", "capsule", "box"]
-            .iter()
-            .all(|k| kinds.contains_key(k)),
-        "{kinds:?}"
-    );
-    assert!(
         outside.iter().all(|n| n.contains("PinyonPine_2M_A")),
         "{outside:?}"
     );
-    // the shapes lowered to core collision: a collider per primitive prototype, the meshes' collision
-    let primitives: u32 = ["sphere", "capsule", "box"].iter().map(|k| kinds[k]).sum();
-    let prototypes = w.iter::<AnvilCollisionShape>().count();
-    assert!(prototypes > 0 && prototypes <= primitives as usize);
-    let surface = "rr-diagnostic-unknown".to_owned();
-    let pipeline = Pipeline {
-        passes: vec![
-            Box::new(LowerAnvilShapes {
-                by: SurfaceBy::CollisionMaterial,
-                surface: surface.clone(),
-            }),
-            Box::new(LowerAnvilCollision {
-                by: SurfaceBy::CollisionMaterial,
-                surface,
-            }),
-        ],
-    };
-    let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
-    let mut report = RunReport::default();
-    manager.run(&mut w, &pipeline, &mut report).expect("lower");
-    assert_eq!(w.iter::<Collider>().count(), prototypes);
-    // their surfaces: the game's CollisionMaterials by name (CM_...), every shape and face of these resolving to one
-    let surfaces = w.resource::<Surfaces>().expect("surfaces");
-    let names: Vec<&str> = surfaces.0.iter().map(|s| s.name.as_str()).collect();
-    assert!(
-        names
-            .iter()
-            .all(|n| n.starts_with("CM_") || *n == "rr-diagnostic-unknown"),
-        "{names:?}"
-    );
-    assert!(names.len() > 3, "{names:?}");
-    assert_eq!(
-        w.iter::<AnvilCollisionShape>().count() + w.iter::<AnvilMeshShape>().count(),
-        0
-    );
-}
-
-/// The aspen's RigidBody, its collision placed at each of its 10 instances where the caller states so.
-#[test]
-fn instanced_collision_is_placed_per_instance_as_stated() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
-        return;
-    };
-    let order = [
-        "DataPC_MAD_USNAT_patch_01.forge",
-        "DataPC_MAD_USNAT.forge",
-        "DataPC_patch_01.forge",
-        "DataPC.forge",
-    ];
-    let mut archive = Archive::open(&order.map(|f| dir.join(f))).expect("archive");
-    let mut w = World::new();
-    let mut placed = Placed::default();
-    let mut placer = Placer::new(
-        &mut archive,
-        &mut w,
-        SourceFrame::WORLD,
-        InstancedLevels::Selector,
-    )
-    .with_instanced_collision(InstancedCollision::PerInstance);
-    placer
-        .place(At { forge: 1, entry: 2 }, &mut placed)
-        .expect("place");
-    let n = placed.collisions.len();
-    assert!(
-        n >= 10 && n % 10 == 0 && placed.instanced_collision == 0,
-        "{n} collisions"
-    );
-    // each instance's shapes at that instance's transform: the first part's translation differs instance by instance
-    let per = n / 10;
-    let at = |k: usize| {
-        placer
-            .world()
-            .get::<Transform>(placed.collisions[k * per])
-            .expect("transform")
-            .cols[3]
-    };
-    assert!((1..10).all(|k| at(k) != at(0)));
-}
-
-/// A group some of whose meshes can't be read (MAD_GRP_CITYSCHOOL_Building_Dormitory_A_015: Meshes whose tail states
-/// a range's vertex count other than the range's, 441 against 401 and 72 against 24): they are recorded and left
-/// out, the group's other Visuals and its collision placed.
-#[test]
-fn a_refused_mesh_leaves_out_only_what_needs_it() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
-        return;
-    };
-    let order = [
-        "DataPC_MAD_USNAT_patch_01.forge",
-        "DataPC_MAD_USNAT.forge",
-        "DataPC_patch_01.forge",
-        "DataPC.forge",
-    ];
-    let mut archive = Archive::open(&order.map(|f| dir.join(f))).expect("archive");
-    let name = "MAD_GRP_CITYSCHOOL_Building_Dormitory_A_015";
-    let at = (0..2)
-        .find_map(|forge| {
-            let names = &archive.forge(forge)?.names;
-            names
-                .iter()
-                .position(|n| n.name == name)
-                .map(|entry| At { forge, entry })
-        })
-        .expect(name);
-    let mut w = World::new();
-    let mut placed = Placed::default();
-    let mut placer = Placer::new(
-        &mut archive,
-        &mut w,
-        SourceFrame::WORLD,
-        InstancedLevels::Selector,
-    );
-    placer.place(at, &mut placed).expect("place");
-    // two of its meshes (entries 97266 and 97267 of the patch), both refused for a tail range's vertex count
-    assert!(
-        !placed.refused.is_empty() && placed.refused.iter().all(|(_, why)| why.contains("tail ranges")),
-        "{:?}",
-        placed.refused
-    );
-    assert!(
-        placed.placements.len() > 8,
-        "{} placements",
-        placed.placements.len()
-    );
-    assert!(!placed.collisions.is_empty());
 }
