@@ -170,7 +170,7 @@ not on this repository's internals.
 **Dependencies: small, focused, maintained crates that do one job well; no umbrella crates.** Each sits behind our own
 trait (`TexDecoder`, `Compressor`, ...), so swapping it is local, and each is held to the same gates as our code.
 Versions are pinned and default features off.
-- **In (by role):** BCn decode `bcdec_rs`, BCn encode `intel_tex_2` or `texpresso`, DDS header `ddsfile`, PNG `png`,
+- **In (by role):** BCn decode `bcdec_rs`, BCn encode `block_compression` (CPU path, default features off, no `wgpu`) or `texpresso`, both pure Rust (`intel_tex_2` is out: its prebuilt C++/ISPC kernels need a native runtime to link and dispatch per CPU), DDS header `ddsfile`, PNG `png`,
   LZ4 `lz4_flex`, deflate/zlib `flate2`, binary layouts `binrw`, casts `bytemuck`, f16 `half`, mesh optimisation
   `meshopt`, bindings `pyo3` and `csbindgen`. Oodle is never bundled: the game's own `oo2core` DLL is loaded at run time
   from the install the user points at, with `oozextract` only as a gate's second decoder. ETC/ASTC via

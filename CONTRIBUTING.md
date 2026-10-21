@@ -433,7 +433,7 @@ and mapped row-major RGBA8 base pixels). Source images and independent expected 
 Small, focused, maintained crates that do one job, each behind our own trait so swapping it is local, each held to the
 same gates as our code. Pinned in the root `Cargo.toml` `[workspace.dependencies]` (exact version, default features
 off) and used with `workspace = true`. **No umbrella crates** (`image`, `image_dds`, engine frameworks like
-`bevy_ecs`). In use or approved: bcdec_rs, intel_tex_2 / texpresso, ddsfile, png, lz4_flex, flate2, binrw, bytemuck,
+`bevy_ecs`). In use or approved: bcdec_rs, block_compression (CPU path only, no wgpu: pure-Rust BC7 encode) / texpresso (pure Rust), ddsfile, png, lz4_flex, flate2, binrw, bytemuck,
 half, meshopt, ruzstd (pure-Rust zstd decoding, MIT), pyo3, csbindgen, libloading (a game's own Oodle DLL, loaded at run time from the install, never
 bundled), oozextract (only as a gate's second decoder), thiserror, serde/serde_json, indexmap, sha2, aes (AES-128 block operations), num-bigint (raw RSA public operations), encoding_rs (strict Shift-JIS), sha1 (key material checks), quick-xml (pull parser for game XML data files), criterion
 (benches), toml (standards-compliant local gate configuration; a handwritten subset would mishandle escaping,

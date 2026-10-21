@@ -381,6 +381,26 @@ pub fn mip_chain(image: &Image) -> Result<Vec<Image>> {
         current = half(&current)?;
     }
 }
+/// [`mip_chain`] over straight RGBA8 bytes (`width * height * 4`, rows top first): every level as
+/// `(width, height, rgba)`, the input first, down to 1x1. Each side is halved (at least 1); a target pixel
+/// averages the source pixels it covers per channel, in 8-bit, rounding half up (`(sum + n/2) / n`; for a full
+/// 2x2 that is `(sum + 2) / 4`). An odd side's last target pixel also covers the leftover source row/column, as
+/// the independent C# reference does (not clamped). Averaging is on the stored values, with no sRGB conversion:
+/// for sRGB colour that is an approximation (it darkens high-contrast detail slightly).
+pub fn mip_chain_rgba8(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<(u32, u32, Vec<u8>)>> {
+    let base = Image {
+        width,
+        height,
+        samples: Samples::U8(rgba.to_vec()),
+    };
+    mip_chain(&base)?
+        .into_iter()
+        .map(|level| match level.samples {
+            Samples::U8(v) => Ok((level.width, level.height, v)),
+            Samples::U16(_) => Err(Error::Invalid("mip level lost its 8-bit depth".into())),
+        })
+        .collect()
+}
 /// First stored level whose larger side is <= cap; otherwise the smallest stored.
 /// Returns (index,width,height). Empty/excessive level counts and cap=0 are errors.
 pub fn pick_level(width: u32, height: u32, levels: usize, cap: u32) -> Result<(usize, u32, u32)> {

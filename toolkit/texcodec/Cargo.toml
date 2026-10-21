@@ -13,6 +13,7 @@ primase-core.workspace = true
 thiserror.workspace = true
 
 bcdec_rs.workspace = true
+block_compression.workspace = true
 half.workspace = true
 
 [lints]

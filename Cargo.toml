@@ -99,6 +99,7 @@ quick-xml = { version = "=0.42.0", default-features = false }
 
 png = { version = "=0.18.1", default-features = false }
 bcdec_rs = { version = "=0.2.0", default-features = false }
+block_compression = { version = "=0.10.1", default-features = false, features = ["bc7"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

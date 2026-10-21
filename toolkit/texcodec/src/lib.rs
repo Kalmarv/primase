@@ -7,9 +7,11 @@
 use primase_core::TexFormat;
 use thiserror::Error;
 mod blocks;
+mod encode;
 mod flip;
 mod pixels;
 
+pub use encode::{Encoder, TexEncoder};
 pub use flip::flip_vertical;
 
 #[derive(Debug, Error)]

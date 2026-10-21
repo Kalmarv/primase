@@ -35,3 +35,7 @@ are relabeled for Pillow 11 without altering payloads or applying gamma.
 
 Censuses deduplicate input files by SHA256 within each configured root, reporting
 path counts separately from checked distinct contents. All paths are read and hashed.
+
+`Encoder` (behind `TexEncoder::encode_rgba8`) encodes BC7 only and refuses every other format; it encodes straight RGBA8 as BC7 through `block_compression` (pure-Rust CPU port of Intel's
+ISPC kernels, all modes; slow settings, alpha fitted only when some texel has alpha < 255). Partial edge blocks are
+padded by repeating the edge texels. No native code, no CPU dispatch: same input, same bytes.
