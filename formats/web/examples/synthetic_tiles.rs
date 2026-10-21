@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     set.write_to(&output)?;
     let mut proof = Vec::new();
     for tile in &set.index.tiles {
-        proof.push(support::tile_proof(&tile.file, &set.files[&tile.file])?);
+        proof.push(support::tile_proof(&output, &tile.file)?);
     }
     support::write_entries(&proof, &output)?;
     let mut reference = Vec::new();

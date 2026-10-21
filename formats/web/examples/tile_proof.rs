@@ -24,10 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             t["row"].as_i64().unwrap_or(0),
             cell,
         );
-        proof.insert(
-            key,
-            support::tile_proof(file, &std::fs::read(folder.join(file))?)?,
-        );
+        proof.insert(key, support::tile_proof(&folder, file)?);
     }
     support::write_entries(&proof.into_values().collect::<Vec<_>>(), &folder)?;
     println!(

@@ -1993,3 +1993,87 @@ fn levels_of_detail_colliders_and_bezier_curves_are_left_out_and_reported() {
         ]
     );
 }
+
+/// Every buffer view's bytes of tile `t` of `set`: the binary chunk's, or a mesh file's (format 3.0).
+fn view_bytes(set: &primase_web::TileSet, t: &primase_web::TileInfo) -> Vec<Vec<u8>> {
+    let chunks = primase_glb::parse(&set.files[&t.file]).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(chunks.json).unwrap();
+    let buffers = doc["buffers"].as_array().unwrap();
+    doc["bufferViews"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| {
+            let ext = &v["extensions"]["EXT_meshopt_compression"];
+            let at = if ext.is_object() { ext } else { v };
+            let buffer = &buffers[at["buffer"].as_u64().unwrap() as usize];
+            let data = match buffer["uri"].as_str() {
+                Some(uri) => &set.meshes[uri][..],
+                None => chunks.bin.unwrap(),
+            };
+            let start = at["byteOffset"].as_u64().unwrap_or(0) as usize;
+            data[start..start + at["byteLength"].as_u64().unwrap() as usize].to_vec()
+        })
+        .collect()
+}
+
+/// Format 3.0 (`mesh_files`): a prototype placed in two cells is one mesh file, which both tiles reference and the
+/// index lists once; every view of each tile holds the bytes the self-contained (2.x) tile holds, the instance streams
+/// staying in the GLB.
+#[test]
+fn mesh_files_are_shared_by_the_tiles_that_place_them() {
+    let mut w = World::new();
+    let proto = w.spawn();
+    w.insert(proto, mesh());
+    for x in [10., 20., 310.] {
+        place(&mut w, proto, x);
+    }
+    let base = Options::new(primase_web::TileSize::new(200.).unwrap());
+    let whole = write(&w, &base).unwrap();
+    let shared = write(
+        &w,
+        &Options {
+            mesh_files: true,
+            ..base
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        (whole.index.format_version, shared.index.format_version),
+        ("2.0", "3.0")
+    );
+    let (file, bytes) = shared.meshes.iter().next().unwrap();
+    assert_eq!(shared.meshes.len(), 1);
+    assert_eq!(
+        shared.index.meshes,
+        [primase_web::ImageFile {
+            file: file.clone(),
+            bytes: bytes.len() as u64
+        }]
+    );
+    assert_eq!(shared.index.tiles.len(), 2);
+    for (a, b) in whole.index.tiles.iter().zip(&shared.index.tiles) {
+        assert_eq!(b.meshes, std::slice::from_ref(file));
+        assert_eq!(view_bytes(&whole, a), view_bytes(&shared, b), "{}", b.file);
+    }
+    let out = std::env::temp_dir().join(format!("primase-web-mesh-files-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    shared.write_to(&out).unwrap();
+    assert!(out.join(file).is_file());
+    // the tile and the mesh file it references by uri are valid glTF together
+    if let Some(validator) = primase_testdata::real_data("PRIMASE_GLTF_VALIDATOR") {
+        let output = std::process::Command::new(validator)
+            .arg("-o")
+            .arg(out.join(&shared.index.tiles[1].file))
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["issues"]["numErrors"], 0, "{report}");
+        assert_eq!(
+            report["info"]["resources"].as_array().map(Vec::len),
+            Some(2),
+            "{report}"
+        );
+    }
+    std::fs::remove_dir_all(&out).unwrap();
+}

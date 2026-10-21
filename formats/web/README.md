@@ -148,6 +148,9 @@ The index's `empty_tile_policy` omits tiles with neither geometry nor viewer
 records. A tile with only records has `content: "metadata_only"`: its GLB contains
 identity nodes and extras, with no meshes, buffers or binary mesh payload.
 Geometry tiles have `content: "geometry"`.
+With `Options::mesh_files` (format 3.0) each mesh's geometry is a file of its own too, `meshes/<sha256>.bin`,
+shared by the tiles that place it and referenced by glTF buffer `uri` (FORMAT.md, "Meshes"): a viewer fetches a
+prototype's geometry once for the whole set, and only when it draws it. Off by default (2.x).
 Images are files of their own (format 2.0): each encoded image is written once,
 as `images/<sha256>.<ext>`, and every tile that uses it references that file by
 `uri`, so tile GLBs carry geometry and materials only. The index lists the image

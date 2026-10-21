@@ -13,10 +13,19 @@ where
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
-/// A tile's proof entry: its hash and every meshopt stream decoded independently, hashed.
-pub fn tile_proof(file: &str, bytes: &[u8]) -> Result<Value, Box<dyn std::error::Error>> {
+/// The proof entry of tile `file` in `folder`: its hash and every meshopt stream decoded independently, hashed; a
+/// stream in a mesh buffer file (format 3.0) is read from that file, beside the tiles.
+pub fn tile_proof(folder: &Path, file: &str) -> Result<Value, Box<dyn std::error::Error>> {
+    let bytes = &std::fs::read(folder.join(file))?[..];
     let chunks = primase_glb::parse(bytes)?;
     let doc: Value = serde_json::from_slice(chunks.json)?;
+    let mut buffers = Vec::new();
+    for b in doc["buffers"].as_array().unwrap_or(&Vec::new()) {
+        buffers.push(match b["uri"].as_str() {
+            Some(uri) => Some(std::fs::read(folder.join(uri))?),
+            None => None,
+        });
+    }
     let mut streams = Vec::new();
     for (i, v) in doc["bufferViews"]
         .as_array()
@@ -31,7 +40,12 @@ pub fn tile_proof(file: &str, bytes: &[u8]) -> Result<Value, Box<dyn std::error:
         let offset = ext["byteOffset"].as_u64().ok_or("offset")? as usize;
         let length = ext["byteLength"].as_u64().ok_or("length")? as usize;
         let count = ext["count"].as_u64().ok_or("count")? as usize;
-        let bytes = &chunks.bin.ok_or("bin")?[offset..offset + length];
+        let buffer = ext["buffer"].as_u64().ok_or("buffer")? as usize;
+        let data = match buffers.get(buffer).ok_or("buffer index")? {
+            Some(file) => &file[..],
+            None => chunks.bin.ok_or("bin")?,
+        };
+        let bytes = &data[offset..offset + length];
         let raw = match ext["byteStride"].as_u64() {
             Some(4) => decoded::<4>(bytes, count)?,
             Some(8) => decoded::<8>(bytes, count)?,

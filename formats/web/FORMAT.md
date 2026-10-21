@@ -1,4 +1,4 @@
-# Web tile format 2.0
+# Web tile format 2.0 and 3.0
 
 This document specifies the output of `primase-web`. It is a consumer contract,
 independent of any viewer, source game or hosting service. Numeric coordinates
@@ -6,7 +6,7 @@ are metres in a right-handed frame: +X east, +Y up, -Z north.
 
 ## Compatibility
 
-`tiles.json` contains `format_version: "2.0"`. The two decimal integers are
+`tiles.json` contains `format_version`, `"2.x"` or `"3.0"`. The two decimal integers are
 major and minor. A new major changes an existing field's meaning or requires
 incompatible interpretation. A minor adds optional fields or records; consumers
 of the same major ignore unknown optional fields. Consumers reject unknown
@@ -26,6 +26,15 @@ held. A 1.x consumer must reject 2.0 (an unknown major), and a 2.0 consumer
 resolves image URIs; nothing else changes for it. 2.0 also adds optional shadow extras (see
 [Shadows](#shadows)), which a consumer may ignore.
 
+### From 2.x to 3.0
+
+A writer chooses 3.0 (`Options::mesh_files`) or 2.x; both are current. In 3.0 the geometry of each mesh is a file
+of its own, shared by the tiles that place it (see [Meshes](#meshes)): a tile GLB keeps its nodes, materials and
+instance streams and references its meshes' geometry by buffer `uri`. The index lists the mesh files (`meshes`) and
+each tile the files it uses (`meshes`). Everything else is 2.2's, the environment and camera included: decoding a 3.0
+tile with its image and mesh files gives what the 2.x tile held. A 2.x consumer must reject 3.0 (an unknown major); a
+3.0 consumer resolves buffer URIs as glTF does, and can fetch a mesh only when it draws it.
+
 Older unversioned indexes with `version: 1` are the legacy 1.0 layout. Readers
 may accept that one legacy case explicitly. New writers always emit
 `format_version`. The numeric `version` field is retained for old readers and
@@ -38,7 +47,7 @@ JSON numbers must be finite; counts are nonnegative integers.
 
 | Field | Type and meaning |
 |---|---|
-| `format_version` | String `major.minor`: the lowest minor holding every optional field present: `"2.2"` with a `camera`, else `"2.1"` with an `environment`, else `"2.0"` |
+| `format_version` | String `major.minor`: `"3.0"` with mesh files; else the lowest minor holding every optional field present: `"2.2"` with a `camera`, else `"2.1"` with an `environment`, else `"2.0"` |
 | `version` | Legacy integer `1` |
 | `tile_size` | Positive number, nominal ground-cell side in metres |
 | `empty_tile_policy` | `"omit_without_geometry_or_viewer_records; retain_metadata_without_mesh_payload"` |
@@ -46,6 +55,7 @@ JSON numbers must be finite; counts are nonnegative integers.
 | `placements_without_mesh` | Count of placements without loaded render geometry |
 | `tiles` | Array of tile objects; deterministic order by `(col, row)`, then `cell` as `(level, x, y)` |
 | `images` | Array of `{file, bytes}`: every image file the tiles reference, ordered by `file` |
+| `meshes` (3.0) | Array of `{file, bytes}`: every mesh file the tiles reference, ordered by `file`; absent in 2.x |
 | `environment` (optional, 2.1) | Object `{sun}`: the scene's environment as the source names it, scene-wide (see [Environment](#environment)); absent when the source names none |
 | `camera` (optional, 2.2) | Object `{eye, target}`: a starting view (see [Camera](#camera)); absent: the consumer frames the scene |
 
@@ -65,6 +75,7 @@ JSON numbers must be finite; counts are nonnegative integers.
 | `lights` (optional) | Scene lights in this tile's GLB; omitted when 0 |
 | `layered_materials` (optional) | Layered materials in this tile's GLB; omitted when 0 |
 | `images` (optional) | Array of the image files the tile's GLB references, in its glTF image order; absent when none |
+| `meshes` (optional, 3.0) | Array of the mesh files the tile's GLB references, in its glTF buffer order; absent when none |
 
 `collision.records` counts collision meshes, not triangles. Each record's index
 accessor gives its triangle count. Bounds of geometry tiles cover render
@@ -94,6 +105,21 @@ image file once and share it among the tiles that use it, releasing it when the
 last of them is unloaded; `tiles.json` lists every file with its length, so a
 consumer can prefetch them or account for them before loading a tile. Image files
 are immutable: the same name always holds the same bytes.
+
+## Meshes
+
+In 3.0 the geometry of every mesh a tile draws is one file, `meshes/<sha256>.bin` beside `tiles.json`, named by the
+SHA256 of its bytes: the mesh's buffer views (its attribute and index data; a meshopt view's compressed range), each
+4-byte aligned, in view order. Meshes sharing an accessor (one prototype drawn with different materials) share a file.
+A tile GLB lists each file it uses as a glTF buffer, `{"uri": "meshes/<sha256>.bin", "byteLength": n}` (relative to
+the GLB), and its views keep their accessors, now ranges of that buffer. What belongs to the tile stays in the GLB's
+binary chunk: instance streams (`EXT_mesh_gpu_instancing`); when nothing does, the GLB has no binary chunk and its
+first buffer is a mesh file. A meshopt fallback buffer is listed as before, without data. Tiles placing the same
+prototype reference the same file when its encoded geometry is the same (a mesh quantized in one tile and kept as f32
+in another, or a piece of a mesh filed by element centre, is a file of its own). Mesh files are immutable, like image
+files: a consumer can fetch each once, share it among the tiles that use it, and fetch it only when it draws that mesh
+(three.js' `GLTFParser` loads a node's buffers when the node is asked for). The byte budget counts the tile's own
+files, not the shared mesh files.
 
 ## Byte budget and subcells
 
