@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-use primase_dxbc::{Program, Sample};
+use primase_dxbc::{Dimension, Program, ResourceDeclaration, ReturnType, Sample};
 
 fn instruction(op: u32, operands: &[u32]) -> Vec<u32> {
     let mut v = vec![op | (((operands.len() + 1) as u32) << 24)];
@@ -647,4 +647,194 @@ fn gradient_samples_volumes_and_shader_model_4() {
         .to_string();
     assert!(error.contains("t2 is a 3D texture"), "{error}");
     assert!(Program::from_words(&program(0x30, 1)).is_err());
+}
+
+/// An instruction's name as primase's table spells it, from Microsoft's disassembly: the resource and return-type
+/// annotation and `_indexable` dropped, an immediate offset of zero (`_aoffimmi(0,0,0)`, the plain instruction) dropped,
+/// saturation dropped, a conditional's test dropped.
+fn disassembled_name(token: &str) -> &str {
+    let name = token.split('(').next().unwrap_or(token);
+    let name = name.strip_suffix("_indexable").unwrap_or(name);
+    let zero_offset = token.contains("_aoffimmi_indexable(0,0,0)") || token.contains("_aoffimmi(0,0,0)");
+    let name = match name.strip_suffix("_aoffimmi") {
+        Some(plain) if zero_offset => plain,
+        _ => name,
+    };
+    let name = name.strip_suffix("_sat").unwrap_or(name);
+    match name {
+        "if_nz" | "if_z" => "if",
+        "breakc_nz" | "breakc_z" => "breakc",
+        "continuec_nz" | "continuec_z" => "continuec",
+        "discard_nz" | "discard_z" => "discard",
+        "retc_nz" | "retc_z" => "retc",
+        _ => name,
+    }
+}
+
+/// A declared resource (`t`) or view (`u`) from a `dcl_resource_*` or `dcl_uav_*` line: its slot, shape and return
+/// type.
+fn disassembled_declaration(line: &str) -> Option<(char, ResourceDeclaration)> {
+    let (kind, rest) = if let Some(r) = line.strip_prefix("dcl_resource_") {
+        ('t', r)
+    } else if let Some(r) = line.strip_prefix("dcl_uav_typed_") {
+        ('u', r)
+    } else {
+        ('u', line.strip_prefix("dcl_uav_")?)
+    };
+    let register = |s: &str| s.trim().trim_start_matches(kind).parse::<u32>().unwrap();
+    if let Some(r) = rest.strip_prefix("structured") {
+        let (slot, stride) = r.trim_start_matches("_glc").trim().split_once(',').unwrap();
+        return Some((
+            kind,
+            ResourceDeclaration {
+                slot: register(slot),
+                dimension: Dimension::Structured(stride.trim().parse().unwrap()),
+                returns: ReturnType::Mixed,
+            },
+        ));
+    }
+    let (shape, rest) = rest.split_once(' ').unwrap();
+    let dimension = match shape.trim_end_matches("_glc") {
+        "buffer" => Dimension::Buffer,
+        "texture2d" => Dimension::Texture2d,
+        "texture2darray" => Dimension::Texture2dArray,
+        "texture3d" => Dimension::Texture3d,
+        "texturecube" => Dimension::TextureCube,
+        "texturecubearray" => Dimension::TextureCubeArray,
+        other => panic!("a shape primase doesn't declare: {other}"),
+    };
+    let (types, slot) = rest.rsplit_once(' ').unwrap();
+    let returns = match types {
+        "(float,float,float,float)" => ReturnType::Float,
+        "(uint,uint,uint,uint)" => ReturnType::Uint,
+        "(sint,sint,sint,sint)" => ReturnType::Sint,
+        other => panic!("return types primase doesn't declare: {other}"),
+    };
+    Some((
+        kind,
+        ResourceDeclaration {
+            slot: register(slot),
+            dimension,
+            returns,
+        },
+    ))
+}
+
+/// The immediate constant buffer's values as the disassembler prints them, row by row.
+fn disassembled_immediates(text: &str) -> Vec<[String; 4]> {
+    let Some(at) = text.find("dcl_immediateConstantBuffer") else {
+        return Vec::new();
+    };
+    // the outer braces' contents: up to the brace closing the first one
+    let block = &text[at..];
+    let mut depth = 0;
+    let end = block
+        .char_indices()
+        .find(|&(_, c)| {
+            depth += match c {
+                '{' => 1,
+                '}' => -1,
+                _ => 0,
+            };
+            c == '}' && depth == 0
+        })
+        .unwrap()
+        .0;
+    block[block.find('{').unwrap() + 1..end]
+        .split('{')
+        .filter_map(|row| {
+            let row = row.split('}').next()?.trim();
+            (!row.is_empty()).then(|| {
+                let v: Vec<String> = row.split(',').map(|x| x.trim().to_owned()).collect();
+                std::array::from_fn(|i| v[i].clone())
+            })
+        })
+        .collect()
+}
+
+/// Every pixel container of `PRIMASE_DXBC_PACK_DISASSEMBLY` (`NNNN.dxbc`, each with Microsoft's D3D Shader
+/// Disassembler text `NNNN.txt`) that primase reads: its checksum verified, then its instruction stream, its declared
+/// resources and views, and its immediate constant buffer equal to the disassembly's (each value printed as the
+/// disassembler prints it). The ones primase refuses are counted by reason.
+#[test]
+fn pack_against_microsoft_disassembly() {
+    let Some(root) = primase_testdata::real_data("PRIMASE_DXBC_PACK_DISASSEMBLY") else {
+        return;
+    };
+    let mut read = 0;
+    let mut refused = std::collections::BTreeMap::<String, u32>::new();
+    let mut paths: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "dxbc"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(
+            primase_dxbc::checksum(&bytes).unwrap()[..],
+            bytes[4..20],
+            "{}",
+            path.display()
+        );
+        let text = String::from_utf8(std::fs::read(path.with_extension("txt")).unwrap())
+            .unwrap()
+            .replace('\0', "");
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let Some(start) = lines.iter().position(|l| *l == "ps_5_0") else {
+            continue;
+        };
+        let p = match Program::parse(&bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                let reason: String = e.detail.chars().filter(|c| !c.is_ascii_digit()).collect();
+                *refused.entry(reason).or_default() += 1;
+                continue;
+            }
+        };
+        let body = &lines[start + 1..];
+        let names: Vec<&str> = body
+            .iter()
+            .filter(|l| {
+                !l.is_empty() && !l.starts_with("//") && !l.starts_with("dcl_") && !l.starts_with('{')
+            })
+            .map(|l| disassembled_name(l.split_whitespace().next().unwrap()))
+            .collect();
+        let ours: Vec<&str> = p.instructions().iter().map(|i| i.name()).collect();
+        assert_eq!(ours, names, "{}", path.display());
+        let (mut resources, mut views) = (Vec::new(), Vec::new());
+        for (kind, d) in body.iter().filter_map(|l| disassembled_declaration(l)) {
+            if kind == 't' {
+                resources.push(d);
+            } else {
+                views.push(d);
+            }
+        }
+        let by_slot = |v: &[ResourceDeclaration]| {
+            let mut v = v.to_vec();
+            v.sort_by_key(|d| d.slot);
+            v
+        };
+        assert_eq!(by_slot(p.resources()), by_slot(&resources), "{}", path.display());
+        assert_eq!(by_slot(p.views()), by_slot(&views), "{}", path.display());
+        let printed: Vec<[String; 4]> = p
+            .immediates()
+            .iter()
+            .map(|row| {
+                row.map(|bits| {
+                    let f = f32::from_bits(bits);
+                    // a lane whose bits are a normal float is printed as one, the others as the integer
+                    if f.is_normal() {
+                        format!("{f:.6}")
+                    } else {
+                        (bits as i32).to_string()
+                    }
+                })
+            })
+            .collect();
+        assert_eq!(printed, disassembled_immediates(&text), "{}", path.display());
+        read += 1;
+    }
+    println!("pixel containers read, matching the disassembly: {read}; refused: {refused:?}");
+    assert!(read > 0);
 }

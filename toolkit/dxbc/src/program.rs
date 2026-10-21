@@ -12,6 +12,8 @@ pub enum Register {
     Null,
     /// An unordered-access view (`u<n>`).
     Uav,
+    /// The immediate constant buffer (`icb[n]`), its rows the program's own.
+    ImmediateBuffer,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Selection {
@@ -52,9 +54,14 @@ impl Instruction {
 /// A declared resource's shape: what its loads and samples address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dimension {
+    /// A typed buffer: `ld` addresses its elements by x alone.
+    Buffer,
     Texture2d,
     Texture2dArray,
     Texture3d,
+    /// A cube (or an array of cubes): declared; sampling one is refused at run time.
+    TextureCube,
+    TextureCubeArray,
     /// A structured buffer of elements this many bytes long.
     Structured(u32),
 }
@@ -81,9 +88,12 @@ impl Dimension {
     /// Its code in an instruction's resource-dimension extension (D3D's resource dimension).
     fn code(self) -> u32 {
         match self {
+            Dimension::Buffer => 1,
             Dimension::Texture2d => 3,
             Dimension::Texture3d => 5,
+            Dimension::TextureCube => 6,
             Dimension::Texture2dArray => 8,
+            Dimension::TextureCubeArray => 10,
             Dimension::Structured(_) => 12,
         }
     }
@@ -114,8 +124,10 @@ pub struct Program {
     pub(crate) volumes: Vec<u32>,
     /// Every declared `t<n>`, its shape and return type.
     pub(crate) resources: Vec<ResourceDeclaration>,
-    /// Every declared typed unordered-access view `u<n>`, its shape and return type.
+    /// Every declared unordered-access view `u<n>` (typed, or structured with its stride), its shape and return type.
     pub(crate) views: Vec<ResourceDeclaration>,
+    /// The immediate constant buffer's rows (`dcl_immediateConstantBuffer`), empty when it declares none.
+    pub(crate) immediates: Vec<[u32; 4]>,
     pub(crate) samplers: Vec<u32>,
     /// Per instruction, its structured flow target: `if` its `else` or `endif`; `else` its `endif`; `loop` its
     /// `endloop` and `endloop` its `loop`; `break(c)` and `continue(c)` their innermost `loop`. `usize::MAX` otherwise.
@@ -133,13 +145,32 @@ fn non_float(opcode: u16) -> bool {
     flow(opcode)
         || matches!(
             opcode,
-            1 | 24 | 27..=30 | 32..=42 | 45 | 49 | 57 | 59 | 60 | 79 | 80 | 83..=85 | 87 | 138 | 140 | 167
+            1 | 24 | 27..=30 | 32..=42 | 45 | 49 | 57 | 59 | 60 | 79 | 80 | 83..=85 | 87 | 138 | 140 | 167 | 180
         )
 }
 
 /// Instructions reading integer sources (and the flow conditions, which test bits): source modifiers are refused.
 fn integer_sources(opcode: u16) -> bool {
-    matches!(opcode, 1 | 3 | 8 | 13 | 30..=43 | 45 | 59 | 60 | 79 | 80 | 83..=87 | 138 | 140 | 167)
+    matches!(opcode, 1 | 3 | 8 | 13 | 30..=43 | 45 | 59 | 60 | 79 | 80 | 83..=87 | 138 | 140 | 167 | 180)
+}
+
+/// The operand an instruction names its unordered-access view by: a store's first, an atomic's second (after its
+/// result).
+pub(crate) fn view_operand(opcode: u16) -> Option<usize> {
+    match opcode {
+        164 | 168 => Some(0),
+        180 => Some(1),
+        _ => None,
+    }
+}
+
+/// The lanes of an address into a view of this shape: a structured view's element and byte offset, a 2D texture's x
+/// and y, an array's or a 3D texture's three.
+pub(crate) fn view_address(dimension: Dimension) -> u8 {
+    match dimension {
+        Dimension::Structured(_) | Dimension::Texture2d => 0b011,
+        _ => 0b111,
+    }
 }
 
 /// The operand an instruction names its resource by: the samples' and `ld`'s third, `ld_structured`'s fourth.
@@ -195,6 +226,7 @@ impl Cursor<'_> {
             6 => Register::Sampler,
             7 => Register::Texture,
             8 => Register::Constant,
+            9 => Register::ImmediateBuffer,
             13 => Register::Null,
             30 => Register::Uav,
             n => return Err(error(pos, format!("unsupported operand register type {n}"))),
@@ -212,6 +244,7 @@ impl Cursor<'_> {
         let expected = match register {
             Register::Immediate | Register::Null => 0,
             Register::Constant => 2,
+            Register::ImmediateBuffer => 1,
             _ => 1,
         };
         if dimensions != expected {
@@ -242,12 +275,11 @@ impl Cursor<'_> {
             };
             indices.push(Index { base, relative });
         }
-        // This bounded subset only permits dynamic addressing within a cbuffer.
-        if indices
-            .iter()
-            .enumerate()
-            .any(|(d, i)| i.relative.is_some() && !(register == Register::Constant && d == 1))
-        {
+        // This bounded subset only permits dynamic addressing within a cbuffer or the immediate constant buffer.
+        if indices.iter().enumerate().any(|(d, i)| {
+            i.relative.is_some()
+                && !((register == Register::Constant && d == 1) || register == Register::ImmediateBuffer)
+        }) {
             return Err(error(
                 pos,
                 "dynamic register addressing outside a constant buffer",
@@ -301,8 +333,19 @@ impl Program {
     pub fn resources(&self) -> &[ResourceDeclaration] {
         &self.resources
     }
+    /// Every declared unordered-access view `u<n>`, its shape and return type.
+    pub fn views(&self) -> &[ResourceDeclaration] {
+        &self.views
+    }
+    /// The immediate constant buffer's rows, as stored (empty when the program declares none).
+    pub fn immediates(&self) -> &[[u32; 4]] {
+        &self.immediates
+    }
     pub(crate) fn resource(&self, slot: u32) -> Option<ResourceDeclaration> {
         self.resources.iter().copied().find(|r| r.slot == slot)
+    }
+    pub(crate) fn view(&self, slot: u32) -> Option<ResourceDeclaration> {
+        self.views.iter().copied().find(|r| r.slot == slot)
     }
     pub fn instructions(&self) -> &[Instruction] {
         &self.code
@@ -345,6 +388,7 @@ impl Program {
             volumes: Vec::new(),
             resources: Vec::new(),
             views: Vec::new(),
+            immediates: Vec::new(),
             samplers: Vec::new(),
             jumps: Vec::new(),
         };
@@ -354,10 +398,30 @@ impl Program {
         while at < words.len() {
             let t = words[at];
             let opcode = (t & 0x7ff) as u16;
+            // customdata: its class in the opcode token's upper bits, its length (these two words included) the next
+            // word; only the immediate constant buffer (class 3), a declaration, is read
+            if opcode == 53 {
+                let len = words.get(at + 1).copied().unwrap_or(0) as usize;
+                if len < 2 || at + len > words.len() {
+                    return Err(error(at, "invalid customdata length"));
+                }
+                if t >> 11 != 3 {
+                    return Err(error(at, format!("unsupported customdata class {}", t >> 11)));
+                }
+                if execution || !p.immediates.is_empty() || !(len - 2).is_multiple_of(4) {
+                    return Err(error(
+                        at,
+                        "an immediate constant buffer after code, repeated, or of partial rows",
+                    ));
+                }
+                p.immediates = words[at + 2..at + len].as_chunks::<4>().0.to_vec();
+                at += len;
+                continue;
+            }
             let name = NAMES.get(opcode as usize).copied().unwrap_or("unknown opcode");
             let count = match opcode {
                 // break, continue, else, endif, endloop, loop, ret; and the declarations, read on their own
-                2 | 7 | 18 | 21 | 22 | 48 | 62 | 88..=90 | 98..=101 | 104 | 106 | 156 | 162 => 0,
+                2 | 7 | 18 | 21 | 22 | 48 | 62 | 88..=90 | 98..=101 | 104 | 106 | 156 | 158 | 162 => 0,
                 // breakc, continuec, if, discard
                 3 | 8 | 13 | 31 => 1,
                 11 | 12 | 25..=28 | 40 | 43 | 47 | 54 | 59 | 64..=68 | 75 | 86 | 122..=125 | 129 => 2,
@@ -387,8 +451,9 @@ impl Program {
                 // ld: destination, address, resource; store_uav_typed: view, address, value
                 | 45
                 | 164 => 3,
-                // ubfe (width, offset, source); ld_structured (element, byte offset, resource)
-                35 | 38 | 50 | 55 | 69 | 138 | 167 => 4,
+                // ubfe (width, offset, source); ld_structured (element, byte offset, resource); imm_atomic_iadd
+                // (result, view, address, value); store_structured (view, element, byte offset, value)
+                35 | 38 | 50 | 55 | 69 | 138 | 167 | 168 | 180 => 4,
                 // sample_b and sample_l (a bias or level after the sampler); bfi (width, offset, insert, base)
                 72 | 74 | 140 => 5,
                 73 => 6,
@@ -440,7 +505,7 @@ impl Program {
                 }
                 extended = ext >> 31 != 0;
             }
-            if (88..=106).contains(&opcode) || matches!(opcode, 156 | 162) {
+            if (88..=106).contains(&opcode) || matches!(opcode, 156 | 158 | 162) {
                 if execution {
                     return Err(error(at, "declaration after executable instruction"));
                 }
@@ -546,8 +611,12 @@ impl Program {
             88 => 0xf800,
             // the dimension, and globally coherent (bit 16)
             156 => 0x1_f800,
+            // globally coherent
+            158 => 0x1_0000,
             162 => 0,
-            89 | 106 => 0x800,
+            89 => 0x800,
+            // refactoring allowed (bit 11) and early depth-stencil (bit 13): neither changes an evaluation's outputs
+            106 => 0x2800,
             98..=100 => 0x7800,
             _ => 0,
         };
@@ -561,11 +630,7 @@ impl Program {
                     return Err(error(pos, "temp limit"));
                 }
             }
-            106 => {
-                if token & 0x00ff_f800 & !0x800 != 0 {
-                    return Err(error(pos, "unsupported global flags"));
-                }
-            }
+            106 => {}
             _ => {
                 let o = c.operand(0)?;
                 if o.modifier != 0 || o.indices.iter().any(|i| i.relative.is_some()) {
@@ -578,15 +643,20 @@ impl Program {
                     .base;
                 match opcode {
                     88 if o.register == Register::Texture => {
-                        // texture2d (3), texture3d (5) or texture2darray (8), its four lanes one return type
+                        // a buffer (1), texture2d (3), texture3d (5), cube (6), texture2darray (8) or cube array
+                        // (10), its four lanes one return type
                         let dimension = match (token >> 11) & 31 {
+                            1 => Dimension::Buffer,
                             3 => Dimension::Texture2d,
                             5 => Dimension::Texture3d,
+                            6 => Dimension::TextureCube,
                             8 => Dimension::Texture2dArray,
+                            10 => Dimension::TextureCubeArray,
                             _ => {
                                 return Err(error(
                                     pos,
-                                    "only texture2d, texture2darray and texture3d resources supported",
+                                    "only buffer, texture2d, texture2darray, texture3d, cube and cube-array resources \
+                                     supported",
                                 ));
                             }
                         };
@@ -610,14 +680,14 @@ impl Program {
                         let returns = ReturnType::of(c.take()?)
                             .filter(|r| *r != ReturnType::Mixed)
                             .ok_or_else(|| error(pos, "a view's lanes of one float, uint or sint type"))?;
-                        if i >= 64 || self.views.iter().any(|v| v.slot == i) {
-                            return Err(error(pos, "invalid/duplicate view"));
+                        self.declare_view(pos, i, dimension, returns)?;
+                    }
+                    158 if o.register == Register::Uav => {
+                        let stride = c.take()?;
+                        if stride == 0 || stride % 4 != 0 || stride > 2048 {
+                            return Err(error(pos, "structured stride"));
                         }
-                        self.views.push(ResourceDeclaration {
-                            slot: i,
-                            dimension,
-                            returns,
-                        });
+                        self.declare_view(pos, i, Dimension::Structured(stride), ReturnType::Mixed)?;
                     }
                     162 if o.register == Register::Texture => {
                         let stride = c.take()?;
@@ -660,6 +730,24 @@ impl Program {
         }
         Ok(())
     }
+    /// Declare `u<slot>`.
+    fn declare_view(
+        &mut self,
+        pos: usize,
+        slot: u32,
+        dimension: Dimension,
+        returns: ReturnType,
+    ) -> Result<()> {
+        if slot >= 64 || self.views.iter().any(|v| v.slot == slot) {
+            return Err(error(pos, "invalid/duplicate view"));
+        }
+        self.views.push(ResourceDeclaration {
+            slot,
+            dimension,
+            returns,
+        });
+        Ok(())
+    }
     /// Declare `t<slot>`.
     fn declare(&mut self, pos: usize, slot: u32, dimension: Dimension, returns: ReturnType) -> Result<()> {
         if slot >= 128 || self.resources.iter().any(|r| r.slot == slot) {
@@ -673,7 +761,10 @@ impl Program {
         match dimension {
             Dimension::Texture2d | Dimension::Texture2dArray => self.textures.push(slot),
             Dimension::Texture3d => self.volumes.push(slot),
-            Dimension::Structured(_) => {}
+            Dimension::Buffer
+            | Dimension::TextureCube
+            | Dimension::TextureCubeArray
+            | Dimension::Structured(_) => {}
         }
         Ok(())
     }
@@ -694,8 +785,9 @@ impl Program {
         let fits = match (ins.opcode, declared.dimension) {
             (167, Dimension::Structured(_)) => true,
             (167, _) | (_, Dimension::Structured(_)) => false,
-            (45, _) => true,
-            (_, d) => d != Dimension::Texture3d || sampling,
+            // no `ld` of a cube; no sample of a buffer
+            (45, d) => !matches!(d, Dimension::TextureCube | Dimension::TextureCubeArray),
+            (_, d) => d != Dimension::Buffer,
         };
         if !fits {
             return Err(fail("an instruction on a resource of another shape"));
@@ -723,24 +815,43 @@ impl Program {
         let resource = resource_operand(ins.opcode);
         let dests = if matches!(ins.opcode, 38 | 77) {
             2
-        } else if flow(ins.opcode) || ins.opcode == 164 {
+        } else if flow(ins.opcode) || matches!(ins.opcode, 164 | 168) {
             0
         } else {
             1
         };
-        // a store's first operand: a declared view, its lanes a write mask
-        if ins.opcode == 164 {
-            let view = &ins.operands[0];
-            if view.register != Register::Uav || !matches!(view.selection, Selection::Mask(1..=15)) {
-                return Err(fail("a store's first operand is a view with a write mask"));
+        // a store's or an atomic's view: declared, a store's with a write mask, an atomic's with no selection; a typed
+        // store's view typed, a structured store's structured, an atomic's structured or of integers
+        let view = view_operand(ins.opcode);
+        if let Some(n) = view {
+            let o = &ins.operands[n];
+            let selected = match ins.opcode {
+                164 => matches!(o.selection, Selection::Mask(1..=15)),
+                // a structured store's lanes consecutive from x
+                168 => matches!(o.selection, Selection::Mask(1 | 3 | 7 | 15)),
+                _ => o.selection == Selection::None,
+            };
+            if o.register != Register::Uav || !selected {
+                return Err(fail("a store's view with a write mask, an atomic's with none"));
+            }
+            let declared = self
+                .view(o.indices[0].base)
+                .ok_or_else(|| fail("undeclared view"))?;
+            let fits = match (ins.opcode, declared.dimension, declared.returns) {
+                (164, Dimension::Structured(_), _) => false,
+                (168, d, _) => matches!(d, Dimension::Structured(_)),
+                (164, ..) | (_, Dimension::Structured(_), _) => true,
+                (_, _, returns) => matches!(returns, ReturnType::Uint | ReturnType::Sint),
+            };
+            if !fits {
+                return Err(fail("an instruction on a view of another shape"));
             }
         }
         if ins.saturate && non_float(ins.opcode) {
             return Err(fail("saturation on non-float result"));
         }
         for (n, o) in ins.operands.iter().enumerate() {
-            if ins.opcode == 164 && n == 0 {
-                self.validate_operand(o, ins.word)?;
+            if view == Some(n) {
                 continue;
             }
             if o.register == Register::Uav {
@@ -797,6 +908,9 @@ impl Program {
             Register::Output => (i as usize) < self.outputs,
             Register::Texture => self.resource(i).is_some(),
             Register::Uav => self.views.iter().any(|v| v.slot == i),
+            Register::ImmediateBuffer => {
+                o.indices[0].relative.is_some() || (i as usize) < self.immediates.len()
+            }
             Register::Sampler => self.samplers.contains(&i),
             Register::Constant => self
                 .constant_buffers

@@ -592,6 +592,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "the game's own shaders with third-party disassembly; the existing raw-register traces came from our own interpreter, not independently",
     },
     Variable {
+        name: "PRIMASE_DXBC_PACK_DISASSEMBLY",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"a folder of DXBC containers `NNNN.dxbc` (Riders Republic's ShaderDataDX11.bin, Steam build 25394987, split at its containers: 2,443) each with `NNNN.txt`, Microsoft's D3D Shader Disassembler text of it; toolkit/dxbc/tests/program.rs"#,
+        status: Status::Live,
+        source: "independent: Microsoft's D3D Shader Disassembler, run over the user's own install's pack (kept in a private cache)",
+    },
+    Variable {
         name: "PRIMASE_SKATE_MASK_ORACLE",
         kind: Kind::Input,
         gate: true,

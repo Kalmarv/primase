@@ -8,8 +8,8 @@ mod program;
 mod reflection;
 pub use evaluate::{RegisterValue, Trace};
 pub use primase_shader::{
-    Buffer, Execution, Load, Lod, Member, PixelShader, Reflection, Resource, Sample, Sampler, Semantic,
-    Store, Type, Variable,
+    AtomicAdd, Buffer, Execution, Load, Lod, Member, PixelShader, Reflection, Resource, Sample, Sampler,
+    Semantic, Store, Type, Variable,
 };
 pub use program::{
     Dimension, Instruction, Operand, Program, Register, ResourceDeclaration, ReturnType, Selection,

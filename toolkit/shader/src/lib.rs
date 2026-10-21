@@ -46,21 +46,33 @@ pub struct Sample {
 pub struct Load {
     /// Texture bind slot (`t<n>`).
     pub texture: u32,
-    /// x, y, and a 2D array's layer or a 3D texture's z (0 for a 2D texture).
+    /// x, y, and a 2D array's layer or a 3D texture's z (0 for a 2D texture); a buffer's element at x (y and z 0).
     pub texel: [i32; 3],
+    /// The mip level (0 for a buffer).
     pub mip: i32,
 }
 
-/// A store request (`store_uav_typed`).
+/// A store request (`store_uav_typed`, `store_structured`).
 #[derive(Clone, Copy, Debug)]
 pub struct Store {
     /// Unordered-access view bind slot (`u<n>`).
     pub view: u32,
-    /// x, y, and z or a 2D array's layer (0 where the view has fewer).
-    pub texel: [i32; 3],
+    /// A typed view's x, y, and z or a 2D array's layer (0 where the view has fewer); a structured view's element and
+    /// byte offset (then 0).
+    pub address: [u32; 3],
     /// The lanes as the program writes them (bits), only those `mask` marks.
     pub value: [u32; 4],
     pub mask: u8,
+}
+
+/// An atomic add (`imm_atomic_iadd`) to the 32-bit word of an unordered-access view at `address`: a structured view's
+/// element and byte offset in its first two lanes, a typed view's x, y (and z) otherwise (0 where the view has fewer).
+#[derive(Clone, Copy, Debug)]
+pub struct AtomicAdd {
+    /// Unordered-access view bind slot (`u<n>`).
+    pub view: u32,
+    pub address: [u32; 3],
+    pub value: u32,
 }
 
 /// Answers sample, load, store and structured-buffer requests; an error stops the evaluation. A closure answers samples
@@ -72,10 +84,15 @@ pub trait Sampler {
     fn load(&mut self, request: Load) -> std::result::Result<[u32; 4], String> {
         Err(format!("t{}: no loads given", request.texture))
     }
-    /// A store to a typed unordered-access view (`store_uav_typed`): the lanes `mask` marks of `value`, at the texel
-    /// whose x, y (and z) the program gives. Its effect is the caller's: it reaches none of this evaluation's outputs.
+    /// A store to an unordered-access view ([`Store`]): the lanes `mask` marks of `value`, at the address the program
+    /// gives (a structured view's lanes the consecutive words from the byte offset). Its effect is the caller's: it
+    /// reaches none of this evaluation's outputs.
     fn store(&mut self, request: Store) -> std::result::Result<(), String> {
         Err(format!("u{}: no stores given", request.view))
+    }
+    /// An atomic add ([`AtomicAdd`]); its result the word as it was before. The add itself is the caller's effect.
+    fn atomic_add(&mut self, request: AtomicAdd) -> std::result::Result<u32, String> {
+        Err(format!("u{}: no atomics given", request.view))
     }
     /// The 32-bit word at byte `offset` of element `element` of the structured buffer at `t<slot>`.
     fn structured(&mut self, slot: u32, element: u32, offset: u32) -> std::result::Result<u32, String> {

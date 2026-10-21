@@ -1,6 +1,6 @@
-use crate::program::{Dimension, derivative};
+use crate::program::{Dimension, derivative, view_address};
 use crate::{Operand, Program, Register, Result, Selection, error};
-use primase_shader::{Execution, Load, Lod, Sample, Sampler, Store};
+use primase_shader::{AtomicAdd, Execution, Load, Lod, Sample, Sampler, Store};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RegisterValue {
@@ -21,6 +21,7 @@ struct State<'a> {
     inputs: &'a [[u32; 4]],
     derivatives: &'a [[[u32; 4]; 2]],
     buffers: &'a [(u32, &'a [[u32; 4]])],
+    immediates: &'a [[u32; 4]],
 }
 /// Instructions one evaluation may execute: a bound on loops whose exit depends on values.
 const BUDGET: usize = 1 << 22;
@@ -59,6 +60,20 @@ impl State<'_> {
                 bits: self.inputs[index],
                 mask: 15,
             },
+            Register::ImmediateBuffer => {
+                let ind = &op.indices[0];
+                let relative = match &ind.relative {
+                    Some(r) => self.source(r, 1, word)?[0],
+                    None => 0,
+                };
+                Value {
+                    bits: *self
+                        .immediates
+                        .get(ind.base.wrapping_add(relative) as usize)
+                        .ok_or_else(|| error(word, "immediate-constant-buffer address out of range"))?,
+                    mask: 15,
+                }
+            }
             Register::Constant => {
                 let ind = &op.indices[1];
                 let relative = if let Some(r) = &ind.relative {
@@ -185,6 +200,7 @@ impl Program {
             inputs,
             derivatives,
             buffers,
+            immediates: &self.immediates,
         };
         let mut samples = 0;
         let mut discarded = false;
@@ -304,15 +320,20 @@ impl Program {
                 result = std::array::from_fn(|i| lanes[swizzle[i] as usize]);
             } else if matches!(ins.opcode, 69 | 72 | 73 | 74) {
                 let texture = a[2].indices[0].base;
-                if self.volumes.contains(&texture) {
+                let dimension = self.resource(texture).map(|r| r.dimension);
+                let unsupported = match dimension {
+                    Some(Dimension::Texture3d) => Some("a 3D texture"),
+                    Some(Dimension::TextureCube) => Some("a cube"),
+                    Some(Dimension::TextureCubeArray) => Some("a cube array"),
+                    _ => None,
+                };
+                if let Some(shape) = unsupported {
                     return Err(error(
                         ins.word,
-                        format!("t{texture} is a 3D texture: sampling one is not supported"),
+                        format!("t{texture} is {shape}: sampling one is not supported"),
                     ));
                 }
-                let array = self
-                    .resource(texture)
-                    .is_some_and(|r| r.dimension == Dimension::Texture2dArray);
+                let array = dimension == Some(Dimension::Texture2dArray);
                 let xyz = s.source(&a[1], if array { 7 } else { 3 }, ins.word)?;
                 let lod = match ins.opcode {
                     73 => {
@@ -338,21 +359,27 @@ impl Program {
                 result = std::array::from_fn(|i| sampled[swizzle[i] as usize].to_bits());
                 samples += 1;
             } else if ins.opcode == 45 {
-                // ld: the texel at the address's x, y (and z for an array or a 3D texture), its mip the w
+                // ld: the texel at the address's x, y (and z for an array or a 3D texture), its mip the w; a
+                // buffer's element at x alone
                 let texture = a[2].indices[0].base;
-                let address = s.source(&a[1], 15, ins.word)?;
-                let flat = self
-                    .resource(texture)
-                    .is_some_and(|r| r.dimension == Dimension::Texture2d);
+                let lanes = match self.resource(texture).map(|r| r.dimension) {
+                    Some(Dimension::Buffer) => 0b0001,
+                    Some(Dimension::Texture2d) => 0b1011,
+                    _ => 0b1111,
+                };
+                let address = s.source(&a[1], lanes, ins.word)?;
+                let at = |k: usize| {
+                    if lanes & (1 << k) != 0 {
+                        address[k] as i32
+                    } else {
+                        0
+                    }
+                };
                 let loaded = sampler
                     .load(Load {
                         texture,
-                        texel: [
-                            address[0] as i32,
-                            address[1] as i32,
-                            if flat { 0 } else { address[2] as i32 },
-                        ],
-                        mip: address[3] as i32,
+                        texel: [at(0), at(1), at(2)],
+                        mip: at(3),
                     })
                     .map_err(|e| error(ins.word, e))?;
                 let Selection::Swizzle(swizzle) = a[2].selection else {
@@ -363,12 +390,13 @@ impl Program {
             } else if ins.opcode == 164 {
                 // store_uav_typed: a side effect, the caller's; nothing written here
                 let view = a[0].indices[0].base;
-                let address = s.source(&a[1], 7, ins.word)?;
+                let lanes = self.view(view).map_or(0b111, |v| view_address(v.dimension));
+                let address = s.source(&a[1], lanes, ins.word)?;
                 let value = s.source(&a[2], mask, ins.word)?;
                 sampler
                     .store(Store {
                         view,
-                        texel: address.map(|x| x as i32)[..3].try_into().expect("three"),
+                        address: std::array::from_fn(|k| if lanes & (1 << k) != 0 { address[k] } else { 0 }),
                         value,
                         mask,
                     })
@@ -379,6 +407,39 @@ impl Program {
                     outputs: &s.outputs,
                 });
                 continue;
+            } else if ins.opcode == 168 {
+                // store_structured: the words from the element's byte offset, the caller's
+                sampler
+                    .store(Store {
+                        view: a[0].indices[0].base,
+                        address: [
+                            s.source(&a[1], 1, ins.word)?[0],
+                            s.source(&a[2], 1, ins.word)?[0],
+                            0,
+                        ],
+                        value: s.source(&a[3], mask, ins.word)?,
+                        mask,
+                    })
+                    .map_err(|e| error(ins.word, e))?;
+                trace(Trace {
+                    word: ins.word,
+                    temps: &s.temps,
+                    outputs: &s.outputs,
+                });
+                continue;
+            } else if ins.opcode == 180 {
+                // imm_atomic_iadd: the add the caller's, the word before it the result
+                let view = a[1].indices[0].base;
+                let lanes = self.view(view).map_or(0b111, |v| view_address(v.dimension));
+                let address = s.source(&a[2], lanes, ins.word)?;
+                let before = sampler
+                    .atomic_add(AtomicAdd {
+                        view,
+                        address: std::array::from_fn(|k| if lanes & (1 << k) != 0 { address[k] } else { 0 }),
+                        value: s.source(&a[3], 1, ins.word)?[0],
+                    })
+                    .map_err(|e| error(ins.word, e))?;
+                result = [before; 4];
             } else if ins.opcode == 167 {
                 // ld_structured: the words from the byte offset of the element, picked by the resource's swizzle
                 let slot = a[3].indices[0].base;
