@@ -48,12 +48,14 @@ fn read_notices(missing_archetypes: usize) -> Vec<Notice> {
     out
 }
 
-/// What loading couldn't find: prototypes without a live drawable file (left without geometry), and textures the
-/// archives don't hold (each named, as the example, with how many bindings asked for it).
+/// What loading couldn't find or couldn't give a core meaning: prototypes without a live drawable file (left without
+/// geometry), textures the archives don't hold (each named, as the example, with how many bindings asked for it),
+/// streams storing values that are not finite, and primitives whose vertex blend streams stay `gta.blend_streams`.
 fn load_notices(
     missing_assets: usize,
     textures_not_found: &BTreeMap<String, usize>,
     non_finite_streams: &BTreeMap<String, usize>,
+    blend_streams: usize,
 ) -> Vec<Notice> {
     let mut out = Vec::new();
     if missing_assets > 0 {
@@ -87,6 +89,15 @@ fn load_notices(
             n = n.example(format!("{semantic} ({primitives} primitives)"));
         }
         out.push(n);
+    }
+    if blend_streams > 0 {
+        out.push(Notice::new(
+            STAGE,
+            NoticeKind::Unsupported,
+            "primitives whose vertex blend weights and indices are kept as gta.blend_streams, not core joints and \
+             weights: the bone palette they index is not read",
+            blend_streams as u64,
+        ));
     }
     out
 }
@@ -135,6 +146,7 @@ impl Reader for GtaReader {
             r.asset_missing,
             &r.textures_not_found,
             &r.non_finite_streams,
+            r.blend_streams,
         ));
         let mut report = Report::new();
         if !r.textures_not_found.is_empty() || r.asset_missing > 0 || !r.non_finite_streams.is_empty() {
@@ -164,16 +176,16 @@ impl Reader for GtaReader {
 mod tests {
     use super::*;
 
-    /// Missing source inputs, and vertex streams left out for values that are not finite, become notices with their
-    /// counts and the names the source has; nothing missing or left out, none.
+    /// Missing source inputs, vertex streams left out for values that are not finite, and blend streams kept in the
+    /// dialect become notices with their counts and the names the source has; nothing missing or left out, none.
     #[test]
     fn missing_inputs_are_notices() {
         assert!(read_notices(0).is_empty());
-        assert!(load_notices(0, &BTreeMap::new(), &BTreeMap::new()).is_empty());
+        assert!(load_notices(0, &BTreeMap::new(), &BTreeMap::new(), 0).is_empty());
         let r = read_notices(15);
         assert_eq!((r.len(), r[0].count, r[0].kind), (1, 15, NoticeKind::Unsupported));
         let textures = BTreeMap::from([("road_01".to_owned(), 3), ("sign_02".to_owned(), 1)]);
-        let l = load_notices(2, &textures, &BTreeMap::new());
+        let l = load_notices(2, &textures, &BTreeMap::new(), 0);
         assert_eq!(l.len(), 2);
         assert_eq!(l[0].count, 2);
         assert!(l[0].reason.contains("drawable"));
@@ -181,9 +193,13 @@ mod tests {
         assert_eq!(l[1].examples, ["road_01 (3 bindings)", "sign_02 (1 bindings)"]);
         // a NaN normal stream on one primitive, a tangent stream on two: one notice, counted per primitive
         let streams = BTreeMap::from([("Normal".to_owned(), 1), ("Tangent".to_owned(), 2)]);
-        let n = load_notices(0, &BTreeMap::new(), &streams);
+        let n = load_notices(0, &BTreeMap::new(), &streams, 0);
         assert_eq!((n.len(), n[0].count, n[0].kind), (1, 3, NoticeKind::Unsupported));
         assert!(n[0].reason.contains("not finite"));
         assert_eq!(n[0].examples, ["Normal (1 primitives)", "Tangent (2 primitives)"]);
+        // blend streams kept in the dialect, their palette unread: counted per primitive
+        let b = load_notices(0, &BTreeMap::new(), &BTreeMap::new(), 4);
+        assert_eq!((b.len(), b[0].count, b[0].kind), (1, 4, NoticeKind::Unsupported));
+        assert!(b[0].reason.contains("gta.blend_streams"));
     }
 }

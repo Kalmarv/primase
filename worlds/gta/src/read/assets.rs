@@ -6,7 +6,8 @@
 //! - A prototype whose archetype is a drawable (asset type 2: the live ydr), a fragment (1: the live yft's main
 //!   drawable) or a drawable dictionary's entry (3: the archetype's live ydd, entry by asset name) gets `core.mesh` from
 //!   that drawable's high LOD: every model's geometries in order, one primitive each, streams as stored (frame
-//!   converted), 16-bit indices widened;
+//!   converted), 16-bit indices widened; the blend streams (`BLENDWEIGHT0`, `BLENDINDICES0`) not in it but as stored in
+//!   [`GtaBlendStreams`], since the bone palette they index is not read;
 //!   [`GtaSources`] (LOD 0, each primitive's model and geometry), [`GtaBones`] when a model is bound to a bone (its
 //!   bones the prototype's [`GtaSkeleton`], as stored; `gta-pose-fragments` places it), and [`GtaDrawable`] with the drawable's box, sphere, LOD
 //!   distances and render masks as stored. Each coarser LOD that has models (medium, low, very low) is a
@@ -43,7 +44,8 @@ use crate::components::GTA;
 use crate::components::GtaResolvedIn;
 use crate::components::collision::GtaEmbeddedBounds;
 use crate::components::{
-    GtaArchetype, GtaBones, GtaDrawable, GtaLights, GtaParam, GtaShader, GtaSkeleton, GtaSources,
+    BlendStreams, GtaArchetype, GtaBlendStreams, GtaBones, GtaDrawable, GtaLights, GtaParam, GtaShader,
+    GtaSkeleton, GtaSources,
 };
 use crate::rage::drawable::{
     Bones, Drawable, DrawableDictionary, Fragment, Geometry, Model, ParamValue, resource_lights,
@@ -223,6 +225,9 @@ pub struct AssetReport {
     /// Vertex streams left out because the file stores values that are not finite (NaN, infinity), by semantic: one
     /// per primitive of any LOD. Such a value is unknown, and core holds finite streams only.
     pub non_finite_streams: BTreeMap<String, usize>,
+    /// Primitives of any LOD whose geometry stores vertex blend streams, kept as [`GtaBlendStreams`] rather than core
+    /// joints and weights: the geometry's bone palette, which they index, is not read.
+    pub blend_streams: usize,
 }
 
 struct Ctx<'a> {
@@ -237,12 +242,22 @@ struct Ctx<'a> {
     report: AssetReport,
 }
 
-/// One vertex element as a core stream (frame converted).
-fn stream(g: &Geometry, e: crate::rage::drawable::Element) -> Result<(Semantic, Stream)> {
+/// Where a vertex element goes.
+enum Element {
+    /// A core stream (frame converted).
+    Core(Semantic, Stream),
+    /// `BLENDWEIGHT0` as stored.
+    BlendWeights(Vec<[u8; 4]>),
+    /// `BLENDINDICES0` as stored: entries of the geometry's bone palette.
+    BlendIndices(Vec<[u8; 4]>),
+}
+
+/// One vertex element: a core stream (frame converted), or a blend stream kept as stored.
+fn stream(g: &Geometry, e: crate::rage::drawable::Element) -> Result<Element> {
     let bytes = g.element_bytes(e);
     let f3 = |b: &[u8]| -> Vec<[f32; 3]> { b.as_chunks::<12>().0.iter().map(le::vec3_of).collect() };
     let fmt = e.format.0;
-    Ok(match (e.slot, fmt) {
+    let (semantic, s) = match (e.slot, fmt) {
         (0, 0x06) => (
             Semantic::Position,
             Stream::F32x3(f3(&bytes).into_iter().map(|p| GTA.point(p)).collect()),
@@ -268,8 +283,8 @@ fn stream(g: &Geometry, e: crate::rage::drawable::Element) -> Result<(Semantic, 
                     .collect(),
             ),
         ),
-        (16, 0x1C) => (Semantic::Weights(0), Stream::U8x4(u8x4(&bytes))),
-        (20, 0x1E) => (Semantic::Joints(0), Stream::U8x4(u8x4(&bytes))),
+        (16, 0x1C) => return Ok(Element::BlendWeights(u8x4(&bytes))),
+        (20, 0x1E) => return Ok(Element::BlendIndices(u8x4(&bytes))),
         (24..=27, 0x1C) => (
             Semantic::Color(e.slot.wrapping_sub(24)),
             Stream::U8x4(u8x4(&bytes)),
@@ -285,7 +300,8 @@ fn stream(g: &Geometry, e: crate::rage::drawable::Element) -> Result<(Semantic, 
                 format!("{} in format {fmt:#x} has no core stream", e.semantic()),
             ));
         }
-    })
+    };
+    Ok(Element::Core(semantic, s))
 }
 
 /// Count one more.
@@ -319,20 +335,36 @@ fn finite(s: &Stream) -> bool {
     }
 }
 
-/// A model list as a mesh, each geometry a primitive with its shader's material. A stream other than the positions
-/// holding a value that is not finite is left out and counted in `non_finite`; such positions are an error.
+/// A model list as a mesh, each geometry a primitive with its shader's material, and the geometries' vertex blend
+/// streams as stored (`None` when no geometry has any). A stream other than the positions holding a value that is
+/// not finite is left out and counted in `non_finite`; such positions are an error.
 fn mesh(
     path: &str,
     models: &[Model],
     materials: &[Entity],
     non_finite: &mut BTreeMap<String, usize>,
-) -> Result<Mesh> {
+) -> Result<(Mesh, Option<GtaBlendStreams>)> {
     let mut primitives = Vec::new();
+    let mut blend = Vec::new();
     for m in models {
         for g in &m.geometries {
             let mut streams = BTreeMap::new();
+            let mut b = BlendStreams {
+                weights: None,
+                indices: None,
+            };
             for &e in &g.elements {
-                let (sem, s) = stream(g, e)?;
+                let (sem, s) = match stream(g, e)? {
+                    Element::Core(sem, s) => (sem, s),
+                    Element::BlendWeights(v) => {
+                        b.weights = Some(v);
+                        continue;
+                    }
+                    Element::BlendIndices(v) => {
+                        b.indices = Some(v);
+                        continue;
+                    }
+                };
                 if !finite(&s) {
                     if sem == Semantic::Position {
                         return Err(invalid(
@@ -352,9 +384,14 @@ fn mesh(
                 indices: Some(g.indices.iter().map(|&i| u32::from(i)).collect()),
                 material: materials.get(usize::from(g.shader)).copied(),
             });
+            blend.push((b.weights.is_some() || b.indices.is_some()).then_some(b));
         }
     }
-    Ok(Mesh::new(primitives))
+    let blend = blend
+        .iter()
+        .any(Option::is_some)
+        .then_some(GtaBlendStreams(blend));
+    Ok((Mesh::new(primitives), blend))
 }
 
 /// A resource file of the install, decoded.
@@ -744,7 +781,7 @@ fn attach(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> Result<AssetRepor
             if lod > 0 && models.is_empty() {
                 continue;
             }
-            let m = mesh(&path, models, &materials, &mut ctx.report.non_finite_streams)?;
+            let (m, blend) = mesh(&path, models, &materials, &mut ctx.report.non_finite_streams)?;
             // per primitive its model's bone, for gta-pose-fragments
             let posed = (models.iter().zip(bones))
                 .flat_map(|(model, p)| std::iter::repeat_n(*p, model.geometries.len()))
@@ -791,6 +828,11 @@ fn attach(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> Result<AssetRepor
             w.insert(holder, provenance);
             if posed.iter().any(Option::is_some) {
                 w.insert(holder, GtaBones(posed));
+            }
+            if let Some(blend) = blend {
+                let n = blend.0.iter().flatten().count();
+                ctx.report.blend_streams = ctx.report.blend_streams.saturating_add(n);
+                w.insert(holder, blend);
             }
         }
         if !forms.is_empty() {
@@ -877,9 +919,82 @@ mod tests {
             vertices,
             indices: vec![],
         };
-        let (semantic, s) = stream(&g, e).unwrap();
+        let super::Element::Core(semantic, s) = stream(&g, e).unwrap() else {
+            panic!("a tangent is a core stream")
+        };
         assert_eq!(semantic, Semantic::Tangent);
         let d = crate::components::GTA.direction([1.0, 0.0, 0.0]);
         assert_eq!(s, Stream::F32x4(vec![[d[0], d[1], d[2], -1.0]]));
+    }
+
+    /// A geometry's BLENDWEIGHT0 and BLENDINDICES0 index a bone palette the reader does not read: they stay out of
+    /// the core mesh (no joints or weights without a skin), kept as stored per primitive in `gta.blend_streams`; a
+    /// geometry without them has no entry, and a mesh with none has no component.
+    #[test]
+    fn blend_streams_stay_in_the_dialect_as_stored() {
+        use crate::components::BlendStreams;
+        use crate::rage::drawable::Model;
+        let element = |slot, format, offset| Element {
+            slot,
+            format: BufferFormat(format),
+            offset,
+        };
+        let (position, weights, indices) =
+            (element(0, 0x06, 0), element(16, 0x1C, 12), element(20, 0x1E, 16));
+        let geometry = |elements: Vec<Element>, stride: u16| {
+            let mut vertices = Vec::new();
+            for v in 0u8..3 {
+                vertices.extend([f32::from(v), 0.0, 0.0].iter().flat_map(|x| x.to_le_bytes()));
+                if stride == 20 {
+                    vertices.extend([255, 0, 0, v]);
+                    vertices.extend([v, 1, 2, 3]);
+                }
+            }
+            Geometry {
+                shader: 0,
+                bounds: [[0.0; 4]; 2],
+                vertex_count: 3,
+                stride,
+                elements,
+                vertices,
+                indices: vec![0, 1, 2],
+            }
+        };
+        let model = |geometries| Model {
+            skeleton_binding: 0,
+            render_mask: 0xff,
+            geometries,
+        };
+        let skinned = geometry(vec![position, weights, indices], 20);
+        let plain = geometry(vec![position], 12);
+        let mut non_finite = std::collections::BTreeMap::new();
+        let (mesh, blend) = super::mesh(
+            "a.ydr",
+            &[model(vec![skinned, plain.clone()])],
+            &[],
+            &mut non_finite,
+        )
+        .unwrap();
+        for p in mesh.primitives() {
+            assert!(
+                p.streams
+                    .keys()
+                    .all(|s| !matches!(s, Semantic::Joints(_) | Semantic::Weights(_))),
+                "{:?}",
+                p.streams.keys()
+            );
+        }
+        assert_eq!(
+            blend.unwrap().0,
+            [
+                Some(BlendStreams {
+                    weights: Some(vec![[255, 0, 0, 0], [255, 0, 0, 1], [255, 0, 0, 2]]),
+                    indices: Some(vec![[0, 1, 2, 3], [1, 1, 2, 3], [2, 1, 2, 3]]),
+                }),
+                None
+            ]
+        );
+        let (_, none) = super::mesh("b.ydr", &[model(vec![plain])], &[], &mut non_finite).unwrap();
+        assert!(none.is_none());
     }
 }

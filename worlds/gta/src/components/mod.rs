@@ -4,8 +4,8 @@
 //! | entity | components |
 //! |---|---|
 //! | placement | `core.transform`, `core.instance`, [`GtaEntity`], `core.condition` when it exists in one map state only |
-//! | prototype | `core.name` (archetype name), [`GtaArchetype`], `core.mesh` and [`GtaSources`] (the drawable's high LOD), [`GtaDrawable`], `core.lods` |
-//! | LOD form | `core.mesh` and [`GtaSources`] (one of the drawable's coarser LODs), unplaced |
+//! | prototype | `core.name` (archetype name), [`GtaArchetype`], `core.mesh` and [`GtaSources`] (the drawable's high LOD), [`GtaBlendStreams`] when its geometries store blend streams, [`GtaDrawable`], `core.lods` |
+//! | LOD form | `core.mesh` and [`GtaSources`] (one of the drawable's coarser LODs), [`GtaBlendStreams`] likewise, unplaced |
 //! | material | [`GtaShader`] (one per drawable and shader) |
 //! | texture | `core.texture`, `core.name`, `core.source` |
 
@@ -301,6 +301,105 @@ impl Component for GtaBones {
     }
 }
 
+/// Per primitive of the entity's mesh, its geometry's vertex blend streams as stored (`BLENDWEIGHT0` and
+/// `BLENDINDICES0`, four bytes a vertex each), `None` for a geometry storing neither. The indices name entries of the
+/// geometry's own bone palette, which the reader does not read yet, so they are no core skin (`core.mesh`'s joints and
+/// weights): they stay here, reported, until the palette is read and checked.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GtaBlendStreams(pub Vec<Option<BlendStreams>>);
+
+/// One geometry's vertex blend streams as stored, one entry a vertex in each.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlendStreams {
+    /// `BLENDWEIGHT0`: four unsigned bytes a vertex.
+    pub weights: Option<Vec<[u8; 4]>>,
+    /// `BLENDINDICES0`: four bytes a vertex, entries of the geometry's bone palette.
+    pub indices: Option<Vec<[u8; 4]>>,
+}
+
+impl BlendStreams {
+    fn streams(&self) -> impl Iterator<Item = &Vec<[u8; 4]>> {
+        self.weights.iter().chain(&self.indices)
+    }
+}
+
+impl Component for GtaBlendStreams {
+    const NAME: &'static str = "gta.blend_streams";
+    /// Bytes a vertex, not local-space geometry.
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
+        primase_core::Linearity::Invariant
+    }
+    fn payload_bytes(&self) -> u64 {
+        let values: usize = self
+            .0
+            .iter()
+            .flatten()
+            .flat_map(BlendStreams::streams)
+            .map(Vec::len)
+            .sum();
+        u64::try_from(values).map_or(u64::MAX, |n| n.saturating_mul(4))
+    }
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(primase_core::remap_list(&self.0, from).map(GtaBlendStreams))
+    }
+    fn remap_vertices(&self, primitive: usize, from: &[u32]) -> Option<Result<Self, String>> {
+        let gather = |v: &Vec<[u8; 4]>| -> Result<Vec<[u8; 4]>, String> {
+            from.iter()
+                .map(|&i| {
+                    usize::try_from(i)
+                        .ok()
+                        .and_then(|i| v.get(i).copied())
+                        .ok_or_else(|| format!("vertex {i} of {}", v.len()))
+                })
+                .collect()
+        };
+        let Some(Some(b)) = self.0.get(primitive) else {
+            return None;
+        };
+        let remapped = (|| {
+            Ok(BlendStreams {
+                weights: b.weights.as_ref().map(gather).transpose()?,
+                indices: b.indices.as_ref().map(gather).transpose()?,
+            })
+        })();
+        Some(remapped.map(|b| {
+            let mut out = self.clone();
+            if let Some(slot) = out.0.get_mut(primitive) {
+                *slot = Some(b);
+            }
+            out
+        }))
+    }
+    /// One entry per primitive of the entity's mesh, each stream one value per vertex of its primitive.
+    fn verify(&self, e: Entity, w: &primase_core::World) -> Result<(), String> {
+        let Some(mesh) = w.get::<Mesh>(e) else {
+            return Ok(());
+        };
+        let primitives = mesh.primitives();
+        if primitives.len() != self.0.len() {
+            return Err(format!(
+                "{} primitives, {} blend entries",
+                primitives.len(),
+                self.0.len()
+            ));
+        }
+        for (i, (p, b)) in primitives.iter().zip(&self.0).enumerate() {
+            if let Some(n) = b
+                .iter()
+                .flat_map(BlendStreams::streams)
+                .map(Vec::len)
+                .find(|&n| n != p.vertex_count())
+            {
+                return Err(format!(
+                    "primitive {i}: {n} blend values for {} vertices",
+                    p.vertex_count()
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A prototype's bones as its drawable and fragment store them ([`crate::rage::drawable::Bones`]: the skeleton, each bone
 /// in its parent's space with its parent and tag, and a fragment's own bone pose). The passes compose a bone's pose
 /// from it: `gta-pose-fragments` for the models on bones (`gta.bones`), `lower-gta-lights` for the light records.
@@ -339,5 +438,71 @@ impl Component for GtaLight {
     const NAME: &'static str = "gta.light";
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::{Primitive, Semantic, Stream, Topology};
+
+    fn triangle(n: usize) -> Primitive {
+        Primitive {
+            topology: Topology::Triangles,
+            streams: [(Semantic::Position, Stream::F32x3(vec![[0.0; 3]; n]))].into(),
+            indices: None,
+            material: None,
+        }
+    }
+
+    /// Blend streams follow their mesh: per primitive when the list is rebuilt, per vertex when a primitive's
+    /// vertices are compacted; a length that no longer matches its primitive fails verification.
+    #[test]
+    fn blend_streams_follow_primitives_and_vertices() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, Mesh::new(vec![triangle(3), triangle(3)]));
+        let b = BlendStreams {
+            weights: Some(vec![[255, 0, 0, 0], [128, 127, 0, 0], [0, 255, 0, 0]]),
+            indices: Some(vec![[0, 0, 0, 0], [0, 1, 0, 0], [1, 0, 0, 0]]),
+        };
+        w.insert(e, GtaBlendStreams(vec![None, Some(b)]));
+        assert_eq!(w.verify_components(), vec![]);
+        // the second primitive kept alone, then its vertices reordered and one dropped
+        w.rebuild_primitives(e, |m| Ok((vec![m.primitives()[1].clone()], vec![1])))
+            .unwrap();
+        w.edit_mesh(e, |m| {
+            let mut p = m.primitive_mut(0).unwrap();
+            // two vertices kept: drawn as points, so the primitive stays whole
+            *p.topology_mut() = Topology::Points;
+            *p.streams_mut() = [(Semantic::Position, Stream::F32x3(vec![[0.0; 3]; 2]))].into();
+            Ok(None)
+        })
+        .unwrap();
+        w.remap_vertices(e, 0, &[2, 0]).unwrap();
+        let kept = &w.get::<GtaBlendStreams>(e).unwrap().0;
+        assert_eq!(
+            kept,
+            &[Some(BlendStreams {
+                weights: Some(vec![[0, 255, 0, 0], [255, 0, 0, 0]]),
+                indices: Some(vec![[1, 0, 0, 0], [0, 0, 0, 0]]),
+            })]
+        );
+        assert_eq!(w.verify_components(), vec![]);
+        // a vertex it does not have is an error, changing nothing
+        assert!(
+            w.remap_vertices(e, 0, &[5])
+                .unwrap_err()
+                .contains("gta.blend_streams")
+        );
+        // stale against its mesh: caught
+        w.insert(e, Mesh::new(vec![triangle(3)]));
+        let failures = w.verify_components();
+        assert!(
+            failures
+                .iter()
+                .any(|(n, _, m)| *n == GtaBlendStreams::NAME && m.contains("2 blend values for 3")),
+            "{failures:?}"
+        );
     }
 }
