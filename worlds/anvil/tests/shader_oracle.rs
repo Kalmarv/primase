@@ -10,7 +10,7 @@ use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::template;
 use primase_core::layered::height_blend;
 use primase_dxbc::Shader;
-use primase_shader::{PixelShader, Sample};
+use primase_shader::{Load, PixelShader, Sample, Sampler, Store};
 use primase_testdata::real_data;
 
 /// A small deterministic generator (xorshift64*), so every run checks the same cases.
@@ -70,9 +70,43 @@ fn uv_rows(cb3: &mut [[f64; 4]], row: usize) {
     cb3[row + 1] = [0.0, 1.0, 0.0, 0.0];
 }
 
-/// The shader's outputs for one case: uniform textures by slot, `cb3`'s rows, the vertex colour; every other
-/// constant buffer zeros (no LOD bias, no instance position), the frame inputs a fixed plausible frame.
-fn run(s: &Shader, textures: &[(u32, [f64; 4])], cb3: &[[f64; 4]], colour: [f64; 4]) -> Vec<[f64; 4]> {
+/// Uniform textures by slot: every sample and load of one the value given; one not given (an engine texture the case
+/// leaves unset, whose value its outputs mustn't depend on) samples a fixed decoy and loads zeros; structured words
+/// zero, stores dropped (they reach no output).
+struct Uniform<'a>(&'a [(u32, [f64; 4])]);
+
+impl Sampler for Uniform<'_> {
+    fn sample(&mut self, r: Sample) -> Result<[f32; 4], String> {
+        self.0
+            .iter()
+            .find(|(t, _)| *t == r.texture)
+            .map_or(Ok([0.37, 0.61, 0.19, 0.83]), |(_, v)| Ok(v.map(|x| x as f32)))
+    }
+    fn load(&mut self, r: Load) -> Result<[u32; 4], String> {
+        Ok(self
+            .0
+            .iter()
+            .find(|(t, _)| *t == r.texture)
+            .map_or([0; 4], |(_, v)| bits(*v)))
+    }
+    fn structured(&mut self, _slot: u32, _element: u32, _offset: u32) -> Result<u32, String> {
+        Ok(0)
+    }
+    fn store(&mut self, _request: Store) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// The shader's outputs for one case: uniform textures by slot, `cb3`'s rows, the vertex colour, and `engine`'s rows
+/// (slot, row, value) of the other constant buffers, all else zeros (no LOD bias, no instance position); the frame
+/// inputs a fixed plausible frame.
+fn run_with(
+    s: &Shader,
+    textures: &[(u32, [f64; 4])],
+    cb3: &[[f64; 4]],
+    colour: [f64; 4],
+    engine: &[(u32, usize, [f64; 4])],
+) -> Vec<[f64; 4]> {
     let inputs: Vec<[u32; 4]> = s
         .reflection()
         .inputs
@@ -92,7 +126,9 @@ fn run(s: &Shader, textures: &[(u32, [f64; 4])], cb3: &[[f64; 4]], colour: [f64;
         .map(|&(slot, size)| {
             let rows = (0..size as usize)
                 .map(|r| {
-                    if slot == 3 {
+                    if let Some((_, _, v)) = engine.iter().find(|(b, row, _)| *b == slot && *row == r) {
+                        bits(*v)
+                    } else if slot == 3 {
                         cb3.get(r).copied().map_or([0; 4], bits)
                     } else {
                         [0; 4]
@@ -103,19 +139,16 @@ fn run(s: &Shader, textures: &[(u32, [f64; 4])], cb3: &[[f64; 4]], colour: [f64;
         })
         .collect();
     let views: Vec<(u32, &[[u32; 4]])> = buffers.iter().map(|(s, v)| (*s, v.as_slice())).collect();
-    let mut sampler = |r: Sample| -> Result<[f32; 4], String> {
-        textures
-            .iter()
-            .find(|(t, _)| *t == r.texture)
-            .map(|(_, v)| v.map(|x| x as f32))
-            .ok_or_else(|| format!("t{} not given", r.texture))
-    };
-    s.execute(&inputs, &views, &mut sampler)
-        .expect("the shader runs")
-        .outputs
-        .into_iter()
-        .map(|o| o.map(float))
-        .collect()
+    let e = s
+        .execute(&inputs, &views, &mut Uniform(textures))
+        .expect("the shader runs");
+    assert!(!e.discarded, "the case discarded");
+    e.outputs.into_iter().map(|o| o.map(float)).collect()
+}
+
+/// [`run_with`] with no engine constants.
+fn run(s: &Shader, textures: &[(u32, [f64; 4])], cb3: &[[f64; 4]], colour: [f64; 4]) -> Vec<[f64; 4]> {
+    run_with(s, textures, cb3, colour, &[])
 }
 
 /// The largest difference of each named quantity.
@@ -424,4 +457,79 @@ fn mad_tex2() {
         worst.see("occlusion", out[3][0], k[0] * oa + k[1] * ob);
     }
     worst.check("MAD_Tex2");
+}
+
+/// MAD_Fake_Sediment (USNAT 59822, at 0x03F958): as MAD_Fake (t75 albedo, t76 normal map) with its two terrain switches
+/// (cb3[1] Use Terrain Albedo Mul, [2] Use Terrain Sediments) at 0, the engine's terrain textures unset.
+#[test]
+fn mad_fake_sediment() {
+    let Some(s) = shader("DataPC_MAD_USNAT.forge", 59822, 0x03_F958) else {
+        return;
+    };
+    let mut r = Random(0x0059_8220_0003_F958);
+    let mut worst = Worst::default();
+    for _ in 0..40 {
+        let (albedo, normal) = (r.texel(), r.texel());
+        let mut cb3 = r.decoys(3);
+        cb3[1] = [0.0; 4];
+        cb3[2] = [0.0; 4];
+        let out = run(&s, &[(75, albedo), (76, normal)], &cb3, r.texel());
+        worst.rgb("albedo", out[0], rgb(albedo));
+        worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
+        worst.see("metalness", out[1][3], metalness(normal[2], None));
+    }
+    worst.check("MAD_Fake_Sediment");
+}
+
+/// MAD_Tex1_TerrainBlend (USNAT 61916, at 0x081AB2; shading class 3, layout B: no metalness output): MAD_Tex1's
+/// cb3[1..7] and textures, EnableTerrainBlend (cb3[14]) 0, the UV rows at 15. The engine's terrain constants are the
+/// notes' (cb1[3..5].w 1000, cb0[47], [48], [50]), its terrain textures unset. o0 = (albedo, roughness), o1.w AO.
+#[test]
+fn mad_tex1_terrain_blend() {
+    let Some(s) = shader("DataPC_MAD_USNAT.forge", 61916, 0x08_1AB2) else {
+        return;
+    };
+    let mut r = Random(0x0061_9160_0008_1AB2);
+    let mut worst = Worst::default();
+    let engine = [
+        (1, 3, [0.0, 0.0, 0.0, 1000.0]),
+        (1, 4, [0.0, 0.0, 0.0, 1000.0]),
+        (1, 5, [0.0, 0.0, 0.0, 1000.0]),
+        (0, 47, [1.0, 0.0, 0.0, 0.0]),
+        (0, 48, [1.0, 10.0, 0.0, 0.0]),
+        (0, 50, [0.0, 0.0, 0.0, 1.0]),
+    ];
+    for case in 0..40 {
+        let (normal, diffuse, mask) = (r.texel(), r.texel(), r.texel());
+        let colour = [r.next(), r.next(), r.next(), 1.0];
+        let hsl = [r.range(-0.5, 0.5), r.range(-0.5, 0.5), r.range(-0.5, 0.5)];
+        let (offset, ao_on) = (r.range(-0.5, 0.5), r.next());
+        let vci = f64::from(case % 2);
+        let mut cb3 = r.decoys(17);
+        for (row, v) in [r.next(), hsl[0], hsl[1], hsl[2], offset, ao_on, vci]
+            .into_iter()
+            .enumerate()
+        {
+            set(&mut cb3, row + 1, v);
+        }
+        set(&mut cb3, 14, 0.0);
+        uv_rows(&mut cb3, 15);
+        let out = run_with(
+            &s,
+            &[(75, normal), (76, diffuse), (77, mask)],
+            &cb3,
+            colour,
+            &engine,
+        );
+        let albedo = tinted(rgb(diffuse), mask[0], hsl);
+        let factor = |k: usize| if vci == 1.0 { colour[k] } else { 1.0 };
+        worst.rgb("albedo", out[0], [0, 1, 2].map(|k| albedo[k] * factor(k)));
+        worst.see(
+            "roughness",
+            out[0][3],
+            roughness(normal[3], Rough::Offset(offset)),
+        );
+        worst.see("occlusion", out[1][3], occlusion(mask[2], ao_on));
+    }
+    worst.check("MAD_Tex1_TerrainBlend");
 }
