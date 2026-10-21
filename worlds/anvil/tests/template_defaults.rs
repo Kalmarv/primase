@@ -63,10 +63,18 @@ fn every_texture_binding_has_its_parameter() {
             .or_default() += 1;
     }
     println!(
-        "{templates} templates, {bindings} texture bindings, {defaults} with a default texture; by (channel, set,          texture) {kinds:?}; missing {missing:?}"
+        "{templates} templates, {bindings} texture bindings, {defaults} with a default texture; by (channel, set, texture) {kinds:?}; missing {missing:?}"
     );
     // only the two generic bindings of the character screen templates, in both forges that hold them, link no object
     assert_eq!(missing.len(), 8);
+    // no channel-0 record names a default; a channel-1 default is a set and its texture; a channel-2 one a bare
+    // texture (the resolution's steps, material-spec §27.0)
+    assert!(kinds.keys().all(|&(channel, set, texture)| match channel {
+        0 => !set && !texture,
+        1 => set == texture,
+        2 => !set,
+        _ => false,
+    }));
     assert!(missing.iter().all(
         |m| m.starts_with("MAD_CHR_Classic_noVWIND_Screen") && (m.ends_with("t75") || m.ends_with("t76"))
     ));

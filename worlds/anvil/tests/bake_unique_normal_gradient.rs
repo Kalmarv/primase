@@ -118,6 +118,7 @@ fn unique_normal_gradient_bakes_as_the_notes_formulas() {
             ("terrain-ao", "0.5"),
             ("sun-elevation", "45"),
             ("view-cosine", "0.7"),
+            ("unset", "white"),
         ]
         .map(|(k, v)| (k.to_owned(), v.to_owned())),
     ))

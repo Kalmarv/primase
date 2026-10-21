@@ -120,12 +120,11 @@ fn decal_fx_is_its_team_colour_cut_out_at_its_cell() {
     let em = row(&m, 7)[0];
     let k: [f64; 3] = std::array::from_fn(|c| f64::from(pbr.base_color[c]) * em);
     let top = k.iter().copied().fold(0.0, f64::max);
-    for c in 0..3 {
-        let got = f64::from(pbr.emissive[c]) * f64::from(pbr.emissive_strength);
+    for (c, (&e, &want)) in pbr.emissive.iter().zip(&k).enumerate() {
+        let got = f64::from(e) * f64::from(pbr.emissive_strength);
         assert!(
-            (got - k[c]).abs() <= 1e-4 * top,
-            "emission {c}: {got} against {}",
-            k[c]
+            (got - want).abs() <= 1e-4 * top,
+            "emission {c}: {got} against {want}"
         );
     }
     let lane = w

@@ -1,9 +1,10 @@
 //! `bake-anvil-material{size=N,normal-green=up|down,shader-uv=texcoord|one-minus-v,mip-bias=X,terrain-ao=X,
-//! sun-elevation=DEG,view-cosine=X}`: Anvil Materials
+//! sun-elevation=DEG,view-cosine=X,unset=white}`: Anvil Materials
 //! whose templates the lowering can't express as texture lookups ([`AnvilMaterial`]; MAD_Tex1_Rocks and
 //! MAD_Tex1_UniqueNormalGradient and MAD_Tex1_UniqueNormal_DiffuseBlend, which combine maps at several UV sets per
-//! pixel, MAD_Hero_Ice and MAD_IceBrick, whose colour depends on the sun and the eye, and MAD_Road, whose paint its
-//! shader computes per pixel) become metal-rough PBR by running the game's own G-buffer pixel shader
+//! pixel, MAD_Hero_Ice and MAD_IceBrick, whose colour depends on the sun and the eye, MAD_Road, whose paint its
+//! shader computes per pixel, and MAD_Tex1_Graffiti_Monster, which sums three normal maps at two tilings) become
+//! metal-rough PBR by running the game's own G-buffer pixel shader
 //! over the Material's texture space and decoding what it writes (Riders Republic docs/shaders.md §6,
 //! docs/material-spec.md §14.6, §15.4).
 //!
@@ -13,7 +14,8 @@
 //!   read) is left to `lower-anvil-material`, reported.
 //! - **Inputs**: the program's constants from the Material's bound properties at the rows its template binds them
 //!   ([`material_rows`]; a UV transform's rows only static and unrotated, the form shown exactly), a texture per
-//!   bound slot (sRGB where its TextureMap says so), sampled at the bake texel's own footprint (2 x 2 quads, the
+//!   bound slot as the reader resolves it ([`crate::components::BoundTexture`]; sRGB where its TextureMap says so; one
+//!   resolved to none sampled white, as `unset=white` states, the same statement as `lower-anvil-material`'s), sampled at the bake texel's own footprint (2 x 2 quads, the
 //!   implicit level from the quad's UV gradients plus `mip-bias`, the engine's `cb1[41].y`: 0 in every frame the notes
 //!   read, §17.1); the interpolants of a flat surface, tangent (1, 0, 0), normal (0, 0, 1), bitangent sign +1, so the
 //!   normal it writes is the tangent-space normal. The engine's own textures (the terrain's, sampled at the
@@ -159,12 +161,21 @@ struct Pattern {
     frequencies: [u32; 2],
 }
 
+/// What a recipe's program reads of the light: nothing, the eye's direction (`cb1[2]`) alone, or the sun's
+/// (`cb0[4]`) and the eye's.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Light {
+    None,
+    Eye,
+    SunAndEye,
+}
+
 struct Recipe {
     template: &'static str,
     /// Its interpolants after the UV, by `TEXCOORD` index.
     interpolants: &'static [(u32, Role)],
-    /// Whether its program reads the sun's direction (`cb0[4]`) and the eye's (`cb1[2]`).
-    sun: bool,
+    /// What its program reads of the sun's direction (`cb0[4]`) and the eye's (`cb1[2]`).
+    light: Light,
     pattern: Option<Pattern>,
     /// `cb3` rows read (from the program's disassembly), each of which the template must bind.
     rows: &'static [u32],
@@ -180,6 +191,8 @@ struct Recipe {
     /// Whether its program reads the camera's position (`cb1[0]`) against the world position (`TEXCOORD1`): run with
     /// the camera [`CAMERA_FAR`] from the surface.
     camera: bool,
+    /// Whether its program divides by the object's screen origin's w (`cb2[11].w`, its team stripes): run with it 1.
+    object_origin: bool,
 }
 
 /// How far the camera is put from the surface (metres) for a program that mixes by the distance: past every mix's
@@ -195,7 +208,7 @@ const ROCKS: Recipe = Recipe {
     template: "MAD_Tex1_Rocks",
     unkept: &[],
     interpolants: WORLD_TANGENT_NORMAL,
-    sun: false,
+    light: Light::None,
     pattern: None,
     rows: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13],
     slots: &[0, 1, 2, 3, 4],
@@ -206,6 +219,7 @@ const ROCKS: Recipe = Recipe {
         sediment_switch: 8,
     }),
     camera: false,
+    object_origin: false,
 };
 
 /// MAD_Tex1_UniqueNormalGradient (§27.3; its G-buffer program read): `Dirt tiling` 1, `Base tiling` 2, the zones'
@@ -217,7 +231,7 @@ const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
     template: "MAD_Tex1_UniqueNormalGradient",
     unkept: &[],
     interpolants: WORLD_TANGENT_NORMAL,
-    sun: false,
+    light: Light::None,
     pattern: None,
     rows: &[
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
@@ -226,6 +240,7 @@ const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
     engine: &[],
     terrain: None,
     camera: true,
+    object_origin: false,
 };
 
 /// MAD_Road (§27.4; its G-buffer program read): `2.Metalness` 1, `4.Emissive Scale` 2, `Hue` 3, `Saturate` 4,
@@ -238,7 +253,7 @@ const ROAD: Recipe = Recipe {
     template: "MAD_Road",
     unkept: &[(1, None)],
     interpolants: TANGENT_NORMAL,
-    sun: false,
+    light: Light::None,
     pattern: Some(Pattern {
         uv: 13,
         frequencies: [10, 11],
@@ -248,6 +263,7 @@ const ROAD: Recipe = Recipe {
     engine: &[(23, 1.0)],
     terrain: None,
     camera: false,
+    object_origin: false,
 };
 
 /// MAD_Tex1_UniqueNormal_DiffuseBlend (§27.8; its G-buffer program read): `Use AO` 1, `3 - DETAILS -Tiling` 2 and
@@ -258,13 +274,33 @@ const UNIQUE_NORMAL_DIFFUSE_BLEND: Recipe = Recipe {
     template: "MAD_Tex1_UniqueNormal_DiffuseBlend",
     unkept: &[(3, Some(1)), (4, Some(1))],
     interpolants: TANGENT_NORMAL,
-    sun: false,
+    light: Light::None,
     pattern: None,
     rows: &[1, 2, 3],
     slots: &[0, 1, 2, 3, 4],
     engine: &[],
     terrain: None,
     camera: false,
+    object_origin: false,
+};
+
+/// MAD_Tex1_Graffiti_Monster (§27.14.2; its G-buffer program read): `Use AO` 1, `EmissivePower` 2, `FresnelOffset` 3,
+/// `Fresnelfalloff` 4, `Color - Team` 5, `Color - Custom` 6, `TeamBlendRatio` 7, `3 - DETAILS -Tiling` 8 and 9, `3 -
+/// DETAILS - SecondTiling` 11 and 12; `Albedo And Opacity` t75 and `Normal` t76 at the mesh's UV, `Details` (a normal
+/// map) t77 at both tilings, `Mask 1` t78 at the mesh's UV and `Details Mask 1` t79 at the first tiling; the exposure
+/// t23; the eye for its Fresnel emission (no place here), the object's screen origin for its team stripes; layout A.
+const GRAFFITI_MONSTER: Recipe = Recipe {
+    template: "MAD_Tex1_Graffiti_Monster",
+    unkept: &[],
+    interpolants: TANGENT_NORMAL,
+    light: Light::Eye,
+    pattern: None,
+    rows: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12],
+    slots: &[0, 1, 2, 3, 4],
+    engine: &[(23, 1.0)],
+    terrain: None,
+    camera: false,
+    object_origin: true,
 };
 
 /// MAD_Hero_Ice (§27.2; its G-buffer program read): `TilingGlobal` 1, `FresnelFalloff` 2, `LightDirectionFalloff` 3,
@@ -280,13 +316,14 @@ const HERO_ICE: Recipe = Recipe {
         (3, Role::TangentView),
         (4, Role::Clip),
     ],
-    sun: true,
+    light: Light::SunAndEye,
     pattern: None,
     rows: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
     slots: &[0, 1, 2, 3, 4, 5, 6],
     engine: &[],
     terrain: None,
     camera: false,
+    object_origin: false,
 };
 
 /// MAD_IceBrick (§27.6; its G-buffer program read): Hero_Ice's albedo without its object normal or parallax, rows 1
@@ -296,13 +333,14 @@ const ICE_BRICK: Recipe = Recipe {
     template: "MAD_IceBrick",
     unkept: &[],
     interpolants: &[(1, Role::Normal), (2, Role::TangentView), (3, Role::Clip)],
-    sun: true,
+    light: Light::SunAndEye,
     pattern: None,
     rows: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
     slots: &[0, 1, 2, 3, 4],
     engine: &[],
     terrain: None,
     camera: false,
+    object_origin: false,
 };
 
 const RECIPES: &[Recipe] = &[
@@ -312,6 +350,7 @@ const RECIPES: &[Recipe] = &[
     UNIQUE_NORMAL_DIFFUSE_BLEND,
     HERO_ICE,
     ICE_BRICK,
+    GRAFFITI_MONSTER,
 ];
 
 /// The pass (see the module documentation).
@@ -339,11 +378,12 @@ impl BakeAnvilMaterial {
             "terrain-ao",
             "sun-elevation",
             "view-cosine",
+            "unset",
         ];
         if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
         }
-        let usage = "size=N, normal-green=up|down, shader-uv=texcoord|one-minus-v, mip-bias=X, terrain-ao=X, sun-elevation=DEG, view-cosine=X";
+        let usage = "size=N, normal-green=up|down, shader-uv=texcoord|one-minus-v, mip-bias=X, terrain-ao=X, sun-elevation=DEG, view-cosine=X, unset=white";
         let get = |k: &str| {
             o.get(k)
                 .map(String::as_str)
@@ -384,6 +424,10 @@ impl BakeAnvilMaterial {
             return Err(format!(
                 "sun-elevation {sun_elevation}: within -90 and 90 degrees"
             ));
+        }
+        match get("unset")? {
+            "white" => {}
+            v => return Err(format!("unset={v}: only white is read")),
         }
         let view_cosine: f32 = get("view-cosine")?
             .parse()
@@ -600,17 +644,25 @@ impl BakeAnvilMaterial {
                     .map_err(|e| e.to_string())?;
             }
         }
+        // the object's screen origin (cb2[11]): its w 1, the origin finite
+        if recipe.object_origin {
+            constants
+                .set_words(2, 11 * 4, &[0.0f32, 0.0, 0.0, 1.0].map(f32::to_bits))
+                .map_err(|e| e.to_string())?;
+        }
         // the engine's mip bias (cb1[41].y)
         constants
             .set_words(1, 41 * 4 + 1, &[self.mip_bias.to_bits()])
             .map_err(|e| e.to_string())?;
         // the sun's direction (cb0[4], toward it) and the eye's (cb1[2]) against the surface's normal +z
-        if recipe.sun {
+        if recipe.light == Light::SunAndEye {
             let (sin, cos) = f64::from(self.sun_elevation).to_radians().sin_cos();
-            let c = f64::from(self.view_cosine);
             constants
                 .set_words(0, 4 * 4, &[cos as f32, 0.0, sin as f32].map(f32::to_bits))
                 .map_err(|e| e.to_string())?;
+        }
+        if recipe.light != Light::None {
+            let c = f64::from(self.view_cosine);
             constants
                 .set_words(
                     1,
@@ -649,7 +701,11 @@ impl BakeAnvilMaterial {
                     textures.insert(75 + slot, primase_shader::Texture::Constant([0.0; 4]));
                     continue;
                 }
-                None => return Err(format!("no texture at t{} (unset, or not read)", 75 + slot)),
+                // resolved to none: white, as `unset=white` states
+                None => {
+                    textures.insert(75 + slot, primase_shader::Texture::Constant([1.0; 4]));
+                    continue;
+                }
             };
             let t = w
                 .get::<Texture>(e)
@@ -813,6 +869,7 @@ impl Pass for BakeAnvilMaterial {
             ("terrain-ao".to_owned(), self.terrain_ao.to_string()),
             ("sun-elevation".to_owned(), self.sun_elevation.to_string()),
             ("view-cosine".to_owned(), self.view_cosine.to_string()),
+            ("unset".to_owned(), "white".to_owned()),
         ])
     }
     fn provides(&self) -> &[&'static str] {

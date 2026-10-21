@@ -2166,6 +2166,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("terrain-ao", "0.5"),
             ("sun-elevation", "45"),
             ("view-cosine", "0.7"),
+            ("unset", "white"),
         ],
     );
     reg.register_requiring(
