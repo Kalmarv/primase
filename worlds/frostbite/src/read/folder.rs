@@ -276,6 +276,30 @@ impl Source<'_> {
         Ok(out)
     }
 
+    /// The resource with id `rid` of the bundle named `bundle_name` in the TOC at `toc`: its type and its bytes.
+    pub fn resource(&self, toc: &str, bundle_name: &str, rid: u64) -> Result<(u32, Vec<u8>)> {
+        let t = self.folder.toc(toc)?;
+        let (_, region) = t
+            .bundles
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(bundle_name))
+            .ok_or_else(|| Error::Missing(format!("{toc} has no bundle {bundle_name}")))?;
+        let (files, inline) = bundle::read_region(region)?;
+        let (m, first, _) = self
+            .manifest(&files, &inline)?
+            .ok_or_else(|| Error::Missing(format!("{bundle_name} has no manifest")))?;
+        let (i, a) = m
+            .res
+            .iter()
+            .enumerate()
+            .find(|(_, a)| a.rid == rid)
+            .ok_or_else(|| Error::Missing(format!("{bundle_name} has no resource {rid:#x}")))?;
+        Ok((
+            a.rtype,
+            self.payload(files[first + m.ebx.len() + i], a.size as usize)?,
+        ))
+    }
+
     /// The EBX document at `entry`, read.
     pub fn read_ebx(&self, entry: &EbxEntry) -> Result<crate::ebx::Document> {
         crate::ebx::read(&self.payload(entry.file, entry.size)?)

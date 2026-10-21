@@ -124,6 +124,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &[("kinds", "spawn+travel"), ("above", "1")],
     );
     reg.register("snap-reskate-markers", passes::snap_reskate_markers);
+    // how the game interpolates between keys is not established: the program states it
+    reg.register_requiring(
+        "lower-skate-clips",
+        game::clip::lower_skate_clips,
+        &[("interpolation", "linear")],
+    );
     // which curves grind, how thick, on what and which it leaves out are the program's: no default
     reg.register_requiring(
         "lower-reskate-grind-curves",

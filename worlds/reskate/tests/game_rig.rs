@@ -10,8 +10,9 @@ use primase_animation::pose::{affine, locals, model_transforms};
 use primase_compress::oodle::{Oodle, Version};
 use primase_core::{Skeleton, World};
 use primase_frostbite::folder::{Folder, Source};
-use primase_reskate::game::rig::{DofTarget, SkateAnimRig, insert_rig, read_rig, render_map};
+use primase_reskate::game::rig::{DofTarget, SkateAnimRig, insert_rig, render_map};
 use primase_reskate::game::skeleton::{SkateSkeletonAsset, read_skeleton};
+use primase_reskate::read::game::read_rig;
 use primase_testdata::real_data;
 
 type R = Result<(), Box<dyn std::error::Error>>;

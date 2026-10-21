@@ -18,7 +18,6 @@ use std::collections::BTreeMap;
 
 use primase_core::{Component, Entity, Joint, JointId, JsonError, Name, Rest, Skeleton, World};
 use primase_frostbite::ebx::{Document, Object, Pointer, Value};
-use primase_frostbite::folder::{EbxEntry, Source};
 use serde::Serialize;
 use serde_json::Value as Json;
 
@@ -109,28 +108,9 @@ fn text(v: &Value, what: &str) -> Result<String, String> {
     }
 }
 
-/// The document an external pointer of `doc` names, from `index` (the bundle's documents by file GUID).
-fn imported(
-    src: &Source,
-    index: &BTreeMap<[u8; 16], EbxEntry>,
-    doc: &Document,
-    v: &Value,
-    what: &str,
-) -> Result<Document, String> {
-    let Value::Pointer(Pointer::External(k)) = v else {
-        return Err(format!("{what} is not an import"));
-    };
-    let guid = doc
-        .imports
-        .get(*k)
-        .ok_or_else(|| format!("{what}: import {k} does not exist"))?
-        .file_guid;
-    let entry = index
-        .get(&guid)
-        .ok_or_else(|| format!("{what}: the imported document is not in the rig's bundle"))?;
-    src.read_ebx(entry)
-        .map_err(|e| format!("{what} ({}): {e}", entry.name))
-}
+/// Resolves an external pointer `v` of document `doc` to the document it names (`what` names it in errors): the
+/// reader's I/O ([`crate::read::game`]), so this module reads documents only.
+pub type Imports<'a> = dyn Fn(&Document, &Value, &str) -> Result<Document, String> + 'a;
 
 /// The names of a `DofSetAsset`'s DOFs, in order.
 fn dof_names(set: &Document, what: &str) -> Result<Vec<String>, String> {
@@ -166,25 +146,18 @@ fn dof_names(set: &Document, what: &str) -> Result<Vec<String>, String> {
         .collect()
 }
 
-/// Read the rig named `rig_name` from bundle `bundle` of TOC `toc` (see the module documentation).
-pub fn read_rig(src: &Source, toc: &str, bundle: &str, rig_name: &str) -> Result<AnimRig, String> {
-    let index = src.ebx_index(toc, bundle).map_err(|e| e.to_string())?;
-    let entry = index
-        .values()
-        .find(|e| e.name.eq_ignore_ascii_case(rig_name))
-        .ok_or_else(|| format!("{bundle} has no EBX {rig_name}"))?;
-    let doc = src.read_ebx(entry).map_err(|e| e.to_string())?;
+/// The rig the `RigAsset` document `doc` states (see the module documentation), the documents it imports resolved by
+/// `imported`.
+pub fn rig_from(doc: &Document, imported: &Imports<'_>) -> Result<AnimRig, String> {
     if doc.root_type != "RigAsset" {
-        return Err(format!("{rig_name} is a {}, not a RigAsset", doc.root_type));
+        return Err(format!("the document is a {}, not a RigAsset", doc.root_type));
     }
-    let rig = object(&doc, 0, "RigAsset")?;
+    let rig = object(doc, 0, "RigAsset")?;
     let name = text(rig.field("Name").ok_or("RigAsset has no Name")?, "RigAsset.Name")?;
 
     // the skeleton
     let skel_doc = imported(
-        src,
-        &index,
-        &doc,
+        doc,
         rig.field("SkeletonAsset")
             .ok_or("RigAsset has no SkeletonAsset")?,
         "RigAsset.SkeletonAsset",
@@ -243,7 +216,7 @@ pub fn read_rig(src: &Source, toc: &str, bundle: &str, rig_name: &str) -> Result
     let mut dofs = BTreeMap::new();
     for (i, set) in sets.iter().enumerate() {
         let what = format!("RigAsset.DofSets[{i}]");
-        let names = dof_names(&imported(src, &index, &doc, set, &what)?, &what)?;
+        let names = dof_names(&imported(doc, set, &what)?, &what)?;
         let end = starts.get(i + 1).copied().unwrap_or(ids.len());
         let run = ids
             .get(starts[i]..end)
@@ -264,7 +237,7 @@ pub fn read_rig(src: &Source, toc: &str, bundle: &str, rig_name: &str) -> Result
     let Some(Value::Pointer(Pointer::Internal(k))) = rig.field("DefaultPoseAsset") else {
         return Err("RigAsset's DefaultPoseAsset is not in its document".into());
     };
-    let pose = object(&doc, *k, "DefaultPoseAsset")?;
+    let pose = object(doc, *k, "DefaultPoseAsset")?;
     let mut defaults = BTreeMap::new();
     let mut take = |values: &str, ids: &str, f: &dyn Fn(&Value, &str) -> Result<DefaultValue, String>| {
         let (v, d) = (
