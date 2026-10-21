@@ -167,22 +167,19 @@ fn tile_image(format: TexFormat, blocks: &[u8], colour: ColorSpace) -> Option<Le
         .flatten()
 }
 
-/// The rectangle `rect` (x0, y0, x1, y1, source units) of the terrain `t`'s ground baked as `s` states, an sRGB RGBA8
-/// image a pixel of `s.pixel` units to its side from (x0, y0) along +x and +y (row 0 at y0), and what it counted.
-/// `tile_colour` is the far tiles' colour space.
+/// Each rectangle of `rects` (x0, y0, x1, y1, source units) of the terrain `t`'s ground baked as `s` states, an sRGB
+/// RGBA8 image a pixel of `s.pixel` units to its side from (x0, y0) along +x and +y (row 0 at y0), and what it counted;
+/// the noise and the materials' details decoded once for them all. `tile_colour` is the far tiles' colour space.
 pub fn bake(
     w: &World,
     t: &AnvilTerrain,
-    rect: [f64; 4],
+    rects: &[[f64; 4]],
     s: &Splat,
     tile_colour: ColorSpace,
-) -> Result<(Texture, Baked), String> {
+) -> Result<Vec<(Texture, Baked)>, String> {
     let level = t.level.min(30);
     let node_side = t.side / f64::from(1u32 << level);
     let texel = node_side / 128.0;
-    let [x0, y0, x1, y1] = rect;
-    let width = ((x1 - x0) / s.pixel).ceil().max(1.0) as u32;
-    let height = ((y1 - y0) / s.pixel).ceil().max(1.0) as u32;
     let noise = match t.noise.and_then(|e| w.get::<Texture>(e)) {
         Some(n) => Levels::of(n).map_err(|e| e.to_string())?,
         None => return Err("the splat bake needs the splatting noise (TerrainRead's noise)".into()),
@@ -222,103 +219,109 @@ pub fn bake(
     } else {
         Transfer::Stored
     };
-    let mut out = vec![0u8; width as usize * height as usize * 4];
-    let mut baked = Baked::default();
-    for py in 0..height {
-        for px in 0..width {
-            baked.pixels += 1;
-            let x = x0 + (f64::from(px) + 0.5) * s.pixel;
-            let y = y0 + (f64::from(py) + 0.5) * s.pixel;
-            let (gx, gy) = ((x - t.origin[0]) / texel, (y - t.origin[1]) / texel);
-            let (nx, ny) = (gx.div_euclid(128.0), gy.div_euclid(128.0));
-            if !nodes.contains_key(&(ny as i64, nx as i64)) {
-                baked.outside += 1;
-                continue;
-            }
-            let (lx, ly) = (gx - nx * 128.0, gy - ny * 128.0);
-            let n = noise.bilinear(0, [lx / 128.0, ly / 128.0], [Address::Wrap; 2], noise_transfer);
-            let (qx, qy) = (gx + (2.0 * n[0] - 1.0) * 0.5, gy + (2.0 * n[1] - 1.0) * 0.5);
-            let (cx, cy) = (qx.floor() as i64, qy.floor() as i64);
-            let (fx, fy) = (qx - qx.floor() - 0.5, qy - qy.floor() - 0.5);
-            let (sx, sy) = (if fx >= 0.0 { 1 } else { -1 }, if fy >= 0.0 { 1 } else { -1 });
-            let weight = |f: f64| 1.0 / (1.0 + (s.k * (0.5 - f.abs())).exp());
-            let (wx, wy) = (weight(fx), weight(fy));
-            let corners = [(cx, cy), (cx + sx, cy), (cx, cy + sy), (cx + sx, cy + sy)];
-            let materials = corners.map(|(mx, my)| material(mx, my));
-            for m in materials.iter().flatten() {
-                detail(w, t, s, *m, &mut images, &mut details)?;
-            }
-            let mut fell_back = false;
-            let mut colour_of = |m: Option<u8>| -> [f64; 3] {
-                let detail = m.and_then(|m| details.get(&m)).and_then(Option::as_ref);
-                match detail {
-                    Some(d) => {
-                        let level0 = f64::from(d.image.width) * d.g * s.pixel;
-                        let top = d.image.levels.len().saturating_sub(1);
-                        let mip = (level0.max(1.0).log2().round() as usize).min(top);
-                        let transfer = if d.srgb {
-                            Transfer::SrgbColour
-                        } else {
-                            Transfer::Stored
-                        };
-                        let c = d
-                            .image
-                            .bilinear(mip, [x * d.g, y * d.g], [Address::Wrap; 2], transfer);
-                        [c[0], c[1], c[2]]
-                    }
-                    None => {
-                        fell_back = true;
-                        let decode = |c: u8| match tile_colour {
-                            ColorSpace::Srgb => srgb_to_linear(unorm(c)),
-                            _ => unorm(c),
-                        };
-                        [0, 1, 2].map(|k| {
-                            across(gx, gy, |tx, ty| {
-                                let (n, i, j) = locate(tx, ty)?;
-                                Some(decode(
-                                    n.colour
-                                        .as_ref()?
-                                        .texel(0, j as i64, i as i64, [Address::Wrap; 2])[k],
-                                ))
-                            })
-                        })
-                    }
+    let mut results = Vec::with_capacity(rects.len());
+    for &[x0, y0, x1, y1] in rects {
+        let width = ((x1 - x0) / s.pixel).ceil().max(1.0) as u32;
+        let height = ((y1 - y0) / s.pixel).ceil().max(1.0) as u32;
+        let mut out = vec![0u8; width as usize * height as usize * 4];
+        let mut baked = Baked::default();
+        for py in 0..height {
+            for px in 0..width {
+                baked.pixels += 1;
+                let x = x0 + (f64::from(px) + 0.5) * s.pixel;
+                let y = y0 + (f64::from(py) + 0.5) * s.pixel;
+                let (gx, gy) = ((x - t.origin[0]) / texel, (y - t.origin[1]) / texel);
+                let (nx, ny) = (gx.div_euclid(128.0), gy.div_euclid(128.0));
+                if !nodes.contains_key(&(ny as i64, nx as i64)) {
+                    baked.outside += 1;
+                    continue;
                 }
-            };
-            let [c00, c10, c01, c11] = materials.map(&mut colour_of);
-            if fell_back {
-                baked.tile_fallback += 1;
+                let (lx, ly) = (gx - nx * 128.0, gy - ny * 128.0);
+                let n = noise.bilinear(0, [lx / 128.0, ly / 128.0], [Address::Wrap; 2], noise_transfer);
+                let (qx, qy) = (gx + (2.0 * n[0] - 1.0) * 0.5, gy + (2.0 * n[1] - 1.0) * 0.5);
+                let (cx, cy) = (qx.floor() as i64, qy.floor() as i64);
+                let (fx, fy) = (qx - qx.floor() - 0.5, qy - qy.floor() - 0.5);
+                let (sx, sy) = (if fx >= 0.0 { 1 } else { -1 }, if fy >= 0.0 { 1 } else { -1 });
+                let weight = |f: f64| 1.0 / (1.0 + (s.k * (0.5 - f.abs())).exp());
+                let (wx, wy) = (weight(fx), weight(fy));
+                let corners = [(cx, cy), (cx + sx, cy), (cx, cy + sy), (cx + sx, cy + sy)];
+                let materials = corners.map(|(mx, my)| material(mx, my));
+                for m in materials.iter().flatten() {
+                    detail(w, t, s, *m, &mut images, &mut details)?;
+                }
+                let mut fell_back = false;
+                let mut colour_of = |m: Option<u8>| -> [f64; 3] {
+                    let detail = m.and_then(|m| details.get(&m)).and_then(Option::as_ref);
+                    match detail {
+                        Some(d) => {
+                            let level0 = f64::from(d.image.width) * d.g * s.pixel;
+                            let top = d.image.levels.len().saturating_sub(1);
+                            let mip = (level0.max(1.0).log2().round() as usize).min(top);
+                            let transfer = if d.srgb {
+                                Transfer::SrgbColour
+                            } else {
+                                Transfer::Stored
+                            };
+                            let c = d
+                                .image
+                                .bilinear(mip, [x * d.g, y * d.g], [Address::Wrap; 2], transfer);
+                            [c[0], c[1], c[2]]
+                        }
+                        None => {
+                            fell_back = true;
+                            let decode = |c: u8| match tile_colour {
+                                ColorSpace::Srgb => srgb_to_linear(unorm(c)),
+                                _ => unorm(c),
+                            };
+                            [0, 1, 2].map(|k| {
+                                across(gx, gy, |tx, ty| {
+                                    let (n, i, j) = locate(tx, ty)?;
+                                    Some(decode(
+                                        n.colour
+                                            .as_ref()?
+                                            .texel(0, j as i64, i as i64, [Address::Wrap; 2])[k],
+                                    ))
+                                })
+                            })
+                        }
+                    }
+                };
+                let [c00, c10, c01, c11] = materials.map(&mut colour_of);
+                if fell_back {
+                    baked.tile_fallback += 1;
+                }
+                let lerp = |a: [f64; 3], b: [f64; 3], t: f64| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t);
+                let mut c = lerp(lerp(c00, c10, wx), lerp(c01, c11, wx), wy);
+                if s.occlusion {
+                    let b = across(gx, gy, |tx, ty| {
+                        let (n, i, j) = locate(tx, ty)?;
+                        Some(unorm(
+                            n.block_8
+                                .as_ref()?
+                                .texel(0, j as i64, i as i64, [Address::Wrap; 2])[0],
+                        ))
+                    });
+                    c = c.map(|v| v * (0.5 + b));
+                }
+                let i = (py as usize * width as usize + px as usize) * 4;
+                for k in 0..3 {
+                    out[i + k] = primase_image::linear_to_srgb8(c[k]);
+                }
+                out[i + 3] = 255;
             }
-            let lerp = |a: [f64; 3], b: [f64; 3], t: f64| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t);
-            let mut c = lerp(lerp(c00, c10, wx), lerp(c01, c11, wx), wy);
-            if s.occlusion {
-                let b = across(gx, gy, |tx, ty| {
-                    let (n, i, j) = locate(tx, ty)?;
-                    Some(unorm(
-                        n.block_8
-                            .as_ref()?
-                            .texel(0, j as i64, i as i64, [Address::Wrap; 2])[0],
-                    ))
-                });
-                c = c.map(|v| v * (0.5 + b));
-            }
-            let i = (py as usize * width as usize + px as usize) * 4;
-            for k in 0..3 {
-                out[i + k] = primase_image::linear_to_srgb8(c[k]);
-            }
-            out[i + 3] = 255;
         }
+        results.push((
+            Texture {
+                width,
+                height,
+                format: TexFormat::Rgba8Unorm,
+                levels: vec![out],
+                color_space: ColorSpace::Srgb,
+                role: TexRole::Color,
+                normal: None,
+            },
+            baked,
+        ));
     }
-    Ok((
-        Texture {
-            width,
-            height,
-            format: TexFormat::Rgba8Unorm,
-            levels: vec![out],
-            color_space: ColorSpace::Srgb,
-            role: TexRole::Color,
-            normal: None,
-        },
-        baked,
-    ))
+    Ok(results)
 }

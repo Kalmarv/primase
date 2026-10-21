@@ -978,6 +978,12 @@ impl Pass for LowerAnvilFloor {
 /// Republic notes' 101 props on one plaza) aren't stored as such, and neither the half-sample convention nor the colour
 /// tiles' colour space is established.
 ///
+/// `pieces=whole` draws the ground as one primitive with one texture over `rect`; `pieces=per-node` (with
+/// `ground=splat`) as a primitive per terrain node, each square of the grid in the node of its corner sample with the
+/// least x and y, each piece with its own near colour baked over its squares' extent (a node's whole square is
+/// 128 samples, its side at `splat-px` a pixel: 64 m at 0.25 m is 256 pixels). The pieces' positions are the whole
+/// ground's, computed alike, so neighbours share their seam vertices exactly; the collision stays one, over the whole.
+///
 /// With `collision` other than none the ground is also its own collision, on the same prototype: each square's two
 /// triangles of the surface its corner sample with the least x and y names (a square spans four samples, whose
 /// materials may differ: that sample is this pass's choice), by the CollisionMaterial of that sample's material in the
@@ -997,6 +1003,16 @@ pub struct LowerAnvilTerrain {
     pub surface: String,
     /// The colour drawn: the far colour tiles, or the near colour baked.
     pub ground: GroundColour,
+    pub pieces: Pieces,
+}
+
+/// How `lower-anvil-terrain` divides the ground it draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pieces {
+    /// One primitive, one texture over the rectangle.
+    Whole,
+    /// A primitive per terrain node, its near colour baked over its own squares (`ground=splat`).
+    PerNode,
 }
 
 /// What `lower-anvil-terrain` draws the ground with.
@@ -1022,7 +1038,7 @@ impl LowerAnvilTerrain {
             "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES (neither stored as such), sample=corner|centre, ",
             "colour=srgb|linear, collision=none|collision-material|one, surface=NAME unless collision=none, ",
             "ground=tile|splat (with splat-k=K, splat-px=UNITS, splat-uv=FACTOR|over-tile-size, splat-noise=raw|srgb, ",
-            "splat-occlusion=block-8|none)"
+            "splat-occlusion=block-8|none), pieces=whole|per-node (per-node with ground=splat)"
         );
         let splat_keys = [
             "splat-k",
@@ -1031,7 +1047,7 @@ impl LowerAnvilTerrain {
             "splat-noise",
             "splat-occlusion",
         ];
-        let mut known = vec!["range", "colour", "collision", "surface", "ground"];
+        let mut known = vec!["range", "colour", "collision", "surface", "ground", "pieces"];
         known.extend(splat_keys);
         let g = ground_options(o, &known, usage)?;
         let get = |k: &str| {
@@ -1092,6 +1108,18 @@ impl LowerAnvilTerrain {
             Some(v) => return Err(format!("colour={v} is not srgb or linear")),
             None => return Err(format!("colour is required: {usage}")),
         };
+        let pieces = match get("pieces")? {
+            "whole" => Pieces::Whole,
+            "per-node" if matches!(ground, GroundColour::Splat(_)) => Pieces::PerNode,
+            "per-node" => {
+                return Err(
+                    "pieces=per-node needs ground=splat (a node's colour tile is sample-centred: it doesn't cover its \
+                     last squares)"
+                        .into(),
+                );
+            }
+            v => return Err(format!("pieces={v} is not whole or per-node")),
+        };
         let range: f64 = o
             .get("range")
             .ok_or_else(|| format!("range is required: {usage}"))?
@@ -1110,6 +1138,7 @@ impl LowerAnvilTerrain {
             collision,
             surface,
             ground,
+            pieces,
         })
     }
 }
@@ -1145,6 +1174,14 @@ impl Pass for LowerAnvilTerrain {
         ])
         .into_iter()
         .chain((!self.surface.is_empty()).then(|| ("surface".to_owned(), self.surface.clone())))
+        .chain([(
+            "pieces".to_owned(),
+            match self.pieces {
+                Pieces::Whole => "whole",
+                Pieces::PerNode => "per-node",
+            }
+            .to_owned(),
+        )])
         .chain(match self.ground {
             GroundColour::Tile => vec![("ground".to_owned(), "tile".to_owned())],
             GroundColour::Splat(s) => vec![
@@ -1293,7 +1330,9 @@ impl Pass for LowerAnvilTerrain {
                     }
                 }
             }
-            let (texture, uvs) = match self.ground {
+            // what is drawn: per piece its texture, its vertices' coordinates in it, and (per node) which of the
+            // whole's vertices it draws and its triangles over them
+            let pieces: Vec<GroundPiece> = match self.ground {
                 GroundColour::Tile => {
                     // the colour: each node's 128 x 128 core texels (from TerrainTile::CORE_AT, not on its BC1 blocks' edges), decoded
                     // (BC1's 8-bit decode is its meaning) and laid side by side
@@ -1370,27 +1409,114 @@ impl Pass for LowerAnvilTerrain {
                             normal: None,
                         },
                     );
-                    (texture, uvs)
+                    vec![GroundPiece {
+                        texture,
+                        uvs,
+                        vertices: None,
+                        indices: indices.clone(),
+                    }]
                 }
                 GroundColour::Splat(splat) => {
-                    let (image, baked) = splat::bake(w, &t, self.rect, &splat, self.colour)?;
-                    let (bw, bh) = (
-                        f64::from(image.width) * splat.pixel,
-                        f64::from(image.height) * splat.pixel,
-                    );
-                    let uvs = rows
-                        .iter()
-                        .flat_map(|&gy| columns.iter().map(move |&gx| (gx, gy)))
-                        .map(|(gx, gy)| {
-                            let x = t.origin[0] + spacing * f64::from(gx) + shift;
-                            let y = t.origin[1] + spacing * f64::from(gy) + shift;
-                            [((x - x0) / bw) as f32, ((y - y0) / bh) as f32]
-                        })
-                        .collect::<Vec<_>>();
+                    let x_of = |gx: u32| t.origin[0] + spacing * f64::from(gx) + shift;
+                    let y_of = |gy: u32| t.origin[1] + spacing * f64::from(gy) + shift;
+                    // per piece: its rectangle, and its squares (row, column) of the grid
+                    let groups: Vec<([f64; 4], Squares)> = match self.pieces {
+                        Pieces::Whole => vec![(
+                            self.rect,
+                            (0..height - 1)
+                                .flat_map(|r| (0..width - 1).map(move |c| (r, c)))
+                                .collect(),
+                        )],
+                        Pieces::PerNode => {
+                            let mut by_node: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
+                            for r in 0..height - 1 {
+                                for c in 0..width - 1 {
+                                    let node = (
+                                        rows[r as usize] / TERRAIN_CORE,
+                                        columns[c as usize] / TERRAIN_CORE,
+                                    );
+                                    by_node.entry(node).or_default().push((r, c));
+                                }
+                            }
+                            by_node
+                                .into_values()
+                                .map(|squares| {
+                                    let (r0, c0) = squares[0];
+                                    let (r1, c1) = squares[squares.len() - 1];
+                                    let rect = [
+                                        x_of(columns[c0 as usize]),
+                                        y_of(rows[r0 as usize]),
+                                        x_of(columns[c1 as usize + 1]),
+                                        y_of(rows[r1 as usize + 1]),
+                                    ];
+                                    (rect, squares)
+                                })
+                                .collect()
+                        }
+                    };
+                    let rects: Vec<[f64; 4]> = groups.iter().map(|(r, _)| *r).collect();
+                    let images = splat::bake(w, &t, &rects, &splat, self.colour)?;
+                    let mut total = splat::Baked::default();
+                    let mut pieces = Vec::with_capacity(images.len());
+                    for ((rect, squares), (image, baked)) in groups.into_iter().zip(images) {
+                        total.pixels += baked.pixels;
+                        total.tile_fallback += baked.tile_fallback;
+                        total.outside += baked.outside;
+                        let (bw, bh) = (
+                            f64::from(image.width) * splat.pixel,
+                            f64::from(image.height) * splat.pixel,
+                        );
+                        let uv = |v: u32| {
+                            let (gx, gy) = (columns[(v % width) as usize], rows[(v / width) as usize]);
+                            [
+                                ((x_of(gx) - rect[0]) / bw) as f32,
+                                ((y_of(gy) - rect[1]) / bh) as f32,
+                            ]
+                        };
+                        let texture = w.spawn();
+                        w.insert(texture, image);
+                        pieces.push(match self.pieces {
+                            Pieces::Whole => GroundPiece {
+                                texture,
+                                uvs: (0..width * height).map(uv).collect(),
+                                vertices: None,
+                                indices: indices.clone(),
+                            },
+                            Pieces::PerNode => {
+                                // the whole's vertices this piece's squares use, in first use, and its triangles
+                                let mut local: BTreeMap<u32, u32> = BTreeMap::new();
+                                let mut vertices = Vec::new();
+                                let mut piece_indices = Vec::with_capacity(squares.len() * 6);
+                                for (r, c) in squares {
+                                    let [a, b] = [r * width + c, r * width + c + 1];
+                                    let [d, f] = [a + width, b + width];
+                                    for tri in [[a, b, f], [a, f, d]] {
+                                        let tri = if flip { [tri[0], tri[2], tri[1]] } else { tri };
+                                        for v in tri {
+                                            let next = u32::try_from(vertices.len())
+                                                .map_err(|_| "too many vertices".to_owned())?;
+                                            let at = *local.entry(v).or_insert_with(|| {
+                                                vertices.push(v);
+                                                next
+                                            });
+                                            piece_indices.push(at);
+                                        }
+                                    }
+                                }
+                                GroundPiece {
+                                    texture,
+                                    uvs: vertices.iter().map(|&v| uv(v)).collect(),
+                                    vertices: Some(vertices),
+                                    indices: piece_indices,
+                                }
+                            }
+                        });
+                    }
                     log.count("terrain nodes used", tiles.len() as u64);
                     log.count("ground samples", positions.len() as u64);
                     log.count("ground triangles", (indices.len() / 3) as u64);
-                    log.count("ground near-colour pixels baked", baked.pixels);
+                    log.count("ground pieces", pieces.len() as u64);
+                    log.count("ground near-colour pixels baked", total.pixels);
                     log.approximate(
                         "ground samples at a stated range and offset",
                         positions.len() as u64,
@@ -1399,37 +1525,23 @@ impl Pass for LowerAnvilTerrain {
                         "ground near colour baked by the notes' reading of the terrain shader, its choices stated",
                         1,
                     );
-                    if baked.tile_fallback > 0 {
+                    if total.tile_fallback > 0 {
                         log.omit(
                             "ground pixels a material of which has no detail diffuse: its far colour tile there",
-                            baked.tile_fallback,
+                            total.tile_fallback,
                         );
                     }
-                    if baked.outside > 0 {
-                        log.omit("ground pixels outside every read node: black", baked.outside);
+                    if total.outside > 0 {
+                        log.omit("ground pixels outside every read node: black", total.outside);
                     }
                     log.omit(
                         "ground near colour's altitude ramps, detail normals, slope normal, per-cell uv rotation and \
                          cell-hash term (not read)",
                         1,
                     );
-                    let texture = w.spawn();
-                    w.insert(texture, image);
-                    (texture, uvs)
+                    pieces
                 }
             };
-            let material = w.spawn();
-            w.insert(
-                material,
-                PbrMaterial {
-                    base_color_texture: Some(TextureRef {
-                        wrap: [Wrap::Clamp; 2],
-                        ..TextureRef::new(texture)
-                    }),
-                    metallic: 0.0,
-                    ..PbrMaterial::default()
-                },
-            );
             if self.collision.is_some() {
                 let mut surfaces = w.remove_resource::<Surfaces>().unwrap_or_default();
                 let mut per_square = Vec::with_capacity(square_names.len());
@@ -1449,18 +1561,35 @@ impl Pass for LowerAnvilTerrain {
                     },
                 );
             }
-            let mut streams = BTreeMap::new();
-            streams.insert(Semantic::Position, Stream::F32x3(positions));
-            streams.insert(Semantic::TexCoord(0), Stream::F32x2(uvs));
-            w.insert(
-                e,
-                Mesh::new(vec![Primitive {
+            let mut primitives = Vec::with_capacity(pieces.len());
+            for piece in pieces {
+                let material = w.spawn();
+                w.insert(
+                    material,
+                    PbrMaterial {
+                        base_color_texture: Some(TextureRef {
+                            wrap: [Wrap::Clamp; 2],
+                            ..TextureRef::new(piece.texture)
+                        }),
+                        metallic: 0.0,
+                        ..PbrMaterial::default()
+                    },
+                );
+                let piece_positions = match &piece.vertices {
+                    None => positions.clone(),
+                    Some(v) => v.iter().map(|&i| positions[i as usize]).collect(),
+                };
+                let mut streams = BTreeMap::new();
+                streams.insert(Semantic::Position, Stream::F32x3(piece_positions));
+                streams.insert(Semantic::TexCoord(0), Stream::F32x2(piece.uvs));
+                primitives.push(Primitive {
                     topology: Topology::Triangles,
                     streams,
-                    indices: Some(indices),
+                    indices: Some(piece.indices),
                     material: Some(material),
-                }]),
-            );
+                });
+            }
+            w.insert(e, Mesh::new(primitives));
             let placed = w.spawn();
             w.insert(
                 placed,
@@ -1474,6 +1603,18 @@ impl Pass for LowerAnvilTerrain {
         }
         Ok(())
     }
+}
+
+/// Squares of the ground grid, by (row, column).
+type Squares = Vec<(u32, u32)>;
+
+/// One primitive of the ground: its texture, its vertices' coordinates in it, which of the whole grid's vertices it
+/// draws (`None`: all, in order) and its triangles over its own vertices.
+struct GroundPiece {
+    texture: Entity,
+    uvs: Vec<[f32; 2]>,
+    vertices: Option<Vec<u32>>,
+    indices: Vec<u32>,
 }
 
 /// Register Anvil's passes by name.
@@ -1549,6 +1690,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("colour", "srgb"),
             ("ground", "tile"),
             ("collision", "none"),
+            ("pieces", "whole"),
         ],
     );
     reg.register_requiring(
