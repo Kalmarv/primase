@@ -38,8 +38,10 @@
 //!
 //! `alpha=prelude` draws each Material as its prelude (the 102 bytes after its references) reads in the notes
 //! (docs/material-spec.md §13.3; AnvilToolkit's BlendMode and alpha-test fields at those places, not checked in the
-//! game): its u32 at 20 4, blended with the base colour's alpha; 0, alpha-tested at its byte at 28 over 255 (opaque
-//! where 0); 1 and 6 (additive-looking) aren't lowered, drawn opaque, reported.
+//! game): its u32 at 20 4, blended with the base colour's alpha; 0, alpha-tested at its byte at 28 over 255 where
+//! that byte and its byte at 53 are other than 0 (the byte at 53 the likely enable, a correlation: the addendum's 68
+//! cut-out and 40 solid Tex1 and Wind Materials), else opaque; 1 and 6 (additive-looking) aren't lowered, drawn
+//! opaque, reported.
 //!
 //! Every option is the program's: the normal map's green sign against glTF's isn't established, nor the alpha test's
 //! reference (alpha=mask states one; alpha=prelude the prelude's reading), nor what the game binds for a texture a Material leaves unset (unset=white: the
@@ -275,14 +277,16 @@ fn binds(m: &AnvilMaterial, layout: &Tex1Layout) -> bool {
     })
 }
 
-/// The blend mode a Material's prelude states (its u32 at 20, the alpha-test byte at 28): the notes' reading
-/// (docs/material-spec.md §13.3), not checked in the game. 4: blended; 0: alpha-tested at the byte over 255 (opaque
-/// where it is 0); otherwise (1, 6: additive-looking) not lowered, `None`.
+/// The blend mode a Material's prelude states (its u32 at 20, the alpha-test byte at 28, the byte at 53): the
+/// notes' reading (docs/material-spec.md §13.3 and its addendum), not checked in the game. 4: blended; 0:
+/// alpha-tested at the byte at 28 over 255 where it and the byte at 53 are other than 0, else opaque (the byte at 53
+/// the likely enable, a correlation: set on 64 of 68 Tex1 and Wind Materials whose diffuse alpha is a cut-out, on 0
+/// of 40 solid ones whose alpha is continuous); otherwise (1, 6: additive-looking) not lowered, `None`.
 fn prelude_alpha(m: &AnvilMaterial) -> Option<AlphaMode> {
-    match (m.prelude_20, m.prelude_28) {
-        (4, _) => Some(AlphaMode::Blend),
-        (0, 0) => Some(AlphaMode::Opaque),
-        (0, t) => Some(AlphaMode::Mask {
+    match (m.prelude_20, m.prelude_28, m.prelude_53) {
+        (4, _, _) => Some(AlphaMode::Blend),
+        (0, 0, _) | (0, _, 0) => Some(AlphaMode::Opaque),
+        (0, t, _) => Some(AlphaMode::Mask {
             cutoff: f32::from(t) / 255.0,
         }),
         _ => None,

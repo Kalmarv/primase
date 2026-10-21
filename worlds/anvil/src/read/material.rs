@@ -179,15 +179,17 @@ impl Cursor<'_> {
 }
 
 impl StoredMaterial {
-    /// The u32 at 20 of the bytes after the references (body 41) and their byte at 28 (body 49): the Riders Republic
-    /// notes' blend mode and alpha-test value (docs/material-spec.md §13.3, AnvilToolkit's names; not established).
-    pub fn prelude_20_28(&self) -> (u32, u8) {
+    /// The u32 at 20 of the bytes after the references (body 41) and their bytes at 28 and 53 (body 49, 74): the
+    /// Riders Republic notes' blend mode, alpha-test value and (a correlation) the cut-out's enable
+    /// (docs/material-spec.md §13.3 and its addendum, AnvilToolkit's names for the first two; none established).
+    pub fn prelude_20_28_53(&self) -> (u32, u8, u8) {
         let word = self
             .unread
             .get(20..24)
             .and_then(|w| w.try_into().ok())
             .map_or(0, u32::from_le_bytes);
-        (word, self.unread.get(28).copied().unwrap_or(0))
+        let byte = |at: usize| self.unread.get(at).copied().unwrap_or(0);
+        (word, byte(28), byte(53))
     }
 
     /// The body parsed.

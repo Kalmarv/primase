@@ -602,8 +602,9 @@ impl<'a> Placer<'a> {
                 bindings,
                 values,
                 texture_set,
-                prelude_20: m.prelude_20_28().0,
-                prelude_28: m.prelude_20_28().1,
+                prelude_20: m.prelude_20_28_53().0,
+                prelude_28: m.prelude_20_28_53().1,
+                prelude_53: m.prelude_20_28_53().2,
             },
         );
         Ok(Some(e))
