@@ -3,6 +3,7 @@
 //! See `docs/DESIGN.md` §3-4 and CONTRIBUTING.md for the conventions every crate follows.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod clip;
 pub mod components;
 pub mod convert;
 mod environment;
@@ -35,6 +36,10 @@ pub mod provenance;
 pub mod rig;
 pub mod skeleton;
 pub mod skin;
+pub use clip::{
+    AdditiveReference, Channel, Clip, ClipBinding, ClipTarget, Extrapolation, Interpolation, Property,
+    RootMotion, RootSpace,
+};
 pub use morphs::{Deltas, Frame as MorphFrame, MorphId, Morphs, Target as MorphTarget};
 pub use provenance::{Origin, Provenance};
 pub use rig::{Attachment, MorphWeights, RigInstance, RigPose, SkinInstance, Socket, SocketId, Sockets};
