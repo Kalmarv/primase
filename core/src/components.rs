@@ -218,6 +218,18 @@ impl Linear {
         self.det
     }
 
+    /// The columns of `M^-1` (the transpose of the cofactors over the determinant); `None` for a singular map.
+    pub fn inverse_columns(&self) -> Option<[[f64; 3]; 3]> {
+        if self.det == 0.0 || !self.det.is_finite() {
+            return None;
+        }
+        // row i of M^-1 is cof[i] / det (c1 x c2 dotted with c0 is det, with c1 and c2 it is 0): column j holds
+        // entry j of each
+        Some(std::array::from_fn(|j| {
+            std::array::from_fn(|r| self.cof[r][j] / self.det)
+        }))
+    }
+
     /// Whether it reverses orientation (negative determinant): triangles must be reversed and tangent w negated.
     pub fn mirrors(&self) -> bool {
         self.det < 0.0
@@ -617,8 +629,15 @@ impl Component for Mesh {
     }
     /// Each primitive whole: a position stream of points, every stream as long as it (one value per vertex), indices
     /// within it, whole triangles or lines; and float streams finite (glTF and every writer we have refuse NaN and
-    /// infinity).
-    fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
+    /// infinity). Joint and weight streams mean a skin: only on an entity with a `core.skin`, which checks them.
+    fn verify(&self, e: Entity, w: &crate::World) -> Result<(), String> {
+        if !w.has::<crate::Skin>(e)
+            && let Some(i) = self.primitives.iter().position(crate::skin::has_skin_streams)
+        {
+            return Err(format!(
+                "primitive {i}: joint or weight streams without a core.skin"
+            ));
+        }
         for (i, p) in self.primitives.iter().enumerate() {
             let n = match p.streams.get(&Semantic::Position) {
                 Some(Stream::F32x3(v)) => v.len(),
