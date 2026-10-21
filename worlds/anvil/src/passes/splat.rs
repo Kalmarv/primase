@@ -32,6 +32,7 @@ use primase_core::{ColorSpace, Entity, TexFormat, TexRole, Texture, World};
 use primase_image::{TextureMetadata, map_rgba8_levels, srgb_to_linear};
 
 use crate::components::{AnvilTerrain, AnvilTextureMap, TerrainTile};
+use crate::read::terrain::CORE_AT;
 
 /// How a detail's uv scale becomes uv per source unit.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -267,7 +268,11 @@ pub fn bake(
     // the node and its local texel of a global texel
     let locate = |gx: i64, gy: i64| -> Option<(&Node, usize, usize)> {
         let n = nodes.get(&(gy.div_euclid(128), gx.div_euclid(128)))?;
-        Some((n, gy.rem_euclid(128) as usize, gx.rem_euclid(128) as usize))
+        Some((
+            n,
+            gy.rem_euclid(128) as usize + CORE_AT,
+            gx.rem_euclid(128) as usize + CORE_AT,
+        ))
     };
     let material = |gx: i64, gy: i64| -> Option<u8> {
         let (n, i, j) = locate(gx, gy)?;

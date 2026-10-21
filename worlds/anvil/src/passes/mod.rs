@@ -22,6 +22,7 @@ use crate::components::{
     AnvilCollisionShape, AnvilDataLayers, AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape,
     AnvilTerrain, CollisionMaterialRef, ShapeGeometry, TerrainTile, UvWordsAt,
 };
+use crate::read::terrain::CORE_AT;
 
 /// What names a lowered collision surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -960,8 +961,9 @@ impl Pass for LowerAnvilFloor {
 
 /// `lower-anvil-terrain`: terrain tiles ([`AnvilTerrain`]) become ground: a core mesh of the samples in `rect`
 /// (x0, y0, x1, y1), every `step`-th along each axis, two triangles to each square, placed once. A node's 128 x 128
-/// samples cover its square (the 4 more it stores are its +x and +y neighbours' first, which the census finds equal
-/// on all 173,740 same-level pairs), sample (i, j) at a 128th of the node's side from its corner (or a half further
+/// samples cover its square, stored from index 2 of its 132 ([`crate::read::terrain::CORE_AT`]: the engine's
+/// reading; the census finds a tile's last four equal to its +x and +y neighbours' first four on all 173,740
+/// same-level pairs), sample (i, j) at a 128th of the node's side from its corner (or a half further
 /// along each axis, by `sample`), at height `range` x (the value x 2^(level - 28)) + `offset`. The mesh is drawn
 /// with a base-colour texture: with `ground=tile` the nodes' colour tiles as stored (their 32 x 32 BC1 blocks a node,
 /// side by side), each sample at the centre of its texel, in the colour space `colour` states (the far colour: the
@@ -1245,7 +1247,7 @@ impl Pass for LowerAnvilTerrain {
                     let tile = tiles
                         .get(&node)
                         .ok_or_else(|| format!("sample ({gx}, {gy}): node {node:?} not read"))?;
-                    let value = f64::from(tile.heights[i * TERRAIN_TILE + j]);
+                    let value = f64::from(tile.heights[(i + CORE_AT) * TERRAIN_TILE + j + CORE_AT]);
                     let x = t.origin[0] + spacing * f64::from(gx) + shift;
                     let y = t.origin[1] + spacing * f64::from(gy) + shift;
                     positions.push(
@@ -1270,7 +1272,9 @@ impl Pass for LowerAnvilTerrain {
                     if let Some(by) = self.collision {
                         let (gy, gx) = (rows[r as usize], columns[c as usize]);
                         let node = (gy / TERRAIN_CORE, gx / TERRAIN_CORE);
-                        let at = (gy % TERRAIN_CORE) as usize * TERRAIN_TILE + (gx % TERRAIN_CORE) as usize;
+                        let at = ((gy % TERRAIN_CORE) as usize + CORE_AT) * TERRAIN_TILE
+                            + (gx % TERRAIN_CORE) as usize
+                            + CORE_AT;
                         let material = tiles
                             .get(&node)
                             .and_then(|tile| tile.material.get(at))
@@ -1286,22 +1290,39 @@ impl Pass for LowerAnvilTerrain {
             }
             let (texture, uvs) = match self.ground {
                 GroundColour::Tile => {
-                    // the colour: each node's first 32 x 32 blocks (its 128 x 128 texels), copied as stored
+                    // the colour: each node's 128 x 128 core texels (from CORE_AT, not on its BC1 blocks' edges), decoded
+                    // (BC1's 8-bit decode is its meaning) and laid side by side
                     let (texels_wide, texels_high) = (node_columns * TERRAIN_CORE, node_rows * TERRAIN_CORE);
-                    let core_blocks = TERRAIN_CORE as usize / 4;
-                    let mut blocks =
-                        Vec::with_capacity((texels_wide as usize / 4) * (texels_high as usize / 4) * 8);
-                    for by in 0..node_rows as usize * core_blocks {
-                        for bx in 0..node_columns as usize * core_blocks {
-                            let node = (
-                                first_row + (by / core_blocks) as u32,
-                                first_column + (bx / core_blocks) as u32,
-                            );
+                    let core = TERRAIN_CORE as usize;
+                    let mut rgba = vec![0u8; texels_wide as usize * texels_high as usize * 4];
+                    for nr in 0..node_rows {
+                        for nc in 0..node_columns {
+                            let node = (first_row + nr, first_column + nc);
                             let tile = tiles
                                 .get(&node)
                                 .ok_or_else(|| format!("node {node:?} not read"))?;
-                            let at = ((by % core_blocks) * TERRAIN_BLOCKS + bx % core_blocks) * 8;
-                            blocks.extend_from_slice(&tile.colour[at..at + 8]);
+                            let decoded = primase_image::texture_level_rgba8(
+                                &Texture {
+                                    width: TERRAIN_TILE as u32,
+                                    height: TERRAIN_TILE as u32,
+                                    format: TexFormat::Bc1,
+                                    levels: vec![tile.colour.clone()],
+                                    color_space: self.colour,
+                                    role: TexRole::Color,
+                                    normal: None,
+                                },
+                                0,
+                            )
+                            .map_err(|e| format!("node {node:?}'s colour tile: {e}"))?;
+                            let primase_image::Samples::U8(texels) = decoded.samples else {
+                                return Err(format!("node {node:?}'s colour tile: not 8-bit"));
+                            };
+                            for i in 0..core {
+                                let from = ((i + CORE_AT) * TERRAIN_TILE + CORE_AT) * 4;
+                                let row = nr as usize * core + i;
+                                let to = (row * texels_wide as usize + nc as usize * core) * 4;
+                                rgba[to..to + core * 4].copy_from_slice(&texels[from..from + core * 4]);
+                            }
                         }
                     }
                     // each sample at its texel's centre
@@ -1334,8 +1355,8 @@ impl Pass for LowerAnvilTerrain {
                         Texture {
                             width: texels_wide,
                             height: texels_high,
-                            format: TexFormat::Bc1,
-                            levels: vec![blocks],
+                            format: TexFormat::Rgba8Unorm,
+                            levels: vec![rgba],
                             color_space: self.colour,
                             role: TexRole::Color,
                             normal: None,

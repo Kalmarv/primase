@@ -10,6 +10,15 @@
 use std::collections::{BTreeSet, HashMap};
 
 use primase_core::Entity;
+
+/// Where a node's samples begin in its 132-sample tile (every raster: heights, colour, material, block 8): its core
+/// sample (i, j), the 128 x 128 covering its square from its corner, is stored at (i + 2, j + 2); the two before and
+/// the two after are its neighbours'. The engine's reading (docs/terrain.md §3.6 correction, §3.7): its per-node
+/// constant block offsets every node 2 texels into its 132-texel block (`cb4[3]` = 2 mod 132 on 125 of 125 blocks in
+/// the world snapshot), and its physics terrain reads cell (r, c) at texel (r + 2, c + 2), its 129 x 129 vertices at
+/// texels 2 to 130. (A tile's last four equal its +x or +y neighbour's first four under either convention, so the
+/// rasters alone don't settle it.)
+pub const CORE_AT: usize = 2;
 use primase_core::World;
 use primase_core::frame::SourceFrame;
 
