@@ -438,6 +438,28 @@ impl Levels {
                     _ => "beyond 1 m".to_owned(),
                 };
                 t3.outcome(fit);
+                // the same split into the centres' shift and the extents' change, and whether the referenced
+                // (coarser) level's box lies within the dependency's (1 mm)
+                let centre = (0..3)
+                    .map(|i| ((a[0][i] + a[1][i]) / 2.0 - (b[0][i] + b[1][i]) / 2.0).abs())
+                    .fold(0.0f32, f32::max);
+                let extent = (0..3)
+                    .map(|i| ((a[1][i] - a[0][i]) - (b[1][i] - b[0][i])).abs())
+                    .fold(0.0f32, f32::max);
+                let within = (0..3).all(|i| b[0][i] >= a[0][i] - 1e-3 && b[1][i] <= a[1][i] + 1e-3);
+                let band = |x: f32| match x {
+                    x if x <= 0.01 => "<= 1 cm",
+                    x if x <= 0.1 => "<= 10 cm",
+                    x if x <= 1.0 => "<= 1 m",
+                    _ => "> 1 m",
+                };
+                let size = if off <= 0.1 { "off <= 10 cm" } else { "off > 10 cm" };
+                t3.outcome(format!(
+                    "{size}: referenced box within the dependency's {within}, centre shift {}, extent change {}, centre shift <= extent change / 2 {}",
+                    band(centre),
+                    band(extent),
+                    centre <= extent / 2.0 + 1e-3
+                ));
             }
         }
         // a LODSelector's dependencies against its levels without a reference: the pattern (- none, R a reference)
