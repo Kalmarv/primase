@@ -17,7 +17,7 @@ use primase_core::{
 
 use crate::components::{
     AnvilCollisionShape, AnvilDataLayers, AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape,
-    AnvilTerrain, CollisionMaterialRef, ShapeGeometry, TerrainTile,
+    AnvilTerrain, CollisionMaterialRef, ShapeGeometry, TerrainTile, UvWordsAt,
 };
 
 /// What names a lowered collision surface.
@@ -370,20 +370,25 @@ pub enum UvV {
     OneMinus,
 }
 
-/// `lower-anvil-mesh{uv-words=unsigned|signed,uv-divisor=N,uv-v=as-stored|one-minus,normals=omit|packed|packed-127}`: a
-/// diagnostic lowering. Every Mesh's buffers ([`AnvilMesh`]) become a core mesh on its prototype: one triangle
+/// `lower-anvil-mesh{uv-words=unsigned|signed,uv-divisor=N,uv-v=as-stored|one-minus,uv-tool=omit|read,normals=omit|packed|packed-127}`:
+/// a diagnostic lowering. Every Mesh's buffers ([`AnvilMesh`]) become a core mesh on its prototype: one triangle
 /// primitive with no material, or, where the reader read its Materials, a primitive per stored range, of the vertices
-/// its triangles use, drawn with the range's Material entity; positions and triangles as read; texture coordinates 0 each vertex's bytes 20..24 read as
-/// two 16-bit words per `uv-words` over `uv-divisor`, the second per `uv-v`; normals per `normals`. (RRAssetStudio
-/// reads the words as signed over 2048; read so, the triangles of 196 meshes spanning more than 16 units drop from
-/// 10,773 to 650 against unsigned, by a separate count; neither proves what the game does.) That bytes 20..24 are texture coordinates, their divisor and origin, and
-/// that bytes 8..11 are a normal are not established: each reading is the program's stated choice, every lowered mesh
+/// its triangles use, drawn with the range's Material entity; positions and triangles as read; normals per `normals`.
+/// Texture coordinates 0: each vertex's two words where its layout keeps them ([`UvWordsAt`]), read per `uv-words`
+/// over `uv-divisor`, the second per `uv-v`. The words of kinds 2 and 3 (bytes 20..24) are lowered always; those
+/// whose place is RRAssetStudio's reading alone (kind 11's bytes 12..16, the split layouts' primary bytes 4..8) as
+/// `uv-tool` states (`omit` leaves those meshes without texture coordinates, reported). (RRAssetStudio reads the
+/// words as signed over 2048; read so, the triangles of 196 meshes spanning more than 16 units drop from 10,773 to 650
+/// against unsigned, by a separate count; neither proves what the game does.) The words' divisor and origin, and that
+/// bytes 8..11 are a normal, are not established: each reading is the program's stated choice, every lowered mesh
 /// reports it as an approximation, and the output is not evidence of the format. The buffers are consumed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerAnvilMesh {
     pub uv_words: UvWords,
     pub uv_divisor: f32,
     pub uv_v: UvV,
+    /// Whether the texture coordinates whose place is a tool's reading alone are lowered.
+    pub uv_tool: bool,
     pub normals: MeshNormals,
 }
 
@@ -392,14 +397,14 @@ impl LowerAnvilMesh {
     pub fn from_options(o: &Options) -> Result<LowerAnvilMesh, String> {
         if let Some(k) = o
             .keys()
-            .find(|k| !["uv-words", "uv-divisor", "uv-v", "normals"].contains(&k.as_str()))
+            .find(|k| !["uv-words", "uv-divisor", "uv-v", "uv-tool", "normals"].contains(&k.as_str()))
         {
             return Err(format!("unknown option {k}"));
         }
         let get = |k: &str| {
             o.get(k).map(String::as_str).ok_or_else(|| {
                 format!(
-                    "{k} is required: uv-words=unsigned|signed, uv-divisor=N, uv-v=as-stored|one-minus, normals=omit|packed|packed-127"
+                    "{k} is required: uv-words=unsigned|signed, uv-divisor=N, uv-v=as-stored|one-minus, uv-tool=omit|read, normals=omit|packed|packed-127"
                 )
             })
         };
@@ -419,6 +424,11 @@ impl LowerAnvilMesh {
             "one-minus" => UvV::OneMinus,
             v => return Err(format!("uv-v={v} is not as-stored or one-minus")),
         };
+        let uv_tool = match get("uv-tool")? {
+            "omit" => false,
+            "read" => true,
+            v => return Err(format!("uv-tool={v} is not omit or read")),
+        };
         let normals = match get("normals")? {
             "omit" => MeshNormals::Omit,
             "packed" => MeshNormals::Packed,
@@ -429,6 +439,7 @@ impl LowerAnvilMesh {
             uv_words,
             uv_divisor,
             uv_v,
+            uv_tool,
             normals,
         })
     }
@@ -456,6 +467,10 @@ impl Pass for LowerAnvilMesh {
                     UvV::OneMinus => "one-minus",
                 }
                 .to_owned(),
+            ),
+            (
+                "uv-tool".to_owned(),
+                if self.uv_tool { "read" } else { "omit" }.to_owned(),
             ),
             (
                 "normals".to_owned(),
@@ -487,9 +502,18 @@ impl Pass for LowerAnvilMesh {
                 continue;
             };
             let mut streams = BTreeMap::new();
-            if m.words_20.len() == m.positions.len() {
+            let tool = matches!(m.uv_at, UvWordsAt::Bytes12 | UvWordsAt::Primary4);
+            if tool && !self.uv_tool && !m.uv_words.is_empty() {
+                log.omit(
+                    &format!(
+                        "texture coordinates: {:?} (kind {} stride {}) not lowered (a tool's reading; uv-tool=omit)",
+                        m.uv_at, m.kind, m.stride
+                    ),
+                    1,
+                );
+            } else if !m.uv_words.is_empty() && m.uv_words.len() == m.positions.len() {
                 let uv = m
-                    .words_20
+                    .uv_words
                     .iter()
                     .map(|&[u, v]| {
                         let word = |x: u16| match self.uv_words {
@@ -503,8 +527,8 @@ impl Pass for LowerAnvilMesh {
                 streams.insert(Semantic::TexCoord(0), Stream::F32x2(uv));
                 log.approximate(
                     &format!(
-                        "texture coordinates: bytes 20..24 as two {:?} words over {} (a stated reading), v {:?}",
-                        self.uv_words, self.uv_divisor, self.uv_v
+                        "texture coordinates: {:?} as two {:?} words over {} (a stated reading), v {:?}",
+                        m.uv_at, self.uv_words, self.uv_divisor, self.uv_v
                     ),
                     1,
                 );
@@ -1290,6 +1314,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("uv-words", "signed"),
             ("uv-divisor", "2048"),
             ("uv-v", "as-stored"),
+            ("uv-tool", "omit"),
             ("normals", "omit"),
         ],
     );

@@ -118,6 +118,7 @@ fn fixtures_place_and_lower() {
                 uv_words: UvWords::Signed,
                 uv_divisor: 2048.0,
                 uv_v: UvV::AsStored,
+                uv_tool: false,
                 normals: MeshNormals::Packed127,
             }),
             Box::new(LowerAnvilLods),

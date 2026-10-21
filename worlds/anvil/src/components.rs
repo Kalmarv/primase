@@ -68,9 +68,9 @@ impl Component for AnvilMeshShape {
 /// reversed when that frame mirrors); `ranges` each stored range's first triangle; `materials` descriptor *k*'s
 /// Material ClassID for range *k* (in order; descriptor *k*'s vertex count equals range *k*'s low 16 bits; how the
 /// engine binds them is not established); the compiled mesh's `kind` byte, `stride` and each vertex's primary record
-/// as stored (`vertex_records`, `stride` bytes each), their meaning beyond the position not established; and for kind
-/// 2 (single-stream) stride 24, bytes 20..24 as two little-endian u16 (`words_20`, empty otherwise). `entry` and
-/// `index_id` name the forge entry it came from.
+/// as stored (`vertex_records`, `stride` bytes each), their meaning beyond the position not established; and each
+/// vertex's two little-endian u16 where its layout keeps its texture coordinates (`uv_words`, from `uv_at`; empty
+/// where that isn't known). `entry` and `index_id` name the forge entry it came from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilMesh {
     pub entry: u32,
@@ -85,7 +85,49 @@ pub struct AnvilMesh {
     pub kind: u8,
     pub stride: u32,
     pub vertex_records: Vec<u8>,
-    pub words_20: Vec<[u16; 2]>,
+    pub uv_at: UvWordsAt,
+    pub uv_words: Vec<[u16; 2]>,
+}
+
+/// Where in each vertex's primary record a Mesh's texture-coordinate words are read, by its layout (the Riders
+/// Republic notes, docs/vertex.md: their classes as stated there).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UvWordsAt {
+    /// Not read: the layout's place isn't known.
+    None,
+    /// Bytes 20..24 of kind 2 (stride 24) and kind 3 (stride 28): the tangent the words' gradient gives meets the
+    /// stored tangent (median 0.52 degrees on 40 stride-24 meshes, 0.56 on 53 stride-28; bytes 24..27 of stride 28 at
+    /// 89.8, not these).
+    Bytes20,
+    /// Bytes 12..16 of kind 11 (stride 16, the far terrain cells): RRAssetStudio's reading; on all 1,031 the words
+    /// lie in 0..2045 and change smoothly across the triangles, and no stored tangent witnesses them.
+    Bytes12,
+    /// Bytes 4..8 of the split layouts' primary record (kind 0, stride 12; kind 1, stride 24): RRAssetStudio's
+    /// reading; the smoothest word pair of the record on 80 sampled meshes, and the gradient meets the tool-decoded
+    /// tangent at 3.1 and 5.7 degrees median (that tangent's decode the tool's).
+    Primary4,
+}
+
+impl UvWordsAt {
+    /// Where a layout of `kind` and primary `stride` keeps them.
+    pub fn of(kind: u8, stride: usize) -> UvWordsAt {
+        match (kind, stride) {
+            (2, 24) | (3, 28) => UvWordsAt::Bytes20,
+            (11, 16) => UvWordsAt::Bytes12,
+            (0, 12) | (1, 24) => UvWordsAt::Primary4,
+            _ => UvWordsAt::None,
+        }
+    }
+
+    /// Their offset in the record.
+    pub fn offset(self) -> Option<usize> {
+        match self {
+            UvWordsAt::None => None,
+            UvWordsAt::Bytes20 => Some(20),
+            UvWordsAt::Bytes12 => Some(12),
+            UvWordsAt::Primary4 => Some(4),
+        }
+    }
 }
 
 impl Component for AnvilMesh {
@@ -103,10 +145,10 @@ impl Component for AnvilMesh {
                 self.vertex_records.len()
             ));
         }
-        if !self.words_20.is_empty() && self.words_20.len() != n {
+        if !self.uv_words.is_empty() && self.uv_words.len() != n {
             return Err(format!(
                 "{n} positions, {} texture-coordinate words",
-                self.words_20.len()
+                self.uv_words.len()
             ));
         }
         let starts_in_order = self.ranges.first().is_none_or(|&s| s == 0)

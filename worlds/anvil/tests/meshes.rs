@@ -33,6 +33,7 @@ fn lower(w: &mut World, normals: MeshNormals) {
             uv_words: UvWords::Signed,
             uv_divisor: 2048.0,
             uv_v: UvV::AsStored,
+            uv_tool: false,
             normals,
         })],
     };
@@ -256,6 +257,7 @@ fn the_lowering_states_every_choice() {
         ("uv-words", "signed"),
         ("uv-divisor", "2048"),
         ("uv-v", "one-minus"),
+        ("uv-tool", "omit"),
         ("normals", "packed"),
     ];
     assert_eq!(
@@ -264,10 +266,11 @@ fn the_lowering_states_every_choice() {
             uv_words: UvWords::Signed,
             uv_divisor: 2048.0,
             uv_v: UvV::OneMinus,
+            uv_tool: false,
             normals: MeshNormals::Packed,
         })
     );
-    for missing in 0..4 {
+    for missing in 0..all.len() {
         let mut some = all.to_vec();
         some.remove(missing);
         assert!(LowerAnvilMesh::from_options(&o(&some)).is_err());

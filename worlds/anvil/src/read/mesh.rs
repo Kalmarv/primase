@@ -186,15 +186,18 @@ impl StoredVertices {
         self.heads().map(|(_, w)| w)
     }
 
-    /// Each vertex's bytes 20..24 as two little-endian u16, for stride 24 (a layout reading; their meaning is not
-    /// established); none for another stride.
-    pub fn words_20(&self) -> Vec<[u16; 2]> {
-        if self.stride != 24 {
+    /// Each vertex's bytes `at..at + 4` as two little-endian u16 (a layout reading; their meaning is the caller's);
+    /// none where they lie past the stride.
+    pub fn words_at(&self, at: usize) -> Vec<[u16; 2]> {
+        if at.checked_add(4).is_none_or(|end| end > self.stride) {
             return Vec::new();
         }
         self.iter()
             .map(|v| {
-                let [a, b, c, d] = v.get(20..24).and_then(|w| w.try_into().ok()).unwrap_or([0; 4]);
+                let [a, b, c, d] = v
+                    .get(at..at.saturating_add(4))
+                    .and_then(|w| w.try_into().ok())
+                    .unwrap_or([0; 4]);
                 [u16::from_le_bytes([a, b]), u16::from_le_bytes([c, d])]
             })
             .collect()
