@@ -24,6 +24,7 @@ pub enum VertexColor {
 
 impl Component for VertexColor {
     const NAME: &'static str = "core.vertex_color";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }

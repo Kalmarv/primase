@@ -401,6 +401,7 @@ mod tests {
     struct Sources(Vec<&'static str>);
     impl primase_core::Component for Sources {
         const NAME: &'static str = "test.sources";
+        const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
         fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
             Some(primase_core::remap_list(&self.0, from).map(Sources))
         }

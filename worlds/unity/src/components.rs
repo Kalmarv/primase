@@ -19,6 +19,7 @@ pub struct UnityObject {
 
 impl Component for UnityObject {
     const NAME: &'static str = "unity.object";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -39,6 +40,7 @@ pub struct UnityRenderer {
 
 impl Component for UnityRenderer {
     const NAME: &'static str = "unity.renderer";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -55,6 +57,7 @@ pub struct UnityMesh {
 
 impl Component for UnityMesh {
     const NAME: &'static str = "unity.mesh";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
     /// Removed from a mapped copy (`bake-nonrigid`): it names the Unity mesh and submeshes the geometry was read
     /// from, which the mapped geometry no longer is; `core.source` keeps the identity.
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
@@ -91,6 +94,7 @@ pub struct UnityTexture {
 
 impl Component for UnityTexture {
     const NAME: &'static str = "unity.texture";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -210,6 +214,7 @@ impl UnityPrograms {
 
 impl Component for UnityPrograms {
     const NAME: &'static str = "unity.programs";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -459,6 +464,7 @@ impl UnityMaterial {
 
 impl Component for UnityMaterial {
     const NAME: &'static str = "unity.material";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// 2: `shader_state`; 3: each shader pass's `kind`; 4: each texture property's `referenced`.
     const VERSION: u32 = 4;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
@@ -501,6 +507,7 @@ pub struct UnityBehaviours(pub Vec<UnityBehaviour>);
 
 impl Component for UnityBehaviours {
     const NAME: &'static str = "unity.behaviours";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// Scripts and sizes, not the bytes.
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         Ok(Some(serde_json::Value::Array(
@@ -535,6 +542,7 @@ pub struct UnityTerrainLayer {
 
 impl Component for UnityTerrainLayer {
     const NAME: &'static str = "unity.terrain_layer";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -593,6 +601,7 @@ pub struct UnityTerrain {
 
 impl Component for UnityTerrain {
     const NAME: &'static str = "unity.terrain";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// The fields, with counts in place of the heights, holes and trees.
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         let mut v = primase_core::json::to_value(self)?;
@@ -635,6 +644,7 @@ pub struct UnityColliderOf(pub Entity);
 
 impl Component for UnityColliderOf {
     const NAME: &'static str = "unity.collider_of";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -661,6 +671,7 @@ pub struct UnityTreeInstance {
 
 impl Component for UnityTreeInstance {
     const NAME: &'static str = "unity.tree_instance";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -703,6 +714,7 @@ pub struct UnityLight {
 
 impl Component for UnityLight {
     const NAME: &'static str = "unity.light";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// 2: `baked`.
     const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
@@ -722,6 +734,7 @@ pub struct UnityCamera {
 
 impl Component for UnityCamera {
     const NAME: &'static str = "unity.camera";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -858,6 +871,7 @@ impl UnityCollider {
 
 impl Component for UnityCollider {
     const NAME: &'static str = "unity.collider";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// 2: `active` left to the entity's state; 3: `lowered`.
     const VERSION: u32 = 3;
     /// Removed when its entity's local space is mapped (`bake-nonrigid`), once nothing is lost with it: its shape is the

@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 struct Sources(Vec<&'static str>);
 impl Component for Sources {
     const NAME: &'static str = "test.sources";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
     fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
         Some(remap_list(&self.0, from).map(Sources))
     }
@@ -107,6 +108,7 @@ fn rebuild_primitives_changes_the_mesh_and_its_per_primitive_data_together() {
 struct Fixed(Vec<u32>);
 impl Component for Fixed {
     const NAME: &'static str = "test.fixed";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
     fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
         Some(if from.len() == self.0.len() {
             remap_list(&self.0, from).map(Fixed)

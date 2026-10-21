@@ -15,6 +15,7 @@ pub struct PrototypeSource {
 }
 impl Component for PrototypeSource {
     const NAME: &'static str = "fromsoft.prototype";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
         primase_core::world::Linearity::Invariant
     }
@@ -28,6 +29,7 @@ impl Component for PrototypeSource {
 pub struct MaterialSlots(pub Vec<Entity>);
 impl Component for MaterialSlots {
     const NAME: &'static str = "fromsoft.material_slots";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
     }
@@ -49,6 +51,7 @@ pub struct CollisionSource {
 }
 impl Component for CollisionSource {
     const NAME: &'static str = "fromsoft.collision";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
         primase_core::world::Linearity::Invariant
     }
@@ -88,6 +91,7 @@ pub struct MapCollision {
 }
 impl Component for MapCollision {
     const NAME: &'static str = "fromsoft.map_collision";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// World-frame triangles on an entity that is not placed.
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
         primase_core::world::Linearity::Invariant
@@ -163,6 +167,7 @@ pub struct ObjectBodies {
 }
 impl Component for ObjectBodies {
     const NAME: &'static str = "fromsoft.object_collision";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// Prototype-space geometry, mapped as the prototype's mesh: mesh triangles moved (a reflection reversing their
     /// order), a convex body's map composed with the mapping.
     fn apply_linear(&self, l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
@@ -261,6 +266,7 @@ pub enum LightKind {
 }
 impl Component for LightSource {
     const NAME: &'static str = "fromsoft.light";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// Placed by its entity's transform; the tangent is world space.
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
         primase_core::world::Linearity::Invariant
@@ -287,6 +293,7 @@ pub struct SpawnRotation {
 }
 impl Component for SpawnRotation {
     const NAME: &'static str = "fromsoft.spawn_point";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
         primase_core::world::Linearity::Invariant
     }
@@ -325,6 +332,7 @@ pub struct FaceCull {
 }
 impl Component for FaceCull {
     const NAME: &'static str = "fromsoft.face_cull";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
     /// Which side is culled follows the triangles' winding, which a mirror's transform keeps.
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
         primase_core::world::Linearity::Invariant
@@ -346,6 +354,7 @@ pub struct LayerInputs {
 }
 impl Component for LayerInputs {
     const NAME: &'static str = "fromsoft.layer_inputs";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
     /// Per-vertex shader inputs, not positions or directions.
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
         primase_core::world::Linearity::Invariant

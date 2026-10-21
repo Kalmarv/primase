@@ -46,6 +46,7 @@ pub struct GtaWater {
 
 impl Component for GtaWater {
     const NAME: &'static str = "gta.water";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// 2: the quads are placed (`gta.water_surface`), the tuning's falloff is theirs.
     const VERSION: u32 = 2;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
@@ -96,6 +97,7 @@ pub struct GtaWaterSurface {
 
 impl Component for GtaWaterSurface {
     const NAME: &'static str = "gta.water_surface";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// 2: the quad as stored (`quad`) instead of its height alone.
     const VERSION: u32 = 2;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {

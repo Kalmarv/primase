@@ -71,6 +71,7 @@ impl LayeredMaterial {
 }
 impl Component for LayeredMaterial {
     const NAME: &'static str = "fromsoft.layered_material";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -116,6 +117,7 @@ pub fn identity_digest(identity: &str) -> String {
 }
 impl Component for Material {
     const NAME: &'static str = "fromsoft.material";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// 4: no `two_sided` (sidedness is the face sets' `fromsoft.face_cull`). 5: the source's facts only (each
     /// binding's availability); the preview textures, the tiling and the name-based surface are the passes'
     /// ([`crate::preview`]).

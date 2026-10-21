@@ -13,6 +13,7 @@ pub struct SkateRock(pub Vec<bool>);
 
 impl Component for SkateRock {
     const NAME: &'static str = "skate.rock";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         Ok(Some(
             json!({"triangles": self.0.len(), "rock": self.0.iter().filter(|&&r| r).count()}),
@@ -161,6 +162,7 @@ impl SkateCellShare {
 
 impl Component for SkateCellShare {
     const NAME: &'static str = "skate.cell_share";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         Ok(Some(json!({
             "cell": [self.cell.0, self.cell.1, self.cell.2],

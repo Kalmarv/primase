@@ -71,6 +71,7 @@ impl DrawOrder {
 
 impl Component for DrawOrder {
     const NAME: &'static str = "core.draw_order";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// 2: `depth_write`.
     const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {

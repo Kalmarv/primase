@@ -20,6 +20,7 @@ pub struct SkatebirdResetPosition {
 
 impl Component for SkatebirdResetPosition {
     const NAME: &'static str = "skatebird.reset_position";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -38,6 +39,7 @@ pub struct SkatebirdMissionGiver {
 
 impl Component for SkatebirdMissionGiver {
     const NAME: &'static str = "skatebird.mission_giver";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -126,6 +128,7 @@ pub struct SkatebirdUnder(pub Vec<SkatebirdScript>);
 
 impl Component for SkatebirdUnder {
     const NAME: &'static str = "skatebird.under";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -153,6 +156,7 @@ pub struct SkatebirdRail {
 
 impl Component for SkatebirdRail {
     const NAME: &'static str = "skatebird.rail";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }

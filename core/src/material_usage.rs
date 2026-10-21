@@ -21,6 +21,7 @@ pub enum MaterialUsage {
 
 impl Component for MaterialUsage {
     const NAME: &'static str = "core.material_usage";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }

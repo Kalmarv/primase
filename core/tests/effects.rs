@@ -12,12 +12,14 @@ use primase_core::{Component, Entity, Resource, World};
 struct X(u32);
 impl Component for X {
     const NAME: &'static str = "toy.x";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct Y;
 impl Component for Y {
     const NAME: &'static str = "toy.y";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
 #[derive(Clone, Debug, PartialEq)]

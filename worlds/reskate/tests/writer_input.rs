@@ -25,6 +25,7 @@ struct Foreign;
 
 impl Component for Foreign {
     const NAME: &'static str = "test.foreign";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
 /// A resource of a namespace the writer does not know.

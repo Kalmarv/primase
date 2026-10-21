@@ -30,6 +30,7 @@ pub struct CollisionMaterialRef {
 
 impl Component for AnvilMeshShape {
     const NAME: &'static str = "anvil.mesh_shape";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         let n = self.positions.len();
         match self
@@ -137,6 +138,7 @@ impl UvWordsAt {
 
 impl Component for AnvilMesh {
     const NAME: &'static str = "anvil.mesh";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.material_entities.iter().flatten());
     }
@@ -215,6 +217,7 @@ pub struct AnvilLods {
 
 impl Component for AnvilLods {
     const NAME: &'static str = "anvil.lods";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.forms.iter().map(|(_, e)| *e));
     }
@@ -243,6 +246,7 @@ pub struct AnvilMaterialOverrides {
 
 impl Component for AnvilMaterialOverrides {
     const NAME: &'static str = "anvil.material_overrides";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn payload_bytes(&self) -> u64 {
         let pairs: usize = self.levels.iter().map(|(_, p)| p.len()).sum();
         u64::try_from(pairs * 16).unwrap_or(u64::MAX)
@@ -285,6 +289,7 @@ pub struct AnvilWater {
 
 impl Component for AnvilWater {
     const NAME: &'static str = "anvil.water";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn payload_bytes(&self) -> u64 {
         u64::try_from(self.patches.len() * 49).unwrap_or(u64::MAX)
     }
@@ -310,6 +315,7 @@ pub struct DataLayerAction {
 
 impl Component for AnvilDataLayers {
     const NAME: &'static str = "anvil.data_layers";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn payload_bytes(&self) -> u64 {
         u64::try_from(self.actions.len() * 12).unwrap_or(u64::MAX)
     }
@@ -355,6 +361,7 @@ impl AnvilFloorHeight {
 
 impl Component for AnvilFloorHeight {
     const NAME: &'static str = "anvil.floor_height";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn payload_bytes(&self) -> u64 {
         u64::try_from(self.blocks.len() * 8).unwrap_or(u64::MAX)
     }
@@ -421,6 +428,7 @@ pub struct AnvilTerrain {
 
 impl Component for AnvilTerrain {
     const NAME: &'static str = "anvil.terrain";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.details.iter().flatten().filter_map(|d| d.diffuse));
         out.extend(self.noise);
@@ -467,6 +475,7 @@ pub struct AnvilCollisionShape {
 
 impl Component for AnvilCollisionShape {
     const NAME: &'static str = "anvil.collision_shape";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
 /// What a MaterialTemplate binding binds (see [`crate::read::template::BindingKind`]).
@@ -518,6 +527,7 @@ pub struct AnvilMaterial {
 
 impl Component for AnvilMaterial {
     const NAME: &'static str = "anvil.material";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.values.iter().filter_map(|(_, v)| match v {
             MaterialValue::Texture { texture, .. } => *texture,
@@ -539,4 +549,5 @@ pub struct AnvilTextureMap {
 
 impl Component for AnvilTextureMap {
     const NAME: &'static str = "anvil.texture_map";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }

@@ -686,6 +686,7 @@ mod tests {
     struct Raw;
     impl primase_core::Component for Raw {
         const NAME: &'static str = "test.raw";
+        const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     }
     struct LowerRaw;
     impl Pass for LowerRaw {
@@ -852,6 +853,7 @@ mod tests {
     struct Refers(Vec<Entity>);
     impl primase_core::Component for Refers {
         const NAME: &'static str = "test.refers";
+        const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
         fn references(&self, out: &mut Vec<Entity>) {
             out.extend(&self.0);
         }

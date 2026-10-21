@@ -18,6 +18,7 @@ pub struct Priority(pub u8);
 
 impl Component for Priority {
     const NAME: &'static str = "core.priority";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// No local-space geometry.
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant

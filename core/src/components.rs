@@ -28,6 +28,7 @@ use crate::world::{Component, Entity};
 pub struct Name(pub String);
 impl Component for Name {
     const NAME: &'static str = "core.name";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// No local-space geometry.
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant
@@ -43,6 +44,7 @@ impl Component for Name {
 pub struct Source(pub String);
 impl Component for Source {
     const NAME: &'static str = "core.source";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// No local-space geometry.
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant
@@ -63,6 +65,7 @@ pub struct Transform {
 }
 impl Component for Transform {
     const NAME: &'static str = "core.transform";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// The placement itself, which a pass baking its non-rigid part replaces: not mapped.
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant
@@ -287,6 +290,7 @@ pub struct Instance {
 }
 impl Component for Instance {
     const NAME: &'static str = "core.instance";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// No local-space geometry.
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant
@@ -328,6 +332,7 @@ pub struct Shadows {
 }
 impl Component for Shadows {
     const NAME: &'static str = "core.shadows";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// 2: `cast: None` casts (it was the renderer's default); materials no longer state casting.
     const VERSION: u32 = 2;
     /// No local-space geometry.
@@ -567,6 +572,7 @@ impl std::fmt::Debug for Mesh {
 }
 impl Component for Mesh {
     const NAME: &'static str = "core.mesh";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// Positions, normals and tangents mapped ([`crate::Linear`]); triangles reversed under a mirror.
     fn apply_linear(&self, l: &crate::Linear) -> crate::world::Linearity<Self> {
         let mut m = self.clone();
@@ -772,6 +778,7 @@ pub struct Texture {
 }
 impl Component for Texture {
     const NAME: &'static str = "core.texture";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// 3: the normal convention gained tangent/bitangent basis ordering.
     const VERSION: u32 = 3;
     /// Every level's bytes.
@@ -851,6 +858,7 @@ pub struct Light {
 
 impl Component for Light {
     const NAME: &'static str = "core.light";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// 2: `cast_shadows`.
     const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
@@ -914,6 +922,7 @@ impl Collision {
 
 impl Component for Collision {
     const NAME: &'static str = "core.collision";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// Positions mapped; triangles reversed under a mirror.
     fn apply_linear(&self, l: &crate::Linear) -> crate::world::Linearity<Self> {
         let mut c = self.clone();
@@ -1112,6 +1121,7 @@ pub struct TextureFile {
 }
 impl Component for TextureFile {
     const NAME: &'static str = "core.texture_file";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -1131,6 +1141,7 @@ pub struct MeshFile {
 }
 impl Component for MeshFile {
     const NAME: &'static str = "core.mesh_file";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// The geometry is no longer the file's.
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Drop
@@ -1149,6 +1160,7 @@ impl Component for MeshFile {
 pub struct MaterialVariants(pub Vec<BTreeMap<u32, Entity>>);
 impl Component for MaterialVariants {
     const NAME: &'static str = "core.material_variants";
+    const GEOMETRY: crate::Geometry = crate::Geometry::PerPrimitive;
     /// No local-space geometry.
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant
@@ -1184,6 +1196,7 @@ impl Tile {
 
 impl Component for Tile {
     const NAME: &'static str = "core.tile";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// No local-space geometry.
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant

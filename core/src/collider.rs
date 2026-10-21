@@ -112,6 +112,7 @@ fn surface_known(w: &World, s: u16) -> Result<(), String> {
 
 impl Component for Collider {
     const NAME: &'static str = "core.collider";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// Exact or not at all: a convex shape's points mapped; a box under a map that keeps axes a box, under any other
     /// the convex hull of its eight mapped corners; a sphere, capsule or cylinder under a similarity (a rotation or
     /// mirror times a uniform scale) mapped with its radius scaled, under any other unsupported (a sheared sphere is
@@ -220,6 +221,7 @@ impl Component for Collider {
 
 impl Component for Heightfield {
     const NAME: &'static str = "core.heightfield";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// A grid along +X and +Z with heights along +Y stays one exactly under a positive scale along each axis
     /// (`diag(sx, sy, sz)`, all positive): spacing times (sx, sz), heights times sy. Under any other map (a mirror, a
     /// rotation, a shear) unsupported: tessellate it first.

@@ -13,6 +13,7 @@ pub struct GtaTint {
 
 impl Component for GtaTint {
     const NAME: &'static str = "gta.tint";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }

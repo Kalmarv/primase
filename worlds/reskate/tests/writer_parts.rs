@@ -1313,6 +1313,7 @@ fn a_layout_for_other_tiles_is_refused() {
 struct Holds(Vec<Entity>);
 impl Component for Holds {
     const NAME: &'static str = "test.holds";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(&self.0);
     }

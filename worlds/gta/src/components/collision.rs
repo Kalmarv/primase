@@ -16,6 +16,7 @@ pub struct GtaBounds {
 
 impl Component for GtaBounds {
     const NAME: &'static str = "gta.bounds";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// 2: `detail` added.
     const VERSION: u32 = 2;
     /// Bulk data (a bound's every vertex and polygon): not shown.
@@ -34,6 +35,7 @@ pub struct GtaEmbeddedBounds {
 
 impl Component for GtaEmbeddedBounds {
     const NAME: &'static str = "gta.embedded_bounds";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// Bulk data (a bound's every vertex and polygon): not shown.
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
         Ok(None)

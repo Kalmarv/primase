@@ -201,6 +201,7 @@ fn empty_split_still_prunes_the_replaced_host() {
 struct Sources(Vec<&'static str>);
 impl Component for Sources {
     const NAME: &'static str = "test.sources";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
     fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
         Some(remap_list(&self.0, from).map(Sources))
     }

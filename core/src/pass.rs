@@ -2052,11 +2052,13 @@ mod tests {
     struct File(u32);
     impl Component for File {
         const NAME: &'static str = "toy.file";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
     }
     #[derive(Clone, Debug, PartialEq)]
     struct Mesh(u32);
     impl Component for Mesh {
         const NAME: &'static str = "toy.mesh";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
         fn verify(&self, _e: Entity, _w: &World) -> std::result::Result<(), String> {
             if self.0 == 13 {
                 Err("unlucky mesh".into())
@@ -2069,11 +2071,13 @@ mod tests {
     struct Layered(u32);
     impl Component for Layered {
         const NAME: &'static str = "toy.layered";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
     }
     #[derive(Clone, Debug, PartialEq)]
     struct Pbr(u32);
     impl Component for Pbr {
         const NAME: &'static str = "toy.pbr";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
     }
 
     /// toy.file -> toy.mesh (needs nothing).
@@ -3223,16 +3227,19 @@ mod tests {
     struct Ta;
     impl Component for Ta {
         const NAME: &'static str = "toy.a";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
     }
     #[derive(Clone, Debug, PartialEq)]
     struct Tb;
     impl Component for Tb {
         const NAME: &'static str = "toy.b";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
     }
     #[derive(Clone, Debug, PartialEq)]
     struct Tx(u32);
     impl Component for Tx {
         const NAME: &'static str = "toy.x";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
     }
 
     /// Removes toy.a (and toy.b with `both`); with `requires`, requires what it removes.

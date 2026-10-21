@@ -339,6 +339,7 @@ fn the_options_are_required_and_round_trip() {
 struct Attributes(Vec<Vec<u32>>);
 impl Component for Attributes {
     const NAME: &'static str = "test.attributes";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerVertex;
     fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
         Some(remap_list(&self.0, from).map(Attributes))
     }

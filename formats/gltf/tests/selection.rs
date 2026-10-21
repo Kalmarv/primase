@@ -187,6 +187,7 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
 struct Parts(Vec<String>);
 impl primase_core::Component for Parts {
     const NAME: &'static str = "test.parts";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
     fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
         Ok(Some(json!(self.0)))
     }

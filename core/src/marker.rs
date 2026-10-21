@@ -63,6 +63,7 @@ fn check_kind(kind: &str) -> Result<(), String> {
 
 impl Component for Marker {
     const NAME: &'static str = "core.marker";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// 2: a ground marker's `yaw`.
     const VERSION: u32 = 2;
     /// Placed by its entity's transform, which the pass keeps rigid; a ground position is world space.
@@ -92,6 +93,7 @@ impl Component for Marker {
 
 impl Component for Curve {
     const NAME: &'static str = "core.curve";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// 2: optional Bezier `tangents` and `up` per point.
     const VERSION: u32 = 2;
     /// World space: not in any entity's local space.

@@ -46,6 +46,10 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
     const NAME: &'static str;
     /// Schema version of the component's content. Bump it when the meaning or layout of a field changes.
     const VERSION: u32 = 1;
+    /// What the value holds of its entity's mesh primitives and vertices ([`Geometry`]). Stated by every component,
+    /// with no default, so data that describes a mesh can't be left behind by an edit of it unawares: the World's edit
+    /// paths take it from there.
+    const GEOMETRY: Geometry;
 
     /// The component as JSON, for glTF extras, the debug text form and golden tests; `Ok(None)` for components
     /// that are not shown (bulk data, handles). The view must never lose a value: components that can be shown
@@ -100,6 +104,29 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
     /// [`Linearity::Invariant`].
     fn apply_linear(&self, _l: &crate::Linear) -> Linearity<Self> {
         Linearity::Unsupported
+    }
+}
+
+/// What a component's value holds of its entity's mesh ([`Component::GEOMETRY`]): whether an edit of the primitives
+/// or vertices must carry it along. A component holding geometry of its own (`core.mesh`, `core.mesh_file`, a source
+/// model a reader keeps beside it) describes no other component's primitives: [`Geometry::None`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Geometry {
+    /// Nothing per primitive or vertex of its entity's mesh: kept as it is whatever an edit does to them.
+    None,
+    /// Something per primitive of its entity's mesh (a material per primitive, provenance per part): it implements
+    /// [`Component::remap_primitives`], goes with the mesh ([`World::remove_mesh`]), and an edit that rebuilds the
+    /// primitives refuses it when it does not answer.
+    PerPrimitive,
+    /// Something per vertex of its entity's mesh primitives (and so per primitive): as [`Geometry::PerPrimitive`], and
+    /// it implements [`Component::remap_vertices`] too.
+    PerVertex,
+}
+
+impl Geometry {
+    /// Whether the value describes its entity's mesh, so it goes when the mesh does.
+    pub fn describes_mesh(self) -> bool {
+        self != Geometry::None
     }
 }
 
@@ -1670,16 +1697,19 @@ mod tests {
     struct A(u32);
     impl Component for A {
         const NAME: &'static str = "test.a";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
     }
     #[derive(Clone, Debug, PartialEq)]
     struct B(&'static str);
     impl Component for B {
         const NAME: &'static str = "test.b";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
     }
     #[derive(Clone, Debug, PartialEq)]
     struct Same;
     impl Component for Same {
         const NAME: &'static str = "test.a";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
     }
     #[derive(Clone, Debug, PartialEq)]
     struct R(i32);
@@ -1703,6 +1733,7 @@ mod tests {
     struct PerVertex(Vec<Vec<u8>>);
     impl Component for PerVertex {
         const NAME: &'static str = "test.per_vertex";
+        const GEOMETRY: crate::Geometry = crate::Geometry::PerVertex;
         fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
             Some(remap_list(&self.0, from).map(PerVertex))
         }
@@ -1957,6 +1988,7 @@ mod tests {
     }
     impl Component for Shown {
         const NAME: &'static str = "test.shown";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
         const VERSION: u32 = 2;
         fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
             crate::json::to_value(self).map(Some)
@@ -2008,6 +2040,7 @@ mod tests {
     struct F(f32);
     impl Component for F {
         const NAME: &'static str = "test.f";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
         fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
             crate::json::to_value(self).map(Some)
         }
@@ -2046,6 +2079,7 @@ mod tests {
     struct Points(Entity);
     impl Component for Points {
         const NAME: &'static str = "test.points";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
         fn references(&self, out: &mut Vec<Entity>) {
             out.push(self.0);
         }

@@ -89,6 +89,7 @@ pub struct ShadowFlags {
 }
 impl primase_core::Component for ShadowFlags {
     const NAME: &'static str = "fromsoft.shadow_flags";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
         primase_core::json::to_value(self).map(Some)
     }

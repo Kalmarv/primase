@@ -1673,6 +1673,7 @@ mod tests {
 
     impl primase_core::Component for PerVertex {
         const NAME: &'static str = "test.per_vertex";
+        const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerVertex;
         fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
             Some(primase_core::remap_list(&self.0, from).map(PerVertex))
         }

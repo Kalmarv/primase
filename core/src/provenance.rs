@@ -101,6 +101,7 @@ impl Serialize for Provenance {
 
 impl Component for Provenance {
     const NAME: &'static str = "core.provenance";
+    const GEOMETRY: crate::Geometry = crate::Geometry::PerPrimitive;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }

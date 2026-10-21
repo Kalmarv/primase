@@ -17,6 +17,7 @@ use primase_core::{Component, Entity, Instance, Name, Resource, World};
 struct ToyMesh(u32);
 impl Component for ToyMesh {
     const NAME: &'static str = "toy.mesh";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// The toy's payload is its number, in bytes.
     fn payload_bytes(&self) -> u64 {
         u64::from(self.0)
@@ -28,6 +29,7 @@ impl Component for ToyMesh {
 struct Lowered;
 impl Component for Lowered {
     const NAME: &'static str = "pbr.toy";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
 /// A raw form the target doesn't write; `toy-lower-raw` would lower it, if the program ran it.
@@ -35,6 +37,7 @@ impl Component for Lowered {
 struct ToyRaw;
 impl Component for ToyRaw {
     const NAME: &'static str = "toy.raw";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
 thread_local! {
@@ -1245,6 +1248,7 @@ impl Pass for ToyNeeds {
 struct ToyCape;
 impl primase_core::Component for ToyCape {
     const NAME: &'static str = "toy.cape";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 struct CapeOnFirst;
 impl Pass for CapeOnFirst {

@@ -19,6 +19,7 @@ pub struct LoadedFile {
 
 impl Component for LoadedFile {
     const NAME: &'static str = "skate.loaded_file";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// None: the loader's copy of a file's bytes is bulk data kept for writing the file through, not content, so it
     /// has no view (a writer that shows components, as glTF extras, leaves it out).
     fn to_json(&self) -> Result<Option<Value>, JsonError> {

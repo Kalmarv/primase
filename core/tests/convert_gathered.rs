@@ -49,6 +49,7 @@ struct Bit {
 }
 impl Component for Bit {
     const NAME: &'static str = "toy.bit";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
 /// A group: one cell's values, in the spool's order.
@@ -59,6 +60,7 @@ struct Cell {
 }
 impl Component for Cell {
     const NAME: &'static str = "toy.cell";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
 /// Each cell's sum, one entry per group: merged as a union, a cell from two groups refused.

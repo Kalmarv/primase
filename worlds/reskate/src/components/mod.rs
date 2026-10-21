@@ -512,6 +512,8 @@ macro_rules! shown {
     ($($t:ty = $n:literal),+ $(,)?) => {$(
         impl Component for $t {
             const NAME: &'static str = $n;
+            /// Nothing per primitive or vertex of its own entity's mesh.
+            const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
             fn to_json(&self) -> Result<Option<Value>, JsonError> {
                 primase_core::json::to_value(self).map(Some)
             }
@@ -521,6 +523,7 @@ macro_rules! shown {
 
 impl Component for SkateMaterial {
     const NAME: &'static str = "skate.material";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// 2: `vertex_alpha` is a field of its own (in 1 it was carried in `other`).
     const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
@@ -1505,6 +1508,7 @@ shown!(
 
 impl Component for SkateParts {
     const NAME: &'static str = "skate.parts";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -1516,6 +1520,7 @@ impl Component for SkateParts {
 
 impl Component for SkateSoup {
     const NAME: &'static str = "skate.soup";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// Counts, not the triangles.
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         Ok(Some(serde_json::json!({

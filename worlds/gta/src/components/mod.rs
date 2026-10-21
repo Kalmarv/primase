@@ -100,6 +100,7 @@ impl GtaEntity {
 
 impl Component for GtaEntity {
     const NAME: &'static str = "gta.entity";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -159,6 +160,7 @@ impl GtaArchetype {
 
 impl Component for GtaArchetype {
     const NAME: &'static str = "gta.archetype";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -176,6 +178,7 @@ pub struct GtaResolvedIn {
 
 impl Component for GtaResolvedIn {
     const NAME: &'static str = "gta.resolved_in";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -208,6 +211,7 @@ pub struct GtaShader {
 
 impl Component for GtaShader {
     const NAME: &'static str = "gta.shader";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -237,6 +241,7 @@ pub struct GtaDrawable {
 
 impl Component for GtaDrawable {
     const NAME: &'static str = "gta.drawable";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// 2: the meshes' sources and the coarser LODs moved to [`GtaSources`] and `core.lods`; 3: `model_masks`.
     const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
@@ -256,6 +261,7 @@ pub struct GtaSources {
 
 impl Component for GtaSources {
     const NAME: &'static str = "gta.sources";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -285,6 +291,7 @@ pub struct GtaBones(pub Vec<Option<u16>>);
 
 impl Component for GtaBones {
     const NAME: &'static str = "gta.bones";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -325,6 +332,7 @@ impl BlendStreams {
 
 impl Component for GtaBlendStreams {
     const NAME: &'static str = "gta.blend_streams";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerVertex;
     /// Bytes a vertex, not local-space geometry.
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
         primase_core::Linearity::Invariant
@@ -408,6 +416,7 @@ pub struct GtaSkeleton(pub crate::rage::drawable::Bones);
 
 impl Component for GtaSkeleton {
     const NAME: &'static str = "gta.skeleton";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -422,6 +431,7 @@ pub struct GtaLights {
 
 impl Component for GtaLights {
     const NAME: &'static str = "gta.lights";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// 3: the records alone (their bones are `gta.skeleton`); 2 held each record's bone pose.
     const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
@@ -436,6 +446,7 @@ pub struct GtaLight(pub crate::rage::drawable::LightAttr);
 
 impl Component for GtaLight {
     const NAME: &'static str = "gta.light";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }

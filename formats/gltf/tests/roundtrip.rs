@@ -786,6 +786,7 @@ fn extras_never_lose_a_value() {
     struct Sample(f32);
     impl primase_core::Component for Sample {
         const NAME: &'static str = "test.sample";
+        const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
         fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
             primase_core::json::to_value(&self.0).map(Some)
         }

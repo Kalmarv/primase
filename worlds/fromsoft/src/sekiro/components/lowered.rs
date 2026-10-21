@@ -8,6 +8,7 @@ use primase_core::Component;
 pub struct UvTiling(pub [f32; 2]);
 impl Component for UvTiling {
     const NAME: &'static str = "fromsoft.uv_tiling";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
         primase_core::world::Linearity::Invariant
     }

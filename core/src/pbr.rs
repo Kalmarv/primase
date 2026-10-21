@@ -219,6 +219,7 @@ pub struct PbrMaterial {
 
 impl Component for PbrMaterial {
     const NAME: &'static str = "pbr.material";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// 2: `emissive_strength`; 3: `cast_shadows`; 4: `specular`; 5: `shading` and each texture's `filters`,
     /// `cast_shadows` gone (shadow casting is [`crate::Shadows`]', per drawn entity).
     const VERSION: u32 = 5;

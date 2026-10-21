@@ -14,6 +14,7 @@ pub(crate) struct Syntax {
 }
 impl Component for Syntax {
     const NAME: &'static str = "skate.layered_syntax";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 fn bad(s: impl Into<String>) -> Error {
     Error::Scene(format!("layered material: {}", s.into()))

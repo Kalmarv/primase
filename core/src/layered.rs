@@ -253,6 +253,7 @@ impl LayeredMaterial {
 
 impl Component for LayeredMaterial {
     const NAME: &'static str = "core.layered";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// 2: per-pixel `channels` and the `composition`; 3: each mask texture's `filters`; 4: the height composition
     /// and its `heights`.
     const VERSION: u32 = 4;

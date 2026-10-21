@@ -63,6 +63,7 @@ impl Lods {
 
 impl Component for Lods {
     const NAME: &'static str = "core.lods";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// The forms are entities of their own (a pass mapping a prototype maps its forms itself).
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant
@@ -460,6 +461,7 @@ mod tests {
     struct PerPrimitive(Vec<u8>);
     impl Component for PerPrimitive {
         const NAME: &'static str = "game.per_primitive";
+        const GEOMETRY: crate::Geometry = crate::Geometry::PerPrimitive;
         fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
             Some(crate::remap_list(&self.0, from).map(PerPrimitive))
         }

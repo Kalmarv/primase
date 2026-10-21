@@ -35,6 +35,7 @@ pub struct StuntboostPart {
 
 impl Component for StuntboostPart {
     const NAME: &'static str = "stuntboost.part";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -149,6 +150,7 @@ pub struct StuntboostNode {
 
 impl Component for StuntboostNode {
     const NAME: &'static str = "stuntboost.node";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -193,6 +195,7 @@ pub struct StuntboostMaterial {
 
 impl Component for StuntboostMaterial {
     const NAME: &'static str = "stuntboost.material";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -394,6 +397,7 @@ pub struct StuntboostAttributes(pub Vec<BTreeMap<String, StuntboostAttribute>>);
 
 impl Component for StuntboostAttributes {
     const NAME: &'static str = "stuntboost.attributes";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerVertex;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -438,6 +442,7 @@ pub struct StuntboostDirectLight {
 
 impl Component for StuntboostDirectLight {
     const NAME: &'static str = "stuntboost.direct_light";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -468,6 +473,7 @@ pub struct StuntboostGameCollision {
 
 impl Component for StuntboostGameCollision {
     const NAME: &'static str = "stuntboost.game_collision";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// Counts, not the triangles.
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         Ok(Some(serde_json::json!({
@@ -510,6 +516,7 @@ pub struct StuntboostLedge {
 
 impl Component for StuntboostLedge {
     const NAME: &'static str = "stuntboost.ledge";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
@@ -537,6 +544,7 @@ pub struct StuntboostLedgeGraph {
 
 impl Component for StuntboostLedgeGraph {
     const NAME: &'static str = "stuntboost.ledge_graph";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// Counts, not the corners.
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         Ok(Some(serde_json::json!({
@@ -557,6 +565,7 @@ pub struct StuntboostShortcuts(pub BTreeMap<u32, Option<Vec<i32>>>);
 
 impl Component for StuntboostShortcuts {
     const NAME: &'static str = "stuntboost.shortcuts";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }

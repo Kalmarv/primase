@@ -103,6 +103,7 @@ pub struct StateAxis {
 
 impl Component for StateAxis {
     const NAME: &'static str = "core.state_axis";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -207,6 +208,7 @@ pub struct Condition(pub Vec<Clause>);
 
 impl Component for Condition {
     const NAME: &'static str = "core.condition";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// No local-space geometry.
     fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
         crate::world::Linearity::Invariant
@@ -249,6 +251,7 @@ pub struct StateOverride(pub Vec<(Clause, Override)>);
 
 impl Component for StateOverride {
     const NAME: &'static str = "core.state_override";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }

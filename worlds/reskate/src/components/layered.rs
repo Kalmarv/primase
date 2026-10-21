@@ -41,6 +41,7 @@ impl VertexBlend {
 
 impl Component for VertexBlend {
     const NAME: &'static str = "reskate.vertex_blend";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn verify(&self, _: Entity, _: &World) -> Result<(), String> {
         self.check()
     }
@@ -56,6 +57,7 @@ pub struct BlendOpacity(pub Vec<Option<Vec<f32>>>);
 
 impl Component for BlendOpacity {
     const NAME: &'static str = "reskate.blend_opacity";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerVertex;
     fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
         Some(primase_core::remap_list(&self.0, from).map(BlendOpacity))
     }
