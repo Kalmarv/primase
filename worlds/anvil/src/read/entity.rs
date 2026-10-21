@@ -162,6 +162,9 @@ pub struct Visual {
 /// A component: its id, type and body.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Component {
+    /// Its header's tag: 04, or 00 (the notes: in UI groups and Trigger_Discovery groups; what it means is not
+    /// established).
+    pub tag: u8,
     pub id: u64,
     pub kind: u32,
     pub body: ComponentBody,
@@ -306,6 +309,40 @@ impl Cursor<'_> {
         let id = self.u64(what)?;
         self.expect(what, u64::from(kind), 4)?;
         Ok(id)
+    }
+    /// A GameplayContextDisabler's condition node (04, a u64, its type): an operator (0x025AD7F9: a byte, an op
+    /// 0, 1 or 2, a count n, n child nodes) or a leaf (0x0FA689EF: 2 bytes, a u64). False where its type is neither
+    /// or it nests deeper than the notes saw (2).
+    fn condition(&mut self, depth: usize) -> Result<bool, Error> {
+        self.expect("condition node", 4, 1)?;
+        self.u64("condition node")?;
+        match self.u32("condition node type")? {
+            0x025A_D7F9 if depth < 2 => {
+                self.take(1, "condition operator")?;
+                let at = self.at;
+                let op = self.u32("condition operator")?;
+                if op > 2 {
+                    return Err(Error::Value {
+                        what: "condition operator",
+                        at,
+                        found: u64::from(op),
+                        read: "0, 1 or 2",
+                    });
+                }
+                let n = self.count("condition operator count", 23)?;
+                for _ in 0..n {
+                    if !self.condition(depth.saturating_add(1))? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            0x0FA6_89EF => {
+                self.take(10, "condition leaf")?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
     fn matrix(&mut self) -> Result<[f32; 16], Error> {
         let mut m = [0.0; 16];
@@ -813,6 +850,68 @@ impl Cursor<'_> {
                 }
                 self.take(11, "FXComponent")?;
             }
+            // 0x341877D6 (unnamed): 4 bytes, a count n, n 109-byte items, each from a 04-tagged 0x30C186C4 object (the
+            // notes: 8 + 109 n, the one sequential end on 190 of 190; the rest of an item, 0x518AFC74 and IsLocked
+            // objects with references, not named)
+            0x3418_77D6 => {
+                self.take(4, "component")?;
+                let n = self.count("component count", 109)?;
+                for _ in 0..n {
+                    self.expect("component item", 4, 1)?;
+                    self.object("component item", 0x30C1_86C4)?;
+                    self.take(96, "component item")?;
+                }
+            }
+            // 0xEEF3F11F (unnamed): 9 bytes (the notes: 00 01 00 00, a u32 0, 03 on 483 of 483)
+            0xEEF3_F11F => {
+                self.take(9, "component")?;
+            }
+            // BreakableComponent: 4 bytes, a u32 (only 0 read), k ids (01, a u64), m ids, a 102-byte audio blocks (an
+            // AudioEventSeed object first: 00, a u64, 0x561E06FC), 20 bytes (the notes: k 3, m 1, a 1 on all 1,070,
+            // 178 bytes, the next component's header there on 1,070 of 1,070; other counts read as counts, not seen)
+            0x44F8_FD99 => {
+                self.take(4, "BreakableComponent")?;
+                if self.u32("BreakableComponent")? != 0 {
+                    return Ok(None);
+                }
+                for what in ["BreakableComponent ids", "BreakableComponent ids"] {
+                    let k = self.count(what, 9)?;
+                    for _ in 0..k {
+                        self.expect(what, 1, 1)?;
+                        self.u64(what)?;
+                    }
+                }
+                let a = self.count("BreakableComponent audio count", 102)?;
+                for _ in 0..a {
+                    self.expect("AudioEventSeed", 0, 1)?;
+                    self.object("AudioEventSeed", 0x561E_06FC)?;
+                    self.take(89, "BreakableComponent audio")?;
+                }
+                self.take(20, "BreakableComponent")?;
+            }
+            // GameplayContextDisablerComponent: 4 bytes, a condition tree, m (a byte 00 or 01, a u64) (the notes: the
+            // one sequential end on 99 of 99 measured, the next component's header on the other 2,216 of 2,315)
+            0xBB7F_5B1D => {
+                self.take(4, "GameplayContextDisablerComponent")?;
+                if !self.condition(0)? {
+                    return Ok(None);
+                }
+                let m = self.count("GameplayContextDisablerComponent count", 9)?;
+                for _ in 0..m {
+                    let what = "GameplayContextDisablerComponent item";
+                    let at = self.at;
+                    let found = self.u8(what)?;
+                    if found > 1 {
+                        return Err(Error::Value {
+                            what,
+                            at,
+                            found: u64::from(found),
+                            read: "0 or 1",
+                        });
+                    }
+                    self.u64(what)?;
+                }
+            }
             // OutOfBoundsVisualComponent (the notes: 169 on 716 of 716)
             0x2994_1A30 => {
                 self.take(169, "component")?;
@@ -911,7 +1010,16 @@ fn entity(c: &mut Cursor<'_>) -> Result<StoredEntity, Error> {
     let n = c.count("component count", 13)?;
     let mut components = Vec::with_capacity(n);
     for index in 0..n {
-        c.expect("component tag", 4, 1)?;
+        let at = c.at;
+        let tag = c.u8("component tag")?;
+        if !matches!(tag, 0 | 4) {
+            return Err(Error::Value {
+                what: "component tag",
+                at,
+                found: u64::from(tag),
+                read: "4 or 0",
+            });
+        }
         let id = c.u64("component")?;
         let kind = c.u32("component type")?;
         let start = c.at;
@@ -934,7 +1042,7 @@ fn entity(c: &mut Cursor<'_>) -> Result<StoredEntity, Error> {
             }
             _ => ComponentBody::Raw(c.raw_component(kind)?.ok_or(Error::Component { index, kind })?),
         };
-        components.push(Component { id, kind, body });
+        components.push(Component { tag, id, kind, body });
     }
     let run = c.array::<43>("run")?;
     let word = c.u32("word before the scale")?;
