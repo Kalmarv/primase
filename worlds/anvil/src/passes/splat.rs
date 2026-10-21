@@ -83,7 +83,7 @@ fn unorm(x: u8) -> f64 {
 fn detail(
     w: &World,
     t: &AnvilTerrain,
-    s: &Splat,
+    uv: SplatUv,
     m: u8,
     images: &mut BTreeMap<Entity, Rc<Levels>>,
     details: &mut BTreeMap<u8, Option<Detail>>,
@@ -94,7 +94,7 @@ fn detail(
     let d = t.details.get(usize::from(m)).and_then(Option::as_ref);
     let made = match (d, d.and_then(|d| d.diffuse)) {
         (Some(d), Some(e)) => {
-            let g = match s.uv {
+            let g = match uv {
                 SplatUv::Factor(f) => Some(f64::from(d.uv_scale) * f),
                 SplatUv::OverTileSize if d.f32_6 > 0.0 => Some(f64::from(d.uv_scale) / f64::from(d.f32_6)),
                 SplatUv::OverTileSize => None,
@@ -167,6 +167,146 @@ fn tile_image(format: TexFormat, blocks: &[u8], colour: ColorSpace) -> Option<Le
         .flatten()
 }
 
+/// The near ground's material lookup (steps 1 to 3 of the module documentation): the nodes' rasters, the noise and
+/// `k`, for the bake and for the weights at points alike.
+pub struct Lookup<'t> {
+    nodes: BTreeMap<(i64, i64), Node<'t>>,
+    noise: Levels,
+    noise_transfer: Transfer,
+    /// Source units per texel, and the quadtree's corner.
+    texel: f64,
+    origin: [f64; 2],
+    k: f64,
+}
+
+/// The four material texels about a point and their blend: `materials` this texel, its x neighbour, its y
+/// neighbour and the diagonal (`None` outside every read node's raster), blended per axis by `wx`, `wy`; the
+/// point's global texel coordinate `(gx, gy)`.
+pub struct Corners {
+    pub materials: [Option<u8>; 4],
+    pub wx: f64,
+    pub wy: f64,
+    pub gx: f64,
+    pub gy: f64,
+}
+
+impl Corners {
+    /// Each corner's weight: `(1 - wx)(1 - wy)`, `wx (1 - wy)`, `(1 - wx) wy`, `wx wy` (the bilinear blend's).
+    pub fn weights(&self) -> [f64; 4] {
+        let (wx, wy) = (self.wx, self.wy);
+        [(1.0 - wx) * (1.0 - wy), wx * (1.0 - wy), (1.0 - wx) * wy, wx * wy]
+    }
+}
+
+impl<'t> Lookup<'t> {
+    /// The lookup of `t`'s ground at blend sharpness `k`, its noise as stored or sRGB-decoded; `tile_colour` the far
+    /// tiles' colour space.
+    pub fn new(
+        w: &World,
+        t: &'t AnvilTerrain,
+        k: f64,
+        noise_srgb: bool,
+        tile_colour: ColorSpace,
+    ) -> Result<Self, String> {
+        let level = t.level.min(30);
+        let node_side = t.side / f64::from(1u32 << level);
+        let noise = match t.noise.and_then(|e| w.get::<Texture>(e)) {
+            Some(n) => Levels::of(n).map_err(|e| e.to_string())?,
+            None => {
+                return Err(
+                    "the ground's material lookup needs the splatting noise (TerrainRead's noise)".into(),
+                );
+            }
+        };
+        let nodes = t
+            .tiles
+            .iter()
+            .map(|tile| {
+                (
+                    (i64::from(tile.row), i64::from(tile.column)),
+                    Node {
+                        tile,
+                        colour: tile_image(TexFormat::Bc1, &tile.colour, tile_colour),
+                        block_8: tile_image(TexFormat::Bc4Unorm, &tile.block_8, ColorSpace::Linear),
+                    },
+                )
+            })
+            .collect();
+        Ok(Lookup {
+            nodes,
+            noise,
+            noise_transfer: if noise_srgb {
+                Transfer::SrgbColour
+            } else {
+                Transfer::Stored
+            },
+            texel: node_side / 128.0,
+            origin: t.origin,
+            k,
+        })
+    }
+
+    /// The node and its local texel of a global texel.
+    fn locate(&self, gx: i64, gy: i64) -> Option<(&Node<'t>, usize, usize)> {
+        let n = self.nodes.get(&(gy.div_euclid(128), gx.div_euclid(128)))?;
+        Some((
+            n,
+            gy.rem_euclid(128) as usize + TerrainTile::CORE_AT,
+            gx.rem_euclid(128) as usize + TerrainTile::CORE_AT,
+        ))
+    }
+
+    fn material(&self, gx: i64, gy: i64) -> Option<u8> {
+        let (n, i, j) = self.locate(gx, gy)?;
+        n.tile.material.get(i * 132 + j).copied()
+    }
+
+    /// The four material texels about `(x, y)` (source units) and their blend; `None` where the point's own node
+    /// isn't read.
+    pub fn corners(&self, x: f64, y: f64) -> Option<Corners> {
+        let (gx, gy) = (
+            (x - self.origin[0]) / self.texel,
+            (y - self.origin[1]) / self.texel,
+        );
+        let (nx, ny) = (gx.div_euclid(128.0), gy.div_euclid(128.0));
+        if !self.nodes.contains_key(&(ny as i64, nx as i64)) {
+            return None;
+        }
+        let (lx, ly) = (gx - nx * 128.0, gy - ny * 128.0);
+        let n = self.noise.bilinear(
+            0,
+            [lx / 128.0, ly / 128.0],
+            [Address::Wrap; 2],
+            self.noise_transfer,
+        );
+        let (qx, qy) = (gx + (2.0 * n[0] - 1.0) * 0.5, gy + (2.0 * n[1] - 1.0) * 0.5);
+        let (cx, cy) = (qx.floor() as i64, qy.floor() as i64);
+        let (fx, fy) = (qx - qx.floor() - 0.5, qy - qy.floor() - 0.5);
+        let (sx, sy) = (if fx >= 0.0 { 1 } else { -1 }, if fy >= 0.0 { 1 } else { -1 });
+        let weight = |f: f64| 1.0 / (1.0 + (self.k * (0.5 - f.abs())).exp());
+        let corners = [(cx, cy), (cx + sx, cy), (cx, cy + sy), (cx + sx, cy + sy)];
+        Some(Corners {
+            materials: corners.map(|(mx, my)| self.material(mx, my)),
+            wx: weight(fx),
+            wy: weight(fy),
+            gx,
+            gy,
+        })
+    }
+}
+
+/// A terrain material's detail as a layer: its TextureSet's diffuse and its uv per source unit (step 4), `None` where
+/// it has no detail diffuse (or, over its tile size, none of that).
+pub fn layer_detail(t: &AnvilTerrain, uv: SplatUv, m: u8) -> Option<(Entity, f64)> {
+    let d = t.details.get(usize::from(m))?.as_ref()?;
+    let g = match uv {
+        SplatUv::Factor(f) => f64::from(d.uv_scale) * f,
+        SplatUv::OverTileSize if d.f32_6 > 0.0 => f64::from(d.uv_scale) / f64::from(d.f32_6),
+        SplatUv::OverTileSize => return None,
+    };
+    Some((d.diffuse?, g))
+}
+
 /// Each rectangle of `rects` (x0, y0, x1, y1, source units) of the terrain `t`'s ground baked as `s` states, an sRGB
 /// RGBA8 image a pixel of `s.pixel` units to its side from (x0, y0) along +x and +y (row 0 at y0), and what it counted;
 /// the noise and the materials' details decoded once for them all. `tile_colour` is the far tiles' colour space.
@@ -177,48 +317,11 @@ pub fn bake(
     s: &Splat,
     tile_colour: ColorSpace,
 ) -> Result<Vec<(Texture, Baked)>, String> {
-    let level = t.level.min(30);
-    let node_side = t.side / f64::from(1u32 << level);
-    let texel = node_side / 128.0;
-    let noise = match t.noise.and_then(|e| w.get::<Texture>(e)) {
-        Some(n) => Levels::of(n).map_err(|e| e.to_string())?,
-        None => return Err("the splat bake needs the splatting noise (TerrainRead's noise)".into()),
-    };
+    let lookup = Lookup::new(w, t, s.k, s.noise_srgb, tile_colour)?;
     // each material's detail, decoded when a pixel first needs it (a bank holds a hundred 2048-texel maps)
     let mut images: BTreeMap<Entity, Rc<Levels>> = BTreeMap::new();
     let mut details: BTreeMap<u8, Option<Detail>> = BTreeMap::new();
-    let nodes: BTreeMap<(i64, i64), Node> = t
-        .tiles
-        .iter()
-        .map(|tile| {
-            (
-                (i64::from(tile.row), i64::from(tile.column)),
-                Node {
-                    tile,
-                    colour: tile_image(TexFormat::Bc1, &tile.colour, tile_colour),
-                    block_8: tile_image(TexFormat::Bc4Unorm, &tile.block_8, ColorSpace::Linear),
-                },
-            )
-        })
-        .collect();
-    // the node and its local texel of a global texel
-    let locate = |gx: i64, gy: i64| -> Option<(&Node, usize, usize)> {
-        let n = nodes.get(&(gy.div_euclid(128), gx.div_euclid(128)))?;
-        Some((
-            n,
-            gy.rem_euclid(128) as usize + TerrainTile::CORE_AT,
-            gx.rem_euclid(128) as usize + TerrainTile::CORE_AT,
-        ))
-    };
-    let material = |gx: i64, gy: i64| -> Option<u8> {
-        let (n, i, j) = locate(gx, gy)?;
-        n.tile.material.get(i * 132 + j).copied()
-    };
-    let noise_transfer = if s.noise_srgb {
-        Transfer::SrgbColour
-    } else {
-        Transfer::Stored
-    };
+    let locate = |gx: i64, gy: i64| lookup.locate(gx, gy);
     let mut results = Vec::with_capacity(rects.len());
     for &[x0, y0, x1, y1] in rects {
         let width = ((x1 - x0) / s.pixel).ceil().max(1.0) as u32;
@@ -230,24 +333,19 @@ pub fn bake(
                 baked.pixels += 1;
                 let x = x0 + (f64::from(px) + 0.5) * s.pixel;
                 let y = y0 + (f64::from(py) + 0.5) * s.pixel;
-                let (gx, gy) = ((x - t.origin[0]) / texel, (y - t.origin[1]) / texel);
-                let (nx, ny) = (gx.div_euclid(128.0), gy.div_euclid(128.0));
-                if !nodes.contains_key(&(ny as i64, nx as i64)) {
+                let Some(Corners {
+                    materials,
+                    wx,
+                    wy,
+                    gx,
+                    gy,
+                }) = lookup.corners(x, y)
+                else {
                     baked.outside += 1;
                     continue;
-                }
-                let (lx, ly) = (gx - nx * 128.0, gy - ny * 128.0);
-                let n = noise.bilinear(0, [lx / 128.0, ly / 128.0], [Address::Wrap; 2], noise_transfer);
-                let (qx, qy) = (gx + (2.0 * n[0] - 1.0) * 0.5, gy + (2.0 * n[1] - 1.0) * 0.5);
-                let (cx, cy) = (qx.floor() as i64, qy.floor() as i64);
-                let (fx, fy) = (qx - qx.floor() - 0.5, qy - qy.floor() - 0.5);
-                let (sx, sy) = (if fx >= 0.0 { 1 } else { -1 }, if fy >= 0.0 { 1 } else { -1 });
-                let weight = |f: f64| 1.0 / (1.0 + (s.k * (0.5 - f.abs())).exp());
-                let (wx, wy) = (weight(fx), weight(fy));
-                let corners = [(cx, cy), (cx + sx, cy), (cx, cy + sy), (cx + sx, cy + sy)];
-                let materials = corners.map(|(mx, my)| material(mx, my));
+                };
                 for m in materials.iter().flatten() {
-                    detail(w, t, s, *m, &mut images, &mut details)?;
+                    detail(w, t, s.uv, *m, &mut images, &mut details)?;
                 }
                 let mut fell_back = false;
                 let mut colour_of = |m: Option<u8>| -> [f64; 3] {
