@@ -35,7 +35,8 @@ use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{
     AnvilCollisionShape, AnvilDataLayers, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh,
-    AnvilWater, CollisionMaterialRef, DataLayerAction, MaterialBinding, MaterialValue, ShapeGeometry,
+    AnvilShaders, AnvilWater, CollisionMaterialRef, DataLayerAction, MaterialBinding, MaterialValue,
+    ShapeGeometry,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::entity::{
@@ -108,6 +109,12 @@ pub enum Error {
         at: At,
         #[source]
         source: crate::read::template::BindingError,
+    },
+    #[error("{at:?}: {source}")]
+    Permutations {
+        at: At,
+        #[source]
+        source: crate::read::template::PermutationError,
     },
     #[error(transparent)]
     TextureMap(#[from] crate::read::textures::Error),
@@ -298,6 +305,10 @@ pub struct Placer<'a> {
     instanced_collision: InstancedCollision,
     /// Whether meshes' Materials are read.
     read_materials: bool,
+    /// Whether Materials' templates' shader permutations are read.
+    read_shaders: bool,
+    /// Per template id, its [`AnvilShaders`]' entity.
+    shaders: HashMap<u64, Entity>,
     /// Per Material id, its entity (`None`: not a Material, or not read).
     materials: HashMap<u64, Option<Entity>>,
     /// Per TextureMap id, its texture's entity.
@@ -328,6 +339,13 @@ impl<'a> Placer<'a> {
         self
     }
 
+    /// The placer reading, with each Material, its template's pixel shader permutations ([`AnvilShaders`], on an
+    /// entity per template).
+    pub fn with_shaders(mut self) -> Placer<'a> {
+        self.read_shaders = true;
+        self
+    }
+
     pub fn with_instanced_collision(mut self, choice: InstancedCollision) -> Placer<'a> {
         self.instanced_collision = choice;
         self
@@ -347,6 +365,8 @@ impl<'a> Placer<'a> {
             instanced,
             instanced_collision: InstancedCollision::Skip,
             read_materials: false,
+            read_shaders: false,
+            shaders: HashMap::new(),
             materials: HashMap::new(),
             textures: HashMap::new(),
             objects: HashMap::new(),
@@ -542,8 +562,12 @@ impl<'a> Placer<'a> {
                 .collect();
         }
         let mut bindings = Vec::new();
-        if let Some(t) = template.and_then(|t| self.archive.find(t)) {
+        let mut shaders = None;
+        if let Some((id, t)) = template.and_then(|id| Some((id, self.archive.find(id)?))) {
             let body = self.archive.resource(t)?.body;
+            if self.read_shaders {
+                shaders = Some(self.template_shaders(id, t, &body)?);
+            }
             let read = template::bindings(&body).map_err(|source| Error::Bindings { at: t, source })?;
             bindings = read
                 .iter()
@@ -594,12 +618,45 @@ impl<'a> Placer<'a> {
                 bindings,
                 values,
                 texture_set,
-                prelude_20: m.prelude_20_28_53().0,
-                prelude_28: m.prelude_20_28_53().1,
-                prelude_53: m.prelude_20_28_53().2,
+                flags: m.flags(),
+                shaders,
             },
         );
         Ok(Some(e))
+    }
+
+    /// The entity holding template `id`'s [`AnvilShaders`] (at `at`, its body `body`), read once.
+    fn template_shaders(&mut self, id: u64, at: At, body: &[u8]) -> Result<Entity, Error> {
+        if let Some(&e) = self.shaders.get(&id) {
+            return Ok(e);
+        }
+        let read = template::permutations(body).map_err(|source| Error::Permutations { at, source })?;
+        let mut programs: Vec<(usize, Vec<u8>)> = Vec::new();
+        let mut pixel = Vec::new();
+        for p in read.iter().filter(|p| p.stage == template::Stage::Pixel) {
+            let index = match programs.iter().position(|(at, _)| *at == p.at) {
+                Some(i) => i,
+                None => {
+                    programs.push((p.at, p.container.to_vec()));
+                    programs.len().saturating_sub(1)
+                }
+            };
+            pixel.push((p.key, index));
+        }
+        pixel.sort_unstable();
+        let e = self.world.spawn();
+        if let Some(name) = self.name(at) {
+            self.world.insert(e, Name(name));
+        }
+        self.world.insert(
+            e,
+            AnvilShaders {
+                pixel,
+                programs: programs.into_iter().map(|(_, p)| p).collect(),
+            },
+        );
+        self.shaders.insert(id, e);
+        Ok(e)
     }
 
     /// The entity holding the TextureMap `id` names, read once: a core texture of its levels (its CompiledMips', then

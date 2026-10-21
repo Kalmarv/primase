@@ -338,6 +338,128 @@ pub fn shaders(body: &[u8]) -> Vec<(usize, &[u8])> {
     out
 }
 
+/// A record type: the CRC-32 of `ShaderPermutation`.
+pub const SHADER_PERMUTATION: u32 = 0x9467_F2BB;
+
+/// One stage of a shader program.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Stage {
+    Vertex,
+    Pixel,
+}
+
+/// One of a template's shader permutations: the key the engine looks it up by, and its program.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Permutation<'b> {
+    pub stage: Stage,
+    /// The engine's ShaderKey (bits 22 to 29 its pass: docs/shaders.md §6.2).
+    pub key: u32,
+    /// Its program's UCodeHash (the u32 after the program, as stored).
+    pub code_hash: u32,
+    /// The program's offset in the body and its DXBC container.
+    pub at: usize,
+    pub container: &'b [u8],
+}
+
+/// Why a template's permutations can't be read.
+#[derive(Debug, thiserror::Error)]
+pub enum PermutationError {
+    #[error("ShaderPermutation at {at}: {what} {found:#x}, not {read}")]
+    Value {
+        what: &'static str,
+        at: usize,
+        found: u64,
+        read: &'static str,
+    },
+    #[error(
+        "ShaderPermutation at {at} (key {key:#010x}): its UCodeHash {code_hash:#010x} names {programs} programs"
+    )]
+    Program {
+        at: usize,
+        key: u32,
+        code_hash: u32,
+        programs: usize,
+    },
+}
+
+/// Every shader permutation a template body lists (CompiledMaterialTemplate's vertex and pixel ShaderPermutations:
+/// docs/shaders.md §6, docs/material-spec.md §25, read from the engine's class registry): each record a u64 0, the
+/// record type, the ShaderKey, a u32 parameter count (0 on all 177,578 the notes count: another is refused), the
+/// UCodeHash and 16 bytes, found by its first 12 bytes (the byte after it, 0 between records, isn't read). Its program is the one container ([`shaders`])
+/// whose framing stores that UCodeHash after it (each container: `0x7C7AC9C7`, its size, the container, then the
+/// UCodeHash, a u32 and a u64); one whose hash names no container or several is refused. Its stage is its program's.
+pub fn permutations(body: &[u8]) -> Result<Vec<Permutation<'_>>, PermutationError> {
+    let u32_at = |at: usize| -> Option<u32> {
+        body.get(at..at.checked_add(4)?)
+            .and_then(|w| w.try_into().ok())
+            .map(u32::from_le_bytes)
+    };
+    // each program by the hash after it
+    let mut programs: Vec<(u32, usize, &[u8], Stage)> = Vec::new();
+    for (at, container) in shaders(body) {
+        let end = at.saturating_add(container.len());
+        let (Some(hash), Some(kind)) = (
+            u32_at(end),
+            primase_dxbc::chunks(container).ok().and_then(|c| {
+                c.into_iter()
+                    .find(|k| &k.kind == b"SHEX" || &k.kind == b"SHDR")
+                    .and_then(|k| {
+                        k.data
+                            .get(..4)
+                            .and_then(|w| w.try_into().ok())
+                            .map(u32::from_le_bytes)
+                    })
+            }),
+        ) else {
+            continue;
+        };
+        let stage = match kind >> 16 {
+            0 => Stage::Pixel,
+            1 => Stage::Vertex,
+            _ => continue,
+        };
+        programs.push((hash, at, container, stage));
+    }
+    let marker = {
+        let mut m = [0u8; 12];
+        m[8..].copy_from_slice(&SHADER_PERMUTATION.to_le_bytes());
+        m
+    };
+    let mut out = Vec::new();
+    for at in 0..body.len().saturating_sub(39) {
+        if at.checked_add(12).and_then(|end| body.get(at..end)) != Some(&marker[..]) {
+            continue;
+        }
+        let field = |offset: usize| at.checked_add(offset).and_then(u32_at).unwrap_or(u32::MAX);
+        let (key, parameters, code_hash) = (field(12), field(16), field(20));
+        if parameters != 0 {
+            return Err(PermutationError::Value {
+                what: "parameter count",
+                at,
+                found: u64::from(parameters),
+                read: "0",
+            });
+        }
+        let named: Vec<_> = programs.iter().filter(|p| p.0 == code_hash).collect();
+        let [(_, program_at, container, stage)] = named[..] else {
+            return Err(PermutationError::Program {
+                at,
+                key,
+                code_hash,
+                programs: named.len(),
+            });
+        };
+        out.push(Permutation {
+            stage: *stage,
+            key,
+            code_hash,
+            at: *program_at,
+            container,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, reason = "test fixtures built by hand")]
 mod tests {

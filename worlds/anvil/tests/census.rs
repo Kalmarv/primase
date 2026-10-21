@@ -801,7 +801,8 @@ fn census_forge(
                     textured.push((template, keys));
                     // a measurement: the u32 at 20 of the bytes after the references (body 41), and whether the
                     // byte at 28 (body 49) is 0
-                    let (word, byte, _) = m.prelude_20_28_53();
+                    let flags = m.flags();
+                    let (word, byte) = (flags.blend_mode, flags.alpha_test_value);
                     tally.outcome(format!(
                         "u32 at body 41: {word}, byte at body 49 {}",
                         if byte == 0 { "0" } else { "not 0" }

@@ -2,10 +2,12 @@
 
 use std::collections::BTreeMap;
 
+mod bake;
 pub mod formulas;
 mod material;
 mod splat;
 mod water;
+pub use bake::{BakeAnvilMaterial, gbuffer_pixel_key};
 pub use material::{AlphaChoice, Emission, LowerAnvilMaterial, ShaderUv};
 pub use splat::{Splat, SplatUv};
 pub use water::{LowerAnvilWater, Shore};
@@ -1496,6 +1498,16 @@ pub fn register(reg: &mut PassRegistry) {
             ("unset", "white"),
             ("shader-uv", "texcoord"),
             ("emissive-exposure", "1"),
+        ],
+    );
+    reg.register_requiring(
+        "bake-anvil-material",
+        |o| Ok(Box::new(BakeAnvilMaterial::from_options(o)?)),
+        &[
+            ("size", "512"),
+            ("normal-green", "up"),
+            ("shader-uv", "texcoord"),
+            ("mip-bias", "0"),
         ],
     );
     reg.register_requiring(

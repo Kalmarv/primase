@@ -518,11 +518,62 @@ pub struct AnvilMaterial {
     pub values: Vec<(u32, MaterialValue)>,
     /// Its TextureSet's 19 slots, each its TextureMap's texture entity (empty where it has no TextureSet).
     pub texture_set: Vec<Option<Entity>>,
-    /// The u32 at 20 and the bytes at 28 and 53 of the 102 bytes after its two references (body 41, 49 and 74), as
-    /// stored ([`crate::read::material::StoredMaterial::prelude_20_28_53`]).
-    pub prelude_20: u32,
-    pub prelude_28: u8,
-    pub prelude_53: u8,
+    pub flags: MaterialFlags,
+    /// Its template's shader permutations ([`AnvilShaders`]), where the reader reads them.
+    pub shaders: Option<Entity>,
+}
+
+/// A Material's flags as stored: body 41 to 84 (of the 102 bytes after its references, 20 to 63), the fields the
+/// engine's Material deserialiser reads there in its order, named by its class registry (Riders Republic
+/// docs/shaders.md §6): `BlendMode` (a u32, of which the engine keeps 4 bits), `AlphaDisplayMode` (a u32, 2 bits),
+/// `AlphaTestValue` and 35 booleans, a byte each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MaterialFlags {
+    pub blend_mode: u32,
+    pub alpha_display_mode: u32,
+    pub alpha_test_value: u8,
+    /// Boolean j at body 50 + j.
+    pub booleans: [u8; 35],
+}
+
+impl MaterialFlags {
+    /// Booleans by their registry names (index j).
+    pub const LAYER_MATERIAL: usize = 3;
+    pub const PRE_TRANSPARENT: usize = 10;
+    pub const FLIP_NORMAL_ON_BACK_FACE: usize = 11;
+    pub const RENDER_IN_LOW_RESOLUTION: usize = 15;
+    pub const ALPHA_TEST_ENABLED: usize = 24;
+    pub const TWO_SIDED: usize = 25;
+    /// The boolean whose name's CRC-32 is `42452A12` (the name not known).
+    pub const BOOLEAN_42452A12: usize = 34;
+}
+
+/// A MaterialTemplate's pixel-stage shader permutations (`anvil.shaders`, on an entity of its own, named as the
+/// template, that its Materials name): each ShaderKey and its program's DXBC container, as stored
+/// (`crate::read::template::permutations`). The vertex stage's are not kept.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilShaders {
+    /// (ShaderKey, index into `programs`), sorted by key: the engine looks a key up exactly.
+    pub pixel: Vec<(u32, usize)>,
+    pub programs: Vec<Vec<u8>>,
+}
+
+impl AnvilShaders {
+    /// The program the pixel key `key` names.
+    pub fn pixel(&self, key: u32) -> Option<&[u8]> {
+        let at = self.pixel.binary_search_by_key(&key, |&(k, _)| k).ok()?;
+        let &(_, program) = self.pixel.get(at)?;
+        self.programs.get(program).map(Vec::as_slice)
+    }
+}
+
+impl Component for AnvilShaders {
+    const NAME: &'static str = "anvil.shaders";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn payload_bytes(&self) -> u64 {
+        let bytes: usize = self.programs.iter().map(Vec::len).sum();
+        u64::try_from(bytes).unwrap_or(u64::MAX)
+    }
 }
 
 impl Component for AnvilMaterial {
@@ -534,6 +585,7 @@ impl Component for AnvilMaterial {
             _ => None,
         }));
         out.extend(self.texture_set.iter().flatten());
+        out.extend(self.shaders);
     }
 }
 

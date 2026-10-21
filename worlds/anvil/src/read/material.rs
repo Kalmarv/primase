@@ -17,6 +17,7 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::components::MaterialFlags;
 pub use crate::read::mesh::MATERIAL;
 use crate::read::reference::{self, Reference};
 
@@ -81,7 +82,7 @@ impl StoredReferences {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredMaterial {
     pub references: [Option<Reference>; 2],
-    /// The 102 bytes after the references.
+    /// The 102 bytes after the references (its flags at 20 to 63: [`StoredMaterial::flags`]).
     pub unread: Vec<u8>,
     pub properties: Vec<Property>,
 }
@@ -179,17 +180,19 @@ impl Cursor<'_> {
 }
 
 impl StoredMaterial {
-    /// The u32 at 20 of the bytes after the references (body 41) and their bytes at 28 and 53 (body 49, 74): the
-    /// Riders Republic notes' blend mode, alpha-test value and (a correlation) the cut-out's enable
-    /// (docs/material-spec.md §13.3 and its addendum, AnvilToolkit's names for the first two; none established).
-    pub fn prelude_20_28_53(&self) -> (u32, u8, u8) {
-        let word = self
-            .unread
-            .get(20..24)
-            .and_then(|w| w.try_into().ok())
-            .map_or(0, u32::from_le_bytes);
-        let byte = |at: usize| self.unread.get(at).copied().unwrap_or(0);
-        (word, byte(28), byte(53))
+    /// Its flags (body 41 to 84: [`MaterialFlags`]).
+    pub fn flags(&self) -> MaterialFlags {
+        let word = |w: Option<&[u8]>| w.and_then(|w| w.try_into().ok()).map_or(0, u32::from_le_bytes);
+        MaterialFlags {
+            blend_mode: word(self.unread.get(20..24)),
+            alpha_display_mode: word(self.unread.get(24..28)),
+            alpha_test_value: self.unread.get(28).copied().unwrap_or(0),
+            booleans: self
+                .unread
+                .get(29..64)
+                .and_then(|b| b.try_into().ok())
+                .unwrap_or([0; 35]),
+        }
     }
 
     /// The body parsed.

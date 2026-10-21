@@ -906,6 +906,7 @@ dependencies = [
  "primase-havok",
  "primase-image",
  "primase-meshops",
+ "primase-shader",
  "primase-testdata",
  "primase-texcodec",
  "primase-vertex",

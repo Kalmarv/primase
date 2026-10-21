@@ -94,7 +94,7 @@ use primase_core::{
 use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, srgb_to_linear};
 
 use super::formulas::{Rough, emission, metalness, occlusion, roughness, sat, tinted};
-use crate::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialValue};
+use crate::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialFlags, MaterialValue};
 
 /// How the alpha channel is drawn: the program's statement.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -561,13 +561,19 @@ fn binds(m: &AnvilMaterial, layout: &Tex1Layout) -> bool {
     })
 }
 
-/// The blend mode a Material's prelude states (its u32 at 20, the alpha-test byte at 28, the byte at 53): the
-/// notes' reading (docs/material-spec.md §13.3 and its addendum), not checked in the game. 4: blended; 0:
-/// alpha-tested at the byte at 28 over 255 where it and the byte at 53 are other than 0, else opaque (the byte at 53
-/// the likely enable, a correlation: set on 64 of 68 Tex1 and Wind Materials whose diffuse alpha is a cut-out, on 0
-/// of 40 solid ones whose alpha is continuous); otherwise (1, 6: additive-looking) not lowered, `None`.
+/// The blend mode a Material's flags state ([`MaterialFlags`]: `BlendMode`, `AlphaTestValue`, `AlphaTestEnabled`):
+/// the notes' reading (docs/material-spec.md §13.3 and its addendum), not checked in the game. 4: blended; 0:
+/// alpha-tested at `AlphaTestValue` over 255 where it and `AlphaTestEnabled` are other than 0 (the engine sets the
+/// shader's alpha reference so where `AlphaTestEnabled` is on: docs/shaders.md §6), else opaque; otherwise (1, 6:
+/// additive-looking) not lowered, `None`.
 fn prelude_alpha(m: &AnvilMaterial) -> Option<AlphaMode> {
-    match (m.prelude_20, m.prelude_28, m.prelude_53) {
+    let f = &m.flags;
+    let enabled = f
+        .booleans
+        .get(MaterialFlags::ALPHA_TEST_ENABLED)
+        .copied()
+        .unwrap_or(0);
+    match (f.blend_mode, f.alpha_test_value, enabled) {
         (4, _, _) => Some(AlphaMode::Blend),
         (0, 0, _) | (0, _, 0) => Some(AlphaMode::Opaque),
         (0, t, _) => Some(AlphaMode::Mask {
