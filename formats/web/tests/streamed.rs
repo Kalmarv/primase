@@ -234,9 +234,13 @@ fn the_target_wants_a_cells_files_loaded_and_lods_chosen() {
     assert!(t.illegal_entities(&w, TextureFile::NAME, Mode::Full).is_empty());
     w.remove::<Mesh>(proto);
     assert_eq!(t.illegal_entities(&w, MeshFile::NAME, Mode::Full), [proto]);
-    // a dialect's component is carried; levels of detail are chosen first
+    // a dialect's component is carried; levels of detail and parametric colliders are legal, left out and reported
     assert!(t.illegal_entities(&w, "test.dialect", Mode::Full).is_empty());
-    assert!(matches!(t.legality(Lods::NAME), Some(Legality::Illegal)));
+    assert!(matches!(t.legality(Lods::NAME), Some(Legality::Legal)));
+    assert!(matches!(
+        t.legality(primase_core::Collider::NAME),
+        Some(Legality::Legal)
+    ));
 }
 
 #[test]

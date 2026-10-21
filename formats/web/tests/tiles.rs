@@ -1897,3 +1897,99 @@ fn an_ambient_consumed_after_planning_is_not_reported() {
         [(primase_core::convert::NoticeKind::Unsupported, 1)]
     );
 }
+
+/// What the tiles have no form for is left out and reported, once each, not refused: a placement of a prototype with
+/// levels of detail (not drawn, not counted as a placement), a parametric collider on a placed prototype and one of its
+/// own, and a Bezier curve (no viewer record). The plain placement and the polyline are written.
+#[test]
+fn levels_of_detail_colliders_and_bezier_curves_are_left_out_and_reported() {
+    use primase_core::convert::NoticeKind;
+    use primase_core::{Collider, Curve, LodForm, Lods, Name, Shape, Surface, Surfaces};
+    let mut w = World::new();
+    w.insert_resource(Surfaces(vec![Surface::new("default")]));
+    let with_forms = w.spawn();
+    w.insert(with_forms, mesh());
+    let form = w.spawn();
+    w.insert(form, mesh());
+    w.insert(
+        with_forms,
+        Lods {
+            detail: 0,
+            forms: vec![LodForm { detail: 1, form }],
+            default: None,
+        },
+    );
+    let lod_placement = place(&mut w, with_forms, 10.);
+    w.insert(lod_placement, Name("chosen later".into()));
+    let solid = w.spawn();
+    w.insert(solid, mesh());
+    w.insert(
+        solid,
+        Collider {
+            shape: Shape::Sphere {
+                center: [0.; 3],
+                radius: 1.,
+            },
+            surface: 0,
+        },
+    );
+    let drawn = place(&mut w, solid, 20.);
+    w.insert(drawn, Name("drawn".into()));
+    let own = w.spawn();
+    w.insert(
+        own,
+        Collider {
+            shape: Shape::Box {
+                center: [0.; 3],
+                half_extents: [1.; 3],
+            },
+            surface: 0,
+        },
+    );
+    let mut t = Transform::IDENTITY;
+    t.cols[3] = [30., 0., 0.];
+    w.insert(own, t);
+    w.insert(own, Name("box".into()));
+    let curve = |tangents| Curve {
+        kind: "rail".into(),
+        points: vec![[40., 0., 0.], [41., 0., 0.]],
+        closed: false,
+        tangents,
+        up: None,
+    };
+    let bezier = w.spawn();
+    w.insert(bezier, curve(Some(vec![[[40., 0., 0.]; 2], [[41., 0., 0.]; 2]])));
+    w.insert(bezier, Name("bezier".into()));
+    let polyline = w.spawn();
+    w.insert(polyline, curve(None));
+    let set = write(&w, &plain()).unwrap();
+    let tile = &set.index.tiles[0];
+    assert_eq!(
+        (set.index.tiles.len(), tile.placements, tile.viewer_items),
+        (1, 1, 1)
+    );
+    let unsupported: Vec<(String, u64, Vec<String>)> = set
+        .notices
+        .iter()
+        .filter(|n| n.kind == NoticeKind::Unsupported)
+        .map(|n| {
+            (
+                n.reason.split(' ').next().unwrap().to_owned(),
+                n.count,
+                n.examples.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        unsupported,
+        [
+            ("Bezier".to_owned(), 1, vec!["bezier".to_owned()]),
+            (
+                "parametric".to_owned(),
+                2,
+                vec!["drawn".to_owned(), "box".to_owned()]
+            ),
+            ("placements".to_owned(), 1, vec!["chosen later".to_owned()]),
+        ]
+    );
+}

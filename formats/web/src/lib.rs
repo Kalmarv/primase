@@ -544,16 +544,17 @@ impl std::fmt::Debug for TilePlan {
 }
 /// What the writer accepts in the world it writes a cell from ([`TilePlan::write_cell`], after that cell's passes):
 /// the core and PBR components it interprets are legal; a `core.mesh_file` or `core.texture_file` only on an entity
-/// with the mesh or texture loaded; a `core.curve` only as a polyline (`flatten-curves` first); `core.lods` and
-/// `core.collider` must be lowered first (`select-lod`, `tessellate-colliders`). Every other name is carried
-/// (glTF extras). Transforms must be rigid or degenerate (skipped): `bake-nonrigid` bakes a mirror or shear
+/// with the mesh or texture loaded. What it has no form for is legal and left out, reported ([`TilePlan::notices`]):
+/// a placement whose prototype has levels of detail (`select-lod` chooses a form), a parametric collider
+/// (`tessellate-colliders` makes its triangles), a Bezier curve's record (`flatten-curves` makes a polyline). Every
+/// other name is carried (glTF extras). Transforms must be rigid or degenerate (skipped): `bake-nonrigid` bakes a mirror or shear
 /// into geometry. As in glTF, a material entity without `pbr.material` is written as no material, and a primitive
 /// lacking a texture coordinate set its material samples is refused (`prepare-gltf-materials`,
 /// `fill-missing-texcoords` are a program's choices).
 pub fn target() -> primase_core::pass::Target {
     use primase_core::{
-        Collision, Component, Curve, LayeredMaterial, Light, Lods, Marker, MeshFile, Shadows, Texture,
-        TextureFile, pbr::PbrMaterial,
+        Collider, Collision, Component, Curve, LayeredMaterial, Light, Lods, Marker, MeshFile, Shadows,
+        Texture, TextureFile, pbr::PbrMaterial,
     };
     primase_core::pass::Target::new("web")
         .legal(Instance::NAME)
@@ -573,10 +574,9 @@ pub fn target() -> primase_core::pass::Target {
         .legal(Texture::NAME)
         .dynamic(MeshFile::NAME, |w, e| w.has::<Mesh>(e))
         .dynamic(TextureFile::NAME, |w, e| w.has::<Texture>(e))
-        // viewer records draw polylines; collision is drawn from its triangles
-        .dynamic_typed::<Curve>(|c| c.tangents.is_none())
-        .illegal(Lods::NAME)
-        .illegal(primase_core::Collider::NAME)
+        // left out and reported: no form chosen, no triangles, no polyline
+        .legal(Lods::NAME)
+        .legal(Collider::NAME)
         .carry_unknown()
 }
 /// Plan `world`'s tiles. Geometry may still be in files: each cell's content is read from its world when it is
@@ -612,8 +612,35 @@ fn placements(world: &World) -> BTreeMap<Entity, Entity> {
 /// Whether `e` holds collision of its own, placed by its own transform: a soup with triangles that is not a
 /// placement and that none of `placements` places.
 fn standalone_collision(world: &World, e: Entity, placements: &BTreeMap<Entity, Entity>) -> bool {
-    collides(world, e) && !placements.contains_key(&e) && !placements.values().any(|&p| p == e)
+    collides(world, e) && unplaced(e, placements)
 }
+
+/// Whether `e` holds a parametric collider of its own, placed by its own transform (left out, reported).
+fn standalone_collider(world: &World, e: Entity, placements: &BTreeMap<Entity, Entity>) -> bool {
+    world.has::<primase_core::Collider>(e) && unplaced(e, placements)
+}
+
+/// Whether `e` is neither a placement nor placed by one of `placements`.
+fn unplaced(e: Entity, placements: &BTreeMap<Entity, Entity>) -> bool {
+    !placements.contains_key(&e) && !placements.values().any(|&p| p == e)
+}
+
+/// Whether `prototype` has other forms to choose from (`core.lods` listing any): the writer chooses none.
+fn has_forms(world: &World, prototype: Entity) -> bool {
+    world
+        .get::<primase_core::Lods>(prototype)
+        .is_some_and(|l| !l.forms.is_empty())
+}
+
+/// What a tile leaves out of a placement whose prototype has other forms ([`has_forms`]).
+const WITH_FORMS: &str =
+    "placements whose prototype has levels of detail (core.lods), not written: select-lod chooses a form";
+/// What a tile leaves out of a parametric collider.
+const COLLIDER: &str = "parametric colliders (core.collider), not written as collision records: the viewer draws \
+                        collision from triangles (tessellate-colliders makes them)";
+/// What a tile leaves out of a Bezier curve.
+const BEZIER: &str = "Bezier curves (core.curve with tangents), not written as viewer records: records are polylines (flatten-curves \
+     makes them)";
 
 /// A marker's anchor: its transform's position, or a ground position at height 0 (`true`: the source leaves the
 /// height to its consumer).
@@ -626,13 +653,8 @@ fn marker_anchor(world: &World, e: Entity, m: &primase_core::Marker) -> Result<(
     }
 }
 
-/// A curve's anchor, its first point; a Bezier curve is refused (viewer records are polylines).
+/// A curve's anchor, its first point.
 fn curve_anchor(e: Entity, c: &primase_core::Curve) -> Result<[f64; 3]> {
-    if c.tangents.is_some() {
-        return Err(Error::Invalid(format!(
-            "{e:?}: a Bezier curve: viewer records are polylines (flatten-curves first)"
-        )));
-    }
     c.points
         .first()
         .map(|p| p.map(f64::from))
@@ -736,13 +758,15 @@ pub fn plan_with_geometry(
         let key = coordinate(item.anchor, options.tile_size.get())?;
         plan.cells.entry(key).or_default().records.push(i);
     }
-    // the other entities, each filed by its first role: curves (at their first point), markers, lights (the sun
-    // aside: it is indexed scene-wide), then collision no placement places; their records numbered in that order,
-    // after the given ones
+    // the other entities, each filed by its first role: curves (at their first point), markers, colliders and
+    // lights (the sun aside: it is indexed scene-wide) no placement places, then collision no placement places; their
+    // records numbered in that order, after the given ones (a Bezier curve has none)
     for (e, c) in world.iter::<Curve>() {
         let first = curve_anchor(e, c)?;
-        plan.numbers.insert((e, Curve::NAME), plan.next_item);
-        plan.next_item += 1;
+        if c.tangents.is_none() {
+            plan.numbers.insert((e, Curve::NAME), plan.next_item);
+            plan.next_item += 1;
+        }
         plan.file(&mut filed, e, first)?;
     }
     for (e, m) in world.iter::<Marker>() {
@@ -750,6 +774,12 @@ pub fn plan_with_geometry(
         plan.numbers.insert((e, Marker::NAME), plan.next_item);
         plan.next_item += 1;
         plan.file(&mut filed, e, anchor)?;
+    }
+    for (e, _) in world.iter::<primase_core::Collider>() {
+        if standalone_collider(world, e, &placements) {
+            let t = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
+            plan.file(&mut filed, e, t.cols[3].map(f64::from))?;
+        }
     }
     for (e, _) in world.iter::<Light>() {
         if Some(e) != sun_entity {
@@ -1039,10 +1069,22 @@ impl TilePlan {
         for (e, owner) in held {
             if owner {
                 if let Some(c) = world.get::<Curve>(e) {
-                    let r = core_record(world, e, "grind_curve", curve_anchor(e, c)?, Curve::NAME)?;
-                    let n = self.number(e, Curve::NAME);
-                    self.unencoded(&r);
-                    cw.put(&mut content, n, r.item, r.components);
+                    if c.tangents.is_some() {
+                        self.omit(NoticeKind::Unsupported, BEZIER.into(), 1, &entity_name(world, e));
+                    } else {
+                        let r = core_record(world, e, "grind_curve", curve_anchor(e, c)?, Curve::NAME)?;
+                        let n = self.number(e, Curve::NAME);
+                        self.unencoded(&r);
+                        cw.put(&mut content, n, r.item, r.components);
+                    }
+                }
+                if standalone_collider(world, e, &placements) {
+                    self.omit(
+                        NoticeKind::Unsupported,
+                        COLLIDER.into(),
+                        1,
+                        &entity_name(world, e),
+                    );
                 }
                 if let Some(m) = world.get::<Marker>(e) {
                     let (anchor, ground) = marker_anchor(world, e, m)?;
@@ -1104,6 +1146,26 @@ impl TilePlan {
             {
                 let n = self.number(e, Collision::NAME);
                 cw.put(&mut content, n, item, serde_json::Map::new());
+            }
+            if owner && world.has::<primase_core::Collider>(prototype) {
+                self.omit(
+                    NoticeKind::Unsupported,
+                    COLLIDER.into(),
+                    1,
+                    &entity_name(world, e),
+                );
+            }
+            if has_forms(world, prototype) {
+                // drawing any one form would be choosing it (select-lod's choice); its owner reports it
+                if owner {
+                    self.omit(
+                        NoticeKind::Unsupported,
+                        WITH_FORMS.into(),
+                        1,
+                        &entity_name(world, e),
+                    );
+                }
+                continue;
             }
             if meshless(world, prototype) {
                 // a prototype whose cell has no mesh (none loaded, or planned from a world that loads per cell)
@@ -1170,8 +1232,9 @@ impl TilePlan {
     /// What the tiles published so far left out, chose or drew approximately, as notices (stage `web`): what their
     /// glTF documents did not write (counted once per published tile, as each document counts it; a tile written to
     /// measure it and then split counts nothing), what the tile encoding approximated (instanced placements' f32
-    /// translation, rotation and scale; 16-bit vertex streams, counted per tile; each KTX2 image once), viewer records'
-    /// components without a JSON form, placements skipped
+    /// translation, rotation and scale; 16-bit vertex streams, counted per tile; each KTX2 image once), what the tiles
+    /// have no form for (placements whose prototype has levels of detail, parametric colliders, Bezier curves; each
+    /// once, by the cell that owns it), viewer records' components without a JSON form, placements skipped
     /// for a degenerate transform, markers anchored at height 0, and the environment's ambient light (once, when a
     /// written cell's world held one, or the planning world when no cell is written: the viewer has no ambient, the
     /// index carries only the sun).
@@ -1777,12 +1840,7 @@ struct Rendered {
 /// transform or a missing mesh are the tile writer's own (it never selects them).
 fn omitted(report: &primase_gltf::WriteReport) -> Vec<Omitted> {
     let mut out: Vec<Omitted> = vec![
-        (
-            NoticeKind::Unsupported,
-            "placements whose prototype has levels of detail (core.lods), not written: select-lod chooses a form"
-                .into(),
-            report.placements_with_lods,
-        ),
+        (NoticeKind::Unsupported, WITH_FORMS.into(), report.placements_with_lods),
         (
             NoticeKind::Unsupported,
             "materials without pbr.material or core.layered, not written: their primitives drawn with no material \
@@ -1876,6 +1934,12 @@ fn approximated(instanced: u64, quantized: compression::Quantized) -> Vec<Omitte
     ];
     out.retain(|o| o.2 > 0);
     out
+}
+/// `e`'s name in notices: its `core.name`, else its entity.
+fn entity_name(world: &World, e: Entity) -> String {
+    world
+        .get::<Name>(e)
+        .map_or_else(|| format!("Entity_{}", e.index()), |n| n.0.clone())
 }
 /// `e`'s mesh, which must be loaded.
 fn loaded(w: &World, e: Entity) -> Result<&Mesh> {
