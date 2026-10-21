@@ -5,8 +5,11 @@
 //!   default where the source states one (none where a script the reader doesn't read sets it), a scope (the whole
 //!   world, or one entity such as a door) and a class tools act on (`door`, `ipl`, ...).
 //!   Axes are variables, so independent toggles never multiply into enumerated variants.
-//! - A **condition** ([`Condition`]) on a placed entity says when it exists: an OR of clauses, each an AND of literals
-//!   "axis is one of these values" (a value mask). No condition: always present.
+//! - A **condition** ([`Condition`]) on a placed entity, or on a part or alternative of an asset (`core.asset`: an
+//!   outfit's pieces), says when it exists: an OR of clauses, each an AND of literals "axis is one of these values"
+//!   (a value mask). No condition: always present. A [`PrimitiveCondition`] says the same of each primitive of one
+//!   mesh (a hat drawn as one primitive of the body's mesh), and follows the primitives through every edit
+//!   ([`Component::remap_primitives`]).
 //! - An **override** ([`StateOverride`]) on a placed entity changes its transform, material variant or prototype in
 //!   the states its clause matches. Poses (a door's open animation) stay in the dialect that owns the clip: its own pass
 //!   lowers them into these overrides first.
@@ -22,8 +25,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::components::{Instance, Transform};
+use crate::asset::{Asset, Role};
+use crate::components::{Instance, Mesh, Transform};
 use crate::json::JsonError;
+use crate::ledger::Measure;
 use crate::pass::{Options, Pass, PassLog};
 use crate::world::{Component, Entity, Resource, World};
 
@@ -202,7 +207,17 @@ fn placed(e: Entity, w: &World) -> Result<(), String> {
     }
 }
 
-/// When a placed entity exists: an OR of clauses. Zero clauses: never (resolve-state counts these).
+/// Whether `e` is a part or an alternative of some asset: a member whose presence a choice decides.
+fn is_choosable_member(e: Entity, w: &World) -> bool {
+    w.iter::<Asset>().any(|(_, a)| {
+        a.members
+            .iter()
+            .any(|&(m, r)| m == e && matches!(r, Role::Part | Role::Alternative))
+    })
+}
+
+/// When a placed entity, or a part or alternative member of an asset, exists: an OR of clauses. Zero clauses: never
+/// (resolve-state counts these).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Condition(pub Vec<Clause>);
 
@@ -217,11 +232,60 @@ impl Component for Condition {
         crate::json::to_value(self).map(Some)
     }
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
-        placed(e, w)?;
+        if !is_choosable_member(e, w) {
+            placed(e, w).map_err(|_| {
+                "on an entity without a transform that is not a part or alternative of an asset: only placed things and chosen members carry state"
+                    .to_owned()
+            })?;
+        }
         self.0.iter().try_for_each(|c| c.verify(w))
     }
     fn references(&self, out: &mut Vec<Entity>) {
         self.0.iter().for_each(|c| c.axes(out));
+    }
+}
+
+/// When each primitive of the entity's `core.mesh` is drawn: one entry per primitive, `None` for one drawn in every
+/// state. A primitive whose condition fails in the resolved state is dropped from the mesh (declared as a drop); the
+/// condition follows its primitive through every edit that splits, drops or reorders primitives, as every
+/// per-primitive component does.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct PrimitiveCondition(pub Vec<Option<Condition>>);
+
+impl Component for PrimitiveCondition {
+    const NAME: &'static str = "core.primitive_condition";
+    const GEOMETRY: crate::Geometry = crate::Geometry::PerPrimitive;
+    /// No local-space geometry.
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
+    }
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(crate::remap_list(&self.0, from).map(PrimitiveCondition))
+    }
+    /// One entry per primitive of the entity's mesh, which it has; every literal names a live axis.
+    fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
+        let mesh = w.get::<Mesh>(e).ok_or("on an entity without a core.mesh")?;
+        if mesh.primitives().len() != self.0.len() {
+            return Err(format!(
+                "{} conditions for {} primitives",
+                self.0.len(),
+                mesh.primitives().len()
+            ));
+        }
+        self.0
+            .iter()
+            .flatten()
+            .flat_map(|c| c.0.iter())
+            .try_for_each(|c| c.verify(w))
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        self.0
+            .iter()
+            .flatten()
+            .for_each(|c| c.0.iter().for_each(|cl| cl.axes(out)));
     }
 }
 
@@ -290,6 +354,70 @@ impl Resource for StateAssignment {
     }
 }
 
+/// What resolving state removes: the model's components and the assignment resource.
+const REMOVED: &[&str] = &[
+    StateAxis::NAME,
+    Condition::NAME,
+    PrimitiveCondition::NAME,
+    StateOverride::NAME,
+    StateAssignment::NAME,
+];
+
+/// What resolving state changes in what stays: placements, their prototypes, meshes that lose primitives, assets that
+/// lose members.
+const MODIFIED: &[&str] = &[Transform::NAME, Instance::NAME, Mesh::NAME, Asset::NAME];
+
+/// A condition with its literals on resolved axes evaluated.
+enum Reduced {
+    /// A clause holds whatever the unresolved axes are: no condition is left.
+    Always,
+    /// No clause can hold.
+    Never,
+    /// The clauses that may still hold, reduced to their literals on unresolved axes.
+    Some(Vec<Clause>),
+}
+
+fn reduce_condition(c: &Condition, values: &BTreeMap<Entity, u32>) -> Reduced {
+    let reduced: Vec<Clause> = c.0.iter().filter_map(|cl| cl.reduce(values)).collect();
+    if reduced.iter().any(|cl| cl.0.is_empty()) {
+        Reduced::Always
+    } else if reduced.is_empty() {
+        Reduced::Never
+    } else {
+        Reduced::Some(reduced)
+    }
+}
+
+/// Take `e`, which is not present in the resolved state, out of the world. A part or alternative of an asset also
+/// leaves its asset's member list, and the placements of it go with it (counted): a member nothing draws any more
+/// leaves nothing referring to it. Any other entity is despawned as it is, and what still references it is left to the
+/// verifier.
+fn remove_not_present(w: &mut World, e: Entity, log: &mut PassLog, why: &str) {
+    if is_choosable_member(e, w) {
+        let roots: Vec<Entity> = w
+            .iter::<Asset>()
+            .filter(|(_, a)| a.members.iter().any(|&(m, _)| m == e))
+            .map(|(r, _)| r)
+            .collect();
+        for r in roots {
+            if let Some(a) = w.get_mut::<Asset>(r) {
+                a.members.retain(|&(m, _)| m != e);
+            }
+        }
+        let placements: Vec<Entity> = w
+            .iter::<Instance>()
+            .filter(|(p, i)| i.prototype == e && *p != e)
+            .map(|(p, _)| p)
+            .collect();
+        for p in placements {
+            crate::ledger::despawn(w, p, log, "its prototype is not present in the resolved state");
+            log.count("placements of an absent member, despawned", 1);
+        }
+        log.count("asset members despawned", 1);
+    }
+    crate::ledger::despawn(w, e, log, why);
+}
+
 /// `resolve-state{assign=key:value;key:value}`: one concrete world, as far as the values are known. Each axis takes
 /// its `assign` value, else the [`StateAssignment`] resource's, else its class's `assign-class` value
 /// (`assign-class=class:value;...`: a program's choice for every axis of a kind, a level of detail where the source
@@ -312,6 +440,12 @@ impl Resource for StateAssignment {
 /// the first. The snapshot's ([`StateAssignment`]) values for kept axes stay, as the resource's only entries. A key
 /// both kept and assigned is an error, and so is an axis scoped to an entity (which a resolved condition may despawn)
 /// that would stay unresolved: only global axes stay.
+///
+/// A part or alternative of an asset whose condition fails leaves the asset's member list and is despawned with the
+/// placements of it (`asset members despawned`, `placements of an absent member, despawned`). A primitive whose
+/// [`PrimitiveCondition`] fails is dropped from its mesh, every per-primitive component following (declared as a
+/// primitive drop; counted per axis as `<axis>=<value> primitives dropped`); a mesh left with no primitive is
+/// not present: its entity is removed as a member would be.
 #[derive(Clone, Debug, Default)]
 pub struct ResolveState {
     /// key -> value text, as given.
@@ -401,15 +535,10 @@ impl Pass for ResolveState {
     }
     /// The state model's components, and the `core.state_assignment` resource it applied.
     fn removes(&self) -> &[&'static str] {
-        &[
-            StateAxis::NAME,
-            Condition::NAME,
-            StateOverride::NAME,
-            StateAssignment::NAME,
-        ]
+        REMOVED
     }
     fn modifies(&self) -> &[&'static str] {
-        &[Transform::NAME, Instance::NAME]
+        MODIFIED
     }
     /// Entities not present in the resolved state are despawned (declared as drops).
     fn despawns_entities(&self) -> bool {
@@ -532,27 +661,22 @@ impl Pass for ResolveState {
             w.insert_resource(kept_assignment);
         }
         // run() may see an unverified world: every literal must name an axis
-        for (e, mut axes_named) in w
-            .iter::<Condition>()
-            .map(|(e, c)| (e, c.0.clone()))
-            .chain(
-                w.iter::<StateOverride>()
-                    .map(|(e, o)| (e, o.0.iter().map(|(c, _)| c.clone()).collect())),
-            )
-            .map(|(e, clauses)| {
-                (
-                    e,
-                    clauses
-                        .iter()
-                        .flat_map(|c| c.0.iter().map(|l| l.axis))
-                        .collect::<Vec<_>>(),
-                )
-            })
-        {
-            axes_named.retain(|a| !values.contains_key(a) && !kept.contains(a));
-            if let Some(a) = axes_named.first() {
-                return Err(format!("{e:?}: a literal names {a:?}, which is not an axis"));
-            }
+        let named_by = |e: Entity, clauses: &mut dyn Iterator<Item = &Clause>| {
+            clauses
+                .flat_map(|c| c.0.iter().map(|l| l.axis))
+                .find(|a| !values.contains_key(a) && !kept.contains(a))
+                .map_or(Ok(()), |a| {
+                    Err(format!("{e:?}: a literal names {a:?}, which is not an axis"))
+                })
+        };
+        for (e, c) in w.iter::<Condition>() {
+            named_by(e, &mut c.0.iter())?;
+        }
+        for (e, o) in w.iter::<StateOverride>() {
+            named_by(e, &mut o.0.iter().map(|(c, _)| c))?;
+        }
+        for (e, pc) in w.iter::<PrimitiveCondition>() {
+            named_by(e, &mut pc.0.iter().flatten().flat_map(|c| c.0.iter()))?;
         }
         let axis_of: BTreeMap<Entity, &StateAxis> = axes.iter().map(|(e, a)| (*e, a)).collect();
         let label = |e: &Entity| {
@@ -568,10 +692,8 @@ impl Pass for ResolveState {
         let conditions: Vec<(Entity, Condition)> =
             w.iter::<Condition>().map(|(e, c)| (e, c.clone())).collect();
         for (e, c) in &conditions {
-            // the clauses on unresolved axes that may still hold; one with no literal left always holds
-            let reduced: Vec<Clause> = c.0.iter().filter_map(|cl| cl.reduce(&values)).collect();
-            let always = reduced.iter().any(|cl| cl.0.is_empty());
-            let present = always || !reduced.is_empty();
+            let reduced = reduce_condition(c, &values);
+            let present = !matches!(reduced, Reduced::Never);
             if c.0.is_empty() {
                 log.count("never present", 1);
             }
@@ -585,13 +707,97 @@ impl Pass for ResolveState {
                     1,
                 );
             }
-            if always {
-                w.remove::<Condition>(*e);
-            } else if present {
-                w.insert(*e, Condition(reduced));
-                log.count("conditions kept on unresolved axes", 1);
+            match reduced {
+                Reduced::Always => {
+                    w.remove::<Condition>(*e);
+                }
+                Reduced::Some(r) => {
+                    w.insert(*e, Condition(r));
+                    log.count("conditions kept on unresolved axes", 1);
+                }
+                Reduced::Never => remove_not_present(w, *e, log, "not present in the resolved state"),
+            }
+        }
+
+        // primitive conditions: drop the primitives that do not exist in this state
+        let primitive_conditions: Vec<(Entity, PrimitiveCondition)> = w
+            .iter::<PrimitiveCondition>()
+            .map(|(e, c)| (e, c.clone()))
+            .collect();
+        for (e, pc) in primitive_conditions {
+            if !w.is_alive(e) {
+                continue;
+            }
+            let mut keep: Vec<usize> = Vec::new();
+            let mut conditions: Vec<Option<Condition>> = Vec::new();
+            for (i, c) in pc.0.iter().enumerate() {
+                let Some(c) = c else {
+                    keep.push(i);
+                    conditions.push(None);
+                    continue;
+                };
+                if c.0.is_empty() {
+                    log.count("primitives never present", 1);
+                }
+                let mut mentioned = Vec::new();
+                c.references(&mut mentioned);
+                mentioned.sort();
+                mentioned.dedup();
+                let reduced = reduce_condition(c, &values);
+                let present = !matches!(reduced, Reduced::Never);
+                for a in &mentioned {
+                    log.count(
+                        &format!(
+                            "{} primitives {}",
+                            label(a),
+                            if present { "kept" } else { "dropped" }
+                        ),
+                        1,
+                    );
+                }
+                match reduced {
+                    Reduced::Always => {
+                        keep.push(i);
+                        conditions.push(None);
+                    }
+                    Reduced::Some(r) => {
+                        keep.push(i);
+                        conditions.push(Some(Condition(r)));
+                        log.count("primitive conditions kept on unresolved axes", 1);
+                    }
+                    Reduced::Never => {}
+                }
+            }
+            if keep.is_empty() {
+                // nothing of it is drawn in this state: the entity is not present
+                remove_not_present(
+                    w,
+                    e,
+                    log,
+                    "every primitive's condition fails in the resolved state",
+                );
+                continue;
+            }
+            let dropped = pc.0.len() - keep.len();
+            if dropped > 0 {
+                w.rebuild_primitives(e, |mesh| {
+                    let primitives = mesh.primitives();
+                    Ok((
+                        keep.iter().map(|&i| primitives[i].clone()).collect(),
+                        keep.clone(),
+                    ))
+                })?;
+                log.dropped(
+                    Measure::Primitives,
+                    "primitive condition fails in the resolved state",
+                    dropped as u64,
+                );
+                log.count("primitives dropped by their condition", dropped as u64);
+            }
+            if conditions.iter().all(Option::is_none) {
+                w.remove::<PrimitiveCondition>(e);
             } else {
-                crate::ledger::despawn(w, *e, log, "not present in the resolved state");
+                w.insert(e, PrimitiveCondition(conditions));
             }
         }
 
@@ -644,6 +850,93 @@ impl Pass for ResolveState {
             }
         }
         Ok(())
+    }
+}
+
+/// `select-outfit{choices=key:value;key:value}` (required): resolves the named axes only, to the named values (by name
+/// or index), and leaves every other global axis unresolved, with the conditions and primitive conditions that
+/// depend on it reduced as [`ResolveState`] reduces them. It is what a recipe of chosen ids replays: a program (a
+/// website) picks some outfits and accessories from a catalog and the rest stays open. Everything else is as for
+/// `resolve-state`, whose report it gives (the members and primitives dropped, counted per axis and value), with the
+/// differences that a key naming no axis is an error naming the axes there are, and that an axis scoped to an entity
+/// and not named resolves by its default (an error when it has none) as it cannot stay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectOutfit {
+    /// key -> value text, as given; never empty.
+    pub choices: BTreeMap<String, String>,
+}
+
+/// The pass factory (`PassRegistry::register_requiring("select-outfit", select_outfit, ...)`).
+pub fn select_outfit(o: &Options) -> Result<Box<dyn Pass>, String> {
+    let mut choices = BTreeMap::new();
+    for (k, v) in o {
+        if k != "choices" {
+            return Err(format!("unknown option {k}"));
+        }
+        for item in v.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            let (key, value) = item
+                .split_once(':')
+                .ok_or_else(|| format!("choices item {item:?} is not key:value"))?;
+            if choices
+                .insert(key.trim().to_owned(), value.trim().to_owned())
+                .is_some()
+            {
+                return Err(format!("choices: {key} twice"));
+            }
+        }
+    }
+    if choices.is_empty() {
+        return Err("choices is required: key:value;key:value".into());
+    }
+    Ok(Box::new(SelectOutfit { choices }))
+}
+
+impl Pass for SelectOutfit {
+    fn name(&self) -> &'static str {
+        "select-outfit"
+    }
+    fn options(&self) -> Options {
+        let items: Vec<String> = self.choices.iter().map(|(k, v)| format!("{k}:{v}")).collect();
+        Options::from([("choices".to_owned(), items.join(";"))])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[StateAxis::NAME]
+    }
+    fn removes(&self) -> &[&'static str] {
+        REMOVED
+    }
+    fn modifies(&self) -> &[&'static str] {
+        MODIFIED
+    }
+    fn despawns_entities(&self) -> bool {
+        true
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let axes: Vec<&StateAxis> = w.iter::<StateAxis>().map(|(_, a)| a).collect();
+        if let Some(k) = self.choices.keys().find(|k| !axes.iter().any(|a| &a.key == *k)) {
+            let mut there: Vec<&str> = axes.iter().map(|a| a.key.as_str()).collect();
+            there.sort_unstable();
+            let shown = there.iter().take(20).copied().collect::<Vec<_>>().join(", ");
+            return Err(format!(
+                "choice {k}: no axis has that key (the world's: {shown}{})",
+                if there.len() > 20 {
+                    format!(" and {} more", there.len() - 20)
+                } else {
+                    String::new()
+                }
+            ));
+        }
+        let keep = axes
+            .iter()
+            .filter(|a| a.scope == Scope::Global && !self.choices.contains_key(&a.key))
+            .map(|a| a.key.clone())
+            .collect();
+        ResolveState {
+            assign: self.choices.clone(),
+            assign_class: BTreeMap::new(),
+            keep,
+        }
+        .run(w, log)
     }
 }
 
@@ -1354,7 +1647,7 @@ mod tests {
             (
                 "core.condition",
                 e,
-                "on an entity without a transform: only placed things carry state".to_owned(),
+                "on an entity without a transform that is not a part or alternative of an asset: only placed things and chosen members carry state".to_owned(),
             )
         });
         // overrides

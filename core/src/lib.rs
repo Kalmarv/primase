@@ -70,7 +70,7 @@ pub use world::{
 };
 
 /// Register core's generic passes by name (`select-lod`, `drop-optional`, `place-spawn`, `place-assets`, `select-assets`,
-/// `partition-by-asset`, `resolve-state`, `translate-world`), as every crate registers its own: a program builds its
+/// `partition-by-asset`, `resolve-state`, `select-outfit`, `translate-world`), as every crate registers its own: a program builds its
 /// registry from these.
 pub fn register(reg: &mut pass::PassRegistry) {
     reg.register("select-lod", select_lod);
@@ -80,5 +80,10 @@ pub fn register(reg: &mut pass::PassRegistry) {
     reg.register_requiring("select-assets", select_assets, &[("keys", "example")]);
     reg.register("partition-by-asset", partition_by_asset);
     reg.register("resolve-state", state::resolve_state);
+    reg.register_requiring(
+        "select-outfit",
+        state::select_outfit,
+        &[("choices", "axis:value")],
+    );
     reg.register_requiring("translate-world", translate::translate_world, &[("by", "0,0,0")]);
 }
