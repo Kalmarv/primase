@@ -694,6 +694,7 @@ impl<'a> Placer<'a> {
                 e,
                 AnvilDecalModel {
                     textures,
+                    opacity: m.opacity(),
                     byte: m.byte,
                     flags: m.flags,
                     parameters: m.parameters,
@@ -1049,7 +1050,9 @@ impl<'a> Placer<'a> {
                         axis_x: d.axis_x(),
                         axis_y: d.axis_y(),
                         centre: d.centre(),
+                        bounds: d.bounds(),
                         window: d.window(),
+                        fade: d.fade(),
                         record: d.0,
                     })
                     .collect();

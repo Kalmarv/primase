@@ -5,13 +5,17 @@
 //! `0xB43FECF1` (a StaticDDecalLibrary); a count R and R references (DDecalModels); a count S and S items, each `00`,
 //! an object `0x1ADB43B0` (DDecalStaticInstancers), 3 bytes (the first the item's model, an index into the R
 //! references: less than R on 34,477 of 34,477 items), a count k and k 100-byte records; 46 bytes. A record: a u64 0,
-//! a u32 `0x295F035C`, the box's first half-axis (3 f32) at 12, 4 bytes, its second half-axis at 28, 3 f32 at 40,
-//! 4 bytes at 52, an f32 at 56, the box's centre (3 f32, world: the Entity's own matrix not applied, §9.3) at 60, an
-//! f32 at 72, the box's minimum at 76 and maximum at 88. The two f32 at 56 and 72 are the record's atlas window along
-//! the texture's length (their meaning a reading: material-spec §23.5, entity-grammar §9.3).
+//! a u32 `0x295F035C`, the box's first half-axis (3 f32) at 12, 4 bytes, its second half-axis at 28, 3 f32 at 40 (the
+//! first its fade), 4 bytes at 52, the window's offset (f32) at 56, the box's centre (3 f32, world: the Entity's own
+//! matrix not applied, §9.3) at 60, the window's width (f32) at 72, the box's minimum at 76 and maximum at 88. The
+//! window is the U range `[offset, offset + width]` the decal takes of its texture's length, and the fade `f` scales
+//! its opacity by `1 - f`: the engine's static decal instancer packs them into the GPU record as read
+//! (material-spec §23.8: `lo16 = trunc((offset + width / 2) 65535)`, `hi16 = trunc(width / 2 x 65535)`,
+//! `w13 = (1 - f) m`).
 //!
-//! A DDecalModel body (115 bytes on all 69, entity-grammar §9.3): `01`, a byte, four references (its Diffuse, Normal,
-//! Height and Mask1 maps), 20 flag bytes, 53 bytes of parameters (kept as stored).
+//! A DDecalModel body (115 bytes on all 70, entity-grammar §9.3; its fields named by the engine's registry,
+//! material-spec §23.8): `01`, a byte, four references (its Diffuse, Normal, Height and Mask1 maps), 20 flag bytes, 53
+//! bytes of parameters (kept as stored), among them its opacity `m` (f32 `0x14A1C428`) at 72.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -76,9 +80,17 @@ impl StoredDecal {
     pub fn centre(&self) -> [f32; 3] {
         self.vec3_at(60)
     }
-    /// The two f32 at 56 and 72: the atlas window along the texture's length.
+    /// Its window along the texture's length: its offset (at 56) and width (at 72).
     pub fn window(&self) -> [f32; 2] {
         [self.f32_at(56), self.f32_at(72)]
+    }
+    /// Its fade (the f32 at 40): its opacity is `1 - fade` of its model's.
+    pub fn fade(&self) -> f32 {
+        self.f32_at(40)
+    }
+    /// The box's bounds: its minimum (at 76) and maximum (at 88).
+    pub fn bounds(&self) -> [[f32; 3]; 2] {
+        [self.vec3_at(76), self.vec3_at(88)]
     }
 }
 
@@ -115,6 +127,16 @@ pub struct StoredDecalModel {
     pub textures: [Option<Reference>; 4],
     pub flags: [u8; 20],
     pub parameters: Vec<u8>,
+}
+
+impl StoredDecalModel {
+    /// Its opacity `m`: the f32 at 72 of the body (10 into its parameters).
+    pub fn opacity(&self) -> f32 {
+        self.parameters
+            .get(10..14)
+            .and_then(|w| w.try_into().ok())
+            .map_or(0.0, f32::from_le_bytes)
+    }
 }
 
 /// Bytes read in order, each bounded.

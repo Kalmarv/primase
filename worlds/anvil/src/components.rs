@@ -254,11 +254,12 @@ impl Component for AnvilMaterialOverrides {
 }
 
 /// A DDecalModel on its own entity (`anvil.decal_model`, named as its entry): its Diffuse, Normal, Height and Mask1
-/// maps' textures (`None` where its reference is null or unread), its byte at 1, flags and parameters as stored
-/// (docs/entity-grammar.md §9.3).
+/// maps' textures (`None` where its reference is null or unread), its opacity `m` (the f32 at 72), its byte at 1,
+/// flags and parameters as stored (docs/entity-grammar.md §9.3, material-spec §23.8).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilDecalModel {
     pub textures: [Option<Entity>; 4],
+    pub opacity: f32,
     pub byte: u8,
     pub flags: [u8; 20],
     pub parameters: Vec<u8>,
@@ -272,14 +273,18 @@ impl Component for AnvilDecalModel {
     }
 }
 
-/// One deferred decal: a projection box in the world (its two half-axes and its centre, in the source's frame; the
-/// owner's matrix not applied) and its atlas window (the record's f32 at 56 and 72), its 100-byte record as stored.
+/// One deferred decal: a projection box in the world (its two half-axes, its centre and its bounds' minimum and
+/// maximum, in the source's frame; the owner's matrix not applied), its window of its texture's length (offset and
+/// width, U units), its fade (its opacity `1 - fade` of its model's) and its 100-byte record as stored
+/// ([`crate::read::ddecal`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DeferredDecal {
     pub axis_x: [f32; 3],
     pub axis_y: [f32; 3],
     pub centre: [f32; 3],
+    pub bounds: [[f32; 3]; 2],
     pub window: [f32; 2],
+    pub fade: f32,
     pub record: [u8; 100],
 }
 
@@ -297,7 +302,7 @@ impl Component for AnvilDeferredDecals {
     const NAME: &'static str = "anvil.deferred_decals";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn payload_bytes(&self) -> u64 {
-        u64::try_from(self.decals.len() * 144).unwrap_or(u64::MAX)
+        u64::try_from(self.decals.len() * std::mem::size_of::<DeferredDecal>()).unwrap_or(u64::MAX)
     }
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.model);

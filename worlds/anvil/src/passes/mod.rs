@@ -3,11 +3,13 @@
 use std::collections::BTreeMap;
 
 mod bake;
+mod decals;
 pub mod formulas;
 mod material;
 mod splat;
 mod water;
 pub use bake::{BakeAnvilMaterial, gbuffer_pixel_key};
+pub use decals::{Family, FamilyRule, LowerAnvilDecals, family};
 pub use material::{AlphaChoice, Emission, LowerAnvilMaterial, ShaderUv};
 pub use splat::{Splat, SplatUv};
 pub use water::{LowerAnvilWater, Shore};
@@ -964,6 +966,105 @@ impl Pass for LowerAnvilFloor {
     }
 }
 
+/// The ground grid `lower-anvil-terrain` draws from one terrain (see it), which `lower-anvil-decals` drapes on: the
+/// sample indices along each axis (every `step`-th from the first in the rectangle), their spacing, the sample's
+/// shift into its cell, and each sample's point.
+pub(crate) struct GroundGrid<'t> {
+    pub t: &'t AnvilTerrain,
+    /// The tiles with whole rasters, by (row, column) of their node.
+    pub tiles: BTreeMap<(u32, u32), &'t TerrainTile>,
+    pub columns: Vec<u32>,
+    pub rows: Vec<u32>,
+    pub spacing: f64,
+    pub shift: f64,
+    /// A height value's metres: `range` x 2^(level - 28).
+    unit: f64,
+    offset: f64,
+}
+
+impl<'t> GroundGrid<'t> {
+    /// `t`'s grid over `rect` by the ground choices; `None` where under 2 by 2 of its samples lie in the rectangle.
+    pub fn new(
+        t: &'t AnvilTerrain,
+        rect: [f64; 4],
+        step: u32,
+        range: f64,
+        offset: f64,
+        sample: CellPoint,
+    ) -> Option<GroundGrid<'t>> {
+        let level = t.level.min(30);
+        let nodes = 1u32 << level;
+        let spacing = t.side / f64::from(nodes) / f64::from(TERRAIN_CORE);
+        let shift = match sample {
+            CellPoint::Corner => 0.0,
+            CellPoint::Centre => spacing / 2.0,
+        };
+        let samples = nodes.saturating_mul(TERRAIN_CORE);
+        let [x0, y0, x1, y1] = rect;
+        let indices = |origin: f64, (from, to): (f64, f64)| -> Vec<u32> {
+            let first = ((from - origin - shift) / spacing).ceil().max(0.0);
+            let last = ((to - origin - shift) / spacing)
+                .floor()
+                .min(f64::from(samples) - 1.0);
+            if first.is_nan() || last.is_nan() || first > last {
+                return Vec::new();
+            }
+            // in range of u32: clamped to 0..samples above
+            (first as u32..=last as u32).step_by(step as usize).collect()
+        };
+        let columns = indices(t.origin[0], (x0, x1));
+        let rows = indices(t.origin[1], (y0, y1));
+        if columns.len() < 2 || rows.len() < 2 {
+            return None;
+        }
+        let tiles = t
+            .tiles
+            .iter()
+            .filter(|tile| {
+                tile.heights.len() == TERRAIN_TILE * TERRAIN_TILE
+                    && tile.colour.len() == TERRAIN_BLOCKS * TERRAIN_BLOCKS * 8
+            })
+            .map(|tile| ((tile.row, tile.column), tile))
+            .collect();
+        Some(GroundGrid {
+            t,
+            tiles,
+            columns,
+            rows,
+            spacing,
+            shift,
+            unit: range * 2f64.powi(level as i32 - 28),
+            offset,
+        })
+    }
+
+    /// Sample column `gx`'s x and row `gy`'s y.
+    pub fn x_of(&self, gx: u32) -> f64 {
+        self.t.origin[0] + self.spacing * f64::from(gx) + self.shift
+    }
+    pub fn y_of(&self, gy: u32) -> f64 {
+        self.t.origin[1] + self.spacing * f64::from(gy) + self.shift
+    }
+
+    /// Sample (`gx`, `gy`)'s point, `(x, y, height)` as f32 in the terrain's source frame (before it applies): the
+    /// value at its node's core sample, `unit` x it + `offset`.
+    pub fn point(&self, gx: u32, gy: u32) -> Result<[f32; 3], String> {
+        let node = (gy / TERRAIN_CORE, gx / TERRAIN_CORE);
+        let (i, j) = ((gy % TERRAIN_CORE) as usize, (gx % TERRAIN_CORE) as usize);
+        let tile = self
+            .tiles
+            .get(&node)
+            .ok_or_else(|| format!("sample ({gx}, {gy}): node {node:?} not read"))?;
+        let value =
+            f64::from(tile.heights[(i + TerrainTile::CORE_AT) * TERRAIN_TILE + j + TerrainTile::CORE_AT]);
+        Ok([
+            self.x_of(gx) as f32,
+            self.y_of(gy) as f32,
+            (self.unit * value + self.offset) as f32,
+        ])
+    }
+}
+
 /// `lower-anvil-terrain`: terrain tiles ([`AnvilTerrain`]) become ground: a core mesh of the samples in `rect`
 /// (x0, y0, x1, y1), every `step`-th along each axis, two triangles to each square, placed once. A node's 128 x 128
 /// samples cover its square, stored from index 2 of its 132 ([`TerrainTile::CORE_AT`]: the engine's
@@ -1309,65 +1410,23 @@ impl Pass for LowerAnvilTerrain {
             let Some(t) = w.remove::<AnvilTerrain>(e) else {
                 continue;
             };
-            let level = t.level.min(30);
-            let nodes = 1u32 << level;
-            let spacing = t.side / f64::from(nodes) / f64::from(TERRAIN_CORE);
-            let shift = match self.sample {
-                CellPoint::Corner => 0.0,
-                CellPoint::Centre => spacing / 2.0,
-            };
-            let samples = nodes.saturating_mul(TERRAIN_CORE);
-            let [x0, y0, x1, y1] = self.rect;
-            let indices = |origin: f64, (from, to): (f64, f64)| -> Vec<u32> {
-                let first = ((from - origin - shift) / spacing).ceil().max(0.0);
-                let last = ((to - origin - shift) / spacing)
-                    .floor()
-                    .min(f64::from(samples) - 1.0);
-                if first.is_nan() || last.is_nan() || first > last {
-                    return Vec::new();
-                }
-                // in range of u32: clamped to 0..samples above
-                (first as u32..=last as u32).step_by(self.step as usize).collect()
-            };
-            let columns = indices(t.origin[0], (x0, x1));
-            let rows = indices(t.origin[1], (y0, y1));
-            if columns.len() < 2 || rows.len() < 2 {
+            let Some(grid) = GroundGrid::new(&t, self.rect, self.step, self.range, self.offset, self.sample)
+            else {
                 log.omit("terrains with under 2 by 2 samples in the rectangle", 1);
                 continue;
-            }
-            let tiles: BTreeMap<(u32, u32), &TerrainTile> = t
-                .tiles
-                .iter()
-                .filter(|tile| {
-                    tile.heights.len() == TERRAIN_TILE * TERRAIN_TILE
-                        && tile.colour.len() == TERRAIN_BLOCKS * TERRAIN_BLOCKS * 8
-                })
-                .map(|tile| ((tile.row, tile.column), tile))
-                .collect();
+            };
+            let (rows, columns, tiles) = (&grid.rows, &grid.columns, &grid.tiles);
+            let (spacing, shift) = (grid.spacing, grid.shift);
             // the nodes the samples lie in: the texture holds their 128 x 128 texels, side by side
             let (first_row, first_column) = (rows[0] / TERRAIN_CORE, columns[0] / TERRAIN_CORE);
             let (node_rows, node_columns) = (
                 rows[rows.len() - 1] / TERRAIN_CORE - first_row + 1,
                 columns[columns.len() - 1] / TERRAIN_CORE - first_column + 1,
             );
-            let unit = self.range * 2f64.powi(level as i32 - 28);
             let mut positions = Vec::with_capacity(columns.len() * rows.len());
-            for &gy in &rows {
-                for &gx in &columns {
-                    let node = (gy / TERRAIN_CORE, gx / TERRAIN_CORE);
-                    let (i, j) = ((gy % TERRAIN_CORE) as usize, (gx % TERRAIN_CORE) as usize);
-                    let tile = tiles
-                        .get(&node)
-                        .ok_or_else(|| format!("sample ({gx}, {gy}): node {node:?} not read"))?;
-                    let value = f64::from(
-                        tile.heights[(i + TerrainTile::CORE_AT) * TERRAIN_TILE + j + TerrainTile::CORE_AT],
-                    );
-                    let x = t.origin[0] + spacing * f64::from(gx) + shift;
-                    let y = t.origin[1] + spacing * f64::from(gy) + shift;
-                    positions.push(
-                        t.frame
-                            .point([x as f32, y as f32, (unit * value + self.offset) as f32]),
-                    );
+            for &gy in rows {
+                for &gx in columns {
+                    positions.push(t.frame.point(grid.point(gx, gy)?));
                 }
             }
             let width = u32::try_from(columns.len()).map_err(|_| "too many columns".to_owned())?;
@@ -1411,8 +1470,8 @@ impl Pass for LowerAnvilTerrain {
                     &t,
                     &layers,
                     LayerGrid {
-                        rows: &rows,
-                        columns: &columns,
+                        rows,
+                        columns,
                         spacing,
                         shift,
                         flip,
@@ -1460,8 +1519,8 @@ impl Pass for LowerAnvilTerrain {
                     }
                     // each sample at its texel's centre
                     let mut uvs = Vec::with_capacity(positions.len());
-                    for &gy in &rows {
-                        for &gx in &columns {
+                    for &gy in rows {
+                        for &gx in columns {
                             uvs.push([
                                 ((f64::from(gx - first_column * TERRAIN_CORE) + 0.5) / f64::from(texels_wide))
                                     as f32,
@@ -2117,6 +2176,20 @@ pub fn register(reg: &mut PassRegistry) {
             ("colour-max", "0.15"),
             ("roughness", "0.05"),
             ("shore", "coverage"),
+        ],
+    );
+    reg.register_requiring(
+        "lower-anvil-decals",
+        |o| Ok(Box::new(LowerAnvilDecals::from_options(o)?)),
+        &[
+            ("rect", "-64,-64,64,64"),
+            ("step", "1"),
+            ("range", "1"),
+            ("offset", "0"),
+            ("sample", "corner"),
+            ("family", "bytes-48-49"),
+            ("cutoff", "0.4"),
+            ("lift", "0.01"),
         ],
     );
     reg.register_requiring(
