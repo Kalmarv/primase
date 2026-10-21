@@ -26,7 +26,8 @@ fn placed(w: &World) -> Vec<(&Collision, Option<Transform>)> {
     out
 }
 
-fn at(t: Option<&Transform>, v: [f32; 3]) -> [f64; 3] {
+/// Point `v` in the core frame, through `t` when there is one.
+pub fn at(t: Option<&Transform>, v: [f32; 3]) -> [f64; 3] {
     match t {
         Some(t) => std::array::from_fn(|r| {
             (0..3)
@@ -70,17 +71,47 @@ pub fn collision_box(w: &World, max_extent: f64) -> Option<[[f64; 3]; 2]> {
 /// soup whose ground footprint holds `p`'s (x, z), at its height there, counting a surface up to `tolerance` metres
 /// above `p` (so a point standing on one keeps it). `None` when nothing is below.
 pub fn ground_below(w: &World, p: [f64; 3], tolerance: f64) -> Option<f64> {
-    let mut best: Option<f64> = None;
-    for (c, t) in placed(w) {
-        for tri in &c.triangles {
-            let Some(corners) = tri
-                .iter()
-                .map(|&i| c.positions.get(i as usize).map(|&v| at(t.as_ref(), v)))
-                .collect::<Option<Vec<_>>>()
-            else {
-                continue;
-            };
-            let [a, b, d] = [corners[0], corners[1], corners[2]];
+    Ground::of(w).surface_below(p, tolerance).map(|s| s.height)
+}
+
+/// The surface [`Ground::surface_below`] finds: its height at the point, and how level it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Surface {
+    /// Its height below the point (core +Y).
+    pub height: f64,
+    /// Its unit normal's vertical part, unsigned: 1 level, 0 a vertical wall.
+    pub level: f64,
+}
+
+/// Every placed collision triangle in the core frame, for asking many points what lies below them.
+#[derive(Clone, Debug, Default)]
+pub struct Ground {
+    triangles: Vec<[[f64; 3]; 3]>,
+}
+
+impl Ground {
+    /// The world's placed soups' triangles (as [`ground_below`] counts them).
+    pub fn of(w: &World) -> Ground {
+        let mut triangles = Vec::new();
+        for (c, t) in placed(w) {
+            for tri in &c.triangles {
+                if let Some(corners) = tri
+                    .iter()
+                    .map(|&i| c.positions.get(i as usize).map(|&v| at(t.as_ref(), v)))
+                    .collect::<Option<Vec<_>>>()
+                {
+                    triangles.push([corners[0], corners[1], corners[2]]);
+                }
+            }
+        }
+        Ground { triangles }
+    }
+
+    /// The first surface straight below `p`: the highest triangle whose ground footprint holds `p`'s (x, z), counting
+    /// one up to `tolerance` metres above `p`. `None` when nothing is below.
+    pub fn surface_below(&self, p: [f64; 3], tolerance: f64) -> Option<Surface> {
+        let mut best: Option<Surface> = None;
+        for &[a, b, d] in &self.triangles {
             // barycentric coordinates of (p.x, p.z) in the triangle's ground footprint
             let det = (b[2] - d[2]) * (a[0] - d[0]) + (d[0] - b[0]) * (a[2] - d[2]);
             if det.abs() < 1e-12 {
@@ -93,12 +124,25 @@ pub fn ground_below(w: &World, p: [f64; 3], tolerance: f64) -> Option<f64> {
                 continue;
             }
             let y = l1 * a[1] + l2 * b[1] + l3 * d[1];
-            if y <= p[1] + tolerance && best.is_none_or(|h| y > h) {
-                best = Some(y);
+            if y <= p[1] + tolerance && best.is_none_or(|s| y > s.height) {
+                let (u, v) = (
+                    [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+                    [d[0] - a[0], d[1] - a[1], d[2] - a[2]],
+                );
+                let n = [
+                    u[1] * v[2] - u[2] * v[1],
+                    u[2] * v[0] - u[0] * v[2],
+                    u[0] * v[1] - u[1] * v[0],
+                ];
+                let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                best = Some(Surface {
+                    height: y,
+                    level: if len > 0.0 { n[1].abs() / len } else { 0.0 },
+                });
             }
         }
+        best
     }
-    best
 }
 
 #[cfg(test)]
@@ -165,5 +209,22 @@ mod tests {
             collision_box(&w, 100.0),
             Some([[0.0, 0.0, 0.0], [51.0, 0.0, 1.0]])
         );
+    }
+
+    /// Over a 45-degree ramp under a level ledge, the ledge is the surface found, level; beside the ledge the ramp,
+    /// at its height there, its normal half way between level and a wall.
+    #[test]
+    fn the_surface_below_tells_how_level_it_is() {
+        let mut w = World::new();
+        soup(&mut w, [[0.0, 0.0, 0.0], [4.0, 4.0, 0.0], [0.0, 0.0, 4.0]], None);
+        soup(&mut w, [[0.0, 0.0, 0.0], [4.0, 4.0, 0.0], [4.0, 4.0, 4.0]], None);
+        soup(&mut w, [[0.0, 2.0, 0.0], [1.0, 2.0, 0.0], [0.0, 2.0, 1.0]], None);
+        let ground = Ground::of(&w);
+        let ledge = ground.surface_below([0.2, 2.5, 0.2], 0.0).unwrap();
+        assert_eq!((ledge.height, ledge.level), (2.0, 1.0));
+        let ramp = ground.surface_below([3.0, 3.5, 2.0], 0.0).unwrap();
+        assert!((ramp.height - 3.0).abs() < 1e-9 && (ramp.level - 0.5f64.sqrt()).abs() < 1e-9);
+        assert_eq!(ground.surface_below([3.0, 2.9, 2.0], 0.05), None);
+        assert!(ground.surface_below([3.0, 2.9, 2.0], 0.2).is_some());
     }
 }
