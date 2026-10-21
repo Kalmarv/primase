@@ -36,6 +36,13 @@
 //! - **MAD_Tex1_Graffiti_Mode** (§17.2, [`TEX1_GRAFFITI`]): as MAD_Tex1 (its mask and normal map from the TextureSet's
 //!   slots 7 and 1, metalness and roughness raw, no vertex colour) where its logo is 0 and its team and custom
 //!   colours' alphas 0, as on all four of its Materials; otherwise the placeholder, reported (runtime state).
+//! - **MAD_FakeForest** (§26.6, executed by the notes: the far forest's canopy cells and tree proxies): no texture,
+//!   no property; its albedo is `pow(saturate(COLOR0.rgb), 2.2)` per vertex (the engine's 2.2, not the sRGB curve),
+//!   so the pass writes that into `COLOR_0` (the colour core multiplies) of every primitive drawn with it and with
+//!   nothing else (one also drawn with another Material keeps its stored colour, reported; one without `COLOR_0` is
+//!   drawn white, its vertex layout's default not read, reported), base colour 1, roughness 1, metalness 0,
+//!   single-sided and opaque: its alpha test is the LOD fade's dither only (§26.6), whatever `alpha` states. Its
+//!   translucency (0.5, written to the G-buffer) has no PBR place, reported.
 //! - **MAD_Tex1_Emissive, MAD_Tex1_UGE** (§14.3, [`TEX1_EMISSIVE`], [`TEX1_UGE`]): Tex1's shape without a mask:
 //!   the diffuse t76 tinted everywhere, its alpha times `Alpha`; roughness the normal map t75's alpha raw, metalness
 //!   `b * Metalness`; no occlusion. Emission the emissive mask t77's red (UGE: its alpha) times `Emissive Scale`
@@ -82,14 +89,15 @@
 //! notes find the masks' settings make sense only so), nor the shader's coordinates against the mesh's (shader-uv).
 //! Other templates are drawn with a neutral placeholder, reported by name. The Materials are consumed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::layered::{Channel, Composition, Layer, LayerWeights, Source, WeightMapping};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
-    ColorSpace, Component, Entity, LayeredMaterial, Name, NormalBasis, NormalConvention, NormalGreen,
-    NormalX, NormalZ, Semantic, TexFormat, TexRole, Texture, VertexColor, World,
+    ColorSpace, Component, Entity, LayeredMaterial, MaterialVariants, Mesh, MeshFile, Name, NormalBasis,
+    NormalConvention, NormalGreen, NormalX, NormalZ, Semantic, Stream, TexFormat, TexRole, Texture,
+    VertexColor, World,
 };
 use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, srgb_to_linear};
 
@@ -777,7 +785,7 @@ impl Pass for LowerAnvilMaterial {
         ]
     }
     fn modifies(&self) -> &[&'static str] {
-        &[Texture::NAME]
+        &[Texture::NAME, Mesh::NAME]
     }
     fn removes(&self) -> &[&'static str] {
         &[AnvilMaterial::NAME]
@@ -796,6 +804,8 @@ impl Pass for LowerAnvilMaterial {
         };
         // made textures, per (source, what, parameters' bits)
         let mut made: BTreeMap<MadeKey, Entity> = BTreeMap::new();
+        // the Materials drawn as MAD_FakeForest, whose COLOR_0 the pass decodes
+        let mut forest: BTreeSet<Entity> = BTreeSet::new();
         for e in materials {
             let Some(m) = w.remove::<AnvilMaterial>(e) else {
                 continue;
@@ -829,6 +839,19 @@ impl Pass for LowerAnvilMaterial {
             // whether it became a layered material (no PBR material of its own then)
             let mut layered = false;
             let pbr = match (name.as_str(), layout) {
+                ("MAD_FakeForest", _) => {
+                    takes_colour = true;
+                    forest.insert(e);
+                    log.omit("FakeForest Materials' translucency (0.5, no PBR place)", 1);
+                    PbrMaterial {
+                        base_color: [1.0; 4],
+                        metallic: 0.0,
+                        roughness: 1.0,
+                        alpha_mode: AlphaMode::Opaque,
+                        double_sided: false,
+                        ..PbrMaterial::default()
+                    }
+                }
                 ("MAD_Fake" | "MAD_CHR_Basic" | "MAD_Fake_Sediment", _) => {
                     if name == "MAD_Fake_Sediment" && [1, 2].iter().any(|&v| i.scalar(v) != 0.0) {
                         log.omit(
@@ -1326,8 +1349,84 @@ impl Pass for LowerAnvilMaterial {
                 w.insert(e, VertexColor::Ignored);
             }
         }
+        forest_colours(w, &forest, log)?;
         Ok(())
     }
+}
+
+/// `COLOR_0` of every primitive drawn with a MAD_FakeForest Material of `forest` and nothing else decoded as its
+/// shader does: `pow(saturate(c), 2.2)` per colour channel (alpha as stored), in f32 (see the module documentation).
+fn forest_colours(w: &mut World, forest: &BTreeSet<Entity>, log: &mut PassLog) -> Result<(), String> {
+    if forest.is_empty() {
+        return Ok(());
+    }
+    for (_, f) in w.iter::<MeshFile>() {
+        if f.materials.iter().flatten().any(|m| forest.contains(m)) {
+            return Err(
+                "a FakeForest Material draws a mesh still in its file: load it before lower-anvil-material"
+                    .into(),
+            );
+        }
+    }
+    let prototypes: Vec<Entity> = w.iter::<Mesh>().map(|(e, _)| e).collect();
+    for e in prototypes {
+        let mesh = w.get::<Mesh>(e).ok_or("listed")?;
+        let variants = w.get::<MaterialVariants>(e);
+        let mut decode = Vec::new();
+        for (i, p) in mesh.primitives().iter().enumerate() {
+            let drawn: Vec<Entity> = p
+                .material
+                .into_iter()
+                .chain(
+                    variants
+                        .and_then(|v| v.0.get(i))
+                        .into_iter()
+                        .flat_map(|v| v.values().copied()),
+                )
+                .collect();
+            if !drawn.iter().any(|m| forest.contains(m)) {
+                continue;
+            }
+            if !drawn.iter().all(|m| forest.contains(m)) {
+                log.omit(
+                    "primitives drawn with a FakeForest Material and another: COLOR_0 as stored",
+                    1,
+                );
+                continue;
+            }
+            match p.streams.get(&Semantic::Color(0)) {
+                None => log.omit(
+                    "FakeForest primitives without COLOR_0: drawn white (the shader's default isn't read)",
+                    1,
+                ),
+                Some(stream) => decode.push((i, stream.clone())),
+            }
+        }
+        if decode.is_empty() {
+            continue;
+        }
+        let mesh = w.get_mut::<Mesh>(e).ok_or("listed")?;
+        for (i, stream) in decode {
+            let colours: Vec<[f32; 4]> = match stream {
+                Stream::U8x4(v) => v.iter().map(|c| c.map(|x| f32::from(x) / 255.0)).collect(),
+                Stream::U16x4(v) => v.iter().map(|c| c.map(|x| f32::from(x) / 65535.0)).collect(),
+                Stream::F32x4(v) => v,
+                Stream::F32x3(v) => v.iter().map(|&[r, g, b]| [r, g, b, 1.0]).collect(),
+                _ => return Err("a FakeForest primitive's COLOR_0 isn't a colour stream".into()),
+            };
+            let decoded = colours
+                .into_iter()
+                .map(|[r, g, b, a]| {
+                    let d = |c: f32| f64::from(c).clamp(0.0, 1.0).powf(2.2) as f32;
+                    [d(r), d(g), d(b), a]
+                })
+                .collect();
+            let mut p = mesh.primitive_mut(i).ok_or("listed")?;
+            p.streams_mut().insert(Semantic::Color(0), Stream::F32x4(decoded));
+            log.count("FakeForest primitives' COLOR_0 decoded (pow 2.2)", 1);
+        }
+    }
+    Ok(())
 }
 
 /// A made texture's key: its source, what it is, and the parameters' bits (and other sources' indices) it is made of.
