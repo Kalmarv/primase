@@ -2,7 +2,7 @@
 //! program reads (constant layout and values, a texture per sampled slot, a value per used input) and which output
 //! registers it wants; the evaluator has no game names and no policy, and refuses what it is not given.
 
-use crate::{Error, PixelShader, Reflection, Sample, Type};
+use crate::{Error, Load, PixelShader, Reflection, Sample, Sampler, Type};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -194,7 +194,31 @@ pub trait Image: Send + Sync + std::fmt::Debug {
 #[derive(Clone, Debug)]
 pub enum Texture {
     Image(Arc<dyn Image>),
+    /// One value everywhere: what a sample returns, and a load the value's bits (as a float view returns them).
     Constant([f32; 4]),
+}
+
+/// The textures by slot, answering samples and loads.
+struct Bound<'t>(&'t BTreeMap<u32, Texture>);
+
+impl Sampler for Bound<'_> {
+    fn sample(&mut self, s: Sample) -> Result<[f32; 4], String> {
+        match self.0.get(&s.texture) {
+            Some(Texture::Image(_)) if s.layer.is_some() => {
+                Err(format!("t{}: an array layer of an image", s.texture))
+            }
+            Some(Texture::Image(image)) => image.sample(s.uv, s.lod),
+            Some(Texture::Constant(c)) => Ok(*c),
+            None => Err(format!("t{} has no texture", s.texture)),
+        }
+    }
+    fn load(&mut self, l: Load) -> Result<[u32; 4], String> {
+        match self.0.get(&l.texture) {
+            Some(Texture::Constant(c)) => Ok(c.map(f32::to_bits)),
+            Some(Texture::Image(_)) => Err(format!("t{}: a load of an image", l.texture)),
+            None => Err(format!("t{} has no texture", l.texture)),
+        }
+    }
 }
 
 /// One component of an input.
@@ -243,17 +267,42 @@ pub struct Evaluation {
     pub samples: u64,
 }
 
-/// Evaluate `shader` once per grid pixel. `textures` are by bind slot (`t<n>`); a slot the program samples without
-/// one is an error. `inputs` are by (semantic, index), compared case-insensitively; a used input without one is an
-/// error. `targets` are (output register, required component mask).
-pub fn evaluate(
+/// How [`evaluate_raw`] runs the program over the grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Invocation {
+    /// One pixel at a time; a derivative is the grid's step for an input the caller places with [`Lane::U`] or
+    /// [`Lane::V`] (zero for a constant input), and of nothing computed.
+    Scalar,
+    /// 2 x 2 quads, as a GPU runs them ([`PixelShader::execute_quad`]): a derivative is the difference inside the
+    /// quad, of inputs and computed values alike, and an implicit-LOD sample's footprint the quad's gradients of its
+    /// coordinates. A quad past the grid's last row or column runs its outside lanes as helpers (their coordinates
+    /// continue past the edge), their values not kept.
+    Quads,
+}
+
+/// Every requested output of every pixel, as the program wrote it.
+#[derive(Debug)]
+pub struct Raw {
+    /// Per requested target, size * size pixels in row-major order: the output register's bits and the lanes the
+    /// program wrote of it (within the target's mask).
+    pub pixels: Vec<Vec<([u32; 4], u8)>>,
+    pub instructions: u64,
+    pub samples: u64,
+}
+
+/// Evaluate `shader` over the grid as `invocation` says, keeping each requested output's bits and written lanes per
+/// pixel ([`Raw`]). `textures` are by bind slot (`t<n>`); a slot the program samples without one is an error.
+/// `inputs` are by (semantic, index), compared case-insensitively; a used input without one is an error. `targets`
+/// are (output register, component mask).
+pub fn evaluate_raw(
     shader: &dyn PixelShader,
     constants: &Constants,
     textures: &BTreeMap<u32, Texture>,
     inputs: &BTreeMap<(String, u32), Input>,
     grid: Grid,
     targets: &[(u32, u8)],
-) -> Result<Evaluation, Error> {
+    invocation: Invocation,
+) -> Result<Raw, Error> {
     if grid.size == 0 || grid.size > 4096 || !grid.period.iter().all(|p| p.is_finite() && *p > 0.) {
         return Err(error(
             0,
@@ -313,65 +362,125 @@ pub fn evaluate(
         .iter()
         .map(|(s, v)| (*s, v.as_slice()))
         .collect();
-    let pixels = grid.size as usize * grid.size as usize;
-    let mut written: Vec<Option<bool>> = vec![None; targets.len()];
-    let mut values: Vec<Vec<[f32; 4]>> = targets.iter().map(|_| Vec::with_capacity(pixels)).collect();
+    let size = grid.size as usize;
+    let mut pixels: Vec<Vec<([u32; 4], u8)>> =
+        targets.iter().map(|_| vec![([0; 4], 0); size * size]).collect();
     let (mut instructions, mut samples) = (0u64, 0u64);
-    let mut sampler = |s: Sample| match textures.get(&s.texture) {
-        Some(Texture::Image(_)) if s.layer.is_some() => {
-            Err(format!("t{}: an array layer of an image", s.texture))
+    let mut sampler = Bound(textures);
+    // the registers of pixel (x, y), which may lie past the grid (a quad's helper lanes)
+    let at = |x: u32, y: u32| -> Vec<[u32; 4]> {
+        let u = (x as f32 + 0.5) / grid.size as f32 * grid.period[0];
+        let v = (y as f32 + 0.5) / grid.size as f32 * grid.period[1];
+        let mut r = registers.clone();
+        for &(register, lane, source) in &placed {
+            r[register][lane] = if source == Lane::U { u } else { v }.to_bits();
         }
-        Some(Texture::Image(image)) => image.sample(s.uv, s.lod),
-        Some(Texture::Constant(c)) => Ok(*c),
-        None => Err(format!("t{} has no texture", s.texture)),
+        r
     };
-    for y in 0..grid.size {
-        for x in 0..grid.size {
-            let u = (x as f32 + 0.5) / grid.size as f32 * grid.period[0];
-            let v = (y as f32 + 0.5) / grid.size as f32 * grid.period[1];
-            for &(register, lane, source) in &placed {
-                registers[register][lane] = if source == Lane::U { u } else { v }.to_bits();
-            }
-            let pixel = (y * grid.size + x) as usize;
-            let result = shader
-                .execute_with_derivatives(&registers, &derivatives, &refs, &mut sampler)
-                .map_err(|mut e| {
-                    e.detail = format!("pixel {pixel}: {}", e.detail);
-                    e
-                })?;
-            instructions += result.instructions as u64;
-            samples += result.samples as u64;
-            for (t, &(register, mask)) in targets.iter().enumerate() {
-                let writes = result
-                    .output_masks
-                    .get(register as usize)
-                    .is_some_and(|m| m & mask == mask);
-                if *written[t].get_or_insert(writes) != writes {
-                    return Err(error(
-                        pixel,
-                        format!("o{register} is written at some pixels only"),
-                    ));
+    let mut keep = |pixel: usize, result: &crate::Execution| {
+        instructions += result.instructions as u64;
+        samples += result.samples as u64;
+        for (t, &(register, mask)) in targets.iter().enumerate() {
+            let written = result.output_masks.get(register as usize).copied().unwrap_or(0) & mask;
+            let bits = result.outputs.get(register as usize).copied().unwrap_or([0; 4]);
+            pixels[t][pixel] = (bits, written);
+        }
+    };
+    match invocation {
+        Invocation::Scalar => {
+            for y in 0..grid.size {
+                for x in 0..grid.size {
+                    let pixel = (y * grid.size + x) as usize;
+                    let result = shader
+                        .execute_with_derivatives(&at(x, y), &derivatives, &refs, &mut sampler)
+                        .map_err(|mut e| {
+                            e.detail = format!("pixel {pixel}: {}", e.detail);
+                            e
+                        })?;
+                    keep(pixel, &result);
                 }
-                if writes {
-                    let bits = result.outputs[register as usize];
-                    values[t].push(std::array::from_fn(|c| {
+            }
+        }
+        Invocation::Quads => {
+            for y in (0..grid.size).step_by(2) {
+                for x in (0..grid.size).step_by(2) {
+                    let lanes = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)];
+                    let inputs = lanes.map(|(lx, ly)| at(lx, ly));
+                    let results = shader
+                        .execute_quad(
+                            [&inputs[0], &inputs[1], &inputs[2], &inputs[3]],
+                            &refs,
+                            &mut sampler,
+                        )
+                        .map_err(|mut e| {
+                            e.detail = format!("quad at pixel ({x}, {y}): {}", e.detail);
+                            e
+                        })?;
+                    for ((lx, ly), result) in lanes.into_iter().zip(&results) {
+                        if lx < grid.size && ly < grid.size {
+                            keep((ly * grid.size + lx) as usize, result);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Raw {
+        pixels,
+        instructions,
+        samples,
+    })
+}
+
+/// Evaluate `shader` once per grid pixel ([`Invocation::Scalar`]). `textures` are by bind slot (`t<n>`); a slot the
+/// program samples without one is an error. `inputs` are by (semantic, index), compared case-insensitively; a used
+/// input without one is an error. `targets` are (output register, required component mask); a target written at some
+/// pixels only is an error.
+pub fn evaluate(
+    shader: &dyn PixelShader,
+    constants: &Constants,
+    textures: &BTreeMap<u32, Texture>,
+    inputs: &BTreeMap<(String, u32), Input>,
+    grid: Grid,
+    targets: &[(u32, u8)],
+) -> Result<Evaluation, Error> {
+    let raw = evaluate_raw(
+        shader,
+        constants,
+        textures,
+        inputs,
+        grid,
+        targets,
+        Invocation::Scalar,
+    )?;
+    let mut out = Vec::with_capacity(targets.len());
+    for (t, &(register, mask)) in targets.iter().enumerate() {
+        let pixels = &raw.pixels[t];
+        let writes = pixels.first().is_some_and(|&(_, m)| m == mask);
+        if let Some(pixel) = pixels.iter().position(|&(_, m)| (m == mask) != writes) {
+            return Err(error(
+                pixel,
+                format!("o{register} is written at some pixels only"),
+            ));
+        }
+        out.push(writes.then(|| {
+            pixels
+                .iter()
+                .map(|&(bits, _)| {
+                    std::array::from_fn(|c| {
                         if mask & (1 << c) != 0 {
                             f32::from_bits(bits[c])
                         } else {
                             0.
                         }
-                    }));
-                }
-            }
-        }
+                    })
+                })
+                .collect()
+        }));
     }
     Ok(Evaluation {
-        targets: written
-            .into_iter()
-            .zip(values)
-            .map(|(w, v)| w.unwrap_or(false).then_some(v))
-            .collect(),
-        instructions,
-        samples,
+        targets: out,
+        instructions: raw.instructions,
+        samples: raw.samples,
     })
 }

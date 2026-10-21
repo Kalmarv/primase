@@ -294,3 +294,144 @@ fn struct_members_are_flattened_with_d3d_packing() {
     let unaligned = reflected(vec![member("a", 2, ty(0, 1, 1, 0))]);
     assert!(Layout::of(&unaligned).is_err());
 }
+
+/// The same fixture in 2 x 2 quads (DXBC: the bytecode with quad evaluation): the same outputs as one pixel at a
+/// time, on a grid of 2 and on an odd one (3: its last row and column run with helper lanes past the edge, not kept);
+/// each implicit sample's footprint the quad's gradients of `uv * tiling`, `(2, 4)` times the grid's step (0.5 on the
+/// grid of 2): `(1, 0)` and `(0, 2)`.
+#[test]
+fn quads_give_the_scalar_outputs_and_their_footprints() {
+    #[derive(Debug, Default)]
+    struct Footprints(std::sync::Mutex<Vec<primase_shader::Lod>>);
+    impl Image for Footprints {
+        fn sample(&self, uv: [f32; 2], lod: primase_shader::Lod) -> Result<[f32; 4], String> {
+            self.0.lock().unwrap().push(lod);
+            Ok([uv[0], uv[1], 0.5, 1.])
+        }
+    }
+    let (_, shader) = shaders().remove(0);
+    let layout = Layout::of(shader.as_ref()).unwrap();
+    let c = constants(&layout);
+    let targets = [(0, 15), (2, 15)];
+    for size in [2, 3] {
+        let footprints = Arc::new(Footprints::default());
+        let textures = BTreeMap::from([(3, Texture::Image(footprints.clone()))]);
+        let grid = Grid {
+            size,
+            period: [1., 1.],
+        };
+        let scalar = primase_shader::evaluate_raw(
+            shader.as_ref(),
+            &c,
+            &textures,
+            &inputs(),
+            grid,
+            &targets,
+            primase_shader::Invocation::Scalar,
+        )
+        .unwrap();
+        footprints.0.lock().unwrap().clear();
+        let quads = primase_shader::evaluate_raw(
+            shader.as_ref(),
+            &c,
+            &textures,
+            &inputs(),
+            grid,
+            &targets,
+            primase_shader::Invocation::Quads,
+        )
+        .unwrap();
+        assert_eq!(quads.pixels, scalar.pixels, "grid of {size}");
+        let step = 1. / size as f32;
+        let want = [[2. * step, 0.], [0., 4. * step]];
+        let seen = footprints.0.lock().unwrap();
+        // every lane of every quad samples, helpers included; the gradients differences of f32 coordinates
+        assert_eq!(
+            seen.len(),
+            (size as usize).div_ceil(2).pow(2) * 4,
+            "grid of {size}"
+        );
+        assert!(
+            seen.iter().all(|l| matches!(l, primase_shader::Lod::Gradients(g)
+                if (0..2).all(|i| (0..2).all(|k| (g[i][k] - want[i][k]).abs() < 1e-6)))),
+            "grid of {size}: {seen:?}"
+        );
+    }
+}
+
+/// Writes to o0 what a load of t0 at texel (1, 2), level 0, returns.
+#[derive(Debug)]
+struct Loads(Reflection);
+impl PixelShader for Loads {
+    fn reflection(&self) -> &Reflection {
+        &self.0
+    }
+    fn input_count(&self) -> usize {
+        0
+    }
+    fn constant_buffers(&self) -> &[(u32, u32)] {
+        &[]
+    }
+    fn textures(&self) -> &[u32] {
+        &[0]
+    }
+    fn samplers(&self) -> &[u32] {
+        &[]
+    }
+    fn execute(
+        &self,
+        _: &[[u32; 4]],
+        _: &[(u32, &[[u32; 4]])],
+        sampler: &mut dyn Sampler,
+    ) -> Result<Execution, primase_shader::Error> {
+        let value = sampler
+            .load(primase_shader::Load {
+                texture: 0,
+                texel: [1, 2, 0],
+                mip: 0,
+            })
+            .map_err(|detail| primase_shader::Error {
+                bytecode: "test",
+                at: 0,
+                detail,
+            })?;
+        Ok(Execution {
+            outputs: vec![value],
+            output_masks: vec![15],
+            instructions: 1,
+            samples: 0,
+            discarded: false,
+        })
+    }
+}
+
+/// A constant texture answers a load with its value's bits, wherever it is loaded; an image refuses a load.
+#[test]
+fn a_constant_texture_answers_loads() {
+    let shader = Loads(Reflection {
+        buffers: vec![],
+        resources: vec![],
+        inputs: vec![],
+        outputs: vec![],
+    });
+    let grid = Grid {
+        size: 2,
+        period: [1.; 2],
+    };
+    let constants = Constants::new(&Layout::default());
+    let run = |texture: Texture| {
+        primase_shader::evaluate_raw(
+            &shader,
+            &constants,
+            &BTreeMap::from([(0, texture)]),
+            &BTreeMap::new(),
+            grid,
+            &[(0, 15)],
+            primase_shader::Invocation::Scalar,
+        )
+    };
+    let raw = run(Texture::Constant([0.25, -1., 0., 2.])).unwrap();
+    let bits = [0.25f32, -1., 0., 2.].map(f32::to_bits);
+    assert!(raw.pixels[0].iter().all(|&p| p == (bits, 15)));
+    assert!(run(Texture::Image(Arc::new(Coordinates))).is_err());
+}

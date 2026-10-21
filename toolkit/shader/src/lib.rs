@@ -10,7 +10,10 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 mod evaluate;
-pub use evaluate::{Constants, Evaluation, Field, Grid, Image, Input, Lane, Layout, Texture, evaluate};
+pub use evaluate::{
+    Constants, Evaluation, Field, Grid, Image, Input, Invocation, Lane, Layout, Raw, Texture, evaluate,
+    evaluate_raw,
+};
 mod periodic;
 pub use periodic::evaluate_periodic;
 
