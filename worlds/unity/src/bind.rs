@@ -277,16 +277,19 @@ impl UnityImage {
 }
 
 impl primase_shader::Image for UnityImage {
-    fn sample(
-        &self,
-        uv: [f32; 2],
-        gradients: Option<[[f32; 2]; 2]>,
-    ) -> std::result::Result<[f32; 4], String> {
+    fn sample(&self, uv: [f32; 2], lod: primase_shader::Lod) -> std::result::Result<[f32; 4], String> {
         let (w, h, _) = self.levels[0];
-        let lod = gradients.map_or(0.0, |[dx, dy]| {
-            let texels = |d: [f32; 2]| (f64::from(d[0]) * f64::from(w)).hypot(f64::from(d[1]) * f64::from(h));
-            texels(dx).max(texels(dy)).max(1e-12).log2().max(0.0)
-        });
+        let lod = match lod {
+            primase_shader::Lod::Gradients([dx, dy]) => {
+                let texels =
+                    |d: [f32; 2]| (f64::from(d[0]) * f64::from(w)).hypot(f64::from(d[1]) * f64::from(h));
+                texels(dx).max(texels(dy)).max(1e-12).log2().max(0.0)
+            }
+            // a scalar evaluation has no footprint: the implicit level is the finest, plus a stated bias or level
+            primase_shader::Lod::Implicit => 0.0,
+            primase_shader::Lod::Bias(b) => f64::from(b).max(0.0),
+            primase_shader::Lod::Level(l) => f64::from(l).max(0.0),
+        };
         let last = self.levels.len() - 1;
         Ok(match self.filter {
             0 => self.level((lod.round() as usize).min(last), uv, false),
@@ -338,12 +341,23 @@ mod tests {
             ColorSpace::Linear,
         );
         let point = UnityImage::new(&t, [0, 1], 0).unwrap();
-        assert_eq!(point.sample([0.25, 0.25], None).unwrap(), [0., 0., 1., 1.]);
-        assert_eq!(point.sample([0.25, 0.75], None).unwrap(), [1., 0., 0., 1.]);
+        assert_eq!(
+            point.sample([0.25, 0.25], primase_shader::Lod::Implicit).unwrap(),
+            [0., 0., 1., 1.]
+        );
+        assert_eq!(
+            point.sample([0.25, 0.75], primase_shader::Lod::Implicit).unwrap(),
+            [1., 0., 0., 1.]
+        );
         // u repeats: 1.25 is 0.25; v clamps: 1.5 is the top row
-        assert_eq!(point.sample([1.25, 1.5], None).unwrap(), [1., 0., 0., 1.]);
+        assert_eq!(
+            point.sample([1.25, 1.5], primase_shader::Lod::Implicit).unwrap(),
+            [1., 0., 0., 1.]
+        );
         let bilinear = UnityImage::new(&t, [0, 0], 1).unwrap();
-        let mid = bilinear.sample([0.5, 0.5], None).unwrap();
+        let mid = bilinear
+            .sample([0.5, 0.5], primase_shader::Lod::Implicit)
+            .unwrap();
         assert_eq!(mid, [0.5, 0.5, 0.5, 1.]);
     }
 
@@ -353,7 +367,7 @@ mod tests {
         let t = texture(1, 1, &[[128, 128, 128, 128]], ColorSpace::Srgb);
         let s = UnityImage::new(&t, [0, 0], 0)
             .unwrap()
-            .sample([0.5, 0.5], None)
+            .sample([0.5, 0.5], primase_shader::Lod::Implicit)
             .unwrap();
         assert!((s[0] - srgb_to_linear(128.0 / 255.0) as f32).abs() < 1e-6);
         assert!((s[3] - 128.0 / 255.0).abs() < 1e-6);

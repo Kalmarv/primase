@@ -25,7 +25,7 @@ fn shaders() -> Vec<(&'static str, Box<dyn PixelShader>)> {
 #[derive(Debug)]
 struct Coordinates;
 impl Image for Coordinates {
-    fn sample(&self, uv: [f32; 2], _gradients: Option<[[f32; 2]; 2]>) -> Result<[f32; 4], String> {
+    fn sample(&self, uv: [f32; 2], _lod: primase_shader::Lod) -> Result<[f32; 4], String> {
         Ok([uv[0], uv[1], 0.5, 1.])
     }
 }

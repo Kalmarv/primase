@@ -63,7 +63,7 @@ fn arithmetic_and_conversion_edges() {
 }
 #[test]
 fn reject_before_execution() {
-    for (op, name) in [(13, "discard"), (72, "sample_l"), (76, "switch")] {
+    for (op, name) in [(76, "switch"), (109, "gather4"), (134, "countbits")] {
         let words = program(op, &[]);
         assert!(
             Program::from_words(&words)
@@ -367,8 +367,8 @@ fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn opcodes_outside_the_subset_are_refused_by_name() {
-    // Switches, umul and the SM5 rcp are refused when the program is read, never evaluated approximately.
-    for (op, name) in [(76, "switch"), (81, "umul"), (129, "rcp")] {
+    // Switches, umul and countbits are refused when the program is read, never evaluated approximately.
+    for (op, name) in [(76, "switch"), (81, "umul"), (134, "countbits")] {
         let mut words = vec![0x50, 0];
         words.extend(instruction(op, &[]));
         words.extend(instruction(62, &[]));
@@ -592,11 +592,10 @@ fn derivatives_are_the_callers_for_inputs_only() {
             op(12, &[&dest(2, 0), &whole(0, 0)]),
         ],
     );
-    let error = Program::from_words(&computed).unwrap_err().to_string();
-    assert!(
-        error.contains("derivatives are of input registers only"),
-        "{error}"
-    );
+    // a derivative of a computed value reads, and is refused where it runs
+    let p = Program::from_words(&computed).unwrap();
+    let error = p.execute(&[[0; 4]], &[], &mut no_sample).unwrap_err().to_string();
+    assert!(error.contains("a derivative of a computed value"), "{error}");
 }
 
 /// sample_d hands its gradients to the sampler; a texture3d is declared but sampling it is refused; a ps_4_0 program
@@ -636,7 +635,7 @@ fn gradient_samples_volumes_and_shader_model_4() {
     let r = p
         .execute(&[], &[], &mut |s: Sample| {
             assert_eq!((s.texture, s.uv), (1, [0.25, 0.5]));
-            assert_eq!(s.gradients, Some([[0.125, 0.], [0., 0.0625]]));
+            assert_eq!(s.lod, primase_shader::Lod::Gradients([[0.125, 0.], [0., 0.0625]]));
             Ok([1., 2., 3., 4.])
         })
         .unwrap();

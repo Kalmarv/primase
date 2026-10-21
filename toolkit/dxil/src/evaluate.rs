@@ -4,7 +4,7 @@
 use crate::module::{BinaryOp, CastOp, Constant, Function, Module, Op, Type, TypeId, Value, ValueId};
 use crate::reflection::{Element, Range};
 use crate::{Chunk, Result, error};
-use primase_shader::{Execution, PixelShader, Reflection, Sample, Sampler};
+use primase_shader::{Execution, Lod, PixelShader, Reflection, Sample, Sampler};
 use std::collections::BTreeMap;
 
 /// Instructions one evaluation may execute (the subset has no loops; this bounds a malformed body).
@@ -702,6 +702,7 @@ impl Shader {
         }
         Ok((
             Execution {
+                discarded: false,
                 outputs,
                 output_masks: masks,
                 instructions: steps,
@@ -856,11 +857,11 @@ impl Shader {
                 *samples += 1;
                 let rgba = sampler
                     .sample(Sample {
-                        bias: 0.0,
                         texture,
                         sampler: s,
                         uv,
-                        gradients: None,
+                        layer: None,
+                        lod: Lod::Implicit,
                     })
                     .map_err(|e| error(at, e))?;
                 V::Aggregate(rgba.iter().map(|&x| fv(x)).chain([V::Bits(0)]).collect())

@@ -8,9 +8,12 @@ mod program;
 mod reflection;
 pub use evaluate::{RegisterValue, Trace};
 pub use primase_shader::{
-    Buffer, Execution, Member, PixelShader, Reflection, Resource, Sample, Sampler, Semantic, Type, Variable,
+    Buffer, Execution, Load, Lod, Member, PixelShader, Reflection, Resource, Sample, Sampler, Semantic,
+    Store, Type, Variable,
 };
-pub use program::{Instruction, Operand, Program, Register, Selection};
+pub use program::{
+    Dimension, Instruction, Operand, Program, Register, ResourceDeclaration, ReturnType, Selection,
+};
 pub use reflection::{reflection, signatures};
 
 #[derive(Debug, thiserror::Error)]

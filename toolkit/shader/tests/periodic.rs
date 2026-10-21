@@ -35,6 +35,7 @@ impl PixelShader for Uv {
     ) -> Result<Execution, primase_shader::Error> {
         let (u, v) = (f32::from_bits(inputs[0][0]), f32::from_bits(inputs[0][1]));
         Ok(Execution {
+            discarded: false,
             outputs: vec![[(self.1)(u, v), u, v, 1.].map(f32::to_bits)],
             output_masks: vec![15],
             instructions: 1,

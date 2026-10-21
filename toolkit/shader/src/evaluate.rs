@@ -185,10 +185,10 @@ impl Constants {
     }
 }
 
-/// A texture the caller samples itself (its footprint, addressing, filtering and transfer are its own policy). A
-/// program's `sample_d` states its gradients (d/dx, d/dy of the UV); an implicit-LOD sample has none.
+/// A texture the caller samples itself (its footprint, addressing, filtering and transfer are its own policy), by the
+/// level of detail the program states ([`crate::Lod`]).
 pub trait Image: Send + Sync + std::fmt::Debug {
-    fn sample(&self, uv: [f32; 2], gradients: Option<[[f32; 2]; 2]>) -> Result<[f32; 4], String>;
+    fn sample(&self, uv: [f32; 2], lod: crate::Lod) -> Result<[f32; 4], String>;
 }
 /// What a texture slot samples.
 #[derive(Clone, Debug)]
@@ -318,7 +318,10 @@ pub fn evaluate(
     let mut values: Vec<Vec<[f32; 4]>> = targets.iter().map(|_| Vec::with_capacity(pixels)).collect();
     let (mut instructions, mut samples) = (0u64, 0u64);
     let mut sampler = |s: Sample| match textures.get(&s.texture) {
-        Some(Texture::Image(image)) => image.sample(s.uv, s.gradients),
+        Some(Texture::Image(_)) if s.layer.is_some() => {
+            Err(format!("t{}: an array layer of an image", s.texture))
+        }
+        Some(Texture::Image(image)) => image.sample(s.uv, s.lod),
         Some(Texture::Constant(c)) => Ok(*c),
         None => Err(format!("t{} has no texture", s.texture)),
     };

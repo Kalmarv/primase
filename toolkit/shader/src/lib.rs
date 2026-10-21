@@ -14,7 +14,21 @@ pub use evaluate::{Constants, Evaluation, Field, Grid, Image, Input, Lane, Layou
 mod periodic;
 pub use periodic::evaluate_periodic;
 
-/// A sample request of a 2D texture: implicit LOD, or with the program's own gradients.
+/// How a sample request picks its level of detail.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Lod {
+    /// The implicit level (`sample`), whose footprint a scalar evaluation leaves to the sampler.
+    Implicit,
+    /// The implicit level plus a bias the program states (`sample_b`, as given: the sampler clamps it to D3D's
+    /// -16..15.99).
+    Bias(f32),
+    /// A level the program states (`sample_l`).
+    Level(f32),
+    /// The UV's screen derivatives the program states (`sample_d`: d/dx, then d/dy).
+    Gradients([[f32; 2]; 2]),
+}
+
+/// A sample request of a 2D texture (or a 2D array's layer).
 #[derive(Clone, Copy, Debug)]
 pub struct Sample {
     /// Texture bind slot (`t<n>`).
@@ -22,16 +36,52 @@ pub struct Sample {
     /// Sampler bind slot (`s<n>`).
     pub sampler: u32,
     pub uv: [f32; 2],
-    /// The UV's screen derivatives the program states (`sample_d`: d/dx, then d/dy); `None` for an implicit-LOD
-    /// sample, whose footprint a scalar evaluation leaves to the sampler.
-    pub gradients: Option<[[f32; 2]; 2]>,
-    /// The level-of-detail bias the program states (`sample_b`, as given: the sampler clamps it to D3D's -16..15.99),
-    /// added to the implicit level; 0 for a plain sample.
-    pub bias: f32,
+    /// A 2D array's layer coordinate, as the program gives it (the sampler rounds it); `None` for a 2D texture.
+    pub layer: Option<f32>,
+    pub lod: Lod,
 }
-/// Answers sample requests; an error stops the evaluation.
+
+/// A load request (`ld`): one texel by its integer address, without a sampler.
+#[derive(Clone, Copy, Debug)]
+pub struct Load {
+    /// Texture bind slot (`t<n>`).
+    pub texture: u32,
+    /// x, y, and a 2D array's layer or a 3D texture's z (0 for a 2D texture).
+    pub texel: [i32; 3],
+    pub mip: i32,
+}
+
+/// A store request (`store_uav_typed`).
+#[derive(Clone, Copy, Debug)]
+pub struct Store {
+    /// Unordered-access view bind slot (`u<n>`).
+    pub view: u32,
+    /// x, y, and z or a 2D array's layer (0 where the view has fewer).
+    pub texel: [i32; 3],
+    /// The lanes as the program writes them (bits), only those `mask` marks.
+    pub value: [u32; 4],
+    pub mask: u8,
+}
+
+/// Answers sample, load, store and structured-buffer requests; an error stops the evaluation. A closure answers samples
+/// only.
 pub trait Sampler {
     fn sample(&mut self, request: Sample) -> std::result::Result<[f32; 4], String>;
+    /// The texel's four lanes as its view returns them: f32 bits for a float view, the integers for a uint or sint
+    /// one.
+    fn load(&mut self, request: Load) -> std::result::Result<[u32; 4], String> {
+        Err(format!("t{}: no loads given", request.texture))
+    }
+    /// A store to a typed unordered-access view (`store_uav_typed`): the lanes `mask` marks of `value`, at the texel
+    /// whose x, y (and z) the program gives. Its effect is the caller's: it reaches none of this evaluation's outputs.
+    fn store(&mut self, request: Store) -> std::result::Result<(), String> {
+        Err(format!("u{}: no stores given", request.view))
+    }
+    /// The 32-bit word at byte `offset` of element `element` of the structured buffer at `t<slot>`.
+    fn structured(&mut self, slot: u32, element: u32, offset: u32) -> std::result::Result<u32, String> {
+        let _ = (element, offset);
+        Err(format!("t{slot}: no structured buffer given"))
+    }
 }
 impl<F: FnMut(Sample) -> std::result::Result<[f32; 4], String>> Sampler for F {
     fn sample(&mut self, request: Sample) -> std::result::Result<[f32; 4], String> {
@@ -48,6 +98,8 @@ pub struct Execution {
     pub output_masks: Vec<u8>,
     pub instructions: usize,
     pub samples: usize,
+    /// Whether the program discarded the pixel (`discard`): its outputs are then those written before.
+    pub discarded: bool,
 }
 
 /// Resource, constant-buffer and signature metadata, as D3D reflection states it.

@@ -1,6 +1,6 @@
-use crate::program::derivative;
+use crate::program::{Dimension, derivative};
 use crate::{Operand, Program, Register, Result, Selection, error};
-use primase_shader::{Execution, Sample, Sampler};
+use primase_shader::{Execution, Load, Lod, Sample, Sampler, Store};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RegisterValue {
@@ -101,6 +101,8 @@ impl State<'_> {
                 1 => v.bits[from] ^ 0x8000_0000,
                 2 => v.bits[from] & 0x7fff_ffff,
                 3 => v.bits[from] | 0x8000_0000,
+                // an integer instruction's negate: two's complement
+                4 => v.bits[from].wrapping_neg(),
                 _ => unreachable!("checked modifier"),
             };
         }
@@ -185,6 +187,7 @@ impl Program {
             buffers,
         };
         let mut samples = 0;
+        let mut discarded = false;
         let (mut pc, mut executed) = (0, 0usize);
         while let Some(ins) = self.code.get(pc) {
             executed += 1;
@@ -219,6 +222,12 @@ impl Program {
                 }),
                 // if: on to its first branch, or past its else (or endif)
                 31 => Some(if taken(&s)? { pc + 1 } else { target + 1 }),
+                // discard: the invocation ends
+                13 if taken(&s)? => {
+                    discarded = true;
+                    break;
+                }
+                13 => Some(pc + 1),
                 _ => None,
             };
             if let Some(next) = next {
@@ -274,6 +283,14 @@ impl Program {
             }
             let mut result = [0; 4];
             if derivative(ins.opcode) {
+                // a scalar evaluation has the derivatives the caller states for its inputs, of nothing computed: a
+                // program reaching a derivative of anything else is refused when it does (one that doesn't, runs)
+                if a[1].register != Register::Input || a[1].modifier != 0 {
+                    return Err(error(
+                        ins.word,
+                        "a derivative of a computed value (a scalar evaluation has those of its inputs only)",
+                    ));
+                }
                 // d/dx for deriv_rtx (and its coarse and fine forms), d/dy for deriv_rty
                 let axis = usize::from(matches!(ins.opcode, 12 | 124 | 125));
                 let index = a[1].indices[0].base as usize;
@@ -285,7 +302,7 @@ impl Program {
                     return Err(error(ins.word, "a derivative's source needs a swizzle"));
                 };
                 result = std::array::from_fn(|i| lanes[swizzle[i] as usize]);
-            } else if matches!(ins.opcode, 69 | 73 | 74) {
+            } else if matches!(ins.opcode, 69 | 72 | 73 | 74) {
                 let texture = a[2].indices[0].base;
                 if self.volumes.contains(&texture) {
                     return Err(error(
@@ -293,30 +310,91 @@ impl Program {
                         format!("t{texture} is a 3D texture: sampling one is not supported"),
                     ));
                 }
-                let xy = s.source(&a[1], 3, ins.word)?;
-                let gradients = if ins.opcode == 73 {
-                    let (dx, dy) = (s.source(&a[4], 3, ins.word)?, s.source(&a[5], 3, ins.word)?);
-                    Some([[float(dx[0]), float(dx[1])], [float(dy[0]), float(dy[1])]])
-                } else {
-                    None
+                let array = self
+                    .resource(texture)
+                    .is_some_and(|r| r.dimension == Dimension::Texture2dArray);
+                let xyz = s.source(&a[1], if array { 7 } else { 3 }, ins.word)?;
+                let lod = match ins.opcode {
+                    73 => {
+                        let (dx, dy) = (s.source(&a[4], 3, ins.word)?, s.source(&a[5], 3, ins.word)?);
+                        Lod::Gradients([[float(dx[0]), float(dx[1])], [float(dy[0]), float(dy[1])]])
+                    }
+                    74 => Lod::Bias(float(s.source(&a[4], 1, ins.word)?[0])),
+                    72 => Lod::Level(float(s.source(&a[4], 1, ins.word)?[0])),
+                    _ => Lod::Implicit,
                 };
                 let sampled = sampler
                     .sample(Sample {
                         texture,
                         sampler: a[3].indices[0].base,
-                        uv: [float(xy[0]), float(xy[1])],
-                        gradients,
-                        bias: if ins.opcode == 74 {
-                            float(s.source(&a[4], 1, ins.word)?[0])
-                        } else {
-                            0.0
-                        },
+                        uv: [float(xyz[0]), float(xyz[1])],
+                        layer: array.then(|| float(xyz[2])),
+                        lod,
                     })
                     .map_err(|e| error(ins.word, e))?;
                 let Selection::Swizzle(swizzle) = a[2].selection else {
                     return Err(error(ins.word, "resource requires return swizzle"));
                 };
                 result = std::array::from_fn(|i| sampled[swizzle[i] as usize].to_bits());
+                samples += 1;
+            } else if ins.opcode == 45 {
+                // ld: the texel at the address's x, y (and z for an array or a 3D texture), its mip the w
+                let texture = a[2].indices[0].base;
+                let address = s.source(&a[1], 15, ins.word)?;
+                let flat = self
+                    .resource(texture)
+                    .is_some_and(|r| r.dimension == Dimension::Texture2d);
+                let loaded = sampler
+                    .load(Load {
+                        texture,
+                        texel: [
+                            address[0] as i32,
+                            address[1] as i32,
+                            if flat { 0 } else { address[2] as i32 },
+                        ],
+                        mip: address[3] as i32,
+                    })
+                    .map_err(|e| error(ins.word, e))?;
+                let Selection::Swizzle(swizzle) = a[2].selection else {
+                    return Err(error(ins.word, "resource requires return swizzle"));
+                };
+                result = std::array::from_fn(|i| loaded[swizzle[i] as usize]);
+                samples += 1;
+            } else if ins.opcode == 164 {
+                // store_uav_typed: a side effect, the caller's; nothing written here
+                let view = a[0].indices[0].base;
+                let address = s.source(&a[1], 7, ins.word)?;
+                let value = s.source(&a[2], mask, ins.word)?;
+                sampler
+                    .store(Store {
+                        view,
+                        texel: address.map(|x| x as i32)[..3].try_into().expect("three"),
+                        value,
+                        mask,
+                    })
+                    .map_err(|e| error(ins.word, e))?;
+                trace(Trace {
+                    word: ins.word,
+                    temps: &s.temps,
+                    outputs: &s.outputs,
+                });
+                continue;
+            } else if ins.opcode == 167 {
+                // ld_structured: the words from the byte offset of the element, picked by the resource's swizzle
+                let slot = a[3].indices[0].base;
+                let element = s.source(&a[1], 1, ins.word)?[0];
+                let offset = s.source(&a[2], 1, ins.word)?[0];
+                let Selection::Swizzle(swizzle) = a[3].selection else {
+                    return Err(error(ins.word, "resource requires return swizzle"));
+                };
+                for i in 0..4 {
+                    if mask & (1 << i) != 0 {
+                        let at = offset.wrapping_add(4 * u32::from(swizzle[i]));
+                        result[i] = sampler
+                            .structured(slot, element, at)
+                            .map_err(|e| error(ins.word, e))?;
+                    }
+                }
                 samples += 1;
             } else {
                 let needed = match ins.opcode {
@@ -415,6 +493,18 @@ impl Program {
                             85 => x[i] >> (y[i] & 31),
                             86 => bits(x[i] as f32),
                             87 => x[i] ^ y[i],
+                            129 => bits(1.0 / xf),
+                            // ubfe: (x & 31) bits of z from bit (y & 31)
+                            138 => {
+                                let (width, offset) = (x[i] & 31, y[i] & 31);
+                                if width == 0 {
+                                    0
+                                } else if width + offset < 32 {
+                                    (z[i] << (32 - width - offset)) >> (32 - width)
+                                } else {
+                                    z[i] >> offset
+                                }
+                            }
                             // bfi: z's low (x & 31) bits put at bit (y & 31) of w
                             140 => {
                                 let (width, offset) = (x[i] & 31, y[i] & 31);
@@ -441,6 +531,7 @@ impl Program {
             output_masks: s.outputs.iter().map(|v| v.mask).collect(),
             instructions: executed,
             samples,
+            discarded,
         })
     }
 }
