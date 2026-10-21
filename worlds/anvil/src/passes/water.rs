@@ -1,12 +1,15 @@
-//! `lower-anvil-water{depth=L:D,...,river-depth=D,colour-max=X,roughness=R,shore=coverage|none}`: lakes
+//! `lower-anvil-water{rect=x0,y0,x1,y1,depth=L:D,...,river-depth=D,colour-max=X,roughness=R,shore=coverage|none}`: lakes
 //! ([`AnvilWater`]) become water surfaces, and the river Materials (template FlowingWater_River) water materials, as
 //! the Riders Republic notes' recipe for a static export states them (docs/material-spec.md §24.6: each value
 //! established by the game or a stated choice):
 //!
+//! - **Which**: the patches whose squares overlap `rect` (x0, y0, x1, y1, source units; a lake's 1 km water cells
+//!   reach past an area's ground), a lake with none left out, counted.
 //! - **Geometry** (established): each patch a flat square of side `512 >> level` metres from its position (its
 //!   least x and y) at the water level; its texture coordinates its atlas rectangle, `(u0, v0)` at its least x and y,
 //!   u along +x and v along +y (§24.9: the lake vertex shader, pack 2186, read; a strip test across 71 neighbouring
-//!   patches agrees). One prototype a lake, a primitive per level, placed once.
+//!   patches agrees). One prototype a lake, a primitive per level, its vertices local to its origin and placed once
+//!   there (its box's least corner rounded down to 64 m: `local_origin`, exact).
 //! - **Colour** (the hue the sun-light pass's model gives, a choice): per texel of the Params atlas its water type
 //!   ([`water_type`]; a texel with none, `p = 0`, the default type `(4, 0.5, 5)`, §24.3), coloured by the hue of
 //!   [`water_reflectance`] at 1 m, its greatest channel `colour-max`.
@@ -52,6 +55,8 @@ pub enum Shore {
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerAnvilWater {
+    /// The rectangle (x0, y0, x1, y1, source units) whose patches are drawn.
+    pub rect: [f64; 4],
     /// The water's depth in metres for a patch of each level.
     pub depth: BTreeMap<u32, f64>,
     /// The rivers' depth in metres.
@@ -65,17 +70,27 @@ impl LowerAnvilWater {
     /// From its options: `depth=L:D,...` (every level a lake's patches have), `colour-max`, `roughness`, `shore`, all
     /// required.
     pub fn from_options(o: &Options) -> Result<LowerAnvilWater, String> {
-        let known = ["depth", "river-depth", "colour-max", "roughness", "shore"];
+        let known = ["rect", "depth", "river-depth", "colour-max", "roughness", "shore"];
         if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
         }
-        let usage =
-            "depth=LEVEL:METRES,..., river-depth=METRES, colour-max=X, roughness=R, shore=coverage|none";
+        let usage = "rect=x0,y0,x1,y1, depth=LEVEL:METRES,..., river-depth=METRES, colour-max=X, roughness=R, shore=coverage|none";
         let get = |k: &str| {
             o.get(k)
                 .map(String::as_str)
                 .ok_or_else(|| format!("{k} is required: {usage}"))
         };
+        let rect: Vec<f64> = get("rect")?
+            .split(',')
+            .map(|v| v.trim().parse::<f64>())
+            .collect::<Result<_, _>>()
+            .map_err(|_| "rect is four numbers x0,y0,x1,y1".to_owned())?;
+        let rect: [f64; 4] = rect
+            .try_into()
+            .map_err(|_| "rect is four numbers x0,y0,x1,y1".to_owned())?;
+        if !(rect.iter().all(|v| v.is_finite()) && rect[0] < rect[2] && rect[1] < rect[3]) {
+            return Err(format!("rect {rect:?}: finite, x0 < x1 and y0 < y1"));
+        }
         let mut depth = BTreeMap::new();
         for item in get("depth")?.split(',') {
             let (level, metres) = item
@@ -117,6 +132,7 @@ impl LowerAnvilWater {
             v => return Err(format!("shore={v} is not coverage or none")),
         };
         Ok(LowerAnvilWater {
+            rect,
             depth,
             river_depth,
             colour_max,
@@ -169,7 +185,9 @@ impl Pass for LowerAnvilWater {
         "lower-anvil-water"
     }
     fn options(&self) -> Options {
+        let [x0, y0, x1, y1] = self.rect;
         Options::from([
+            ("rect".to_owned(), format!("{x0},{y0},{x1},{y1}")),
             (
                 "depth".to_owned(),
                 self.depth
@@ -232,8 +250,19 @@ impl Pass for LowerAnvilWater {
                 .map_err(|e| format!("Params atlas: {e}"))?;
             let texels = decoded.levels[0].clone();
             let mut by_level: BTreeMap<u32, Vec<&crate::components::WaterPatch>> = BTreeMap::new();
+            let [x0, y0, x1, y1] = self.rect;
             for p in &lake.patches {
-                by_level.entry(p.level).or_default().push(p);
+                let side = p.side().map_or(0.0, f64::from);
+                let [x, y] = [f64::from(p.position[0]), f64::from(p.position[1])];
+                if x < x1 && x + side > x0 && y < y1 && y + side > y0 {
+                    by_level.entry(p.level).or_default().push(p);
+                } else {
+                    log.omit("lake patches outside the rectangle", 1);
+                }
+            }
+            if by_level.is_empty() {
+                log.omit("lakes with no patch in the rectangle", 1);
+                continue;
             }
             let flip = lake.frame.flips_winding();
             let mut primitives = Vec::new();
@@ -296,6 +325,20 @@ impl Pass for LowerAnvilWater {
                     material: Some(material),
                 });
             }
+            // the vertices local to the lake's origin
+            let all: Vec<[f32; 3]> = primitives
+                .iter()
+                .filter_map(|p| p.positions())
+                .flat_map(|p| p.iter().copied())
+                .collect();
+            let origin = super::local_origin(&all);
+            for p in &mut primitives {
+                if let Some(Stream::F32x3(v)) = p.streams.get_mut(&Semantic::Position) {
+                    for q in v.iter_mut() {
+                        *q = std::array::from_fn(|k| q[k] - origin[k]);
+                    }
+                }
+            }
             w.insert(e, Mesh::new(primitives));
             let placed = w.spawn();
             w.insert(
@@ -305,7 +348,7 @@ impl Pass for LowerAnvilWater {
                     variant: 0,
                 },
             );
-            w.insert(placed, Transform::IDENTITY);
+            w.insert(placed, super::placed_at(origin));
             if let Some(name) = w.get::<Name>(e).cloned() {
                 w.insert(placed, name);
             }

@@ -982,7 +982,9 @@ impl Pass for LowerAnvilFloor {
 /// `ground=splat`) as a primitive per terrain node, each square of the grid in the node of its corner sample with the
 /// least x and y, each piece with its own near colour baked over its squares' extent (a node's whole square is
 /// 128 samples, its side at `splat-px` a pixel: 64 m at 0.25 m is 256 pixels). The pieces' positions are the whole
-/// ground's, computed alike, so neighbours share their seam vertices exactly; the collision stays one, over the whole.
+/// ground's, computed alike, so neighbours share their seam vertices exactly. Each piece (the whole, or a node's) is a
+/// prototype of its own, its collision (where drawn) over its own squares, its vertices local to its origin
+/// ([`local_origin`]: its box's least corner rounded down to 64 m, which keeps them exact), placed once there.
 ///
 /// With `collision` other than none the ground is also its own collision, on the same prototype: each square's two
 /// triangles of the surface its corner sample with the least x and y names (a square spans four samples, whose
@@ -1330,6 +1332,7 @@ impl Pass for LowerAnvilTerrain {
                     }
                 }
             }
+            let square_count = ((width - 1) * (height - 1)) as usize;
             // what is drawn: per piece its texture, its vertices' coordinates in it, and (per node) which of the
             // whole's vertices it draws and its triangles over them
             let pieces: Vec<GroundPiece> = match self.ground {
@@ -1414,6 +1417,7 @@ impl Pass for LowerAnvilTerrain {
                         uvs,
                         vertices: None,
                         indices: indices.clone(),
+                        squares: (0..square_count).collect(),
                     }]
                 }
                 GroundColour::Splat(splat) => {
@@ -1481,12 +1485,17 @@ impl Pass for LowerAnvilTerrain {
                                 uvs: (0..width * height).map(uv).collect(),
                                 vertices: None,
                                 indices: indices.clone(),
+                                squares: (0..square_count).collect(),
                             },
                             Pieces::PerNode => {
                                 // the whole's vertices this piece's squares use, in first use, and its triangles
                                 let mut local: BTreeMap<u32, u32> = BTreeMap::new();
                                 let mut vertices = Vec::new();
                                 let mut piece_indices = Vec::with_capacity(squares.len() * 6);
+                                let square_index = squares
+                                    .iter()
+                                    .map(|&(r, c)| (r * (width - 1) + c) as usize)
+                                    .collect();
                                 for (r, c) in squares {
                                     let [a, b] = [r * width + c, r * width + c + 1];
                                     let [d, f] = [a + width, b + width];
@@ -1508,6 +1517,7 @@ impl Pass for LowerAnvilTerrain {
                                     uvs: vertices.iter().map(|&v| uv(v)).collect(),
                                     vertices: Some(vertices),
                                     indices: piece_indices,
+                                    squares: square_index,
                                 }
                             }
                         });
@@ -1542,27 +1552,39 @@ impl Pass for LowerAnvilTerrain {
                     pieces
                 }
             };
+            // each square's collision surface, by index
+            let mut per_square = Vec::new();
             if self.collision.is_some() {
                 let mut surfaces = w.remove_resource::<Surfaces>().unwrap_or_default();
-                let mut per_square = Vec::with_capacity(square_names.len());
+                per_square.reserve(square_names.len());
                 for name in &square_names {
                     per_square.push(surfaces.index(name).map_err(|e| e.to_string())?);
                     log.count(&format!("ground collision squares of surface {name}"), 1);
                 }
                 w.insert_resource(surfaces);
-                let triangles: Vec<[u32; 3]> = indices.as_chunks::<3>().0.to_vec();
-                let surfaces = per_square.iter().flat_map(|&s| [s, s]).collect();
-                w.insert(
-                    e,
-                    Collision {
-                        positions: positions.clone(),
-                        triangles,
-                        surfaces,
-                    },
-                );
             }
-            let mut primitives = Vec::with_capacity(pieces.len());
-            for piece in pieces {
+            // each piece a prototype of its own (the terrain's entity the first), its vertices local to its origin
+            for (k, piece) in pieces.into_iter().enumerate() {
+                let prototype = if k == 0 { e } else { w.spawn() };
+                let world_positions: Vec<[f32; 3]> = match &piece.vertices {
+                    None => positions.clone(),
+                    Some(v) => v.iter().map(|&i| positions[i as usize]).collect(),
+                };
+                let origin = local_origin(&world_positions);
+                let local: Vec<[f32; 3]> = world_positions
+                    .iter()
+                    .map(|p| std::array::from_fn(|a| p[a] - origin[a]))
+                    .collect();
+                if self.collision.is_some() {
+                    w.insert(
+                        prototype,
+                        Collision {
+                            positions: local.clone(),
+                            triangles: piece.indices.as_chunks::<3>().0.to_vec(),
+                            surfaces: piece.squares.iter().flat_map(|&q| [per_square[q]; 2]).collect(),
+                        },
+                    );
+                }
                 let material = w.spawn();
                 w.insert(
                     material,
@@ -1575,31 +1597,29 @@ impl Pass for LowerAnvilTerrain {
                         ..PbrMaterial::default()
                     },
                 );
-                let piece_positions = match &piece.vertices {
-                    None => positions.clone(),
-                    Some(v) => v.iter().map(|&i| positions[i as usize]).collect(),
-                };
                 let mut streams = BTreeMap::new();
-                streams.insert(Semantic::Position, Stream::F32x3(piece_positions));
+                streams.insert(Semantic::Position, Stream::F32x3(local));
                 streams.insert(Semantic::TexCoord(0), Stream::F32x2(piece.uvs));
-                primitives.push(Primitive {
-                    topology: Topology::Triangles,
-                    streams,
-                    indices: Some(piece.indices),
-                    material: Some(material),
-                });
+                w.insert(
+                    prototype,
+                    Mesh::new(vec![Primitive {
+                        topology: Topology::Triangles,
+                        streams,
+                        indices: Some(piece.indices),
+                        material: Some(material),
+                    }]),
+                );
+                let placed = w.spawn();
+                w.insert(
+                    placed,
+                    Instance {
+                        prototype,
+                        variant: 0,
+                    },
+                );
+                w.insert(placed, placed_at(origin));
+                log.place(placed);
             }
-            w.insert(e, Mesh::new(primitives));
-            let placed = w.spawn();
-            w.insert(
-                placed,
-                Instance {
-                    prototype: e,
-                    variant: 0,
-                },
-            );
-            w.insert(placed, Transform::IDENTITY);
-            log.place(placed);
         }
         Ok(())
     }
@@ -1615,6 +1635,30 @@ struct GroundPiece {
     uvs: Vec<[f32; 2]>,
     vertices: Option<Vec<u32>>,
     indices: Vec<u32>,
+    /// Its squares, by their index in the grid's row order (two triangles each, in `indices`' order).
+    squares: Vec<usize>,
+}
+
+/// Where a prototype of `positions` (in the world) is placed: its box's least corner rounded down to a multiple of
+/// 64 units on each axis. A position less that origin is exact in f32 (the origin a multiple of the position's ulp
+/// and nearer zero), so the content placed there is where it was to the bit, and its vertices lie near its origin
+/// for a writer that files a placement by its position and reach.
+pub(crate) fn local_origin(positions: &[[f32; 3]]) -> [f32; 3] {
+    std::array::from_fn(|k| {
+        let least = positions.iter().map(|p| p[k]).fold(f32::INFINITY, f32::min);
+        if least.is_finite() {
+            (least / 64.0).floor() * 64.0
+        } else {
+            0.0
+        }
+    })
+}
+
+/// A translation to `origin`.
+pub(crate) fn placed_at(origin: [f32; 3]) -> Transform {
+    Transform {
+        cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], origin],
+    }
 }
 
 /// Register Anvil's passes by name.
@@ -1656,6 +1700,7 @@ pub fn register(reg: &mut PassRegistry) {
         "lower-anvil-water",
         |o| Ok(Box::new(LowerAnvilWater::from_options(o)?)),
         &[
+            ("rect", "-64,-64,64,64"),
             ("depth", "3:2,4:1,5:0.5,6:0.5"),
             ("river-depth", "1"),
             ("colour-max", "0.15"),

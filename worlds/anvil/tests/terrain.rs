@@ -88,9 +88,22 @@ fn the_campus_ground_reads_and_lowers() {
             &mut report,
         )
         .expect("lower");
-    // 128 m at 0.5 m, both edges: 257 x 257 samples
+    // 128 m at 0.5 m, both edges: 257 x 257 samples, local to the ground's placement (its least corner rounded down
+    // to 64 m), which puts them back where they were to the bit
     let mesh = w.get::<Mesh>(ground).expect("ground");
-    let p = mesh.primitives()[0].positions().expect("positions");
+    let placed = w
+        .iter::<primase_core::Instance>()
+        .find(|(_, i)| i.prototype == ground)
+        .map(|(e, _)| e)
+        .expect("placed");
+    let origin = w.get::<Transform>(placed).expect("transform").cols[3];
+    assert!(origin.iter().all(|c| c % 64.0 == 0.0), "{origin:?}");
+    let p: Vec<[f32; 3]> = mesh.primitives()[0]
+        .positions()
+        .expect("positions")
+        .iter()
+        .map(|q| std::array::from_fn(|k| q[k] + origin[k]))
+        .collect();
     assert_eq!(p.len(), 257 * 257);
     assert_eq!(
         mesh.primitives()[0].indices.as_ref().map(Vec::len),
