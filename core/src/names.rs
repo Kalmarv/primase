@@ -14,6 +14,7 @@ use crate::layered::LayeredMaterial;
 use crate::lod::Lods;
 use crate::marker::{Curve, Marker};
 use crate::material_usage::MaterialUsage;
+use crate::morphs::Morphs;
 use crate::pbr::PbrMaterial;
 use crate::priority::Priority;
 use crate::provenance::Provenance;
@@ -49,7 +50,7 @@ macro_rules! declared {
 declared! {
     components: Collider, Heightfield, Name, Source, Transform, Instance, Shadows, Mesh, Texture, Light, Collision,
         TextureFile, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, Marker, Curve, MaterialUsage,
-        PbrMaterial, Priority, Provenance, StateAxis, Condition, StateOverride, VertexColor, Skeleton, Skin;
+        PbrMaterial, Priority, Provenance, StateAxis, Condition, StateOverride, VertexColor, Skeleton, Skin, Morphs;
     resources: PartScope, PartitionPlan, Environment, StateAssignment, Surfaces,
 }
 
