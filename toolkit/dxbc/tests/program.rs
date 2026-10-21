@@ -838,3 +838,130 @@ fn pack_against_microsoft_disassembly() {
     println!("pixel containers read, matching the disassembly: {read}; refused: {refused:?}");
     assert!(read > 0);
 }
+
+/// A quad's lanes' v0.x: 1, 2 (the top row), 3, 5 (the bottom).
+fn quad_inputs() -> [Vec<[u32; 4]>; 4] {
+    [1f32, 2., 3., 5.].map(|x| vec![[x.to_bits(), 0, 0, 0]])
+}
+
+fn quad(words: &[u32], sampler: &mut dyn primase_shader::Sampler) -> [primase_shader::Execution; 4] {
+    let inputs = quad_inputs();
+    Program::from_words(words)
+        .unwrap()
+        .execute_quad([&inputs[0], &inputs[1], &inputs[2], &inputs[3]], &[], sampler)
+        .unwrap()
+}
+
+/// Derivatives of a computed value r0 = v0.x squared (1, 4 / 9, 25) inside the quad: coarse d/dx 4 - 1 = 3 and
+/// d/dy 9 - 1 = 8 for every lane; fine d/dx the lane's row (3 above, 25 - 9 = 16 below), fine d/dy its column
+/// (9 - 1 = 8 left, 25 - 4 = 21 right).
+#[test]
+fn a_quad_differences_its_lanes() {
+    let program = |x: u32, y: u32| {
+        shader(
+            1,
+            1,
+            &[
+                op(56, &[&temp(0), &scalar(1, 0, 0), &scalar(1, 0, 0)]),
+                op(x, &[&dest(2, 0), &whole(0, 0)]),
+                op(y, &[&dest(2, 1), &whole(0, 0)]),
+            ],
+        )
+    };
+    let lanes = |words: Vec<u32>| {
+        quad(&words, &mut no_sample).map(|e| [0, 1].map(|k| f32::from_bits(e.outputs[k][0])))
+    };
+    // deriv_rtx_coarse, deriv_rty_fine
+    let r = lanes(program(122, 125));
+    assert_eq!(r.map(|o| o[0]), [3.; 4]);
+    assert_eq!(r.map(|o| o[1]), [8., 21., 8., 21.]);
+    // deriv_rtx_fine, deriv_rty_coarse; deriv_rtx and deriv_rty are the coarse ones
+    let r = lanes(program(123, 124));
+    assert_eq!(r.map(|o| o[0]), [3., 3., 16., 16.]);
+    assert_eq!(r.map(|o| o[1]), [8.; 4]);
+    let r = lanes(program(11, 12));
+    assert_eq!((r.map(|o| o[0]), r.map(|o| o[1])), ([3.; 4], [8.; 4]));
+}
+
+/// An implicit-LOD sample in a quad: its footprint the coordinates' coarse gradients, (0.25, 0) and (0, 0.5) here.
+#[test]
+fn a_quads_implicit_sample_has_its_gradients() {
+    let mut words = vec![0x50, 0];
+    words.extend(instruction(
+        88 | 3 << 11,
+        &[2 | 15 << 4 | 7 << 12 | 1 << 20, 2, 0x5555],
+    ));
+    words.extend(instruction(90, &[6 << 12 | 1 << 20, 3]));
+    words.extend(instruction(98 | 2 << 11, &dest(1, 0)));
+    words.extend(instruction(101, &dest(2, 0)));
+    let resource = [
+        2 | 1 << 2 | 0xe4 << 4 | 7 << 12 | 1 << 20,
+        2,
+        6 << 12 | 1 << 20,
+        3,
+    ];
+    words.extend(op(69, &[&dest(2, 0), &whole(1, 0), &resource]));
+    words.extend(instruction(62, &[]));
+    words[1] = words.len() as u32;
+    let uvs = [[0f32, 0.], [0.25, 0.], [0., 0.5], [0.25, 0.5]];
+    let inputs = uvs.map(|[u, v]| vec![[u.to_bits(), v.to_bits(), 0, 0]]);
+    let mut seen = Vec::new();
+    let r = Program::from_words(&words)
+        .unwrap()
+        .execute_quad(
+            [&inputs[0], &inputs[1], &inputs[2], &inputs[3]],
+            &[],
+            &mut |s: Sample| {
+                seen.push((s.uv, s.lod));
+                Ok([1., 2., 3., 4.])
+            },
+        )
+        .unwrap();
+    let footprint = primase_shader::Lod::Gradients([[0.25, 0.], [0., 0.5]]);
+    assert_eq!(seen, uvs.map(|uv| (uv, footprint)));
+    assert!(
+        r.iter()
+            .all(|e| e.samples == 1 && e.outputs[0] == [1f32, 2., 3., 4.].map(f32::to_bits))
+    );
+}
+
+/// Lanes that reach a derivative apart (one takes a branch the others don't) are refused; a lane that discards goes
+/// on as a helper, so its neighbours still have their derivatives, and is marked discarded.
+#[test]
+fn a_quad_refuses_divergent_derivatives_and_keeps_its_helpers() {
+    // v0.x < 2: only the top-left lane enters the branch holding the derivative
+    let divergent = shader(
+        1,
+        1,
+        &[
+            op(49, &[&temp(0), &scalar(1, 0, 0), &lit([2f32.to_bits(); 4])]),
+            op(31 | 1 << 18, &[&scalar(0, 0, 0)]),
+            op(122, &[&dest(2, 0), &whole(1, 0)]),
+            op(21, &[]),
+        ],
+    );
+    let inputs = quad_inputs();
+    let error = Program::from_words(&divergent)
+        .unwrap()
+        .execute_quad(
+            [&inputs[0], &inputs[1], &inputs[2], &inputs[3]],
+            &[],
+            &mut no_sample,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("diverge"), "{error}");
+    // the top-left lane discards (v0.x < 2), then every lane takes d/dx of v0.x: 2 - 1 = 1
+    let helper = shader(
+        1,
+        1,
+        &[
+            op(49, &[&temp(0), &scalar(1, 0, 0), &lit([2f32.to_bits(); 4])]),
+            op(13 | 1 << 18, &[&scalar(0, 0, 0)]),
+            op(122, &[&dest(2, 0), &whole(1, 0)]),
+        ],
+    );
+    let r = quad(&helper, &mut no_sample);
+    assert_eq!(r.each_ref().map(|e| e.discarded), [true, false, false, false]);
+    assert_eq!(r.each_ref().map(|e| f32::from_bits(e.outputs[0][0])), [1.; 4]);
+}

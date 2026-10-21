@@ -144,6 +144,41 @@ impl State<'_> {
         target.mask |= mask;
     }
 }
+/// One invocation: its registers and where it is.
+struct Lane<'a> {
+    s: State<'a>,
+    pc: usize,
+    executed: usize,
+    samples: usize,
+    discarded: bool,
+}
+
+impl Lane<'_> {
+    fn finish(self) -> Execution {
+        Execution {
+            outputs: self.s.outputs.iter().map(|v| v.bits).collect(),
+            output_masks: self.s.outputs.iter().map(|v| v.mask).collect(),
+            instructions: self.executed,
+            samples: self.samples,
+            discarded: self.discarded,
+        }
+    }
+}
+
+/// Where a lane's run stopped.
+enum Stop {
+    /// At `ret` (or, run alone, at a discard).
+    Done,
+    /// At an instruction that needs its quad's other lanes (a derivative, an implicit-LOD sample), not executed.
+    Quad,
+}
+
+/// Whether a quad's lanes must reach `ins` together: a screen derivative, or a sample whose level of detail is the
+/// implicit one (`sample`, `sample_b`), its footprint the quad's.
+fn needs_quad(ins: &crate::Instruction) -> bool {
+    derivative(ins.opcode) || matches!(ins.opcode, 69 | 74)
+}
+
 impl Program {
     /// Evaluate a prevalidated program. Missing inputs/buffers and unwritten
     /// temporaries are errors; no partial output is returned. Sampling callbacks
@@ -181,6 +216,14 @@ impl Program {
         sampler: &mut S,
         trace: &mut impl FnMut(Trace<'_>),
     ) -> Result<Execution> {
+        self.check(inputs, buffers)?;
+        let mut lane = self.lane(inputs, derivatives, buffers);
+        self.run_lane(&mut lane, sampler, trace, false)?;
+        Ok(lane.finish())
+    }
+
+    /// The inputs and constant buffers an evaluation needs, given.
+    fn check(&self, inputs: &[[u32; 4]], buffers: &[(u32, &[[u32; 4]])]) -> Result<()> {
         if inputs.len() < self.inputs {
             return Err(error(0, "missing input registers"));
         }
@@ -194,18 +237,50 @@ impl Program {
                 return Err(error(0, format!("cb{slot} requires exactly {size} vectors")));
             }
         }
-        let mut s = State {
-            temps: vec![Value::default(); self.temps],
-            outputs: vec![Value::default(); self.outputs],
-            inputs,
-            derivatives,
-            buffers,
-            immediates: &self.immediates,
-        };
-        let mut samples = 0;
-        let mut discarded = false;
-        let (mut pc, mut executed) = (0, 0usize);
-        while let Some(ins) = self.code.get(pc) {
+        Ok(())
+    }
+
+    fn lane<'a>(
+        &'a self,
+        inputs: &'a [[u32; 4]],
+        derivatives: &'a [[[u32; 4]; 2]],
+        buffers: &'a [(u32, &'a [[u32; 4]])],
+    ) -> Lane<'a> {
+        Lane {
+            s: State {
+                temps: vec![Value::default(); self.temps],
+                outputs: vec![Value::default(); self.outputs],
+                inputs,
+                derivatives,
+                buffers,
+                immediates: &self.immediates,
+            },
+            pc: 0,
+            executed: 0,
+            samples: 0,
+            discarded: false,
+        }
+    }
+
+    /// Run `lane` to its end; in a quad (`quad`), to the next instruction that needs the quad ([`needs_quad`]),
+    /// which it leaves unexecuted, and past a discard (the lane goes on as a helper, its outputs marked discarded).
+    fn run_lane<S: Sampler + ?Sized>(
+        &self,
+        lane: &mut Lane<'_>,
+        sampler: &mut S,
+        trace: &mut impl FnMut(Trace<'_>),
+        quad: bool,
+    ) -> Result<Stop> {
+        let s = &mut lane.s;
+        let (mut pc, mut executed, mut samples, mut discarded) =
+            (lane.pc, lane.executed, lane.samples, lane.discarded);
+        let stop = loop {
+            let Some(ins) = self.code.get(pc) else {
+                break Stop::Done;
+            };
+            if quad && needs_quad(ins) {
+                break Stop::Quad;
+            }
             executed += 1;
             if executed > BUDGET {
                 return Err(error(
@@ -214,7 +289,7 @@ impl Program {
                 ));
             }
             if ins.opcode == 62 {
-                break;
+                break Stop::Done;
             }
             let a = &ins.operands;
             // structured flow: `jumps` holds each one's matching instruction
@@ -228,20 +303,19 @@ impl Program {
                 18 => Some(target + 1),
                 // endloop goes back to its loop's first instruction; continue likewise
                 22 | 7 => Some(target + 1),
-                8 => Some(if taken(&s)? { target + 1 } else { pc + 1 }),
+                8 => Some(if taken(s)? { target + 1 } else { pc + 1 }),
                 // break leaves after its loop's endloop
                 2 => Some(self.jumps[target] + 1),
-                3 => Some(if taken(&s)? {
-                    self.jumps[target] + 1
-                } else {
-                    pc + 1
-                }),
+                3 => Some(if taken(s)? { self.jumps[target] + 1 } else { pc + 1 }),
                 // if: on to its first branch, or past its else (or endif)
-                31 => Some(if taken(&s)? { pc + 1 } else { target + 1 }),
-                // discard: the invocation ends
-                13 if taken(&s)? => {
+                31 => Some(if taken(s)? { pc + 1 } else { target + 1 }),
+                // discard: the invocation ends (in a quad it goes on as a helper, for its neighbours' derivatives)
+                13 if taken(s)? => {
                     discarded = true;
-                    break;
+                    if !quad {
+                        break Stop::Done;
+                    }
+                    Some(pc + 1)
                 }
                 13 => Some(pc + 1),
                 _ => None,
@@ -319,44 +393,7 @@ impl Program {
                 };
                 result = std::array::from_fn(|i| lanes[swizzle[i] as usize]);
             } else if matches!(ins.opcode, 69 | 72 | 73 | 74) {
-                let texture = a[2].indices[0].base;
-                let dimension = self.resource(texture).map(|r| r.dimension);
-                let unsupported = match dimension {
-                    Some(Dimension::Texture3d) => Some("a 3D texture"),
-                    Some(Dimension::TextureCube) => Some("a cube"),
-                    Some(Dimension::TextureCubeArray) => Some("a cube array"),
-                    _ => None,
-                };
-                if let Some(shape) = unsupported {
-                    return Err(error(
-                        ins.word,
-                        format!("t{texture} is {shape}: sampling one is not supported"),
-                    ));
-                }
-                let array = dimension == Some(Dimension::Texture2dArray);
-                let xyz = s.source(&a[1], if array { 7 } else { 3 }, ins.word)?;
-                let lod = match ins.opcode {
-                    73 => {
-                        let (dx, dy) = (s.source(&a[4], 3, ins.word)?, s.source(&a[5], 3, ins.word)?);
-                        Lod::Gradients([[float(dx[0]), float(dx[1])], [float(dy[0]), float(dy[1])]])
-                    }
-                    74 => Lod::Bias(float(s.source(&a[4], 1, ins.word)?[0])),
-                    72 => Lod::Level(float(s.source(&a[4], 1, ins.word)?[0])),
-                    _ => Lod::Implicit,
-                };
-                let sampled = sampler
-                    .sample(Sample {
-                        texture,
-                        sampler: a[3].indices[0].base,
-                        uv: [float(xyz[0]), float(xyz[1])],
-                        layer: array.then(|| float(xyz[2])),
-                        lod,
-                    })
-                    .map_err(|e| error(ins.word, e))?;
-                let Selection::Swizzle(swizzle) = a[2].selection else {
-                    return Err(error(ins.word, "resource requires return swizzle"));
-                };
-                result = std::array::from_fn(|i| sampled[swizzle[i] as usize].to_bits());
+                result = self.sample_texture(s, ins, sampler, None)?;
                 samples += 1;
             } else if ins.opcode == 45 {
                 // ld: the texel at the address's x, y (and z for an array or a 3D texture), its mip the w; a
@@ -586,13 +623,144 @@ impl Program {
                 temps: &s.temps,
                 outputs: &s.outputs,
             });
+        };
+        (lane.pc, lane.executed, lane.samples, lane.discarded) = (pc, executed, samples, discarded);
+        Ok(stop)
+    }
+
+    /// A sample instruction's texel (`sample`, `sample_l`, `sample_d`, `sample_b`), through its return swizzle;
+    /// an implicit level of detail from `footprint` (the quad's gradients of the coordinates) where given.
+    fn sample_texture<S: Sampler + ?Sized>(
+        &self,
+        s: &State<'_>,
+        ins: &crate::Instruction,
+        sampler: &mut S,
+        footprint: Option<[[f32; 2]; 2]>,
+    ) -> Result<[u32; 4]> {
+        let a = &ins.operands;
+        let texture = a[2].indices[0].base;
+        let dimension = self.resource(texture).map(|r| r.dimension);
+        let unsupported = match dimension {
+            Some(Dimension::Texture3d) => Some("a 3D texture"),
+            Some(Dimension::TextureCube) => Some("a cube"),
+            Some(Dimension::TextureCubeArray) => Some("a cube array"),
+            _ => None,
+        };
+        if let Some(shape) = unsupported {
+            return Err(error(
+                ins.word,
+                format!("t{texture} is {shape}: sampling one is not supported"),
+            ));
         }
-        Ok(Execution {
-            outputs: s.outputs.iter().map(|v| v.bits).collect(),
-            output_masks: s.outputs.iter().map(|v| v.mask).collect(),
-            instructions: executed,
-            samples,
-            discarded,
-        })
+        let array = dimension == Some(Dimension::Texture2dArray);
+        let xyz = s.source(&a[1], if array { 7 } else { 3 }, ins.word)?;
+        let lod = match (ins.opcode, footprint) {
+            (73, _) => {
+                let (dx, dy) = (s.source(&a[4], 3, ins.word)?, s.source(&a[5], 3, ins.word)?);
+                Lod::Gradients([[float(dx[0]), float(dx[1])], [float(dy[0]), float(dy[1])]])
+            }
+            (72, _) => Lod::Level(float(s.source(&a[4], 1, ins.word)?[0])),
+            (74, Some(g)) => Lod::GradientsBias(g, float(s.source(&a[4], 1, ins.word)?[0])),
+            (74, None) => Lod::Bias(float(s.source(&a[4], 1, ins.word)?[0])),
+            (_, Some(g)) => Lod::Gradients(g),
+            _ => Lod::Implicit,
+        };
+        let sampled = sampler
+            .sample(Sample {
+                texture,
+                sampler: a[3].indices[0].base,
+                uv: [float(xyz[0]), float(xyz[1])],
+                layer: array.then(|| float(xyz[2])),
+                lod,
+            })
+            .map_err(|e| error(ins.word, e))?;
+        let Selection::Swizzle(swizzle) = a[2].selection else {
+            return Err(error(ins.word, "resource requires return swizzle"));
+        };
+        Ok(std::array::from_fn(|i| sampled[swizzle[i] as usize].to_bits()))
+    }
+
+    /// Evaluate a 2 x 2 quad of invocations together, as a GPU does: lanes 0 and 1 the top row (left, right), 2 and 3
+    /// the bottom. A screen derivative is a difference inside the quad: coarse (and `deriv_rtx`, `deriv_rty`) the
+    /// top-left lane's row or column for all four, fine each lane's own row or column. An implicit-LOD sample's
+    /// footprint is the quad's coarse gradients of its coordinates ([`Lod::Gradients`], [`Lod::GradientsBias`]). A
+    /// discarded lane goes on as a helper, its execution marked discarded. The lanes must reach each such
+    /// instruction together: where they diverge (one ends, or they stand at different instructions) the quad is
+    /// refused.
+    pub fn execute_quad<S: Sampler + ?Sized>(
+        &self,
+        inputs: [&[[u32; 4]]; 4],
+        buffers: &[(u32, &[[u32; 4]])],
+        sampler: &mut S,
+    ) -> Result<[Execution; 4]> {
+        for i in inputs {
+            self.check(i, buffers)?;
+        }
+        let mut lanes = inputs.map(|i| self.lane(i, &[], buffers));
+        let mut unobserved = |_: Trace<'_>| {};
+        loop {
+            let mut stops = Vec::with_capacity(4);
+            for lane in &mut lanes {
+                stops.push(self.run_lane(lane, sampler, &mut unobserved, true)?);
+            }
+            if stops.iter().all(|s| matches!(s, Stop::Done)) {
+                break;
+            }
+            let pc = lanes[0].pc;
+            let word = self.code.get(pc).map_or(0, |i| i.word);
+            if !stops.iter().all(|s| matches!(s, Stop::Quad)) || lanes.iter().any(|l| l.pc != pc) {
+                return Err(error(
+                    word,
+                    "a quad's lanes diverge at a derivative or an implicit-LOD sample",
+                ));
+            }
+            let ins = &self.code[pc];
+            let a = &ins.operands;
+            let mask = match a[0].selection {
+                Selection::Mask(m) => m,
+                _ => 0,
+            };
+            let mut results = [[0u32; 4]; 4];
+            if derivative(ins.opcode) {
+                let mut v = [[0u32; 4]; 4];
+                for (k, lane) in lanes.iter().enumerate() {
+                    v[k] = lane.s.source(&a[1], mask, word)?;
+                }
+                let x = !matches!(ins.opcode, 12 | 124 | 125);
+                let fine = matches!(ins.opcode, 123 | 125);
+                for (k, r) in results.iter_mut().enumerate() {
+                    let (from, to) = match (x, fine) {
+                        (true, false) => (0, 1),
+                        (false, false) => (0, 2),
+                        (true, true) if k < 2 => (0, 1),
+                        (true, true) => (2, 3),
+                        (false, true) if k % 2 == 0 => (0, 2),
+                        (false, true) => (1, 3),
+                    };
+                    *r = std::array::from_fn(|i| bits(float(v[to][i]) - float(v[from][i])));
+                }
+            } else {
+                let mut uv = [[0f32; 2]; 4];
+                for (k, lane) in lanes.iter().enumerate() {
+                    let c = lane.s.source(&a[1], 3, word)?;
+                    uv[k] = [float(c[0]), float(c[1])];
+                }
+                let footprint = [
+                    [uv[1][0] - uv[0][0], uv[1][1] - uv[0][1]],
+                    [uv[2][0] - uv[0][0], uv[2][1] - uv[0][1]],
+                ];
+                for (k, lane) in lanes.iter_mut().enumerate() {
+                    results[k] = self.sample_texture(&lane.s, ins, sampler, Some(footprint))?;
+                    lane.samples += 1;
+                }
+            }
+            for (lane, r) in lanes.iter_mut().zip(results) {
+                lane.s
+                    .write(&a[0], if ins.saturate { r.map(saturation) } else { r });
+                lane.pc += 1;
+                lane.executed += 1;
+            }
+        }
+        Ok(lanes.map(Lane::finish))
     }
 }

@@ -97,6 +97,16 @@ impl PixelShader for Shader {
             .execute_with_derivatives(inputs, derivatives, buffers, sampler)
             .map_err(shader_error)
     }
+    fn execute_quad(
+        &self,
+        inputs: [&[[u32; 4]]; 4],
+        buffers: &[(u32, &[[u32; 4]])],
+        sampler: &mut dyn Sampler,
+    ) -> std::result::Result<[Execution; 4], primase_shader::Error> {
+        self.program
+            .execute_quad(inputs, buffers, sampler)
+            .map_err(shader_error)
+    }
 }
 
 /// The checksum a container stores at bytes 4..20: MD5's block function over its bytes from 20 on, the last block

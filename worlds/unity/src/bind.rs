@@ -279,11 +279,11 @@ impl UnityImage {
 impl primase_shader::Image for UnityImage {
     fn sample(&self, uv: [f32; 2], lod: primase_shader::Lod) -> std::result::Result<[f32; 4], String> {
         let (w, h, _) = self.levels[0];
+        let texels = |d: [f32; 2]| (f64::from(d[0]) * f64::from(w)).hypot(f64::from(d[1]) * f64::from(h));
         let lod = match lod {
-            primase_shader::Lod::Gradients([dx, dy]) => {
-                let texels =
-                    |d: [f32; 2]| (f64::from(d[0]) * f64::from(w)).hypot(f64::from(d[1]) * f64::from(h));
-                texels(dx).max(texels(dy)).max(1e-12).log2().max(0.0)
+            primase_shader::Lod::Gradients([dx, dy]) => texels(dx).max(texels(dy)).max(1e-12).log2().max(0.0),
+            primase_shader::Lod::GradientsBias([dx, dy], b) => {
+                (texels(dx).max(texels(dy)).max(1e-12).log2() + f64::from(b)).max(0.0)
             }
             // a scalar evaluation has no footprint: the implicit level is the finest, plus a stated bias or level
             primase_shader::Lod::Implicit => 0.0,

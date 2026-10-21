@@ -24,8 +24,11 @@ pub enum Lod {
     Bias(f32),
     /// A level the program states (`sample_l`).
     Level(f32),
-    /// The UV's screen derivatives the program states (`sample_d`: d/dx, then d/dy).
+    /// The UV's screen derivatives: those the program states (`sample_d`), or a quad's own for an implicit-LOD
+    /// sample (d/dx, then d/dy).
     Gradients([[f32; 2]; 2]),
+    /// A quad's own UV derivatives plus the bias the program states (`sample_b` in a quad).
+    GradientsBias([[f32; 2]; 2], f32),
 }
 
 /// A sample request of a 2D texture (or a 2D array's layer).
@@ -245,5 +248,20 @@ pub trait PixelShader: std::fmt::Debug {
     ) -> std::result::Result<Execution, Error> {
         let _ = derivatives;
         self.execute(inputs, buffers, sampler)
+    }
+    /// Evaluate a 2 x 2 quad together (lanes 0, 1 the top row, 2, 3 the bottom), its derivatives and implicit
+    /// levels of detail the quad's own. A bytecode without quad evaluation refuses.
+    fn execute_quad(
+        &self,
+        inputs: [&[[u32; 4]]; 4],
+        buffers: &[(u32, &[[u32; 4]])],
+        sampler: &mut dyn Sampler,
+    ) -> std::result::Result<[Execution; 4], Error> {
+        let _ = (inputs, buffers, sampler);
+        Err(Error {
+            bytecode: "this bytecode",
+            at: 0,
+            detail: "no quad evaluation".to_owned(),
+        })
     }
 }
