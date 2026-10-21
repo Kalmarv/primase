@@ -20,7 +20,7 @@ use crate::morphs::Morphs;
 use crate::pbr::PbrMaterial;
 use crate::priority::Priority;
 use crate::provenance::Provenance;
-use crate::rig::{Attachment, MorphWeights, RigInstance, RigPose, SkinInstance, Sockets};
+use crate::rig::{Attachment, JointMap, MorphWeights, RigInstance, RigPose, SkinInstance, Sockets};
 use crate::skeleton::Skeleton;
 use crate::skin::Skin;
 use crate::state::{Condition, StateAssignment, StateAxis, StateOverride};
@@ -54,7 +54,7 @@ declared! {
     components: Collider, Heightfield, Name, Source, Transform, Instance, Shadows, Mesh, Texture, Light, Collision,
         TextureFile, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, Marker, Curve, MaterialUsage,
         PbrMaterial, Priority, Provenance, StateAxis, Condition, StateOverride, VertexColor, Skeleton, Skin, Morphs, RigInstance,
-        RigPose, SkinInstance, MorphWeights, Sockets, Attachment, Clip, ClipBinding, Asset;
+        RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, Clip, ClipBinding, Asset;
     resources: PartScope, PartitionPlan, Environment, StateAssignment, Surfaces,
 }
 

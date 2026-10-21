@@ -267,6 +267,50 @@ impl Component for Attachment {
     }
 }
 
+/// `core.joint_map`, on an entity of its own: which joint of skeleton `to` each listed joint of skeleton `from` is, as a
+/// source states it (a table, or a correspondence a pass proved). Each joint at most once on each side; joints of either
+/// skeleton not listed are unmapped (a pass using the map states what it does with them). Names are not evidence: a map
+/// a pass builds by name states what else it checked.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct JointMap {
+    /// The entity holding the source `core.skeleton`.
+    pub from: Entity,
+    /// The entity holding the target `core.skeleton`.
+    pub to: Entity,
+    pub pairs: Vec<(JointId, JointId)>,
+}
+
+impl Component for JointMap {
+    const NAME: &'static str = "core.joint_map";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.from);
+        out.push(self.to);
+    }
+    /// Both ends skeletons; every listed joint in its skeleton; no joint twice on either side.
+    fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
+        let from = w
+            .get::<Skeleton>(self.from)
+            .ok_or_else(|| format!("{:?} holds no core.skeleton", self.from))?;
+        let to = w
+            .get::<Skeleton>(self.to)
+            .ok_or_else(|| format!("{:?} holds no core.skeleton", self.to))?;
+        let (mut a, mut b) = (BTreeSet::new(), BTreeSet::new());
+        for &(x, y) in &self.pairs {
+            if from.index_of(x).is_none() || to.index_of(y).is_none() {
+                return Err(format!("pair {x:?} -> {y:?}: a joint not in its skeleton"));
+            }
+            if !a.insert(x) || !b.insert(y) {
+                return Err(format!("pair {x:?} -> {y:?}: a joint mapped twice"));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

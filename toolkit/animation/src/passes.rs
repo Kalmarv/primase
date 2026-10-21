@@ -554,6 +554,16 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         |o| Ok(Box::new(EvaluateClip::from_options(o)?)),
         &[("time", "0"), ("root", "ignore")],
     );
+    reg.register_requiring(
+        "retarget-clip",
+        crate::retarget::retarget_clip,
+        &[("reference", "rest"), ("translation", "none")],
+    );
+    reg.register_requiring(
+        "map-clip",
+        crate::map::map_clip,
+        &[("unmapped", "refuse"), ("rests", "target")],
+    );
     reg.register("normalize-skin-weights", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(NormalizeSkinWeights)),
