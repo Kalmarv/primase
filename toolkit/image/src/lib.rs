@@ -15,6 +15,7 @@ mod orm;
 pub use orm::{MissingLevels, OrmSize, PackOrm};
 mod qoi;
 mod rgba8;
+pub mod sampling;
 pub use qoi::{Qoi, QoiChannels, QoiColorspace, read_qoi};
 pub use rgba8::{LowerTexturesRgba8, SignedData, rgba8_exact};
 mod texture;

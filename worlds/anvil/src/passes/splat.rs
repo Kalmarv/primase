@@ -29,7 +29,8 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use primase_core::{ColorSpace, Entity, TexFormat, TexRole, Texture, World};
-use primase_image::{TextureMetadata, map_rgba8_levels, srgb_to_linear};
+use primase_image::sampling::{Address, Levels, Transfer};
+use primase_image::srgb_to_linear;
 
 use crate::components::{AnvilTerrain, AnvilTextureMap, TerrainTile};
 
@@ -63,67 +64,6 @@ pub struct Baked {
     pub tile_fallback: u64,
     /// Pixels outside every read node (left black).
     pub outside: u64,
-}
-
-/// An RGBA8 image's levels, row by row.
-struct Levels {
-    width: u32,
-    height: u32,
-    levels: Vec<Vec<u8>>,
-}
-
-impl Levels {
-    fn of(t: &Texture) -> Result<Levels, String> {
-        let meta = TextureMetadata {
-            color_space: ColorSpace::Linear,
-            role: TexRole::Other,
-            normal: None,
-        };
-        let d = map_rgba8_levels(t, 0..t.levels.len(), meta, |x| Ok(x.rgba)).map_err(|e| e.to_string())?;
-        Ok(Levels {
-            width: d.width,
-            height: d.height,
-            levels: d.levels,
-        })
-    }
-
-    fn size(&self, level: usize) -> (u32, u32) {
-        let s = u32::try_from(level).unwrap_or(31);
-        ((self.width >> s).max(1), (self.height >> s).max(1))
-    }
-
-    fn texel(&self, level: usize, x: i64, y: i64) -> [u8; 4] {
-        let (w, h) = self.size(level);
-        let (x, y) = (
-            x.rem_euclid(i64::from(w)) as usize,
-            y.rem_euclid(i64::from(h)) as usize,
-        );
-        let i = (y * w as usize + x) * 4;
-        let l = &self.levels[level];
-        [l[i], l[i + 1], l[i + 2], l[i + 3]]
-    }
-
-    /// Bilinear, repeating, at uv `(u, v)` (texel centres at half-integers), each channel by `decode`.
-    fn sample(&self, level: usize, u: f64, v: f64, decode: impl Fn(u8) -> f64) -> [f64; 4] {
-        let (w, h) = self.size(level);
-        let (x, y) = (u * f64::from(w) - 0.5, v * f64::from(h) - 0.5);
-        let (fx, fy) = (x.floor(), y.floor());
-        let (tx, ty) = (x - fx, y - fy);
-        let (ix, iy) = (fx as i64, fy as i64);
-        let mut out = [0.0; 4];
-        for (dx, dy, wt) in [
-            (0, 0, (1.0 - tx) * (1.0 - ty)),
-            (1, 0, tx * (1.0 - ty)),
-            (0, 1, (1.0 - tx) * ty),
-            (1, 1, tx * ty),
-        ] {
-            let t = self.texel(level, ix + dx, iy + dy);
-            for c in 0..4 {
-                out[c] += wt * decode(t[c]);
-            }
-        }
-        out
-    }
 }
 
 /// A material's detail, ready to sample.
@@ -164,7 +104,7 @@ fn detail(
                     let image = match images.get(&e) {
                         Some(i) => i.clone(),
                         None => {
-                            let i = Rc::new(Levels::of(tex)?);
+                            let i = Rc::new(Levels::of(tex).map_err(|e| e.to_string())?);
                             images.insert(e, i.clone());
                             i
                         }
@@ -244,7 +184,7 @@ pub fn bake(
     let width = ((x1 - x0) / s.pixel).ceil().max(1.0) as u32;
     let height = ((y1 - y0) / s.pixel).ceil().max(1.0) as u32;
     let noise = match t.noise.and_then(|e| w.get::<Texture>(e)) {
-        Some(n) => Levels::of(n)?,
+        Some(n) => Levels::of(n).map_err(|e| e.to_string())?,
         None => return Err("the splat bake needs the splatting noise (TerrainRead's noise)".into()),
     };
     // each material's detail, decoded when a pixel first needs it (a bank holds a hundred 2048-texel maps)
@@ -277,12 +217,10 @@ pub fn bake(
         let (n, i, j) = locate(gx, gy)?;
         n.tile.material.get(i * 132 + j).copied()
     };
-    let decode_noise = |x: u8| {
-        if s.noise_srgb {
-            srgb_to_linear(unorm(x))
-        } else {
-            unorm(x)
-        }
+    let noise_transfer = if s.noise_srgb {
+        Transfer::SrgbColour
+    } else {
+        Transfer::Stored
     };
     let mut out = vec![0u8; width as usize * height as usize * 4];
     let mut baked = Baked::default();
@@ -298,7 +236,7 @@ pub fn bake(
                 continue;
             }
             let (lx, ly) = (gx - nx * 128.0, gy - ny * 128.0);
-            let n = noise.sample(0, lx / 128.0, ly / 128.0, decode_noise);
+            let n = noise.bilinear(0, [lx / 128.0, ly / 128.0], [Address::Wrap; 2], noise_transfer);
             let (qx, qy) = (gx + (2.0 * n[0] - 1.0) * 0.5, gy + (2.0 * n[1] - 1.0) * 0.5);
             let (cx, cy) = (qx.floor() as i64, qy.floor() as i64);
             let (fx, fy) = (qx - qx.floor() - 0.5, qy - qy.floor() - 0.5);
@@ -318,14 +256,14 @@ pub fn bake(
                         let level0 = f64::from(d.image.width) * d.g * s.pixel;
                         let top = d.image.levels.len().saturating_sub(1);
                         let mip = (level0.max(1.0).log2().round() as usize).min(top);
-                        let decode = |c: u8| {
-                            if d.srgb {
-                                srgb_to_linear(unorm(c))
-                            } else {
-                                unorm(c)
-                            }
+                        let transfer = if d.srgb {
+                            Transfer::SrgbColour
+                        } else {
+                            Transfer::Stored
                         };
-                        let c = d.image.sample(mip, x * d.g, y * d.g, decode);
+                        let c = d
+                            .image
+                            .bilinear(mip, [x * d.g, y * d.g], [Address::Wrap; 2], transfer);
                         [c[0], c[1], c[2]]
                     }
                     None => {
@@ -337,7 +275,11 @@ pub fn bake(
                         [0, 1, 2].map(|k| {
                             across(gx, gy, |tx, ty| {
                                 let (n, i, j) = locate(tx, ty)?;
-                                Some(decode(n.colour.as_ref()?.texel(0, j as i64, i as i64)[k]))
+                                Some(decode(
+                                    n.colour
+                                        .as_ref()?
+                                        .texel(0, j as i64, i as i64, [Address::Wrap; 2])[k],
+                                ))
                             })
                         })
                     }
@@ -352,7 +294,11 @@ pub fn bake(
             if s.occlusion {
                 let b = across(gx, gy, |tx, ty| {
                     let (n, i, j) = locate(tx, ty)?;
-                    Some(unorm(n.block_8.as_ref()?.texel(0, j as i64, i as i64)[0]))
+                    Some(unorm(
+                        n.block_8
+                            .as_ref()?
+                            .texel(0, j as i64, i as i64, [Address::Wrap; 2])[0],
+                    ))
                 });
                 c = c.map(|v| v * (0.5 + b));
             }
