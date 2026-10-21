@@ -5,8 +5,11 @@
 
 pub mod curve;
 pub mod deform;
+pub mod passes;
 pub mod pose;
 pub mod quat;
+
+pub use passes::{EvaluateClip, PoseSkin, RootChoice, register};
 
 /// What evaluation could not do, with why.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
