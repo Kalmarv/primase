@@ -20,7 +20,8 @@ pub mod components;
 pub mod passes;
 pub mod read;
 
-pub use read::{LevelReport, read_level};
+pub use passes::{Spawn, Start, spawns};
+pub use read::{LevelEntry, LevelReport, levels, read_level};
 
 /// Registers STUNTBOOST's passes by name; every option of each is the program's, without defaults.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {

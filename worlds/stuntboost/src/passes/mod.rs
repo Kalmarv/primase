@@ -11,4 +11,4 @@ mod tests;
 pub use collision::{KillSurface, LowerStuntboostCollision};
 pub use hidden::OmitStuntboostHidden;
 pub use materials::{Baked, LowerStuntboostMaterials, Transparent};
-pub use spawns::{LowerStuntboostSpawns, OtherSpawns};
+pub use spawns::{LowerStuntboostSpawns, OtherSpawns, Spawn, Start, spawns};

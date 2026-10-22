@@ -3,4 +3,4 @@
 pub mod derived;
 pub mod level;
 
-pub use level::{LevelReport, read_level};
+pub use level::{LevelEntry, LevelReport, levels, read_level};

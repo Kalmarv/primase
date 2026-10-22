@@ -1,9 +1,15 @@
-//! `lower-stuntboost-spawns{start=NAME,others=travel|leave-out}`: the level's spawn nodes (class `Spawn`,
-//! `=Spawn(<name>[,<n>])`) become `core.marker`s on their own entities, placed by their transforms: the spawn named
-//! `start` (its first argument; `start=` for `=Spawn()` or `=Spawn(,n)`) of kind `spawn`, the others of kind `travel`
-//! or left out (counted). A level holds several spawns when gameplay levels share its geometry, one per level; which
-//! one a map starts at is the program's choice, stated (no default). A `start` no spawn names is an error. The node
-//! keeps its `stuntboost.node` (its arguments, as stored).
+//! `lower-stuntboost-spawns{start=NAME|first|none,others=travel|leave-out}`: the level's spawn nodes (class `Spawn`,
+//! `=Spawn(<name>[,<n>])`) become `core.marker`s on their own entities, placed by their transforms: the start spawn of
+//! kind `spawn`, the others of kind `travel` or left out (counted). A level holds several spawns when gameplay levels
+//! share its geometry, one per level; which one a map starts at is the program's choice, stated (no default):
+//!
+//! - `start=NAME`: the spawn named so (its first argument; `start=` for `=Spawn()` or `=Spawn(,n)`); a `start` no
+//!   spawn names is an error. [`spawns`] lists the names.
+//! - `start=first`: the first spawn in stored order (the order of [`spawns`]); a level without a spawn is an error.
+//!   `first` is this word, not a spawn named `first`; `start=name:first` is that spawn.
+//! - `start=none`: no spawn starts; every spawn is one of the others.
+//!
+//! The node keeps its `stuntboost.node` (its arguments, as stored).
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Component, Entity, Marker, World};
@@ -19,26 +25,65 @@ pub enum OtherSpawns {
     LeaveOut,
 }
 
+/// Which spawn starts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Start {
+    /// The spawn with this name (its first argument, empty when none).
+    Named(String),
+    /// The first spawn in stored order.
+    First,
+    /// None: every spawn is one of the others.
+    None,
+}
+
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LowerStuntboostSpawns {
-    pub start: String,
+    pub start: Start,
     pub others: OtherSpawns,
 }
 
+/// A spawn node of the level.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Spawn {
+    pub entity: Entity,
+    /// The spawn's name: its first argument, empty when none.
+    pub name: String,
+}
+
+/// The level's spawn nodes in stored order (the order of the nodes in their parts, parts in order), each with its
+/// name. Read from the nodes' parsed names, so it holds what [`crate::read_level`] read, whichever lowering ran.
+pub fn spawns(w: &World) -> Vec<Spawn> {
+    w.iter::<StuntboostNode>()
+        .filter_map(|(entity, n)| {
+            Some(Spawn {
+                entity,
+                name: spawn_name(n)?.to_owned(),
+            })
+        })
+        .collect()
+}
+
 impl LowerStuntboostSpawns {
-    /// From its options, both required: `start` (a spawn's name, may be empty), `others` (`travel` or `leave-out`).
+    /// From its options, both required: `start` (a spawn's name, which may be empty, `first` or `none`; see the module
+    /// documentation), `others` (`travel` or `leave-out`).
     pub fn from_options(o: &Options) -> Result<LowerStuntboostSpawns, String> {
         if let Some(k) = o.keys().find(|k| !["start", "others"].contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
         }
         let get = |k: &str| {
             o.get(k).ok_or_else(|| {
-                format!("{k} is required: start=<spawn name, may be empty>, others=travel|leave-out")
+                format!(
+                    "{k} is required: start=<spawn name, may be empty>|first|none, others=travel|leave-out"
+                )
             })
         };
         Ok(LowerStuntboostSpawns {
-            start: get("start")?.clone(),
+            start: match get("start")?.as_str() {
+                "first" => Start::First,
+                "none" => Start::None,
+                v => Start::Named(v.strip_prefix("name:").unwrap_or(v).to_owned()),
+            },
             others: match get("others")?.as_str() {
                 "travel" => OtherSpawns::Travel,
                 "leave-out" => OtherSpawns::LeaveOut,
@@ -66,7 +111,18 @@ impl Pass for LowerStuntboostSpawns {
     }
     fn options(&self) -> Options {
         Options::from([
-            ("start".to_owned(), self.start.clone()),
+            (
+                "start".to_owned(),
+                match &self.start {
+                    Start::First => "first".to_owned(),
+                    Start::None => "none".to_owned(),
+                    // the words are the options' own; a spawn named so is written with its prefix
+                    Start::Named(n) if matches!(n.as_str(), "first" | "none") || n.starts_with("name:") => {
+                        format!("name:{n}")
+                    }
+                    Start::Named(n) => n.clone(),
+                },
+            ),
             (
                 "others".to_owned(),
                 match self.others {
@@ -84,19 +140,22 @@ impl Pass for LowerStuntboostSpawns {
         self.others == OtherSpawns::LeaveOut
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let spawns: Vec<(Entity, String)> = w
-            .iter::<StuntboostNode>()
-            .filter_map(|(e, n)| Some((e, spawn_name(n)?.to_owned())))
-            .collect();
-        if !spawns.iter().any(|(_, name)| *name == self.start) {
-            let names: Vec<&str> = spawns.iter().map(|(_, n)| n.as_str()).collect();
-            return Err(format!("no spawn named {:?}; the spawns: {names:?}", self.start));
-        }
-        let mut started = false;
-        for (e, name) in spawns {
+        let spawns = spawns(w);
+        let start = match &self.start {
+            Start::Named(name) => match spawns.iter().position(|spawn| spawn.name == *name) {
+                Some(i) => Some(i),
+                None => {
+                    let names: Vec<&str> = spawns.iter().map(|spawn| spawn.name.as_str()).collect();
+                    return Err(format!("no spawn named {name:?}; the spawns: {names:?}"));
+                }
+            },
+            Start::First if spawns.is_empty() => return Err("start=first: the level has no spawn".to_owned()),
+            Start::First => Some(0),
+            Start::None => None,
+        };
+        for (i, Spawn { entity: e, .. }) in spawns.into_iter().enumerate() {
             // the first spawn of the start's name starts; a second of the same name is another
-            let kind = if name == self.start && !started {
-                started = true;
+            let kind = if Some(i) == start {
                 "spawn"
             } else {
                 match self.others {

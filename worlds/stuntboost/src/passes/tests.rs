@@ -202,17 +202,66 @@ fn the_stated_spawn_starts() {
 
     let mut l = level();
     let pass = LowerStuntboostSpawns {
-        start: String::new(),
+        start: Start::Named(String::new()),
         others: OtherSpawns::LeaveOut,
     };
     pass.run(&mut l.w, &mut PassLog::default()).unwrap();
     assert_eq!(kind(&l.w, l.other).as_deref(), Some("spawn"));
     assert!(!l.w.is_alive(l.start));
     let missing = LowerStuntboostSpawns {
-        start: "nowhere".into(),
+        start: Start::Named("nowhere".into()),
         others: OtherSpawns::Travel,
     };
     assert!(missing.run(&mut level().w, &mut PassLog::default()).is_err());
+}
+
+/// `start=first` starts the first spawn in stored order, `start=none` starts none, `name:` names a spawn called
+/// `first`; the spawn listing is that order; a level without a spawn has no first.
+#[test]
+fn the_start_is_the_first_spawn_or_none() {
+    let kind = |w: &World, e| w.get::<Marker>(e).map(|m| m.kind.clone());
+    let mut l = level();
+    let listed = spawns(&l.w);
+    assert_eq!(
+        listed
+            .iter()
+            .map(|s| (s.entity, s.name.as_str()))
+            .collect::<Vec<_>>(),
+        [(l.start, "start"), (l.other, "")]
+    );
+    let first = opts(&[("start", "first"), ("others", "travel")]);
+    let pass = LowerStuntboostSpawns::from_options(&first).unwrap();
+    assert_eq!(pass.start, Start::First);
+    assert_eq!(pass.options(), first);
+    pass.run(&mut l.w, &mut PassLog::default()).unwrap();
+    assert_eq!(kind(&l.w, l.start).as_deref(), Some("spawn"));
+    assert_eq!(kind(&l.w, l.other).as_deref(), Some("travel"));
+
+    let mut l = level();
+    let none = opts(&[("start", "none"), ("others", "leave-out")]);
+    let pass = LowerStuntboostSpawns::from_options(&none).unwrap();
+    assert_eq!(pass.start, Start::None);
+    assert_eq!(pass.options(), none);
+    let mut log = PassLog::default();
+    pass.run(&mut l.w, &mut log).unwrap();
+    assert!(!l.w.is_alive(l.start) && !l.w.is_alive(l.other));
+    assert_eq!(log.counts.get("spawns other than the start left out"), Some(&2));
+
+    // the words are reserved; a spawn of that name is written with its prefix
+    let named =
+        LowerStuntboostSpawns::from_options(&opts(&[("start", "name:first"), ("others", "travel")])).unwrap();
+    assert_eq!(named.start, Start::Named("first".into()));
+    assert_eq!(named.options()["start"], "name:first");
+    assert!(named.run(&mut level().w, &mut PassLog::default()).is_err());
+
+    let mut no_spawns = World::new();
+    let err = LowerStuntboostSpawns {
+        start: Start::First,
+        others: OtherSpawns::Travel,
+    }
+    .run(&mut no_spawns, &mut PassLog::default())
+    .unwrap_err();
+    assert!(err.contains("no spawn"), "{err}");
 }
 
 /// The bake atlas lowers as base colour or emission; a transparent node's material blends at its alpha.
@@ -320,7 +369,7 @@ fn the_lowerings_declare_their_effects_to_the_pass_manager() {
                 unassigned: "C_Default".into(),
             }),
             Box::new(LowerStuntboostSpawns {
-                start: "start".into(),
+                start: Start::Named("start".into()),
                 others: OtherSpawns::LeaveOut,
             }),
             Box::new(LowerStuntboostMaterials {
@@ -357,7 +406,7 @@ fn hidden_and_gameplay_nodes_are_left_out_as_stated() {
     .run(&mut l.w, &mut PassLog::default())
     .unwrap();
     LowerStuntboostSpawns {
-        start: "start".into(),
+        start: Start::Named("start".into()),
         others: OtherSpawns::Travel,
     }
     .run(&mut l.w, &mut PassLog::default())

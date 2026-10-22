@@ -76,6 +76,63 @@ fn content(path: &Path) -> Result<Vec<u8>> {
     })
 }
 
+/// The folder the levels' files are in.
+fn export_dir(install: &Path) -> PathBuf {
+    install.join("Content").join("Models").join("Export")
+}
+
+/// The number of parts the level's sidecar (`Level_<Name>_.xnb`, a JSON object) states.
+fn model_count(export: &Path, level: &str) -> Result<u32> {
+    let sidecar = export.join(format!("Level_{level}_.xnb"));
+    let file = sidecar.display().to_string();
+    let side: Value = serde_json::from_str(&string_of(&sidecar, None)?).map_err(|e| format(&file, e))?;
+    let count = side
+        .get("modelCount")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format(&file, "no modelCount"))?;
+    u32::try_from(count).map_err(|_| format(&file, "modelCount"))
+}
+
+/// A level the install ships, as its sidecar states it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LevelEntry {
+    /// The name as the game stores it: the `<Name>` of `Export/Level_<Name>_.xnb`, which [`read_level`] takes.
+    pub name: String,
+    /// The number of parts (`modelCount`): `Level_<Name>_0.xnb` to `Level_<Name>_<modelCount - 1>.xnb`.
+    pub model_count: u32,
+}
+
+/// Every level the install ships, by name (byte order), each as its sidecar states it. A level is a
+/// `Level_<Name>_.xnb` sidecar in `Content/Models/Export`; its parts' files are not opened.
+pub fn levels(install: &Path) -> Result<Vec<LevelEntry>> {
+    let export = export_dir(install);
+    let io = |source| Error::Io {
+        path: export.clone(),
+        source,
+    };
+    let mut names = std::collections::BTreeSet::new();
+    for entry in std::fs::read_dir(&export).map_err(io)? {
+        let entry = entry.map_err(io)?;
+        let file = entry.file_name();
+        let name = file
+            .to_str()
+            .and_then(|f| f.strip_prefix("Level_")?.strip_suffix("_.xnb"))
+            .filter(|n| !n.is_empty());
+        if let Some(name) = name {
+            names.insert(name.to_owned());
+        }
+    }
+    names
+        .into_iter()
+        .map(|name| {
+            Ok(LevelEntry {
+                model_count: model_count(&export, &name)?,
+                name,
+            })
+        })
+        .collect()
+}
+
 /// The text of a file whose one object a string-shaped reader stores (7-bit length and UTF-8): XNA's
 /// `StringReader` (`reader` `None`) or the game's reader of that type name.
 fn string_of(path: &Path, reader: Option<&str>) -> Result<String> {
@@ -203,18 +260,12 @@ fn transform(m: &[f64; 16]) -> Transform {
 pub fn read_level(install: &Path, level: &str, metres_per_unit: f64, w: &mut World) -> Result<LevelReport> {
     let frame = SourceFrame::try_new([Axis::PosX, Axis::PosY, Axis::PosZ], metres_per_unit)
         .map_err(|e| Error::Format(format!("metres per unit: {e}")))?;
-    let export = install.join("Content").join("Models").join("Export");
+    let export = export_dir(install);
     let mut report = LevelReport::default();
-    let sidecar = export.join(format!("Level_{level}_.xnb"));
-    let side: Value = serde_json::from_str(&string_of(&sidecar, None)?)
-        .map_err(|e| format(&sidecar.display().to_string(), e))?;
-    let count = side
-        .get("modelCount")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format(&sidecar.display().to_string(), "no modelCount"))?;
+    let count = model_count(&export, level)?;
     // decoded images by path, shared by every part
     let mut images: BTreeMap<PathBuf, Option<Entity>> = BTreeMap::new();
-    for index in 0..u32::try_from(count).map_err(|_| format(&sidecar.display().to_string(), "modelCount"))? {
+    for index in 0..count {
         let file = format!("Level_{level}_{index}.xnb");
         let path = export.join(&file);
         let text = string_of(&path, Some("BytingPipeline.GLTFReader"))?;
@@ -702,6 +753,47 @@ mod tests {
         }
         out.extend_from_slice(s.as_bytes());
         out
+    }
+
+    /// The listing holds the levels' sidecars only, by name in byte order, each with its `modelCount`: a part's
+    /// file, a buffer, a derived file and other content are not levels.
+    #[test]
+    fn the_listing_is_the_sidecars_with_their_counts() {
+        let dir = std::env::temp_dir().join(format!("primase-stuntboost-levels-{}", std::process::id()));
+        let export = dir.join("Content").join("Models").join("Export");
+        std::fs::create_dir_all(&export).unwrap();
+        let string_reader = "Microsoft.Xna.Framework.Content.StringReader, MonoGame.Framework";
+        for (name, count) in [("B_x", 1), ("A", 3)] {
+            std::fs::write(
+                export.join(format!("Level_{name}_.xnb")),
+                xnb(string_reader, &string(&format!(r#"{{"modelCount":{count}}}"#))),
+            )
+            .unwrap();
+        }
+        for other in [
+            "Level_A_0.xnb",
+            "Level_A_0.bin.xnb",
+            "Level_A_0Collision.xnb",
+            "Level__.xnb",
+            "Board.xnb",
+        ] {
+            std::fs::write(export.join(other), b"not a sidecar").unwrap();
+        }
+        assert_eq!(
+            levels(&dir).unwrap(),
+            [
+                LevelEntry {
+                    name: "A".into(),
+                    model_count: 3
+                },
+                LevelEntry {
+                    name: "B_x".into(),
+                    model_count: 1
+                },
+            ]
+        );
+        assert!(levels(&dir.join("missing")).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A level of one part as the game ships it: the sidecar, the glTF (a floor mesh placed under a parent moved 2
