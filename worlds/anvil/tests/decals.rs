@@ -9,7 +9,8 @@ use primase_anvil::components::{
     AnvilDecalModel, AnvilDeferredDecals, AnvilTerrain, AnvilTextureMap, DeferredDecal, TerrainTile,
 };
 use primase_anvil::passes::{
-    CellPoint, FamilyRule, GroundColour, LowerAnvilDecals, LowerAnvilTerrain, Pieces, TerrainDecals,
+    CellPoint, FamilyRule, GroundColour, GroundNormals, LowerAnvilDecals, LowerAnvilTerrain, Pieces,
+    TerrainDecals,
 };
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::ddecal::{DDECAL_MODEL, StoredDecalModel};
@@ -418,6 +419,7 @@ fn decals_lie_on_the_ground_lower_anvil_terrain_draws() {
         surface: String::new(),
         ground: GroundColour::Tile,
         pieces: Pieces::Whole,
+        normals: GroundNormals::None,
     }
     .run(&mut w, &mut log)
     .expect("terrain");

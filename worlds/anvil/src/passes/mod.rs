@@ -990,13 +990,14 @@ impl<'t> GroundGrid<'t> {
 /// prototype of its own, its collision (where drawn) over its own squares, its vertices local to its origin
 /// ([`local_origin`]: its box's least corner rounded down to 64 m, which keeps them exact), placed once there.
 ///
-/// Every `ground=` and `pieces=` draws **smooth normals**: each vertex's `Normal` is the unit normal of the height
+/// With `normals=central-differences` (required: `central-differences` or `none`; how the game shades its terrain is not
+/// read, so this is the program's choice, an approximation counted) every `ground=` and `pieces=` draws **smooth normals**: each vertex's `Normal` is the unit normal of the height
 /// field `z = h(x, y)` at its sample, `(-dh/dx, -dh/dy, 1)` normalised in the terrain's source frame and carried to
 /// core's by the frame's direction map (so it is up whatever the frame, and agrees with the triangles' winding), its
 /// slopes central differences of the grid's own neighbouring samples along each axis (`step` widens the baseline),
 /// one-sided at the grid's outer edge. The normals are computed once over the whole grid and each piece takes its
 /// vertices' own, so the vertices neighbouring pieces share (they share their positions exactly) carry the same bits and
-/// there is no lighting seam. Counted: `ground normals`. Without them a writer makes flat per-triangle normals,
+/// there is no lighting seam. With `normals=none` the ground has none, and a writer makes flat per-triangle normals,
 /// which shade the 0.5 m grid as facets.
 ///
 /// With `collision` other than none the ground is also its own collision, on the same prototype: each square's two
@@ -1019,6 +1020,19 @@ pub struct LowerAnvilTerrain {
     /// The colour drawn: the far colour tiles, or the near colour baked.
     pub ground: GroundColour,
     pub pieces: Pieces,
+    /// The ground's normals (`normals=`): the program's stated choice, the game's own not read.
+    pub normals: GroundNormals,
+}
+
+/// The normals `lower-anvil-terrain` gives the ground (`normals=`, required): how the game shades its terrain is not
+/// read (its terrain programs may take a stored normal or another kernel), so the program states it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroundNormals {
+    /// The unit normal of the height field at each sample, its slopes central differences of the grid's neighbours
+    /// ([`GroundGrid::normals`]): an approximation, counted.
+    CentralDifferences,
+    /// None: a writer makes its own (flat per triangle, faceting the grid).
+    None,
 }
 
 /// How `lower-anvil-terrain` divides the ground it draws.
@@ -1065,7 +1079,8 @@ impl LowerAnvilTerrain {
             "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES (neither stored as such), sample=corner|centre, ",
             "colour=srgb|linear, collision=none|collision-material|one, surface=NAME unless collision=none, ",
             "ground=tile|splat|layers (with splat-k=K, splat-px=UNITS (splat), splat-uv=FACTOR|over-tile-size, splat-noise=raw|srgb, ",
-            "splat-occlusion=block-8|none (splat, layers)), pieces=whole|per-node (per-node with ground=splat or layers)"
+            "splat-occlusion=block-8|none (splat, layers)), pieces=whole|per-node (per-node with ground=splat or layers), ",
+            "normals=central-differences|none"
         );
         let splat_keys = [
             "splat-k",
@@ -1074,7 +1089,15 @@ impl LowerAnvilTerrain {
             "splat-noise",
             "splat-occlusion",
         ];
-        let mut known = vec!["range", "colour", "collision", "surface", "ground", "pieces"];
+        let mut known = vec![
+            "range",
+            "colour",
+            "collision",
+            "surface",
+            "ground",
+            "pieces",
+            "normals",
+        ];
         known.extend(splat_keys);
         let g = ground_options(o, &known, usage)?;
         let get = |k: &str| {
@@ -1177,6 +1200,12 @@ impl LowerAnvilTerrain {
         if !(range.is_finite() && range > 0.0) {
             return Err(format!("range {range}: a positive number"));
         }
+        let normals = match o.get("normals").map(String::as_str) {
+            Some("central-differences") => GroundNormals::CentralDifferences,
+            Some("none") => GroundNormals::None,
+            Some(v) => return Err(format!("normals={v}: central-differences or none")),
+            None => return Err(format!("normals is required: {usage}")),
+        };
         Ok(LowerAnvilTerrain {
             rect: g.rect,
             step: g.step,
@@ -1188,6 +1217,7 @@ impl LowerAnvilTerrain {
             surface,
             ground,
             pieces,
+            normals,
         })
     }
 }
@@ -1223,14 +1253,24 @@ impl Pass for LowerAnvilTerrain {
         ])
         .into_iter()
         .chain((!self.surface.is_empty()).then(|| ("surface".to_owned(), self.surface.clone())))
-        .chain([(
-            "pieces".to_owned(),
-            match self.pieces {
-                Pieces::Whole => "whole",
-                Pieces::PerNode => "per-node",
-            }
-            .to_owned(),
-        )])
+        .chain([
+            (
+                "pieces".to_owned(),
+                match self.pieces {
+                    Pieces::Whole => "whole",
+                    Pieces::PerNode => "per-node",
+                }
+                .to_owned(),
+            ),
+            (
+                "normals".to_owned(),
+                match self.normals {
+                    GroundNormals::CentralDifferences => "central-differences",
+                    GroundNormals::None => "none",
+                }
+                .to_owned(),
+            ),
+        ])
         .chain(match self.ground {
             GroundColour::Tile => vec![("ground".to_owned(), "tile".to_owned())],
             GroundColour::Splat(s) => vec![
@@ -1298,7 +1338,7 @@ impl Pass for LowerAnvilTerrain {
     }
     fn approximates(&self) -> &'static str {
         "ground heights from a stated range and offset, drawn with its far colour tiles or its near colour baked by \
-         stated choices"
+         stated choices; its normals, where stated, central differences of the height grid"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let terrains: Vec<Entity> = w.iter::<AnvilTerrain>().map(|(e, _)| e).collect();
@@ -1319,12 +1359,19 @@ impl Pass for LowerAnvilTerrain {
                     positions.push(t.frame.point(grid.point(gx, gy)?));
                 }
             }
-            // every ground=… draws smooth normals: one per sample of the whole grid, shared by every piece
-            let normals = grid.normals(&t.frame)?;
-            log.count(
-                "ground normals (central differences of the height grid)",
-                normals.len() as u64,
-            );
+            // with normals=central-differences, smooth normals: one per sample of the whole grid, shared by every piece
+            let normals = match self.normals {
+                GroundNormals::CentralDifferences => {
+                    let n = grid.normals(&t.frame)?;
+                    log.approximate(
+                        "ground normals as central differences of the height grid (normals=central-differences; the \
+                         game's own not read)",
+                        n.len() as u64,
+                    );
+                    Some(n)
+                }
+                GroundNormals::None => None,
+            };
             let width = u32::try_from(columns.len()).map_err(|_| "too many columns".to_owned())?;
             let height = u32::try_from(rows.len()).map_err(|_| "too many rows".to_owned())?;
             let flip = t.frame.flips_winding();
@@ -1611,13 +1658,15 @@ impl Pass for LowerAnvilTerrain {
                     (None, None) => return Err("a ground piece with no colour".into()),
                 };
                 streams.insert(Semantic::Position, Stream::F32x3(local));
-                streams.insert(
-                    Semantic::Normal,
-                    Stream::F32x3(match &piece.vertices {
-                        None => normals.clone(),
-                        Some(v) => v.iter().map(|&i| normals[i as usize]).collect(),
-                    }),
-                );
+                if let Some(normals) = &normals {
+                    streams.insert(
+                        Semantic::Normal,
+                        Stream::F32x3(match &piece.vertices {
+                            None => normals.clone(),
+                            Some(v) => v.iter().map(|&i| normals[i as usize]).collect(),
+                        }),
+                    );
+                }
                 streams.insert(Semantic::TexCoord(0), Stream::F32x2(piece.uvs));
                 w.insert(
                     prototype,
@@ -2248,6 +2297,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("ground", "tile"),
             ("collision", "none"),
             ("pieces", "whole"),
+            ("normals", "central-differences"),
         ],
     );
     reg.register_requiring(

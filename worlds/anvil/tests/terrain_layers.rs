@@ -4,7 +4,9 @@
 //! blend (terrain.md §3.5) worked here: each vertex's layer weights, the far colour's the weight no detail layer
 //! holds; at most 4 layers a piece (the striped node cut); the pieces' triangles the whole ground's to the bit.
 use primase_anvil::components::{AnvilTerrain, AnvilTextureMap, TerrainDetail, TerrainTile};
-use primase_anvil::passes::{CellPoint, GroundColour, LowerAnvilTerrain, Pieces, SplatUv, TerrainLayers};
+use primase_anvil::passes::{
+    CellPoint, GroundColour, GroundNormals, LowerAnvilTerrain, Pieces, SplatUv, TerrainLayers,
+};
 use primase_core::frame::SourceFrame;
 use primase_core::layered::LayeredMaterial;
 use primase_core::pass::{Pass, PassLog};
@@ -203,6 +205,7 @@ fn lowered_with(pieces: Pieces, occlusion: bool, undetailed: Option<u8>) -> Worl
             occlusion,
         }),
         pieces,
+        normals: GroundNormals::None,
     };
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log).expect("lower");

@@ -3,7 +3,9 @@
 //! seam vertices, a ridge's crest is a smooth vertical normal rather than a face's, and the normal is up in core's
 //! frame (agreeing with the winding) whatever the terrain's frame, for `pieces=whole` and `pieces=per-node` alike.
 use primase_anvil::components::{AnvilTerrain, TerrainTile};
-use primase_anvil::passes::{CellPoint, GroundColour, LowerAnvilTerrain, Pieces, Splat, SplatUv, SurfaceBy};
+use primase_anvil::passes::{
+    CellPoint, GroundColour, GroundNormals, LowerAnvilTerrain, Pieces, Splat, SplatUv, SurfaceBy,
+};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{
@@ -86,15 +88,16 @@ fn lowered(frame: SourceFrame, height: impl Fn(i64, i64) -> i64, pieces: Pieces,
             occlusion: false,
         }),
         pieces,
+        normals: GroundNormals::CentralDifferences,
     };
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log).expect("lower");
     assert!(
-        log.counts
+        log.approximations
             .iter()
             .any(|(k, v)| k.starts_with("ground normals") && *v > 0),
-        "the pass counts its normals: {:?}",
-        log.counts
+        "the pass counts its normals as an approximation: {:?}",
+        log.approximations
     );
     w
 }

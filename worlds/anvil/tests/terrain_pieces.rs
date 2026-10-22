@@ -4,7 +4,9 @@
 //! with its vertices local to an origin on the 64 m grid, each texture 256 pixels, their triangles (drawn and
 //! collided) the whole's to the bit once placed, their pixels the whole's at the same places.
 use primase_anvil::components::{AnvilTerrain, TerrainTile};
-use primase_anvil::passes::{CellPoint, GroundColour, LowerAnvilTerrain, Pieces, Splat, SplatUv, SurfaceBy};
+use primase_anvil::passes::{
+    CellPoint, GroundColour, GroundNormals, LowerAnvilTerrain, Pieces, Splat, SplatUv, SurfaceBy,
+};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
@@ -85,6 +87,7 @@ fn lowered(pieces: Pieces) -> World {
             occlusion: false,
         }),
         pieces,
+        normals: GroundNormals::None,
     };
     pass.run(&mut w, &mut PassLog::default()).expect("lower");
     w
