@@ -41,7 +41,7 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World};
 use primase_image::linear_to_srgb;
-use primase_shader::{Input, Lane, PixelShader};
+use primase_shader::{Input, Lane, PixelShader, PreparedProgram, PreparedProgramRef};
 use primase_unity::bind::{UnityImage, bind, constants, directional_light};
 use primase_unity::components::{UnityMaterial, UnityPrograms, UnityTexEnv, UnityTexture};
 
@@ -136,10 +136,8 @@ struct Block {
 /// Bake `shader` with `constants` (material set, `_Color` white) and `textures` over `cells` x `cells` at `texels`
 /// each, the map coordinate (TEXCOORD0's both pairs) the grid's: the five lit evaluations in parallel, then
 /// [`recover`].
-fn bake(
-    shader: &(dyn PixelShader + Sync),
-    constants: &primase_shader::Constants,
-    textures: &BTreeMap<u32, primase_shader::Texture>,
+fn bake<S: PixelShader + Sync>(
+    prepared: &PreparedProgram<S>,
     cells: u32,
     texels: u32,
 ) -> std::result::Result<Block, String> {
@@ -162,18 +160,11 @@ fn bake(
             .map(|&towards| {
                 let inputs = &inputs;
                 s.spawn(move || {
-                    let mut c = constants.clone();
+                    let mut c = prepared.constants().clone();
                     directional_light(&mut c, towards, [1.0; 3]).map_err(|e| e.to_string())?;
-                    let e = primase_shader::evaluate_periodic(
-                        shader,
-                        &c,
-                        textures,
-                        inputs,
-                        cells,
-                        texels,
-                        &[(0, 0b0111)],
-                    )
-                    .map_err(|e| e.to_string())?;
+                    let e = PreparedProgramRef::new(prepared.shader(), &c, prepared.textures())
+                        .evaluate_periodic(inputs, cells, texels, &[(0, 0b0111)])
+                        .map_err(|e| e.to_string())?;
                     e.targets
                         .into_iter()
                         .next()
@@ -455,22 +446,17 @@ impl LowerSkatebirdVoronoi {
             n.clamp(1, self.max_texels)
         };
         let shared = colour.is_some() && colour == bump && tiling(m, "_MainTex") == tiling(m, "_BumpMap");
+        let prepared = bound.prepare(mc.constants, textures);
         let mut baked = BTreeMap::new();
         if let Some(n) = colour {
             let t = texels(n);
-            baked.insert(
-                "_MainTex",
-                bake(&bound.shader, &mc.constants, &textures, self.cells, t)?,
-            );
+            baked.insert("_MainTex", bake(&prepared, self.cells, t)?);
         }
         if let Some(n) = bump
             && !shared
         {
             let t = texels(n);
-            baked.insert(
-                "_BumpMap",
-                bake(&bound.shader, &mc.constants, &textures, self.cells, t)?,
-            );
+            baked.insert("_BumpMap", bake(&prepared, self.cells, t)?);
         }
         let mut pbr = w
             .get::<PbrMaterial>(e)

@@ -1,7 +1,7 @@
 use super::BaseMipBilinearWrap;
 use crate::{Result, invalid, materials::LayeredMaterial, mtd::Value};
 use primase_dxbc::{Shader, Type};
-use primase_shader::{Constants, Grid, Input, Invocation, Lane, Layout, Texture, evaluate_raw};
+use primase_shader::{Constants, Grid, Input, Invocation, Lane, Layout, PreparedProgram, Texture};
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Frozen per-vertex input for one baked layer-weight group. Choosing groups
@@ -21,13 +21,11 @@ impl Default for Inputs {
         }
     }
 }
-/// Evaluated by the toolkit ([`evaluate_raw`], one pixel at a time): the program, its constants and a texture per
+/// Evaluated by the toolkit ([`PreparedProgram`], one pixel at a time): the program, its constants and a texture per
 /// sampled slot, frozen; the main albedo's alpha, sampled beside the program at its own scale.
 #[derive(Debug)]
 pub struct Prepared {
-    shader: Shader,
-    constants: Constants,
-    textures: BTreeMap<u32, Texture>,
+    program: PreparedProgram<Shader>,
     alpha: Option<(Arc<BaseMipBilinearWrap>, [f32; 2])>,
     pub policies: BTreeMap<String, u64>,
     pub decoded_bytes: usize,
@@ -413,9 +411,7 @@ impl Prepared {
         }
         let decoded_bytes = cache.values().flatten().map(|t| t.decoded_bytes()).sum();
         Ok(Self {
-            shader,
-            constants,
-            textures,
+            program: PreparedProgram::new(shader, constants, textures),
             alpha,
             policies,
             decoded_bytes,
@@ -438,15 +434,20 @@ impl Prepared {
     }
     /// The parsed source program: its instructions and reflection, read-only.
     pub fn shader(&self) -> &Shader {
-        &self.shader
+        self.program.shader()
     }
     /// The constants the program is bound with, written rows included.
     pub fn constants(&self) -> &Constants {
-        &self.constants
+        self.program.constants()
     }
     /// Every texture slot the program samples, as bound (an image or one constant value).
     pub fn textures(&self) -> &BTreeMap<u32, Texture> {
-        &self.textures
+        self.program.textures()
+    }
+    /// The shared shader contract, prepared without evaluating or baking it. The policies of this binding recipe
+    /// remain in `policies`; its alpha sampler and interpretation of outputs remain FromSoft data.
+    pub fn program(&self) -> &PreparedProgram<Shader> {
+        &self.program
     }
     /// The main albedo's alpha sampler and its scale, when one was bound.
     pub fn alpha(&self) -> Option<(&BaseMipBilinearWrap, [f32; 2])> {
@@ -455,7 +456,13 @@ impl Prepared {
     /// Every used input by its semantic: the grid's UV in TEXCOORD0 for a bake, or `uv` for one invocation.
     fn bind_inputs(&self, params: Inputs, uv: Option<[f32; 2]>) -> Result<BTreeMap<(String, u32), Input>> {
         let mut inputs = BTreeMap::new();
-        for s in self.shader.reflection.inputs.iter().filter(|s| s.used_mask != 0) {
+        for s in self
+            .shader()
+            .reflection
+            .inputs
+            .iter()
+            .filter(|s| s.used_mask != 0)
+        {
             let input = match (s.name.to_ascii_uppercase().as_str(), s.index) {
                 ("POSITION", 1) => Input::Constant([0., 0., 0., 1.]),
                 ("NORMAL", 0) => Input::Constant([0., 1., 0., 0.]),
@@ -499,20 +506,27 @@ impl Prepared {
             return Err(invalid("layer binding", 0, "nonfinite pixel uv"));
         }
         let inputs = self.bind_inputs(params, Some(uv))?;
-        let raw = evaluate_raw(
-            &self.shader,
-            &self.constants,
-            &self.textures,
-            &inputs,
-            Grid {
-                size: 1,
-                period: [1.; 2],
-            },
-            &[(0, 7), (1, 1), (2, 7), (3, 7), (4, 7)],
-            Invocation::Scalar,
-        )
-        .map_err(evaluation)?;
+        let raw = self
+            .program
+            .as_ref()
+            .evaluate_raw(
+                &inputs,
+                Grid {
+                    size: 1,
+                    period: [1.; 2],
+                },
+                &[(0, 7), (1, 1), (2, 7), (3, 7), (4, 7)],
+                Invocation::Scalar,
+            )
+            .map_err(evaluation)?;
         let mut out = [([0u32; 4], 0u8); 5];
+        if raw.discarded.iter().any(|&v| v) {
+            return Err(invalid(
+                "layer binding",
+                0,
+                "pixel discarded; this output-only oracle cannot represent coverage",
+            ));
+        }
         for (slot, pixels) in out.iter_mut().zip(raw.pixels) {
             *slot = pixels
                 .into_iter()
@@ -545,19 +559,26 @@ impl Prepared {
         }
         let inputs = self.bind_inputs(params, None)?;
         // the G-buffer normal, the second output's x, the albedo, the reflectance and the emission
-        let raw = evaluate_raw(
-            &self.shader,
-            &self.constants,
-            &self.textures,
-            &inputs,
-            Grid { size, period },
-            &[(0, 7), (1, 1), (2, 7), (3, 7), (4, 7)],
-            Invocation::Scalar,
-        )
-        .map_err(evaluation)?;
+        let raw = self
+            .program
+            .as_ref()
+            .evaluate_raw(
+                &inputs,
+                Grid { size, period },
+                &[(0, 7), (1, 1), (2, 7), (3, 7), (4, 7)],
+                Invocation::Scalar,
+            )
+            .map_err(evaluation)?;
         let [normals, seconds, colours, reflected, emitted] = &raw.pixels[..] else {
             unreachable!("five targets requested");
         };
+        if raw.discarded.iter().any(|&v| v) {
+            return Err(invalid(
+                "layer bake",
+                0,
+                "program discards pixels; this bake does not preserve coverage",
+            ));
+        }
         let mut albedo = Vec::with_capacity(size as usize * size as usize * 4);
         let mut normal = Vec::with_capacity(albedo.capacity());
         let mut gloss = None;
@@ -744,25 +765,27 @@ mod tests {
         instruction(62, &[]);
         words[1] = words.len() as u32;
         Prepared {
-            shader: Shader {
-                program: primase_dxbc::Program::from_words(&words).unwrap(),
-                reflection: primase_dxbc::Reflection {
-                    buffers: vec![],
-                    resources: vec![],
-                    outputs: vec![],
-                    inputs: vec![primase_dxbc::Semantic {
-                        name: "TEXCOORD".into(),
-                        index: 0,
-                        system_value: 0,
-                        component_type: 3,
-                        register: 0,
-                        mask: 15,
-                        used_mask: 15,
-                    }],
+            program: PreparedProgram::new(
+                Shader {
+                    program: primase_dxbc::Program::from_words(&words).unwrap(),
+                    reflection: primase_dxbc::Reflection {
+                        buffers: vec![],
+                        resources: vec![],
+                        outputs: vec![],
+                        inputs: vec![primase_dxbc::Semantic {
+                            name: "TEXCOORD".into(),
+                            index: 0,
+                            system_value: 0,
+                            component_type: 3,
+                            register: 0,
+                            mask: 15,
+                            used_mask: 15,
+                        }],
+                    },
                 },
-            },
-            constants: Constants::new(&Layout::default()),
-            textures: BTreeMap::new(),
+                Constants::new(&Layout::default()),
+                BTreeMap::new(),
+            ),
             alpha: None,
             policies: BTreeMap::new(),
             decoded_bytes: 0,

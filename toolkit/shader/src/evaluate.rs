@@ -190,6 +190,11 @@ impl Constants {
             .find(|(slot, _)| *slot == buffer)
             .map(|(_, rows)| rows.as_slice())
     }
+    /// Every bound constant buffer, by source register, without copying its words. This is source layout data;
+    /// a translated program may require a different allocation size and its consumer must check that layout.
+    pub fn buffers(&self) -> impl ExactSizeIterator<Item = (u32, &[[u32; 4]])> {
+        self.buffers.iter().map(|(slot, rows)| (*slot, rows.as_slice()))
+    }
     /// The reflected field `name`, with its buffer, word offset and word count.
     pub fn field(&self, name: &str) -> Option<&Field> {
         self.fields.get(name)
@@ -210,7 +215,7 @@ pub enum Texture {
 }
 
 /// The textures by slot, answering samples and loads.
-struct Bound<'t>(&'t BTreeMap<u32, Texture>);
+pub(crate) struct Bound<'t>(pub(crate) &'t BTreeMap<u32, Texture>);
 
 impl Sampler for Bound<'_> {
     fn sample(&mut self, s: Sample) -> Result<[f32; 4], String> {
@@ -297,6 +302,9 @@ pub struct Raw {
     /// Per requested target, size * size pixels in row-major order: the output register's bits and the lanes the
     /// program wrote of it (within the target's mask).
     pub pixels: Vec<Vec<([u32; 4], u8)>>,
+    /// One flag per grid pixel. Register values written before discard are still available in `pixels`, but they
+    /// are not surviving fragment outputs. Consumers must choose how their destination handles coverage.
+    pub discarded: Vec<bool>,
     pub instructions: u64,
     pub samples: u64,
 }
@@ -376,6 +384,7 @@ pub fn evaluate_raw(
     let size = grid.size as usize;
     let mut pixels: Vec<Vec<([u32; 4], u8)>> =
         targets.iter().map(|_| vec![([0; 4], 0); size * size]).collect();
+    let mut discarded = vec![false; size * size];
     let (mut instructions, mut samples) = (0u64, 0u64);
     let mut sampler = Bound(textures);
     // the registers of pixel (x, y), which may lie past the grid (a quad's helper lanes)
@@ -389,6 +398,7 @@ pub fn evaluate_raw(
         r
     };
     let mut keep = |pixel: usize, result: &crate::Execution| {
+        discarded[pixel] = result.discarded;
         instructions += result.instructions as u64;
         samples += result.samples as u64;
         for (t, &(register, mask)) in targets.iter().enumerate() {
@@ -438,6 +448,7 @@ pub fn evaluate_raw(
     }
     Ok(Raw {
         pixels,
+        discarded,
         instructions,
         samples,
     })
@@ -465,6 +476,12 @@ pub fn evaluate(
         Invocation::Scalar,
     )?;
     let mut out = Vec::with_capacity(targets.len());
+    if let Some(pixel) = raw.discarded.iter().position(|&discarded| discarded) {
+        return Err(error(
+            pixel,
+            "discarded pixel cannot become a colour-only evaluation; use evaluate_raw to handle coverage",
+        ));
+    }
     for (t, &(register, mask)) in targets.iter().enumerate() {
         let pixels = &raw.pixels[t];
         let writes = pixels.first().is_some_and(|&(_, m)| m == mask);

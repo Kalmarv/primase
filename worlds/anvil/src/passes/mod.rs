@@ -11,7 +11,7 @@ mod select;
 mod splat;
 mod water;
 mod world_uv;
-pub use bake::{BakeAnvilMaterial, gbuffer_pixel_key};
+pub use bake::{BakeAnvilMaterial, PreparedMaterial, gbuffer_pixel_key};
 pub use decals::{Family, FamilyRule, LowerAnvilDecals, TerrainDecals, family};
 pub use material::{
     AlphaChoice, Decals1Cutout, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo, world_uv_rows,

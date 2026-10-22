@@ -66,7 +66,7 @@ use primase_core::{
     TexRole, Texture, VertexColor, World,
 };
 use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
-use primase_shader::{Constants, Grid, Input, Invocation, Layout, Lod, evaluate_raw};
+use primase_shader::{Constants, Grid, Input, Invocation, Layout, Lod, PreparedProgram};
 
 use super::material::{ShaderUv, uv_transform};
 use crate::components::{
@@ -156,7 +156,7 @@ const TANGENT_NORMAL: &[(u32, Role)] = &[(1, Role::Tangent), (2, Role::NormalSig
 
 /// A paint the program computes, periodic in its UV: the Material's UV transform row, and per axis the row whose
 /// value's reciprocal is the period (a whole number of units, else the Material is refused).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Pattern {
     uv: u32,
     frequencies: [u32; 2],
@@ -560,6 +560,24 @@ struct Baked {
     transform: Option<UvTransform>,
 }
 
+/// Prepared bindings for this pass's explicitly selected bake policy, before any pixel is evaluated. The shader
+/// and its resources use the shared toolkit contract. These inputs describe the bake's frozen surface, not a live
+/// game draw; their meanings and the decoding of G-buffer outputs remain Anvil-specific.
+#[derive(Debug)]
+pub struct PreparedMaterial {
+    /// The source template whose binding recipe was selected.
+    pub template: &'static str,
+    /// Explicit preparation/bake choices, retained so consumers can report the frozen inputs and sampling policy.
+    pub options: BakeAnvilMaterial,
+    pub program: PreparedProgram<primase_dxbc::Shader>,
+    pub inputs: BTreeMap<(String, u32), Input>,
+    /// The UV period selected by the material's pattern, or one unit for ordinary materials.
+    pub period: [f32; 2],
+    pattern: Option<(Pattern, [f32; 2], Vec<f32>)>,
+    terrain_ao: bool,
+    sediment: bool,
+}
+
 /// An 8-bit UNORM store of `x` (what the G-buffer target holds).
 fn unorm8(x: f32) -> u8 {
     (x.clamp(0.0, 1.0) * 255.0).round_ties_even() as u8
@@ -581,8 +599,31 @@ fn decode_normal(o1: [f32; 3]) -> ([f64; 3], u8) {
 }
 
 impl BakeAnvilMaterial {
-    /// Run `program` for `m` (whose recipe is `recipe`) over the texture square.
-    fn bake(&self, w: &World, m: &AnvilMaterial, recipe: &Recipe, program: &[u8]) -> Result<Baked, String> {
+    /// Prepare a supported material without baking, changing the World or choosing a different policy. The
+    /// options on `self` still state the frozen frame, fallback resources and sampling described by this module.
+    pub fn prepare(&self, w: &World, m: &AnvilMaterial) -> Result<PreparedMaterial, String> {
+        let recipe = RECIPES
+            .iter()
+            .find(|r| m.template_name.as_deref() == Some(r.template))
+            .ok_or("material has no supported binding recipe")?;
+        let key = gbuffer_pixel_key(&m.flags).map_err(str::to_owned)?;
+        let shaders = m
+            .shaders
+            .ok_or("its template's shaders weren't read (Placer::with_shaders)")?;
+        let program = w
+            .get::<AnvilShaders>(shaders)
+            .and_then(|s| s.pixel(key))
+            .ok_or_else(|| format!("its template has no pixel permutation {key:#x}"))?;
+        self.prepare_recipe(w, m, recipe, program)
+    }
+
+    fn prepare_recipe(
+        &self,
+        w: &World,
+        m: &AnvilMaterial,
+        recipe: &Recipe,
+        program: &[u8],
+    ) -> Result<PreparedMaterial, String> {
         let shader = primase_dxbc::Shader::parse_stripped(program).map_err(|e| e.to_string())?;
         let rows = material_rows(m)?;
         if let Some(r) = recipe.rows.iter().find(|r| !rows.contains_key(r)) {
@@ -743,20 +784,44 @@ impl BakeAnvilMaterial {
         for &(index, role) in recipe.interpolants {
             inputs.insert(("TEXCOORD".to_owned(), index), constant(role.value()));
         }
-        let raw = evaluate_raw(
-            &shader,
-            &constants,
-            &textures,
-            &inputs,
-            Grid {
-                size: self.size,
-                period: period.as_ref().map_or([1.0; 2], |(_, q, _)| *q),
-            },
-            &[(0, 15), (1, 15), (2, 15), (3, 15)],
-            Invocation::Quads,
-        )
-        .map_err(|e| e.to_string())?;
+        Ok(PreparedMaterial {
+            template: recipe.template,
+            options: self.clone(),
+            program: PreparedProgram::new(shader, constants, textures),
+            inputs,
+            period: period.as_ref().map_or([1.0; 2], |(_, q, _)| *q),
+            pattern: period,
+            terrain_ao,
+            sediment,
+        })
+    }
+
+    fn bake(&self, prepared: PreparedMaterial) -> Result<Baked, String> {
+        let PreparedMaterial {
+            program,
+            inputs,
+            period: uv_period,
+            pattern: period,
+            terrain_ao,
+            sediment,
+            ..
+        } = prepared;
+        let raw = program
+            .as_ref()
+            .evaluate_raw(
+                &inputs,
+                Grid {
+                    size: self.size,
+                    period: uv_period,
+                },
+                &[(0, 15), (1, 15), (2, 15), (3, 15)],
+                Invocation::Quads,
+            )
+            .map_err(|e| e.to_string())?;
         let n = self.size as usize;
+        if raw.discarded.iter().any(|&v| v) {
+            return Err("program discards pixels; this bake does not preserve coverage".into());
+        }
         let mut baked = Baked {
             base: Vec::with_capacity(n * n * 4),
             roughness: Vec::with_capacity(n * n * 4),
@@ -918,16 +983,7 @@ impl Pass for BakeAnvilMaterial {
                 .iter()
                 .find(|r| m.template_name.as_deref() == Some(r.template))
                 .ok_or("listed above")?;
-            let program = match (gbuffer_pixel_key(&m.flags), m.shaders) {
-                (Err(why), _) => Err(why.to_owned()),
-                (Ok(_), None) => Err("its template's shaders weren't read (Placer::with_shaders)".to_owned()),
-                (Ok(key), Some(s)) => w
-                    .get::<AnvilShaders>(s)
-                    .and_then(|s| s.pixel(key))
-                    .map(<[u8]>::to_vec)
-                    .ok_or_else(|| format!("its template has no pixel permutation {key:#x}")),
-            };
-            let baked = program.and_then(|p| self.bake(w, m, recipe, &p));
+            let baked = self.prepare(w, m).and_then(|prepared| self.bake(prepared));
             let baked = match baked {
                 Ok(b) => b,
                 Err(why) => {
