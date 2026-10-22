@@ -367,10 +367,19 @@ fn parse_pipeline(text: &str) -> Result<Vec<(String, Options)>, Error> {
             let close = r
                 .find('}')
                 .ok_or_else(|| bad(format!("{name}: no closing brace")))?;
+            // A value may hold commas (`rect=x0,y0,x1,y1`, as `Display` writes it): an item without `=` continues the
+            // previous option's value.
+            let mut last: Option<String> = None;
             for item in r[..close].split(',').filter(|s| !s.trim().is_empty()) {
-                let (k, v) = item
-                    .split_once('=')
-                    .ok_or_else(|| bad(format!("{name}: option {item:?} is not key=value")))?;
+                let Some((k, v)) = item.split_once('=') else {
+                    let value = last
+                        .as_ref()
+                        .and_then(|k| options.get_mut(k))
+                        .ok_or_else(|| bad(format!("{name}: option {item:?} is not key=value")))?;
+                    value.push(',');
+                    value.push_str(item.trim());
+                    continue;
+                };
                 let (k, v) = (k.trim(), v.trim());
                 if !is_word(k) || v.contains('{') {
                     return Err(bad(format!("{name}: bad option {item:?}")));
@@ -378,6 +387,7 @@ fn parse_pipeline(text: &str) -> Result<Vec<(String, Options)>, Error> {
                 if options.insert(k.to_owned(), v.to_owned()).is_some() {
                     return Err(bad(format!("{name}: option {k} twice")));
                 }
+                last = Some(k.to_owned());
             }
             rest = r[close + 1..].trim_start();
         }
@@ -2137,6 +2147,29 @@ fn order_passes(passes: &[Box<dyn Pass>], chosen: &BTreeSet<usize>) -> Result<Ve
 mod tests {
     use super::*;
     use crate::world::{Opaque, OpaqueData};
+
+    #[test]
+    fn option_values_with_commas_parse_as_display_writes_them() {
+        let parsed = parse_pipeline("a{rect=-64,-64,64,64,depth=3:2,4:1},b{by=1,2,3},c").unwrap();
+        let opts = |pairs: &[(&str, &str)]| -> Options {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect()
+        };
+        assert_eq!(
+            parsed,
+            vec![
+                (
+                    "a".to_owned(),
+                    opts(&[("rect", "-64,-64,64,64"), ("depth", "3:2,4:1")])
+                ),
+                ("b".to_owned(), opts(&[("by", "1,2,3")])),
+                ("c".to_owned(), Options::new()),
+            ]
+        );
+        assert!(parse_pipeline("a{-64,x=1}").is_err());
+    }
 
     // toy components
     #[derive(Clone, Debug, PartialEq)]
