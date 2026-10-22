@@ -18,12 +18,12 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{PassLog, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{
     Entity, Layer, LayerWeights, LayeredMaterial, Mesh, Primitive, Semantic, Stream, Topology, VertexColor,
     WeightMapping, World, uses_color0,
 };
-use primase_reskate::components::{MaterialClass, SkateMaterial};
+use primase_reskate::components::{MaterialClass, SkateMaterial, SkateScene};
 use primase_reskate::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::tint::LowerTintReskate;
 
@@ -137,12 +137,22 @@ fn drawn(w: &World, mesh: Entity) -> Vec<(String, bool, Option<[u8; 3]>)> {
         .collect()
 }
 
+/// Both passes through the pass manager, so what each adds, changes and removes is held to what it declares.
 fn run(w: &mut World) -> (PassLog, PassLog) {
-    let (mut blend, mut tint) = (PassLog::default(), PassLog::default());
-    LowerLayeredReskate::new(OverlayLimit::All)
-        .run(w, &mut blend)
+    let pipeline = Pipeline {
+        passes: vec![
+            Box::new(LowerLayeredReskate::new(OverlayLimit::All)),
+            Box::new(LowerTintReskate::uncapped()),
+        ],
+    };
+    // the scene a read map has (the passes require it)
+    w.insert_resource(SkateScene::default());
+    let mut report = RunReport::default();
+    PassManager::new(PassRegistry::new())
+        .with_pass_checks(true)
+        .run(w, &pipeline, &mut report)
         .unwrap();
-    LowerTintReskate::uncapped().run(w, &mut tint).unwrap();
+    let [blend, tint] = [0, 1].map(|i| report.steps[i].log.clone());
     (blend, tint)
 }
 

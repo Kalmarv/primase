@@ -406,7 +406,12 @@ impl primase_core::pass::Pass for LowerLayeredReskate {
         &["skate.scene"]
     }
     fn provides(&self) -> &[&'static str] {
-        &["skate.material", "reskate.vertex_blend", "reskate.blend_opacity"]
+        &[
+            "skate.material",
+            "reskate.vertex_blend",
+            "reskate.blend_opacity",
+            "core.vertex_color",
+        ]
     }
     fn modifies(&self) -> &[&'static str] {
         &["core.mesh", "core.material_variants", "skate.prototype"]
