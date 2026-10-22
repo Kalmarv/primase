@@ -8,11 +8,11 @@ mod program;
 mod reflection;
 pub use evaluate::{RegisterValue, Trace};
 pub use primase_shader::{
-    AtomicAdd, Buffer, Execution, Load, Lod, Member, PixelShader, Reflection, Resource, Sample, Sampler,
-    Semantic, Store, Type, Variable,
+    AtomicAdd, Execution, Interface, Load, Lod, PixelShader, Resource, Sample, Sampler, Store, Varying,
 };
 pub use program::{
-    Dimension, Instruction, Operand, Program, Register, ResourceDeclaration, ReturnType, Selection,
+    Dimension, InputDeclaration, Instruction, Operand, Program, Register, ResourceDeclaration, ReturnType,
+    Selection,
 };
 pub use reflection::{reflection, signatures};
 
@@ -30,27 +30,47 @@ pub(crate) fn error(word: usize, detail: impl Into<String>) -> Error {
     }
 }
 
-/// A parsed program with its container's reflection: the [`PixelShader`] a bytecode-independent caller evaluates.
+/// A parsed program with its container's interface: the [`PixelShader`] a bytecode-independent caller evaluates.
 #[derive(Debug)]
 pub struct Shader {
     pub program: Program,
-    pub reflection: Reflection,
+    pub interface: Interface,
 }
 impl Shader {
     /// Parse a DXBC container's program and reflection.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
-        Ok(Self {
-            program: Program::parse(bytes)?,
-            reflection: reflection(bytes)?,
-        })
+        Self::with(Program::parse(bytes)?, reflection(bytes)?)
     }
     /// Parse a container whose RDEF was stripped: the program and its signatures ([`signatures`]); the caller
     /// builds the constant layout from its own records.
     pub fn parse_stripped(bytes: &[u8]) -> Result<Self> {
-        Ok(Self {
-            program: Program::parse(bytes)?,
-            reflection: signatures(bytes)?,
-        })
+        Self::with(Program::parse(bytes)?, signatures(bytes)?)
+    }
+    /// The program with its container's interface, whose inputs take the interpolation the program declares: that of
+    /// the declarations at an input's register that cover any of its lanes (a declaration covers only the lanes the
+    /// program reads). An input the program never declares has none.
+    fn with(program: Program, mut interface: Interface) -> Result<Self> {
+        for input in &mut interface.inputs {
+            let Some(d3d) = input.provenance.d3d else {
+                continue;
+            };
+            let mut declared = program
+                .input_declarations()
+                .iter()
+                .filter(|d| d.register == d3d.register && d.mask & d3d.mask != 0)
+                .map(|d| d.interpolation);
+            input.interp = declared.next();
+            if declared.any(|other| Some(other) != input.interp) {
+                return Err(error(
+                    0,
+                    format!(
+                        "input {}{} is declared with different interpolations",
+                        input.label.name, input.label.index
+                    ),
+                ));
+            }
+        }
+        Ok(Self { program, interface })
     }
 }
 fn shader_error(e: Error) -> primase_shader::Error {
@@ -61,8 +81,8 @@ fn shader_error(e: Error) -> primase_shader::Error {
     }
 }
 impl PixelShader for Shader {
-    fn reflection(&self) -> &Reflection {
-        &self.reflection
+    fn interface(&self) -> &Interface {
+        &self.interface
     }
     fn input_count(&self) -> usize {
         self.program.input_count()

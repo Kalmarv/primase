@@ -1,9 +1,16 @@
 //! Reflection of an SM6 container: signatures from its `ISG1`/`OSG1` parts, signature packing from the entry
 //! point's metadata, and resources and constant-buffer layouts from `dx.resources` and `dx.typeAnnotations` (of the
-//! `STAT` part's reflection module when present: the program's own metadata carries no names).
+//! `STAT` part's reflection module when present: the program's own metadata carries no names), mapped into
+//! primase's interface vocabulary. D3D's and DXIL's enum numbers stop here: a value the mapping does not know is an
+//! error naming it.
 use crate::module::{Constant, Metadata, MetadataId, Module, Type, TypeId, Value};
 use crate::{Chunk, Result, error};
-use primase_shader::{Buffer, Member, Reflection, Resource, Semantic, Variable};
+use primase_shader::d3d;
+use primase_shader::{
+    Access, BufferKind, BufferLayout, Constant as BufferConstant, ConstantType, D3dBinding, D3dClass,
+    Interface, Majorness, Member, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType,
+    ScalarType, Stage, StorageTarget, TextureDim, Value as Lanes, Varying,
+};
 
 /// One signature element of the entry point: its id (the `sigId` loadInput and storeOutput name), its first
 /// register and column, and its size.
@@ -33,8 +40,15 @@ pub struct Range {
     pub id: u32,
     pub lower: u32,
     pub count: u32,
-    /// Constant buffers: their size in bytes; SRVs: their shape (2 a 2D texture).
+    /// Constant buffers: their size in bytes; SRVs and UAVs: their shape (`DxilResourceKind`, 2 a 2D texture);
+    /// samplers: their kind (0 default, 1 comparison, 2 mono).
     pub extra: u32,
+    /// The register space.
+    pub space: u32,
+    /// An SRV's or UAV's element type tag (`DxilComponentType`), where its tags state one.
+    pub element: Option<u32>,
+    /// A structured SRV's or UAV's element stride in bytes, where its tags state one.
+    pub stride: Option<u32>,
 }
 
 fn node<'a>(m: &'a Module, id: MetadataId, at: &str) -> Result<&'a [Option<MetadataId>]> {
@@ -149,6 +163,29 @@ pub fn elements(m: &Module) -> Result<(Vec<Element>, Vec<Element>)> {
     Ok((list(0)?, list(1)?))
 }
 
+/// A resource's tag list (alternating tag and value): the element type (tag 0) and the structured stride (tag 1).
+fn tags(m: &Module, list: Option<MetadataId>) -> Result<(Option<u32>, Option<u32>)> {
+    let Some(list) = list else {
+        return Ok((None, None));
+    };
+    let ops = node(m, list, "resource tags")?;
+    let (pairs, rest) = ops.as_chunks::<2>();
+    if !rest.is_empty() {
+        return Err(error(0, "resource tag without its value"));
+    }
+    let (mut element, mut stride) = (None, None);
+    for pair in pairs {
+        let value = u32::try_from(int(m, pair[1], "resource tag value")?)
+            .map_err(|_| error(0, "resource tag value"))?;
+        match int(m, pair[0], "resource tag")? {
+            0 => element = Some(value),
+            1 => stride = Some(value),
+            _ => {}
+        }
+    }
+    Ok((element, stride))
+}
+
 /// The bound resource ranges of `dx.resources` (SRVs, UAVs, constant buffers, samplers), with their names.
 pub fn ranges(m: &Module) -> Result<Vec<(Range, String, Option<TypeId>)>> {
     let Some([resources]) = named(m, "dx.resources") else {
@@ -169,11 +206,12 @@ pub fn ranges(m: &Module) -> Result<Vec<(Range, String, Option<TypeId>)>> {
                 },
                 _ => None,
             };
-            let extra = match class {
-                0 | 2 => {
-                    u32::try_from(int(m, operand(r, 6, at)?, at)?).map_err(|_| error(0, "resource field"))?
-                }
-                _ => 0,
+            let extra =
+                u32::try_from(int(m, operand(r, 6, at)?, at)?).map_err(|_| error(0, "resource field"))?;
+            let (element, stride) = match class {
+                0 => tags(m, r.get(8).copied().flatten())?,
+                1 => tags(m, r.get(10).copied().flatten())?,
+                _ => (None, None),
             };
             out.push((
                 Range {
@@ -185,6 +223,10 @@ pub fn ranges(m: &Module) -> Result<Vec<(Range, String, Option<TypeId>)>> {
                     count: u32::try_from(int(m, operand(r, 5, at)?, at)?)
                         .map_err(|_| error(0, "range size"))?,
                     extra,
+                    space: u32::try_from(int(m, operand(r, 3, at)?, at)?)
+                        .map_err(|_| error(0, "register space"))?,
+                    element,
+                    stride,
                 },
                 string(m, operand(r, 2, at)?),
                 ty,
@@ -194,78 +236,127 @@ pub fn ranges(m: &Module) -> Result<Vec<(Range, String, Option<TypeId>)>> {
     Ok(out)
 }
 
-/// D3D reflection's type description of an LLVM type, with struct members from the type annotations.
-fn d3d_type(m: &Module, t: TypeId, depth: usize) -> Result<primase_shader::Type> {
+/// The constant type of an LLVM type, with struct members from the type annotations and D3D's packing.
+fn constant_type(m: &Module, t: TypeId, hint: Hint, depth: usize) -> Result<ConstantType> {
+    let component = hint.component;
     if depth > 16 {
         return Err(error(0, "type nesting"));
     }
-    let scalar = |t: &Type| match t {
-        Type::Float => Some(3),
-        Type::Double => Some(39),
-        Type::Half => Some(3),
-        Type::Integer(1) => Some(1),
-        Type::Integer(_) => Some(2),
-        _ => None,
+    // a half is read as a float: 32 bits is a valid implementation of it, and the legacy buffer layout gives it a lane
+    let scalar = |t: &Type| -> Result<Option<ScalarType>> {
+        Ok(match t {
+            Type::Float | Type::Half => Some(ScalarType::Float),
+            Type::Double => Some(ScalarType::Double),
+            Type::Integer(1) => Some(ScalarType::Bool),
+            Type::Integer(16 | 32) => Some(match component {
+                Some(1) => ScalarType::Bool,
+                Some(2 | 4) => ScalarType::Sint,
+                Some(3 | 5) => ScalarType::Uint,
+                other => {
+                    return Err(error(
+                        0,
+                        format!("an integer constant of component type {other:?} is not mapped"),
+                    ));
+                }
+            }),
+            Type::Integer(bits) => {
+                return Err(error(0, format!("a constant of {bits} bits is not mapped")));
+            }
+            _ => None,
+        })
     };
+    let wrap = |detail: String| error(0, detail);
     let ty = m.types.get(t).ok_or_else(|| error(0, "type id"))?;
     Ok(match ty {
-        Type::Vector(n, e) => primase_shader::Type {
-            class: 1,
-            scalar: scalar(&m.types[*e]).unwrap_or(0),
-            rows: 1,
-            columns: *n as u16,
-            elements: 0,
-            members: Vec::new(),
-        },
-        Type::Array(n, e) => primase_shader::Type {
-            elements: *n as u16,
-            ..d3d_type(m, *e, depth + 1)?
-        },
+        Type::Vector(n, e) => {
+            let scalar = scalar(&m.types[*e])?.ok_or_else(|| error(0, "a vector of a non-scalar"))?;
+            d3d::vector(scalar, u32::try_from(*n).map_err(|_| error(0, "vector width"))?).map_err(wrap)?
+        }
+        // a matrix: an array of its lines, each a vector
+        Type::Array(lines, e)
+            if hint.matrix.is_some() && matches!(m.types.get(*e), Some(Type::Vector(..))) =>
+        {
+            let (rows, columns, orientation) = hint.matrix.expect("matched");
+            let Some(Type::Vector(lanes, inner)) = m.types.get(*e) else {
+                unreachable!("matched")
+            };
+            let major = match orientation {
+                1 => Majorness::Row,
+                2 => Majorness::Column,
+                other => return Err(error(0, format!("matrix orientation {other} is not mapped"))),
+            };
+            let (want_lines, want_lanes) = match major {
+                Majorness::Row => (rows, columns),
+                Majorness::Column => (columns, rows),
+            };
+            if (*lines, *lanes) != (u64::from(want_lines), u64::from(want_lanes)) {
+                return Err(error(0, "a matrix annotation disagrees with its type"));
+            }
+            let scalar = scalar(&m.types[*inner])?.ok_or_else(|| error(0, "a matrix of a non-scalar"))?;
+            d3d::matrix(scalar, rows, columns, major).map_err(wrap)?
+        }
+        Type::Array(n, e) => d3d::array(
+            constant_type(m, *e, hint, depth + 1)?,
+            u32::try_from(*n).map_err(|_| error(0, "array length"))?,
+        )
+        .map_err(wrap)?,
         Type::Struct { elements, .. } => {
             // HLSL vectors are structs of one LLVM vector in some reflection modules.
             if let [single] = elements.as_slice()
                 && matches!(m.types.get(*single), Some(Type::Vector(..)))
                 && fields(m, t)?.is_empty()
             {
-                return d3d_type(m, *single, depth + 1);
+                return constant_type(m, *single, hint, depth + 1);
             }
             let members = fields(m, t)?
                 .into_iter()
                 .zip(elements)
-                .map(|((name, offset), &e)| {
+                .map(|(note, &e)| {
                     Ok(Member {
-                        name,
-                        offset,
-                        ty: d3d_type(m, e, depth + 1)?,
+                        ty: constant_type(m, e, note.hint(), depth + 1)?,
+                        name: note.name,
+                        offset: note.offset,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            primase_shader::Type {
-                class: 5,
-                scalar: 0,
-                rows: 1,
-                columns: 1,
-                elements: 0,
-                members,
-            }
+            ConstantType::Struct { members }
         }
-        other => match scalar(other) {
-            Some(s) => primase_shader::Type {
-                class: 0,
-                scalar: s,
-                rows: 1,
-                columns: 1,
-                elements: 0,
-                members: Vec::new(),
-            },
+        other => match scalar(other)? {
+            Some(s) => ConstantType::Scalar(s),
             None => return Err(error(0, "unsupported constant-buffer field type")),
         },
     })
 }
 
-/// Field names and byte offsets of a struct type from `dx.typeAnnotations` (field tag 6 the name, 3 the
-/// constant-buffer offset). Empty when the module has no annotation for it.
-fn fields(m: &Module, t: TypeId) -> Result<Vec<(String, u32)>> {
+/// One field of a struct type, from its annotation.
+struct Note {
+    name: String,
+    /// Byte offset in the constant buffer.
+    offset: u32,
+    /// Its `DxilComponentType`: LLVM integers carry no signedness, the annotation does.
+    component: Option<u32>,
+    /// A matrix field's rows, columns and orientation (1 row-major, 2 column-major): LLVM lowers a matrix to an array
+    /// of its lines, so only the annotation says it is one.
+    matrix: Option<(u32, u32, u32)>,
+}
+/// What an annotation says of the field whose type is being read.
+#[derive(Clone, Copy)]
+struct Hint {
+    component: Option<u32>,
+    matrix: Option<(u32, u32, u32)>,
+}
+impl Note {
+    fn hint(&self) -> Hint {
+        Hint {
+            component: self.component,
+            matrix: self.matrix,
+        }
+    }
+}
+
+/// Fields of a struct type from `dx.typeAnnotations` (field tag 6 the name, 3 the constant-buffer offset, 7 the
+/// component type). Empty when the module has no annotation for it.
+fn fields(m: &Module, t: TypeId) -> Result<Vec<Note>> {
     let Some(annotations) = named(m, "dx.typeAnnotations") else {
         return Ok(Vec::new());
     };
@@ -296,7 +387,7 @@ fn fields(m: &Module, t: TypeId) -> Result<Vec<(String, u32)>> {
                 .iter()
                 .map(|f| {
                     let f = node(m, f.ok_or_else(|| error(0, "null field"))?, "field annotation")?;
-                    let (mut name, mut offset) = (String::new(), 0);
+                    let (mut name, mut offset, mut component, mut matrix) = (String::new(), 0, None, None);
                     let (tags, rest) = f.as_chunks::<2>();
                     if !rest.is_empty() {
                         return Err(error(0, "field annotation tag without its value"));
@@ -308,10 +399,35 @@ fn fields(m: &Module, t: TypeId) -> Result<Vec<(String, u32)>> {
                                 offset = u32::try_from(int(m, tag[1], "field offset")?)
                                     .map_err(|_| error(0, "field offset"))?
                             }
+                            2 => {
+                                let ops = node(
+                                    m,
+                                    tag[1].ok_or_else(|| error(0, "null matrix annotation"))?,
+                                    "matrix annotation",
+                                )?;
+                                let [rows, columns, orientation] = [0, 1, 2].map(|i| {
+                                    int(m, operand(ops, i, "matrix annotation")?, "matrix annotation")
+                                        .and_then(|v| {
+                                            u32::try_from(v).map_err(|_| error(0, "matrix annotation"))
+                                        })
+                                });
+                                matrix = Some((rows?, columns?, orientation?));
+                            }
+                            7 => {
+                                component = Some(
+                                    u32::try_from(int(m, tag[1], "field component type")?)
+                                        .map_err(|_| error(0, "field component type"))?,
+                                )
+                            }
                             _ => {}
                         }
                     }
-                    Ok((name, offset))
+                    Ok(Note {
+                        name,
+                        offset,
+                        component,
+                        matrix,
+                    })
                 })
                 .collect();
         }
@@ -319,8 +435,8 @@ fn fields(m: &Module, t: TypeId) -> Result<Vec<(String, u32)>> {
     Ok(Vec::new())
 }
 
-/// D3D signature elements of an `ISG1`/`OSG1` part.
-fn signature(part: &[u8]) -> Result<Vec<Semantic>> {
+/// D3D signature elements of an `ISG1`/`OSG1` part, mapped for `stage`.
+fn signature(part: &[u8], stage: Stage, output: bool) -> Result<Vec<Varying>> {
     let v = primase_bytes::View::new(part);
     let word = |at: usize| -> Result<u32> {
         v.array::<4>(at)
@@ -345,86 +461,276 @@ fn signature(part: &[u8]) -> Result<Vec<Semantic>> {
             .filter(|&n| n <= 256)
             .ok_or_else(|| error(name_at * 8, "signature name"))?;
         let mask = v.array::<2>(e + 24).map_err(|x| error(e * 8, x.to_string()))?;
-        out.push(Semantic {
-            name: String::from_utf8_lossy(&tail[..end]).into_owned(),
+        let name = String::from_utf8_lossy(&tail[..end]);
+        let element = d3d::Element {
+            name: &name,
             index: word(e + 8)?,
             system_value: word(e + 12)?,
             component_type: word(e + 16)?,
             register: word(e + 20)?,
             mask: mask[0],
-            used_mask: mask[1],
-        });
+            read_write_mask: mask[1],
+        };
+        out.push(d3d::varying(stage, output, &element).map_err(|detail| error(e * 8, detail))?);
     }
     Ok(out)
 }
 
-/// The container's reflection. `program` is the DXIL module; `named` the STAT part's reflection module when the
+/// A `DxilComponentType` as the scalar type a view of it returns.
+fn element_scalar(name: &str, tag: Option<u32>) -> Result<ScalarType> {
+    match tag {
+        // f16, f32, snorm and unorm f16 and f32
+        Some(8 | 9 | 11..=14) => Ok(ScalarType::Float),
+        Some(2 | 4) => Ok(ScalarType::Sint),
+        Some(3 | 5) => Ok(ScalarType::Uint),
+        Some(other) => Err(error(0, format!("{name}: element type {other} is not mapped"))),
+        None => Err(error(0, format!("{name}: the resource states no element type"))),
+    }
+}
+
+/// What a texture or buffer range (SRV or UAV) is, from its `DxilResourceKind`, and its element type tags.
+fn view(range: &Range, name: &str, ty: Option<TypeId>, m: &Module) -> Result<View> {
+    // texture shapes: dimensionality, array, multisampled
+    let texture = |dim, arrayed, multisampled| {
+        Ok(View::Texture {
+            dim,
+            arrayed,
+            multisampled,
+            scalar: element_scalar(name, range.element)?,
+        })
+    };
+    match range.extra {
+        1 => texture(TextureDim::D1, false, false),
+        2 => texture(TextureDim::D2, false, false),
+        3 => texture(TextureDim::D2, false, true),
+        4 => texture(TextureDim::D3, false, false),
+        5 => texture(TextureDim::Cube, false, false),
+        6 => texture(TextureDim::D1, true, false),
+        7 => texture(TextureDim::D2, true, false),
+        8 => texture(TextureDim::D2, true, true),
+        9 => texture(TextureDim::Cube, true, false),
+        10 => Ok(View::Buffer(BufferKind::Typed(Lanes {
+            scalar: element_scalar(name, range.element)?,
+            width: typed_width(m, ty).ok_or_else(|| {
+                error(
+                    0,
+                    format!("{name}: a typed buffer whose element width the module does not state"),
+                )
+            })?,
+        }))),
+        11 => Ok(View::Buffer(BufferKind::Raw)),
+        12 => match range.stride {
+            Some(stride) if stride > 0 => Ok(View::Buffer(BufferKind::Structured { stride })),
+            _ => Err(error(0, format!("{name}: a structured buffer without a stride"))),
+        },
+        other => Err(error(
+            0,
+            format!("{name}: DxilResourceKind {other} is not mapped"),
+        )),
+    }
+}
+
+/// The width of a typed buffer's element: the lanes of the one vector (or scalar) its handle type holds.
+fn typed_width(m: &Module, ty: Option<TypeId>) -> Option<u8> {
+    let Type::Struct { elements, .. } = m.types.get(ty?)? else {
+        return None;
+    };
+    match m.types.get(*elements.first()?)? {
+        Type::Vector(n, _) => u8::try_from(*n).ok().filter(|n| (1..=4).contains(n)),
+        Type::Float | Type::Half | Type::Double | Type::Integer(_) => Some(1),
+        _ => None,
+    }
+}
+
+enum View {
+    Texture {
+        dim: TextureDim,
+        arrayed: bool,
+        multisampled: bool,
+        scalar: ScalarType,
+    },
+    Buffer(BufferKind),
+}
+
+fn sample_type(scalar: ScalarType) -> SampleType {
+    match scalar {
+        ScalarType::Sint => SampleType::Sint,
+        ScalarType::Uint => SampleType::Uint,
+        _ => SampleType::Float,
+    }
+}
+
+/// The program module of a container's part of this kind (`DXIL`, or `STAT` for the reflection module), if it has one.
+pub(crate) fn module(chunks: &[Chunk<'_>], kind: &[u8; 4]) -> Result<Option<Module>> {
+    let Some(c) = chunks.iter().find(|c| &c.kind == kind) else {
+        return Ok(None);
+    };
+    let part = crate::program(c.data)?;
+    let blocks = crate::bitstream::read(part.bitcode, *b"BC\xc0\xde")?;
+    Module::read(&blocks).map(Some)
+}
+
+/// The interface of a DXIL container read alone, without checking that its program is within the evaluated subset
+/// ([`crate::Shader::parse`] does): stage, varyings with interpolation and resources.
+pub fn interface(container: &[u8]) -> Result<Interface> {
+    let chunks = crate::chunks(container)?;
+    let program = module(&chunks, b"DXIL")?.ok_or_else(|| error(0, "no DXIL part"))?;
+    let named = module(&chunks, b"STAT")?;
+    reflection(&chunks, &program, named.as_ref())
+}
+
+/// The interface of a container: stage, signatures, resources, and each pixel input's interpolation from the entry
+/// point's signature metadata. `program` is the DXIL module; `named` the STAT part's reflection module when the
 /// container has one.
-pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>) -> Result<Reflection> {
+pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>) -> Result<Interface> {
     let part = |kind: &[u8; 4]| chunks.iter().find(|c| &c.kind == kind).map(|c| c.data);
+    let stage =
+        match crate::program(part(b"DXIL").ok_or_else(|| error(0, "no DXIL part"))?)?.program_version >> 16 {
+            0 => Stage::Pixel,
+            1 => Stage::Vertex,
+            kind => return Err(error(0, format!("program kind {kind} is not mapped"))),
+        };
     let source = named.unwrap_or(program);
     let mut resources = Vec::new();
-    let mut buffers = Vec::new();
-    for (range, name, ty) in ranges(source)? {
-        let kind = match range.class {
-            0 => 2,
-            1 => 4,
-            2 => 0,
-            _ => 3,
-        };
-        resources.push(Resource {
-            name: name.clone(),
-            kind,
-            return_type: if range.class == 0 { 5 } else { 0 },
-            dimension: if range.class == 0 && range.extra == 2 {
-                4
-            } else {
-                0
-            },
-            slot: range.lower,
-            count: range.count,
-        });
-        if range.class == 2 {
-            let variables = match ty {
-                Some(t) => {
-                    let names = fields(source, t)?;
-                    let elements = match source.types.get(t) {
-                        Some(Type::Struct { elements, .. }) => elements.clone(),
-                        _ => Vec::new(),
-                    };
-                    names
-                        .into_iter()
-                        .zip(elements)
-                        .map(|((name, offset), e)| {
-                            let ty = d3d_type(source, e, 0)?;
-                            // The bitcode states no size; D3D reflection's is the packed size.
-                            let size = ty
-                                .packed_words()
-                                .and_then(|w| w.checked_mul(4))
-                                .ok_or_else(|| error(0, format!("constant {name} has no packed size")))?;
-                            Ok(Variable {
-                                name,
-                                offset,
-                                size,
-                                ty,
-                                default: None,
+    for (i, (range, name, ty)) in ranges(source)?.into_iter().enumerate() {
+        let (kind, class) = match range.class {
+            0 | 1 => {
+                let uav = range.class == 1;
+                let kind = match view(&range, &name, ty, source)? {
+                    View::Texture {
+                        dim,
+                        arrayed,
+                        multisampled,
+                        scalar,
+                    } if !uav => ResourceKind::Texture {
+                        dim,
+                        arrayed,
+                        multisampled,
+                        sample: sample_type(scalar),
+                    },
+                    View::Texture {
+                        multisampled: true, ..
+                    } => {
+                        return Err(error(0, format!("{name}: a multisampled unordered-access view")));
+                    }
+                    View::Texture {
+                        dim, arrayed, scalar, ..
+                    } => ResourceKind::Storage {
+                        target: StorageTarget::Image {
+                            dim,
+                            arrayed,
+                            sample: sample_type(scalar),
+                        },
+                        access: Access::ReadWrite,
+                    },
+                    View::Buffer(buffer) if !uav => ResourceKind::Buffer(buffer),
+                    View::Buffer(buffer) => ResourceKind::Storage {
+                        target: StorageTarget::Buffer(buffer),
+                        access: Access::ReadWrite,
+                    },
+                };
+                (
+                    kind,
+                    if uav {
+                        D3dClass::UnorderedAccess
+                    } else {
+                        D3dClass::ShaderResource
+                    },
+                )
+            }
+            2 => {
+                let constants = match ty {
+                    Some(t) => {
+                        let names = fields(source, t)?;
+                        let elements = match source.types.get(t) {
+                            Some(Type::Struct { elements, .. }) => elements.clone(),
+                            _ => Vec::new(),
+                        };
+                        names
+                            .into_iter()
+                            .zip(elements)
+                            .map(|(note, e)| {
+                                Ok(BufferConstant {
+                                    ty: constant_type(source, e, note.hint(), 0)?,
+                                    name: note.name,
+                                    offset: note.offset,
+                                    default: None,
+                                })
                             })
-                        })
-                        .collect::<Result<Vec<_>>>()?
-                }
-                None => Vec::new(),
-            };
-            buffers.push(Buffer {
+                            .collect::<Result<Vec<_>>>()?
+                    }
+                    None => Vec::new(),
+                };
+                (
+                    ResourceKind::ConstantBuffer {
+                        layout: BufferLayout {
+                            size: range.extra,
+                            constants,
+                        },
+                    },
+                    D3dClass::ConstantBuffer,
+                )
+            }
+            _ => (
+                ResourceKind::Sampler {
+                    comparison: match range.extra {
+                        0 => false,
+                        1 => true,
+                        other => {
+                            return Err(error(0, format!("{name}: sampler kind {other} is not mapped")));
+                        }
+                    },
+                },
+                D3dClass::Sampler,
+            ),
+        };
+        if range.count == 0 {
+            return Err(error(0, format!("{name}: a range of no bindings")));
+        }
+        resources.push(Resource {
+            id: ResourceId(i as u32),
+            kind,
+            count: range.count,
+            provenance: ResourceProvenance {
                 name,
-                size: range.extra,
-                variables,
-            });
+                d3d: Some(D3dBinding {
+                    class,
+                    register: range.lower,
+                    space: range.space,
+                }),
+            },
+        });
+    }
+    let mut inputs = part(b"ISG1")
+        .map(|p| signature(p, stage, false))
+        .transpose()?
+        .unwrap_or_default();
+    // a pixel input's interpolation is the entry point's own signature element's, found by register and lanes
+    let (elements, _) = elements(program)?;
+    for input in &mut inputs {
+        let Some(d3d) = input.provenance.d3d else {
+            continue;
+        };
+        let found = elements.iter().find(|e| {
+            let lanes = ((1u32 << e.columns) - 1) << e.column;
+            e.placed
+                && (e.row..e.row + e.rows).contains(&d3d.register)
+                && u32::from(d3d.mask) & lanes == u32::from(d3d.mask)
+        });
+        if let Some(e) = found.filter(|e| e.interpolation != 0) {
+            input.interp = Some(
+                d3d::interpolation(u32::from(e.interpolation))
+                    .map_err(|detail| error(0, format!("{}{}: {detail}", e.name, e.index)))?,
+            );
         }
     }
-    Ok(Reflection {
-        buffers,
+    Ok(Interface {
+        stage,
+        inputs,
+        outputs: part(b"OSG1")
+            .map(|p| signature(p, stage, true))
+            .transpose()?
+            .unwrap_or_default(),
         resources,
-        inputs: part(b"ISG1").map(signature).transpose()?.unwrap_or_default(),
-        outputs: part(b"OSG1").map(signature).transpose()?.unwrap_or_default(),
     })
 }

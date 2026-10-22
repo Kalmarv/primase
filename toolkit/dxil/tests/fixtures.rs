@@ -2,7 +2,10 @@
 //! each): reflection, evaluation against outputs derived from the HLSL by hand, every truncation refused, and a
 //! seeded mutation run that must never panic.
 use primase_dxil::Shader;
-use primase_shader::{PixelShader, Sample};
+use primase_shader::{
+    ConstantType, InterpMode, InterpSampling, PixelShader, ResourceKind, Sample, SampleType, ScalarType,
+    SystemValue, TextureDim, Value,
+};
 
 const BLEND: &[u8] = include_bytes!("fixtures/blend.dxil");
 
@@ -28,38 +31,101 @@ fn inputs(front: bool) -> Vec<[u32; 4]> {
 #[test]
 fn reflection_names_bindings_and_packing() {
     let s = Shader::parse(BLEND).unwrap();
-    let r = s.reflection();
-    let inputs: Vec<(String, u32, u32, u8)> = r
+    let r = s.interface();
+    // (semantic, index, system value, register, lanes, interpolation)
+    let inputs: Vec<_> = r
         .inputs
         .iter()
-        .map(|e| (e.name.clone(), e.index, e.register, e.mask))
+        .map(|e| {
+            let d3d = e.provenance.d3d.unwrap();
+            (
+                e.label.name.as_str(),
+                e.label.index,
+                e.system,
+                d3d.register,
+                d3d.mask,
+                e.interp.map(|i| (i.mode, i.sampling)),
+            )
+        })
         .collect();
+    let center = |mode| Some((mode, InterpSampling::Center));
     assert_eq!(
         inputs,
         [
-            ("SV_Position".into(), 0, 0, 0b1111),
-            ("TEXCOORD".into(), 0, 1, 0b0011),
-            ("TEXCOORD".into(), 1, 1, 0b0100),
-            ("TEXCOORD".into(), 2, 2, 0b0001),
-            ("SV_IsFrontFace".into(), 0, 2, 0b0010),
+            (
+                "SV_Position",
+                0,
+                Some(SystemValue::FragCoord),
+                0,
+                0b1111,
+                center(InterpMode::Linear)
+            ),
+            ("TEXCOORD", 0, None, 1, 0b0011, center(InterpMode::Perspective)),
+            ("TEXCOORD", 1, None, 1, 0b0100, center(InterpMode::Perspective)),
+            ("TEXCOORD", 2, None, 2, 0b0001, center(InterpMode::Flat)),
+            (
+                "SV_IsFrontFace",
+                0,
+                Some(SystemValue::FrontFacing),
+                2,
+                0b0010,
+                center(InterpMode::Flat)
+            ),
+        ]
+    );
+    let outputs: Vec<_> = r.outputs.iter().map(|e| (e.system, e.interp, e.value)).collect();
+    let colour = Value {
+        scalar: ScalarType::Float,
+        width: 4,
+    };
+    assert_eq!(
+        outputs,
+        [
+            (Some(SystemValue::Target(0)), None, colour),
+            (Some(SystemValue::Target(1)), None, colour)
         ]
     );
     assert_eq!(s.input_count(), 3);
     assert_eq!(s.constant_buffers(), &[(3, 3)]);
     assert_eq!(s.textures(), &[2]);
     assert_eq!(s.samplers(), &[1]);
-    let names: Vec<(&str, u32, u32)> = r
+    let named: Vec<(&str, u32)> = r
         .resources
         .iter()
-        .map(|x| (x.name.as_str(), x.kind, x.slot))
+        .map(|x| (x.provenance.name.as_str(), x.provenance.d3d.unwrap().register))
         .collect();
-    assert!(names.contains(&("layer", 2, 2)), "{names:?}");
-    assert!(names.contains(&("linear_wrap", 3, 1)), "{names:?}");
-    assert!(names.contains(&("Constants", 0, 3)), "{names:?}");
-    let b = &r.buffers[0];
-    let vars: Vec<(&str, u32)> = b.variables.iter().map(|v| (v.name.as_str(), v.offset)).collect();
-    assert_eq!(b.name, "Constants");
-    assert_eq!(vars, [("scale", 0), ("bias", 16), ("flags", 32)]);
+    assert_eq!(named, [("layer", 2), ("Constants", 3), ("linear_wrap", 1)]);
+    for resource in &r.resources {
+        match (resource.provenance.name.as_str(), &resource.kind) {
+            ("layer", kind) => assert_eq!(
+                kind,
+                &ResourceKind::Texture {
+                    dim: TextureDim::D2,
+                    arrayed: false,
+                    multisampled: false,
+                    sample: SampleType::Float
+                }
+            ),
+            ("linear_wrap", kind) => assert_eq!(kind, &ResourceKind::Sampler { comparison: false }),
+            ("Constants", ResourceKind::ConstantBuffer { layout }) => {
+                let vars: Vec<(&str, u32, &ConstantType)> = layout
+                    .constants
+                    .iter()
+                    .map(|c| (c.name.as_str(), c.offset, &c.ty))
+                    .collect();
+                let vector = |scalar| ConstantType::Vector(Value { scalar, width: 4 });
+                assert_eq!(
+                    vars,
+                    [
+                        ("scale", 0, &vector(ScalarType::Float)),
+                        ("bias", 16, &vector(ScalarType::Float)),
+                        ("flags", 32, &vector(ScalarType::Uint)),
+                    ]
+                );
+            }
+            other => panic!("unexpected resource {other:?}"),
+        }
+    }
 }
 
 #[test]

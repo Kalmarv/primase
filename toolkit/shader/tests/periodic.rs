@@ -3,16 +3,16 @@
 //! already periodic, the program's value outside the cross-faded first cell, seamless across the wrap, and its size
 //! limits.
 use primase_shader::{
-    Constants, Execution, Input, Layout, PixelShader, Reflection, Sampler, Semantic, Texture,
-    evaluate_periodic,
+    Constants, D3dSignature, Execution, Input, Interface, Label, Layout, PixelShader, Sampler, ScalarType,
+    Stage, Texture, Value, Varying, VaryingProvenance, evaluate_periodic,
 };
 use std::collections::BTreeMap;
 
 /// o0 = (f(U, V), U, V, 1), U and V read from TEXCOORD0.xy.
 #[derive(Debug)]
-struct Uv(Reflection, fn(f32, f32) -> f32);
+struct Uv(Interface, fn(f32, f32) -> f32);
 impl PixelShader for Uv {
-    fn reflection(&self) -> &Reflection {
+    fn interface(&self) -> &Interface {
         &self.0
     }
     fn input_count(&self) -> usize {
@@ -46,19 +46,30 @@ impl PixelShader for Uv {
 
 fn shader(f: fn(f32, f32) -> f32) -> Uv {
     Uv(
-        Reflection {
-            buffers: Vec::new(),
-            resources: Vec::new(),
-            inputs: vec![Semantic {
-                name: "TEXCOORD".into(),
-                index: 0,
-                system_value: 0,
-                component_type: 3,
-                register: 0,
-                mask: 3,
-                used_mask: 3,
+        Interface {
+            stage: Stage::Pixel,
+            inputs: vec![Varying {
+                label: Label {
+                    name: "TEXCOORD".into(),
+                    index: 0,
+                },
+                system: None,
+                value: Value {
+                    scalar: ScalarType::Float,
+                    width: 2,
+                },
+                interp: None,
+                used: true,
+                provenance: VaryingProvenance {
+                    d3d: Some(D3dSignature {
+                        register: 0,
+                        mask: 3,
+                        read_write_mask: 3,
+                    }),
+                },
             }],
             outputs: Vec::new(),
+            resources: Vec::new(),
         },
         f,
     )

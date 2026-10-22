@@ -1,4 +1,5 @@
 use crate::{Result, chunks, error, opcodes::NAMES};
+use primase_shader::Interpolation;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Register {
@@ -76,6 +77,15 @@ pub enum ReturnType {
     Mixed,
 }
 
+/// A declared pixel input (`dcl_input_ps v<register>.<lanes>`): the lanes it covers and how they are interpolated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputDeclaration {
+    pub register: u32,
+    /// Lane mask: bit k is lane k.
+    pub mask: u8,
+    pub interpolation: Interpolation,
+}
+
 /// A declared `t<slot>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResourceDeclaration {
@@ -118,6 +128,8 @@ pub struct Program {
     pub(crate) temps: usize,
     pub(crate) inputs: usize,
     pub(crate) outputs: usize,
+    /// Every pixel input declaration, in program order.
+    pub(crate) input_declarations: Vec<InputDeclaration>,
     pub(crate) constant_buffers: Vec<(u32, u32)>,
     pub(crate) textures: Vec<u32>,
     /// 3D texture slots: declared, refused when a sample reaches one (loaded by `ld`).
@@ -316,6 +328,10 @@ impl Program {
     pub fn output_count(&self) -> usize {
         self.outputs
     }
+    /// The pixel inputs the program declares, with their interpolation.
+    pub fn input_declarations(&self) -> &[InputDeclaration] {
+        &self.input_declarations
+    }
     pub fn constant_buffers(&self) -> &[(u32, u32)] {
         &self.constant_buffers
     }
@@ -383,6 +399,7 @@ impl Program {
             temps: 0,
             inputs: 0,
             outputs: 0,
+            input_declarations: Vec::new(),
             constant_buffers: Vec::new(),
             textures: Vec::new(),
             volumes: Vec::new(),
@@ -715,6 +732,15 @@ impl Program {
                             return Err(error(pos, "input limit"));
                         }
                         self.inputs = self.inputs.max(i as usize + 1);
+                        let Selection::Mask(mask @ 1..=15) = o.selection else {
+                            return Err(error(pos, "an input declaration without a lane mask"));
+                        };
+                        self.input_declarations.push(InputDeclaration {
+                            register: i,
+                            mask,
+                            interpolation: primase_shader::d3d::interpolation((token >> 11) & 15)
+                                .map_err(|detail| error(pos, detail))?,
+                        });
                         if opcode != 98 {
                             c.take()?;
                         }

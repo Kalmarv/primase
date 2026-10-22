@@ -2,8 +2,9 @@
 //! `evaluate` on one HLSL fixture compiled to both bytecodes (tests/fixtures/evaluate.hlsl), with outputs worked out
 //! from the HLSL, and constant packing worked out from D3D's packing rules.
 use primase_shader::{
-    Buffer, Constants, Execution, Field, Grid, Image, Input, Lane, Layout, Member, PixelShader, Reflection,
-    Resource, Sampler, Texture, Type, Variable, evaluate,
+    BufferLayout, Constant, ConstantType, Constants, D3dBinding, D3dClass, Execution, Field, Grid, Image,
+    Input, Interface, Lane, Layout, Majorness, Member, PixelShader, Resource, ResourceId, ResourceKind,
+    ResourceProvenance, Sampler, ScalarType, Stage, Texture, d3d, evaluate,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -175,9 +176,9 @@ fn constants_are_bounded_by_field_and_buffer() {
 
 /// A reflection-only shader for layouts the fixture does not have.
 #[derive(Debug)]
-struct Reflected(Reflection, Vec<(u32, u32)>);
+struct Reflected(Interface, Vec<(u32, u32)>);
 impl PixelShader for Reflected {
-    fn reflection(&self) -> &Reflection {
+    fn interface(&self) -> &Interface {
         &self.0
     }
     fn input_count(&self) -> usize {
@@ -201,17 +202,23 @@ impl PixelShader for Reflected {
         unreachable!("layout only")
     }
 }
-fn ty(class: u16, rows: u16, columns: u16, elements: u16) -> Type {
-    Type {
-        class,
-        scalar: 3,
-        rows,
-        columns,
-        elements,
-        members: Vec::new(),
+/// A constant of D3D reflection's class (1 vector, 2 row-major matrix, 3 column-major matrix, 0 scalar), shape and
+/// array length, packed by D3D's rules.
+fn ty(class: u16, rows: u32, columns: u32, elements: u32) -> ConstantType {
+    let f = ScalarType::Float;
+    let one = match class {
+        0 => ConstantType::Scalar(f),
+        1 => d3d::vector(f, columns).unwrap(),
+        2 => d3d::matrix(f, rows, columns, Majorness::Row).unwrap(),
+        _ => d3d::matrix(f, rows, columns, Majorness::Column).unwrap(),
+    };
+    if elements == 0 {
+        one
+    } else {
+        d3d::array(one, elements).unwrap()
     }
 }
-fn member(name: &str, offset: u32, ty: Type) -> Member {
+fn member(name: &str, offset: u32, ty: ConstantType) -> Member {
     Member {
         name: name.into(),
         offset,
@@ -219,37 +226,34 @@ fn member(name: &str, offset: u32, ty: Type) -> Member {
     }
 }
 fn reflected(members: Vec<Member>) -> Reflected {
-    let structure = Type {
-        class: 5,
-        scalar: 0,
-        rows: 1,
-        columns: 1,
-        elements: 0,
-        members,
-    };
     Reflected(
-        Reflection {
-            buffers: vec![Buffer {
-                name: "Frame".into(),
-                size: 256,
-                variables: vec![Variable {
-                    name: "frame".into(),
-                    offset: 32,
-                    size: 224,
-                    ty: structure,
-                    default: None,
-                }],
-            }],
-            resources: vec![Resource {
-                name: "Frame".into(),
-                kind: 0,
-                return_type: 0,
-                dimension: 0,
-                slot: 2,
-                count: 1,
-            }],
+        Interface {
+            stage: Stage::Pixel,
             inputs: Vec::new(),
             outputs: Vec::new(),
+            resources: vec![Resource {
+                id: ResourceId(0),
+                kind: ResourceKind::ConstantBuffer {
+                    layout: BufferLayout {
+                        size: 256,
+                        constants: vec![Constant {
+                            name: "frame".into(),
+                            offset: 32,
+                            ty: ConstantType::Struct { members },
+                            default: None,
+                        }],
+                    },
+                },
+                count: 1,
+                provenance: ResourceProvenance {
+                    name: "Frame".into(),
+                    d3d: Some(D3dBinding {
+                        class: D3dClass::ConstantBuffer,
+                        register: 2,
+                        space: 0,
+                    }),
+                },
+            }],
         },
         vec![(2, 16)],
     )
@@ -361,9 +365,9 @@ fn quads_give_the_scalar_outputs_and_their_footprints() {
 
 /// Writes to o0 what a load of t0 at texel (1, 2), level 0, returns.
 #[derive(Debug)]
-struct Loads(Reflection);
+struct Loads(Interface);
 impl PixelShader for Loads {
-    fn reflection(&self) -> &Reflection {
+    fn interface(&self) -> &Interface {
         &self.0
     }
     fn input_count(&self) -> usize {
@@ -408,11 +412,11 @@ impl PixelShader for Loads {
 /// A constant texture answers a load with its value's bits, wherever it is loaded; an image refuses a load.
 #[test]
 fn a_constant_texture_answers_loads() {
-    let shader = Loads(Reflection {
-        buffers: vec![],
-        resources: vec![],
+    let shader = Loads(Interface {
+        stage: Stage::Pixel,
         inputs: vec![],
         outputs: vec![],
+        resources: vec![],
     });
     let grid = Grid {
         size: 2,

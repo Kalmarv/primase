@@ -128,10 +128,12 @@ Written outputs compare exactly or within four f32 epsilon times
 `max(1, abs(reference))`; NaN pairs are counted separately. An unset directory
 skips the real-binary gate. The committed analytical tests require no data.
 
-`Reflection::parse` reads SM5.0 pixel-program RDEF, ISGN and OSGN chunks.
-It retains resource slots, buffer sizes/default bytes, variable and nested
-member offsets, scalar/class/array metadata and input/output semantics.
-It does not flatten arrays, infer their use or assign material parameters.
+`reflection` reads SM5.0 pixel-program RDEF, ISGN and OSGN chunks into primase's interface vocabulary
+(`primase_shader::Interface`, see `toolkit/shader/README.md`): resources by kind with their D3D bind points, constant
+buffers with explicit byte offsets, strides and default bytes, and one varying per signature element with its
+register and lanes in provenance. D3D's enum numbers stop there; one the mapping does not know is refused by name.
+`Shader::parse` also gives each input the interpolation the program declares. It does not flatten arrays, infer
+their use or assign material parameters.
 Record sizes, byte ranges, string lengths, recursion and total type count are
 bounded; cyclic types and variables outside their buffer are refused. Stripped
 reflection is an explicit error for this API, not an invented binding layout.

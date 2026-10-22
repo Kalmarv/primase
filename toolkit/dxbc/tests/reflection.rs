@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-use primase_dxbc::Type;
+use primase_shader::{ConstantType, ResourceKind, ScalarType, Value};
 use std::collections::BTreeMap;
 
 fn set(bytes: &mut [u8], at: usize, value: u32) {
@@ -30,10 +30,15 @@ fn fixture(rdef: &[u8]) -> Vec<u8> {
     bytes
 }
 fn rdef() -> Vec<u8> {
-    let mut b = vec![0; 176];
+    let mut b = vec![0; 208];
     for (at, v) in [
         (0, 1),
         (4, 60),
+        // one resource record, at 176: the constant buffer B at b0
+        (8, 1),
+        (12, 176),
+        (176, 172),
+        (200, 1),
         (16, 0xffff0500),
         (28, u32::from_le_bytes(*b"RD11")),
         (32, 60),
@@ -54,17 +59,48 @@ fn rdef() -> Vec<u8> {
     ] {
         set(&mut b, at, v);
     }
-    b[172..].copy_from_slice(b"B\0v\0");
+    b[172..176].copy_from_slice(b"B\0v\0");
     b
 }
 #[test]
 fn checked_reflection_ranges_and_cycles() {
     let valid = rdef();
     let r = primase_dxbc::reflection(&fixture(&valid)).unwrap();
+    let ResourceKind::ConstantBuffer { layout } = &r.resources[0].kind else {
+        panic!("a constant buffer")
+    };
     assert_eq!(
-        (r.buffers[0].name.as_str(), r.buffers[0].variables[0].ty.columns),
-        ("B", 4)
+        (
+            r.resources[0].provenance.name.as_str(),
+            r.resources[0].provenance.d3d.unwrap().register,
+            layout.constants[0].ty.clone()
+        ),
+        (
+            "B",
+            0,
+            ConstantType::Vector(Value {
+                scalar: ScalarType::Float,
+                width: 4
+            })
+        )
     );
+    // what the mapping does not know is refused by name: a tbuffer, a resource type with a counter, flags and counts
+    for (at, value, named) in [
+        (180, 1, "D3D_SIT_TBUFFER"),
+        (180, 9, "D3D_SIT_UAV_APPEND_STRUCTURED"),
+        (180, 99, "an unknown resource type"),
+        (204, 0x40, "flags 0x40"),
+        (200, 0, "bind count 0"),
+    ] {
+        let mut bad = valid.clone();
+        set(&mut bad, at, value);
+        let message = primase_dxbc::reflection(&fixture(&bad)).unwrap_err().to_string();
+        assert!(message.contains(named), "{named}: {message}");
+    }
+    let mut bad = valid.clone();
+    set(&mut bad, 80, 1);
+    let message = primase_dxbc::reflection(&fixture(&bad)).unwrap_err().to_string();
+    assert!(message.contains("tbuffer"), "{message}");
     let mut bad = valid.clone();
     set(&mut bad, 92, 17);
     assert!(
@@ -96,11 +132,16 @@ fn checked_reflection_ranges_and_cycles() {
     }
 }
 
-fn leaves<'a>(name: &str, offset: u32, ty: &'a Type, out: &mut BTreeMap<String, (u32, &'a Type)>) {
-    if ty.members.is_empty() {
+fn leaves<'a>(
+    name: &str,
+    offset: u32,
+    ty: &'a ConstantType,
+    out: &mut BTreeMap<String, (u32, &'a ConstantType)>,
+) {
+    if ty.members().is_empty() {
         assert!(out.insert(name.to_owned(), (offset, ty)).is_none());
     }
-    for m in &ty.members {
+    for m in ty.members() {
         leaves(&m.name, offset + m.offset, &m.ty, out);
     }
 }
@@ -124,31 +165,45 @@ fn reflected_bindings_match_independent_disassembly() -> Result<(), Box<dyn std:
         let j: serde_json::Value = serde_json::from_slice(&std::fs::read(oracle)?)?;
         let r = primase_dxbc::reflection(&std::fs::read(&path)?)
             .map_err(|e| format!("{}: {e}", path.display()))?;
-        for (group, kind) in [("textures", 2), ("buffers", 0)] {
+        for (group, textures) in [("textures", true), ("buffers", false)] {
             for (name, value) in j[group].as_object().unwrap() {
                 let resource = r
                     .resources
                     .iter()
-                    .find(|b| b.kind == kind && b.name == *name)
+                    .find(|b| {
+                        matches!(b.kind, ResourceKind::Texture { .. }) == textures
+                            && matches!(
+                                b.kind,
+                                ResourceKind::Texture { .. } | ResourceKind::ConstantBuffer { .. }
+                            )
+                            && b.provenance.name == *name
+                    })
                     .unwrap();
-                assert_eq!(resource.slot as u64, value.as_u64().unwrap());
+                assert_eq!(
+                    resource.provenance.d3d.unwrap().register as u64,
+                    value.as_u64().unwrap()
+                );
                 bindings += 1;
             }
         }
         for (name, expected) in j["inputs"].as_object().unwrap() {
             assert!(
-                r.inputs
-                    .iter()
-                    .any(|v| format!("{}{}", v.name.to_uppercase(), v.index) == *name
-                        && v.register as u64 == expected.as_u64().unwrap()),
+                r.inputs.iter().any(
+                    |v| format!("{}{}", v.label.name.to_uppercase(), v.label.index) == *name
+                        && v.provenance.d3d.unwrap().register as u64 == expected.as_u64().unwrap()
+                ),
                 "{name}"
             );
             inputs += 1;
         }
         for (buffer, expected) in j["layout"].as_object().unwrap() {
             let mut actual = BTreeMap::new();
-            for v in &r.buffers.iter().find(|b| b.name == *buffer).unwrap().variables {
-                leaves(&v.name, v.offset, &v.ty, &mut actual);
+            let resource = r.resources.iter().find(|b| b.provenance.name == *buffer).unwrap();
+            let ResourceKind::ConstantBuffer { layout } = &resource.kind else {
+                panic!("{buffer} is not a constant buffer")
+            };
+            for c in &layout.constants {
+                leaves(&c.name, c.offset, &c.ty, &mut actual);
             }
             for (name, expected) in expected.as_object().unwrap() {
                 let (offset, ty) = actual
@@ -160,7 +215,10 @@ fn reflected_bindings_match_independent_disassembly() -> Result<(), Box<dyn std:
                     "{buffer}.{name}"
                 );
                 assert_eq!(
-                    ty.elements.max(1) as u64,
+                    match ty {
+                        ConstantType::Array { count, .. } => *count as u64,
+                        _ => 1,
+                    },
                     expected["count"].as_u64().unwrap(),
                     "{buffer}.{name} count"
                 );

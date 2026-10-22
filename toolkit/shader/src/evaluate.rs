@@ -2,7 +2,9 @@
 //! program reads (constant layout and values, a texture per sampled slot, a value per used input) and which output
 //! registers it wants; the evaluator has no game names and no policy, and refuses what it is not given.
 
-use crate::{Error, Load, PixelShader, Reflection, Sample, Sampler, Type};
+use crate::{
+    ConstantType, D3dClass, Error, Interface, Load, Member, PixelShader, ResourceKind, Sample, Sampler,
+};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -25,7 +27,7 @@ pub struct Field {
     pub words: u32,
 }
 
-/// The constant buffers a program reads and where each named constant lives. Built from the bytecode's reflection
+/// The constant buffers a program reads and where each named constant lives. Built from the program's interface
 /// ([`Layout::of`]) or by the caller from a game's own records when the bytecode carries none.
 #[derive(Clone, Debug, Default)]
 pub struct Layout {
@@ -34,8 +36,9 @@ pub struct Layout {
     pub fields: BTreeMap<String, Field>,
 }
 impl Layout {
-    /// The program's buffers, and every reflected field by name: struct members are flattened to their own names, as
-    /// D3D reflection names them. A name that occurs twice or a field off a word boundary is an error.
+    /// The program's buffers, and every constant its interface names, by name: a structure's members are flattened to
+    /// their own names, as D3D reflection names them. A name that occurs twice or a constant off a word boundary is
+    /// an error.
     pub fn of(shader: &dyn PixelShader) -> Result<Self, Error> {
         let mut layout = Self {
             buffers: shader
@@ -49,36 +52,45 @@ impl Layout {
                 .collect::<Result<_, _>>()?,
             fields: BTreeMap::new(),
         };
-        layout.add_reflected(shader.reflection())?;
+        layout.add_named(shader.interface())?;
         Ok(layout)
     }
-    fn add_reflected(&mut self, reflection: &Reflection) -> Result<(), Error> {
-        for buffer in &reflection.buffers {
-            let slot = reflection
-                .resources
-                .iter()
-                .find(|r| r.kind == 0 && r.name == buffer.name)
-                .ok_or_else(|| error(0, format!("buffer {} has no binding", buffer.name)))?
-                .slot;
-            for v in &buffer.variables {
-                if v.ty.members.is_empty() {
-                    self.insert(slot, &v.name, v.offset, v.size.div_ceil(4))?;
-                } else {
-                    self.members(slot, v.offset, &v.ty)?;
+    fn add_named(&mut self, interface: &Interface) -> Result<(), Error> {
+        for resource in &interface.resources {
+            let ResourceKind::ConstantBuffer { layout } = &resource.kind else {
+                continue;
+            };
+            let slot = resource
+                .provenance
+                .d3d
+                .filter(|b| b.class == D3dClass::ConstantBuffer)
+                .ok_or_else(|| {
+                    error(
+                        0,
+                        format!(
+                            "buffer {} has no constant-buffer register",
+                            resource.provenance.name
+                        ),
+                    )
+                })?
+                .register;
+            for c in &layout.constants {
+                match c.ty.members() {
+                    [] => self.insert(slot, &c.name, c.offset, words(&c.ty)?)?,
+                    members => self.members(slot, c.offset, members)?,
                 }
             }
         }
         Ok(())
     }
-    fn members(&mut self, slot: u32, offset: u32, ty: &Type) -> Result<(), Error> {
-        for m in &ty.members {
+    fn members(&mut self, slot: u32, offset: u32, members: &[Member]) -> Result<(), Error> {
+        for m in members {
             let at = offset
                 .checked_add(m.offset)
                 .ok_or_else(|| error(0, "member offset overflow"))?;
-            if m.ty.members.is_empty() {
-                self.insert(slot, &m.name, at, words(&m.ty)?)?;
-            } else {
-                self.members(slot, at, &m.ty)?;
+            match m.ty.members() {
+                [] => self.insert(slot, &m.name, at, words(&m.ty)?)?,
+                inner => self.members(slot, at, inner)?,
             }
         }
         Ok(())
@@ -102,14 +114,11 @@ impl Layout {
     }
 }
 
-/// Words of a member type under D3D constant packing ([`Type::packed_words`]).
-fn words(ty: &Type) -> Result<u32, Error> {
-    ty.packed_words().ok_or_else(|| {
-        error(
-            0,
-            format!("a constant of variable class {} has no packed size", ty.class),
-        )
-    })
+/// Words a constant of this type occupies in its buffer, padding inside arrays and matrices included.
+fn words(ty: &ConstantType) -> Result<u32, Error> {
+    ty.size()
+        .map(|bytes| bytes.div_ceil(4))
+        .ok_or_else(|| error(0, "a constant's layout overflows"))
 }
 
 /// Constant-buffer words of one layout, zero until set.
@@ -318,28 +327,25 @@ pub fn evaluate_raw(
     // Each used input element's lanes, placed at its register and components.
     let mut placed: Vec<(usize, usize, Lane)> = Vec::new();
     let mut registers = vec![[0u32; 4]; shader.input_count()];
-    for element in shader.reflection().inputs.iter().filter(|e| e.used_mask != 0) {
+    for element in shader.interface().inputs.iter().filter(|e| e.used) {
+        let (name, index) = (&element.label.name, element.label.index);
         let key = inputs
             .iter()
-            .find(|((name, index), _)| name.eq_ignore_ascii_case(&element.name) && *index == element.index)
+            .find(|((n, i), _)| n.eq_ignore_ascii_case(name) && *i == index)
             .map(|(_, input)| *input)
-            .ok_or_else(|| {
-                error(
-                    0,
-                    format!("no value for used input {}{}", element.name, element.index),
-                )
-            })?;
-        let register = element.register as usize;
-        if register >= registers.len() || element.mask == 0 || element.mask > 15 {
+            .ok_or_else(|| error(0, format!("no value for used input {name}{index}")))?;
+        let d3d = element
+            .provenance
+            .d3d
+            .ok_or_else(|| error(0, format!("input {name}{index} has no D3D register")))?;
+        let register = d3d.register as usize;
+        if register >= registers.len() || d3d.mask == 0 || d3d.mask > 15 {
             return Err(error(
                 0,
-                format!(
-                    "input {}{} is outside the program's registers",
-                    element.name, element.index
-                ),
+                format!("input {name}{index} is outside the program's registers"),
             ));
         }
-        let components = (0..4).filter(|c| element.mask & (1 << c) != 0);
+        let components = (0..4).filter(|c| d3d.mask & (1 << c) != 0);
         for (component, lane) in components.zip(key.lanes()) {
             match lane {
                 Lane::Bits(bits) => registers[register][component] = bits,

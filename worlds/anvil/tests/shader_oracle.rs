@@ -108,18 +108,23 @@ fn run_with(
     engine: &[(u32, usize, [f64; 4])],
 ) -> Vec<[f64; 4]> {
     let inputs: Vec<[u32; 4]> = s
-        .reflection()
+        .interface()
         .inputs
         .iter()
-        .map(|i| match (i.name.as_str(), i.register) {
-            ("SV_Position", _) => bits([0.5, 0.5, 0.5, 1.0]),
-            ("COLOR", _) if i.index == 0 => bits(colour),
-            // a second vertex colour (MAD_Grounds' tire scalar, COLOR1.x): 1s
-            ("COLOR", _) => bits([1.0; 4]),
-            ("SV_IsFrontFace", _) => [u32::MAX; 4],
-            (_, 1) => bits([0.3, 0.6, 0.0, 0.0]),
-            (_, r) if r % 2 == 1 => bits([1.0, 0.0, 0.0, 0.0]),
-            _ => bits([0.0, 0.0, 1.0, 1.0]),
+        .map(|i| {
+            match (
+                i.label.name.as_str(),
+                i.provenance.d3d.expect("a D3D register").register,
+            ) {
+                ("SV_Position", _) => bits([0.5, 0.5, 0.5, 1.0]),
+                ("COLOR", _) if i.label.index == 0 => bits(colour),
+                // a second vertex colour (MAD_Grounds' tire scalar, COLOR1.x): 1s
+                ("COLOR", _) => bits([1.0; 4]),
+                ("SV_IsFrontFace", _) => [u32::MAX; 4],
+                (_, 1) => bits([0.3, 0.6, 0.0, 0.0]),
+                (_, r) if r % 2 == 1 => bits([1.0, 0.0, 0.0, 0.0]),
+                _ => bits([0.0, 0.0, 1.0, 1.0]),
+            }
         })
         .collect();
     let buffers: Vec<(u32, Vec<[u32; 4]>)> = s
@@ -1165,14 +1170,19 @@ fn mad_outskirt_maps_by_the_world_position() {
         set(&mut cb3, 2, scale);
         cb3[3] = [offset[0], offset[1], 0.0, 0.0];
         let inputs: Vec<[u32; 4]> = s
-            .reflection()
+            .interface()
             .inputs
             .iter()
-            .map(|i| match (i.name.as_str(), i.register) {
-                ("SV_Position", _) => bits([0.5, 0.5, 0.5, 1.0]),
-                (_, 1) => bits([p[0], p[1], p[2], 1.0]),
-                (_, reg) if reg % 2 == 1 => bits([1.0, 0.0, 0.0, 0.0]),
-                _ => bits([0.0, 0.0, 1.0, 1.0]),
+            .map(|i| {
+                match (
+                    i.label.name.as_str(),
+                    i.provenance.d3d.expect("a D3D register").register,
+                ) {
+                    ("SV_Position", _) => bits([0.5, 0.5, 0.5, 1.0]),
+                    (_, 1) => bits([p[0], p[1], p[2], 1.0]),
+                    (_, reg) if reg % 2 == 1 => bits([1.0, 0.0, 0.0, 0.0]),
+                    _ => bits([0.0, 0.0, 1.0, 1.0]),
+                }
             })
             .collect();
         let buffers: Vec<(u32, Vec<[u32; 4]>)> = s

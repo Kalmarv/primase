@@ -20,10 +20,11 @@
   function bodies. Instructions: binary operators, casts, comparisons, select, extractvalue, insertvalue, call,
   phi, ret and forward-only branches; any other record is refused by name (`getelementptr`, `alloca`, `load`,
   `store`, `switch`, backward branches as loops, ...).
-- Reflection (`reflection`): input and output signatures from `ISG1`/`OSG1`, their packing (element id, first
-  register and column, size) from `dx.entryPoints`, resources from `dx.resources`, and constant-buffer layouts
-  (field names and offsets) from `dx.typeAnnotations`, named from the `STAT` module when present (the program's
-  own metadata has no names).
+- Reflection (`reflection`, `interface`): input and output signatures from `ISG1`/`OSG1`, their packing (element id,
+  first register and column, size) and interpolation from `dx.entryPoints`, resources from `dx.resources` (kind,
+  element type and stride tags, space), and constant-buffer layouts (field names, offsets, component types and
+  matrix annotations) from `dx.typeAnnotations`, named from the `STAT` module when present (the program's own
+  metadata has no names), mapped into primase's interface vocabulary (`primase_shader::Interface`).
 
 ## Evaluation
 

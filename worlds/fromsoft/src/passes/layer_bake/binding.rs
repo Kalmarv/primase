@@ -1,7 +1,10 @@
 use super::BaseMipBilinearWrap;
 use crate::{Result, invalid, materials::LayeredMaterial, mtd::Value};
-use primase_dxbc::{Shader, Type};
-use primase_shader::{Constants, Grid, Input, Invocation, Lane, Layout, Texture, evaluate_raw};
+use primase_dxbc::Shader;
+use primase_shader::{
+    Constants, Field, Grid, Input, Interface, Invocation, Lane, Layout, Resource, ResourceKind, Texture,
+    TextureDim, evaluate_raw,
+};
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Frozen per-vertex input for one baked layer-weight group. Choosing groups
@@ -75,37 +78,12 @@ fn dxbc(e: primase_dxbc::Error) -> crate::Error {
 fn evaluation(e: primase_shader::Error) -> crate::Error {
     invalid("layer bake", e.at, e.detail)
 }
-fn fields(
-    name: &str,
-    offset: u32,
-    ty: &Type,
-    out: &mut BTreeMap<String, (u32, usize)>,
-    slot: u32,
-) -> Result<()> {
-    if ty.members.is_empty() {
-        if !offset.is_multiple_of(4) {
-            return Err(invalid("layer binding", offset as usize, "unaligned field"));
-        }
-        if out.insert(name.to_owned(), (slot, offset as usize / 4)).is_some() {
-            return Err(invalid(
-                "layer binding",
-                offset as usize,
-                format!("ambiguous reflected field {name}"),
-            ));
-        }
-    }
-    for m in &ty.members {
-        fields(
-            &m.name,
-            offset
-                .checked_add(m.offset)
-                .ok_or_else(|| invalid("layer binding", 0, "member overflow"))?,
-            &m.ty,
-            out,
-            slot,
-        )?;
-    }
-    Ok(())
+/// The texture resources of a program's interface.
+fn textures_of(interface: &Interface) -> impl Iterator<Item = &Resource> {
+    interface
+        .resources
+        .iter()
+        .filter(|r| matches!(r.kind, ResourceKind::Texture { .. }))
 }
 fn slot_name(kind: &str) -> Option<(u32, &str)> {
     let rest = kind.rsplit_once("Texture2D_")?.1;
@@ -140,7 +118,7 @@ impl Prepared {
         mut image: impl FnMut(&str, bool) -> Result<Option<Arc<BaseMipBilinearWrap>>>,
     ) -> Result<Self> {
         let shader = Shader::parse(bytes).map_err(dxbc)?;
-        let (program, reflection) = (&shader.program, &shader.reflection);
+        let (program, interface) = (&shader.program, &shader.interface);
         let leaf = material
             .definition
             .shader
@@ -166,33 +144,24 @@ impl Prepared {
             ),
             ("second UV set replaced by first for static bake".into(), 1),
         ]);
-        let mut offsets = BTreeMap::new();
-        for buffer in &reflection.buffers {
-            let binding = reflection
-                .resources
-                .iter()
-                .find(|r| r.kind == 0 && r.name == buffer.name)
-                .ok_or_else(|| invalid("layer binding", 0, "buffer has no resource binding"))?;
-            for v in &buffer.variables {
-                fields(&v.name, v.offset, &v.ty, &mut offsets, binding.slot)?;
-            }
-        }
+        let layout = Layout::of(&shader).map_err(evaluation)?;
         // the buffers the program reads, by slot: their words
         let words: BTreeMap<u32, usize> = program
             .constant_buffers()
             .iter()
             .map(|&(slot, rows)| (slot, rows as usize * 4))
             .collect();
-        let mut constants = Constants::new(&Layout {
-            buffers: words.iter().map(|(&slot, &n)| (slot, n as u32)).collect(),
-            fields: BTreeMap::new(),
-        });
+        let mut constants = Constants::new(&layout);
         // a field's words from `word` on, those inside a buffer the program reads (the program reads no others)
         let mut set = |name: &str, word: usize, values: &[f32]| {
-            if let Some(&(slot, at)) = offsets.get(name)
+            if let Some(&Field {
+                buffer: slot,
+                offset: at,
+                ..
+            }) = layout.fields.get(name)
                 && let Some(&n) = words.get(&slot)
             {
-                let start = at + word;
+                let start = at as usize + word;
                 let bits: Vec<u32> = values
                     .iter()
                     .take(n.saturating_sub(start))
@@ -220,11 +189,8 @@ impl Prepared {
             }
         }
         let mut textures = BTreeMap::new();
-        let sampled_scales: Vec<_> = reflection
-            .resources
-            .iter()
-            .filter(|r| r.kind == 2)
-            .filter_map(|r| r.name.rsplit_once("Texture2D_")?.1.parse::<u32>().ok())
+        let sampled_scales: Vec<_> = textures_of(interface)
+            .filter_map(|r| r.provenance.name.rsplit_once("Texture2D_")?.1.parse::<u32>().ok())
             .filter_map(|slot| slots.get(&slot).map(|(_, b)| b.scale))
             .collect();
         let main_scale = slots
@@ -235,15 +201,30 @@ impl Prepared {
         let (period, period_exact) = super::period::common_period(&sampled_scales, main_scale)?;
         let mut cache = BTreeMap::<(String, bool), Option<Arc<BaseMipBilinearWrap>>>::new();
         let mut largest_colour_dimension = 0;
-        for resource in reflection.resources.iter().filter(|r| r.kind == 2) {
-            if resource.count != 1 || resource.dimension != 4 {
+        for resource in textures_of(interface) {
+            let ResourceKind::Texture {
+                dim,
+                arrayed,
+                multisampled,
+                ..
+            } = resource.kind
+            else {
+                unreachable!("textures_of yields textures")
+            };
+            if resource.count != 1 || dim != TextureDim::D2 || arrayed || multisampled {
                 return Err(invalid(
                     "layer binding",
                     0,
                     "only individual Texture2D resources are supported",
                 ));
             }
+            let register = resource
+                .provenance
+                .d3d
+                .ok_or_else(|| invalid("layer binding", 0, "a texture without a D3D register"))?
+                .register;
             let slot = resource
+                .provenance
                 .name
                 .rsplit_once("Texture2D_")
                 .and_then(|(_, s)| s.parse::<u32>().ok())
@@ -251,7 +232,7 @@ impl Prepared {
                     invalid(
                         "layer binding",
                         0,
-                        format!("unrecognized texture binding {}", resource.name),
+                        format!("unrecognized texture binding {}", resource.provenance.name),
                     )
                 })?;
             // A declared slot retains its semantic role even without a path.
@@ -278,15 +259,11 @@ impl Prepared {
                 }
                 set(
                     "FC_TextureTilingScale",
-                    resource.slot as usize * 4,
+                    register as usize * 4,
                     &[b.scale[0], b.scale[1], 0., 0.],
                 );
             } else {
-                set(
-                    "FC_TextureTilingScale",
-                    resource.slot as usize * 4,
-                    &[1., 1., 0., 0.],
-                );
+                set("FC_TextureTilingScale", register as usize * 4, &[1., 1., 0., 0.]);
             }
             if source.is_none() {
                 *policies
@@ -298,7 +275,7 @@ impl Prepared {
                     _ => [0.; 4],
                 }));
             }
-            textures.insert(resource.slot, source.expect("explicit default"));
+            textures.insert(register, source.expect("explicit default"));
         }
         for &slot in program.textures() {
             if !textures.contains_key(&slot) {
@@ -323,19 +300,20 @@ impl Prepared {
             return Err(invalid("layer binding", 0, "nonfinite sample time"));
         }
         set("FC_GlobalTime", 0, &[sample_time]);
-        if offsets.contains_key("FC_GlobalTime") {
+        if layout.fields.contains_key("FC_GlobalTime") {
             policies.insert("global time at the program's sample time".into(), 1);
         }
-        if offsets.contains_key("FC_TimeOfDay") {
+        if layout.fields.contains_key("FC_TimeOfDay") {
             policies.insert("time of day left at frozen zero".into(), 1);
         }
         // Material radiance is baked at unit exposure, not a runtime camera's
         // pre-exposure. Otherwise zero-initialized constants suppress emission.
         set("SC_PreExposure", 0, &[1.]);
-        if offsets.contains_key("SC_PreExposure") {
+        if layout.fields.contains_key("SC_PreExposure") {
             policies.insert("unit pre-exposure for static material bake".into(), 1);
         }
-        for name in offsets
+        for name in layout
+            .fields
             .keys()
             .filter(|n| n.starts_with(&prefix) && !n.ends_with("_PADDING"))
         {
@@ -455,8 +433,8 @@ impl Prepared {
         }
         // every used input by its semantic: the grid's UV in TEXCOORD0, the frozen values elsewhere
         let mut inputs = BTreeMap::new();
-        for s in self.shader.reflection.inputs.iter().filter(|s| s.used_mask != 0) {
-            let input = match (s.name.to_ascii_uppercase().as_str(), s.index) {
+        for s in self.shader.interface.inputs.iter().filter(|s| s.used) {
+            let input = match (s.label.name.to_ascii_uppercase().as_str(), s.label.index) {
                 ("POSITION", 1) => Input::Constant([0., 0., 0., 1.]),
                 ("NORMAL", 0) => Input::Constant([0., 1., 0., 0.]),
                 ("TANGENT", 0) => Input::Constant([1., 0., 0., 1.]),
@@ -472,11 +450,11 @@ impl Prepared {
                     return Err(invalid(
                         "layer binding",
                         0,
-                        format!("unclassified input {}{}", s.name, s.index),
+                        format!("unclassified input {}{}", s.label.name, s.label.index),
                     ));
                 }
             };
-            inputs.insert((s.name.clone(), s.index), input);
+            inputs.insert((s.label.name.clone(), s.label.index), input);
         }
         if !inputs
             .keys()
@@ -644,7 +622,8 @@ mod tests {
             words.push(opcode | (((args.len() + 1) as u32) << 24));
             words.extend_from_slice(args);
         };
-        instruction(98, &operand(1, 0));
+        // dcl_input_ps linear v0.xyzw: a pixel input is declared with an interpolation mode
+        instruction(98 | (2 << 11), &operand(1, 0));
         for index in [0, 2] {
             instruction(101, &operand(2, index));
         }
@@ -686,19 +665,30 @@ mod tests {
         Prepared {
             shader: Shader {
                 program: primase_dxbc::Program::from_words(&words).unwrap(),
-                reflection: primase_dxbc::Reflection {
-                    buffers: vec![],
-                    resources: vec![],
-                    outputs: vec![],
-                    inputs: vec![primase_dxbc::Semantic {
-                        name: "TEXCOORD".into(),
-                        index: 0,
-                        system_value: 0,
-                        component_type: 3,
-                        register: 0,
-                        mask: 15,
-                        used_mask: 15,
+                interface: primase_dxbc::Interface {
+                    stage: primase_shader::Stage::Pixel,
+                    inputs: vec![primase_dxbc::Varying {
+                        label: primase_shader::Label {
+                            name: "TEXCOORD".into(),
+                            index: 0,
+                        },
+                        system: None,
+                        value: primase_shader::Value {
+                            scalar: primase_shader::ScalarType::Float,
+                            width: 4,
+                        },
+                        interp: None,
+                        used: true,
+                        provenance: primase_shader::VaryingProvenance {
+                            d3d: Some(primase_shader::D3dSignature {
+                                register: 0,
+                                mask: 15,
+                                read_write_mask: 15,
+                            }),
+                        },
                     }],
+                    outputs: vec![],
+                    resources: vec![],
                 },
             },
             constants: Constants::new(&Layout::default()),

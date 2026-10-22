@@ -7,6 +7,7 @@ mod evaluate;
 pub mod module;
 pub mod reflection;
 pub use evaluate::{Census, Shader};
+pub use reflection::interface;
 
 #[derive(Debug, thiserror::Error)]
 #[error("DXIL at bit {bit}: {detail}")]

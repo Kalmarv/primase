@@ -4,7 +4,7 @@
 use crate::module::{BinaryOp, CastOp, Constant, Function, Module, Op, Type, TypeId, Value, ValueId};
 use crate::reflection::{Element, Range};
 use crate::{Chunk, Result, error};
-use primase_shader::{Execution, Lod, PixelShader, Reflection, Sample, Sampler};
+use primase_shader::{Execution, Interface, Lod, PixelShader, Sample, Sampler};
 use std::collections::BTreeMap;
 
 /// Instructions one evaluation may execute (the subset has no loops; this bounds a malformed body).
@@ -90,7 +90,7 @@ pub struct Shader {
     inputs: Vec<Element>,
     outputs: Vec<Element>,
     ranges: Vec<Range>,
-    reflection: Reflection,
+    interface: Interface,
     constant_buffers: Vec<(u32, u32)>,
     textures: Vec<u32>,
     samplers: Vec<u32>,
@@ -137,16 +137,8 @@ impl Shader {
     /// from the `STAT` part when present). Refuses a program outside the subset ([`Shader::census`]).
     pub fn parse(container: &[u8]) -> Result<Self> {
         let chunks: Vec<Chunk<'_>> = crate::chunks(container)?;
-        let program = |kind: &[u8; 4]| -> Result<Option<Module>> {
-            let Some(c) = chunks.iter().find(|c| &c.kind == kind) else {
-                return Ok(None);
-            };
-            let part = crate::program(c.data)?;
-            let blocks = crate::bitstream::read(part.bitcode, *b"BC\xc0\xde")?;
-            Module::read(&blocks).map(Some)
-        };
-        let module = program(b"DXIL")?.ok_or_else(|| error(0, "no DXIL part"))?;
-        let named = program(b"STAT")?;
+        let module = crate::reflection::module(&chunks, b"DXIL")?.ok_or_else(|| error(0, "no DXIL part"))?;
+        let named = crate::reflection::module(&chunks, b"STAT")?;
         let entry_value = crate::reflection::entry(&module)?;
         let entry = module
             .functions
@@ -158,7 +150,7 @@ impl Shader {
             .into_iter()
             .map(|r| r.0)
             .collect();
-        let reflection = crate::reflection::reflection(&chunks, &module, named.as_ref())?;
+        let interface = crate::reflection::reflection(&chunks, &module, named.as_ref())?;
         let constant_buffers = ranges
             .iter()
             .filter(|r| r.class == 2)
@@ -178,7 +170,7 @@ impl Shader {
             inputs,
             outputs,
             ranges,
-            reflection,
+            interface,
             constant_buffers,
             textures,
             samplers,
@@ -872,8 +864,8 @@ impl Shader {
 }
 
 impl PixelShader for Shader {
-    fn reflection(&self) -> &Reflection {
-        &self.reflection
+    fn interface(&self) -> &Interface {
+        &self.interface
     }
     fn input_count(&self) -> usize {
         self.input_count
