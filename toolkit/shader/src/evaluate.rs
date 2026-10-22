@@ -8,6 +8,8 @@ use crate::{
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use primase_core::parallel::Threads;
+
 fn error(at: usize, detail: impl Into<String>) -> Error {
     Error {
         bytecode: "evaluate",
@@ -312,6 +314,32 @@ pub fn evaluate_raw(
     targets: &[(u32, u8)],
     invocation: Invocation,
 ) -> Result<Raw, Error> {
+    evaluate_raw_with(
+        Threads::ONE,
+        shader,
+        constants,
+        textures,
+        inputs,
+        grid,
+        targets,
+        invocation,
+    )
+}
+
+/// [`evaluate_raw`] on `threads` threads: the grid's rows (of quads, for [`Invocation::Quads`]) worked one per thread
+/// at a time, each with its own sampler, the pixels and counts gathered in row order: the same [`Raw`] on any count.
+/// The first failing row's error, as the serial run's.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_raw_with(
+    threads: Threads,
+    shader: &dyn PixelShader,
+    constants: &Constants,
+    textures: &BTreeMap<u32, Texture>,
+    inputs: &BTreeMap<(String, u32), Input>,
+    grid: Grid,
+    targets: &[(u32, u8)],
+    invocation: Invocation,
+) -> Result<Raw, Error> {
     if grid.size == 0 || grid.size > 4096 || !grid.period.iter().all(|p| p.is_finite() && *p > 0.) {
         return Err(error(
             0,
@@ -369,10 +397,6 @@ pub fn evaluate_raw(
         .map(|(s, v)| (*s, v.as_slice()))
         .collect();
     let size = grid.size as usize;
-    let mut pixels: Vec<Vec<([u32; 4], u8)>> =
-        targets.iter().map(|_| vec![([0; 4], 0); size * size]).collect();
-    let (mut instructions, mut samples) = (0u64, 0u64);
-    let mut sampler = Bound(textures);
     // the registers of pixel (x, y), which may lie past the grid (a quad's helper lanes)
     let at = |x: u32, y: u32| -> Vec<[u32; 4]> {
         let u = (x as f32 + 0.5) / grid.size as f32 * grid.period[0];
@@ -383,18 +407,28 @@ pub fn evaluate_raw(
         }
         r
     };
-    let mut keep = |pixel: usize, result: &crate::Execution| {
-        instructions += result.instructions as u64;
-        samples += result.samples as u64;
-        for (t, &(register, mask)) in targets.iter().enumerate() {
-            let written = result.output_masks.get(register as usize).copied().unwrap_or(0) & mask;
-            let bits = result.outputs.get(register as usize).copied().unwrap_or([0; 4]);
-            pixels[t][pixel] = (bits, written);
-        }
+    // one row's (or row of quads') kept results: pixel index, then per target its bits and written lanes
+    type Kept = Vec<(usize, Vec<([u32; 4], u8)>)>;
+    let kept = |result: &crate::Execution| -> Vec<([u32; 4], u8)> {
+        targets
+            .iter()
+            .map(|&(register, mask)| {
+                let written = result.output_masks.get(register as usize).copied().unwrap_or(0) & mask;
+                let bits = result.outputs.get(register as usize).copied().unwrap_or([0; 4]);
+                (bits, written)
+            })
+            .collect()
     };
-    match invocation {
-        Invocation::Scalar => {
-            for y in 0..grid.size {
+    let row = |y: u32| -> Result<(Kept, u64, u64), Error> {
+        let mut sampler = Bound(textures);
+        let (mut out, mut instructions, mut samples): (Kept, u64, u64) = (Vec::new(), 0, 0);
+        let mut keep = |pixel: usize, result: &crate::Execution| {
+            instructions += result.instructions as u64;
+            samples += result.samples as u64;
+            out.push((pixel, kept(result)));
+        };
+        match invocation {
+            Invocation::Scalar => {
                 for x in 0..grid.size {
                     let pixel = (y * grid.size + x) as usize;
                     let result = shader
@@ -406,9 +440,7 @@ pub fn evaluate_raw(
                     keep(pixel, &result);
                 }
             }
-        }
-        Invocation::Quads => {
-            for y in (0..grid.size).step_by(2) {
+            Invocation::Quads => {
                 for x in (0..grid.size).step_by(2) {
                     let lanes = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)];
                     let inputs = lanes.map(|(lx, ly)| at(lx, ly));
@@ -428,6 +460,26 @@ pub fn evaluate_raw(
                         }
                     }
                 }
+            }
+        }
+        Ok((out, instructions, samples))
+    };
+    let rows: Vec<u32> = match invocation {
+        Invocation::Scalar => (0..grid.size).collect(),
+        Invocation::Quads => (0..grid.size).step_by(2).collect(),
+    };
+    let done = primase_core::parallel::map(threads, &rows, |_, &y| row(y))
+        .map_err(|p| error(0, format!("row {}: {}", rows[p.item], p.message)))?;
+    let mut pixels: Vec<Vec<([u32; 4], u8)>> =
+        targets.iter().map(|_| vec![([0; 4], 0); size * size]).collect();
+    let (mut instructions, mut samples) = (0u64, 0u64);
+    for r in done {
+        let (kept, i, s) = r?;
+        instructions += i;
+        samples += s;
+        for (pixel, values) in kept {
+            for (t, v) in values.into_iter().enumerate() {
+                pixels[t][pixel] = v;
             }
         }
     }

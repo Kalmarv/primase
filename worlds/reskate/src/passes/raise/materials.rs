@@ -294,8 +294,10 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
         let (index, quantized) = if let Some(&entry) = cache.get(&key) {
             entry
         } else {
-            let mut quantized = false;
-            let texture = primase_image::map_rgba8_levels(
+            // any texel rounded: an OR over the texels, which no thread's order changes
+            let quantized = std::sync::atomic::AtomicBool::new(false);
+            let texture = primase_image::map_rgba8_levels_with(
+                primase_core::parallel::Threads::of(world),
                 source,
                 0..source.levels.len(),
                 primase_image::TextureMetadata {
@@ -327,13 +329,16 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
                     let mut pixel = [255; 4];
                     for (out, value) in pixel.iter_mut().zip(values) {
                         let rounded = value.round();
-                        quantized |= value != rounded;
+                        if value != rounded {
+                            quantized.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
                         *out = rounded as u8;
                     }
                     Ok(pixel)
                 },
             )
             .map_err(|error| bad(entity, format!("mask source {:?}: {error}", slot.texture)))?;
+            let quantized = quantized.into_inner();
             let index = plan.masks.len();
             plan.masks.push(texture);
             plan.mask_names.push(mask_name(world, &key, source));

@@ -164,6 +164,7 @@
 use std::collections::BTreeMap;
 
 use primase_core::layered::{Channel, Composition, Layer, LayerWeights, Source, WeightMapping};
+use primase_core::parallel::Threads;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
@@ -171,7 +172,7 @@ use primase_core::{
     Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, Semantic, Stream, TexFormat, TexRole,
     Texture, VertexColor, World,
 };
-use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, srgb8_to_linear};
+use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, map_rgba8_levels_with, srgb8_to_linear};
 
 use super::decals::DECAL_QUEUE;
 use super::formulas::{Rough, emission, metalness, occlusion, roughness, sat, tinted};
@@ -197,7 +198,8 @@ pub enum ShaderUv {
     OneMinusV,
 }
 
-/// The pass (see the module documentation).
+/// The pass (see the module documentation). The textures it derives are worked on the world's stated threads
+/// (`core.threads`, [`primase_core::parallel`]): the same texels on any count.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerAnvilMaterial {
     pub normal_green: NormalGreen,
@@ -1077,19 +1079,21 @@ fn srgb(w: &World, e: Entity) -> bool {
     w.get::<AnvilTextureMap>(e).is_some_and(|t| t.field_25 == 1)
 }
 
-/// A texture made from `source`'s every stored level, each texel by `map` of its sampled channels.
+/// A texture made from `source`'s every stored level, each texel by `map` of its sampled channels (that texel's
+/// alone), on the world's stated threads (`core.threads`).
 fn derived(
     w: &World,
     source: Entity,
     role: TexRole,
     color_space: ColorSpace,
-    mut map: impl FnMut(&Rgba8Texel, [f64; 4]) -> [u8; 4],
+    map: impl Fn(&Rgba8Texel, [f64; 4]) -> [u8; 4] + Sync,
 ) -> Result<Texture, String> {
     let t = w
         .get::<Texture>(source)
         .ok_or("a texture entity without a texture")?;
     let srgb = srgb(w, source);
-    map_rgba8_levels(
+    map_rgba8_levels_with(
+        Threads::of(w),
         t,
         0..t.levels.len(),
         TextureMetadata {

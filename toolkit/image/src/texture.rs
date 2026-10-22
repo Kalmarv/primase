@@ -1,4 +1,5 @@
 use crate::{Error, Image, Result, Samples, read_png, write_png};
+use primase_core::parallel::Threads;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{
     ColorSpace, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole,
@@ -117,8 +118,13 @@ pub fn texture_level_png(t: &Texture, level: usize) -> Result<Vec<u8>> {
 
 /// Level `level` of `t` decoded to RGBA8, the pixels [`texture_level_png`] writes.
 pub fn texture_level_rgba8(t: &Texture, level: usize) -> Result<Image> {
+    texture_level_rgba8_with(Threads::ONE, t, level)
+}
+
+/// [`texture_level_rgba8`] decoded on `threads` threads (a row of blocks each at a time): the same pixels.
+pub fn texture_level_rgba8_with(threads: Threads, t: &Texture, level: usize) -> Result<Image> {
     let (w, h) = level_dimensions(t, level)?;
-    let rgba = Decoder::default().decode_rgba8(t.format, w, h, &t.levels[level])?;
+    let rgba = Decoder::with_threads(threads).decode_rgba8(t.format, w, h, &t.levels[level])?;
     Ok(Image {
         width: w,
         height: h,
@@ -132,43 +138,30 @@ pub fn texture_level_rgba8(t: &Texture, level: usize) -> Result<Image> {
 /// the same frame; this pass does not regenerate tangents from UV coordinates.
 /// Every stored mip is decoded to RGBA8; alpha
 /// and colour-space metadata stay unchanged. Already-conforming textures remain
-/// byte-identical and keep file provenance. Missing normal metadata is an error.
+/// byte-identical and keep file provenance. Missing normal metadata is an error. The textures are converted on the
+/// world's stated threads (`core.threads`, one texture per thread at a time): the same result on any count.
 pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
     let mut log = PassLog::default();
-    let mut changes = Vec::<(Entity, Texture)>::new();
+    let mut todo = Vec::<(Entity, &Texture, NormalConvention)>::new();
     for (e, t) in world.iter::<Texture>().filter(|(_, t)| t.role == TexRole::Normal) {
         let convention = t
             .normal
             .ok_or_else(|| Error::Invalid(format!("normal texture {e:?} has no convention")))?;
-        if convention == NormalConvention::GLTF {
-            continue;
+        if convention != NormalConvention::GLTF {
+            todo.push((e, t, convention));
         }
-        let mut levels = Vec::new();
-        for i in 0..t.levels.len() {
-            let (w, h) = level_dimensions(t, i)?;
-            let mut rgba = Decoder::default().decode_rgba8(t.format, w, h, &t.levels[i])?;
-            for p in rgba.as_chunks_mut::<4>().0 {
-                if convention.x == NormalX::Alpha {
-                    p[0] = p[3];
-                }
-                if convention.green == NormalGreen::Down {
-                    p[1] = 255 - p[1];
-                }
-                if convention.basis == NormalBasis::BitangentTangent {
-                    p.swap(0, 1);
-                }
-                if convention.z == NormalZ::Rebuild && crate::rebuild_normal_z(p) {
-                    log.count("normal pixels projected onto unit disk", 1);
-                }
-            }
-            levels.push(rgba);
+    }
+    // each texture converted on its own (at most the stated threads at once), the counts added in the textures' order
+    let converted = primase_core::parallel::map(Threads::of(world), &todo, |_, &(_, t, convention)| {
+        convert_normals(t, convention)
+    })
+    .map_err(|e| Error::Invalid(e.to_string()))?;
+    let mut changes = Vec::<(Entity, Texture)>::with_capacity(todo.len());
+    for (&(e, t, convention), converted) in todo.iter().zip(converted) {
+        let (converted, projected) = converted?;
+        if projected > 0 {
+            log.count("normal pixels projected onto unit disk", projected);
         }
-        // Validate even an invalid empty input chain before mutating anything.
-        level_dimensions(t, 0)?;
-        let mut converted = t.clone();
-        converted.format = TexFormat::Rgba8Unorm;
-        converted.levels = levels;
-        converted.normal = Some(NormalConvention::GLTF);
         changes.push((e, converted));
         log.count("normal textures converted", 1);
         if convention.basis == NormalBasis::BitangentTangent {
@@ -192,6 +185,39 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
         world.remove::<TextureFile>(e);
     }
     Ok(log)
+}
+
+/// `t` in glTF's normal convention from `convention`, every level decoded to RGBA8, and how many pixels were projected
+/// onto the unit disk.
+fn convert_normals(t: &Texture, convention: NormalConvention) -> Result<(Texture, u64)> {
+    let mut projected = 0;
+    let mut levels = Vec::new();
+    for i in 0..t.levels.len() {
+        let (w, h) = level_dimensions(t, i)?;
+        let mut rgba = Decoder::default().decode_rgba8(t.format, w, h, &t.levels[i])?;
+        for p in rgba.as_chunks_mut::<4>().0 {
+            if convention.x == NormalX::Alpha {
+                p[0] = p[3];
+            }
+            if convention.green == NormalGreen::Down {
+                p[1] = 255 - p[1];
+            }
+            if convention.basis == NormalBasis::BitangentTangent {
+                p.swap(0, 1);
+            }
+            if convention.z == NormalZ::Rebuild && crate::rebuild_normal_z(p) {
+                projected += 1;
+            }
+        }
+        levels.push(rgba);
+    }
+    // Validate even an invalid empty input chain before mutating anything.
+    level_dimensions(t, 0)?;
+    let mut converted = t.clone();
+    converted.format = TexFormat::Rgba8Unorm;
+    converted.levels = levels;
+    converted.normal = Some(NormalConvention::GLTF);
+    Ok((converted, projected))
 }
 /// Bake every `pbr.material`'s normal scale into its normal map ([`crate::scale_normal`], glTF's rule) and set the
 /// scale to 1, for targets without a normal strength. The normal maps must be in glTF's convention

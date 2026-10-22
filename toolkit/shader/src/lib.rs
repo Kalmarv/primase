@@ -20,7 +20,7 @@ mod evaluate;
 mod program;
 pub use evaluate::{
     Constants, Evaluation, Field, Grid, Image, Input, Invocation, Lane, Layout, Raw, Texture, evaluate,
-    evaluate_raw,
+    evaluate_raw, evaluate_raw_with,
 };
 pub use primase_core::shader::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, D3dSignature, Interface,
@@ -153,7 +153,7 @@ pub struct Error {
 }
 
 /// A checked pixel shader that can be evaluated.
-pub trait PixelShader: std::fmt::Debug {
+pub trait PixelShader: std::fmt::Debug + Sync {
     /// The program's varyings and resources, in primase's vocabulary.
     fn interface(&self) -> &Interface;
     /// Input registers an evaluation needs.

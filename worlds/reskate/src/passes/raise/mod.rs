@@ -920,7 +920,8 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
 
 /// `raise-skate{name=N,light_scale=standard|S[,map=NAME:surface;...][,unclassified=surface]}`:
 /// [`raise_skate`] as a pass; `name` and `light_scale` are required; `map` is the caller's map of source surface names (it wins over the
-/// class, [`class_to_skate`]).
+/// class, [`class_to_skate`]). Its derived MSK textures are made on the world's stated threads (`core.threads`, a row of
+/// texels at a time): the same texels on any count.
 #[derive(Debug)]
 pub struct RaiseSkate {
     options: RaiseOptions,

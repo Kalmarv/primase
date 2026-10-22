@@ -66,7 +66,7 @@ use primase_core::{
     TexRole, Texture, VertexColor, World,
 };
 use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
-use primase_shader::{Constants, Grid, Input, Invocation, Layout, Lod, evaluate_raw};
+use primase_shader::{Constants, Grid, Input, Invocation, Layout, Lod, evaluate_raw_with};
 
 use super::material::{ShaderUv, uv_transform};
 use crate::components::{
@@ -350,7 +350,8 @@ const RECIPES: &[Recipe] = &[
     GRAFFITI_MONSTER,
 ];
 
-/// The pass (see the module documentation).
+/// The pass (see the module documentation). Each shader evaluation runs on the world's stated threads (`core.threads`,
+/// a row of quads at a time): the same pixels on any count.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BakeAnvilMaterial {
     pub size: u32,
@@ -743,7 +744,8 @@ impl BakeAnvilMaterial {
         for &(index, role) in recipe.interpolants {
             inputs.insert(("TEXCOORD".to_owned(), index), constant(role.value()));
         }
-        let raw = evaluate_raw(
+        let raw = evaluate_raw_with(
+            primase_core::parallel::Threads::of(w),
             &shader,
             &constants,
             &textures,

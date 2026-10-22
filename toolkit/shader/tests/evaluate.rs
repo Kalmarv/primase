@@ -346,6 +346,47 @@ fn quads_give_the_scalar_outputs_and_their_footprints() {
         )
         .unwrap();
         assert_eq!(quads.pixels, scalar.pixels, "grid of {size}");
+        // on several threads (a row, or row of quads, each): the same pixels and counts as one
+        for invocation in [
+            primase_shader::Invocation::Scalar,
+            primase_shader::Invocation::Quads,
+        ] {
+            let one = if invocation == primase_shader::Invocation::Scalar {
+                &scalar
+            } else {
+                &quads
+            };
+            for n in [2, 8] {
+                let many = primase_shader::evaluate_raw_with(
+                    primase_core::parallel::Threads::new(n).unwrap(),
+                    shader.as_ref(),
+                    &c,
+                    &textures,
+                    &inputs(),
+                    grid,
+                    &targets,
+                    invocation,
+                )
+                .unwrap();
+                assert_eq!(
+                    (&many.pixels, many.instructions, many.samples),
+                    (&one.pixels, one.instructions, one.samples),
+                    "grid of {size}, {invocation:?} on {n} threads"
+                );
+            }
+        }
+        footprints.0.lock().unwrap().clear();
+        // the footprints again, of one quads run
+        primase_shader::evaluate_raw(
+            shader.as_ref(),
+            &c,
+            &textures,
+            &inputs(),
+            grid,
+            &targets,
+            primase_shader::Invocation::Quads,
+        )
+        .unwrap();
         let step = 1. / size as f32;
         let want = [[2. * step, 0.], [0., 4. * step]];
         let seen = footprints.0.lock().unwrap();

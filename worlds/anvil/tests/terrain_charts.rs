@@ -400,3 +400,35 @@ fn the_options_state_the_threshold_and_refuse_what_cannot_chart() {
     });
     assert_eq!(LowerAnvilTerrain::from_options(&p.options()).unwrap(), p);
 }
+
+/// The splat bake on the world's stated threads (`core.threads`, its rows shaded in parallel) makes the serial
+/// ground: every texture byte for byte, the same pieces and log, charts or none.
+#[test]
+fn the_bake_on_any_thread_count_is_the_serial_one() {
+    use primase_core::parallel::Threads;
+    for steep in [
+        Steep::None,
+        Steep::Chart {
+            threshold: 45.0,
+            max_atlas: 4096,
+        },
+    ] {
+        let (serial, log) = lowered(steep);
+        let textures = |w: &World| -> Vec<(Entity, Texture)> {
+            w.iter::<Texture>().map(|(e, t)| (e, t.clone())).collect()
+        };
+        for n in [2, 7] {
+            let mut w = world();
+            w.insert_resource(Threads::new(n).unwrap());
+            let mut l = PassLog::default();
+            pass(steep).run(&mut w, &mut l).expect("lower");
+            assert_eq!(textures(&w), textures(&serial), "{steep:?} on {n} threads");
+            assert_eq!(
+                piece(&w).0,
+                piece(&serial).0,
+                "{steep:?} on {n} threads: the mesh"
+            );
+            assert_eq!(l, log, "{steep:?} on {n} threads: the log");
+        }
+    }
+}

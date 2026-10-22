@@ -5,6 +5,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 use primase_core::TexFormat;
+use primase_core::parallel::{Panicked, Threads, rows_mut};
 use thiserror::Error;
 mod blocks;
 mod encode;
@@ -24,6 +25,8 @@ pub enum Error {
     Length { expected: usize, actual: usize },
     #[error("could not allocate decoded pixels")]
     Allocation,
+    #[error("decoding a row of blocks: {0}")]
+    Worker(#[from] Panicked),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -33,10 +36,31 @@ pub trait TexDecoder {
     fn decode_rgba32f(&self, format: TexFormat, width: u32, height: u32, data: &[u8]) -> Result<Vec<f32>>;
 }
 
-/// Independent Rust BC1-5 implementation; BC6H/BC7 use the checked bcdec adapter.
-#[derive(Debug, Clone, Copy, Default)]
+/// Independent Rust BC1-5 implementation; BC6H/BC7 use the checked bcdec adapter. A block-compressed level is decoded
+/// on [`Decoder::threads`] threads, a row of blocks at a time (the same pixels on any count).
+#[derive(Debug, Clone, Copy)]
 pub struct Decoder {
-    _private: (),
+    threads: Threads,
+}
+
+impl Default for Decoder {
+    /// One thread.
+    fn default() -> Decoder {
+        Decoder {
+            threads: Threads::ONE,
+        }
+    }
+}
+
+impl Decoder {
+    /// A decoder working each level's rows of blocks on `threads` threads (at most that many rows at once).
+    pub fn with_threads(threads: Threads) -> Decoder {
+        Decoder { threads }
+    }
+
+    pub fn threads(&self) -> Threads {
+        self.threads
+    }
 }
 /// Adapter to bcdec_rs 0.2.0, useful as an independent gate oracle for BC1-5.
 #[derive(Debug, Clone, Copy, Default)]
@@ -88,7 +112,7 @@ fn to_byte(v: f32) -> u8 {
     (v.clamp(0., 1.) * 255.).round_ties_even() as u8
 }
 
-fn decode8(oracle: bool, f: TexFormat, w: u32, h: u32, data: &[u8]) -> Result<Vec<u8>> {
+fn decode8(oracle: bool, threads: Threads, f: TexFormat, w: u32, h: u32, data: &[u8]) -> Result<Vec<u8>> {
     let n = validate(f, w, h, data)?;
     if !f.is_block_compressed() || signed(f) || matches!(f, TexFormat::Bc6hUfloat | TexFormat::Bc6hSfloat) {
         let floats = decode_float(oracle, f, w, h, data)?;
@@ -105,22 +129,41 @@ fn decode8(oracle: bool, f: TexFormat, w: u32, h: u32, data: &[u8]) -> Result<Ve
             .collect());
     }
     let mut out = buffer(n)?;
-    for by in 0..h.div_ceil(4) {
-        for bx in 0..w.div_ceil(4) {
-            let offset = (by as usize * w.div_ceil(4) as usize + bx as usize) * f.block_bytes() as usize;
-            let block = blocks::decode(f, &data[offset..offset + f.block_bytes() as usize], oracle)?;
-            for y in 0..4 {
-                for x in 0..4 {
-                    if bx * 4 + x < w && by * 4 + y < h {
-                        let dst = (((by * 4 + y) as usize * w as usize) + (bx * 4 + x) as usize) * 4;
-                        let src = (y * 4 + x) as usize * 4;
-                        out[dst..dst + 4].copy_from_slice(&block[src..src + 4]);
-                    }
+    // each row of blocks fills its own four rows of pixels (fewer at the bottom edge); the first failing row's error
+    let failed: std::sync::Mutex<Option<(u32, Error)>> = std::sync::Mutex::new(None);
+    let block_row = 4 * w as usize * 4;
+    rows_mut(threads, &mut out, block_row, |by, rows| {
+        let by = by as u32;
+        if let Err(e) = decode_block_row(oracle, f, w, by, data, rows)
+            && let Ok(mut first) = failed.lock()
+            && first.as_ref().is_none_or(|(at, _)| by < *at)
+        {
+            *first = Some((by, e));
+        }
+    })?;
+    if let Some((_, e)) = failed.into_inner().ok().flatten() {
+        return Err(e);
+    }
+    Ok(out)
+}
+
+/// Block row `by` of a level `w` texels wide into `rows`, its pixel rows (four, or what is left of the level).
+fn decode_block_row(oracle: bool, f: TexFormat, w: u32, by: u32, data: &[u8], rows: &mut [u8]) -> Result<()> {
+    let height = (rows.len() / (w as usize * 4)) as u32;
+    for bx in 0..w.div_ceil(4) {
+        let offset = (by as usize * w.div_ceil(4) as usize + bx as usize) * f.block_bytes() as usize;
+        let block = blocks::decode(f, &data[offset..offset + f.block_bytes() as usize], oracle)?;
+        for y in 0..height {
+            for x in 0..4 {
+                if bx * 4 + x < w {
+                    let dst = ((y as usize * w as usize) + (bx * 4 + x) as usize) * 4;
+                    let src = (y * 4 + x) as usize * 4;
+                    rows[dst..dst + 4].copy_from_slice(&block[src..src + 4]);
                 }
             }
         }
     }
-    Ok(out)
+    Ok(())
 }
 fn decode_float(oracle: bool, f: TexFormat, w: u32, h: u32, data: &[u8]) -> Result<Vec<f32>> {
     let n = validate(f, w, h, data)?;
@@ -131,7 +174,7 @@ fn decode_float(oracle: bool, f: TexFormat, w: u32, h: u32, data: &[u8]) -> Resu
         f,
         TexFormat::Bc4Snorm | TexFormat::Bc5Snorm | TexFormat::Bc6hUfloat | TexFormat::Bc6hSfloat
     ) {
-        return Ok(decode8(oracle, f, w, h, data)?
+        return Ok(decode8(oracle, Threads::ONE, f, w, h, data)?
             .iter()
             .map(|&v| v as f32 / 255.)
             .collect());
@@ -182,7 +225,7 @@ fn decode_float(oracle: bool, f: TexFormat, w: u32, h: u32, data: &[u8]) -> Resu
 }
 impl TexDecoder for Decoder {
     fn decode_rgba8(&self, f: TexFormat, w: u32, h: u32, d: &[u8]) -> Result<Vec<u8>> {
-        decode8(false, f, w, h, d)
+        decode8(false, self.threads, f, w, h, d)
     }
     fn decode_rgba32f(&self, f: TexFormat, w: u32, h: u32, d: &[u8]) -> Result<Vec<f32>> {
         decode_float(false, f, w, h, d)
@@ -190,7 +233,7 @@ impl TexDecoder for Decoder {
 }
 impl TexDecoder for Bcdec {
     fn decode_rgba8(&self, f: TexFormat, w: u32, h: u32, d: &[u8]) -> Result<Vec<u8>> {
-        decode8(true, f, w, h, d)
+        decode8(true, Threads::ONE, f, w, h, d)
     }
     fn decode_rgba32f(&self, f: TexFormat, w: u32, h: u32, d: &[u8]) -> Result<Vec<f32>> {
         decode_float(true, f, w, h, d)

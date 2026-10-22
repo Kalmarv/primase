@@ -16,7 +16,8 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{ColorSpace, Component, Entity, Name, TexFormat, TexRole, Texture, World};
 
-use crate::{Image, Samples, mip_chain, texture_level_rgba8};
+use crate::{Image, Samples, mip_chain, texture_level_rgba8_with};
+use primase_core::parallel::{Threads, rows_mut};
 
 /// Which map the packed image takes its size and stored levels from (`size=`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,7 +58,8 @@ impl MissingLevels {
 }
 
 /// `pack-orm` (see the module documentation): `size`, which map gives the packed image its size and levels;
-/// `missing_levels`, what becomes of a level the other map does not store. Both are the program's choice.
+/// `missing_levels`, what becomes of a level the other map does not store. Both are the program's choice. The maps are
+/// decoded and packed on the world's stated threads (`core.threads`, a row at a time): the same image on any count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PackOrm {
     size: OrmSize,
@@ -110,7 +112,7 @@ fn rgba(image: &Image) -> &[u8] {
 }
 
 impl Decoded {
-    fn of(t: &Texture, what: &str) -> Result<Decoded, String> {
+    fn of(threads: Threads, t: &Texture, what: &str) -> Result<Decoded, String> {
         if t.color_space != ColorSpace::Linear {
             return Err(format!(
                 "the {what} map is not linear: a mask map's channels are data"
@@ -120,7 +122,10 @@ impl Decoded {
             return Err(format!("the {what} map stores no level"));
         }
         let levels = (0..t.levels.len())
-            .map(|i| texture_level_rgba8(t, i).map_err(|e| format!("the {what} map's level {i}: {e}")))
+            .map(|i| {
+                texture_level_rgba8_with(threads, t, i)
+                    .map_err(|e| format!("the {what} map's level {i}: {e}"))
+            })
             .collect::<Result<_, _>>()?;
         Ok(Decoded {
             levels,
@@ -155,9 +160,15 @@ struct Tally {
 
 impl PackOrm {
     /// The pair packed: the size-giving map's levels, the other's at each level (resampled, generated as chosen).
-    fn pack(&self, mr: &Texture, ao: &Texture, tally: &mut Tally) -> Result<Texture, String> {
-        let mut mr = Decoded::of(mr, "metallic-roughness")?;
-        let mut ao = Decoded::of(ao, "occlusion")?;
+    fn pack(
+        &self,
+        threads: Threads,
+        mr: &Texture,
+        ao: &Texture,
+        tally: &mut Tally,
+    ) -> Result<Texture, String> {
+        let mut mr = Decoded::of(threads, mr, "metallic-roughness")?;
+        let mut ao = Decoded::of(threads, ao, "occlusion")?;
         let (width, height, count) = match self.size {
             OrmSize::MetallicRoughness => (mr.levels[0].width, mr.levels[0].height, mr.levels.len()),
             OrmSize::Occlusion => (ao.levels[0].width, ao.levels[0].height, ao.levels.len()),
@@ -181,13 +192,15 @@ impl PackOrm {
                 let p = (sy * img.width as usize + sx) * 4;
                 rgba(img)[p..p + 4].try_into().expect("four channels")
             };
-            let mut out = Vec::with_capacity(w as usize * h as usize * 4);
-            for y in 0..h {
-                for x in 0..w {
-                    let (o, r) = (at(a, x, y), at(m, x, y));
-                    out.extend_from_slice(&[o[0], r[1], r[2], 255]);
+            // each row of the packed level from its own texels (at most the stated threads rows at once)
+            let mut out = vec![0u8; w as usize * h as usize * 4];
+            rows_mut(threads, &mut out, w as usize * 4, |y, row| {
+                for (x, p) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    let (o, r) = (at(a, x as u32, y as u32), at(m, x as u32, y as u32));
+                    *p = [o[0], r[1], r[2], 255];
                 }
-            }
+            })
+            .map_err(|e| e.to_string())?;
             levels.push(out);
         }
         Ok(Texture {
@@ -258,6 +271,7 @@ impl Pass for PackOrm {
                     let mut tally = Tally::default();
                     let image = self
                         .pack(
+                            Threads::of(world),
                             source(mr.texture, "metallic-roughness")?,
                             source(ao.texture, "occlusion")?,
                             &mut tally,

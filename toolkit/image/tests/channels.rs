@@ -106,3 +106,71 @@ fn callback_failure_does_not_change_source() {
     assert!(result.is_err());
     assert_eq!(source, before);
 }
+
+/// [`map_rgba8_levels_with`] on several threads makes the serial texture texel for texel (a BC1 source of three levels,
+/// sizes not whole blocks, a mapping of each texel's own channels and coordinates), and an error is the first failing
+/// row's, as the serial one's.
+#[test]
+fn the_threaded_mapping_is_the_serial_one() {
+    use primase_core::parallel::Threads;
+    use primase_image::map_rgba8_levels_with;
+    let mut s = 12345u32;
+    let mut noise = |n: usize| -> Vec<u8> {
+        (0..n)
+            .map(|_| {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                (s >> 24) as u8
+            })
+            .collect()
+    };
+    let (w, h) = (75u32, 51u32);
+    let blocks = |w: u32, h: u32| (w.div_ceil(4) * h.div_ceil(4) * 8) as usize;
+    let source = Texture {
+        width: w,
+        height: h,
+        format: TexFormat::Bc1,
+        levels: vec![noise(blocks(w, h)), noise(blocks(37, 25)), noise(blocks(18, 12))],
+        color_space: ColorSpace::Srgb,
+        role: TexRole::Color,
+        normal: None,
+    };
+    let map = |t: primase_image::Rgba8Texel| -> Result<[u8; 4], Error> {
+        let [r, g, b, a] = t.rgba;
+        Ok([
+            b ^ (t.x as u8),
+            r.wrapping_add(t.y as u8),
+            g,
+            a.wrapping_sub(t.level as u8),
+        ])
+    };
+    let serial = map_rgba8_levels(&source, 0..3, metadata(), map).unwrap();
+    for n in [2, 5, 16] {
+        let threads = Threads::new(n).unwrap();
+        assert_eq!(
+            map_rgba8_levels_with(threads, &source, 0..3, metadata(), map).unwrap(),
+            serial,
+            "{n} threads"
+        );
+        assert_eq!(
+            map_rgba8_levels_with(threads, &source, 1..3, metadata(), map).unwrap(),
+            map_rgba8_levels(&source, 1..3, metadata(), map).unwrap()
+        );
+    }
+    let fail = |t: primase_image::Rgba8Texel| -> Result<[u8; 4], Error> {
+        if t.level == 0 && t.y >= 20 && t.x == 3 {
+            Err(Error::Invalid(format!("row {}", t.y)))
+        } else {
+            Ok(t.rgba)
+        }
+    };
+    let serial = map_rgba8_levels(&source, 0..3, metadata(), fail)
+        .unwrap_err()
+        .to_string();
+    let many = map_rgba8_levels_with(Threads::new(8).unwrap(), &source, 0..3, metadata(), fail)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(many, serial);
+    assert!(serial.contains("row 20"), "{serial}");
+}

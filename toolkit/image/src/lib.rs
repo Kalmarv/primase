@@ -8,7 +8,7 @@ mod cap;
 pub use cap::{Beyond, CapMode, CapRole, CapTextures, Capped, NormalDownscale, cap_texture, cap_textures};
 mod channels;
 mod frames;
-pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels};
+pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels, map_rgba8_levels_with};
 pub use frames::{Bitangent, UvFrameNormals};
 mod layers;
 pub use layers::{BakeLayerChannels, register};
@@ -29,7 +29,7 @@ use std::io::Cursor;
 use std::sync::LazyLock;
 pub use texture::{
     BakeNormalScale, NormalizeNormals, TextureLoadReport, bake_normal_scale, decode_texture_file,
-    load_textures, normalize_normals, texture_level_png, texture_level_rgba8,
+    load_textures, normalize_normals, texture_level_png, texture_level_rgba8, texture_level_rgba8_with,
 };
 pub use upscale::{MAX_UPSCALED, UpscaleBy, UpscaleNearest, enlarge_nearest, upscale_nearest};
 

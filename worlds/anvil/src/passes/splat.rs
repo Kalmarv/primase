@@ -25,8 +25,10 @@
 //! detail normals, heights and masks, the steep-slope normal, the per-cell uv rotation, the cell-hash term, the
 //! lighting, and the distance blend to the far tile.
 
-use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+use primase_core::parallel::{self, Threads};
 
 use primase_core::{ColorSpace, Entity, TexFormat, TexRole, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer};
@@ -68,7 +70,7 @@ pub struct Baked {
 
 /// A material's detail, ready to sample.
 struct Detail {
-    image: Rc<Levels>,
+    image: Arc<Levels>,
     srgb: bool,
     /// uv per source unit.
     g: f64,
@@ -85,7 +87,7 @@ fn detail(
     t: &AnvilTerrain,
     uv: SplatUv,
     m: u8,
-    images: &mut BTreeMap<Entity, Rc<Levels>>,
+    images: &mut BTreeMap<Entity, Arc<Levels>>,
     details: &mut BTreeMap<u8, Option<Detail>>,
 ) -> Result<(), String> {
     if details.contains_key(&m) {
@@ -104,7 +106,7 @@ fn detail(
                     let image = match images.get(&e) {
                         Some(i) => i.clone(),
                         None => {
-                            let i = Rc::new(Levels::of(tex).map_err(|e| e.to_string())?);
+                            let i = Arc::new(Levels::of(tex).map_err(|e| e.to_string())?);
                             images.insert(e, i.clone());
                             i
                         }
@@ -354,7 +356,7 @@ pub struct Baker<'a> {
     tile_colour: ColorSpace,
     lookup: Lookup<'a>,
     /// Each material's detail, decoded when a pixel first needs it (a bank holds a hundred 2048-texel maps).
-    images: BTreeMap<Entity, Rc<Levels>>,
+    images: BTreeMap<Entity, Arc<Levels>>,
     details: BTreeMap<u8, Option<Detail>>,
 }
 
@@ -384,7 +386,8 @@ impl<'a> Baker<'a> {
     }
 
     /// The colour at the point `(x, y, z)` (source units) as `plane` addresses the details, for a pixel `pixel` units
-    /// across (it picks the detail's mip); `None` where the point's node isn't read.
+    /// across (it picks the detail's mip); `None` where the point's node isn't read. The details it needs are decoded
+    /// first.
     pub fn texel(
         &mut self,
         x: f64,
@@ -393,19 +396,30 @@ impl<'a> Baker<'a> {
         plane: DetailPlane,
         pixel: f64,
     ) -> Result<Option<Texel>, String> {
-        let Some(Corners {
+        let Some(corners) = self.lookup.corners(x, y) else {
+            return Ok(None);
+        };
+        self.prepare(corners.materials.iter().flatten().copied())?;
+        Ok(Some(self.shade(corners, x, y, z, plane, pixel)))
+    }
+
+    /// The materials `ms`' details decoded (each once over the baker's life).
+    fn prepare(&mut self, ms: impl IntoIterator<Item = u8>) -> Result<(), String> {
+        for m in ms {
+            detail(self.w, self.t, self.s.uv, m, &mut self.images, &mut self.details)?;
+        }
+        Ok(())
+    }
+
+    /// [`Baker::texel`] at `corners`, the point's, whose materials' details are prepared.
+    fn shade(&self, corners: Corners, x: f64, y: f64, z: f64, plane: DetailPlane, pixel: f64) -> Texel {
+        let Corners {
             materials,
             wx,
             wy,
             gx,
             gy,
-        }) = self.lookup.corners(x, y)
-        else {
-            return Ok(None);
-        };
-        for m in materials.iter().flatten() {
-            detail(self.w, self.t, self.s.uv, *m, &mut self.images, &mut self.details)?;
-        }
+        } = corners;
         let mut fell_back = false;
         let mut at = |baker: &Self, coord: [f64; 2]| -> [[f64; 3]; 4] {
             materials.map(|m| baker.colour_of(m, coord, (gx, gy), pixel, &mut fell_back))
@@ -432,10 +446,10 @@ impl<'a> Baker<'a> {
             let o = self.lookup.occlusion(gx, gy);
             c = c.map(|v| v * o);
         }
-        Ok(Some(Texel {
+        Texel {
             rgb: c.map(primase_image::linear_to_srgb8),
             tile_fallback: fell_back,
-        }))
+        }
     }
 
     /// Material `m`'s colour (linear) with its detail sampled at `coord` (source units), or its far colour tile at the
@@ -498,30 +512,65 @@ pub fn bake(
     s: &Splat,
     tile_colour: ColorSpace,
 ) -> Result<Vec<(Texture, Baked)>, String> {
+    let threads = Threads::of(w);
     let mut baker = Baker::new(w, t, s, tile_colour)?;
     let mut results = Vec::with_capacity(rects.len());
     for &[x0, y0, x1, y1] in rects {
         let width = ((x1 - x0) / s.pixel).ceil().max(1.0) as u32;
         let height = ((y1 - y0) / s.pixel).ceil().max(1.0) as u32;
+        let at = |px: u32, py: u32| {
+            (
+                x0 + (f64::from(px) + 0.5) * s.pixel,
+                y0 + (f64::from(py) + 0.5) * s.pixel,
+            )
+        };
+        // the materials the rectangle's pixels meet, row by row, their details decoded before any pixel is shaded
+        let rows: Vec<u32> = (0..height).collect();
+        let met = parallel::map(threads, &rows, |_, &py| {
+            let mut met = BTreeSet::new();
+            for px in 0..width {
+                let (x, y) = at(px, py);
+                if let Some(c) = baker.lookup.corners(x, y) {
+                    met.extend(c.materials.iter().flatten().copied());
+                }
+            }
+            met
+        })
+        .map_err(|e| e.to_string())?;
+        baker.prepare(met.into_iter().flatten().collect::<BTreeSet<u8>>())?;
+        // each row shaded on its own (at most the stated threads rows at once), its counts added in row order
         let mut out = vec![0u8; width as usize * height as usize * 4];
-        let mut baked = Baked::default();
-        for py in 0..height {
+        let mut jobs: Vec<(Baked, &mut [u8])> = out
+            .chunks_mut(width as usize * 4)
+            .map(|row| (Baked::default(), row))
+            .collect();
+        let baker = &baker;
+        parallel::rows_mut(threads, &mut jobs, 1, |py, job| {
+            let (baked, row) = &mut job[0];
             for px in 0..width {
                 baked.pixels += 1;
-                let x = x0 + (f64::from(px) + 0.5) * s.pixel;
-                let y = y0 + (f64::from(py) + 0.5) * s.pixel;
-                let Some(texel) = baker.texel(x, y, 0.0, DetailPlane::Xy, s.pixel)? else {
+                let (x, y) = at(px, py as u32);
+                let Some(corners) = baker.lookup.corners(x, y) else {
                     baked.outside += 1;
                     continue;
                 };
+                let texel = baker.shade(corners, x, y, 0.0, DetailPlane::Xy, s.pixel);
                 if texel.tile_fallback {
                     baked.tile_fallback += 1;
                 }
-                let i = (py as usize * width as usize + px as usize) * 4;
-                out[i..i + 3].copy_from_slice(&texel.rgb);
-                out[i + 3] = 255;
+                let i = px as usize * 4;
+                row[i..i + 3].copy_from_slice(&texel.rgb);
+                row[i + 3] = 255;
             }
+        })
+        .map_err(|e| e.to_string())?;
+        let mut baked = Baked::default();
+        for (b, _) in &jobs {
+            baked.pixels += b.pixels;
+            baked.outside += b.outside;
+            baked.tile_fallback += b.tile_fallback;
         }
+        drop(jobs);
         results.push((
             Texture {
                 width,

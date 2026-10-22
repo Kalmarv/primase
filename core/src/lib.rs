@@ -30,6 +30,7 @@ pub use material_usage::MaterialUsage;
 mod vertex_color;
 pub use vertex_color::{VertexColor, color0_drawn, uses_color0};
 pub mod morphs;
+pub mod parallel;
 pub mod pass;
 pub mod pbr;
 pub mod print;
