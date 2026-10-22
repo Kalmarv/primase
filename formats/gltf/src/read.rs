@@ -11,8 +11,10 @@
 //!   above the joints are joints too: their transforms (and channels that animate them) are kept exactly, with no
 //!   composing. Each skeleton has one rig (`core.rig_instance`) at the origin, the scene's space.
 //! - **Meshes** each glTF mesh a scene node draws becomes a prototype (`core.mesh`, its name), its primitives drawing
-//!   the material entities. **Materials** are read as their glTF JSON (`gltf.material`, with `core.name`): their
-//!   textures and images are not read, counted. A mesh drawn with a skin gets `core.skin`: per primitive with joint
+//!   the material entities. **Materials** are read as their glTF JSON (`gltf.material`, with `core.name`), and the
+//!   images their core texture slots sample as `core.texture`s with a `gltf.material_textures` component ([`crate::textures`]:
+//!   PNG decoded, other formats refused by name and counted); `lower-gltf-materials` ([`crate::lower`]) turns the two
+//!   into `pbr.material`. A mesh drawn with a skin gets `core.skin`: per primitive with joint
 //!   streams, `Streams` influences of its `JOINTS_n`/`WEIGHTS_n` sets as stored; one binding per glTF skin it is
 //!   drawn with (`BindingId` the skin's index), its palette the skin's joints in order with their inverse bind
 //!   matrices as stored (identity where the skin gives none), deformation linear (glTF's). The weight rule is
@@ -37,7 +39,8 @@
 //! - **The asset**: a root with `core.asset` (each skeleton a rig, each placement a part, each clip a clip),
 //!   `core.source` the caller's key and `core.name`.
 //!
-//! Not read, counted: cameras, the skins' `skeleton` hints (no effect on deformation), textures and images.
+//! Not read, counted: cameras, the skins' `skeleton` hints (no effect on deformation), images no core material slot
+//! samples, and the images refused by name.
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_animation::pose::{Affine, affine, compose, transform};
@@ -51,6 +54,7 @@ use primase_core::{
 use primase_glb::{AnimationInterpolation, AnimationPath, Gltf, Local, ReadMesh, ReadNode, ReadSkin};
 use serde_json::Value;
 
+use crate::textures::{ImageResolver, read_textures};
 use crate::{Error, Result};
 
 /// The component a material's glTF JSON is read into.
@@ -73,14 +77,20 @@ pub struct ReadReport {
     /// Meshes whose skinned vertices' weights do not all sum to 1: read `AsStored`.
     pub weights_as_stored: usize,
     /// Not read: nodes outside the default scene, cameras, skins' skeleton hints, animation channels on nodes that
-    /// are not joints, joint streams of meshes no node draws with a skin, textures and images.
+    /// are not joints, joint streams of meshes no node draws with a skin.
     pub nodes_outside_scene: usize,
     pub cameras: usize,
     pub skeleton_hints: usize,
     pub channels_off_joints: usize,
     pub unskinned_joint_streams: usize,
+    /// The document's textures and images, and what became of its images: those a core material slot samples were
+    /// read (`core.texture`, [`crate::textures`]) or refused by name (the reason and how many images), the others
+    /// not read.
     pub textures: usize,
     pub images: usize,
+    pub images_read: usize,
+    pub images_refused: BTreeMap<String, usize>,
+    pub images_unused: usize,
 }
 
 impl ReadReport {
@@ -107,12 +117,16 @@ impl ReadReport {
                 self.unskinned_joint_streams,
             ),
             n(
-                "textures, not read (materials kept as their glTF JSON)",
-                self.textures,
+                "images no core material slot samples, not read",
+                self.images_unused,
             ),
-            n("images, not read", self.images),
         ]
         .into_iter()
+        .chain(
+            self.images_refused
+                .iter()
+                .map(|(reason, count)| n(&format!("images refused: {reason}"), *count)),
+        )
         .filter(|x| x.count > 0)
         .collect()
     }
@@ -189,8 +203,22 @@ fn joint_sets(p: &primase_core::Primitive) -> u8 {
 }
 
 /// Read `gltf` into `world`, which must be empty, as one asset whose source is `source` (see the module
-/// documentation).
+/// documentation). Images the document stores in its buffers are read; one it names by `uri` is refused (counted),
+/// as no resolver is given: [`read_with_images`] takes one.
 pub fn read(gltf: &Gltf, source: &str, world: &mut World) -> Result<ReadReport> {
+    read_with_images(gltf, source, world, &mut |_| {
+        Err("no image resolver was given".to_owned())
+    })
+}
+
+/// [`read`], fetching the images the document names by `uri` through `resolve` (a relative file, a `data:` URI:
+/// resolving is the caller's, as for [`Gltf::from_gltf`]'s buffers).
+pub fn read_with_images(
+    gltf: &Gltf,
+    source: &str,
+    world: &mut World,
+    resolve: &mut ImageResolver,
+) -> Result<ReadReport> {
     if world.entities().next().is_some() {
         return Err(invalid("glTF reader", "the world must be empty"));
     }
@@ -683,6 +711,12 @@ pub fn read(gltf: &Gltf, source: &str, world: &mut World) -> Result<ReadReport> 
         }
     }
     report.clips = clips.len();
+
+    // the images the materials' slots sample
+    let images = read_textures(gltf, source, w, &material_entities, resolve);
+    report.images_read = images.read;
+    report.images_refused = images.refused;
+    report.images_unused = images.unused;
 
     // the asset
     let root = w.spawn();

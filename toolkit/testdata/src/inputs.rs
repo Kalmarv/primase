@@ -395,9 +395,9 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_KHRONOS_GLTF",
         kind: Kind::Input,
         gate: true,
-        about: r#"a folder of Khronos glTF-Sample-Assets models, one folder per model (`<Model>/<Model>.glb` or `.gltf` with its buffers, and `expected.json` written by pygltflib from the same file)"#,
+        about: r#"a folder of Khronos glTF-Sample-Assets models, one folder per model (`<Model>/<Model>.glb` or `.gltf` with its buffers, `expected.json` written by pygltflib from the same file, `validator.json` by the Khronos validator and, for a model with images, `images.json` by Pillow)"#,
         status: Status::Live,
-        source: "third-party: Khronos glTF-Sample-Assets at commit 15cd02d304e54cb42a4db4eefe719f76190f4b68; expected.json by pygltflib 1.16.5",
+        source: "third-party: Khronos glTF-Sample-Assets at commit 15cd02d304e54cb42a4db4eefe719f76190f4b68; expected.json by pygltflib 1.16.5; images.json by Pillow 11.0.0",
     },
     Variable {
         name: "PRIMASE_OODLE5",
