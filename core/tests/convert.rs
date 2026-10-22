@@ -401,6 +401,25 @@ fn reads_selects_plans_then_loads_passes_checks_and_writes_each_part() {
         written: BTreeMap::from([("toy.mesh".to_string(), 12)]),
     };
     assert_eq!(report.part_sizes, vec![size.clone(), size]);
+    // every stage it went through, in order, each timed
+    let stages: Vec<&str> = report.stages.iter().map(|(s, _)| s.as_str()).collect();
+    assert_eq!(
+        stages,
+        [
+            "read",
+            "select",
+            "plan",
+            "part 0: load",
+            "part 0: passes",
+            "part 0: target check",
+            "part 0: write",
+            "part 1: load",
+            "part 1: passes",
+            "part 1: target check",
+            "part 1: write",
+            "finish"
+        ]
+    );
 }
 
 /// The loop runs the program's passes once and adds none: a raw form the target doesn't write is not lowered (though
@@ -604,6 +623,11 @@ fn a_failed_conversion_keeps_what_it_had_reported() {
     assert_eq!(e.to_string(), "the toy writer failed");
     let e = e.downcast::<ConvertError>().unwrap();
     assert_eq!(e.during, "part 1: write");
+    // the partial report's stages end with the one that failed
+    assert_eq!(
+        e.partial.stages.last().map(|(s, _)| s.as_str()),
+        Some("part 1: write")
+    );
     assert_eq!(e.partial.parts, 1);
     assert_eq!(e.partial.part_reports.len(), 2);
     assert_eq!(

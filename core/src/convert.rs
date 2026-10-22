@@ -21,6 +21,7 @@
 //! composed directly, outside this loop (no `core.part_scope` resource), is by definition the whole of what is
 //! written.
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use crate::pass::{PassManager, Pipeline, RunReport, Target};
 use crate::summary::SummaryRegistry;
@@ -653,6 +654,11 @@ pub struct ConvertReport {
     pub reported: Vec<Notice>,
     /// The writer's report.
     pub written: Report,
+    /// Each stage of the conversion in the order it ran, named as [`ConvertError::during`] names it (`read`, `select`,
+    /// `plan`, `part N: load`, `part N: passes`, `part N: target check`, `part N: write`, `finish`, and the summary,
+    /// gather and group stages), with its wall-clock time: for a program's log and for profiling, not part of what the
+    /// conversion makes. A failed conversion's partial report ends with the stage that failed.
+    pub stages: Vec<(String, Duration)>,
 }
 
 impl ConvertReport {
@@ -885,6 +891,61 @@ impl std::error::Error for ConvertError {
     }
 }
 
+/// The stage a conversion is in, and the ones it finished with their wall-clock times ([`ConvertReport::stages`]).
+#[derive(Debug)]
+struct Stages {
+    during: String,
+    started: Instant,
+    done: Vec<(String, Duration)>,
+}
+
+impl Stages {
+    fn new() -> Stages {
+        Stages {
+            during: String::new(),
+            started: Instant::now(),
+            done: Vec::new(),
+        }
+    }
+
+    /// The stage before ends and `stage` begins.
+    fn enter(&mut self, stage: impl Into<String>) {
+        self.close();
+        self.during = stage.into();
+    }
+
+    fn close(&mut self) {
+        if !self.during.is_empty() {
+            self.done.push((self.during.clone(), self.started.elapsed()));
+        }
+        self.started = Instant::now();
+    }
+}
+
+/// A conversion's outcome from `run`: its report with the stages' times, or the error with where it happened and what
+/// was reported until then.
+fn finish(mut report: ConvertReport, mut stages: Stages, ran: Result<()>) -> Result<ConvertReport> {
+    stages.close();
+    report.stages = std::mem::take(&mut stages.done);
+    match ran {
+        Ok(()) => Ok(report),
+        Err(error) => {
+            let during = stages.during;
+            report.reported.push(Notice::new(
+                "convert",
+                NoticeKind::FailureContext,
+                format!("failed during {during}: {error}"),
+                1,
+            ));
+            Err(Box::new(ConvertError {
+                error,
+                during,
+                partial: Box::new(report),
+            }))
+        }
+    }
+}
+
 /// The bulk payload one part held ([`World::payload_bytes`]), by component name.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PartSize {
@@ -933,8 +994,8 @@ pub fn convert_parts(
     passes: &Pipeline,
 ) -> Result<ConvertReport> {
     let mut report = ConvertReport::default();
-    let mut during = String::new();
-    match run(
+    let mut stages = Stages::new();
+    let ran = run(
         reader,
         parts,
         writer,
@@ -943,23 +1004,9 @@ pub fn convert_parts(
         None,
         passes,
         &mut report,
-        &mut during,
-    ) {
-        Ok(()) => Ok(report),
-        Err(error) => {
-            report.reported.push(Notice::new(
-                "convert",
-                NoticeKind::FailureContext,
-                format!("failed during {during}: {error}"),
-                1,
-            ));
-            Err(Box::new(ConvertError {
-                error,
-                during,
-                partial: Box::new(report),
-            }))
-        }
-    }
+        &mut stages,
+    );
+    finish(report, stages, ran)
 }
 
 /// The program's summaries and decisions for a conversion in parts ([`convert_parts_summarized`]).
@@ -989,8 +1036,8 @@ pub fn convert_parts_summarized(
     passes: &Pipeline,
 ) -> Result<ConvertReport> {
     let mut report = ConvertReport::default();
-    let mut during = String::new();
-    match run(
+    let mut stages = Stages::new();
+    let ran = run(
         reader,
         parts,
         writer,
@@ -999,23 +1046,9 @@ pub fn convert_parts_summarized(
         Some((summarized, None)),
         passes,
         &mut report,
-        &mut during,
-    ) {
-        Ok(()) => Ok(report),
-        Err(error) => {
-            report.reported.push(Notice::new(
-                "convert",
-                NoticeKind::FailureContext,
-                format!("failed during {during}: {error}"),
-                1,
-            ));
-            Err(Box::new(ConvertError {
-                error,
-                during,
-                partial: Box::new(report),
-            }))
-        }
-    }
+        &mut stages,
+    );
+    finish(report, stages, ran)
 }
 
 /// Content the first traversal of a conversion in parts sets aside to be prepared and written by groups of its own
@@ -1071,9 +1104,9 @@ pub fn convert_parts_gathered(
     passes: &Pipeline,
 ) -> Result<ConvertReport> {
     let mut report = ConvertReport::default();
-    let mut during = String::new();
+    let mut stages = Stages::new();
     let mut gathered = gathered;
-    match run(
+    let ran = run(
         reader,
         parts,
         writer,
@@ -1082,23 +1115,9 @@ pub fn convert_parts_gathered(
         Some((summarized, Some(&mut gathered))),
         passes,
         &mut report,
-        &mut during,
-    ) {
-        Ok(()) => Ok(report),
-        Err(error) => {
-            report.reported.push(Notice::new(
-                "convert",
-                NoticeKind::FailureContext,
-                format!("failed during {during}: {error}"),
-                1,
-            ));
-            Err(Box::new(ConvertError {
-                error,
-                during,
-                partial: Box::new(report),
-            }))
-        }
-    }
+        &mut stages,
+    );
+    finish(report, stages, ran)
 }
 
 /// A part's or a group's check against the writer's target: what the target doesn't write (reported), or an error
@@ -1156,9 +1175,9 @@ fn run(
     summarized: Option<(&Summarized, Option<&mut Gathered>)>,
     passes: &Pipeline,
     report: &mut ConvertReport,
-    during: &mut String,
+    stages: &mut Stages,
 ) -> Result<()> {
-    "read".clone_into(during);
+    stages.enter("read");
     let read = reader.read();
     report.reported.extend(reader.notices());
     let (mut world, read) = read?;
@@ -1166,10 +1185,10 @@ fn run(
     check_emits(&world, reader.emits(), "read")?;
     // what was read is checked before anything uses it: the selection, the plan, an empty pipeline too
     manager.verify(&world, "read")?;
-    "select".clone_into(during);
+    stages.enter("select");
     manager.run(&mut world, select, &mut report.select)?;
     let target = writer.target();
-    "plan".clone_into(during);
+    stages.enter("plan");
     parts.plan(&world, &|p| reader.prototype_box(&world, p))?;
     // the first traversal: each part's summaries, kept (their bytes counted) and merged; the decisions made
     // once from them
@@ -1186,7 +1205,7 @@ fn run(
             }) = parts.next_part()?
             {
                 let ordinal = kept.len();
-                *during = format!("summary {ordinal}: load");
+                stages.enter(format!("summary {ordinal}: load"));
                 let asked = asked(&roots, &shared, &context)?;
                 let loaded = reader.load(&world, &asked);
                 report.reported.extend(reader.notices());
@@ -1195,7 +1214,7 @@ fn run(
                 check_load_emits(&world, &part, reader.emits())?;
                 // what was loaded is checked before any summary pass reads it, as the second traversal does
                 manager.verify(&part, &format!("summary {ordinal}: load"))?;
-                *during = format!("summary {ordinal}: passes");
+                stages.enter(format!("summary {ordinal}: passes"));
                 let first_made = Some(part.next_index());
                 part.insert_resource(PartScope {
                     roots,
@@ -1216,7 +1235,7 @@ fn run(
                 kept.push(summaries);
             }
             skipped_in_every_part(&report.summarized.iter().collect::<Vec<_>>(), s.summarize)?;
-            "decide".clone_into(during);
+            stages.enter("decide");
             let mut merged = merge(s.registry, manager, &kept)?;
             drop(kept);
             report.merged_summary_bytes = s.registry.retained(&merged);
@@ -1237,7 +1256,7 @@ fn run(
                     &target,
                     &mut writer,
                     report,
-                    during,
+                    stages,
                 )?;
             }
             parts.restart()?;
@@ -1253,7 +1272,7 @@ fn run(
     }) = parts.next_part()?
     {
         let ordinal = report.part_reports.len();
-        *during = format!("part {ordinal}: load");
+        stages.enter(format!("part {ordinal}: load"));
         let asked = asked(&roots, &shared, &context)?;
         let loaded = reader.load(&world, &asked);
         report.reported.extend(reader.notices());
@@ -1267,7 +1286,7 @@ fn run(
         check_load_emits(&world, &part, reader.emits())?;
         // what was loaded is checked before the part's passes use it
         manager.verify(&part, "load")?;
-        *during = format!("part {ordinal}: passes");
+        stages.enter(format!("part {ordinal}: passes"));
         // the part's report is published before its passes run, so a failure keeps what ran
         report.part_reports.push(PartReport {
             ordinal,
@@ -1334,14 +1353,14 @@ fn run(
             *report.counts.entry(format!("convert: {k}")).or_default() += v;
         }
         part.retain(&keep);
-        *during = format!("part {ordinal}: target check");
+        stages.enter(format!("part {ordinal}: target check"));
         manager.verify(&part, "the passes")?;
         (part_report.unsupported, part_report.unsupported_resources) = check_target(&target, &part)?;
         let explicit = part_report.explicit.clone();
         tally(&mut report.counts, &explicit);
         size.written = sizes(&part);
         report.part_sizes.push(size);
-        *during = format!("part {ordinal}: write");
+        stages.enter(format!("part {ordinal}: write"));
         let written = writer.write(&part);
         report.reported.extend(writer.notices());
         written?;
@@ -1356,7 +1375,7 @@ fn run(
             .collect::<Vec<_>>(),
         passes,
     )?;
-    "finish".clone_into(during);
+    stages.enter("finish");
     report.reported.extend(writer.notices());
     let finished = writer.finish()?;
     report.reported.extend(finished.notices);
@@ -1378,7 +1397,7 @@ fn gather(
     target: &Target,
     writer: &mut Box<dyn Writer>,
     report: &mut ConvertReport,
-    during: &mut String,
+    stages: &mut Stages,
 ) -> Result<World> {
     let mut kept = vec![registry.take_summaries(decided)];
     let mut handed = World::new();
@@ -1394,7 +1413,7 @@ fn gather(
     }) = parts.next_part()?
     {
         let ordinal = report.gather_runs.len();
-        *during = format!("gather {ordinal}: load");
+        stages.enter(format!("gather {ordinal}: load"));
         let asked = asked(&roots, &shared, &context)?;
         let loaded = reader.load(world, &asked);
         report.reported.extend(reader.notices());
@@ -1413,23 +1432,23 @@ fn gather(
             first_made,
             placed: BTreeMap::new(),
         });
-        *during = format!("gather {ordinal}: passes");
+        stages.enter(format!("gather {ordinal}: passes"));
         let mut r = RunReport::default();
         let ran = manager.run_part(&mut part, g.gather, &mut r);
         tally(&mut report.counts, &r);
         report.gather_runs.push(r);
         ran?;
-        *during = format!("gather {ordinal}: spool");
+        stages.enter(format!("gather {ordinal}: spool"));
         g.spool.take(&mut part)?;
         kept.push(registry.take_summaries_made(&part, &handed));
     }
     skipped_in_every_part(&report.gather_runs.iter().collect::<Vec<_>>(), g.gather)?;
     while let Some(mut group) = g.spool.next()? {
         let ordinal = report.groups.len();
-        *during = format!("group {ordinal}: load");
+        stages.enter(format!("group {ordinal}: load"));
         manager.verify(&group, &format!("group {ordinal}"))?;
         registry.hand_on(decided, &mut group);
-        *during = format!("group {ordinal}: passes");
+        stages.enter(format!("group {ordinal}: passes"));
         report.groups.push(GroupReport {
             ordinal,
             ..GroupReport::default()
@@ -1438,19 +1457,19 @@ fn gather(
         manager.run(&mut group, g.group, &mut group_report.run)?;
         tally(&mut report.counts, &report.groups[ordinal].run.clone());
         kept.push(registry.take_summaries_made(&group, &handed));
-        *during = format!("group {ordinal}: target check");
+        stages.enter(format!("group {ordinal}: target check"));
         manager.verify(&group, "the group's passes")?;
         let (unsupported, unsupported_resources) = check_target(target, &group)?;
         let group_report = &mut report.groups[ordinal];
         group_report.unsupported = unsupported;
         group_report.unsupported_resources = unsupported_resources;
         group_report.written = sizes(&group);
-        *during = format!("group {ordinal}: write");
+        stages.enter(format!("group {ordinal}: write"));
         let written = writer.write(&group);
         report.reported.extend(writer.notices());
         written?;
     }
-    "finalize".clone_into(during);
+    stages.enter("finalize");
     let mut merged = merge(registry, manager, &kept)?;
     drop(kept);
     registry.carry_decisions(decided, &mut merged);

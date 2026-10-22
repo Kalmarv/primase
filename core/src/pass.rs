@@ -33,6 +33,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub use crate::ledger::{Conservation, Gap, Measure};
 use crate::world::{Component, Entity, Resource, World};
@@ -910,8 +911,9 @@ fn check_settled(passes: &[Box<dyn Pass>]) -> Result<()> {
     Ok(())
 }
 
-/// One pass's run.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One pass's run. Its equality is the determinism comparison: every field but [`StepReport::time`] (two runs that made
+/// the same are equal however long they took).
+#[derive(Clone, Debug)]
 pub struct StepReport {
     /// The pass with its options, as in the pipeline text.
     pub pass: String,
@@ -931,6 +933,66 @@ pub struct StepReport {
     /// names when none of them was in the part, so the pass did not run (its log counts it, [`SKIPPED`]); empty when it
     /// ran.
     pub skipped: Vec<String>,
+    /// How long the step took, by the wall clock (zero for a skipped step).
+    pub time: StepTime,
+}
+
+/// A step's wall-clock time, as the pass manager measured it: for a program's log and for profiling, not part of what
+/// a conversion makes (it differs from run to run), so a [`StepReport`]'s equality leaves it out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StepTime {
+    /// The pass's own [`Pass::run`].
+    pub run: Duration,
+    /// The manager's work around it: the requirements, the declarations and their effects, conservation diagnostics
+    /// and the verifier ([`PassManager::with_pass_checks`]).
+    pub checks: Duration,
+}
+
+impl PartialEq for StepReport {
+    /// Every field but the time.
+    fn eq(&self, other: &StepReport) -> bool {
+        let StepReport {
+            pass,
+            approximates,
+            log,
+            added,
+            removed,
+            conservation,
+            failed,
+            skipped,
+            time: _,
+        } = self;
+        (
+            pass,
+            approximates,
+            log,
+            added,
+            removed,
+            conservation,
+            failed,
+            skipped,
+        ) == (
+            &other.pass,
+            &other.approximates,
+            &other.log,
+            &other.added,
+            &other.removed,
+            &other.conservation,
+            &other.failed,
+            &other.skipped,
+        )
+    }
+}
+impl Eq for StepReport {}
+
+impl RunReport {
+    /// Every step's time added up.
+    pub fn time(&self) -> StepTime {
+        self.steps.iter().fold(StepTime::default(), |t, s| StepTime {
+            run: t.run + s.time.run,
+            checks: t.checks + s.time.checks,
+        })
+    }
 }
 
 /// The count a pass skipped in a part run gets in its log ([`PassManager::run_part`]), so a conversion's totals give the
@@ -946,7 +1008,8 @@ pub struct PlanChoice {
     pub depth: u32,
 }
 
-/// What a conversion did.
+/// What a conversion did. Its equality is the determinism comparison: every field, the steps compared without their
+/// times ([`StepReport`]'s equality).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunReport {
     pub target: String,
@@ -982,6 +1045,14 @@ impl fmt::Display for RunReport {
             }
             for g in &s.conservation {
                 write!(f, " !{g}")?;
+            }
+            if s.skipped.is_empty() {
+                write!(
+                    f,
+                    " ({:.3} s, checks {:.3} s)",
+                    s.time.run.as_secs_f64(),
+                    s.time.checks.as_secs_f64()
+                )?;
             }
             writeln!(f)?;
         }
@@ -1180,6 +1251,7 @@ impl PassManager {
                     conservation: Vec::new(),
                     failed: None,
                     skipped: p.requires().iter().map(|r| (*r).to_owned()).collect(),
+                    time: StepTime::default(),
                 });
                 continue;
             }
@@ -1201,8 +1273,16 @@ impl PassManager {
                 .map(|s| s.owned(w))
                 .unwrap_or_default();
             let mut log = PassLog::default();
-            match self.run_pass(w, p.as_ref(), &text, &mut log) {
-                Ok(done) => {
+            let started = Instant::now();
+            let mut run = Duration::ZERO;
+            let ran = self.run_pass(w, p.as_ref(), &text, &mut log, &mut run);
+            let time = StepTime {
+                run,
+                checks: started.elapsed().saturating_sub(run),
+            };
+            match ran {
+                Ok(mut done) => {
+                    done.time = time;
                     // a part's declared output so far, for the passes after (PartScope::output)
                     crate::convert::PartScope::declare(
                         w,
@@ -1224,6 +1304,7 @@ impl PassManager {
                         conservation: Vec::new(),
                         failed: Some(e.to_string()),
                         skipped: Vec::new(),
+                        time,
                     });
                     // the pass's error is the one that matters; a failing hook has nothing to add to it
                     let _ = instrument.pass_failed(&step, w, &e);
@@ -1235,8 +1316,15 @@ impl PassManager {
     }
 
     /// One pass: its requirements, the run, its declarations, the verifier. `log` is the caller's, so what the pass
-    /// noted survives a failure.
-    fn run_pass(&self, w: &mut World, p: &dyn Pass, text: &str, log: &mut PassLog) -> Result<StepReport> {
+    /// noted survives a failure; `run` is set to how long the pass's own run took (left zero if it never ran).
+    fn run_pass(
+        &self,
+        w: &mut World,
+        p: &dyn Pass,
+        text: &str,
+        log: &mut PassLog,
+        run: &mut Duration,
+    ) -> Result<StepReport> {
         for &r in p.requires() {
             if !w.has_component_named(r) && !w.resource_names().contains(&r) {
                 return Err(Error::Missing {
@@ -1275,7 +1363,9 @@ impl PassManager {
             w.start_rebuild_log();
             crate::ledger::Before::take(w)
         });
+        let started = Instant::now();
         let ran = p.run(w, log);
+        *run = started.elapsed();
         let rebuilds = w.take_rebuild_log();
         let effects = w.take_effects();
         ran.map_err(|message| Error::Pass {
@@ -1397,6 +1487,7 @@ impl PassManager {
             conservation,
             failed: None,
             skipped: Vec::new(),
+            time: StepTime::default(),
         })
     }
 
@@ -2234,6 +2325,85 @@ mod tests {
             .legal("toy.pbr")
             .illegal("toy.file")
             .illegal("toy.layered")
+    }
+
+    /// Sleeps for its milliseconds in its run, doing nothing else.
+    struct Slow(u64);
+    impl Pass for Slow {
+        fn name(&self) -> &'static str {
+            "slow"
+        }
+        fn run(&self, _: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+            std::thread::sleep(Duration::from_millis(self.0));
+            Ok(())
+        }
+    }
+
+    /// Each step's time is measured around its own run (a 30 ms run is at least 30 ms, the manager's checks apart);
+    /// the report's time adds the steps up and its text shows each step's; a step a part skips takes none.
+    #[test]
+    fn steps_are_timed_around_their_runs() {
+        let pipeline = Pipeline {
+            passes: vec![Box::new(Slow(30)), Box::new(Load)],
+        };
+        let mut report = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .with_pass_checks(true)
+            .run(&mut world(), &pipeline, &mut report)
+            .unwrap();
+        let [slow, load] = [&report.steps[0].time, &report.steps[1].time];
+        assert!(slow.run >= Duration::from_millis(30), "{slow:?}");
+        assert!(load.run < slow.run, "{load:?} {slow:?}");
+        assert_eq!(report.time().run, slow.run + load.run);
+        assert_eq!(report.time().checks, slow.checks + load.checks);
+        let text = report.to_string();
+        let line = text
+            .lines()
+            .find(|l| l.trim_start().starts_with("slow:"))
+            .unwrap();
+        assert!(
+            line.ends_with(&format!(
+                "({:.3} s, checks {:.3} s)",
+                slow.run.as_secs_f64(),
+                slow.checks.as_secs_f64()
+            )),
+            "{line}"
+        );
+
+        struct Skippable;
+        impl Pass for Skippable {
+            fn name(&self) -> &'static str {
+                "skippable"
+            }
+            fn requires(&self) -> &[&'static str] {
+                &["toy.pbr"]
+            }
+            fn part_may_lack_inputs(&self) -> bool {
+                true
+            }
+            fn run(&self, _: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+                Ok(())
+            }
+        }
+        let mut report = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .run_part(
+                &mut world(),
+                &Pipeline {
+                    passes: vec![Box::new(Skippable)],
+                },
+                &mut report,
+            )
+            .unwrap();
+        assert_eq!(report.steps[0].time, StepTime::default());
+        assert!(!report.to_string().contains(" s, checks "));
+        // reports compare without their times (the determinism comparison); times compare as themselves
+        let mut later = report.clone();
+        later.steps[0].time.run = Duration::from_secs(1);
+        assert_eq!(later, report);
+        assert_ne!(later.steps[0].time, report.steps[0].time);
+        later.steps[0].pass = "other".into();
+        assert_ne!(later, report);
     }
 
     /// A pass taking in a function's log keeps everything it reported: counts, approximations, omissions and drops
