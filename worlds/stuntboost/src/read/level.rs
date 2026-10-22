@@ -5,8 +5,9 @@
 //! Files (all uncompressed XNB v5 under `Content/Models`): `Export/Level_<Name>_.xnb` (a `StringReader` JSON sidecar:
 //! `modelCount`), per part `Export/Level_<Name>_<N>.xnb` (`BytingPipeline.GLTFReader`: the Blender exporter's glTF
 //! 2.0 JSON) with its buffer `Export/<buffer uri>.xnb` (`ArrayReader<Byte>`), and each image
-//! `<image uri relative to Export, .png -> .xnb>` (`BytingPipeline.QoiReader`: an i32 byte count and a QOI file). The
-//! derived `<N>Collision.xnb` and `<N>Cuts.xnb` (the game's own builds from the same glTF) are not read.
+//! `<image uri relative to Export, .png -> .xnb>` (`BytingPipeline.QoiReader`: an i32 byte count and a QOI file; or
+//! XNA's `Texture2DReader`: raw `Color` pixels, as the board's own textures are). The derived `<N>Collision.xnb` and
+//! `<N>Cuts.xnb` (the game's own builds from the same glTF) are not read.
 #![allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
@@ -177,6 +178,34 @@ fn bytes_of(path: &Path, reader: Option<&str>) -> Result<Vec<u8>> {
     Ok(b)
 }
 
+/// An image file of the install's content as RGBA8 mip levels, largest first: a QOI image (`BytingPipeline.QoiReader`:
+/// an i32 byte count and a QOI file) or XNA's `Texture2D` (raw `Color` pixels).
+fn image_levels(path: &Path) -> Result<(u32, u32, Vec<Vec<u8>>)> {
+    let bytes = content(path)?;
+    let xnb = Xnb::parse(&bytes)?;
+    let (reader, mut c) = xnb.primary()?;
+    let file = path.display().to_string();
+    if reader.is_texture_2d() {
+        let t = xnb.texture2d()?;
+        return Ok((t.width, t.height, t.levels.iter().map(|l| l.to_vec()).collect()));
+    }
+    if reader.type_name() != "BytingPipeline.QoiReader" {
+        return Err(format(
+            &file,
+            format!(
+                "reader {}, neither BytingPipeline.QoiReader nor Texture2DReader",
+                reader.type_name()
+            ),
+        ));
+    }
+    let qoi = primase_image::read_qoi(c.byte_array()?)?;
+    c.end()?;
+    let primase_image::Samples::U8(rgba) = qoi.image.samples else {
+        return Err(format(&file, "a QOI image not 8-bit"));
+    };
+    Ok((qoi.image.width, qoi.image.height, vec![rgba]))
+}
+
 /// A glTF node's local matrix (column-major 4x4), from `matrix` or its TRS.
 fn local(node: &Value) -> [f64; 16] {
     let nums = |k: &str| -> Option<Vec<f64>> { node.get(k)?.as_array()?.iter().map(Value::as_f64).collect() };
@@ -342,19 +371,15 @@ fn read_part(
                     *e
                 } else {
                     let e = if path.is_file() {
-                        let qoi =
-                            primase_image::read_qoi(&bytes_of(&path, Some("BytingPipeline.QoiReader"))?)?;
-                        let primase_image::Samples::U8(rgba) = qoi.image.samples else {
-                            return Err(format(uri, "a QOI image not 8-bit"));
-                        };
+                        let (width, height, levels) = image_levels(&path)?;
                         let e = w.spawn();
                         w.insert(
                             e,
                             Texture {
-                                width: qoi.image.width,
-                                height: qoi.image.height,
+                                width,
+                                height,
                                 format: TexFormat::Rgba8Unorm,
-                                levels: vec![rgba],
+                                levels,
                                 color_space: ColorSpace::Srgb,
                                 role: TexRole::Other,
                                 normal: None,

@@ -11,7 +11,8 @@
 //! The built-in readers' values: [`Content::string`] (`StringReader`: a 7-bit byte length, then UTF-8) and
 //! [`Content::byte_array`] (`ArrayReader<Byte>`: an i32 count, then the bytes). Which reader wrote the object is the
 //! caller's to check by [`TypeReader::type_name`]; [`Xnb::string`] and [`Xnb::byte_array`] do it for the built-in
-//! two. Shared resources are not read: [`Content::end`] refuses a file that has any.
+//! two. [`Xnb::texture2d`] reads XNA's `Texture2DReader` (a raw 8-bit `Color` surface; any other surface format is
+//! refused, naming it). Shared resources are not read: [`Content::end`] refuses a file that has any.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -75,7 +76,8 @@ const LZX: u8 = 0x80;
 const HEADER: usize = 10;
 
 /// XNA's string reader, as [`TypeReader::type_name`] gives it.
-pub const STRING_READER: &str = "Microsoft.Xna.Framework.Content.StringReader";
+pub const TEXTURE_2D_READER: &str = "Microsoft.Xna.Framework.Content.Texture2DReader";
+const STRING_READER: &str = "Microsoft.Xna.Framework.Content.StringReader";
 /// XNA's array reader, as [`TypeReader::base_name`] gives it; its one generic argument is the element type.
 pub const ARRAY_READER: &str = "Microsoft.Xna.Framework.Content.ArrayReader`1";
 /// The element type of a byte array, as [`TypeReader::generic_arguments`] gives it.
@@ -162,7 +164,25 @@ impl TypeReader {
     pub fn is_byte_array(&self) -> bool {
         self.base_name() == ARRAY_READER && self.generic_arguments() == [BYTE]
     }
+
+    /// XNA's texture reader.
+    pub fn is_texture_2d(&self) -> bool {
+        self.type_name() == TEXTURE_2D_READER
+    }
 }
+
+/// A `Texture2D` as XNA's reader stores it: raw 8-bit `Color` pixels (R, G, B, A bytes, rows top to bottom), each mip
+/// level a slice of the file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Texture2D<'a> {
+    pub width: u32,
+    pub height: u32,
+    /// The levels, largest first; level `i` is `max(1, width >> i)` by `max(1, height >> i)` pixels of 4 bytes.
+    pub levels: Vec<&'a [u8]>,
+}
+
+/// The `SurfaceFormat` `Color` of XNA and MonoGame: 8 bits per channel, R, G, B, A.
+const SURFACE_FORMAT_COLOR: i32 = 0;
 
 /// A parsed XNB: its header, its type-reader table, and the bytes after them (the primary object).
 #[derive(Clone, Debug)]
@@ -273,6 +293,62 @@ impl<'a> Xnb<'a> {
         let s = c.string()?;
         c.end()?;
         Ok(s)
+    }
+
+    /// The primary object as XNA's `Texture2DReader` wrote it (the surface format, the size, the level count, then each
+    /// level's byte count and bytes); the whole file read. Only the `Color` surface format (0) is read: another is
+    /// refused naming its number, as is a level whose byte count is not its pixels', zero or too many levels and a
+    /// zero size.
+    pub fn texture2d(&self) -> Result<Texture2D<'a>> {
+        let (reader, mut c) = self.primary()?;
+        if !reader.is_texture_2d() {
+            return Err(bad(
+                self.origin,
+                format!("the reader is {}, not a texture's", reader.name),
+            ));
+        }
+        let at = c.position();
+        let format = c.i32()?;
+        if format != SURFACE_FORMAT_COLOR {
+            return Err(bad(at, format!("SurfaceFormat {format}: only Color (0) is read")));
+        }
+        let (width, height, levels) = (c.i32()?, c.i32()?, c.i32()?);
+        let dimension = |v: i32, what: &str| match u32::try_from(v) {
+            Ok(n) if n > 0 => Ok(n),
+            _ => Err(bad(at, format!("{what} {v}"))),
+        };
+        let (width, height) = (dimension(width, "width")?, dimension(height, "height")?);
+        let most = width.max(height).ilog2().saturating_add(1);
+        let levels = match u32::try_from(levels) {
+            Ok(n) if (1..=most).contains(&n) => n,
+            _ => {
+                return Err(bad(
+                    at,
+                    format!("{levels} levels for {width} x {height} (1 to {most})"),
+                ));
+            }
+        };
+        let mut out = Vec::new();
+        for level in 0..levels {
+            let at = c.position();
+            let count = c.i32()?;
+            let pixels = u64::from(width.checked_shr(level).unwrap_or(0).max(1))
+                .saturating_mul(u64::from(height.checked_shr(level).unwrap_or(0).max(1)));
+            let expected = pixels.saturating_mul(4);
+            if u64::try_from(count).ok() != Some(expected) {
+                return Err(bad(
+                    at,
+                    format!("level {level}: {count} bytes, not {expected} (Color pixels)"),
+                ));
+            }
+            out.push(c.bytes(usize::try_from(expected).map_err(|_| bad(at, "level size"))?)?);
+        }
+        c.end()?;
+        Ok(Texture2D {
+            width,
+            height,
+            levels: out,
+        })
     }
 
     /// The primary object as XNA's array reader of bytes wrote it; the whole file read.
@@ -498,6 +574,51 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("count -1")
+        );
+    }
+
+    /// A 2 x 2 `Color` texture with a second level (1 x 1) reads as stored; another surface format, a wrong byte count,
+    /// a missing level and a non-texture reader are refused.
+    #[test]
+    fn a_texture_reads_as_stored_and_is_strict() {
+        const TEXTURE: &str =
+            "Microsoft.Xna.Framework.Content.Texture2DReader, Microsoft.Xna.Framework.Graphics";
+        let body = |format: i32, levels: i32, sizes: &[i32]| {
+            let mut b = vec![1];
+            for v in [format, 2, 2, levels] {
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+            for (i, n) in sizes.iter().enumerate() {
+                b.extend_from_slice(&n.to_le_bytes());
+                b.extend((0..*n).map(|k| (k as u8).wrapping_add(i as u8 * 100)));
+            }
+            b
+        };
+        let file = |b: &[u8]| xnb(0, &[TEXTURE], 0, b);
+        let f = file(&body(0, 2, &[16, 4]));
+        let x = Xnb::parse(&f).unwrap();
+        assert!(x.readers[0].is_texture_2d());
+        let t = x.texture2d().unwrap();
+        assert_eq!((t.width, t.height), (2, 2));
+        assert_eq!(t.levels.len(), 2);
+        assert_eq!(t.levels[0], (0..16).collect::<Vec<u8>>());
+        assert_eq!(t.levels[1], [100, 101, 102, 103]);
+        let err = |b: &[u8]| Xnb::parse(&file(b)).unwrap().texture2d().unwrap_err().to_string();
+        assert!(err(&body(4, 1, &[16])).contains("SurfaceFormat 4"), "DXT1");
+        assert!(err(&body(0, 1, &[12])).contains("12 bytes, not 16"));
+        assert!(err(&body(0, 2, &[16])).contains("short") || err(&body(0, 2, &[16])).contains("XNB at byte"));
+        assert!(err(&body(0, 3, &[16, 4, 4])).contains("3 levels for 2 x 2"));
+        let mut trailing = body(0, 1, &[16]);
+        trailing.push(0);
+        assert!(!err(&trailing).is_empty());
+        let other = xnb(0, &[STRING_READER], 0, &string_body(1, ""));
+        assert!(
+            Xnb::parse(&other)
+                .unwrap()
+                .texture2d()
+                .unwrap_err()
+                .to_string()
+                .contains("not a texture's")
         );
     }
 
