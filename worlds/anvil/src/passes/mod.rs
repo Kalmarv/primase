@@ -2769,6 +2769,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("hidden", "drop"),
             ("phantom", "drop"),
             ("water-collision", "drop"),
+            ("collision-only", "drop"),
         ],
     );
     reg.register_requiring(
@@ -2856,6 +2857,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("collision", "none"),
             ("pieces", "whole"),
             ("normals", "near-camera"),
+            ("steep", "none"),
         ],
     );
     reg.register_requiring(
