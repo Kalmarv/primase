@@ -19,6 +19,21 @@ Approximations that stand core lights in for light a destination cannot draw.
   to the scene's own lights. The pass consumes the ambient (takes it out of
   `core.environment`, the sun kept): the lights stand for it, so a writer does not
   report it as light it leaves out.
+- `emissive-lights` (`EmissiveLights`, `EmissivePolicy`): emissive surfaces as point lights, for a source that draws
+  lamps, bulbs and signs with emissive materials and has no lights of its own. A placed prototype's triangle
+  primitives of materials that emit (`pbr.material` `emissive` times its texture times `emissive_strength`) are split
+  into pieces (triangles joined at one position within `weld`); a piece's colour is the texture under its coordinates
+  (or, for a material the source animates, the texture's mean) and a piece under `min_luminance` is left out;
+  its intensity is the radiance's largest channel (colour x strength x `nits_per_strength`) times its area times
+  `area_factor` and the placement's scale squared, in candela, its range `sqrt(intensity / e_min)` kept within the
+  range options. A piece up to `big` metres is a bulb or fixture, one light each, except that a prototype with `string` or
+  more of them is a string kept as `per_string` lights (consecutive groups along it, each at its pieces' mean position
+  with their total intensity); a longer piece is one light per `strip` metres along its longest axis. More lights than
+  `max_total` is an error, never a silent drop. Every option is required: the units (what a unit of strength is in
+  cd/m2), the thinning and the thresholds are the program's. Reported: pieces seen, left out, folded, strips split,
+  lights made, as an approximation. A world is read whole or in parts (a light is made from, and kept with, its
+  placement). Not read: the emitter's facing (a point light), a spot cone, a surface's two sides, an animation's
+  timing, a time-of-day switch of the emission (a light is always on; a destination's own time-of-day mask applies).
 - `SurfaceGrid`: the world's placed triangles (`placed_triangles`) bucketed in
   cubic cells within a box of interest, for "is a surface nearer than `d`" queries,
   by meshops' point-triangle distance.

@@ -1030,6 +1030,7 @@ version = "0.1.0"
 dependencies = [
  "primase-core",
  "primase-meshops",
+ "primase-texcodec",
 ]
 
 [[package]]
