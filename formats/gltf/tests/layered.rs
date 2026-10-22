@@ -260,6 +260,12 @@ fn per_pixel_channels_and_over_are_version_2() {
     l.weights.composition = Composition::Over;
     w.insert(host, l);
     let (bytes, _) = write(&w, &WriteOptions::default()).unwrap();
+    // the mask encoded up front on several threads: the same bytes
+    let threads = WriteOptions {
+        threads: primase_core::parallel::Threads::new(4).unwrap(),
+        ..WriteOptions::default()
+    };
+    assert!(write(&w, &threads).unwrap().0 == bytes);
     let doc = document(&bytes);
     let ext = &material(&doc, "terrain")["extensions"]["PRIMASE_layered_material"];
     assert_eq!(ext["version"], 2);

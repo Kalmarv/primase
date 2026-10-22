@@ -57,6 +57,9 @@ pub struct WriterOptions {
     pub warnings: Vec<String>,
     /// The pause-map picture to write (`prepare-reskate-pause-map`); `None`: none.
     pub pause: Option<SkatePausePicture>,
+    /// How many PNG files are encoded at once (the program's choice, [`crate::MapSink::with_threads`]): the same files
+    /// on any count.
+    pub threads: primase_core::parallel::Threads,
 }
 
 impl WriterOptions {
@@ -834,7 +837,7 @@ impl MapWriter {
             )),
             None => None,
         };
-        let mut tex = TexLib::encoding();
+        let mut tex = TexLib::encoding().with_threads(o.threads);
         if o.pause_drawing()
             .is_some_and(|d| d.colour == PauseColour::Texture)
         {
@@ -2630,7 +2633,7 @@ impl MapWriter {
                     src_w: t.source_w,
                     src_h: t.source_h,
                     src_format: &t.source_format,
-                    bytes: t.bytes,
+                    bytes: t.bytes(),
                     sources: t.sources.iter().map(String::as_str).collect(),
                     src_variants: (t.source_variants.len() > 1)
                         .then(|| t.source_variants.iter().map(String::as_str).collect()),
@@ -2638,7 +2641,7 @@ impl MapWriter {
                 .collect(),
         };
         let bytes = crate::json_bytes("textures_index.json", &index, false)?;
-        self.r.tex_bytes = out_tex.iter().map(|t| t.bytes).sum();
+        self.r.tex_bytes = out_tex.iter().map(|t| t.bytes()).sum();
         self.r.tex_pixels = out_tex.iter().map(|t| u64::from(t.w) * u64::from(t.h)).sum();
         self.files.insert("textures_index.json".into(), bytes);
         Ok(())

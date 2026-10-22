@@ -748,6 +748,27 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
         primase_image::Samples::U8(pixels)
     );
     assert_eq!(bytes, written(&b).2);
+    // encoded on several threads (every bound image up front): the same document, byte for byte, with distinct images
+    let mut distinct = b.world.subset(&b.world.entities().collect());
+    let entities: Vec<_> = distinct.iter::<TextureFile>().map(|(e, _)| e).collect();
+    for (k, e) in entities.into_iter().enumerate() {
+        let mut t = t.clone();
+        t.levels = vec![vec![10 * k as u8 + 1, 64, 200 - k as u8, 255]];
+        distinct.insert(e, t);
+    }
+    let one = write(&distinct, &options()).unwrap().0;
+    for n in [2, 8] {
+        let many = write(
+            &distinct,
+            &WriteOptions {
+                threads: primase_core::parallel::Threads::new(n).unwrap(),
+                ..options()
+            },
+        )
+        .unwrap()
+        .0;
+        assert!(many == one, "{n} threads");
+    }
     let n = b.world.get_mut::<Texture>(b.tex_normal).unwrap();
     n.role = TexRole::Normal;
     n.normal = Some(NormalConvention {

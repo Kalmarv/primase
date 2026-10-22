@@ -143,6 +143,10 @@ pub struct WriteOptions {
     /// that no placement draws, so a viewer that switches a placement's variant finds its mesh
     /// ([`Drawn::variants`]). Not with a [`Selection`].
     pub all_variants: bool,
+    /// How many threads encode the images ([`primase_core::parallel`]): with more than one and no [`Selection`], every
+    /// image a material binds is encoded up front, at most this many at once, the same bytes in the same order as one
+    /// at a time. Default one.
+    pub threads: primase_core::parallel::Threads,
 }
 
 /// What to write of the world a tiled writer is given, without changing it: only these placements (instances or
@@ -459,9 +463,51 @@ pub fn write_document(world: &World, options: &WriteOptions) -> Result<(Document
         morph_targets: BTreeMap::new(),
         animations: Vec::new(),
         drawn: BTreeMap::new(),
+        encoded: BTreeMap::new(),
     };
     let json = w.document()?;
     Ok((Document::new(json, std::mem::take(&mut w.buffers.bin)), w.report))
+}
+
+/// With threads and no selection: every texture that a material reached from `places` (the placements written,
+/// [`World::closure`]) binds, a `pbr.material`'s slots and a `core.layered`'s masks, and that the writer could embed,
+/// encoded (or the encoder's error) on the stated threads, for [`Writer::image`] to take instead of encoding it then.
+fn preencode(
+    world: &World,
+    options: &WriteOptions,
+    places: &[Place],
+) -> BTreeMap<Entity, std::result::Result<Vec<u8>, String>> {
+    if options.threads.get() < 2 || options.selection.is_some() {
+        return BTreeMap::new();
+    }
+    let reached = world.closure(places.iter().map(|p| p.entity));
+    let mut bound = BTreeSet::new();
+    for &e in &reached {
+        if let Some(m) = world.get::<PbrMaterial>(e) {
+            bound.extend(m.textures().map(|r| r.texture));
+        }
+        if let Some(m) = world.get::<LayeredMaterial>(e) {
+            bound.extend(m.mask_textures().map(|r| r.texture));
+        }
+    }
+    let mut todo: Vec<(Entity, &Texture)> = bound
+        .into_iter()
+        .filter_map(|e| world.get::<Texture>(e).map(|t| (e, t)))
+        .filter(|(_, t)| {
+            primase_image::rgba8_exact(t.format)
+                && (t.role != primase_core::TexRole::Normal
+                    || t.normal == Some(primase_core::NormalConvention::GLTF))
+        })
+        .collect();
+    // the largest first, so the longest encodings do not start last; each image's bytes are its own either way
+    todo.sort_by_key(|(e, t)| (std::cmp::Reverse(u64::from(t.width) * u64::from(t.height)), *e));
+    match primase_core::parallel::map(options.threads, &todo, |_, (_, t)| {
+        primase_image::texture_level_png(t, 0).map_err(|e| e.to_string())
+    }) {
+        Ok(done) => todo.iter().map(|(e, _)| *e).zip(done).collect(),
+        // a panicking encoder: each image is encoded when it is reached instead, where the error is its own
+        Err(_) => BTreeMap::new(),
+    }
 }
 
 /// Write the world to a GLB file.
@@ -523,6 +569,8 @@ enum GroupKey {
 struct Writer<'w> {
     world: &'w World,
     options: &'w WriteOptions,
+    /// The images encoded up front ([`preencode`]), taken as they are reached.
+    encoded: BTreeMap<Entity, std::result::Result<Vec<u8>, String>>,
     report: WriteReport,
     /// The binary buffer, its views and accessors.
     buffers: Buffers,
@@ -580,6 +628,7 @@ struct MorphAccessors {
 impl Writer<'_> {
     fn document(&mut self) -> Result<Value> {
         let places = self.places()?;
+        self.encoded = preencode(self.world, self.options, &places);
         let mut nodes: Vec<Value> = Vec::new();
         let mut groups: BTreeMap<GroupKey, Vec<usize>> = BTreeMap::new();
         let mut roots: Vec<usize> = Vec::new();
@@ -1696,10 +1745,13 @@ impl Writer<'_> {
                 self.image_of_entity.insert(e, None);
                 return Ok(None);
             }
-            let bytes = primase_image::texture_level_png(texture, 0).map_err(|error| Error::World {
-                entity: e,
-                detail: error.to_string(),
-            })?;
+            let bytes = match self.encoded.remove(&e) {
+                Some(encoded) => encoded.map_err(|detail| Error::World { entity: e, detail })?,
+                None => primase_image::texture_level_png(texture, 0).map_err(|error| Error::World {
+                    entity: e,
+                    detail: error.to_string(),
+                })?,
+            };
             (bytes, self.name_of(e, "image"))
         } else if self.world.has::<TextureFile>(e) {
             // a reader's load step makes the pixels (primase_image::load_textures); the writer reads no file

@@ -403,6 +403,7 @@ pub(crate) fn writer_options(s: &Scene, a: &EncodingOptions) -> Result<WriterOpt
         trainer_note: s.trainer_note.clone(),
         warnings: s.warnings.clone(),
         pause: None,
+        threads: primase_core::parallel::Threads::ONE,
     })
 }
 

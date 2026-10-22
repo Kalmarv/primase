@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
+use primase_core::parallel::Threads;
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
 use primase_hash::{content_bytes, content_finish, content_string, content_word};
 use primase_texcodec::{Decoder, TexDecoder};
@@ -500,7 +501,8 @@ pub struct OutTexture {
     pub w: u32,
     pub h: u32,
     pub alpha: bool,
-    pub bytes: u64,
+    /// The file's size ([`OutTexture::bytes`]).
+    size: u64,
     pub mean: u32,
     pub removed: bool,
     pub source_w: u32,
@@ -511,6 +513,20 @@ pub struct OutTexture {
     data: Vec<u8>,
     /// The file name it was given out under ([`TexLib::take_used`]); `None`: not given out yet.
     given: Option<String>,
+    /// Its pixels (and whether the file keeps alpha) until they are encoded ([`TexLib::flush`]).
+    raw: Option<(Vec<u8>, bool)>,
+}
+
+impl OutTexture {
+    /// The file's size in bytes. Panics while its file waits to be encoded ([`TexLib::finish`] encodes every one).
+    pub fn bytes(&self) -> u64 {
+        assert!(
+            self.raw.is_none(),
+            "{}: the file's size read before it was encoded",
+            self.file
+        );
+        self.size
+    }
 }
 
 /// The texture files of a map (the reference writer's TexLib): each texture as prepared (its size, its pixels), encoded
@@ -520,6 +536,10 @@ pub struct OutTexture {
 pub struct TexLib {
     /// Encode the files (`false`: ids only, by the same content keys: what a pass needs of the writer's materials).
     encode: bool,
+    /// How many PNG files are encoded at once: the textures registered wait until that many do, then go together.
+    threads: Threads,
+    /// The textures registered and not encoded yet, in the order registered.
+    pending: Vec<usize>,
     by_key: HashMap<(u64, bool), usize>,
     by_content: HashMap<u64, usize>,
     out: Vec<OutTexture>,
@@ -560,6 +580,17 @@ fn mip_for(width: u32, height: u32, levels: u32, cap: u32) -> (u32, u32, u32) {
         mip += 1;
     }
     (mip, w, h)
+}
+
+/// `encode` of every job on `threads` threads, in the jobs' order. The encoder only fails on an invalid image (a bug,
+/// as when one is encoded alone), so a failure is the panic it was.
+fn parallel_png<T: Sync>(
+    threads: Threads,
+    jobs: &[T],
+    encode: impl Fn(&T) -> Vec<u8> + Sync,
+) -> Vec<Vec<u8>> {
+    primase_core::parallel::map(threads, jobs, |_, j| encode(j))
+        .unwrap_or_else(|p| panic!("encoding a texture file: {p}"))
 }
 
 fn png_bytes(w: u32, h: u32, rgba: &[u8], alpha: bool) -> Vec<u8> {
@@ -627,11 +658,49 @@ impl TexLib {
     pub fn encoding() -> TexLib {
         TexLib {
             encode: true,
+            threads: Threads::ONE,
+            pending: Vec::new(),
             by_key: HashMap::new(),
             by_content: HashMap::new(),
             out: Vec::new(),
             unsupported: 0,
             pyramids: None,
+        }
+    }
+
+    /// Encode the PNG files on `threads` threads, that many at a time (at most that many textures' pixels wait to be
+    /// encoded): the same files as one at a time.
+    pub fn with_threads(mut self, threads: Threads) -> TexLib {
+        self.threads = threads;
+        self
+    }
+
+    /// The textures registered and waiting, encoded (on the library's threads), their files and sizes set.
+    fn flush(&mut self) {
+        let ids = std::mem::take(&mut self.pending);
+        let jobs: Vec<(usize, u32, u32, Vec<u8>, bool)> = ids
+            .into_iter()
+            .filter_map(|id| {
+                let t = &mut self.out[id];
+                t.raw.take().map(|(rgba, alpha)| (id, t.w, t.h, rgba, alpha))
+            })
+            .collect();
+        let encoded = parallel_png(self.threads, &jobs, |(_, w, h, rgba, alpha)| {
+            png_bytes(*w, *h, rgba, *alpha)
+        });
+        for ((id, ..), data) in jobs.iter().zip(encoded) {
+            let t = &mut self.out[*id];
+            t.size = data.len() as u64;
+            t.data = data;
+        }
+    }
+
+    /// `id` (just added) waits for its file to be encoded with others ([`TexLib::flush`]).
+    fn queue(&mut self, id: usize, rgba: Vec<u8>, alpha: bool) {
+        self.out[id].raw = Some((rgba, alpha));
+        self.pending.push(id);
+        if self.pending.len() >= self.threads.get() {
+            self.flush();
         }
     }
 
@@ -767,11 +836,7 @@ impl TexLib {
         hh.uint(tag).int(w as i32).int(h as i32).bytes(rgba);
         // a Studio MSK keeps its alpha (opacity) when it has any
         let alpha = tag == MASK_TAG && rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 255);
-        let data = if self.encode {
-            png_bytes(w, h, rgba, alpha)
-        } else {
-            Vec::new()
-        };
+        let before = self.out.len();
         let id = self.add(
             name,
             w,
@@ -780,10 +845,13 @@ impl TexLib {
             hh.value(),
             "png",
             Some(src),
-            data,
+            Vec::new(),
             ".png",
             mean,
         );
+        if self.encode && self.out.len() > before {
+            self.queue(id, rgba.to_vec(), alpha);
+        }
         self.keep_pyramid(id, || Some((w, h, rgba.to_vec())));
         id as i32
     }
@@ -838,7 +906,7 @@ impl TexLib {
             w,
             h,
             alpha,
-            bytes: data.len() as u64,
+            size: data.len() as u64,
             mean,
             removed: false,
             source_w: src.map_or(w, |s| s.source_width),
@@ -848,6 +916,7 @@ impl TexLib {
             sources: BTreeSet::new(),
             data,
             given: None,
+            raw: None,
         };
         t.sources.insert(name.to_owned());
         if src.is_some() {
@@ -947,13 +1016,9 @@ impl TexLib {
                 ch.uint(u32::from(px[0]) | u32::from(px[1]) << 8 | u32::from(px[2]) << 16);
             }
         }
-        let data = if self.encode {
-            png_bytes(p.w, p.h, &rgba, alpha)
-        } else {
-            Vec::new()
-        };
         let mean = mean_color(&rgba);
-        Ok(self.add(
+        let before = self.out.len();
+        let id = self.add(
             &r.name,
             p.w,
             p.h,
@@ -961,14 +1026,20 @@ impl TexLib {
             ch.value(),
             "png",
             Some(tex),
-            data,
+            Vec::new(),
             ".png",
             mean,
-        ) as i32)
+        );
+        if self.encode && self.out.len() > before {
+            self.queue(id, rgba, alpha);
+        }
+        Ok(id as i32)
     }
 
-    /// After the last register: a file whose pixels arrived under several names takes its final name.
+    /// After the last register: the files still waiting encoded, and a file whose pixels arrived under several names
+    /// takes its final name.
     pub fn finish(&mut self) {
+        self.flush();
         for t in &mut self.out {
             let ext = Path::new(&t.file)
                 .extension()
@@ -994,6 +1065,7 @@ impl TexLib {
     /// The files to write, those not removed: each one's name (under `textures/`) and bytes, moved out (the library
     /// keeps what it reports of them). A library that encodes nothing has none to give (an error).
     pub fn take_files(&mut self) -> Result<Vec<(String, Vec<u8>)>> {
+        self.flush();
         if !self.encode {
             return Err(Error::Texture(
                 "a texture library that encodes nothing has no files to write".into(),
@@ -1012,6 +1084,7 @@ impl TexLib {
     /// pixels under a smaller one: [`TexLib::renamed`] tells which, after [`TexLib::finish`]. A library that encodes
     /// nothing has none to give (an error).
     pub fn take_used(&mut self, used: &BTreeSet<i32>) -> Result<Vec<(String, Vec<u8>)>> {
+        self.flush();
         if !self.encode {
             return Err(Error::Texture(
                 "a texture library that encodes nothing has no files to write".into(),

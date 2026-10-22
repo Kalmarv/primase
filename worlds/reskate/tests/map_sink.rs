@@ -22,11 +22,8 @@ use primase_reskate::{EncodingOptions, MapSink};
 
 /// A raised map: a textured slab placed twice, and a spawn.
 fn map() -> World {
-    let mut w = World::new();
-    let tex = w.spawn();
-    w.insert(tex, Name("stone_d".into()));
-    w.insert(
-        tex,
+    map_of(vec![(
+        "stone".to_owned(),
         Texture {
             width: 2,
             height: 2,
@@ -36,48 +33,65 @@ fn map() -> World {
             role: TexRole::Color,
             normal: None,
         },
-    );
-    let material = w.spawn();
-    w.insert(material, Name("stone".into()));
-    w.insert(
-        material,
-        PbrMaterial {
-            base_color_texture: Some(TextureRef::new(tex)),
-            ..PbrMaterial::default()
-        },
-    );
-    let proto = w.spawn();
-    w.insert(proto, Name("slab".into()));
-    w.insert(
-        proto,
-        Mesh::new(vec![Primitive {
-            topology: Topology::Triangles,
-            streams: BTreeMap::from([
-                (
-                    Semantic::Position,
-                    Stream::F32x3(vec![[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [0.0, 0.0, -4.0]]),
-                ),
-                (
-                    Semantic::TexCoord(0),
-                    Stream::F32x2(vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
-                ),
-            ]),
-            indices: None,
-            material: Some(material),
-        }]),
-    );
-    for x in [0.0, 10.0] {
-        let p = w.spawn();
+    )])
+}
+
+/// A raised map: a slab of each texture (named after it), placed twice, and a spawn.
+fn map_of(slabs: Vec<(String, Texture)>) -> World {
+    let mut w = World::new();
+    for (k, (name, texture)) in slabs.into_iter().enumerate() {
+        let tex = w.spawn();
+        w.insert(tex, Name(format!("{name}_d")));
+        w.insert(tex, texture);
+        let material = w.spawn();
+        w.insert(material, Name(name.clone()));
         w.insert(
-            p,
-            Instance {
-                prototype: proto,
-                variant: 0,
+            material,
+            PbrMaterial {
+                base_color_texture: Some(TextureRef::new(tex)),
+                ..PbrMaterial::default()
             },
         );
-        let mut t = Transform::IDENTITY;
-        t.cols[3] = [x, 0.0, 0.0];
-        w.insert(p, t);
+        let proto = w.spawn();
+        w.insert(
+            proto,
+            Name(if k == 0 {
+                "slab".to_owned()
+            } else {
+                format!("slab{k}")
+            }),
+        );
+        w.insert(
+            proto,
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([
+                    (
+                        Semantic::Position,
+                        Stream::F32x3(vec![[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [0.0, 0.0, -4.0]]),
+                    ),
+                    (
+                        Semantic::TexCoord(0),
+                        Stream::F32x2(vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+                    ),
+                ]),
+                indices: None,
+                material: Some(material),
+            }]),
+        );
+        for x in [0.0, 10.0] {
+            let p = w.spawn();
+            w.insert(
+                p,
+                Instance {
+                    prototype: proto,
+                    variant: 0,
+                },
+            );
+            let mut t = Transform::IDENTITY;
+            t.cols[3] = [x, 20.0 * k as f32, 0.0];
+            w.insert(p, t);
+        }
     }
     primase_reskate::passes::raise_skate(
         &mut w,
@@ -249,4 +263,64 @@ fn as_a_conversions_writer_the_sink_reports_its_losses_as_notices() {
     for e in [e, e2] {
         std::fs::remove_dir_all(e.out_root).ok();
     }
+}
+
+/// The texture files encoded on several threads ([`MapSink::with_threads`]): the folder `write_map` writes on one,
+/// byte for byte, for a map of nine textures (sizes not powers of two, some with alpha).
+#[test]
+fn the_files_on_any_thread_count_are_the_serial_ones() {
+    let noise = |n: usize, seed: u32| -> Vec<u8> {
+        let mut s = seed;
+        (0..n)
+            .map(|_| {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                (s >> 24) as u8
+            })
+            .collect()
+    };
+    let slabs = || {
+        (0..9u32)
+            .map(|k| {
+                let (w, h) = (16 + 5 * k, 12 + 3 * k);
+                let mut px = noise((w * h * 4) as usize, 1 + k);
+                if k % 3 != 0 {
+                    px.iter_mut().skip(3).step_by(4).for_each(|a| *a = 255);
+                }
+                (
+                    format!("stone{k}"),
+                    Texture {
+                        width: w,
+                        height: h,
+                        format: TexFormat::Rgba8Unorm,
+                        levels: vec![px],
+                        color_space: ColorSpace::Srgb,
+                        role: TexRole::Color,
+                        normal: None,
+                    },
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let e = encoding("threads_one");
+    let r = primase_reskate::write_map(&map_of(slabs()), Path::new(""), &e).unwrap();
+    let serial = files(&r.out_dir);
+    assert!(
+        serial
+            .keys()
+            .filter(|p| p.extension().is_some_and(|x| x == "png"))
+            .count()
+            >= 9
+    );
+    for n in [2, 8] {
+        let e2 = encoding(&format!("threads_{n}"));
+        let mut sink =
+            MapSink::new(Path::new(""), &e2).with_threads(primase_core::parallel::Threads::new(n).unwrap());
+        sink.part(&map_of(slabs())).unwrap();
+        let r2 = sink.finish().unwrap();
+        assert_eq!(files(&r2.out_dir), serial, "{n} threads");
+        std::fs::remove_dir_all(e2.out_root).ok();
+    }
+    std::fs::remove_dir_all(e.out_root).ok();
 }

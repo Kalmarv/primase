@@ -252,6 +252,7 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<Build
 pub struct MapSink {
     dir: PathBuf,
     encoding: EncodingOptions,
+    threads: primase_core::parallel::Threads,
     taken: Option<Taken>,
     cells: GatheredCells,
 }
@@ -657,9 +658,17 @@ impl MapSink {
         MapSink {
             dir: dir.to_owned(),
             encoding: encoding.clone(),
+            threads: primase_core::parallel::Threads::ONE,
             taken: None,
             cells: GatheredCells::default(),
         }
+    }
+
+    /// The texture files encoded on `threads` threads, that many at a time (at most that many textures' pixels waiting):
+    /// the same files on any count.
+    pub fn with_threads(mut self, threads: primase_core::parallel::Threads) -> MapSink {
+        self.threads = threads;
+        self
     }
 
     /// Take the prepared world `world`: a collision cell of a map in parts (one holding `skate.cell_layout`), laid out
@@ -690,6 +699,7 @@ impl MapSink {
             counts,
             ..
         } = read_part(world, &self.dir, &a, true)?;
+        o.threads = self.threads;
         let warnings = match &a.scene_warnings {
             Some(w) => Ok(w.clone()),
             None => Err(SceneWarnings::of(&s, world)?),

@@ -39,6 +39,13 @@ impl Threads {
     }
 }
 
+impl Default for Threads {
+    /// One: the serial run.
+    fn default() -> Threads {
+        Threads::ONE
+    }
+}
+
 impl Resource for Threads {
     const NAME: &'static str = "core.threads";
 }
