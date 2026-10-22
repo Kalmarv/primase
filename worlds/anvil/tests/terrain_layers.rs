@@ -5,7 +5,8 @@
 //! holds; at most 4 layers a piece (the striped node cut); the pieces' triangles the whole ground's to the bit.
 use primase_anvil::components::{AnvilTerrain, AnvilTextureMap, TerrainDetail, TerrainTile};
 use primase_anvil::passes::{
-    CellPoint, GroundColour, GroundNormals, LayersBase, LowerAnvilTerrain, Pieces, SplatUv, Steep, TerrainLayers,
+    CellPoint, GroundColour, GroundNormals, LayersBase, LowerAnvilTerrain, Pieces, SplatUv, Steep,
+    TerrainLayers,
 };
 use primase_core::frame::SourceFrame;
 use primase_core::layered::LayeredMaterial;
