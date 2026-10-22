@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use super::{Resource, ResourceId, Stage};
+use super::{BufferKind, Resource, ResourceId, ResourceKind, Stage, StorageTarget};
 
 /// The scalar type of a value or constant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -151,6 +151,69 @@ impl Interface {
     /// The resource with this id.
     pub fn resource(&self, id: ResourceId) -> Option<&Resource> {
         self.resources.iter().find(|r| r.id == id)
+    }
+
+    /// The interface's own invariants: one varying per label in each direction, values of 1 to 4 lanes, resource ids
+    /// unique, every resource spanning at least one binding with a buffer stride or element width that means
+    /// something, and every constant of a buffer inside it (with a layout that does not overflow).
+    pub fn verify(&self) -> Result<(), String> {
+        for (direction, varyings) in [("input", &self.inputs), ("output", &self.outputs)] {
+            for (i, v) in varyings.iter().enumerate() {
+                if !(1..=4).contains(&v.value.width) {
+                    return Err(format!(
+                        "{direction} {}{} has a width of {}, not 1 to 4",
+                        v.label.name, v.label.index, v.value.width
+                    ));
+                }
+                if varyings[..i].iter().any(|other| other.label == v.label) {
+                    return Err(format!(
+                        "{direction} {}{} is listed twice",
+                        v.label.name, v.label.index
+                    ));
+                }
+            }
+        }
+        let width_ok = |w: u8| (1..=4).contains(&w);
+        for (i, r) in self.resources.iter().enumerate() {
+            let name = &r.provenance.name;
+            if self.resources[..i].iter().any(|other| other.id == r.id) {
+                return Err(format!("resource id {} ({name}) is used twice", r.id.0));
+            }
+            if r.count == 0 {
+                return Err(format!("resource {name} spans no bindings"));
+            }
+            let buffer = |kind: &BufferKind| match kind {
+                BufferKind::Typed(v) if !width_ok(v.width) => {
+                    Err(format!("buffer {name} has elements of {} lanes", v.width))
+                }
+                BufferKind::Structured { stride: 0 } => Err(format!("buffer {name} has a stride of 0")),
+                _ => Ok(()),
+            };
+            match &r.kind {
+                ResourceKind::Buffer(kind)
+                | ResourceKind::Storage {
+                    target: StorageTarget::Buffer(kind),
+                    ..
+                } => {
+                    buffer(kind)?;
+                }
+                ResourceKind::ConstantBuffer { layout } => {
+                    for c in &layout.constants {
+                        let size =
+                            c.ty.size()
+                                .ok_or_else(|| format!("constant {name}.{} overflows", c.name))?;
+                        if c.offset.checked_add(size).is_none_or(|end| end > layout.size) {
+                            return Err(format!(
+                                "constant {name}.{} ({size} bytes at {}) reaches past the end of the {}-byte buffer",
+                                c.name, c.offset, layout.size
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 }
 

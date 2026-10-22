@@ -12,15 +12,24 @@
 //! Everything is plain data: owned strings, integers and enums, no handles and no GPU types, and every type
 //! serializes, so the vocabulary can be shown, stored and compared.
 
+mod binding;
 mod interface;
+mod program;
 mod resource;
 
 use serde::Serialize;
 
+pub use binding::{
+    AlphaTest, Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull,
+    DepthState, FrameParameter, InputBinding, InputRole, NormalEncoding, NormalSpace, ObjectParameter,
+    OutputBinding, OutputRole, RenderState, SamplerState, ShaderBinding, StageBinding, TextureBinding,
+    TextureSource, ViewParameter,
+};
 pub use interface::{
     D3dSignature, Interface, InterpMode, InterpSampling, Interpolation, Label, ScalarType, SystemValue,
     Value, Varying, VaryingProvenance,
 };
+pub use program::Shader;
 pub use resource::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, Majorness, Member,
     Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, StorageTarget, TextureDim,
