@@ -49,10 +49,12 @@ fn unit(v: [f64; 3]) -> [f64; 3] {
     if len > 0.0 { v.map(|x| x / len) } else { v }
 }
 
-/// A target's delta factor at weight `w` along its frames: where `w` falls between two points of `(0, nothing)` and
-/// each frame's `(weight, its deltas)`, the pair of frame indices (`None` for the zero point) and the blend between
-/// them, extrapolating along the first and last segments.
-fn frame_blend(weights: &[f32], w: f64) -> Vec<(usize, f64)> {
+/// A morph target's frame factors at weight `w`, given its frames' weights in order: the deltas to add are each listed
+/// frame's deltas times its factor, `(frame index, factor)`. `w` falls between two points of the zero point `(0, no
+/// deltas)` (present when the first frame's weight is above 0) and the frames; the two neighbours blend linearly,
+/// extrapolating along the first and last segments; a single frame with no zero point holds at factor 1. This is the
+/// rule [`apply_morphs`] uses, public so a consumer deforming elsewhere (a GPU) uses the same factors.
+pub fn frame_blend(weights: &[f32], w: f64) -> Vec<(usize, f64)> {
     // the points: (weight, frame) with the zero point first when the frames start above 0
     let mut points: Vec<(f64, Option<usize>)> = Vec::new();
     if weights.first().is_some_and(|&f| f > 0.0) {
@@ -158,8 +160,10 @@ pub fn apply_morphs(
     })
 }
 
-/// Integer-or-float influence streams of a primitive, per vertex (slot, weight) pairs.
-pub(crate) fn influences(p: &Primitive, how: Influences, rule: WeightRule) -> Result<Vec<Vec<(usize, f64)>>> {
+/// A primitive's skin influences, per vertex its `(joint slot, weight)` pairs, read from its integer-or-float joint
+/// and weight streams as `how` says and weighted by `rule`: the influences [`skin`] uses, public so a consumer
+/// deforming elsewhere (a GPU) uses the same ones.
+pub fn influences(p: &Primitive, how: Influences, rule: WeightRule) -> Result<Vec<Vec<(usize, f64)>>> {
     let n = p.vertex_count();
     let stream = |s: Semantic| p.streams.get(&s).ok_or_else(|| Error(format!("no {s:?} stream")));
     let ints = |s: &Stream| -> Result<Vec<[u32; 4]>> {
