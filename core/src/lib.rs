@@ -35,6 +35,7 @@ pub mod pbr;
 pub mod print;
 pub mod provenance;
 pub mod rig;
+pub mod shader;
 pub mod skeleton;
 pub mod skin;
 pub use asset::{
