@@ -88,7 +88,7 @@ fn lowered(frame: SourceFrame, height: impl Fn(i64, i64) -> i64, pieces: Pieces,
             occlusion: false,
         }),
         pieces,
-        normals: GroundNormals::CentralDifferences,
+        normals: GroundNormals::NearCamera,
     };
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log).expect("lower");
@@ -245,5 +245,36 @@ fn the_normal_is_up_in_cores_frame_and_agrees_with_the_winding() {
             let dot: f64 = (0..3).map(|k| face[k] * f64::from(n[k])).sum();
             assert!(dot > 0.0, "the normal is on the winding's front side");
         }
+    }
+}
+
+/// The kernel is the engine's: one sample either side whatever `step` is, so the vertices a coarser grid keeps carry the
+/// normals the finest grid gives them (a baseline widened with `step` would not).
+#[test]
+fn the_baseline_is_one_sample_whatever_the_step() {
+    let hill = |gx: i64, gy: i64| ((gx * gx) % 97) + ((gy * 3) % 31) + (gx * gy) % 13;
+    let by_pos = |step: u32| {
+        let w = lowered(SourceFrame::WORLD, hill, Pieces::Whole, step);
+        let placed = placed(&w);
+        let (pos, nrm) = streams(&placed[0].0);
+        let origin = placed[0].1;
+        pos.iter()
+            .zip(nrm)
+            .map(|(q, n)| {
+                (
+                    std::array::from_fn::<u32, 3, _>(|k| (q[k] + origin[k]).to_bits()),
+                    n.map(f32::to_bits),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let (fine, coarse) = (by_pos(1), by_pos(2));
+    assert!(coarse.len() < fine.len());
+    for (k, n) in &coarse {
+        assert_eq!(
+            fine.get(k),
+            Some(n),
+            "a vertex of the step-2 grid has the step-1 grid's normal"
+        );
     }
 }

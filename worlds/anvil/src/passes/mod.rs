@@ -920,28 +920,41 @@ impl<'t> GroundGrid<'t> {
         Ok(self.unit * value + self.offset)
     }
 
-    /// Every sample's smooth normal, row by row as the grid's vertices, in core's frame (`frame`): the unit normal of
-    /// the height field `z = h(x, y)` at the sample, `(-dh/dx, -dh/dy, 1)` in the terrain's source frame, its
-    /// slopes the central differences of the grid's own neighbours along each axis (the samples `columns` and `rows`
-    /// name, so `step` widens the baseline), one-sided at the grid's outer edge. It is computed once over the whole
-    /// grid, so every piece that draws a sample draws the same bits.
+    /// Every vertex's near-camera normal, row by row as the grid's vertices, in core's frame (`frame`): the engine's
+    /// terrain pixel program's `n0` (ps 1908 `TerrainTesselFlatOnly`, ShaderDataDX11.bin container 1908; docs/terrain.md
+    /// 3.6 (1)): the unit normal of the height field `z = h(x, y)`, `(-dh/dx, -dh/dy, 1)` in the terrain's source frame,
+    /// the slopes the central differences of the terrain's own height samples **one sample either side** along each
+    /// axis (the program's `cb0[48].x`, one atlas texel: two samples apart whatever `step` is), one-sided where a
+    /// neighbour's node is not read. The heights are in the source frame's units (`range` x the stored value, the
+    /// program's `cb4[2].z` factor, plus the offset), the spacing in the same units, so the slopes are rises over runs.
+    /// It is computed once over the whole grid, so every piece that draws a vertex draws the same bits.
     pub fn normals(&self, frame: &primase_core::frame::SourceFrame) -> Result<Vec<[f32; 3]>, String> {
-        let (w, h) = (self.columns.len(), self.rows.len());
-        let mut heights = Vec::with_capacity(w * h);
+        let height = |gx: Option<u32>, gy: Option<u32>| match (gx, gy) {
+            (Some(gx), Some(gy)) => self.height(gx, gy).ok(),
+            _ => None,
+        };
+        // the slope along one axis from the neighbours' heights and the sample spacing: central, one-sided where
+        // one neighbour is missing, flat where both are
+        let slope = |before: Option<f64>, here: f64, after: Option<f64>| match (before, after) {
+            (Some(b), Some(a)) => (a - b) / (2.0 * self.spacing),
+            (Some(b), None) => (here - b) / self.spacing,
+            (None, Some(a)) => (a - here) / self.spacing,
+            (None, None) => 0.0,
+        };
+        let mut out = Vec::with_capacity(self.columns.len() * self.rows.len());
         for &gy in &self.rows {
             for &gx in &self.columns {
-                heights.push(self.height(gx, gy)?);
-            }
-        }
-        let xs: Vec<f64> = self.columns.iter().map(|&g| self.x_of(g)).collect();
-        let ys: Vec<f64> = self.rows.iter().map(|&g| self.y_of(g)).collect();
-        let mut out = Vec::with_capacity(w * h);
-        for r in 0..h {
-            let (r0, r1) = (r.saturating_sub(1), (r + 1).min(h - 1));
-            for c in 0..w {
-                let (c0, c1) = (c.saturating_sub(1), (c + 1).min(w - 1));
-                let dx = (heights[r * w + c1] - heights[r * w + c0]) / (xs[c1] - xs[c0]);
-                let dy = (heights[r1 * w + c] - heights[r0 * w + c]) / (ys[r1] - ys[r0]);
+                let here = self.height(gx, gy)?;
+                let dx = slope(
+                    height(gx.checked_sub(1), Some(gy)),
+                    here,
+                    height(gx.checked_add(1), Some(gy)),
+                );
+                let dy = slope(
+                    height(Some(gx), gy.checked_sub(1)),
+                    here,
+                    height(Some(gx), gy.checked_add(1)),
+                );
                 let len = (dx * dx + dy * dy + 1.0).sqrt();
                 out.push(frame.direction([(-dx / len) as f32, (-dy / len) as f32, (1.0 / len) as f32]));
             }
@@ -990,15 +1003,20 @@ impl<'t> GroundGrid<'t> {
 /// prototype of its own, its collision (where drawn) over its own squares, its vertices local to its origin
 /// ([`local_origin`]: its box's least corner rounded down to 64 m, which keeps them exact), placed once there.
 ///
-/// With `normals=central-differences` (required: `central-differences` or `none`; how the game shades its terrain is not
-/// read, so this is the program's choice, an approximation counted) every `ground=` and `pieces=` draws **smooth normals**: each vertex's `Normal` is the unit normal of the height
-/// field `z = h(x, y)` at its sample, `(-dh/dx, -dh/dy, 1)` normalised in the terrain's source frame and carried to
-/// core's by the frame's direction map (so it is up whatever the frame, and agrees with the triangles' winding), its
-/// slopes central differences of the grid's own neighbouring samples along each axis (`step` widens the baseline),
-/// one-sided at the grid's outer edge. The normals are computed once over the whole grid and each piece takes its
-/// vertices' own, so the vertices neighbouring pieces share (they share their positions exactly) carry the same bits and
-/// there is no lighting seam. With `normals=none` the ground has none, and a writer makes flat per-triangle normals,
-/// which shade the 0.5 m grid as facets.
+/// With `normals=near-camera` (required: `near-camera` or `none`) every `ground=` and `pieces=` draws **smooth
+/// normals**: each vertex's `Normal` is the engine's near-camera terrain normal at its sample, carried to core's frame
+/// by the frame's direction map (so it is up whatever the frame, and agrees with the triangles' winding). **Read:** the
+/// terrain pixel program (ps 1908 `TerrainTesselFlatOnly`, ShaderDataDX11.bin container 1908; docs/terrain.md 3.6 (1),
+/// from the disassembly and executed there) samples the height atlas one texel either side of the pixel on each axis
+/// (`cb0[48].x`) and takes `n0 = normalize((h(x-1) - h(x+1), h(y-1) - h(y+1)) * range, 1)` (`range` its `cb4[2].z`):
+/// central differences, two samples apart, no stored normal or normal map in that path; here the same on the terrain's
+/// own samples, whatever `step` is, one-sided where a neighbour's node is not read. **Not read:** past about 27 to 32 m
+/// of the camera the program blends `n0` into the mesh's interpolated vertex normal (a smoothstep of the distance), whose
+/// derivation is not read; this pass draws the near-camera normal at every distance, which is the approximation (counted).
+/// The normals are computed once over the whole grid and each piece takes its vertices' own, so the vertices neighbouring
+/// pieces share (they share their positions exactly) carry the same bits and there is no lighting seam. With
+/// `normals=none` the ground has none, and a writer makes flat per-triangle normals, which shade the 0.5 m grid as
+/// facets.
 ///
 /// With `collision` other than none the ground is also its own collision, on the same prototype: each square's two
 /// triangles of the surface its corner sample with the least x and y names (a square spans four samples, whose
@@ -1024,13 +1042,14 @@ pub struct LowerAnvilTerrain {
     pub normals: GroundNormals,
 }
 
-/// The normals `lower-anvil-terrain` gives the ground (`normals=`, required): how the game shades its terrain is not
-/// read (its terrain programs may take a stored normal or another kernel), so the program states it.
+/// The normals `lower-anvil-terrain` gives the ground (`normals=`, required): the game's terrain pixel program's
+/// near-camera normal is read, the far normal it blends toward is not, so the program states which it draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroundNormals {
-    /// The unit normal of the height field at each sample, its slopes central differences of the grid's neighbours
-    /// ([`GroundGrid::normals`]): an approximation, counted.
-    CentralDifferences,
+    /// The pixel program's near-camera normal `n0` at each sample, at every distance ([`GroundGrid::normals`]): read
+    /// within about 27 m, an approximation beyond about 32 m (the mesh vertex normal the game blends to is not read),
+    /// counted.
+    NearCamera,
     /// None: a writer makes its own (flat per triangle, faceting the grid).
     None,
 }
@@ -1080,7 +1099,7 @@ impl LowerAnvilTerrain {
             "colour=srgb|linear, collision=none|collision-material|one, surface=NAME unless collision=none, ",
             "ground=tile|splat|layers (with splat-k=K, splat-px=UNITS (splat), splat-uv=FACTOR|over-tile-size, splat-noise=raw|srgb, ",
             "splat-occlusion=block-8|none (splat, layers)), pieces=whole|per-node (per-node with ground=splat or layers), ",
-            "normals=central-differences|none"
+            "normals=near-camera|none"
         );
         let splat_keys = [
             "splat-k",
@@ -1201,9 +1220,9 @@ impl LowerAnvilTerrain {
             return Err(format!("range {range}: a positive number"));
         }
         let normals = match o.get("normals").map(String::as_str) {
-            Some("central-differences") => GroundNormals::CentralDifferences,
+            Some("near-camera") => GroundNormals::NearCamera,
             Some("none") => GroundNormals::None,
-            Some(v) => return Err(format!("normals={v}: central-differences or none")),
+            Some(v) => return Err(format!("normals={v}: near-camera or none")),
             None => return Err(format!("normals is required: {usage}")),
         };
         Ok(LowerAnvilTerrain {
@@ -1265,7 +1284,7 @@ impl Pass for LowerAnvilTerrain {
             (
                 "normals".to_owned(),
                 match self.normals {
-                    GroundNormals::CentralDifferences => "central-differences",
+                    GroundNormals::NearCamera => "near-camera",
                     GroundNormals::None => "none",
                 }
                 .to_owned(),
@@ -1338,7 +1357,7 @@ impl Pass for LowerAnvilTerrain {
     }
     fn approximates(&self) -> &'static str {
         "ground heights from a stated range and offset, drawn with its far colour tiles or its near colour baked by \
-         stated choices; its normals, where stated, central differences of the height grid"
+         stated choices; its normals, where stated, the near-camera normal at every distance"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let terrains: Vec<Entity> = w.iter::<AnvilTerrain>().map(|(e, _)| e).collect();
@@ -1359,13 +1378,13 @@ impl Pass for LowerAnvilTerrain {
                     positions.push(t.frame.point(grid.point(gx, gy)?));
                 }
             }
-            // with normals=central-differences, smooth normals: one per sample of the whole grid, shared by every piece
+            // with normals=near-camera, smooth normals: one per sample of the whole grid, shared by every piece
             let normals = match self.normals {
-                GroundNormals::CentralDifferences => {
+                GroundNormals::NearCamera => {
                     let n = grid.normals(&t.frame)?;
                     log.approximate(
-                        "ground normals as central differences of the height grid (normals=central-differences; the \
-                         game's own not read)",
+                        "ground normals as the terrain pixel program's near-camera normal at every distance \
+                         (normals=near-camera; the mesh vertex normal it blends to beyond about 32 m is not read)",
                         n.len() as u64,
                     );
                     Some(n)
@@ -2297,7 +2316,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("ground", "tile"),
             ("collision", "none"),
             ("pieces", "whole"),
-            ("normals", "central-differences"),
+            ("normals", "near-camera"),
         ],
     );
     reg.register_requiring(
