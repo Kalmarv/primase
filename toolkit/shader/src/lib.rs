@@ -9,6 +9,7 @@
 //! transfer policy.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod d3d;
 mod evaluate;
 pub use evaluate::{
     Constants, Evaluation, Field, Grid, Image, Input, Invocation, Lane, Layout, Raw, Texture, evaluate,
