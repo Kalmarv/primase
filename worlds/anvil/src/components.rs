@@ -207,7 +207,7 @@ impl Component for AnvilLods {
 
 /// A collision placement's RigidBody filter (`anvil.collision_filter`: [`crate::read::entity::CollisionFilter`]): its
 /// `QueryFlags` and two `CollisionLayerBits` as bit masks by the registry's slots
-/// ([`crate::read::entity::query`], [`crate::read::entity::layer`]), and its `IsGround` as stored (what it marks
+/// ([`query`], [`layer`]), and its `IsGround` as stored (what it marks
 /// isn't established: fences, lights and steel sheets among its 33,960, docs/placement.md §19.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AnvilCollisionFilter {
@@ -218,6 +218,64 @@ pub struct AnvilCollisionFilter {
 
 impl Component for AnvilCollisionFilter {
     const NAME: &'static str = "anvil.collision_filter";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
+impl AnvilCollisionFilter {
+    /// Whether `QueryFlags` slot `slot` ([`query`]) is set.
+    pub fn queries(&self, slot: u32) -> bool {
+        self.query.checked_shr(slot).is_some_and(|q| q & 1 == 1)
+    }
+
+    /// A water surface's: `WaterLevel` set and `Static` clear (on Riders Republic the river surfaces, docs/placement.md
+    /// §19.2).
+    pub fn is_water_surface(&self) -> bool {
+        self.queries(query::WATER_LEVEL) && !self.queries(query::STATIC)
+    }
+}
+
+/// `QueryLayerBits` slots by the registry's names (the others are unnamed or unset in the data).
+pub mod query {
+    pub const STATIC: u32 = 0;
+    pub const DYNAMIC: u32 = 2;
+    pub const CAMERA_COLLISION: u32 = 3;
+    pub const CAMERA_OCCLUSION: u32 = 5;
+    pub const CHARACTER: u32 = 9;
+    pub const WATER_LEVEL: u32 = 10;
+    pub const PARTICLE: u32 = 11;
+    pub const RAYCAST: u32 = 19;
+    pub const OCCLUSION_HEIGHT_TEST: u32 = 20;
+    pub const TARGETING: u32 = 21;
+    /// `TerrainLod0`; `TerrainLod1` to `4` follow.
+    pub const TERRAIN_LOD0: u32 = 25;
+}
+
+/// `CollisionLayerBits` slots by the registry's names.
+pub mod layer {
+    pub const STATIC: u32 = 0;
+    pub const DYNAMIC: u32 = 2;
+    pub const DEBRIS: u32 = 3;
+    pub const DETECTION_ZONE: u32 = 4;
+    pub const MAIN_CHARACTER: u32 = 5;
+    pub const CHARACTER: u32 = 6;
+    pub const CHARACTER_NO_INTERACTIVE: u32 = 7;
+    pub const WATER_LEVEL: u32 = 13;
+    pub const TARGETABLE: u32 = 14;
+    /// `TerrainLod0`; `TerrainLod1` to `4` follow.
+    pub const TERRAIN_LOD0: u32 = 16;
+}
+
+/// The owning Entity's `IsHidden` and `IsPhantom` as stored (`anvil.entity_state`; the Entity bit-field run's bytes
+/// 3 and 4, docs/placement.md §19.1), on every placement made for an Entity or EntityGroup that sets either: on Riders
+/// Republic UI, HUD and editor helpers. `select-anvil-entities` keeps or drops them, as the program states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnvilEntityState {
+    pub hidden: bool,
+    pub phantom: bool,
+}
+
+impl Component for AnvilEntityState {
+    const NAME: &'static str = "anvil.entity_state";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 

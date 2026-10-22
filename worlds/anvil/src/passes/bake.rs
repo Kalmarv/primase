@@ -1,5 +1,5 @@
 //! `bake-anvil-material{size=N,normal-green=up|down,shader-uv=texcoord|one-minus-v,mip-bias=X,terrain-ao=X,
-//! sun-elevation=DEG,view-cosine=X,unset=white}`: Anvil Materials
+//! sun-elevation=DEG,view-cosine=X,camera-distance=M,unset=white}`: Anvil Materials
 //! whose templates the lowering can't express as texture lookups ([`AnvilMaterial`]; MAD_Tex1_Rocks and
 //! MAD_Tex1_UniqueNormalGradient and MAD_Tex1_UniqueNormal_DiffuseBlend, which combine maps at several UV sets per
 //! pixel, MAD_Hero_Ice and MAD_IceBrick, whose colour depends on the sun and the eye, MAD_Road, whose paint its
@@ -40,9 +40,10 @@
 //!   stated, the game's change with every frame); its parallax march sees the surface straight on (a tangent-space
 //!   view with no xy: the march offsets nothing, §27.2).
 //! - **The camera**: a program that mixes by the distance from the camera (UniqueNormalGradient's medium and micro
-//!   albedo) is run with the camera far, where the mix is constant (the notes' choice, §27.3: the medium albedo, right
-//!   at any distance past 20 m times its `Detail Blend Range`); its micro detail, tens to hundreds of tiles across the
-//!   UV square, is sampled at the bake texel's footprint like every texture.
+//!   albedo) is run with the camera `camera-distance` metres from the surface along its normal (stated: the game's
+//!   mix changes with the distance every frame; far, past 20 m times the Material's `Detail Blend Range`, the mix is
+//!   constant at the medium albedo, the notes' reading, §27.3), counted per Material; its micro detail, tens to
+//!   hundreds of tiles across the UV square, is sampled at the bake texel's footprint like every texture.
 //!
 //! A recipe whose paint is a pattern its shader computes (Road's lane lines) is baked over one period of the pattern in
 //! the shader's own UV, its Material's UV transform set to the identity, and that transform scaled by the period put
@@ -189,15 +190,11 @@ struct Recipe {
     engine: &'static [(u32, f32)],
     terrain: Option<Terrain>,
     /// Whether its program reads the camera's position (`cb1[0]`) against the world position (`TEXCOORD1`): run with
-    /// the camera [`CAMERA_FAR`] from the surface.
+    /// the camera `camera-distance` from the surface.
     camera: bool,
     /// Whether its program divides by the object's screen origin's w (`cb2[11].w`, its team stripes): run with it 1.
     object_origin: bool,
 }
-
-/// How far the camera is put from the surface (metres) for a program that mixes by the distance: past every mix's
-/// range.
-const CAMERA_FAR: f32 = 1.0e6;
 
 /// MAD_Tex1_Rocks (docs/material-spec.md §14.6; its G-buffer program 0x25A2D read): dirt colours at rows 1 to 3,
 /// value, hue and saturation at 4 to 6, the terrain switches at 7 and 8, the detail tiling at 9 and 10, the dirt
@@ -365,6 +362,8 @@ pub struct BakeAnvilMaterial {
     /// The sun's elevation above the surface (degrees), and the cosine of the eye's angle to its normal.
     pub sun_elevation: f32,
     pub view_cosine: f32,
+    /// How far the camera is from the surface (metres), for a program that mixes by the distance.
+    pub camera_distance: f32,
 }
 
 impl BakeAnvilMaterial {
@@ -378,12 +377,13 @@ impl BakeAnvilMaterial {
             "terrain-ao",
             "sun-elevation",
             "view-cosine",
+            "camera-distance",
             "unset",
         ];
         if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
         }
-        let usage = "size=N, normal-green=up|down, shader-uv=texcoord|one-minus-v, mip-bias=X, terrain-ao=X, sun-elevation=DEG, view-cosine=X, unset=white";
+        let usage = "size=N, normal-green=up|down, shader-uv=texcoord|one-minus-v, mip-bias=X, terrain-ao=X, sun-elevation=DEG, view-cosine=X, camera-distance=M, unset=white";
         let get = |k: &str| {
             o.get(k)
                 .map(String::as_str)
@@ -435,6 +435,12 @@ impl BakeAnvilMaterial {
         if !(view_cosine > 0.0 && view_cosine <= 1.0) {
             return Err(format!("view-cosine {view_cosine}: above 0, at most 1"));
         }
+        let camera_distance: f32 = get("camera-distance")?
+            .parse()
+            .map_err(|_| "camera-distance is a number".to_owned())?;
+        if !(camera_distance.is_finite() && camera_distance > 0.0) {
+            return Err(format!("camera-distance {camera_distance}: finite and above 0"));
+        }
         Ok(BakeAnvilMaterial {
             size,
             normal_green,
@@ -443,6 +449,7 @@ impl BakeAnvilMaterial {
             terrain_ao,
             sun_elevation,
             view_cosine,
+            camera_distance,
         })
     }
 }
@@ -678,10 +685,10 @@ impl BakeAnvilMaterial {
                 )
                 .map_err(|e| e.to_string())?;
         }
-        // the camera's position (cb1[0]), far along the normal from the surface (at the origin)
+        // the camera's position (cb1[0]), `camera-distance` along the normal from the surface (at the origin)
         if recipe.camera {
             constants
-                .set_words(1, 0, &[0.0, 0.0, CAMERA_FAR].map(f32::to_bits))
+                .set_words(1, 0, &[0.0, 0.0, self.camera_distance].map(f32::to_bits))
                 .map_err(|e| e.to_string())?;
         }
         let mut textures = BTreeMap::new();
@@ -1002,6 +1009,15 @@ impl Pass for BakeAnvilMaterial {
             );
             w.insert(e, VertexColor::Ignored);
             log.count(&format!("{} Materials baked", recipe.template), 1);
+            if recipe.camera {
+                log.approximate(
+                    &format!(
+                        "Materials baked with the camera at the stated camera-distance {} m (their mix by distance)",
+                        self.camera_distance
+                    ),
+                    1,
+                );
+            }
         }
         Ok(())
     }

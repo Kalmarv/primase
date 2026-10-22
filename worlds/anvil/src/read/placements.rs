@@ -31,7 +31,8 @@
 //! established ([`Placed::scaled_collision`]). An instanced Entity's is placed at each instance or not, as the caller
 //! states ([`InstancedCollision`]). Each collision placement carries its RigidBody's filter ([`AnvilCollisionFilter`]:
 //! the registry's `QueryFlags`, `CollisionLayerBits` and `IsGround`); a RigidBody whose `QueryFlags` set `WaterLevel`
-//! and not `Static` is a water surface, not ground, and isn't placed ([`Placed::water_bodies`]).
+//! and not `Static` is a water surface (counted, [`Placed::water_bodies`]), placed as the others are: which collision
+//! a destination takes is `select-anvil-entities`'.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -40,9 +41,9 @@ use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{
     AnvilCollisionFilter, AnvilCollisionShape, AnvilDataLayers, AnvilDecalModel, AnvilDeferredDecals,
-    AnvilFake, AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilShaders,
-    AnvilWater, BoundTexture, CollisionMaterialRef, DataLayerAction, DeferredDecal, MaterialBinding,
-    MaterialValue, ShapeGeometry, TextureFrom,
+    AnvilEntityState, AnvilFake, AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides,
+    AnvilMesh, AnvilShaders, AnvilWater, BoundTexture, CollisionMaterialRef, DataLayerAction, DeferredDecal,
+    MaterialBinding, MaterialValue, ShapeGeometry, TextureFrom,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::ddecal::{DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, StoredDecalModel, StoredDeferredDecals};
@@ -227,14 +228,14 @@ pub struct Placed {
     pub deferred_decals: Vec<Entity>,
     /// HoudiniDecalInstancerComponents whose body can't be read (recorded in `refused` too).
     pub deferred_decals_unread: u64,
-    /// Entities and EntityGroups not placed at all (their Visuals, collision, lakes and decals) because their
-    /// `IsHidden` or `IsPhantom` is set: UI, HUD and editor helpers (docs/placement.md §19.1). A group's members are
-    /// listed still: each has flags of its own.
+    /// Entities and EntityGroups whose `IsHidden` or `IsPhantom` is set (UI, HUD and editor helpers, docs/placement.md
+    /// §19.1): placed as the others are, each of their placements marked [`AnvilEntityState`]. A group's members
+    /// have flags of their own.
     pub hidden_or_phantom: u64,
     /// Placements of fake MeshInstanceData, marked [`AnvilFake`].
     pub fakes: u64,
-    /// RigidBodies not placed as collision: water surfaces (`QueryFlags` `WaterLevel` set and `Static` clear: on
-    /// Riders Republic the river surfaces, docs/placement.md §19.2).
+    /// RigidBodies that are water surfaces (`QueryFlags` `WaterLevel` set and `Static` clear: on Riders Republic the
+    /// river surfaces, docs/placement.md §19.2), placed with their [`AnvilCollisionFilter`] as every collision is.
     pub water_bodies: u64,
     /// RigidBodies placed whose `QueryFlags` `Static` is clear (and `WaterLevel` too), each marked as every collision
     /// placement is ([`AnvilCollisionFilter`]).
@@ -1059,9 +1060,13 @@ impl<'a> Placer<'a> {
                 });
             }
         };
-        if e.is_hidden() || e.is_phantom() {
+        // the owner's IsHidden / IsPhantom, on each of its placements: a pass keeps or drops them
+        let state = (e.is_hidden() || e.is_phantom()).then(|| AnvilEntityState {
+            hidden: e.is_hidden(),
+            phantom: e.is_phantom(),
+        });
+        if state.is_some() {
             placed.hidden_or_phantom = placed.hidden_or_phantom.saturating_add(1);
-            return Ok(());
         }
         let name = self.name(at).unwrap_or_default();
         let layers = (!e.data_layers.is_empty()).then(|| AnvilDataLayers {
@@ -1178,6 +1183,9 @@ impl<'a> Placer<'a> {
                 if let Some(layers) = &layers {
                     self.world.insert(p, layers.clone());
                 }
+                if let Some(s) = state {
+                    self.world.insert(p, s);
+                }
                 if let Some(fake) = fake {
                     self.world.insert(p, fake);
                     placed.fakes = placed.fakes.saturating_add(1);
@@ -1217,6 +1225,9 @@ impl<'a> Placer<'a> {
             );
             if let Some(layers) = &layers {
                 self.world.insert(lake, layers.clone());
+            }
+            if let Some(s) = state {
+                self.world.insert(lake, s);
             }
             placed.lakes.push(lake);
         }
@@ -1269,6 +1280,9 @@ impl<'a> Placer<'a> {
                 if let Some(layers) = &layers {
                     self.world.insert(set, layers.clone());
                 }
+                if let Some(s) = state {
+                    self.world.insert(set, s);
+                }
                 placed.deferred_decals.push(set);
             }
         }
@@ -1304,7 +1318,6 @@ impl<'a> Placer<'a> {
             };
             if filter.queries(query::WATER_LEVEL) && !filter.queries(query::STATIC) {
                 placed.water_bodies = placed.water_bodies.saturating_add(1);
-                continue;
             }
             let mark = AnvilCollisionFilter {
                 query: filter.query,
@@ -1348,6 +1361,9 @@ impl<'a> Placer<'a> {
                     self.world.insert(p, self.frame.transform(&t));
                     if let Some(layers) = &layers {
                         self.world.insert(p, layers.clone());
+                    }
+                    if let Some(s) = state {
+                        self.world.insert(p, s);
                     }
                     self.world.insert(p, mark);
                     placed.collisions.push(p);

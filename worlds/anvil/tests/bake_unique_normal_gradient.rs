@@ -118,6 +118,7 @@ fn unique_normal_gradient_bakes_as_the_notes_formulas() {
             ("terrain-ao", "0.5"),
             ("sun-elevation", "45"),
             ("view-cosine", "0.7"),
+            ("camera-distance", "1000000"),
             ("unset", "white"),
         ]
         .map(|(k, v)| (k.to_owned(), v.to_owned())),
@@ -131,6 +132,14 @@ fn unique_normal_gradient_bakes_as_the_notes_formulas() {
         .get("MAD_Tex1_UniqueNormalGradient Materials baked")
         .copied()
         .unwrap_or(0);
+    // the camera distance is the program's stated choice, counted per Material baked with it
+    assert_eq!(
+        log.approximations
+            .get("Materials baked with the camera at the stated camera-distance 1000000 m (their mix by distance)")
+            .copied(),
+        (baked > 0).then_some(baked),
+        "{log:?}"
+    );
     let mut worst = [0u8; 3];
     let mut checked = 0;
     for (&e, m) in materials.iter().zip(&before) {

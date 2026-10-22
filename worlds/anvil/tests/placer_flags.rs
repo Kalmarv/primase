@@ -1,15 +1,20 @@
 //! The Placer on the Entity flags it reads (Riders Republic build 25394987; docs/placement.md §19): a hidden and
-//! phantom Entity isn't placed; a FarFake cell's placements are marked with its cell number; a river's RigidBody (a
-//! water surface: `WaterLevel` without `Static`) isn't placed as collision and the others carry their filter; a
+//! phantom Entity is placed with every placement marked; a FarFake cell's placements are marked with its cell number;
+//! a river's RigidBody (a water surface: `WaterLevel` without `Static`) is placed as collision carrying its filter, as
+//! the others are; `select-anvil-entities` then drops what the program says (here all three kinds) and nothing else; a
 //! prototype carries its selector's switch distances (each level's far limit, rising), its finest level the
 //! prototype's own where the selector's first levels hold no reference: the dependencies fill them (the `_LOD0` and
 //! `_LOD1` meshes), so level 0 is present.
-use primase_anvil::components::{AnvilCollisionFilter, AnvilFake, AnvilLodDistances, AnvilLods};
+use primase_anvil::components::{
+    AnvilCollisionFilter, AnvilEntityState, AnvilFake, AnvilLodDistances, AnvilLods,
+};
+use primase_anvil::passes::{Keep, SelectAnvilEntities};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::entity::{ComponentBody, ENTITY, StoredEntity, query};
 use primase_anvil::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use primase_anvil::read::placements::{InstancedCollision, InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
+use primase_core::pass::{Pass, PassLog};
 use primase_core::{Instance, World};
 use primase_testdata::real_data;
 
@@ -122,12 +127,23 @@ fn the_placer_reads_the_entity_flags() {
     .with_instanced_collision(InstancedCollision::PerInstance);
     placer.place(ufo, &mut placed).expect("the UFO beam");
     assert_eq!(placed.hidden_or_phantom, 1);
-    assert!(placed.placements.is_empty() && placed.collisions.is_empty());
+    let ufo_placed: Vec<_> = placed
+        .placements
+        .iter()
+        .chain(&placed.collisions)
+        .copied()
+        .collect();
+    assert!(!ufo_placed.is_empty(), "the hidden Entity is placed, marked");
+    for &p in &ufo_placed {
+        let s = placer.world().get::<AnvilEntityState>(p).expect("marked");
+        assert!(s.hidden || s.phantom, "{s:?}");
+    }
+    let cell_from = placed.placements.len();
 
     placer.place(cell, &mut placed).expect("the cell");
-    assert!(!placed.placements.is_empty());
-    assert_eq!(placed.fakes, placed.placements.len() as u64);
-    for &p in &placed.placements {
+    assert!(placed.placements.len() > cell_from);
+    assert_eq!(placed.fakes, (placed.placements.len() - cell_from) as u64);
+    for &p in &placed.placements[cell_from..] {
         assert_eq!(
             placer.world().get::<AnvilFake>(p),
             Some(&AnvilFake {
@@ -140,11 +156,15 @@ fn the_placer_reads_the_entity_flags() {
     let before = placed.collisions.len();
     placer.place(river, &mut placed).expect("the river");
     assert!(placed.water_bodies >= 1);
-    assert_eq!(
-        placed.collisions.len(),
-        before,
-        "a water surface isn't ground collision"
+    let river_collision: Vec<_> = placed.collisions[before..].to_vec();
+    assert!(
+        river_collision.iter().any(|&c| placer
+            .world()
+            .get::<AnvilCollisionFilter>(c)
+            .is_some_and(|f| f.is_water_surface())),
+        "the water surface is placed as collision, its filter saying what it is"
     );
+    let before = placed.collisions.len();
 
     let from = placed.placements.len();
     placer
@@ -177,13 +197,44 @@ fn the_placer_reads_the_entity_flags() {
             last
         })
     );
-    // its collision placements carry their filter, Static set
+    // its collision placements carry their filter: Static set, but for a water surface's (placed now, marked)
     for &c in &placed.collisions[before..] {
         let f = placer.world().get::<AnvilCollisionFilter>(c).expect("a filter");
-        assert!(f.query >> query::STATIC & 1 == 1);
+        assert!(f.queries(query::STATIC) || f.is_water_surface(), "{f:?}");
     }
     println!(
         "cell {cell_name}, distances {:?} (culling {}), water bodies {}",
         d.levels, d.culling, placed.water_bodies
     );
+    // what stays: the cell's and the selector owner's placements and collision, but for a water surface's
+    let kept: Vec<_> = placed.placements[cell_from..]
+        .iter()
+        .chain(&placed.collisions[before..])
+        .copied()
+        .filter(|&p| {
+            !placer
+                .world()
+                .get::<AnvilCollisionFilter>(p)
+                .is_some_and(|f| f.is_water_surface())
+        })
+        .collect();
+    drop(placer);
+    // the program drops all three kinds: the UFO's placements and the water surface's collision go, the rest stays
+    let mut log = PassLog::default();
+    SelectAnvilEntities {
+        hidden: Keep::Drop,
+        phantom: Keep::Drop,
+        water_collision: Keep::Drop,
+    }
+    .run(&mut w, &mut log)
+    .expect("select");
+    assert!(ufo_placed.iter().all(|&p| !w.is_alive(p)));
+    assert!(river_collision.iter().all(|&c| {
+        !w.is_alive(c)
+            || !w
+                .get::<AnvilCollisionFilter>(c)
+                .is_some_and(|f| f.is_water_surface())
+    }));
+    assert!(kept.iter().all(|&p| w.is_alive(p)));
+    assert!(w.iter::<AnvilEntityState>().next().is_none());
 }

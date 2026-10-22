@@ -6,12 +6,14 @@ mod bake;
 mod decals;
 pub mod formulas;
 mod material;
+mod select;
 mod splat;
 mod water;
 mod world_uv;
 pub use bake::{BakeAnvilMaterial, gbuffer_pixel_key};
 pub use decals::{Family, FamilyRule, LowerAnvilDecals, TerrainDecals, family};
 pub use material::{AlphaChoice, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo, world_uv_rows};
+pub use select::{Keep, SelectAnvilEntities};
 pub use splat::{Splat, SplatUv};
 pub use water::{LowerAnvilWater, Shore};
 pub use world_uv::LowerAnvilWorldUv;
@@ -2098,6 +2100,15 @@ pub fn register(reg: &mut PassRegistry) {
     reg.register("lower-anvil-lods", |_| Ok(Box::new(LowerAnvilLods)));
     reg.register("lower-anvil-world-uv", |_| Ok(Box::new(LowerAnvilWorldUv)));
     reg.register_requiring(
+        "select-anvil-entities",
+        |o| Ok(Box::new(SelectAnvilEntities::from_options(o)?)),
+        &[
+            ("hidden", "drop"),
+            ("phantom", "drop"),
+            ("water-collision", "drop"),
+        ],
+    );
+    reg.register_requiring(
         "lower-anvil-material",
         |o| Ok(Box::new(LowerAnvilMaterial::from_options(o)?)),
         &[
@@ -2121,6 +2132,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("terrain-ao", "0.5"),
             ("sun-elevation", "45"),
             ("view-cosine", "0.7"),
+            ("camera-distance", "1000000"),
             ("unset", "white"),
         ],
     );

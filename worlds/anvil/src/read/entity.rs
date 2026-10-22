@@ -204,6 +204,8 @@ pub enum ComponentBody {
     Raw(Vec<u8>),
 }
 
+pub use crate::components::{layer, query};
+
 /// A RigidBody's `CollisionFilterInfo` as the game's registry names it (registry-named-fields §9, §10): its
 /// `QueryFlags` (a `QueryLayerBits`: 34 bit fields, each stored as a u64 0 or 1, from the RigidBodyComponent's offset
 /// 68) and its two `CollisionLayerBits` (24 each, from 352 and 556), as bit masks by slot, and its `IsGround` (797).
@@ -212,37 +214,6 @@ pub struct CollisionFilter {
     pub query: u64,
     pub layers: [u32; 2],
     pub ground: bool,
-}
-
-/// `QueryLayerBits` slots by the registry's names (the others are unnamed or unset in the data).
-pub mod query {
-    pub const STATIC: u32 = 0;
-    pub const DYNAMIC: u32 = 2;
-    pub const CAMERA_COLLISION: u32 = 3;
-    pub const CAMERA_OCCLUSION: u32 = 5;
-    pub const CHARACTER: u32 = 9;
-    pub const WATER_LEVEL: u32 = 10;
-    pub const PARTICLE: u32 = 11;
-    pub const RAYCAST: u32 = 19;
-    pub const OCCLUSION_HEIGHT_TEST: u32 = 20;
-    pub const TARGETING: u32 = 21;
-    /// `TerrainLod0`; `TerrainLod1` to `4` follow.
-    pub const TERRAIN_LOD0: u32 = 25;
-}
-
-/// `CollisionLayerBits` slots by the registry's names.
-pub mod layer {
-    pub const STATIC: u32 = 0;
-    pub const DYNAMIC: u32 = 2;
-    pub const DEBRIS: u32 = 3;
-    pub const DETECTION_ZONE: u32 = 4;
-    pub const MAIN_CHARACTER: u32 = 5;
-    pub const CHARACTER: u32 = 6;
-    pub const CHARACTER_NO_INTERACTIVE: u32 = 7;
-    pub const WATER_LEVEL: u32 = 13;
-    pub const TARGETABLE: u32 = 14;
-    /// `TerrainLod0`; `TerrainLod1` to `4` follow.
-    pub const TERRAIN_LOD0: u32 = 16;
 }
 
 impl CollisionFilter {

@@ -92,6 +92,7 @@ fn road_bakes_its_lane_lines_over_a_period() {
             ("terrain-ao", "0.5"),
             ("sun-elevation", "45"),
             ("view-cosine", "0.7"),
+            ("camera-distance", "1000000"),
             ("unset", "white"),
         ]
         .map(|(k, v)| (k.to_owned(), v.to_owned())),
