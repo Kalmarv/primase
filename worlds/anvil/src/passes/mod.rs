@@ -899,6 +899,16 @@ impl<'t> GroundGrid<'t> {
     /// Sample (`gx`, `gy`)'s point, `(x, y, height)` as f32 in the terrain's source frame (before it applies): the
     /// value at its node's core sample, `unit` x it + `offset`.
     pub fn point(&self, gx: u32, gy: u32) -> Result<[f32; 3], String> {
+        Ok([
+            self.x_of(gx) as f32,
+            self.y_of(gy) as f32,
+            self.height(gx, gy)? as f32,
+        ])
+    }
+
+    /// Sample (`gx`, `gy`)'s height in the terrain's source units, in f64: the value at its node's core sample,
+    /// `unit` x it + `offset`.
+    pub fn height(&self, gx: u32, gy: u32) -> Result<f64, String> {
         let node = (gy / TERRAIN_CORE, gx / TERRAIN_CORE);
         let (i, j) = ((gy % TERRAIN_CORE) as usize, (gx % TERRAIN_CORE) as usize);
         let tile = self
@@ -907,11 +917,36 @@ impl<'t> GroundGrid<'t> {
             .ok_or_else(|| format!("sample ({gx}, {gy}): node {node:?} not read"))?;
         let value =
             f64::from(tile.heights[(i + TerrainTile::CORE_AT) * TERRAIN_TILE + j + TerrainTile::CORE_AT]);
-        Ok([
-            self.x_of(gx) as f32,
-            self.y_of(gy) as f32,
-            (self.unit * value + self.offset) as f32,
-        ])
+        Ok(self.unit * value + self.offset)
+    }
+
+    /// Every sample's smooth normal, row by row as the grid's vertices, in core's frame (`frame`): the unit normal of
+    /// the height field `z = h(x, y)` at the sample, `(-dh/dx, -dh/dy, 1)` in the terrain's source frame, its
+    /// slopes the central differences of the grid's own neighbours along each axis (the samples `columns` and `rows`
+    /// name, so `step` widens the baseline), one-sided at the grid's outer edge. It is computed once over the whole
+    /// grid, so every piece that draws a sample draws the same bits.
+    pub fn normals(&self, frame: &primase_core::frame::SourceFrame) -> Result<Vec<[f32; 3]>, String> {
+        let (w, h) = (self.columns.len(), self.rows.len());
+        let mut heights = Vec::with_capacity(w * h);
+        for &gy in &self.rows {
+            for &gx in &self.columns {
+                heights.push(self.height(gx, gy)?);
+            }
+        }
+        let xs: Vec<f64> = self.columns.iter().map(|&g| self.x_of(g)).collect();
+        let ys: Vec<f64> = self.rows.iter().map(|&g| self.y_of(g)).collect();
+        let mut out = Vec::with_capacity(w * h);
+        for r in 0..h {
+            let (r0, r1) = (r.saturating_sub(1), (r + 1).min(h - 1));
+            for c in 0..w {
+                let (c0, c1) = (c.saturating_sub(1), (c + 1).min(w - 1));
+                let dx = (heights[r * w + c1] - heights[r * w + c0]) / (xs[c1] - xs[c0]);
+                let dy = (heights[r1 * w + c] - heights[r0 * w + c]) / (ys[r1] - ys[r0]);
+                let len = (dx * dx + dy * dy + 1.0).sqrt();
+                out.push(frame.direction([(-dx / len) as f32, (-dy / len) as f32, (1.0 / len) as f32]));
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -954,6 +989,15 @@ impl<'t> GroundGrid<'t> {
 /// ground's, computed alike, so neighbours share their seam vertices exactly. Each piece (the whole, or a node's) is a
 /// prototype of its own, its collision (where drawn) over its own squares, its vertices local to its origin
 /// ([`local_origin`]: its box's least corner rounded down to 64 m, which keeps them exact), placed once there.
+///
+/// Every `ground=` and `pieces=` draws **smooth normals**: each vertex's `Normal` is the unit normal of the height
+/// field `z = h(x, y)` at its sample, `(-dh/dx, -dh/dy, 1)` normalised in the terrain's source frame and carried to
+/// core's by the frame's direction map (so it is up whatever the frame, and agrees with the triangles' winding), its
+/// slopes central differences of the grid's own neighbouring samples along each axis (`step` widens the baseline),
+/// one-sided at the grid's outer edge. The normals are computed once over the whole grid and each piece takes its
+/// vertices' own, so the vertices neighbouring pieces share (they share their positions exactly) carry the same bits and
+/// there is no lighting seam. Counted: `ground normals`. Without them a writer makes flat per-triangle normals,
+/// which shade the 0.5 m grid as facets.
 ///
 /// With `collision` other than none the ground is also its own collision, on the same prototype: each square's two
 /// triangles of the surface its corner sample with the least x and y names (a square spans four samples, whose
@@ -1275,6 +1319,12 @@ impl Pass for LowerAnvilTerrain {
                     positions.push(t.frame.point(grid.point(gx, gy)?));
                 }
             }
+            // every ground=… draws smooth normals: one per sample of the whole grid, shared by every piece
+            let normals = grid.normals(&t.frame)?;
+            log.count(
+                "ground normals (central differences of the height grid)",
+                normals.len() as u64,
+            );
             let width = u32::try_from(columns.len()).map_err(|_| "too many columns".to_owned())?;
             let height = u32::try_from(rows.len()).map_err(|_| "too many rows".to_owned())?;
             let flip = t.frame.flips_winding();
@@ -1561,6 +1611,13 @@ impl Pass for LowerAnvilTerrain {
                     (None, None) => return Err("a ground piece with no colour".into()),
                 };
                 streams.insert(Semantic::Position, Stream::F32x3(local));
+                streams.insert(
+                    Semantic::Normal,
+                    Stream::F32x3(match &piece.vertices {
+                        None => normals.clone(),
+                        Some(v) => v.iter().map(|&i| normals[i as usize]).collect(),
+                    }),
+                );
                 streams.insert(Semantic::TexCoord(0), Stream::F32x2(piece.uvs));
                 w.insert(
                     prototype,
