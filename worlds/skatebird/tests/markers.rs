@@ -1,4 +1,4 @@
-//! SkateBIRD's reset points and mission givers read from the game (`PRIMASE_SKATEBIRD_DATA`, with
+//! SkateBIRD's reset points and mission givers read from the game (`PRIMASE_UNITY_V21_DATA`, with
 //! `PRIMASE_UNITY_TPK`), after the Unity level read, over the levels the game ships. Facts measured independently
 //! (UnityPy over the same player): each level stores at most one starting `ResetPosition`, level7 none, seven
 //! across the levels; every script's fields decode by the measured layouts (an unknown layout fails the read); every
@@ -20,7 +20,7 @@ const LEVELS: [&str; 8] = [
 #[test]
 fn every_level_s_reset_points_and_mission_givers_are_read() {
     let (Some(data), Some(tpk)) = (
-        real_data("PRIMASE_SKATEBIRD_DATA"),
+        real_data("PRIMASE_UNITY_V21_DATA"),
         real_data("PRIMASE_UNITY_TPK"),
     ) else {
         return;

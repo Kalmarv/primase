@@ -187,7 +187,7 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_UNITY_V21_DATA",
         kind: Kind::Input,
         gate: true,
-        about: "a Unity player data folder with SerializedFile version 21 containers",
+        about: r#"SkateBIRD's data folder (`SkateBIRD_Data`, a Unity 2019.4.20f1 player: SerializedFile version 21 containers), read with `PRIMASE_UNITY_TPK`; `worlds/unity/tests/serialized_census.rs`, `worlds/skatebird/tests/markers.rs`"#,
         status: Status::Live,
         source: "the user's own install",
     },
@@ -222,14 +222,6 @@ pub const VARIABLES: &[Variable] = &[
         about: r#"optional: an independent reader's decoded sample objects of that folder (JSON; schema in `worlds/unity/tests/oracle.rs`)"#,
         status: Status::Live,
         source: "independent: UnityPy, through dump scripts kept with the private oracle tools",
-    },
-    Variable {
-        name: "PRIMASE_SKATEBIRD_DATA",
-        kind: Kind::Input,
-        gate: true,
-        about: r#"SkateBIRD's data folder (`SkateBIRD_Data`, a Unity 2019.4.20f1 player), read with `PRIMASE_UNITY_TPK`; worlds/skatebird/tests/markers.rs"#,
-        status: Status::Live,
-        source: "the user's own install",
     },
     Variable {
         name: "PRIMASE_STUNTBOOST_DIR",
