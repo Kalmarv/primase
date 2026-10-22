@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use primase_anvil::components::{AnvilMaterial, TextureFrom};
-use primase_anvil::passes::{AlphaChoice, LowerAnvilMaterial, ShaderUv};
+use primase_anvil::passes::{AlphaChoice, Decals1Cutout, LowerAnvilMaterial, ShaderUv};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::material::MATERIAL;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -162,6 +162,7 @@ fn the_area_52_tex2_blends_lower_with_their_unset_masks_white() {
         emissive_exposure: 1.0,
         underground_view: 0.5,
         fake_river_s: 0.0,
+        decals1_cutout: Decals1Cutout::Surface,
     };
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log).expect("lower");

@@ -201,6 +201,7 @@ impl Pass for PrepareReskateOverlays {
             .retain(|(a, b)| owned.contains(a.entity()) && owned.contains(b.entity()));
         let kept: std::collections::BTreeSet<&str> = rec.pieces.values().map(|p| p.mesh.as_str()).collect();
         rec.meshes.retain(|m, _| kept.contains(m.as_str()));
+        rec.left.retain(|(m, ..), _| kept.contains(m.as_str()));
         rec.totals = crate::map::sum_totals(rec.meshes.values());
         log.count("overlay pieces stacked", rec.totals.pieces.max(0) as u64);
         log.count(
@@ -216,6 +217,18 @@ impl Pass for PrepareReskateOverlays {
                 "overlay pieces whose lift could not clear every surface",
                 rec.totals.conflicts_left as u64,
             );
+            // which: per (material, the material it is left against), over the meshes (a piece with several such
+            // surfaces counts in each pair)
+            let mut pairs: std::collections::BTreeMap<(&str, &str), u64> = Default::default();
+            for ((_, a, b), n) in &rec.left {
+                *pairs.entry((a, b)).or_default() += u64::from(*n);
+            }
+            for ((a, b), n) in pairs {
+                log.count(
+                    &format!("overlay pieces left in the unclear band, by material and the material they are against: {a} against {b}"),
+                    n,
+                );
+            }
         }
         w.insert_resource(rec);
         Ok(())

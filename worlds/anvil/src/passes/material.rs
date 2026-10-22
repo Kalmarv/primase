@@ -1,4 +1,4 @@
-//! `lower-anvil-material{normal-green=up|down,alpha=opaque|mask[,alpha-cutoff=X]|prelude,unset=white,shader-uv=texcoord|one-minus-v,emissive-exposure=X,underground-view=X,fake-river-s=S}`:
+//! `lower-anvil-material{normal-green=up|down,alpha=opaque|mask[,alpha-cutoff=X]|prelude,unset=white,shader-uv=texcoord|one-minus-v,emissive-exposure=X,underground-view=X,fake-river-s=S,decals1-cutout=decal|surface}`:
 //! Anvil Materials ([`AnvilMaterial`]) become metal-rough PBR, for the templates whose pixel shaders the Riders
 //! Republic notes evaluated (docs/material-spec.md §4: the game's own shaders run on WARP against these formulas,
 //! within 5.5e-7):
@@ -137,14 +137,23 @@
 //! cut-out and 40 solid Tex1 and Wind Materials), else opaque; 1 and 6 (additive-looking) aren't lowered, drawn
 //! opaque, reported.
 //!
-//! **Decals1 drawn blended is a decal.** A Material of `MAD_Decals1` or `MAD_Decals1_Graffiti` whose lowered alpha is
-//! blended (`alpha=prelude` and its BlendMode 4) gets `core.draw_order` layer Decal at the queue of the deferred decals
-//! (`lower-anvil-decals`), so a consumer keeps it blended over the surface beneath it, biased and shadowless, and does
-//! not cut it out. The reason is the template's own: its pixel stage writes the albedo's alpha to the G-buffer
-//! (docs/material-spec.md §13.3, o0.w and o2.w of every permutation), which is what the engine's decals do to the
-//! surface under them, and BlendMode 4 is the blend the Material states; the same template with BlendMode 0 and an
-//! alpha test (the graffiti Materials) is a cutout and stays a mask. Not checked in the running game. A forced
-//! `alpha=opaque` or `alpha=mask` lowers none of them as blended, so none gets the layer.
+//! **Decals1 drawn blended is a decal.** A Material of `MAD_Decals1` or `MAD_Decals1_Graffiti` whose alpha is lowered
+//! from its prelude (`alpha=prelude`) as blended (BlendMode 4) gets `core.draw_order` layer Decal at the queue of the
+//! deferred decals (`lower-anvil-decals`), so a consumer keeps it blended over the surface beneath it, biased and
+//! shadowless, and does not cut it out. The reason is the template's: its blended permutations write the albedo's alpha
+//! to the G-buffer (docs/material-spec.md §13.3 item 1: `o0.w` and `o2.w` = Diffuse.a), which is what the engine's
+//! decals do to the surface under them, and BlendMode 4 is the blend the Material states.
+//!
+//! **Decals1 alpha-tested (BlendMode 0 with an `AlphaTestValue` and `AlphaTestEnabled`: the graffiti Materials) is the
+//! program's statement, `decals1-cutout=decal|surface` (required).** The template's alpha-tested permutations are the
+//! opaque-style ones (§13.3 item 1: `o0.w` = roughness, with an alpha-test discard), not the ones that write the
+//! albedo's alpha, so the template does not make them decals; whether the engine draws them coplanar over the wall
+//! with a depth bias is not established. `decal` gives them the Decal layer (their alpha stays a mask; decal-domain
+//! masks are known to draw in game: The Deck's road cracks), which is what lets the overlay stack lift them off the wall
+//! (measured on The Deck and Area 52: 2 to 4 mm in front of it, which the depth buffer does not separate); `surface`
+//! leaves them cutouts. An opaque Decals1 (BlendMode 0, no alpha test) is not given the layer either way (a
+//! decal-domain opaque material is untested), counted. A forced `alpha=opaque` or `alpha=mask` gives none of them the
+//! layer.
 //!
 //! Every option is the program's: `underground-view` and `fake-river-s` state what the static export takes for a view
 //! and a vertex value the shaders read; the normal map's green sign against glTF's isn't established, nor the alpha test's
@@ -200,6 +209,18 @@ pub struct LowerAnvilMaterial {
     pub underground_view: f64,
     /// MAD_Tex1_FakeRiver's `s`, its COLOR0.x (its albedo quadratic in it, not a COLOR_0 product: a stated value).
     pub fake_river_s: f64,
+    /// Whether an alpha-tested Decals1 is drawn in the decal layer (the template's alpha-tested permutations are not
+    /// the albedo-alpha ones: a stated choice).
+    pub decals1_cutout: Decals1Cutout,
+}
+
+/// What an alpha-tested (BlendMode 0) Decals1 Material is: the program's statement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Decals1Cutout {
+    /// In the decal layer (`core.draw_order`), its alpha a mask.
+    Decal,
+    /// A cutout surface, as its alpha mode says.
+    Surface,
 }
 
 impl LowerAnvilMaterial {
@@ -215,12 +236,14 @@ impl LowerAnvilMaterial {
             "emissive-exposure",
             "underground-view",
             "fake-river-s",
+            "decals1-cutout",
         ];
         if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
         }
         let usage = "normal-green=up|down, alpha=opaque|mask (with alpha-cutoff=X)|prelude, unset=white, \
-                     shader-uv=texcoord|one-minus-v, emissive-exposure=X, underground-view=X (0 to 1), fake-river-s=S";
+                     shader-uv=texcoord|one-minus-v, emissive-exposure=X, underground-view=X (0 to 1), fake-river-s=S, \
+                     decals1-cutout=decal|surface";
         let get = |k: &str| {
             o.get(k)
                 .map(String::as_str)
@@ -275,6 +298,11 @@ impl LowerAnvilMaterial {
             return Err(format!("underground-view {underground_view}: within 0 and 1"));
         }
         let fake_river_s = number("fake-river-s")?;
+        let decals1_cutout = match get("decals1-cutout")? {
+            "decal" => Decals1Cutout::Decal,
+            "surface" => Decals1Cutout::Surface,
+            v => return Err(format!("decals1-cutout={v} is not decal or surface")),
+        };
         Ok(LowerAnvilMaterial {
             normal_green,
             alpha,
@@ -282,6 +310,7 @@ impl LowerAnvilMaterial {
             emissive_exposure,
             underground_view,
             fake_river_s,
+            decals1_cutout,
         })
     }
 }
@@ -1099,6 +1128,14 @@ impl Pass for LowerAnvilMaterial {
             ("emissive-exposure".to_owned(), self.emissive_exposure.to_string()),
             ("underground-view".to_owned(), self.underground_view.to_string()),
             ("fake-river-s".to_owned(), self.fake_river_s.to_string()),
+            (
+                "decals1-cutout".to_owned(),
+                match self.decals1_cutout {
+                    Decals1Cutout::Decal => "decal",
+                    Decals1Cutout::Surface => "surface",
+                }
+                .to_owned(),
+            ),
         ]);
         match self.alpha {
             AlphaChoice::Opaque => {
@@ -1135,7 +1172,7 @@ impl Pass for LowerAnvilMaterial {
         &[AnvilMaterial::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "Riders Republic materials as metal-rough PBR: no vertex-colour factor or translucency, UV transforms only of the forms seen, other templates a placeholder"
+        "Riders Republic materials as metal-rough PBR: no vertex-colour factor or translucency, UV transforms only of the forms seen, other templates a placeholder; alpha-tested Decals1 Materials in the decal layer or not as decals1-cutout states (the template does not decide it)"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let materials: Vec<Entity> = w.iter::<AnvilMaterial>().map(|(e, _)| e).collect();
@@ -1961,13 +1998,34 @@ impl Pass for LowerAnvilMaterial {
             };
             if !layered {
                 if matches!(name.as_str(), "MAD_Decals1" | "MAD_Decals1_Graffiti")
-                    && pbr.alpha_mode == AlphaMode::Blend
+                    && self.alpha == AlphaChoice::Prelude
                 {
-                    w.insert(e, DrawOrder::conventional(DrawLayer::Decal, DECAL_QUEUE));
-                    log.count(
-                        "Decals1 Materials drawn blended (BlendMode 4), in the decal layer",
-                        1,
-                    );
+                    match pbr.alpha_mode {
+                        AlphaMode::Blend => {
+                            w.insert(e, DrawOrder::conventional(DrawLayer::Decal, DECAL_QUEUE));
+                            log.count(
+                                "Decals1 Materials drawn blended (BlendMode 4), in the decal layer",
+                                1,
+                            );
+                        }
+                        AlphaMode::Mask { .. } => match self.decals1_cutout {
+                            Decals1Cutout::Decal => {
+                                w.insert(e, DrawOrder::conventional(DrawLayer::Decal, DECAL_QUEUE));
+                                log.count(
+                                    "Decals1 Materials drawn alpha-tested (BlendMode 0), in the decal layer (decals1-cutout=decal)",
+                                    1,
+                                );
+                            }
+                            Decals1Cutout::Surface => log.count(
+                                "Decals1 Materials drawn alpha-tested (BlendMode 0), left as cutout surfaces (decals1-cutout=surface)",
+                                1,
+                            ),
+                        },
+                        AlphaMode::Opaque => log.count(
+                            "Decals1 Materials drawn opaque (BlendMode 0, no alpha test), left as surfaces (a decal-domain opaque material is untested)",
+                            1,
+                        ),
+                    }
                 }
                 w.insert(e, pbr);
             }
@@ -2602,6 +2660,7 @@ mod tests {
         test: u8,
         enabled: u8,
         alpha: AlphaChoice,
+        decals1_cutout: Decals1Cutout,
     ) -> (World, Entity, PassLog) {
         let mut w = World::new();
         let e = w.spawn();
@@ -2643,6 +2702,7 @@ mod tests {
             emissive_exposure: 1.0,
             underground_view: 0.5,
             fake_river_s: 0.0,
+            decals1_cutout,
         };
         let mut log = PassLog::default();
         pass.run(&mut w, &mut log).expect("lowered");
@@ -2650,47 +2710,108 @@ mod tests {
     }
 
     /// Decals1's prelude states how it is drawn: BlendMode 4 (blended) is a decal, kept blended in the decal layer at
-    /// the deferred decals' queue (2,500; conventional depth write: none); BlendMode 0 with an alpha test (the
-    /// graffiti Materials: AlphaTestValue 128, enabled) is a mask and states no draw order; another template's
-    /// BlendMode 4 is not a decal; a forced alpha lowers none as blended.
+    /// the deferred decals' queue (2,500; conventional depth write: none), whatever `decals1-cutout` says;
+    /// BlendMode 0 with an alpha test (the graffiti Materials: AlphaTestValue 128, enabled) is a mask, in the decal
+    /// layer only with `decals1-cutout=decal`; an opaque one is a surface either way (counted); another template's
+    /// BlendMode 4 is not a decal; a forced alpha gives none the layer.
     #[test]
-    fn decals1_drawn_blended_are_decals() {
+    fn decals1_are_decals_as_the_prelude_and_the_programs_statement_say() {
+        use Decals1Cutout::{Decal, Surface};
         let decal = DrawOrder {
             layer: DrawLayer::Decal,
             queue: 2500,
             depth_write: false,
         };
         for template in ["MAD_Decals1", "MAD_Decals1_Graffiti"] {
-            let (w, e, log) = lowered(template, 4, 0, 0, AlphaChoice::Prelude);
+            for cutout in [Decal, Surface] {
+                let (w, e, log) = lowered(template, 4, 0, 0, AlphaChoice::Prelude, cutout);
+                assert_eq!(
+                    w.get::<PbrMaterial>(e).unwrap().alpha_mode,
+                    AlphaMode::Blend,
+                    "{template}"
+                );
+                assert_eq!(w.get::<DrawOrder>(e), Some(&decal), "{template} {cutout:?}");
+                assert_eq!(
+                    log.counts["Decals1 Materials drawn blended (BlendMode 4), in the decal layer"],
+                    1
+                );
+                // no alpha test: opaque, left as a surface, counted
+                let (w, e, log) = lowered(template, 0, 0, 0, AlphaChoice::Prelude, cutout);
+                assert_eq!(
+                    w.get::<PbrMaterial>(e).unwrap().alpha_mode,
+                    AlphaMode::Opaque,
+                    "{template}"
+                );
+                assert_eq!(w.get::<DrawOrder>(e), None, "{template} {cutout:?}");
+                assert!(log.counts.keys().any(|k| k.contains("drawn opaque (BlendMode 0")));
+                for forced in [AlphaChoice::Opaque, AlphaChoice::Mask(0.5)] {
+                    let (w, e, _) = lowered(template, 4, 0, 0, forced, cutout);
+                    assert_ne!(w.get::<PbrMaterial>(e).unwrap().alpha_mode, AlphaMode::Blend);
+                    assert_eq!(w.get::<DrawOrder>(e), None, "{template}");
+                    let (w, e, _) = lowered(template, 0, 128, 1, forced, cutout);
+                    assert_eq!(w.get::<DrawOrder>(e), None, "{template}: forced alpha");
+                }
+            }
+            // alpha-tested: the program's statement
+            let mask = AlphaMode::Mask {
+                cutoff: 128.0 / 255.0,
+            };
+            let (w, e, log) = lowered(template, 0, 128, 1, AlphaChoice::Prelude, Decal);
+            assert_eq!(w.get::<PbrMaterial>(e).unwrap().alpha_mode, mask, "{template}");
             assert_eq!(
-                w.get::<PbrMaterial>(e).unwrap().alpha_mode,
-                AlphaMode::Blend,
-                "{template}"
+                w.get::<DrawOrder>(e),
+                Some(&decal),
+                "{template}: decals1-cutout=decal"
             );
-            assert_eq!(w.get::<DrawOrder>(e), Some(&decal), "{template}");
             assert_eq!(
-                log.counts["Decals1 Materials drawn blended (BlendMode 4), in the decal layer"],
+                log.counts["Decals1 Materials drawn alpha-tested (BlendMode 0), in the decal layer (decals1-cutout=decal)"],
                 1
             );
-            let (w, e, log) = lowered(template, 0, 128, 1, AlphaChoice::Prelude);
+            let (w, e, log) = lowered(template, 0, 128, 1, AlphaChoice::Prelude, Surface);
+            assert_eq!(w.get::<PbrMaterial>(e).unwrap().alpha_mode, mask, "{template}");
+            assert_eq!(w.get::<DrawOrder>(e), None, "{template}: decals1-cutout=surface");
             assert_eq!(
-                w.get::<PbrMaterial>(e).unwrap().alpha_mode,
-                AlphaMode::Mask {
-                    cutoff: 128.0 / 255.0
-                },
-                "{template}"
+                log.counts["Decals1 Materials drawn alpha-tested (BlendMode 0), left as cutout surfaces (decals1-cutout=surface)"],
+                1
             );
-            assert_eq!(w.get::<DrawOrder>(e), None, "{template}");
-            assert!(!log.counts.keys().any(|k| k.contains("decal layer")));
-            for forced in [AlphaChoice::Opaque, AlphaChoice::Mask(0.5)] {
-                let (w, e, _) = lowered(template, 4, 0, 0, forced);
-                assert_ne!(w.get::<PbrMaterial>(e).unwrap().alpha_mode, AlphaMode::Blend);
-                assert_eq!(w.get::<DrawOrder>(e), None, "{template}");
-            }
         }
         // the same BlendMode 4 on a template that is no decal
-        let (w, e, _) = lowered("MAD_Tex1", 4, 0, 0, AlphaChoice::Prelude);
+        let (w, e, _) = lowered("MAD_Tex1", 4, 0, 0, AlphaChoice::Prelude, Decal);
         assert_eq!(w.get::<PbrMaterial>(e).unwrap().alpha_mode, AlphaMode::Blend);
         assert_eq!(w.get::<DrawOrder>(e), None);
+    }
+
+    /// `decals1-cutout` is required, with its two values.
+    #[test]
+    fn decals1_cutout_is_a_required_option() {
+        let mut o = Options::from(
+            [
+                ("normal-green", "up"),
+                ("alpha", "prelude"),
+                ("unset", "white"),
+                ("shader-uv", "texcoord"),
+                ("emissive-exposure", "1"),
+                ("underground-view", "0.5"),
+                ("fake-river-s", "0"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned())),
+        );
+        let err = LowerAnvilMaterial::from_options(&o).unwrap_err();
+        assert!(err.contains("decals1-cutout is required"), "{err}");
+        o.insert("decals1-cutout".into(), "yes".into());
+        assert!(
+            LowerAnvilMaterial::from_options(&o)
+                .unwrap_err()
+                .contains("not decal or surface")
+        );
+        for (v, want) in [
+            ("decal", Decals1Cutout::Decal),
+            ("surface", Decals1Cutout::Surface),
+        ] {
+            o.insert("decals1-cutout".into(), v.into());
+            let pass = LowerAnvilMaterial::from_options(&o).unwrap();
+            assert_eq!(pass.decals1_cutout, want);
+            assert_eq!(pass.options()["decals1-cutout"], v);
+        }
     }
 }

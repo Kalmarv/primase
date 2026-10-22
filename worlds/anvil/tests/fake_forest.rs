@@ -2,7 +2,7 @@
 //! 1, metalness 0, opaque, single-sided, and each primitive drawn with it alone given COLOR_0 = pow(c, 2.2) (worked by
 //! hand); a primitive also drawn with another Material keeps its colour, counted.
 use primase_anvil::components::{AnvilMaterial, MaterialFlags};
-use primase_anvil::passes::{AlphaChoice, LowerAnvilMaterial, ShaderUv};
+use primase_anvil::passes::{AlphaChoice, Decals1Cutout, LowerAnvilMaterial, ShaderUv};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{
@@ -69,6 +69,7 @@ fn fake_forest_takes_its_vertex_colour_decoded() {
         emissive_exposure: 1.0,
         underground_view: 0.5,
         fake_river_s: 0.0,
+        decals1_cutout: Decals1Cutout::Surface,
     };
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log).expect("lower");
@@ -179,6 +180,7 @@ fn grass_ao_takes_its_vertex_alpha_as_occlusion() {
         emissive_exposure: 1.0,
         underground_view: 0.5,
         fake_river_s: 0.0,
+        decals1_cutout: Decals1Cutout::Surface,
     };
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log).expect("lower");

@@ -51,6 +51,9 @@ struct Tri {
 pub struct Stacked {
     pub stats: OverlayStats,
     pub under: Vec<(usize, usize)>,
+    /// The pieces whose lift could not clear every surface ([`OverlayStats::conflicts_left`]), each with the pieces
+    /// whose surfaces it still lies in the unclear band of (`(piece, other piece)`, sorted, once each).
+    pub left: Vec<(usize, usize)>,
 }
 
 /// Totals over a run.
@@ -200,6 +203,7 @@ pub fn apply(step: f32, parts: &mut Parts, pieces: &mut [Piece]) -> Stacked {
         return Stacked {
             stats: st,
             under: Vec::new(),
+            left: Vec::new(),
         };
     }
     let mut tris: Vec<Tri> = Vec::new();
@@ -343,7 +347,8 @@ pub fn apply(step: f32, parts: &mut Parts, pieces: &mut [Piece]) -> Stacked {
 
     // 3. place each piece against everything placed so far
     let mut placed: Vec<bool> = pieces.iter().map(|p| !p.overlay).collect();
-    let mut ds: Vec<f32> = Vec::new();
+    let mut ds: Vec<(f32, usize)> = Vec::new();
+    let mut left: BTreeSet<(usize, usize)> = BTreeSet::new();
     for &k in &order {
         st.pieces += 1;
         if pieces[k].fixed {
@@ -362,28 +367,25 @@ pub fn apply(step: f32, parts: &mut Parts, pieces: &mut [Piece]) -> Stacked {
                 if let Some(d) = related(&t, &u)
                     && d.abs() <= REACH
                 {
-                    ds.push(d);
+                    ds.push((d, u.piece));
                 }
             }
         }
         let (mut lo, mut hi) = (0f32, f32::MAX);
-        for &d in &ds {
+        for &(d, _) in &ds {
             if d >= -BEHIND {
                 lo = lo.max(step - d);
             } else {
                 hi = hi.min(-BEHIND - d);
             }
         }
-        let band = |l: f32, ds: &[f32]| {
-            ds.iter()
-                .filter(|&&d| d + l > -BEHIND + BAND_TOL && d + l < step - BAND_TOL)
-                .count()
-        };
+        let in_band = |l: f32, d: f32| d + l > -BEHIND + BAND_TOL && d + l < step - BAND_TOL;
+        let band = |l: f32, ds: &[(f32, usize)]| ds.iter().filter(|&&(d, _)| in_band(l, d)).count();
         let mut total = lo;
         if lo > hi {
             st.conflicts += 1;
             let mut past = lo;
-            for &d in &ds {
+            for &(d, _) in &ds {
                 if d < -BEHIND && d + lo > -BEHIND {
                     past = past.max(step - d);
                 }
@@ -398,6 +400,11 @@ pub fn apply(step: f32, parts: &mut Parts, pieces: &mut [Piece]) -> Stacked {
             total = cands[0];
             if band(total, &ds) > 0 {
                 st.conflicts_left += 1;
+                left.extend(
+                    ds.iter()
+                        .filter(|&&(d, _)| in_band(total, d))
+                        .map(|&(_, u)| (k, u)),
+                );
             }
         }
         if total > 0.0 {
@@ -423,7 +430,11 @@ pub fn apply(step: f32, parts: &mut Parts, pieces: &mut [Piece]) -> Stacked {
         .flat_map(|(&k, ups)| ups.iter().map(move |&a| (k, a)))
         .collect();
     under.sort_unstable();
-    Stacked { stats: st, under }
+    Stacked {
+        stats: st,
+        under,
+        left: left.into_iter().collect(),
+    }
 }
 
 /// The stack `apply` made, put on unshifted parts again: each piece moved once by its recorded `shift`, as `apply`
@@ -510,6 +521,49 @@ mod tests {
         );
         assert_eq!((st.stats.pieces, st.stats.shifted), (3, 1));
         drop((i0, i1, i2));
+    }
+
+    /// A piece that has to clear the base (a 4 mm lift) and also stay behind pieces placed before it that lie 6 and 12
+    /// mm in front of it (more than 5 mm behind: no lift may reach them) cannot do both; nor can lifting past them
+    /// (10 mm, which puts it 2 mm behind the 12 mm one): the pass counts a conflict it could not clear and says
+    /// against which piece it is left. Worked by hand (y = 0 base, the movable piece at y = 0, fixed pieces at 6 and
+    /// 12 mm placed under it by order; step 4 mm, 5 mm "behind", band (-5 mm, +4 mm) exclusive of 0.1 mm at both ends):
+    /// the three lifts it can take, 4 mm (the 6 mm piece 2 mm in front: in the band), 1 mm (the base 1 mm behind: in
+    /// the band) and 10 mm (the 12 mm piece 2 mm in front: in the band) each leave one surface in the band; the
+    /// smallest lift wins the tie, 1 mm, and what it leaves is the base.
+    #[test]
+    fn a_piece_that_cannot_clear_every_surface_is_reported_with_the_piece_it_is_left_against() {
+        let (mut p0, mut i0, mut p1, mut i1, mut p2, mut i2, mut p3, mut i3) =
+            (vec![], vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+        let base = square(&mut p0, &mut i0, 0.0);
+        let near = square(&mut p1, &mut i1, 0.006);
+        let far = square(&mut p2, &mut i2, 0.012);
+        let movable = square(&mut p3, &mut i3, 0.0);
+        let mut pieces = vec![
+            piece(0, base, false, false, 0),
+            piece(1, near, true, true, 1),
+            piece(2, far, true, true, 2),
+            piece(3, movable, true, false, 3),
+        ];
+        let (i0c, i1c, i2c, i3c) = (i0.clone(), i1.clone(), i2.clone(), i3.clone());
+        let mut parts = Parts {
+            pos: vec![&mut p0, &mut p1, &mut p2, &mut p3],
+            idx: vec![&i0c, &i1c, &i2c, &i3c],
+        };
+        let st = apply(0.004, &mut parts, &mut pieces);
+        assert_eq!(
+            (st.stats.conflicts, st.stats.conflicts_left),
+            (1, 1),
+            "{:?}",
+            st.stats
+        );
+        assert!((pieces[3].shift - 0.001).abs() < 1e-6, "lift {}", pieces[3].shift);
+        assert_eq!(
+            st.left,
+            vec![(3, 0)],
+            "the movable piece is left against the base"
+        );
+        drop((i0, i1, i2, i3));
     }
 
     /// Replaying the shifts `apply` recorded on the unshifted parts gives its positions exactly: three decals stacked

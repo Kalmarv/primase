@@ -2,7 +2,7 @@
 //! lowered by `lower-anvil-material`: its team colour to the 2.2 as the base colour, its atlas's alpha at the logo's
 //! cell (worked by hand from its shader's cell formula), cut out at its AlphaTestValue over 255.
 use primase_anvil::components::{AnvilMaterial, MaterialBinding, MaterialValue};
-use primase_anvil::passes::{AlphaChoice, LowerAnvilMaterial, ShaderUv};
+use primase_anvil::passes::{AlphaChoice, Decals1Cutout, LowerAnvilMaterial, ShaderUv};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -75,6 +75,7 @@ fn decal_fx_is_its_team_colour_cut_out_at_its_cell() {
         emissive_exposure: 1.0,
         underground_view: 0.5,
         fake_river_s: 0.0,
+        decals1_cutout: Decals1Cutout::Surface,
     };
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log).expect("lower");

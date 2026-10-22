@@ -1438,6 +1438,10 @@ impl MapWriter {
                     totals.add(&stacked.stats);
                     rec.totals = totals_of(&totals);
                     rec.meshes.insert(mesh.to_owned(), totals_of(&stacked.stats));
+                    for &(k, u) in &stacked.left {
+                        let name = |p: usize| self.ctx.mats.by_id(src[p].0).name.clone();
+                        *rec.left.entry((mesh.to_owned(), name(k), name(u))).or_default() += 1;
+                    }
                     for (k, p) in pieces.iter().enumerate() {
                         // its centre after the lift, the mesh's frame in scene axes
                         let pos = &*view.pos[p.part];

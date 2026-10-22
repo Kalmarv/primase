@@ -1146,6 +1146,10 @@ pub struct SkateOverlayStack {
     /// Each stacked mesh's totals (`totals` is their sum): a map written in parts counts a prototype stacked by several
     /// parts once.
     pub meshes: BTreeMap<String, OverlayTotals>,
+    /// The pieces whose lift could not clear every surface, by (mesh, the piece's material, the material of a piece it
+    /// still lies in the unclear band of): how many pieces of the first material, of that mesh, are in that state
+    /// against a piece of the second. Not checked by the writer.
+    pub left: BTreeMap<(String, String, String), u32>,
 }
 
 /// One piece of a stacked mesh: the mesh (`t_<column>_<row>`, a render tile; `proto <name>`, an instanced prototype),
@@ -1478,6 +1482,11 @@ impl Resource for SkateOverlayStack {
                 .map(|(p, s)| serde_json::json!({ "piece": id(p), "stacked": s }))
                 .collect::<Vec<_>>(),
             "under": self.under.iter().map(|(a, b)| [id(a), id(b)]).collect::<Vec<_>>(),
+            "left": self
+                .left
+                .iter()
+                .map(|((mesh, a, b), n)| serde_json::json!({ "mesh": mesh, "material": a, "against": b, "pieces": n }))
+                .collect::<Vec<_>>(),
         })))
     }
     fn references(&self, out: &mut Vec<Entity>) {

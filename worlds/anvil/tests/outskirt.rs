@@ -4,7 +4,7 @@
 //! then `lower-anvil-world-uv` on a triangle placed twice: a copy for the second placement, each with its placement's
 //! coordinates.
 use primase_anvil::components::{AnvilMaterial, AnvilWorldUv};
-use primase_anvil::passes::{AlphaChoice, LowerAnvilMaterial, LowerAnvilWorldUv, ShaderUv};
+use primase_anvil::passes::{AlphaChoice, Decals1Cutout, LowerAnvilMaterial, LowerAnvilWorldUv, ShaderUv};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -99,6 +99,7 @@ fn outskirt_maps_each_placement_by_its_world_position() {
         emissive_exposure: 1.0,
         underground_view: 0.5,
         fake_river_s: 0.0,
+        decals1_cutout: Decals1Cutout::Surface,
     }
     .run(&mut w, &mut log)
     .expect("lower");

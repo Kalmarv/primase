@@ -12,7 +12,9 @@ mod water;
 mod world_uv;
 pub use bake::{BakeAnvilMaterial, gbuffer_pixel_key};
 pub use decals::{Family, FamilyRule, LowerAnvilDecals, TerrainDecals, family};
-pub use material::{AlphaChoice, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo, world_uv_rows};
+pub use material::{
+    AlphaChoice, Decals1Cutout, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo, world_uv_rows,
+};
 pub use select::{Keep, SelectAnvilEntities};
 pub use splat::{Splat, SplatUv};
 pub use water::{LowerAnvilWater, Shore};
@@ -2244,6 +2246,7 @@ pub fn register(reg: &mut PassRegistry) {
             ("emissive-exposure", "1"),
             ("underground-view", "0.5"),
             ("fake-river-s", "0"),
+            ("decals1-cutout", "surface"),
         ],
     );
     reg.register_requiring(
