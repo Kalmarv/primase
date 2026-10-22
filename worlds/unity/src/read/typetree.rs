@@ -151,6 +151,23 @@ impl TypeTree {
         Ok((v, r.pos))
     }
 
+    /// The root struct's field `name` alone: the fields before it are walked (and so must decode), the ones after it
+    /// are not read, so a name stored first costs a few bytes whatever the object holds. `None` when the root has no
+    /// such field; the value is what [`TypeTree::decode`] gives it. A root that is not a struct has no fields.
+    pub fn decode_field(&self, data: &[u8], big_endian: bool, name: &str) -> Result<Option<Value>> {
+        if !matches!(self.kinds[0], Kind::Struct) {
+            return Ok(None);
+        }
+        let mut r = Reader::new(data, big_endian);
+        for &c in &self.nodes[0].children {
+            let v = self.read(c, &mut r, 1)?;
+            if &*self.nodes[c].name == name {
+                return Ok(Some(v));
+            }
+        }
+        Ok(None)
+    }
+
     fn read(&self, i: usize, r: &mut Reader, depth: u32) -> Result<Value> {
         if depth > 128 {
             return Err(invalid("type tree recursion deeper than 128"));
@@ -329,6 +346,25 @@ mod tests {
             v.get("m_P"),
             Some(&Value::Pair(Box::new((Value::Int(7), Value::UInt(9)))))
         );
+        // one field alone: what decode gives it, the fields after it unread (a broken tail does not matter), none for a
+        // name the root lacks
+        for name in ["m_On", "m_Name", "m_V", "m_P"] {
+            assert_eq!(
+                t.decode_field(&d, false, name).unwrap().as_ref(),
+                v.get(name),
+                "{name}"
+            );
+        }
+        assert_eq!(t.decode_field(&d, false, "m_Missing").unwrap(), None);
+        assert_eq!(
+            t.decode_field(&d[..12], false, "m_Name")
+                .unwrap()
+                .as_ref()
+                .and_then(Value::as_str),
+            Some("abc"),
+            "the name decodes from the bytes up to it"
+        );
+        assert!(t.decode_field(&d[..10], false, "m_Name").is_err());
         // a count past the data and a bad bool are errors
         let mut short = d.clone();
         short[12..16].copy_from_slice(&1000i32.to_le_bytes());

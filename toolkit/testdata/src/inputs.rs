@@ -200,6 +200,22 @@ pub const VARIABLES: &[Variable] = &[
         source: "independent: UnityPy, through dump scripts kept with the private oracle tools",
     },
     Variable {
+        name: "PRIMASE_UNITY_V21_LISTING",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: an independent reader's (UnityPy) object names and BuildSettings scene list of `PRIMASE_UNITY_V21_DATA` (JSON; schema in `worlds/unity/tests/listing.rs`)"#,
+        status: Status::Live,
+        source: "independent: UnityPy, through dump scripts kept with the private oracle tools",
+    },
+    Variable {
+        name: "PRIMASE_UNITY_LISTING",
+        kind: Kind::Input,
+        gate: true,
+        about: r#"optional: an independent reader's (UnityPy) object names and BuildSettings scene list of `PRIMASE_UNITY_DATA` (JSON; schema in `worlds/unity/tests/listing.rs`)"#,
+        status: Status::Live,
+        source: "independent: UnityPy, through dump scripts kept with the private oracle tools",
+    },
+    Variable {
         name: "PRIMASE_UNITY_DATA",
         kind: Kind::Input,
         gate: true,

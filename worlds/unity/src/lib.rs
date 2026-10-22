@@ -10,7 +10,12 @@
 //! - [`resource`]: streamed resources (`.resS`), the bulk data that objects point at.
 //! - [`player`]: a player's data folder: its files, pointers resolved across them.
 //! - [`scene`]: a scene's hierarchy (GameObjects, Transforms to world matrices) and its drawn mesh renderers.
-//! - [`level`]: a scene into the world, Unity's frame converted; [`components`] the `unity.*` dialect.
+//! - [`level`]: a scene into the world, Unity's frame converted; [`components`] the `unity.*` dialect. Its report
+//!   serialises ([`level::LevelReport::to_json`]).
+//! - [`convert`]: a scene as a conversion's reader ([`convert::UnityReader`]: the level read, a part its roots' closure).
+//! - [`listing`]: a player's objects by class and name from its object tables, the names read from the objects' first
+//!   bytes; [`player::Player::scenes`] the build's scene list (`levelN` to scene name).
+//! - [`asset`]: one mesh, texture or material read into a world as a preview.
 //! - [`mesh`]: meshes (vertex streams, compressed meshes, index buffers, submeshes).
 //! - [`texture`]: textures (formats, mip chains, rows flipped top first, normal map conventions).
 //! - [`material`]: materials as stored (shader, saved properties, keywords).
@@ -47,8 +52,8 @@ pub use read::typetree::TypeTree;
 pub use read::value::Value;
 pub use read::version::UnityVersion;
 pub use read::{
-    level, material, mesh, player, program, resource, scene, serialized, terrain, texture, tpk, typetree,
-    value, version,
+    asset, convert, level, listing, material, mesh, player, program, resource, scene, serialized, terrain,
+    texture, tpk, typetree, value, version,
 };
 
 /// Registers the Unity passes by name: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,

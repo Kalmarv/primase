@@ -14,7 +14,7 @@ use crate::components::{RenderPipeline, URP_ASSET, UnityObject};
 use crate::read::serialized::SerializedFile;
 use crate::read::tpk::TypeTreePackage;
 use crate::read::typetree::TypeTree;
-use crate::read::value::Value;
+use crate::read::value::{Array, Value};
 use crate::{Error, Result, invalid};
 
 /// An object of the player: its file (lower-case name) and path id.
@@ -31,6 +31,19 @@ impl From<&ObjRef> for UnityObject {
             path_id: r.path_id,
         }
     }
+}
+
+/// A scene of the build ([`Player::scenes`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuildScene {
+    /// Its place in the build's scene list.
+    pub index: usize,
+    /// The file it is stored in (`level<index>`).
+    pub file: String,
+    /// The path the editor knew it by (`Assets/Scenes/Main Mountain Scene.unity`), as stored.
+    pub path: String,
+    /// The scene's name: its path's file name without `.unity`.
+    pub name: String,
 }
 
 #[derive(Debug)]
@@ -134,6 +147,71 @@ impl Player {
             )));
         }
         Ok(d.value)
+    }
+
+    /// The field `name` of the object's root struct alone ([`TypeTree::decode_field`]): `None` when its class has no
+    /// such field. The object need not decode whole, and a field stored early (`m_Name`) is read without the rest.
+    pub fn field(&self, r: &ObjRef, name: &str) -> Result<Option<Value>> {
+        let f = self.file(&r.file)?;
+        let o = f
+            .object(r.path_id)
+            .ok_or_else(|| invalid(format!("{}: no object {}", r.file, r.path_id)))?;
+        self.tree(&r.file, f, o.class_id)?
+            .decode_field(f.bytes(o), f.big_endian, name)
+            .map_err(|e| invalid(format!("{}/{} (class {}): {e}", r.file, r.path_id, o.class_id)))
+    }
+
+    /// The scenes of the build, in `BuildSettings`' order: scene `i` is the file `level<i>`. `Ok(empty)` for a player
+    /// without a `globalgamemanagers` or a `BuildSettings` (a player is never read for scenes it does not list).
+    pub fn scenes(&self) -> Result<Vec<BuildScene>> {
+        const FILE: &str = "globalgamemanagers";
+        let Some(f) = self.files.get(FILE) else {
+            return Ok(Vec::new());
+        };
+        let mut found = None;
+        for o in &f.objects {
+            let r = ObjRef {
+                file: FILE.into(),
+                path_id: o.path_id,
+            };
+            if self.class_name(&r) == Some("BuildSettings") {
+                if found.is_some() {
+                    return Err(invalid(format!("{FILE}: more than one BuildSettings")));
+                }
+                found = Some(r);
+            }
+        }
+        let Some(r) = found else {
+            return Ok(Vec::new());
+        };
+        let list = self
+            .field(&r, "scenes")?
+            .ok_or_else(|| invalid(format!("{FILE}: BuildSettings without a scene list")))?;
+        let Value::Array(Array::Values(paths)) = list else {
+            return Err(invalid(format!("{FILE}: BuildSettings' scenes is not a list")));
+        };
+        paths
+            .iter()
+            .enumerate()
+            .map(|(index, p)| {
+                let path = p
+                    .as_str()
+                    .ok_or_else(|| invalid(format!("{FILE}: scene {index} is not a path")))?
+                    .to_owned();
+                let name = path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&path)
+                    .trim_end_matches(".unity")
+                    .to_owned();
+                Ok(BuildScene {
+                    index,
+                    file: format!("level{index}"),
+                    path,
+                    name,
+                })
+            })
+            .collect()
     }
 
     /// A MonoBehaviour's base fields and its script's serialized bytes, which a stripped build has no type tree for.

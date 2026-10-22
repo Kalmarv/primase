@@ -33,6 +33,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::Serialize;
+
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{
     Entity, Instance, LodForm, Lods, MaterialVariants, Mesh, Name, ShadowCast, Shadows, Source, Transform,
@@ -57,7 +59,7 @@ use crate::read::value::Value;
 use crate::shader::procedural;
 
 /// A prototype's or form's provenance: the Unity mesh it was read from, and the slice a static-batched renderer draws.
-fn mesh_source(mesh: &ObjRef, submeshes: Option<(u32, u32)>) -> Source {
+pub(crate) fn mesh_source(mesh: &ObjRef, submeshes: Option<(u32, u32)>) -> Source {
     Source(match submeshes {
         Some((first, count)) => format!(
             "unity mesh {}/{} submeshes {first}+{count}",
@@ -113,8 +115,9 @@ pub fn transform_of(m: &Matrix) -> Transform {
     Transform { cols }
 }
 
-/// What reading a level did.
-#[derive(Clone, Debug, Default)]
+/// What reading a level did. Serialisable ([`LevelReport::to_json`]): the counts are maps and numbers, the notices
+/// keyed by what they are.
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct LevelReport {
     pub renderers: usize,
     pub prototypes: usize,
@@ -299,6 +302,13 @@ fn lod_roles(
     roles
 }
 
+impl LevelReport {
+    /// The report as JSON: each field by its name, the maps as objects keyed by reason, the way a consumer lists them.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).expect("a report of numbers and strings serialises")
+    }
+}
+
 /// The state axes of stored "off" flags (a GameObject stored inactive, a component stored disabled): one Bool axis per
 /// flag (`unity.active.<file>.<GameObject>` or `unity.enabled.<file>.<component>`, default off, global), found by its
 /// key. The level read makes them; a reader that adds objects to the same world later ([`OffAxes::of`]) conditions
@@ -373,7 +383,7 @@ impl OffAxes {
     }
 }
 
-struct Builder<'a> {
+pub(crate) struct Builder<'a> {
     player: &'a Player,
     textures: BTreeMap<ObjRef, Entity>,
     materials: BTreeMap<ObjRef, Entity>,
@@ -384,7 +394,25 @@ struct Builder<'a> {
     /// The off flags' state axes, and LOD axes by group (and tree instance).
     axes: OffAxes,
     lod_axes: BTreeMap<(ObjRef, Option<(Entity, usize)>), Entity>,
-    report: LevelReport,
+    pub(crate) report: LevelReport,
+}
+
+impl<'a> Builder<'a> {
+    /// A builder reading from `player`, with nothing read yet.
+    pub(crate) fn new(player: &'a Player, report: LevelReport) -> Self {
+        Builder {
+            player,
+            textures: BTreeMap::new(),
+            materials: BTreeMap::new(),
+            layers: BTreeMap::new(),
+            collider_meshes: BTreeMap::new(),
+            physic_materials: BTreeMap::new(),
+            shaders: BTreeMap::new(),
+            axes: OffAxes::default(),
+            lod_axes: BTreeMap::new(),
+            report,
+        }
+    }
 }
 
 impl Builder<'_> {
@@ -447,7 +475,7 @@ impl Builder<'_> {
     }
 
     /// Count what reading a mesh could not put into core as stored ([`LevelReport::notices`]).
-    fn note_mesh(&mut self, notices: crate::read::mesh::MeshNotices) {
+    pub(crate) fn note_mesh(&mut self, notices: crate::read::mesh::MeshNotices) {
         for (what, n) in notices {
             *self.report.notices.entry(what.to_owned()).or_default() += n;
         }
@@ -459,7 +487,7 @@ impl Builder<'_> {
         }
     }
 
-    fn texture(&mut self, w: &mut World, r: &ObjRef) -> Result<Entity> {
+    pub(crate) fn texture(&mut self, w: &mut World, r: &ObjRef) -> Result<Entity> {
         if let Some(&e) = self.textures.get(r) {
             return Ok(e);
         }
@@ -756,7 +784,7 @@ impl Builder<'_> {
         Ok(s)
     }
 
-    fn material(&mut self, w: &mut World, r: &ObjRef) -> Result<Entity> {
+    pub(crate) fn material(&mut self, w: &mut World, r: &ObjRef) -> Result<Entity> {
         if let Some(&e) = self.materials.get(r) {
             return Ok(e);
         }
@@ -812,21 +840,13 @@ impl Builder<'_> {
 pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelReport> {
     let scene = Scene::read(player, level)?;
     let (renderers, skipped) = scene.renderers(player)?;
-    let mut b = Builder {
+    let mut b = Builder::new(
         player,
-        textures: BTreeMap::new(),
-        materials: BTreeMap::new(),
-        layers: BTreeMap::new(),
-        collider_meshes: BTreeMap::new(),
-        physic_materials: BTreeMap::new(),
-        shaders: BTreeMap::new(),
-        axes: OffAxes::default(),
-        lod_axes: BTreeMap::new(),
-        report: LevelReport {
+        LevelReport {
             skipped,
             ..LevelReport::default()
         },
-    };
+    );
     let groups = scene.lod_groups_under(player, None)?;
     let mut roles = lod_roles(&renderers, &groups, &mut b.report);
     // terrains, and the renderers of their trees
@@ -1324,6 +1344,27 @@ mod tests {
             off: Vec::new(),
             levels,
         }
+    }
+
+    /// The report as JSON: counts as numbers, every map keyed by its reason, nothing dropped.
+    #[test]
+    fn the_report_serialises_with_its_maps_keyed_by_reason() {
+        let mut report = LevelReport {
+            renderers: 3,
+            sun_named: true,
+            ..LevelReport::default()
+        };
+        report.notices.insert("quads converted".into(), 2);
+        report.colliders_not_colliding.insert("trigger", 5);
+        report.skipped.insert("no mesh", 1);
+        let json = report.to_json();
+        assert_eq!(json["renderers"], 3);
+        assert_eq!(json["sun_named"], true);
+        assert_eq!(json["notices"]["quads converted"], 2);
+        assert_eq!(json["colliders_not_colliding"]["trigger"], 5);
+        assert_eq!(json["skipped"]["no mesh"], 1);
+        // every field of the struct is there
+        assert_eq!(json.as_object().map(serde_json::Map::len), Some(21));
     }
 
     #[test]
