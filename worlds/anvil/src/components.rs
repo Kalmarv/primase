@@ -321,6 +321,39 @@ impl Component for AnvilFake {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
+/// One grid cell that lists an object.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedBy {
+    /// The grid's GridPartition entry name.
+    pub grid: String,
+    /// The cell's number (its position in the partition).
+    pub cell: u32,
+    /// The cell's level: 0 the finest (level 0's cells are the grid's smallest squares).
+    pub level: u32,
+}
+
+/// Where a section read found an Entity or EntityGroup (`anvil.listed`): on every placement (and collision, lake and
+/// decal entity) made for it. `cells` are the grid cells that list it itself; `reached_from` is the finest level of
+/// any cell that reaches it, directly or as a member of a listed EntityGroup (members are placed with their group;
+/// a member of a group a level-0 cell lists is reached from level 0 whatever lists it itself). An object larger than
+/// a cell is listed only at a coarser level, so a program that keeps what stands on its section tells them apart
+/// by `reached_from`: a stated choice (`select-anvil-listed`), never the reader's. Removed by the pass that makes it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilListed {
+    /// The owner's ClassID (an Entity's or EntityGroup's).
+    pub owner: u64,
+    /// The frame the owner's placements were converted through (a placement's numbers are core's; the grid's units and
+    /// the program's rectangles are the source's).
+    pub frame: primase_core::frame::SourceFrame,
+    pub cells: Vec<ListedBy>,
+    pub reached_from: u32,
+}
+
+impl Component for AnvilListed {
+    const NAME: &'static str = "anvil.listed";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
 /// A prototype's level distances as its object stores them (`anvil.lod_distances`; registry-named-fields §2, §4,
 /// docs/placement.md §19.5): each mesh level's `SwitchDistance` (its LODDescriptor's: the level's far limit, rising
 /// level to level on all 686 selectors of two areas), finest first, as `(level, metres)`; and the last mesh level's

@@ -6,6 +6,7 @@ mod bake;
 mod charts;
 mod decals;
 pub mod formulas;
+mod listed;
 mod material;
 mod select;
 mod splat;
@@ -13,6 +14,7 @@ mod water;
 mod world_uv;
 pub use bake::{BakeAnvilMaterial, gbuffer_pixel_key};
 pub use decals::{Family, FamilyRule, LowerAnvilDecals, TerrainDecals, family};
+pub use listed::{Coarse, SelectAnvilListed};
 pub use material::{
     AlphaChoice, Decals1Cutout, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo, world_uv_rows,
 };
@@ -2762,6 +2764,11 @@ pub fn register(reg: &mut PassRegistry) {
     );
     reg.register("lower-anvil-lods", |_| Ok(Box::new(LowerAnvilLods)));
     reg.register("lower-anvil-world-uv", |_| Ok(Box::new(LowerAnvilWorldUv)));
+    reg.register_requiring(
+        "select-anvil-listed",
+        |o| Ok(Box::new(SelectAnvilListed::from_options(o)?)),
+        &[("coarse", "keep")],
+    );
     reg.register_requiring(
         "select-anvil-entities",
         |o| Ok(Box::new(SelectAnvilEntities::from_options(o)?)),
