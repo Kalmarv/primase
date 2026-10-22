@@ -5,7 +5,7 @@
 //! holds; at most 4 layers a piece (the striped node cut); the pieces' triangles the whole ground's to the bit.
 use primase_anvil::components::{AnvilTerrain, AnvilTextureMap, TerrainDetail, TerrainTile};
 use primase_anvil::passes::{
-    CellPoint, GroundColour, GroundNormals, LowerAnvilTerrain, Pieces, SplatUv, TerrainLayers,
+    CellPoint, GroundColour, GroundNormals, LowerAnvilTerrain, Pieces, SplatUv, Steep, TerrainLayers,
 };
 use primase_core::frame::SourceFrame;
 use primase_core::layered::LayeredMaterial;
@@ -206,6 +206,7 @@ fn lowered_with(pieces: Pieces, occlusion: bool, undetailed: Option<u8>) -> Worl
         }),
         pieces,
         normals: GroundNormals::None,
+        steep: Steep::None,
     };
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log).expect("lower");

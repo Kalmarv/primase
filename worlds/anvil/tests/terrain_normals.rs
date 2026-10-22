@@ -4,7 +4,7 @@
 //! frame (agreeing with the winding) whatever the terrain's frame, for `pieces=whole` and `pieces=per-node` alike.
 use primase_anvil::components::{AnvilTerrain, TerrainTile};
 use primase_anvil::passes::{
-    CellPoint, GroundColour, GroundNormals, LowerAnvilTerrain, Pieces, Splat, SplatUv, SurfaceBy,
+    CellPoint, GroundColour, GroundNormals, LowerAnvilTerrain, Pieces, Splat, SplatUv, Steep, SurfaceBy,
 };
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};
@@ -89,6 +89,7 @@ fn lowered(frame: SourceFrame, height: impl Fn(i64, i64) -> i64, pieces: Pieces,
         }),
         pieces,
         normals: GroundNormals::NearCamera,
+        steep: Steep::None,
     };
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log).expect("lower");

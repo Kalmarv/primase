@@ -3,7 +3,9 @@
 //! the quadtree in (docs/terrain.md §3.3: ShortRange cell 9380, x -3584..-3456, y 1152..1280).
 use primase_anvil::components::AnvilTerrain;
 use primase_anvil::components::TerrainTile;
-use primase_anvil::passes::{CellPoint, GroundColour, GroundNormals, LowerAnvilTerrain, Pieces, SurfaceBy};
+use primase_anvil::passes::{
+    CellPoint, GroundColour, GroundNormals, LowerAnvilTerrain, Pieces, Steep, SurfaceBy,
+};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::grid::{self, StoredGridCellDataBlock, StoredGridPartition, WORLD};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -77,6 +79,7 @@ fn the_campus_ground_reads_and_lowers() {
         ground: GroundColour::Tile,
         pieces: Pieces::Whole,
         normals: GroundNormals::None,
+        steep: Steep::None,
     };
     let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
     let mut report = RunReport::default();

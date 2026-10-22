@@ -320,6 +320,174 @@ pub fn layer_detail(t: &AnvilTerrain, uv: SplatUv, m: u8) -> Option<(Entity, Opt
     Some((d.diffuse?, d.normal, g))
 }
 
+/// Which coordinates of a point address the material details.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DetailPlane {
+    /// The flat and mixed programs' (ps 1908): the detail at the point's (x, y).
+    Xy,
+    /// The vertical program's (ps 1924, `TerrainTesselVerticalOnly`, docs/terrain.md 3.10 (3)): the whole near colour
+    /// at the point's (x, z) and again at its (y, z), mixed by `w` (0: all (x, z); 1: all (y, z)), `w` the program's
+    /// `saturate(5 (n.x^2 / (n.x^2 + n.y^2) - 0.4))` of the pixel's normal.
+    Vertical { w: f64 },
+}
+
+impl DetailPlane {
+    /// The vertical program's mix of the two planes at the pixel normal `n` (source frame); 0 where `n` has no
+    /// horizontal part.
+    pub fn vertical(n: [f64; 3]) -> DetailPlane {
+        let h = n[0] * n[0] + n[1] * n[1];
+        let w = if h > 0.0 {
+            (5.0 * (n[0] * n[0] / h - 0.4)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        DetailPlane::Vertical { w }
+    }
+}
+
+/// The near ground colour at points of the terrain: the lookup, the details decoded as pixels first need them, the
+/// bake's choices. [`bake`] runs it over rectangles; `lower-anvil-terrain`'s charts run it at the points of a steep face.
+pub struct Baker<'a> {
+    w: &'a World,
+    t: &'a AnvilTerrain,
+    s: &'a Splat,
+    tile_colour: ColorSpace,
+    lookup: Lookup<'a>,
+    /// Each material's detail, decoded when a pixel first needs it (a bank holds a hundred 2048-texel maps).
+    images: BTreeMap<Entity, Rc<Levels>>,
+    details: BTreeMap<u8, Option<Detail>>,
+}
+
+/// A baked point: its sRGB8 colour, and whether a material of it had no detail diffuse (its far colour tile there).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Texel {
+    pub rgb: [u8; 3],
+    pub tile_fallback: bool,
+}
+
+impl<'a> Baker<'a> {
+    pub fn new(
+        w: &'a World,
+        t: &'a AnvilTerrain,
+        s: &'a Splat,
+        tile_colour: ColorSpace,
+    ) -> Result<Self, String> {
+        Ok(Baker {
+            w,
+            t,
+            s,
+            tile_colour,
+            lookup: Lookup::new(w, t, s.k, s.noise_srgb, tile_colour)?,
+            images: BTreeMap::new(),
+            details: BTreeMap::new(),
+        })
+    }
+
+    /// The colour at the point `(x, y, z)` (source units) as `plane` addresses the details, for a pixel `pixel` units
+    /// across (it picks the detail's mip); `None` where the point's node isn't read.
+    pub fn texel(
+        &mut self,
+        x: f64,
+        y: f64,
+        z: f64,
+        plane: DetailPlane,
+        pixel: f64,
+    ) -> Result<Option<Texel>, String> {
+        let Some(Corners {
+            materials,
+            wx,
+            wy,
+            gx,
+            gy,
+        }) = self.lookup.corners(x, y)
+        else {
+            return Ok(None);
+        };
+        for m in materials.iter().flatten() {
+            detail(self.w, self.t, self.s.uv, *m, &mut self.images, &mut self.details)?;
+        }
+        let mut fell_back = false;
+        let mut at = |baker: &Self, coord: [f64; 2]| -> [[f64; 3]; 4] {
+            materials.map(|m| baker.colour_of(m, coord, (gx, gy), pixel, &mut fell_back))
+        };
+        let colours = match plane {
+            DetailPlane::Xy => at(self, [x, y]),
+            DetailPlane::Vertical { w } => {
+                let xz = (w < 1.0).then(|| at(self, [x, z]));
+                let yz = (w > 0.0).then(|| at(self, [y, z]));
+                match (xz, yz) {
+                    (Some(a), Some(b)) => {
+                        std::array::from_fn(|c| std::array::from_fn(|k| a[c][k] + (b[c][k] - a[c][k]) * w))
+                    }
+                    (Some(a), None) => a,
+                    (None, Some(b)) => b,
+                    (None, None) => unreachable!("w is below 1 or above 0"),
+                }
+            }
+        };
+        let [c00, c10, c01, c11] = colours;
+        let lerp = |a: [f64; 3], b: [f64; 3], t: f64| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t);
+        let mut c = lerp(lerp(c00, c10, wx), lerp(c01, c11, wx), wy);
+        if self.s.occlusion {
+            let o = self.lookup.occlusion(gx, gy);
+            c = c.map(|v| v * o);
+        }
+        Ok(Some(Texel {
+            rgb: c.map(primase_image::linear_to_srgb8),
+            tile_fallback: fell_back,
+        }))
+    }
+
+    /// Material `m`'s colour (linear) with its detail sampled at `coord` (source units), or its far colour tile at the
+    /// global texel `(gx, gy)` where it has no detail diffuse (setting `fell_back`).
+    fn colour_of(
+        &self,
+        m: Option<u8>,
+        coord: [f64; 2],
+        (gx, gy): (f64, f64),
+        pixel: f64,
+        fell_back: &mut bool,
+    ) -> [f64; 3] {
+        let detail = m.and_then(|m| self.details.get(&m)).and_then(Option::as_ref);
+        match detail {
+            Some(d) => {
+                let level0 = f64::from(d.image.width) * d.g * pixel;
+                let top = d.image.levels.len().saturating_sub(1);
+                let mip = (level0.max(1.0).log2().round() as usize).min(top);
+                let transfer = if d.srgb {
+                    Transfer::SrgbColour
+                } else {
+                    Transfer::Stored
+                };
+                let c = d.image.bilinear(
+                    mip,
+                    [coord[0] * d.g, coord[1] * d.g],
+                    [Address::Wrap; 2],
+                    transfer,
+                );
+                [c[0], c[1], c[2]]
+            }
+            None => {
+                *fell_back = true;
+                let decode = |c: u8| match self.tile_colour {
+                    ColorSpace::Srgb => srgb_to_linear(unorm(c)),
+                    _ => unorm(c),
+                };
+                [0, 1, 2].map(|k| {
+                    across(gx, gy, |tx, ty| {
+                        let (n, i, j) = self.lookup.locate(tx, ty)?;
+                        Some(decode(
+                            n.colour
+                                .as_ref()?
+                                .texel(0, j as i64, i as i64, [Address::Wrap; 2])[k],
+                        ))
+                    })
+                })
+            }
+        }
+    }
+}
+
 /// Each rectangle of `rects` (x0, y0, x1, y1, source units) of the terrain `t`'s ground baked as `s` states, an sRGB
 /// RGBA8 image a pixel of `s.pixel` units to its side from (x0, y0) along +x and +y (row 0 at y0), and what it counted;
 /// the noise and the materials' details decoded once for them all. `tile_colour` is the far tiles' colour space.
@@ -330,11 +498,7 @@ pub fn bake(
     s: &Splat,
     tile_colour: ColorSpace,
 ) -> Result<Vec<(Texture, Baked)>, String> {
-    let lookup = Lookup::new(w, t, s.k, s.noise_srgb, tile_colour)?;
-    // each material's detail, decoded when a pixel first needs it (a bank holds a hundred 2048-texel maps)
-    let mut images: BTreeMap<Entity, Rc<Levels>> = BTreeMap::new();
-    let mut details: BTreeMap<u8, Option<Detail>> = BTreeMap::new();
-    let locate = |gx: i64, gy: i64| lookup.locate(gx, gy);
+    let mut baker = Baker::new(w, t, s, tile_colour)?;
     let mut results = Vec::with_capacity(rects.len());
     for &[x0, y0, x1, y1] in rects {
         let width = ((x1 - x0) / s.pixel).ceil().max(1.0) as u32;
@@ -346,71 +510,15 @@ pub fn bake(
                 baked.pixels += 1;
                 let x = x0 + (f64::from(px) + 0.5) * s.pixel;
                 let y = y0 + (f64::from(py) + 0.5) * s.pixel;
-                let Some(Corners {
-                    materials,
-                    wx,
-                    wy,
-                    gx,
-                    gy,
-                }) = lookup.corners(x, y)
-                else {
+                let Some(texel) = baker.texel(x, y, 0.0, DetailPlane::Xy, s.pixel)? else {
                     baked.outside += 1;
                     continue;
                 };
-                for m in materials.iter().flatten() {
-                    detail(w, t, s.uv, *m, &mut images, &mut details)?;
-                }
-                let mut fell_back = false;
-                let mut colour_of = |m: Option<u8>| -> [f64; 3] {
-                    let detail = m.and_then(|m| details.get(&m)).and_then(Option::as_ref);
-                    match detail {
-                        Some(d) => {
-                            let level0 = f64::from(d.image.width) * d.g * s.pixel;
-                            let top = d.image.levels.len().saturating_sub(1);
-                            let mip = (level0.max(1.0).log2().round() as usize).min(top);
-                            let transfer = if d.srgb {
-                                Transfer::SrgbColour
-                            } else {
-                                Transfer::Stored
-                            };
-                            let c = d
-                                .image
-                                .bilinear(mip, [x * d.g, y * d.g], [Address::Wrap; 2], transfer);
-                            [c[0], c[1], c[2]]
-                        }
-                        None => {
-                            fell_back = true;
-                            let decode = |c: u8| match tile_colour {
-                                ColorSpace::Srgb => srgb_to_linear(unorm(c)),
-                                _ => unorm(c),
-                            };
-                            [0, 1, 2].map(|k| {
-                                across(gx, gy, |tx, ty| {
-                                    let (n, i, j) = locate(tx, ty)?;
-                                    Some(decode(
-                                        n.colour
-                                            .as_ref()?
-                                            .texel(0, j as i64, i as i64, [Address::Wrap; 2])[k],
-                                    ))
-                                })
-                            })
-                        }
-                    }
-                };
-                let [c00, c10, c01, c11] = materials.map(&mut colour_of);
-                if fell_back {
+                if texel.tile_fallback {
                     baked.tile_fallback += 1;
                 }
-                let lerp = |a: [f64; 3], b: [f64; 3], t: f64| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t);
-                let mut c = lerp(lerp(c00, c10, wx), lerp(c01, c11, wx), wy);
-                if s.occlusion {
-                    let o = lookup.occlusion(gx, gy);
-                    c = c.map(|v| v * o);
-                }
                 let i = (py as usize * width as usize + px as usize) * 4;
-                for k in 0..3 {
-                    out[i + k] = primase_image::linear_to_srgb8(c[k]);
-                }
+                out[i..i + 3].copy_from_slice(&texel.rgb);
                 out[i + 3] = 255;
             }
         }
@@ -428,4 +536,31 @@ pub fn bake(
         ));
     }
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn w_of(n: [f64; 3]) -> f64 {
+        match DetailPlane::vertical(n) {
+            DetailPlane::Vertical { w } => w,
+            DetailPlane::Xy => panic!("vertical"),
+        }
+    }
+
+    /// The vertical program's `saturate(5 (n.x^2 / (n.x^2 + n.y^2) - 0.4))`, worked by hand.
+    #[test]
+    fn the_planes_mix_by_the_normals_azimuth() {
+        assert_eq!(w_of([1.0, 0.0, 0.5]), 1.0);
+        assert_eq!(w_of([0.0, 1.0, 0.5]), 0.0);
+        // 45 degrees: x^2 / (x^2 + y^2) = 1/2, so 5 (0.5 - 0.4) = 0.5
+        assert!((w_of([1.0, 1.0, 0.3]) - 0.5).abs() < 1e-12);
+        // 0.4 and below take (x, z) only, 0.6 and above (y, z) only: x^2 / y^2 = 2/3 gives 0.4, 3/2 gives 0.6
+        assert!(w_of([(2.0f64 / 3.0).sqrt(), 1.0, 0.0]) < 1e-12);
+        assert!(w_of([1.5f64.sqrt(), 1.0, 0.0]) > 1.0 - 1e-12);
+        // the sign of a component doesn't matter, and a flat normal has no horizontal part: (x, z)
+        assert_eq!(w_of([-1.0, 0.0, 0.5]), 1.0);
+        assert_eq!(w_of([0.0, 0.0, 1.0]), 0.0);
+    }
 }

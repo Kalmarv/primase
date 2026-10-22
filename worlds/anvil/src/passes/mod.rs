@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 mod bake;
+mod charts;
 mod decals;
 pub mod formulas;
 mod material;
@@ -931,6 +932,15 @@ impl<'t> GroundGrid<'t> {
     /// program's `cb4[2].z` factor, plus the offset), the spacing in the same units, so the slopes are rises over runs.
     /// It is computed once over the whole grid, so every piece that draws a vertex draws the same bits.
     pub fn normals(&self, frame: &primase_core::frame::SourceFrame) -> Result<Vec<[f32; 3]>, String> {
+        Ok(self
+            .normals_source()?
+            .into_iter()
+            .map(|n| frame.direction(n))
+            .collect())
+    }
+
+    /// [`Self::normals`] in the terrain's source frame (z up), before the frame's direction map.
+    pub fn normals_source(&self) -> Result<Vec<[f32; 3]>, String> {
         let height = |gx: Option<u32>, gy: Option<u32>| match (gx, gy) {
             (Some(gx), Some(gy)) => self.height(gx, gy).ok(),
             _ => None,
@@ -958,7 +968,7 @@ impl<'t> GroundGrid<'t> {
                     height(Some(gx), gy.checked_add(1)),
                 );
                 let len = (dx * dx + dy * dy + 1.0).sqrt();
-                out.push(frame.direction([(-dx / len) as f32, (-dy / len) as f32, (1.0 / len) as f32]));
+                out.push([(-dx / len) as f32, (-dy / len) as f32, (1.0 / len) as f32]);
             }
         }
         Ok(out)
@@ -1020,6 +1030,24 @@ impl<'t> GroundGrid<'t> {
 /// `normals=none` the ground has none, and a writer makes flat per-triangle normals, which shade the 0.5 m grid as
 /// facets.
 ///
+/// With `steep=chart` (required: `none` or `chart` with `steep-threshold=DEGREES` and `steep-max-atlas=PIXELS`; `chart` needs `ground=splat` and
+/// `pieces=per-node`) the triangles steeper than the threshold (by their face normal) leave their node's top-down
+/// primitive for a primitive of their own with a **chart atlas**. **Why:** a top-down texture spends `pixel / cos(slope)`
+/// of surface on a pixel (8.8 cm at 45 degrees, 36 cm at 80 for 6.25 cm), and the game does not draw a steep face from
+/// a top-down lookup at all: its vertical-triangle pixel program (ps 1924 `TerrainTesselVerticalOnly`, docs/terrain.md
+/// 3.10 (3), read and executed) addresses the detail diffuse in the vertical planes, at the point's (x, z) and at its
+/// (y, z), the two results mixed by `saturate(5 (n.x^2 / (n.x^2 + n.y^2) - 0.4))` of the pixel's normal. **What the pass
+/// does:** the steep triangles are grouped into charts (connected by shared edges, looking alike: the larger horizontal
+/// component of the face normal, and its sign), each laid out in the plane that holds it ((x, z) for faces looking along
+/// y, (y, z) along x), packed per node into one atlas at the top-down bake's pixel (`splat-px`) along both axes, and every
+/// texel is baked at the point of the surface it maps to (the face under it, its nearest edge for the two pixels of padding)
+/// with that program's colour at the point's smooth normal. The collision is the whole ground's either way. **Ours, not
+/// the game's, and counted:** the threshold (the game splits its draw lists into flat, mixed and vertical triangles by a
+/// CPU rule that is not read; its vertex stage carries no class), the laying out, a fold of the surface (a second face
+/// claiming a chart pixel keeps the first's), and an atlas that would pass 4,096 pixels a side, built at twice the pixel
+/// size until it fits. The vertical program's other terms (the steep-slope detail normal `t83`, the plane-frame normal
+/// map) are colour-free and left out, as the top-down bake leaves out the normals.
+///
 /// With `collision` other than none the ground is also its own collision, on the same prototype: each square's two
 /// triangles of the surface its corner sample with the least x and y names (a square spans four samples, whose
 /// materials may differ: that sample is this pass's choice), by the CollisionMaterial of that sample's material in the
@@ -1042,6 +1070,29 @@ pub struct LowerAnvilTerrain {
     pub pieces: Pieces,
     /// The ground's normals (`normals=`): the program's stated choice, the game's own not read.
     pub normals: GroundNormals,
+    /// The steep ground (`steep=`): the program's stated choice, the game's own class rule not read.
+    pub steep: Steep,
+}
+
+/// How `lower-anvil-terrain` draws the ground steeper than an angle (`steep=`, required; `chart` needs `ground=splat`
+/// and `pieces=per-node`): the engine draws steep triangles with the vertical-triangle pixel program, which addresses the
+/// details in the vertical planes (docs/terrain.md 3.10 (3)), and a top-down texture holds them at `pixel / cos(slope)`
+/// of surface a pixel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Steep {
+    /// Every triangle in its node's top-down primitive and texture.
+    None,
+    /// The triangles steeper than `threshold` degrees (by their face normal) are taken out of the top-down primitive into
+    /// one primitive per node with a chart atlas: each connected face laid out in the vertical plane it looks along,
+    /// at the top-down bake's pixel, each texel baked at its point of the surface with the vertical program's colour
+    /// ([`splat::DetailPlane::Vertical`]). The threshold is this pass's choice: the game's rule that splits its draw
+    /// lists into flat, mixed and vertical triangles is not read.
+    Chart {
+        threshold: f64,
+        /// An atlas's greatest side in pixels (`steep-max-atlas`): the program's choice, its destination's texture cap.
+        /// A node whose charts do not fit are baked at twice the pixel, again until they do, counted.
+        max_atlas: u32,
+    },
 }
 
 /// The normals `lower-anvil-terrain` gives the ground (`normals=`, required): the game's terrain pixel program's
@@ -1101,7 +1152,7 @@ impl LowerAnvilTerrain {
             "colour=srgb|linear, collision=none|collision-material|one, surface=NAME unless collision=none, ",
             "ground=tile|splat|layers (with splat-k=K, splat-px=UNITS (splat), splat-uv=FACTOR|over-tile-size, splat-noise=raw|srgb, ",
             "splat-occlusion=block-8|none (splat, layers)), pieces=whole|per-node (per-node with ground=splat or layers), ",
-            "normals=near-camera|none"
+            "normals=near-camera|none, steep=none|chart (chart with ground=splat, pieces=per-node, steep-threshold=DEGREES and steep-max-atlas=PIXELS)"
         );
         let splat_keys = [
             "splat-k",
@@ -1118,6 +1169,9 @@ impl LowerAnvilTerrain {
             "ground",
             "pieces",
             "normals",
+            "steep",
+            "steep-threshold",
+            "steep-max-atlas",
         ];
         known.extend(splat_keys);
         let g = ground_options(o, &known, usage)?;
@@ -1227,6 +1281,48 @@ impl LowerAnvilTerrain {
             Some(v) => return Err(format!("normals={v}: near-camera or none")),
             None => return Err(format!("normals is required: {usage}")),
         };
+        let steep = match o.get("steep").map(String::as_str) {
+            Some("none") => {
+                if let Some(k) = ["steep-threshold", "steep-max-atlas"]
+                    .iter()
+                    .find(|k| o.contains_key(**k))
+                {
+                    return Err(format!("{k} goes with steep=chart only"));
+                }
+                Steep::None
+            }
+            Some("chart") => {
+                if !matches!((ground, pieces), (GroundColour::Splat(_), Pieces::PerNode)) {
+                    return Err(
+                        "steep=chart needs ground=splat and pieces=per-node (a chart atlas per node)"
+                            .to_owned(),
+                    );
+                }
+                let v = get("steep-threshold").map_err(|_| {
+                    format!("steep=chart needs steep-threshold=DEGREES and steep-max-atlas=PIXELS: {usage}")
+                })?;
+                let threshold: f64 = v
+                    .parse()
+                    .map_err(|_| format!("steep-threshold={v} is not a number"))?;
+                if !(threshold > 0.0 && threshold < 90.0) {
+                    return Err(format!(
+                        "steep-threshold={v}: degrees from the horizontal, 0 < T < 90"
+                    ));
+                }
+                let v = get("steep-max-atlas").map_err(|_| {
+                    format!("steep=chart needs steep-threshold=DEGREES and steep-max-atlas=PIXELS: {usage}")
+                })?;
+                let max_atlas: u32 = v
+                    .parse()
+                    .map_err(|_| format!("steep-max-atlas={v}: a whole number of pixels"))?;
+                if !(16..=65_536).contains(&max_atlas) {
+                    return Err(format!("steep-max-atlas={v}: pixels a side, 16 to 65536"));
+                }
+                Steep::Chart { threshold, max_atlas }
+            }
+            Some(v) => return Err(format!("steep={v}: none or chart")),
+            None => return Err(format!("steep is required: {usage}")),
+        };
         Ok(LowerAnvilTerrain {
             rect: g.rect,
             step: g.step,
@@ -1239,6 +1335,7 @@ impl LowerAnvilTerrain {
             ground,
             pieces,
             normals,
+            steep,
         })
     }
 }
@@ -1292,6 +1389,14 @@ impl Pass for LowerAnvilTerrain {
                 .to_owned(),
             ),
         ])
+        .chain(match self.steep {
+            Steep::None => vec![("steep".to_owned(), "none".to_owned())],
+            Steep::Chart { threshold, max_atlas } => vec![
+                ("steep".to_owned(), "chart".to_owned()),
+                ("steep-threshold".to_owned(), threshold.to_string()),
+                ("steep-max-atlas".to_owned(), max_atlas.to_string()),
+            ],
+        })
         .chain(match self.ground {
             GroundColour::Tile => vec![("ground".to_owned(), "tile".to_owned())],
             GroundColour::Splat(s) => vec![
@@ -1359,7 +1464,8 @@ impl Pass for LowerAnvilTerrain {
     }
     fn approximates(&self) -> &'static str {
         "ground heights from a stated range and offset, drawn with its far colour tiles or its near colour baked by \
-         stated choices; its normals, where stated, the near-camera normal at every distance"
+         stated choices; its normals, where stated, the near-camera normal at every distance; its steep ground, where \
+         charted, above a threshold of this pass's choice (the game's triangle class rule is not read)"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let terrains: Vec<Entity> = w.iter::<AnvilTerrain>().map(|(e, _)| e).collect();
@@ -1472,6 +1578,7 @@ impl Pass for LowerAnvilTerrain {
                         vertices: None,
                         indices: indices.clone(),
                         squares: (0..square_count).collect(),
+                        steep: None,
                     }]
                 }
                 GroundColour::Splat(splat) => {
@@ -1541,6 +1648,7 @@ impl Pass for LowerAnvilTerrain {
                                 vertices: None,
                                 indices: indices.clone(),
                                 squares: (0..square_count).collect(),
+                                steep: None,
                             },
                             Pieces::PerNode => {
                                 // the whole's vertices this piece's squares use, in first use, and its triangles
@@ -1574,6 +1682,7 @@ impl Pass for LowerAnvilTerrain {
                                     vertices: Some(vertices),
                                     indices: piece_indices,
                                     squares: square_index,
+                                    steep: None,
                                 }
                             }
                         });
@@ -1608,6 +1717,12 @@ impl Pass for LowerAnvilTerrain {
                     pieces
                 }
             };
+            let mut pieces = pieces;
+            if let (Steep::Chart { threshold, max_atlas }, GroundColour::Splat(splat)) =
+                (self.steep, self.ground)
+            {
+                self.steep_pieces(w, &t, &grid, &mut pieces, (threshold, max_atlas, &splat), log)?;
+            }
             // each square's collision surface, by index
             let mut per_square = Vec::new();
             if self.collision.is_some() {
@@ -1620,8 +1735,9 @@ impl Pass for LowerAnvilTerrain {
                 w.insert_resource(surfaces);
             }
             // each piece a prototype of its own (the terrain's entity the first), its vertices local to its origin
-            for (k, piece) in pieces.into_iter().enumerate() {
+            for (k, mut piece) in pieces.into_iter().enumerate() {
                 let prototype = if k == 0 { e } else { w.spawn() };
+                let steep = piece.steep.take();
                 let world_positions: Vec<[f32; 3]> = match &piece.vertices {
                     None => positions.clone(),
                     Some(v) => v.iter().map(|&i| positions[i as usize]).collect(),
@@ -1678,26 +1794,75 @@ impl Pass for LowerAnvilTerrain {
                     }
                     (None, None) => return Err("a ground piece with no colour".into()),
                 };
-                streams.insert(Semantic::Position, Stream::F32x3(local));
-                if let Some(normals) = &normals {
-                    streams.insert(
-                        Semantic::Normal,
-                        Stream::F32x3(match &piece.vertices {
-                            None => normals.clone(),
-                            Some(v) => v.iter().map(|&i| normals[i as usize]).collect(),
-                        }),
+                if let Some(part) = steep {
+                    // the flat remainder keeps the top-down texture, the charts have their atlas
+                    let local_of = |vertices: &[u32]| -> Vec<[f32; 3]> {
+                        vertices
+                            .iter()
+                            .map(|&i| std::array::from_fn(|a| positions[i as usize][a] - origin[a]))
+                            .collect()
+                    };
+                    let primitive = |part: DrawPart, material: Entity| {
+                        let mut streams = BTreeMap::new();
+                        streams.insert(Semantic::Position, Stream::F32x3(local_of(&part.vertices)));
+                        if let Some(normals) = &normals {
+                            streams.insert(
+                                Semantic::Normal,
+                                Stream::F32x3(part.vertices.iter().map(|&i| normals[i as usize]).collect()),
+                            );
+                        }
+                        streams.insert(Semantic::TexCoord(0), Stream::F32x2(part.uvs));
+                        Primitive {
+                            topology: Topology::Triangles,
+                            streams,
+                            indices: Some(part.indices),
+                            material: Some(material),
+                        }
+                    };
+                    let textured = |w: &mut World, texture: Entity| {
+                        let material = w.spawn();
+                        w.insert(
+                            material,
+                            PbrMaterial {
+                                base_color_texture: Some(TextureRef {
+                                    wrap: [Wrap::Clamp; 2],
+                                    ..TextureRef::new(texture)
+                                }),
+                                metallic: 0.0,
+                                ..PbrMaterial::default()
+                            },
+                        );
+                        material
+                    };
+                    let mut primitives = Vec::with_capacity(2);
+                    if !part.flat.indices.is_empty() {
+                        primitives.push(primitive(part.flat, material));
+                    }
+                    let charts = textured(w, part.atlas);
+                    primitives.push(primitive(part.charts, charts));
+                    w.insert(prototype, Mesh::new(primitives));
+                } else {
+                    streams.insert(Semantic::Position, Stream::F32x3(local));
+                    if let Some(normals) = &normals {
+                        streams.insert(
+                            Semantic::Normal,
+                            Stream::F32x3(match &piece.vertices {
+                                None => normals.clone(),
+                                Some(v) => v.iter().map(|&i| normals[i as usize]).collect(),
+                            }),
+                        );
+                    }
+                    streams.insert(Semantic::TexCoord(0), Stream::F32x2(piece.uvs));
+                    w.insert(
+                        prototype,
+                        Mesh::new(vec![Primitive {
+                            topology: Topology::Triangles,
+                            streams,
+                            indices: Some(piece.indices),
+                            material: Some(material),
+                        }]),
                     );
                 }
-                streams.insert(Semantic::TexCoord(0), Stream::F32x2(piece.uvs));
-                w.insert(
-                    prototype,
-                    Mesh::new(vec![Primitive {
-                        topology: Topology::Triangles,
-                        streams,
-                        indices: Some(piece.indices),
-                        material: Some(material),
-                    }]),
-                );
                 let placed = w.spawn();
                 w.insert(
                     placed,
@@ -1709,6 +1874,198 @@ impl Pass for LowerAnvilTerrain {
                 w.insert(placed, placed_at(origin));
                 log.place(placed);
             }
+        }
+        Ok(())
+    }
+}
+
+impl LowerAnvilTerrain {
+    /// `steep=chart`: each per-node piece's triangles steeper than `threshold` degrees (by their face normal) are taken
+    /// out of its top-down primitive into charts in one atlas ([`charts`]), the atlas baked at the points of the surface its
+    /// texels map to with the vertical program's colour ([`splat::DetailPlane::Vertical`]); the piece keeps its
+    /// triangles for the collision, which is the whole ground's either way.
+    fn steep_pieces(
+        &self,
+        w: &mut World,
+        t: &AnvilTerrain,
+        grid: &GroundGrid,
+        pieces: &mut [GroundPiece],
+        (threshold, max_atlas, splat): (f64, u32, &Splat),
+        log: &mut PassLog,
+    ) -> Result<(), String> {
+        let width = grid.columns.len();
+        // every vertex's point and smooth normal, in the terrain's source frame (where z is up and the details are
+        // addressed)
+        let mut points = Vec::with_capacity(width * grid.rows.len());
+        for &gy in &grid.rows {
+            for &gx in &grid.columns {
+                points.push([grid.x_of(gx), grid.y_of(gy), grid.height(gx, gy)?]);
+            }
+        }
+        let normals: Vec<[f64; 3]> = grid
+            .normals_source()?
+            .into_iter()
+            .map(|n| n.map(f64::from))
+            .collect();
+        let point = |v: u32| points[v as usize];
+        let normal = |v: u32| normals[v as usize];
+        struct Made {
+            piece: usize,
+            flat: DrawPart,
+            charts: DrawPart,
+            atlas: Texture,
+        }
+        let mut made: Vec<Made> = Vec::new();
+        let (mut triangles, mut charted, mut texels) = (0u64, 0u64, 0u64);
+        let (mut overlaps, mut outside, mut fallback, mut halved) = (0u64, 0u64, 0u64, 0u64);
+        {
+            let mut baker = splat::Baker::new(w, t, splat, self.colour)?;
+            for (k, piece) in pieces.iter().enumerate() {
+                let Some(vertices) = &piece.vertices else {
+                    continue;
+                };
+                let tris: Vec<[u32; 3]> = piece
+                    .indices
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|tri| tri.map(|i| vertices[i as usize]))
+                    .collect();
+                let Some(split) = charts::split(&point, &tris, threshold, splat.pixel, max_atlas) else {
+                    continue;
+                };
+                // the atlas: opaque, each chart texel baked at its point of the surface
+                let [atlas_w, atlas_h] = split.size;
+                let mut rgba = vec![255u8; atlas_w as usize * atlas_h as usize * 4];
+                for chart in &split.charts {
+                    let found = charts::texels(chart, &tris, &point, &normal, split.pixel);
+                    overlaps += found.overlaps;
+                    for (idx, sample) in found.samples.iter().enumerate() {
+                        let Some(sample) = sample else {
+                            continue;
+                        };
+                        texels += 1;
+                        let (i, j) = (idx as u32 % chart.size[0], idx as u32 / chart.size[0]);
+                        let p = sample.point;
+                        match baker.texel(
+                            p[0],
+                            p[1],
+                            p[2],
+                            splat::DetailPlane::vertical(sample.normal),
+                            split.pixel,
+                        )? {
+                            Some(texel) => {
+                                let at = (((chart.at[1] + j) * atlas_w + chart.at[0] + i) * 4) as usize;
+                                rgba[at..at + 3].copy_from_slice(&texel.rgb);
+                                fallback += u64::from(texel.tile_fallback);
+                            }
+                            None => outside += 1,
+                        }
+                    }
+                }
+                // the flat remainder: the triangles that stay, over the vertices they use, in first use
+                let mut flat = DrawPart {
+                    vertices: Vec::new(),
+                    uvs: Vec::new(),
+                    indices: Vec::new(),
+                };
+                let mut kept: BTreeMap<u32, u32> = BTreeMap::new();
+                for (ti, tri) in piece.indices.as_chunks::<3>().0.iter().enumerate() {
+                    if split.steep[ti] {
+                        continue;
+                    }
+                    for &li in tri {
+                        let next = flat.vertices.len() as u32;
+                        let at = *kept.entry(li).or_insert_with(|| {
+                            flat.vertices.push(vertices[li as usize]);
+                            flat.uvs.push(piece.uvs[li as usize]);
+                            next
+                        });
+                        flat.indices.push(at);
+                    }
+                }
+                // the charts: each chart's triangles over its own copies of the vertices
+                let mut drawn = DrawPart {
+                    vertices: Vec::new(),
+                    uvs: Vec::new(),
+                    indices: Vec::new(),
+                };
+                for chart in &split.charts {
+                    let mut own: BTreeMap<u32, u32> = BTreeMap::new();
+                    for &ti in &chart.triangles {
+                        for v in tris[ti] {
+                            let next = drawn.vertices.len() as u32;
+                            let at = *own.entry(v).or_insert_with(|| {
+                                drawn.vertices.push(v);
+                                drawn
+                                    .uvs
+                                    .push(charts::uv_of(chart, split.size, split.pixel, point(v)));
+                                next
+                            });
+                            drawn.indices.push(at);
+                        }
+                    }
+                }
+                triangles += split.steep.iter().filter(|&&s| s).count() as u64;
+                charted += split.charts.len() as u64;
+                halved += u64::from(split.halvings > 0);
+                made.push(Made {
+                    piece: k,
+                    flat,
+                    charts: drawn,
+                    atlas: Texture {
+                        width: atlas_w,
+                        height: atlas_h,
+                        format: TexFormat::Rgba8Unorm,
+                        levels: vec![rgba],
+                        color_space: ColorSpace::Srgb,
+                        role: TexRole::Color,
+                        normal: None,
+                    },
+                });
+            }
+        }
+        let atlases = made.len() as u64;
+        for m in made {
+            let atlas = w.spawn();
+            w.insert(atlas, m.atlas);
+            pieces[m.piece].steep = Some(SteepPart {
+                flat: m.flat,
+                charts: m.charts,
+                atlas,
+            });
+        }
+        log.count("steep ground triangles drawn from charts", triangles);
+        log.count("ground charts", charted);
+        log.count("ground chart atlases", atlases);
+        log.count("ground chart pixels baked", texels);
+        log.approximate(
+            "steep ground drawn from charts above a threshold of this pass's choice (the game's triangle class rule is \
+             not read)",
+            triangles,
+        );
+        if halved > 0 {
+            log.approximate(
+                &format!(
+                    "chart atlases built at a coarser pixel than the top-down bake's (they would pass steep-max-atlas={max_atlas} pixels a side)"
+                ),
+                halved,
+            );
+        }
+        if overlaps > 0 {
+            log.omit(
+                "chart pixels claimed by a second face of the same chart (a fold of the surface): the first face's point",
+                overlaps,
+            );
+        }
+        if outside > 0 {
+            log.omit("chart pixels outside every read node: left white", outside);
+        }
+        if fallback > 0 {
+            log.omit(
+                "chart pixels a material of which has no detail diffuse: its far colour tile there",
+                fallback,
+            );
         }
         Ok(())
     }
@@ -2122,6 +2479,7 @@ impl LowerAnvilTerrain {
                 vertices: Some(vertices),
                 indices,
                 squares,
+                steep: None,
             });
         }
         log.count("ground layer pieces", pieces.len() as u64);
@@ -2188,6 +2546,23 @@ struct GroundPiece {
     indices: Vec<u32>,
     /// Its squares, by their index in the grid's row order (two triangles each, in `indices`' order).
     squares: Vec<usize>,
+    /// With `steep=chart` and steep triangles: what is drawn instead of `vertices`, `uvs` and `indices` (which stay
+    /// the collision's): the flat remainder and the charts.
+    steep: Option<SteepPart>,
+}
+
+/// A primitive's vertices (by number in the whole grid), their coordinates and triangles over them.
+struct DrawPart {
+    vertices: Vec<u32>,
+    uvs: Vec<[f32; 2]>,
+    indices: Vec<u32>,
+}
+
+/// A piece's steep ground drawn: the triangles that stay in its top-down texture, and the charts' atlas with theirs.
+struct SteepPart {
+    flat: DrawPart,
+    charts: DrawPart,
+    atlas: Entity,
 }
 
 /// Where a prototype of `positions` (in the world) is placed: its box's least corner rounded down to a multiple of
