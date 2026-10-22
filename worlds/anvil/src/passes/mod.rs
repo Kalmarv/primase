@@ -1007,6 +1007,15 @@ impl<'t> GroundGrid<'t> {
 /// and the far colour, which takes the rest's weight (an approximation, counted). Left out
 /// (counted): the ramps, the masks, the detail normals' flattening on flat ground and the per-cell uv rotation.
 ///
+/// `layers-detail=F` (required, in (0, 1]) weighs each detail layer at F times its material's blend, and the base layer
+/// takes what that leaves (with every weight on a detailed material: 1 - F). `layers-base=tile` (required) is the far
+/// colour tile, drawn as a layer only where weight goes to it (always, under F < 1; F = 1 is the layers above);
+/// `layers-base=bake` (with `splat-px=UNITS`) is the splat's bake of the piece itself, at the same `splat-k`,
+/// `splat-uv` and `splat-noise`, as the base of every piece (a piece then holds 3 detail layers and the base),
+/// without the occlusion tint (the vertex tint multiplies the whole blend, the base too, so it is not taken twice).
+/// A lerp toward each detail's colour at F cannot add the high frequencies the bake averaged away, only stand the
+/// details' own over it: counted as an approximation.
+///
 /// `pieces=whole` draws the ground as one primitive with one texture over `rect`; `pieces=per-node` (with
 /// `ground=splat`) as a primitive per terrain node, each square of the grid in the node of its corner sample with the
 /// least x and y, each piece with its own near colour baked over its squares' extent (a node's whole square is
@@ -1128,13 +1137,28 @@ pub enum GroundColour {
 }
 
 /// `ground=layers`' stated choices: the blend's `k`, the detail uv, the noise's decoding and the occlusion tint, as
-/// the splat's.
+/// the splat's, and the base the details lie over (`layers-base`) at what weight (`layers-detail`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerrainLayers {
     pub k: f64,
     pub uv: SplatUv,
     pub noise_srgb: bool,
     pub occlusion: bool,
+    /// The layer the details lie over: what the weight they don't take is drawn with.
+    pub base: LayersBase,
+    /// `layers-detail`: each detail layer's weight is its material's splat weight times this, in (0, 1]; the base
+    /// takes the rest (so 1 draws the details alone, where a base is only the far colour of what has no detail).
+    pub detail: f64,
+}
+
+/// The base layer of `ground=layers` (`layers-base`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LayersBase {
+    /// The nodes' far colour tiles (the mosaic `ground=tile` draws).
+    Tile,
+    /// The near colour baked over the piece, at `pixel` source units a pixel (`splat-px`): the splat's bake of the
+    /// same `splat-k`, `splat-uv` and `splat-noise`, without the occlusion (the vertex tint multiplies the blend).
+    Bake { pixel: f64 },
 }
 
 /// A terrain tile's side in samples (and in colour texels), the samples of it its node covers, and its colour tile's
@@ -1151,7 +1175,8 @@ impl LowerAnvilTerrain {
             "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES (neither stored as such), sample=corner|centre, ",
             "colour=srgb|linear, collision=none|collision-material|one, surface=NAME unless collision=none, ",
             "ground=tile|splat|layers (with splat-k=K, splat-px=UNITS (splat), splat-uv=FACTOR|over-tile-size, splat-noise=raw|srgb, ",
-            "splat-occlusion=block-8|none (splat, layers)), pieces=whole|per-node (per-node with ground=splat or layers), ",
+            "splat-occlusion=block-8|none (splat, layers), layers-base=tile|bake and layers-detail=F in (0, 1] (layers; ",
+            "splat-px with layers-base=bake)), pieces=whole|per-node (per-node with ground=splat or layers), ",
             "normals=near-camera|none, steep=none|chart (chart with ground=splat, pieces=per-node, steep-threshold=DEGREES and steep-max-atlas=PIXELS)"
         );
         let splat_keys = [
@@ -1160,6 +1185,8 @@ impl LowerAnvilTerrain {
             "splat-uv",
             "splat-noise",
             "splat-occlusion",
+            "layers-base",
+            "layers-detail",
         ];
         let mut known = vec![
             "range",
@@ -1191,12 +1218,20 @@ impl LowerAnvilTerrain {
         let ground = match get("ground")? {
             "tile" => {
                 if let Some(k) = splat_keys.iter().find(|k| o.contains_key(**k)) {
-                    return Err(format!("{k} is only taken with ground=splat"));
+                    return Err(format!("{k} is only taken with ground=splat or layers"));
                 }
                 GroundColour::Tile
             }
             "splat" => GroundColour::Splat(Splat {
-                k: number("splat-k")?,
+                k: {
+                    if let Some(k) = ["layers-base", "layers-detail"]
+                        .iter()
+                        .find(|k| o.contains_key(**k))
+                    {
+                        return Err(format!("{k} is only taken with ground=layers"));
+                    }
+                    number("splat-k")?
+                },
                 pixel: number("splat-px")?,
                 uv: match get("splat-uv")? {
                     "over-tile-size" => SplatUv::OverTileSize,
@@ -1214,10 +1249,25 @@ impl LowerAnvilTerrain {
                 },
             }),
             "layers" => {
-                if o.contains_key("splat-px") {
-                    return Err("splat-px is only taken with ground=splat".into());
+                let base = match get("layers-base")? {
+                    "tile" => {
+                        if o.contains_key("splat-px") {
+                            return Err("splat-px is only taken with ground=splat or layers-base=bake".into());
+                        }
+                        LayersBase::Tile
+                    }
+                    "bake" => LayersBase::Bake {
+                        pixel: number("splat-px")?,
+                    },
+                    v => return Err(format!("layers-base={v} is not tile or bake")),
+                };
+                let detail = number("layers-detail")?;
+                if detail > 1.0 {
+                    return Err(format!("layers-detail {detail}: a number in (0, 1]"));
                 }
                 GroundColour::Layers(TerrainLayers {
+                    base,
+                    detail,
                     k: number("splat-k")?,
                     uv: match get("splat-uv")? {
                         "over-tile-size" => SplatUv::OverTileSize,
@@ -1419,25 +1469,40 @@ impl Pass for LowerAnvilTerrain {
                     if s.occlusion { "block-8" } else { "none" }.to_owned(),
                 ),
             ],
-            GroundColour::Layers(l) => vec![
-                ("ground".to_owned(), "layers".to_owned()),
-                ("splat-k".to_owned(), l.k.to_string()),
-                (
-                    "splat-uv".to_owned(),
-                    match l.uv {
-                        SplatUv::Factor(f) => f.to_string(),
-                        SplatUv::OverTileSize => "over-tile-size".to_owned(),
-                    },
-                ),
-                (
-                    "splat-noise".to_owned(),
-                    if l.noise_srgb { "srgb" } else { "raw" }.to_owned(),
-                ),
-                (
-                    "splat-occlusion".to_owned(),
-                    if l.occlusion { "block-8" } else { "none" }.to_owned(),
-                ),
-            ],
+            GroundColour::Layers(l) => {
+                let mut v = vec![
+                    ("ground".to_owned(), "layers".to_owned()),
+                    ("layers-detail".to_owned(), l.detail.to_string()),
+                    (
+                        "layers-base".to_owned(),
+                        match l.base {
+                            LayersBase::Tile => "tile",
+                            LayersBase::Bake { .. } => "bake",
+                        }
+                        .to_owned(),
+                    ),
+                    ("splat-k".to_owned(), l.k.to_string()),
+                    (
+                        "splat-uv".to_owned(),
+                        match l.uv {
+                            SplatUv::Factor(f) => f.to_string(),
+                            SplatUv::OverTileSize => "over-tile-size".to_owned(),
+                        },
+                    ),
+                    (
+                        "splat-noise".to_owned(),
+                        if l.noise_srgb { "srgb" } else { "raw" }.to_owned(),
+                    ),
+                    (
+                        "splat-occlusion".to_owned(),
+                        if l.occlusion { "block-8" } else { "none" }.to_owned(),
+                    ),
+                ];
+                if let LayersBase::Bake { pixel } = l.base {
+                    v.push(("splat-px".to_owned(), pixel.to_string()));
+                }
+                v
+            }
         })
         .collect()
     }
@@ -2186,6 +2251,8 @@ impl LowerAnvilTerrain {
         log: &mut PassLog,
     ) -> Result<Vec<GroundPiece>, String> {
         let lookup = splat::Lookup::new(w, t, layers.k, layers.noise_srgb, self.colour)?;
+        // a base layer every piece has: the bake, or the far colour where the details take less than all the weight
+        let base_always = matches!(layers.base, LayersBase::Bake { .. }) || layers.detail < 1.0;
         let (width, height) = (g.columns.len(), g.rows.len());
         let x_of = |gx: u32| t.origin[0] + g.spacing * f64::from(gx) + g.shift;
         let y_of = |gy: u32| t.origin[1] + g.spacing * f64::from(gy) + g.shift;
@@ -2268,10 +2335,10 @@ impl LowerAnvilTerrain {
             }
             (m, far)
         };
-        // the layers a rectangle needs: its detail materials and the far colour where any weight goes to it
+        // the layers a rectangle needs: its detail materials and the base where any weight goes to it
         let slots = |b: [usize; 4]| {
             let (m, far) = used(b);
-            m.len() + usize::from(far > 0.0)
+            m.len() + usize::from(base_always || far > 0.0)
         };
         let mut leaves = Vec::new();
         let mut stack: Vec<[usize; 4]> = starts.into_values().collect();
@@ -2293,6 +2360,31 @@ impl LowerAnvilTerrain {
             }
         }
         leaves.sort_unstable();
+        // the base layer's bake of each piece (`layers-base=bake`), over the piece's own extent
+        let mut bakes = Vec::new().into_iter();
+        let mut baked_total = splat::Baked::default();
+        if let LayersBase::Bake { pixel } = layers.base {
+            let rects: Vec<[f64; 4]> = leaves
+                .iter()
+                .map(|&[r0, r1, c0, c1]| {
+                    [
+                        x_of(g.columns[c0]),
+                        y_of(g.rows[r0]),
+                        x_of(g.columns[c1]),
+                        y_of(g.rows[r1]),
+                    ]
+                })
+                .collect();
+            let splat = Splat {
+                k: layers.k,
+                pixel,
+                uv: layers.uv,
+                noise_srgb: layers.noise_srgb,
+                // the vertex tint multiplies the whole blend, the bake included
+                occlusion: false,
+            };
+            bakes = splat::bake(w, t, &rects, &splat, self.colour)?.into_iter();
+        }
         // each terrain material's layer, made once; the far colour's layer (the ground's colour mosaic, as
         // `ground=tile` draws it), made once where a piece takes it
         let mut layer_materials: BTreeMap<u8, Entity> = BTreeMap::new();
@@ -2308,13 +2400,13 @@ impl LowerAnvilTerrain {
             by_weight.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
             // the far colour takes what no detail layer holds: the weight of materials without a detail, and of those
             // the cap drops
-            let far = far_used > 0.0 || by_weight.len() > 4;
+            let far = base_always || far_used > 0.0 || by_weight.len() > 4;
             let detail_slots = if far { 3 } else { 4 };
             if by_weight.len() > detail_slots {
                 trimmed += 1;
             }
             let kept: Vec<u8> = by_weight.iter().take(detail_slots).map(|&(m, _)| m).collect();
-            if far && far_layer.is_none() {
+            if far && far_layer.is_none() && layers.base == LayersBase::Tile {
                 let mosaic = ColourMosaic::new(g.tiles, g.rows, g.columns, self.colour)?;
                 let texture = w.spawn();
                 w.insert(texture, mosaic.texture.clone());
@@ -2333,6 +2425,32 @@ impl LowerAnvilTerrain {
                 far_layer = Some((e, mosaic));
             }
             let (ox, oy) = (x_of(g.columns[c0]), y_of(g.rows[r0]));
+            // this piece's bake as its base layer: its material, and its texture's extent in source units
+            let bake_layer = match layers.base {
+                LayersBase::Bake { pixel } => {
+                    let (image, baked) = bakes.next().ok_or("a ground piece without its bake")?;
+                    baked_total.pixels += baked.pixels;
+                    baked_total.tile_fallback += baked.tile_fallback;
+                    baked_total.outside += baked.outside;
+                    let extent = [f64::from(image.width) * pixel, f64::from(image.height) * pixel];
+                    let texture = w.spawn();
+                    w.insert(texture, image);
+                    let e = w.spawn();
+                    w.insert(
+                        e,
+                        PbrMaterial {
+                            base_color_texture: Some(TextureRef {
+                                wrap: [Wrap::Clamp; 2],
+                                ..TextureRef::new(texture)
+                            }),
+                            metallic: 0.0,
+                            ..PbrMaterial::default()
+                        },
+                    );
+                    Some((e, extent))
+                }
+                LayersBase::Tile => None,
+            };
             let mut layer_list = Vec::with_capacity(kept.len());
             for &m in &kept {
                 let (diffuse, normal, scale) =
@@ -2429,13 +2547,21 @@ impl LowerAnvilTerrain {
                 let (r, c) = (v as usize / width, v as usize % width);
                 let mut out = [0.0f64; 4];
                 for (slot, m) in kept.iter().enumerate() {
-                    out[slot] = at(r, c).iter().find(|(n, _)| n == m).map_or(0.0, |(_, x)| *x);
+                    out[slot] =
+                        layers.detail * at(r, c).iter().find(|(n, _)| n == m).map_or(0.0, |(_, x)| *x);
                 }
                 let held: f64 = out.iter().sum();
-                if let (true, Some((_, mosaic))) = (far, &far_layer) {
-                    // the far colour: the rest, what the kept detail layers don't hold
+                if far {
+                    // the base: the rest, what the kept detail layers don't hold
                     out[kept.len()] = (1.0 - held).max(0.0);
-                    far_uvs.push(mosaic.uv(g.columns[c], g.rows[r]));
+                    far_uvs.push(match (&bake_layer, &far_layer) {
+                        (Some((_, extent)), _) => [
+                            ((x_of(g.columns[c]) - ox) / extent[0]) as f32,
+                            ((y_of(g.rows[r]) - oy) / extent[1]) as f32,
+                        ],
+                        (None, Some((_, mosaic))) => mosaic.uv(g.columns[c], g.rows[r]),
+                        (None, None) => return Err("a base layer without its colour".into()),
+                    });
                 }
                 let sum: f64 = out.iter().sum();
                 if sum == 0.0 {
@@ -2450,14 +2576,19 @@ impl LowerAnvilTerrain {
                 piece_weights.push(out.map(|x| x as f32));
                 uvs.push([(x_of(g.columns[c]) - ox) as f32, (y_of(g.rows[r]) - oy) as f32]);
             }
-            if let (true, Some((material, _))) = (far, &far_layer) {
-                let material = *material;
+            if far {
+                let material = match (&bake_layer, &far_layer) {
+                    (Some((e, _)), _) | (None, Some((e, _))) => *e,
+                    (None, None) => return Err("a base layer without its colour".into()),
+                };
                 layer_list.push(Some(Layer {
                     material,
                     texcoord: Some(1),
                     transform: None,
                 }));
-                far_pieces += 1;
+                if bake_layer.is_none() {
+                    far_pieces += 1;
+                }
             }
             let layered = w.spawn();
             w.insert(
@@ -2488,10 +2619,40 @@ impl LowerAnvilTerrain {
             "ground layer weights evaluated at the vertices and interpolated (the engine's blend is per pixel)",
             1,
         );
+        if layers.detail < 1.0 {
+            // the base is the far colour tile or the bake: a lerp over it moves it toward the details' own colours by
+            // that weight, it cannot add what the base lacks
+            log.approximate(
+                "ground detail layers weighted by layers-detail times their splat weight over the base layer (a lerp \
+                 toward the detail's colour at that weight; the high frequencies a bake averaged away are not added \
+                 back exactly)",
+                pieces.len() as u64,
+            );
+        }
+        if let LayersBase::Bake { .. } = layers.base {
+            log.count("ground near-colour pixels baked", baked_total.pixels);
+            log.approximate(
+                "ground base layer: the near colour baked by the notes' reading of the terrain shader, its choices \
+                 stated, without the occlusion (the vertex tint multiplies the blend)",
+                pieces.len() as u64,
+            );
+            if baked_total.tile_fallback > 0 {
+                log.omit(
+                    "ground pixels a material of which has no detail diffuse: its far colour tile there",
+                    baked_total.tile_fallback,
+                );
+            }
+            if baked_total.outside > 0 {
+                log.omit(
+                    "ground pixels outside every read node: black",
+                    baked_total.outside,
+                );
+            }
+        }
         if trimmed > 0 {
             log.approximate(
-                "ground pieces using more materials than they can hold at 16 squares a side: their 3 heaviest kept, \
-                 the rest's weight on the far colour",
+                "ground pieces using more materials than they can hold at 16 squares a side: their heaviest kept, \
+                 the rest's weight on the base layer",
                 trimmed,
             );
         }

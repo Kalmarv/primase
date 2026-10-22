@@ -5,10 +5,11 @@
 //! holds; at most 4 layers a piece (the striped node cut); the pieces' triangles the whole ground's to the bit.
 use primase_anvil::components::{AnvilTerrain, AnvilTextureMap, TerrainDetail, TerrainTile};
 use primase_anvil::passes::{
-    CellPoint, GroundColour, GroundNormals, LowerAnvilTerrain, Pieces, SplatUv, Steep, TerrainLayers,
+    CellPoint, GroundColour, GroundNormals, LayersBase, LowerAnvilTerrain, Pieces, SplatUv, Steep, TerrainLayers,
 };
 use primase_core::frame::SourceFrame;
 use primase_core::layered::LayeredMaterial;
+use primase_core::pass::Options;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{
     ColorSpace, Entity, Instance, Mesh, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Transform,
@@ -188,6 +189,17 @@ fn lowered(pieces: Pieces) -> World {
 }
 
 fn lowered_with(pieces: Pieces, occlusion: bool, undetailed: Option<u8>) -> World {
+    lowered_over(pieces, occlusion, undetailed, LayersBase::Tile, 1.0)
+}
+
+/// The ground with the details at weight `detail` over `base`.
+fn lowered_over(
+    pieces: Pieces,
+    occlusion: bool,
+    undetailed: Option<u8>,
+    base: LayersBase,
+    detail: f64,
+) -> World {
     let (mut w, _) = world(undetailed);
     let pass = LowerAnvilTerrain {
         rect: [0.0, 0.0, 128.0, 64.0],
@@ -203,6 +215,8 @@ fn lowered_with(pieces: Pieces, occlusion: bool, undetailed: Option<u8>) -> Worl
             uv: SplatUv::Factor(0.25),
             noise_srgb: false,
             occlusion,
+            base,
+            detail,
         }),
         pieces,
         normals: GroundNormals::None,
@@ -258,10 +272,15 @@ fn layer_index(w: &World, layered: &LayeredMaterial) -> Vec<Option<u8>> {
         .collect()
 }
 
-/// Checks every piece's weights against the blend: each detail layer's weight the blend's, the far colour's the rest
-/// (the materials without a detail, and those the piece doesn't keep); at most 4 layers, the far colour last and only
-/// where it holds weight. Returns the pieces, the vertices checked and the far layer's vertices.
-fn check_weights(w: &World, undetailed: Option<u8>) -> (Vec<(Primitive, [f32; 3])>, usize, usize) {
+/// Checks every piece's weights against the blend: each detail layer's weight the blend's times `detail`, the base's
+/// the rest (the materials without a detail, and those the piece doesn't keep, and what `detail` leaves of the kept
+/// ones); at most 4 layers, the base last and only where it holds weight. Returns the pieces, the vertices checked and
+/// the base layer's vertices.
+fn check_weights(
+    w: &World,
+    undetailed: Option<u8>,
+    detail: f64,
+) -> (Vec<(Primitive, [f32; 3])>, usize, usize) {
     let pieces = placed(w);
     let (mut checked, mut far_vertices) = (0, 0);
     let mut worst = 0.0f64;
@@ -284,7 +303,10 @@ fn check_weights(w: &World, undetailed: Option<u8>) -> (Vec<(Primitive, [f32; 3]
             let mut rest = 0.0;
             for (m, v) in blend(f64::from(q[0] + o[0]), f64::from(q[1] + o[1])) {
                 match index.iter().position(|n| *n == Some(m)) {
-                    Some(slot) if undetailed != Some(m) => worst = worst.max((f64::from(wt[slot]) - v).abs()),
+                    Some(slot) if undetailed != Some(m) => {
+                        worst = worst.max((f64::from(wt[slot]) - detail * v).abs());
+                        rest += (1.0 - detail) * v;
+                    }
                     _ => rest += v,
                 }
             }
@@ -315,7 +337,7 @@ fn check_weights(w: &World, undetailed: Option<u8>) -> (Vec<(Primitive, [f32; 3]
 #[test]
 fn layers_weigh_each_vertex_as_the_engine_blends() {
     let w = lowered(Pieces::PerNode);
-    let (pieces, _, far_vertices) = check_weights(&w, None);
+    let (pieces, _, far_vertices) = check_weights(&w, None, 1.0);
     // the cap at 16 squares: the striped node's pieces holding more than 4 materials keep 3 and the far colour
     assert!(far_vertices > 0, "no piece over the cap");
     let mut all = Vec::new();
@@ -382,7 +404,7 @@ fn layers_carry_their_normals_and_the_occlusion_tint() {
 #[test]
 fn undetailed_weight_goes_to_the_far_colour() {
     let w = lowered_with(Pieces::PerNode, false, Some(1));
-    let (pieces, _, far_vertices) = check_weights(&w, Some(1));
+    let (pieces, _, far_vertices) = check_weights(&w, Some(1), 1.0);
     assert!(far_vertices > 0, "no far colour");
     let mut texels = 0;
     for (p, o) in &pieces {
@@ -437,4 +459,198 @@ fn undetailed_weight_goes_to_the_far_colour() {
         }
     }
     assert_eq!(texels, far_vertices);
+}
+
+/// `layers-base=bake{layers-detail=F}`: each detail layer weighs F times its material's blend, the base the rest; the
+/// base last, one bake a piece (its texture the piece's extent at `splat-px` rounded up, clamped, its vertices'
+/// `TexCoord(1)` their metres from the piece's corner over that extent), and the bake's pixels the blend of the
+/// materials' colours there (each detail a solid colour here); at most 4 layers (3 details and the base), the striped
+/// node cut to hold them.
+#[test]
+fn details_over_a_bake_weigh_f_times_the_blend_and_the_bake_takes_the_rest() {
+    const F: f64 = 0.4;
+    const PIXEL: f64 = 0.5;
+    let w = lowered_over(Pieces::PerNode, false, None, LayersBase::Bake { pixel: PIXEL }, F);
+    let (pieces, _, base_vertices) = check_weights(&w, None, F);
+    let vertices: usize = pieces
+        .iter()
+        .map(|(p, _)| p.positions().expect("positions").len())
+        .sum();
+    assert_eq!(base_vertices, vertices, "every vertex carries the base");
+    // the striped node (six materials) is cut until a piece holds 3
+    assert!(pieces.len() > 2, "{} pieces", pieces.len());
+    let mut deep = 0;
+    for (p, o) in &pieces {
+        let layered = w
+            .get::<LayeredMaterial>(p.material.expect("material"))
+            .expect("layered");
+        let base = layered.layers.last().and_then(Option::as_ref).expect("a base");
+        assert_eq!(base.texcoord, Some(1));
+        let pbr = w
+            .get::<primase_core::pbr::PbrMaterial>(base.material)
+            .expect("pbr");
+        let r = pbr.base_color_texture.as_ref().expect("the bake");
+        assert_eq!(r.wrap, [primase_core::pbr::Wrap::Clamp; 2]);
+        let t = w.get::<Texture>(r.texture).expect("texture");
+        assert_eq!(
+            (t.format, t.color_space, t.role),
+            (TexFormat::Rgba8Unorm, ColorSpace::Srgb, TexRole::Color)
+        );
+        let pos = p.positions().expect("positions");
+        let Some(Stream::F32x2(uvs)) = p.streams.get(&Semantic::TexCoord(1)) else {
+            panic!("base coordinates")
+        };
+        // the piece's corner is its least vertex; its extent in metres the texture's pixels at the pixel size
+        let corner = [0, 1].map(|a| {
+            pos.iter()
+                .map(|q| f64::from(q[a] + o[a]))
+                .fold(f64::INFINITY, f64::min)
+        });
+        let side = [0, 1].map(|a| {
+            pos.iter()
+                .map(|q| f64::from(q[a] + o[a]))
+                .fold(f64::NEG_INFINITY, f64::max)
+                - corner[a]
+        });
+        assert_eq!(
+            (t.width, t.height),
+            ((side[0] / PIXEL).ceil() as u32, (side[1] / PIXEL).ceil() as u32)
+        );
+        let extent = [f64::from(t.width) * PIXEL, f64::from(t.height) * PIXEL];
+        for (q, uv) in pos.iter().zip(uvs) {
+            for a in 0..2 {
+                let want = (f64::from(q[a] + o[a]) - corner[a]) / extent[a];
+                assert!((f64::from(uv[a]) - want).abs() < 1e-6, "{uv:?} for {q:?}");
+            }
+        }
+        // a pixel well inside node (0, 0)'s left half (material 0: colour (0, 100, 200) as stored sRGB) is that colour
+        if corner == [0.0, 0.0] && side == [64.0, 64.0] {
+            let (px, py) = (20.0 / PIXEL, 20.0 / PIXEL);
+            let at = (py as usize * t.width as usize + px as usize) * 4;
+            let got = &t.levels[0][at..at + 3];
+            for (g, e) in got.iter().zip([0u8, 100, 200]) {
+                assert!(g.abs_diff(e) <= 1, "{got:?}");
+            }
+            deep += 1;
+        }
+    }
+    assert_eq!(deep, 1, "node (0, 0)'s piece");
+}
+
+/// F = 1 over the colour tile draws what the layers drew before the options: the details' weights the blend's, the far
+/// colour only where weight goes to it.
+#[test]
+fn full_detail_over_the_tile_is_the_layers_as_they_were() {
+    let w = lowered_over(Pieces::PerNode, false, None, LayersBase::Tile, 1.0);
+    let before = lowered(Pieces::PerNode);
+    let key = |w: &World| {
+        let mut v: Vec<_> = placed(w)
+            .iter()
+            .flat_map(|(p, o)| {
+                let Some(Stream::F32x4(wt)) = p.streams.get(&Semantic::Color(1)) else {
+                    panic!("weights")
+                };
+                let pos = p.positions().expect("positions");
+                pos.iter()
+                    .zip(wt)
+                    .map(|(q, wt)| {
+                        (
+                            std::array::from_fn::<u32, 3, _>(|k| (q[k] + o[k]).to_bits()),
+                            wt.map(f32::to_bits),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        v.sort_unstable();
+        v
+    };
+    assert_eq!(key(&w), key(&before));
+}
+
+/// A detail under F < 1 over the tile: the far colour layer then holds (1 - F) of the blend where the details had it.
+#[test]
+fn partial_detail_over_the_tile_puts_the_rest_on_the_far_colour() {
+    const F: f64 = 0.6;
+    let w = lowered_over(Pieces::PerNode, false, None, LayersBase::Tile, F);
+    let (pieces, _, base_vertices) = check_weights(&w, None, F);
+    let vertices: usize = pieces
+        .iter()
+        .map(|(p, _)| p.positions().expect("positions").len())
+        .sum();
+    assert_eq!(base_vertices, vertices, "every vertex carries the far colour");
+}
+
+fn options(pairs: &[(&str, &str)]) -> Options {
+    let mut o: Options = [
+        ("rect", "0,0,128,64"),
+        ("step", "1"),
+        ("range", "1"),
+        ("offset", "0"),
+        ("sample", "corner"),
+        ("colour", "srgb"),
+        ("collision", "none"),
+        ("pieces", "per-node"),
+        ("normals", "none"),
+        ("steep", "none"),
+        ("ground", "layers"),
+        ("splat-k", "12"),
+        ("splat-uv", "0.25"),
+        ("splat-noise", "raw"),
+        ("splat-occlusion", "none"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    .collect();
+    o.extend(pairs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
+    o
+}
+
+/// `layers-base` and `layers-detail` are required with `ground=layers`, `splat-px` goes with `bake` only, the weight
+/// is in (0, 1], and the options read back as given.
+#[test]
+fn the_layer_options_are_required_stated_and_read_back() {
+    let err = |pairs: &[(&str, &str)]| LowerAnvilTerrain::from_options(&options(pairs)).expect_err("refused");
+    assert!(err(&[("layers-detail", "0.5")]).contains("layers-base is required"));
+    assert!(err(&[("layers-base", "tile")]).contains("layers-detail is required"));
+    assert!(err(&[("layers-base", "bake"), ("layers-detail", "0.5")]).contains("splat-px is required"));
+    assert!(
+        err(&[
+            ("layers-base", "tile"),
+            ("layers-detail", "0.5"),
+            ("splat-px", "0.0625")
+        ])
+        .contains("splat-px")
+    );
+    assert!(err(&[("layers-base", "mix"), ("layers-detail", "0.5")]).contains("layers-base=mix"));
+    assert!(err(&[("layers-base", "tile"), ("layers-detail", "1.5")]).contains("layers-detail"));
+    assert!(err(&[("layers-base", "tile"), ("layers-detail", "0")]).contains("layers-detail"));
+    let mut splat = options(&[("ground", "splat"), ("splat-px", "0.0625")]);
+    splat.insert("layers-detail".to_owned(), "0.5".to_owned());
+    assert!(
+        LowerAnvilTerrain::from_options(&splat)
+            .expect_err("refused")
+            .contains("only taken with ground=layers")
+    );
+    let given = options(&[
+        ("layers-base", "bake"),
+        ("layers-detail", "0.35"),
+        ("splat-px", "0.0625"),
+    ]);
+    let pass = LowerAnvilTerrain::from_options(&given).expect("options");
+    assert_eq!(
+        pass.ground,
+        GroundColour::Layers(TerrainLayers {
+            k: 12.0,
+            uv: SplatUv::Factor(0.25),
+            noise_srgb: false,
+            occlusion: false,
+            base: LayersBase::Bake { pixel: 0.0625 },
+            detail: 0.35,
+        })
+    );
+    let back = pass.options();
+    for (k, v) in &given {
+        assert_eq!(back.get(k), Some(v), "{k}");
+    }
 }
