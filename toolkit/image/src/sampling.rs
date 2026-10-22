@@ -6,7 +6,7 @@
 
 use primase_core::{ColorSpace, TexRole, Texture};
 
-use crate::{Error, Result, TextureMetadata, map_rgba8_levels, srgb_to_linear};
+use crate::{Error, Result, TextureMetadata, map_rgba8_levels, srgb8_to_linear};
 
 /// Where a coordinate outside 0..1 reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,11 +117,10 @@ impl Levels {
         ] {
             let t = self.texel(level, ix + dx, iy + dy, address);
             for c in 0..4 {
-                let v = f64::from(t[c]) / 255.0;
                 out[c] += wt
                     * match transfer {
-                        Transfer::SrgbColour if c < 3 => srgb_to_linear(v),
-                        _ => v,
+                        Transfer::SrgbColour if c < 3 => srgb8_to_linear(t[c]),
+                        _ => f64::from(t[c]) / 255.0,
                     };
             }
         }
@@ -137,7 +136,7 @@ impl Levels {
             .iter()
             .map(|p| {
                 std::array::from_fn(|c| match transfer {
-                    Transfer::SrgbColour if c < 3 => srgb_to_linear(f64::from(p[c]) / 255.0) as f32,
+                    Transfer::SrgbColour if c < 3 => srgb8_to_linear(p[c]) as f32,
                     _ => p[c] as f32 / 255.0,
                 })
             })
@@ -252,7 +251,10 @@ mod tests {
         // a 50% grey texel: its sRGB colour decodes to linear 0.2158...; its alpha stays 128/255
         let g = Levels::one(1, 1, vec![128, 128, 128, 128]).unwrap();
         let c = g.bilinear(0, [0.5, 0.5], wrap, Transfer::SrgbColour);
-        assert!((c[0] - srgb_to_linear(128.0 / 255.0)).abs() < 1e-15 && (c[3] - 128.0 / 255.0).abs() < 1e-15);
+        assert!(
+            (c[0] - crate::srgb_to_linear(128.0 / 255.0)).abs() < 1e-15
+                && (c[3] - 128.0 / 255.0).abs() < 1e-15
+        );
     }
 
     /// A footprint of one base texel is level 0, of four texels level 2 (the longer derivative counts, in texels of

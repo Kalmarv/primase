@@ -171,7 +171,7 @@ use primase_core::{
     Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, Semantic, Stream, TexFormat, TexRole,
     Texture, VertexColor, World,
 };
-use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, srgb_to_linear};
+use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, srgb8_to_linear};
 
 use super::decals::DECAL_QUEUE;
 use super::formulas::{Rough, emission, metalness, occlusion, roughness, sat, tinted};
@@ -319,7 +319,7 @@ impl LowerAnvilMaterial {
 /// sRGB, alpha as stored.
 fn sampled(rgba: [u8; 4], srgb: bool) -> [f64; 4] {
     let f = |x: u8| f64::from(x) / 255.0;
-    let c = |x: u8| if srgb { srgb_to_linear(f(x)) } else { f(x) };
+    let c = |x: u8| if srgb { srgb8_to_linear(x) } else { f(x) };
     [c(rgba[0]), c(rgba[1]), c(rgba[2]), f(rgba[3])]
 }
 

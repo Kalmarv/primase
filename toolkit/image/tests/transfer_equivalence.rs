@@ -178,3 +178,119 @@ fn baseline_writer_rounding_matches_its_pre_extraction_formulas() {
         }
     }
 }
+
+/// [`scene_encode`] on an f64 input.
+fn scene_encode_f64(linear: f64) -> u8 {
+    let c = linear.clamp(0.0, 1.0);
+    let s = if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0).round() as u8
+}
+
+/// The inputs bracketing every half-byte boundary of the curve, `spread` ulps each way, in f64.
+fn near_boundaries_f64(spread: u64) -> Vec<f64> {
+    let mut out = Vec::new();
+    for i in 0..255 {
+        let s = (f64::from(i) + 0.5) / 255.;
+        let c = if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        };
+        let bits = c.to_bits();
+        out.extend((bits - spread..=bits + spread).map(f64::from_bits));
+    }
+    out
+}
+
+/// The tables give the curves' own results: every decoded byte bit for bit, and the encoded byte of every input tried:
+/// 2^22 inputs spread evenly over [0, 1], 4001 ulps around each of the 255 half-byte boundaries (where a rounding
+/// threshold lies), and the values outside (0, 1) (negative, above 1, infinite, NaN), in f64 and f32. The oracle is the
+/// curve as written before the tables ([`scene_encode`], [`map_encode`]).
+#[test]
+fn byte_tables_give_the_curves_own_results() {
+    use primase_image::{srgb8_to_linear, srgb8_to_linear_f32};
+    for i in 0..=255u8 {
+        assert_eq!(
+            srgb8_to_linear(i).to_bits(),
+            srgb_to_linear(f64::from(i) / 255.).to_bits(),
+            "decode {i}"
+        );
+        assert_eq!(
+            srgb8_to_linear_f32(i).to_bits(),
+            map_decode(i).to_bits(),
+            "f32 decode {i}"
+        );
+    }
+    let specials = [
+        -1.0,
+        -0.0,
+        0.0,
+        1.0,
+        1.5,
+        f64::MIN,
+        f64::MAX,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ];
+    let even = (0..=1u32 << 22).map(|k| f64::from(k) / f64::from(1u32 << 22));
+    for c in specials.into_iter().chain(even).chain(near_boundaries_f64(2000)) {
+        assert_eq!(
+            linear_to_srgb8(c),
+            scene_encode_f64(c),
+            "f64 input {:016x}",
+            c.to_bits()
+        );
+        let v = c as f32;
+        assert_eq!(
+            linear_to_srgb8_f32(v),
+            map_encode(v),
+            "f32 input {:08x}",
+            v.to_bits()
+        );
+    }
+    for c in near_boundaries_f64(0) {
+        let bits = (c as f32).to_bits();
+        for v in (bits - 2000..=bits + 2000).map(f32::from_bits) {
+            assert_eq!(
+                linear_to_srgb8_f32(v),
+                map_encode(v),
+                "f32 input {:08x}",
+                v.to_bits()
+            );
+        }
+    }
+}
+
+/// [`linear_to_srgb8_f32`] against its curve on every f32 from 0 to 1 (1,065,353,217 inputs). Slow: run with
+/// `--ignored` in release.
+#[test]
+#[ignore = "every f32 in [0, 1]: run with --ignored in release"]
+fn f32_byte_table_gives_the_curves_result_on_every_input() {
+    let ones = 1.0f32.to_bits();
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()) as u32;
+    let wrong: u64 = std::thread::scope(|s| {
+        (0..threads)
+            .map(|t| {
+                s.spawn(move || {
+                    (t..=ones)
+                        .step_by(threads as usize)
+                        .filter(|&b| {
+                            let v = f32::from_bits(b);
+                            linear_to_srgb8_f32(v) != map_encode(v)
+                                || linear_to_srgb8(f64::from(v)) != scene_encode(v)
+                        })
+                        .count() as u64
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("worker"))
+            .sum()
+    });
+    assert_eq!(wrong, 0);
+}

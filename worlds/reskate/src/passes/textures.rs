@@ -30,7 +30,7 @@ pub struct PrepareReskateTextures;
 /// A tint (sRGB bytes) multiplied into RGBA8 pixels: in linear light, or for a `linear` texture into its bytes as
 /// they are; alpha untouched.
 pub fn tint_pixels(rgba: &mut [u8], tint: [u8; 3], linear: bool) {
-    let to_lin = |i: u8| primase_image::srgb_to_linear_f32(f32::from(i) / 255.0);
+    let to_lin = primase_image::srgb8_to_linear_f32;
     let [tr, tg, tb] = tint.map(to_lin);
     let byte = |v: f32| ((v * 255.0 + 0.5) as i32).clamp(0, 255) as u8;
     let mut lut = [[0u8; 3]; 256];

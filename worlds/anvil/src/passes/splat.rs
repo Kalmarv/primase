@@ -30,7 +30,7 @@ use std::rc::Rc;
 
 use primase_core::{ColorSpace, Entity, TexFormat, TexRole, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer};
-use primase_image::srgb_to_linear;
+use primase_image::srgb8_to_linear;
 
 use crate::components::{AnvilTerrain, AnvilTextureMap, TerrainTile};
 
@@ -470,7 +470,7 @@ impl<'a> Baker<'a> {
             None => {
                 *fell_back = true;
                 let decode = |c: u8| match self.tile_colour {
-                    ColorSpace::Srgb => srgb_to_linear(unorm(c)),
+                    ColorSpace::Srgb => srgb8_to_linear(c),
                     _ => unorm(c),
                 };
                 [0, 1, 2].map(|k| {

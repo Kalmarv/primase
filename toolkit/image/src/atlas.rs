@@ -52,7 +52,7 @@ use primase_core::{
     NormalConvention, Semantic, Stream, TexFormat, TexRole, Texture, TextureFile, VertexColor, World,
 };
 
-use crate::{Image, Samples, linear_to_srgb8, resize_normals, rgba8_exact, scale_normal, srgb_to_linear};
+use crate::{Image, Samples, linear_to_srgb8, resize_normals, rgba8_exact, scale_normal, srgb8_to_linear};
 
 /// Texels repeating each rectangle's edge on every side.
 pub const GUTTER: u32 = 2;
@@ -287,7 +287,7 @@ fn bake(px: [u8; 4], m: &PbrMaterial, slot: TextureSlot, meta: Meta) -> [u8; 4] 
     let byte = |v: f64| (v * 255.0).round().clamp(0.0, 255.0) as u8;
     let colour = |c: u8, f: f32| {
         if srgb {
-            linear_to_srgb8(srgb_to_linear(f64::from(c) / 255.0) * f64::from(f))
+            linear_to_srgb8(srgb8_to_linear(c) * f64::from(f))
         } else {
             byte(f64::from(c) / 255.0 * f64::from(f))
         }

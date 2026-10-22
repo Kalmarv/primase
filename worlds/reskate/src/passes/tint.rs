@@ -58,12 +58,7 @@ fn srgb(c: [f64; 3]) -> [u8; 3] {
 
 /// An sRGB byte in linear light (the IEC 61966-2-1 curve).
 fn linear(b: u8) -> f64 {
-    let c = f64::from(b) / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
+    primase_image::srgb8_to_linear(b)
 }
 
 /// A colour of a split, linear 0..1.
