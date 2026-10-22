@@ -436,7 +436,7 @@ same gates as our code. Pinned in the root `Cargo.toml` `[workspace.dependencies
 off) and used with `workspace = true`. **No umbrella crates** (`image`, `image_dds`, engine frameworks like
 `bevy_ecs`). In use or approved: bcdec_rs, block_compression (CPU path only, no wgpu: pure-Rust BC7 encode) / texpresso (pure Rust), ddsfile, png, lz4_flex, flate2, binrw, bytemuck,
 half, meshopt, ruzstd (pure-Rust zstd decoding, MIT), pyo3, csbindgen, libloading (a game's own Oodle DLL, loaded at run time from the install, never
-bundled), oozextract (only as a gate's second decoder), thiserror, serde/serde_json, indexmap, sha2, aes (AES-128 block operations), num-bigint (raw RSA public operations), encoding_rs (strict Shift-JIS), sha1 (key material checks), quick-xml (pull parser for game XML data files), criterion
+bundled), oozextract (only as a gate's second decoder), thiserror, serde/serde_json, indexmap, sha2, aes (AES-128 block operations), num-bigint (raw RSA public operations), encoding_rs (strict Shift-JIS), sha1 (key material checks), quick-xml (pull parser for game XML data files), naga (the shader IR `primase_shader::Program` wraps, with its validator and WGSL writer; SPIR-V and GLSL front ends later: our own IR would need every one of those written by us; approved 2026-10-22), criterion
 (benches), toml (standards-compliant local gate configuration; a handwritten subset would mishandle escaping,
 duplicate keys and typed values). Propose anything else in the pull request, with what it does and why our own would be worse.
 

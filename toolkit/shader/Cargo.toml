@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 primase-core.workspace = true
 thiserror.workspace = true
+naga.workspace = true
 
 [dev-dependencies]
 # The implementations, to evaluate one fixture through each bytecode (a dev-dependency cycle cargo allows).

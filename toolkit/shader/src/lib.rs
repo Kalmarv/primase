@@ -13,8 +13,11 @@
 //! transfer policy.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod build;
 pub mod d3d;
+pub mod emit;
 mod evaluate;
+mod program;
 pub use evaluate::{
     Constants, Evaluation, Field, Grid, Image, Input, Invocation, Lane, Layout, Raw, Texture, evaluate,
     evaluate_raw,
@@ -27,6 +30,10 @@ pub use primase_core::shader::{
 };
 mod periodic;
 pub use periodic::evaluate_periodic;
+pub use program::{
+    ClipDepth, Conventions, D3dModes, Error as ProgramError, Origin, Problem, Program, Provenance,
+    VERSION as PROGRAM_VERSION,
+};
 
 /// How a sample request picks its level of detail.
 #[derive(Clone, Copy, Debug, PartialEq)]
