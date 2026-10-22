@@ -1051,6 +1051,57 @@ impl<'a> Placer<'a> {
         c
     }
 
+    /// The Mesh or LODSelector at `at` placed once, at the origin: what a Visual of an Entity places, without an owner
+    /// (no matrix, bounds, DataLayerActions or material overrides). A Mesh is its one level; a LODSelector every mesh
+    /// level it names, as an Entity's Visual without instances places them (levels referring to an Impostor are
+    /// counted in [`Placed::impostor_levels`]). Its Materials are read where the placer reads them
+    /// ([`Placer::with_materials`]). `None` where no level of it could be read (recorded in `placed`).
+    pub fn place_object(&mut self, at: At, placed: &mut Placed) -> Result<Option<Entity>, Error> {
+        let (id, found) = {
+            let forge = self
+                .archive
+                .forge(at.forge)
+                .ok_or(crate::read::archive::Error::NoForge(at.forge))?;
+            let named = forge.names.get(at.entry).map(|n| n.type_id);
+            (forge.index.get(at.entry).map(|i| i.id), named)
+        };
+        let (Some(id), Some(found)) = (id, found) else {
+            return Err(Error::Type {
+                at,
+                found: 0,
+                what: "an entry of its forge",
+            });
+        };
+        if found != MESH && found != LOD_SELECTOR {
+            return Err(Error::Type {
+                at,
+                found,
+                what: "a Mesh or LODSelector",
+            });
+        }
+        let Some(levels) = self.levels(id, placed)? else {
+            return Ok(None);
+        };
+        let Some(prototype) = self.whole(id, &levels) else {
+            return Ok(None);
+        };
+        let prototype = self.with_distances(prototype, id);
+        let p = self.world.spawn();
+        if let Some(name) = self.name(at) {
+            self.world.insert(p, Name(name));
+        }
+        self.world.insert(
+            p,
+            Instance {
+                prototype,
+                variant: 0,
+            },
+        );
+        self.world.insert(p, self.frame.transform(&Transform::IDENTITY));
+        placed.placements.push(p);
+        Ok(Some(p))
+    }
+
     /// The Entity or EntityGroup at `at` placed into the world: one placement per Visual with something to show, or per
     /// instance. A group's own Visuals place as an Entity's (it is an Entity's body and its member list).
     ///
