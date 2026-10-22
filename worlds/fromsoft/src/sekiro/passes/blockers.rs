@@ -32,8 +32,6 @@ pub struct Card {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub uv: Vec<[f32; 2]>,
-    /// Additional authored UV sets, in the same vertex order; UV0 remains in `uv`.
-    pub extra_uvs: BTreeMap<u8, Vec<[f32; 2]>>,
     pub tangents: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
 }
@@ -45,7 +43,6 @@ impl Card {
             positions: part.mesh.positions,
             normals: part.mesh.normals,
             uv: part.mesh.uv,
-            extra_uvs: part.extra_uvs,
             tangents: part.tangents,
             indices: part.mesh.indices,
         }
@@ -65,7 +62,6 @@ pub struct BlockerCards {
 }
 impl Resource for BlockerCards {
     const NAME: &'static str = "fromsoft.blocker_cards";
-    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::json::JsonError> {
         primase_core::json::to_value(self).map(Some)
     }

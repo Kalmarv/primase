@@ -33,17 +33,13 @@ impl super::FaceSet {
 
 /// One face set of one mesh, decoded: the vertices its triangles use, compacted in first-use order, in the world
 /// frame (positions and directions mirrored in Z, normals unit length, tangent handedness reflected with the frame),
-/// and the first two coordinates of every authored UV set. Third UV components stay in [`Model`]; this 2D
-/// view does not interpret them. Triangles in stored order and winding; strips triangulated with the file's alternation.
+/// UV0 as stored. Triangles in stored order and winding; strips triangulated with the file's alternation.
 #[derive(Clone, Debug)]
 pub struct Part {
     pub source_mesh: usize,
     pub face_set: usize,
     pub material: usize,
     pub mesh: Mesh,
-    /// Authored sets numbered 1 and above, in the same compacted vertex order as `mesh`. UV0 is `mesh.uv`.
-    /// These are source coordinates, not a claim about a compiled shader's varying or per-draw UV transforms.
-    pub extra_uvs: BTreeMap<u8, Vec<[f32; 2]>>,
     /// Stored tangent frame after coordinate conversion, in compacted vertex order; empty without tangents.
     pub tangents: Vec<[f32; 4]>,
     /// Original vertex indices in compacted order, for retained source attributes.
@@ -88,22 +84,6 @@ impl Model {
                 ),
             ),
         ]);
-        let uv_count = m.vertices.iter().map(|v| v.uvs.len()).max().unwrap_or(0);
-        if uv_count > usize::from(u8::MAX) + 1 {
-            return Err(invalid("FLVER geometry", source_mesh, "more than 256 UV sets"));
-        }
-        for set in 1..uv_count {
-            let values = m
-                .vertices
-                .iter()
-                .map(|v| {
-                    v.uvs.get(set).map(|uv| [uv[0], uv[1]]).ok_or_else(|| {
-                        invalid("FLVER geometry", source_mesh, format!("partial UV set {set}"))
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            streams.insert(Semantic::TexCoord(set as u8), Stream::F32x2(values));
-        }
         if m.vertices.iter().any(|v| !v.tangents.is_empty()) {
             let tangents = m
                 .vertices
@@ -139,17 +119,6 @@ impl Model {
             None => Vec::new(),
             _ => unreachable!(),
         };
-        let extra_uvs = streams
-            .into_iter()
-            .map(|(semantic, stream)| match (semantic, stream) {
-                (Semantic::TexCoord(set), Stream::F32x2(values)) => Ok((set, values)),
-                (semantic, _) => Err(invalid(
-                    "FLVER geometry",
-                    source_mesh,
-                    format!("unexpected compacted stream {semantic:?}"),
-                )),
-            })
-            .collect::<Result<BTreeMap<_, _>>>()?;
         for t in &mut tangents {
             *t = tangent_to_scene(*t);
         }
@@ -171,7 +140,6 @@ impl Model {
             face_set,
             material: m.material,
             mesh,
-            extra_uvs,
             tangents,
             source_vertices: compacted.gather,
             winding_flipped: false,

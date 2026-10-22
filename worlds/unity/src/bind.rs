@@ -32,30 +32,6 @@ pub struct Bound {
     pub textures: BTreeMap<String, u32>,
 }
 
-impl Bound {
-    /// Borrow the common prepared-program view while retaining Unity's property-to-slot map and source layout.
-    /// The caller owns the resolved constants and images; this method chooses no material or draw policy.
-    pub fn prepared<'a>(
-        &'a self,
-        constants: &'a Constants,
-        textures: &'a BTreeMap<u32, primase_shader::Texture>,
-    ) -> primase_shader::PreparedProgramRef<'a> {
-        primase_shader::PreparedProgramRef::new(&self.shader, constants, textures)
-    }
-
-    /// Finish preparation with the caller's material/draw constants and resolved texture slots. No inputs, light,
-    /// texture defaults or bake policy are chosen here; the supplied binding data remains inspectable by every
-    /// consumer through the shared toolkit contract. This consumes the Unity layout and property-name map after
-    /// resolution; use [`Self::prepared`] to retain that source metadata. Named constant offsets remain in Constants.
-    pub fn prepare(
-        self,
-        constants: Constants,
-        textures: BTreeMap<u32, primase_shader::Texture>,
-    ) -> primase_shader::PreparedProgram<primase_dxbc::Shader> {
-        primase_shader::PreparedProgram::new(self.shader, constants, textures)
-    }
-}
-
 /// The words a field of `shape` and `array_size` elements takes under D3D packing: a vector its columns, a matrix
 /// four per row (Unity's are row-major float4 rows), each array element but the last padded to whole registers.
 fn words(shape: Shape, array_size: u32) -> u32 {

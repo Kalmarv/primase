@@ -28,8 +28,6 @@ fn error(detail: impl Into<String>) -> Error {
 /// program does not write it. The evaluation grid, (K + 1) * texels pixels per axis, is at most 4096. `textures`,
 /// `inputs` and `targets` are as [`evaluate`] takes them; the grid's U and V ([`crate::Lane::U`], `V`) run one per
 /// cell. The instruction and sample counts are the grid's.
-/// Discarded invocations are refused: this colour-only result cannot preserve or cross-fade coverage. Use
-/// [`crate::PreparedProgramRef::evaluate_raw`] when the caller has an explicit coverage policy.
 pub fn evaluate_periodic(
     shader: &dyn PixelShader,
     constants: &Constants,

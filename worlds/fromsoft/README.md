@@ -315,19 +315,13 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   beside it (below).
 - `lower-fromsoft-geometry` makes `core.mesh`: one primitive per mesh and face set,
   level 0 on the prototype and levels 1 and 2 as `core.lods` forms for
-  `select-lod`; positions, unit normals and stored tangents in the world frame,
-  every authored two-dimensional UV set as `TexCoord(n)` in the same compacted vertex order,
+  `select-lod`; positions, unit normals, stored tangents and UV0 in the world frame,
   a layered material's Byte4C members as raw `Color(n)` streams listed by
   `fromsoft.layer_inputs`. `pose=rigid|stored` is required (which model is lowered);
   its other options default to the source as stored: `uv-tiling=keep|apply` (recorded per material as
-  `fromsoft.uv_tiling`, UV0 only), `winding=stored|normals`, `degenerates=keep|drop`,
+  `fromsoft.uv_tiling`), `winding=stored|normals`, `degenerates=keep|drop`,
   `leave-out=sky+light-volume+shadow`, `blocker-cards=draw|record`. Motion-blur
-  face sets, vertex colours and nonzero third UV components are not lowered and are counted.
-  Additional UV sets also survive blocker-card recording. Partial additional streams and more than
-  256 sets are refused. Preserving authored coordinates does not establish a shader's varying packing
-  or its per-draw UV transforms; the original model remains available beside the lowered mesh.
-  API: `flver::Part` and `sekiro::blockers::Card` now carry `extra_uvs` (sets 1 and above;
-  callers constructing these structs must supply the map). The blocker-card resource JSON is version 2.
+  face sets, vertex colours and UV sets beyond UV0 are not lowered and are counted.
 - `lower-fromsoft-lights{candela-per-power=...,spot-blend=...}` makes `core.light` from the BTL
   records: colour bytes read as sRGB, intensity by the program's calibration (no
   default), range the stored radius (at least `min-range`), a spot's cone from the

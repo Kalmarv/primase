@@ -16,8 +16,6 @@ pub use evaluate::{
 };
 mod periodic;
 pub use periodic::evaluate_periodic;
-mod prepared;
-pub use prepared::{PreparedProgram, PreparedProgramRef};
 
 /// How a sample request picks its level of detail.
 #[derive(Clone, Copy, Debug, PartialEq)]
