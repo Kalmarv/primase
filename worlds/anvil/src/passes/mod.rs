@@ -15,7 +15,7 @@ pub use decals::{Family, FamilyRule, LowerAnvilDecals, TerrainDecals, family};
 pub use material::{
     AlphaChoice, Decals1Cutout, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo, world_uv_rows,
 };
-pub use select::{Keep, SelectAnvilEntities};
+pub use select::{CollisionOnly, Keep, Overlap, SelectAnvilEntities};
 pub use splat::{Splat, SplatUv};
 pub use water::{LowerAnvilWater, Shore};
 pub use world_uv::LowerAnvilWorldUv;

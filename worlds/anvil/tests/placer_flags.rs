@@ -8,7 +8,7 @@
 use primase_anvil::components::{
     AnvilCollisionFilter, AnvilEntityState, AnvilFake, AnvilLodDistances, AnvilLods,
 };
-use primase_anvil::passes::{Keep, SelectAnvilEntities};
+use primase_anvil::passes::{CollisionOnly, Keep, SelectAnvilEntities};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::entity::{ComponentBody, ENTITY, StoredEntity, query};
 use primase_anvil::read::lod::{LOD_SELECTOR, StoredLodSelector};
@@ -225,6 +225,7 @@ fn the_placer_reads_the_entity_flags() {
         hidden: Keep::Drop,
         phantom: Keep::Drop,
         water_collision: Keep::Drop,
+        collision_only: CollisionOnly::Keep,
     }
     .run(&mut w, &mut log)
     .expect("select");

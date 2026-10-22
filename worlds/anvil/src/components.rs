@@ -279,6 +279,33 @@ impl Component for AnvilEntityState {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
+/// The owning Entity's `BoundingVolume` as a box in core's frame (`anvil.bounds`): the stored volume's two corners
+/// (axis-aligned, relative to the owner's translation in the source frame: docs/placement.md) placed at the owner's
+/// translation and carried through the source frame's axes. On every visual placement and every collision-only
+/// placement ([`AnvilCollisionOnly`]); `select-anvil-entities` reads it for `collision-only=overlap` and removes it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnvilBounds {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
+impl Component for AnvilBounds {
+    const NAME: &'static str = "anvil.bounds";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
+/// A collision placement whose owner (an Entity or EntityGroup) places no visual (`anvil.collision_only`): its
+/// RigidBody has a shape and the owner has no Visual with something to show. On Riders Republic the `MAD_COL_*` blockers
+/// (a RigidBodyComponent and nothing else). `select-anvil-entities` keeps, drops or tests it against the visuals'
+/// bounds (`collision-only=`), and removes the mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnvilCollisionOnly;
+
+impl Component for AnvilCollisionOnly {
+    const NAME: &'static str = "anvil.collision_only";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
 /// A placement whose MeshInstanceData is a fake (`anvil.fake`: its `IsFake` set; docs/placement.md §19.4): its
 /// `FakeMeshIndex` and `IsNearFake`. On Riders Republic exactly the far terrain's cells (`MAD_USNAT_FarFake_<n>_Cell`,
 /// the index `n`), which stand in for the near ground at a distance: a program leaves them out where it draws the

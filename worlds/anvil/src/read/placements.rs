@@ -40,10 +40,11 @@ use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{
-    AnvilCollisionFilter, AnvilCollisionShape, AnvilDataLayers, AnvilDecalModel, AnvilDeferredDecals,
-    AnvilEntityState, AnvilFake, AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides,
-    AnvilMesh, AnvilShaders, AnvilWater, BoundTexture, CollisionMaterialRef, DataLayerAction, DeferredDecal,
-    MaterialBinding, MaterialValue, ShapeGeometry, TextureFrom,
+    AnvilBounds, AnvilCollisionFilter, AnvilCollisionOnly, AnvilCollisionShape, AnvilDataLayers,
+    AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake, AnvilLodDistances, AnvilLods,
+    AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilShaders, AnvilWater, BoundTexture,
+    CollisionMaterialRef, DataLayerAction, DeferredDecal, MaterialBinding, MaterialValue, ShapeGeometry,
+    TextureFrom,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::ddecal::{DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, StoredDecalModel, StoredDeferredDecals};
@@ -240,6 +241,9 @@ pub struct Placed {
     /// RigidBodies placed whose `QueryFlags` `Static` is clear (and `WaterLevel` too), each marked as every collision
     /// placement is ([`AnvilCollisionFilter`]).
     pub not_static: u64,
+    /// Collision placements of owners that place no visual, each marked [`AnvilCollisionOnly`] (on Riders Republic the
+    /// `MAD_COL_*` blockers); `select-anvil-entities collision-only=` keeps, drops or tests them.
+    pub collision_only: u64,
 }
 
 /// The column-major 4x4 `m` as a transform, its linear part times `s`.
@@ -1019,6 +1023,19 @@ impl<'a> Placer<'a> {
         e
     }
 
+    /// `e`'s `BoundingVolume` as a box in core's frame: its two corners (relative to the owner's translation, in the
+    /// source frame) at the translation, each carried through the frame, then the component-wise least and greatest
+    /// (the frame only permutes and negates axes, so the box stays a box).
+    fn owner_bounds(&self, e: &StoredEntity) -> AnvilBounds {
+        let t = [e.matrix[12], e.matrix[13], e.matrix[14]];
+        let corner = |c: [f32; 3]| self.frame.point(std::array::from_fn(|k| t[k] + c[k]));
+        let (a, b) = (corner(e.bounds.min), corner(e.bounds.max));
+        AnvilBounds {
+            min: std::array::from_fn(|k| a[k].min(b[k])),
+            max: std::array::from_fn(|k| a[k].max(b[k])),
+        }
+    }
+
     /// `e` (a mesh level's entity) placed as a prototype itself: itself, or, where it is a form, one copy of it.
     fn as_prototype(&mut self, e: Entity) -> Entity {
         if let Some(&c) = self.prototype_copies.get(&e) {
@@ -1069,6 +1086,8 @@ impl<'a> Placer<'a> {
             placed.hidden_or_phantom = placed.hidden_or_phantom.saturating_add(1);
         }
         let name = self.name(at).unwrap_or_default();
+        let bounds = self.owner_bounds(&e);
+        let mut visual_placements = 0u64;
         let layers = (!e.data_layers.is_empty()).then(|| AnvilDataLayers {
             actions: e
                 .data_layers
@@ -1190,6 +1209,8 @@ impl<'a> Placer<'a> {
                     self.world.insert(p, fake);
                     placed.fakes = placed.fakes.saturating_add(1);
                 }
+                self.world.insert(p, bounds);
+                visual_placements = visual_placements.saturating_add(1);
                 placed.placements.push(p);
                 if decal {
                     placed.static_decals = placed.static_decals.saturating_add(1);
@@ -1366,6 +1387,11 @@ impl<'a> Placer<'a> {
                         self.world.insert(p, s);
                     }
                     self.world.insert(p, mark);
+                    if visual_placements == 0 {
+                        self.world.insert(p, AnvilCollisionOnly);
+                        self.world.insert(p, bounds);
+                        placed.collision_only = placed.collision_only.saturating_add(1);
+                    }
                     placed.collisions.push(p);
                 }
             }
