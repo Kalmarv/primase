@@ -126,6 +126,19 @@ fn declared_role(material: &LayeredMaterial, slot: u32) -> Result<&str> {
     }
     Ok(role.unwrap_or("?"))
 }
+/// The frozen inputs must be finite: they become shader constants.
+fn check_params(params: Inputs) -> Result<()> {
+    if !params
+        .weights_snow
+        .iter()
+        .chain(&params.tint_color)
+        .chain(std::iter::once(&params.detail))
+        .all(|v| v.is_finite())
+    {
+        return Err(invalid("layer bake", 0, "nonfinite frozen vertex input"));
+    }
+    Ok(())
+}
 impl Prepared {
     /// Frozen-frame preview binding: caller supplies decoded views by texture
     /// name and sRGB flag. Missing slots use explicitly counted preview defaults;
@@ -423,44 +436,34 @@ impl Prepared {
             self.largest_colour_dimension.min(cap)
         })
     }
-    pub fn bake(&self, size: u32, period: [f32; 2], params: Inputs) -> Result<Bake> {
-        Ok(self.bake_channels(size, period, params, false)?.image)
+    /// The parsed source program: its instructions and reflection, read-only.
+    pub fn shader(&self) -> &Shader {
+        &self.shader
     }
-    pub(crate) fn bake_with_reflectance(
-        &self,
-        size: u32,
-        period: [f32; 2],
-        params: Inputs,
-    ) -> Result<BakedChannels> {
-        self.bake_channels(size, period, params, true)
+    /// The constants the program is bound with, written rows included.
+    pub fn constants(&self) -> &Constants {
+        &self.constants
     }
-    fn bake_channels(
-        &self,
-        size: u32,
-        period: [f32; 2],
-        params: Inputs,
-        capture_reflectance: bool,
-    ) -> Result<BakedChannels> {
-        if !params
-            .weights_snow
-            .iter()
-            .chain(&params.tint_color)
-            .chain(std::iter::once(&params.detail))
-            .all(|v| v.is_finite())
-        {
-            return Err(invalid("layer bake", 0, "nonfinite frozen vertex input"));
-        }
-        if size == 0 || size > 4096 || !period.iter().all(|v| v.is_finite() && *v > 0.) {
-            return Err(invalid("layer bake", 0, "invalid size or period"));
-        }
-        // every used input by its semantic: the grid's UV in TEXCOORD0, the frozen values elsewhere
+    /// Every texture slot the program samples, as bound (an image or one constant value).
+    pub fn textures(&self) -> &BTreeMap<u32, Texture> {
+        &self.textures
+    }
+    /// The main albedo's alpha sampler and its scale, when one was bound.
+    pub fn alpha(&self) -> Option<(&BaseMipBilinearWrap, [f32; 2])> {
+        self.alpha.as_ref().map(|(image, scale)| (image.as_ref(), *scale))
+    }
+    /// Every used input by its semantic: the grid's UV in TEXCOORD0 for a bake, or `uv` for one invocation.
+    fn bind_inputs(&self, params: Inputs, uv: Option<[f32; 2]>) -> Result<BTreeMap<(String, u32), Input>> {
         let mut inputs = BTreeMap::new();
         for s in self.shader.reflection.inputs.iter().filter(|s| s.used_mask != 0) {
             let input = match (s.name.to_ascii_uppercase().as_str(), s.index) {
                 ("POSITION", 1) => Input::Constant([0., 0., 0., 1.]),
                 ("NORMAL", 0) => Input::Constant([0., 1., 0., 0.]),
                 ("TANGENT", 0) => Input::Constant([1., 0., 0., 1.]),
-                ("TEXCOORD", 0) => Input::Lanes([Lane::U, Lane::V, Lane::U, Lane::V]),
+                ("TEXCOORD", 0) => match uv {
+                    Some([u, v]) => Input::Constant([u, v, u, v]),
+                    None => Input::Lanes([Lane::U, Lane::V, Lane::U, Lane::V]),
+                },
                 ("TEXCOORD", 5) => Input::Constant(params.weights_snow),
                 ("TEXCOORD", 7) => Input::Constant(params.tint_color),
                 ("TEXCOORD", 12) => Input::Constant([params.detail, 0., 0., 0.]),
@@ -484,6 +487,63 @@ impl Prepared {
         {
             return Err(invalid("layer binding", 0, "missing TEXCOORD0"));
         }
+        Ok(inputs)
+    }
+    /// Run one pixel invocation at `uv` with the frozen inputs `params`: the five output registers (0 G-buffer normal,
+    /// 1 gloss, 2 albedo, 3 reflectance, 4 emission) as the program wrote them, each register's bits and written
+    /// lanes. The program's constants and textures are this `Prepared`'s. The invocation has no screen derivatives; an
+    /// implicit-LOD sample uses the bound sampler's base mip.
+    pub fn evaluate_pixel(&self, params: Inputs, uv: [f32; 2]) -> Result<[([u32; 4], u8); 5]> {
+        check_params(params)?;
+        if !uv.iter().all(|v| v.is_finite()) {
+            return Err(invalid("layer binding", 0, "nonfinite pixel uv"));
+        }
+        let inputs = self.bind_inputs(params, Some(uv))?;
+        let raw = evaluate_raw(
+            &self.shader,
+            &self.constants,
+            &self.textures,
+            &inputs,
+            Grid {
+                size: 1,
+                period: [1.; 2],
+            },
+            &[(0, 7), (1, 1), (2, 7), (3, 7), (4, 7)],
+            Invocation::Scalar,
+        )
+        .map_err(evaluation)?;
+        let mut out = [([0u32; 4], 0u8); 5];
+        for (slot, pixels) in out.iter_mut().zip(raw.pixels) {
+            *slot = pixels
+                .into_iter()
+                .next()
+                .ok_or_else(|| invalid("layer binding", 0, "no pixel in a one-pixel evaluation"))?;
+        }
+        Ok(out)
+    }
+    pub fn bake(&self, size: u32, period: [f32; 2], params: Inputs) -> Result<Bake> {
+        Ok(self.bake_channels(size, period, params, false)?.image)
+    }
+    pub(crate) fn bake_with_reflectance(
+        &self,
+        size: u32,
+        period: [f32; 2],
+        params: Inputs,
+    ) -> Result<BakedChannels> {
+        self.bake_channels(size, period, params, true)
+    }
+    fn bake_channels(
+        &self,
+        size: u32,
+        period: [f32; 2],
+        params: Inputs,
+        capture_reflectance: bool,
+    ) -> Result<BakedChannels> {
+        check_params(params)?;
+        if size == 0 || size > 4096 || !period.iter().all(|v| v.is_finite() && *v > 0.) {
+            return Err(invalid("layer bake", 0, "invalid size or period"));
+        }
+        let inputs = self.bind_inputs(params, None)?;
         // the G-buffer normal, the second output's x, the albedo, the reflectance and the emission
         let raw = evaluate_raw(
             &self.shader,
@@ -782,5 +842,42 @@ mod tests {
         assert_eq!(present.normal, absent.normal);
         assert_eq!(present.policies["material writes second-output x"], 1);
         assert_eq!(absent.policies["material omits second-output x"], 1);
+    }
+
+    #[test]
+    fn prepared_exposes_bound_program_and_evaluates_one_pixel() {
+        let prepared = prepared(false);
+        assert_eq!(prepared.shader().reflection.inputs[0].name, "TEXCOORD");
+        assert!(prepared.textures().is_empty());
+        assert!(prepared.alpha().is_none());
+        assert!(prepared.constants().words(0).is_none());
+
+        let [normal, gloss, albedo, reflectance, emission] =
+            prepared.evaluate_pixel(Inputs::default(), [0.25, 0.75]).unwrap();
+        assert_eq!(normal.1, 7);
+        assert_eq!(albedo.1, 7);
+        assert_eq!(normal.0.map(f32::from_bits), [0.5, 0.75, 0.5, 0.0]);
+        assert_eq!(albedo.0.map(f32::from_bits), [0.5, 0.75, 0.5, 0.0]);
+        assert_eq!((gloss.1, reflectance.1, emission.1), (0, 0, 0));
+    }
+
+    #[test]
+    fn constants_expose_written_rows_and_reflected_fields() {
+        let mut constants = Constants::new(&Layout {
+            buffers: vec![(0, 8)],
+            fields: BTreeMap::from([(
+                "x".to_owned(),
+                primase_shader::Field {
+                    buffer: 0,
+                    offset: 1,
+                    words: 2,
+                },
+            )]),
+        });
+        constants.set_words(0, 1, &[7, 8]).unwrap();
+        assert_eq!(constants.words(0).unwrap(), &[[0, 7, 8, 0], [0; 4]]);
+        assert!(constants.words(1).is_none());
+        assert_eq!(constants.field("x").unwrap().offset, 1);
+        assert!(constants.field("missing").is_none());
     }
 }

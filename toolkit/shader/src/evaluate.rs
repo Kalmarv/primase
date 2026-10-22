@@ -183,6 +183,17 @@ impl Constants {
     pub fn unset_words(&self) -> u64 {
         self.written.iter().flatten().filter(|w| !**w).count() as u64
     }
+    /// The buffer's rows of four words as written so far, row-major; `None` when the program reads no such buffer.
+    pub fn words(&self, buffer: u32) -> Option<&[[u32; 4]]> {
+        self.buffers
+            .iter()
+            .find(|(slot, _)| *slot == buffer)
+            .map(|(_, rows)| rows.as_slice())
+    }
+    /// The reflected field `name`, with its buffer, word offset and word count.
+    pub fn field(&self, name: &str) -> Option<&Field> {
+        self.fields.get(name)
+    }
 }
 
 /// A texture the caller samples itself (its footprint, addressing, filtering and transfer are its own policy), by the
