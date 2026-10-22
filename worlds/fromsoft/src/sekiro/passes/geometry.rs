@@ -101,8 +101,9 @@ choice! {
 /// `lower-fromsoft-geometry`: every prototype's model as `core.mesh`, one primitive per mesh and face set, its
 /// material the slot's `fromsoft.material` entity; level-0 face sets on the prototype, levels 1 and 2 as `core.lods`
 /// forms (`select-lod` chooses), a form holding the meshes that have a face set of its level (no source default, as
-/// the game switches by distance). Positions, unit normals, stored tangents (handedness reflected) and UV0 in the
-/// world frame; a layered material's Byte4C members as raw `Color(n)` streams listed by `fromsoft.layer_inputs`.
+/// the game switches by distance). Positions, unit normals and stored tangents (handedness reflected) in the
+/// world frame; every authored two-dimensional UV set as `TexCoord(n)`, with tiling applied only to UV0 when chosen.
+/// A layered material's Byte4C members are raw `Color(n)` streams listed by `fromsoft.layer_inputs`.
 ///
 /// Every field is the program's choice, stated (no default): `pose`, which model is lowered (the posed one
 /// `fromsoft-apply-rigid-skinning` made, or the stored one); `uv_tiling` (multiply UV0 by the material's tiling,
@@ -340,8 +341,8 @@ impl LowerFromSoftGeometry {
                     1,
                 );
             }
-            if mesh.vertices.iter().any(|v| v.uvs.len() > 1) {
-                log.approximate("meshes with UV sets beyond UV0 not lowered", 1);
+            if mesh.vertices.iter().any(|v| v.uvs.iter().any(|uv| uv[2] != 0.0)) {
+                log.approximate("meshes with nonzero third UV components not lowered (core UV streams are two-dimensional)", 1);
             }
             let mut levels = BTreeSet::new();
             for (face_set, f) in mesh.faces.iter().enumerate() {
@@ -370,6 +371,9 @@ impl LowerFromSoftGeometry {
                     (Semantic::Normal, Stream::F32x3(part.mesh.normals)),
                     (Semantic::TexCoord(0), Stream::F32x2(part.mesh.uv)),
                 ]);
+                for (set, values) in part.extra_uvs {
+                    streams.insert(Semantic::TexCoord(set), Stream::F32x2(values));
+                }
                 if !part.tangents.is_empty() {
                     streams.insert(Semantic::Tangent, Stream::F32x4(part.tangents));
                 }
@@ -476,7 +480,7 @@ impl Pass for LowerFromSoftGeometry {
         true
     }
     fn approximates(&self) -> &'static str {
-        "motion-blur face sets, vertex colours and UV sets beyond UV0 not lowered; with winding=normals, a part's winding inferred from its stored normals"
+        "motion-blur face sets, vertex colours and third UV components not lowered; with winding=normals, a part's winding inferred from its stored normals"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let prototypes: Vec<Entity> = world.iter::<PrototypeSource>().map(|(e, _)| e).collect();
