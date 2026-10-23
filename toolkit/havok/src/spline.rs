@@ -634,16 +634,28 @@ fn block(r: &mut Reader, tracks: usize, s: &SplineData, index: usize) -> Result<
             ),
         ));
     }
+    let on_boundary = r.at.is_multiple_of(16);
     r.pad(16)?;
     let next = s
         .block_offsets
         .get(index + 1)
         .map_or(s.data.len(), |&o| o as usize);
     if r.at != next {
-        return Err(invalid(
-            r.at,
-            format!("block {index} ends at {}, the next begins at {next}", r.at),
-        ));
+        // The 2018.1 files the install holds pad a block whose float data begins on a 16-byte boundary by 16 more
+        // zero bytes in some cases (711 of 1,568 such blocks; the other 857 and every block of the 2016.2 files have
+        // none, with the same trailing bytes: the encoder's rule is its own, not the data's). Those 16 zero bytes are
+        // accepted, nothing else.
+        let extra = on_boundary
+            && next == r.at + 16
+            && s.data
+                .get(r.at..next)
+                .is_some_and(|pad| pad.iter().all(|&b| b == 0));
+        if !extra {
+            return Err(invalid(
+                r.at,
+                format!("block {index} ends at {}, the next begins at {next}", r.at),
+            ));
+        }
     }
     Ok(out)
 }
@@ -818,6 +830,50 @@ mod tests {
         assert!(e.contains("float data begins"), "{e}");
         let a = animation(d, 1, &[(0, end)], 256, 2);
         assert!(SplineAnimation::parse(&a).is_ok());
+    }
+
+    /// A block of 32 bytes (a static position of three components and an uncompressed static rotation), so that its
+    /// float data begins on a 16-byte boundary.
+    fn aligned_block(x: f32) -> Vec<u8> {
+        let mut d = vec![5 << 2, 0x01 | 0x02 | 0x04, 0x01, 0x00];
+        d.extend([f(x), f(0.0), f(0.0)].concat());
+        d.extend([f(0.0), f(1.0), f(0.0), f(0.0)].concat());
+        assert_eq!(d.len(), 32);
+        d
+    }
+
+    /// Two aligned blocks with `between` between them: the float data of each begins at 32 of its own.
+    fn two_aligned_blocks(between: &[u8]) -> SplineAnimation {
+        let mut d = aligned_block(1.0);
+        d.extend(between);
+        let second = d.len() as u32;
+        d.extend(aligned_block(2.0));
+        let a = animation(d, 1, &[(0, 32), (second, 32)], 3, 5);
+        SplineAnimation::parse(&a).unwrap()
+    }
+
+    /// The padding between two blocks whose float data begins on a 16-byte boundary: none (the 2016.2 files, and some
+    /// 2018.1 ones) or 16 zero bytes (other 2018.1 ones) are the data's; anything else is not.
+    #[test]
+    fn a_block_ending_on_a_boundary_may_be_followed_by_sixteen_zero_bytes() {
+        let none = two_aligned_blocks(&[]);
+        let sixteen = two_aligned_blocks(&[0; 16]);
+        assert_eq!(
+            none.sample(0, 3.0, &IDENTITY, MIXED).unwrap().translation,
+            sixteen.sample(0, 3.0, &IDENTITY, MIXED).unwrap().translation
+        );
+        for between in [vec![0u8; 8], vec![0u8; 32], {
+            let mut v = vec![0u8; 16];
+            v[5] = 1;
+            v
+        }] {
+            let mut d = aligned_block(1.0);
+            d.extend(&between);
+            let second = d.len() as u32;
+            d.extend(aligned_block(2.0));
+            let a = animation(d, 1, &[(0, 32), (second, 32)], 3, 5);
+            assert!(SplineAnimation::parse(&a).is_err(), "{between:?}");
+        }
     }
 
     /// A position spline of degree 1 over three control points, x 8-bit between 0 and 10, y static 7.5, z absent: the
