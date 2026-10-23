@@ -23,9 +23,8 @@ pub use binding::{
     AddressMode, AlphaTest, Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding,
     ConstantRole, Cull, DepthBias, DepthState, Fill, FrameParameter, FrameTexture, InputBinding, InputRole,
     LaneStream, NormalEncoding, NormalSpace, ObjectMatrix, ObjectParameter, OutputBinding, OutputRole,
-    RenderState,
-    SamplerState, ScalarEncoding, ShaderBinding, StageBinding, Stencil, StencilFace, StencilOp, TargetState,
-    TextureBinding, TextureSource, ViewParameter,
+    RenderState, SamplerState, ScalarEncoding, ShaderBinding, StageBinding, Stencil, StencilFace, StencilOp,
+    TargetState, TextureBinding, TextureSource, ViewParameter,
 };
 pub use interface::{
     D3dSignature, DomainFacts, GeometryFacts, GsInput, GsOutput, HitGroup, HitGroupKind, HullFacts,
