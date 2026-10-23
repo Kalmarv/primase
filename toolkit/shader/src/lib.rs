@@ -17,6 +17,7 @@ pub mod build;
 pub mod d3d;
 pub mod emit;
 mod evaluate;
+pub mod exec;
 mod program;
 pub use evaluate::{
     Constants, Evaluation, Field, Grid, Image, Input, Invocation, Lane, Layout, Raw, Texture, evaluate,
@@ -122,6 +123,76 @@ pub trait Sampler {
     fn structured(&mut self, slot: u32, element: u32, offset: u32) -> std::result::Result<u32, String> {
         let _ = (element, offset);
         Err(format!("t{slot}: no structured buffer given"))
+    }
+
+    /// A sample of any texture: 1D, 3D or cube, with a texel offset, a gather or a comparison. A plain 2D sample
+    /// (or a 2D array's layer) goes to [`Sampler::sample`]; anything else is refused unless the sampler answers it.
+    fn sample_image(&mut self, request: exec::ImageSample<u32>) -> std::result::Result<[f32; 4], String> {
+        if request.dim != exec::Dim::D2
+            || request.gather.is_some()
+            || request.depth_ref.is_some()
+            || request.depth
+            || request.offset != [0; 3]
+        {
+            return Err(format!(
+                "t{}: this sampler answers plain 2D samples only",
+                request.texture
+            ));
+        }
+        let lod = match request.lod {
+            exec::ImageLod::Implicit => Lod::Implicit,
+            exec::ImageLod::Bias(bias) => Lod::Bias(bias),
+            exec::ImageLod::Level(level) => Lod::Level(level),
+            exec::ImageLod::Gradients(g) => Lod::Gradients([[g[0][0], g[0][1]], [g[1][0], g[1][1]]]),
+            exec::ImageLod::GradientsBias(g, bias) => {
+                Lod::GradientsBias([[g[0][0], g[0][1]], [g[1][0], g[1][1]]], bias)
+            }
+        };
+        self.sample(Sample {
+            texture: request.texture,
+            sampler: request.sampler,
+            uv: [request.coord[0], request.coord[1]],
+            layer: request.layer,
+            lod,
+        })
+    }
+    /// A texel load of any texture. A 2D or 3D one (or a 2D array's layer) goes to [`Sampler::load`].
+    fn load_image(&mut self, request: exec::ImageLoad<u32>) -> std::result::Result<[u32; 4], String> {
+        if !matches!(request.dim, exec::Dim::D2 | exec::Dim::D3)
+            || request.storage
+            || request.sample.is_some()
+        {
+            return Err(format!(
+                "t{}: this sampler answers 2D, array and 3D loads of shader resources only",
+                request.texture
+            ));
+        }
+        self.load(Load {
+            texture: request.texture,
+            texel: [
+                request.texel[0],
+                request.texel[1],
+                request.layer.unwrap_or(request.texel[2]),
+            ],
+            mip: request.mip.unwrap_or(0),
+        })
+    }
+    /// A texture's size, level count, layer count or sample count.
+    fn query_image(&mut self, request: exec::ImageQuery<u32>) -> std::result::Result<[u32; 4], String> {
+        Err(format!("t{}: no queries given", request.texture))
+    }
+    /// A write to an unordered-access texture; the plain form is [`Sampler::store`].
+    fn store_image(&mut self, request: exec::ImageStore<u32>) -> std::result::Result<(), String> {
+        self.store(Store {
+            view: request.view,
+            address: [
+                request.texel[0],
+                request.texel[1],
+                request.layer.unwrap_or(request.texel[2]),
+            ],
+            value: request.value,
+            mask: ((1u16 << request.lanes) - 1) as u8,
+        })
     }
 }
 impl<F: FnMut(Sample) -> std::result::Result<[f32; 4], String>> Sampler for F {

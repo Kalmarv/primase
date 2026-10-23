@@ -1164,6 +1164,7 @@ dependencies = [
 name = "primase-shader"
 version = "0.1.0"
 dependencies = [
+ "half",
  "naga",
  "primase-core",
  "primase-dxbc",
