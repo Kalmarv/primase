@@ -932,6 +932,23 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
             }
         }
         for (name, offset, size) in flat {
+            // the screen size is the target's size in pixels, then its reciprocals: two pairs, a role each (the order
+            // the vocabulary's old four-value size had; no program of the corpus was checked for it)
+            if name == "FC_ScreenSize" && size == Some(16) {
+                for (at, role) in [
+                    (0, ConstantRole::View(ViewParameter::ViewportSize)),
+                    (8, ConstantRole::View(ViewParameter::InverseViewportSize)),
+                ] {
+                    constants.push(ConstantBinding {
+                        resource: resource.id,
+                        offset: offset + at,
+                        size: 8,
+                        name: Some(name.clone()),
+                        role,
+                    });
+                }
+                continue;
+            }
             let role = match name.as_str() {
                 "FC_MatrixView" => ConstantRole::View(ViewParameter::View),
                 // the instance record's own fields the vertex program reads
@@ -943,7 +960,6 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
                 "FC_MatrixInvProj" => ConstantRole::View(ViewParameter::InverseProjection),
                 "FC_MatrixInvViewProj" => ConstantRole::View(ViewParameter::InverseViewProjection),
                 "SC_CameraPos" => ConstantRole::View(ViewParameter::CameraPosition),
-                "FC_ScreenSize" => ConstantRole::View(ViewParameter::ViewportSize),
                 // the object matrices: one per object, or the joints' palette in the skinned permutation (the program
                 // that takes joint indices)
                 "VC_aObjMatrix" if skinned => ConstantRole::Object(ObjectParameter::BonePalette),

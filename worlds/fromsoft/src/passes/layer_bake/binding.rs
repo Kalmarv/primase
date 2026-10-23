@@ -209,6 +209,9 @@ pub(super) fn frozen_words(
             | ViewParameter::InverseProjection,
         ) => bits(&frame.view_matrix),
         ConstantRole::View(ViewParameter::ViewportSize) => bits(&frame.viewport_size),
+        ConstantRole::View(ViewParameter::InverseViewportSize) => {
+            bits(&frame.viewport_size.map(|extent| 1.0 / extent))
+        }
         ConstantRole::Object(ObjectParameter::World) => bits(&frame.world),
         ConstantRole::Object(ObjectParameter::EnvironmentData) => {
             policies.insert(INSTANCE_DATA_POLICY.into(), 1);
@@ -325,8 +328,8 @@ pub struct FrozenFrame {
     /// `View(View)`, `Projection`, `ViewProjection`, `InverseView` and `InverseProjection`: the identity, so a vertex
     /// program's clip position is its camera-relative position.
     pub view_matrix: [f32; 16],
-    /// `View(ViewportSize)`: one by one pixel, and its reciprocals.
-    pub viewport_size: [f32; 4],
+    /// `View(ViewportSize)`: one by one pixel (`View(InverseViewportSize)` is its reciprocals).
+    pub viewport_size: [f32; 2],
 }
 impl FrozenFrame {
     /// The static bake's frame, its global time `time` seconds.
@@ -346,7 +349,7 @@ impl FrozenFrame {
             matrix_base: 0,
             clip_plane: [0.; 4],
             view_matrix: IDENTITY,
-            viewport_size: [1.; 4],
+            viewport_size: [1.; 2],
         }
     }
 }

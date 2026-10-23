@@ -605,9 +605,19 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
         named("SC_CameraPos"),
         scene(0, 16, View(ViewParameter::CameraPosition))
     );
+    // the screen size is two pairs: the size in pixels, then its reciprocals
+    let screen: Vec<_> = stage
+        .constants
+        .iter()
+        .filter(|c| c.name.as_deref() == Some("FC_ScreenSize"))
+        .map(|c| (c.offset, c.size, c.role.clone()))
+        .collect();
     assert_eq!(
-        named("FC_ScreenSize"),
-        scene(16, 16, View(ViewParameter::ViewportSize))
+        screen,
+        [
+            (16, 8, View(ViewParameter::ViewportSize)),
+            (24, 8, View(ViewParameter::InverseViewportSize)),
+        ]
     );
     assert_eq!(named("FC_MatrixView"), scene(32, 64, View(ViewParameter::View)));
     assert_eq!(
@@ -651,7 +661,8 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
             Object(ObjectParameter::ClipPlane)
         )
     );
-    assert_eq!(stage.constants.len(), 11);
+    // eleven constants of the table, the screen size as two bindings
+    assert_eq!(stage.constants.len(), 12);
     assert!(stage.outputs.is_empty() && stage.textures.is_empty());
 }
 

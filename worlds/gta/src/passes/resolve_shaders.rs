@@ -29,7 +29,8 @@
 //!   one past the end of the buffer it declares, is left out, counted. A constant the effect renames (its parameter records:
 //!   [`GtaEffectParameters`]) is a material parameter, bound to the words the material stores under the new name
 //!   (`Material`), or `Unknown` where it stores none; the engine's world, view and projection matrices have the roles
-//!   [`engine_role`] names; every other engine constant is `Unknown` with its name.
+//!   [`engine_role`] names, and the screen size's two pairs ([`engine_parts`], each bound where read); every other engine
+//!   constant is `Unknown` with its name.
 //! - **Textures.** A texture the program declares is the table record at its register and space that has a texture tag
 //!   (the sampler heap's and the constant buffers' records share register and space numbers with it). The material
 //!   binds it (`Texture`) through the parameter it stores under the record's second name where the effect renames it,
@@ -369,6 +370,20 @@ pub fn select_pass<'a>(techniques: &'a GtaEffectTechniques, name: &str) -> Resul
     Ok(pass)
 }
 
+/// The engine constants whose register packs more than one value: the byte offset, the bytes and the role of each
+/// part. `globalScreenSize` is `(x, y, z, w)` with x, y scaling a coordinate into pixels (the render target's size)
+/// and z, w the uv-space steps of whole texels (its reciprocals); that z, w are `1 / x` and `1 / y` is the natural
+/// reading of their use (`tests/engine_lanes.rs`: no program shown multiplies them together).
+pub fn engine_parts(name: &str) -> Option<[(u32, u32, ConstantRole); 2]> {
+    Some(match name {
+        "globalScreenSize" => [
+            (0, 8, ConstantRole::View(ViewParameter::ViewportSize)),
+            (8, 8, ConstantRole::View(ViewParameter::InverseViewportSize)),
+        ],
+        _ => return None,
+    })
+}
+
 /// The role of an engine constant, by the program's name for it: the object and view matrices the vocabulary names.
 /// Every other engine constant has no role here. (`gWorld` and `gWorldViewProj` are the object's matrices,
 /// `gViewInverse` the camera's.)
@@ -400,8 +415,6 @@ pub fn engine_role(name: &str) -> Option<ConstantRole> {
         )),
         "gViewInverse" => ConstantRole::View(ViewParameter::InverseView),
         "gPrevViewProj" => ConstantRole::View(ViewParameter::PreviousViewProjection),
-        // x, y scale a coordinate into pixels and z, w are uv offsets of whole texels (tests/engine_lanes.rs)
-        "globalScreenSize" => ConstantRole::View(ViewParameter::ViewportSize),
         "gDirectionalLight" => ConstantRole::Frame(FrameParameter::LightDirection),
         "gDirectionalColour" => ConstantRole::Frame(FrameParameter::LightColour),
         // xyz are added to the lit colour's channels by the lighting programs, w scales the vertex colour
@@ -567,6 +580,26 @@ impl ResolveGtaShaders {
                             continue;
                         }
                         let name = table.name_of(c.name).map(str::to_owned);
+                        if let Some(parts) = name.as_deref().and_then(engine_parts) {
+                            for (at, size, role) in parts {
+                                let offset = u32::from(c.offset) + at;
+                                if let Ok(reads) = reads
+                                    && !reads.reads(bind.space, bind.register, offset, size)
+                                {
+                                    counts.add("constants the program does not read, left out");
+                                    continue;
+                                }
+                                counts.add("engine constants with a role");
+                                constants.push(ConstantBinding {
+                                    resource: r.id,
+                                    offset,
+                                    size,
+                                    name: name.clone(),
+                                    role,
+                                });
+                            }
+                            continue;
+                        }
                         let role = constant_role(inputs, c, bytes, name.as_deref(), bind.space, counts);
                         constants.push(ConstantBinding {
                             resource: r.id,
@@ -1686,9 +1719,13 @@ mod tests {
             engine_role("gDirectionalLight"),
             Some(ConstantRole::Frame(FrameParameter::LightDirection))
         );
+        assert_eq!(engine_role("globalScreenSize"), None);
         assert_eq!(
-            engine_role("globalScreenSize"),
-            Some(ConstantRole::View(ViewParameter::ViewportSize))
+            engine_parts("globalScreenSize"),
+            Some([
+                (0, 8, ConstantRole::View(ViewParameter::ViewportSize)),
+                (8, 8, ConstantRole::View(ViewParameter::InverseViewportSize)),
+            ])
         );
         assert_eq!(
             engine_role("globalAnimUV1"),

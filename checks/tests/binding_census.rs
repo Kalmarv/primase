@@ -260,7 +260,9 @@ fn rr_scenes() {
 
 fn unity_scene(game: &str, label: &str, data: &std::path::Path, tpk: &std::path::Path, level: &str) {
     use primase_unity::TypeTreePackage;
-    use primase_unity::components::{RenderPipeline, UnityMaterial, UnityPrograms, UnityRenderSettings};
+    use primase_unity::components::{
+        RenderPipeline, UnityLight, UnityMaterial, UnityPrograms, UnityRenderSettings, UnityRenderer,
+    };
     use primase_unity::level::{LevelOptions, read_level_with};
     use primase_unity::player::Player;
     use primase_unity::program::read_programs;
@@ -287,39 +289,30 @@ fn unity_scene(game: &str, label: &str, data: &std::path::Path, tpk: &std::path:
     let materials = w.iter::<UnityMaterial>().count();
     let roots: BTreeSet<_> = w.iter::<UnityPrograms>().map(|(e, _)| e).collect();
     let closure = w.closure(roots.iter().copied());
-    let w = w.subset(&closure);
-    // the renderer's keywords: the commonest non-empty set every fragment variant of a pass carries
-    let mut required: BTreeMap<Vec<String>, usize> = BTreeMap::new();
-    for (_, p) in w.iter::<UnityPrograms>() {
-        let mut always: Option<BTreeSet<String>> = None;
-        for v in &p.variants {
-            let k: BTreeSet<String> = v.keywords.iter().cloned().collect();
-            always = Some(match always {
-                None => k,
-                Some(a) => a.intersection(&k).cloned().collect(),
-            });
-        }
-        *required
-            .entry(always.unwrap_or_default().into_iter().collect())
-            .or_default() += 1;
+    // the lights and renderers state the scene's draws (`keywords=scene`); their meshes are not needed
+    let lights: Vec<_> = w.iter::<UnityLight>().map(|(_, l)| l.clone()).collect();
+    let renderers: Vec<_> = w.iter::<UnityRenderer>().map(|(_, r)| r.clone()).collect();
+    let mut w = w.subset(&closure);
+    for l in lights {
+        let e = w.spawn();
+        w.insert(e, l);
     }
-    let renderer: String = required
-        .iter()
-        .filter(|(k, _)| !k.is_empty())
-        .max_by_key(|(_, n)| **n)
-        .map(|(k, _)| k.join("+"))
-        .unwrap_or_default();
+    for r in renderers {
+        let e = w.spawn();
+        w.insert(e, r);
+    }
     let tiers: BTreeSet<usize> = w
         .iter::<UnityPrograms>()
         .flat_map(|(_, p)| p.variants.iter().map(|v| v.tier))
         .collect();
-    // the first tier, with no keywords and with the renderer's: the keywords decide which fragment variants exist
+    // the first tier, with no keywords and with the scene's own (`scene`): the keywords decide which fragment variants
+    // exist
     for tier in tiers.iter().take(1) {
-        for keywords in ["none".to_owned(), renderer.clone()] {
+        for keywords in ["none", "scene"] {
             let mut world = w.clone();
             let options = Options::from([
                 ("tier".to_owned(), tier.to_string()),
-                ("keywords".to_owned(), keywords.clone()),
+                ("keywords".to_owned(), keywords.to_owned()),
                 ("colour-space".to_owned(), "linear".to_owned()),
             ]);
             let mut log = PassLog::default();
@@ -327,12 +320,7 @@ fn unity_scene(game: &str, label: &str, data: &std::path::Path, tpk: &std::path:
                 .unwrap()
                 .run(&mut world, &mut log)
                 .unwrap();
-            let named = if keywords.len() > 60 {
-                format!("{}...", &keywords[..60])
-            } else {
-                keywords.clone()
-            };
-            let scene = format!("{label} {level} ({pipeline:?}, tier {tier}, keywords {named})");
+            let scene = format!("{label} {level} ({pipeline:?}, tier {tier}, keywords {keywords})");
             print(&tally(&world, game, &scene, materials, &log));
         }
     }

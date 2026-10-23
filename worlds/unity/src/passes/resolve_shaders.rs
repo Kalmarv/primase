@@ -16,12 +16,21 @@
 //!   property of the material by the field's name; a colour property (`colour-space=linear`: converted from its
 //!   gamma-encoded storage to linear, as Unity sets colours in a linear-colour-space player; `gamma`: as stored); a
 //!   texture's `<name>_ST` tiling (scale x, y, offset x, y); Unity's own matrices and camera position as the roles of
-//!   [`builtin`]; anything else `Unknown` with the reason, struct (instancing) fields included. Every byte of a
-//!   buffer the program reads has a role.
+//!   [`builtin`]; its vectors that pack several values (the screen size, the projection's flip and planes, the time) part
+//!   by part ([`builtin_parts`]: each part's own role, the derived ones `Unknown`); anything else `Unknown` with the
+//!   reason, struct (instancing) fields included. Only the bytes the program reads are bound
+//!   ([`primase_shader::ConstantReads`] of the lifted program): a field or part it does not read is left out, counted,
+//!   and the bytes between the fields it reads are `Unknown` ("the player stores no field for them"). A buffer the player
+//!   gives no binding slot (the Universal pipeline's `UnityPerMaterial`, which holds the material's own properties, and
+//!   `LightShadows`) is not placed: the DXBC names no buffer and its sizes are not Unity's (a buffer's size there is
+//!   not its declared size), so the register is not told, and its read bytes are such gaps.
 //! - **Textures.** A texture parameter binds the texture the material's property of that name holds; a property the
 //!   material leaves unset takes the shader's declared default: `white` is white, any other (`bump`, `black`...)
-//!   `Missing`, counted by name (Unity's built-in textures' values are not read). The engine's textures (a lightmap,
-//!   the camera's depth) the program reads and the parameters do not name are `Missing`. The sampler state is Unity's
+//!   `Missing`, counted by name (Unity's built-in textures' values are not read). A texture of Unity's own that the
+//!   material has no property of is the frame's ([`frame_texture`]: the camera's depth and colour, the main light's
+//!   shadow map or screen-space shadows, the occlusion, the nearest reflection probe, the light-probe volume), counted
+//!   by name; the other engine textures the parameters name are `Missing` with the reason, and a slot the parameters do
+//!   not name is `Missing` (the Unity 2021 URP programs of Sledding Game's `level1` name 1 of their 1,375 texture slots: their shader objects store no texture parameters, and the DXBC has no names). The sampler state is Unity's
 //!   packed value ([`crate::components::Parameters::samplers`]): not decoded.
 //! - **Outputs.** The fragment stage's first target is the finished colour of a forward pass; the others `Unknown`.
 //! - **State.** The pass's stored render state (`m_State`), each value the material's property where the pass binds
@@ -38,11 +47,13 @@ use std::collections::BTreeMap;
 
 use primase_core::shader::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
-    DepthBias, DepthState, InputBinding, InputRole, Interface, ObjectParameter, OutputBinding, OutputRole,
-    RenderState, SamplerState, Shader, ShaderBinding, ShaderFormat, Stage, StageBinding, Stencil,
-    StencilFace, StencilOp, SystemValue, TargetState, TextureBinding, TextureSource, ViewParameter,
+    DepthBias, DepthState, FrameParameter, FrameTexture, InputBinding, InputRole, Interface, ObjectParameter,
+    OutputBinding, OutputRole, RenderState, SamplerState, Shader, ShaderBinding, ShaderFormat, Stage,
+    StageBinding, Stencil, StencilFace, StencilOp, SystemValue, TargetState, TextureBinding, TextureSource,
+    ViewParameter,
 };
 use primase_core::{Component, Entity, Name, Semantic, Texture, World};
+use primase_shader::ConstantReads;
 
 use crate::components::{Parameters, Shape, UnityMaterial, UnityProgramVariant, UnityPrograms, UnityTexEnv};
 use crate::passes::draw_keywords::{SceneKeywords, receivers};
@@ -116,17 +127,119 @@ impl ResolveUnityShaders {
     }
 }
 
-/// What Unity's built-in constants are, by field name: the matrices and the camera position the roles of the
-/// vocabulary name.
+/// What Unity's built-in constants are, by field name, where one role names the whole field: the matrices and the camera
+/// position the roles of the vocabulary name. (`unity_CameraToWorld` is the camera's world matrix, the inverse of
+/// `unity_MatrixV` by Unity's own definition.)
 pub fn builtin(name: &str) -> Option<ConstantRole> {
     Some(match name {
         "unity_ObjectToWorld" => ConstantRole::Object(ObjectParameter::World),
         "unity_WorldToObject" => ConstantRole::Object(ObjectParameter::InverseWorld),
         "unity_MatrixV" => ConstantRole::View(ViewParameter::View),
-        "unity_MatrixInvV" => ConstantRole::View(ViewParameter::InverseView),
+        "unity_MatrixInvV" | "unity_CameraToWorld" => ConstantRole::View(ViewParameter::InverseView),
         "unity_MatrixVP" => ConstantRole::View(ViewParameter::ViewProjection),
+        "unity_MatrixInvVP" => ConstantRole::View(ViewParameter::InverseViewProjection),
         "glstate_matrix_projection" => ConstantRole::View(ViewParameter::Projection),
         "_WorldSpaceCameraPos" => ConstantRole::View(ViewParameter::CameraPosition),
+        _ => return None,
+    })
+}
+
+/// Unity's built-in vectors that pack several values in one register: the byte offset in the field, the bytes and the
+/// role of each part. A part with no role in the vocabulary (a value derived from another, or one the vocabulary has no
+/// meaning for) is `Unknown` with the reason.
+pub fn builtin_parts(name: &str) -> Option<Vec<(u32, u32, ConstantRole)>> {
+    let derived = |of: &str, how: &str| ConstantRole::Unknown {
+        why: format!(
+            "{name} {how}: derived from {of}, which has the role; the vocabulary names no derived value"
+        ),
+    };
+    Some(match name {
+        // `(width, height, 1 + 1/width, 1 + 1/height)` of the render target
+        "_ScreenParams" => vec![
+            (0, 8, ConstantRole::View(ViewParameter::ViewportSize)),
+            (
+                8,
+                8,
+                ConstantRole::Unknown {
+                    why: "_ScreenParams.zw is (1 + 1/width, 1 + 1/height): the reciprocals of the viewport plus one, which the vocabulary has no role for".into(),
+                },
+            ),
+        ],
+        // `(flip, near, far, 1/far)`: the flip is +1, or -1 when the projection is flipped, so Unity's sign is core's
+        "_ProjectionParams" => vec![
+            (0, 4, ConstantRole::View(ViewParameter::ProjectionFlip)),
+            (4, 4, ConstantRole::View(ViewParameter::NearPlane)),
+            (8, 4, ConstantRole::View(ViewParameter::FarPlane)),
+            (12, 4, ConstantRole::View(ViewParameter::InverseFarPlane)),
+        ],
+        // `(t/20, t, t*2, t*3)`
+        "_Time" => vec![
+            (0, 4, derived("_Time.y", "x is t / 20")),
+            (4, 4, ConstantRole::Frame(FrameParameter::Time)),
+            (8, 4, derived("_Time.y", "z is t * 2")),
+            (12, 4, derived("_Time.y", "w is t * 3")),
+        ],
+        // `(t, sin t, cos t)` in the Universal pipeline's shaders
+        "_TimeParameters" => vec![
+            (0, 4, ConstantRole::Frame(FrameParameter::Time)),
+            (4, 4, derived("_TimeParameters.x", "y is sin(t)")),
+            (8, 4, derived("_TimeParameters.x", "z is cos(t)")),
+        ],
+        "_SinTime" => vec![(0, 16, derived("_Time.y", "is sin(t / 8), sin(t / 4), sin(t / 2), sin(t)"))],
+        "_CosTime" => vec![(0, 16, derived("_Time.y", "is cos(t / 8), cos(t / 4), cos(t / 2), cos(t)"))],
+        _ => return None,
+    })
+}
+
+/// Why a built-in Unity constant has no role in the vocabulary, for the ones whose meaning is known.
+fn builtin_reason(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "_WorldSpaceLightPos0" | "_MainLightPosition" => {
+            "the main light's position (w 1) or, for a directional light (w 0), the direction toward the light: the vocabulary's light direction is the direction the light travels, and a point or spot light has no role"
+        }
+        "_LightColor0" | "_MainLightColor" => {
+            "the colour of the light the pass is drawn for, times its intensity: no role for a per-pass light colour"
+        }
+        "_LightShadowData" | "unity_ShadowFadeCenterAndType" | "_MainLightShadowParams" => {
+            "the shadow strength and fade of the light the pass is drawn for: no role"
+        }
+        "unity_OrthoParams" => {
+            "(orthographic width, height, 0, 1 if the camera is orthographic else 0): no role"
+        }
+        "_ZBufferParams" => {
+            "the factors that turn the depth buffer's value into eye depth, derived from the near and far planes and the depth direction: no role"
+        }
+        "unity_WorldTransformParams" => {
+            "w is -1 for an object with an odd number of negative scale axes (it flips the bitangent), else 1: a per-object value with no role"
+        }
+        "unity_LightmapST" | "unity_DynamicLightmapST" => {
+            "the scale and offset of the renderer's lightmap coordinates: a per-renderer baked-light value with no role"
+        }
+        "_MainLightLayerMask" | "_MainLightWorldToShadow" => {
+            "the main light's layer mask or its cascades' world-to-shadow matrices: a per-pass light value with no role"
+        }
+        n if n.starts_with("_AdditionalLights") => {
+            "an array of the additional lights' values (position, colour, attenuation, spot direction, layer mask), one entry per light: no role"
+        }
+        "_FPParams0" | "_FPParams1" | "_FPParams2" | "urp_Tiles" | "urp_ZBins" => {
+            "the Forward+ light culling's parameters, tile masks or depth bins: no role"
+        }
+        "_GlobalMipBias" => "the mip bias of dynamic resolution and its power of two: no role",
+        "_ScaledScreenParams" => {
+            "(width, height, 1 + 1/width, 1 + 1/height) of the scaled render target: no role"
+        }
+        n if n.starts_with("_GlossyEnvironmentCubeMap") => {
+            "the decode parameters of the environment reflection cube: no role"
+        }
+        n if n.starts_with("unity_SH") => {
+            "a spherical-harmonics coefficient of the ambient light from the light probes: no role"
+        }
+        n if n.starts_with("unity_SpecCube") || n.starts_with("urp_ReflProbes") => {
+            "a reflection probe's value: no role"
+        }
+        n if n.starts_with("unity_ProbeVolume") || n == "unity_OcclusionMaskSelector" => {
+            "a light-probe-volume value: no role"
+        }
         _ => return None,
     })
 }
@@ -169,8 +282,21 @@ fn material_value(m: &UnityMaterial, name: &str, linear: bool) -> Option<Vec<u32
     Some(words(&[scale[0], scale[1], offset[0], offset[1]]))
 }
 
+/// A declared field or struct of a buffer and the bindings it stands for: its bytes at `offset`, as parts (the byte
+/// offset in the field, the bytes, the role).
+struct Declared {
+    offset: u32,
+    size: u32,
+    name: String,
+    parts: Vec<(u32, u32, ConstantRole)>,
+}
+
 /// The constants of the constant buffer `resource` (of `size` bytes, register `slot`) from the variant's parameters:
-/// each named field and struct field, then `Unknown` over every byte left.
+/// each named field and struct field, and `Unknown` over the bytes no field covers, where the program (`reads`) reads
+/// them. A field or part of a field the program does not read, and bytes it does not read between the fields, are left
+/// out, counted. A built-in vector that packs several values is bound part by part ([`builtin_parts`]). `reads` is
+/// `None` for a program whose reads could not be taken: every byte is then bound.
+#[allow(clippy::too_many_arguments)]
 pub fn buffer_constants(
     parameters: &Parameters,
     slot: u32,
@@ -178,10 +304,11 @@ pub fn buffer_constants(
     size: u32,
     m: &UnityMaterial,
     linear: bool,
+    reads: Option<&ConstantReads>,
     counts: &mut BTreeMap<String, u64>,
 ) -> Vec<ConstantBinding> {
-    let mut out: Vec<ConstantBinding> = Vec::new();
     let mut bump = |what: &str| *counts.entry(what.to_owned()).or_default() += 1;
+    let mut declared: Vec<Declared> = Vec::new();
     if let Some(cb) = parameters
         .constant_buffers
         .iter()
@@ -189,76 +316,125 @@ pub fn buffer_constants(
     {
         for f in &cb.fields {
             let bytes = field_bytes(f.shape, f.array_size);
-            let role = if let Some(mut w) = material_value(m, &f.name, linear) {
+            let whole = |role| vec![(0, bytes, role)];
+            let parts = if let Some(mut w) = material_value(m, &f.name, linear) {
                 w.truncate(bytes as usize / 4);
                 bump("constants set from the material's properties");
-                ConstantRole::Material(w)
+                whole(ConstantRole::Material(w))
             } else if let Some(role) = builtin(&f.name) {
                 bump("constants that are Unity's built-in matrices and camera position");
-                role
+                whole(role)
+            } else if let Some(parts) = builtin_parts(&f.name) {
+                bump("constants that are Unity's built-in vectors of several values, bound part by part");
+                parts.into_iter().filter(|(at, n, _)| at + n <= bytes).collect()
             } else {
                 bump(
                     "constants no role is resolved for (not a material property, not in the built-in table)",
                 );
-                ConstantRole::Unknown {
-                    why: "not a material property of this name and not a built-in this pass maps".into(),
-                }
+                whole(ConstantRole::Unknown {
+                    why: match builtin_reason(&f.name) {
+                        Some(reason) => format!("{}: {reason}", f.name),
+                        None => {
+                            "not a material property of this name and not a built-in this pass maps".into()
+                        }
+                    },
+                })
             };
-            out.push(ConstantBinding {
-                resource,
+            declared.push(Declared {
                 offset: f.offset,
                 size: bytes,
-                name: Some(f.name.clone()),
-                role,
+                name: f.name.clone(),
+                parts,
             });
         }
         for s in &cb.structs {
             bump("struct (instancing) constants, Unknown");
-            out.push(ConstantBinding {
-                resource,
+            let bytes = s.size.saturating_mul(s.array_size.max(1));
+            declared.push(Declared {
                 offset: s.offset,
-                size: s.size.saturating_mul(s.array_size.max(1)),
-                name: Some(s.name.clone()),
-                role: ConstantRole::Unknown {
-                    why: "a struct field (an instancing array): not laid out".into(),
-                },
+                size: bytes,
+                name: s.name.clone(),
+                parts: vec![(
+                    0,
+                    bytes,
+                    ConstantRole::Unknown {
+                        why: "a struct field (an instancing array): not laid out".into(),
+                    },
+                )],
             });
         }
     }
     // only what fits the buffer the program declares
-    out.retain(|c| c.size > 0 && c.offset.checked_add(c.size).is_some_and(|end| end <= size));
-    out.sort_by_key(|c| (c.offset, c.size));
+    declared.retain(|c| c.size > 0 && c.offset.checked_add(c.size).is_some_and(|end| end <= size));
+    declared.sort_by_key(|c| (c.offset, c.size));
     // overlapping declarations (a field and a struct's member over the same bytes) keep the first
-    let mut kept: Vec<ConstantBinding> = Vec::new();
-    for c in out {
+    let mut kept: Vec<Declared> = Vec::new();
+    for c in declared {
         if kept.last().is_none_or(|l| c.offset >= l.offset + l.size) {
             kept.push(c);
         }
     }
-    let mut gaps = Vec::new();
+    // whether the program reads the bytes (every byte, where its reads are not known)
+    let read = |offset: u32, bytes: u32| reads.is_none_or(|r| r.reads(0, slot, offset, bytes));
+    let mut out = Vec::new();
+    let mut unread = 0u64;
     let mut at = 0;
+    let mut gaps = Vec::new();
     for c in &kept {
         if c.offset > at {
             gaps.push((at, c.offset - at));
         }
         at = c.offset + c.size;
+        for (rel, bytes, role) in &c.parts {
+            if read(c.offset + rel, *bytes) {
+                out.push(ConstantBinding {
+                    resource,
+                    offset: c.offset + rel,
+                    size: *bytes,
+                    name: Some(c.name.clone()),
+                    role: role.clone(),
+                });
+            } else {
+                unread += 1;
+            }
+        }
     }
     if at < size {
         gaps.push((at, size - at));
     }
+    // the bytes between the fields, in runs of words the program reads
     for (offset, bytes) in gaps {
-        kept.push(ConstantBinding {
-            resource,
-            offset,
-            size: bytes,
-            name: None,
-            role: ConstantRole::Unknown {
-                why: "bytes of the buffer no stored field covers".into(),
-            },
-        });
+        let mut word = offset;
+        while word < offset + bytes {
+            if !read(word, 4) {
+                unread += 1;
+                while word < offset + bytes && !read(word, 4) {
+                    word += 4;
+                }
+                continue;
+            }
+            let start = word;
+            while word < offset + bytes && read(word, 4) {
+                word += 4;
+            }
+            out.push(ConstantBinding {
+                resource,
+                offset: start,
+                size: word.min(offset + bytes) - start,
+                name: None,
+                role: ConstantRole::Unknown {
+                    why: "the program reads these bytes and the player stores no field for them".into(),
+                },
+            });
+        }
     }
-    kept.sort_by_key(|c| c.offset);
-    kept
+    if unread > 0 {
+        *counts
+            .entry("constants and runs of bytes the program does not read, left out".into())
+            .or_default() += unread;
+    }
+    out.sort_by_key(|c| c.offset);
+    out
 }
 
 /// A shader's declared default texture (`white`...) as a colour, where Unity's name is one this pass values.
@@ -563,6 +739,8 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
             without,
         );
         let mut shaders: BTreeMap<std::sync::Arc<[u8]>, Result<Entity, String>> = BTreeMap::new();
+        // the constants each program reads, taken when it is lifted
+        let mut reads_of: BTreeMap<Entity, ConstantReads> = BTreeMap::new();
         let scene = self.scene.then(|| SceneKeywords::read(world));
         if scene.as_ref().is_some_and(|s| !s.known()) {
             log.approximate(
@@ -630,6 +808,10 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                         Err(e) => Err(format!("a program the lifter refuses: {}", e.group())),
                         Ok(program) => {
                             let e = world.spawn();
+                            reads_of.insert(
+                                e,
+                                ConstantReads::of_module(program.module.clone(), |b| (b.group, b.binding)),
+                            );
                             world.insert(e, Name(format!("{}-{:?}", programs.shader, stage)));
                             world.insert(
                                 e,
@@ -658,6 +840,7 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                             stage,
                             shader,
                             &interface,
+                            reads_of.get(&shader),
                             chosen.vertex.is_some(),
                             &mut counts,
                         ));
@@ -725,6 +908,7 @@ impl ResolveUnityShaders {
         stage: Stage,
         shader: Entity,
         interface: &Interface,
+        reads: Option<&ConstantReads>,
         vertex_bound: bool,
         counts: &mut BTreeMap<String, u64>,
     ) -> StageBinding {
@@ -753,22 +937,24 @@ impl ResolveUnityShaders {
             .collect();
         let mut constants = Vec::new();
         let mut textures = Vec::new();
+        let parameters = &variant.parameters;
         for r in &interface.resources {
             let Some(b) = r.provenance.d3d else { continue };
             match (&r.kind, b.class) {
                 (primase_core::shader::ResourceKind::ConstantBuffer { layout }, D3dClass::ConstantBuffer) => {
                     constants.extend(buffer_constants(
-                        &variant.parameters,
+                        parameters,
                         b.register,
                         r.id,
                         layout.size,
                         m,
                         self.linear,
+                        reads,
                         counts,
                     ));
                 }
                 (primase_core::shader::ResourceKind::Texture { .. }, D3dClass::ShaderResource) => {
-                    let named = variant.parameters.textures.iter().find(|t| t.slot == b.register);
+                    let named = parameters.textures.iter().find(|t| t.slot == b.register);
                     let source = match named {
                         None => {
                             *counts
@@ -779,7 +965,7 @@ impl ResolveUnityShaders {
                                 .or_default() += 1;
                             TextureSource::Missing
                         }
-                        Some(t) => resolve_texture(m, defaults, &t.name, counts),
+                        Some(t) => resolve_texture(m, defaults, &variant.keywords, &t.name, counts),
                     };
                     textures.push(TextureBinding {
                         resource: r.id,
@@ -833,10 +1019,47 @@ fn output_bindings(interface: &Interface) -> Vec<OutputBinding> {
         .collect()
 }
 
-/// What a texture parameter named `name` samples: the property's texture, else the shader's default.
+/// The image of the frame a texture parameter of Unity's own name is, by what it holds (`keywords` are the fragment
+/// variant's: `_ShadowMapTexture` is the main light's screen-space shadow term under `SHADOWS_SCREEN`, else a light's
+/// shadow depth map).
+pub fn frame_texture(name: &str, keywords: &[String]) -> Option<FrameTexture> {
+    Some(match name {
+        "_CameraDepthTexture" => FrameTexture::SceneDepth,
+        "_CameraOpaqueTexture" | "_GrabTexture" | "_GrabScreen0" => FrameTexture::SceneColour,
+        "_MainLightShadowmapTexture" => FrameTexture::ShadowMap,
+        "_ShadowMapTexture" if keywords.iter().any(|k| k == "SHADOWS_SCREEN") => {
+            FrameTexture::ScreenSpaceShadows
+        }
+        "_ShadowMapTexture" => FrameTexture::ShadowMap,
+        "_ScreenSpaceOcclusionTexture" => FrameTexture::AmbientOcclusion,
+        "unity_SpecCube0" | "_GlossyEnvironmentCubeMap" => FrameTexture::ReflectionProbe,
+        "unity_ProbeVolumeSH" => FrameTexture::LightProbeVolume,
+        _ => return None,
+    })
+}
+
+/// Why an engine texture of Unity's has no frame texture in the vocabulary, for the ones whose meaning is known.
+fn engine_texture_reason(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "_AdditionalLightsShadowmapTexture" => {
+            "an atlas of the shadow maps of the additional lights: which lights it holds is not stated"
+        }
+        "unity_SpecCube1" => {
+            "the second-nearest reflection probe, blended with the first by a weight in the engine's constants: no role for it"
+        }
+        "urp_ReflProbes_Atlas" => {
+            "an atlas of the scene's reflection probes, picked per surface by the cluster: no role"
+        }
+        _ => return None,
+    })
+}
+
+/// What a texture parameter named `name` samples: the property's texture, else the shader's default; the engine's
+/// own textures ([`frame_texture`]) are the frame's.
 fn resolve_texture(
     m: &UnityMaterial,
     defaults: &[(String, String)],
+    keywords: &[String],
     name: &str,
     counts: &mut BTreeMap<String, u64>,
 ) -> TextureSource {
@@ -845,7 +1068,18 @@ fn resolve_texture(
         referenced, texture, ..
     }) = m.textures.iter().find(|t| t.name == name)
     else {
-        bump("texture parameters the material has no property of, left Missing".into());
+        if let Some(frame) = frame_texture(name, keywords) {
+            bump(format!(
+                "texture parameters that are the frame's {frame:?}: {name}"
+            ));
+            return TextureSource::Frame(frame);
+        }
+        bump(match engine_texture_reason(name) {
+            Some(why) => {
+                format!("texture parameters the material has no property of, left Missing: {name} ({why})")
+            }
+            None => format!("texture parameters the material has no property of, left Missing: {name}"),
+        });
         return TextureSource::Missing;
     };
     match (referenced, texture) {
@@ -982,6 +1216,7 @@ mod tests {
             192,
             &material(),
             true,
+            None,
             &mut counts,
         );
         let at = |offset: u32| c.iter().find(|c| c.offset == offset).unwrap();
@@ -1020,6 +1255,7 @@ mod tests {
             192,
             &material(),
             false,
+            None,
             &mut BTreeMap::new(),
         );
         assert_eq!(
@@ -1034,6 +1270,7 @@ mod tests {
             32,
             &material(),
             true,
+            None,
             &mut BTreeMap::new(),
         );
         assert_eq!(other.len(), 1);
@@ -1051,6 +1288,136 @@ mod tests {
             Some(ConstantRole::View(ViewParameter::CameraPosition))
         );
         assert_eq!(builtin("_Time"), None);
+        // the camera's world matrix is the inverse of the view matrix
+        assert_eq!(
+            builtin("unity_CameraToWorld"),
+            Some(ConstantRole::View(ViewParameter::InverseView))
+        );
+        assert_eq!(
+            builtin("unity_MatrixInvVP"),
+            Some(ConstantRole::View(ViewParameter::InverseViewProjection))
+        );
+    }
+
+    #[test]
+    fn the_packed_builtin_vectors_bind_each_value_by_its_lanes() {
+        let role = |name: &str, at: u32| {
+            builtin_parts(name)
+                .unwrap()
+                .into_iter()
+                .find(|(a, _, _)| *a == at)
+                .unwrap()
+                .2
+        };
+        // `_ProjectionParams` is (flip, near, far, 1/far)
+        assert_eq!(
+            role("_ProjectionParams", 0),
+            ConstantRole::View(ViewParameter::ProjectionFlip)
+        );
+        assert_eq!(
+            role("_ProjectionParams", 4),
+            ConstantRole::View(ViewParameter::NearPlane)
+        );
+        assert_eq!(
+            role("_ProjectionParams", 8),
+            ConstantRole::View(ViewParameter::FarPlane)
+        );
+        assert_eq!(
+            role("_ProjectionParams", 12),
+            ConstantRole::View(ViewParameter::InverseFarPlane)
+        );
+        // `_ScreenParams` is (width, height, 1 + 1/width, 1 + 1/height): the size is the role, the rest is not
+        assert_eq!(
+            role("_ScreenParams", 0),
+            ConstantRole::View(ViewParameter::ViewportSize)
+        );
+        assert!(
+            matches!(role("_ScreenParams", 8), ConstantRole::Unknown { why } if why.contains("1 + 1/width"))
+        );
+        // the time is `_Time.y` and `_TimeParameters.x`; the lanes derived from it are not roles
+        assert_eq!(role("_Time", 4), ConstantRole::Frame(FrameParameter::Time));
+        assert!(matches!(role("_Time", 0), ConstantRole::Unknown { .. }));
+        assert_eq!(
+            role("_TimeParameters", 0),
+            ConstantRole::Frame(FrameParameter::Time)
+        );
+        assert!(builtin_parts("_WorldSpaceCameraPos").is_none());
+        // a light's position points toward it: stated, not mapped onto the light's travel direction
+        assert!(builtin_reason("_WorldSpaceLightPos0").is_some_and(|r| r.contains("toward the light")));
+    }
+
+    /// The constants of `modes.dxbc`, a pixel program of one buffer at register 0 (`f` row 0, `u` row 1, `i` row 2) that
+    /// reads every lane of rows 0 and 1 and the x and y lanes of row 2.
+    #[test]
+    fn only_the_bytes_the_program_reads_are_bound() {
+        let program = primase_dxbc::lift(include_bytes!(
+            "../../../../toolkit/dxbc/tests/fixtures/modes.dxbc"
+        ))
+        .unwrap();
+        let reads = ConstantReads::of_module(program.module, |b| (b.group, b.binding));
+        let parameters = Parameters {
+            constant_buffers: vec![ConstantBuffer {
+                name: "UnityPerCamera".into(),
+                slot: Some(0),
+                size: 64,
+                fields: vec![
+                    field("_ProjectionParams", 0, Shape::Vector { columns: 4 }),
+                    field("_Time", 32, Shape::Vector { columns: 4 }),
+                    field("_Never", 48, Shape::Vector { columns: 4 }),
+                ],
+                structs: Vec::new(),
+            }],
+            textures: Vec::new(),
+            samplers: Vec::new(),
+        };
+        let mut counts = BTreeMap::new();
+        let c = buffer_constants(
+            &parameters,
+            0,
+            ResourceId(1),
+            64,
+            &material(),
+            true,
+            Some(&reads),
+            &mut counts,
+        );
+        let at: Vec<(u32, u32, Option<&str>)> =
+            c.iter().map(|c| (c.offset, c.size, c.name.as_deref())).collect();
+        assert_eq!(
+            at,
+            [
+                // all four values of the vector: each lane is read
+                (0, 4, Some("_ProjectionParams")),
+                (4, 4, Some("_ProjectionParams")),
+                (8, 4, Some("_ProjectionParams")),
+                (12, 4, Some("_ProjectionParams")),
+                // the row no field covers, read whole
+                (16, 16, None),
+                // `_Time` x and y are read, z and w are not
+                (32, 4, Some("_Time")),
+                (36, 4, Some("_Time")),
+            ]
+        );
+        assert_eq!(c[1].role, ConstantRole::View(ViewParameter::NearPlane));
+        assert!(matches!(&c[4].role, ConstantRole::Unknown { why } if why.contains("reads these bytes")));
+        assert_eq!(c[6].role, ConstantRole::Frame(FrameParameter::Time));
+        // `_Time.z`, `_Time.w` and `_Never` are the three left out
+        assert_eq!(
+            counts["constants and runs of bytes the program does not read, left out"],
+            3
+        );
+        // a program whose reads are not known keeps every byte
+        let all = buffer_constants(
+            &parameters,
+            0,
+            ResourceId(1),
+            64,
+            &material(),
+            true,
+            None,
+            &mut BTreeMap::new(),
+        );
+        assert_eq!(all.iter().map(|c| c.size).sum::<u32>(), 64);
     }
 
     #[test]
@@ -1063,18 +1430,18 @@ mod tests {
         let mut counts = BTreeMap::new();
         // referenced, but the world holds no texture for it
         assert_eq!(
-            resolve_texture(&m, &defaults, "_MainTex", &mut counts),
+            resolve_texture(&m, &defaults, &[], "_MainTex", &mut counts),
             TextureSource::Missing
         );
         // unset, with a default this pass does not value
         assert_eq!(
-            resolve_texture(&m, &defaults, "_BumpMap", &mut counts),
+            resolve_texture(&m, &defaults, &[], "_BumpMap", &mut counts),
             TextureSource::Missing
         );
         assert!(counts.keys().any(|k| k.contains("\"bump\" is not valued")));
         // a property the material does not have
         assert_eq!(
-            resolve_texture(&m, &defaults, "_Other", &mut counts),
+            resolve_texture(&m, &defaults, &[], "_Other", &mut counts),
             TextureSource::Missing
         );
         let mut unset = material();
@@ -1086,9 +1453,44 @@ mod tests {
             offset: [0.0; 2],
         });
         assert!(matches!(
-            resolve_texture(&unset, &defaults, "_Other", &mut counts),
+            resolve_texture(&unset, &defaults, &[], "_Other", &mut counts),
             TextureSource::Default { value, .. } if value == [1.0; 4]
         ));
+    }
+
+    #[test]
+    fn the_engines_own_textures_are_the_frames() {
+        let screen = vec!["DIRECTIONAL".to_owned(), "SHADOWS_SCREEN".to_owned()];
+        let none: Vec<String> = Vec::new();
+        assert_eq!(
+            frame_texture("_CameraDepthTexture", &none),
+            Some(FrameTexture::SceneDepth)
+        );
+        // the same name holds a screen-space term under SHADOWS_SCREEN and a light's depth map otherwise
+        assert_eq!(
+            frame_texture("_ShadowMapTexture", &screen),
+            Some(FrameTexture::ScreenSpaceShadows)
+        );
+        assert_eq!(
+            frame_texture("_ShadowMapTexture", &none),
+            Some(FrameTexture::ShadowMap)
+        );
+        assert_eq!(
+            frame_texture("unity_SpecCube0", &none),
+            Some(FrameTexture::ReflectionProbe)
+        );
+        assert_eq!(frame_texture("unity_SpecCube1", &none), None);
+        assert!(engine_texture_reason("unity_SpecCube1").is_some());
+        // a property the material has wins over the engine's name; one it has not is the frame's, counted
+        let mut counts = BTreeMap::new();
+        assert_eq!(
+            resolve_texture(&material(), &[], &none, "_CameraDepthTexture", &mut counts),
+            TextureSource::Frame(FrameTexture::SceneDepth)
+        );
+        assert_eq!(
+            counts["texture parameters that are the frame's SceneDepth: _CameraDepthTexture"],
+            1
+        );
     }
 
     #[test]

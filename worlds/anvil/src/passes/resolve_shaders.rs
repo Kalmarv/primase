@@ -23,7 +23,7 @@
 //!   `cb2` per draw) are the engine's: the program is lifted and only the lanes it reads are bound (a program reads a
 //!   few rows of buffers of some hundred; the rest are counted as left out, a buffer indexed by a computed value is one
 //!   `Unknown` constant). The rows the notes establish have roles where the vocabulary has one: `cb1[37]`
-//!   (`1/W, 1/H, W, H`) the `InverseViewportSize`, `cb1[39].x` the `Exposure`, `cb2[8..12]` and `cb2[12..16]` the object's `WorldViewProjection` and its `PreviousFrame` one,
+//!   (`1/W, 1/H, W, H`) the `InverseViewportSize` in its lanes x, y and the `ViewportSize` in z, w, `cb1[39].x` the `Exposure`, `cb2[8..12]` and `cb2[12..16]` the object's `WorldViewProjection` and its `PreviousFrame` one,
 //!   `cb2[18].y` the Material's alpha-test
 //!   reference (`AlphaTestValue / 255` where `AlphaTestEnabled`, else 0); the rest are `Unknown` with the notes' reason
 //!   where they state one.
@@ -400,20 +400,23 @@ fn engine_matrix(register: u32, row: u32) -> Option<(u32, ObjectParameter)> {
     })
 }
 
-/// The tiles of the engine's buffers that have a role: (first lane, lanes, the role) of a row. A program that reads any
-/// lane of a tile has the tile bound whole, the role naming all of its values.
-fn engine_tile(register: u32, row: u32, alpha_test_reference: f32) -> Option<(u32, u32, ConstantRole)> {
-    Some(match (register, row) {
+/// The tiles of the engine's buffers that have a role: (first lane, lanes, the role) of each, in a row. A program that
+/// reads any lane of a tile has the tile bound whole, the role naming all of its values.
+fn engine_tile(register: u32, row: u32, alpha_test_reference: f32) -> Vec<(u32, u32, ConstantRole)> {
+    match (register, row) {
         // `cb1[37]` is `(1/W, 1/H, W, H)` in every copy of the per-view buffer found in memory, and the G-buffer pixel
         // shaders scale a pixel position by its xy for the velocity output (material-spec §17.1)
-        (1, 37) => (0, 4, ConstantRole::View(ViewParameter::InverseViewportSize)),
+        (1, 37) => vec![
+            (0, 2, ConstantRole::View(ViewParameter::InverseViewportSize)),
+            (2, 2, ConstantRole::View(ViewParameter::ViewportSize)),
+        ],
         // the multiplier the lighting passes scale their output by (`cb1[39].x`, 1 in every copy)
-        (1, 39) => (0, 1, ConstantRole::Frame(FrameParameter::Exposure)),
+        (1, 39) => vec![(0, 1, ConstantRole::Frame(FrameParameter::Exposure))],
         // the alpha-test reference of the G-buffer pass: the Material's `AlphaTestValue / 255` where `AlphaTestEnabled`
         // is on, else 0 (shaders.md §6.2): a fragment is discarded where its alpha minus this is below 0
-        (2, 18) => (1, 1, ConstantRole::Material(bits(&[alpha_test_reference]))),
-        _ => return None,
-    })
+        (2, 18) => vec![(1, 1, ConstantRole::Material(bits(&[alpha_test_reference])))],
+        _ => Vec::new(),
+    }
 }
 
 /// The engine's constant buffers a program reads, as constants: `cb0` per frame, `cb1` per view, `cb2` per draw. The
@@ -486,7 +489,10 @@ fn engine_constants(
         }
         let lanes = reads.lanes_of(0, register, row);
         let mut covered = [false; 4];
-        if let Some((first, count, role)) = engine_tile(register, row, reference) {
+        for (first, count, role) in engine_tile(register, row, reference) {
+            if !(first..first + count).any(|lane| lanes.contains(&lane)) {
+                continue;
+            }
             bump("engine constants with a role", 1);
             for lane in first..first + count {
                 covered[lane as usize] = true;
@@ -1534,20 +1540,23 @@ mod key_tests {
             (b.group, b.binding)
         });
         let _ = engine_constants(2, ResourceId(0), 18 * 16 + 16, Some(&reads), &m, &mut counts);
-        let tile = |reference: f32| engine_tile(2, 18, reference).unwrap();
+        let tile = |reference: f32| engine_tile(2, 18, reference).remove(0);
         assert_eq!(
             tile(128.0 / 255.0).2,
             ConstantRole::Material(vec![(128.0f32 / 255.0).to_bits()])
         );
         assert_eq!(
-            engine_tile(1, 37, 0.0).unwrap(),
-            (0, 4, ConstantRole::View(ViewParameter::InverseViewportSize))
+            engine_tile(1, 37, 0.0),
+            vec![
+                (0, 2, ConstantRole::View(ViewParameter::InverseViewportSize)),
+                (2, 2, ConstantRole::View(ViewParameter::ViewportSize)),
+            ]
         );
         assert_eq!(
-            engine_tile(1, 39, 0.0).unwrap(),
+            engine_tile(1, 39, 0.0).remove(0),
             (0, 1, ConstantRole::Frame(FrameParameter::Exposure))
         );
-        assert!(engine_tile(0, 4, 0.0).is_none());
+        assert!(engine_tile(0, 4, 0.0).is_empty());
         // the clip matrix and the previous frame's are four rows each, whichever row a program reads
         for row in 8..12 {
             assert_eq!(

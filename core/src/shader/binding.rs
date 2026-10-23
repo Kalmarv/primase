@@ -49,13 +49,23 @@ pub enum ViewParameter {
     InverseView,
     InverseProjection,
     InverseViewProjection,
-    /// The render target's size as four values: width and height in pixels, then the uv-space step programs add to a
-    /// coordinate to move whole texels (the reciprocals, by use: GTA's SSAO vertex program offsets a coordinate by two
-    /// times each).
+    /// The render target's size in pixels as two values: the width, then the height. A source that packs more into
+    /// the register (the reciprocals beside the size, in either order) binds each pair by its own role over its own
+    /// lanes.
     ViewportSize,
-    /// The render target's size as four values in the other order: the uv-space step of a whole texel in x and y (the
-    /// reciprocals of the width and height), then the width and height in pixels in z and w.
+    /// The reciprocals of the render target's size in pixels as two values: `1 / width`, then `1 / height`, the
+    /// uv-space step of a whole texel.
     InverseViewportSize,
+    /// The distance from the camera to the near clip plane, along the view axis, in world units (one value).
+    NearPlane,
+    /// The distance from the camera to the far clip plane, along the view axis, in world units (one value).
+    FarPlane,
+    /// `1 / far plane`: the reciprocal of [`ViewParameter::FarPlane`] (one value).
+    InverseFarPlane,
+    /// The sign the projection puts on up (one value): +1 when a point above the view axis, in view space, has a positive
+    /// clip-space y, -1 when the projection negates y (a render into a texture, on a source whose texture origin is not
+    /// the screen's). A source that stores the opposite convention maps its value onto this one.
+    ProjectionFlip,
     /// The previous frame's view-projection matrix (what a motion vector is measured against).
     PreviousViewProjection,
 }
@@ -222,6 +232,23 @@ pub enum FrameTexture {
     /// The depth the frame's depth pass wrote, the hardware depth in `x`: a program that reads it linearises it with the scene
     /// constants' depth parameters (soft edges of fog, foam and water against the geometry behind).
     SceneDepth,
+    /// The colour image of what the frame has drawn so far behind the surface (the opaque scene, or the screen as it
+    /// stands): what a refracting or see-through surface samples.
+    SceneColour,
+    /// The depth image rendered from a shadow-casting light (the main light's, its cascades side by side where it has
+    /// them): a program compares a surface's depth in that light's space with it.
+    ShadowMap,
+    /// The shadow term of the main light gathered per screen pixel: a program samples it at its own screen position, 1
+    /// where the light reaches and 0 where it is shadowed.
+    ScreenSpaceShadows,
+    /// The ambient occlusion the frame computed per screen pixel (1 unoccluded).
+    AmbientOcclusion,
+    /// The cube image of the environment around the surface as the nearest reflection probe, or the sky where there is
+    /// none, captured: what a reflection samples along the reflected view direction.
+    ReflectionProbe,
+    /// The volume image of the light probes' lighting around the surface (a 3D image of spherical-harmonic
+    /// coefficients the surface samples at its position).
+    LightProbeVolume,
 }
 
 /// What a texture slot samples.
