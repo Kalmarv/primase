@@ -259,13 +259,13 @@ which primase-viewer's `audit-ktx2.mjs` compares with Three.js' pinned WASM
 transcoder. The export's `plain/` set is written from the same prepared world
 (one conversion writing both sets), so its PNG images are the encoder's input:
 the audit requires the KTX2 set's PNG images to equal them and the cut-out and
-blend bounds above, and reports per-role channel maxima/means and normal-angle
+blend bounds above, at the materials that bind each encoded image in the set itself
+(an image name can be several textures, each with its own bindings and encoding), and reports per-role channel maxima/means and normal-angle
 maxima/means/p99 of the codec error; an image whose plain twin has another size
 is an error (nothing independent gives its input). It runs on the synthetic
 fixture (`fixture::synthetic_world`; colour p99 within 8) and on a real export,
-`oracles.baseline.sekiro/ktx2-tiles` (colour p99 within 5, as measured on slice A; blocked:
-the export on hand came from a removed command, its plain set not prepared
-alike). A reference image is found in the plain set by its name, in whichever
+`oracles.baseline.sekiro/ktx2-tiles` (colour p99 within 5, as measured on slice A; written by
+`examples/examples/sekiro_ktx2_tiles.rs`, both sets from one conversion). A reference image is found in the plain set by its name, in whichever
 plain tile holds it: the plain set tiles on its own (its PNG tiles are larger, so
 a cell may split where the KTX2 one does not). Quality samples are deduplicated
 by source content, role, output dimensions and encoded content. The resize itself

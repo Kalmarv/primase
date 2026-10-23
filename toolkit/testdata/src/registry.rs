@@ -479,10 +479,10 @@ pub const DECLARED: &[Declared] = &[
     },
     Declared {
         query: Query::Oracle(OracleSet::Baseline, Game::Sekiro, "ktx2-tiles"),
-        status: Status::Blocked,
+        status: Status::Live,
         gate: true,
         about: r#"a web tile export with KTX2 textures and its plain set, both written from the same prepared cell worlds (one conversion writing both sets, `primase_web::convert::tiles`): tiles.json, the tiles, images/, plain/tiles.json and its tiles; formats/web/tests/ktx2_audit.rs"#,
-        source: r#"the existing export's producer is gone (scene_to_tiles --ktx2 of oracles.baseline.sekiro/scene, removed) and its plain set was not prepared alike (16 of 172 images at their source size), so nothing independent gives those images' encoder input; replacement: a program converting a scene to both sets in one conversion, its KTX2 images then checked with an independent decoder (the pure-Rust basisu transcoder) against the plain set and the printed hashes with the viewer's WASM transcoder"#,
+        source: r#"our own writer's output: examples/examples/sekiro_ktx2_tiles.rs writes it (slice A of Sekiro's m11_01, both sets in one conversion), so the plain set holds the KTX2 encoder's input; the checks are an independent decoder's (the pure-Rust basisu transcoder, against the plain set) and the viewer's WASM transcoder's (the printed hashes)"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Baseline, Game::Sekiro, "layer-pilot"),

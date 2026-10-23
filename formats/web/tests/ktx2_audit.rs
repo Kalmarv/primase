@@ -2,8 +2,10 @@
 //! every mip level decoded by the pure-Rust Basis Universal transcoder (their hashes printed for the viewer's WASM
 //! transcoder to compare), each image against its plain (PNG) set's, which is the encoder's input (the plain set is
 //! written from the same prepared world; an image of another size there is an error): PNG images exactly those
-//! pixels, cut-out visibility changed for fewer than 0.1% of pixels at each material's cutoff, blended alpha p99
-//! within 8 levels, and per-role codec quality. Runs on the synthetic fixture always, and on a real export
+//! pixels, cut-out visibility changed for fewer than 0.1% of pixels at the cutoff of each material that binds the
+//! image's content as base colour in the set itself (a name may be several textures, each bound and encoded by its
+//! own rules), blended alpha p99 within 8 levels, and per-role codec quality. Every image past a bound is listed
+//! before the audit fails. Runs on the synthetic fixture always, and on a real export
 //! (`oracles.baseline.sekiro/ktx2-tiles`) when configured, against the bounds the README states.
 #![cfg(all(feature = "ktx2", feature = "fixture"))]
 #![allow(clippy::unwrap_used)]
@@ -38,6 +40,59 @@ fn image_bytes(
         .to_vec())
 }
 
+/// The texture source of a glTF texture: its image, as core glTF or `KHR_texture_basisu` names it.
+fn texture_source(texture: &Value) -> Option<u64> {
+    texture["source"]
+        .as_u64()
+        .or_else(|| texture.pointer("/extensions/KHR_texture_basisu/source")?.as_u64())
+}
+
+/// An image's content across the tiles: its file (format 2.0, shared by every tile that names it), or the hash of
+/// its bytes in a GLB (1.x).
+fn content_key(image: &Value, bytes: &[u8]) -> String {
+    image["uri"].as_str().map_or_else(
+        || Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect(),
+        str::to_owned,
+    )
+}
+
+/// A base-colour binding's alpha rule: the material's alpha mode, cutoff and base-colour alpha factor (bits).
+type Rule = (String, u32, u32);
+
+/// The alpha rules of every material that binds each image as base colour, by the image's content
+/// ([`content_key`]), in the set's own tiles: the consumer's uses of that content and nothing else (an image name
+/// may be several textures, each bound by its own materials and encoded by its own rules).
+fn alpha_rules(folder: &Path, index: &Value) -> R<BTreeMap<String, BTreeSet<Rule>>> {
+    let mut rules = BTreeMap::<String, BTreeSet<Rule>>::new();
+    for tile in index["tiles"].as_array().ok_or("tiles")? {
+        let glb = std::fs::read(folder.join(tile["file"].as_str().ok_or("tile file")?))?;
+        let chunks = primase_glb::parse(&glb)?;
+        let doc: Value = serde_json::from_slice(chunks.json)?;
+        for material in doc["materials"].as_array().map_or(&[][..], Vec::as_slice) {
+            let Some(t) = material
+                .pointer("/pbrMetallicRoughness/baseColorTexture/index")
+                .and_then(Value::as_u64)
+            else {
+                continue;
+            };
+            let source = texture_source(&doc["textures"][t as usize]).ok_or("texture source")?;
+            let image = &doc["images"][source as usize];
+            let key = content_key(image, &image_bytes(folder, &doc, chunks.bin, image)?);
+            let mode = material["alphaMode"].as_str().unwrap_or("OPAQUE").to_owned();
+            let cutoff = material["alphaCutoff"].as_f64().unwrap_or(0.5) as f32;
+            let factor = material
+                .pointer("/pbrMetallicRoughness/baseColorFactor/3")
+                .and_then(Value::as_f64)
+                .unwrap_or(1.) as f32;
+            rules
+                .entry(key)
+                .or_default()
+                .insert((mode, cutoff.to_bits(), factor.to_bits()));
+        }
+    }
+    Ok(rules)
+}
+
 /// What an audit found.
 #[derive(Default)]
 struct Audit {
@@ -50,6 +105,13 @@ struct Audit {
     near_zero: u64,
     /// Codec error against the encoder's input, by role.
     quality: BTreeMap<String, Quality>,
+    /// Cut-out bindings checked and the largest share of flips among them; blended bindings and the largest p99.
+    cutouts: u64,
+    worst_flips: f64,
+    blends: u64,
+    worst_blend_p99: u64,
+    /// Every image past a bound, with what it measured.
+    failures: Vec<String>,
 }
 
 /// Audit the web export in `folder` (`tiles.json`, its tiles and images) against its plain set in `folder/plain`.
@@ -88,6 +150,7 @@ fn audit(folder: &Path) -> R<Audit> {
             }
         }
     }
+    let rules = alpha_rules(folder, &index)?;
     let mut seen = BTreeSet::new();
     for tile in index["tiles"].as_array().ok_or("tiles")? {
         let name = tile["file"].as_str().ok_or("tile file")?;
@@ -185,35 +248,18 @@ fn audit(folder: &Path) -> R<Audit> {
                 )
                 .into());
             }
-            // the consumer's alpha rules, from the materials that bind the image as base colour, in every plain tile
-            let bindings = plain_docs.iter().flat_map(|(plain_doc, _)| {
-                plain_doc["materials"]
-                    .as_array()
-                    .map_or(&[][..], Vec::as_slice)
-                    .iter()
-                    .map(move |m| (plain_doc, m))
-            });
-            for (plain_doc, material) in bindings {
-                let Some(t) = material
-                    .pointer("/pbrMetallicRoughness/baseColorTexture/index")
-                    .and_then(Value::as_u64)
-                else {
-                    continue;
-                };
-                let source = plain_doc["textures"][t as usize]["source"]
-                    .as_u64()
-                    .ok_or("PNG texture source")?;
-                if plain_doc["images"][source as usize]["name"].as_str() != Some(source_name)
-                    || role != "colour"
-                {
-                    continue;
-                }
-                let factor = material
-                    .pointer("/pbrMetallicRoughness/baseColorFactor/3")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(1.) as f32;
-                if material["alphaMode"] == "MASK" {
-                    let cutoff = material["alphaCutoff"].as_f64().unwrap_or(0.5) as f32;
+            // the consumer's alpha rules: the materials that bind this content as base colour, in every tile of
+            // this set that uses it
+            let content = content_key(image, bytes);
+            let pixels = (reference.len() / 4) as u64;
+            let bound = if role == "colour" {
+                rules.get(&content)
+            } else {
+                None
+            };
+            for (mode, cutoff, factor) in bound.into_iter().flatten() {
+                let (cutoff, factor) = (f32::from_bits(*cutoff), f32::from_bits(*factor));
+                if mode == "MASK" {
                     let flips = reference
                         .as_chunks::<4>()
                         .0
@@ -222,31 +268,36 @@ fn audit(folder: &Path) -> R<Audit> {
                         .filter(|(a, b)| {
                             (a[3] as f32 / 255. * factor < cutoff) != (b[3] as f32 / 255. * factor < cutoff)
                         })
-                        .count();
-                    assert!(
-                        (flips as u64) * 1000 < (reference.len() / 4) as u64,
-                        "cutout flips exceed bound: {}",
-                        image["name"]
-                    );
-                } else if material["alphaMode"] == "BLEND" {
+                        .count() as u64;
+                    out.cutouts += 1;
+                    out.worst_flips = out.worst_flips.max(flips as f64 / pixels as f64);
+                    if flips * 1000 >= pixels {
+                        out.failures.push(format!(
+                            "{} ({content}): cutout flips {flips} of {pixels} at cutoff {cutoff}, factor {factor}",
+                            image["name"]
+                        ));
+                    }
+                } else if mode == "BLEND" {
                     let mut alpha = Quality::default();
                     alpha.add(&reference, &decoded, false);
-                    assert!(
-                        alpha.report()["channel_p99_rgba"][3]
-                            .as_u64()
-                            .ok_or("alpha p99")?
-                            <= 8,
-                        "blend alpha exceeds bound: {}",
-                        image["name"]
-                    );
+                    let p99 = alpha.report()["channel_p99_rgba"][3]
+                        .as_u64()
+                        .ok_or("alpha p99")?;
+                    out.blends += 1;
+                    out.worst_blend_p99 = out.worst_blend_p99.max(p99);
+                    if p99 > 8 {
+                        out.failures.push(format!(
+                            "{} ({content}): blend alpha p99 {p99} levels",
+                            image["name"]
+                        ));
+                    }
                 }
             }
-            if is_png {
-                assert_eq!(
-                    reference, decoded,
+            if is_png && reference != decoded {
+                out.failures.push(format!(
                     "{}: PNG must exactly preserve the prepared pixels",
                     image["name"]
-                );
+                ));
             }
             out.quality
                 .entry(role.into())
@@ -256,10 +307,13 @@ fn audit(folder: &Path) -> R<Audit> {
     }
     eprintln!(
         "{}",
-        json!({"images":out.images,"levels":out.levels,"compared":out.compared,"png":out.png,"near_zero_cap_average_to_flat":out.near_zero})
+        json!({"images":out.images,"levels":out.levels,"compared":out.compared,"png":out.png,"near_zero_cap_average_to_flat":out.near_zero,"cutout_bindings":out.cutouts,"worst_flip_share":out.worst_flips,"blend_bindings":out.blends,"worst_blend_alpha_p99":out.worst_blend_p99,"failures":out.failures.len()})
     );
     for (role, stats) in &out.quality {
         eprintln!("{}", json!({"role":role,"quality":stats.report()}));
+    }
+    for f in &out.failures {
+        eprintln!("FAIL {f}");
     }
     Ok(out)
 }
@@ -299,6 +353,7 @@ fn the_synthetic_export_decodes_and_keeps_its_bounds() -> R<()> {
     options.ktx2 = false;
     primase_web::write(&world, &options)?.write_to(&dir.join("plain"))?;
     let a = audit(&dir)?;
+    assert!(a.failures.is_empty(), "{} images past a bound", a.failures.len());
     // the 8 x 8 gradient: one KTX2 image, mips 8, 4, 2, 1
     assert_eq!((a.images, a.levels, a.compared, a.png), (1, 4, 1, 0));
     // the synthetic gradient's bound (README: 8 channel values)
@@ -318,6 +373,7 @@ fn a_real_export_decodes_and_keeps_the_measured_bounds() -> R<()> {
     };
     let a = audit(&dir)?;
     assert!(a.images > 0, "no KTX2 image in the export");
+    assert!(a.failures.is_empty(), "{} images past a bound", a.failures.len());
     // README: colour codec error p99 at most 5 levels per channel on slice A, as measured ([5, 4, 5] over the whole
     // slice and over its one cell)
     assert!(colour_p99(&a) <= 5, "colour codec p99 {}", colour_p99(&a));
