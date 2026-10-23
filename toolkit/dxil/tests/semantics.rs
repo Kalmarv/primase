@@ -476,3 +476,173 @@ mod resources {
         }
     }
 }
+
+mod resource_arrays {
+    use super::*;
+    use primase_shader::exec::{ImageLoad, ImageQuery, QueryKind, Runner};
+
+    /// The textures of `resource_arrays.hlsl` answer with their element: a sample is (texture, sampler, 0.25, 1), a
+    /// load 100 + the texture's element, a size 2 << element wide and 1 << element high; the single texture is 32 by 64.
+    struct Elements {
+        /// The texture array's resource id.
+        array: ResourceId,
+    }
+    impl Backend for Elements {
+        fn sample(&mut self, r: ImageSample<Element>) -> Result<[f32; 4], String> {
+            assert_eq!(r.texture.id, self.array);
+            Ok([r.texture.index as f32, r.sampler.index as f32, 0.25, 1.0])
+        }
+        fn load(&mut self, r: ImageLoad<Element>) -> Result<[u32; 4], String> {
+            assert_eq!((r.texture.id, r.texel, r.mip), (self.array, [1, 2, 0], Some(0)));
+            Ok([f(100.0 + r.texture.index as f32); 4])
+        }
+        fn query(&mut self, r: ImageQuery<Element>) -> Result<[u32; 4], String> {
+            assert_eq!(r.kind, QueryKind::Size);
+            Ok(if r.texture.id == self.array {
+                [2 << r.texture.index, 1 << r.texture.index, 1, 0]
+            } else {
+                [32, 64, 1, 0]
+            })
+        }
+    }
+
+    fn run(variant: &str, which: [u32; 2]) -> Result<Output, String> {
+        let (program, exe) = lifted(&fixture("resource_arrays", variant));
+        program.validate().unwrap();
+        let find = |register: u32, class: primase_shader::D3dClass| {
+            program
+                .interface
+                .resources
+                .iter()
+                .find(|r| {
+                    r.provenance
+                        .d3d
+                        .is_some_and(|d| d.register == register && d.class == class)
+                })
+                .unwrap_or_else(|| panic!("{variant}: no {class:?} {register}"))
+        };
+        // the arrays are arrays: four textures, and samplers the program does not size
+        let tex = find(0, primase_shader::D3dClass::ShaderResource);
+        assert_eq!(tex.count, 4, "{variant}");
+        let smp = find(0, primase_shader::D3dClass::Sampler);
+        assert!(smp.is_unbounded(), "{variant}");
+        assert_eq!(
+            find(8, primase_shader::D3dClass::ShaderResource).count,
+            1,
+            "{variant}"
+        );
+        let mut resources = Resources::default();
+        // Select { uint2 which; float2 uv; }
+        let cb = find(0, primase_shader::D3dClass::ConstantBuffer).id;
+        resources
+            .constants
+            .insert(cb, vec![[which[0], which[1], f(0.25), f(0.75)]]);
+        let bound = exe.bind_resources(&resources).unwrap();
+        let mut backend = Elements { array: tex.id };
+        let mut runner = Runner::<1>::new(&exe, &bound, &mut backend, None);
+        let [out] = runner.run([&[[f(0.5), f(0.5), 0, f(1.0)]]])?;
+        Ok(out)
+    }
+
+    /// which = (1, 3): Target0 samples texture 1 with sampler 3; Target1 samples texture 2 with sampler 1 and adds a
+    /// load of texture 2 (100 + 2); Target2 is texture 1's size (4 by 2) and the single texture's (32 by 64).
+    #[test]
+    fn a_computed_index_picks_the_texture_and_the_sampler() {
+        for v in BOTH {
+            let o = run(v, [1, 3]).unwrap_or_else(|e| panic!("{v}: {e}"));
+            assert_eq!(o.values[0], [1.0, 3.0, 0.25, 1.0].map(f32::to_bits), "{v}");
+            assert_eq!(
+                o.values[1],
+                [104.0, 103.0, 102.25, 103.0].map(f32::to_bits),
+                "{v}"
+            );
+            assert_eq!(o.values[2], [4.0, 2.0, 32.0, 64.0].map(f32::to_bits), "{v}");
+        }
+    }
+
+    /// Another index picks other elements; one past the array's four textures stops the run naming the resource.
+    #[test]
+    fn another_index_picks_other_elements_and_one_past_the_array_is_an_error() {
+        for v in BOTH {
+            let o = run(v, [0, 7]).unwrap_or_else(|e| panic!("{v}: {e}"));
+            assert_eq!(o.values[0], [0.0, 7.0, 0.25, 1.0].map(f32::to_bits), "{v}");
+            assert_eq!(
+                o.values[1],
+                [103.0, 102.0, 101.25, 102.0].map(f32::to_bits),
+                "{v}"
+            );
+            assert_eq!(o.values[2], [2.0, 1.0, 32.0, 64.0].map(f32::to_bits), "{v}");
+            let error = run(v, [4, 0]).unwrap_err();
+            assert!(error.contains("element 4 of an array of 4"), "{v}: {error}");
+        }
+    }
+}
+
+mod pixel_ops {
+    use super::*;
+    use primase_shader::exec::{ImageLoad, ImageQuery, QueryKind, Runner};
+
+    /// A load answers its texel as floats; a query of the sample count answers 4.
+    struct Texels;
+    impl Backend for Texels {
+        fn sample(&mut self, _: ImageSample<Element>) -> Result<[f32; 4], String> {
+            Err("no sampling in this fixture".into())
+        }
+        fn load(&mut self, r: ImageLoad<Element>) -> Result<[u32; 4], String> {
+            assert_eq!(r.mip, Some(0));
+            Ok([f(r.texel[0] as f32), f(r.texel[1] as f32), 0, f(1.0)])
+        }
+        fn query(&mut self, r: ImageQuery<Element>) -> Result<[u32; 4], String> {
+            assert_eq!(r.kind, QueryKind::Samples);
+            Ok([4, 0, 0, 0])
+        }
+    }
+
+    fn run(variant: &str, sample: u32, h: f32, packed: u32) -> Output {
+        let (program, exe) = lifted(&fixture("pixel_ops", variant));
+        program.validate().unwrap();
+        // the sample index is an input the signature does not list (the position is not read, so it is not kept)
+        let names: Vec<_> = program
+            .interface
+            .inputs
+            .iter()
+            .map(|i| i.label.name.as_str())
+            .collect();
+        assert_eq!(names, ["SV_SampleIndex"], "{variant}");
+        let cb = program
+            .interface
+            .resources
+            .iter()
+            .find(|r| matches!(r.kind, ResourceKind::ConstantBuffer { .. }))
+            .unwrap()
+            .id;
+        let mut resources = Resources::default();
+        // Values { float h; uint packed; }
+        resources.constants.insert(cb, vec![[f(h), packed, 0, 0]]);
+        let bound = exe.bind_resources(&resources).unwrap();
+        let mut backend = Texels;
+        let mut runner = Runner::<1>::new(&exe, &bound, &mut backend, None);
+        let [out] = runner
+            .run([&[[sample, 0, 0, 0]]])
+            .unwrap_or_else(|e| panic!("{variant}: {e}"));
+        out
+    }
+
+    /// The offset load reads texel (5, 6) moved by (-2, 3): (3, 9). The four-sample positions are D3D's standard
+    /// pattern in sixteenths; f16tof32(0x4000) is 2 and f32tof16(1.5) is 0x3e00 = 15872.
+    #[test]
+    fn the_sample_index_its_position_the_offset_load_and_the_half_conversions() {
+        let positions = [(-2.0, -6.0), (6.0, -2.0), (-6.0, 2.0), (2.0, 6.0)];
+        for v in BOTH {
+            for (sample, (x, y)) in positions.iter().enumerate() {
+                let o = run(v, sample as u32, 1.5, 0x4000);
+                assert_eq!(o.values[0], [f(3.0), f(9.0), 0, f(1.0)], "{v} sample {sample}");
+                assert_eq!(
+                    o.values[1],
+                    [x / 16.0, y / 16.0, 2.0, 15872.0].map(f32::to_bits),
+                    "{v} sample {sample}"
+                );
+            }
+        }
+    }
+}

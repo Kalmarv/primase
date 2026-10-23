@@ -140,6 +140,8 @@ fn the_enhanced_shader_database() {
     let mut refused: BTreeMap<String, usize> = BTreeMap::new();
     let mut invalid = Vec::new();
     let mut unrunnable: BTreeMap<String, usize> = BTreeMap::new();
+    let mut kinds: BTreeMap<(usize, u32), usize> = BTreeMap::new();
+    let mut other_ops: BTreeMap<(usize, String), usize> = BTreeMap::new();
     for (g, stage) in sgd2::GROUP_STAGES.iter().enumerate() {
         for program in &db.groups[g] {
             programs += 1;
@@ -151,6 +153,20 @@ fn the_enhanced_shader_database() {
                 program.name
             );
             if !matches!(stage, Some(ProgramStage::Vertex | ProgramStage::Pixel)) {
+                // the stages with no lifter yet: which kind the container is, and the operations they call
+                let (kind, calls) = match primase_dxil::operations(program.container) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        *other_ops
+                            .entry((g, format!("UNREADABLE {}", primase_dxil::refusal_reason(&e))))
+                            .or_default() += 1;
+                        continue;
+                    }
+                };
+                *kinds.entry((g, kind)).or_default() += 1;
+                for (name, n) in calls {
+                    *other_ops.entry((g, name)).or_default() += n;
+                }
                 continue;
             }
             match primase_dxil::lift(program.container) {
@@ -181,6 +197,13 @@ fn the_enhanced_shader_database() {
     reasons.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
     for (reason, n) in reasons.iter().take(40) {
         println!("  refused {n:5}  {reason}");
+    }
+    println!("KINDS (group, program kind): {kinds:?}");
+    for ((g, name), n) in other_ops
+        .iter()
+        .filter(|((_, name), _)| name.starts_with("UNREADABLE"))
+    {
+        println!("  group {g}: {n} {name}");
     }
     for (reason, n) in &unrunnable {
         println!("  not executable {n:5}  {reason}");

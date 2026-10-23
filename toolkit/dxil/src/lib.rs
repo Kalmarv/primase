@@ -130,3 +130,31 @@ pub fn part(container: &[u8]) -> Result<Part<'_>> {
         .data;
     program(data)
 }
+
+/// The shader kind (0 pixel, 1 vertex, 2 geometry, 3 hull, 4 domain, 5 compute) of a container and the `dx.op`
+/// operations called across all the module's function bodies (a hull shader's patch-constant function is a second
+/// one), by name: for surveying programs a stage's lifter does not exist for yet.
+pub fn operations(container: &[u8]) -> Result<(u32, std::collections::BTreeMap<String, usize>)> {
+    use module::Op;
+    let chunks = chunks(container)?;
+    let part = program(
+        chunks
+            .iter()
+            .find(|c| &c.kind == b"DXIL")
+            .ok_or_else(|| error(0, "no DXIL part"))?
+            .data,
+    )?;
+    let module = reflection::module(&chunks, b"DXIL")?.ok_or_else(|| error(0, "no DXIL part"))?;
+    let mut out = std::collections::BTreeMap::new();
+    for f in &module.functions {
+        for inst in &f.instructions {
+            let Op::Call { function, .. } = &inst.op else {
+                continue;
+            };
+            if let Some(name) = module.name(*function).filter(|n| n.starts_with("dx.op.")) {
+                *out.entry(name.to_owned()).or_default() += 1;
+            }
+        }
+    }
+    Ok((part.program_version >> 16, out))
+}
