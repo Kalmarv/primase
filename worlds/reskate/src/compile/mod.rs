@@ -4,7 +4,6 @@
 //! Orchestration (which maps, their names, deploying, packaging) is the program's.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Instant;
 
 use crate::{Error, Result};
@@ -145,7 +144,7 @@ pub fn compile_map(
     }
     let log = staging.with_extension("compile.log");
     let started = Instant::now();
-    let out = Command::new(&studio.cli)
+    let out = std::process::Command::new(&studio.cli)
         .arg("compile-map")
         .arg(&studio.game)
         .arg(map)
