@@ -268,6 +268,25 @@ impl Builder {
             width: v.width,
         }
     }
+    /// The value as `kind`: a bitcast between u32, i32 and f32; a bool becomes a word of all ones or zero (D3D's
+    /// true and false) and a word a bool by being nonzero.
+    pub fn bitcast_to(&mut self, v: Val, kind: Kind) -> Val {
+        match (v.kind, kind) {
+            (a, b) if a == b => v,
+            (Kind::B, _) => {
+                let ones = self.lit_u(u32::MAX);
+                let zero = self.lit_u(0);
+                let word = self.select(v, ones, zero);
+                self.bitcast(word, kind)
+            }
+            (_, Kind::B) => {
+                let word = self.bitcast(v, Kind::U);
+                let zero = self.lit_u(0);
+                self.binary(BinaryOperator::NotEqual, word, zero)
+            }
+            _ => self.bitcast(v, kind),
+        }
+    }
     /// Convert the value to another kind (`itof`, `utof`, float to integer) with naga's own semantics; D3D's differ
     /// for float to integer and are [`behaviour`].
     pub fn convert(&mut self, v: Val, kind: Kind) -> Val {

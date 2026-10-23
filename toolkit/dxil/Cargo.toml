@@ -12,6 +12,7 @@ publish.workspace = true
 thiserror.workspace = true
 primase-bytes.workspace = true
 primase-shader.workspace = true
+naga.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true

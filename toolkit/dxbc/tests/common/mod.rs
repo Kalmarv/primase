@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 //! What the executor's gates share: deterministic test vectors for a lifted pixel program (input registers, constant
 //! buffers), a quad's lanes, and the containers under a corpus folder.
+pub mod differential;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

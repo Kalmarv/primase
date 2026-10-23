@@ -4,9 +4,11 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 pub mod bitstream;
 mod evaluate;
+mod lift;
 pub mod module;
 pub mod reflection;
 pub use evaluate::{Census, Shader};
+pub use lift::{LIFTER_VERSION, lift, refusal_reason};
 pub use reflection::interface;
 
 #[derive(Debug, thiserror::Error)]

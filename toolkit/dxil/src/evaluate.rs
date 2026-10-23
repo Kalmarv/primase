@@ -797,16 +797,17 @@ impl Shader {
             8 => V::Bits(u64::from(af(1)?.is_nan())),
             9 => V::Bits(u64::from(af(1)?.is_infinite())),
             10 => V::Bits(u64::from(af(1)?.is_finite())),
-            12 => fv(af(1)?.cos()),
-            13 => fv(af(1)?.sin()),
-            21 => fv(af(1)?.exp2()),
+            // transcendentals in f64, rounded once to f32, as primase-dxbc's evaluator does
+            12 => fv((f64::from(af(1)?).cos()) as f32),
+            13 => fv((f64::from(af(1)?).sin()) as f32),
+            21 => fv((f64::from(af(1)?).exp2()) as f32),
             22 => {
                 let x = af(1)?;
                 fv(x - x.floor())
             }
-            23 => fv(af(1)?.log2()),
+            23 => fv((f64::from(af(1)?).log2()) as f32),
             24 => fv(af(1)?.sqrt()),
-            25 => fv(1. / af(1)?.sqrt()),
+            25 => fv((1. / f64::from(af(1)?).sqrt()) as f32),
             26 => fv(af(1)?.round_ties_even()),
             27 => fv(af(1)?.floor()),
             28 => fv(af(1)?.ceil()),
