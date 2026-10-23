@@ -341,6 +341,8 @@ pub(super) enum St {
         op: ImageAtomicOp,
         signed: bool,
         value: u32,
+        /// The register that takes the word as it was before, where the program reads it.
+        result: Option<u32>,
     },
     Atomic {
         ptr: Ptr,

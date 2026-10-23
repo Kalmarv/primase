@@ -68,17 +68,14 @@ impl Lift<'_> {
         }
     }
 
-    /// An atomic operation on a typed texture view: naga's image atomic, which returns no old value.
+    /// An atomic operation on a typed texture view: naga's image atomic, which returns no old value; where the program
+    /// reads the old value, a call of the module's image atomic function that has it (see `primase_shader::ops`).
     fn view_atomic(&mut self, ins: &Instruction, slot: u32) -> Result<()> {
         let name = ins.name();
         let immediate = name.starts_with("imm_");
         let ops = &ins.operands;
         let at = usize::from(immediate);
-        if immediate && ops[0].register != Register::Null {
-            return self.refuse(
-                "the old value of an atomic operation on a texture view (naga's image atomic returns none)",
-            );
-        }
+        let wants_old = immediate && ops[0].register != Register::Null;
         let fun = match name.trim_start_matches("imm_").trim_start_matches("atomic_") {
             "iadd" => AtomicFunction::Add,
             "and" => AtomicFunction::And,
@@ -86,6 +83,7 @@ impl Lift<'_> {
             "xor" => AtomicFunction::ExclusiveOr,
             "imax" | "umax" => AtomicFunction::Max,
             "imin" | "umin" => AtomicFunction::Min,
+            "exch" => AtomicFunction::Exchange { compare: None },
             other => return self.refuse(format!("atomic operation {other} on a texture view")),
         };
         let (global, v) = self
@@ -106,6 +104,27 @@ impl Lift<'_> {
             };
             self.b.bitcast_to(layer, Kind::I).expr
         });
+        // naga's image atomic statement has no exchange, and none has an old value: both are the function's
+        if wants_old || matches!(fun, AtomicFunction::Exchange { .. }) {
+            let op = match fun {
+                AtomicFunction::Add => "add",
+                AtomicFunction::And => "and",
+                AtomicFunction::InclusiveOr => "or",
+                AtomicFunction::ExclusiveOr => "xor",
+                AtomicFunction::Max => "max",
+                AtomicFunction::Min => "min",
+                AtomicFunction::Exchange { compare: None } => "exchange",
+                _ => return self.refuse("an image atomic operation the module's functions do not name"),
+            };
+            let old = self
+                .b
+                .image_atomic_fetch(global, op, coordinate, array_index, value);
+            if !wants_old {
+                return Ok(());
+            }
+            let bits = self.b.bitcast_to(old, Kind::U);
+            return self.write(&ops[0], bits, false);
+        }
         let image = self.b.global_ptr(global);
         self.b.push(Statement::ImageAtomic {
             image,

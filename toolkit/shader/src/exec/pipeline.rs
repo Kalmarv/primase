@@ -724,7 +724,7 @@ impl Backend for Host<'_, '_> {
     fn store_image(&mut self, r: ImageStore<ResourceId>) -> Result<(), String> {
         self.slot_backend()?.store_image(r)
     }
-    fn atomic_image(&mut self, r: ImageAtomic<ResourceId>) -> Result<(), String> {
+    fn atomic_image(&mut self, r: ImageAtomic<ResourceId>) -> Result<u32, String> {
         self.slot_backend()?.atomic_image(r)
     }
     fn store_buffer(&mut self, view: ResourceId, word: u32, value: [u32; 4], mask: u8) -> Result<(), String> {

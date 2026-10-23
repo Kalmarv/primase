@@ -993,9 +993,10 @@ mod image_atomics {
         fn sample(&mut self, _: ImageSample<Element>) -> Result<[f32; 4], String> {
             Err("no sampling in this fixture".into())
         }
-        fn atomic_image(&mut self, r: ImageAtomic<ResourceId>) -> Result<(), String> {
+        fn atomic_image(&mut self, r: ImageAtomic<ResourceId>) -> Result<u32, String> {
             self.requests += 1;
             let word = self.words.entry((r.view, r.texel)).or_insert(0);
+            let old = *word;
             *word = match (r.op, r.signed) {
                 (ImageAtomicOp::Add, _) => word.wrapping_add(r.value),
                 (ImageAtomicOp::Sub, _) => word.wrapping_sub(r.value),
@@ -1008,7 +1009,7 @@ mod image_atomics {
                 (ImageAtomicOp::Max, false) => (*word).max(r.value),
                 (ImageAtomicOp::Exchange, _) => r.value,
             };
-            Ok(())
+            Ok(old)
         }
     }
 
@@ -1062,6 +1063,87 @@ mod image_atomics {
                     assert_eq!(at(signed, cx, cy), cx, "{v} signed max {cx} {cy}");
                 }
             }
+        }
+    }
+
+    /// The textures of `image_atomic_results.hlsl`: the atomics apply and give the old word, the stores are kept.
+    struct Results {
+        words: BTreeMap<(ResourceId, [u32; 3]), u32>,
+        stores: BTreeMap<(ResourceId, [u32; 3]), u32>,
+    }
+    impl Backend for Results {
+        fn sample(&mut self, _: ImageSample<Element>) -> Result<[f32; 4], String> {
+            Err("no sampling in this fixture".into())
+        }
+        fn atomic_image(&mut self, r: ImageAtomic<ResourceId>) -> Result<u32, String> {
+            let word = self.words.entry((r.view, r.texel)).or_insert(0);
+            let old = *word;
+            *word = match r.op {
+                ImageAtomicOp::Add => word.wrapping_add(r.value),
+                ImageAtomicOp::Max => (*word).max(r.value),
+                ImageAtomicOp::Exchange => r.value,
+                other => return Err(format!("{other:?} is not in this fixture")),
+            };
+            Ok(old)
+        }
+        fn store_image(&mut self, r: primase_shader::exec::ImageStore<ResourceId>) -> Result<(), String> {
+            self.stores.insert((r.view, r.texel), r.value[0]);
+            Ok(())
+        }
+    }
+
+    /// `image_atomic_results.hlsl`: four threads in order, each adding x + 1 to counts[(0, 0)], exchanging x + 10 into
+    /// counts[(1, 0)] (preset 5) and maxing x * 3 into counts[(2, 0)], and storing each old word to olds[(x, request)]:
+    /// the old words are the running sum 0, 1, 3, 6, the words exchanged out 5, 10, 11, 12 and the running maximum 0,
+    /// 0, 3, 6.
+    #[test]
+    fn the_old_word_of_an_atomic_on_a_texture_reaches_the_program_in_every_build() {
+        for v in ["", ".od", ".66"] {
+            let (program, exe) = lifted(&fixture("image_atomic_results", v));
+            let uav = |register: u32| {
+                program
+                    .interface
+                    .resources
+                    .iter()
+                    .find(|r| {
+                        r.provenance
+                            .d3d
+                            .is_some_and(|d| d.class == D3dClass::UnorderedAccess && d.register == register)
+                    })
+                    .unwrap_or_else(|| panic!("{v}: no u{register}"))
+                    .id
+            };
+            let (counts, olds) = (uav(0), uav(1));
+            assert!(
+                primase_shader::emit::wgsl(&program)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("old value of an image atomic"),
+                "{v}"
+            );
+            program.validate().unwrap_or_else(|p| panic!("{v}: {p:?}"));
+            let mut backend = Results {
+                words: BTreeMap::from([((counts, [1, 0, 0]), 5)]),
+                stores: BTreeMap::new(),
+            };
+            let resources = Resources::default();
+            let bound = exe.bind_resources(&resources).unwrap();
+            exe.dispatch(&bound, &mut backend, &mut BTreeMap::new(), [1, 1, 1], 32)
+                .unwrap_or_else(|e| panic!("{v}: {e}"));
+            let old = |x, request| backend.stores[&(olds, [x, request, 0])];
+            let want = [[0, 1, 3, 6], [5, 10, 11, 12], [0, 0, 3, 6]];
+            for (request, row) in want.iter().enumerate() {
+                for (x, &word) in row.iter().enumerate() {
+                    assert_eq!(
+                        old(x as u32, request as u32),
+                        word,
+                        "{v} request {request} thread {x}"
+                    );
+                }
+            }
+            assert_eq!(backend.words[&(counts, [0, 0, 0])], 10, "{v}");
+            assert_eq!(backend.words[&(counts, [1, 0, 0])], 13, "{v}");
+            assert_eq!(backend.words[&(counts, [2, 0, 0])], 9, "{v}");
         }
     }
 }

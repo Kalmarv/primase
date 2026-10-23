@@ -20,6 +20,7 @@ mod evaluate;
 pub mod exec;
 pub mod gate;
 mod limits;
+pub mod ops;
 mod program;
 pub mod rt;
 pub use evaluate::{
@@ -197,8 +198,9 @@ pub trait Sampler {
     fn query_image(&mut self, request: exec::ImageQuery<u32>) -> std::result::Result<[u32; 4], String> {
         Err(format!("t{}: no queries given", request.texture))
     }
-    /// An atomic operation on a texel of a single-channel 32-bit unordered-access texture.
-    fn atomic_image(&mut self, request: exec::ImageAtomic<u32>) -> std::result::Result<(), String> {
+    /// An atomic operation on a texel of a single-channel 32-bit unordered-access texture; its result is the word as it
+    /// was before.
+    fn atomic_image(&mut self, request: exec::ImageAtomic<u32>) -> std::result::Result<u32, String> {
         Err(format!("u{}: no image atomics given", request.view))
     }
     /// A write to an unordered-access texture; the plain form is [`Sampler::store`].

@@ -120,7 +120,8 @@ pub enum ImageAtomicOp {
     Exchange,
 }
 
-/// An atomic operation on one texel of a single-channel 32-bit unordered-access texture; the program reads no result.
+/// An atomic operation on one texel of a single-channel 32-bit unordered-access texture. Its result is the word as it was
+/// before; the program reads it only when it asked through an image atomic function (see [`crate::ops`]).
 #[derive(Clone, Copy, Debug)]
 pub struct ImageAtomic<R> {
     pub view: R,
@@ -197,7 +198,8 @@ pub trait Backend {
         let _ = request;
         Err("no ray tracing pipeline given".into())
     }
-    fn atomic_image(&mut self, request: ImageAtomic<ResourceId>) -> Result<(), String> {
+    /// An atomic operation on one texel; its result the word as it was before.
+    fn atomic_image(&mut self, request: ImageAtomic<ResourceId>) -> Result<u32, String> {
         Err(format!("resource {}: no image atomics given", request.view.0))
     }
     /// Words written to a buffer: the lanes `mask` marks of `value`, to the consecutive 32-bit words from word `word`

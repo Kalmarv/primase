@@ -965,12 +965,13 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                     op,
                     signed,
                     value,
+                    result,
                 } => {
                     for l in 0..N {
                         if active.has(l) {
                             let cd = self.regs[*coord as usize * N + l];
                             let element = self.element(tex, l)?;
-                            self.sampler.atomic_image(ImageAtomic {
+                            let old = self.sampler.atomic_image(ImageAtomic {
                                 view: element.id,
                                 index: element.index,
                                 dim: *dim,
@@ -980,6 +981,9 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                                 signed: *signed,
                                 value: self.regs[*value as usize * N + l][0],
                             })?;
+                            if let Some(r) = result {
+                                self.regs[*r as usize * N + l] = [old, 0, 0, 0];
+                            }
                         }
                     }
                 }

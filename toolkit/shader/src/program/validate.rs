@@ -141,21 +141,19 @@ fn functions(p: &Program, sigs: &[FunctionSig], problems: &mut Vec<Problem>) {
         ));
     }
     // a ray tracing program also has the pipeline's operations, functions without a body
+    let is_operation = |name: Option<&str>| {
+        name.is_some_and(|n| {
+            (p.stage.is_ray_tracing() && crate::rt::OPERATIONS.contains(&n)) || crate::ops::is_image_atomic(n)
+        })
+    };
     let operations = p
         .module
         .functions
         .iter()
-        .filter(|(_, f)| {
-            f.name
-                .as_deref()
-                .is_some_and(|n| p.stage.is_ray_tracing() && crate::rt::OPERATIONS.contains(&n))
-        })
+        .filter(|(_, f)| is_operation(f.name.as_deref()))
         .count();
     for (_, f) in p.module.functions.iter() {
-        let is_operation = f
-            .name
-            .as_deref()
-            .is_some_and(|n| p.stage.is_ray_tracing() && crate::rt::OPERATIONS.contains(&n));
+        let is_operation = is_operation(f.name.as_deref());
         if is_operation
             && !f
                 .body
@@ -275,12 +273,62 @@ fn functions(p: &Program, sigs: &[FunctionSig], problems: &mut Vec<Problem>) {
     }
 }
 
+/// The image atomic functions of a module (see [`crate::ops`]) are what they say: no body but the return of a zero,
+/// the image, the coordinate, a layer for an arrayed texture and a value as arguments, a result of the value's type.
+fn image_atomic_operations(p: &Program, problems: &mut Vec<Problem>) {
+    for (_, f) in p.module.functions.iter() {
+        let Some(name) = f.name.as_deref().filter(|n| crate::ops::is_image_atomic(n)) else {
+            continue;
+        };
+        let mut fail = |m: &str| problems.push(Problem::Program(format!("the operation {name}: {m}")));
+        if !f
+            .body
+            .iter()
+            .all(|s| matches!(s, naga::Statement::Return { .. } | naga::Statement::Emit(_)))
+        {
+            fail("has a body");
+        }
+        let arrayed = name.contains("_array_");
+        let signed = name.ends_with("_i32");
+        let expected = 3 + usize::from(arrayed);
+        if f.arguments.len() != expected {
+            fail(&format!("has {} arguments, not {expected}", f.arguments.len()));
+            continue;
+        }
+        let image = matches!(p.module.types[f.arguments[0].ty].inner, TypeInner::Image { .. });
+        let scalar = |ty| match p.module.types[ty].inner {
+            TypeInner::Scalar(s) => Some(s),
+            _ => None,
+        };
+        let value = f.arguments.last().and_then(|a| scalar(a.ty));
+        let value_ok = value.is_some_and(|s| {
+            s.width == 4
+                && s.kind
+                    == if signed {
+                        naga::ScalarKind::Sint
+                    } else {
+                        naga::ScalarKind::Uint
+                    }
+        });
+        if !image {
+            fail("its first argument is not a texture");
+        }
+        if !value_ok {
+            fail("its value is not a 32-bit integer of the kind its name says");
+        }
+        if f.result.as_ref().and_then(|r| scalar(r.ty)) != value {
+            fail("its result is not of the value's type");
+        }
+    }
+}
+
 fn interface(p: &Program, problems: &mut Vec<Problem>) {
     match stage_functions(&p.interface) {
         Err(e) => return problems.push(Problem::Program(e)),
         Ok(Some(sigs)) => return functions(p, &sigs, problems),
         Ok(None) => {}
     }
+    image_atomic_operations(p, problems);
     let mut fail = |m: String| problems.push(Problem::Program(m));
     let [entry] = p.module.entry_points.as_slice() else {
         return fail(format!(

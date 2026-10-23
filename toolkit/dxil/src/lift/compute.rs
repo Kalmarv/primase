@@ -191,14 +191,10 @@ impl Lift<'_> {
         self.f.instructions.iter().any(|i| i.op.operands().contains(&v))
     }
 
-    /// `AtomicBinOp` on an unordered-access texture: naga's image atomic, which returns no old value; refused where
-    /// the program reads the old value.
+    /// `AtomicBinOp` on an unordered-access texture: naga's image atomic, which returns no old value; where the program
+    /// reads the old value, a call of the module's image atomic function that has it (see `primase_shader::ops`).
     fn image_atomic(&mut self, inst: &Instruction, args: &[ValueId], resource: usize) -> Result<()> {
-        if inst.result.is_some_and(|(v, _)| self.value_is_read(v)) {
-            return self.refuse(
-                "the old value of an atomic operation on a texture view (naga's image atomic returns none)",
-            );
-        }
+        let wants_old = inst.result.is_some_and(|(v, _)| self.value_is_read(v));
         let fun = match const_int(self.m, self.f, args[2]) {
             Some(ATOMIC_ADD) => AtomicFunction::Add,
             Some(ATOMIC_AND) => AtomicFunction::And,
@@ -206,6 +202,7 @@ impl Lift<'_> {
             Some(ATOMIC_XOR) => AtomicFunction::ExclusiveOr,
             Some(ATOMIC_IMIN | ATOMIC_UMIN) => AtomicFunction::Min,
             Some(ATOMIC_IMAX | ATOMIC_UMAX) => AtomicFunction::Max,
+            Some(ATOMIC_EXCHANGE) => AtomicFunction::Exchange { compare: None },
             other => return self.refuse(format!("atomic operation {other:?} on a texture view")),
         };
         let (dim, arrayed, _, _, _) = self.texture_shape(resource)?;
@@ -227,6 +224,32 @@ impl Lift<'_> {
             .unwrap_or(naga::Scalar::U32);
         let value = self.scalar(args[6])?;
         let value = self.b.bitcast_to(value, kind_of_atomic(scalar));
+        // naga's image atomic statement has no exchange, and none has an old value: both are the function's
+        if wants_old || matches!(fun, AtomicFunction::Exchange { .. }) {
+            let op = match fun {
+                AtomicFunction::Add => "add",
+                AtomicFunction::And => "and",
+                AtomicFunction::InclusiveOr => "or",
+                AtomicFunction::ExclusiveOr => "xor",
+                AtomicFunction::Max => "max",
+                AtomicFunction::Min => "min",
+                AtomicFunction::Exchange { compare: None } => "exchange",
+                _ => return self.refuse("an image atomic operation the module's functions do not name"),
+            };
+            if matches!(self.get(args[1])?, Lv::Handle { element: Some(_), .. }) {
+                return self.refuse(
+                    "the old value of an atomic operation on an element of an array of texture views",
+                );
+            }
+            let global = self.global_of(resource);
+            let old = self
+                .b
+                .image_atomic_fetch(global, op, coordinate, array_index, value);
+            if !wants_old {
+                return Ok(());
+            }
+            return self.define_result(inst.result, Lv::Scalar(old));
+        }
         let (_, image) = self.handle_expr(args[1], 1)?;
         self.b.push(Statement::ImageAtomic {
             image,

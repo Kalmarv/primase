@@ -129,21 +129,18 @@ What the lifters make of every program of every corpus the project holds, counte
 | corpus (test) | programs | lifted | validated | written as WGSL | refused by the lift | executable |
 |---|---:|---:|---:|---:|---:|---:|
 | GTA V Enhanced shader database (SGD2; `fxc_census`) | 12,405 | 12,405 | 12,405 | 12,375 | 0 | 11,130 |
-| Riders Republic (DXBC; `lift_corpus`) | 2,443 | 2,442 | 2,442 | 2,442 | 1 | 2,416 |
+| Riders Republic (DXBC; `lift_corpus`) | 2,443 | 2,443 | 2,443 | 2,442 | 0 | 2,417 |
 | Unity player (DXBC, `sledding`) | 4,854 | 4,854 | 4,854 | 4,854 | 0 | 4,854 |
 | Sekiro (DXBC) | 432 | 432 | 432 | 432 | 0 | 432 |
 | Elden Ring (DXIL; 44,450 containers) | 44,450 | 44,450 | 44,450 | 44,441 | 0 | 43,985 |
-| skate. (DXIL; 19,445 containers) | 19,445 | 19,443 | 19,443 | 19,138 | 2 | 19,199 |
+| skate. (DXIL; 19,445 containers) | 19,445 | 19,445 | 19,445 | 19,138 | 0 | 19,239 |
 | STUNTBOOST (MojoShader GLSL in 18 effects) | 47 | 47 | 47 | 47 | 0 | 47 |
 
 Not measured: GTA V Legacy's `.fxc` effects (`oracles.corpus.gta/legacy-effects`; the folder is not on the machine that ran this).
 
 ### Refused by the lift
 
-| count | corpus | reason | example (corpus-relative) |
-|---:|---|---|---|
-| 2 | skate. | the old value of an atomic operation on a texture view (naga's image atomic returns none) | `235911bb-c5c8-bef5-9998-f3e2ea6597fb.dxil` |
-| 1 | Riders Republic | the same (`imm_atomic_umin`) | `1378.dxbc` |
+None. The three programs that read the old value of an atomic operation on a texture view (2 in skate., 1 in Riders Republic) were refused until naga's image atomic could return it; they are lifted with a call of the module's image atomic function (`primase_shader::ops`: a function with no body that stands for the operation with its old word as the result, the way a ray tracing program's operations are, and which the executor runs through `Backend::atomic_image`). WGSL has no such operation, so the writer refuses them by name (below). A naga statement with a result would replace the functions.
 
 ### Lifted and validated but not written as WGSL
 
@@ -151,6 +148,8 @@ Not measured: GTA V Legacy's `.fxc` effects (`oracles.corpus.gta/legacy-effects`
 |---:|---|---|---|
 | 100 | skate. | naga's WGSL writer does not write ray queries (`unreachable!()` on `Statement::RayQuery`; naga 30.0.1 is the newest release, so only a writer of our own or a change to naga lifts it) | `01f9f54b-846f-2a4b-c576-9e1e6f1d8077.dxil` |
 | 30 | GTA Enhanced | the same | (the census prints none) |
+| 2 | skate. | the program reads the old value of an image atomic operation (`image_atomic_add_3d_u32`): WGSL's image atomics return no value | `235911bb-c5c8-bef5-9998-f3e2ea6597fb.dxil` |
+| 1 | Riders Republic | the same (`image_atomic_min_2d_u32`) | `1378.dxbc` |
 | 205 | skate. | a ray tracing pipeline program (172 ray generation, 16 closest-hit, 8 miss, 6 intersection, 3 any-hit) has no WGSL form: WebGPU has no ray tracing pipeline | `000e14b5-25b8-967b-532c-1b7f6c7e62cb.dxil` |
 | 9 | Elden Ring | the same (3 ray generation, 2 any-hit, 2 closest-hit, 2 miss) | `gxraytracing/GXRayGen.cpo` |
 
@@ -161,6 +160,6 @@ Not measured: GTA V Legacy's `.fxc` effects (`oracles.corpus.gta/legacy-effects`
 | 1,275 | GTA Enhanced | function-form stages, run as functions through `Executable::function` (458 domain, 406 hull, 411 vertex programs that feed a tessellator) |
 | 26 | Riders Republic | function-form stages, run as functions (9 domain, 9 hull, 7 geometry, 1 vertex) |
 | 465 | Elden Ring | function-form stages, run as functions (150 domain, 136 hull, 33 geometry, 137 vertex), and 9 ray tracing pipeline programs refused by name |
-| 244 | skate. | 205 ray tracing pipeline programs (no pipeline to run them in), 38 ray queries that generate an intersection with a procedural primitive (scenes carry triangles only), 1 mesh program (a whole thread group writes one meshlet) |
+| 206 | skate. | 205 ray tracing pipeline programs (run in a pipeline: `exec::Pipeline`), 1 mesh program (a whole thread group writes one meshlet) |
 
-The executable column is the lifted program count less these. The skate. row was measured again after the mesh programs were lifted (main d67b1261's `dxil-mesh`); the other rows are as first measured.
+The executable column is the lifted program count less these. The skate. and Riders Republic rows were measured again after the image atomic functions (the other rows, and the ray queries that generate procedural primitives, which the executor now runs, are as first measured). The skate. row was measured again after the mesh programs were lifted (main d67b1261's `dxil-mesh`); the other rows are as first measured.

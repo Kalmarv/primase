@@ -19,6 +19,8 @@ struct Census {
     /// Refusals by reason: how many, and the first program.
     refused: BTreeMap<String, (usize, String)>,
     invalid: Vec<String>,
+    /// Validated programs a writer cannot write, by reason, with the first program of each.
+    unwritten: BTreeMap<String, (usize, String)>,
     /// Lifted programs the executor refuses, by reason, with the first program of each.
     unrunnable: BTreeMap<String, (usize, String)>,
 }
@@ -64,18 +66,24 @@ fn census(game: Game) {
             primase_shader::emit::wgsl(&program)
         };
         match written {
-            Ok(_) => {
-                c.written += 1;
-                // the executor compiles it too, or refuses it by name
-                if let Err(e) = primase_shader::exec::Executable::new(&program) {
-                    let entry = c
-                        .unrunnable
-                        .entry(e.to_string())
-                        .or_insert((0, path.display().to_string()));
-                    entry.0 += 1;
-                }
+            Ok(_) => c.written += 1,
+            // a program the validator accepts and a writer says it cannot write is counted, not wrong
+            Err(primase_shader::ProgramError::Unsupported { detail, .. }) => {
+                let entry = c
+                    .unwritten
+                    .entry(detail)
+                    .or_insert((0, path.display().to_string()));
+                entry.0 += 1;
             }
             Err(e) => c.invalid.push(format!("{}: {e}", path.display())),
+        }
+        // the executor compiles it too, or refuses it by name
+        if let Err(e) = primase_shader::exec::Executable::new(&program) {
+            let entry = c
+                .unrunnable
+                .entry(e.to_string())
+                .or_insert((0, path.display().to_string()));
+            entry.0 += 1;
         }
     }
     println!(
@@ -88,6 +96,9 @@ fn census(game: Game) {
     );
     for (reason, (n, example)) in &c.refused {
         println!("  refused {n:5}  {reason}  (e.g. {example})");
+    }
+    for (reason, (n, example)) in &c.unwritten {
+        println!("  not written {n:5}  {reason}  (e.g. {example})");
     }
     for (reason, (n, example)) in &c.unrunnable {
         println!("  not executable {n:5}  {reason}  (e.g. {example})");

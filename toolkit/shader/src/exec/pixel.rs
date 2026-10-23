@@ -450,7 +450,7 @@ impl Backend for SlotBackend<'_> {
             lanes: r.lanes,
         })
     }
-    fn atomic_image(&mut self, r: ImageAtomic<ResourceId>) -> Result<(), String> {
+    fn atomic_image(&mut self, r: ImageAtomic<ResourceId>) -> Result<u32, String> {
         let view = self.slot_of(Element {
             id: r.view,
             index: r.index,
