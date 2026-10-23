@@ -210,18 +210,15 @@ mod tests {
                         .map(|(k, v)| (k.to_owned(), v.to_owned()))
                         .collect(),
                 )
-            } else if let Some(o) = [
-                ("lower-gta-pbr", ("night", "false")),
-                ("gta-select-water", ("clip", "region")),
-                ("lower-gta-lights", ("hour", "every")),
-            ]
-            .into_iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, (k, v))| [(k.to_owned(), v.to_owned())].into_iter().collect())
-            {
-                Some(o)
             } else {
-                None
+                [
+                    ("lower-gta-pbr", ("night", "false")),
+                    ("gta-select-water", ("clip", "region")),
+                    ("lower-gta-lights", ("hour", "every")),
+                ]
+                .into_iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, (k, v))| [(k.to_owned(), v.to_owned())].into_iter().collect())
             };
             assert_eq!(reg.requires_options(name), required.is_some(), "{name}");
             let options = match required {
