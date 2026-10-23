@@ -18,6 +18,7 @@ pub mod mip;
 pub mod placements;
 pub mod reference;
 pub mod shader_pack;
+pub mod shader_source;
 pub mod shape;
 pub mod shapes;
 pub mod template;
