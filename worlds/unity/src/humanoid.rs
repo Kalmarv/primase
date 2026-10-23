@@ -19,13 +19,40 @@
 //!   angle, and passes the rest to the child, which applies it as `post_parent * Rx(rest) * post_parent^-1` before its
 //!   own rotation.
 //!
-//! **What is not evaluated**: the body's centre of mass and orientation (a clip's `RootT`, `RootQ`) that place the hips,
-//! the IK goals, and the fingers' muscles (no avatar read here has finger bones, so the formula for them, the same,
-//! has no oracle). Each is counted by the lowering.
+//! **The hips** are placed by the clip's `RootT` and `RootQ`, the body's centre of mass (in units of the avatar's human
+//! scale) and orientation (relative to the avatar's rest orientation, `m_RootX.q`), which the muscles' pose moves the
+//! hips to: the hips' rotation is the one that turns the pose's body frame to the stated orientation, and the hips'
+//! position the one that puts the pose's centre of mass at the stated place. Found by the same oracle
+//! (`HumanPoseHandler.GetHumanPose` reporting the body position and rotation of a pose, and how they respond when one
+//! bone is moved or turned), and checked against the avatars' own stored data:
+//!
+//! - The pose is the human skeleton's (the translations of the avatar's human pose, the muscles' rotations), the hips at
+//!   the origin, unrotated, their own scale applied to the bones below.
+//! - The body frame has its up axis from the middle of the upper legs to the middle of the upper arms, its lateral axis
+//!   the sum of the right-minus-left vectors of the upper arms and of the upper legs, made perpendicular to the up axis,
+//!   and its forward axis their cross product. At the avatar's stored pose this frame is `m_RootX.q` (frog and yeti, to
+//!   the digits the file stores), the up axis is exact (the editor keeps it to 6e-5 degrees over 1,932 poses) and the
+//!   lateral axis follows a bone turned 10 degrees from the rest pose to 2e-4 degrees. It is not the whole of the
+//!   editor's frame: against the editor's hips the rotation is off by 0.05 degrees rms (0.4 at most) over 1,251 poses of
+//!   the spine's muscles, 0.25 rms (3.2 at most) over 681 poses of every muscle at random on the frog and 0.6 rms (9.6
+//!   at most, a pose with every muscle near its limit) on the yeti; what the editor adds beyond these four points was
+//!   not found.
+//! - The centre of mass is the mean of the bones' masses at their segments' centres, the centre of a bone being the mean
+//!   of its origin and its children's (the hips': their children's alone; the head, hands and feet: their own, the toes
+//!   and eyes being no children; the left lower arm's own origin is the left upper arm's, which the editor does on both
+//!   avatars). The stored pose's centre of mass is `m_RootX.t` and its height is the human scale `m_Scale` (frog and
+//!   yeti, to float precision), and the rule is exact to 1e-6 over the editor's poses on both. The centre of mass is
+//!   `RootT` times the human scale.
+//!
+//! The skeleton of an avatar lacking optional bones (a chest, shoulders) is placed by the same rules over the bones it
+//! has; no avatar read here lacks one, so that is unchecked.
+//!
+//! **What is not evaluated**: the IK goals and the fingers' muscles (no avatar read here has finger bones, so the
+//! formula for them, the same, has no oracle). Each is counted by the lowering.
 
 use primase_core::{Channel, ClipTarget, Entity, Interpolation, JointId, Property, Rest};
 
-use crate::animator::{AvatarAxes, AvatarHuman, UnityAvatar};
+use crate::animator::{AvatarAxes, AvatarHuman, UnityAvatar, Xform};
 use crate::components::UNITY;
 use crate::read::clip::{ClipData, Curve, Track};
 
@@ -217,34 +244,496 @@ fn slerp(a: Quat, mut b: Quat, t: f64) -> Quat {
     std::array::from_fn(|i| a[i] * wa + b[i] * wb)
 }
 
+type Vec3 = [f64; 3];
+
+fn add(a: Vec3, b: Vec3) -> Vec3 {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub(a: Vec3, b: Vec3) -> Vec3 {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn scaled(a: Vec3, s: f64) -> Vec3 {
+    a.map(|x| x * s)
+}
+
+fn each(a: Vec3, b: Vec3) -> Vec3 {
+    [a[0] * b[0], a[1] * b[1], a[2] * b[2]]
+}
+
+fn dot(a: Vec3, b: Vec3) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: Vec3, b: Vec3) -> Vec3 {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn unit(a: Vec3) -> Option<Vec3> {
+    let n = dot(a, a).sqrt();
+    (n > 1e-12).then(|| scaled(a, 1.0 / n))
+}
+
+/// `v` rotated by the unit quaternion `q`.
+fn rotate(q: Quat, v: Vec3) -> Vec3 {
+    let u = [q[0], q[1], q[2]];
+    let t = scaled(cross(u, v), 2.0);
+    add(add(v, scaled(t, q[3])), cross(u, t))
+}
+
+/// The unit quaternion of the rotation whose images of x, y and z are `axes`.
+fn rotation_of_axes(axes: [Vec3; 3]) -> Quat {
+    let m = |row: usize, col: usize| axes[col][row];
+    let trace = m(0, 0) + m(1, 1) + m(2, 2);
+    let q = if trace > 0.0 {
+        let s = 2.0 * (trace + 1.0).sqrt();
+        [
+            (m(2, 1) - m(1, 2)) / s,
+            (m(0, 2) - m(2, 0)) / s,
+            (m(1, 0) - m(0, 1)) / s,
+            0.25 * s,
+        ]
+    } else if m(0, 0) > m(1, 1) && m(0, 0) > m(2, 2) {
+        let s = 2.0 * (1.0 + m(0, 0) - m(1, 1) - m(2, 2)).sqrt();
+        [
+            0.25 * s,
+            (m(0, 1) + m(1, 0)) / s,
+            (m(0, 2) + m(2, 0)) / s,
+            (m(2, 1) - m(1, 2)) / s,
+        ]
+    } else if m(1, 1) > m(2, 2) {
+        let s = 2.0 * (1.0 + m(1, 1) - m(0, 0) - m(2, 2)).sqrt();
+        [
+            (m(0, 1) + m(1, 0)) / s,
+            0.25 * s,
+            (m(1, 2) + m(2, 1)) / s,
+            (m(0, 2) - m(2, 0)) / s,
+        ]
+    } else {
+        let s = 2.0 * (1.0 + m(2, 2) - m(0, 0) - m(1, 1)).sqrt();
+        [
+            (m(0, 2) + m(2, 0)) / s,
+            (m(1, 2) + m(2, 1)) / s,
+            0.25 * s,
+            (m(1, 0) - m(0, 1)) / s,
+        ]
+    };
+    let n = q.iter().map(|x| x * x).sum::<f64>().sqrt();
+    q.map(|x| x / n)
+}
+
+/// A node of the human skeleton placed in the avatar's space: its rotation, its scale (per axis, as the xform stores it)
+/// and its origin.
+#[derive(Clone, Copy, Debug)]
+struct Placed {
+    rotation: Quat,
+    scale: Vec3,
+    origin: Vec3,
+}
+
+impl Placed {
+    const ROOT: Placed = Placed {
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        scale: [1.0; 3],
+        origin: [0.0; 3],
+    };
+
+    /// A child with local translation `t`, rotation `q` and scale `s`.
+    fn child(&self, t: Vec3, q: Quat, s: Vec3) -> Placed {
+        Placed {
+            rotation: mul(self.rotation, q),
+            scale: each(self.scale, s),
+            origin: add(self.origin, rotate(self.rotation, each(self.scale, t))),
+        }
+    }
+}
+
+fn xform(x: &Xform) -> (Vec3, Quat, Vec3) {
+    (x.t.map(f64::from), f64q(x.q), x.s.map(f64::from))
+}
+
+/// Every human bone's origin in a posed skeleton, `None` for a bone the model lacks.
+type Origins = [Option<Vec3>; BONES];
+
+/// The human bone below which a human bone sits in Mecanim's fixed hierarchy.
+#[rustfmt::skip]
+const PARENT_BONE: [Option<usize>; BONES] = [
+    None,                                   // Hips
+    Some(0), Some(0), Some(1), Some(2),     // upper legs, lower legs
+    Some(3), Some(4),                       // feet
+    Some(0), Some(7), Some(8), Some(9), Some(10), // spine, chest, upper chest, neck, head
+    Some(9), Some(9),                       // shoulders
+    Some(12), Some(13), Some(14), Some(15), // upper arms, lower arms
+    Some(16), Some(17),                     // hands
+    Some(5), Some(6),                       // toes
+    Some(11), Some(11), Some(11),           // eyes, jaw
+];
+
+/// The bones that are no child of their parent for the centre of mass: the toes, eyes and jaw.
+const EXTREMITIES: std::ops::RangeInclusive<usize> = 20..=24;
+
+const LEFT_UPPER_ARM: usize = 14;
+const LEFT_LOWER_ARM: usize = 16;
+
+/// The human skeleton node of human bone `bone`.
+fn node_of(human: &AvatarHuman, bone: usize) -> Option<usize> {
+    usize::try_from(*human.bone_index.get(bone)?).ok()
+}
+
+/// The human skeleton posed at `muscles` in the hips' own frame: the hips at the origin, unrotated and with the scale
+/// of their place in the skeleton, the human bones below them rotated by their muscles, every other node as the avatar's
+/// pose has it. `None` for an avatar without a hips node or a pose for each node.
+fn posed_origins(human: &AvatarHuman, muscles: &[f64; MUSCLES]) -> Option<Origins> {
+    let nodes = &human.skeleton.nodes;
+    if human.pose.len() != nodes.len() {
+        return None;
+    }
+    let hips = node_of(human, 0).filter(|n| *n < nodes.len())?;
+    // the hips' scale: their own composed with their ancestors'
+    let mut scale = [1.0; 3];
+    let mut at = Some(hips);
+    while let Some(n) = at {
+        scale = each(scale, human.pose[n].s.map(f64::from));
+        at = usize::try_from(nodes[n].0)
+            .ok()
+            .filter(|p| *p < nodes.len() && *p != n);
+    }
+    let mut bone_of: Vec<Option<usize>> = vec![None; nodes.len()];
+    for bone in 1..BONES {
+        if let Some(n) = node_of(human, bone).filter(|n| *n < nodes.len()) {
+            bone_of[n] = Some(bone);
+        }
+    }
+    let mut placed: Vec<Option<Placed>> = vec![None; nodes.len()];
+    placed[hips] = Some(Placed {
+        rotation: Placed::ROOT.rotation,
+        scale,
+        origin: [0.0; 3],
+    });
+    loop {
+        let mut changed = false;
+        for n in 0..nodes.len() {
+            let Some(parent) = usize::try_from(nodes[n].0).ok().filter(|p| *p < nodes.len()) else {
+                continue;
+            };
+            if placed[n].is_some() {
+                continue;
+            }
+            let Some(parent) = placed[parent] else {
+                continue;
+            };
+            let (t, q, s) = xform(&human.pose[n]);
+            let q = bone_of[n]
+                .and_then(|b| bone_rotation(human, b, muscles))
+                .unwrap_or(q);
+            placed[n] = Some(parent.child(t, q, s));
+            changed = true;
+        }
+        if !changed {
+            break;
+        }
+    }
+    Some(std::array::from_fn(|bone| {
+        let n = node_of(human, bone).filter(|n| *n < nodes.len())?;
+        placed[n].map(|p| p.origin)
+    }))
+}
+
+/// The body frame of a posed skeleton: its lateral (right), up and forward axes. The up axis runs from the middle of the
+/// upper legs to the middle of the upper arms; the lateral axis is the sum of the right-minus-left vectors of the upper
+/// arms and of the upper legs, made perpendicular to the up axis; the forward axis is their cross product.
+fn body_axes(o: &Origins) -> Option<[Vec3; 3]> {
+    let [Some(left_leg), Some(right_leg), Some(left_arm), Some(right_arm)] = [o[1], o[2], o[14], o[15]]
+    else {
+        return None;
+    };
+    let up = unit(sub(
+        scaled(add(left_arm, right_arm), 0.5),
+        scaled(add(left_leg, right_leg), 0.5),
+    ))?;
+    let right = add(sub(right_arm, left_arm), sub(right_leg, left_leg));
+    let right = unit(sub(right, scaled(up, dot(right, up))))?;
+    Some([right, up, cross(right, up)])
+}
+
+/// The nearest present bone above `bone` in Mecanim's hierarchy.
+fn present_parent(o: &Origins, bone: usize) -> Option<usize> {
+    let mut at = PARENT_BONE[bone];
+    while let Some(p) = at {
+        if o[p].is_some() {
+            return Some(p);
+        }
+        at = PARENT_BONE[p];
+    }
+    None
+}
+
+/// The centre of mass of a posed skeleton: each bone's mass at the mean of its origin and its children's, the hips' at
+/// the mean of their children's, over the masses the avatar stores. `None` where a bone with mass is missing.
+fn centre_of_mass(human: &AvatarHuman, o: &Origins) -> Option<Vec3> {
+    let (mut sum, mut total) = ([0.0; 3], 0.0);
+    for bone in 0..BONES {
+        let mass = f64::from(*human.bone_mass.get(bone)?);
+        if mass == 0.0 {
+            continue;
+        }
+        let own = o[bone]?;
+        let mut points: Vec<Vec3> = (1..BONES)
+            .filter(|c| !EXTREMITIES.contains(c) && o[*c].is_some() && present_parent(o, *c) == Some(bone))
+            .filter_map(|c| o[c])
+            .collect();
+        if bone != 0 {
+            // the editor takes the left lower arm's origin from the left upper arm
+            points.push(if bone == LEFT_LOWER_ARM {
+                o[LEFT_UPPER_ARM]?
+            } else {
+                own
+            });
+        }
+        let centre = scaled(
+            points.iter().fold([0.0; 3], |a, p| add(a, *p)),
+            1.0 / points.len() as f64,
+        );
+        sum = add(sum, scaled(centre, mass));
+        total += mass;
+    }
+    (total > 0.0).then(|| scaled(sum, 1.0 / total))
+}
+
+/// Where the hips go: what places them for a body position and orientation, from an avatar's data.
+#[derive(Debug)]
+pub struct Hips<'a> {
+    human: &'a AvatarHuman,
+    /// The avatar's rest body orientation (`m_RootX.q`).
+    rest: Quat,
+    /// The hips' parent in the avatar's skeleton, in the avatar's space.
+    parent: Placed,
+}
+
+impl<'a> Hips<'a> {
+    /// The hips' placement for `avatar`'s humanoid `human`; `None` where the avatar lacks what it needs (a hips node, the
+    /// pose of its human skeleton, the avatar skeleton node of the hips).
+    pub fn new(avatar: &UnityAvatar, human: &'a AvatarHuman) -> Option<Hips<'a>> {
+        let hips = node_of(human, 0)?;
+        let node = usize::try_from(*avatar.human_skeleton_index.get(hips)?).ok()?;
+        let nodes = &avatar.skeleton.nodes;
+        if avatar.skeleton_pose.len() != nodes.len() {
+            return None;
+        }
+        // the chain above the hips in the avatar's skeleton, from its root down
+        let mut chain = Vec::new();
+        let mut at = usize::try_from(nodes.get(node)?.0).ok();
+        while let Some(n) = at {
+            if chain.len() > nodes.len() || n >= nodes.len() {
+                return None;
+            }
+            chain.push(n);
+            at = usize::try_from(nodes[n].0).ok();
+        }
+        let parent = chain.iter().rev().fold(Placed::ROOT, |p, &n| {
+            let (t, q, s) = xform(&avatar.skeleton_pose[n]);
+            p.child(t, q, s)
+        });
+        Some(Hips {
+            human,
+            rest: unit_quat(f64q(human.root.q))?,
+            parent,
+        })
+    }
+
+    /// The body position (in units of the human scale) of the avatar's rest pose, `m_RootX.t` over the scale.
+    pub fn rest_position(&self) -> Vec3 {
+        scaled(
+            self.human.root.t.map(f64::from),
+            1.0 / f64::from(self.human.scale),
+        )
+    }
+
+    /// The hips' local rotation and translation (in their parent's frame, Unity's) that give the skeleton posed at
+    /// `muscles` the body position `body_position` and rotation `body_rotation` (a clip's `RootT` and `RootQ`).
+    pub fn place(
+        &self,
+        muscles: &[f64; MUSCLES],
+        body_position: Vec3,
+        body_rotation: Quat,
+    ) -> Option<(Quat, Vec3)> {
+        let human = self.human;
+        let origins = posed_origins(human, muscles)?;
+        let local = rotation_of_axes(body_axes(&origins)?);
+        // the body frame the pose must have: the stated rotation of the rest one
+        let wanted = mul(unit_quat(body_rotation)?, self.rest);
+        let rotation = mul(wanted, inverse(local));
+        let centre = centre_of_mass(human, &origins)?;
+        let origin = sub(
+            scaled(body_position, f64::from(human.scale)),
+            rotate(rotation, centre),
+        );
+        // into the parent's frame
+        let back = inverse(self.parent.rotation);
+        let translation = rotate(back, sub(origin, self.parent.origin));
+        let translation = [0, 1, 2].map(|i| translation[i] / self.parent.scale[i]);
+        Some((mul(back, rotation), translation))
+    }
+}
+
+fn unit_quat(q: Quat) -> Option<Quat> {
+    let n = q.iter().map(|x| x * x).sum::<f64>().sqrt();
+    (n > 1e-12).then(|| q.map(|x| x / n))
+}
+
 /// How far a lowered bone channel may be from the muscles' rotation between its keys, in degrees, and the shortest gap
-/// between keys (seconds): keys are added by bisection until slerp between them is within the tolerance.
+/// between keys (seconds): keys are added by bisection until slerp between them is within the tolerance. The hips'
+/// translation may be off by this fraction of the avatar's human scale.
 const TOLERANCE_DEGREES: f64 = 0.01;
+const TOLERANCE_TRANSLATION: f64 = 1e-4;
 const SHORTEST_GAP: f64 = 1.0 / 480.0;
 
 /// What lowering a humanoid clip did.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct HumanoidLowering {
-    /// Bones given a rotation channel, and the keys of those channels.
+    /// Bones given a rotation channel (the hips included), and the keys of those channels (the hips' translation too).
     pub bones: usize,
     pub keys: usize,
     /// The largest angle, over the bones and the gaps between keys, between the muscles' rotation at a quarter, half
-    /// and three quarters of a gap and the channel's slerp there (degrees).
+    /// and three quarters of a gap and the channel's slerp there (degrees); and the largest distance the hips'
+    /// translation is off between its keys, as a fraction of the avatar's human scale.
     pub worst_between_keys_degrees: f64,
-    /// Muscle curves the clip lacks (those muscles stay 0), RootT/RootQ curves, IK goal curves and finger muscle curves
-    /// the clip has and nothing here applies.
+    pub worst_hips_between_keys: f64,
+    /// Muscle curves the clip lacks (those muscles stay 0), RootT/RootQ curves the clip has, IK goal curves and finger
+    /// muscle curves the clip has and nothing here applies.
     pub missing_muscles: usize,
     pub root_curves: usize,
     pub goal_curves: usize,
     pub finger_curves: usize,
+    /// Whether the hips were placed (by the clip's `RootT` and `RootQ`), and how many of those seven curves the clip lacks
+    /// (the body then keeps the avatar's rest position, or no rotation, in them).
+    pub hips: bool,
+    pub missing_root_curves: usize,
     /// Human bones of the avatar whose joint the rig lacks, by name.
     pub unresolved_bones: Vec<&'static str>,
 }
 
+/// `times` sampled by `evaluate`, with keys added by bisection between neighbours wherever `blend` of their values is
+/// off `evaluate` by more than 1 in `miss` at a quarter, half or three quarters of the gap (a gap shorter than
+/// [`SHORTEST_GAP`] is kept), and the largest miss left in the gaps kept.
+fn bisect_keys<T: Copy>(
+    times: &[f64],
+    evaluate: &dyn Fn(f64) -> T,
+    blend: &dyn Fn(&T, &T, f64) -> T,
+    miss: &dyn Fn(&T, &T) -> f64,
+) -> (Vec<(f64, T)>, f64) {
+    let mut keys: Vec<(f64, T)> = times.iter().map(|&t| (t, evaluate(t))).collect();
+    let mut out: Vec<(f64, T)> = Vec::with_capacity(keys.len());
+    let mut worst = 0.0f64;
+    if keys.is_empty() {
+        return (out, worst);
+    }
+    let first = keys.remove(0);
+    out.push(first);
+    let mut last = first;
+    for next in keys {
+        let mut stack = vec![(last, next)];
+        let mut pieces: Vec<(f64, T)> = Vec::new();
+        while let Some((a, b)) = stack.pop() {
+            let gap = b.0 - a.0;
+            let measured = [0.25, 0.5, 0.75]
+                .iter()
+                .map(|&f| miss(&evaluate(a.0 + gap * f), &blend(&a.1, &b.1, f)))
+                .fold(0.0, f64::max);
+            if measured > 1.0 && gap > SHORTEST_GAP {
+                let mid = a.0 + gap / 2.0;
+                let m = (mid, evaluate(mid));
+                stack.push((m, b));
+                stack.push((a, m));
+            } else {
+                worst = worst.max(measured);
+                pieces.push(b);
+            }
+        }
+        out.extend(pieces);
+        last = next;
+    }
+    (out, worst)
+}
+
+/// Keys of a rotation sampled by `evaluate`, bisected to [`TOLERANCE_DEGREES`], and the worst miss left (degrees).
+fn rotation_keys(times: &[f64], evaluate: &dyn Fn(f64) -> Quat) -> (Vec<(f64, Quat)>, f64) {
+    let (keys, worst) = bisect_keys(times, evaluate, &|a, b, f| slerp(*a, *b, f), &|a, b| {
+        between(*a, *b) / TOLERANCE_DEGREES
+    });
+    (keys, worst * TOLERANCE_DEGREES)
+}
+
+/// A rotation and a translation in the world's frame.
+fn world_frame(rotation: Quat, translation: Vec3) -> ([f32; 4], [f32; 3]) {
+    let converted = Rest::Trs {
+        translation: translation.map(|x| x as f32),
+        rotation: rotation.map(|x| x as f32),
+        scale: [1.0; 3],
+    }
+    .converted(&UNITY);
+    let Rest::Trs {
+        translation,
+        rotation,
+        ..
+    } = converted
+    else {
+        unreachable!("a TRS converts to a TRS");
+    };
+    (rotation, translation)
+}
+
+/// The rotation channel of `joint` from keys, their quaternions on one hemisphere along the channel so that slerp takes
+/// the arc the keys sampled.
+fn rotation_channel(skeleton: Entity, joint: JointId, keys: Vec<(f64, Quat)>) -> Channel {
+    let mut times = Vec::with_capacity(keys.len());
+    let mut values = Vec::with_capacity(keys.len() * 4);
+    let mut previous: Option<Quat> = None;
+    for (t, q) in keys {
+        let q = match previous {
+            Some(p) if p.iter().zip(&q).map(|(a, b)| a * b).sum::<f64>() < 0.0 => q.map(|x| -x),
+            _ => q,
+        };
+        previous = Some(q);
+        times.push(t as f32);
+        values.extend(world_frame(q, [0.0; 3]).0);
+    }
+    Channel {
+        target: ClipTarget::Joint { skeleton, joint },
+        property: Property::Rotation,
+        interpolation: Interpolation::Linear,
+        times,
+        values,
+    }
+}
+
+/// The translation channel of `joint` from keys.
+fn translation_channel(skeleton: Entity, joint: JointId, keys: Vec<(f64, Vec3)>) -> Channel {
+    let mut times = Vec::with_capacity(keys.len());
+    let mut values = Vec::with_capacity(keys.len() * 3);
+    for (t, v) in keys {
+        times.push(t as f32);
+        values.extend(world_frame([0.0, 0.0, 0.0, 1.0], v).1);
+    }
+    Channel {
+        target: ClipTarget::Joint { skeleton, joint },
+        property: Property::Translation,
+        interpolation: Interpolation::Linear,
+        times,
+        values,
+    }
+}
+
 impl ClipData {
     /// The rotation channels of `avatar`'s humanoid bones for this clip's muscle curves, in the world's frame, each
-    /// found among the rig's joints by the path hash of its human skeleton node (`resolve`), and what was counted.
-    /// Empty for an avatar that is not a humanoid or a clip with no muscle curves.
+    /// found among the rig's joints by the path hash of its human skeleton node (`resolve`), and what was counted. The
+    /// hips get a rotation and a translation channel, placed by the clip's `RootT` and `RootQ` ([`Hips`]). Empty for an
+    /// avatar that is not a humanoid or a clip with no muscle curves.
     pub fn humanoid_channels(
         &self,
         avatar: &UnityAvatar,
@@ -255,6 +744,8 @@ impl ClipData {
             return (Vec::new(), report);
         };
         let mut curves: [Option<&Curve>; MUSCLES] = [None; MUSCLES];
+        // RootT.xyz, then RootQ.xyzw
+        let mut root: [Option<&Curve>; 7] = [None; 7];
         let mut any = false;
         for Track {
             binding,
@@ -265,7 +756,10 @@ impl ClipData {
                 continue;
             }
             match binding.attribute {
-                7..=13 => report.root_curves += 1,
+                a @ 7..=13 => {
+                    report.root_curves += 1;
+                    root[(a - 7) as usize] = tracks.first();
+                }
                 14..=41 => report.goal_curves += 1,
                 a if (MUSCLE_ATTRIBUTE_BASE..MUSCLE_ATTRIBUTE_BASE + MUSCLES as u32).contains(&a) => {
                     let m = (a - MUSCLE_ATTRIBUTE_BASE) as usize;
@@ -283,9 +777,10 @@ impl ClipData {
             return (Vec::new(), report);
         }
         report.missing_muscles = curves[..BODY_MUSCLES].iter().filter(|c| c.is_none()).count();
-        // every key time of the muscle curves, within the clip
+        // every key time of the muscle and root curves, within the clip
         let mut times: Vec<f64> = curves
             .iter()
+            .chain(&root)
             .flatten()
             .flat_map(|c| c.keys.iter().map(|k| f64::from(k.time.min(self.duration))))
             .collect();
@@ -310,68 +805,52 @@ impl ClipData {
                 continue;
             };
             let rotation = |t: f64| bone_rotation(human, bone, &muscles_at(t)).expect("the bone has axes");
-            // keys: the muscles' key times, bisected where slerp between them is off
-            let mut keys: Vec<(f64, Quat)> = times.iter().map(|&t| (t, rotation(t))).collect();
-            let mut out: Vec<(f64, Quat)> = Vec::with_capacity(keys.len());
-            let mut worst = 0.0f64;
-            let first = keys.remove(0);
-            out.push(first);
-            let mut last = first;
-            for next in keys {
-                let mut stack = vec![(last, next)];
-                let mut pieces: Vec<(f64, Quat)> = Vec::new();
-                while let Some((a, b)) = stack.pop() {
-                    let gap = b.0 - a.0;
-                    let off = |t: f64, f: f64| between(rotation(t), slerp(a.1, b.1, f));
-                    let measured = [0.25, 0.5, 0.75]
-                        .iter()
-                        .map(|&f| off(a.0 + gap * f, f))
-                        .fold(0.0, f64::max);
-                    if measured > TOLERANCE_DEGREES && gap > SHORTEST_GAP {
-                        let mid = a.0 + gap / 2.0;
-                        let m = (mid, rotation(mid));
-                        stack.push((m, b));
-                        stack.push((a, m));
-                    } else {
-                        worst = worst.max(measured);
-                        pieces.push(b);
+            let (keys, worst) = rotation_keys(&times, &rotation);
+            report.worst_between_keys_degrees = report.worst_between_keys_degrees.max(worst);
+            report.bones += 1;
+            report.keys += keys.len();
+            channels.push(rotation_channel(skeleton, joint, keys));
+        }
+        // the hips: placed by the body's position and orientation
+        if let Some(hips) = Hips::new(avatar, human)
+            && let Some(path) = node_of(human, 0).and_then(|n| human.skeleton.ids.get(n))
+        {
+            match resolve(*path) {
+                None => report.unresolved_bones.push(BONE_NAMES[0]),
+                Some((skeleton, joint)) => {
+                    let at_rest = hips.rest_position();
+                    let placed = |t: f64| -> Option<(Quat, Vec3)> {
+                        let value = |i: usize, default: f64| {
+                            root[i].map_or(default, |c| f64::from(c.sample(t as f32).0))
+                        };
+                        let position = [value(0, at_rest[0]), value(1, at_rest[1]), value(2, at_rest[2])];
+                        let rotation =
+                            unit_quat([value(3, 0.0), value(4, 0.0), value(5, 0.0), value(6, 1.0)])
+                                .unwrap_or([0.0, 0.0, 0.0, 1.0]);
+                        hips.place(&muscles_at(t), position, rotation)
+                    };
+                    if placed(times[0]).is_some() {
+                        report.hips = true;
+                        report.missing_root_curves = root.iter().filter(|c| c.is_none()).count();
+                        let (keys, worst) = rotation_keys(&times, &|t| placed(t).expect("placed").0);
+                        report.worst_between_keys_degrees = report.worst_between_keys_degrees.max(worst);
+                        report.bones += 1;
+                        report.keys += keys.len();
+                        channels.push(rotation_channel(skeleton, joint, keys));
+                        let limit = TOLERANCE_TRANSLATION * f64::from(human.scale);
+                        let (keys, worst) = bisect_keys(
+                            &times,
+                            &|t| placed(t).expect("placed").1,
+                            &|a: &Vec3, b: &Vec3, f| add(*a, scaled(sub(*b, *a), f)),
+                            &|a: &Vec3, b: &Vec3| dot(sub(*a, *b), sub(*a, *b)).sqrt() / limit,
+                        );
+                        report.worst_hips_between_keys =
+                            report.worst_hips_between_keys.max(worst * TOLERANCE_TRANSLATION);
+                        report.keys += keys.len();
+                        channels.push(translation_channel(skeleton, joint, keys));
                     }
                 }
-                out.extend(pieces);
-                last = next;
             }
-            report.worst_between_keys_degrees = report.worst_between_keys_degrees.max(worst);
-            let mut times_out = Vec::with_capacity(out.len());
-            let mut values = Vec::with_capacity(out.len() * 4);
-            let mut previous: Option<Quat> = None;
-            for (t, q) in out {
-                // one hemisphere along the channel, so slerp takes the arc the keys sampled
-                let q = match previous {
-                    Some(p) if p.iter().zip(&q).map(|(a, b)| a * b).sum::<f64>() < 0.0 => q.map(|x| -x),
-                    _ => q,
-                };
-                previous = Some(q);
-                let converted = Rest::Trs {
-                    translation: [0.0; 3],
-                    rotation: q.map(|x| x as f32),
-                    scale: [1.0; 3],
-                }
-                .converted(&UNITY);
-                let Rest::Trs { rotation, .. } = converted else {
-                    unreachable!("a TRS converts to a TRS");
-                };
-                times_out.push(t as f32);
-                values.extend(rotation);
-            }
-            report.bones += 1;
-            report.keys += times_out.len();
-            channels.push(Channel {
-                target: ClipTarget::Joint { skeleton, joint },
-                property: Property::Rotation,
-                interpolation: Interpolation::Linear,
-                times: times_out,
-                values,
-            });
         }
         (channels, report)
     }
@@ -380,7 +859,7 @@ impl ClipData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::animator::{AvatarSkeleton, Xform};
+    use crate::animator::AvatarSkeleton;
 
     const IDENTITY: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
@@ -486,5 +965,134 @@ mod tests {
         assert!((between(slerp(a, b, 0.5), rotation_x(0.5))) < 1e-9);
         // the opposite sign is the same rotation
         assert!(between(a, [0.0, 0.0, 0.0, -1.0]) < 1e-9);
+    }
+
+    /// The rotation of a set of axes is the rotation that has them as images of x, y and z, and `rotate` applies it.
+    #[test]
+    fn axes_and_rotations_round_trip() {
+        for q in [
+            [0.0, 0.0, 0.0, 1.0],
+            rotation_x(1.0),
+            rotation_x(3.0),
+            unit_quat([0.3, -0.5, 0.2, 0.7]).unwrap(),
+            unit_quat([0.9, 0.1, -0.3, 0.05]).unwrap(),
+            unit_quat([-0.1, 0.8, 0.2, 0.0]).unwrap(),
+        ] {
+            let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]].map(|v| rotate(q, v));
+            assert!(between(rotation_of_axes(axes), q) < 1e-9, "{q:?}");
+        }
+        // x turned a quarter about y is -z
+        let r = rotate([0.0, 0.5f64.sqrt(), 0.0, 0.5f64.sqrt()], [1.0, 0.0, 0.0]);
+        assert!(
+            r[0].abs() < 1e-12 && r[1].abs() < 1e-12 && (r[2] + 1.0).abs() < 1e-12,
+            "{r:?}"
+        );
+    }
+
+    /// A trunk with the bones the body frame and the centre of mass need: hips (node 1), upper legs (2, 3), spine (4) and
+    /// upper arms (5, 6), every node a child of the hips but the hips', with the masses 0.3, 0.1 + 0.1, 0.2 and 0.15 + 0.15.
+    fn trunk() -> AvatarHuman {
+        let mut h = human(-1.0, 1.0, [1.0; 3]);
+        let at = |t: [f32; 3]| Xform {
+            t,
+            q: IDENTITY,
+            s: [1.0; 3],
+        };
+        h.skeleton = AvatarSkeleton {
+            nodes: vec![(-1, -1), (0, -1), (1, -1), (1, -1), (1, -1), (1, -1), (1, -1)],
+            ids: vec![0; 7],
+            axes: vec![],
+        };
+        h.pose = vec![
+            at([0.0; 3]),
+            at([0.0, 1.0, 0.0]),
+            at([-0.1, -0.1, 0.0]),
+            at([0.1, -0.1, 0.0]),
+            at([0.0, 0.2, 0.0]),
+            at([-0.4, 0.5, 0.0]),
+            at([0.4, 0.5, 0.0]),
+        ];
+        h.bone_index = vec![-1; BONES];
+        for (bone, node) in [(0, 1), (1, 2), (2, 3), (7, 4), (14, 5), (15, 6)] {
+            h.bone_index[bone] = node;
+        }
+        h.bone_mass = vec![0.0; BONES];
+        for (bone, mass) in [(0, 0.3), (1, 0.1), (2, 0.1), (7, 0.2), (14, 0.15), (15, 0.15)] {
+            h.bone_mass[bone] = mass;
+        }
+        h.scale = 2.0;
+        h
+    }
+
+    /// The origins of the trunk in the hips' frame, the frame of a symmetric body is the axes, and the centre of mass is
+    /// the masses' mean of the segments' centres: the hips' at the mean of their children's origins, the spine's at the
+    /// mean of its own and the arms' (the nearest present bones below it), the others' at their own.
+    #[test]
+    fn the_trunks_frame_and_centre_of_mass() {
+        let h = trunk();
+        let o = posed_origins(&h, &[0.0; MUSCLES]).unwrap();
+        assert_eq!(o[0], Some([0.0; 3]));
+        assert_eq!(o[14], Some([-0.4, 0.5, 0.0]));
+        let axes = body_axes(&o).unwrap();
+        for (axis, want) in axes
+            .iter()
+            .zip([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        {
+            assert!((0..3).all(|i| (axis[i] - want[i]).abs() < 1e-6), "{axes:?}");
+        }
+        let mean = |points: &[Vec3]| {
+            scaled(
+                points.iter().fold([0.0; 3], |a, p| add(a, *p)),
+                1.0 / points.len() as f64,
+            )
+        };
+        let (spine, left_leg, right_leg) = ([0.0, 0.2, 0.0], [-0.1, -0.1, 0.0], [0.1, -0.1, 0.0]);
+        let (left_arm, right_arm) = ([-0.4, 0.5, 0.0], [0.4, 0.5, 0.0]);
+        let want = [
+            (0.3, mean(&[spine, left_leg, right_leg])),
+            (0.1, left_leg),
+            (0.1, right_leg),
+            (0.2, mean(&[left_arm, right_arm, spine])),
+            (0.15, left_arm),
+            (0.15, right_arm),
+        ]
+        .iter()
+        .fold([0.0; 3], |a, (m, c)| add(a, scaled(*c, *m)));
+        let got = centre_of_mass(&h, &o).unwrap();
+        assert!(
+            (0..3).all(|i| (got[i] - want[i]).abs() < 1e-6),
+            "{got:?} vs {want:?}"
+        );
+    }
+
+    /// The hips are placed so that the pose's body frame is the stated rotation of the rest frame and its centre of mass
+    /// is the body position times the human scale, whatever the hips' parent is.
+    #[test]
+    fn the_hips_are_placed_by_the_body_position_and_rotation() {
+        let h = trunk();
+        let rest = unit_quat([0.03, 0.0, 0.0, 1.0]).unwrap();
+        let parent = Placed {
+            rotation: unit_quat([0.5, -0.5, 0.5, 0.5]).unwrap(),
+            scale: [1.0, 2.0, 1.0],
+            origin: [0.3, -0.2, 0.1],
+        };
+        let hips = Hips {
+            human: &h,
+            rest,
+            parent,
+        };
+        let (body, turn) = ([0.1, 1.2, -0.3], unit_quat([0.2, -0.4, 0.1, 0.8]).unwrap());
+        let (local_rotation, local_translation) = hips.place(&[0.0; MUSCLES], body, turn).unwrap();
+        // back to the avatar's space
+        let at = parent.child(local_translation, local_rotation, [1.0; 3]);
+        let o = posed_origins(&h, &[0.0; MUSCLES]).unwrap();
+        let frame = rotation_of_axes(body_axes(&o).unwrap());
+        assert!(between(mul(at.rotation, frame), mul(turn, rest)) < 1e-7);
+        let centre = add(at.origin, rotate(at.rotation, centre_of_mass(&h, &o).unwrap()));
+        let want = scaled(body, 2.0);
+        assert!(
+            (0..3).all(|i| (centre[i] - want[i]).abs() < 1e-9),
+            "{centre:?} vs {want:?}"
+        );
     }
 }

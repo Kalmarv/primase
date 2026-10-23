@@ -150,10 +150,13 @@ pub struct LevelReport {
     /// Animators of the rigs read (`unity.animator` on the rig).
     pub avatars: usize,
     pub controllers: usize,
-    /// Clips lowered with a humanoid avatar (their muscle curves evaluated as bone rotations,
-    /// [`crate::humanoid`]), and the largest angle between the muscles' rotation and the lowered channel's between keys.
+    /// Clips lowered with a humanoid avatar (their muscle curves evaluated as bone rotations and their root curves as
+    /// the hips' place, [`crate::humanoid`]), and the largest angle between the muscles' rotation and the lowered channel's between keys.
     pub humanoid_clips: usize,
     pub humanoid_worst_between_keys_degrees: f64,
+    /// The largest distance a lowered hips translation is off the body position between keys, as a fraction of the
+    /// avatar's human scale.
+    pub humanoid_worst_hips_between_keys: f64,
     /// RenderSettings names a sun (`unity.render_settings` holds it when it is a light read).
     pub sun_named: bool,
     /// Colliders read: those that collide, and those that do not by reason (inactive or disabled, trigger,
@@ -916,10 +919,18 @@ impl Builder<'_> {
                                     .report
                                     .humanoid_worst_between_keys_degrees
                                     .max(h.worst_between_keys_degrees);
+                                self.report.humanoid_worst_hips_between_keys = self
+                                    .report
+                                    .humanoid_worst_hips_between_keys
+                                    .max(h.worst_hips_between_keys);
                                 for (what, n) in [
                                     (
-                                        "humanoid clip root curves (RootT, RootQ: the body's centre of mass and orientation that place the hips) not applied",
-                                        h.root_curves,
+                                        "humanoid clips whose hips are not placed (the avatar lacks what places them)",
+                                        usize::from(!h.hips),
+                                    ),
+                                    (
+                                        "humanoid clip RootT or RootQ curves missing (the body keeps the avatar's rest position, or no turn, in them)",
+                                        if h.hips { h.missing_root_curves } else { 0 },
                                     ),
                                     (
                                         "humanoid clip IK goal curves not applied (used only by a layer with IK)",
@@ -2357,7 +2368,7 @@ mod tests {
         assert_eq!(json["colliders_not_colliding"]["trigger"], 5);
         assert_eq!(json["skipped"]["no mesh"], 1);
         // every field of the struct is there
-        assert_eq!(json.as_object().map(serde_json::Map::len), Some(32));
+        assert_eq!(json.as_object().map(serde_json::Map::len), Some(33));
     }
 
     #[test]
