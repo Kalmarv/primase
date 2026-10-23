@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
+use half::f16;
 use primase_core::{Deltas, MorphFrame, MorphId, MorphTarget, Morphs, Primitive, Semantic, Stream, Topology};
 use primase_meshops::compact_primitive;
 use primase_vertex::{Element, Format, Stream as VertexStream, decode_stream_raw, resolve_layout};
@@ -660,23 +661,11 @@ fn bind_poses(m: &Value, name: &str) -> Result<Vec<[[f64; 4]; 4]>> {
         .collect()
 }
 
-/// An IEEE binary16 value as an f32 (exact).
-fn half_to_f32(h: u16) -> f32 {
-    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
-    let (exponent, fraction) = (i32::from((h >> 10) & 0x1F), f32::from(h & 0x3FF));
-    match exponent {
-        0 => sign * fraction * 2f32.powi(-24),
-        0x1F if fraction == 0.0 => sign * f32::INFINITY,
-        0x1F => f32::NAN,
-        e => sign * (1.0 + fraction / 1024.0) * 2f32.powi(e - 15),
-    }
-}
-
 /// A blend weight component by Unity's `VertexFormat`: `Float` (0), `Float16` (1), `UNorm8` (2) or `UNorm16` (4).
 fn blend_weight(bytes: &[u8], format: i64) -> f32 {
     match format {
         0 => f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
-        1 => half_to_f32(u16::from_le_bytes([bytes[0], bytes[1]])),
+        1 => f16::from_le_bytes([bytes[0], bytes[1]]).to_f32(),
         2 => f32::from(bytes[0]) / 255.0,
         _ => f32::from(u16::from_le_bytes([bytes[0], bytes[1]])) / 65535.0,
     }
@@ -1726,18 +1715,6 @@ mod tests {
             refused(blend_info((0, 0, 0, 2), (0, 8, 5, 2)), 12, 24).contains("blend indices of format 5")
         );
         assert!(refused(blend_info((0, 0, 0, 2), (0, 8, 10, 2)), 16, 20).contains("past the vertex data"));
-    }
-
-    /// binary16 values: zero, a subnormal, one, the largest finite value, infinity and NaN.
-    #[test]
-    fn half_floats_convert_exactly() {
-        assert_eq!(half_to_f32(0x0000), 0.0);
-        assert_eq!(half_to_f32(0x0001), 2f32.powi(-24));
-        assert_eq!(half_to_f32(0x3C00), 1.0);
-        assert_eq!(half_to_f32(0xC000), -2.0);
-        assert_eq!(half_to_f32(0x7BFF), 65504.0);
-        assert_eq!(half_to_f32(0x7C00), f32::INFINITY);
-        assert!(half_to_f32(0x7E00).is_nan());
     }
 
     /// A skinned mesh's primitives carry `Joints(0)` (16-bit slots) and `Weights(0)` only when asked, compacted with the

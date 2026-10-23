@@ -27,6 +27,7 @@ primase-vertex.workspace = true
 primase-meshops.workspace = true
 primase-compress.workspace = true
 thiserror.workspace = true
+half.workspace = true
 aes.workspace = true
 num-bigint.workspace = true
 sha2.workspace = true

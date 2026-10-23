@@ -1,5 +1,6 @@
 use super::Member;
 use crate::{Result, bytes::View, invalid};
+use half::f16;
 use primase_vertex::Format;
 
 /// Decoded attributes in file coordinates. Repeated attributes retain stream order.
@@ -79,7 +80,7 @@ impl Vertex {
                 }
                 0x2d | 0x2e => {
                     for (k, lane) in lanes.iter_mut().take(n / 2).enumerate() {
-                        *lane = half(v.u16(at + k * 2)?);
+                        *lane = f16::from_bits(v.u16(at + k * 2)?).to_f32();
                     }
                 }
                 0x13 => {
@@ -225,10 +226,10 @@ impl Vertex {
                 }
                 (5, 0x2e) => {
                     let lanes = [
-                        half(v.u16(o)?),
-                        half(v.u16(o + 2)?),
-                        half(v.u16(o + 4)?),
-                        half(v.u16(o + 6)?),
+                        f16::from_bits(v.u16(o)?).to_f32(),
+                        f16::from_bits(v.u16(o + 2)?).to_f32(),
+                        f16::from_bits(v.u16(o + 4)?).to_f32(),
+                        f16::from_bits(v.u16(o + 6)?).to_f32(),
                     ];
                     if lanes.iter().any(|x: &f32| !x.is_finite()) {
                         return Err(invalid(v.format, o, "non-finite half-float UV member"));
@@ -251,18 +252,5 @@ impl Vertex {
             }
         }
         Ok(())
-    }
-}
-
-/// An IEEE 754 half-precision value (subnormals, infinities and NaN as such).
-fn half(bits: u16) -> f32 {
-    let sign = if bits & 0x8000 != 0 { -1f32 } else { 1. };
-    let exponent = i32::from((bits >> 10) & 0x1f);
-    let mantissa = f32::from(bits & 0x3ff);
-    sign * match exponent {
-        0 => mantissa * 2f32.powi(-24),
-        31 if mantissa == 0. => f32::INFINITY,
-        31 => f32::NAN,
-        e => (1. + mantissa / 1024.) * 2f32.powi(e - 15),
     }
 }

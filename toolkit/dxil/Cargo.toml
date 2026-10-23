@@ -13,6 +13,7 @@ primase-bytes.workspace = true
 primase-dxcontainer.workspace = true
 primase-shader.workspace = true
 naga.workspace = true
+half.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true

@@ -1,6 +1,7 @@
 //! LLVM values and the instructions that are not `dx.op` calls: constants, arithmetic, casts, comparisons, selects,
 //! aggregates, phis.
 
+use half::f16;
 use naga::{BinaryOperator as Bo, Expression as E, MathFunction as Mf, UnaryOperator as Uo};
 use primase_shader::build::{Kind, Val};
 
@@ -94,7 +95,7 @@ impl Lift<'_> {
             },
             Constant::Float(bits) => match self.m.types.get(ty) {
                 Some(Type::Float) => Lv::Scalar(self.b.lit_f(f32::from_bits(*bits as u32))),
-                Some(Type::Half) => Lv::Scalar(self.b.lit_f(half_to_f32(*bits as u16))),
+                Some(Type::Half) => Lv::Scalar(self.b.lit_f(f16::from_bits(*bits as u16).to_f32())),
                 _ => return kind(self).map(|_| unreachable!("a float constant of another type")),
             },
             Constant::Null | Constant::Undef => match self.m.types.get(ty) {
@@ -892,18 +893,5 @@ impl Lift<'_> {
             41 => signed(self, Bo::LessEqual),
             other => return self.refuse(format!("the integer predicate {other}")),
         })
-    }
-}
-
-/// The value of an IEEE half, from its bits.
-fn half_to_f32(bits: u16) -> f32 {
-    let sign = if bits & 0x8000 != 0 { -1.0f32 } else { 1.0 };
-    let exponent = i32::from((bits >> 10) & 31);
-    let fraction = f32::from(bits & 1023);
-    sign * match exponent {
-        0 => fraction * 2f32.powi(-24),
-        31 if fraction == 0.0 => f32::INFINITY,
-        31 => f32::NAN,
-        e => (1.0 + fraction / 1024.0) * 2f32.powi(e - 15),
     }
 }

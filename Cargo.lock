@@ -1111,6 +1111,7 @@ dependencies = [
 name = "primase-dxil"
 version = "0.1.0"
 dependencies = [
+ "half",
  "naga",
  "primase-bytes",
  "primase-dxcontainer",
@@ -1144,6 +1145,7 @@ dependencies = [
  "aes",
  "criterion",
  "encoding_rs",
+ "half",
  "num-bigint",
  "primase-animation",
  "primase-bytes",
@@ -1413,6 +1415,7 @@ dependencies = [
 name = "primase-unity"
 version = "0.1.0"
 dependencies = [
+ "half",
  "primase-compress",
  "primase-core",
  "primase-dxbc",
