@@ -8,7 +8,11 @@ mod mesh;
 pub use convex::ConvexCore;
 mod section;
 pub mod spline;
+pub mod world;
+
 pub use mesh::{CompressedMesh, MeshSection, Triangle, compressed_mesh, mesh_sections};
+/// Register this crate's passes (`lower-havok-clips`).
+pub use world::register;
 mod tagfile;
 mod types;
 mod value;

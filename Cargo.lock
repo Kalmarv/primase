@@ -1099,6 +1099,7 @@ version = "0.1.0"
 name = "primase-havok"
 version = "0.1.0"
 dependencies = [
+ "primase-core",
  "primase-testdata",
  "primase-vertex",
  "thiserror",

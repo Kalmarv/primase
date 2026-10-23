@@ -1,5 +1,6 @@
 //! The Sekiro reader: the area read ([`area`]), one character by itself ([`character`]), and the parts of it with modules of their own (texture catalog, world
 //! states, shadow flags), and the program-facing reader adapter ([`convert`]).
+pub mod animation;
 pub mod area;
 pub mod character;
 pub mod collision;

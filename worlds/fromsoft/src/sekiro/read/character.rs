@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use primase_core::convert::{Notice, NoticeKind, Reader, Report as ConvertReport, Result as ConvertResult};
 use primase_core::{Asset, Entity, Name, Role, Source, World};
 
+use super::animation::{self, AnimationReport};
 use super::area::material_definitions;
 use super::{shaders, textures};
 use crate::components::models::{SkeletonOf, SourceModel};
@@ -53,6 +54,8 @@ pub struct CharacterReport {
     pub missing_shader_bundles: Vec<String>,
     /// Shader bundles its materials bind whose metaparam is of a version the reader does not read.
     pub unread_metaparams: Vec<String>,
+    /// What reading the character's animation binder found, when it was asked for ([`CharacterOptions::animations`]).
+    pub animations: Option<AnimationReport>,
 }
 
 impl CharacterReport {
@@ -85,8 +88,40 @@ impl CharacterReport {
                 ));
             }
         }
+        if let Some(a) = &self.animations {
+            for (why, files) in &a.refused {
+                out.push(files.iter().take(3).fold(
+                    Notice::new(
+                        "sekiro animations",
+                        NoticeKind::Unsupported,
+                        format!("animation files not read: {why}"),
+                        files.len() as u64,
+                    ),
+                    |n, f| n.example(f.clone()),
+                ));
+            }
+            if !a.unread.is_empty() {
+                out.push(a.unread.iter().take(3).fold(
+                    Notice::new(
+                        "sekiro animations",
+                        NoticeKind::Unsupported,
+                        "animation binder members not read (event files, ...)",
+                        a.unread.len() as u64,
+                    ),
+                    |n, f| n.example(f.clone()),
+                ));
+            }
+        }
         out
     }
+}
+
+/// What a character read asks for beyond its model.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CharacterOptions {
+    /// Read the character's animation binder too (`chr/<id>.anibnd`): its Havok skeleton as a skeleton of its own and
+    /// each animation as `havok.animation` (see [`super::animation`]), the animations members of the asset.
+    pub animations: bool,
 }
 
 /// A character id as the game names its files: `c` and four digits.
@@ -273,7 +308,7 @@ impl<'a> Reading<'a> {
     }
 
     /// Read `item` into `w` as an asset of its own (see the module documentation).
-    fn read(&mut self, item: Item<'_>, w: &mut World) -> Result<CharacterReport> {
+    fn read(&mut self, item: Item<'_>, animations: bool, w: &mut World) -> Result<CharacterReport> {
         let (archive, decoder) = (&self.archive, self.decoder);
         let binder_path = item.binder_path();
         if !textures::has(archive, &binder_path) {
@@ -373,6 +408,7 @@ impl<'a> Reading<'a> {
             }
         }
         if let Item::Character(id) = item
+            && !animations
             && textures::has(archive, &format!("/chr/{id}.anibnd.dcx"))
         {
             report.unread.push(format!("{id}.anibnd"));
@@ -454,15 +490,19 @@ impl<'a> Reading<'a> {
             },
         );
         w.insert(prototype, SkeletonOf(skeleton));
+        let mut members = vec![(skeleton, Role::Rig), (prototype, Role::Part)];
+        if let (true, Item::Character(id)) = (animations, item) {
+            if let Some(read) = animation::read(archive, decoder, id, w)? {
+                members.extend(read.animations.iter().map(|&e| (e, Role::Clip)));
+                report.animations = Some(read.report);
+            } else {
+                report.animations = Some(AnimationReport::default());
+            }
+        }
         let root = w.spawn();
         w.insert(root, Name(name.to_owned()));
         w.insert(root, Source(key));
-        w.insert(
-            root,
-            Asset {
-                members: vec![(skeleton, Role::Rig), (prototype, Role::Part)],
-            },
-        );
+        w.insert(root, Asset { members });
         Ok(report)
     }
 
@@ -482,12 +522,23 @@ pub fn read_character(
     decoder: &Decoder<'_>,
     destination: &mut World,
 ) -> Result<CharacterReport> {
+    read_character_with(install, id, decoder, CharacterOptions::default(), destination)
+}
+
+/// [`read_character`] with what else to read ([`CharacterOptions`]).
+pub fn read_character_with(
+    install: impl AsRef<Path>,
+    id: &str,
+    decoder: &Decoder<'_>,
+    options: CharacterOptions,
+    destination: &mut World,
+) -> Result<CharacterReport> {
     if destination.entities().next().is_some() {
         return Err(invalid("Sekiro character", 0, "destination must be empty"));
     }
     let id = character_id(id)?;
     let mut reading = Reading::open(install.as_ref(), decoder)?;
-    let report = reading.read(Item::Character(id), destination)?;
+    let report = reading.read(Item::Character(id), options.animations, destination)?;
     reading.finish(destination);
     Ok(report)
 }
@@ -520,7 +571,7 @@ pub fn read_parts(
     let mut reading = Reading::open(install.as_ref(), decoder)?;
     let reports = parts
         .iter()
-        .map(|p| reading.read(Item::Part(p), destination))
+        .map(|p| reading.read(Item::Part(p), false, destination))
         .collect::<Result<Vec<_>>>()?;
     reading.finish(destination);
     Ok(reports)
@@ -534,6 +585,7 @@ pub struct CharacterReader<'a> {
     install: PathBuf,
     request: Request,
     decoder: Decoder<'a>,
+    options: CharacterOptions,
     pending: Vec<Notice>,
 }
 
@@ -551,8 +603,15 @@ impl<'a> CharacterReader<'a> {
             install: install.into(),
             request: Request::Character(id.to_owned()),
             decoder,
+            options: CharacterOptions::default(),
             pending: Vec::new(),
         }
+    }
+
+    /// Also read the character's animation binder ([`CharacterOptions::animations`]).
+    pub fn with_animations(mut self) -> Self {
+        self.options.animations = true;
+        self
     }
 
     /// The parts `parts` (`bd_m_9120_l`) of the install at `install`, each an asset of its own ([`read_parts`]).
@@ -561,6 +620,7 @@ impl<'a> CharacterReader<'a> {
             install: install.into(),
             request: Request::Parts(parts.iter().map(|p| (*p).to_owned()).collect()),
             decoder,
+            options: CharacterOptions::default(),
             pending: Vec::new(),
         }
     }
@@ -570,7 +630,13 @@ impl Reader for CharacterReader<'_> {
     fn read(&mut self) -> ConvertResult<(World, ConvertReport)> {
         let mut world = World::new();
         let reports = match &self.request {
-            Request::Character(id) => vec![read_character(&self.install, id, &self.decoder, &mut world)?],
+            Request::Character(id) => vec![read_character_with(
+                &self.install,
+                id,
+                &self.decoder,
+                self.options,
+                &mut world,
+            )?],
             Request::Parts(parts) => {
                 let names: Vec<&str> = parts.iter().map(String::as_str).collect();
                 read_parts(&self.install, &names, &self.decoder, &mut world)?
@@ -582,8 +648,16 @@ impl Reader for CharacterReader<'_> {
             report.push((
                 "sekiro character".into(),
                 format!(
-                    "{}: {} bones, {} meshes, {} materials, {} textures",
-                    r.id, r.bones, r.meshes, r.materials, r.textures
+                    "{}: {} bones, {} meshes, {} materials, {} textures{}",
+                    r.id,
+                    r.bones,
+                    r.meshes,
+                    r.materials,
+                    r.textures,
+                    r.animations.as_ref().map_or(String::new(), |a| format!(
+                        ", {} animations ({} bones in the Havok skeleton)",
+                        a.animations, a.bones
+                    ))
                 ),
             ));
         }
@@ -595,7 +669,7 @@ impl Reader for CharacterReader<'_> {
         Ok((part, Vec::new()))
     }
     fn emits(&self) -> &'static [&'static str] {
-        &["core", "fromsoft"]
+        &["core", "fromsoft", "havok"]
     }
     fn notices(&mut self) -> Vec<Notice> {
         std::mem::take(&mut self.pending)

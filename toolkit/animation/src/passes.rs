@@ -496,6 +496,11 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         ],
     );
     reg.register_requiring(
+        "correspond-skeletons",
+        crate::correspond::correspond_skeletons,
+        &[("from", "a"), ("to", "b"), ("tolerance", "0.001")],
+    );
+    reg.register_requiring(
         "retarget-skin",
         crate::retarget_skin::retarget_skin,
         &[("unmapped", "refuse")],

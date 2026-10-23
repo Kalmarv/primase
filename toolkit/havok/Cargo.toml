@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+primase-core.workspace = true
 primase-vertex.workspace = true
 
 [dev-dependencies]

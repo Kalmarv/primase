@@ -1,0 +1,338 @@
+//! `correspond-skeletons`: the joint map between two skeletons of one character that name their joints alike and agree
+//! on them, so `map-clip` can move a clip made for one onto the other.
+//!
+//! A map built by name states what else it checked ([`primase_core::JointMap`]): a joint is paired with the joint of the
+//! other skeleton that has its name only where that joint is the only one of the name on each side, the two rests agree
+//! (translation and scale parts within the tolerance, rotations within it in radians), and the parents correspond (the
+//! parent of one is paired with the parent of the other; roots with roots). Anything else is left out, counted by reason:
+//! a skeleton with extra joints between two it shares breaks the chain there, and a clip's channels on the joints below
+//! are then dropped or refused by `map-clip`, as its option says.
+
+use std::collections::BTreeMap;
+
+use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::{Component, Entity, JointId, JointMap, Name, Skeleton, World};
+
+use crate::pose::Trs;
+
+/// `correspond-skeletons{from=NAME,to=NAME,tolerance=T}` (all required): the one skeleton (`core.skeleton`) whose
+/// `core.name` is `from` and the one named `to` get a `core.joint_map` from the first to the second.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CorrespondSkeletons {
+    pub from: String,
+    pub to: String,
+    pub tolerance: f64,
+}
+
+/// The pass factory.
+pub fn correspond_skeletons(o: &Options) -> Result<Box<dyn Pass>, String> {
+    let (mut from, mut to, mut tolerance) = (None, None, None);
+    for (k, v) in o {
+        match k.as_str() {
+            "from" => from = Some(v.clone()),
+            "to" => to = Some(v.clone()),
+            "tolerance" => {
+                tolerance = Some(
+                    v.parse::<f64>()
+                        .ok()
+                        .filter(|t| t.is_finite() && *t > 0.0)
+                        .ok_or_else(|| format!("tolerance={v}: a positive number"))?,
+                );
+            }
+            _ => return Err(format!("unknown option {k}")),
+        }
+    }
+    let from = from.ok_or("from=NAME (the source skeleton's name) is required")?;
+    let to = to.ok_or("to=NAME (the target skeleton's name) is required")?;
+    if from == to {
+        return Err("from and to name the same skeleton".into());
+    }
+    Ok(Box::new(CorrespondSkeletons {
+        from,
+        to,
+        tolerance: tolerance.ok_or("tolerance=T is required")?,
+    }))
+}
+
+/// The one skeleton entity named `name`.
+fn find(w: &World, name: &str) -> Result<Entity, String> {
+    let named: Vec<Entity> = w
+        .iter::<Skeleton>()
+        .map(|(e, _)| e)
+        .filter(|e| w.get::<Name>(*e).is_some_and(|n| n.0 == name))
+        .collect();
+    match named.as_slice() {
+        [e] => Ok(*e),
+        [] => Err(format!("no skeleton is named {name}")),
+        _ => Err(format!("{} skeletons are named {name}", named.len())),
+    }
+}
+
+/// Whether two rests agree within `tolerance`.
+fn agree(a: &Trs, b: &Trs, tolerance: f64) -> bool {
+    let near = |x: &[f64], y: &[f64]| x.iter().zip(y).all(|(p, q)| (p - q).abs() <= tolerance);
+    let dot: f64 = a.rotation.iter().zip(&b.rotation).map(|(p, q)| p * q).sum();
+    near(&a.translation, &b.translation)
+        && near(&a.scale, &b.scale)
+        && 2.0 * dot.abs().min(1.0).acos() <= tolerance
+}
+
+impl Pass for CorrespondSkeletons {
+    fn name(&self) -> &'static str {
+        "correspond-skeletons"
+    }
+    fn options(&self) -> Options {
+        Options::from([
+            ("from".to_owned(), self.from.clone()),
+            ("to".to_owned(), self.to.clone()),
+            ("tolerance".to_owned(), self.tolerance.to_string()),
+        ])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[Skeleton::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[JointMap::NAME]
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let (a, b) = (find(w, &self.from)?, find(w, &self.to)?);
+        let (from, to) = match (w.get::<Skeleton>(a), w.get::<Skeleton>(b)) {
+            (Some(f), Some(t)) => (f.clone(), t.clone()),
+            _ => return Err("a skeleton is gone".into()),
+        };
+        let mut by_name: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        for (i, j) in to.joints.iter().enumerate() {
+            by_name.entry(j.name.as_str()).or_default().push(i);
+        }
+        let mut from_names: BTreeMap<&str, usize> = BTreeMap::new();
+        for j in &from.joints {
+            *from_names.entry(j.name.as_str()).or_default() += 1;
+        }
+        // candidates: the one joint of the name on each side whose rest agrees
+        let mut candidate: BTreeMap<JointId, JointId> = BTreeMap::new();
+        for j in &from.joints {
+            let others = by_name.get(j.name.as_str()).map_or(&[][..], Vec::as_slice);
+            match others {
+                [] => log.count("joints left out: no joint of the name in the target", 1),
+                [t] if from_names[j.name.as_str()] == 1 => {
+                    let t = &to.joints[*t];
+                    match (Trs::of(&j.rest), Trs::of(&t.rest)) {
+                        (Ok(x), Ok(y)) if agree(&x, &y, self.tolerance) => {
+                            candidate.insert(j.id, t.id);
+                        }
+                        _ => log.count("joints left out: the rests differ", 1),
+                    }
+                }
+                _ => log.count("joints left out: the name is not unique", 1),
+            }
+        }
+        // the parents must correspond: drop candidates whose parent is not paired with the target's parent, until none
+        loop {
+            let parents: BTreeMap<JointId, Option<JointId>> =
+                to.joints.iter().map(|j| (j.id, j.parent)).collect();
+            let doomed: Vec<JointId> = from
+                .joints
+                .iter()
+                .filter(|j| candidate.contains_key(&j.id))
+                .filter(|j| {
+                    let target_parent = parents[&candidate[&j.id]];
+                    match j.parent {
+                        None => target_parent.is_some(),
+                        Some(p) => candidate.get(&p).copied() != target_parent,
+                    }
+                })
+                .map(|j| j.id)
+                .collect();
+            if doomed.is_empty() {
+                break;
+            }
+            log.count(
+                "joints left out: the parents do not correspond",
+                doomed.len() as u64,
+            );
+            for d in doomed {
+                candidate.remove(&d);
+            }
+        }
+        if candidate.is_empty() {
+            return Err(format!(
+                "no joint of {} corresponds to one of {} (names, rests within {} and parents)",
+                self.from, self.to, self.tolerance
+            ));
+        }
+        log.count("joints paired", candidate.len() as u64);
+        let map = w.spawn();
+        w.insert(map, Name(format!("{} -> {}", self.from, self.to)));
+        w.insert(
+            map,
+            JointMap {
+                from: a,
+                to: b,
+                pairs: from
+                    .joints
+                    .iter()
+                    .filter_map(|j| candidate.get(&j.id).map(|t| (j.id, *t)))
+                    .collect(),
+            },
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use primase_core::pass::{PassManager, PassRegistry, RunReport};
+    use primase_core::{Joint, Rest};
+
+    use super::*;
+
+    fn joint(id: u32, name: &str, parent: Option<u32>, x: f32) -> Joint {
+        Joint {
+            id: JointId(id),
+            name: name.to_owned(),
+            parent: parent.map(JointId),
+            rest: Rest::Trs {
+                translation: [x, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            },
+        }
+    }
+
+    fn skeleton(w: &mut World, name: &str, joints: Vec<Joint>) -> Entity {
+        let e = w.spawn();
+        w.insert(e, Name(name.to_owned()));
+        w.insert(e, Skeleton { joints });
+        e
+    }
+
+    fn run(w: &mut World, options: &str) -> Result<RunReport, String> {
+        let mut reg = PassRegistry::new();
+        reg.register_requiring(
+            "correspond-skeletons",
+            correspond_skeletons,
+            &[("from", "a"), ("to", "b"), ("tolerance", "0.001")],
+        );
+        let m = PassManager::new(reg).with_pass_checks(true);
+        let mut report = RunReport::default();
+        m.run(
+            w,
+            &m.registry.parse(options).map_err(|e| e.to_string())?,
+            &mut report,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(report)
+    }
+
+    fn pairs(w: &World) -> Vec<(u32, u32)> {
+        w.iter::<JointMap>()
+            .flat_map(|(_, m)| m.pairs.iter().map(|(a, b)| (a.0, b.0)).collect::<Vec<_>>())
+            .collect()
+    }
+
+    /// The target has an extra joint between a joint and its child: the child's parent does not correspond, and the
+    /// joints with another rest or no counterpart are left out, each counted by its reason.
+    #[test]
+    fn joints_correspond_where_name_rest_and_parent_agree() {
+        let mut w = World::new();
+        skeleton(
+            &mut w,
+            "a",
+            vec![
+                joint(0, "Master", None, 0.0),
+                joint(1, "Spine", Some(0), 1.0),
+                joint(2, "Head", Some(1), 2.0),
+                joint(3, "Arm", Some(0), 3.0),
+                joint(4, "Hand", Some(3), 4.0),
+                joint(5, "Tail", Some(0), 5.0),
+            ],
+        );
+        skeleton(
+            &mut w,
+            "b",
+            vec![
+                joint(10, "Master", None, 0.0),
+                joint(11, "Spine", Some(10), 1.0),
+                joint(12, "Extra", Some(11), 0.5),
+                // Head is under the extra joint here: its parent does not correspond
+                joint(13, "Head", Some(12), 2.0),
+                joint(14, "Arm", Some(10), 3.0),
+                joint(15, "Hand", Some(14), 4.0),
+                // Tail's rest differs
+                joint(16, "Tail", Some(10), 9.0),
+            ],
+        );
+        let report = run(&mut w, "correspond-skeletons{from=a,to=b,tolerance=0.001}").unwrap();
+        assert_eq!(pairs(&w), [(0, 10), (1, 11), (3, 14), (4, 15)]);
+        let log = &report.steps[0].log;
+        assert_eq!(log.counts["joints paired"], 4);
+        assert_eq!(log.counts["joints left out: the rests differ"], 1);
+        assert_eq!(log.counts["joints left out: the parents do not correspond"], 1);
+    }
+
+    #[test]
+    fn a_name_that_is_not_unique_or_not_there_is_left_out_and_nothing_to_pair_is_refused() {
+        let mut w = World::new();
+        skeleton(
+            &mut w,
+            "a",
+            vec![
+                joint(0, "Root", None, 0.0),
+                joint(1, "Twin", Some(0), 1.0),
+                joint(2, "Twin", Some(0), 1.0),
+                joint(3, "Only", Some(0), 2.0),
+            ],
+        );
+        skeleton(
+            &mut w,
+            "b",
+            vec![joint(10, "Root", None, 0.0), joint(11, "Twin", Some(10), 1.0)],
+        );
+        let report = run(&mut w, "correspond-skeletons{from=a,to=b,tolerance=0.001}").unwrap();
+        let log = &report.steps[0].log;
+        assert_eq!(pairs(&w), [(0, 10)]);
+        assert_eq!(log.counts["joints left out: the name is not unique"], 2);
+        assert_eq!(
+            log.counts["joints left out: no joint of the name in the target"],
+            1
+        );
+        let mut none = World::new();
+        skeleton(&mut none, "a", vec![joint(0, "X", None, 0.0)]);
+        skeleton(&mut none, "b", vec![joint(1, "Y", None, 0.0)]);
+        assert!(
+            run(&mut none, "correspond-skeletons{from=a,to=b,tolerance=0.001}")
+                .unwrap_err()
+                .contains("no joint of a corresponds")
+        );
+    }
+
+    #[test]
+    fn the_skeletons_are_named_exactly_and_the_options_are_required() {
+        let mut w = World::new();
+        skeleton(&mut w, "a", vec![joint(0, "X", None, 0.0)]);
+        let e = run(&mut w, "correspond-skeletons{from=a,to=b,tolerance=0.001}").unwrap_err();
+        assert!(e.contains("no skeleton is named b"), "{e}");
+        skeleton(&mut w, "b", vec![joint(0, "X", None, 0.0)]);
+        skeleton(&mut w, "b", vec![joint(0, "X", None, 0.0)]);
+        let e = run(&mut w, "correspond-skeletons{from=a,to=b,tolerance=0.001}").unwrap_err();
+        assert!(e.contains("2 skeletons are named b"), "{e}");
+        for (options, why) in [
+            ("to=b,tolerance=1", "from=NAME"),
+            ("from=a,tolerance=1", "to=NAME"),
+            ("from=a,to=b", "tolerance=T"),
+            ("from=a,to=a,tolerance=1", "the same skeleton"),
+            ("from=a,to=b,tolerance=0", "positive"),
+        ] {
+            let parsed: Options = options
+                .split(',')
+                .map(|kv| {
+                    kv.split_once('=')
+                        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                        .unwrap()
+                })
+                .collect();
+            let e = correspond_skeletons(&parsed).err().unwrap_or_default();
+            assert!(e.contains(why), "{options}: {e}");
+        }
+    }
+}
