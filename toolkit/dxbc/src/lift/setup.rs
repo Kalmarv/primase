@@ -33,7 +33,7 @@ pub(crate) enum PhaseKind {
 }
 
 /// The phases of a hull program, in order, from the phase markers among its declarations.
-fn phases_of(decoded: &Decoded) -> Vec<Phase> {
+fn phases_of(decoded: &Decoded) -> Result<Vec<Phase>> {
     let mut starts: Vec<(usize, PhaseKind)> = decoded
         .declarations
         .iter()
@@ -49,27 +49,47 @@ fn phases_of(decoded: &Decoded) -> Vec<Phase> {
     for (i, (start, kind)) in starts.iter().enumerate() {
         let end = starts.get(i + 1).map_or(usize::MAX, |(w, _)| *w);
         // the instance count a fork or join phase declares
-        let instances = decoded
-            .declarations
-            .iter()
-            .find_map(|d| match &d.kind {
-                Declared::Other { opcode, words, .. }
-                    if (*start..end).contains(&d.word)
-                        && matches!((opcode, kind), (153, PhaseKind::Fork) | (154, PhaseKind::Join)) =>
-                {
-                    words.first().copied()
-                }
-                _ => None,
-            })
-            .unwrap_or(1);
+        let mut instances = 1;
+        for d in &decoded.declarations {
+            if let Declared::Other { opcode, words, .. } = &d.kind
+                && (*start..end).contains(&d.word)
+                && matches!((opcode, kind), (153, PhaseKind::Fork) | (154, PhaseKind::Join))
+            {
+                let [count] = words[..] else {
+                    return Err(error(
+                        d.word,
+                        format!(
+                            "a phase's instance count of {} words, where it has 1",
+                            words.len()
+                        ),
+                    ));
+                };
+                instances = count;
+                break;
+            }
+        }
         phases.push(Phase {
             kind: *kind,
             words: *start..end,
             instances,
         });
     }
-    phases
+    Ok(phases)
 }
+
+/// What a program may declare, D3D11's limits: a declaration past them is not a program of the format, and the lifter
+/// would allocate locals, array elements or registers for it. `dcl_temps` (r0 to r4095), one `dcl_indexable_temp` array
+/// (x#[4096]), a constant buffer (4096 rows of four lanes), thread-group memory (32 KiB), a structured buffer's element
+/// (2048 bytes), the registers a `dcl_index_range` covers, a geometry program's output (1024 vertices) and its instances
+/// (32).
+const MAX_TEMPS: u32 = 4096;
+const MAX_INDEXABLE_TEMP: u32 = 4096;
+const MAX_CONSTANT_BUFFER_ROWS: u32 = 4096;
+const MAX_SHARED_BYTES: u32 = 32 * 1024;
+const MAX_STRUCTURE_STRIDE: u32 = 2048;
+const MAX_INDEX_RANGE: u32 = 4096;
+const MAX_GS_VERTICES: u32 = 1024;
+const MAX_GS_INSTANCES: u32 = 32;
 
 /// One declared resource, with what the module's global for it needs.
 #[derive(Clone, Debug)]
@@ -220,7 +240,7 @@ impl Setup {
         debug_assert_eq!(signature_stage, stage);
         let mut setup = Self::empty();
         let refuse = |detail: String| error(0, detail);
-        let phases = phases_of(decoded);
+        let phases = phases_of(decoded)?;
         // a declaration inside a fork or join phase is the patch-constant function's, else the control-point phase's
         // or the whole program's
         let in_patch_phase = |word: usize| {
@@ -241,15 +261,23 @@ impl Setup {
         for d in &decoded.declarations {
             let at = |detail: String| error(d.word, detail);
             match &d.kind {
-                Declared::Temps(n) => setup.temps = *n,
+                Declared::Temps(n) => {
+                    if *n > MAX_TEMPS {
+                        return Err(at(format!(
+                            "dcl_temps {n}: D3D has at most {MAX_TEMPS} temporaries"
+                        )));
+                    }
+                    setup.temps = *n;
+                }
                 Declared::IndexableTemp {
                     register,
                     size,
                     components,
                 } => {
-                    if *components > 4 || *size == 0 {
+                    if *components > 4 || *size == 0 || *size > MAX_INDEXABLE_TEMP {
                         return Err(at(format!(
-                            "dcl_indexable_temp x{register}[{size}] of {components} components"
+                            "dcl_indexable_temp x{register}[{size}] of {components} components: D3D has 1 to \
+                             {MAX_INDEXABLE_TEMP} elements of 1 to 4 components"
                         )));
                     }
                     setup.indexable.push((*register, *size));
@@ -345,6 +373,11 @@ impl Setup {
                     if *dimensions > 2 {
                         return Err(at("SM5.1 constant buffer declaration".into()));
                     }
+                    if *rows > MAX_CONSTANT_BUFFER_ROWS {
+                        return Err(at(format!(
+                            "dcl_constantbuffer cb{slot}[{rows}]: D3D has at most {MAX_CONSTANT_BUFFER_ROWS} rows"
+                        )));
+                    }
                     setup.declarations.push(Declaration::ConstantBuffer {
                         slot: *slot,
                         rows: *rows,
@@ -398,6 +431,12 @@ impl Setup {
                     setup.declarations.push(Declaration::RawBuffer { slot: *slot })
                 }
                 Declared::ResourceStructured { slot, stride } => {
+                    if *stride > MAX_STRUCTURE_STRIDE {
+                        return Err(at(format!(
+                            "dcl_resource_structured t{slot}: a stride of {stride} bytes, D3D has at most \
+                             {MAX_STRUCTURE_STRIDE}"
+                        )));
+                    }
                     setup.declarations.push(Declaration::StructuredBuffer {
                         slot: *slot,
                         stride: *stride,
@@ -451,6 +490,12 @@ impl Setup {
                     atomic: None,
                 })),
                 Declared::UavStructured { slot, stride, .. } => {
+                    if *stride > MAX_STRUCTURE_STRIDE {
+                        return Err(at(format!(
+                            "dcl_uav_structured u{slot}: a stride of {stride} bytes, D3D has at most \
+                             {MAX_STRUCTURE_STRIDE}"
+                        )));
+                    }
                     setup.declarations.push(Declaration::UavBuffer(UavBuffer {
                         slot: *slot,
                         kind: UavKind::Structured {
@@ -462,12 +507,20 @@ impl Setup {
                     }))
                 }
                 Declared::ThreadGroup(size) => setup.workgroup = Some(*size),
-                Declared::GroupSharedRaw { register, bytes } => setup.shared.push(Shared {
-                    register: *register,
-                    words: bytes.div_ceil(4),
-                    stride: None,
-                    atomic: None,
-                }),
+                Declared::GroupSharedRaw { register, bytes } => {
+                    if *bytes > MAX_SHARED_BYTES {
+                        return Err(at(format!(
+                            "dcl_tgsm_raw g{register}: {bytes} bytes, D3D has at most {MAX_SHARED_BYTES} per \
+                             thread group"
+                        )));
+                    }
+                    setup.shared.push(Shared {
+                        register: *register,
+                        words: bytes.div_ceil(4),
+                        stride: None,
+                        atomic: None,
+                    })
+                }
                 Declared::GroupSharedStructured {
                     register,
                     stride,
@@ -476,7 +529,13 @@ impl Setup {
                     let words = stride
                         .div_ceil(4)
                         .checked_mul(*count)
-                        .ok_or_else(|| at("thread-group memory too large".into()))?;
+                        .filter(|words| words.saturating_mul(4) <= MAX_SHARED_BYTES)
+                        .ok_or_else(|| {
+                            at(format!(
+                                "dcl_tgsm_structured g{register}: {count} elements of {stride} bytes, D3D has at \
+                                 most {MAX_SHARED_BYTES} bytes per thread group"
+                            ))
+                        })?;
                     setup.shared.push(Shared {
                         register: *register,
                         words,
@@ -494,13 +553,28 @@ impl Setup {
                 Declared::Other {
                     opcode: 91, words, ..
                 } => {
-                    if let [token, first, count] = words[..] {
-                        match (token >> 12) & 255 {
-                            1 => setup.index_ranges.push((false, first, count)),
-                            2 => setup.index_ranges.push((true, first, count)),
-                            _ => {}
+                    let [token, first, count] = words[..] else {
+                        return Err(at(format!(
+                            "dcl_index_range of {} words, where it has 3",
+                            words.len()
+                        )));
+                    };
+                    let output = match (token >> 12) & 255 {
+                        1 => false,
+                        2 => true,
+                        other => {
+                            return Err(at(format!(
+                                "dcl_index_range of operand register type {other}: only inputs and outputs are lifted"
+                            )));
                         }
+                    };
+                    if count == 0 || first.checked_add(count).is_none_or(|end| end > MAX_INDEX_RANGE) {
+                        return Err(at(format!(
+                            "dcl_index_range of {count} registers from {first}: D3D has registers up to \
+                             {MAX_INDEX_RANGE}"
+                        )));
                     }
+                    setup.index_ranges.push((output, first, count));
                 }
                 Declared::Other {
                     opcode: 93, control, ..
@@ -510,15 +584,41 @@ impl Setup {
                 } => gs_output = *control,
                 Declared::Other {
                     opcode: 94, words, ..
-                } => gs_vertices = words.first().copied().unwrap_or(0),
+                } => {
+                    let [count] = words[..] else {
+                        return Err(at(format!("dcl_maxout of {} words, where it has 1", words.len())));
+                    };
+                    if count > MAX_GS_VERTICES {
+                        return Err(at(format!(
+                            "dcl_maxout {count}: D3D has at most {MAX_GS_VERTICES} vertices"
+                        )));
+                    }
+                    gs_vertices = count;
+                }
                 Declared::Other {
                     opcode: 206, words, ..
-                } => gs_instances = words.first().copied().unwrap_or(1),
+                } => {
+                    let [count] = words[..] else {
+                        return Err(at(format!(
+                            "dcl_gs_instances of {} words, where it has 1",
+                            words.len()
+                        )));
+                    };
+                    if !(1..=MAX_GS_INSTANCES).contains(&count) {
+                        return Err(at(format!(
+                            "dcl_gs_instances {count}: D3D has 1 to {MAX_GS_INSTANCES} instances"
+                        )));
+                    }
+                    gs_instances = count;
+                }
                 // dcl_stream: only stream 0 is rasterized; the others are stream output
                 Declared::Other {
                     opcode: 143, words, ..
                 } => {
-                    if words.get(1).copied().unwrap_or(0) != 0 {
+                    let [_, stream] = words[..] else {
+                        return Err(at(format!("dcl_stream of {} words, where it has 2", words.len())));
+                    };
+                    if stream != 0 {
                         return Err(at(
                             "a geometry program's output to a stream other than 0 is not lifted".into(),
                         ));
@@ -541,7 +641,15 @@ impl Setup {
                 } => topology = *control,
                 Declared::Other {
                     opcode: 152, words, ..
-                } => max_factor = words.first().copied().unwrap_or(max_factor),
+                } => {
+                    let [bits] = words[..] else {
+                        return Err(at(format!(
+                            "dcl_hs_max_tessfactor of {} words, where it has 1",
+                            words.len()
+                        )));
+                    };
+                    max_factor = bits;
+                }
                 Declared::Other { opcode, .. } => {
                     return Err(at(format!(
                         "{} ({opcode}) is not lifted",

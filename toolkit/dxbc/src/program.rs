@@ -486,7 +486,7 @@ impl Program {
                 controls(0)?;
                 self.temps = *n as usize;
                 if self.temps > 4096 {
-                    return Err(error(pos, "temp limit"));
+                    return Err(error(pos, format!("dcl_temps {n}: at most 4096 are evaluated")));
                 }
             }
             // refactoring allowed and early depth-stencil: neither changes an evaluation's outputs
@@ -560,14 +560,24 @@ impl Program {
                 // globally coherent
                 controls(0x20)?;
                 if *stride == 0 || stride % 4 != 0 || *stride > 2048 {
-                    return Err(error(pos, "structured stride"));
+                    return Err(error(
+                        pos,
+                        format!(
+                            "a structured stride of {stride} bytes: a multiple of 4 up to 2048 is evaluated"
+                        ),
+                    ));
                 }
                 self.declare_view(pos, *slot, Dimension::Structured(*stride), ReturnType::Mixed)?;
             }
             Declared::ResourceStructured { slot, stride } => {
                 controls(0)?;
                 if *stride == 0 || stride % 4 != 0 || *stride > 2048 {
-                    return Err(error(pos, "structured stride"));
+                    return Err(error(
+                        pos,
+                        format!(
+                            "a structured stride of {stride} bytes: a multiple of 4 up to 2048 is evaluated"
+                        ),
+                    ));
                 }
                 self.declare(pos, *slot, Dimension::Structured(*stride), ReturnType::Mixed)?;
             }
@@ -579,15 +589,33 @@ impl Program {
             } => {
                 controls(1)?;
                 let _ = dynamic;
-                if *slot >= 14 || *rows > 4096 || self.constant_buffers.iter().any(|&(n, _)| n == *slot) {
-                    return Err(error(pos, "invalid/duplicate cbuffer"));
+                if *slot >= 14 {
+                    return Err(error(pos, format!("cb{slot}: only cb0 to cb13 are evaluated")));
+                }
+                if *rows > 4096 {
+                    return Err(error(
+                        pos,
+                        format!("cb{slot} of {rows} rows: at most 4096 are evaluated"),
+                    ));
+                }
+                if self.constant_buffers.iter().any(|&(n, _)| n == *slot) {
+                    return Err(error(pos, format!("cb{slot} declared twice")));
                 }
                 self.constant_buffers.push((*slot, *rows));
             }
             Declared::Sampler { slot, mode } => {
                 controls(0)?;
-                if *mode != 0 || *slot >= 16 || self.samplers.contains(slot) {
-                    return Err(error(pos, "unsupported/duplicate sampler"));
+                if *mode != 0 {
+                    return Err(error(
+                        pos,
+                        format!("s{slot} in sampler mode {mode}: only the default is evaluated"),
+                    ));
+                }
+                if *slot >= 16 {
+                    return Err(error(pos, format!("s{slot}: only s0 to s15 are evaluated")));
+                }
+                if self.samplers.contains(slot) {
+                    return Err(error(pos, format!("s{slot} declared twice")));
                 }
                 self.samplers.push(*slot);
             }
@@ -603,7 +631,7 @@ impl Program {
                     return Err(error(pos, "declaration register mismatch"));
                 }
                 if i >= 32 {
-                    return Err(error(pos, "input limit"));
+                    return Err(error(pos, format!("v{i}: only v0 to v31 are evaluated")));
                 }
                 self.inputs = self.inputs.max(i as usize + 1);
                 let Selection::Mask(mask @ 1..=15) = operand.selection else {
@@ -625,7 +653,7 @@ impl Program {
                     return Err(error(pos, "declaration register mismatch"));
                 }
                 if i >= 8 {
-                    return Err(error(pos, "output limit"));
+                    return Err(error(pos, format!("o{i}: only o0 to o7 are evaluated")));
                 }
                 self.outputs = self.outputs.max(i as usize + 1);
             }
@@ -641,8 +669,11 @@ impl Program {
         dimension: Dimension,
         returns: ReturnType,
     ) -> Result<()> {
-        if slot >= 64 || self.views.iter().any(|v| v.slot == slot) {
-            return Err(error(pos, "invalid/duplicate view"));
+        if slot >= 64 {
+            return Err(error(pos, format!("u{slot}: only u0 to u63 are evaluated")));
+        }
+        if self.views.iter().any(|v| v.slot == slot) {
+            return Err(error(pos, format!("u{slot} declared twice")));
         }
         self.views.push(ResourceDeclaration {
             slot,
@@ -653,8 +684,11 @@ impl Program {
     }
     /// Declare `t<slot>`.
     fn declare(&mut self, pos: usize, slot: u32, dimension: Dimension, returns: ReturnType) -> Result<()> {
-        if slot >= 128 || self.resources.iter().any(|r| r.slot == slot) {
-            return Err(error(pos, "invalid/duplicate texture"));
+        if slot >= 128 {
+            return Err(error(pos, format!("t{slot}: only t0 to t127 are evaluated")));
+        }
+        if self.resources.iter().any(|r| r.slot == slot) {
+            return Err(error(pos, format!("t{slot} declared twice")));
         }
         self.resources.push(ResourceDeclaration {
             slot,

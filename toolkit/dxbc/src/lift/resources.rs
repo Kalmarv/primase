@@ -353,10 +353,29 @@ impl Lift<'_> {
         (n, t.arrayed)
     }
 
+    /// The slot operand `n` of `ins` names, which must be a register of one of `kinds` (`t3`, `u0`, `s1`).
+    pub(super) fn slot_of(
+        &self,
+        ins: &Instruction,
+        n: usize,
+        kinds: &[crate::decode::Register],
+    ) -> Result<u32> {
+        let operand = &ins.operands[n];
+        match operand.indices.first() {
+            Some(index) if kinds.contains(&operand.register) => Ok(index.base),
+            _ => self.refuse(format!(
+                "operand {n} is {:?}, where {kinds:?} is taken",
+                operand.register
+            )),
+        }
+    }
+
     pub(super) fn sample(&mut self, ins: &Instruction) -> Result<()> {
         let name = ins.name();
-        let (image, t) = self.texture(ins.operands[2].indices[0].base)?;
-        let sampler = self.sampler(ins.operands[3].indices[0].base)?;
+        let texture = self.slot_of(ins, 2, &[crate::decode::Register::Texture])?;
+        let sampler = self.slot_of(ins, 3, &[crate::decode::Register::Sampler])?;
+        let (image, t) = self.texture(texture)?;
+        let sampler = self.sampler(sampler)?;
         if t.multi {
             return self.refuse("a sample of a multisampled texture");
         }
@@ -475,7 +494,7 @@ impl Lift<'_> {
     }
 
     pub(super) fn load(&mut self, ins: &Instruction) -> Result<()> {
-        let slot = ins.operands[2].indices[0].base;
+        let slot = self.slot_of(ins, 2, &[crate::decode::Register::Texture])?;
         let mask = self.dest_mask(&ins.operands[0]);
         if let Some((g, buffer)) = self.resources.buffers.get(&slot).copied() {
             let Buffer::Typed = buffer else {
@@ -559,7 +578,11 @@ impl Lift<'_> {
     }
 
     pub(super) fn resource_info(&mut self, ins: &Instruction) -> Result<()> {
-        let slot = ins.operands[2].indices[0].base;
+        let slot = self.slot_of(
+            ins,
+            2,
+            &[crate::decode::Register::Texture, crate::decode::Register::Uav],
+        )?;
         // a typed unordered-access view has one level and a size queried without one
         let (image, t) = if matches!(ins.operands[2].register, crate::decode::Register::Uav) {
             let (g, v) = self.view(slot)?;
@@ -727,7 +750,7 @@ impl Lift<'_> {
     /// `store_uav_typed u, address, value`: the texel's four lanes. D3D writes the lanes the view's mask names; a
     /// partial mask would keep the others, which a store of four lanes cannot, so it is refused.
     pub(super) fn store_view(&mut self, ins: &Instruction) -> Result<()> {
-        let slot = ins.operands[0].indices[0].base;
+        let slot = self.slot_of(ins, 0, &[crate::decode::Register::Uav])?;
         let (global, v) = self.view(slot)?;
         if self.dest_mask(&ins.operands[0]) != 15 {
             return self.refuse("a store to a view with a partial write mask");
@@ -746,7 +769,7 @@ impl Lift<'_> {
 
     /// `ld_uav_typed dest, address, u`.
     pub(super) fn load_view(&mut self, ins: &Instruction) -> Result<()> {
-        let slot = ins.operands[2].indices[0].base;
+        let slot = self.slot_of(ins, 2, &[crate::decode::Register::Uav])?;
         let (global, v) = self.view(slot)?;
         let mask = self.dest_mask(&ins.operands[0]);
         let (coordinate, array_index) = self.view_address(&ins.operands[1], &v)?;

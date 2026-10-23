@@ -548,6 +548,16 @@ pub fn decode(words: &[u32]) -> Result<Decoded> {
         let control = (t >> 11) & 0x1fff;
         if is_declaration(opcode) {
             let kind = declaration(opcode, control, &mut c)?;
+            if c.at != c.words.len() {
+                return Err(error(
+                    at,
+                    format!(
+                        "{} words after the operands of {}",
+                        c.words.len() - c.at,
+                        opcode_name(opcode)
+                    ),
+                ));
+            }
             result.declarations.push(Declaration {
                 word: at,
                 opcode,

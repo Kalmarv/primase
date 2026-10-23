@@ -225,6 +225,9 @@ impl Lift<'_> {
 
     /// The source for the destination lanes `lanes` (the swizzle is indexed by destination lane), as `kind`.
     pub(super) fn read_lanes(&mut self, op: &Operand, lanes: &[u8], kind: Kind) -> Result<Val> {
+        if lanes.is_empty() {
+            return self.refuse("a read of no lanes: the destination's write mask is empty");
+        }
         let components: Vec<u8> = lanes
             .iter()
             .map(|&l| match op.selection {
@@ -275,6 +278,9 @@ impl Lift<'_> {
         }
         let mask = self.dest_mask(op);
         let lanes = lanes_of(mask);
+        if lanes.is_empty() {
+            return self.refuse("a destination whose write mask is empty");
+        }
         let mut v = v;
         if v.width == 1 && lanes.len() > 1 {
             v = self.b.splat(v, lanes.len() as u8);

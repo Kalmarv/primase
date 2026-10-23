@@ -2,6 +2,7 @@
 //! Sampling belongs to the caller: a scalar interpreter cannot infer derivatives, so the caller states its inputs'.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+mod arity;
 pub mod decode;
 mod evaluate;
 mod lift;

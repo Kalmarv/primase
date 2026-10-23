@@ -168,6 +168,13 @@ zero, as in D3D. D3D's results are written out (`D3dModes::ALL`). Refused by nam
 geometry and tessellation programs, unordered-access buffer views (raw, structured, typed) and atomics, a store through a view with a partial write mask, `sample_info`, index ranges, a pixel input of
 `SV_RenderTargetArrayIndex`, a vertex program with no `SV_Position`, doubles, SM5.1 declarations.
 
+A malformed program is an `Err`, never a panic or an allocation its declarations ask for: an instruction's operand count is
+its opcode's (`src/arity.rs`, checked once before an operand is read by position), a resource operand is the register class
+the instruction takes, a declaration is read to its last word, and what a declaration states is within D3D11's limits
+(4096 temporaries, 4096 elements in an indexable array, 4096 constant-buffer rows, 32 KiB of thread-group memory, 2048-byte
+structured elements, 1024 geometry output vertices, 32 geometry instances). `tests/malformed.rs` makes each case from a
+committed fixture.
+
 `tests/lift.rs` lifts our own HLSL fixture (`tests/fixtures/modes.hlsl`, fxc `/T ps_5_0`) and checks its interface,
 layout and the D3D guards in the WGSL. `tests/lift_corpus.rs` (`oracles.corpus.<game>/shaders` for sekiro, riders, sledding)
 lifts a folder of real containers, validates and writes each, and prints the refusals by reason; a lifted program that

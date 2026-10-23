@@ -86,6 +86,14 @@ impl Lift<'_> {
     fn instruction(&mut self, ins: &Instruction, name: &str) -> Result<()> {
         use Bo::*;
         let ops = &ins.operands;
+        // the operands are read by position below: the count is the opcode's, checked once here
+        match crate::arity::operands(name) {
+            None => return self.refuse(format!("opcode {} is not lifted", ins.opcode)),
+            Some(n) if ops.len() != n => {
+                return self.refuse(format!("{} operands, where the instruction takes {n}", ops.len()));
+            }
+            Some(_) => {}
+        }
         match name {
             "nop" => {}
             "mov" => {
@@ -595,16 +603,16 @@ impl Lift<'_> {
             "ld_structured" => self.load_structured(ins)?,
             "ld_raw" => self.load_raw(ins)?,
             "ld_uav_typed" => {
-                if matches!(ops[2].register, Register::Uav)
-                    && self.resources.uav_buffers.contains_key(&ops[2].indices[0].base)
-                {
+                let slot = self.slot_of(ins, 2, &[Register::Uav])?;
+                if self.resources.uav_buffers.contains_key(&slot) {
                     self.load_typed_buffer(ins)?
                 } else {
                     self.load_view(ins)?
                 }
             }
             "store_uav_typed" => {
-                if self.resources.uav_buffers.contains_key(&ops[0].indices[0].base) {
+                let slot = self.slot_of(ins, 0, &[Register::Uav])?;
+                if self.resources.uav_buffers.contains_key(&slot) {
                     self.store_typed_buffer(ins)?
                 } else {
                     self.store_view(ins)?
