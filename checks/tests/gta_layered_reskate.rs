@@ -352,9 +352,23 @@ fn layered_terrain_builds_with_vertex_blend_overlays() -> Result<()> {
     LowerLayeredReskate::new(OverlayLimit::All).run(&mut w, &mut log)?;
     assert_eq!(w.iter::<LayeredMaterial>().count(), 0);
     println!("Vespucci: {:?}", log.counts);
-    assert_eq!(
+    // each limit counts the overlap of its own opacities: a layer's chain opacity (what `All` writes) is never above its
+    // two-layer opacity (what `One` writes), and a layer draws where some corner's byte is above zero, so `One` sees at
+    // least the overlap `All` draws, more where a corner has a trace of a layer over a nearly pure other (hand-worked in
+    // `one_counts_the_overlap_of_a_layer_all_draws_at_a_zero_byte`). On Vespucci's terrain, with its layer channels
+    // baked to vertex weights, they differ by 160 m2 of 158,543 (this assertion was first run on these data when the
+    // test moved here from the retired scene folders, where the two were equal)
+    let (all_area, one_area) = (
         log.counts["area with overlapping overlays (m2)"],
-        one_log.counts["area limited to one overlay (m2)"]
+        one_log.counts["area limited to one overlay (m2)"],
+    );
+    assert!(
+        one_area >= all_area,
+        "One counts {one_area} m2 of overlap, All {all_area} m2: One must see every overlap All draws"
+    );
+    assert!(
+        log.counts["triangles with overlapping overlays"]
+            <= one_log.counts["triangles limited to one overlay"]
     );
     // the rest of the recipe's preparation: the overlay stack (4 mm), the chains (Studio's 200 m cells), their budget
     m.run(&mut w, &m.registry.parse(PREPARE)?, &mut RunReport::default())?;

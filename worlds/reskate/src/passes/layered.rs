@@ -985,6 +985,32 @@ mod tests {
         }
     }
 
+    /// The two limits count overlap by their own opacities, so their counts are not equal: a layer's chain opacity
+    /// `w_k / (w_0 + .. + w_k)` (what [`OverlayLimit::All`] writes) is never above its two-layer opacity
+    /// `w_k / (w_0 + w_k)` (what [`OverlayLimit::One`] writes), and a layer is drawn only where some corner's byte is
+    /// above zero. At a corner with almost no base and a trace of slot 2 over a nearly pure slot 1, slot 2's chain
+    /// opacity is 0.0015 (0 as a byte, no overlay) and its two-layer opacity 0.75: `One` sees two layers where `All` draws
+    /// one, and so counts the triangle (hand-worked: 0.0015 / (0.0005 + 0.998 + 0.0015) = 0.0015, 0.0015 x 255 = 0.38).
+    #[test]
+    fn one_counts_the_overlap_of_a_layer_all_draws_at_a_zero_byte() {
+        let w = [[0.0005, 0.998, 0.0015, 0.0]; 3];
+        let (mut one, mut all) = (OverlayCounts::default(), OverlayCounts::default());
+        let drawn_one = overlay_parts(&w, 3, &[0, 1, 2], &TRI, OverlayLimit::One, &mut one);
+        let drawn_all = overlay_parts(&w, 3, &[0, 1, 2], &TRI, OverlayLimit::All, &mut all);
+        assert_eq!(
+            drawn_all.iter().map(|p| p.layer).collect::<Vec<_>>(),
+            [OverlayLayer::Slot(1)]
+        );
+        assert_eq!(all.overlapping_triangles, 0);
+        // `One` keeps the strongest (slot 1) and counts the triangle that would have had slot 2 as well
+        assert_eq!(
+            drawn_one.iter().map(|p| p.layer).collect::<Vec<_>>(),
+            [OverlayLayer::Slot(1)]
+        );
+        assert_eq!(one.overlapping_triangles, 1);
+        assert!((one.overlapping_area - 0.5).abs() < 1e-9);
+    }
+
     #[test]
     fn the_black_remainder_competes_as_a_layer() {
         // weights sum to 0.4: black (0.6) is the strongest other layer, over the base 0.3 -> 0.6 / 0.9
