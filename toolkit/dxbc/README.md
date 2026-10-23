@@ -117,7 +117,7 @@ are format identifiers; no third-party interpreter implementation is included.
 
 ## Optional independent gates
 
-`PRIMASE_DXBC_SHADERS` selects a directory of `.ppo` binaries with matching
+`oracles.corpus.general/dxbc` selects a directory of `.ppo` binaries with matching
 `.ppo.asm` independent disassemblies. The test compares the complete executable
 opcode sequence and count, including ret. Nothing is copied into the repository.
 An optional `.ppo.state.json` supplies raw u32 arrays `inputs`, `outputs`, and
@@ -166,7 +166,7 @@ geometry and tessellation programs, unordered-access buffer views (raw, structur
 `SV_RenderTargetArrayIndex`, a vertex program with no `SV_Position`, doubles, SM5.1 declarations.
 
 `tests/lift.rs` lifts our own HLSL fixture (`tests/fixtures/modes.hlsl`, fxc `/T ps_5_0`) and checks its interface,
-layout and the D3D guards in the WGSL. `tests/lift_corpus.rs` (`PRIMASE_SHADER_CORPUS_SEKIRO`, `_RR`, `_UNITY`)
+layout and the D3D guards in the WGSL. `tests/lift_corpus.rs` (`oracles.corpus.<game>/shaders` for sekiro, riders, sledding)
 lifts a folder of real containers, validates and writes each, and prints the refusals by reason; a lifted program that
 fails validation fails the test. Lifting is checked structurally here; values are checked against WARP and a GPU by the
 batch that runs the executor over the lifted programs.

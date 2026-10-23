@@ -1,14 +1,14 @@
 #![allow(clippy::unwrap_used)]
 //! How fast the executor runs a lifted program against the DXBC evaluator, invocation for invocation, over the pixel
-//! programs of a corpus (`PRIMASE_SHADER_CORPUS_SEKIRO`, `_RR`, `_UNITY`; `PRIMASE_SHADER_DIFF_LIMIT` bounds the
-//! programs, `PRIMASE_SHADER_SPEED_RUNS` the invocations timed per program, default 200). It prints the distribution of
-//! the ratio and the slowest programs, and asserts nothing: a measurement, to be run with `--release`.
+//! programs of a corpus (the corpus oracle set's `sekiro/shaders`, `riders/shaders`, `sledding/shaders`; the debug key
+//! `shader.diff_limit` bounds the programs, `shader.speed_runs` the invocations timed per program, default 200). It
+//! prints the distribution of the ratio and the slowest programs, and asserts nothing: a measurement, to be run with
+//! `--release`.
 mod common;
-use common::{case, containers, refs};
+use common::{case, refs};
 use primase_shader::exec::ProgramShader;
 use primase_shader::{Load, PixelShader, Sample, Sampler};
-use primase_testdata::real_data;
-use std::path::Path;
+use primase_testdata::Game;
 use std::time::Instant;
 
 /// A sampler that answers at once and the same for both: the time is the program's.
@@ -35,22 +35,15 @@ struct Row {
     steps: u64,
 }
 
-fn measure(variable: &str) {
-    let Some(root) = real_data(variable) else {
+fn measure(game: Game) {
+    let Some((name, paths)) = common::corpus(game) else {
         return;
     };
-    let limit = std::env::var("PRIMASE_SHADER_DIFF_LIMIT")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(usize::MAX);
-    let runs: u32 = std::env::var("PRIMASE_SHADER_SPEED_RUNS")
-        .ok()
+    let runs: u32 = primase_testdata::debug("shader.speed_runs")
         .and_then(|v| v.parse().ok())
         .unwrap_or(200);
-    let mut paths = Vec::new();
-    containers(Path::new(&root), &mut paths);
     let mut rows = Vec::new();
-    for path in paths.iter().take(limit) {
+    for path in paths.iter().take(common::diff_limit()) {
         let bytes = std::fs::read(path).unwrap();
         let Ok(program) = primase_dxbc::lift(&bytes) else {
             continue;
@@ -103,7 +96,7 @@ fn measure(variable: &str) {
         .iter()
         .fold((0.0, 0.0), |a, r| (a.0 + r.evaluator_ns, a.1 + r.executor_ns));
     println!(
-        "{variable}: {n} programs, {runs} runs each; total executor/evaluator {:.2}; per program p10 {:.2} median {:.2} p90 {:.2} p99 {:.2} max {:.2}",
+        "{name}: {n} programs, {runs} runs each; total executor/evaluator {:.2}; per program p10 {:.2} median {:.2} p90 {:.2} p99 {:.2} max {:.2}",
         tx / te,
         q(0.1),
         q(0.5),
@@ -125,13 +118,13 @@ fn measure(variable: &str) {
 
 #[test]
 fn sekiro_speed() {
-    measure("PRIMASE_SHADER_CORPUS_SEKIRO");
+    measure(Game::Sekiro);
 }
 #[test]
 fn riders_republic_speed() {
-    measure("PRIMASE_SHADER_CORPUS_RR");
+    measure(Game::Riders);
 }
 #[test]
 fn unity_speed() {
-    measure("PRIMASE_SHADER_CORPUS_UNITY");
+    measure(Game::Sledding);
 }

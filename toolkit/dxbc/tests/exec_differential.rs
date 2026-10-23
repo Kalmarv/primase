@@ -3,16 +3,17 @@
 //! sampler answers through `PixelShader` on both, scalar and as a quad. The evaluator is the reference the executor
 //! replaces; where it refuses (a 3D or cube sample) the executor's answer is counted, not compared.
 //!
-//! The fixture program always runs; the corpora need `PRIMASE_SHADER_CORPUS_SEKIRO`, `PRIMASE_SHADER_CORPUS_RR` or
-//! `PRIMASE_SHADER_CORPUS_UNITY` (a folder, searched recursively, of containers as the game ships them) and
-//! optionally `PRIMASE_SHADER_DIFF_LIMIT` (programs to compare, default all).
+//! The fixture program always runs; the corpora need the corpus oracle set's `sekiro/shaders`, `riders/shaders` or
+//! `sledding/shaders` (a folder, searched recursively, of containers as the game ships them) and optionally the debug
+//! key `shader.diff_limit` (programs to compare, default all).
 use std::path::Path;
 
 mod common;
 use common::differential::{Hashing, Tally, check, report, run};
-use common::{case, containers, quad_lane, refs};
+use common::{case, quad_lane, refs};
 use primase_shader::exec::ProgramShader;
 use primase_shader::{Execution, Load, PixelShader, Sample, Sampler};
+use primase_testdata::Game;
 
 fn run_program(name: &str, bytes: &[u8], cases: u32, t: &mut Tally) {
     let Ok(program) = primase_dxbc::lift(bytes) else {
@@ -32,27 +33,16 @@ fn run_program(name: &str, bytes: &[u8], cases: u32, t: &mut Tally) {
     run(name, program, &reference, cases, t);
 }
 
-fn corpus(variable: &str) {
-    let Some(root) = primase_testdata::real_data(variable) else {
+fn corpus(game: Game) {
+    let Some((name, paths)) = common::corpus(game) else {
         return;
     };
-    let limit = std::env::var("PRIMASE_SHADER_DIFF_LIMIT")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(usize::MAX);
-    let mut paths = Vec::new();
-    containers(Path::new(&root), &mut paths);
-    assert!(
-        !paths.is_empty(),
-        "{variable}: no DXBC containers under {}",
-        root.display()
-    );
     let mut t = Tally::default();
-    for path in paths.iter().take(limit) {
+    for path in paths.iter().take(common::diff_limit()) {
         let bytes = std::fs::read(path).unwrap();
         run_program(&path.display().to_string(), &bytes, 3, &mut t);
     }
-    report(variable, &t);
+    report(&name, &t);
     check(&t);
 }
 
@@ -70,15 +60,15 @@ fn the_modes_fixture() {
 
 #[test]
 fn sekiro_programs() {
-    corpus("PRIMASE_SHADER_CORPUS_SEKIRO");
+    corpus(Game::Sekiro);
 }
 #[test]
 fn riders_republic_programs() {
-    corpus("PRIMASE_SHADER_CORPUS_RR");
+    corpus(Game::Riders);
 }
 #[test]
 fn unity_programs() {
-    corpus("PRIMASE_SHADER_CORPUS_UNITY");
+    corpus(Game::Sledding);
 }
 
 /// Records every request a run makes, then answers as [`Hashing`] does.
@@ -105,16 +95,15 @@ impl Sampler for Logging {
     }
 }
 
-/// `PRIMASE_SHADER_DIFF_TRACE=<container>` (and `PRIMASE_SHADER_DIFF_CASE=<n>`, default 0): both implementations'
+/// The debug key `shader.diff_trace=<container>` (and `shader.diff_case=<n>`, default 0): both implementations'
 /// requests and outputs for that case, scalar and as a quad, printed. A debugging aid for a disagreement the corpus
 /// run reports.
 #[test]
 fn trace_one_program() {
-    let Ok(path) = std::env::var("PRIMASE_SHADER_DIFF_TRACE") else {
+    let Some(path) = primase_testdata::debug("shader.diff_trace") else {
         return;
     };
-    let c: u32 = std::env::var("PRIMASE_SHADER_DIFF_CASE")
-        .ok()
+    let c: u32 = primase_testdata::debug("shader.diff_case")
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
     let bytes = std::fs::read(&path).unwrap();
@@ -176,10 +165,10 @@ fn trace_one_program() {
     }
 }
 
-/// `PRIMASE_SHADER_DIFF_TEXT=<container>`: the lifted program as text, printed.
+/// The debug key `shader.diff_text=<container>`: the lifted program as text, printed.
 #[test]
 fn print_one_program() {
-    let Ok(path) = std::env::var("PRIMASE_SHADER_DIFF_TEXT") else {
+    let Some(path) = primase_testdata::debug("shader.diff_text") else {
         return;
     };
     let bytes = std::fs::read(&path).unwrap();

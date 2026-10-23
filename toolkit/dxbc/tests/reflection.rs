@@ -148,8 +148,11 @@ fn leaves<'a>(
 
 #[test]
 fn reflected_bindings_match_independent_disassembly() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = primase_testdata::real_data_value("PRIMASE_DXBC_SHADERS") else {
-        eprintln!("SKIPPED: PRIMASE_DXBC_SHADERS not set");
+    let Some(root) = primase_testdata::oracle(
+        primase_testdata::OracleSet::Corpus,
+        primase_testdata::Game::General,
+        "dxbc",
+    ) else {
         return Ok(());
     };
     let (mut shaders, mut fields, mut bindings, mut inputs) = (0, 0, 0, 0);

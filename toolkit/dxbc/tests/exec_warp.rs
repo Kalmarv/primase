@@ -4,23 +4,24 @@
 //! buffers and uniform textures (of the dimension the program declares: 1D, 2D, 3D, cube, arrays, cube arrays), and
 //! run by [`ProgramShader`]; every lane both write is compared.
 //!
-//! Needs `PRIMASE_WARP` (the oracle program), `PRIMASE_FXC` (Microsoft's `fxc`, for the oracle's vertex shader) and
-//! `PRIMASE_WARP_SCRATCH` (a folder), and a corpus folder (`PRIMASE_SHADER_CORPUS_SEKIRO`, `_RR`, `_UNITY`). By default
-//! only the programs with a texture that is not a plain 2D one run, the ones the DXBC evaluator cannot (sampling a 3D,
-//! cube or cube-array texture is refused there); `PRIMASE_SHADER_WARP_ALL=1` runs every program the oracle can bind.
+//! Needs `tools.warp` (the oracle program) and `tools.fxc` (Microsoft's `fxc`, for the oracle's vertex shader), and a
+//! corpus folder (the corpus oracle set's `sekiro/shaders`, `riders/shaders`, `sledding/shaders`); it works in
+//! `warp` under the scratch folder. By default only the programs with a texture that is not a plain 2D one run, the
+//! ones the DXBC evaluator cannot (sampling a 3D, cube or cube-array texture is refused there); the debug key
+//! `shader.warp_all=1` runs every program the oracle can bind.
 //!
 //! Textures are uniform and every sampler point-filters with clamp, so a sample cannot depend on its coordinate: the
 //! gate checks the arithmetic around it, the dimension plumbing and the declared shapes, not the sampler. Direct3D
 //! leaves `exp`, `log`, `sin`, `cos`, `rsqrt` and `rcp` within a few units in the last place: lanes are classed by how
 //! far apart they are, and only a lane further apart than 1e-3 relative fails.
 mod common;
-use common::{case, containers};
+use common::case;
 use primase_shader::exec::{Dim, ImageLoad, ImageQuery, ImageSample, ProgramShader, QueryKind};
 use primase_shader::{
     InterpMode, InterpSampling, PixelShader, Program, ResourceKind, SampleType, Sampler, ScalarType,
     StorageTarget, SystemValue, TextureDim,
 };
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, debug, tool};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -441,8 +442,8 @@ fn run_program(
         *t.errors.entry(format!("fxc: {first}")).or_default() += 1;
         return;
     }
-    let evaluator = std::env::var("PRIMASE_SHADER_WARP_EVALUATOR")
-        .is_ok_and(|v| v == "1")
+    let evaluator = debug("shader.warp_evaluator")
+        .is_some_and(|v| v == "1")
         .then(|| primase_dxbc::Shader::parse(bytes).or_else(|_| primase_dxbc::Shader::parse_stripped(bytes)))
         .and_then(Result::ok);
     let interface = shader.interface().clone();
@@ -519,7 +520,7 @@ fn run_program(
             samples: 0,
         };
         let zero = vec![[[0u32; 4]; 2]; case.inputs.len()];
-        // `PRIMASE_SHADER_WARP_EVALUATOR=1` runs the DXBC evaluator in the executor's place: which of the two a
+        // the debug key `shader.warp_evaluator=1` runs the DXBC evaluator in the executor's place: which of the two a
         // disagreement belongs to, or the harness
         let run: &dyn PixelShader = match &evaluator {
             Some(e) => e,
@@ -634,37 +635,25 @@ fn report(title: &str, t: &Tally) {
     }
 }
 
-fn corpus(variable: &str) {
-    let (Some(fxc), Some(warp), Some(scratch), Some(root)) = (
-        real_data("PRIMASE_FXC"),
-        real_data("PRIMASE_WARP"),
-        real_data("PRIMASE_WARP_SCRATCH"),
-        real_data(variable),
-    ) else {
+fn corpus(game: Game) {
+    let (Some(fxc), Some(warp), Some((name, paths))) =
+        (tool(Tool::Fxc), tool(Tool::Warp), common::corpus(game))
+    else {
         return;
     };
-    let all = std::env::var("PRIMASE_SHADER_WARP_ALL").is_ok_and(|v| v == "1");
-    let limit = std::env::var("PRIMASE_SHADER_DIFF_LIMIT")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(usize::MAX);
-    let mut paths = Vec::new();
-    containers(&root, &mut paths);
-    assert!(
-        !paths.is_empty(),
-        "{variable}: no DXBC containers under {}",
-        root.display()
-    );
+    let scratch = primase_testdata::scratch().join("warp");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let all = debug("shader.warp_all").is_some_and(|v| v == "1");
     let tools = (fxc, warp, scratch);
     let mut t = Tally::default();
-    for path in paths.iter().take(limit) {
+    for path in paths.iter().take(common::diff_limit()) {
         let bytes = std::fs::read(path).unwrap();
         run_program(&path.display().to_string(), &bytes, 3, all, &tools, &mut t);
     }
-    report(variable, &t);
+    report(&name, &t);
     // Direct3D leaves exp2, log2, sin, cos and rsqrt to the implementation within a few ulp, and a program that raises
     // a value to a large power through them turns that into more than 1e-3; only the textures that are not plain 2D are
-    // asserted, the everything-bindable run (`PRIMASE_SHADER_WARP_ALL=1`) reports
+    // asserted, the everything-bindable run (the debug key `shader.warp_all=1`) reports
     assert!(
         all || t.worst.is_empty(),
         "{} lanes are further than 1e-3 from WARP",
@@ -675,13 +664,13 @@ fn corpus(variable: &str) {
 
 #[test]
 fn sekiro_programs_agree_with_warp() {
-    corpus("PRIMASE_SHADER_CORPUS_SEKIRO");
+    corpus(Game::Sekiro);
 }
 #[test]
 fn riders_republic_programs_agree_with_warp() {
-    corpus("PRIMASE_SHADER_CORPUS_RR");
+    corpus(Game::Riders);
 }
 #[test]
 fn unity_programs_agree_with_warp() {
-    corpus("PRIMASE_SHADER_CORPUS_UNITY");
+    corpus(Game::Sledding);
 }

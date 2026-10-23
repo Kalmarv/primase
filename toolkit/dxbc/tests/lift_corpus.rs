@@ -2,25 +2,13 @@
 //! Lifting real programs: every DXBC container in a folder of extracted programs (the user's own install) is lifted,
 //! the lifted program validated and written as WGSL. A program the lifter refuses is counted by reason (the
 //! refusals are by name, never silent); a program it lifts must validate and write, or the lifter is wrong.
-//! Needs `PRIMASE_SHADER_CORPUS_SEKIRO`, `PRIMASE_SHADER_CORPUS_RR` or `PRIMASE_SHADER_CORPUS_UNITY` (each a folder,
-//! searched recursively, of containers as the game ships them).
+//! Needs the corpus oracle set's `sekiro/shaders`, `riders/shaders` or `sledding/shaders` (each a folder, searched
+//! recursively, of containers as the game ships them).
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
-fn containers(root: &Path, out: &mut Vec<PathBuf>) {
-    let mut entries: Vec<_> = std::fs::read_dir(root)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            containers(&path, out);
-        } else if std::fs::read(&path).is_ok_and(|b| b.starts_with(b"DXBC")) {
-            out.push(path);
-        }
-    }
-}
+use primase_testdata::Game;
+
+mod common;
 
 #[derive(Default)]
 struct Census {
@@ -34,17 +22,10 @@ struct Census {
     unrunnable: BTreeMap<String, (usize, String)>,
 }
 
-fn census(variable: &str) {
-    let Some(root) = primase_testdata::real_data(variable) else {
+fn census(game: Game) {
+    let Some((name, paths)) = common::corpus(game) else {
         return;
     };
-    let mut paths = Vec::new();
-    containers(Path::new(&root), &mut paths);
-    assert!(
-        !paths.is_empty(),
-        "{variable}: no DXBC containers under {}",
-        root.display()
-    );
     let mut c = Census::default();
     for path in &paths {
         let bytes = std::fs::read(path).unwrap();
@@ -94,7 +75,7 @@ fn census(variable: &str) {
         }
     }
     println!(
-        "{variable}: {} programs, {} lifted, {} validated, {} written as WGSL, {} refused",
+        "{name}: {} programs, {} lifted, {} validated, {} written as WGSL, {} refused",
         c.programs,
         c.lifted,
         c.validated,
@@ -119,13 +100,13 @@ fn census(variable: &str) {
 
 #[test]
 fn sekiro_programs() {
-    census("PRIMASE_SHADER_CORPUS_SEKIRO");
+    census(Game::Sekiro);
 }
 #[test]
 fn riders_republic_programs() {
-    census("PRIMASE_SHADER_CORPUS_RR");
+    census(Game::Riders);
 }
 #[test]
 fn unity_programs() {
-    census("PRIMASE_SHADER_CORPUS_UNITY");
+    census(Game::Sledding);
 }

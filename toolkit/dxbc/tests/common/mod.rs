@@ -1,10 +1,12 @@
 #![allow(dead_code)]
 //! What the executor's gates share: deterministic test vectors for a lifted pixel program (input registers, constant
-//! buffers), a quad's lanes, and the containers under a corpus folder.
+//! buffers), a quad's lanes, and a game's shader corpus.
 pub mod differential;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use primase_testdata::{Game, OracleSet, Query, expect_found, resolve};
 
 use primase_shader::{ConstantType, Majorness, PixelShader, ResourceKind, ScalarType, SystemValue};
 
@@ -176,6 +178,25 @@ pub fn refs<'a>(c: &'a Case, shader: &dyn PixelShader) -> Vec<(u32, &'a [[u32; 4
             Some((slot, &v[..(rows as usize).min(v.len())]))
         })
         .collect()
+}
+
+/// A game's shader corpus (`oracles.corpus.<game>/shaders`: a folder, searched recursively, of containers as the game
+/// ships them): its key and its containers in path order; `None` when it is not configured. A configured corpus without
+/// a container fails.
+pub fn corpus(game: Game) -> Option<(String, Vec<PathBuf>)> {
+    let query = Query::Oracle(OracleSet::Corpus, game, "shaders");
+    let root = resolve(query)?;
+    let mut paths = Vec::new();
+    containers(&root, &mut paths);
+    expect_found(query, "DXBC containers", paths.len());
+    Some((query.key(), paths))
+}
+
+/// How many programs of a corpus a run takes (the debug key `shader.diff_limit`, default all).
+pub fn diff_limit() -> usize {
+    primase_testdata::debug("shader.diff_limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(usize::MAX)
 }
 
 pub fn containers(root: &Path, out: &mut Vec<PathBuf>) {

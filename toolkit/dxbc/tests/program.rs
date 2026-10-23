@@ -265,8 +265,11 @@ fn sample_callback_uses_coordinates_and_return_swizzle() {
 /// text (.asm appended). Counts executable instructions including final ret.
 #[test]
 fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = primase_testdata::real_data_value("PRIMASE_DXBC_SHADERS") else {
-        eprintln!("SKIPPED: PRIMASE_DXBC_SHADERS not set");
+    let Some(root) = primase_testdata::oracle(
+        primase_testdata::OracleSet::Corpus,
+        primase_testdata::Game::General,
+        "dxbc",
+    ) else {
         return Ok(());
     };
     let mut count = 0;
@@ -775,13 +778,17 @@ fn disassembled_immediates(text: &str) -> Vec<[String; 4]> {
         .collect()
 }
 
-/// Every pixel container of `PRIMASE_DXBC_PACK_DISASSEMBLY` (`NNNN.dxbc`, each with Microsoft's D3D Shader
-/// Disassembler text `NNNN.txt`) that primase reads: its checksum verified, then its instruction stream, its declared
-/// resources and views, and its immediate constant buffer equal to the disassembly's (each value printed as the
-/// disassembler prints it). The ones primase refuses are counted by reason.
+/// Every pixel container of `oracles.d3d-disassembler.riders/shader-pack` (`NNNN.dxbc`, each with Microsoft's D3D
+/// Shader Disassembler text `NNNN.txt`) that primase reads: its checksum verified, then its instruction stream, its
+/// declared resources and views, and its immediate constant buffer equal to the disassembly's (each value printed as
+/// the disassembler prints it). The ones primase refuses are counted by reason.
 #[test]
 fn pack_against_microsoft_disassembly() {
-    let Some(root) = primase_testdata::real_data("PRIMASE_DXBC_PACK_DISASSEMBLY") else {
+    let Some(root) = primase_testdata::oracle(
+        primase_testdata::OracleSet::D3dDisassembler,
+        primase_testdata::Game::Riders,
+        "shader-pack",
+    ) else {
         return;
     };
     let mut read = 0;
