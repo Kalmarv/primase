@@ -1,10 +1,14 @@
 //! Inline ray tracing: the acceleration structure a caller supplies, the bounding-volume hierarchies the executor builds
 //! over it, and the ray query a program runs against it (DXR 1.1's `RayQuery`, as naga carries it).
 //!
-//! A [`Scene`] is what an acceleration structure is made of: bottom levels of triangle geometry and a top level of
-//! instances of them, each with a transform, a mask and the ids a hit reports. Procedural primitives (axis-aligned
-//! boxes a shader intersects itself) are not carried: a scene has none, and a program that generates an intersection is
-//! refused by name.
+//! A [`Scene`] is what an acceleration structure is made of: bottom levels of geometry (triangles, or procedural
+//! primitives: axis-aligned boxes the program intersects itself) and a top level of instances of them, each with a
+//! transform, a mask and the ids a hit reports.
+//!
+//! The rules taken from the DXR specification (https://microsoft.github.io/DirectX-Specs/d3d/Raytracing.html) are cited
+//! where they apply: the ray extents (section "Ray extents": a triangle hit needs TMin < t < TMax, a procedural one
+//! TMin <= t <= TMax), what the program must do when it commits a procedural hit (section "RayQuery
+//! CommitProceduralPrimitiveHit") and the flags (section "Ray flags").
 //!
 //! A query visits the triangles the ray crosses in an order of the hierarchy's choosing, as hardware does; the closest
 //! committed hit does not depend on the order. An opaque triangle in range is committed on the spot (and with
@@ -471,11 +475,18 @@ impl Query {
         }
     }
 
-    /// Commit a procedural candidate at distance `t`, which the program found by intersecting the primitive itself. A
-    /// distance outside the ray's current range, from the t min to the nearest hit committed so far, is ignored, as DXR
-    /// says. WARP takes a farther one, so the WARP gate's program commits only nearer hits and no check against WARP
-    /// covers this. A ray that starts inside a primitive's box is offered that primitive here (the box overlaps the
-    /// range); WARP offers none, and the gate leaves such rays out.
+    /// Commit a procedural candidate at distance `t`, which the program found by intersecting the primitive itself.
+    ///
+    /// DXR (section "RayQuery CommitProceduralPrimitiveHit") puts the check on the program: it "must only commit hit(s)
+    /// when it manually determines that a given hit being reported satisfies TMin <= t <= TMax", within "the most recent
+    /// [TMin ... TMax] (inclusive) range", and the system does not do that work for procedural primitives (section
+    /// "TraceRayInline control flow", note 4). What a commit outside that range does is not specified. This executor
+    /// ignores it; WARP takes it even when it is farther than the committed hit, so the WARP gate's program commits only
+    /// nearer hits and nothing checks this against WARP.
+    ///
+    /// Not specified either (the section "Ray extents" speaks of the intersection's t, not of the box): whether a box
+    /// the ray starts inside is offered. This executor offers it (the box overlaps the range); WARP offers none, and the
+    /// gate leaves such rays out.
     pub(super) fn generate(&mut self, t: f32) -> Result<(), String> {
         let Some(mut hit) = self.candidate else {
             return Err("an intersection generated when there is no candidate".into());
@@ -607,7 +618,8 @@ impl Query {
                     let Some((t, b1, b2, front_clockwise)) = intersect(&tri, origin, direction) else {
                         continue;
                     };
-                    if !(self.tmin <= t && t <= self.tmax) {
+                    // section "Ray extents": a triangle is hit only at TMin < t < TMax, both ends excluded
+                    if !(self.tmin < t && t < self.tmax) {
                         continue;
                     }
                     let f = built.instance.flags;
