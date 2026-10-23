@@ -25,10 +25,25 @@
 //! takes come from the caller, never from the material.
 //!
 //! Not decoded, kept as stored: the name hashes and the value hashes (no name is known for either, the hash function is
-//! not known), the options' type, count and extra words, and the record's other seven items (0x18, 0x24 and 0x6c to
-//! 0x9c: counts of 0 or 1 to 24 in the sample, whose meaning is unknown). A record this reader cannot place (an array
-//! outside the section, entries that do not tile, a value named twice in a node, a node or a permutation reached twice
-//! or not at all, an option out of range or not increasing) is refused, never guessed at.
+//! not known; see below), the options' type, count and extra words, and the record's other seven items (0x18, 0x24 and
+//! 0x6c to 0x9c: counts of 0 or 1 to 24 in the sample, whose meaning is unknown). A record this reader cannot place
+//! (an array outside the section, entries that do not tile, a value named twice in a node, a node or a permutation
+//! reached twice or not at all, an option out of range or not increasing) is refused, never guessed at.
+//!
+//! **The hashes (searched, not found).** The 64-bit hashes of the options' names and values, the depot blocks'
+//! parameter names ([`crate::depot`]) and the pass groups and pass bindings were searched for in text of the install,
+//! offline: the strings of `Skate.exe` and of the render DLL (489 thousand and 21 thousand), the ASCII runs of all
+//! 19,437 CompiledBytecode payloads (559 thousand: entry points and the engine's `g_` resource names), and of all
+//! 185,301 EBX payloads with every bundle entry name (1.4 million). Each string was taken as is, lower- and
+//! upper-cased, as UTF-16, with a trailing NUL and without a leading `g_`, under FNV-1 and FNV-1a (32 and 64 bit),
+//! djb2 (add and xor, 32 and 64 bit), sdbm, MurmurHash64A, xxHash64, CityHash64, Jenkins one-at-a-time and CRC-32
+//! (implementations checked against reference vectors), and the result compared with the whole 64 bits, with the
+//! target's low 48 (the result's low 48 and its top 48) and with each 32-bit half. Nothing matched in the whole word or
+//! in 48 bits; the 32-bit half matches are as many as chance gives. None of the hashes is stored as a literal in
+//! `Skate.exe`. So the names are not in the install's text under these functions, or the function takes a seed or a
+//! prefix not guessed. What the values themselves show: in a block a texture parameter's name hash carries the
+//! texture slot in its top 16 bits ([`crate::depot`]), so a name is that tag over 48 bits of something. The binding
+//! does not need the names: it is keyed by the hashes.
 
 use crate::lookup::RECORD_LEN;
 use crate::{Rd, Result, bad};
