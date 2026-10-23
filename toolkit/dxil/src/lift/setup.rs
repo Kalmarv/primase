@@ -46,6 +46,53 @@ pub(super) fn binding_of(m: &Module, f: &Function, bind: ValueId) -> Option<(u8,
     ))
 }
 
+/// The system value a ray tracing `dx.op` reads (`InstanceID` 141 to `RayTCurrent` 154 except the matrices, and
+/// `PrimitiveIndex` 161 and `GeometryIndex` 213).
+pub(super) fn ray_system_value(code: u64) -> Option<SystemValue> {
+    Some(match code {
+        141 => SystemValue::InstanceId,
+        142 => SystemValue::InstanceIndex,
+        143 => SystemValue::HitKind,
+        144 => SystemValue::RayFlags,
+        145 => SystemValue::DispatchRaysIndex,
+        146 => SystemValue::DispatchRaysDimensions,
+        147 => SystemValue::WorldRayOrigin,
+        148 => SystemValue::WorldRayDirection,
+        149 => SystemValue::ObjectRayOrigin,
+        150 => SystemValue::ObjectRayDirection,
+        153 => SystemValue::RayTMin,
+        154 => SystemValue::RayTCurrent,
+        161 => SystemValue::PrimitiveIndex,
+        213 => SystemValue::GeometryIndex,
+        _ => return None,
+    })
+}
+
+/// The module global whose value `v` is: the load of a global (or of a cast of one) that a library's handle is made
+/// from.
+pub(super) fn variable_loaded(m: &Module, f: &Function, v: ValueId) -> Option<ValueId> {
+    let load = f
+        .instructions
+        .iter()
+        .find(|i| i.result.is_some_and(|(r, _)| r == v))?;
+    let Op::Load { pointer } = &load.op else {
+        return None;
+    };
+    let mut at = *pointer;
+    loop {
+        let value = if at < f.first {
+            m.values.get(at)?
+        } else {
+            f.locals.get(at - f.first)?
+        };
+        match value {
+            Value::Global { .. } if at < f.first => return Some(at),
+            Value::Constant(Constant::Cast { value, .. }) => at = *value,
+            _ => return None,
+        }
+    }
+}
+
 /// The `dx.op` opcode a call makes: the callee is a `dx.op.*` declaration and the first argument a constant.
 pub(super) fn dx_opcode(m: &Module, f: &Function, function: ValueId, args: &[ValueId]) -> Option<u64> {
     if !m.name(function)?.starts_with("dx.op.") {
@@ -84,7 +131,8 @@ impl Setup {
         if !matches!(
             interface.stage,
             Stage::Pixel | Stage::Vertex | Stage::Compute | Stage::Hull | Stage::Domain
-        ) {
+        ) && !interface.stage.is_ray_tracing()
+        {
             return Err(error(0, "geometry programs are not lifted"));
         }
         let (input_elements, output_elements) = reflection::elements(m)?;
@@ -103,9 +151,13 @@ impl Setup {
         let mut system_out: BTreeSet<u8> = BTreeSet::new();
         let mut used_ranges: BTreeSet<(u8, u32)> = BTreeSet::new();
         let mut used_bindings: BTreeSet<(u8, u32, u32)> = BTreeSet::new();
+        // a library makes its handles from the value of the resource's global
+        let mut used_variables: BTreeSet<ValueId> = BTreeSet::new();
         // the system inputs the program reads that the signature does not list: the sample index and, in a compute
         // program, the invocation's ids
         let mut system_inputs: BTreeSet<SystemValue> = BTreeSet::new();
+        // the rows of an instance's transform the program reads
+        let mut matrix_rows: BTreeSet<(SystemValue, u32)> = BTreeSet::new();
         for entry in functions.iter().copied() {
             for inst in &entry.instructions {
                 let Op::Call { function, args } = &inst.op else {
@@ -188,12 +240,40 @@ impl Setup {
                     112 => {
                         system_inputs.insert(SystemValue::LaneCount);
                     }
+                    151 | 152 => {
+                        let Some(row) = konst(1).filter(|r| (0..3).contains(r)) else {
+                            return Err(error(inst.at, "a transform read at a computed row"));
+                        };
+                        let system = if code == 151 {
+                            SystemValue::ObjectToWorld
+                        } else {
+                            SystemValue::WorldToObject
+                        };
+                        matrix_rows.insert((system, row as u32));
+                    }
+                    // the ray tracing system values: the ids and the traced ray's state
+                    141..=150 | 153 | 154 | 161 | 213 => {
+                        if let Some(system) = ray_system_value(code) {
+                            system_inputs.insert(system);
+                        }
+                    }
                     217 => {
                         let Some((class, lower, space)) = binding_of(m, entry, args[1]) else {
                             return Err(error(inst.at, "a handle of a binding that is not constant"));
                         };
                         used_bindings.insert((class, lower, space));
                     }
+                    160 => match variable_loaded(m, entry, args[1]) {
+                        Some(global) => {
+                            used_variables.insert(global);
+                        }
+                        None => {
+                            return Err(error(
+                                inst.at,
+                                "a handle of a resource that is not a global's value",
+                            ));
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -246,8 +326,31 @@ impl Setup {
                 SystemValue::GroupThreadId => ("SV_GroupThreadID", 3),
                 SystemValue::LaneIndex => ("SV_LaneIndex", 1),
                 SystemValue::LaneCount => ("SV_LaneCount", 1),
+                SystemValue::DispatchRaysIndex => ("SV_DispatchRaysIndex", 3),
+                SystemValue::DispatchRaysDimensions => ("SV_DispatchRaysDimensions", 3),
+                SystemValue::WorldRayOrigin => ("SV_WorldRayOrigin", 3),
+                SystemValue::WorldRayDirection => ("SV_WorldRayDirection", 3),
+                SystemValue::ObjectRayOrigin => ("SV_ObjectRayOrigin", 3),
+                SystemValue::ObjectRayDirection => ("SV_ObjectRayDirection", 3),
+                SystemValue::RayTMin => ("SV_RayTMin", 1),
+                SystemValue::RayTCurrent => ("SV_RayTCurrent", 1),
+                SystemValue::RayFlags => ("SV_RayFlags", 1),
+                SystemValue::InstanceId => ("SV_InstanceID", 1),
+                SystemValue::InstanceIndex => ("SV_InstanceIndex", 1),
+                SystemValue::PrimitiveIndex => ("SV_PrimitiveIndex", 1),
+                SystemValue::GeometryIndex => ("SV_GeometryIndex", 1),
+                SystemValue::HitKind => ("SV_HitKind", 1),
                 _ => ("SV_GroupIndex", 1),
             };
+            let float = matches!(
+                system,
+                SystemValue::WorldRayOrigin
+                    | SystemValue::WorldRayDirection
+                    | SystemValue::ObjectRayOrigin
+                    | SystemValue::ObjectRayDirection
+                    | SystemValue::RayTMin
+                    | SystemValue::RayTCurrent
+            );
             interface.inputs.push(primase_shader::Varying {
                 label: primase_shader::Label {
                     name: name.into(),
@@ -255,8 +358,33 @@ impl Setup {
                 },
                 system: Some(system),
                 value: primase_shader::Value {
-                    scalar: primase_shader::ScalarType::Uint,
+                    scalar: if float {
+                        primase_shader::ScalarType::Float
+                    } else {
+                        primase_shader::ScalarType::Uint
+                    },
                     width,
+                },
+                interp: None,
+                used: true,
+                provenance: primase_shader::VaryingProvenance::default(),
+            });
+        }
+        for (system, row) in matrix_rows {
+            interface.inputs.push(primase_shader::Varying {
+                label: primase_shader::Label {
+                    name: if system == SystemValue::ObjectToWorld {
+                        "SV_ObjectToWorld"
+                    } else {
+                        "SV_WorldToObject"
+                    }
+                    .into(),
+                    index: row,
+                },
+                system: Some(system),
+                value: primase_shader::Value {
+                    scalar: primase_shader::ScalarType::Float,
+                    width: 4,
                 },
                 interp: None,
                 used: true,
@@ -269,6 +397,7 @@ impl Setup {
         for (original, range) in interface.resources.drain(..).zip(program_ranges) {
             if !used_ranges.contains(&(range.class, range.id))
                 && !used_bindings.contains(&(range.class, range.lower, range.space))
+                && !range.variable.is_some_and(|g| used_variables.contains(&g))
             {
                 continue;
             }
@@ -344,6 +473,10 @@ impl Setup {
     /// The kept resource of a handle's class and range id.
     pub(super) fn resource(&self, class: u8, id: u32) -> Option<usize> {
         self.ranges.iter().position(|r| r.class == class && r.id == id)
+    }
+    /// The kept resource a library names by this module global.
+    pub(super) fn resource_of_variable(&self, global: ValueId) -> Option<usize> {
+        self.ranges.iter().position(|r| r.variable == Some(global))
     }
     pub(super) fn kind(&self, resource: usize) -> &ResourceKind {
         &self.interface.resources[resource].kind
@@ -435,6 +568,7 @@ fn heap_resources(
                         element: (class < 2 && kind != 11 && kind != 12).then_some((second & 0xff) as u32),
                         stride: (kind == 12).then_some(second as u32),
                         counter: false,
+                        variable: None,
                     };
                     let id = ResourceId(resources.len() as u32);
                     let name = if class == 3 {

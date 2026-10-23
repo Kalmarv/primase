@@ -199,6 +199,13 @@ impl Lift<'_> {
                 otherwise,
             } => [*condition, *then, *otherwise].contains(&v),
             crate::module::Op::ExtractValue { aggregate, .. } => *aggregate == v,
+            crate::module::Op::ExtractElement { vector, index } => *vector == v || *index == v,
+            crate::module::Op::InsertElement { vector, value, index } => {
+                *vector == v || *value == v || *index == v
+            }
+            crate::module::Op::ShuffleVector { first, second, mask } => {
+                *first == v || *second == v || *mask == v
+            }
             crate::module::Op::InsertValue { aggregate, value, .. } => *aggregate == v || *value == v,
             crate::module::Op::Call { args, .. } => args.contains(&v),
             crate::module::Op::Phi { incoming } => incoming.iter().any(|(x, _)| *x == v),

@@ -20,6 +20,7 @@ mod evaluate;
 pub mod exec;
 mod limits;
 mod program;
+pub mod rt;
 pub use evaluate::{
     Constants, Evaluation, Field, Grid, Image, Input, Invocation, Lane, Layout, Raw, Texture, evaluate,
     evaluate_raw, evaluate_raw_with, evaluate_with,

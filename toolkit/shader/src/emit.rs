@@ -37,6 +37,23 @@ pub fn wgsl(program: &Program) -> Result<String, Error> {
 
 /// The module as WGSL whatever its stage: for a program of a stage with no entry point, its functions, to be read.
 pub fn wgsl_functions(program: &Program) -> Result<String, Error> {
+    if program.stage.is_ray_tracing() {
+        return Err(Error::Unsupported {
+            writer: "wgsl",
+            detail: format!(
+                "a {:?} program has no WGSL form: WebGPU has no ray tracing pipeline, and the program's \
+                 operations ({}) are the pipeline's",
+                program.stage,
+                crate::rt::OPERATIONS.join(", ")
+            ),
+        });
+    }
+    module_text(program)
+}
+
+/// The module as WGSL text whatever its stage, for a program's text form: a ray tracing program too, which no consumer
+/// is offered as WGSL ([`wgsl_functions`] refuses it).
+pub(crate) fn module_text(program: &Program) -> Result<String, Error> {
     // naga's WGSL writer does not write ray queries (it stops on one), so a program that has one is refused here
     if program
         .module

@@ -17,6 +17,7 @@ mod flow;
 mod memory;
 mod ops;
 mod rayquery;
+mod raytracing;
 mod resources;
 mod setup;
 mod stages;
@@ -77,6 +78,7 @@ pub fn lift(container: &[u8]) -> Result<Program> {
             1 => "vs",
             3 => "hs",
             4 => "ds",
+            6..=12 => "lib",
             _ => "cs",
         },
         (part.program_version >> 4) & 15,
@@ -174,6 +176,8 @@ pub(crate) struct Lift<'m> {
     coverage: Option<Handle<LocalVariable>>,
     /// The lane number of a thread group with no lane-number built-in, made at the start of the program.
     lane: Option<Handle<LocalVariable>>,
+    /// The ray tracing pipeline's operations the program calls.
+    operations: raytracing::Operations,
     resources: resources::Resources,
     memory: memory::Memory,
     arguments: Vec<naga::FunctionArgument>,
@@ -215,6 +219,7 @@ impl<'m> Lift<'m> {
             depth: None,
             coverage: None,
             lane: None,
+            operations: raytracing::Operations::default(),
             resources: resources::Resources::default(),
             memory: memory::Memory::default(),
             arguments: Vec::new(),
@@ -262,6 +267,20 @@ impl<'m> Lift<'m> {
                     }
                 }
                 Op::ExtractValue { aggregate, .. } => mark(*aggregate, at, &mut cross),
+                Op::ExtractElement { vector, index } => {
+                    mark(*vector, at, &mut cross);
+                    mark(*index, at, &mut cross);
+                }
+                Op::InsertElement { vector, value, index } => {
+                    for v in [vector, value, index] {
+                        mark(*v, at, &mut cross);
+                    }
+                }
+                Op::ShuffleVector { first, second, mask } => {
+                    for v in [first, second, mask] {
+                        mark(*v, at, &mut cross);
+                    }
+                }
                 Op::InsertValue { aggregate, value, .. } => {
                     mark(*aggregate, at, &mut cross);
                     mark(*value, at, &mut cross);
@@ -393,7 +412,51 @@ impl<'m> Lift<'m> {
         self.argument_exprs.clear();
         self.analyse_uses();
         self.sig = Some(sig.clone());
-        let decl = self.b.declare_function(sig).map_err(|detail| error(0, detail))?;
+        // the pointer arguments (a ray tracing program's payload and attributes) are the function's own parameters
+        let mut structures = Vec::new();
+        if sig
+            .arguments
+            .iter()
+            .any(|a| a.ty == primase_shader::IoType::Memory)
+        {
+            let params = match self.m.types.get(self.m.value_types[f.value]) {
+                Some(Type::Pointer(t)) => match &self.m.types[*t] {
+                    Type::Function { params, .. } => params.clone(),
+                    _ => Vec::new(),
+                },
+                _ => Vec::new(),
+            };
+            let memory: Vec<usize> = sig
+                .arguments
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| a.ty == primase_shader::IoType::Memory)
+                .map(|(k, _)| k)
+                .collect();
+            if params.len() != memory.len() {
+                return self.refuse(format!(
+                    "a {:?} program whose function takes {} parameters where {} are expected",
+                    self.setup.interface.stage,
+                    params.len(),
+                    memory.len()
+                ));
+            }
+            for (k, (&param, &argument)) in params.iter().zip(&memory).enumerate() {
+                let Some(Type::Pointer(pointee)) = self.m.types.get(param).cloned() else {
+                    return self.refuse("a parameter that is not a pointer");
+                };
+                let (structure, _) = self.naga_type(pointee)?;
+                structures.push(structure);
+                self.slots[k] = Some(Slot::Value(Lv::Pointer(memory::Ptr {
+                    root: memory::Root::Argument(argument as u32),
+                    steps: Vec::new(),
+                })));
+            }
+        }
+        let decl = self
+            .b
+            .declare_function_with(sig, &structures)
+            .map_err(|detail| error(0, detail))?;
         // the registers its results are made of
         let u4 = self.b.ty_of(Kind::U, 4);
         for v in self.result_varyings() {

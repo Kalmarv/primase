@@ -4,14 +4,85 @@
 use naga::{BinaryOperator as Bo, Expression as E, MathFunction as Mf, UnaryOperator as Uo};
 use primase_shader::build::{Kind, Val};
 
+use super::setup::const_int;
 use super::{Lift, Lv, Slot, Stored};
 use crate::Result;
 use crate::module::{BinaryOp, CastOp, Constant, Instruction, Op, Type, TypeId, Value, ValueId};
 
 impl Lift<'_> {
+    /// The lanes a shuffle's constant mask picks (`None` for an undefined lane).
+    fn vector_mask(&self, mask: ValueId) -> Result<Vec<Option<usize>>> {
+        let value = if mask < self.f.first {
+            self.m.values.get(mask)
+        } else {
+            self.f.locals.get(mask - self.f.first)
+        };
+        let ty = if mask < self.f.first {
+            self.m.value_types.get(mask).copied()
+        } else {
+            self.f.local_types.get(mask - self.f.first).copied()
+        };
+        let lanes = match ty.and_then(|t| self.m.types.get(t)) {
+            Some(Type::Vector(n, _)) => *n as usize,
+            _ => return self.refuse("a shuffle mask that is not a vector"),
+        };
+        let lane = |item: Option<&Value>| match item {
+            Some(Value::Constant(Constant::Integer(k))) => usize::try_from(*k).ok().map(Some),
+            Some(Value::Constant(Constant::Null)) => Some(Some(0)),
+            Some(Value::Constant(Constant::Undef)) => Some(None),
+            _ => None,
+        };
+        let picks = match value {
+            Some(Value::Constant(Constant::Null)) => vec![Some(Some(0)); lanes],
+            Some(Value::Constant(Constant::Undef)) => vec![Some(None); lanes],
+            Some(Value::Constant(Constant::Aggregate(items))) => items
+                .iter()
+                .map(|&i| {
+                    lane(if i < self.f.first {
+                        self.m.values.get(i)
+                    } else {
+                        self.f.locals.get(i - self.f.first)
+                    })
+                })
+                .collect(),
+            Some(Value::Constant(Constant::Data(words))) => {
+                words.iter().map(|&w| Some(Some(w as usize))).collect()
+            }
+            _ => return self.refuse("a shuffle mask that is not constant"),
+        };
+        picks
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .map_or_else(|| self.refuse("a shuffle mask lane that is not a number"), Ok)
+    }
+
     /// The value of a constant of this type.
     pub(crate) fn constant(&mut self, c: &Constant, ty: TypeId) -> Result<Lv> {
         let kind = |lift: &Self| lift.kind_of_type(ty);
+        // a vector constant: its lanes composed
+        if let Some(Type::Vector(n, element)) = self.m.types.get(ty).cloned() {
+            let lanes: Vec<Val> = match c {
+                Constant::Null | Constant::Undef => {
+                    let k = self.kind_of_type(element)?;
+                    (0..n).map(|_| self.b.lit_bits(k, 0)).collect()
+                }
+                Constant::Aggregate(items) => {
+                    let mut lanes = Vec::new();
+                    for &item in items {
+                        lanes.push(self.scalar(item)?);
+                    }
+                    lanes
+                }
+                Constant::Data(words) => {
+                    let k = self.kind_of_type(element)?;
+                    words.iter().map(|&w| self.b.lit_bits(k, w as u32)).collect()
+                }
+                other => return self.refuse(format!("a vector constant of this form ({other:?})")),
+            };
+            let kind = lanes.first().map_or(Kind::U, |l| l.kind);
+            let lanes: Vec<Val> = lanes.into_iter().map(|l| self.b.bitcast_to(l, kind)).collect();
+            return Ok(Lv::Scalar(self.b.compose(&lanes)));
+        }
         Ok(match c {
             Constant::Integer(i) if self.is_wide_type(ty) => self.wide_constant(*i as u64),
             Constant::Null | Constant::Undef if self.is_wide_type(ty) => self.wide_constant(0),
@@ -370,6 +441,69 @@ impl Lift<'_> {
                 let (t, o) = (self.scalar(*then)?, self.scalar(*otherwise)?);
                 let o = self.b.bitcast_to(o, t.kind);
                 let r = self.b.select(c, t, o);
+                self.define_result(result, Lv::Scalar(r))
+            }
+            Op::ExtractElement { vector, index } => {
+                let v = self.scalar(*vector)?;
+                let r = match const_int(self.m, self.f, *index) {
+                    Some(k) if (0..i64::from(v.width)).contains(&k) => self.b.lane(v, k as u8),
+                    Some(_) => return self.refuse("a vector lane outside the vector"),
+                    None => {
+                        let at = self.uint(*index)?;
+                        Val {
+                            expr: self.b.app(E::Access {
+                                base: v.expr,
+                                index: at.expr,
+                            }),
+                            kind: v.kind,
+                            width: 1,
+                        }
+                    }
+                };
+                self.define_result(result, Lv::Scalar(r))
+            }
+            Op::InsertElement { vector, value, index } => {
+                let v = self.scalar(*vector)?;
+                let new = self.scalar(*value)?;
+                let new = self.b.bitcast_to(new, v.kind);
+                let lanes: Vec<Val> = (0..v.width).map(|k| self.b.lane(v, k)).collect();
+                let lanes = match const_int(self.m, self.f, *index) {
+                    Some(k) if (0..i64::from(v.width)).contains(&k) => {
+                        let mut lanes = lanes;
+                        lanes[k as usize] = new;
+                        lanes
+                    }
+                    Some(_) => return self.refuse("a vector lane outside the vector"),
+                    None => {
+                        let at = self.uint(*index)?;
+                        let mut replaced = Vec::new();
+                        for (k, lane) in lanes.into_iter().enumerate() {
+                            let here = self.b.lit_u(k as u32);
+                            let is_here = self.b.binary(Bo::Equal, at, here);
+                            replaced.push(self.b.select(is_here, new, lane));
+                        }
+                        replaced
+                    }
+                };
+                let r = self.b.compose(&lanes);
+                self.define_result(result, Lv::Scalar(r))
+            }
+            Op::ShuffleVector { first, second, mask } => {
+                let (a, b) = (self.scalar(*first)?, self.scalar(*second)?);
+                let b = self.b.bitcast_to(b, a.kind);
+                let mut source: Vec<Val> = (0..a.width).map(|k| self.b.lane(a, k)).collect();
+                source.extend((0..b.width).map(|k| self.b.lane(b, k)));
+                let picks = self.vector_mask(*mask)?;
+                let mut lanes = Vec::new();
+                for pick in picks {
+                    match pick {
+                        Some(k) if k < source.len() => lanes.push(source[k]),
+                        // an undefined lane may be anything
+                        None => lanes.push(source[0]),
+                        Some(_) => return self.refuse("a shuffle that picks a lane beyond both vectors"),
+                    }
+                }
+                let r = self.b.compose(&lanes);
                 self.define_result(result, Lv::Scalar(r))
             }
             Op::ExtractValue { aggregate, indices } => {

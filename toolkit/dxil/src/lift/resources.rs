@@ -124,6 +124,10 @@ impl Lift<'_> {
             }
             // a handle annotated with its properties is the same handle
             216 => self.handle_of(args[1]),
+            // a library's handle is made from the value of the resource's global
+            160 => self
+                .setup
+                .resource_of_variable(super::setup::variable_loaded(self.m, self.f, args[1])?),
             218 => self.setup.heap.get(&v).copied(),
             _ => None,
         }
@@ -711,6 +715,16 @@ impl Lift<'_> {
                 element: Some(index),
             },
         )
+    }
+
+    /// `CreateHandleForLib(resource)` (a library): the value a load of the resource's global gave, which already names
+    /// the resource.
+    pub(super) fn create_handle_for_lib(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
+        let value = self.get(args[1])?;
+        if !matches!(value, Lv::Handle { .. }) {
+            return self.refuse("a handle made from something that is not a resource of the library");
+        }
+        self.define_result(inst.result, value)
     }
 
     /// `AnnotateHandle(handle, properties)`: the handle itself; the properties repeat what the resource declares.

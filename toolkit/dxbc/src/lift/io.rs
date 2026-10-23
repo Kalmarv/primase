@@ -271,7 +271,7 @@ impl<'a> Lift<'a> {
         let mut parts = Vec::new();
         for item in &io.results {
             let part = match item.ty {
-                IoType::Array(..) => return self.refuse("an array-typed output"),
+                IoType::Array(..) | IoType::Memory => return self.refuse("an array-typed output"),
                 IoType::ClipDistances(_) => {
                     let mut components = Vec::new();
                     for &i in &item.varyings {

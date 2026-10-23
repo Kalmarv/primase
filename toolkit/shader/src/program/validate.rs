@@ -120,6 +120,11 @@ fn matches_io(module: &naga::Module, ty: &IoType, handle: naga::Handle<naga::Typ
             TypeInner::Array { base, size: naga::ArraySize::Constant(len), .. }
                 if len.get() == *n && is_value(&types[*base].inner, *v)
         ),
+        IoType::Memory => matches!(
+            &types[handle].inner,
+            TypeInner::Pointer { base, space: AddressSpace::Function }
+                if matches!(types[*base].inner, TypeInner::Struct { .. })
+        ),
     }
 }
 
@@ -134,9 +139,37 @@ fn functions(p: &Program, sigs: &[FunctionSig], problems: &mut Vec<Problem>) {
             p.module.entry_points.len()
         ));
     }
-    if p.module.functions.len() != sigs.len() {
+    // a ray tracing program also has the pipeline's operations, functions without a body
+    let operations = p
+        .module
+        .functions
+        .iter()
+        .filter(|(_, f)| {
+            f.name
+                .as_deref()
+                .is_some_and(|n| p.stage.is_ray_tracing() && crate::rt::OPERATIONS.contains(&n))
+        })
+        .count();
+    for (_, f) in p.module.functions.iter() {
+        let is_operation = f
+            .name
+            .as_deref()
+            .is_some_and(|n| p.stage.is_ray_tracing() && crate::rt::OPERATIONS.contains(&n));
+        if is_operation
+            && !f
+                .body
+                .iter()
+                .all(|s| matches!(s, naga::Statement::Return { .. } | naga::Statement::Emit(_)))
+        {
+            fail(format!(
+                "the operation {} has a body",
+                f.name.as_deref().unwrap_or("")
+            ));
+        }
+    }
+    if p.module.functions.len() != sigs.len() + operations {
         fail(format!(
-            "a {:?} program is {} functions, the module has {}",
+            "a {:?} program is {} functions and {operations} operations, the module has {}",
             p.stage,
             sigs.len(),
             p.module.functions.len()

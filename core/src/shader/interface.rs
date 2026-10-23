@@ -51,7 +51,10 @@ pub enum SystemValue {
     FragCoord,
     FrontFacing,
     VertexIndex,
+    /// A vertex stage's instance number; in a ray tracing hit program, the instance's index in the acceleration
+    /// structure.
     InstanceIndex,
+    /// A pixel stage's primitive number; in a ray tracing hit program, the hit primitive's index in its geometry.
     PrimitiveIndex,
     SampleIndex,
     RenderTargetArrayIndex,
@@ -86,6 +89,32 @@ pub enum SystemValue {
     LaneIndex,
     /// How many lanes the wave (subgroup) has.
     LaneCount,
+    /// A ray tracing program's position in the dispatch, three components.
+    DispatchRaysIndex,
+    /// The size of the dispatch a ray tracing program runs in, three components.
+    DispatchRaysDimensions,
+    /// The traced ray's origin and direction in world space, three components each.
+    WorldRayOrigin,
+    WorldRayDirection,
+    /// The same in the space of the instance the ray hit (an intersection, any-hit or closest-hit program).
+    ObjectRayOrigin,
+    ObjectRayDirection,
+    /// The ray's start and the distance of the closest accepted hit so far (or the candidate being tested, in an
+    /// any-hit program), along the ray.
+    RayTMin,
+    RayTCurrent,
+    /// The traced ray's flags.
+    RayFlags,
+    /// The hit instance's own identifier (the 24 bits the acceleration structure was built with).
+    InstanceId,
+    /// The geometry's index within the hit instance's bottom-level acceleration structure.
+    GeometryIndex,
+    /// What the intersection program reported the hit as (`ReportHit`'s kind).
+    HitKind,
+    /// The hit instance's 3 by 4 transform to world space and back. One varying for each row used, the label's index
+    /// naming the row, its four lanes the row's four columns.
+    ObjectToWorld,
+    WorldToObject,
 }
 
 /// How a varying is interpolated across a primitive.

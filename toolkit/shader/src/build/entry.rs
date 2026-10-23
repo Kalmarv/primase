@@ -76,6 +76,7 @@ impl Builder {
                     align_of(v.width),
                 )
             }
+            IoType::Memory => return Err(format!("{name}: a pointer to the shader's own structure")),
         })
     }
 
@@ -142,9 +143,30 @@ impl Builder {
 
     /// Declare a stage function's arguments and result structure (no bindings anywhere).
     pub fn declare_function(&mut self, sig: &FunctionSig) -> Result<FunctionDecl, String> {
+        self.declare_function_with(sig, &[])
+    }
+
+    /// [`Self::declare_function`] for a function with pointer arguments ([`IoType::Memory`]): each is a pointer in
+    /// function memory to the next of `structures`.
+    pub fn declare_function_with(
+        &mut self,
+        sig: &FunctionSig,
+        structures: &[Handle<Type>],
+    ) -> Result<FunctionDecl, String> {
         let mut arguments = Vec::new();
+        let mut structures = structures.iter();
         for item in &sig.arguments {
-            let (ty, _, _) = self.io_type(item.ty, &item.name)?;
+            let ty = if item.ty == IoType::Memory {
+                let base = *structures
+                    .next()
+                    .ok_or_else(|| format!("{}: no structure to point to", item.name))?;
+                self.ty(TypeInner::Pointer {
+                    base,
+                    space: naga::AddressSpace::Function,
+                })
+            } else {
+                self.io_type(item.ty, &item.name)?.0
+            };
             arguments.push(FunctionArgument {
                 name: Some(item.name.clone()),
                 ty,

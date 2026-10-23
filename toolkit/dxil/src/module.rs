@@ -176,6 +176,23 @@ pub enum Op {
         value: ValueId,
         indices: Vec<u64>,
     },
+    /// One lane of a vector.
+    ExtractElement {
+        vector: ValueId,
+        index: ValueId,
+    },
+    /// A vector with one lane replaced.
+    InsertElement {
+        vector: ValueId,
+        value: ValueId,
+        index: ValueId,
+    },
+    /// The lanes of two vectors the mask (a constant vector of lane numbers) picks.
+    ShuffleVector {
+        first: ValueId,
+        second: ValueId,
+        mask: ValueId,
+    },
     Call {
         function: ValueId,
         args: Vec<ValueId>,
@@ -580,9 +597,6 @@ fn cast(code: u64, at: usize) -> Result<CastOp> {
 fn refused(code: u64) -> &'static str {
     match code {
         4 | 30 => "getelementptr (old form)",
-        6 => "extractelement",
-        7 => "insertelement",
-        8 => "shufflevector",
         13 => "invoke",
         41 => "load (atomic)",
         23 => "va_arg",
@@ -694,6 +708,37 @@ impl Module {
                         };
                     }
                     (Op::ExtractValue { aggregate, indices }, Some(t))
+                }
+                6 => {
+                    let (vector, t) = body.value_type(r, &mut i)?;
+                    let (index, _) = body.value_type(r, &mut i)?;
+                    let Type::Vector(_, element) = body.m.types[t] else {
+                        return Err(error(r.at, "extractelement of something that is not a vector"));
+                    };
+                    (Op::ExtractElement { vector, index }, Some(element))
+                }
+                7 => {
+                    let (vector, t) = body.value_type(r, &mut i)?;
+                    let value = body.value(r, &mut i)?;
+                    let (index, _) = body.value_type(r, &mut i)?;
+                    (Op::InsertElement { vector, value, index }, Some(t))
+                }
+                8 => {
+                    let (first, t) = body.value_type(r, &mut i)?;
+                    let second = body.value(r, &mut i)?;
+                    let (mask, mask_ty) = body.value_type(r, &mut i)?;
+                    let (Type::Vector(_, element), Type::Vector(lanes, _)) =
+                        (body.m.types[t].clone(), body.m.types[mask_ty].clone())
+                    else {
+                        return Err(error(r.at, "shufflevector of something that is not a vector"));
+                    };
+                    let result = body
+                        .m
+                        .types
+                        .iter()
+                        .position(|x| *x == Type::Vector(lanes, element))
+                        .ok_or_else(|| error(r.at, "no type for the shuffled vector"))?;
+                    (Op::ShuffleVector { first, second, mask }, Some(result))
                 }
                 27 => {
                     let (aggregate, t) = body.value_type(r, &mut i)?;

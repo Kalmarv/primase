@@ -460,6 +460,32 @@ impl Builder {
         self.module.functions.append(function, Span::UNDEFINED)
     }
 
+    /// Declare a function with no body, the module's name for an operation the pipeline does (see [`crate::rt`]); one
+    /// that returns a value returns `false`.
+    pub fn declare_operation(
+        &mut self,
+        name: &str,
+        arguments: Vec<naga::FunctionArgument>,
+        returns_bool: bool,
+    ) -> Handle<naga::Function> {
+        let mut function = Function {
+            name: Some(name.to_owned()),
+            arguments,
+            ..Function::default()
+        };
+        if returns_bool {
+            let ty = self.ty_of(Kind::B, 1);
+            function.result = Some(naga::FunctionResult { ty, binding: None });
+            let value = function
+                .expressions
+                .append(Expression::Literal(naga::Literal::Bool(false)), Span::UNDEFINED);
+            function
+                .body
+                .push(Statement::Return { value: Some(value) }, Span::UNDEFINED);
+        }
+        self.module.functions.append(function, Span::UNDEFINED)
+    }
+
     /// Finish a module that has functions and no entry point.
     pub fn finish_functions(self) -> Module {
         assert_eq!(self.blocks.len(), 1, "unclosed control flow (a lifter bug)");

@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 use naga::{ArraySize, Expression as E, GlobalVariable, Handle, LocalVariable, TypeInner};
 use primase_shader::build::{Kind, Val};
 
+use primase_shader::ResourceKind;
+
 use super::{Lift, Lv};
 use crate::Result;
 use crate::module::{Constant, Instruction, Op, Type, TypeId, Value, ValueId};
@@ -14,6 +16,8 @@ use crate::module::{Constant, Instruction, Op, Type, TypeId, Value, ValueId};
 pub(crate) enum Root {
     Local(Handle<LocalVariable>),
     Global(Handle<GlobalVariable>),
+    /// A pointer argument of the function (a ray tracing program's payload or attributes), by argument number.
+    Argument(u32),
     /// dxc's no-op marker globals (`dx.nothing`): loads of them are nothing.
     Nothing,
 }
@@ -65,6 +69,20 @@ impl Lift<'_> {
         }
     }
 
+    /// The kind and width of a value of this type: a scalar, or a vector of up to four lanes.
+    pub(super) fn value_shape(&self, ty: TypeId) -> Result<(Kind, u8)> {
+        match self.m.types.get(ty) {
+            Some(Type::Vector(n, e)) => {
+                let n = u8::try_from(*n)
+                    .ok()
+                    .filter(|n| (2..=4).contains(n))
+                    .map_or_else(|| self.refuse("a vector of this width"), Ok)?;
+                Ok((self.kind_of_type(*e)?, n))
+            }
+            _ => Ok((self.kind_of_type(ty)?, 1)),
+        }
+    }
+
     /// The kind of scalar the memory a pointer reaches holds, when that is known.
     fn memory_kind(&self, root: &Root) -> Option<Kind> {
         match root {
@@ -73,7 +91,7 @@ impl Lift<'_> {
                 None => self.memory.leaf_globals.get(g).copied(),
             },
             Root::Local(l) => self.memory.leaf_locals.get(l).copied(),
-            Root::Nothing => None,
+            Root::Argument(_) | Root::Nothing => None,
         }
     }
 
@@ -83,7 +101,7 @@ impl Lift<'_> {
     }
 
     /// The module global a pointer value is made from, through getelementptrs and casts.
-    fn root_global(&self, v: ValueId) -> Option<ValueId> {
+    pub(super) fn root_global(&self, v: ValueId) -> Option<ValueId> {
         let mut v = v;
         loop {
             // a module value, or a constant of the function's own constants block
@@ -158,7 +176,7 @@ impl Lift<'_> {
     }
 
     /// The naga type of an LLVM type of scalars, vectors, arrays and structures, and its size in bytes.
-    fn naga_type(&mut self, ty: TypeId) -> Result<(Handle<naga::Type>, u32)> {
+    pub(super) fn naga_type(&mut self, ty: TypeId) -> Result<(Handle<naga::Type>, u32)> {
         let (t, size, _) = self.naga_layout(ty, None)?;
         Ok((t, size))
     }
@@ -395,6 +413,7 @@ impl Lift<'_> {
         let mut e = match p.root {
             Root::Local(l) => self.b.local_ptr(l),
             Root::Global(g) => self.b.global_ptr(g),
+            Root::Argument(index) => self.argument_expr(index as usize),
             Root::Nothing => return self.refuse("a pointer to nothing"),
         };
         for s in &p.steps {
@@ -456,20 +475,41 @@ impl Lift<'_> {
                 self.define_result(result, Lv::Pointer(p))
             }
             Op::Load { pointer } => {
+                // a library names its resources by globals; the value a load of one gives is the resource
+                if let Some(resource) = self
+                    .root_global(*pointer)
+                    .and_then(|g| self.setup.resource_of_variable(g))
+                {
+                    let class = match self.setup.kind(resource) {
+                        ResourceKind::ConstantBuffer { .. } => 2,
+                        ResourceKind::Sampler { .. } => 3,
+                        ResourceKind::Storage { .. } => 1,
+                        _ => 0,
+                    };
+                    return self.define_result(
+                        result,
+                        Lv::Handle {
+                            class,
+                            resource,
+                            element: None,
+                        },
+                    );
+                }
                 let Lv::Pointer(p) = self.get(*pointer)? else {
                     return self.refuse("a load of something that is not a pointer");
                 };
                 let ty = result.map(|(_, t)| t).expect("a load has a result");
-                let kind = self.kind_of_type(ty)?;
+                let (kind, width) = self.value_shape(ty)?;
                 if matches!(p.root, Root::Nothing) {
                     let zero = self.b.lit_bits(kind, 0);
+                    let zero = self.b.splat(zero, width);
                     return self.define_result(result, Lv::Scalar(zero));
                 }
                 let e = self.pointer_expr(&p)?;
                 // the memory is read as the kind it holds (an atomic variable by an atomic load), then as the type
                 // the program reads it as
                 let memory = self.memory_kind(&p.root).unwrap_or(kind);
-                let loaded = self.b.load(e, memory, 1);
+                let loaded = self.b.load(e, memory, width);
                 let v = self.b.bitcast_to(loaded, kind);
                 self.define_result(result, Lv::Scalar(v))
             }
@@ -493,7 +533,7 @@ impl Lift<'_> {
                         };
                         match pointee.map(|t| self.m.types[t].clone()) {
                             Some(Type::Pointer(t)) => {
-                                let kind = self.kind_of_type(t)?;
+                                let (kind, _) = self.value_shape(t)?;
                                 self.b.bitcast_to(v, kind)
                             }
                             _ => v,

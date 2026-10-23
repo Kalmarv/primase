@@ -326,6 +326,9 @@ impl Shader {
                 }
                 Op::Select { .. } => "Select".into(),
                 Op::ExtractValue { .. } => "ExtractValue".into(),
+                Op::ExtractElement { .. } => "ExtractElement".into(),
+                Op::InsertElement { .. } => "InsertElement".into(),
+                Op::ShuffleVector { .. } => "ShuffleVector".into(),
                 Op::InsertValue { .. } => "InsertValue".into(),
                 Op::Phi { .. } => "Phi".into(),
                 Op::Return(_) => "Ret".into(),
@@ -694,6 +697,9 @@ impl Shader {
                     Some(v)
                 }
                 Op::InsertValue { .. } => return Err(error(at, "insertvalue")),
+                Op::ExtractElement { .. } | Op::InsertElement { .. } | Op::ShuffleVector { .. } => {
+                    return Err(error(at, "vector element operations"));
+                }
                 Op::Switch { .. }
                 | Op::Unreachable
                 | Op::Alloca { .. }

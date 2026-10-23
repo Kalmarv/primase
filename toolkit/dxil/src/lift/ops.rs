@@ -218,6 +218,8 @@ impl Lift<'_> {
             57 => self.create_handle(inst, args),
             216 => self.annotate_handle(inst, args),
             217 => self.create_handle_from_binding(inst, args),
+            160 => self.create_handle_for_lib(inst, args),
+            141..=159 | 161 | 213 => self.ray_op(inst, code, args),
             218 => self.create_handle_from_heap(inst, args),
             59 => self.cbuffer_load(inst, args),
             60..=65 | 73 | 74 => self.sample(inst, code, args),
@@ -361,7 +363,9 @@ impl Lift<'_> {
                     carried,
                 )
             }
-            primase_shader::IoType::ClipDistances(_) => return self.refuse("an array-typed input"),
+            primase_shader::IoType::ClipDistances(_) | primase_shader::IoType::Memory => {
+                return self.refuse("an array-typed input");
+            }
         };
         let value = Val {
             expr,
@@ -414,21 +418,41 @@ impl Lift<'_> {
 
     /// The value of the input varying that carries a system value the signature does not list.
     pub(super) fn system_input(&mut self, system: SystemValue) -> Result<Val> {
+        self.system_input_row(system, 0)
+    }
+
+    /// The same for a system value that is several varyings, one for each row of a matrix (the label's index).
+    pub(super) fn system_input_row(&mut self, system: SystemValue, row: u32) -> Result<Val> {
         if system == SystemValue::LaneIndex
             && let Some(lane) = self.lane
         {
             let p = self.b.local_ptr(lane);
             return Ok(self.b.load(p, Kind::U, 1));
         }
-        let io = self.setup.io.clone();
-        let Some(index) = io
-            .arguments
-            .iter()
-            .position(|item| self.setup.interface.inputs[item.varyings[0]].system == Some(system))
-        else {
-            return self.refuse(format!("{system:?} has no input"));
+        // a program that is functions takes its system values as arguments named after the varying
+        let (index, ty) = if self.sig.is_some() {
+            let Some(varying) = self
+                .setup
+                .interface
+                .inputs
+                .iter()
+                .position(|v| v.system == Some(system) && v.label.index == row)
+            else {
+                return self.refuse(format!("{system:?} has no input"));
+            };
+            self.input_argument(varying)?
+        } else {
+            let io = self.setup.io.clone();
+            let Some(index) = io
+                .arguments
+                .iter()
+                .position(|item| self.setup.interface.inputs[item.varyings[0]].system == Some(system))
+            else {
+                return self.refuse(format!("{system:?} has no input"));
+            };
+            (index, io.arguments[index].ty)
         };
-        let primase_shader::IoType::Value(carried) = io.arguments[index].ty else {
+        let primase_shader::IoType::Value(carried) = ty else {
             return self.refuse("an array-typed input");
         };
         let expr = self.argument_expr(index);
@@ -500,7 +524,9 @@ impl Lift<'_> {
         let mut parts = Vec::new();
         for item in &io.results {
             let part = match item.ty {
-                primase_shader::IoType::Array(..) => return self.refuse("an array-typed output"),
+                primase_shader::IoType::Array(..) | primase_shader::IoType::Memory => {
+                    return self.refuse("an array-typed output");
+                }
                 primase_shader::IoType::ClipDistances(n) => {
                     let mut components = Vec::new();
                     for &i in &item.varyings {

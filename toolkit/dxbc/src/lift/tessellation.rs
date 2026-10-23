@@ -266,6 +266,7 @@ impl Lift<'_> {
                 }
             }
             IoType::ClipDistances(_) => return self.refuse("clip distances as an argument"),
+            IoType::Memory => return self.refuse("a pointer as an argument"),
         }
         Ok(())
     }

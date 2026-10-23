@@ -16,6 +16,9 @@ pub enum IoType {
     ClipDistances(u32),
     /// An array of this value: a hull or domain program's control points (one per point), a hull program's outputs.
     Array(Value, u32),
+    /// A pointer, in function memory, to a structure the module defines: a ray tracing program's payload or hit
+    /// attributes, whose layout is the shader's own.
+    Memory,
 }
 
 /// One argument or result member.
@@ -63,6 +66,21 @@ pub fn carried(stage: Stage, output: bool, v: &Varying) -> Value {
         Some(SystemValue::GroupIndex | SystemValue::LaneIndex | SystemValue::LaneCount) => {
             (ScalarType::Uint, 1)
         }
+        Some(SystemValue::DispatchRaysIndex | SystemValue::DispatchRaysDimensions) => (ScalarType::Uint, 3),
+        Some(
+            SystemValue::WorldRayOrigin
+            | SystemValue::WorldRayDirection
+            | SystemValue::ObjectRayOrigin
+            | SystemValue::ObjectRayDirection,
+        ) => (ScalarType::Float, 3),
+        Some(SystemValue::RayTMin | SystemValue::RayTCurrent) => (ScalarType::Float, 1),
+        Some(SystemValue::ObjectToWorld | SystemValue::WorldToObject) => (ScalarType::Float, 4),
+        Some(
+            SystemValue::RayFlags
+            | SystemValue::InstanceId
+            | SystemValue::GeometryIndex
+            | SystemValue::HitKind,
+        ) => (ScalarType::Uint, 1),
         Some(SystemValue::Depth | SystemValue::DepthGreaterEqual | SystemValue::DepthLessEqual) => {
             (ScalarType::Float, 1)
         }
@@ -179,6 +197,12 @@ pub struct FunctionSig {
 /// - A geometry program: `main(inputs as arrays of the primitive's vertices, SV_PrimitiveID: u32, SV_GSInstanceID:
 ///   u32) -> Out`, the result each output varying as an array of the most vertices an invocation emits, then
 ///   `SV_VertexCount` (how many were emitted) and `SV_StripStart` (per vertex, 1 where it begins a strip).
+/// - A ray tracing program (ray generation, intersection, any-hit, closest-hit, miss, callable): `main(the ray's
+///   system values it reads, payload, attributes)` returning nothing, `payload` for every stage but ray generation and
+///   intersection, `attributes` for any-hit and closest-hit; the payload and attributes are pointers to structures the
+///   shader defines ([`IoType::Memory`]). What the shader does to the ray tracing pipeline is calls to the module's
+///   functions named by [`crate::rt`] (`TraceRay`, `ReportHit`, `CallShader`, `IgnoreHit`, `AcceptHitAndEndSearch`),
+///   which have no body: they are the pipeline's.
 pub fn stage_functions(interface: &Interface) -> Result<Option<Vec<FunctionSig>>, String> {
     let stage = interface.stage;
     let values = |list: &[Varying], output: bool| -> Vec<FnItem> {
@@ -271,6 +295,34 @@ pub fn stage_functions(interface: &Interface) -> Result<Option<Vec<FunctionSig>>
             }])
         }
         (Stage::Geometry, _) => return Err("a geometry program without its facts".into()),
+        // a ray tracing program: the ray's system values it reads, then the payload (a hit, miss or callable program
+        // has one, `payload`: what the traced ray carries, or a callable's parameter) and the attributes of the hit
+        // (`attributes`, a triangle's barycentrics or what an intersection program reported)
+        (stage, StageFacts::None) if stage.is_ray_tracing() => {
+            let mut arguments = values(&interface.inputs, false);
+            let memory = |name: &str| FnItem {
+                name: name.into(),
+                ty: IoType::Memory,
+                varying: None,
+            };
+            if matches!(
+                stage,
+                Stage::AnyHit | Stage::ClosestHit | Stage::Miss | Stage::Callable
+            ) {
+                arguments.push(memory("payload"));
+            }
+            if matches!(stage, Stage::AnyHit | Stage::ClosestHit) {
+                arguments.push(memory("attributes"));
+            }
+            Some(vec![FunctionSig {
+                name: "main",
+                arguments,
+                result: Vec::new(),
+            }])
+        }
+        (stage, facts) if stage.is_ray_tracing() => {
+            return Err(format!("a {stage:?} program with {facts:?}"));
+        }
         _ => None,
     })
 }

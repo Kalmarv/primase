@@ -52,6 +52,9 @@ pub struct Range {
     pub stride: Option<u32>,
     /// An unordered-access view with a hidden counter (an append or consume buffer, `IncrementCounter`).
     pub counter: bool,
+    /// The module global a library names the resource by (a program of a library makes its handles from the
+    /// global's value).
+    pub variable: Option<crate::module::ValueId>,
 }
 
 fn node<'a>(m: &'a Module, id: MetadataId, at: &str) -> Result<&'a [Option<MetadataId>]> {
@@ -90,12 +93,42 @@ fn named<'a>(m: &'a Module, name: &str) -> Option<&'a [MetadataId]> {
         .map(|(_, v)| v.as_slice())
 }
 
+/// The shader kind a library's entry point states (properties tag 8): the numbers of a program's kind (7 ray
+/// generation to 12 callable, 13 mesh).
+fn library_kind(m: &Module) -> Result<u32> {
+    let entry = node(m, the_entry(m)?, "entry point")?;
+    let Some(properties) = entry.get(4).copied().flatten() else {
+        return Err(error(0, "a library entry point without properties"));
+    };
+    for pair in node(m, properties, "entry point properties")?.chunks(2) {
+        let [tag, value] = pair else {
+            return Err(error(0, "entry point properties: a tag without a value"));
+        };
+        if int(m, *tag, "property tag")? == 8 {
+            return u32::try_from(int(m, *value, "shader kind")?).map_err(|_| error(0, "shader kind"));
+        }
+    }
+    Err(error(0, "a library entry point that states no shader kind"))
+}
+
+/// The one entry point's record. A library also has a record with no function, which holds its resources.
+fn the_entry(m: &Module) -> Result<MetadataId> {
+    let entries = named(m, "dx.entryPoints").ok_or_else(|| error(0, "no dx.entryPoints"))?;
+    let mut with_function = Vec::new();
+    for &entry in entries {
+        if operand(node(m, entry, "entry point")?, 0, "entry point")?.is_some() {
+            with_function.push(entry);
+        }
+    }
+    match with_function.as_slice() {
+        [entry] => Ok(*entry),
+        _ => Err(error(0, "not exactly one entry point")),
+    }
+}
+
 /// The entry point's function value.
 pub fn entry(m: &Module) -> Result<crate::module::ValueId> {
-    let entries = named(m, "dx.entryPoints").ok_or_else(|| error(0, "no dx.entryPoints"))?;
-    let [entry] = entries else {
-        return Err(error(0, "not exactly one entry point"));
-    };
+    let entry = &the_entry(m)?;
     match operand(node(m, *entry, "entry point")?, 0, "entry point")?.and_then(|i| m.metadata.get(i)) {
         Some(Metadata::Value { value, .. }) => Ok(*value),
         _ => Err(error(0, "entry point names no function")),
@@ -105,10 +138,7 @@ pub fn entry(m: &Module) -> Result<crate::module::ValueId> {
 /// The entry point's thread group size (`numthreads`): the value of the properties' tag 4. `None` when the entry
 /// point states none (every stage but compute).
 pub fn num_threads(m: &Module) -> Result<Option<[u32; 3]>> {
-    let entries = named(m, "dx.entryPoints").ok_or_else(|| error(0, "no dx.entryPoints"))?;
-    let [entry] = entries else {
-        return Err(error(0, "not exactly one entry point"));
-    };
+    let entry = &the_entry(m)?;
     let entry = node(m, *entry, "entry point")?;
     let Some(properties) = entry.get(4).copied().flatten() else {
         return Ok(None);
@@ -162,10 +192,7 @@ pub struct HullState {
 
 /// The value of a properties tag of the entry point, if the entry point states it.
 fn entry_property(m: &Module, wanted: i64) -> Result<Option<&[Option<MetadataId>]>> {
-    let entries = named(m, "dx.entryPoints").ok_or_else(|| error(0, "no dx.entryPoints"))?;
-    let [entry] = entries else {
-        return Err(error(0, "not exactly one entry point"));
-    };
+    let entry = &the_entry(m)?;
     let entry = node(m, *entry, "entry point")?;
     let Some(properties) = entry.get(4).copied().flatten() else {
         return Ok(None);
@@ -225,10 +252,7 @@ pub fn domain_state(m: &Module) -> Result<(u32, u32)> {
 }
 
 fn signature_lists(m: &Module) -> Result<[Vec<Element>; 3]> {
-    let entries = named(m, "dx.entryPoints").ok_or_else(|| error(0, "no dx.entryPoints"))?;
-    let [entry] = entries else {
-        return Err(error(0, "not exactly one entry point"));
-    };
+    let entry = &the_entry(m)?;
     let entry = node(m, *entry, "entry point")?;
     let Some(signatures) = operand(entry, 2, "entry point")? else {
         return Ok([Vec::new(), Vec::new(), Vec::new()]);
@@ -311,6 +335,18 @@ fn tags(m: &Module, list: Option<MetadataId>) -> Result<(Option<u32>, Option<u32
 }
 
 /// The bound resource ranges of `dx.resources` (SRVs, UAVs, constant buffers, samplers), with their names.
+/// The module global a resource record's variable names: the global itself, or the one it is a cast of.
+fn variable_of(m: &Module, id: Option<MetadataId>) -> Option<crate::module::ValueId> {
+    let Some(Metadata::Value { value, .. }) = id.and_then(|i| m.metadata.get(i)) else {
+        return None;
+    };
+    match m.values.get(*value)? {
+        Value::Constant(Constant::Cast { value, .. }) => Some(*value),
+        Value::Global { .. } => Some(*value),
+        _ => None,
+    }
+}
+
 pub fn ranges(m: &Module) -> Result<Vec<(Range, String, Option<TypeId>)>> {
     let Some([resources]) = named(m, "dx.resources") else {
         return Ok(Vec::new());
@@ -360,6 +396,7 @@ pub fn ranges(m: &Module) -> Result<Vec<(Range, String, Option<TypeId>)>> {
                     counter: class == 1
                         && r.get(8).copied().flatten().is_some()
                         && int(m, operand(r, 8, at)?, at)? != 0,
+                    variable: variable_of(m, operand(r, 1, at)?),
                 },
                 string(m, operand(r, 2, at)?),
                 ty,
@@ -850,15 +887,25 @@ pub(crate) fn resource_of(
 /// container has one.
 pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>) -> Result<Interface> {
     let part = |kind: &[u8; 4]| chunks.iter().find(|c| &c.kind == kind).map(|c| c.data);
-    let stage =
-        match crate::program(part(b"DXIL").ok_or_else(|| error(0, "no DXIL part"))?)?.program_version >> 16 {
-            0 => Stage::Pixel,
-            1 => Stage::Vertex,
-            3 => Stage::Hull,
-            4 => Stage::Domain,
-            5 => Stage::Compute,
-            kind => return Err(error(0, format!("program kind {kind} is not mapped"))),
-        };
+    let kind = crate::program(part(b"DXIL").ok_or_else(|| error(0, "no DXIL part"))?)?.program_version >> 16;
+    // a library states its entry point's own kind
+    let kind = if kind == 6 { library_kind(program)? } else { kind };
+    let stage = match kind {
+        0 => Stage::Pixel,
+        1 => Stage::Vertex,
+        3 => Stage::Hull,
+        4 => Stage::Domain,
+        5 => Stage::Compute,
+        7 => Stage::RayGeneration,
+        8 => Stage::Intersection,
+        9 => Stage::AnyHit,
+        10 => Stage::ClosestHit,
+        11 => Stage::Miss,
+        12 => Stage::Callable,
+        13 => return Err(error(0, "mesh shader programs are not lifted")),
+        14 => return Err(error(0, "amplification shader programs are not lifted")),
+        kind => return Err(error(0, format!("program kind {kind} is not mapped"))),
+    };
     let source = named.unwrap_or(program);
     let mut resources = Vec::new();
     for (i, (range, name, ty)) in ranges(source)?.into_iter().enumerate() {

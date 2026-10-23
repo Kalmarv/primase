@@ -69,4 +69,33 @@ pub enum Stage {
     Domain,
     /// A geometry program.
     Geometry,
+    /// A ray generation program: the start of a ray tracing dispatch, one invocation per dispatched ray position.
+    RayGeneration,
+    /// An intersection program: tests a ray against a procedural primitive and reports hits.
+    Intersection,
+    /// An any-hit program: decides whether a candidate hit counts.
+    AnyHit,
+    /// A closest-hit program: runs for the nearest accepted hit of a traced ray.
+    ClosestHit,
+    /// A miss program: runs when a traced ray hits nothing.
+    Miss,
+    /// A callable program: run by another ray tracing program (`CallShader`).
+    Callable,
+}
+
+impl Stage {
+    /// Whether this is one of the ray tracing pipeline's stages: a program of it is functions that read the ray's
+    /// system values and carry a payload, not an entry point (see [`crate::shader`]'s `stage_functions` in
+    /// primase-shader).
+    pub fn is_ray_tracing(self) -> bool {
+        matches!(
+            self,
+            Self::RayGeneration
+                | Self::Intersection
+                | Self::AnyHit
+                | Self::ClosestHit
+                | Self::Miss
+                | Self::Callable
+        )
+    }
 }

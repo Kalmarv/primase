@@ -50,7 +50,7 @@ fn varying(out: &mut String, direction: &str, v: &Varying) {
 }
 
 pub(super) fn text(p: &Program) -> Result<String, Error> {
-    let wgsl = crate::emit::wgsl_functions(p)?;
+    let wgsl = crate::emit::module_text(p)?;
     let mut out = String::new();
     let _ = writeln!(out, "// primase shader program v{}", super::VERSION);
     let _ = writeln!(
@@ -63,6 +63,12 @@ pub(super) fn text(p: &Program) -> Result<String, Error> {
             Stage::Hull => "hull",
             Stage::Domain => "domain",
             Stage::Geometry => "geometry",
+            Stage::RayGeneration => "ray_generation",
+            Stage::Intersection => "intersection",
+            Stage::AnyHit => "any_hit",
+            Stage::ClosestHit => "closest_hit",
+            Stage::Miss => "miss",
+            Stage::Callable => "callable",
             _ => "other",
         },
         p.entry

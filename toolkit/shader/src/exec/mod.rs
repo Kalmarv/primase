@@ -48,10 +48,19 @@ impl Executable {
             .map_err(error)?
             .is_some()
         {
-            return Err(error(format!(
-                "a {:?} program is functions, not an entry point: the executor does not run it yet",
-                program.stage
-            )));
+            return Err(error(if program.stage.is_ray_tracing() {
+                format!(
+                    "a {:?} program does the ray tracing pipeline's work through operations only the pipeline has \
+                     ({}): the executor has no pipeline to run it in",
+                    program.stage,
+                    crate::rt::OPERATIONS.join(", ")
+                )
+            } else {
+                format!(
+                    "a {:?} program is functions, not an entry point: the executor does not run it yet",
+                    program.stage
+                )
+            }));
         }
         let info = program.validate().map_err(|problems| {
             error(
@@ -70,6 +79,14 @@ impl Executable {
     /// invocation. The registers it takes are its arguments in order, an array argument (the control points) as one
     /// register per element; the members of its result are the members of [`crate::FunctionSig::result`].
     pub fn function(program: &Program, name: &str) -> Result<Self, Error> {
+        if program.stage.is_ray_tracing() {
+            return Err(error(format!(
+                "a {:?} program does the ray tracing pipeline's work through operations only the pipeline has \
+                 ({}): the executor has no pipeline to run it in",
+                program.stage,
+                crate::rt::OPERATIONS.join(", ")
+            )));
+        }
         let info = program.validate().map_err(|problems| {
             error(
                 problems
