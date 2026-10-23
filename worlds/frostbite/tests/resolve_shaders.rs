@@ -13,9 +13,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_compress::oodle::{Oodle, Version};
+use primase_core::World;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::shader::{ConstantRole, InputRole, ShaderBinding, TextureSource};
-use primase_core::{Component, World};
 use primase_frostbite::MESHSET;
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbiteMaterial, FrostbitePermutation, FrostbiteProgram};
@@ -24,6 +24,11 @@ use primase_frostbite::passes::ResolveFrostbiteShaders;
 use primase_frostbite::permutation::Kind as PermutationKind;
 use primase_frostbite::program::Scope;
 use primase_testdata::{Game, Tool, install_file, tool};
+
+/// A verify message with its digits taken out, so equal rules count together.
+fn cut_numbers(why: &str) -> String {
+    why.chars().filter(|c| !c.is_ascii_digit()).collect()
+}
 
 #[test]
 fn the_pass_binds_the_stock_materials_it_can_choose() {
@@ -50,6 +55,7 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
     let mut constants: BTreeMap<String, (usize, u64)> = BTreeMap::new();
     // per bound material: variants, stages, constants and the bytes they cover
     let mut sizes: Vec<[u64; 4]> = Vec::new();
+    let mut violations: BTreeMap<String, (usize, String)> = BTreeMap::new();
     // the engine's lists (b0, b4) as signatures of (name, offset, size), distinct per list, and the constants that
     // remain when adjacent constants of one resource with the same Unknown reason are merged into runs
     let mut engine_lists: std::collections::BTreeSet<Vec<(Option<String>, u32, u32)>> =
@@ -83,6 +89,13 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
             meshsets += 1;
         }
         ResolveFrostbiteShaders.run(&mut w, &mut log).unwrap();
+        // every component of the world verifies, counted rather than stopped at (shaders and bindings both)
+        for (component, _, why) in w.verify_components() {
+            let slot = violations
+                .entry(format!("{component}: {}", cut_numbers(&why)))
+                .or_insert((0, format!("{}: {why}", bundle.name)));
+            slot.0 += 1;
+        }
         for (_, m) in w
             .iter::<FrostbiteMaterial>()
             .filter(|(_, m)| !m.programs.is_empty())
@@ -110,11 +123,9 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
             }
             *drawing_per_row.entry(drawing).or_default() += 1;
         }
-        for (e, b) in w.iter::<ShaderBinding>() {
+        for (_, b) in w.iter::<ShaderBinding>() {
             bound += 1;
             let mut size = [0u64; 4];
-            b.verify(e, &w)
-                .unwrap_or_else(|why| panic!("{} does not verify: {why}", bundle.name));
             size[0] = b
                 .stages
                 .iter()
@@ -202,6 +213,13 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
         println!("  {n:>7}  {k}");
     }
     println!("texture slots by source: {textures:?}");
+    for (what, (n, example)) in &violations {
+        println!(
+            "VERIFY x{n}: {what}
+    example: {example}"
+        );
+    }
+    println!("{} kinds of verify failure", violations.len());
     println!(
         "engine constants {engine_constants} -> {engine_runs} runs; all constants {} -> {all_runs} with Unknown runs merged; {} distinct engine lists (name, offset, size) over {} stages",
         sizes.iter().map(|s| s[2]).sum::<u64>(),
@@ -229,6 +247,11 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
         "materials with a program row, by the programs of the row that draw pixels: {drawing_per_row:?}"
     );
     println!("drawing programs by listed/distinct/layouts permutations: {permutations_per_program:?}");
+    assert!(
+        violations.is_empty(),
+        "{} kinds of verify failure",
+        violations.len()
+    );
     // every material is bound or counted under a reason
     let counted: u64 = log
         .counts

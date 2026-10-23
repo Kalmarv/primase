@@ -62,6 +62,15 @@ fn tally(world: &World, game: &str, scene: &str, materials: usize, log: &PassLog
     let mut state_fields: BTreeMap<String, u64> = BTreeMap::new();
     let (mut bound, mut state_default, mut state_stated) = (0u64, 0u64, 0u64);
     let mut variants = 0u64;
+    // the shaders' interfaces verify too (the resource, register and colour-output rules), counted with the bindings'
+    for (component, _, why) in world.verify_components() {
+        if component == "core.shader" {
+            bump(
+                &mut state_fields,
+                format!("SHADER FAILS VERIFY: {}", reason(&why)),
+            );
+        }
+    }
     for (e, b) in world.iter::<ShaderBinding>() {
         if let Err(why) = b.verify(e, world) {
             bump(
