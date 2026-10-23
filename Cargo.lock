@@ -910,6 +910,7 @@ name = "primase-checks"
 version = "0.1.0"
 dependencies = [
  "meshopt",
+ "primase-anvil",
  "primase-compress",
  "primase-core",
  "primase-fromsoft",
@@ -918,7 +919,9 @@ dependencies = [
  "primase-image",
  "primase-lighting",
  "primase-meshops",
+ "primase-monogame",
  "primase-reskate",
+ "primase-stuntboost",
  "primase-testdata",
  "primase-unity",
  "primase-web",

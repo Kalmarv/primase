@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dev-dependencies]
+primase-anvil.workspace = true
 primase-core.workspace = true
 primase-fromsoft.workspace = true
 primase-gltf.workspace = true
@@ -17,6 +18,8 @@ primase-image.workspace = true
 primase-lighting.workspace = true
 primase-meshops.workspace = true
 primase-reskate.workspace = true
+primase-stuntboost.workspace = true
+primase-monogame.workspace = true
 primase-unity.workspace = true
 primase-web = { workspace = true, features = ["fixture"] }
 primase-compress.workspace = true
