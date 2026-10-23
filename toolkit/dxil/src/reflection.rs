@@ -212,6 +212,54 @@ fn entry_property(m: &Module, wanted: i64) -> Result<Option<&[Option<MetadataId>
     Ok(None)
 }
 
+/// What a geometry program's entry point states (the properties' tag 1): the primitive it reads, how many vertices it
+/// emits at most, the streams it writes, what its stream makes and how many invocations run for a primitive. Only stream 0
+/// is carried: another stream is refused by name.
+pub fn geometry_facts(m: &Module) -> Result<primase_shader::GeometryFacts> {
+    use primase_shader::{GeometryFacts, GsInput, GsOutput};
+    let state = entry_property(m, 1)?.ok_or_else(|| error(0, "a geometry program without its state"))?;
+    let field = |k: usize| -> Result<u32> {
+        u32::try_from(int(m, operand(state, k, "geometry state")?, "geometry state")?)
+            .map_err(|_| error(0, "geometry state field"))
+    };
+    let (input, vertices, streams, topology, instances) =
+        (field(0)?, field(1)?, field(2)?, field(3)?, field(4)?);
+    if streams != 1 {
+        return Err(error(
+            0,
+            format!("a geometry program that writes streams {streams:#b} (only stream 0 is lifted)"),
+        ));
+    }
+    Ok(GeometryFacts {
+        input: match input {
+            1 => GsInput::Point,
+            2 => GsInput::Line,
+            3 => GsInput::Triangle,
+            6 => GsInput::LineAdjacency,
+            7 => GsInput::TriangleAdjacency,
+            other => {
+                return Err(error(
+                    0,
+                    format!("geometry input primitive {other} is not mapped"),
+                ));
+            }
+        },
+        output: match topology {
+            1 => GsOutput::PointList,
+            3 => GsOutput::LineStrip,
+            5 => GsOutput::TriangleStrip,
+            other => {
+                return Err(error(
+                    0,
+                    format!("geometry output topology {other} is not mapped"),
+                ));
+            }
+        },
+        max_vertices: vertices,
+        instances: instances.max(1),
+    })
+}
+
 /// A hull program's patch state.
 pub fn hull_state(m: &Module) -> Result<HullState> {
     let state = entry_property(m, 3)?.ok_or_else(|| error(0, "a hull program without its patch state"))?;
@@ -893,6 +941,7 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
     let stage = match kind {
         0 => Stage::Pixel,
         1 => Stage::Vertex,
+        2 => Stage::Geometry,
         3 => Stage::Hull,
         4 => Stage::Domain,
         5 => Stage::Compute,
@@ -984,6 +1033,7 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
                 patch_constants: patch(false)?,
             })
         }
+        Stage::Geometry => StageFacts::Geometry(geometry_facts(program)?),
         stage if stage.is_ray_tracing() => {
             let function = entry(program)?;
             let export = program

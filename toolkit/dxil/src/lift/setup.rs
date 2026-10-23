@@ -130,10 +130,10 @@ impl Setup {
         let mut interface = reflection::reflection(chunks, m, named.as_ref())?;
         if !matches!(
             interface.stage,
-            Stage::Pixel | Stage::Vertex | Stage::Compute | Stage::Hull | Stage::Domain
+            Stage::Pixel | Stage::Vertex | Stage::Compute | Stage::Hull | Stage::Domain | Stage::Geometry
         ) && !interface.stage.is_ray_tracing()
         {
-            return Err(error(0, "geometry programs are not lifted"));
+            return Err(error(0, format!("{:?} programs are not lifted", interface.stage)));
         }
         let (input_elements, output_elements) = reflection::elements(m)?;
         let patch_elements = reflection::patch_elements(m)?;

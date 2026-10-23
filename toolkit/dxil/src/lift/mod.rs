@@ -76,6 +76,7 @@ pub fn lift(container: &[u8]) -> Result<Program> {
         match part.program_version >> 16 {
             0 => "ps",
             1 => "vs",
+            2 => "gs",
             3 => "hs",
             4 => "ds",
             6..=12 => "lib",
@@ -176,6 +177,8 @@ pub(crate) struct Lift<'m> {
     coverage: Option<Handle<LocalVariable>>,
     /// The lane number of a thread group with no lane-number built-in, made at the start of the program.
     lane: Option<Handle<LocalVariable>>,
+    /// A geometry program's emitted vertices so far.
+    gs: Option<stages::GsState>,
     /// The ray tracing pipeline's operations the program calls.
     operations: raytracing::Operations,
     resources: resources::Resources,
@@ -219,6 +222,7 @@ impl<'m> Lift<'m> {
             depth: None,
             coverage: None,
             lane: None,
+            gs: None,
             operations: raytracing::Operations::default(),
             resources: resources::Resources::default(),
             memory: memory::Memory::default(),
@@ -475,6 +479,10 @@ impl<'m> Lift<'m> {
             self.declare_resources()?;
             self.declare_memory()?;
             self.resources.globals_made = true;
+        }
+        if let StageFacts::Geometry(g) = &self.setup.interface.facts {
+            let max = g.max_vertices;
+            self.start_geometry(max)?;
         }
         self.define_phis()?;
         self.structure_and_lower()?;

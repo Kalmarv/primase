@@ -235,6 +235,8 @@ impl Lift<'_> {
             104 => self.load_patch_constant(inst, args),
             105 => self.domain_location(inst, args),
             106 => self.store_patch_constant(args),
+            97..=99 => self.stream_op(code, args),
+            100 => self.patch_id(inst, "SV_GSInstanceID"),
             107 => self.patch_id(inst, "SV_OutputControlPointID"),
             108 => self.patch_id(inst, "SV_PrimitiveID"),
             78 => self.buffer_atomic(inst, args),
