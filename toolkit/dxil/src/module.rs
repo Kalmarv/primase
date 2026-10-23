@@ -701,8 +701,9 @@ impl Module {
                     }
                     let mut args = Vec::with_capacity(params.len());
                     for p in &params {
-                        let (a, at) = body.value_type(r, &mut i)?;
-                        if at != *p {
+                        // a fixed parameter carries no type, even for a value defined later in the layout
+                        let a = body.value(r, &mut i)?;
+                        if a < body.next() && body.m.value_types[a] != *p {
                             return Err(error(r.at, "call argument type"));
                         }
                         args.push(a);

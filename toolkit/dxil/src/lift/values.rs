@@ -196,6 +196,12 @@ impl Lift<'_> {
                 self.define_result(result, Lv::Scalar(r))
             }
             Op::Cast { op, value } => {
+                // a pointer cast (dxc casts a local array to bytes for its lifetime markers) keeps the pointer
+                if *op == CastOp::BitCast
+                    && let Lv::Pointer(p) = self.get(*value)?
+                {
+                    return self.define_result(result, Lv::Pointer(p));
+                }
                 let v = self.scalar(*value)?;
                 let to = result.map(|(_, t)| t).expect("a cast has a result");
                 let r = self.cast(*op, v, to)?;

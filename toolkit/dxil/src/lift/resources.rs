@@ -13,7 +13,7 @@ use primase_shader::{
     Access, BufferKind, ResourceId, ResourceKind, SampleType, ScalarType, StorageTarget, TextureDim,
 };
 
-use super::setup::{const_int, dx_opcode};
+use super::setup::{binding_of, const_int, dx_opcode};
 use super::{Lift, Lv};
 use crate::Result;
 use crate::module::{Instruction, Op, ValueId};
@@ -56,12 +56,20 @@ impl Lift<'_> {
         let Op::Call { function, args } = &inst.op else {
             return None;
         };
-        if dx_opcode(self.m, self.f, *function, args)? != 57 {
-            return None;
+        match dx_opcode(self.m, self.f, *function, args)? {
+            57 => {
+                let class = const_int(self.m, self.f, args[1])?;
+                let id = const_int(self.m, self.f, args[2])?;
+                self.setup.resource(class as u8, id as u32)
+            }
+            217 => {
+                let (class, lower, space, _) = binding_of(self.m, self.f, args[1], args[2])?;
+                self.setup.resource_by_binding(class, lower, space)
+            }
+            // a handle annotated with its properties is the same handle
+            216 => self.handle_of(args[1]),
+            _ => None,
         }
-        let class = const_int(self.m, self.f, args[1])?;
-        let id = const_int(self.m, self.f, args[2])?;
-        self.setup.resource(class as u8, id as u32)
     }
 
     /// Scan the program for how it uses each resource, before the globals are made.
@@ -278,6 +286,29 @@ impl Lift<'_> {
                 resource,
             },
         )
+    }
+
+    /// `CreateHandleFromBinding(binding, index, non-uniform)` (Shader Model 6.6): the resource of a constant binding.
+    pub(super) fn create_handle_from_binding(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
+        let Some((class, lower, space, index)) = binding_of(self.m, self.f, args[1], args[2]) else {
+            return self.refuse("a handle of a binding that is not constant");
+        };
+        if index != 0 {
+            return self.refuse("a handle at an index into a resource array");
+        }
+        let Some(resource) = self.setup.resource_by_binding(class, lower, space) else {
+            return self.refuse("a handle of an undeclared binding");
+        };
+        self.define_result(inst.result, Lv::Handle { class, resource })
+    }
+
+    /// `AnnotateHandle(handle, properties)`: the handle itself; the properties repeat what the resource declares.
+    pub(super) fn annotate_handle(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
+        let handle = self.get(args[1])?;
+        if !matches!(handle, Lv::Handle { .. }) {
+            return self.refuse("an annotation of something that is not a handle");
+        }
+        self.define_result(inst.result, handle)
     }
 
     fn global_of(&self, resource: usize) -> Handle<GlobalVariable> {

@@ -23,6 +23,35 @@ pub(super) fn const_int(m: &Module, f: &Function, v: ValueId) -> Option<i64> {
     }
 }
 
+/// The range a `CreateHandleFromBinding` names: its class, lower bound and register space (the binding constant
+/// `{ lower, upper, space, class }`), and the offset into the range (the call's index is the register itself).
+pub(super) fn binding_of(
+    m: &Module,
+    f: &Function,
+    bind: ValueId,
+    index: ValueId,
+) -> Option<(u8, u32, u32, u32)> {
+    let value = if bind < f.first {
+        m.values.get(bind)?
+    } else {
+        f.locals.get(bind - f.first)?
+    };
+    // a zero binding (register 0 of space 0, a shader resource) is stored as the null constant
+    let field = |k: usize| match value {
+        Value::Constant(Constant::Null) => Some(0),
+        Value::Constant(Constant::Aggregate(items)) => const_int(m, f, *items.get(k)?),
+        _ => None,
+    };
+    Some((
+        u8::try_from(field(3)?).ok()?,
+        u32::try_from(field(0)?).ok()?,
+        u32::try_from(field(2)?).ok()?,
+        u32::try_from(const_int(m, f, index)?)
+            .ok()?
+            .checked_sub(u32::try_from(field(0)?).ok()?)?,
+    ))
+}
+
 /// The `dx.op` opcode a call makes: the callee is a `dx.op.*` declaration and the first argument a constant.
 pub(super) fn dx_opcode(m: &Module, f: &Function, function: ValueId, args: &[ValueId]) -> Option<u64> {
     if !m.name(function)?.starts_with("dx.op.") {
@@ -62,6 +91,7 @@ impl Setup {
         let mut cells_out: BTreeSet<(u32, u8)> = BTreeSet::new();
         let mut system_out: BTreeSet<u8> = BTreeSet::new();
         let mut used_ranges: BTreeSet<(u8, u32)> = BTreeSet::new();
+        let mut used_bindings: BTreeSet<(u8, u32, u32)> = BTreeSet::new();
         for inst in &entry.instructions {
             let Op::Call { function, args } = &inst.op else {
                 continue;
@@ -115,6 +145,15 @@ impl Setup {
                         return Err(error(inst.at, "a handle of a computed range"));
                     }
                 }
+                217 => {
+                    let Some((class, lower, space, index)) = binding_of(m, entry, args[1], args[2]) else {
+                        return Err(error(inst.at, "a handle of a binding that is not constant"));
+                    };
+                    if index != 0 {
+                        return Err(error(inst.at, "a handle at an index into a resource array"));
+                    }
+                    used_bindings.insert((class, lower, space));
+                }
                 _ => {}
             }
         }
@@ -141,7 +180,9 @@ impl Setup {
         let mut resources = Vec::new();
         let mut ranges = Vec::new();
         for (original, range) in interface.resources.drain(..).zip(program_ranges) {
-            if !used_ranges.contains(&(range.class, range.id)) {
+            if !used_ranges.contains(&(range.class, range.id))
+                && !used_bindings.contains(&(range.class, range.lower, range.space))
+            {
                 continue;
             }
             if original.count != 1 {
@@ -177,6 +218,13 @@ impl Setup {
     }
     pub(super) fn output_cell(&self, register: u32, lane: u8) -> Option<(usize, u8)> {
         cell(&self.interface.outputs, register, lane)
+    }
+
+    /// The kept resource of a binding's class, lower bound and register space.
+    pub(super) fn resource_by_binding(&self, class: u8, lower: u32, space: u32) -> Option<usize> {
+        self.ranges
+            .iter()
+            .position(|r| r.class == class && r.lower == lower && r.space == space)
     }
 
     /// The kept resource of a handle's class and range id.

@@ -54,7 +54,7 @@ fn run(name: &str, args: &[[u32; 4]], constants: &[(u32, Vec<[u32; 4]>)]) -> Out
     out
 }
 
-const BOTH: [&str; 2] = ["", ".od"];
+const BOTH: [&str; 3] = ["", ".od", ".66"];
 
 fn fixture(base: &str, variant: &str) -> String {
     format!("{base}{variant}.dxil")

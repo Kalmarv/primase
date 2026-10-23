@@ -3,7 +3,7 @@
 //! DXIL part), lifted to the shader representation where it is a vertex or pixel program, and the census printed
 //! (effects, programs per stage, shader models, refusals by reason). The reader fails on a file it cannot read to
 //! its end; the lift's refusals are counted, not failures, but a program that lifts must validate and write WGSL.
-//! Needs `PRIMASE_GTA_SHADERS`.
+//! Needs `PRIMASE_GTA_SHADERS`, a folder of Legacy's `.fxc` files (the Enhanced edition has none: see `sgd2.rs`).
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

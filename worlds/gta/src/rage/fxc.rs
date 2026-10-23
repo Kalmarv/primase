@@ -1,4 +1,5 @@
-//! RAGE's compiled effect files (`.fxc`, magic `rgxe`) as GTA V stores them: the effect's preset parameters, the
+//! RAGE's compiled effect files (`.fxc`, magic `rgxe`) as GTA V Legacy stores them (the Enhanced edition ships no
+//! `.fxc`: its programs are one `SGD2` container, [`super::sgd2`]; a census of this reader needs a Legacy install): the effect's preset parameters, the
 //! shader programs of its six stages (each a Direct3D container, DXBC on the Legacy edition and DXIL on Enhanced), the
 //! constant buffers and variables they use, and the techniques that pick programs for a draw. No I/O: the reader
 //! hands over bytes.

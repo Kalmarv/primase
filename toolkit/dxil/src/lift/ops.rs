@@ -15,6 +15,10 @@ impl Lift<'_> {
     pub(crate) fn call(&mut self, inst: &Instruction, function: ValueId, args: &[ValueId]) -> Result<()> {
         let Some(code) = dx_opcode(self.m, self.f, function, args) else {
             let name = self.m.name(function).unwrap_or("a function");
+            // the compiler's lifetime markers of locals say nothing the program does
+            if name.starts_with("llvm.lifetime.") {
+                return Ok(());
+            }
             return self.refuse(format!("a call of {name}"));
         };
         let result = inst.result;
@@ -207,11 +211,13 @@ impl Lift<'_> {
                 scalar!(r)
             }
             57 => self.create_handle(inst, args),
+            216 => self.annotate_handle(inst, args),
+            217 => self.create_handle_from_binding(inst, args),
             59 => self.cbuffer_load(inst, args),
             60..=65 | 73 | 74 => self.sample(inst, code, args),
             66 => self.texture_load(inst, args),
             67 => self.texture_store(args),
-            68 => self.buffer_load(inst, args),
+            68 | 139 => self.buffer_load(inst, args),
             72 => self.get_dimensions(inst, args),
             82 => {
                 let c = self.scalar(args[1])?;
