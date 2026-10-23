@@ -64,6 +64,9 @@ pub enum ObjectParameter {
     WorldViewProjection,
     /// A colour the instance tints the surface with.
     InstanceColour,
+    /// The scale (`xy`) and offset (`zw`) a model's texture coordinate set `n` is drawn with: the engine feeds one
+    /// value per model for each set, a scroll that animates some models (water, flags).
+    TextureScroll(u8),
 }
 
 /// A value of the frame being drawn.

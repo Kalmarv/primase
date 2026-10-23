@@ -106,6 +106,13 @@ fn evaluation(e: primase_shader::Error) -> crate::Error {
     invalid("layer bake", e.at, e.detail)
 }
 
+/// The policy a consumer counts when it freezes a model's texture scroll ([`ObjectParameter::TextureScroll`]) to the
+/// identity (scale one, offset zero, in each of the four sets): a capture of the running game (Sekiro 1.06, a castle
+/// interior, a hook on its D3D11 contexts) found the vertex program's `cbTexScroll` to be that, in all 40,744 layered
+/// draws (33 vertex programs, 61 pixel programs) over 88 frames; no scrolling model (water, flags) was in view, so the
+/// value of an animated model is not observed.
+pub const TEXTURE_SCROLL_POLICY: &str = "texture scroll frozen to the identity: 40,744 layered draws in a Sekiro capture all identity; animated models unobserved";
+
 /// What a static bake freezes of the engine's per-view, per-frame and per-object values: the roles a binding states
 /// ([`ConstantRole`]) and never values. These are the bake's choices, reported as policies when a binding reads them.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -126,6 +133,8 @@ pub struct FrozenFrame {
     pub world: [f32; 12],
     /// `Object(InstanceColour)`: white.
     pub instance_colour: [f32; 4],
+    /// `Object(TextureScroll(n))`: the identity, scale one and offset zero ([`TEXTURE_SCROLL_POLICY`]).
+    pub texture_scroll: [[f32; 4]; 4],
 }
 impl FrozenFrame {
     /// The static bake's frame, its global time `time` seconds.
@@ -141,6 +150,7 @@ impl FrozenFrame {
             inverse_view_projection,
             world: [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.],
             instance_colour: [1.; 4],
+            texture_scroll: [[1., 1., 0., 0.]; 4],
         }
     }
 }
@@ -284,6 +294,14 @@ impl Prepared {
                 }
                 ConstantRole::Object(ObjectParameter::World) => bits(&frame.world),
                 ConstantRole::Object(ObjectParameter::InstanceColour) => bits(&frame.instance_colour),
+                ConstantRole::Object(ObjectParameter::TextureScroll(set)) => {
+                    policies.insert(TEXTURE_SCROLL_POLICY.into(), 1);
+                    let scroll = frame
+                        .texture_scroll
+                        .get(usize::from(*set))
+                        .ok_or_else(|| invalid("layer binding", 0, "a texture scroll of a fifth set"))?;
+                    bits(scroll)
+                }
                 ConstantRole::Frame(FrameParameter::AlbedoTint) => bits(&frame.albedo_tint),
                 ConstantRole::Frame(FrameParameter::ColourSlot) => bits(&[frame.colour_slot]),
                 ConstantRole::Frame(FrameParameter::Time) => {
