@@ -184,7 +184,11 @@ pub trait Pass: Send + Sync {
     /// Names whose values it edits in place, and resources it writes (replaced, also by removing and inserting again,
     /// or borrowed with [`World::resource_mut`]). The pass manager checks the resources; an in-place edit of a
     /// component's value on an entity that keeps it (`get_mut`, or [`World::insert`] over the value) is declared here
-    /// and not checked: seeing it would take a controlled editing interface, later work. Adding a name to an entity, taking one away and despawning are checked entity by entity
+    /// and not checked: seeing it would take a controlled editing interface, later work. What the gap costs: a pass that
+    /// edits a value in place without declaring it here is never named, in any build, and its edit can make a plan's
+    /// reasoning about that name wrong; one that leaves an invalid value there is named at the pass in a build with the
+    /// pass checks, and in a release build without them only by the verifier that runs before the writer, which names the
+    /// entity but not the pass. Adding a name to an entity, taking one away and despawning are checked entity by entity
     /// against [`Pass::provides`], [`Pass::removes`] and [`Pass::despawns_entities`].
     fn modifies(&self) -> &[&'static str] {
         &[]
@@ -1153,6 +1157,8 @@ impl PassManager {
     /// Unity level (16,000 placements, 12 passes, release): the verifier 0.26 s and the declaration diff another
     /// 0.46 s, against 1.6 s of passes. What a pass's names do across the whole world is checked either way, and a
     /// conversion ([`PassManager::convert`]) verifies the reader's output and the world before its writer either way.
+    /// The in-place edits of values on entities that keep the name are not in the declaration diff in any build
+    /// ([`Pass::modifies`]); only the verifier sees their result, and only after the pass when the checks are on.
     pub fn with_pass_checks(mut self, on: bool) -> Self {
         self.pass_checks = on;
         self

@@ -78,6 +78,14 @@ impl Component for Transform {
     }
 }
 
+/// A basis axis shorter than this, or a determinant under this fraction of the axes' lengths' product, makes a transform
+/// [`TransformKind::Degenerate`]. Fixed, not an option: every consumer that classifies a placement (and
+/// `primase_meshops::transform`, which applies it in f32) means the same by it.
+pub const DEGENERATE_BASIS: f64 = 1e-6;
+/// Two axes whose unit vectors' dot product exceeds this are not orthogonal: the transform is [`TransformKind::Sheared`].
+/// Fixed, as [`DEGENERATE_BASIS`] is.
+pub const SHEAR_TOLERANCE: f64 = 1e-4;
+
 /// What a transform does besides rotating, scaling and translating.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransformKind {
@@ -136,20 +144,23 @@ impl Transform {
         })
     }
 
-    /// The skate-scene v1 placement rule: with `u_i = c_i / |c_i|`, degenerate when some
-    /// `|c_i| < 1e-6` or `|det| <= 1e-6 |c0||c1||c2|`; sheared when some `|u_i . u_j| > 1e-4`; mirrored when `det < 0`.
-    /// Computed in f64.
+    /// What the basis does besides rotating, scaling and translating, the one meaning every reader, writer and mesh operation
+    /// that classifies a placement shares: with `u_i = c_i / |c_i|`, degenerate when some `|c_i| <` [`DEGENERATE_BASIS`] or
+    /// `|det| <=` [`DEGENERATE_BASIS`] `|c0||c1||c2|`; sheared when some `|u_i . u_j| >` [`SHEAR_TOLERANCE`]; mirrored when
+    /// `det < 0`. Computed in f64.
     pub fn classify(&self) -> TransformKind {
         let c: [[f64; 3]; 3] = std::array::from_fn(|i| self.cols[i].map(f64::from));
         let len: [f64; 3] = std::array::from_fn(|i| dot(c[i], c[i]).sqrt());
         let det = dot(c[0], cross(c[1], c[2]));
-        if len.iter().any(|&l| l < 1e-6) || det.abs() <= 1e-6 * len[0] * len[1] * len[2] {
+        if len.iter().any(|&l| l < DEGENERATE_BASIS)
+            || det.abs() <= DEGENERATE_BASIS * len[0] * len[1] * len[2]
+        {
             return TransformKind::Degenerate;
         }
         let u: [[f64; 3]; 3] = std::array::from_fn(|i| c[i].map(|x| x / len[i]));
         if [(0, 1), (0, 2), (1, 2)]
             .iter()
-            .any(|&(i, j)| dot(u[i], u[j]).abs() > 1e-4)
+            .any(|&(i, j)| dot(u[i], u[j]).abs() > SHEAR_TOLERANCE)
         {
             return TransformKind::Sheared;
         }

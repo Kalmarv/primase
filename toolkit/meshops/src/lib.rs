@@ -296,7 +296,7 @@ pub fn flat_normals(mesh: &Mesh) -> Result<Mesh> {
     Ok(out)
 }
 /// Transform using column basis and translation. Classification uses f32 dot
-/// products and the shared length. Orthogonal normal axes divide by max(length²,1e-12);
+/// products and the shared length, with the thresholds of `primase_core::Transform::classify`. Orthogonal normal axes divide by max(length²,1e-12);
 /// sheared axes use cofactors times determinant sign. Normalize above length 1e-8,
 /// otherwise +Z. Mirrored bases reverse triangle corners 1/2. Degenerate bases fail.
 pub fn transform(mesh: &Mesh, basis: [V; 3], translation: V) -> Result<Mesh> {
@@ -309,12 +309,19 @@ pub fn transform(mesh: &Mesh, basis: [V; 3], translation: V) -> Result<Mesh> {
     let lengths = basis.map(|v| vector::Vec3::from(v).length());
     let det = dot(cross(ex, ey), ez);
     finite(&[lengths[0], lengths[1], lengths[2], det])?;
-    if lengths.iter().any(|&l| l < 1e-6) || det.abs() <= 1e-6 * lengths[0] * lengths[1] * lengths[2] {
+    // the thresholds core names once, in f32 (both are the f32 nearest their decimal value)
+    let (degenerate, shear) = (
+        primase_core::DEGENERATE_BASIS as f32,
+        primase_core::SHEAR_TOLERANCE as f32,
+    );
+    if lengths.iter().any(|&l| l < degenerate)
+        || det.abs() <= degenerate * lengths[0] * lengths[1] * lengths[2]
+    {
         return Err(Error("degenerate basis".into()));
     }
-    let sheared = dot(ex, ey).abs() > 1e-4 * lengths[0] * lengths[1]
-        || dot(ey, ez).abs() > 1e-4 * lengths[1] * lengths[2]
-        || dot(ez, ex).abs() > 1e-4 * lengths[2] * lengths[0];
+    let sheared = dot(ex, ey).abs() > shear * lengths[0] * lengths[1]
+        || dot(ey, ez).abs() > shear * lengths[1] * lengths[2]
+        || dot(ez, ex).abs() > shear * lengths[2] * lengths[0];
     let normals = if sheared {
         let sign = if det < 0. { -1. } else { 1. };
         [
