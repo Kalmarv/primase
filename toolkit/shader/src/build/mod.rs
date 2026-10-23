@@ -162,8 +162,13 @@ impl Builder {
     pub fn lit_i(&mut self, x: i32) -> Val {
         self.lit(Literal::I32(x), Kind::I)
     }
+    /// A float literal. naga holds only finite ones, so a NaN or an infinity is the bits of one, reinterpreted.
     pub fn lit_f(&mut self, x: f32) -> Val {
-        self.lit(Literal::F32(x), Kind::F)
+        if x.is_finite() {
+            return self.lit(Literal::F32(x), Kind::F);
+        }
+        let bits = self.lit_u(x.to_bits());
+        self.bitcast(bits, Kind::F)
     }
     pub fn lit_b(&mut self, x: bool) -> Val {
         self.lit(Literal::Bool(x), Kind::B)

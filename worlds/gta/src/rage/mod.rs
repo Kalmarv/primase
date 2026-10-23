@@ -9,4 +9,5 @@ pub mod map;
 pub mod meta;
 pub mod resource;
 pub mod sga;
+pub mod sgd2;
 pub mod texture;

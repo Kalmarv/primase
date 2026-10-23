@@ -102,3 +102,75 @@ fn every_effect_of_the_install() {
         invalid.len()
     );
 }
+
+/// GTA V Enhanced's shader database: `PRIMASE_GTA_SHADER_DB`, the `sga_win32_60_final.awc` file (or its `_init`
+/// sibling) as the install stores it after decryption and decompression. Every group and effect is read to the end
+/// of the file; every program's container is checked and every vertex and pixel program lifted (DXIL), validated and
+/// written as WGSL; the effects' program lists are checked to name programs of the right stage.
+#[test]
+fn the_enhanced_shader_database() {
+    use primase_gta::rage::sgd2;
+    let Some(path) = primase_testdata::real_data("PRIMASE_GTA_SHADER_DB") else {
+        return;
+    };
+    let bytes = std::fs::read(&path).unwrap();
+    let db = sgd2::parse(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let counts: Vec<usize> = db.groups.iter().map(Vec::len).collect();
+    println!("groups {counts:?}, {} effects", db.effects.len());
+    let mut tags: BTreeMap<u8, usize> = BTreeMap::new();
+    for g in &db.groups {
+        for p in g {
+            *tags.entry(p.tag).or_default() += 1;
+        }
+    }
+    println!("TAGS {tags:?}");
+    let (mut lifted, mut programs) = (0, 0);
+    let mut refused: BTreeMap<String, usize> = BTreeMap::new();
+    let mut invalid = Vec::new();
+    for (g, stage) in sgd2::GROUP_STAGES.iter().enumerate() {
+        for program in &db.groups[g] {
+            programs += 1;
+            let chunks =
+                primase_dxbc::chunks(program.container).unwrap_or_else(|e| panic!("{}: {e}", program.name));
+            assert!(
+                chunks.iter().any(|c| &c.kind == b"DXIL"),
+                "{}: not a DXIL container",
+                program.name
+            );
+            if !matches!(stage, Some(ProgramStage::Vertex | ProgramStage::Pixel)) {
+                continue;
+            }
+            match primase_dxil::lift(program.container) {
+                Err(e) => *refused.entry(primase_dxil::refusal_reason(&e)).or_default() += 1,
+                Ok(p) => {
+                    lifted += 1;
+                    match p.validate() {
+                        Err(problems) => invalid.push(format!("{}: {problems:?}", program.name)),
+                        Ok(_) => {
+                            if let Err(e) = primase_shader::emit::wgsl(&p) {
+                                invalid.push(format!("{}: {e}", program.name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println!(
+        "{programs} programs, {lifted} vertex and pixel programs lifted, {} refused",
+        refused.values().sum::<usize>()
+    );
+    let mut reasons: Vec<_> = refused.iter().collect();
+    reasons.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+    for (reason, n) in reasons.iter().take(40) {
+        println!("  refused {n:5}  {reason}");
+    }
+    for line in invalid.iter().take(20) {
+        println!("  INVALID {line}");
+    }
+    assert!(
+        invalid.is_empty(),
+        "{} lifted programs failed validation or writing",
+        invalid.len()
+    );
+}

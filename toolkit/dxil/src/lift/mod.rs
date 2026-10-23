@@ -50,6 +50,18 @@ pub fn lift(container: &[u8]) -> Result<Program> {
         .find(|f| f.value == entry_value)
         .ok_or_else(|| error(0, "the entry point has no body"))?;
     let setup = setup::Setup::new(&chunks, &module, entry)?;
+    if part.program_version >> 16 == 1
+        && !setup
+            .interface
+            .outputs
+            .iter()
+            .any(|v| v.system == Some(primase_shader::SystemValue::ClipPosition))
+    {
+        return Err(error(
+            0,
+            "a vertex program that writes no position (it feeds a tessellator, which a Program has no stage for)",
+        ));
+    }
     let target = format!(
         "{}_{}_{}",
         match part.program_version >> 16 {

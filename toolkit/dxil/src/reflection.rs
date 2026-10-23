@@ -220,8 +220,13 @@ pub fn ranges(m: &Module) -> Result<Vec<(Range, String, Option<TypeId>)>> {
                         .map_err(|_| error(0, "resource id"))?,
                     lower: u32::try_from(int(m, operand(r, 4, at)?, at)?)
                         .map_err(|_| error(0, "lower bound"))?,
-                    count: u32::try_from(int(m, operand(r, 5, at)?, at)?)
-                        .map_err(|_| error(0, "range size"))?,
+                    // an unbounded range is written -1 (all ones in 32 bits)
+                    count: {
+                        let v = int(m, operand(r, 5, at)?, at)?;
+                        u32::try_from(v)
+                            .or_else(|_| i32::try_from(v).map(|v| u32::from_ne_bytes(v.to_ne_bytes())))
+                            .map_err(|_| error(0, format!("range size {v}")))?
+                    },
                     extra,
                     space: u32::try_from(int(m, operand(r, 3, at)?, at)?)
                         .map_err(|_| error(0, "register space"))?,

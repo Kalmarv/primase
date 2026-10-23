@@ -165,6 +165,11 @@ impl Lift<'_> {
                         size: ArraySize::Dynamic,
                         stride,
                     });
+                    // a typed buffer is carried as four 32-bit lanes per element, whatever the view's own width
+                    if let BufferKind::Typed(v) = kind {
+                        self.setup.interface.resources[i].kind =
+                            ResourceKind::Buffer(BufferKind::Typed(primase_shader::Value { width: 4, ..*v }));
+                    }
                     (
                         format!("sb{}", range.lower),
                         AddressSpace::Storage {
