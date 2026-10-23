@@ -27,6 +27,11 @@ use crate::{
     StageFacts, StorageTarget, Subobject, SystemValue, stage_functions,
 };
 
+/// The pipeline flags the pipeline runs: they are added to the flags of every `TraceRay`, as the specification says of
+/// `D3D12_RAYTRACING_PIPELINE_FLAG_SKIP_TRIANGLES` ("add in the RAY_FLAG_SKIP_TRIANGLES Ray flag") and
+/// `SKIP_PROCEDURAL_PRIMITIVES`.
+const SUPPORTED_PIPELINE_FLAGS: u32 = flags::SKIP_TRIANGLES | flags::SKIP_PROCEDURAL;
+
 /// The deepest maximum recursion a pipeline may declare.
 const MAX_DECLARABLE_RECURSION: u32 = 31;
 
@@ -78,6 +83,8 @@ pub struct Pipeline {
     /// The deepest `TraceRay` recursion the pipeline declares; none until a library's subobjects or
     /// [`Pipeline::with_max_recursion`] state it.
     max_recursion: Option<u32>,
+    /// The pipeline flags (`D3D12_RAYTRACING_PIPELINE_CONFIG1`): ray flags every `TraceRay` of the pipeline gets added.
+    config_flags: u32,
 }
 
 impl Pipeline {
@@ -90,6 +97,7 @@ impl Pipeline {
         let mut entries = BTreeMap::new();
         let mut groups = BTreeMap::new();
         let mut max_recursion = None;
+        let mut config_flags = None;
         for program in programs {
             let StageFacts::RayTracing(facts) = program.interface.facts.clone() else {
                 return Err(format!(
@@ -103,8 +111,19 @@ impl Pipeline {
                         groups.insert(g.name.clone(), g.clone());
                     }
                     Subobject::PipelineConfig {
-                        max_recursion_depth, ..
+                        max_recursion_depth,
+                        flags,
+                        ..
                     } => {
+                        // a config without flags (`D3D12_RAYTRACING_PIPELINE_CONFIG`) has none set
+                        let flags = flags.unwrap_or(0);
+                        if config_flags.is_some_and(|f| f != flags) {
+                            return Err(format!(
+                                "the libraries state different pipeline flags ({:#x} and {flags:#x})",
+                                config_flags.unwrap_or_default()
+                            ));
+                        }
+                        config_flags = Some(flags);
                         // "If multiple [...] configurations are present [...] they must all match"
                         if max_recursion.is_some_and(|d| d != *max_recursion_depth) {
                             return Err(format!(
@@ -154,6 +173,7 @@ impl Pipeline {
             groups,
             table,
             max_recursion,
+            config_flags: config_flags.unwrap_or(0),
         })
     }
 
@@ -161,6 +181,14 @@ impl Pipeline {
     /// depth the application declares in `D3D12_RAYTRACING_PIPELINE_CONFIG`): replaces the libraries' own.
     pub fn with_max_recursion(mut self, depth: u32) -> Self {
         self.max_recursion = Some(depth);
+        self
+    }
+
+    /// State the pipeline flags (`D3D12_RAYTRACING_PIPELINE_CONFIG1`'s `Flags`: the SKIP_TRIANGLES and
+    /// SKIP_PROCEDURAL ray flags), as an application gives them when its libraries state none: replaces the
+    /// libraries' own.
+    pub fn with_pipeline_flags(mut self, flags: u32) -> Self {
+        self.config_flags = flags;
         self
     }
 
@@ -183,14 +211,31 @@ impl Pipeline {
     ) -> Result<DispatchStats, String> {
         let Some(depth) = self.max_recursion else {
             return Err(
-                "the pipeline has no maximum recursion depth: a raytracing pipeline needs one raytracing pipeline                  configuration (DXR specification, D3D12_RAYTRACING_PIPELINE_CONFIG); state it in a library's                  subobjects or with Pipeline::with_max_recursion"
+                "the pipeline has no maximum recursion depth: a raytracing pipeline needs one raytracing pipeline \
+                configuration (DXR specification, D3D12_RAYTRACING_PIPELINE_CONFIG); state it in a library's \
+                subobjects or with Pipeline::with_max_recursion"
                     .into(),
             );
         };
         if depth > MAX_DECLARABLE_RECURSION {
             return Err(format!(
-                "the pipeline declares a maximum recursion depth of {depth}, past the {MAX_DECLARABLE_RECURSION}                  DXR allows (\"Ray recursion limit\": a depth in the range [0..31])"
+                "the pipeline declares a maximum recursion depth of {depth}, past the {MAX_DECLARABLE_RECURSION} DXR allows \
+                (\"Ray recursion limit\": a depth in the range [0..31])"
             ));
+        }
+        if self.config_flags & !SUPPORTED_PIPELINE_FLAGS != 0 {
+            return Err(format!(
+                "the pipeline has flags {:#x}; only RAYTRACING_PIPELINE_FLAG_SKIP_TRIANGLES (0x100) and \
+                SKIP_PROCEDURAL_PRIMITIVES (0x200) are run",
+                self.config_flags
+            ));
+        }
+        if self.config_flags & SUPPORTED_PIPELINE_FLAGS == SUPPORTED_PIPELINE_FLAGS {
+            return Err(
+                "the pipeline has both RAYTRACING_PIPELINE_FLAG_SKIP_TRIANGLES and SKIP_PROCEDURAL_PRIMITIVES: \
+                every ray would skip all geometry, which the ray flags forbid"
+                    .into(),
+            );
         }
         let entry = self
             .programs
@@ -453,12 +498,21 @@ impl<'p> Host<'p, '_> {
             ));
         }
         self.stats.rays += 1;
-        let query = Query::new(r.scene, r.flags, r.mask, r.t_min, r.t_max, r.origin, r.direction);
+        let ray_flags = r.flags | self.pipe.config_flags;
+        let query = Query::new(
+            r.scene,
+            ray_flags,
+            r.mask,
+            r.t_min,
+            r.t_max,
+            r.origin,
+            r.direction,
+        );
         self.active.push(Active {
             query,
             offset: r.hit_group_offset,
             stride: r.hit_group_stride,
-            flags: r.flags,
+            flags: ray_flags,
             origin: r.origin,
             direction: r.direction,
             payload: r.payload.to_vec(),

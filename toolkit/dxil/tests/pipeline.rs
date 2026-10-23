@@ -285,3 +285,59 @@ fn a_pipeline_without_a_declared_recursion_depth_is_refused() {
         .unwrap_err();
     assert!(e.contains("past the 31"), "{e}");
 }
+
+/// The pipeline flags are added to the flags of every `TraceRay` (the specification: "add in the RAY_FLAG_SKIP_TRIANGLES
+/// Ray flag"): the 2 by 2 dispatch at the opaque triangle of the first test hits it with the procedural flag and misses
+/// everywhere with the triangle one, and flags the pipeline does not run are refused by name.
+#[test]
+fn the_pipeline_flags_are_added_to_every_ray() {
+    let resources = || PipelineResources {
+        constants: BTreeMap::new(),
+        scene: Scene {
+            bottoms: vec![vec![triangle(
+                [[0.0, 0.0, 5.0], [1.25, 0.0, 5.0], [0.0, 1.25, 5.0]],
+                true,
+            )]],
+            instances: vec![instance(IDENTITY, 0)],
+        },
+    };
+    const SKIP_TRIANGLES: u32 = 0x100;
+    const SKIP_PROCEDURAL: u32 = 0x200;
+    let missed = [0.0, 0.0, -0.6, -1.0];
+
+    let mut image = Image::default();
+    pipeline("")
+        .with_pipeline_flags(SKIP_TRIANGLES)
+        .dispatch_rays("raygen", [2, 2, 1], &resources(), &mut image)
+        .unwrap();
+    for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        close(
+            image.texels[&(x, y)],
+            missed,
+            &format!("skip triangles ({x}, {y})"),
+        );
+    }
+
+    let mut image = Image::default();
+    pipeline("")
+        .with_pipeline_flags(SKIP_PROCEDURAL)
+        .dispatch_rays("raygen", [2, 2, 1], &resources(), &mut image)
+        .unwrap();
+    let t = 5.0f32 + 0.001;
+    // pixel (0, 0): the ray from (0.25, 0.25, 0): b = (0.2, 0.2), as in the first test
+    let (ox, oy, b1, b2) = (0.25f32, 0.25f32, 0.2f32, 0.2f32);
+    let color = [b1 + 2.0 * ox, b2 + 2.0 * oy + 1.0, 3.0 - b1 - b2];
+    close(
+        image.texels[&(0, 0)],
+        [color[0] * 2.0 * t, color[1] * 2.0 * t, color[2] * 2.0 * t, t],
+        "skip procedural primitives (0, 0)",
+    );
+
+    for (flags, what) in [(0x400, "only"), (SKIP_TRIANGLES | SKIP_PROCEDURAL, "forbid")] {
+        let e = pipeline("")
+            .with_pipeline_flags(flags)
+            .dispatch_rays("raygen", [1, 1, 1], &resources(), &mut Image::default())
+            .unwrap_err();
+        assert!(e.contains(what), "{flags:#x}: {e}");
+    }
+}
