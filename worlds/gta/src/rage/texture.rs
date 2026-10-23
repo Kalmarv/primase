@@ -81,6 +81,13 @@ impl Texture {
         Ok((t, le::u64(d, 0x38)?, le::u32(d, 0x08)?, le::u32(d, 0x0C)?))
     }
 
+    /// The sides of level `level`: each halved per level, at least 1. `level` is below [`Texture::levels`], which
+    /// [`Texture::read`] bounds to the halvings of the larger side.
+    pub fn level_sides(&self, level: u32) -> (u32, u32) {
+        let side = |s: u16| (u32::from(s) >> level).max(1);
+        (side(self.width), side(self.height))
+    }
+
     /// The texture at `pointer`, with its data.
     pub fn read(r: &Resource, pointer: u64) -> Result<Texture> {
         let (mut t, data_ptr, blocks, block_size) = Self::read_base(r, pointer)?;
@@ -91,14 +98,23 @@ impl Texture {
         if t.levels == 0 || t.width == 0 || t.height == 0 || t.depth == 0 {
             return Err(err(pointer, format!("{}: empty size or no levels", t.name)));
         }
-        // levels of at most 2^16 texels a side, at most 255 of them: the sums and shifts are checked anyway
+        // a level per halving of the larger side, down to 1 (the bound `primase_core::Texture` holds levels to)
+        let most = t.width.max(t.height).ilog2().saturating_add(1);
+        if u32::from(t.levels) > most {
+            return Err(err(
+                pointer,
+                format!(
+                    "{}: {} levels for {} x {} (1 to {most})",
+                    t.name, t.levels, t.width, t.height
+                ),
+            ));
+        }
+        // levels of at most 2^16 texels a side, at most 16 of them: the sums are checked anyway
         let too_big = || err(pointer, format!("{}: a size past the address space", t.name));
         let mut size = 0usize;
         for level in 0..u32::from(t.levels) {
-            let side = |s: u16| u32::from(s).checked_shr(level).unwrap_or(0).max(1);
-            size = size
-                .checked_add(format.level_size(side(t.width), side(t.height)))
-                .ok_or_else(too_big)?;
+            let (w, h) = t.level_sides(level);
+            size = size.checked_add(format.level_size(w, h)).ok_or_else(too_big)?;
         }
         let size = size.checked_mul(usize::from(t.depth)).ok_or_else(too_big)?;
         if u64::try_from(size).ok() != u64::from(blocks).checked_mul(u64::from(block_size)) {
@@ -191,5 +207,64 @@ impl TextureDictionary {
             }
         }
         Ok(TextureDictionary { hashes, textures })
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    reason = "test fixtures built by hand"
+)]
+mod tests {
+    use super::*;
+    use crate::rage::resource::PageFlags;
+
+    /// A resource holding one 4 x 4 R8G8B8A8_UNORM texture named `t` at 0x5000_0100 that states `levels` levels, its
+    /// block count stating the bytes those levels take (64, 16, then 4 for each further level).
+    fn texture(levels: u8) -> Resource {
+        let size: u32 = (0..u32::from(levels))
+            .map(|l| (4u32 >> l.min(2)).pow(2) * 4)
+            .sum();
+        let mut data = vec![0u8; 0x2000];
+        let mut put = |at: usize, b: &[u8]| data[at..at + b.len()].copy_from_slice(b);
+        let base = 0x100;
+        put(base + 0x08, &1u32.to_le_bytes());
+        put(base + 0x0C, &size.to_le_bytes());
+        put(base + 0x18, &4u16.to_le_bytes());
+        put(base + 0x1A, &4u16.to_le_bytes());
+        put(base + 0x1C, &1u16.to_le_bytes());
+        put(base + 0x1E, &[1, 0x1C]);
+        put(base + 0x22, &[levels]);
+        put(base + 0x28, &0x5000_0300u64.to_le_bytes());
+        put(base + 0x38, &0x5000_0400u64.to_le_bytes());
+        put(0x300, b"t\0");
+        Resource {
+            version: VERSION,
+            system: PageFlags((1 << 27) | 4),
+            graphics: PageFlags(0),
+            data,
+            zero_filled: 0,
+            spent: Default::default(),
+        }
+    }
+
+    /// A level per halving of the larger side: a 4 x 4 holds 3 (4, 2, 1). More are refused at the read, naming the
+    /// texture, even when the block count agrees with the extra 1 x 1 levels; 40 would shift a side by 32 or more.
+    #[test]
+    fn levels_past_the_halvings_of_the_size_are_refused() {
+        let t = Texture::read(&texture(3), 0x5000_0100).unwrap();
+        assert_eq!((t.name.as_str(), t.levels, t.data.len()), ("t", 3, 84));
+        assert_eq!(t.level_sides(2), (1, 1));
+        for levels in [4, 40] {
+            let e = Texture::read(&texture(levels), 0x5000_0100)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                e.contains(&format!("t: {levels} levels for 4 x 4 (1 to 3)")),
+                "{e}"
+            );
+        }
     }
 }

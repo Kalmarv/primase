@@ -454,11 +454,9 @@ impl Ctx<'_> {
         let mut levels = Vec::new();
         let mut rest = t.data.as_slice();
         for level in 0..u32::from(t.levels) {
+            let (lw, lh) = t.level_sides(level);
             let n = format
-                .level_size(
-                    (u32::from(t.width) >> level).max(1),
-                    (u32::from(t.height) >> level).max(1),
-                )
+                .level_size(lw, lh)
                 .checked_mul(usize::from(t.depth))
                 .filter(|&n| n <= rest.len())
                 .ok_or_else(|| {
