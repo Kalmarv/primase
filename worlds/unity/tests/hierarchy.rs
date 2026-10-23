@@ -1,8 +1,8 @@
-//! Gate for a scene's hierarchy against an independent reader's scan (`PRIMASE_UNITY_SCAN`, JSON: `level`, `instances`
-//! with `src` "scene" for the drawn mesh renderers in scene order, each `path`, `layer`, `mesh` and `mats` as
-//! [file, path id], `M` the world matrix rounded to 6 decimals, `shadows`, `submeshes`; `stats` with
-//! `renderer_inactive`, `renderer_lod1plus`, `renderer_kept`), for the player `PRIMASE_UNITY_DATA` read with the type
-//! tree package `PRIMASE_UNITY_TPK`.
+//! Gate for a scene's hierarchy against an independent reader's scan (`oracles.unitypy.sledding/scan.json`, JSON:
+//! `level`, `instances` with `src` "scene" for the drawn mesh renderers in scene order, each `path`, `layer`, `mesh`
+//! and `mats` as [file, path id], `M` the world matrix rounded to 6 decimals, `shadows`, `submeshes`; `stats` with
+//! `renderer_inactive`, `renderer_lod1plus`, `renderer_kept`), for the player `installs.sledding/Sledding Game_Data`
+//! read with the type tree package `tools.unity_tpk`.
 //!
 //! Every drawn renderer: path, layer, mesh, materials, static-batch slice and shadow mode exactly; the world matrix
 //! within the scan's rounding (5e-7) plus 1e-12 relative (the two readers sum the products in another order). Then the
@@ -18,7 +18,7 @@
 use primase_core::gate::{GateReport, Tolerance};
 use primase_core::ledger::Measure;
 use primase_core::{Instance, Mesh, Semantic, Stream, Transform, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::components::UNITY;
 use primase_unity::components::{UnityBehaviours, UnityMesh, UnityRenderer, UnityTreeInstance};
@@ -35,9 +35,9 @@ fn obj(r: &ObjRef) -> Json {
 #[test]
 fn renderers_match_the_scan() {
     let (Some(data), Some(tpk), Some(scan)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_SCAN"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "scan.json"),
     ) else {
         return;
     };

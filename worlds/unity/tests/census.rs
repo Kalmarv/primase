@@ -1,8 +1,8 @@
-//! Census over a Unity player's data folder (`PRIMASE_UNITY_DATA`) with a type tree package (`PRIMASE_UNITY_TPK`):
-//! every SerializedFile under it parsed, every object decoded by its class's type tree, which must cover the object's
-//! bytes exactly (a MonoBehaviour's script fields after its base fields are counted, not decoded; an object the
-//! package's layout for its Unity version falls short of is listed by name), every streamed resource it names inside
-//! its file. Files of container versions not read are listed. Counts by class.
+//! Census over a Unity player's data folder (`installs.sledding/Sledding Game_Data`) with a type tree package
+//! (`tools.unity_tpk`): every SerializedFile under it parsed, every object decoded by its class's type tree, which must
+//! cover the object's bytes exactly (a MonoBehaviour's script fields after its base fields are counted, not decoded; an
+//! object the package's layout for its Unity version falls short of is listed by name), every streamed resource it
+//! names inside its file. Files of container versions not read are listed. Counts by class.
 
 #![allow(clippy::unwrap_used)]
 
@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use primase_core::gate::{GateReport, Tolerance};
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::resource::{StreamingInfo, streaming_infos};
 use primase_unity::{Error, SerializedFile, TypeTree, TypeTreePackage};
 
@@ -42,7 +42,10 @@ fn serialized_version(b: &[u8]) -> Option<u32> {
 
 #[test]
 fn every_object_decodes() {
-    let (Some(data), Some(tpk)) = (real_data("PRIMASE_UNITY_DATA"), real_data("PRIMASE_UNITY_TPK")) else {
+    let (Some(data), Some(tpk)) = (
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+    ) else {
         return;
     };
     let package = TypeTreePackage::parse(&std::fs::read(&tpk).unwrap()).unwrap();

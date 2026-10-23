@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::ShaderBinding;
 use primase_core::{Component, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::components::{RenderPipeline, UnityMaterial, UnityPrograms, UnityRenderSettings};
 use primase_unity::level::read_level;
@@ -110,10 +110,10 @@ fn census(label: &str, data: &std::path::Path, tpk: &std::path::Path, level: &st
 
 #[test]
 fn a_levels_materials_are_bound_or_left_with_a_reason() {
-    let Some(tpk) = real_data("PRIMASE_UNITY_TPK") else {
+    let Some(tpk) = tool(Tool::UnityTpk) else {
         return;
     };
-    if let Some(data) = real_data("PRIMASE_UNITY_DATA") {
+    if let Some(data) = install_file(Game::Sledding, "Sledding Game_Data") {
         census("Sledding Game", &data, &tpk, "level1");
     }
 }

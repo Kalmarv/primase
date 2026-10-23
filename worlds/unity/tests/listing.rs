@@ -2,8 +2,9 @@
 //! decoding of `BuildSettings`): a JSON file `{scenes, objects}` with `scenes` the strings of the BuildSettings object
 //! of `globalgamemanagers` (null for a player without one) and `objects` each `file` (relative path), `path_id`,
 //! `class` (the class name) and `name` (`peek_name()`: the object's `m_Name` as UnityPy reads it from the first bytes,
-//! null for a class without one). Two players: Sledding Game (`PRIMASE_UNITY_DATA`, `PRIMASE_UNITY_LISTING`) and
-//! SkateBIRD (`PRIMASE_UNITY_V21_DATA`, `PRIMASE_UNITY_V21_LISTING`), each read with `PRIMASE_UNITY_TPK`.
+//! null for a class without one). Two players: Sledding Game (`installs.sledding/Sledding Game_Data`,
+//! `oracles.unitypy.sledding/listing.json`) and SkateBIRD (`installs.skatebird/SkateBIRD_Data`,
+//! `oracles.unitypy.skatebird/listing.json`), each read with `tools.unity_tpk`.
 //!
 //! Every object of every file is listed exactly once, with the class UnityPy names it by, and its name equal to
 //! UnityPy's: both read the string first in the object's bytes (a class without an `m_Name` has none in both). The
@@ -15,7 +16,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use primase_core::gate::{GateReport, Tolerance};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::listing::list;
 use primase_unity::player::Player;
@@ -134,9 +135,9 @@ fn check(data: PathBuf, tpk: PathBuf, oracle: PathBuf) {
 #[test]
 fn sledding_listing_and_scenes_match_the_oracle() {
     let (Some(data), Some(tpk), Some(oracle)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_LISTING"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "listing.json"),
     ) else {
         return;
     };
@@ -146,9 +147,9 @@ fn sledding_listing_and_scenes_match_the_oracle() {
 #[test]
 fn skatebird_listing_and_scenes_match_the_oracle() {
     let (Some(data), Some(tpk), Some(oracle)) = (
-        real_data("PRIMASE_UNITY_V21_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_V21_LISTING"),
+        install_file(Game::Skatebird, "SkateBIRD_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Skatebird, "listing.json"),
     ) else {
         return;
     };

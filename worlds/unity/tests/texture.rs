@@ -1,6 +1,7 @@
-//! Texture gate against an independent reader's decoded images (`PRIMASE_UNITY_TEXTURES`: a folder with `index.json`,
-//! `textures` each `file`, `path_id`, `name`, `format`, `width`, `height`, `mips`, `color_space`, `usage` and `png`, its
-//! level 0 as an RGBA PNG with rows top first), for the player `PRIMASE_UNITY_DATA` read with `PRIMASE_UNITY_TPK`.
+//! Texture gate against an independent reader's decoded images (`oracles.unitypy.sledding/textures`: a folder with
+//! `index.json`, `textures` each `file`, `path_id`, `name`, `format`, `width`, `height`, `mips`, `color_space`, `usage`
+//! and `png`, its level 0 as an RGBA PNG with rows top first), for the player `installs.sledding/Sledding Game_Data`
+//! read with `tools.unity_tpk`.
 //!
 //! Every texture's size, level count and colour space; level 0 decoded to RGBA8 against the image, per TextureFormat:
 //! uncompressed and BC7 exactly; DXT1 and DXT5 within 1, named "oracle decoder's BC1-3 palette rounding": the
@@ -16,7 +17,7 @@ use primase_core::TexFormat;
 use primase_core::gate::{GateReport, Tolerance};
 use primase_core::{ColorSpace, Texture};
 use primase_image::{Samples, read_png};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 use primase_unity::TypeTreePackage;
 use primase_unity::player::{ObjRef, Player};
@@ -58,9 +59,9 @@ const NOT_DECODED: [&str; 2] = ["an empty texture", "crunched texture format"];
 #[test]
 fn textures_match_the_oracle() {
     let (Some(data), Some(tpk), Some(oracle)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_TEXTURES"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "textures"),
     ) else {
         return;
     };

@@ -1,15 +1,15 @@
-//! Differential gate against an independent reader's decoded values (`PRIMASE_UNITY_ORACLE`: a JSON file of samples,
-//! `{"samples": [{"file", "path_id", "class_id", "value"}]}`, byte strings as `{"$bytes": length, "sha256": hex}`,
-//! pairs as lists, non-finite floats as strings; a byte string the oracle lists as numbers is digested to compare),
-//! for objects of the data folder `PRIMASE_UNITY_DATA` decoded with
-//! the type tree package `PRIMASE_UNITY_TPK`. Values compare as parsed JSON (`compare_json`, no tolerance), per class.
+//! Differential gate against an independent reader's decoded values (`oracles.unitypy.sledding/samples.json`: a JSON
+//! file of samples, `{"samples": [{"file", "path_id", "class_id", "value"}]}`, byte strings as `{"$bytes": length,
+//! "sha256": hex}`, pairs as lists, non-finite floats as strings; a byte string the oracle lists as numbers is digested
+//! to compare), for objects of the data folder `installs.sledding/Sledding Game_Data` decoded with the type tree
+//! package `tools.unity_tpk`. Values compare as parsed JSON (`compare_json`, no tolerance), per class.
 
 #![allow(clippy::unwrap_used)]
 
 use std::collections::{BTreeMap, HashMap};
 
 use primase_core::gate::{GateReport, Tolerance, compare_json};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::{SerializedFile, TypeTreePackage};
 use serde_json::{Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -53,9 +53,9 @@ fn bytes_alike(oracle: &mut Json, ours: &Json) {
 #[test]
 fn values_match_the_oracle() {
     let (Some(data), Some(tpk), Some(oracle)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_ORACLE"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "samples.json"),
     ) else {
         return;
     };

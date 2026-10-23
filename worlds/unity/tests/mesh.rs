@@ -1,7 +1,8 @@
-//! Mesh gate against an independent reader's decoded meshes (`PRIMASE_UNITY_MESHES`, JSON: `meshes` with `file`,
-//! `path_id`, `vertex_count`, `compressed`, `channels` by name (`m_Vertices`, `m_Normals`, `m_Tangents`, `m_Colors`,
-//! `m_UV0`..`m_UV7`) each `dim` and either `sha256` of its values as little-endian f32 or the `values`, and `indices`
-//! as `count` and `sha256` of little-endian u32s), for the player `PRIMASE_UNITY_DATA` read with `PRIMASE_UNITY_TPK`.
+//! Mesh gate against an independent reader's decoded meshes (`oracles.unitypy.sledding/meshes.json`, JSON: `meshes`
+//! with `file`, `path_id`, `vertex_count`, `compressed`, `channels` by name (`m_Vertices`, `m_Normals`, `m_Tangents`,
+//! `m_Colors`, `m_UV0`..`m_UV7`) each `dim` and either `sha256` of its values as little-endian f32 or the `values`, and
+//! `indices` as `count` and `sha256` of little-endian u32s), for the player `installs.sledding/Sledding Game_Data` read
+//! with `tools.unity_tpk`.
 //!
 //! Stored channels and index buffers exactly (by digest; the oracle keeps 8-bit normalised colours as their bytes, so
 //! ours are compared times 255); a compressed mesh's channel lengths and indices exactly, its values, dequantised
@@ -12,7 +13,7 @@
 use std::collections::BTreeMap;
 
 use primase_core::gate::{GateReport, Tolerance};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::Value;
 use primase_unity::mesh::UnityMeshData;
@@ -86,9 +87,9 @@ fn bound(ch: usize, k: usize, end: f64) -> f64 {
 #[test]
 fn meshes_match_the_oracle() {
     let (Some(data), Some(tpk), Some(oracle)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_MESHES"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "meshes.json"),
     ) else {
         return;
     };

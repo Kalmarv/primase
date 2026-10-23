@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install_file, oracle};
 use std::collections::BTreeMap;
 
 use primase_unity::SerializedFile;
@@ -43,8 +43,8 @@ fn entry(objects: [i64; 4]) -> (i64, Entry) {
 #[test]
 fn matches_unitypy_census() {
     let (Some(data), Some(census)) = (
-        real_data("PRIMASE_UNITY_V21_DATA"),
-        real_data("PRIMASE_UNITY_V21_CENSUS"),
+        install_file(Game::Skatebird, "SkateBIRD_Data"),
+        oracle(OracleSet::UnityPy, Game::Skatebird, "census.json"),
     ) else {
         return;
     };

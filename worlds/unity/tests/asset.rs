@@ -1,8 +1,9 @@
-//! One asset read as a preview ([`primase_unity::asset::read_asset`]) against independent readers' decodings of the same
-//! objects, for the player `PRIMASE_UNITY_DATA` read with `PRIMASE_UNITY_TPK`: meshes against UnityPy's
-//! (`PRIMASE_UNITY_MESHES`, JSON `meshes` with `file`, `path_id`, `name` and `indices.count`), textures against its
-//! decoded textures' headers (`PRIMASE_UNITY_TEXTURES`, `index.json`: `name`, `width`, `height`, `mips`), materials
-//! against its materials' (`PRIMASE_UNITY_MATERIALS`: `name`, `shader`, `textures` as [property, texture or null, ..]).
+//! One asset read as a preview ([`primase_unity::asset::read_asset`]) against independent readers' decodings of the
+//! same objects, for the player `installs.sledding/Sledding Game_Data` read with `tools.unity_tpk`: meshes against
+//! UnityPy's (`oracles.unitypy.sledding/meshes.json`, JSON `meshes` with `file`, `path_id`, `name` and
+//! `indices.count`), textures against its decoded textures' headers (`oracles.unitypy.sledding/textures`, `index.json`:
+//! `name`, `width`, `height`, `mips`), materials against its materials' (`oracles.unitypy.sledding/materials.json`:
+//! `name`, `shader`, `textures` as [property, texture or null, ..]).
 //!
 //! A mesh: the prototype's primitives index exactly the oracle's index buffer (the same count; compared where the read
 //! converted no topology, the others counted), and the placement is named as the mesh. A texture: the entity's name,
@@ -17,7 +18,7 @@ use std::path::Path;
 
 use primase_core::gate::{GateReport, Tolerance};
 use primase_core::{Instance, Mesh, Name, Texture, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::asset::read_asset;
 use primase_unity::components::{UnityMaterial, UnityTexture};
@@ -25,7 +26,10 @@ use primase_unity::player::{ObjRef, Player};
 use serde_json::Value as Json;
 
 fn player() -> Option<Player> {
-    let (data, tpk) = (real_data("PRIMASE_UNITY_DATA")?, real_data("PRIMASE_UNITY_TPK")?);
+    let (data, tpk) = (
+        install_file(Game::Sledding, "Sledding Game_Data")?,
+        tool(Tool::UnityTpk)?,
+    );
     Some(
         Player::open(
             &data,
@@ -50,7 +54,10 @@ fn object(row: &Json) -> ObjRef {
 
 #[test]
 fn meshes_read_as_assets_match_the_oracle() {
-    let (Some(player), Some(oracle)) = (player(), real_data("PRIMASE_UNITY_MESHES")) else {
+    let (Some(player), Some(oracle)) = (
+        player(),
+        oracle(OracleSet::UnityPy, Game::Sledding, "meshes.json"),
+    ) else {
         return;
     };
     let oracle: Json = serde_json::from_slice(&std::fs::read(&oracle).unwrap()).unwrap();
@@ -106,7 +113,8 @@ fn meshes_read_as_assets_match_the_oracle() {
 
 #[test]
 fn textures_read_as_assets_match_the_oracle() {
-    let (Some(player), Some(oracle)) = (player(), real_data("PRIMASE_UNITY_TEXTURES")) else {
+    let (Some(player), Some(oracle)) = (player(), oracle(OracleSet::UnityPy, Game::Sledding, "textures"))
+    else {
         return;
     };
     let index: Json =
@@ -158,7 +166,10 @@ fn textures_read_as_assets_match_the_oracle() {
 
 #[test]
 fn materials_read_as_assets_match_the_oracle() {
-    let (Some(player), Some(oracle)) = (player(), real_data("PRIMASE_UNITY_MATERIALS")) else {
+    let (Some(player), Some(oracle)) = (
+        player(),
+        oracle(OracleSet::UnityPy, Game::Sledding, "materials.json"),
+    ) else {
         return;
     };
     let oracle: Json = serde_json::from_slice(&std::fs::read(&oracle).unwrap()).unwrap();

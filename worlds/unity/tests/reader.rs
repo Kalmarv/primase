@@ -1,9 +1,9 @@
 //! The Unity scene as a conversion's reader ([`primase_unity::convert::UnityReader`]) for the player
-//! `PRIMASE_UNITY_DATA` read with `PRIMASE_UNITY_TPK`: its read is the level read (the same entities and components as
-//! [`primase_unity::level::read_level`] makes, which `hierarchy.rs`, `mesh.rs`, `texture.rs` and the others gate against
-//! UnityPy), kept to the namespaces it declares, with the reader's notices the level report's own counts; a part is the
-//! closure of its roots with entity ids unchanged, what a load adds stays inside the namespaces, and every prototype with
-//! geometry has the box of its mesh.
+//! `installs.sledding/Sledding Game_Data` read with `tools.unity_tpk`: its read is the level read (the same entities
+//! and components as [`primase_unity::level::read_level`] makes, which `hierarchy.rs`, `mesh.rs`, `texture.rs` and the
+//! others gate against UnityPy), kept to the namespaces it declares, with the reader's notices the level report's own
+//! counts; a part is the closure of its roots with entity ids unchanged, what a load adds stays inside the namespaces,
+//! and every prototype with geometry has the box of its mesh.
 //!
 //! A hand-worked check, not an oracle comparison: the independent comparisons are the gates above.
 
@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 
 use primase_core::convert::{NoticeKind, Reader, check_emits, check_load_emits};
 use primase_core::{Entity, Instance, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::convert::UnityReader;
 use primase_unity::level::read_level;
@@ -21,7 +21,10 @@ use primase_unity::player::Player;
 
 #[test]
 fn the_reader_reads_the_level_and_loads_parts_of_it() {
-    let (Some(data), Some(tpk)) = (real_data("PRIMASE_UNITY_DATA"), real_data("PRIMASE_UNITY_TPK")) else {
+    let (Some(data), Some(tpk)) = (
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+    ) else {
         return;
     };
     let player = Player::open(

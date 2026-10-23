@@ -1,8 +1,8 @@
-//! Collider gate against an independent reader's scan (`PRIMASE_UNITY_SCAN`: `colliders`, the colliding ones, each
-//! `src` (scene or tree), `type` (BoxCollider, SphereCollider, CapsuleCollider, MeshCollider), `path`, `layer`, `M`
-//! rounded to 6 decimals, `rigidbody` (null, "kinematic", "dynamic"), `physmat`, `friction`, and `size` and `center`,
-//! `radius`, `height`, `direction`, or `mesh` and `convex`; `stats` with `collider_inactive` and `collider_trigger`),
-//! for level `level1` of `PRIMASE_UNITY_DATA` read with `PRIMASE_UNITY_TPK`.
+//! Collider gate against an independent reader's scan (`oracles.unitypy.sledding/scan.json`: `colliders`, the colliding
+//! ones, each `src` (scene or tree), `type` (BoxCollider, SphereCollider, CapsuleCollider, MeshCollider), `path`,
+//! `layer`, `M` rounded to 6 decimals, `rigidbody` (null, "kinematic", "dynamic"), `physmat`, `friction`, and `size`
+//! and `center`, `radius`, `height`, `direction`, or `mesh` and `convex`; `stats` with `collider_inactive` and
+//! `collider_trigger`), for level `level1` of `installs.sledding/Sledding Game_Data` read with `tools.unity_tpk`.
 //!
 //! Every collider that is not inactive or a trigger: its shape, physic material, rigidbody state and layer exactly,
 //! its world matrix within the scan's rounding plus half an f32 step at the entry (our transforms are f32); the counts
@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use primase_core::gate::{GateReport, Tolerance};
 use primase_core::{Name, Transform, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::components::UNITY;
 use primase_unity::components::{UnityCollider, UnityColliderShape, UnityTreeInstance};
@@ -69,9 +69,9 @@ fn xyz(v: [f32; 3]) -> Json {
 #[test]
 fn colliders_match_the_scan() {
     let (Some(data), Some(tpk), Some(scan)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_SCAN"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "scan.json"),
     ) else {
         return;
     };
@@ -219,9 +219,9 @@ fn collision_matches_the_colliders() {
     use primase_core::{Collision, Surfaces, World};
     use primase_unity::lower_collision::lower_unity_collision;
     let (Some(data), Some(tpk), Some(scan)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_SCAN"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "scan.json"),
     ) else {
         return;
     };

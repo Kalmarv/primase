@@ -1,13 +1,14 @@
-//! Compiled-program gate against an independent reader (`PRIMASE_UNITY_PROGRAMS`, JSON: `shaders`, each `file`,
-//! `path_id`, `name` and `passes[subshader][pass]`: `variants` (each `group`, `blob_index`, `keywords`,
-//! `gpu_program_type`, `requirements` and `code`, the sha256 of its D3D11 code or null) and `parameters`
+//! Compiled-program gate against an independent reader (`oracles.unitypy.sledding/shader-programs.json`, JSON:
+//! `shaders`, each `file`, `path_id`, `name` and `passes[subshader][pass]`: `variants` (each `group`, `blob_index`,
+//! `keywords`, `gpu_program_type`, `requirements` and `code`, the sha256 of its D3D11 code or null) and `parameters`
 //! (`constant_buffers` each `name`, `slot`, `size`, `fields` by offset; `textures`; `samplers`)), for the player
-//! `PRIMASE_UNITY_DATA` read with `PRIMASE_UNITY_TPK`: every shader's programs exactly, every variant's code bytes.
+//! `installs.sledding/Sledding Game_Data` read with `tools.unity_tpk`: every shader's programs exactly, every variant's
+//! code bytes.
 
 #![allow(clippy::unwrap_used)]
 
 use primase_core::gate::{GateReport, Tolerance};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::player::{ObjRef, Player};
 use primase_unity::program::{D3D11_PROGRAM_TYPES, ShaderPrograms, Stage};
@@ -17,9 +18,9 @@ use sha2::{Digest, Sha256};
 #[test]
 fn shader_programs_match_the_oracle() {
     let (Some(data), Some(tpk), Some(oracle)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_PROGRAMS"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "shader-programs.json"),
     ) else {
         return;
     };
@@ -85,16 +86,16 @@ fn shader_programs_match_the_oracle() {
 }
 
 /// The programs of every stage of every pass against the same independent reader's dump of all five stages
-/// (`shader_programs_stages.json`, beside the file `PRIMASE_UNITY_PROGRAMS` names: per pass `vertex`, `fragment`,
-/// `geometry`, `hull` and `domain`, each as above). The oracle could not parse the code of two entries (one
-/// `Hidden/FrameDebuggerRenderTargetDisplay` program of an unknown GPU program type, one it ran off the end of): their
-/// code is not compared.
+/// (`shader_programs_stages.json`, beside the file `oracles.unitypy.sledding/shader-programs.json` names: per pass
+/// `vertex`, `fragment`, `geometry`, `hull` and `domain`, each as above). The oracle could not parse the code of two
+/// entries (one `Hidden/FrameDebuggerRenderTargetDisplay` program of an unknown GPU program type, one it ran off the
+/// end of): their code is not compared.
 #[test]
 fn programs_of_every_stage_match_the_oracle() {
     let (Some(data), Some(tpk), Some(programs)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_PROGRAMS"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "shader-programs.json"),
     ) else {
         return;
     };
@@ -111,9 +112,9 @@ fn programs_of_every_stage_match_the_oracle() {
 #[test]
 fn skatebird_programs_of_every_stage_match_the_oracle() {
     let (Some(data), Some(tpk), Some(programs)) = (
-        real_data("PRIMASE_UNITY_V21_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_PROGRAMS"),
+        install_file(Game::Skatebird, "SkateBIRD_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "shader-programs.json"),
     ) else {
         return;
     };

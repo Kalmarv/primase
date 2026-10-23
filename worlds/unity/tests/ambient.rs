@@ -1,11 +1,11 @@
 //! Sledding Game's lodge: its scene's stored ambient lowered by `lower-unity-ambient`, for the player
-//! `PRIMASE_UNITY_DATA` read with `PRIMASE_UNITY_TPK`. The lodge is not a scene of its own: it stands in
-//! `Main Mountain Scene` (found by name in BuildSettings' scene list, `levelN` by its index), and RenderSettings'
+//! `installs.sledding/Sledding Game_Data` read with `tools.unity_tpk`. The lodge is not a scene of its own: it stands
+//! in `Main Mountain Scene` (found by name in BuildSettings' scene list, `levelN` by its index), and RenderSettings'
 //! ambient is one per scene, so the lodge shares the mountain's. Whether the game varies ambient inside the lodge (a
-//! volume of its own) is a separate question this does not answer. Per stored mode: trilight lowers to the gradient
-//! of the stored colours made linear, flat to the sky colour, skybox and custom to nothing (omitted), the stored
-//! gradient (an approximation) or the stored probe's average (flat, an approximation; none for an all-zero probe), as
-//! the program chooses. A player without that scene (another game) is skipped.
+//! volume of its own) is a separate question this does not answer. Per stored mode: trilight lowers to the gradient of
+//! the stored colours made linear, flat to the sky colour, skybox and custom to nothing (omitted), the stored gradient
+//! (an approximation) or the stored probe's average (flat, an approximation; none for an all-zero probe), as the
+//! program chooses. A player without that scene (another game) is skipped.
 //!
 //! As read (Sledding Game on Unity 6000.3.12f1): skybox (mode 0), its stored colours Unity's defaults (reported
 //! under `stored-gradient`), its probe's average 0.1792, 0.2244, 0.3062 (Unity's `m_IndirectSpecularColor`):
@@ -16,7 +16,7 @@
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Ambient, AmbientLight, Environment, World};
 use primase_image::srgb_to_linear_f32;
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::components::UnityRenderSettings;
 use primase_unity::lower_ambient::{LowerUnityAmbient, UnityAmbientProbe, probe_average};
@@ -54,7 +54,10 @@ fn level_of(player: &Player, name: &str) -> Option<String> {
 
 #[test]
 fn the_lodges_ambient_lowers_by_its_stored_mode() {
-    let (Some(data), Some(tpk)) = (real_data("PRIMASE_UNITY_DATA"), real_data("PRIMASE_UNITY_TPK")) else {
+    let (Some(data), Some(tpk)) = (
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+    ) else {
         return;
     };
     let player = Player::open(

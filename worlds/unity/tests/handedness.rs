@@ -1,11 +1,11 @@
 //! Handedness of the Unity reader's frame change, on small real meshes against UnityPy's decoding of them.
 //!
-//! `PRIMASE_UNITY_FRAMES` is a thin UnityPy dump (MeshHandler) of a few meshes in Unity's own frame: vertices, normals,
-//! tangents (xyzw), and each submesh's triangles in Unity's order. Unity's conventions, from its documentation and
-//! shader library: a left-handed frame (+Y up, +Z forward); clockwise front faces, so the front side of a triangle
-//! `(a, b, c)` is along `cross(b - a, c - a)` computed in Unity's coordinates; the bitangent is
-//! `cross(normal, tangent.xyz) * tangent.w` (UnityCG / URP `CreateTangentToWorld`), the normal map's +Y along it.
-//! The world is right-handed with counter-clockwise fronts (glTF), reached from Unity by `C = diag(1, 1, -1)`.
+//! `oracles.unitypy.sledding/frames.json` is a thin UnityPy dump (MeshHandler) of a few meshes in Unity's own frame:
+//! vertices, normals, tangents (xyzw), and each submesh's triangles in Unity's order. Unity's conventions, from its
+//! documentation and shader library: a left-handed frame (+Y up, +Z forward); clockwise front faces, so the front side
+//! of a triangle `(a, b, c)` is along `cross(b - a, c - a)` computed in Unity's coordinates; the bitangent is
+//! `cross(normal, tangent.xyz) * tangent.w` (UnityCG / URP `CreateTangentToWorld`), the normal map's +Y along it. The
+//! world is right-handed with counter-clockwise fronts (glTF), reached from Unity by `C = diag(1, 1, -1)`.
 //!
 //! Checked for every vertex and triangle: positions, normals and tangent directions are `C` of Unity's (bit for bit:
 //! `C` only negates); each of our triangles is one of Unity's, with its front side `C` of Unity's front side; our
@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 
 use primase_core::{Semantic, Stream};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::mesh::UnityMeshData;
 use primase_unity::player::{ObjRef, Player};
@@ -60,9 +60,9 @@ fn key(p: [f32; 3]) -> [u32; 3] {
 #[test]
 fn mirror_is_undone_in_the_geometry() {
     let (Some(data), Some(tpk), Some(frames)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_FRAMES"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "frames.json"),
     ) else {
         return;
     };

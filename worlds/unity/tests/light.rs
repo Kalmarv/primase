@@ -1,12 +1,13 @@
-//! Light gate against an independent reader's scan (`PRIMASE_UNITY_SCAN`: `lights`, the shining lights other than the
-//! sun, and `sun`, the shining directional light; each `path`, `type`, `color`, `intensity`, `range`, `spot_angle`,
-//! `inner_spot_angle`, `shadows`, `M` rounded to 6 decimals), for the player `PRIMASE_UNITY_DATA` read with
-//! `PRIMASE_UNITY_TPK`: every light's fields exactly, its world matrix within the scan's rounding (5e-7).
+//! Light gate against an independent reader's scan (`oracles.unitypy.sledding/scan.json`: `lights`, the shining lights
+//! other than the sun, and `sun`, the shining directional light; each `path`, `type`, `color`, `intensity`, `range`,
+//! `spot_angle`, `inner_spot_angle`, `shadows`, `M` rounded to 6 decimals), for the player `installs.sledding/Sledding
+//! Game_Data` read with `tools.unity_tpk`: every light's fields exactly, its world matrix within the scan's rounding
+//! (5e-7).
 
 #![allow(clippy::unwrap_used)]
 
 use primase_core::gate::{GateReport, Tolerance};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::player::Player;
 use primase_unity::scene::{LightComponent, Scene};
@@ -23,9 +24,9 @@ fn record(l: &LightComponent) -> Json {
 #[test]
 fn lights_match_the_scan() {
     let (Some(data), Some(tpk), Some(scan)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_SCAN"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "scan.json"),
     ) else {
         return;
     };
@@ -86,9 +87,9 @@ fn lights_lower_to_core() {
     use primase_unity::level::{read_level, transform_of};
     use primase_unity::lower_lights::lower_unity_lights;
     let (Some(data), Some(tpk), Some(scan)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_SCAN"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "scan.json"),
     ) else {
         return;
     };
@@ -165,12 +166,12 @@ fn lights_lower_to_core() {
     gate.assert_passed();
 }
 
-/// The sun against an independent reader (`PRIMASE_UNITY_SUN`, for the scan's level: `m_Sun` as stored; `pipelines`,
-/// the script class of each quality level's render pipeline asset, `built-in` for none, sorted, each once; and
-/// `main_light`, the light URP's `GetBrightestDirectionalLightIndex` makes its main light among the shining directional
-/// lights, `rule` `named`, `brightest` or `none`, with its `path`, `path_id` and `baked`): the light RenderSettings
-/// names as we read it, the player's pipeline, and the environment sun the lowering makes: the named directional
-/// light, else under URP the brightest one unless it is fully baked, else none.
+/// The sun against an independent reader (`oracles.unitypy.sledding/sun.json`, for the scan's level: `m_Sun` as stored;
+/// `pipelines`, the script class of each quality level's render pipeline asset, `built-in` for none, sorted, each once;
+/// and `main_light`, the light URP's `GetBrightestDirectionalLightIndex` makes its main light among the shining
+/// directional lights, `rule` `named`, `brightest` or `none`, with its `path`, `path_id` and `baked`): the light
+/// RenderSettings names as we read it, the player's pipeline, and the environment sun the lowering makes: the named
+/// directional light, else under URP the brightest one unless it is fully baked, else none.
 #[test]
 fn the_sun_matches_the_independent_reader() {
     use primase_core::{Environment, Name, World};
@@ -179,10 +180,10 @@ fn the_sun_matches_the_independent_reader() {
     use primase_unity::level::read_level;
     use primase_unity::lower_lights::lower_unity_lights;
     let (Some(data), Some(tpk), Some(scan), Some(oracle)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_SCAN"),
-        real_data("PRIMASE_UNITY_SUN"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "scan.json"),
+        oracle(OracleSet::UnityPy, Game::Sledding, "sun.json"),
     ) else {
         return;
     };

@@ -1,8 +1,9 @@
-//! Lowering gate against an independent port's exported materials (`PRIMASE_UNITY_PORT`: its output folder, with
-//! `textures/*.png`; `PRIMASE_UNITY_PORT_MATERIALS`: JSON `joined`, each `key`, `file`, `path_id` and the port's record
-//! `port` with `shader`, `alpha` (opaque, clip, blend), `cutoff`, `double_sided`, `metallic`, `smoothness`, `texture`
-//! (its base-colour image: texture x colour multiplied in linear space, sRGB, alpha dropped when opaque) or `skip`),
-//! for the level `level1` of `PRIMASE_UNITY_DATA` read with `PRIMASE_UNITY_TPK`.
+//! Lowering gate against an independent port's exported materials (`oracles.port.sledding/level1`: its output folder,
+//! with `textures/*.png`; `oracles.port.sledding/materials.json`: JSON `joined`, each `key`, `file`, `path_id` and the
+//! port's record `port` with `shader`, `alpha` (opaque, clip, blend), `cutoff`, `double_sided`, `metallic`,
+//! `smoothness`, `texture` (its base-colour image: texture x colour multiplied in linear space, sRGB, alpha dropped
+//! when opaque) or `skip`), for the level `level1` of `installs.sledding/Sledding Game_Data` read with
+//! `tools.unity_tpk`.
 //!
 //! Per material lowered: alpha mode and cutoff, double-sidedness, metallic and smoothness (when no map replaces them)
 //! exactly; the base colour (our texture x factor, encoded as the port encodes it) against the port's image, the largest
@@ -19,7 +20,7 @@ use primase_core::Texture;
 use primase_core::World;
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform};
 use primase_image::{Samples, linear_to_srgb, read_png};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_texcodec::{Decoder, TexDecoder};
 use primase_unity::TypeTreePackage;
 use primase_unity::components::UnityMaterial;
@@ -72,10 +73,10 @@ struct Images {
 #[test]
 fn lowering_matches_the_port() {
     let (Some(data), Some(tpk), Some(port_dir), Some(joined)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_PORT"),
-        real_data("PRIMASE_UNITY_PORT_MATERIALS"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::Port, Game::Sledding, "level1"),
+        oracle(OracleSet::Port, Game::Sledding, "materials.json"),
     ) else {
         return;
     };
@@ -163,7 +164,7 @@ fn lowering_matches_the_port() {
         if p.double_sided != port_sided {
             if p.double_sided && !port_sided && um.float("_Cull") != Some(0.0) {
                 // the port reads the material's `_Cull`; the draw pass's own `Cull Off` (independent shader state,
-                // PRIMASE_UNITY_SHADERS) draws both sides
+                // oracles.unitypy.sledding/shader-state.json) draws both sides
                 *rules
                     .entry("port takes double-sidedness from the material's _Cull: a pass culling nothing drawn one-sided".into())
                     .or_default() += 1;
@@ -307,7 +308,10 @@ fn lowering_matches_the_port() {
 #[test]
 fn draw_order_follows_the_render_queue() {
     use primase_core::{DrawLayer, DrawOrder, Name};
-    let (Some(data), Some(tpk)) = (real_data("PRIMASE_UNITY_DATA"), real_data("PRIMASE_UNITY_TPK")) else {
+    let (Some(data), Some(tpk)) = (
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+    ) else {
         return;
     };
     let player = Player::open(
@@ -342,7 +346,10 @@ fn draw_order_follows_the_render_queue() {
 fn water_and_trees_state_their_usage() {
     use primase_core::{MaterialUsage, Name};
     use std::collections::BTreeSet;
-    let (Some(data), Some(tpk)) = (real_data("PRIMASE_UNITY_DATA"), real_data("PRIMASE_UNITY_TPK")) else {
+    let (Some(data), Some(tpk)) = (
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+    ) else {
         return;
     };
     let player = Player::open(
@@ -377,7 +384,10 @@ fn water_and_trees_state_their_usage() {
 /// (the case a per-property reading gets wrong).
 #[test]
 fn lit_slots_sample_through_the_base_maps_tiling() {
-    let (Some(data), Some(tpk)) = (real_data("PRIMASE_UNITY_DATA"), real_data("PRIMASE_UNITY_TPK")) else {
+    let (Some(data), Some(tpk)) = (
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+    ) else {
         return;
     };
     let player = Player::open(

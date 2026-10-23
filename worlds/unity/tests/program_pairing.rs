@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::listing;
 use primase_unity::player::Player;
@@ -100,14 +100,18 @@ fn census(label: &str, data: &std::path::Path, tpk: &std::path::Path) {
 
 #[test]
 fn the_stages_variants_of_a_pass_form_one_family_by_the_draws_keywords() {
-    let Some(tpk) = real_data("PRIMASE_UNITY_TPK") else {
+    let Some(tpk) = tool(Tool::UnityTpk) else {
         return;
     };
-    for (label, var) in [
-        ("Sledding Game", "PRIMASE_UNITY_DATA"),
-        ("SkateBIRD", "PRIMASE_UNITY_V21_DATA"),
-    ] {
-        if let Some(data) = real_data(var) {
+    let players = [
+        (
+            "Sledding Game",
+            install_file(Game::Sledding, "Sledding Game_Data"),
+        ),
+        ("SkateBIRD", install_file(Game::Skatebird, "SkateBIRD_Data")),
+    ];
+    for (label, data) in players {
+        if let Some(data) = data {
             census(label, &data, &tpk);
         }
     }

@@ -1,14 +1,14 @@
-//! Terrain gate against an independent reader's scan (`PRIMASE_UNITY_SCAN`: `terrains` each `name`, `path`, `M` (the
-//! world matrix), `data` and `mat` as [file, path id], `size`, `collider`, `physmat` (the physic material's name),
-//! `draw_trees`, `tree_colliders`), for the player `PRIMASE_UNITY_DATA` read with `PRIMASE_UNITY_TPK`: every drawn
-//! terrain's path, data, material, size, collider, physic material and tree flags exactly, its position within the
-//! scan's 6 decimals. Also reports, per terrain whose collider has its own TerrainData, whether its heights are the
-//! drawn ones.
+//! Terrain gate against an independent reader's scan (`oracles.unitypy.sledding/scan.json`: `terrains` each `name`,
+//! `path`, `M` (the world matrix), `data` and `mat` as [file, path id], `size`, `collider`, `physmat` (the physic
+//! material's name), `draw_trees`, `tree_colliders`), for the player `installs.sledding/Sledding Game_Data` read with
+//! `tools.unity_tpk`: every drawn terrain's path, data, material, size, collider, physic material and tree flags
+//! exactly, its position within the scan's 6 decimals. Also reports, per terrain whose collider has its own
+//! TerrainData, whether its heights are the drawn ones.
 
 #![allow(clippy::unwrap_used)]
 
 use primase_core::gate::{GateReport, Tolerance};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::player::{ObjRef, Player};
 use primase_unity::scene::Scene;
@@ -23,9 +23,9 @@ fn obj(r: &Option<ObjRef>) -> Json {
 #[test]
 fn terrains_match_the_scan() {
     let (Some(data), Some(tpk), Some(scan)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_SCAN"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "scan.json"),
     ) else {
         return;
     };
@@ -133,15 +133,15 @@ fn read_f32(path: &std::path::Path) -> Vec<f32> {
         .collect()
 }
 
-/// Terrain lowering against another exporter's terrain pieces (`PRIMASE_UNITY_PORT_TERRAIN`: `index.json` with
+/// Terrain lowering against another exporter's terrain pieces (`oracles.port.sledding/terrain`: `index.json` with
 /// `lift` and `pieces`, each `name`, `origin` (the terrain's x and z), `piece` (column and row of 128-cell pieces),
 /// `verts`, `tris`, `texture`, and files `<name>.pos` / `.nrm` (f32 x, y, z in the world frame, y lifted by `lift`),
-/// `.idx` (u32 triangles); `PRIMASE_UNITY_PORT`: its output folder, for `textures/<texture>`, the piece's base colour
-/// tile at the alphamap's resolution, rows top first; `layers.json`, its layers' mean colours): triangles as sets
-/// (winding kept) exactly; vertices within one f32 step of their lifted coordinate (they round after the lift); normals;
-/// layer means within 1/255 of their float64 means (BC1 palettes rounded otherwise); base colour texels baked from
-/// the means they used (float32 sums) within 1 of theirs, which checks the bake and its alignment; ours against theirs
-/// reported.
+/// `.idx` (u32 triangles); `oracles.port.sledding/level1`: its output folder, for `textures/<texture>`, the piece's
+/// base colour tile at the alphamap's resolution, rows top first; `layers.json`, its layers' mean colours): triangles
+/// as sets (winding kept) exactly; vertices within one f32 step of their lifted coordinate (they round after the lift);
+/// normals; layer means within 1/255 of their float64 means (BC1 palettes rounded otherwise); base colour texels baked
+/// from the means they used (float32 sums) within 1 of theirs, which checks the bake and its alignment; ours against
+/// theirs reported.
 #[test]
 fn terrain_geometry_matches_the_port() {
     use primase_core::pbr::PbrMaterial;
@@ -152,10 +152,10 @@ fn terrain_geometry_matches_the_port() {
     use std::collections::BTreeSet;
     use std::path::Path;
     let (Some(data), Some(tpk), Some(dir), Some(port)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_PORT_TERRAIN"),
-        real_data("PRIMASE_UNITY_PORT"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::Port, Game::Sledding, "terrain"),
+        oracle(OracleSet::Port, Game::Sledding, "level1"),
     ) else {
         return;
     };
@@ -422,9 +422,9 @@ fn trees_match_the_scan() {
     use primase_unity::level::read_level;
     use std::collections::BTreeMap;
     let (Some(data), Some(tpk), Some(scan)) = (
-        real_data("PRIMASE_UNITY_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
-        real_data("PRIMASE_UNITY_SCAN"),
+        install_file(Game::Sledding, "Sledding Game_Data"),
+        tool(Tool::UnityTpk),
+        oracle(OracleSet::UnityPy, Game::Sledding, "scan.json"),
     ) else {
         return;
     };
