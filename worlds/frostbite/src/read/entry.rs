@@ -171,9 +171,11 @@ impl Source<'_> {
         Ok(entities)
     }
 
-    /// The core texture of a texture resource: its header's levels, cut from the chunk the header names (the levels
-    /// the chunk holds, from level `first_mip` of the full map: the header's size is the first level's). Colour space
-    /// linear and role other until a lowering states them.
+    /// The core texture of a texture resource: the levels its chunk holds, cut from it. A streamed texture's header
+    /// describes the whole chain (`mip_sizes`, `chunk_size` their sum) while its chunk holds the levels from
+    /// `first_mip` on (the smaller ones; the chunk's logical offset in the bundle's manifest is the bytes of the levels
+    /// before it): the core texture is those levels, as large as level `first_mip` of the full size, which the
+    /// header's `width` and `height` still state. Colour space linear and role other until a lowering states them.
     fn texture(&self, bundle: &Bundle, entry: &Listed, h: &texture::TextureHeader) -> Result<Texture> {
         if h.kind != 0 || h.depth > 1 || h.slices > 1 {
             return Err(unsupported(
@@ -189,15 +191,22 @@ impl Source<'_> {
         };
         let (file, decoded) = bundle.chunk(self, &h.chunk)?;
         let chunk = self.payload(file, decoded)?;
-        let sizes = &h.mip_sizes[..usize::from(h.mip_count)];
-        if chunk.len() != sizes.iter().map(|&s| s as usize).sum::<usize>() {
+        let all = &h.mip_sizes[..usize::from(h.mip_count)];
+        let first = usize::from(h.first_mip);
+        let Some(held) = all.get(first..).filter(|h| !h.is_empty()) else {
             return Err(unsupported(
                 entry,
-                format_args!("chunk of {} bytes for levels of {sizes:?}", chunk.len()),
+                format_args!("first level {first} of a texture of {} levels", all.len()),
+            ));
+        };
+        if chunk.len() != held.iter().map(|&s| s as usize).sum::<usize>() {
+            return Err(unsupported(
+                entry,
+                format_args!("chunk of {} bytes for levels {first}.. of {all:?}", chunk.len()),
             ));
         }
-        let (mut at, mut levels) = (0, Vec::with_capacity(sizes.len()));
-        for (i, &size) in sizes.iter().enumerate() {
+        let (mut at, mut levels) = (0, Vec::with_capacity(held.len()));
+        for (i, &size) in all.iter().enumerate().skip(first) {
             let (lw, lh) = (
                 (u32::from(h.width) >> i).max(1),
                 (u32::from(h.height) >> i).max(1),
@@ -216,8 +225,8 @@ impl Source<'_> {
         }
         let _: Storage = storage;
         Ok(Texture {
-            width: u32::from(h.width),
-            height: u32::from(h.height),
+            width: (u32::from(h.width) >> first).max(1),
+            height: (u32::from(h.height) >> first).max(1),
             format,
             levels,
             color_space: ColorSpace::Linear,

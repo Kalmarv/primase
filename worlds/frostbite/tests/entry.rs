@@ -211,15 +211,22 @@ fn the_stock_items_toc_lists_and_reads() -> R {
     let t = src.read_entry(b, e, &mut w)?[0];
     let pixels = w.get::<Texture>(t).unwrap();
     let header = &w.get::<FrostbiteTexture>(t).unwrap().header;
+    let first = u32::from(header.first_mip);
     assert_eq!(
         (pixels.width, pixels.height),
-        (u32::from(header.width), u32::from(header.height))
+        (
+            (u32::from(header.width) >> first).max(1),
+            (u32::from(header.height) >> first).max(1)
+        )
     );
-    assert_eq!(pixels.levels.len(), usize::from(header.mip_count));
     assert_eq!(
-        pixels.levels.iter().map(Vec::len).sum::<usize>(),
-        header.chunk_size as usize
+        pixels.levels.len(),
+        usize::from(header.mip_count) - usize::from(header.first_mip)
     );
+    let held: u32 = header.mip_sizes[usize::from(header.first_mip)..usize::from(header.mip_count)]
+        .iter()
+        .sum();
+    assert_eq!(pixels.levels.iter().map(Vec::len).sum::<usize>(), held as usize);
 
     let (b, e) = all
         .iter()
@@ -238,5 +245,79 @@ fn the_stock_items_toc_lists_and_reads() -> R {
     let err = src.read_entry(b, e, &mut w).unwrap_err().to_string();
     assert!(err.contains(&e.name) && err.contains("is not read"), "{err}");
     assert_eq!(w.iter::<FrostbiteEntry>().count(), before);
+    Ok(())
+}
+
+/// A streamed texture: its header describes the whole chain while its chunk holds the levels from `first_mip` on (the
+/// chunk's logical offset in the bundle's manifest is the bytes of the levels before them). `steel_02_2x2m_c` of the
+/// build kit's rails is 1024x1024 BC7 with 11 levels of which 8 are held (21,872 bytes): it reads as a 128x128 core
+/// texture of those 8 levels, and its chunk starts where the three larger levels (1,376,256 bytes) end.
+#[test]
+fn a_streamed_texture_reads_the_levels_its_chunk_holds() -> R {
+    let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
+        return Ok(());
+    };
+    let folder = Folder::open(data)?;
+    // SAFETY: the configured Oodle 9 library is the game's own.
+    #[allow(unsafe_code)]
+    let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
+    let src = Source {
+        folder: &folder,
+        base: Some(&folder),
+        oodle: Some(&oodle),
+    };
+    let listing = src.listing("Win32/buildkititems.toc")?;
+    let (bundle, entry) = listing
+        .bundles
+        .iter()
+        .flat_map(|b| b.entries().map(move |e| (b, e)))
+        .find(|(_, e)| {
+            e.resource_type == Some(primase_frostbite::TEXTURE) && e.name.ends_with("/metal_steel_02_2x2m_c")
+        })
+        .unwrap();
+    let mut w = World::new();
+    let t = src.read_entry(bundle, &entry, &mut w)?[0];
+    let header = w.get::<FrostbiteTexture>(t).unwrap().header.clone();
+    assert_eq!(
+        (header.width, header.height, header.mip_count, header.first_mip),
+        (1024, 1024, 11, 3)
+    );
+    let pixels = w.get::<Texture>(t).unwrap();
+    assert_eq!((pixels.width, pixels.height, pixels.levels.len()), (128, 128, 8));
+    assert_eq!(pixels.levels.iter().map(Vec::len).sum::<usize>(), 21_872);
+    assert_eq!(pixels.levels[0].len(), header.mip_sizes[3] as usize);
+    // the chunk's logical offset in the manifest is the three larger levels
+    let skipped: u32 = header.mip_sizes[..3].iter().sum();
+    let held = bundle
+        .manifest
+        .chunks
+        .iter()
+        .find(|c| c.guid == header.chunk)
+        .unwrap();
+    assert_eq!((held.loff, held.lsize), (skipped, 21_872));
+    // every streamed 2D texture of the TOC reads, and a texture whose header says a first level past its chain does not
+    let (mut streamed, mut whole) = (0usize, 0usize);
+    for (b, e) in listing
+        .bundles
+        .iter()
+        .flat_map(|b| b.entries().map(move |e| (b, e)))
+        .filter(|(_, e)| e.resource_type == Some(primase_frostbite::TEXTURE))
+        .step_by(7)
+    {
+        let h = texture::read(&src.payload(e.file, e.size as usize)?)?;
+        if h.kind != 0 || h.slices > 1 || tex_format(h.format).is_none() {
+            continue;
+        }
+        let mut w = World::new();
+        src.read_entry(b, &e, &mut w)
+            .map_err(|err| format!("{}: {err}", e.name))?;
+        if h.first_mip > 0 {
+            streamed += 1;
+        } else {
+            whole += 1;
+        }
+    }
+    println!("{streamed} streamed and {whole} whole textures read");
+    assert!(streamed > 0 && whole > 0);
     Ok(())
 }
