@@ -16,7 +16,7 @@
 
 use std::collections::BTreeSet;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Collision, Entity, Instance, Marker, World};
 
 use crate::components::{StuntboostCollision, StuntboostDraw, StuntboostNode};
@@ -30,48 +30,62 @@ pub struct OmitStuntboostHidden {
     pub classes: BTreeSet<String>,
 }
 
-fn choice(o: &Options, k: &str) -> Result<bool, String> {
-    match o.get(k).map(String::as_str) {
-        Some("leave-out") => Ok(true),
-        Some("keep") => Ok(false),
-        Some(v) => Err(format!("{k}={v}: leave-out or keep")),
-        None => Err(format!(
-            "{k} is required: invisible=, shadow-only=, triggers= (leave-out|keep), classes= (joined by +, empty for none)"
-        )),
-    }
+/// Options `invisible`, `shadow-only` and `triggers`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hidden {
+    LeaveOut,
+    Keep,
+}
+
+impl Choice for Hidden {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("leave-out", Hidden::LeaveOut), ("keep", Hidden::Keep)];
 }
 
 impl OmitStuntboostHidden {
-    /// From its options, every one required.
-    pub fn from_options(o: &Options) -> Result<OmitStuntboostHidden, String> {
-        if let Some(k) = o
-            .keys()
-            .find(|k| !["invisible", "shadow-only", "triggers", "classes"].contains(&k.as_str()))
-        {
-            return Err(format!("unknown option {k}"));
-        }
-        let classes = o
-            .get("classes")
-            .ok_or("classes is required: class names joined by +, empty for none")?;
-        Ok(OmitStuntboostHidden {
-            invisible: choice(o, "invisible")?,
-            shadow_only: choice(o, "shadow-only")?,
-            triggers: choice(o, "triggers")?,
-            classes: classes
+    /// From its declared options.
+    fn from_given(g: &Given) -> OmitStuntboostHidden {
+        let leave_out = |k: &str| g.choice::<Hidden>(k) == Hidden::LeaveOut;
+        OmitStuntboostHidden {
+            invisible: leave_out("invisible"),
+            shadow_only: leave_out("shadow-only"),
+            triggers: leave_out("triggers"),
+            classes: g
+                .required("classes")
                 .split('+')
                 .filter(|c| !c.is_empty())
                 .map(str::to_owned)
                 .collect(),
-        })
+        }
     }
 }
+
+/// `omit-stuntboost-hidden`'s declaration ([`primase_core::pass::PassRegistry::add`]): every option is the program's,
+/// without defaults.
+pub const OMIT_STUNTBOOST_HIDDEN: PassSpec = PassSpec {
+    name: "omit-stuntboost-hidden",
+    options: &[
+        OptionSpec::choice::<Hidden>("invisible", "the invisible nodes left out, or kept"),
+        OptionSpec::choice::<Hidden>(
+            "shadow-only",
+            "the nodes drawn only into shadows left out, or kept",
+        ),
+        OptionSpec::choice::<Hidden>("triggers", "the trigger nodes left out, or kept"),
+        OptionSpec::required(
+            "classes",
+            "PreviewCamera+Sun+SetBakedLighting",
+            "the node classes left out, joined by + (empty for none)",
+        ),
+    ],
+    make: |g| Ok(Box::new(OmitStuntboostHidden::from_given(g))),
+};
 
 impl Pass for OmitStuntboostHidden {
     fn name(&self) -> &'static str {
         "omit-stuntboost-hidden"
     }
     fn options(&self) -> Options {
-        let word = |b: bool| if b { "leave-out" } else { "keep" }.to_owned();
+        let word = |b: bool| if b { Hidden::LeaveOut } else { Hidden::Keep }.text().to_owned();
         Options::from([
             ("invisible".to_owned(), word(self.invisible)),
             ("shadow-only".to_owned(), word(self.shadow_only)),

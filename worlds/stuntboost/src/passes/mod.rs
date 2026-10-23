@@ -8,7 +8,7 @@ pub mod spawns;
 #[cfg(test)]
 mod tests;
 
-pub use collision::{KillSurface, LowerStuntboostCollision};
-pub use hidden::OmitStuntboostHidden;
-pub use materials::{Baked, LowerStuntboostMaterials, Transparent};
-pub use spawns::{LowerStuntboostSpawns, OtherSpawns, Spawn, Start, spawns};
+pub use collision::{KillSurface, LOWER_STUNTBOOST_COLLISION, LowerStuntboostCollision};
+pub use hidden::{OMIT_STUNTBOOST_HIDDEN, OmitStuntboostHidden};
+pub use materials::{Baked, LOWER_STUNTBOOST_MATERIALS, LowerStuntboostMaterials, Transparent};
+pub use spawns::{LOWER_STUNTBOOST_SPAWNS, LowerStuntboostSpawns, OtherSpawns, Spawn, Start, spawns};

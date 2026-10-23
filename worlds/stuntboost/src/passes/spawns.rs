@@ -11,7 +11,7 @@
 //!
 //! The node keeps its `stuntboost.node` (its arguments, as stored).
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Marker, World};
 
 use crate::components::StuntboostNode;
@@ -23,6 +23,13 @@ pub enum OtherSpawns {
     Travel,
     /// Despawned, counted.
     LeaveOut,
+}
+
+impl Choice for OtherSpawns {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("travel", OtherSpawns::Travel),
+        ("leave-out", OtherSpawns::LeaveOut),
+    ];
 }
 
 /// Which spawn starts.
@@ -65,33 +72,38 @@ pub fn spawns(w: &World) -> Vec<Spawn> {
 }
 
 impl LowerStuntboostSpawns {
-    /// From its options, both required: `start` (a spawn's name, which may be empty, `first` or `none`; see the module
-    /// documentation), `others` (`travel` or `leave-out`).
-    pub fn from_options(o: &Options) -> Result<LowerStuntboostSpawns, String> {
-        if let Some(k) = o.keys().find(|k| !["start", "others"].contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let get = |k: &str| {
-            o.get(k).ok_or_else(|| {
-                format!(
-                    "{k} is required: start=<spawn name, may be empty>|first|none, others=travel|leave-out"
-                )
-            })
-        };
-        Ok(LowerStuntboostSpawns {
-            start: match get("start")?.as_str() {
+    /// From its declared options: `start` a spawn's name (which may be empty, written `name:<name>` when it is one
+    /// of the words or starts so), `first` or `none` (see the module documentation).
+    fn from_given(g: &Given) -> LowerStuntboostSpawns {
+        LowerStuntboostSpawns {
+            start: match g.required("start") {
                 "first" => Start::First,
                 "none" => Start::None,
                 v => Start::Named(v.strip_prefix("name:").unwrap_or(v).to_owned()),
             },
-            others: match get("others")?.as_str() {
-                "travel" => OtherSpawns::Travel,
-                "leave-out" => OtherSpawns::LeaveOut,
-                v => return Err(format!("others={v}: travel or leave-out")),
-            },
-        })
+            others: g.choice("others"),
+        }
     }
 }
+
+/// `lower-stuntboost-spawns`' declaration ([`primase_core::pass::PassRegistry::add`]): both options are the program's,
+/// without defaults.
+pub const LOWER_STUNTBOOST_SPAWNS: PassSpec = PassSpec {
+    name: "lower-stuntboost-spawns",
+    options: &[
+        OptionSpec::required(
+            "start",
+            "start",
+            "the spawn that starts: its name (may be empty; name:<name> for one called first or none), first (the \
+             first in stored order) or none",
+        ),
+        OptionSpec::choice::<OtherSpawns>(
+            "others",
+            "the other spawns as travel markers, or left out (counted)",
+        ),
+    ],
+    make: |g| Ok(Box::new(LowerStuntboostSpawns::from_given(g))),
+};
 
 /// A spawn node's name: its first argument, empty when none.
 fn spawn_name(n: &StuntboostNode) -> Option<&str> {
@@ -123,14 +135,7 @@ impl Pass for LowerStuntboostSpawns {
                     Start::Named(n) => n.clone(),
                 },
             ),
-            (
-                "others".to_owned(),
-                match self.others {
-                    OtherSpawns::Travel => "travel",
-                    OtherSpawns::LeaveOut => "leave-out",
-                }
-                .to_owned(),
-            ),
+            ("others".to_owned(), self.others.text().to_owned()),
         ])
     }
     fn provides(&self) -> &[&'static str] {

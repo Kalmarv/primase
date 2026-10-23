@@ -168,7 +168,7 @@ fn solid_nodes_collide_with_their_physics_surfaces() {
         ("kill", "leave-out"),
         ("unassigned", "C_Default"),
     ]);
-    let pass = LowerStuntboostCollision::from_options(&o).unwrap();
+    let pass = LOWER_STUNTBOOST_COLLISION.instance(&o).unwrap();
     assert_eq!(pass.options(), o);
     let mut log = PassLog::default();
     pass.run(&mut l.w, &mut log).unwrap();
@@ -193,7 +193,7 @@ fn solid_nodes_collide_with_their_physics_surfaces() {
 fn the_stated_spawn_starts() {
     let mut l = level();
     let o = opts(&[("start", "start"), ("others", "travel")]);
-    let pass = LowerStuntboostSpawns::from_options(&o).unwrap();
+    let pass = LOWER_STUNTBOOST_SPAWNS.instance(&o).unwrap();
     assert_eq!(pass.options(), o);
     pass.run(&mut l.w, &mut PassLog::default()).unwrap();
     let kind = |w: &World, e| w.get::<Marker>(e).map(|m| m.kind.clone());
@@ -230,8 +230,8 @@ fn the_start_is_the_first_spawn_or_none() {
         [(l.start, "start"), (l.other, "")]
     );
     let first = opts(&[("start", "first"), ("others", "travel")]);
-    let pass = LowerStuntboostSpawns::from_options(&first).unwrap();
-    assert_eq!(pass.start, Start::First);
+    // printed back as the word, not as a spawn's name (name:first)
+    let pass = LOWER_STUNTBOOST_SPAWNS.instance(&first).unwrap();
     assert_eq!(pass.options(), first);
     pass.run(&mut l.w, &mut PassLog::default()).unwrap();
     assert_eq!(kind(&l.w, l.start).as_deref(), Some("spawn"));
@@ -239,8 +239,7 @@ fn the_start_is_the_first_spawn_or_none() {
 
     let mut l = level();
     let none = opts(&[("start", "none"), ("others", "leave-out")]);
-    let pass = LowerStuntboostSpawns::from_options(&none).unwrap();
-    assert_eq!(pass.start, Start::None);
+    let pass = LOWER_STUNTBOOST_SPAWNS.instance(&none).unwrap();
     assert_eq!(pass.options(), none);
     let mut log = PassLog::default();
     pass.run(&mut l.w, &mut log).unwrap();
@@ -248,9 +247,14 @@ fn the_start_is_the_first_spawn_or_none() {
     assert_eq!(log.counts.get("spawns other than the start left out"), Some(&2));
 
     // the words are reserved; a spawn of that name is written with its prefix
-    let named =
-        LowerStuntboostSpawns::from_options(&opts(&[("start", "name:first"), ("others", "travel")])).unwrap();
-    assert_eq!(named.start, Start::Named("first".into()));
+    let named = LOWER_STUNTBOOST_SPAWNS
+        .instance(&opts(&[("start", "name:first"), ("others", "travel")]))
+        .unwrap();
+    let typed = LowerStuntboostSpawns {
+        start: Start::Named("first".into()),
+        others: OtherSpawns::Travel,
+    };
+    assert_eq!(named.options(), typed.options());
     assert_eq!(named.options()["start"], "name:first");
     assert!(named.run(&mut level().w, &mut PassLog::default()).is_err());
 
@@ -269,7 +273,7 @@ fn the_start_is_the_first_spawn_or_none() {
 fn the_baked_atlas_lowers_as_stated() {
     let mut l = level();
     let o = opts(&[("baked", "emission"), ("transparent", "blend")]);
-    let pass = LowerStuntboostMaterials::from_options(&o).unwrap();
+    let pass = LOWER_STUNTBOOST_MATERIALS.instance(&o).unwrap();
     assert_eq!(pass.options(), o);
     pass.run(&mut l.w, &mut PassLog::default()).unwrap();
     let bake = l.w.get::<PbrMaterial>(l.bake).unwrap();
@@ -417,12 +421,11 @@ fn hidden_and_gameplay_nodes_are_left_out_as_stated() {
         ("triggers", "leave-out"),
         ("classes", "Sun"),
     ]);
-    let pass = OmitStuntboostHidden::from_options(&o).unwrap();
+    let pass = OMIT_STUNTBOOST_HIDDEN.instance(&o).unwrap();
     assert_eq!(pass.options(), o);
-    assert_eq!(pass.classes, BTreeSet::from(["Sun".to_owned()]));
     pass.run(&mut l.w, &mut PassLog::default()).unwrap();
     assert!(!l.w.is_alive(l.checkpoint) && !l.w.is_alive(l.ceiling) && !l.w.is_alive(l.sun));
     assert!(l.w.is_alive(l.wall) && l.w.has::<Collision>(l.wall) && !l.w.has::<Instance>(l.wall));
     assert!(l.w.is_alive(l.start) && l.w.is_alive(l.window) && l.w.has::<Instance>(l.ramp));
-    assert!(OmitStuntboostHidden::from_options(&Options::new()).is_err());
+    assert!(OMIT_STUNTBOOST_HIDDEN.instance(&Options::new()).is_err());
 }

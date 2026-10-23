@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::world::Resource;
 use primase_core::{
     Collision, Component, Entity, Instance, Mesh, Primitive, SurfaceClass, Surfaces, Topology, World,
@@ -65,34 +65,20 @@ pub struct LowerStuntboostCollision {
 }
 
 impl LowerStuntboostCollision {
-    /// From its options, every one required: `plain` and `rails` a surface class, `kill` `leave-out` or a class,
-    /// `unassigned` a physics material name.
-    pub fn from_options(o: &Options) -> Result<LowerStuntboostCollision, String> {
-        if let Some(k) = o
-            .keys()
-            .find(|k| !["plain", "rails", "kill", "unassigned"].contains(&k.as_str()))
-        {
-            return Err(format!("unknown option {k}"));
-        }
-        let get = |k: &str| {
-            o.get(k).map(String::as_str).ok_or_else(|| {
-                format!(
-                    "{k} is required: plain=<class>, rails=<class>, kill=leave-out|<class>, unassigned=C_..."
-                )
-            })
-        };
+    /// From its declared options.
+    fn from_given(g: &Given) -> Result<LowerStuntboostCollision, String> {
         let class = |k: &str| -> Result<SurfaceClass, String> {
-            let v = get(k)?;
+            let v = g.required(k);
             SurfaceClass::parse(v).ok_or_else(|| format!("{k}: {v} is not a surface class"))
         };
         Ok(LowerStuntboostCollision {
             plain: class("plain")?,
             rails: class("rails")?,
-            kill: match get("kill")? {
+            kill: match g.required("kill") {
                 "leave-out" => KillSurface::LeaveOut,
                 _ => KillSurface::Class(class("kill")?),
             },
-            unassigned: get("unassigned")?.to_owned(),
+            unassigned: g.required("unassigned").to_owned(),
         })
     }
 
@@ -112,6 +98,35 @@ impl LowerStuntboostCollision {
         })
     }
 }
+
+/// `lower-stuntboost-collision`'s declaration ([`primase_core::pass::PassRegistry::add`]): every option is the
+/// program's, without defaults.
+pub const LOWER_STUNTBOOST_COLLISION: PassSpec = PassSpec {
+    name: "lower-stuntboost-collision",
+    options: &[
+        OptionSpec::required(
+            "plain",
+            "wood",
+            "the surface class of a solid physics material with no substance",
+        ),
+        OptionSpec::required(
+            "rails",
+            "metal",
+            "the surface class of a rail physics material with no substance",
+        ),
+        OptionSpec::required(
+            "kill",
+            "leave-out",
+            "what C_Kill triangles become: leave-out (not collided with, counted) or a surface class",
+        ),
+        OptionSpec::required(
+            "unassigned",
+            "C_Default",
+            "the physics material (C_...) a primitive without one is made of",
+        ),
+    ],
+    make: |g| Ok(Box::new(LowerStuntboostCollision::from_given(g)?)),
+};
 
 impl Pass for LowerStuntboostCollision {
     fn name(&self) -> &'static str {

@@ -26,7 +26,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, TextureRef};
 use primase_core::{Component, Entity, Instance, MaterialVariants, Mesh, Name, World};
 
@@ -42,11 +42,24 @@ pub enum Baked {
     Unlit,
 }
 
+impl Choice for Baked {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("base-colour", Baked::BaseColour),
+        ("emission", Baked::Emission),
+        ("unlit", Baked::Unlit),
+    ];
+}
+
 /// What a transparent node's materials become.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transparent {
     Blend,
     Opaque,
+}
+
+impl Choice for Transparent {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("blend", Transparent::Blend), ("opaque", Transparent::Opaque)];
 }
 
 /// See the module documentation.
@@ -56,32 +69,27 @@ pub struct LowerStuntboostMaterials {
     pub transparent: Transparent,
 }
 
-impl LowerStuntboostMaterials {
-    /// From its options, both required: `baked` (`base-colour`, `emission` or `unlit`), `transparent` (`blend` or `opaque`).
-    pub fn from_options(o: &Options) -> Result<LowerStuntboostMaterials, String> {
-        if let Some(k) = o.keys().find(|k| !["baked", "transparent"].contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let get = |k: &str| {
-            o.get(k).map(String::as_str).ok_or_else(|| {
-                format!("{k} is required: baked=base-colour|emission|unlit, transparent=blend|opaque")
-            })
-        };
-        Ok(LowerStuntboostMaterials {
-            baked: match get("baked")? {
-                "base-colour" => Baked::BaseColour,
-                "emission" => Baked::Emission,
-                "unlit" => Baked::Unlit,
-                v => return Err(format!("baked={v}: base-colour, emission or unlit")),
-            },
-            transparent: match get("transparent")? {
-                "blend" => Transparent::Blend,
-                "opaque" => Transparent::Opaque,
-                v => return Err(format!("transparent={v}: blend or opaque")),
-            },
-        })
-    }
-}
+/// `lower-stuntboost-materials`' declaration ([`primase_core::pass::PassRegistry::add`]): both options are the
+/// program's, without defaults.
+pub const LOWER_STUNTBOOST_MATERIALS: PassSpec = PassSpec {
+    name: "lower-stuntboost-materials",
+    options: &[
+        OptionSpec::choice::<Baked>(
+            "baked",
+            "what a bake material's atlas lowers as: base colour, emission, or unlit",
+        ),
+        OptionSpec::choice::<Transparent>(
+            "transparent",
+            "a transparent node's materials blended at their alpha, or opaque",
+        ),
+    ],
+    make: |g| {
+        Ok(Box::new(LowerStuntboostMaterials {
+            baked: g.choice("baked"),
+            transparent: g.choice("transparent"),
+        }))
+    },
+};
 
 fn texture(t: &Option<StuntboostTextureRef>) -> Option<TextureRef> {
     let t = t.as_ref()?;
@@ -99,23 +107,8 @@ impl Pass for LowerStuntboostMaterials {
     }
     fn options(&self) -> Options {
         Options::from([
-            (
-                "baked".to_owned(),
-                match self.baked {
-                    Baked::BaseColour => "base-colour",
-                    Baked::Emission => "emission",
-                    Baked::Unlit => "unlit",
-                }
-                .to_owned(),
-            ),
-            (
-                "transparent".to_owned(),
-                match self.transparent {
-                    Transparent::Blend => "blend",
-                    Transparent::Opaque => "opaque",
-                }
-                .to_owned(),
-            ),
+            ("baked".to_owned(), self.baked.text().to_owned()),
+            ("transparent".to_owned(), self.transparent.text().to_owned()),
         ])
     }
     /// The materials' `pbr.material`; with `transparent=blend`, the blended copies (each with `core.name`) and the

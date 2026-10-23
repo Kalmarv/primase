@@ -23,38 +23,16 @@ pub mod read;
 pub use passes::{Spawn, Start, spawns};
 pub use read::{LevelEntry, LevelReport, levels, model_gltf, model_image, models, read_level};
 
-/// Registers STUNTBOOST's passes by name; every option of each is the program's, without defaults.
+/// Registers STUNTBOOST's passes by their declarations; every option of each is the program's, without defaults.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    reg.register_requiring(
-        "lower-stuntboost-collision",
-        |o| Ok(Box::new(passes::LowerStuntboostCollision::from_options(o)?)),
-        &[
-            ("plain", "wood"),
-            ("rails", "metal"),
-            ("kill", "leave-out"),
-            ("unassigned", "C_Default"),
-        ],
-    );
-    reg.register_requiring(
-        "lower-stuntboost-spawns",
-        |o| Ok(Box::new(passes::LowerStuntboostSpawns::from_options(o)?)),
-        &[("start", "start"), ("others", "travel")],
-    );
-    reg.register_requiring(
-        "lower-stuntboost-materials",
-        |o| Ok(Box::new(passes::LowerStuntboostMaterials::from_options(o)?)),
-        &[("baked", "base-colour"), ("transparent", "blend")],
-    );
-    reg.register_requiring(
-        "omit-stuntboost-hidden",
-        |o| Ok(Box::new(passes::OmitStuntboostHidden::from_options(o)?)),
-        &[
-            ("invisible", "leave-out"),
-            ("shadow-only", "leave-out"),
-            ("triggers", "leave-out"),
-            ("classes", "PreviewCamera+Sun+SetBakedLighting"),
-        ],
-    );
+    for spec in [
+        &passes::LOWER_STUNTBOOST_COLLISION,
+        &passes::LOWER_STUNTBOOST_SPAWNS,
+        &passes::LOWER_STUNTBOOST_MATERIALS,
+        &passes::OMIT_STUNTBOOST_HIDDEN,
+    ] {
+        reg.add(spec);
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -76,3 +54,28 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[cfg(test)]
+mod tests {
+    use primase_core::pass::{Options, PassRegistry};
+
+    /// The crate registers exactly these passes by their declarations, each made only with its options and saying
+    /// what it takes.
+    #[test]
+    fn the_stuntboost_passes_register_by_name() {
+        let mut reg = PassRegistry::new();
+        super::register(&mut reg);
+        let names = [
+            "lower-stuntboost-collision",
+            "lower-stuntboost-materials",
+            "lower-stuntboost-spawns",
+            "omit-stuntboost-hidden",
+        ];
+        assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        for name in names {
+            assert!(reg.requires_options(name), "{name}");
+            assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");
+            assert!(reg.make(name, &Options::new()).is_err(), "{name}");
+        }
+    }
+}
