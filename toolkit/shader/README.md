@@ -134,9 +134,9 @@ What the lifters make of every program of every corpus the project holds, counte
 | Sekiro (DXBC) | 432 | 432 | 432 | 432 | 0 | 432 |
 | Elden Ring (DXIL; 44,450 containers) | 44,450 | 44,450 | 44,450 | 44,441 | 0 | 43,985 |
 | skate. (DXIL; 19,445 containers) | 19,445 | 19,443 | 19,443 | 19,138 | 2 | 19,199 |
-| STUNTBOOST (MojoShader GLSL in 18 effects) | 47 | 47 | 47 | 47 | 0 | not measured |
+| STUNTBOOST (MojoShader GLSL in 18 effects) | 47 | 47 | 47 | 47 | 0 | 47 |
 
-Not measured: GTA V Legacy's `.fxc` effects (`oracles.corpus.gta/legacy-effects`; the folder is not on the machine that ran this) and the STUNTBOOST shaders on the executor.
+Not measured: GTA V Legacy's `.fxc` effects (`oracles.corpus.gta/legacy-effects`; the folder is not on the machine that ran this).
 
 ### Refused by the lift
 

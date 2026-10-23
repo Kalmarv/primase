@@ -581,6 +581,8 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                                     CvtOp::F2U => f(s[i]) as u32,
                                     CvtOp::I2F => (s[i] as i32 as f32).to_bits(),
                                     CvtOp::U2F => (s[i] as f32).to_bits(),
+                                    CvtOp::B2F => (if s[i] != 0 { 1.0f32 } else { 0.0 }).to_bits(),
+                                    CvtOp::B2U => u32::from(s[i] != 0),
                                 };
                             }
                             self.regs[dst + l] = r;
@@ -593,12 +595,16 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                     b,
                     c: cc,
                     n,
+                    c1,
                 } => {
                     for l in 0..N {
                         if active.has(l) {
                             let x = self.regs[*a as usize * N + l];
                             let y = self.regs[*b as usize * N + l];
-                            let z = self.regs[*cc as usize * N + l];
+                            let mut z = self.regs[*cc as usize * N + l];
+                            if *c1 {
+                                z = [z[0]; 4];
+                            }
                             self.regs[dst + l] = math(*mf, x, y, z, *n, ftz);
                         }
                     }
@@ -1638,6 +1644,30 @@ fn math(mf: MathOp, a: Reg, b: Reg, c: Reg, n: u8, z: bool) -> Reg {
         r[0] = acc.to_bits();
         return r;
     }
+    match mf {
+        MathOp::All => {
+            r[0] = u32::from(a[..n as usize].iter().all(|&w| w != 0));
+            return r;
+        }
+        MathOp::Any => {
+            r[0] = u32::from(a[..n as usize].iter().any(|&w| w != 0));
+            return r;
+        }
+        MathOp::Normalize => {
+            let lanes = &a[..n as usize];
+            let mut sum = 0.0f32;
+            for (i, &lane) in lanes.iter().enumerate() {
+                let sq = fl(fl(f(lane), z) * fl(f(lane), z), z);
+                sum = if i == 0 { sq } else { fl(sum + sq, z) };
+            }
+            let length = fl((sum as f64).sqrt() as f32, z);
+            for (out, &lane) in r.iter_mut().zip(lanes) {
+                *out = fl(fl(f(lane), z) / length, z).to_bits();
+            }
+            return r;
+        }
+        _ => {}
+    }
     if mf == MathOp::PackHalf {
         r[0] = half::f16::from_f32(f(a[0])).to_bits() as u32
             | ((half::f16::from_f32(f(a[1])).to_bits() as u32) << 16);
@@ -1695,7 +1725,29 @@ fn math(mf: MathOp, a: Reg, b: Reg, c: Reg, n: u8, z: bool) -> Reg {
                     x.trailing_zeros()
                 }
             }
-            MathOp::Dot | MathOp::PackHalf | MathOp::UnpackHalf => unreachable!(),
+            // x * (1 - a) + y * a, each product and the sum rounded
+            MathOp::Mix => g(g(g(f(x)) * g(1.0 - g(f(w)))) + g(g(f(y)) * g(f(w)))).to_bits(),
+            MathOp::SignF => {
+                let v = f(x);
+                (if v > 0.0 {
+                    1.0f32
+                } else if v < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                })
+                .to_bits()
+            }
+            MathOp::Pow => g((g(f(x)) as f64).powf(g(f(y)) as f64) as f32).to_bits(),
+            MathOp::SignI => (x as i32).signum() as u32,
+            MathOp::IsNan => u32::from(f(x).is_nan()),
+            MathOp::IsInf => u32::from(f(x).is_infinite()),
+            MathOp::Dot
+            | MathOp::PackHalf
+            | MathOp::UnpackHalf
+            | MathOp::All
+            | MathOp::Any
+            | MathOp::Normalize => unreachable!(),
         };
     }
     r

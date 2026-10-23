@@ -174,3 +174,41 @@ fn e2_every_shader_lifts() {
     );
     assert_eq!(programs, 47);
 }
+
+/// - E3: every lifted shader is checked and compiled by the executor (`Executable::new`); the refusals are counted by
+///   reason (each a name for what the executor does not run).
+#[test]
+fn e3_every_shader_compiles_on_the_executor() {
+    let Some(root) = install_file(Game::Stuntboost, "Content/Effects") else {
+        return;
+    };
+    let mut files = Vec::new();
+    effects(&root, &mut files);
+    let (mut programs, mut refused) = (0usize, std::collections::BTreeMap::<String, Vec<String>>::new());
+    for path in &files {
+        let name = path.strip_prefix(&root).unwrap().display().to_string();
+        let bytes = std::fs::read(path).unwrap();
+        let xnb = Xnb::parse(&bytes).unwrap();
+        let effect = Effect::parse(xnb.effect().unwrap()).unwrap();
+        for index in 0..effect.shaders.len() {
+            let program = primase_monogame::programs::program(&effect, index).unwrap();
+            programs += 1;
+            if let Err(e) = primase_shader::exec::Executable::new(&program) {
+                refused
+                    .entry(e.detail.clone())
+                    .or_default()
+                    .push(format!("{name} shader {index} ({:?})", program.stage));
+            }
+        }
+    }
+    println!(
+        "{programs} programs, {} executable, {} refused",
+        programs - refused.values().map(Vec::len).sum::<usize>(),
+        refused.values().map(Vec::len).sum::<usize>()
+    );
+    for (reason, which) in &refused {
+        println!("  refused {:3}  {reason}  e.g. {}", which.len(), which[0]);
+    }
+    assert_eq!(programs, 47);
+    assert!(refused.is_empty(), "{} programs the executor refuses", refused.len());
+}

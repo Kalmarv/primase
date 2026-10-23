@@ -56,6 +56,9 @@ pub(super) enum CvtOp {
     F2U,
     I2F,
     U2F,
+    /// A boolean (a word that is 0 or not) as 1.0 or 0.0, and as 1 or 0.
+    B2F,
+    B2U,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum MathOp {
@@ -96,6 +99,20 @@ pub(super) enum MathOp {
     Ctz,
     PackHalf,
     UnpackHalf,
+    /// `mix(x, y, a)`: `x * (1 - a) + y * a`.
+    Mix,
+    /// The vector scaled to length 1.
+    Normalize,
+    /// `pow(x, y)`, evaluated in double precision and rounded once.
+    Pow,
+    SignF,
+    SignI,
+    /// The relational functions: whether all or any lane of a boolean vector is set, and per lane whether a float is a
+    /// NaN or an infinity.
+    All,
+    Any,
+    IsNan,
+    IsInf,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -185,6 +202,8 @@ pub(super) enum Op {
         b: u32,
         c: u32,
         n: u8,
+        /// The third operand is a scalar given to every lane (`mix` of vectors by a scalar).
+        c1: bool,
     },
     Deriv {
         src: u32,

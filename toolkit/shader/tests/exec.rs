@@ -833,3 +833,100 @@ fn trigonometry_fma_and_the_float_remainder() {
         [1.5, -1.5, 5.5f32.mul_add(2.0, 0.5), 0.5]
     );
 }
+
+/// `mix` of vectors by a vector and by a scalar, `normalize`, `sign` and the relational functions, against the values
+/// worked out here: with x = 0.5 and y = 2, v = (x, y, 2, 0.5) and w = (y, x, -1, 4).
+#[test]
+fn mix_normalize_sign_and_the_relational_functions() {
+    use naga::{MathFunction as Mf, RelationalFunction as Rf};
+    let run = |program: Program| {
+        let shader = ProgramShader::new(program).unwrap();
+        lanes(
+            shader
+                .execute(&[bits([0.5, 2.0, 0.0, 0.0])], &[], &mut Unused)
+                .unwrap()
+                .outputs[0],
+        )
+    };
+    let vectors = |b: &mut Builder, x: Val, y: Val| {
+        let (two, half, minus_one, four) = (b.lit_f(2.0), b.lit_f(0.5), b.lit_f(-1.0), b.lit_f(4.0));
+        (b.compose(&[x, y, two, half]), b.compose(&[y, x, minus_one, four]))
+    };
+    // by a scalar: v * (1 - x) + w * x
+    let by_scalar = program_of(|b, x, y| {
+        let (v, w) = vectors(b, x, y);
+        b.math(Mf::Mix, &[v, w, x])
+    });
+    assert_eq!(run(by_scalar), [1.25, 1.25, 0.5, 2.25]);
+    // by a vector (x, x, y, y)
+    let by_vector = program_of(|b, x, y| {
+        let (v, w) = vectors(b, x, y);
+        let a = b.compose(&[x, x, y, y]);
+        b.math(Mf::Mix, &[v, w, a])
+    });
+    assert_eq!(run(by_vector), [1.25, 1.25, -4.0, 7.5]);
+    let normalized = program_of(|b, x, y| {
+        let (v, _) = vectors(b, x, y);
+        b.math(Mf::Normalize, &[v])
+    });
+    let length = 8.5f64.sqrt() as f32;
+    assert_eq!(
+        run(normalized),
+        [0.5 / length, 2.0 / length, 2.0 / length, 0.5 / length]
+    );
+    let signs = program_of(|b, x, y| {
+        let zero = b.lit_f(0.0);
+        let minus_x = b.unary(naga::UnaryOperator::Negate, x);
+        let parts = [x, minus_x, zero, y].map(|v| b.math(Mf::Sign, &[v]));
+        b.compose(&parts)
+    });
+    assert_eq!(run(signs), [1.0, -1.0, 0.0, 1.0]);
+    // any and all of v < w = (true, false, false, true); NaN from 0 / 0, infinity from x / 0
+    let relational = program_of(|b, x, y| {
+        let (v, w) = vectors(b, x, y);
+        let less = b.binary(naga::BinaryOperator::Less, v, w);
+        let relation = |b: &mut Builder, fun, argument: Val| {
+            let e = b.app(naga::Expression::Relational {
+                fun,
+                argument: argument.expr,
+            });
+            val(e, Kind::B, 1)
+        };
+        let zero = b.lit_f(0.0);
+        let nan = b.binary(naga::BinaryOperator::Divide, zero, zero);
+        let infinity = b.binary(naga::BinaryOperator::Divide, x, zero);
+        let tests = [
+            relation(b, Rf::Any, less),
+            relation(b, Rf::All, less),
+            relation(b, Rf::IsNan, nan),
+            relation(b, Rf::IsInf, infinity),
+        ];
+        let (one, none) = (b.lit_f(1.0), b.lit_f(0.0));
+        let parts = tests.map(|t| b.select(t, one, none));
+        b.compose(&parts)
+    });
+    assert_eq!(run(relational), [1.0, 0.0, 1.0, 1.0]);
+}
+
+/// `pow` (in double precision, rounded once) and the conversion of a boolean to a float and to an integer.
+#[test]
+fn pow_and_the_conversion_of_booleans() {
+    let program = program_of(|b, x, y| {
+        let power = b.math(naga::MathFunction::Pow, &[y, x]);
+        let below = b.binary(naga::BinaryOperator::Less, x, y);
+        let above = b.binary(naga::BinaryOperator::Less, y, x);
+        let as_float = |b: &mut Builder, v: Val| b.convert(v, Kind::F);
+        let (one, zero) = (as_float(b, below), as_float(b, above));
+        let as_int = b.convert(below, Kind::U);
+        let as_int = b.convert(as_int, Kind::F);
+        b.compose(&[power, one, zero, as_int])
+    });
+    let shader = ProgramShader::new(program).unwrap();
+    let out = lanes(
+        shader
+            .execute(&[bits([0.5, 2.0, 0.0, 0.0])], &[], &mut Unused)
+            .unwrap()
+            .outputs[0],
+    );
+    assert_eq!(out, [2.0f64.powf(0.5) as f32, 1.0, 0.0, 1.0]);
+}

@@ -724,6 +724,8 @@ pub(super) fn compile(
                         (Kind::F, ScalarKind::Uint) => CvtOp::F2U,
                         (Kind::I, ScalarKind::Float) => CvtOp::I2F,
                         (Kind::U, ScalarKind::Float) => CvtOp::U2F,
+                        (Kind::B, ScalarKind::Float) => CvtOp::B2F,
+                        (Kind::B, ScalarKind::Uint | ScalarKind::Sint) => CvtOp::B2U,
                         (Kind::I, ScalarKind::Uint) | (Kind::U, ScalarKind::Sint) => {
                             slot[i] = slot[expr.index()];
                             continue;
@@ -798,9 +800,31 @@ pub(super) fn compile(
                     (Mf::FirstTrailingBit, _) => MathOp::Ctz,
                     (Mf::Pack2x16float, _) => MathOp::PackHalf,
                     (Mf::Unpack2x16float, _) => MathOp::UnpackHalf,
+                    (Mf::Mix, Kind::F) => MathOp::Mix,
+                    (Mf::Pow, Kind::F) => MathOp::Pow,
+                    (Mf::Normalize, Kind::F) => MathOp::Normalize,
+                    (Mf::Sign, Kind::F) => MathOp::SignF,
+                    (Mf::Sign, Kind::I) => MathOp::SignI,
                     (f, k) => return Err(format!("math function {f:?} on {k:?}")),
                 };
-                op_of[i] = Some(Op::Math { f, a, b, c, n });
+                let c1 = arg2.is_some_and(|x| nlanes(x) == 1) && n > 1;
+                op_of[i] = Some(Op::Math { f, a, b, c, n, c1 });
+            }
+            E::Relational { fun, argument } => {
+                let f = match fun {
+                    naga::RelationalFunction::All => MathOp::All,
+                    naga::RelationalFunction::Any => MathOp::Any,
+                    naga::RelationalFunction::IsNan => MathOp::IsNan,
+                    naga::RelationalFunction::IsInf => MathOp::IsInf,
+                };
+                op_of[i] = Some(Op::Math {
+                    f,
+                    a: slot[argument.index()],
+                    b: 0,
+                    c: 0,
+                    n: nlanes(*argument),
+                    c1: false,
+                });
             }
             E::ArrayLength(p) => {
                 let pp = ptr_of[p.index()].ok_or("arrayLength of a non-pointer")?;
