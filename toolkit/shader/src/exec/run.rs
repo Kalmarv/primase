@@ -70,7 +70,7 @@ pub struct Output {
     pub discarded: bool,
     /// Operations and loop turns executed.
     pub steps: u64,
-    /// Sample requests made.
+    /// Sample requests this lane made.
     pub samples: u64,
 }
 
@@ -85,7 +85,7 @@ pub struct Runner<'a, const N: usize> {
     sampler: &'a mut dyn Backend,
     ftz: bool,
     steps: u64,
-    samples: u64,
+    samples: [u64; N],
     outs: [Vec<Reg>; N],
     killed: u8,
     /// The derivatives of the arguments (scalar mode): per argument, d/dx then d/dy lanes.
@@ -146,7 +146,7 @@ impl<'a, const N: usize> Runner<'a, N> {
             sampler,
             ftz,
             steps: 0,
-            samples: 0,
+            samples: [0; N],
             outs: std::array::from_fn(|_| Vec::new()),
             killed: 0,
             derivs,
@@ -195,8 +195,9 @@ impl<'a, const N: usize> Runner<'a, N> {
                         let GlobalKind::Storage(view) = self.c.globals[g as usize].kind else {
                             return Err("a global that is neither bound nor a buffer".into());
                         };
-                        for (i, w) in r.iter_mut().take(n as usize).enumerate() {
-                            *w = self.sampler.read_buffer(view, (base + i) as u32)?;
+                        r = self.sampler.read_buffer(view, base as u32, n)?;
+                        for w in r.iter_mut().skip(n as usize) {
+                            *w = 0;
                         }
                     }
                 }
@@ -528,7 +529,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                             depth: *depth,
                         };
                         let r = self.sampler.sample(req)?;
-                        self.samples += 1;
+                        self.samples[l] += 1;
                         self.regs[dst + l] = [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()];
                     }
                 }
@@ -769,7 +770,7 @@ impl<'a, const N: usize> Runner<'a, N> {
     /// Run once, each lane with its arguments (one register per entry argument, the lanes of its value first).
     pub fn run(&mut self, args: [&[[u32; 4]]; N]) -> Result<[Output; N], String> {
         self.steps = 0;
-        self.samples = 0;
+        self.samples = [0; N];
         self.killed = 0;
         for o in self.outs.iter_mut() {
             o.clear();
@@ -796,7 +797,7 @@ impl<'a, const N: usize> Runner<'a, N> {
             values: std::mem::take(&mut self.outs[l]),
             discarded: self.killed >> l & 1 != 0,
             steps,
-            samples,
+            samples: samples[l],
         }))
     }
 }

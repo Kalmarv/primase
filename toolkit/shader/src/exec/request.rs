@@ -116,9 +116,10 @@ pub trait Backend {
         let _ = (word, value, mask);
         Err(format!("resource {}: no stores given", view.0))
     }
-    /// The 32-bit word `word` of a buffer the caller did not bind ([`super::Resources::buffers`]).
-    fn read_buffer(&mut self, view: ResourceId, word: u32) -> Result<u32, String> {
-        let _ = word;
+    /// `count` (1 to 4) consecutive 32-bit words from word `word` of a buffer the caller did not bind
+    /// ([`super::Resources::buffers`]); lanes past `count` are 0.
+    fn read_buffer(&mut self, view: ResourceId, word: u32, count: u8) -> Result<[u32; 4], String> {
+        let _ = (word, count);
         Err(format!("resource {}: no buffer given", view.0))
     }
     /// How many words a buffer the caller did not bind has.

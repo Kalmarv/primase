@@ -81,6 +81,22 @@ impl ProgramShader {
         let mut input_count = 0;
         for v in &interface.inputs {
             let name = Program::varying_name(&v.label);
+            // the primitive and coverage inputs have no register in the signature: the register view cannot carry
+            // them, they read as 0
+            if v.provenance.d3d.is_none()
+                && matches!(
+                    v.system,
+                    Some(SystemValue::PrimitiveIndex | SystemValue::Coverage | SystemValue::SampleIndex)
+                )
+            {
+                arguments.push(Argument {
+                    register: usize::MAX,
+                    lanes: Vec::new(),
+                    boolean: false,
+                    used: false,
+                });
+                continue;
+            }
             let sig = v
                 .provenance
                 .d3d
@@ -387,10 +403,34 @@ impl Backend for SlotBackend<'_> {
         let view = self.slot(view)?;
         self.sampler.atomic_add(AtomicAdd { view, address, value })
     }
-    fn read_buffer(&mut self, view: ResourceId, word: u32) -> Result<u32, String> {
-        let [element, offset, _] = self.address(view, word);
+    fn read_buffer(&mut self, view: ResourceId, word: u32, count: u8) -> Result<[u32; 4], String> {
         let slot = self.slot(view)?;
-        self.sampler.structured(slot, element, offset)
+        let mut out = [0u32; 4];
+        match self.buffers.get(&view) {
+            // a typed view's element is four lanes, one load answers all of them
+            Some(BufferKind::Typed(_)) => {
+                let (mut at, end) = (word, word + u32::from(count));
+                while at < end {
+                    let element = at / 4;
+                    let lanes = self.sampler.load(crate::Load {
+                        texture: slot,
+                        texel: [i32::try_from(element).unwrap_or(i32::MAX), 0, 0],
+                        mip: 0,
+                    })?;
+                    while at < end && at / 4 == element {
+                        out[(at - word) as usize] = lanes[(at % 4) as usize];
+                        at += 1;
+                    }
+                }
+            }
+            _ => {
+                for (i, w) in out.iter_mut().take(usize::from(count)).enumerate() {
+                    let [element, offset, _] = self.address(view, word + i as u32);
+                    *w = self.sampler.structured(slot, element, offset)?;
+                }
+            }
+        }
+        Ok(out)
     }
     fn buffer_words(&mut self, _view: ResourceId) -> Result<u32, String> {
         // the sampler answers reads by element and cannot say how many there are: no out-of-range read is caught
