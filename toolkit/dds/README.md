@@ -21,10 +21,11 @@ does not preserve sRGB tagging; use DX10 when that tag matters. Neither writer
 serializes role or normal annotations.
 
 Run `cargo test -p primase-dds -- --nocapture`. Tests include synthetic headers,
-format mappings, malformed inputs and encoded-level roundtrips. Environment-driven
-censuses use `PRIMASE_SCENES_GTA` and `PRIMASE_SCENES_SEKIRO`, recursively selecting
-DDS beneath `textures` directories. The legacy payload-identity gate selects DXT
-sources only, measuring header field differences separately; other formats participate in read and DX10 roundtrip gates.
+format mappings, malformed inputs and encoded-level roundtrips. The real-data
+census reads Sekiro's own DDS files (`oracles.scripts.sekiro/pbr/census/dds`, the
+real-data configuration in CONTRIBUTING.md). The legacy payload-identity gate
+selects DXT sources only, measuring header field differences separately; other
+formats participate in read and DX10 roundtrip gates.
 
 Header references: [DDS header](https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-header), [DDS DX10](https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-header-dxt10),
 [DDS pixel format](https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-pixelformat).

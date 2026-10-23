@@ -1,39 +1,42 @@
-//! Distinct-content DDS census: payloads exact, semantic roundtrips exact, header differences measured.
+//! Distinct-content DDS census over the game's own files (Sekiro's DDS as its install stores them,
+//! `oracles.scripts.sekiro/pbr/census/dds`): every file reads, round-trips through the DX10 writer to the same texture,
+//! and a legacy DXT file's payload is written back byte for byte by the legacy writer, header differences measured.
 #![allow(clippy::unwrap_used)]
 use primase_core::gate::{GateReport, Tolerance};
 use primase_dds::{read, write_dx10, write_legacy};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Query, expect_found, resolve};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
-fn collect(dir: &Path, inside: bool, out: &mut Vec<PathBuf>) {
-    let inside = inside
-        || dir
-            .file_name()
-            .is_some_and(|n| n.eq_ignore_ascii_case("textures"));
+/// Every `.dds` file under `dir`.
+fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
         let kind = entry.file_type().unwrap();
         let p = entry.path();
         if kind.is_dir() {
-            collect(&p, inside, out);
-        } else if inside && kind.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dds")) {
+            collect(&p, out);
+        } else if kind.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dds")) {
             out.push(p);
         }
     }
 }
-fn census(var: &str, legacy_oracle: bool) {
-    let Some(root) = real_data(var) else { return };
+#[test]
+fn sekiro_dds_read_round_trip_and_keep_their_legacy_payload() {
+    let query = Query::Oracle(OracleSet::Scripts, Game::Sekiro, "pbr/census/dds");
+    let Some(root) = resolve(query) else { return };
+    let name = query.key();
     let mut files = Vec::new();
-    collect(&root, false, &mut files);
+    collect(&root, &mut files);
     files.sort();
+    expect_found(query, "DDS files", files.len());
     let mut outside_legacy = 0;
     let mut counts = BTreeMap::<String, usize>::new();
-    let mut read_gate = GateReport::new(format!("{var} read"), Tolerance::Exact);
-    let mut roundtrip = GateReport::new(format!("{var} stored levels"), Tolerance::Exact);
-    let mut oracle = GateReport::new(format!("{var} legacy payload identity"), Tolerance::Exact);
+    let mut read_gate = GateReport::new(format!("{name} read"), Tolerance::Exact);
+    let mut roundtrip = GateReport::new(format!("{name} stored levels"), Tolerance::Exact);
+    let mut oracle = GateReport::new(format!("{name} legacy payload identity"), Tolerance::Exact);
     let mut header_differences = BTreeMap::<usize, u64>::new();
     let path_count = files.len();
     let mut contents = std::collections::BTreeSet::<[u8; 32]>::new();
@@ -55,7 +58,7 @@ fn census(var: &str, legacy_oracle: bool) {
                     Ok(_) => roundtrip.fail(&key, "texture changed"),
                     Err(e) => roundtrip.fail(&key, e.to_string()),
                 }
-                if legacy_oracle && matches!(&bytes[84..88], b"DXT1" | b"DXT3" | b"DXT5") {
+                if matches!(&bytes[84..88], b"DXT1" | b"DXT3" | b"DXT5") {
                     match write_legacy(&t) {
                         Ok(b) => {
                             assert_eq!(read(&b).unwrap(), t);
@@ -70,7 +73,7 @@ fn census(var: &str, legacy_oracle: bool) {
                         }
                         Err(e) => oracle.fail(&key, e.to_string()),
                     }
-                } else if legacy_oracle {
+                } else {
                     outside_legacy += 1;
                 }
             }
@@ -81,23 +84,13 @@ fn census(var: &str, legacy_oracle: bool) {
         root.display()
     );
     eprintln!(
-        "{var}: {path_count} paths, {} distinct contents (SHA256)",
+        "{name}: {path_count} paths, {} distinct contents (SHA256)",
         contents.len()
     );
-    if legacy_oracle {
-        eprintln!(
-            "{oracle}\nheader field differences by byte offset={header_differences:?}\noutside legacy DXT writer scope: {outside_legacy}"
-        );
-        oracle.assert_passed();
-    }
+    eprintln!(
+        "{oracle}\nheader field differences by byte offset={header_differences:?}\noutside legacy DXT writer scope: {outside_legacy}"
+    );
+    oracle.assert_passed();
     read_gate.assert_passed();
     roundtrip.assert_passed();
-}
-#[test]
-fn gta() {
-    census("PRIMASE_SCENES_GTA", true);
-}
-#[test]
-fn sekiro() {
-    census("PRIMASE_SCENES_SEKIRO", false);
 }
