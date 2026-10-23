@@ -79,6 +79,11 @@ impl Builder {
         })
     }
 
+    /// The type of an array of `n` values of `v`, as an interface array has it (see [`IoType::Array`]).
+    pub fn io_array(&mut self, v: crate::Value, n: u32) -> Result<Handle<Type>, String> {
+        Ok(self.io_type(IoType::Array(v, n), "an array")?.0)
+    }
+
     /// The structure `Out` of these members, offsets by the alignment of their types.
     fn result_struct(
         &mut self,

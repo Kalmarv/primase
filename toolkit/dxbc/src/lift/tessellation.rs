@@ -17,6 +17,27 @@ use crate::decode::{Operand, Register};
 /// How many fork or join instances a phase may be unrolled into.
 const MAX_INSTANCES: u32 = 64;
 
+/// One output varying of a geometry program: its array local, the register local it is emitted from, the register's
+/// lanes it takes and the type it is carried as.
+type GsOutputLocal = (
+    Handle<LocalVariable>,
+    Handle<LocalVariable>,
+    Vec<u8>,
+    primase_shader::Value,
+);
+
+/// A geometry program's output so far: how many vertices it has emitted, whether the next begins a strip, and for each
+/// output varying and each vertex the value emitted.
+#[derive(Clone)]
+pub(super) struct GsState {
+    count: Handle<LocalVariable>,
+    pending: Handle<LocalVariable>,
+    strips: Handle<LocalVariable>,
+    /// Per output varying: the array local, the register it is emitted from, its lanes and carried type.
+    outputs: Vec<GsOutputLocal>,
+    max: u32,
+}
+
 impl Lift<'_> {
     /// The varyings the current function's result is made of: the outputs, or a hull program's patch constants.
     pub(super) fn result_varyings(&self) -> Vec<Varying> {
@@ -87,6 +108,7 @@ impl Lift<'_> {
         let (points, out_points) = match &facts {
             StageFacts::Hull(h) => (h.input_control_points, h.output_control_points),
             StageFacts::Domain(d) => (d.input_control_points, 0),
+            StageFacts::Geometry(g) => (g.input.vertices(), 0),
             _ => (0, 0),
         };
         // the input control points as one array of registers, `registers` to a point
@@ -106,9 +128,20 @@ impl Lift<'_> {
             let registers = Self::registers_of(&d.patch_constants);
             self.patch_in = self.register_array("vpc", registers);
         }
+        if let StageFacts::Geometry(g) = &facts {
+            self.start_geometry(g.max_vertices)?;
+        }
         for (index, item) in sig.arguments.iter().enumerate() {
             let expr = self.b.app(E::FunctionArgument(index as u32));
             match (item.name.as_str(), item.ty) {
+                ("SV_GSInstanceID", IoType::Value(v)) => {
+                    let value = Val {
+                        expr,
+                        kind: Kind::of(v.scalar),
+                        width: 1,
+                    };
+                    self.gs_instance = Some(self.id_local("vGSInstanceID", value));
+                }
                 ("SV_OutputControlPointID", IoType::Value(v)) => {
                     let value = Val {
                         expr,
@@ -175,7 +208,8 @@ impl Lift<'_> {
         } else {
             (self.setup.interface.inputs[varying].clone(), self.control_points)
         };
-        let Some(d3d) = v.provenance.d3d else {
+        // a system value the signature does not place in a register has none
+        let Some(d3d) = v.provenance.d3d.filter(|d| d.register != u32::MAX) else {
             return Ok(());
         };
         let bits_of = |lift: &mut Self, base: Handle<E>, carried: primase_shader::Value| -> Val {
@@ -236,8 +270,148 @@ impl Lift<'_> {
         Ok(())
     }
 
+    /// A geometry program's output locals: an array per output varying, the count, the strip starts.
+    fn start_geometry(&mut self, max: u32) -> Result<()> {
+        let one = std::num::NonZeroU32::new(max).expect("verified with the facts");
+        let u1 = self.b.ty_of(Kind::U, 1);
+        let strips_ty = self.b.ty(naga::TypeInner::Array {
+            base: u1,
+            size: naga::ArraySize::Constant(one),
+            stride: 4,
+        });
+        let count = self.b.local("emitted", u1);
+        let pending = self.b.local("strip_pending", u1);
+        let strips = self.b.local("strip_starts", strips_ty);
+        let (zero, first) = (self.b.lit_u(0), self.b.lit_u(1));
+        let pointer = self.b.local_ptr(count);
+        self.b.store(pointer, zero);
+        let pointer = self.b.local_ptr(pending);
+        self.b.store(pointer, first);
+        let mut outputs = Vec::new();
+        let sig = self.sig.clone().expect("a stage function");
+        for (i, v) in self.setup.interface.outputs.clone().into_iter().enumerate() {
+            let Some(d3d) = v.provenance.d3d else {
+                return self.refuse("an output without a register");
+            };
+            let Some(&register) = self.outputs.get(&d3d.register) else {
+                return self.refuse("an output register that is not declared");
+            };
+            let Some(IoType::Array(carried, _)) =
+                sig.result.iter().find(|r| r.varying == Some(i)).map(|r| r.ty)
+            else {
+                return self.refuse("an output without its result array");
+            };
+            let ty = self
+                .b
+                .io_array(carried, max)
+                .map_err(|d| crate::error(self.word, d))?;
+            let array = self
+                .b
+                .local(&format!("emit_{}", Program::varying_name(&v.label)), ty);
+            let lanes = match v.system {
+                Some(primase_shader::SystemValue::ClipPosition) => vec![0, 1, 2, 3],
+                _ => lanes_of(d3d.mask),
+            };
+            outputs.push((array, register, lanes, carried));
+        }
+        self.gs = Some(GsState {
+            count,
+            pending,
+            strips,
+            outputs,
+            max,
+        });
+        Ok(())
+    }
+
+    /// `emit`: the output registers become the next vertex (past the most vertices, nothing).
+    pub(super) fn emit_vertex(&mut self) -> Result<()> {
+        let Some(gs) = self.gs.clone() else {
+            return self.refuse("a vertex emitted outside a geometry program");
+        };
+        let count = {
+            let p = self.b.local_ptr(gs.count);
+            self.b.load(p, Kind::U, 1)
+        };
+        let max = self.b.lit_u(gs.max);
+        let inside = self.b.binary(naga::BinaryOperator::Less, count, max);
+        self.b.when(inside, |b| {
+            let index = {
+                let p = b.local_ptr(gs.count);
+                b.load(p, Kind::U, 1)
+            };
+            for (array, register, lanes, carried) in &gs.outputs {
+                let p = b.local_ptr(*register);
+                let row = b.load(p, Kind::U, 4);
+                let picked = b.swizzle(row, lanes);
+                let value = b.bitcast(picked, Kind::of(carried.scalar));
+                let a = b.local_ptr(*array);
+                let target = b.app(E::Access {
+                    base: a,
+                    index: index.expr,
+                });
+                b.store(target, value);
+            }
+            let pending = {
+                let p = b.local_ptr(gs.pending);
+                b.load(p, Kind::U, 1)
+            };
+            let s = b.local_ptr(gs.strips);
+            let target = b.app(E::Access {
+                base: s,
+                index: index.expr,
+            });
+            b.store(target, pending);
+            let zero = b.lit_u(0);
+            let p = b.local_ptr(gs.pending);
+            b.store(p, zero);
+            let one = b.lit_u(1);
+            let next = b.binary(naga::BinaryOperator::Add, index, one);
+            let p = b.local_ptr(gs.count);
+            b.store(p, next);
+        });
+        Ok(())
+    }
+
+    /// `cut`: the next vertex begins a strip.
+    pub(super) fn cut_strip(&mut self) -> Result<()> {
+        let Some(gs) = self.gs.clone() else {
+            return self.refuse("a strip cut outside a geometry program");
+        };
+        let one = self.b.lit_u(1);
+        let p = self.b.local_ptr(gs.pending);
+        self.b.store(p, one);
+        Ok(())
+    }
+
+    /// The geometry program's result: the emitted vertices, how many, and where strips start.
+    fn geometry_epilogue(&mut self) -> Result<()> {
+        let result = self.result_type.expect("a geometry program returns its vertices");
+        let gs = self.gs.clone().expect("a geometry program");
+        let mut parts = Vec::new();
+        for (array, ..) in &gs.outputs {
+            let p = self.b.local_ptr(*array);
+            parts.push(self.b.load(p, Kind::U, 1).expr);
+        }
+        let p = self.b.local_ptr(gs.count);
+        parts.push(self.b.load(p, Kind::U, 1).expr);
+        let p = self.b.local_ptr(gs.strips);
+        parts.push(self.b.load(p, Kind::U, 1).expr);
+        let composed = self.b.app(E::Compose {
+            ty: result,
+            components: parts,
+        });
+        self.b.push(Statement::Return {
+            value: Some(composed),
+        });
+        Ok(())
+    }
+
     /// Pack the result registers into the function's result structure and return it.
     pub(super) fn function_epilogue(&mut self) -> Result<()> {
+        if self.gs.is_some() {
+            return self.geometry_epilogue();
+        }
         let Some(result) = self.result_type else {
             self.b.push(Statement::Return { value: None });
             return Ok(());
@@ -422,6 +596,7 @@ impl Lift<'_> {
         let local = match register {
             Register::InputDomainPoint => self.domain_point,
             Register::OutputControlPointId => self.point_id,
+            Register::GsInstanceId => self.gs_instance,
             Register::ForkInstanceId => self.fork_id,
             _ => self.join_id,
         };

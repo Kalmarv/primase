@@ -34,6 +34,8 @@ impl<'a> Lift<'a> {
             point_id: None,
             fork_id: None,
             join_id: None,
+            gs: None,
+            gs_instance: None,
             in_phase: false,
             pending_decl: None,
             primitive_id: None,
@@ -74,6 +76,8 @@ impl<'a> Lift<'a> {
         lift.point_id = None;
         lift.fork_id = None;
         lift.join_id = None;
+        lift.gs = None;
+        lift.gs_instance = None;
         lift.input_coverage = None;
         lift.depth = None;
         lift.coverage = None;

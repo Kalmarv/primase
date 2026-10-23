@@ -612,6 +612,20 @@ impl Lift<'_> {
             "store_raw" => self.store_memory(ins, &[&ops[1]], &ops[2])?,
             "store_structured" => self.store_memory(ins, &[&ops[1], &ops[2]], &ops[3])?,
             "sync" => self.sync(ins),
+            // a geometry program's vertices: only stream 0 is carried
+            "emit" | "emit_stream" | "cut" | "cut_stream" | "emitthencut" | "emitthencut_stream" => {
+                if let Some(stream) = ins.operands.first()
+                    && stream.indices.first().is_some_and(|i| i.base != 0)
+                {
+                    return self.refuse("a vertex emitted to a stream other than 0");
+                }
+                if name.starts_with("emit") {
+                    self.emit_vertex()?;
+                }
+                if name.starts_with("cut") || name.starts_with("emitthencut") {
+                    self.cut_strip()?;
+                }
+            }
             "imm_atomic_alloc" | "imm_atomic_consume" => {
                 return self.refuse("append and consume buffer counters are not lifted");
             }

@@ -72,6 +72,14 @@ fn system_from_number(
         (Stage::Hull | Stage::Domain, false, _) | (Stage::Hull, true, _) | (Stage::Domain, true, 11..=16) => {
             return Ok(None);
         }
+        // a geometry program reads plain varyings and writes a vertex program's system values
+        (Stage::Geometry, false, _) => return Ok(None),
+        (Stage::Geometry, true, 1) => ClipPosition,
+        (Stage::Geometry, true, 2) => ClipDistance,
+        (Stage::Geometry, true, 3) => CullDistance,
+        (Stage::Geometry, true, 4) => RenderTargetArrayIndex,
+        (Stage::Geometry, true, 5) => ViewportArrayIndex,
+        (Stage::Geometry, true, 7) => PrimitiveIndex,
         (Stage::Domain, true, 1) => ClipPosition,
         (Stage::Domain, true, 2) => ClipDistance,
         (Stage::Domain, true, 3) => CullDistance,

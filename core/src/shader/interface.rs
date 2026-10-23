@@ -205,6 +205,48 @@ pub struct DomainFacts {
     pub patch_constants: Vec<Varying>,
 }
 
+/// The primitive a geometry program reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GsInput {
+    Point,
+    Line,
+    Triangle,
+    LineAdjacency,
+    TriangleAdjacency,
+}
+impl GsInput {
+    /// How many vertices the primitive has.
+    pub fn vertices(self) -> u32 {
+        match self {
+            Self::Point => 1,
+            Self::Line => 2,
+            Self::Triangle => 3,
+            Self::LineAdjacency => 4,
+            Self::TriangleAdjacency => 6,
+        }
+    }
+}
+
+/// What a geometry program's emitted vertices make.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GsOutput {
+    PointList,
+    LineStrip,
+    TriangleStrip,
+}
+
+/// What a geometry program states: the primitive it reads, what its emitted vertices make, the most vertices an
+/// invocation emits and how many invocations run for a primitive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct GeometryFacts {
+    pub input: GsInput,
+    pub output: GsOutput,
+    pub max_vertices: u32,
+    pub instances: u32,
+}
+
 /// Facts about a program a stage's varyings and resources do not carry.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -217,6 +259,7 @@ pub enum StageFacts {
     VertexWithoutPosition,
     Hull(HullFacts),
     Domain(DomainFacts),
+    Geometry(GeometryFacts),
 }
 
 /// What a program exposes: its stage, the varyings it takes and gives, and the resources it binds.
@@ -264,6 +307,15 @@ impl Interface {
             }
             (Stage::Domain, StageFacts::Domain(d)) => {
                 patch("domain", d.input_control_points, &d.patch_constants)
+            }
+            (Stage::Geometry, StageFacts::Geometry(g)) => {
+                if !(1..=1024).contains(&g.max_vertices) || !(1..=32).contains(&g.instances) {
+                    return Err(format!(
+                        "a geometry program of {} vertices and {} instances",
+                        g.max_vertices, g.instances
+                    ));
+                }
+                Ok(())
             }
             (Stage::Vertex, StageFacts::VertexWithoutPosition) => Ok(()),
             (Stage::Hull | Stage::Domain, _) => {

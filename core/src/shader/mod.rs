@@ -26,9 +26,9 @@ pub use binding::{
     StageBinding, TextureBinding, TextureSource, ViewParameter,
 };
 pub use interface::{
-    D3dSignature, DomainFacts, HullFacts, Interface, InterpMode, InterpSampling, Interpolation, Label,
-    Partitioning, ScalarType, StageFacts, SystemValue, TessDomain, TessTopology, Value, Varying,
-    VaryingProvenance,
+    D3dSignature, DomainFacts, GeometryFacts, GsInput, GsOutput, HullFacts, Interface, InterpMode,
+    InterpSampling, Interpolation, Label, Partitioning, ScalarType, StageFacts, SystemValue, TessDomain,
+    TessTopology, Value, Varying, VaryingProvenance,
 };
 pub use program::Shader;
 pub use resource::{

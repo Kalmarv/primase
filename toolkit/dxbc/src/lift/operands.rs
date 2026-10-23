@@ -47,6 +47,7 @@ impl Lift<'_> {
             Register::InputPatchConstant => self.patch_constant_register(op),
             Register::InputDomainPoint
             | Register::OutputControlPointId
+            | Register::GsInstanceId
             | Register::ForkInstanceId
             | Register::JoinInstanceId => self.id_register(op.register),
             Register::Input => {

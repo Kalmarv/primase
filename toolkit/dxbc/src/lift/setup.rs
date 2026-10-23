@@ -7,10 +7,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use naga::ImageDimension;
 use primase_shader::build::Kind;
 use primase_shader::{
-    Access, BufferKind, BufferLayout, D3dBinding, D3dClass, DomainFacts, EntryIo, HullFacts, Interface,
-    Label, Partitioning, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType,
-    Stage, StageFacts, StorageTarget, SystemValue, TessDomain, TessTopology, TextureDim, Value, Varying,
-    VaryingProvenance, entry_io,
+    Access, BufferKind, BufferLayout, D3dBinding, D3dClass, DomainFacts, EntryIo, GeometryFacts, GsInput,
+    GsOutput, HullFacts, Interface, Label, Partitioning, Resource, ResourceId, ResourceKind,
+    ResourceProvenance, SampleType, ScalarType, Stage, StageFacts, StorageTarget, SystemValue, TessDomain,
+    TessTopology, TextureDim, Value, Varying, VaryingProvenance, entry_io,
 };
 
 use crate::decode::{Declared, Decoded, Register, Selection};
@@ -226,6 +226,8 @@ impl Setup {
         // what the declarations of a hull or domain program state about its patch
         let (mut input_points, mut output_points, mut tess_domain) = (0u32, 0u32, 0u32);
         let (mut partitioning, mut topology, mut max_factor) = (0u32, 0u32, 64.0f32.to_bits());
+        // and of a geometry program
+        let (mut gs_input, mut gs_output, mut gs_vertices, mut gs_instances) = (0u32, 0u32, 0u32, 1u32);
         let mut declared_inputs: BTreeMap<u32, u8> = BTreeMap::new();
         let (mut primitive_id, mut input_coverage) = (false, false);
         let (mut depth, mut coverage, mut stencil) = (None, false, false);
@@ -483,6 +485,28 @@ impl Setup {
                     ..
                 } => {}
                 Declared::Other {
+                    opcode: 93, control, ..
+                } => gs_input = *control,
+                Declared::Other {
+                    opcode: 92, control, ..
+                } => gs_output = *control,
+                Declared::Other {
+                    opcode: 94, words, ..
+                } => gs_vertices = words.first().copied().unwrap_or(0),
+                Declared::Other {
+                    opcode: 206, words, ..
+                } => gs_instances = words.first().copied().unwrap_or(1),
+                // dcl_stream: only stream 0 is rasterized; the others are stream output
+                Declared::Other {
+                    opcode: 143, words, ..
+                } => {
+                    if words.get(1).copied().unwrap_or(0) != 0 {
+                        return Err(at(
+                            "a geometry program's output to a stream other than 0 is not lifted".into(),
+                        ));
+                    }
+                }
+                Declared::Other {
                     opcode: 147, control, ..
                 } => input_points = *control,
                 Declared::Other {
@@ -698,6 +722,7 @@ impl Setup {
             provenance: VaryingProvenance::default(),
         };
         if primitive_id
+            && !matches!(stage, Stage::Hull | Stage::Domain | Stage::Geometry)
             && !interface
                 .inputs
                 .iter()
@@ -809,6 +834,32 @@ impl Setup {
                     patch_constants,
                 })
             };
+        }
+        if stage == Stage::Geometry {
+            let input = match gs_input {
+                1 => GsInput::Point,
+                2 => GsInput::Line,
+                3 => GsInput::Triangle,
+                6 => GsInput::LineAdjacency,
+                7 => GsInput::TriangleAdjacency,
+                other => return Err(refuse(format!("dcl_gs_input_primitive: {other} is not mapped"))),
+            };
+            let output = match gs_output {
+                1 => GsOutput::PointList,
+                3 => GsOutput::LineStrip,
+                5 => GsOutput::TriangleStrip,
+                other => {
+                    return Err(refuse(format!(
+                        "dcl_gs_output_primitive_topology: {other} is not mapped"
+                    )));
+                }
+            };
+            interface.facts = StageFacts::Geometry(GeometryFacts {
+                input,
+                output,
+                max_vertices: gs_vertices,
+                instances: gs_instances,
+            });
         }
         // a compute program's ids are system inputs the signature does not list
         for id in setup.ids.clone() {

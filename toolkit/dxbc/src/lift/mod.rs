@@ -61,35 +61,14 @@ pub fn lift(bytes: &[u8]) -> Result<Program> {
     if words.len() > 1_048_576 {
         return Err(error(1, "program exceeds word budget"));
     }
-    // the stage first: a compute or tessellation program is refused as such, not for the registers only it has
-    if let Some(&version) = words.first() {
-        let kind = match version >> 16 {
-            2 => "gs",
-            _ => "",
-        };
-        if !kind.is_empty() {
-            return Err(error(
-                0,
-                format!("{kind} programs are outside the lifted stages (ps, vs, cs, hs, ds)"),
-            ));
-        }
-    }
     let decoded = decode(&words)?;
     let stage = match decoded.kind {
         crate::decode::ProgramType::Pixel => Stage::Pixel,
         crate::decode::ProgramType::Vertex => Stage::Vertex,
         crate::decode::ProgramType::Compute => Stage::Compute,
         crate::decode::ProgramType::Hull => Stage::Hull,
+        crate::decode::ProgramType::Geometry => Stage::Geometry,
         crate::decode::ProgramType::Domain => Stage::Domain,
-        other => {
-            return Err(error(
-                0,
-                format!(
-                    "{} programs are outside the lifted stages (ps, vs, cs, hs, ds)",
-                    other.name()
-                ),
-            ));
-        }
     };
     let setup = setup::Setup::new(bytes, &decoded, stage)?;
     let mut lift = Lift::new(&decoded, stage, setup)?;
@@ -152,6 +131,9 @@ struct Lift<'a> {
     point_id: Option<Handle<LocalVariable>>,
     fork_id: Option<Handle<LocalVariable>>,
     join_id: Option<Handle<LocalVariable>>,
+    /// A geometry program's emitted vertices so far (see [`tessellation::GsState`]) and its instance number.
+    gs: Option<tessellation::GsState>,
+    gs_instance: Option<Handle<LocalVariable>>,
     /// Lifting a phase of a hull program: a `ret` ends the phase, not the function.
     in_phase: bool,
     /// The declared arguments and result of the function being lifted, until it is closed.

@@ -126,6 +126,13 @@ pub(super) fn text(p: &Program) -> Result<String, Error> {
                 varying(&mut out, "patch_constant", v);
             }
         }
+        StageFacts::Geometry(g) => {
+            let _ = writeln!(
+                out,
+                "// geometry input={:?} output={:?} max_vertices={} instances={}",
+                g.input, g.output, g.max_vertices, g.instances
+            );
+        }
         other => {
             let _ = writeln!(out, "// facts {other:?}");
         }

@@ -176,6 +176,9 @@ pub struct FunctionSig {
 ///   the patch-constant phase, run once for a patch, its result the patch constants.
 /// - A domain program: `main(patch constants, inputs as arrays of the input control points, SV_DomainLocation:
 ///   vec3<f32>, SV_PrimitiveID: u32) -> Out`.
+/// - A geometry program: `main(inputs as arrays of the primitive's vertices, SV_PrimitiveID: u32, SV_GSInstanceID:
+///   u32) -> Out`, the result each output varying as an array of the most vertices an invocation emits, then
+///   `SV_VertexCount` (how many were emitted) and `SV_StripStart` (per vertex, 1 where it begins a strip).
 pub fn stage_functions(interface: &Interface) -> Result<Option<Vec<FunctionSig>>, String> {
     let stage = interface.stage;
     let values = |list: &[Varying], output: bool| -> Vec<FnItem> {
@@ -242,7 +245,32 @@ pub fn stage_functions(interface: &Interface) -> Result<Option<Vec<FunctionSig>>
         (Stage::Hull | Stage::Domain, _) => {
             return Err(format!("a {stage:?} program without its patch facts"));
         }
-        (Stage::Geometry, _) => return Err("geometry programs are not carried".into()),
+        (Stage::Geometry, StageFacts::Geometry(g)) => {
+            let mut args = arrays(&interface.inputs, false, "", g.input.vertices());
+            args.push(scalar("SV_PrimitiveID", 1, ScalarType::Uint));
+            args.push(scalar("SV_GSInstanceID", 1, ScalarType::Uint));
+            // the emitted vertices: each output varying for every vertex the invocation may emit, how many it did, and
+            // whether each starts a new strip (the first, and the first after a cut)
+            let mut result = arrays(&interface.outputs, true, "", g.max_vertices);
+            result.push(scalar("SV_VertexCount", 1, ScalarType::Uint));
+            result.push(FnItem {
+                name: "SV_StripStart".into(),
+                ty: IoType::Array(
+                    Value {
+                        scalar: ScalarType::Uint,
+                        width: 1,
+                    },
+                    g.max_vertices,
+                ),
+                varying: None,
+            });
+            Some(vec![FunctionSig {
+                name: "main",
+                arguments: args,
+                result,
+            }])
+        }
+        (Stage::Geometry, _) => return Err("a geometry program without its facts".into()),
         _ => None,
     })
 }

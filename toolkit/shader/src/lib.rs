@@ -26,10 +26,10 @@ pub use evaluate::{
 };
 pub use primase_core::shader::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, D3dSignature,
-    DomainFacts, HullFacts, Interface, InterpMode, InterpSampling, Interpolation, Label, Majorness, Member,
-    Partitioning, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType,
-    ShaderFormat, Stage, StageFacts, StorageTarget, SystemValue, TessDomain, TessTopology, TextureDim, Value,
-    Varying, VaryingProvenance,
+    DomainFacts, GeometryFacts, GsInput, GsOutput, HullFacts, Interface, InterpMode, InterpSampling,
+    Interpolation, Label, Majorness, Member, Partitioning, Resource, ResourceId, ResourceKind,
+    ResourceProvenance, SampleType, ScalarType, ShaderFormat, Stage, StageFacts, StorageTarget, SystemValue,
+    TessDomain, TessTopology, TextureDim, Value, Varying, VaryingProvenance,
 };
 mod periodic;
 pub use limits::{WEBGPU_BASELINE, compute_limit_notes};

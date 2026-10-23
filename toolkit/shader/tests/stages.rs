@@ -218,3 +218,84 @@ fn a_module_that_is_not_the_stages_functions_is_refused() {
             .any(|m| m.to_string().contains("without its patch facts"))
     );
 }
+
+/// A geometry program that passes a triangle through: `main` returns the three vertices, a count of three, and a strip
+/// that starts at the first.
+fn geometry() -> Program {
+    let interface = Interface {
+        stage: Stage::Geometry,
+        inputs: vec![varying("COLOR", 0, 4, None)],
+        outputs: vec![varying("SV_Position", 0, 4, Some(SystemValue::ClipPosition))],
+        resources: Vec::new(),
+        facts: StageFacts::Geometry(primase_shader::GeometryFacts {
+            input: primase_shader::GsInput::Triangle,
+            output: primase_shader::GsOutput::TriangleStrip,
+            max_vertices: 3,
+            instances: 1,
+        }),
+    };
+    let sigs = primase_shader::stage_functions(&interface).unwrap().unwrap();
+    let mut b = Builder::new();
+    let decl = b.declare_function(&sigs[0]).unwrap();
+    let out = decl.result.unwrap();
+    // COLOR0 (the three vertices), SV_PrimitiveID, SV_GSInstanceID
+    let colors = b.app(Expression::FunctionArgument(0));
+    let three = b.lit_u(3);
+    let (zero, one) = (b.lit_u(0), b.lit_u(1));
+    let u1 = b.ty_of(Kind::U, 1);
+    let starts_ty = b
+        .io_array(
+            Value {
+                scalar: ScalarType::Uint,
+                width: 1,
+            },
+            3,
+        )
+        .unwrap();
+    let starts = b.app(Expression::Compose {
+        ty: starts_ty,
+        components: vec![one.expr, zero.expr, zero.expr],
+    });
+    let _ = u1;
+    let result = b.app(Expression::Compose {
+        ty: out,
+        components: vec![colors, three.expr, starts],
+    });
+    b.push(Statement::Return { value: Some(result) });
+    b.end_function("main", decl);
+    Program {
+        module: b.finish_functions(),
+        stage: Stage::Geometry,
+        entry: "main".into(),
+        interface,
+        bindings: Vec::new(),
+        conventions: Conventions::D3D,
+        modes: D3dModes::ALL,
+        provenance: provenance("gs_5_0"),
+        notes: Vec::new(),
+    }
+}
+
+#[test]
+fn a_geometry_program_is_a_function_of_a_primitive_returning_its_vertices() {
+    let p = geometry();
+    p.validate().unwrap_or_else(|e| panic!("{e:?}"));
+    let text = p.text().unwrap();
+    assert!(text.contains("// stage geometry entry main"), "{text}");
+    assert!(
+        text.contains("// geometry input=Triangle output=TriangleStrip max_vertices=3 instances=1"),
+        "{text}"
+    );
+    assert!(
+        emit::wgsl(&p)
+            .unwrap_err()
+            .to_string()
+            .contains("has no WGSL stage")
+    );
+    // more vertices than the facts allow is a different function
+    let mut p = geometry();
+    if let StageFacts::Geometry(g) = &mut p.interface.facts {
+        g.max_vertices = 4;
+    }
+    assert!(p.validate().is_err());
+}

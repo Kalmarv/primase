@@ -241,6 +241,7 @@ fn stage(directory: &[crate::Chunk<'_>]) -> Result<Stage> {
     match token >> 16 {
         0 => Ok(Stage::Pixel),
         1 => Ok(Stage::Vertex),
+        2 => Ok(Stage::Geometry),
         3 => Ok(Stage::Hull),
         4 => Ok(Stage::Domain),
         5 => Ok(Stage::Compute),
