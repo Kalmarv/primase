@@ -2148,7 +2148,9 @@ impl Index {
             source,
         })?;
         let path = folder.join("tiles.json");
-        std::fs::write(&path, serde_json::to_vec_pretty(self)?).map_err(|source| Error::Io { path, source })
+        // core's JSON text: each f32 reads back as itself, and a non-finite one is refused
+        let text = primase_core::json::to_vec(self, true).map_err(|e| Error::Invalid(e.to_string()))?;
+        std::fs::write(&path, text).map_err(|source| Error::Io { path, source })
     }
 }
 impl TileSet {
@@ -2171,7 +2173,8 @@ impl TileSet {
         {
             return Err(Error::Invalid("tile index does not match generated files".into()));
         }
-        let index_bytes = serde_json::to_vec_pretty(&self.index)?;
+        let index_bytes =
+            primase_core::json::to_vec(&self.index, true).map_err(|e| Error::Invalid(e.to_string()))?;
         let collision_entries: Vec<_> = self
             .index
             .tiles

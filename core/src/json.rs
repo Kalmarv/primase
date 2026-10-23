@@ -27,21 +27,85 @@ pub fn to_value<T: Serialize + ?Sized>(v: &T) -> Result<Value, JsonError> {
     serde_json::to_value(v).map_err(|e| JsonError(e.to_string()))
 }
 
-/// JSON text of a value (two-space indented when `pretty`, with a final newline), serialized directly, so f32 fields
-/// are written as their own shortest digits. A non-finite float is an error naming where it is (serde_json would
-/// write `null`).
+/// JSON text of a value (two-space indented when `pretty`, with a final newline), serialized directly. Each f32 is
+/// written as [`f32_decimal`] gives it, so it reads back as the same f32 both where a reader parses it as f32 and where
+/// it parses f64 and narrows (a JSON value's `as_f64`, JavaScript): its shortest digits nearly always. serde_json's own
+/// f32 digits read back exactly as f32 but, for two f32s, round twice through f64. A non-finite float is an error
+/// naming where it is (serde_json would write `null`).
 pub fn to_vec<T: Serialize + ?Sized>(v: &T, pretty: bool) -> Result<Vec<u8>, JsonError> {
     v.serialize(&mut Check { path: Vec::new() })?;
-    let mut out = if pretty {
-        serde_json::to_vec_pretty(v)
+    let mut out = Vec::new();
+    let written = if pretty {
+        v.serialize(&mut serde_json::Serializer::with_formatter(
+            &mut out,
+            ExactF32(serde_json::ser::PrettyFormatter::new()),
+        ))
     } else {
-        serde_json::to_vec(v)
-    }
-    .map_err(|e| JsonError(e.to_string()))?;
+        v.serialize(&mut serde_json::Serializer::with_formatter(
+            &mut out,
+            ExactF32(serde_json::ser::CompactFormatter),
+        ))
+    };
+    written.map_err(|e| JsonError(e.to_string()))?;
     if pretty {
         out.push(b'\n');
     }
     Ok(out)
+}
+
+/// A serde_json formatter that writes each f32 as [`f32_decimal`] (through the inner formatter's f64 form) and
+/// everything else as the inner formatter does.
+struct ExactF32<F>(F);
+
+impl<F: serde_json::ser::Formatter> serde_json::ser::Formatter for ExactF32<F> {
+    fn write_f32<W: ?Sized + std::io::Write>(&mut self, writer: &mut W, value: f32) -> std::io::Result<()> {
+        match f32_decimal(value) {
+            Ok(d) => self.0.write_f64(writer, d),
+            // the check before writing refuses a non-finite value: as serde_json would, should one get here
+            Err(_) => self.0.write_null(writer),
+        }
+    }
+    fn write_f64<W: ?Sized + std::io::Write>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()> {
+        self.0.write_f64(writer, value)
+    }
+    fn begin_array<W: ?Sized + std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.begin_array(writer)
+    }
+    fn end_array<W: ?Sized + std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.end_array(writer)
+    }
+    fn begin_array_value<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        self.0.begin_array_value(writer, first)
+    }
+    fn end_array_value<W: ?Sized + std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.end_array_value(writer)
+    }
+    fn begin_object<W: ?Sized + std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.begin_object(writer)
+    }
+    fn end_object<W: ?Sized + std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.end_object(writer)
+    }
+    fn begin_object_key<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        self.0.begin_object_key(writer, first)
+    }
+    fn end_object_key<W: ?Sized + std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.end_object_key(writer)
+    }
+    fn begin_object_value<W: ?Sized + std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.begin_object_value(writer)
+    }
+    fn end_object_value<W: ?Sized + std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.end_object_value(writer)
+    }
 }
 
 /// An f32 as a JSON number that reads back as the same f32 where a reader parses the number as f64 and narrows it (as
@@ -501,6 +565,50 @@ mod tests {
                 && f32_decimal(f32::INFINITY).is_err()
                 && f64_value(f64::NAN).is_err()
         );
+    }
+
+    /// JSON text writes each f32 so that it reads back both as f32 and through f64: the two whose shortest digits round
+    /// twice through f64, as fields of a struct, compact and pretty; and an f32 field keeps its short digits where
+    /// those are exact.
+    #[test]
+    fn json_text_f32_fields_read_back_through_f64() {
+        #[derive(Serialize)]
+        struct R {
+            x: f32,
+            v: Vec<f32>,
+        }
+        #[derive(serde::Deserialize)]
+        struct R2 {
+            v: Vec<f32>,
+        }
+        let hard: Vec<f32> = [0x15ae_43fd, 0x95ae_43fd].map(f32::from_bits).to_vec();
+        for pretty in [false, true] {
+            let text = to_vec(
+                &R {
+                    x: 0.1,
+                    v: hard.clone(),
+                },
+                pretty,
+            )
+            .unwrap();
+            let back: serde_json::Value = serde_json::from_slice(&text).unwrap();
+            assert_eq!(back["x"].as_f64().unwrap() as f32, 0.1);
+            assert!(
+                String::from_utf8_lossy(&text).contains("0.1"),
+                "{}",
+                String::from_utf8_lossy(&text)
+            );
+            for (k, f) in hard.iter().enumerate() {
+                assert_eq!(
+                    (back["v"][k].as_f64().unwrap() as f32).to_bits(),
+                    f.to_bits(),
+                    "pretty {pretty}"
+                );
+                // and as f32, directly
+                let r: Vec<f32> = serde_json::from_slice::<R2>(&text).unwrap().v;
+                assert_eq!(r[k].to_bits(), f.to_bits());
+            }
+        }
     }
 
     /// 128-bit integers are numbers the check lets through, as serde_json writes them.

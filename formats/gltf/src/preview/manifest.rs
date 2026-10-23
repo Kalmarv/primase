@@ -332,9 +332,9 @@ impl Manifest {
     /// The manifest as JSON, indented, after [`Manifest::check`] (a manifest that fails its own checks is not written).
     pub fn to_json(&self) -> Result<String> {
         self.check()?;
-        let mut text = serde_json::to_string_pretty(self).map_err(|e| invalid("manifest", e.to_string()))?;
-        text.push('\n');
-        Ok(text)
+        // core's JSON text: each f32 reads back as itself, and a non-finite one is refused
+        let bytes = primase_core::json::to_vec(self, true).map_err(|e| invalid("manifest", e.to_string()))?;
+        String::from_utf8(bytes).map_err(|e| invalid("manifest", e.to_string()))
     }
 
     /// Read a manifest, refusing a format or version this crate does not know, unknown fields, and a manifest that
