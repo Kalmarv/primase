@@ -753,6 +753,9 @@ impl<'a> Scene<'a> {
         }
         notes.texture_budget = sc.texture_budget.as_ref().and_then(|b| b.max);
         notes.min_height = sc.min_height.is_some();
+        // a key names a prototype in the placements and the writer's tables: two prototypes sharing one would be drawn
+        // as the last of them
+        let mut key_of: HashMap<u32, String> = HashMap::new();
         for (i, (e, p)) in world.iter::<SkatePrototype>().enumerate() {
             proto_index.insert(e, i);
             // core.mesh is the writer's input; a prototype with only a GLB file has not been loaded
@@ -765,6 +768,18 @@ impl<'a> Scene<'a> {
                 )));
             }
             let variants = world.get::<MaterialVariants>(e);
+            // one part per primitive: the writer indexes a prototype's parts by its primitives
+            let parts_len = world.get::<SkateParts>(e).map_or(0, |parts| parts.0.len());
+            if let Some(m) = mesh
+                && parts_len != m.primitives().len()
+            {
+                return Err(Error::Scene(format!(
+                    "prototype '{}' has {} skate.parts for {} primitives: one part per primitive (raise-skate makes them)",
+                    p.id,
+                    parts_len,
+                    m.primitives().len()
+                )));
+            }
             let parts: Vec<PartDef> = world
                 .get::<SkateParts>(e)
                 .map_or(&[][..], |parts| &parts.0[..])
@@ -823,6 +838,14 @@ impl<'a> Scene<'a> {
                     .and_then(|(pos, _, _)| box_of(pos.as_chunks::<3>().0))
                     .map_or((None, None), |(a, b)| (Some(a), Some(b))),
             };
+            let key = p.key.unwrap_or_else(|| prototype_key(&p.id));
+            if let Some(other) = key_of.insert(key, p.id.clone()) {
+                return Err(Error::Scene(format!(
+                    "prototypes '{other}' and '{}' share the key {key:#010x} (the id's hash, unless skate.prototype \
+                     states one): rename one, or give one a distinct key",
+                    p.id
+                )));
+            }
             protos.push(ProtoDef {
                 index: i,
                 entity: e,
@@ -840,7 +863,7 @@ impl<'a> Scene<'a> {
                 }),
                 name: world.get::<Name>(e).map_or_else(|| p.id.clone(), |n| n.0.clone()),
                 col_mode: mode_of(p.collision.as_ref().and_then(|c| c.mode)),
-                key: p.key.unwrap_or_else(|| prototype_key(&p.id)),
+                key,
                 foliage: p.foliage == Some(true),
                 ground: p.ground == Some(true),
                 collision,

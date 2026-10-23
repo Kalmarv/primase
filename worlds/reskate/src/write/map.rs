@@ -673,6 +673,18 @@ fn begin_map(out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The map's folder under `root`: the scene's name is one folder's, so a name that is empty, `.`, `..`, or holds a path
+/// separator (or a NUL) would put the writer's `remove_dir_all` and files outside `root`: refused.
+fn map_folder(root: &Path, name: &str) -> Result<PathBuf> {
+    let one_folder = !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0']);
+    if !one_folder {
+        return Err(Error::Scene(format!(
+            "the map's name {name:?} is not one folder's: no path separators, and not empty, '.' or '..'"
+        )));
+    }
+    Ok(root.join(name))
+}
+
 /// The folder `d` made afresh (empty).
 fn fresh_folder(d: &Path) -> Result<()> {
     if d.exists() {
@@ -749,7 +761,7 @@ impl MapSink {
             None => Err(SceneWarnings::of(&s, world)?),
         };
         o.warnings = s.stated_warnings.clone();
-        let out_dir = a.out_root.join(&o.name);
+        let out_dir = map_folder(&a.out_root, &o.name)?;
         if let Some(l) = &self.cells.layout
             && *l != cell_layout(&s, &o)
         {
@@ -1054,7 +1066,7 @@ impl MapSink {
             }
             Some(_) => {}
             None => {
-                let out_dir = self.encoding.out_root.join(&layout.name);
+                let out_dir = map_folder(&self.encoding.out_root, &layout.name)?;
                 begin_map(&out_dir)?;
                 c.out_dir = Some(out_dir);
                 c.layout = Some(layout.clone());

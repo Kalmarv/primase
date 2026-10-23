@@ -304,3 +304,38 @@ fn the_floor_options_are_required_and_checked() {
         assert!(prepare_reskate_floor(&bad).is_err(), "{bad:?}");
     }
 }
+
+/// A primitive with no position spans nothing, so it is not below the cutoff: a placement of one empty part and one
+/// part below the cutoff loses the low part only, and a placement of empty parts alone stays.
+#[test]
+fn an_empty_part_is_not_below_the_cutoff() {
+    let mut w = World::new();
+    w.insert_resource(SkateScene {
+        name: "t".into(),
+        ..SkateScene::default()
+    });
+    let empty = Primitive {
+        topology: Topology::Triangles,
+        streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(Vec::new()))]),
+        indices: None,
+        material: None,
+    };
+    let mixed = prototype(&mut w, "mixed", vec![empty.clone(), part(-400.0, -399.0)]);
+    let only_empty = prototype(&mut w, "only_empty", vec![empty]);
+    let solid = prototype(&mut w, "solid", vec![part(0.0, 1.0)]);
+    let (a, b) = (place(&mut w, mixed, 0.0), place(&mut w, only_empty, 0.0));
+    place(&mut w, solid, 0.0);
+    let mut log = PassLog::default();
+    PrepareReskateFloor::new(0.0, 10.0)
+        .unwrap()
+        .with_pinned_floor(0.0)
+        .unwrap()
+        .run(&mut w, &mut log)
+        .unwrap();
+    assert_eq!(w.get::<SkatePartsOff>(a).unwrap().0, vec![false, true]);
+    assert!(
+        w.has::<Instance>(b),
+        "a placement of empty parts is not removed for them"
+    );
+    assert_eq!(log.counts["parts below the cutoff, left out"], 1);
+}

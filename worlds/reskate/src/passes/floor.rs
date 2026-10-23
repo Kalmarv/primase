@@ -333,7 +333,11 @@ impl PrepareReskateFloor {
         // parts wholly below the cutoff left out; a placement left with none removed
         let (mut parts_removed, mut placements_removed) = (0u64, 0u64);
         for (e, spans) in placed {
-            let off: Vec<bool> = spans.iter().map(|b| b[1] < drop_below).collect();
+            // a part with no position spans [inf, -inf]: it has nothing below the cutoff, so it is not left out for it
+            let off: Vec<bool> = spans
+                .iter()
+                .map(|b| b[1].is_finite() && b[1] < drop_below)
+                .collect();
             let n = off.iter().filter(|&&o| o).count();
             if n == 0 {
                 continue;

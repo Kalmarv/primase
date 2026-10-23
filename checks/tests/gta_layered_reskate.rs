@@ -29,6 +29,7 @@ use primase_core::pbr::PbrMaterial;
 use primase_core::{LayeredMaterial, Mesh, World};
 use primase_gta::convert::{GtaOptions, GtaReader};
 use primase_reskate::EncodingOptions;
+use primase_reskate::components::{MarkerKind, SkateMarker, Snap, SnapMode};
 use primase_reskate::passes::LowerLayeredPbr;
 use primase_reskate::passes::layered::{BlendOpacity, LowerLayeredReskate, OverlayLimit};
 use primase_testdata::{Game, install, keys};
@@ -105,6 +106,25 @@ fn vespucci(m: &PassManager, passes: &str) -> Result<Option<World>> {
     let mut parts = std::mem::take(&mut *parts.lock().expect("done"));
     assert_eq!(parts.len(), 1, "one part");
     Ok(parts.pop())
+}
+
+/// The spawn `place-spawn{at=centre}` makes stands at the median of the placements, which may have no street under it to
+/// snap to; the writer refuses a spawn over no ground with no height (it used to write one 50 m up, a fall). The
+/// vertex blend is under test here, not the spawn: it stands at a stated height, unsnapped.
+fn stand_the_spawn_at_a_height(w: &mut World) {
+    let spawns: Vec<_> = w
+        .iter::<SkateMarker>()
+        .filter(|(_, m)| m.kind == MarkerKind::Spawn)
+        .map(|(e, _)| e)
+        .collect();
+    assert!(!spawns.is_empty(), "the selection places a spawn");
+    for e in spawns {
+        let m = w.get_mut::<SkateMarker>(e).unwrap();
+        if let Some((ground, _)) = m.position {
+            m.position = Some((ground, Some(0.0)));
+        }
+        m.snap = Some(Snap::Mode(SnapMode::None));
+    }
 }
 
 fn triangles(w: &World) -> usize {
@@ -328,6 +348,7 @@ fn layered_terrain_builds_with_vertex_blend_overlays() -> Result<()> {
         w.iter::<LayeredMaterial>().count() > 0,
         "no layered material in Vespucci"
     );
+    stand_the_spawn_at_a_height(&mut w);
     let o = EncodingOptions {
         out_root: primase_testdata::scratch().join("reskate-layered"),
         name: Some("vespucci".into()),
