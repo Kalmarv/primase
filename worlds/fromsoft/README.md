@@ -143,8 +143,9 @@ of the 119 ("Index was out of range"), so no independent decoder checks the memb
 What the members are is the game's SpeedTree vertex programs' (`flver::speedtree_layout`):
 `Half4` UV2's `xyz` is the position (its `w` and UV3's `zw` the coarser level's position,
 which the programs blend toward by the instance's blend), `Half4`
-UV3's `xy` the texture coordinate, the layout's two `UByte4Norm` members the normal and
-the tangent (`x * 2 - 1`); `Model::read` sets the vertex's position, normal, UV0 and
+UV3's `xy` the texture coordinate, the members at the program's last two `TEXCOORD` inputs the normal and the tangent
+(`x * 2 - 1`), for all but three meshes the layout's two `UByte4Norm` members;
+`Model::read` sets the vertex's position, normal, UV0 and
 tangent from them, the tangent in the ordinary programs' convention (`T × N`, `w` 1:
 an ordinary pixel program bends its normal by the normal map's `x` along `w (N × T)` and
 `y` along `T`, a SpeedTree one by `x` along `T` and `y` along `-w (N × T)`). Each mesh
@@ -159,20 +160,21 @@ instance at the finest level and the wind off (the wind block's fourth row's `y`
 1, with which every program outputs the stored position as it stands), and requires the decoded position and UV to be its
 outputs exactly and the normal and tangent within 1e-6. The programs of the three
 meshes of AEG801_258 (placed 194 times) drawn with `SpeedTree_5030f_w31a187` and
-`SpeedTree_5030ff8_w31a187` are the exception. Those programs read the inputs the
-eight-member layout holds (UV2 to UV4, the normal at TEXCOORD5, the tangent at
-TEXCOORD6, the same lanes as `SpeedTree_5010f_w312187`'s), but these meshes' layout has a
-fourth `Half4` (UV5) before its `UByte4Norm` pair (UV6, UV7). Nothing in the layout marks
-it (its member words are those of every other stored member, the indices run 2 to 7),
-and binding by index is what reproduces every other mesh exactly, so the game most likely
-gives those programs UV5 as the normal: all zeros in two meshes (the constant
-(-1, -1, -1) once unpacked), and in the third `x` from 0.28 to 15.6 with `y` 1, not unit
-directions. The lowering does not follow the programs there. It keeps the layout's pair,
-a unit normal and tangent perpendicular to each other whose normal follows the faces, so
-these meshes are lit as authored, not as the game most likely lights them. Following the
-programs would mean taking the roles from each material's program (its last two
-TEXCOORD inputs are the normal and the tangent in all 46) rather than from the layout.
-The test lists these meshes and compares only their positions and UVs. The
+`SpeedTree_5030ff8_w31a187` read the inputs the eight-member layout holds (UV2 to UV4,
+the normal at TEXCOORD5, the tangent at TEXCOORD6, the same lanes as
+`SpeedTree_5010f_w312187`'s), but these meshes' layout has a fourth `Half4` (UV5) before
+its `UByte4Norm` pair (UV6, UV7). Nothing in the layout marks it (its member words are
+those of every other stored member, the indices run 2 to 7), and binding by index is what
+reproduces every other mesh exactly, so the game gives those programs UV5 as the normal
+and UV6 as the tangent: UV5 is all zeros in two meshes (the constant (-1, -1, -1) once
+unpacked), and in the third `x` runs from 0.28 to 15.6 with `y` 1, not unit directions.
+`Model::read` sets the layout's pair (`Model::speedtree_frame`, a unit normal and a
+perpendicular tangent whose normal follows the faces); `lower-fromsoft-geometry`'s
+`speedtree-frame=program` replaces it with the members the material's program reads
+(`program_frame`: the last two `TEXCOORD` inputs of its `<shader>_Gbuf.vpo`;
+`Model::set_speedtree_frame`), so these meshes are lit as the game lights them, and
+`speedtree-frame=authored` keeps the layout's pair. The test takes each mesh's frame from
+its own program the same way, compares every mesh, and lists the three. The
 collision of the same assets checks the frame: the position as stored lies nearest its
 own collision (101 of the 106 with collision; for the other five the best of the 48
 signed axis permutations is within 0.02 m of it), mirrored in z farther (median 0.165 m against 0.064 m).
@@ -499,7 +501,9 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   `fromsoft.layer_inputs`. `pose=rigid|stored` is required (which model is lowered);
   its other options default to the source as stored: `uv-tiling=keep|apply` (recorded per material as
   `fromsoft.uv_tiling`), `winding=stored|normals`, `degenerates=keep|drop`,
-  `leave-out=sky+light-volume+shadow+billboard`, `blocker-cards=draw|record`. Motion-blur
+  `leave-out=sky+light-volume+shadow+billboard`, `blocker-cards=draw|record`,
+  `speedtree-frame=program|authored` (a SpeedTree mesh's normal and tangent from the
+  members its material's G-buffer vertex program reads, or its layout's pair). Motion-blur
   face sets, vertex colours and UV sets beyond UV0 are not lowered and are counted.
 - `lower-fromsoft-lights{candela-per-power=...,spot-blend=...}` makes `core.light` from the BTL
   records: colour bytes read as sRGB, intensity by the program's calibration (no
@@ -542,7 +546,7 @@ The collision and geometry the earlier reader produced by itself are this explic
 composition: `lower-fromsoft-collision{hit-filters=8+27,water=22+36,leave-out=29+40,reach=50},
 lower-fromsoft-object-collision{resolution=high,convex=tessellate,leave-out=22+29+36+40,leave-out-motion=2,convex-surface=render,reach=50},
 drop-fromsoft-far, fromsoft-apply-rigid-skinning,
-lower-fromsoft-geometry{pose=rigid,uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow+billboard,blocker-cards=record},
+lower-fromsoft-geometry{pose=rigid,uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow+billboard,blocker-cards=record,speedtree-frame=program},
 select-lod{form=finest}`. On m11_01 it reproduces that reader's placements, meshes
 (streams, indices, material identities), collision, lights, joined ledges and
 travel markers exactly.
@@ -686,7 +690,7 @@ surface IDs enforced, independent of convex triangulation.
 
 ### Interior blocker cards
 
-`lower-fromsoft-geometry{blocker-cards=record}` leaves out of the drawn geometry only meshes whose non-skipped resolved material uses a
+`lower-fromsoft-geometry{blocker-cards=record,speedtree-frame=program}` leaves out of the drawn geometry only meshes whose non-skipped resolved material uses a
 `GXFlver_Col*` shader and an exact `m[0-9][0-9]_black_a` main albedo. Other meshes
 in the same prototype remain renderable. Ordinary unlit ground fills and missing
 albedos do not match. This is an explicit export policy: the source game draws

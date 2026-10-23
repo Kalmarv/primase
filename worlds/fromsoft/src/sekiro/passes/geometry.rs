@@ -12,7 +12,9 @@ use crate::components::models::{RigidModel, SkeletonOf, SourceModel};
 use crate::flver::{FaceSetKind, Model, Part};
 use crate::materials::{self, Material};
 use crate::sekiro::components::lowered::UvTiling;
-use crate::sekiro::source::{FaceCull, LayerInputs, MaterialSlots, PrototypeSource};
+use crate::sekiro::source::{
+    FaceCull, LayerInputs, MaterialShader, MaterialSlots, PrototypeSource, ShaderBundle, ShaderStage,
+};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::world::Resource;
 use primase_core::{
@@ -89,6 +91,15 @@ choice! {
     }
 }
 choice! {
+    /// Which members give a SpeedTree mesh its normal and tangent (`speedtree-frame=`).
+    SpeedTreeFrame {
+        /// Those its material's G-buffer vertex program reads ([`program_frame`]): what the game draws with.
+        Program = "program",
+        /// Its layout's two `UByte4Norm` members, as the model was authored ([`Model::speedtree_frame`]).
+        Authored = "authored",
+    }
+}
+choice! {
     /// What `lower-fromsoft-geometry` does with interior blocker cards (`blocker-cards=`).
     Cards {
         /// Drawn as any mesh.
@@ -112,9 +123,11 @@ choice! {
 /// balance, or keep it); `degenerates` (drop triangles of doubled area squared at most 1e-14, or keep them);
 /// `leave_out`, material source classes whose meshes are not lowered; `blocker_cards` (record the level-0 parts of
 /// interior blocker cards in `fromsoft.blocker_cards` with every placement of their prototype, or draw them). A
-/// prototype left drawing nothing at any level is despawned with its placements, counted. Options, all required:
-/// `pose=rigid|stored`, `uv-tiling=keep|apply`, `winding=stored|normals`, `degenerates=keep|drop`, `leave-out=`
-/// classes joined by `+` (`sky`, `light-volume`, `shadow`; empty: none), `blocker-cards=draw|record`.
+/// prototype left drawing nothing at any level is despawned with its placements, counted. `speedtree_frame`: a SpeedTree
+/// mesh's normal and tangent from the members its material's program reads, or from its layout's pair (they differ for
+/// three meshes of Elden Ring's, counted). Options, all required: `pose=rigid|stored`, `uv-tiling=keep|apply`,
+/// `winding=stored|normals`, `degenerates=keep|drop`, `leave-out=` classes joined by `+` (`sky`, `light-volume`,
+/// `shadow`, `billboard`; empty: none), `blocker-cards=draw|record`, `speedtree-frame=program|authored`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LowerFromSoftGeometry {
     pub pose: Pose,
@@ -123,18 +136,20 @@ pub struct LowerFromSoftGeometry {
     pub degenerates: Degenerates,
     pub leave_out: BTreeSet<materials::SkipClass>,
     pub blocker_cards: Cards,
+    pub speedtree_frame: SpeedTreeFrame,
 }
 
 impl LowerFromSoftGeometry {
     /// From its options, every one required.
     pub fn from_options(o: &Options) -> Result<Self, String> {
-        const KEYS: [&str; 6] = [
+        const KEYS: [&str; 7] = [
             "pose",
             "uv-tiling",
             "winding",
             "degenerates",
             "leave-out",
             "blocker-cards",
+            "speedtree-frame",
         ];
         if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
@@ -144,7 +159,7 @@ impl LowerFromSoftGeometry {
                 format!(
                     "{k} is required: pose=rigid|stored, uv-tiling=keep|apply, winding=stored|normals, \
                      degenerates=keep|drop, leave-out= (sky+light-volume+shadow+billboard, empty for none), \
-                     blocker-cards=draw|record"
+                     blocker-cards=draw|record, speedtree-frame=program|authored"
                 )
             })
         };
@@ -161,6 +176,7 @@ impl LowerFromSoftGeometry {
             degenerates: Degenerates::parse("degenerates", get("degenerates")?)?,
             leave_out,
             blocker_cards: Cards::parse("blocker-cards", get("blocker-cards")?)?,
+            speedtree_frame: SpeedTreeFrame::parse("speedtree-frame", get("speedtree-frame")?)?,
         })
     }
     fn input(&self) -> &'static str {
@@ -168,6 +184,35 @@ impl LowerFromSoftGeometry {
             Pose::Rigid => RigidModel::NAME,
             Pose::Stored => SourceModel::NAME,
         }
+    }
+}
+
+/// The input indices (`TEXCOORD<n>`) of the normal and the tangent a SpeedTree material's G-buffer vertex program
+/// (`<shader>_Gbuf.vpo` of its bundle) reads: its last two `TEXCOORD` inputs, which each of Elden Ring's SpeedTree
+/// programs unpacks (`x * 2 - 1`) and outputs as the normal and the tangent (`tests/speedtree.rs` runs every one on its
+/// meshes' vertices).
+pub fn program_frame(bundle: &ShaderBundle) -> Result<[u32; 2], String> {
+    let name = format!("{}_Gbuf.vpo", bundle.name);
+    let program = bundle
+        .program(&name)
+        .filter(|p| p.stage == ShaderStage::Vertex)
+        .ok_or_else(|| format!("{}: no vertex program {name}", bundle.name))?;
+    if program.format != primase_core::shader::ShaderFormat::Dxil {
+        return Err(format!(
+            "{name}: a SpeedTree program read as DXIL, this one is not"
+        ));
+    }
+    let interface = primase_dxil::interface(&program.code).map_err(|e| format!("{name}: {e}"))?;
+    let mut texcoords: Vec<u32> = interface
+        .inputs
+        .iter()
+        .filter(|i| i.label.name == "TEXCOORD")
+        .map(|i| i.label.index)
+        .collect();
+    texcoords.sort_unstable();
+    match texcoords[..] {
+        [.., normal, tangent] => Ok([normal, tangent]),
+        _ => Err(format!("{name}: fewer than two TEXCOORD inputs")),
     }
 }
 
@@ -285,7 +330,68 @@ impl LowerFromSoftGeometry {
         Ok(Some(part))
     }
 
-    fn lower(&self, world: &World, prototype: Entity, log: &mut PassLog) -> Result<Lowered, String> {
+    /// A SpeedTree model whose meshes' programs read another normal and tangent than their layouts' pairs, given
+    /// those (`frames`: each shader bundle's [`program_frame`], read once); `None` where nothing changes.
+    fn program_frames(
+        &self,
+        world: &World,
+        model: &Model,
+        slots: &[Entity],
+        frames: &mut BTreeMap<Entity, [u32; 2]>,
+        log: &mut PassLog,
+    ) -> Result<Option<Model>, String> {
+        if self.speedtree_frame == SpeedTreeFrame::Authored || !model.speedtree {
+            return Ok(None);
+        }
+        let mut changed: Option<Model> = None;
+        for (index, mesh) in model.meshes.iter().enumerate() {
+            let Some(authored) = model.speedtree_frame(index).map_err(|e| e.to_string())? else {
+                continue;
+            };
+            let entity = *slots
+                .get(mesh.material)
+                .ok_or_else(|| format!("mesh {index} material slot {}", mesh.material))?;
+            let bundle = world
+                .get::<MaterialShader>(entity)
+                .ok_or_else(|| {
+                    format!(
+                        "SpeedTree mesh {index}: its material has no shader bundle, so the members its program reads \
+                         as its normal and tangent are unknown (speedtree-frame=authored takes its layout's)"
+                    )
+                })?
+                .0;
+            let frame = match frames.get(&bundle) {
+                Some(f) => *f,
+                None => {
+                    let b = world
+                        .get::<ShaderBundle>(bundle)
+                        .ok_or_else(|| format!("{bundle:?} holds no fromsoft.shader_bundle"))?;
+                    let f = program_frame(b)?;
+                    frames.insert(bundle, f);
+                    f
+                }
+            };
+            if frame != authored {
+                changed
+                    .get_or_insert_with(|| model.clone())
+                    .set_speedtree_frame(index, frame)
+                    .map_err(|e| e.to_string())?;
+                log.count(
+                    "SpeedTree meshes whose program reads another normal and tangent than its layout's pair",
+                    1,
+                );
+            }
+        }
+        Ok(changed)
+    }
+
+    fn lower(
+        &self,
+        world: &World,
+        prototype: Entity,
+        frames: &mut BTreeMap<Entity, [u32; 2]>,
+        log: &mut PassLog,
+    ) -> Result<Lowered, String> {
         let model = match self.pose {
             Pose::Rigid => world.get::<RigidModel>(prototype).map(|m| &m.0),
             Pose::Stored => world.get::<SourceModel>(prototype).map(|m| &m.0),
@@ -295,6 +401,10 @@ impl LowerFromSoftGeometry {
             .get::<MaterialSlots>(prototype)
             .ok_or_else(|| format!("{prototype:?}: no fromsoft.material_slots"))?
             .0;
+        let reframed = self
+            .program_frames(world, model, slots, frames, log)
+            .map_err(|e| format!("{prototype:?}: {e}"))?;
+        let model = reframed.as_ref().unwrap_or(model);
         let mut out = Lowered::default();
         if self.pose == Pose::Stored
             && let Some(s) = world.get::<SkeletonOf>(prototype)
@@ -451,6 +561,10 @@ impl Pass for LowerFromSoftGeometry {
             ("degenerates".to_owned(), self.degenerates.word().to_owned()),
             ("leave-out".to_owned(), leave_out.join("+")),
             ("blocker-cards".to_owned(), self.blocker_cards.word().to_owned()),
+            (
+                "speedtree-frame".to_owned(),
+                self.speedtree_frame.word().to_owned(),
+            ),
         ])
     }
     fn requires(&self) -> &[&'static str] {
@@ -494,11 +608,12 @@ impl Pass for LowerFromSoftGeometry {
         }
         // Everything is checked and lowered before the world changes.
         let mut lowered = Vec::with_capacity(prototypes.len());
+        let mut frames = BTreeMap::new();
         for &prototype in &prototypes {
             if world.has::<Mesh>(prototype) {
                 return Err(format!("{prototype:?} already has core.mesh"));
             }
-            lowered.push(self.lower(world, prototype, log)?);
+            lowered.push(self.lower(world, prototype, &mut frames, log)?);
         }
         if self.uv_tiling == Tiling::Apply {
             let used: BTreeSet<Entity> = lowered

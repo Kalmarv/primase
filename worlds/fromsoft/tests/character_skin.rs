@@ -142,7 +142,7 @@ fn characters_read_as_soulsformats_reads_them() -> Result<()> {
         primase_fromsoft::sekiro::passes::register(&mut reg);
         let manager = primase_core::pass::PassManager::new(reg).with_pass_checks(true);
         let pipeline = manager.registry.parse(
-            "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw}",
+            "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}",
         )?;
         manager.run(&mut world, &pipeline, &mut r)?;
         assert_eq!(
@@ -209,7 +209,7 @@ fn a_character_converts_as_one_part_per_asset() -> Result<()> {
         &manager,
         &manager.registry.parse("partition-by-asset")?,
         &manager.registry.parse(
-            "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw}, place-assets",
+            "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}, place-assets",
         )?,
     )
     .map_err(|e| e as Box<dyn std::error::Error>)?;

@@ -26,7 +26,7 @@ const PARTS: [&str; 5] = [
     "fc_m_0220_l",
 ];
 
-const LOWER: &str = "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw}";
+const LOWER: &str = "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}";
 
 fn manager() -> PassManager {
     let mut reg = PassRegistry::new();

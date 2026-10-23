@@ -15,12 +15,14 @@
 //! to leave the position as the basis gives it; every other constant is zero. A stored member is bound as
 //! `TEXCOORD<its index>`.
 //!
-//! Billboard cards are the `billboard` material class, and their decode is refused. Where a program unpacks a `Half4`
-//! member as its normal (one whose values are not a direction), the normal and tangent it outputs are not compared;
-//! those meshes are listed, and their positions and UVs still are.
-use primase_core::shader::ResourceKind;
+//! Each mesh's normal and tangent are the members its program reads as them, as `lower-fromsoft-geometry` takes them
+//! with `speedtree-frame=program` ([`program_frame`], [`Model::set_speedtree_frame`]); the meshes where those are not
+//! its layout's pair are listed. Billboard cards are the `billboard` material class, and their decode is refused.
+use primase_core::shader::{ResourceKind, ShaderFormat};
 use primase_fromsoft::flver::{Model, SpeedTreeLayout, is_speedtree, speedtree_layout, tangent_to_scene};
 use primase_fromsoft::materials::{self, Definition, SkipClass};
+use primase_fromsoft::sekiro::passes::geometry::program_frame;
+use primase_fromsoft::sekiro::source::{ShaderBundle, ShaderProgram, ShaderStage};
 use primase_fromsoft::{Binder, Game, NameDictionary, dcx::Decoder};
 use primase_shader::exec::{Backend, Element, Executable, ImageSample, Resources, Runner};
 use std::collections::BTreeMap;
@@ -42,15 +44,27 @@ impl Backend for NoImages {
     }
 }
 
-/// A lifted vertex program with the constants the module states.
+/// A lifted vertex program with the constants the module states, and the inputs it reads as the normal and tangent.
 struct Prepared {
+    frame: [u32; 2],
     exe: Executable,
     inputs: Vec<(String, u32, u8)>,
     outputs: BTreeMap<(String, u32), usize>,
     resources: Resources,
 }
 
-fn prepare(code: &[u8]) -> Result<Prepared> {
+/// Shader `shader`'s G-buffer vertex program `name`, of bytes `code`.
+fn prepare(shader: &str, name: &str, code: &[u8]) -> Result<Prepared> {
+    let frame = program_frame(&ShaderBundle {
+        name: shader.to_owned(),
+        programs: vec![ShaderProgram {
+            name: name.to_owned(),
+            stage: ShaderStage::Vertex,
+            format: ShaderFormat::Dxil,
+            code: code.into(),
+        }],
+        parameters: None,
+    })?;
     let program = primase_dxil::lift(code).map_err(|e| e.reason().to_string())?;
     let exe = Executable::new(&program)?;
     let mut resources = Resources::default();
@@ -93,6 +107,7 @@ fn prepare(code: &[u8]) -> Result<Prepared> {
         .map(|(k, o)| ((o.label.name.clone(), o.label.index), k))
         .collect();
     Ok(Prepared {
+        frame,
         exe,
         inputs,
         outputs,
@@ -163,8 +178,8 @@ struct Counts {
     meshes: usize,
     vertices: usize,
     billboards: usize,
-    /// Meshes whose program unpacks a `Half4` member as its normal: `<model> mesh <n> (<shader>)`.
-    half_normals: Vec<String>,
+    /// Meshes whose program reads another normal and tangent than its layout's pair: `<model> mesh <n> (<shader>)`.
+    reframed: Vec<String>,
 }
 
 #[test]
@@ -236,9 +251,10 @@ fn speedtree_models_are_what_their_programs_draw() -> Result<()> {
                 continue;
             }
             let id = format!("{path}:{}", f.name.as_deref().unwrap_or(""));
-            let model = Model::read(&data).map_err(|e| format!("{id}: {e}"))?;
+            let mut model = Model::read(&data).map_err(|e| format!("{id}: {e}"))?;
             counts.models += 1;
-            for (index, mesh) in model.meshes.iter().enumerate() {
+            for index in 0..model.meshes.len() {
+                let mesh = &model.meshes[index];
                 let source = &model.materials[mesh.material];
                 let definition = shaders
                     .get(&materials::stem(&source.mtd))
@@ -275,29 +291,18 @@ fn speedtree_models_are_what_their_programs_draw() -> Result<()> {
                         .bytes;
                     programs.insert(
                         shader.clone(),
-                        prepare(&code).map_err(|e| format!("{wanted}: {e}"))?,
+                        prepare(&shader, &wanted, &code).map_err(|e| format!("{wanted}: {e}"))?,
                     );
                 }
+                // the normal and tangent the program reads, as speedtree-frame=program gives them
+                let frame = programs[&shader].frame;
+                if model.speedtree_frame(index)? != Some(frame) {
+                    model.set_speedtree_frame(index, frame)?;
+                    counts.reframed.push(format!("{id} mesh {index} ({shader})"));
+                }
+                let mesh = &model.meshes[index];
                 let outputs =
                     run(&programs[&shader], &model, index).map_err(|e| format!("{id} mesh {index}: {e}"))?;
-                // the program's normal is a Half4 member's, unpacked: those meshes' normals are not compared
-                let stored: Vec<_> = model.layouts[mesh.layouts[0]]
-                    .iter()
-                    .filter(|x| x.stored)
-                    .collect();
-                let half_normal = (0..stored.len()).any(|k| {
-                    stored[k].kind == 0x2e
-                        && mesh.vertices.iter().zip(&outputs).all(|(v, o)| {
-                            let s = v.speedtree[k];
-                            near(
-                                unit([o[1][0], o[1][1], o[1][2]]),
-                                unit([s[0] * 2. - 1., s[1] * 2. - 1., s[2] * 2. - 1.]),
-                            )
-                        })
-                });
-                if half_normal {
-                    counts.half_normals.push(format!("{id} mesh {index} ({shader})"));
-                }
                 for face_set in 0..mesh.faces.len() {
                     let Some(part) = model.decode(index, face_set)? else {
                         continue;
@@ -310,9 +315,6 @@ fn speedtree_models_are_what_their_programs_draw() -> Result<()> {
                         }
                         if part.mesh.uv[j] != [uv[0], uv[1]] {
                             failures.push(what("UV"));
-                        }
-                        if half_normal {
-                            continue;
                         }
                         if !near(part.mesh.normals[j], unit([n[0], n[1], -n[2]])) {
                             failures.push(what("normal"));
@@ -338,17 +340,17 @@ fn speedtree_models_are_what_their_programs_draw() -> Result<()> {
     }
     println!(
         "SpeedTree models {}: meshes run {} ({} vertices, {} programs), billboard meshes {}, meshes whose program \
-         unpacks a Half4 member as its normal {}, failures {}",
+         reads another normal and tangent than its layout's pair {}, failures {}",
         counts.models,
         counts.meshes,
         counts.vertices,
         programs.len(),
         counts.billboards,
-        counts.half_normals.len(),
+        counts.reframed.len(),
         failures.len()
     );
-    for h in &counts.half_normals {
-        println!("  Half4 normal: {h}");
+    for r in &counts.reframed {
+        println!("  program's own frame: {r}");
     }
     for f in failures.iter().take(40) {
         println!("FAIL {f}");

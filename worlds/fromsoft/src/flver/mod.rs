@@ -636,9 +636,10 @@ pub enum SpeedTreeLayout {
 /// The roles of a SpeedTree layout's stored members, as Elden Ring's SpeedTree G-buffer vertex programs read them:
 /// with the per-instance stream an identity instance (position 0, scale 1, basis vectors x and y, the level-of-detail
 /// blend at the finest level) and the wind off, each program outputs `Half4` UV2's `xyz` as the position, `Half4`
-/// UV3's `xy` as the texture coordinate, and its layout's two `UByte4Norm` members, in order, as the normal and the
-/// tangent (`tests/speedtree.rs` runs every mesh's own program on its vertices). The billboard cards' layout is
-/// [`SpeedTreeLayout::Billboard`]; another layout is refused.
+/// UV3's `xy` as the texture coordinate, and the members at its last two `TEXCOORD` inputs as the normal and the
+/// tangent: its layout's two `UByte4Norm` members, in order, for every mesh but three, whose programs read another
+/// member ([`Model::set_speedtree_frame`] gives a mesh those; `tests/speedtree.rs` runs every mesh's own program on its
+/// vertices). The billboard cards' layout is [`SpeedTreeLayout::Billboard`]; another layout is refused.
 pub fn speedtree_layout(members: &[Member]) -> Result<SpeedTreeLayout> {
     let stored: Vec<&Member> = members.iter().filter(|m| m.stored).collect();
     let refused = || {
@@ -675,4 +676,61 @@ pub fn speedtree_layout(members: &[Member]) -> Result<SpeedTreeLayout> {
         normal,
         tangent,
     })
+}
+
+impl Model {
+    /// The stored members of mesh `mesh`'s one SpeedTree layout, and its roles; `None` for an ordinary model.
+    fn speedtree_mesh(&self, mesh: usize) -> Result<Option<(Vec<&Member>, SpeedTreeLayout)>> {
+        if !self.speedtree {
+            return Ok(None);
+        }
+        let m = self
+            .meshes
+            .get(mesh)
+            .ok_or_else(|| invalid("FLVER SpeedTree mesh", mesh, "mesh index"))?;
+        let Some(&l) = m.layouts.first() else {
+            return Ok(None);
+        };
+        let members = &self.layouts[l];
+        Ok(Some((
+            members.iter().filter(|m| m.stored).collect(),
+            speedtree_layout(members)?,
+        )))
+    }
+
+    /// The input indices (`TEXCOORD<n>`, the members' UV indices) of the normal and the tangent mesh `mesh`'s layout
+    /// holds ([`SpeedTreeLayout::Geometry`], what [`Model::read`] sets); `None` for an ordinary model's mesh and a
+    /// billboard card's.
+    pub fn speedtree_frame(&self, mesh: usize) -> Result<Option<[u32; 2]>> {
+        Ok(match self.speedtree_mesh(mesh)? {
+            Some((stored, SpeedTreeLayout::Geometry { normal, tangent, .. })) => {
+                Some([stored[normal].index, stored[tangent].index])
+            }
+            _ => None,
+        })
+    }
+
+    /// Set mesh `mesh`'s vertices' normal and tangent from the stored members a program reads as them, at its inputs
+    /// `TEXCOORD<normal>` and `TEXCOORD<tangent>`, unpacked as for the layout's pair. Where the program reads the
+    /// layout's own pair this changes nothing. Refused for a mesh that is not a SpeedTree geometry mesh, and for an
+    /// input its layout does not store.
+    pub fn set_speedtree_frame(&mut self, mesh: usize, [normal, tangent]: [u32; 2]) -> Result<()> {
+        let refused = |why: String| invalid("FLVER SpeedTree mesh", mesh, why);
+        let (normal, tangent) = match self.speedtree_mesh(mesh)? {
+            Some((stored, SpeedTreeLayout::Geometry { .. })) => {
+                let at = |index: u32| {
+                    stored
+                        .iter()
+                        .position(|m| m.semantic == 5 && m.index == index)
+                        .ok_or_else(|| refused(format!("its layout stores no TEXCOORD{index}")))
+                };
+                (at(normal)?, at(tangent)?)
+            }
+            _ => return Err(refused("not a SpeedTree geometry mesh".into())),
+        };
+        for v in &mut self.meshes[mesh].vertices {
+            v.speedtree_frame(normal, tangent);
+        }
+        Ok(())
+    }
 }

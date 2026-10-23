@@ -372,6 +372,31 @@ fn a_speedtree_vertex_takes_its_attributes_from_the_members_its_programs_read() 
     }
 }
 #[test]
+fn a_speedtree_mesh_takes_the_normal_and_tangent_a_program_reads() {
+    let mut m = Model::read(&speedtree_fixture()).unwrap();
+    // the layout's pair: its two UByte4Norm members, TEXCOORD4 and TEXCOORD5
+    assert_eq!(m.speedtree_frame(0).unwrap(), Some([4, 5]));
+    // a program reading TEXCOORD3 (a Half4: 0.5, 0.25, 0) as its normal and TEXCOORD4 as its tangent
+    m.set_speedtree_frame(0, [3, 4]).unwrap();
+    let v = &m.meshes[0].vertices[1];
+    assert_eq!(v.normal, [0., -0.5, -1.]);
+    // the stored tangent (1, -1, -1) crossed with that normal, w 1
+    assert_eq!(v.tangents, [[0.5, 1., -0.5, 1.]]);
+    // the position and UV stay
+    assert_eq!(v.position, [1., 0., 0.]);
+    assert_eq!(v.uvs, [[0.5, 0.25, 0.]]);
+    // an input the layout does not store, and an ordinary model's mesh, are refused
+    assert!(
+        m.set_speedtree_frame(0, [9, 4])
+            .unwrap_err()
+            .to_string()
+            .contains("TEXCOORD9")
+    );
+    let mut ordinary = Model::read(&fixture()).unwrap();
+    assert_eq!(ordinary.speedtree_frame(0).unwrap(), None);
+    assert!(ordinary.set_speedtree_frame(0, [4, 5]).is_err());
+}
+#[test]
 fn a_speedtree_billboard_card_is_read_and_refused_as_geometry() {
     // the stored stream as a billboard's: Float4 UV2 at 0 and Float2 UV3 at 16 (the same 24 bytes)
     let mut b = speedtree_fixture();

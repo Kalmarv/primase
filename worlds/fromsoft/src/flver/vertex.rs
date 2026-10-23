@@ -77,19 +77,26 @@ impl Vertex {
     }
 
     /// A SpeedTree vertex's attributes from its stored members (indices into [`Vertex::speedtree`], the roles
-    /// [`super::SpeedTreeLayout::Geometry`] names): the position and UV0 as stored, the normal unpacked, and the
-    /// tangent of the ordinary programs' convention. A SpeedTree pixel program bends the normal by its normal map's
-    /// `x` along the stored tangent `T` and its `y` along `-w (N × T)`, `w` the 1 its vertex program passes; an
-    /// ordinary one bends it by `x` along `w (N × T')` and `y` along `T'`. `T' = T × N` with `w` 1 is the same frame
-    /// where `T` is perpendicular to `N` (the stored pairs are within a byte's precision of it).
+    /// [`super::SpeedTreeLayout::Geometry`] names): the position and UV0 as stored, and the normal and tangent
+    /// ([`Vertex::speedtree_frame`]).
     pub(super) fn speedtree_attributes(&mut self, position: usize, uv: usize, normal: usize, tangent: usize) {
-        let unpack = |m: [f32; 4]| [m[0] * 2. - 1., m[1] * 2. - 1., m[2] * 2. - 1.];
         let p = self.speedtree[position];
         let t = self.speedtree[uv];
-        let n = unpack(self.speedtree[normal]);
-        let s = unpack(self.speedtree[tangent]);
         self.position = [p[0], p[1], p[2]];
         self.uvs = vec![[t[0], t[1], 0.]];
+        self.speedtree_frame(normal, tangent);
+    }
+
+    /// A SpeedTree vertex's normal and tangent from the stored members of indices `normal` and `tangent`, unpacked
+    /// as its programs unpack them (`x * 2 - 1`), the tangent in the ordinary programs' convention. A SpeedTree pixel
+    /// program bends the normal by its normal map's `x` along the stored tangent `T` and its `y` along `-w (N × T)`,
+    /// `w` the 1 its vertex program passes; an ordinary one bends it by `x` along `w (N × T')` and `y` along `T'`.
+    /// `T' = T × N` with `w` 1 is the same frame where `T` is perpendicular to `N` (the stored pairs are within a
+    /// byte's precision of it).
+    pub(super) fn speedtree_frame(&mut self, normal: usize, tangent: usize) {
+        let unpack = |m: [f32; 4]| [m[0] * 2. - 1., m[1] * 2. - 1., m[2] * 2. - 1.];
+        let n = unpack(self.speedtree[normal]);
+        let s = unpack(self.speedtree[tangent]);
         self.normal = n;
         self.tangents = vec![[
             s[1] * n[2] - s[2] * n[1],

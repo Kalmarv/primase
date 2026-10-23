@@ -25,7 +25,7 @@ use crate::rigid::ApplyRigidSkinning;
 pub use crate::sekiro::components::lowered::UvTiling;
 pub use bake::BakeFromSoftLayers;
 pub use far::DropFromSoftFar;
-pub use geometry::{Cards, Degenerates, LowerFromSoftGeometry, Pose, Tiling, Winding};
+pub use geometry::{Cards, Degenerates, LowerFromSoftGeometry, Pose, SpeedTreeFrame, Tiling, Winding};
 pub use materials::{DropFromSoftTextureTransforms, LowerFromSoftMaterials};
 use primase_core::pass::{Options, Pass, PassRegistry};
 pub use resolve_shaders::ResolveFromSoftShaders;
@@ -82,6 +82,7 @@ pub fn register(registry: &mut PassRegistry) {
             ("degenerates", "drop"),
             ("leave-out", "sky+light-volume+shadow+billboard"),
             ("blocker-cards", "record"),
+            ("speedtree-frame", "program"),
         ],
     );
     registry.register("drop-fromsoft-far", |o| without_options(o, DropFromSoftFar));
