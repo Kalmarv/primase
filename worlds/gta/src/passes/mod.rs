@@ -12,6 +12,7 @@ pub mod roles;
 pub mod select;
 pub mod shader_class;
 pub mod shader_names;
+pub mod skin;
 pub mod surfaces;
 pub mod terrain;
 pub mod tint;

@@ -452,6 +452,9 @@ pub struct Skeleton {
     pub parents: Vec<Option<u16>>,
     /// Per bone, its tag: the id a light record names its bone by (`None` when the skeleton stores no bones).
     pub tags: Option<Vec<u16>>,
+    /// Per bone, the inverse of its transform into the drawable's space ([`Skeleton::pose`]) as the skeleton stores
+    /// it (the pointer at 0x28), in the form of `local`; `None` when it stores none.
+    pub inverse: Option<Vec<[[f32; 4]; 3]>>,
 }
 
 impl Skeleton {
@@ -483,20 +486,27 @@ impl Skeleton {
                     .collect::<Result<Vec<_>>>()?,
             ),
         };
-        let local = transforms
-            .as_chunks::<64>()
-            .0
-            .iter()
-            .map(|m| {
-                // row-vector matrix M (p' = p M, translation in its fourth row): row i of ours is column i of M
-                let [r0, r1, r2, r3] = rows::<4, 64>(m, pointer)?;
-                Ok([
-                    [r0[0], r1[0], r2[0], r3[0]],
-                    [r0[1], r1[1], r2[1], r3[1]],
-                    [r0[2], r1[2], r2[2], r3[2]],
-                ])
-            })
-            .collect::<Result<_>>()?;
+        // a row-vector matrix M (p' = p M, translation in its fourth row) as ours: row i of ours is column i of M
+        let matrices = |bytes: &[u8]| -> Result<Vec<[[f32; 4]; 3]>> {
+            bytes
+                .as_chunks::<64>()
+                .0
+                .iter()
+                .map(|m| {
+                    let [r0, r1, r2, r3] = rows::<4, 64>(m, pointer)?;
+                    Ok([
+                        [r0[0], r1[0], r2[0], r3[0]],
+                        [r0[1], r1[1], r2[1], r3[1]],
+                        [r0[2], r1[2], r2[2], r3[2]],
+                    ])
+                })
+                .collect()
+        };
+        let local = matrices(transforms)?;
+        let inverse = match le::u64(s, 0x28)? {
+            0 => None,
+            p => Some(matrices(r.records(p, count, 64)?)?),
+        };
         let parents = parents
             .iter()
             .map(|&p| match p {
@@ -508,7 +518,12 @@ impl Skeleton {
                     .ok_or_else(|| err(pointer, format!("bone parent {p} of {count} bones"))),
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Skeleton { local, parents, tags })
+        Ok(Skeleton {
+            local,
+            parents,
+            tags,
+            inverse,
+        })
     }
 
     /// The index of the bone tagged `tag` (the first, should two share it).
@@ -1195,6 +1210,7 @@ mod tests {
                 local: vec![rest, rest],
                 parents: vec![None, Some(0)],
                 tags: None,
+                inverse: None,
             }),
             fragment_pose: vec![moved],
         };
@@ -1211,6 +1227,7 @@ mod tests {
             ],
             parents: vec![None, Some(0)],
             tags: None,
+            inverse: None,
         };
         let pose = s.pose();
         let at = |m: &[[f32; 4]; 3], p: [f32; 3]| m.map(|r| r[0] * p[0] + r[1] * p[1] + r[2] * p[2] + r[3]);

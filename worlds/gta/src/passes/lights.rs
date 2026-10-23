@@ -316,6 +316,7 @@ mod tests {
                     local: vec![rest, up],
                     parents: vec![None, Some(0)],
                     tags: Some(vec![0, 0x1234]),
+                    inverse: None,
                 }),
                 fragment_pose: Vec::new(),
             }),

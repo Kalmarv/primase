@@ -54,7 +54,7 @@ pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) 
     }
 }
 
-/// Registers the GTA passes by name: `gta-pose-fragments`, `lower-gta-pbr{night}`, `gta-winding`, `gta-tint`, `gta-terrain-layers`,
+/// Registers the GTA passes by name: `gta-pose-fragments`, `lower-gta-skin`, `lower-gta-pbr{night}`, `gta-winding`, `gta-tint`, `gta-terrain-layers`,
 /// `gta-vertex-colours`, `gta-select-region{x0,y0,x1,y1,max_priority,min_size}`, `gta-select-stand-ins{levels,x0,y0,x1,y1}`,
 /// `gta-leave-out-interiors`,
 /// `lower-gta-lights{hour,x0,y0,x1,y1}`, `gta-select-collision{detail}`, `lower-gta-collision{x0,y0,x1,y1,foliage,river}`,
@@ -73,6 +73,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         none(o, passes::roles::ClassifyGtaTextureRoles)
     });
     reg.register("gta-pose-fragments", |o| none(o, passes::pose::PoseFragments));
+    reg.register("lower-gta-skin", |o| none(o, passes::skin::LowerGtaSkin));
     reg.register("lower-gta-pbr", |o| {
         Ok(Box::new(passes::lower::LowerGtaPbr::from_options(o)?))
     });
@@ -165,6 +166,7 @@ mod tests {
             "lower-gta-embedded-collision",
             "lower-gta-lights",
             "lower-gta-pbr",
+            "lower-gta-skin",
             "lower-gta-surfaces",
             "lower-gta-water",
             "resolve-gta-shaders",
