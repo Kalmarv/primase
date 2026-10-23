@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
-use primase_image::sampling::{Address, Decoded, Levels, Transfer};
+use primase_image::sampling::{Address, Decoded, Levels, Subtexel, Transfer};
 
 use crate::{Result, invalid};
 
-/// Named offline policy: base mip, bilinear filtering, in f32 ([`primase_image::sampling`]'s mechanism), the
-/// addressing along each axis the binding states (wrap where it states none). Albedo RGB is linearized with the shared
+/// Named offline policy: base mip, bilinear filtering as Direct3D 11 filters (the texel coordinate truncated to 8
+/// sub-texel bits, [`Subtexel::D3d11`], as the GPU and WARP do; the arithmetic in f32, [`primase_image::sampling`]'s
+/// mechanism), the addressing along each axis the binding states (wrap where it states none). Albedo RGB is linearized with the shared
 /// sRGB transfer before filtering; alpha and data textures remain linear. Runtime derivatives are not inferred from the
 /// shader resource names.
 ///
@@ -67,7 +68,7 @@ impl BaseMipBilinearWrap {
     }
     pub fn sample(&self, uv: [f32; 2]) -> Result<[f32; 4]> {
         self.decoded
-            .bilinear(uv, self.address)
+            .bilinear_at(uv, self.address, Subtexel::D3d11)
             .map_err(|e| invalid("layer sampler", 0, e.to_string()))
     }
 }

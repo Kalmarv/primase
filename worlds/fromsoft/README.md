@@ -703,8 +703,11 @@ against our own old code is not a check. An open coverage gap (build one when a 
 It is a static preview policy: identity world transform, upward normal, stored
 +X tangent, overhead camera, white instance colour, constant layer weights and
 one UV set. It does not claim those constants or its base-mip bilinear wrap
-sampler reproduce runtime derivatives or sampler descriptors. Albedo RGB is
-linearized before filtering; alpha and data channels remain linear. Missing
+sampler reproduce runtime derivatives or sampler descriptors. The sampler filters
+as Direct3D 11 does, the texel coordinate truncated to 8 sub-texel bits
+(`Subtexel::D3d11`; D3D11.3 functional specification 7.18.16.1), as the GPU and
+WARP do. Albedo RGB is linearized before filtering; alpha and data channels
+remain linear. Missing
 bindings, zero-initialized buffer words, and frozen policies are counted.
 Normal output inverts the binary G-buffer bias and retains the source tangent
 basis; consumer lowering remains separate. The main albedo supplies alpha.
