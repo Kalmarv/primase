@@ -437,6 +437,13 @@ pub const DECLARED: &[Declared] = &[
         source: r#"the user's own install"#,
     },
     Declared {
+        query: Query::Install(Game::Stuntboost, Some("Content/Effects")),
+        status: Status::Live,
+        gate: false,
+        about: r#"STUNTBOOST's compiled effects (`D2/*.xnb`, `D3/*.xnb`: MonoGame `EffectReader`, MGFX version 12, OpenGL profile): every one is read to its shaders, parameters and passes; worlds/stuntboost/tests/effects.rs"#,
+        source: r#"the user's own install"#,
+    },
+    Declared {
         query: Query::Oracle(OracleSet::Baseline, Game::Gta, "legion/blend-spec.json"),
         status: Status::Live,
         gate: true,

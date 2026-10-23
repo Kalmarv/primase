@@ -77,6 +77,8 @@ const HEADER: usize = 10;
 
 /// XNA's string reader, as [`TypeReader::type_name`] gives it.
 pub const TEXTURE_2D_READER: &str = "Microsoft.Xna.Framework.Content.Texture2DReader";
+/// MonoGame's effect reader, as [`TypeReader::type_name`] gives it.
+pub const EFFECT_READER: &str = "Microsoft.Xna.Framework.Content.EffectReader";
 const STRING_READER: &str = "Microsoft.Xna.Framework.Content.StringReader";
 /// XNA's array reader, as [`TypeReader::base_name`] gives it; its one generic argument is the element type.
 pub const ARRAY_READER: &str = "Microsoft.Xna.Framework.Content.ArrayReader`1";
@@ -163,6 +165,11 @@ impl TypeReader {
     /// XNA's array reader of bytes.
     pub fn is_byte_array(&self) -> bool {
         self.base_name() == ARRAY_READER && self.generic_arguments() == [BYTE]
+    }
+
+    /// MonoGame's effect reader.
+    pub fn is_effect(&self) -> bool {
+        self.type_name() == EFFECT_READER
     }
 
     /// XNA's texture reader.
@@ -349,6 +356,21 @@ impl<'a> Xnb<'a> {
             height,
             levels: out,
         })
+    }
+
+    /// The primary object as MonoGame's `EffectReader` wrote it, an i32 count and the bytes of the compiled effect
+    /// ([`crate::mgfx::Effect::parse`] reads them); the whole file read.
+    pub fn effect(&self) -> Result<&'a [u8]> {
+        let (reader, mut c) = self.primary()?;
+        if !reader.is_effect() {
+            return Err(bad(
+                self.origin,
+                format!("the reader is {}, not an effect's", reader.name),
+            ));
+        }
+        let b = c.byte_array()?;
+        c.end()?;
+        Ok(b)
     }
 
     /// The primary object as XNA's array reader of bytes wrote it; the whole file read.
