@@ -42,6 +42,7 @@
 
 pub mod animator;
 pub mod bind;
+pub mod clipdata;
 pub mod components;
 pub mod humanoid;
 pub mod passes;

@@ -53,8 +53,8 @@
 use primase_core::{Channel, ClipTarget, Entity, Interpolation, JointId, Property, Rest};
 
 use crate::animator::{AvatarAxes, AvatarHuman, UnityAvatar, Xform};
+use crate::clipdata::{ClipData, Curve, Track};
 use crate::components::UNITY;
-use crate::read::clip::{ClipData, Curve, Track};
 
 /// How many muscles Unity has (`HumanTrait.MuscleCount`).
 pub const MUSCLES: usize = 95;
