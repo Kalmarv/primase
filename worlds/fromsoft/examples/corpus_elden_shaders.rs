@@ -4,7 +4,8 @@
 //!
 //! `cargo run --release -p primase-fromsoft --example corpus_elden_shaders -- <Elden Ring Game folder> <keys folder>
 //! <dictionary.txt> <oo2core_6_win64.dll> <out>`: the install, the archive keys (`keys.elden`), UXM's path dictionary
-//! (`oracles.uxm.elden/dictionary.txt`), the game's Oodle library, and `<oracles.root>/corpus/elden/shaders`.
+//! (`oracles.uxm.elden/dictionary.txt`), the game's own Oodle library (in its Game folder), and
+//! `<oracles.root>/corpus/elden/shaders`.
 
 use std::path::PathBuf;
 
@@ -42,7 +43,8 @@ fn main() -> Result<(), BoxError> {
         if !archive.entries.contains_key(hash) {
             continue;
         }
-        let binder = Binder::read(&archive.read_stored(*hash)?, &decoder)?;
+        // the binder decoded from its DCX envelope
+        let binder = Binder::read(&archive.read_hash(*hash, &decoder)?, &decoder)?;
         let stem = path
             .trim_start_matches("/shader/")
             .trim_end_matches(".shaderbnd.dcx");
