@@ -1136,6 +1136,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-mojoshader"
+version = "0.1.0"
+dependencies = [
+ "naga",
+ "primase-shader",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-monogame"
 version = "0.1.0"
 dependencies = [

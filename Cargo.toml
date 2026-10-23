@@ -18,6 +18,7 @@ members = [
     "toolkit/dxbc",
     "toolkit/shader",
     "toolkit/dxil",
+    "toolkit/mojoshader",
     "toolkit/cache",
     "formats/gltf",
     "formats/web",
@@ -76,6 +77,7 @@ primase-havok = { path = "toolkit/havok" }
 primase-dxbc = { path = "toolkit/dxbc" }
 primase-shader = { path = "toolkit/shader" }
 primase-dxil = { path = "toolkit/dxil" }
+primase-mojoshader = { path = "toolkit/mojoshader" }
 primase-frostbite = { path = "worlds/frostbite" }
 primase-gltf = { path = "formats/gltf" }
 primase-web = { path = "formats/web" }
