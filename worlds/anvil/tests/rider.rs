@@ -448,3 +448,79 @@ fn the_variant_tables_replace_the_materials_the_part_meshes_name() {
         (451, 815, 809, 767, 48, 2047, 767)
     );
 }
+
+/// A part drawn with a variant leaves no mesh nothing places: every mesh of the world is a prototype of a placement,
+/// and placing the same part twice with different variants gives each its own Materials.
+#[test]
+fn a_variant_leaves_no_unplaced_mesh_and_the_same_part_can_be_placed_again() {
+    let Some(mut archive) = open() else {
+        return;
+    };
+    let table = id_of(&archive, BUILD_TABLE, "MAD_CHR_UBODY_001_U_1001");
+    let mut scratch = World::new();
+    let (stated, other) = {
+        let mut placer = Placer::new(
+            &mut archive,
+            &mut scratch,
+            SourceFrame::WORLD,
+            InstancedLevels::Selector,
+        );
+        let part = placer.describe_part(
+            RiderPartChoice {
+                table,
+                variant: Variant::Stated,
+            },
+            Gender::Male,
+        );
+        let other = part
+            .variants
+            .iter()
+            .find(|v| v.weight != 1.0)
+            .expect("another variant")
+            .table;
+        (part.variant.expect("the stated variant").table, other)
+    };
+    let spec = RiderSpec {
+        name: "twice".to_owned(),
+        skeletons: base(&archive),
+        gender: Gender::Male,
+        parts: vec![
+            RiderPartChoice {
+                table,
+                variant: Variant::Table(stated),
+            },
+            RiderPartChoice {
+                table,
+                variant: Variant::Table(other),
+            },
+        ],
+    };
+    let mut w = World::new();
+    let mut placed = Placed::default();
+    let rider = Placer::new(
+        &mut archive,
+        &mut w,
+        SourceFrame::WORLD,
+        InstancedLevels::Selector,
+    )
+    .with_materials()
+    .place_rider(&spec, &mut placed);
+    assert!(
+        rider
+            .parts
+            .iter()
+            .all(|p| p.refused.is_empty() && p.placements.len() == 1),
+        "{:?}",
+        rider.parts
+    );
+    let materials = |p: &primase_anvil::read::placements::RiderPart| {
+        let i = w.get::<Instance>(p.placements[0]).expect("instance");
+        w.get::<AnvilMesh>(i.prototype).expect("mesh").materials.clone()
+    };
+    assert_ne!(materials(&rider.parts[0]), materials(&rider.parts[1]));
+    let unplaced: Vec<_> = w
+        .iter::<AnvilMesh>()
+        .filter(|(e, _)| !w.iter::<Instance>().any(|(_, i)| i.prototype == *e))
+        .collect();
+    assert!(unplaced.is_empty(), "{} meshes nothing places", unplaced.len());
+}

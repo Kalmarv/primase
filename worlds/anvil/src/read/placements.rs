@@ -1735,6 +1735,30 @@ impl<'a> Placer<'a> {
                 variant: 0,
             },
         );
+        self.release_prototype(prototype);
+    }
+
+    /// The prototype `prototype` removed when no placement uses it any more (a placement drawn with a copy of it left
+    /// it with none, and a prototype nothing places is a mesh that is drawn nowhere): the entries of the caches that
+    /// name it go too, so that a later placement of the same object reads it again.
+    fn release_prototype(&mut self, prototype: Entity) {
+        if self
+            .world
+            .iter::<Instance>()
+            .any(|(_, i)| i.prototype == prototype)
+            || self.forms.contains(&prototype)
+        {
+            return;
+        }
+        self.wholes.retain(|_, e| *e != prototype);
+        self.objects
+            .retain(|_, levels| !levels.iter().flatten().any(|(_, e)| *e == prototype));
+        self.prototypes.remove(&prototype);
+        self.prototype_copies
+            .retain(|k, v| *k != prototype && *v != prototype);
+        self.distance_copies
+            .retain(|(e, _), v| *e != prototype && *v != prototype);
+        self.world.despawn(prototype);
     }
 
     /// The Entity or EntityGroup at `at` placed into the world: one placement per Visual with something to show, or per
