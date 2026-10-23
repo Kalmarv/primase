@@ -44,9 +44,9 @@ fn the_slot_tables_list_parts_and_their_variants_and_state_a_default_where_they_
         ("outfits", 27, 27, 27),
         ("heads", 12, 0, 0),
         ("eyes", 1, 0, 0),
-        ("mad_chr_innermouth_u", 2, 0, 0),
         ("hair_activator", 61, 0, 0),
         ("beard_activator", 94, 0, 0),
+        ("mad_chr_innermouth_u", 2, 0, 0),
     ];
     assert_eq!(
         found,

@@ -246,6 +246,11 @@ fn key_of(name: &str) -> String {
 /// activator (the haircuts, each a table of its `Full` and `Cut` styles, which are the parts), the beard activator (the
 /// beards, each a head selector listing its table per head, which are the parts) and the hair materials (no part, so no
 /// slot). A table whose links make no slot either is left out.
+///
+/// The order of the slots is defined: the tables [`SLOTS_DEFAULT`] lists, then those [`BODY`] lists, each in the order
+/// of its rows and, within a row, of its links, a table counted where it is first linked; a table that is not a slot
+/// itself is replaced, in that place, by the slots of the tables it links, in their link order (the hairs table's:
+/// the hair activator, then the beard activator, between the eyes and the inner mouth).
 pub fn rider_catalog(archive: &mut Archive) -> Result<RiderCatalog, Error> {
     let mut listed: Vec<(u64, bool)> = Vec::new();
     for name in [SLOTS_DEFAULT, BODY] {
