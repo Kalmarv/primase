@@ -58,7 +58,7 @@ impl Topology {
     /// The primitives of a draw of `vertices` vertices, each as the indices of its vertices in the order the geometry
     /// program reads them (`GsInput::vertices` of them). Vertices that complete no primitive are ignored.
     ///
-    /// - A strip's primitive `i` is `[i, i + 1, ...]`, a triangle strip's odd primitive `[i + 1, i, i + 2]`.
+    /// - A strip's primitive `i` is `[i, i + 1, ...]`, a triangle strip's odd primitive `[i, i + 2, i + 1]` (its last two swapped).
     /// - A line with adjacency is `[before, start, end, after]`.
     /// - A triangle with adjacency is `[a, adjacent to a-b, b, adjacent to b-c, c, adjacent to c-a]`.
     /// - A triangle strip with adjacency is the vertices `0, 2, 4, ...` of a triangle strip, and between them the
@@ -87,7 +87,7 @@ impl Topology {
                 .enumerate()
                 .map(|(p, mut t)| {
                     if p % 2 == 1 {
-                        t.swap(0, 1);
+                        t.swap(1, 2);
                     }
                     t
                 })
