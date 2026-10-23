@@ -1,6 +1,6 @@
-//! The STUNTBOOST reader against the game's own code (`PRIMASE_STUNTBOOST_DIR`, the install, and
-//! `PRIMASE_STUNTBOOST_ORACLE`, the game's parsers' dumps of it: `<L>_<N>.json` and `<L>_<N>.tris.bin`), every level
-//! part the oracle dumped.
+//! The STUNTBOOST reader against the game's own code (`installs.stuntboost`, the install, and
+//! `oracles.game-code.stuntboost/levels`, the game's parsers' dumps of it: `<L>_<N>.json` and `<L>_<N>.tris.bin`),
+//! every level part the oracle dumped.
 //!
 //! - G1: every node name as the game's `ParsedName` reads it (visible, aggregate, bake shadows, inner name, code).
 //! - G2: which nodes collide and how (the game's collision meshes, in node order, against the names), and every
@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use primase_stuntboost::components::names::parse;
 use primase_stuntboost::components::{StuntboostBake, StuntboostCollision};
 use primase_stuntboost::read::derived;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, oracle};
 use serde_json::Value;
 
 /// Every dumped part: (level, part, its JSON).
@@ -43,8 +43,8 @@ fn parts(oracle: &Path) -> Vec<(String, u32, Value)> {
 
 fn inputs() -> Option<(PathBuf, PathBuf)> {
     Some((
-        real_data("PRIMASE_STUNTBOOST_DIR")?,
-        real_data("PRIMASE_STUNTBOOST_ORACLE")?,
+        install(Game::Stuntboost)?,
+        oracle(OracleSet::GameCode, Game::Stuntboost, "levels")?,
     ))
 }
 

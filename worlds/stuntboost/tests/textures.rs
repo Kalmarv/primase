@@ -1,4 +1,4 @@
-//! The install's own textures (`PRIMASE_STUNTBOOST_DIR`).
+//! The install's own textures (`installs.stuntboost`).
 //!
 //! - X1: every `Texture2DReader` XNB under `Content` reads strictly through `Xnb::texture2d` (raw `Color`, each level
 //!   its pixels' size, the whole file used), and a level whose material names such a texture (AirGainSpeed's board
@@ -12,7 +12,7 @@ use std::path::Path;
 use primase_core::{Texture, World};
 use primase_monogame::xnb::Xnb;
 use primase_stuntboost::read_level;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 fn files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
@@ -27,7 +27,7 @@ fn files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 
 #[test]
 fn x1_every_raw_texture_the_game_ships_reads_strictly() {
-    let Some(install) = real_data("PRIMASE_STUNTBOOST_DIR") else {
+    let Some(install) = install(Game::Stuntboost) else {
         return;
     };
     let mut all = Vec::new();

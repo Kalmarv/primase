@@ -1,4 +1,4 @@
-//! The models of the install (`PRIMASE_STUNTBOOST_DIR`, the install) as the documents they store.
+//! The models of the install (`installs.stuntboost`, the install) as the documents they store.
 //!
 //! - M1: every model the listing names unwraps to a glTF document with its buffers, and the four that carry a skin
 //!   hold the joints, clips and channels counted from the document itself (`primase-glb`'s reading of its JSON; no
@@ -9,11 +9,11 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
 use primase_stuntboost::{model_gltf, model_image, models};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 #[test]
 fn m1_every_model_unwraps_and_the_skinned_ones_hold_their_joints_and_clips() {
-    let Some(install) = real_data("PRIMASE_STUNTBOOST_DIR") else {
+    let Some(install) = install(Game::Stuntboost) else {
         return;
     };
     let listed = models(&install).unwrap();
@@ -50,7 +50,7 @@ fn m1_every_model_unwraps_and_the_skinned_ones_hold_their_joints_and_clips() {
 
 #[test]
 fn m2_the_images_a_model_names_decode_to_png() {
-    let Some(install) = real_data("PRIMASE_STUNTBOOST_DIR") else {
+    let Some(install) = install(Game::Stuntboost) else {
         return;
     };
     let mut images = 0;

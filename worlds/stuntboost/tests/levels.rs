@@ -1,6 +1,6 @@
-//! The level listing against the part files the game's dumps cover (`PRIMASE_STUNTBOOST_DIR`, the install, and
-//! `PRIMASE_STUNTBOOST_ORACLE`, the game's parsers' dumps of it: `<L>_<N>.json`, one per `Level_<L>_<N>.xnb` file; the
-//! dump tool finds the parts by file name, not through the sidecar).
+//! The level listing against the part files the game's dumps cover (`installs.stuntboost`, the install, and
+//! `oracles.game-code.stuntboost/levels`, the game's parsers' dumps of it: `<L>_<N>.json`, one per `Level_<L>_<N>.xnb`
+//! file; the dump tool finds the parts by file name, not through the sidecar).
 //!
 //! - L1: every level the listing names has its parts `0..modelCount` dumped, and every dumped level is listed. The
 //!   differences the install has are named and counted: `Test_Gym` has parts and no sidecar (not a level the game
@@ -12,14 +12,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_stuntboost::levels;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, oracle};
 use serde_json::Value;
 
 #[test]
 fn l1_the_listing_is_the_levels_the_game_dumped() {
     let (Some(install), Some(oracle)) = (
-        real_data("PRIMASE_STUNTBOOST_DIR"),
-        real_data("PRIMASE_STUNTBOOST_ORACLE"),
+        install(Game::Stuntboost),
+        oracle(OracleSet::GameCode, Game::Stuntboost, "levels"),
     ) else {
         return;
     };
