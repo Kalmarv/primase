@@ -6,6 +6,7 @@ mod bake;
 mod charts;
 mod decals;
 pub mod formulas;
+mod grass;
 mod listed;
 mod material;
 mod resolve_shaders;
@@ -15,6 +16,7 @@ mod water;
 mod world_uv;
 pub use bake::{BakeAnvilMaterial, gbuffer_pixel_key};
 pub use decals::{Family, FamilyRule, LowerAnvilDecals, TerrainDecals, family};
+pub use grass::{Density, LowerAnvilGrass};
 pub use listed::{Coarse, SelectAnvilListed};
 pub use material::{
     AlphaChoice, Decals1Cutout, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo, world_uv_rows,
@@ -2848,6 +2850,24 @@ pub fn register(reg: &mut PassRegistry) {
             ("cutoff", "0.4"),
             ("lift", "0.01"),
             ("terrain-family", "out"),
+        ],
+    );
+    reg.register_requiring(
+        "lower-anvil-grass",
+        |o| Ok(Box::new(LowerAnvilGrass::from_options(o)?)),
+        &[
+            ("rect", "-64,-64,64,64"),
+            ("range", "1"),
+            ("offset", "0"),
+            ("sample", "corner"),
+            ("seed", "0"),
+            ("density", "per-sample"),
+            ("tiling", "rule"),
+            ("scale", "rule"),
+            ("height-scale", "rule"),
+            ("tilt", "none"),
+            ("normal", "terrain"),
+            ("max-plants", "1000000"),
         ],
     );
     reg.register_requiring(
