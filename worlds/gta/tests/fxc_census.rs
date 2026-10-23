@@ -150,6 +150,7 @@ fn the_enhanced_shader_database() {
     let mut invalid = Vec::new();
     let mut unwritten: BTreeMap<String, usize> = BTreeMap::new();
     let mut unrunnable: BTreeMap<String, (usize, String)> = BTreeMap::new();
+    let mut as_functions: BTreeMap<String, usize> = BTreeMap::new();
     // per group: programs, lifted
     let mut tally: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
     for (g, stage) in sgd2::GROUP_STAGES.iter().enumerate() {
@@ -200,8 +201,18 @@ fn the_enhanced_shader_database() {
                                 }
                                 Err(e) => invalid.push(format!("{}: {e}", program.name)),
                             }
-                            // the executor compiles it too, or refuses it by name
-                            if let Err(e) = primase_shader::exec::Executable::new(&p) {
+                            // the executor compiles it too (as an entry point, or as its functions), or refuses it by name
+                            let compiled = match primase_shader::exec::Executable::functions(&p) {
+                                Ok(Some(_)) => {
+                                    *as_functions
+                                        .entry(format!("{:?}", p.interface.stage))
+                                        .or_default() += 1;
+                                    Ok(())
+                                }
+                                Ok(None) => primase_shader::exec::Executable::new(&p).map(|_| ()),
+                                Err(e) => Err(e),
+                            };
+                            if let Err(e) = compiled {
                                 unrunnable
                                     .entry(e.to_string())
                                     .or_insert((0usize, program.name.to_string()))
@@ -226,6 +237,7 @@ fn the_enhanced_shader_database() {
         println!("  not written {n:5}  {reason}");
     }
     println!("LIFTED per group (programs, lifted): {tally:?}");
+    println!("  executable as functions {as_functions:?}");
     for (reason, (n, example)) in &unrunnable {
         println!("  not executable {n:5}  {reason}  (e.g. {example})");
     }

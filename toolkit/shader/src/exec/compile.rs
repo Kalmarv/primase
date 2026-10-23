@@ -1708,6 +1708,19 @@ pub(super) fn compile(
         .zip(&arg_at)
         .filter_map(|(a, at)| a.map(|(off, count, width)| (*at, off, count, width)))
         .collect();
+    let mesh_output = match ep.and_then(|e| e.mesh_info.as_ref()) {
+        Some(info) => {
+            let global = *gid_of
+                .get(&info.output_variable.index())
+                .ok_or("a mesh program whose output variable is not memory")?
+                as usize;
+            match globals[global].kind {
+                GlobalKind::Workgroup(words) => Some((global, words)),
+                _ => return Err("a mesh program whose output variable is not thread-group memory".into()),
+            }
+        }
+        None => None,
+    };
     Ok(Executable {
         ops: kept,
         body,
@@ -1722,8 +1735,9 @@ pub(super) fn compile(
         globals,
         flush_denormals: p.modes.flush_denormals,
         workgroup: ep
-            .filter(|_| p.stage == crate::Stage::Compute)
+            .filter(|_| matches!(p.stage, crate::Stage::Compute | crate::Stage::Mesh))
             .map(|e| e.workgroup_size),
+        mesh_output,
         builtins: f
             .arguments
             .iter()

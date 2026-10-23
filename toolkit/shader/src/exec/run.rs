@@ -1759,6 +1759,9 @@ fn math(mf: MathOp, a: Reg, b: Reg, c: Reg, n: u8, z: bool) -> Reg {
 
 // ---------------------------------------------------------------------------------------------------- compute
 
+/// What a run of a mesh program does with the memory of a thread group's output variable when the group has finished.
+pub(super) type GroupHook<'a> = dyn FnMut([u32; 3], &[u32]) -> Result<(), String> + 'a;
+
 /// What a compute run did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Dispatched {
@@ -1792,6 +1795,61 @@ impl Executable {
         self.dispatch_elements(bound, backend, buffers, &mut BTreeMap::new(), groups, wave)
     }
 
+    /// Run `groups` thread groups of a mesh program, handing the memory of the output variable (its words, as
+    /// [`Executable::mesh_output`] says) to `after` when each group has finished.
+    pub(super) fn dispatch_mesh(
+        &self,
+        bound: &Bound<'_>,
+        backend: &mut dyn Backend,
+        groups: [u32; 3],
+        wave: u32,
+        after: &mut GroupHook<'_>,
+    ) -> Result<Dispatched, String> {
+        let (global, _) = self.mesh_output.ok_or("not a mesh program")?;
+        let size = self.workgroup.ok_or("not a mesh program")?;
+        if wave == 0 {
+            return Err("a wave of no lanes".into());
+        }
+        let ids = (0..groups[2])
+            .flat_map(move |z| (0..groups[1]).flat_map(move |y| (0..groups[0]).map(move |x| [x, y, z])));
+        let mut buffers = BTreeMap::new();
+        let mut elements = BTreeMap::new();
+        match size[0] * size[1] * size[2] {
+            0 => Err("a thread group of no invocations".into()),
+            1..=64 => self.groups::<64>(
+                bound,
+                backend,
+                &mut buffers,
+                &mut elements,
+                ids,
+                size,
+                wave,
+                Some((global, after)),
+            ),
+            65..=256 => self.groups::<256>(
+                bound,
+                backend,
+                &mut buffers,
+                &mut elements,
+                ids,
+                size,
+                wave,
+                Some((global, after)),
+            ),
+            257..=1024 => self.groups::<1024>(
+                bound,
+                backend,
+                &mut buffers,
+                &mut elements,
+                ids,
+                size,
+                wave,
+                Some((global, after)),
+            ),
+            _ => Err("a thread group of more than 1024 invocations".into()),
+        }
+    }
+
     /// [`Executable::dispatch`] for a program that also writes elements of arrays of buffers, `elements` holding
     /// their words by resource and element.
     pub fn dispatch_elements(
@@ -1811,9 +1869,9 @@ impl Executable {
             .flat_map(move |z| (0..groups[1]).flat_map(move |y| (0..groups[0]).map(move |x| [x, y, z])));
         match size[0] * size[1] * size[2] {
             0 => Err("a thread group of no invocations".into()),
-            1..=64 => self.groups::<64>(bound, backend, buffers, elements, ids, size, wave),
-            65..=256 => self.groups::<256>(bound, backend, buffers, elements, ids, size, wave),
-            257..=1024 => self.groups::<1024>(bound, backend, buffers, elements, ids, size, wave),
+            1..=64 => self.groups::<64>(bound, backend, buffers, elements, ids, size, wave, None),
+            65..=256 => self.groups::<256>(bound, backend, buffers, elements, ids, size, wave, None),
+            257..=1024 => self.groups::<1024>(bound, backend, buffers, elements, ids, size, wave, None),
             _ => Err("a thread group of more than 1024 invocations".into()),
         }
     }
@@ -1828,6 +1886,7 @@ impl Executable {
         ids: impl Iterator<Item = [u32; 3]>,
         size: [u32; 3],
         wave: u32,
+        mut after: Option<(usize, &mut GroupHook<'_>)>,
     ) -> Result<Dispatched, String> {
         let lanes = (size[0] * size[1] * size[2]) as usize;
         // the buffers move into the run, and back whatever happens
@@ -1878,6 +1937,13 @@ impl Executable {
                 Ok(steps) => {
                     done.groups += 1;
                     done.steps += steps;
+                    if let Some((global, hook)) = after.as_mut() {
+                        let words = runner.store[*global].as_deref().unwrap_or(&[]);
+                        if let Err(e) = hook(id, words) {
+                            result = Err(format!("group {id:?}: {e}"));
+                            break;
+                        }
+                    }
                 }
                 Err(e) => {
                     result = Err(format!("group {id:?}: {e}"));

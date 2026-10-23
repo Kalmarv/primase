@@ -21,6 +21,8 @@ struct Census {
     invalid: Vec<String>,
     /// Validated programs a writer cannot write, by reason, with the first program of each.
     unwritten: BTreeMap<String, (usize, String)>,
+    /// Lifted programs executable as their functions, by stage.
+    as_functions: BTreeMap<String, usize>,
     /// Lifted programs the executor refuses, by reason, with the first program of each.
     unrunnable: BTreeMap<String, (usize, String)>,
 }
@@ -77,8 +79,18 @@ fn census(game: Game) {
             }
             Err(e) => c.invalid.push(format!("{}: {e}", path.display())),
         }
-        // the executor compiles it too, or refuses it by name
-        if let Err(e) = primase_shader::exec::Executable::new(&program) {
+        // the executor compiles it too (as an entry point, or as its functions), or refuses it by name
+        let compiled = match primase_shader::exec::Executable::functions(&program) {
+            Ok(Some(_)) => {
+                *c.as_functions
+                    .entry(format!("{:?}", program.interface.stage))
+                    .or_default() += 1;
+                Ok(())
+            }
+            Ok(None) => primase_shader::exec::Executable::new(&program).map(|_| ()),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = compiled {
             let entry = c
                 .unrunnable
                 .entry(e.to_string())
@@ -100,6 +112,7 @@ fn census(game: Game) {
     for (reason, (n, example)) in &c.unwritten {
         println!("  not written {n:5}  {reason}  (e.g. {example})");
     }
+    println!("  executable as functions {:?}", c.as_functions);
     for (reason, (n, example)) in &c.unrunnable {
         println!("  not executable {n:5}  {reason}  (e.g. {example})");
     }

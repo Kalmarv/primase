@@ -548,8 +548,10 @@ pub struct Executable {
     pub(super) globals: Vec<GlobalDesc>,
     /// Whether 32-bit denormals are flushed to zero (the program's D3D modes).
     pub(super) flush_denormals: bool,
-    /// The thread group of a compute program.
+    /// The thread group of a compute or mesh program.
     pub(super) workgroup: Option<[u32; 3]>,
+    /// A mesh program's output variable: its index among the globals and its words.
+    pub(super) mesh_output: Option<(usize, u32)>,
     /// Per entry argument, the built-in it carries.
     pub(super) builtins: Vec<Option<naga::BuiltIn>>,
 }

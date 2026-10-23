@@ -1,4 +1,4 @@
-//! Executing a [`Program`] on the CPU: the one evaluator for a shader whatever bytecode it was lifted from.
+//! Executing a [`Program`] on the CPU: the one executor for a shader whatever bytecode it was lifted from.
 //!
 //! [`Executable::new`] checks a program and compiles it once into a flat form (typed operations on four-lane word
 //! registers, pointers folded to word offsets, dead operations dropped). [`Executable::bind`] flattens the buffers a
@@ -17,6 +17,7 @@ mod compile;
 mod flat;
 pub mod geometry;
 mod mask;
+pub mod mesh;
 mod pipeline;
 mod pixel;
 mod rayquery;
@@ -53,12 +54,6 @@ impl Executable {
     /// Check `program` (its module and its interface) and compile it. A construct the executor does not run (a
     /// 64-bit value, an atomic other than add, an image atomic) is refused here, by name.
     pub fn new(program: &Program) -> Result<Self, Error> {
-        if program.stage == crate::Stage::Mesh {
-            return Err(error(
-                "a Mesh program writes the vertices and primitives of a meshlet from a whole thread group: the \
-                 executor does not run mesh shaders",
-            ));
-        }
         if crate::stage_functions(&program.interface)
             .map_err(error)?
             .is_some()
@@ -104,6 +99,20 @@ impl Executable {
             )
         })?;
         compile::compile(program, &info, Some(name)).map_err(error)
+    }
+
+    /// Every function of a program made of functions ([`crate::stage_functions`]: a hull, domain, geometry or ray tracing
+    /// program, a vertex program that feeds a tessellator), each compiled by [`Executable::function`] under its name;
+    /// `None` for a program that is an entry point, which [`Executable::new`] takes.
+    pub fn functions(program: &Program) -> Result<Option<Vec<(&'static str, Self)>>, Error> {
+        let Some(signatures) = crate::stage_functions(&program.interface).map_err(error)? else {
+            return Ok(None);
+        };
+        signatures
+            .iter()
+            .map(|sig| Self::function(program, sig.name).map(|executable| (sig.name, executable)))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some)
     }
 
     /// The words of pointer argument `k` (a ray tracing program's payload, attributes or parameter).
