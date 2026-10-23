@@ -40,13 +40,14 @@ use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{
-    AnvilBounds, AnvilCollisionFilter, AnvilCollisionOnly, AnvilCollisionShape, AnvilDataLayers,
-    AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake, AnvilGrass, AnvilGrassModel,
-    AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilRig,
-    AnvilRigOccurrence, AnvilSkeleton, AnvilSkinned, AnvilWater, BoundTexture, CollisionMaterialRef,
-    DataLayerAction, DeferredDecal, GrassSystemSetup, MaterialBinding, MaterialValue, ShapeGeometry,
-    TextureFrom,
+    AnvilBounds, AnvilClip, AnvilClipBinding, AnvilCollisionFilter, AnvilCollisionOnly, AnvilCollisionShape,
+    AnvilDataLayers, AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake, AnvilGrass,
+    AnvilGrassModel, AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh,
+    AnvilRig, AnvilRigOccurrence, AnvilSkeleton, AnvilSkinned, AnvilWater, BoundTexture,
+    CollisionMaterialRef, DataLayerAction, DeferredDecal, GrassSystemSetup, MaterialBinding, MaterialValue,
+    ShapeGeometry, TextureFrom,
 };
+use crate::read::animation::{ANIMATION, StoredAnimation};
 use crate::read::archive::{Archive, At};
 use crate::read::ddecal::{
     DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, STATIC_DDECAL, StoredDecalModel, StoredDeferredDecals,
@@ -381,6 +382,8 @@ pub struct Placer<'a> {
     materials: HashMap<u64, Option<Entity>>,
     /// Per Skeleton id, its entity (`None`: not a Skeleton, or not read).
     skeletons: HashMap<u64, Option<Entity>>,
+    /// Per (Animation id, rig entity), the entity holding the clip (`None`: not an Animation, or can't be read).
+    clips: HashMap<(u64, Entity), Option<Entity>>,
     /// Per SkeletonComponent's Skeletons (the main one's id, then its addons'), the entity holding their rig (`None`:
     /// one of them isn't a Skeleton or can't be read).
     rigs: HashMap<Vec<u64>, Option<Entity>>,
@@ -449,6 +452,7 @@ impl<'a> Placer<'a> {
             materials: HashMap::new(),
             skeletons: HashMap::new(),
             rigs: HashMap::new(),
+            clips: HashMap::new(),
             textures: HashMap::new(),
             decal_models: HashMap::new(),
             objects: HashMap::new(),
@@ -643,6 +647,47 @@ impl<'a> Placer<'a> {
         };
         self.rigs.insert(key, e);
         e
+    }
+
+    /// The entity holding the Animation `id` names read for the rig `rig` (an [`AnvilClip`], named for its entry), read
+    /// once: `None` where it isn't an Animation or can't be read (recorded in `placed`).
+    fn clip(&mut self, id: u64, rig: Entity, placed: &mut Placed) -> Option<Entity> {
+        if let Some(&e) = self.clips.get(&(id, rig)) {
+            return e;
+        }
+        let e = match self.read_clip(id, rig) {
+            Ok(e) => e,
+            Err(why) => {
+                placed.refused.push((id, format!("clip: {why}")));
+                None
+            }
+        };
+        self.clips.insert((id, rig), e);
+        e
+    }
+
+    fn read_clip(&mut self, id: u64, rig: Entity) -> Result<Option<Entity>, String> {
+        let Some(at) = self.archive.find(id) else {
+            return Ok(None);
+        };
+        let r = self.archive.resource(at).map_err(|e| e.to_string())?;
+        if r.type_id != ANIMATION {
+            return Ok(None);
+        }
+        let animation = StoredAnimation::parse(&r.body).map_err(|e| e.to_string())?;
+        let e = self.world.spawn();
+        if let Some(name) = self.name(at) {
+            self.world.insert(e, Name(name));
+        }
+        self.world.insert(
+            e,
+            AnvilClip {
+                frame: self.frame,
+                animation,
+                rig,
+            },
+        );
+        Ok(Some(e))
     }
 
     fn read_rig(&mut self, key: &[u64]) -> Result<Entity, String> {
@@ -1275,23 +1320,37 @@ impl<'a> Placer<'a> {
                 _ => None,
             })
             .collect();
-        // a SkeletonComponent's rig, placed once at the owner's transform: its Visuals follow it
-        let occurrence = e
+        // a SkeletonComponent's rig, placed once at the owner's transform: its Visuals follow it, and the Animations of
+        // its AnimComponent play on it
+        let rig = e
             .components
             .iter()
             .find_map(|c| match &c.body {
                 ComponentBody::Skeleton(sc) => Some(sc),
                 _ => None,
             })
-            .and_then(|sc| self.rig(sc, placed))
-            .map(|rig| {
-                let o = self.world.spawn();
-                self.world.insert(o, Name(name.clone()));
-                self.world.insert(o, AnvilRigOccurrence { rig });
-                self.world
-                    .insert(o, self.frame.transform(&transform(&e.matrix, e.scale)));
-                o
+            .and_then(|sc| self.rig(sc, placed));
+        let occurrence = rig.map(|rig| {
+            let o = self.world.spawn();
+            self.world.insert(o, Name(name.clone()));
+            self.world.insert(o, AnvilRigOccurrence { rig });
+            self.world
+                .insert(o, self.frame.transform(&transform(&e.matrix, e.scale)));
+            o
+        });
+        if let (Some(rig), Some(occurrence)) = (rig, occurrence) {
+            let animations = e.components.iter().find_map(|c| match &c.body {
+                ComponentBody::Anim(a) => Some(&a.animations),
+                _ => None,
             });
+            for animation in animations.into_iter().flatten().flatten() {
+                if let Some(clip) = self.clip(animation.id, rig, placed) {
+                    let b = self.world.spawn();
+                    self.world.insert(b, Name(name.clone()));
+                    self.world.insert(b, AnvilClipBinding { clip, occurrence });
+                }
+            }
+        }
         for (v, decal, grass_model) in e
             .visuals()
             .map(|v| (v, false, None))

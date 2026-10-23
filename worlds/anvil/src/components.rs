@@ -1360,3 +1360,40 @@ pub struct StoredAnimation {
     pub cb4e: u32,
     pub tracks: Vec<StoredTrack>,
 }
+
+/// An Animation read for a rig (`anvil.clip`), on an entity named for it: the clip as stored and the rig it drives (the
+/// entity holding its `core.skeleton`), in the source's frame (`frame`, as the reader was given it). Each track names
+/// its bone by the CRC-32 of the bone's name; the rig's joints are named by that hash. `lower-anvil-clips` makes a
+/// `core.clip` of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilClip {
+    pub frame: primase_core::frame::SourceFrame,
+    pub animation: StoredAnimation,
+    pub rig: Entity,
+}
+
+impl Component for AnvilClip {
+    const NAME: &'static str = "anvil.clip";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.rig);
+    }
+}
+
+/// An Animation an Entity plays, bound to the Entity's placed rig (`anvil.clip_binding`, on an entity of its own): the
+/// clip ([`AnvilClip`]) and the rig occurrence ([`AnvilRigOccurrence`]) that plays it. `lower-anvil-clips` makes a
+/// `core.clip_binding` of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnvilClipBinding {
+    pub clip: Entity,
+    pub occurrence: Entity,
+}
+
+impl Component for AnvilClipBinding {
+    const NAME: &'static str = "anvil.clip_binding";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.clip);
+        out.push(self.occurrence);
+    }
+}

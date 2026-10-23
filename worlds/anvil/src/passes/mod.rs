@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 mod bake;
 mod charts;
+mod clips;
 mod decals;
 pub mod formulas;
 mod grass;
@@ -17,6 +18,7 @@ mod splat;
 mod water;
 mod world_uv;
 pub use bake::{BakeAnvilMaterial, gbuffer_pixel_key};
+pub use clips::LowerAnvilClips;
 pub use decals::{Family, FamilyRule, LowerAnvilDecals, TerrainDecals, family};
 pub use grass::{Density, LowerAnvilGrass};
 pub use listed::{Coarse, SelectAnvilListed};
@@ -2938,6 +2940,11 @@ pub fn register(reg: &mut PassRegistry) {
         "lower-anvil-rig",
         |o| Ok(Box::new(LowerAnvilRig::from_options(o)?)),
         &[("own-transform", "refuse")],
+    );
+    reg.register_requiring(
+        "lower-anvil-clips",
+        |o| Ok(Box::new(LowerAnvilClips::from_options(o)?)),
+        &[("interpolation", "linear"), ("extrapolation", "hold")],
     );
     reg.register_requiring("lower-anvil-skin", |_| Ok(Box::new(LowerAnvilSkin)), &[]);
     reg.register_requiring(

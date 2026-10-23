@@ -63,6 +63,8 @@ pub const GRASS_VISUAL: u32 = 0x8FA8_0D8D;
 pub const GRASS_COMPONENT: u32 = 0xCB28_F06D;
 /// A SkeletonComponent's type: the CRC-32 of its name.
 pub const SKELETON_COMPONENT: u32 = 0x71FD_A747;
+/// An AnimComponent's type: the CRC-32 of its name.
+pub const ANIM_COMPONENT: u32 = 0x8C8A_A19D;
 /// An AnimTrackDefinition's type, and a WindForce's: the SkeletonComponent's embedded objects.
 const ANIM_TRACK_DEFINITION: u32 = 0xA803_7D53;
 const WIND_FORCE: u32 = 0xE7F9_A244;
@@ -287,6 +289,20 @@ pub struct SkeletonBinding {
     pub wind_force: (u64, [u8; 12]),
 }
 
+/// An AnimComponent as stored, read over its extent: the Animations an Entity plays. Its grammar, on all 70 of Riders
+/// Republic's (51 list none): a head of 4 bytes (`00 01 00 00`), a u32 count and that many references (the Animation
+/// resources, 10 bytes each, a null one included: `MAD_ICON` lists 31, the first null), then the rest, as stored (a blending time
+/// of 0.2 s among it, and a bare u64 that names one of the Animations again).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnimBinding {
+    /// The 4 bytes before the count.
+    pub head: [u8; 4],
+    /// The Animations (`Animations`, an array of references: none where the element is null), in order.
+    pub animations: Vec<Option<Reference>>,
+    /// The bytes after them to the component's end.
+    pub tail: Vec<u8>,
+}
+
 /// A component: its id, type and body.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Component {
@@ -316,6 +332,8 @@ pub enum ComponentBody {
     GrassSetup(Box<GrassSetup>),
     /// A SkeletonComponent: the rig an Entity's meshes bind to, read over its extent.
     Skeleton(Box<SkeletonBinding>),
+    /// An AnimComponent: the Animations an Entity plays, read over its extent.
+    Anim(Box<AnimBinding>),
     /// A type stepped over by its length rule, its bytes kept as stored.
     Raw(Vec<u8>),
     /// A component whose bytes no rule here reads, kept as stored: its type has no length rule, or a rule of a type
@@ -682,6 +700,27 @@ impl Cursor<'_> {
             ranges,
             tail,
             model,
+        })
+    }
+    /// An AnimComponent's body over the extent that ends at `end`: [`AnimBinding`].
+    fn anim_binding(&mut self, end: usize) -> Result<AnimBinding, Error> {
+        let head = self.array::<4>("AnimComponent")?;
+        let n = self.count("AnimComponent animation count", reference::LENGTH)?;
+        let mut animations = Vec::with_capacity(n);
+        for _ in 0..n {
+            animations.push(self.reference()?);
+        }
+        let tail = self.b.get(self.at..end).ok_or(Error::Short {
+            what: "AnimComponent",
+            at: self.at,
+            have: self.b.len(),
+        })?;
+        let tail = tail.to_vec();
+        self.at = end;
+        Ok(AnimBinding {
+            head,
+            animations,
+            tail,
         })
     }
     /// A SkeletonComponent's body: [`SkeletonBinding`].
@@ -1358,6 +1397,7 @@ impl StoredEntity {
             | ComponentBody::GrassVisual(_)
             | ComponentBody::GrassSetup(_)
             | ComponentBody::Skeleton(_)
+            | ComponentBody::Anim(_)
             | ComponentBody::Raw(_)
             | ComponentBody::Unread(_) => None,
         })
@@ -1452,6 +1492,10 @@ impl Cursor<'_> {
                 .ok()
                 .filter(|_| self.at == end)
                 .map(|b| ComponentBody::Skeleton(Box::new(b))),
+            ANIM_COMPONENT => self
+                .anim_binding(end)
+                .ok()
+                .map(|b| ComponentBody::Anim(Box::new(b))),
             _ => None,
         }
     }
