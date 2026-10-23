@@ -7,6 +7,7 @@ pub mod fxc;
 pub(crate) mod le;
 pub mod map;
 pub mod meta;
+pub mod ped;
 pub mod resource;
 pub mod sga;
 pub mod sgd2;
