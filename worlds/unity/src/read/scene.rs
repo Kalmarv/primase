@@ -164,6 +164,8 @@ pub struct Animator {
     pub controller: Option<ObjRef>,
     pub avatar: Option<ObjRef>,
     pub enabled: bool,
+    /// `m_ApplyRootMotion`.
+    pub apply_root_motion: bool,
 }
 
 /// A character: an Animator with skinned renderers on its GameObject or below it.
@@ -638,6 +640,7 @@ impl Scene {
                 controller: pointer("m_Controller")?,
                 avatar: pointer("m_Avatar")?,
                 enabled: a.get("m_Enabled").is_none_or(flag_value),
+                apply_root_motion: a.get("m_ApplyRootMotion").is_some_and(flag_value),
             });
         }
         Ok(out)

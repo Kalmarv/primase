@@ -40,6 +40,7 @@
 //! - [`register`]: the passes by name.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod animator;
 pub mod bind;
 pub mod components;
 pub mod passes;

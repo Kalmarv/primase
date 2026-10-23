@@ -43,6 +43,7 @@ use primase_core::{
     Slot, Source, Transform, WeightRule, World,
 };
 
+use crate::animator::{UnityAnimator, UnityAnimatorController, UnityAvatar};
 use crate::components::{
     ColliderMesh, UNITY, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape, UnityLight,
     UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings, UnityRenderer,
@@ -145,6 +146,10 @@ pub struct LevelReport {
     pub clips: usize,
     pub clip_bindings: usize,
     pub clip_channels: usize,
+    /// Avatars and AnimatorControllers read typed (`unity.avatar`, `unity.animator_controller`), each once, for the
+    /// Animators of the rigs read (`unity.animator` on the rig).
+    pub avatars: usize,
+    pub controllers: usize,
     /// RenderSettings names a sun (`unity.render_settings` holds it when it is a light read).
     pub sun_named: bool,
     /// Colliders read: those that collide, and those that do not by reason (inactive or disabled, trigger,
@@ -629,6 +634,9 @@ pub(crate) struct Builder<'a> {
     /// The off flags' state axes, and LOD axes by group (and tree instance).
     axes: OffAxes,
     lod_axes: BTreeMap<(ObjRef, Option<(Entity, usize)>), Entity>,
+    /// The entities of the avatars and controllers read, `None` for one that could not be.
+    avatars: BTreeMap<ObjRef, Option<Entity>>,
+    controller_entities: BTreeMap<ObjRef, Option<Entity>>,
     pub(crate) report: LevelReport,
 }
 
@@ -645,6 +653,8 @@ impl<'a> Builder<'a> {
             shaders: BTreeMap::new(),
             axes: OffAxes::default(),
             lod_axes: BTreeMap::new(),
+            avatars: BTreeMap::new(),
+            controller_entities: BTreeMap::new(),
             report,
         }
     }
@@ -733,13 +743,6 @@ impl Builder<'_> {
         let mut bound: BTreeSet<(Entity, Entity)> = BTreeSet::new();
         let mut controllers: BTreeMap<ObjRef, Vec<ObjRef>> = BTreeMap::new();
         for animator in scene.animators_under(self.player, root)? {
-            let Some(controller) = &animator.controller else {
-                self.notice(
-                    "Animators without a controller (the clips they play are chosen at run time by scripts; not bound)",
-                    1,
-                );
-                continue;
-            };
             let Some(tp) = scene.transform_of(animator.game_object) else {
                 continue;
             };
@@ -759,12 +762,41 @@ impl Builder<'_> {
                 }
             }
             if rigs.is_empty() {
+                self.notice("Animators that animate no skinned skeleton (not bound)", 1);
+                continue;
+            }
+            // the Animator's avatar and controller as typed data, on entities of their own, named by the rigs' Animator
+            let avatar = match &animator.avatar {
+                Some(a) => self.typed_avatar(w, a)?,
+                None => None,
+            };
+            let controller_entity = match &animator.controller {
+                Some(c) if self.player.class_name(c) == Some("AnimatorController") => {
+                    self.typed_controller(w, c)?
+                }
+                _ => None,
+            };
+            for &rig in rigs.keys() {
+                if !w.has::<UnityAnimator>(rig) {
+                    w.insert(
+                        rig,
+                        UnityAnimator {
+                            animator: UnityObject::from(&animator.animator),
+                            enabled: animator.enabled,
+                            apply_root_motion: animator.apply_root_motion,
+                            controller: controller_entity,
+                            avatar,
+                        },
+                    );
+                }
+            }
+            let Some(controller) = &animator.controller else {
                 self.notice(
-                    "Animators with a controller that animate no skinned skeleton (not bound)",
+                    "Animators without a controller (the clips they play are chosen at run time by scripts; not bound)",
                     1,
                 );
                 continue;
-            }
+            };
             self.report.animators += 1;
             if self.player.class_name(controller) != Some("AnimatorController") {
                 self.notice(
@@ -844,6 +876,57 @@ impl Builder<'_> {
             }
         }
         Ok(())
+    }
+
+    /// The avatar `r` as an entity with its typed data, read once; `None` (counted) for one that cannot be read.
+    fn typed_avatar(&mut self, w: &mut World, r: &ObjRef) -> Result<Option<Entity>> {
+        if let Some(e) = self.avatars.get(r) {
+            return Ok(*e);
+        }
+        let entity = match UnityAvatar::read(self.player, r) {
+            Ok(avatar) => {
+                let e = w.spawn();
+                w.insert(e, Name(avatar.name.clone()));
+                w.insert(e, Source(format!("unity avatar {}/{}", r.file, r.path_id)));
+                w.insert(e, avatar);
+                self.report.avatars += 1;
+                Some(e)
+            }
+            Err(crate::Error::Unsupported(why)) => {
+                self.notice(&format!("avatars not read: {why}"), 1);
+                None
+            }
+            Err(e) => return Err(e),
+        };
+        self.avatars.insert(r.clone(), entity);
+        Ok(entity)
+    }
+
+    /// The AnimatorController `r` as an entity with its typed data, read once.
+    fn typed_controller(&mut self, w: &mut World, r: &ObjRef) -> Result<Option<Entity>> {
+        if let Some(e) = self.controller_entities.get(r) {
+            return Ok(*e);
+        }
+        let entity = match UnityAnimatorController::read(self.player, r) {
+            Ok(controller) => {
+                let e = w.spawn();
+                w.insert(e, Name(controller.name.clone()));
+                w.insert(
+                    e,
+                    Source(format!("unity animator controller {}/{}", r.file, r.path_id)),
+                );
+                w.insert(e, controller);
+                self.report.controllers += 1;
+                Some(e)
+            }
+            Err(crate::Error::Unsupported(why)) => {
+                self.notice(&format!("animator controllers not read: {why}"), 1);
+                None
+            }
+            Err(e) => return Err(e),
+        };
+        self.controller_entities.insert(r.clone(), entity);
+        Ok(entity)
     }
 
     /// Count what was read differently from how it is stored ([`LevelReport::notices`]).
@@ -2154,7 +2237,7 @@ mod tests {
         assert_eq!(json["colliders_not_colliding"]["trigger"], 5);
         assert_eq!(json["skipped"]["no mesh"], 1);
         // every field of the struct is there
-        assert_eq!(json.as_object().map(serde_json::Map::len), Some(28));
+        assert_eq!(json.as_object().map(serde_json::Map::len), Some(30));
     }
 
     #[test]
