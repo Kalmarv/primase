@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-use primase_core::{Primitive, Semantic, Stream, Topology};
+use primase_core::{Deltas, MorphFrame, MorphId, MorphTarget, Morphs, Primitive, Semantic, Stream, Topology};
 use primase_meshops::compact_primitive;
 use primase_vertex::{Element, Format, Stream as VertexStream, decode_stream_raw, resolve_layout};
 
@@ -221,10 +221,241 @@ pub struct UnityMeshData {
     /// The mesh's skin: its blend weights and indices with the bind poses; `None` for a mesh without blend data.
     pub skin: Option<MeshSkin>,
     pub compressed: bool,
+    /// The mesh's blend shapes; `None` for a mesh without any.
+    pub shapes: Option<MeshShapes>,
     /// The index buffer, decoded.
     pub indices: Vec<u32>,
     pub index_size: u32,
     pub submeshes: Vec<SubMesh>,
+}
+
+/// One blend shape channel (`m_Shapes.channels`): a name, the CRC-32 of it that an animation curve names it by, and its
+/// frames (`frames` of them from `first_frame` in [`MeshShapes::frames`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShapeChannel {
+    pub name: String,
+    pub name_hash: u32,
+    pub first_frame: usize,
+    pub frames: usize,
+}
+
+/// One frame of a blend shape (`m_Shapes.shapes`, its `fullWeights` entry): the weight it is at, its entries
+/// (`count` from `first` in [`MeshShapes::vertices`]) and whether they carry normal and tangent deltas.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShapeFrame {
+    pub weight: f32,
+    pub first: usize,
+    pub count: usize,
+    pub normals: bool,
+    pub tangents: bool,
+}
+
+/// A blend shape entry (`m_Shapes.vertices`): the delta of vertex `index` of the mesh, in Unity's frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShapeVertex {
+    pub index: u32,
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub tangent: [f32; 3],
+}
+
+/// A mesh's blend shapes as stored (`m_Shapes`): per channel its frames in increasing weight (Unity's weights run 0 to
+/// 100), per frame sparse deltas of the mesh's vertices, applied to the mesh as stored before any skin.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshShapes {
+    pub channels: Vec<ShapeChannel>,
+    pub frames: Vec<ShapeFrame>,
+    pub vertices: Vec<ShapeVertex>,
+}
+
+fn vec3(v: &Value, k: &str, what: &str) -> Result<[f32; 3]> {
+    let c = v.get(k).ok_or_else(|| invalid(format!("{what}: no {k}")))?;
+    let f = |a: &str| {
+        c.get(a)
+            .and_then(Value::as_f32)
+            .ok_or_else(|| invalid(format!("{what}: {k} without {a}")))
+    };
+    Ok([f("x")?, f("y")?, f("z")?])
+}
+
+/// The blend shapes of a mesh (`m_Shapes`) with `vertex_count` vertices; `None` where it has no channel.
+fn read_shapes(m: &Value, name: &str, vertex_count: usize) -> Result<Option<MeshShapes>> {
+    let Some(s) = m.get("m_Shapes") else {
+        return Ok(None);
+    };
+    let list = |k: &str| -> Result<&[Value]> {
+        match s.get(k) {
+            Some(Value::Array(Array::Values(l))) => Ok(l.as_slice()),
+            Some(Value::Array(a)) if a.is_empty() => Ok(&[]),
+            _ => Err(invalid(format!("{name}: no m_Shapes.{k}"))),
+        }
+    };
+    let channels = list("channels")?;
+    if channels.is_empty() {
+        return Ok(None);
+    }
+    let full_weights: &[f32] = match s.get("fullWeights") {
+        Some(Value::Array(Array::F32(w))) => w,
+        Some(Value::Array(a)) if a.is_empty() => &[],
+        _ => return Err(invalid(format!("{name}: no m_Shapes.fullWeights"))),
+    };
+    let stored = list("vertices")?;
+    let shapes = list("shapes")?;
+    if full_weights.len() != shapes.len() {
+        return Err(invalid(format!(
+            "{name}: {} frame weights for {} blend shape frames",
+            full_weights.len(),
+            shapes.len()
+        )));
+    }
+    let what = format!("{name}: blend shapes");
+    let vertices = stored
+        .iter()
+        .map(|v| {
+            let index = int(v, "index")?;
+            if index < 0 || index as usize >= vertex_count {
+                return Err(invalid(format!("{what}: vertex {index} of {vertex_count}")));
+            }
+            let entry = ShapeVertex {
+                index: index as u32,
+                position: vec3(v, "vertex", &what)?,
+                normal: vec3(v, "normal", &what)?,
+                tangent: vec3(v, "tangent", &what)?,
+            };
+            if [entry.position, entry.normal, entry.tangent]
+                .iter()
+                .flatten()
+                .any(|x| !x.is_finite())
+            {
+                return Err(Error::Unsupported(format!(
+                    "{what}: a delta that is not finite (vertex {index})"
+                )));
+            }
+            Ok(entry)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let frames = shapes
+        .iter()
+        .zip(full_weights)
+        .map(|(f, &weight)| {
+            let (first, count) = (int(f, "firstVertex")?, int(f, "vertexCount")?);
+            if first < 0 || count < 0 || (first + count) as usize > vertices.len() {
+                return Err(invalid(format!(
+                    "{what}: entries {first}+{count} of {}",
+                    vertices.len()
+                )));
+            }
+            let flag = |k: &str| {
+                f.get(k)
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| invalid(format!("{what}: no {k}")))
+            };
+            Ok(ShapeFrame {
+                weight,
+                first: first as usize,
+                count: count as usize,
+                normals: flag("hasNormals")?,
+                tangents: flag("hasTangents")?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let channels = channels
+        .iter()
+        .map(|c| {
+            let (first, count) = (int(c, "frameIndex")?, int(c, "frameCount")?);
+            if first < 0 || count < 1 || (first + count) as usize > frames.len() {
+                return Err(invalid(format!(
+                    "{what}: frames {first}+{count} of {}",
+                    frames.len()
+                )));
+            }
+            let own = &frames[first as usize..(first + count) as usize];
+            if !own.windows(2).all(|p| p[0].weight < p[1].weight)
+                || own.iter().any(|f| !f.weight.is_finite() || f.weight == 0.0)
+            {
+                return Err(Error::Unsupported(format!(
+                    "{what}: frame weights not increasing or zero"
+                )));
+            }
+            Ok(ShapeChannel {
+                name: c.get("name").and_then(Value::as_str).unwrap_or("").to_owned(),
+                name_hash: int(c, "nameHash")? as u32,
+                first_frame: first as usize,
+                frames: count as usize,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some(MeshShapes {
+        channels,
+        frames,
+        vertices,
+    }))
+}
+
+impl MeshShapes {
+    /// `core.morphs` for primitives made of this mesh's vertices: target `c` is channel `c` (`MorphId(c)`), its frames at
+    /// Unity's weights (0 to 100 for a full shape), and per primitive the sparse deltas of the vertices it kept, in its
+    /// own numbering (`gathers[i][new]` is the mesh vertex of vertex `new` of primitive `i`). Positions are deltas in
+    /// the world's frame; normal and tangent deltas only where the frame stores them.
+    pub fn morphs(&self, vertex_count: usize, gathers: &[&[u32]]) -> Morphs {
+        let numbering: Vec<Vec<u32>> = gathers
+            .iter()
+            .map(|g| {
+                let mut to_new = vec![u32::MAX; vertex_count];
+                for (new, &old) in g.iter().enumerate() {
+                    to_new[old as usize] = new as u32;
+                }
+                to_new
+            })
+            .collect();
+        let targets = self
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(c, channel)| MorphTarget {
+                id: MorphId(c as u32),
+                name: channel.name.clone(),
+                default_weight: 0.0,
+                frames: self.frames[channel.first_frame..channel.first_frame + channel.frames]
+                    .iter()
+                    .map(|frame| MorphFrame {
+                        weight: frame.weight,
+                        primitives: numbering
+                            .iter()
+                            .map(|to_new| {
+                                let mut entries: Vec<(u32, &ShapeVertex)> = self.vertices
+                                    [frame.first..frame.first + frame.count]
+                                    .iter()
+                                    .filter_map(|v| {
+                                        let new = to_new[v.index as usize];
+                                        (new != u32::MAX).then_some((new, v))
+                                    })
+                                    .collect();
+                                entries.sort_by_key(|(new, _)| *new);
+                                entries.dedup_by_key(|(new, _)| *new);
+                                if entries.is_empty() {
+                                    return None;
+                                }
+                                Some(Deltas {
+                                    indices: Some(entries.iter().map(|(new, _)| *new).collect()),
+                                    positions: Some(
+                                        entries.iter().map(|(_, v)| UNITY.point(v.position)).collect(),
+                                    ),
+                                    normals: frame.normals.then(|| {
+                                        entries.iter().map(|(_, v)| UNITY.direction(v.normal)).collect()
+                                    }),
+                                    tangents: frame.tangents.then(|| {
+                                        entries.iter().map(|(_, v)| UNITY.direction(v.tangent)).collect()
+                                    }),
+                                })
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        Morphs { targets }
+    }
 }
 
 fn int(v: &Value, k: &str) -> Result<i64> {
@@ -741,12 +972,14 @@ impl UnityMeshData {
             }
             None => None,
         };
+        let shapes = read_shapes(&m, &name, vertex_count)?;
         Ok(UnityMeshData {
             name,
             vertex_count,
             channels,
             skin,
             compressed,
+            shapes,
             indices,
             index_size,
             submeshes,
@@ -786,6 +1019,9 @@ fn core_indices(topology: i64, indices: Vec<u32>) -> Vec<u32> {
         _ => indices,
     }
 }
+
+/// The primitives read from submeshes: each with the index of the submesh it is.
+pub type Drawn = Vec<(usize, Primitive)>;
 
 /// What reading a submesh could not put into core as stored, by what: counts for [`crate::level::LevelReport::notices`].
 pub type MeshNotices = std::collections::BTreeMap<&'static str, u64>;
@@ -868,8 +1104,28 @@ impl UnityMeshData {
     /// (stored as half4, the fourth is padding). Quads become triangles and line strips lines ([`topology`]); each
     /// primitive is made finite as core requires ([`make_finite`]). What could not be read as stored is counted in the
     /// returned notices, over the primitives returned (and those left out).
-    pub fn primitives(&self, range: Range<usize>) -> Result<(Vec<(usize, Primitive)>, MeshNotices)> {
-        self.primitives_with(range, None)
+    pub fn primitives(&self, range: Range<usize>) -> Result<(Drawn, MeshNotices)> {
+        let (out, _, notices) = self.primitives_with(range, None)?;
+        Ok((out, notices))
+    }
+
+    /// [`UnityMeshData::primitives`] (or, with `skinned`, [`UnityMeshData::skinned_primitives`]) and the mesh's blend
+    /// shapes as `core.morphs` over the primitives returned, `None` for a mesh without any
+    /// ([`MeshShapes::morphs`]).
+    pub fn primitives_and_morphs(
+        &self,
+        range: Range<usize>,
+        skinned: Option<SkinWeights>,
+    ) -> Result<(Drawn, Option<Morphs>, MeshNotices)> {
+        if skinned.is_some() && self.skin.is_none() {
+            return Err(invalid(format!("{}: no skin to read", self.name)));
+        }
+        let (out, gathers, notices) = self.primitives_with(range, skinned)?;
+        let morphs = self.shapes.as_ref().map(|s| {
+            let gathers: Vec<&[u32]> = gathers.iter().map(Vec::as_slice).collect();
+            s.morphs(self.vertex_count, &gathers)
+        });
+        Ok((out, morphs, notices))
     }
 
     /// [`UnityMeshData::primitives`] with the skin's streams as `limit` draws them: `Joints(k)` (the bone slots, 16
@@ -884,14 +1140,16 @@ impl UnityMeshData {
         if self.skin.is_none() {
             return Err(invalid(format!("{}: no skin to read", self.name)));
         }
-        self.primitives_with(range, Some(limit))
+        let (out, _, notices) = self.primitives_with(range, Some(limit))?;
+        Ok((out, notices))
     }
 
+    /// The primitives of the submeshes in `range` with, for each, the mesh vertex of each of its vertices.
     fn primitives_with(
         &self,
         range: Range<usize>,
         skinned: Option<SkinWeights>,
-    ) -> Result<(Vec<(usize, Primitive)>, MeshNotices)> {
+    ) -> Result<(Drawn, Vec<Vec<u32>>, MeshNotices)> {
         let mut notices = MeshNotices::new();
         let n = self.vertex_count;
         let mut streams = BTreeMap::new();
@@ -1001,6 +1259,7 @@ impl UnityMeshData {
             material: None,
         };
         let mut out = Vec::with_capacity(subs.len());
+        let mut gathers = Vec::with_capacity(subs.len());
         for (k, s) in subs.iter().enumerate() {
             let k = range.start + k;
             if s.index_count == 0 {
@@ -1038,9 +1297,9 @@ impl UnityMeshData {
             if !make_finite(&mut part, &used, &mut notices) {
                 continue;
             }
-            let compacted = compact_primitive(&part)
-                .map_err(|e| invalid(format!("{}: {}", what(), e.0)))?
-                .primitive;
+            let compacted = compact_primitive(&part).map_err(|e| invalid(format!("{}: {}", what(), e.0)))?;
+            gathers.push(compacted.gather);
+            let compacted = compacted.primitive;
             let vertices = used.len() as u64;
             let wide_uvs = self.channels[4..12]
                 .iter()
@@ -1054,7 +1313,7 @@ impl UnityMeshData {
             );
             out.push((k, compacted));
         }
-        Ok((out, notices))
+        Ok((out, gathers, notices))
     }
 }
 
@@ -1067,6 +1326,86 @@ mod tests {
             dim,
             values: values.to_vec(),
         })
+    }
+
+    fn shapes() -> MeshShapes {
+        let entry = |index: u32, x: f32| ShapeVertex {
+            index,
+            position: [x, 0.0, 0.0],
+            normal: [0.0, x, 0.0],
+            tangent: [0.0, 0.0, x],
+        };
+        MeshShapes {
+            // two channels: one frame at 100, and one with frames at 50 and 100
+            channels: vec![
+                ShapeChannel {
+                    name: "smile".into(),
+                    name_hash: 7,
+                    first_frame: 0,
+                    frames: 1,
+                },
+                ShapeChannel {
+                    name: "blink".into(),
+                    name_hash: 9,
+                    first_frame: 1,
+                    frames: 2,
+                },
+            ],
+            frames: vec![
+                ShapeFrame {
+                    weight: 100.0,
+                    first: 0,
+                    count: 2,
+                    normals: true,
+                    tangents: false,
+                },
+                ShapeFrame {
+                    weight: 50.0,
+                    first: 2,
+                    count: 1,
+                    normals: false,
+                    tangents: false,
+                },
+                ShapeFrame {
+                    weight: 100.0,
+                    first: 3,
+                    count: 1,
+                    normals: false,
+                    tangents: false,
+                },
+            ],
+            vertices: vec![entry(1, 1.0), entry(3, 2.0), entry(1, 0.5), entry(3, 4.0)],
+        }
+    }
+
+    /// A mesh's blend shapes become `core.morphs` over the vertices a primitive kept, in its own numbering and the
+    /// world's frame: a target a channel, its frames at Unity's weights, sparse deltas of the kept vertices only,
+    /// normals and tangents only where the frame stores them.
+    #[test]
+    fn blend_shapes_become_core_morphs_over_the_kept_vertices() {
+        // the primitive kept mesh vertices 3, 0, 1 (in that order): new vertex 0 is 3, 2 is 1
+        let morphs = shapes().morphs(4, &[&[3, 0, 1]]);
+        assert_eq!(morphs.targets.len(), 2);
+        assert_eq!(morphs.targets[1].name, "blink");
+        assert_eq!(morphs.targets[1].frames.len(), 2);
+        let smile = &morphs.targets[0].frames[0];
+        assert_eq!(smile.weight, 100.0);
+        let d = smile.primitives[0].as_ref().unwrap();
+        // entries of mesh vertices 1 and 3, as new vertices 2 and 0, ascending
+        assert_eq!(d.indices, Some(vec![0, 2]));
+        // x is the same in both frames
+        assert_eq!(d.positions, Some(vec![[2.0, 0.0, 0.0], [1.0, 0.0, 0.0]]));
+        assert_eq!(d.normals.as_ref().map(Vec::len), Some(2));
+        assert!(d.tangents.is_none());
+        let blink = &morphs.targets[1];
+        assert_eq!(
+            blink.frames.iter().map(|f| f.weight).collect::<Vec<_>>(),
+            vec![50.0, 100.0]
+        );
+        assert!(blink.frames[0].primitives[0].as_ref().unwrap().normals.is_none());
+        // a primitive that kept none of a frame's vertices has no deltas for it
+        let none = shapes().morphs(4, &[&[0, 2]]);
+        assert!(none.targets[0].frames[0].primitives[0].is_none());
     }
 
     #[test]
@@ -1088,6 +1427,7 @@ mod tests {
             channels,
             skin: None,
             compressed: false,
+            shapes: None,
             indices: vec![0, 1, 2],
             index_size: 2,
             submeshes: vec![
@@ -1142,6 +1482,7 @@ mod tests {
             channels,
             skin: None,
             compressed: false,
+            shapes: None,
             index_size: 2,
             submeshes: vec![SubMesh {
                 first_byte: 0,

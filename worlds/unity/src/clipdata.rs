@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use primase_core::{
-    Channel, Clip, ClipTarget, Entity, Extrapolation, Interpolation, JointId, Property, Rest,
+    Channel, Clip, ClipTarget, Entity, Extrapolation, Interpolation, JointId, MorphId, Property, Rest,
 };
 
 use crate::components::UNITY;
@@ -153,6 +153,9 @@ pub struct ClipLowering {
     pub renormalised_keys: usize,
     /// Transform curves whose path is no joint of the rig, by attribute (`position`, `rotation`, `scale`).
     pub unresolved: std::collections::BTreeMap<&'static str, usize>,
+    /// Blend shape curves lowered to morph channels, and those whose renderer or shape the character lacks.
+    pub morph_channels: usize,
+    pub unresolved_morphs: usize,
     /// Bindings with no joint channel in core, by what they are.
     pub not_lowered: std::collections::BTreeMap<&'static str, usize>,
     /// What the humanoid muscle curves made of a humanoid avatar's bones ([`crate::humanoid`]); `None` for a clip lowered
@@ -160,8 +163,11 @@ pub struct ClipLowering {
     pub humanoid: Option<crate::humanoid::HumanoidLowering>,
 }
 
-/// A joint-channel value or tangent of `property` in the world's frame.
+/// A channel value or tangent of `property` in the world's frame.
 fn convert(property: Property, v: &[f32]) -> Vec<f32> {
+    if property == Property::Scalar {
+        return v.to_vec();
+    }
     let rest = match property {
         Property::Translation => Rest::Trs {
             translation: [v[0], v[1], v[2]],
@@ -208,11 +214,19 @@ impl Track {
             (4, 1) => Property::Translation,
             (4, 2) => Property::Rotation,
             (4, 3) => Property::Scale,
+            (137, _) => Property::Scalar,
             _ => return Ok(None),
         };
         let width = self.curves.len();
         let steps = self.curves.iter().filter(|c| c.has_steps()).count();
-        if steps > 0 {
+        // a scalar curve may step throughout; a transform's, or a scalar's with steps among smooth segments, may not
+        let stepped = steps > 0
+            && property == Property::Scalar
+            && self
+                .curves
+                .iter()
+                .all(|c| c.keys.iter().rev().skip(1).all(|k| !k.out_slope.is_finite()));
+        if steps > 0 && !stepped {
             return Err(Error::Unsupported(format!("a {property:?} curve with steps")));
         }
         let mut times: Vec<f32> = self
@@ -227,7 +241,9 @@ impl Track {
         times.dedup();
         let all_constant = self.curves.iter().all(Curve::is_constant);
         let all_linear = self.curves.iter().all(|c| c.storage != Storage::Streamed);
-        let interpolation = if all_constant || all_linear {
+        let interpolation = if stepped {
+            Interpolation::Step
+        } else if all_constant || all_linear {
             Interpolation::Linear
         } else {
             Interpolation::Hermite
@@ -262,7 +278,14 @@ impl Track {
                 values.extend(convert(property, &value));
             }
         }
-        debug_assert_eq!(width, if property == Property::Rotation { 4 } else { 3 });
+        debug_assert_eq!(
+            width,
+            match property {
+                Property::Rotation => 4,
+                Property::Scalar => 1,
+                _ => 3,
+            }
+        );
         Ok(Some(Channel {
             target,
             property,
@@ -280,12 +303,14 @@ impl ClipData {
     pub fn lower(
         &self,
         resolve: &dyn Fn(u32) -> Option<(Entity, JointId)>,
+        morph_resolve: &dyn Fn(u32, u32) -> Option<(Entity, MorphId)>,
         humanoid: Option<HumanoidRig>,
     ) -> Result<(Clip, ClipLowering)> {
         let humanoid = humanoid.filter(|(a, _)| a.human.is_some());
         let mut report = ClipLowering::default();
         let mut channels = Vec::new();
         let mut seen = BTreeSet::new();
+        let mut morph_seen = BTreeSet::new();
         for track in &self.tracks {
             let b = &track.binding;
             let kind = match (b.type_id, b.attribute) {
@@ -308,11 +333,28 @@ impl ClipData {
                         .or_default() += 1;
                     continue;
                 }
+                // a blend shape: the curve's path names the renderer, its attribute the CRC-32 of the shape's name
                 (137, _) => {
-                    *report
-                        .not_lowered
-                        .entry("SkinnedMeshRenderer blend shape curves")
-                        .or_default() += 1;
+                    let Some((geometry, morph)) = morph_resolve(b.path, b.attribute) else {
+                        report.unresolved_morphs += 1;
+                        continue;
+                    };
+                    let channel = track
+                        .channel(
+                            ClipTarget::Morph { geometry, morph },
+                            self.duration,
+                            &mut report.renormalised_keys,
+                        )?
+                        .expect("a blend shape curve is a channel");
+                    if !morph_seen.insert((geometry, morph)) {
+                        return Err(invalid(format!(
+                            "{}: two channels for one blend shape ({morph:?})",
+                            self.name
+                        )));
+                    }
+                    report.keys += channel.times.len();
+                    report.morph_channels += 1;
+                    channels.push(channel);
                     continue;
                 }
                 _ => {

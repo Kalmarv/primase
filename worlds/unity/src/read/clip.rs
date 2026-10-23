@@ -460,6 +460,66 @@ mod tests {
         );
     }
 
+    /// A SkinnedMeshRenderer's blend shape curve is a morph channel on the target its renderer path and shape name hashes
+    /// resolve to, in Unity's weights (0 to 100) as stored; one with no such target is counted, not lowered, and two for
+    /// one target are refused.
+    #[test]
+    fn blend_shape_curves_become_morph_channels() {
+        let track = |path: u32, shape: u32| Track {
+            binding: GenericBinding {
+                path,
+                attribute: shape,
+                type_id: 137,
+                is_pptr: false,
+            },
+            curves: vec![Curve {
+                storage: Storage::Streamed,
+                keys: vec![key(0.0, 0.0, 0.0, 100.0), key(1.0, 100.0, 100.0, 0.0)],
+            }],
+        };
+        let mut world = primase_core::World::new();
+        let geometry = world.spawn();
+        let clip = |tracks: Vec<Track>| ClipData {
+            name: "blink".into(),
+            duration: 1.0,
+            looping: false,
+            tracks,
+            events: 0,
+            worst_continuity_error: 0.0,
+        };
+        let morph =
+            |path: u32, shape: u32| (path == 5 && shape == 6).then_some((geometry, primase_core::MorphId(3)));
+        let none = |_: u32| None;
+        let (lowered, report) = clip(vec![track(5, 6), track(5, 99)])
+            .lower(&none, &morph, None)
+            .unwrap();
+        assert_eq!(
+            (report.morph_channels, report.unresolved_morphs, report.channels),
+            (1, 1, 1)
+        );
+        let c = &lowered.channels[0];
+        assert_eq!(
+            c.target,
+            ClipTarget::Morph {
+                geometry,
+                morph: primase_core::MorphId(3)
+            }
+        );
+        assert_eq!(
+            (c.property, c.interpolation),
+            (Property::Scalar, Interpolation::Hermite)
+        );
+        assert_eq!(c.times, vec![0.0, 1.0]);
+        // in tangent, value, out tangent a key; the values are not scaled
+        assert_eq!(c.values.len(), 6);
+        assert!((c.values[4] - 100.0).abs() < 1e-5, "{:?}", c.values);
+        assert!(
+            clip(vec![track(5, 6), track(5, 6)])
+                .lower(&none, &morph, None)
+                .is_err()
+        );
+    }
+
     /// The path hash is the zlib CRC-32: values from the SkateBIRD avatar's name table.
     #[test]
     fn path_hashes_are_the_crc32_of_the_path() {

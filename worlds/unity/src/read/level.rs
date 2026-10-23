@@ -38,9 +38,9 @@ use serde::Serialize;
 use primase_core::skin::SUM_TOLERANCE;
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{
-    Binding, BindingId, ClipBinding, Deformation, Entity, Influences, Instance, Joint, JointId, LodForm,
-    Lods, MaterialVariants, Mesh, Name, Rest, RigInstance, ShadowCast, Shadows, Skeleton, Skin, SkinInstance,
-    Slot, Source, Transform, WeightRule, World,
+    Binding, BindingId, ClipBinding, ClipTarget, Deformation, Entity, Influences, Instance, Joint, JointId,
+    LodForm, Lods, MaterialVariants, Mesh, MorphId, MorphWeights, Name, Rest, RigInstance, ShadowCast,
+    Shadows, Skeleton, Skin, SkinInstance, Slot, Source, Transform, WeightRule, World,
 };
 
 use crate::animator::{UnityAnimator, UnityAnimatorController, UnityAvatar};
@@ -146,6 +146,11 @@ pub struct LevelReport {
     pub clips: usize,
     pub clip_bindings: usize,
     pub clip_channels: usize,
+    /// Blend shape targets of the meshes read (`core.morphs`), the renderers that set weights of them
+    /// (`core.morph_weights`) and the morph channels of the clips (counted in `clip_channels` too).
+    pub morph_targets: usize,
+    pub morph_renderers: usize,
+    pub morph_channels: usize,
     /// Avatars and AnimatorControllers read typed (`unity.avatar`, `unity.animator_controller`), each once, for the
     /// Animators of the rigs read (`unity.animator` on the rig).
     pub avatars: usize,
@@ -185,6 +190,18 @@ pub struct LevelReport {
     /// ([`crate::mesh::MeshNotices`]).
     pub notices: BTreeMap<String, u64>,
     pub skipped: Skipped,
+}
+
+/// The blend shapes an Animator's character has, for what a clip made with them depends on: each by the hash of its
+/// renderer's path below the Animator and of its name, the geometry holding it and its id.
+type MorphKey = Vec<((u32, u32), Entity, MorphId)>;
+
+/// A renderer whose mesh has blend shapes, for the clips that drive them: the placement drawing it, the prototype
+/// holding the morph set, and each shape by the CRC-32 of its name (what a clip's curve names it by).
+struct MorphRenderer {
+    occurrence: Entity,
+    geometry: Entity,
+    shapes: Vec<(u32, MorphId)>,
 }
 
 /// A prototype being built: its entity, the submesh of each primitive, the material lists of its variants, and
@@ -750,10 +767,11 @@ impl Builder<'_> {
         w: &mut World,
         scene: &Scene,
         joint_of: &BTreeMap<i64, (Entity, Entity, JointId)>,
+        morph_renderers: &BTreeMap<i64, MorphRenderer>,
         root: Option<i64>,
     ) -> Result<()> {
         let mut data: BTreeMap<ObjRef, Option<ClipData>> = BTreeMap::new();
-        let mut made: BTreeMap<(ObjRef, Entity, Option<ObjRef>), Option<Entity>> = BTreeMap::new();
+        let mut made: BTreeMap<(ObjRef, Entity, Option<ObjRef>, MorphKey), Option<Entity>> = BTreeMap::new();
         let mut bound: BTreeSet<(Entity, Entity)> = BTreeSet::new();
         let mut controllers: BTreeMap<ObjRef, Vec<ObjRef>> = BTreeMap::new();
         for animator in scene.animators_under(self.player, root)? {
@@ -845,6 +863,17 @@ impl Builder<'_> {
                     }
                 }
             }
+            // the blend shapes below the Animator's GameObject, by the hash of their renderer's path and of their name
+            let mut morphs: BTreeMap<(u32, u32), (Entity, Entity, MorphId)> = BTreeMap::new();
+            for (&t, m) in morph_renderers {
+                let Some(path) = scene.path_below(t, tp) else {
+                    continue;
+                };
+                for &(hash, id) in &m.shapes {
+                    morphs.insert((path_hash(&path), hash), (m.occurrence, m.geometry, id));
+                }
+            }
+            let morph_key: MorphKey = morphs.iter().map(|(&k, &(_, g, id))| (k, g, id)).collect();
             let controller_entity = match &animator.controller {
                 Some(c) if self.player.class_name(c) == Some("AnimatorController") => {
                     self.typed_controller(w, c)?
@@ -902,6 +931,7 @@ impl Builder<'_> {
                         clip.clone(),
                         skeleton,
                         animator.avatar.clone().filter(|_| humanoid.is_some()),
+                        morph_key.clone(),
                     );
                     let entity = match made.get(&key) {
                         Some(e) => *e,
@@ -909,6 +939,7 @@ impl Builder<'_> {
                             let bone_joint = |hash: u32| bones.get(&hash).map(|j| (skeleton, *j));
                             let (lowered, report) = d.lower(
                                 &|hash| hashes.get(&hash).map(|j| (skeleton, *j)),
+                                &|path, shape| morphs.get(&(path, shape)).map(|&(_, g, id)| (g, id)),
                                 humanoid
                                     .as_ref()
                                     .map(|a| (a, &bone_joint as &dyn Fn(u32) -> Option<(Entity, JointId)>)),
@@ -970,6 +1001,11 @@ impl Builder<'_> {
                                 self.notice(&format!("animation clip curves not lowered: {kind}"), *n as u64);
                             }
                             self.notice(
+                                "animation clip blend shape curves whose renderer or shape the Animator's character lacks",
+                                report.unresolved_morphs as u64,
+                            );
+                            self.report.morph_channels += report.morph_channels;
+                            self.notice(
                                 "animation clip rotation keys renormalised to unit length",
                                 report.renormalised_keys as u64,
                             );
@@ -992,6 +1028,23 @@ impl Builder<'_> {
                     if let Some(clip_entity) = entity
                         && bound.insert((clip_entity, rig))
                     {
+                        // the occurrences of the blend shapes the clip drives
+                        let driven: BTreeSet<Entity> = w
+                            .get::<primase_core::Clip>(clip_entity)
+                            .iter()
+                            .flat_map(|c| &c.channels)
+                            .filter_map(|c| match c.target {
+                                ClipTarget::Morph { geometry, .. } => Some(geometry),
+                                _ => None,
+                            })
+                            .collect();
+                        let meshes: Vec<Entity> = morphs
+                            .values()
+                            .filter(|(_, g, _)| driven.contains(g))
+                            .map(|(o, _, _)| *o)
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect();
                         let e = w.spawn();
                         w.insert(e, Name(format!("{} on {}", d.name, animator.path)));
                         w.insert(
@@ -999,7 +1052,7 @@ impl Builder<'_> {
                             ClipBinding {
                                 clip: clip_entity,
                                 rig: Some(rig),
-                                meshes: Vec::new(),
+                                meshes,
                             },
                         );
                         self.report.clip_bindings += 1;
@@ -1702,6 +1755,7 @@ fn read_scene(
             }
         }
     }
+    let mut morph_renderers: BTreeMap<i64, MorphRenderer> = BTreeMap::new();
     let mut skinning: BTreeMap<ObjRef, Skinning> = BTreeMap::new();
     let mut joint_of: BTreeMap<i64, (Entity, Entity, JointId)> = BTreeMap::new();
     if !candidates.is_empty() {
@@ -1774,11 +1828,8 @@ fn read_scene(
             );
             if !prototypes.contains_key(&key) {
                 let range = first as usize..first as usize + count;
-                let (read, notices) = if skinning_of.is_some() {
-                    data.skinned_primitives(range, limits[&r.mesh])?
-                } else {
-                    data.primitives(range)?
-                };
+                let (read, morphs, notices) =
+                    data.primitives_and_morphs(range, skinning_of.is_some().then(|| limits[&r.mesh]))?;
                 b.note_mesh(notices);
                 let (drawn, primitives): (Vec<u32>, Vec<_>) =
                     read.into_iter().map(|(k, p)| (k as u32, p)).unzip();
@@ -1787,6 +1838,10 @@ fn read_scene(
                 if !primitives.is_empty() {
                     b.report.primitives += primitives.len();
                     w.insert(e, Mesh::new(primitives));
+                    if let Some(morphs) = morphs {
+                        b.report.morph_targets += morphs.targets.len();
+                        w.insert(e, morphs);
+                    }
                 }
                 w.insert(
                     e,
@@ -1842,6 +1897,41 @@ fn read_scene(
             );
             w.insert(e, Name(r.path.clone()));
             w.insert(e, unity_renderer(r));
+            if let (Some(shapes), true) = (&data.shapes, w.has::<primase_core::Morphs>(entity)) {
+                // the weights the renderer sets, then where its shapes can be found by the clips
+                let weights: Vec<(MorphId, f32)> = r
+                    .skin
+                    .iter()
+                    .flat_map(|s| s.blend_weights.iter().enumerate())
+                    .filter(|(c, v)| *c < shapes.channels.len() && **v != 0.0)
+                    .map(|(c, v)| (MorphId(c as u32), *v))
+                    .collect();
+                if r.skin
+                    .as_ref()
+                    .is_some_and(|s| s.blend_weights.len() > shapes.channels.len())
+                {
+                    b.notice("renderers with more blend shape weights than their mesh has shapes (the extra left out)", 1);
+                }
+                if !weights.is_empty() {
+                    b.report.morph_renderers += 1;
+                    w.insert(e, MorphWeights(weights));
+                }
+                if let Some(t) = scene.transform_of(r.game_object) {
+                    morph_renderers.insert(
+                        t,
+                        MorphRenderer {
+                            occurrence: e,
+                            geometry: entity,
+                            shapes: shapes
+                                .channels
+                                .iter()
+                                .enumerate()
+                                .map(|(c, ch)| (ch.name_hash, MorphId(c as u32)))
+                                .collect(),
+                        },
+                    );
+                }
+            }
             if let Some(sk) = skinning_of {
                 let build = skin_builds.entry(entity).or_insert_with(|| SkinBuild {
                     mesh: r.mesh.clone(),
@@ -2062,7 +2152,7 @@ fn read_scene(
     }
     // the clips of the Animators that animate the skeletons made: a clip lowered for each skeleton, bound to its rig
     if !joint_of.is_empty() {
-        b.bind_clips(w, &scene, &joint_of, root)?;
+        b.bind_clips(w, &scene, &joint_of, &morph_renderers, root)?;
     }
     // colliders: the scene's, then the terrain trees'
     for c in scene.colliders_under(player, root)? {
@@ -2372,7 +2462,7 @@ mod tests {
         assert_eq!(json["colliders_not_colliding"]["trigger"], 5);
         assert_eq!(json["skipped"]["no mesh"], 1);
         // every field of the struct is there
-        assert_eq!(json.as_object().map(serde_json::Map::len), Some(33));
+        assert_eq!(json.as_object().map(serde_json::Map::len), Some(36));
     }
 
     #[test]

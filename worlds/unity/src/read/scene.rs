@@ -182,6 +182,8 @@ pub struct Character {
 pub struct RendererSkin {
     pub bones: Vec<Option<i64>>,
     pub root_bone: Option<i64>,
+    /// `m_BlendShapeWeights`: the weight of each of the mesh's blend shape channels (0 to 100 for a full shape).
+    pub blend_weights: Vec<f32>,
 }
 
 /// A mesh renderer with a mesh, whatever its state.
@@ -816,6 +818,12 @@ impl Scene {
                     root_bone: match mr.get("m_RootBone") {
                         Some(p) => bone(p)?,
                         None => None,
+                    },
+                    blend_weights: match mr.get("m_BlendShapeWeights") {
+                        Some(Value::Array(Array::F32(w))) => w.clone(),
+                        Some(Value::Array(a)) if a.is_empty() => Vec::new(),
+                        None => Vec::new(),
+                        _ => return Err(invalid("SkinnedMeshRenderer: m_BlendShapeWeights not floats")),
                     },
                 })
             } else {
