@@ -125,7 +125,24 @@ pub struct LayeredMaterial {
     pub bindings: BTreeMap<String, Binding>,
 }
 impl LayeredMaterial {
-    /// The G-buffer program file its shader and static switch select (`<shader>_<switch>_Gbuf.ppo`).
+    /// The alpha test's reference, the first word of `g_AlphaRef` (an int pair; 0 where the material states none: no
+    /// alpha test).
+    pub fn alpha_reference(&self) -> i32 {
+        self.definition
+            .parameters
+            .iter()
+            .find(|p| p.name == "g_AlphaRef")
+            .and_then(|p| match &p.value {
+                Value::Int(v) => v.first().copied(),
+                _ => None,
+            })
+            .unwrap_or(0)
+    }
+    /// The G-buffer program file its shader and static switch select (`<shader>_<switch>_Gbuf.ppo`), the alpha-tested
+    /// permutation (`<shader>_<switch>_Gbuf_[A].ppo`, the plain program with a discard against `FC_AlphaRef`) when the
+    /// material has an alpha reference. Read from the bundles: all 34 switches of each of the three layered shaders have both
+    /// (no plain program discards); in a capture of the running game the contents of the pixel stage's material buffer
+    /// for a plain program have `FC_AlphaRef.x` = -100 and the alpha-tested one's 0.502 = 128 / 255 of `g_AlphaRef`.
     pub fn program_name(&self) -> crate::Result<String> {
         let leaf = self.definition.shader.rsplit(['/', '\\']).next().unwrap_or("");
         let shader = leaf.rsplit_once('.').map_or(leaf, |x| x.0);
@@ -139,7 +156,8 @@ impl LayeredMaterial {
                 _ => None,
             })
             .ok_or_else(|| crate::invalid("layer shader", 0, "missing static switch"))?;
-        Ok(format!("{shader}_{switch}_Gbuf.ppo"))
+        let alpha = if self.alpha_reference() > 0 { "_[A]" } else { "" };
+        Ok(format!("{shader}_{switch}_Gbuf{alpha}.ppo"))
     }
 }
 impl Component for LayeredMaterial {

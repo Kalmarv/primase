@@ -66,6 +66,11 @@ fn material() -> LayeredMaterial {
                     name: "GXFT_SATStaticSwitch".into(),
                     value: Value::Int(vec![27]),
                 },
+                float("g_DiffuseMapColor", &[0.8, 0.6, 0.4]),
+                Parameter {
+                    name: "g_AlphaRef".into(),
+                    value: Value::Int(vec![0, 0]),
+                },
             ],
             textures: vec![
                 texture_kind("A_Texture2D_8_AlbedoMap"),
@@ -128,6 +133,7 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
         &shader,
         program,
         &material(),
+        None,
         Unbound::Preview,
         &mut |stem, srgb| {
             asked.push((stem.to_owned(), srgb));
@@ -145,7 +151,8 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
     let material =
         |name: &str, offset, size, role| ("Material".to_owned(), name.to_owned(), offset, size, role);
     let expected = vec![
-        engine("FC_DifMapMulCol", 0, 16, Frame(FrameParameter::AlbedoTint)),
+        // the material's g_DiffuseMapColor and a zero
+        engine("FC_DifMapMulCol", 0, 16, bits(&[0.8, 0.6, 0.4, 0.])),
         engine("mWorld", 16, 48, Object(ObjectParameter::World)),
         engine("aColor", 64, 16, Object(ObjectParameter::InstanceColour)),
         engine("FC_ColorSlotNo", 80, 4, Frame(FrameParameter::ColourSlot)),
@@ -261,9 +268,14 @@ fn leaving_unbound_slots_invents_nothing() {
     let shader = primase_dxbc::Shader::parse(PROGRAM).unwrap();
     let mut world = World::default();
     let program = world.spawn();
-    let resolution = resolve(&shader, program, &material(), Unbound::Leave, &mut |_, _| {
-        Ok(None)
-    })
+    let resolution = resolve(
+        &shader,
+        program,
+        &material(),
+        None,
+        Unbound::Leave,
+        &mut |_, _| Ok(None),
+    )
     .unwrap();
     assert!(resolution.policies.is_empty());
     assert!(
@@ -457,9 +469,14 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
     let mut world = World::default();
     let (program, grass) = (world.spawn(), world.spawn());
     let layered = material();
-    let stage = resolve(&shader, program, &layered, Unbound::Preview, &mut |stem, _| {
-        Ok((stem == "grass_a").then_some(grass))
-    })
+    let stage = resolve(
+        &shader,
+        program,
+        &layered,
+        None,
+        Unbound::Preview,
+        &mut |stem, _| Ok((stem == "grass_a").then_some(grass)),
+    )
     .unwrap()
     .stage;
     let view = || -> primase_fromsoft::Result<_> {
@@ -729,5 +746,178 @@ fn the_pass_chooses_the_vertex_permutation_by_the_primitives_streams() {
     assert_eq!(
         counts["skinned layered materials whose bundle has no <shader>_Gbuf_Skin.vpo (no vertex program bound)"],
         1
+    );
+}
+
+const MTD_PROGRAM: &[u8] = include_bytes!("fixtures/layered_mtd.dxbc");
+
+fn with_params(params: &[(&str, Value)]) -> LayeredMaterial {
+    let mut layered = material();
+    for (name, value) in params {
+        layered.definition.parameters.retain(|p| p.name != *name);
+        layered.definition.parameters.push(Parameter {
+            name: (*name).into(),
+            value: value.clone(),
+        });
+    }
+    layered
+}
+
+/// The material buffer's engine-named fields come from the MTD's engine-named parameters: the diffuse map's colour from
+/// `g_DiffuseMapColor` (rgb, and 0), the alpha test's reference from `g_AlphaRef` (a word over 255, -100 for none), and the
+/// flag beside it, whose source is not established, is Unknown.
+#[test]
+fn the_material_buffers_engine_named_fields_come_from_the_definition() {
+    let shader = primase_dxbc::Shader::parse(MTD_PROGRAM).unwrap();
+    let program = World::default().spawn();
+    let at = |layered: &LayeredMaterial| {
+        let stage = resolve(&shader, program, layered, None, Unbound::Preview, &mut |_, _| {
+            Ok(None)
+        })
+        .unwrap()
+        .stage;
+        constants(&stage, &shader)
+            .into_iter()
+            .map(|(_, name, offset, size, role)| (name, offset, size, role))
+            .collect::<Vec<_>>()
+    };
+    let tested = with_params(&[
+        ("g_DiffuseMapColor", Value::Float(vec![0.8, 0.6, 0.4])),
+        ("g_AlphaRef", Value::Int(vec![128, 64])),
+    ]);
+    let flag = ConstantRole::Unknown {
+        why: "the alpha test's flag the engine derives (zw of FC_AlphaRef): its source is not established"
+            .into(),
+    };
+    assert_eq!(
+        at(&tested),
+        [
+            ("FC_DifMapMulCol".to_owned(), 0, 16, bits(&[0.8, 0.6, 0.4, 0.])),
+            ("FC_AlphaRef".to_owned(), 80, 8, bits(&[128. / 255., 64. / 255.])),
+            ("FC_AlphaRef".to_owned(), 88, 8, flag.clone()),
+        ]
+    );
+    // no alpha reference: the test never discards (-100); no diffuse colour: Unknown by name
+    let plain = with_params(&[("g_AlphaRef", Value::Int(vec![0, 0]))]);
+    let mut without_colour = plain.clone();
+    without_colour
+        .definition
+        .parameters
+        .retain(|p| p.name != "g_DiffuseMapColor");
+    let got = at(&without_colour);
+    assert_eq!(got[1], ("FC_AlphaRef".to_owned(), 80, 8, bits(&[-100., 0.])));
+    assert!(
+        matches!(&got[0].3, ConstantRole::Unknown { why } if why.contains("g_DiffuseMapColor")),
+        "{:?}",
+        got[0]
+    );
+    // the program the reference selects: the alpha-tested permutation, which discards; the plain one when there is none
+    assert_eq!(tested.program_name().unwrap(), "M[Multiple]_27_Gbuf_[A].ppo");
+    assert_eq!(plain.program_name().unwrap(), "M[Multiple]_27_Gbuf.ppo");
+}
+
+/// The bake keeps every texel of an alpha-tested material: the test is frozen off (-100) and counted, since a discarded
+/// texel has no G-buffer and the cutout is the albedo's own alpha.
+#[test]
+fn the_bake_freezes_the_alpha_test_off() {
+    use primase_fromsoft::layer_bake::{ALPHA_TEST_POLICY, FrozenFrame, Prepared, Programs};
+    let shader = primase_dxbc::Shader::parse(MTD_PROGRAM).unwrap();
+    let program = World::default().spawn();
+    let tested = with_params(&[
+        ("g_DiffuseMapColor", Value::Float(vec![1., 1., 1.])),
+        ("g_AlphaRef", Value::Int(vec![128, 0])),
+    ]);
+    let stage = resolve(&shader, program, &tested, None, Unbound::Preview, &mut |_, _| {
+        Ok(None)
+    })
+    .unwrap()
+    .stage;
+    let prepared = Prepared::from_binding(
+        Programs {
+            shader: &shader,
+            bytecode: MTD_PROGRAM,
+            stage: &stage,
+            vertex: None,
+        },
+        &tested,
+        &FrozenFrame::static_bake(0.),
+        |_, _, _| unreachable!("no texture is bound"),
+        |_, _, _| Ok(None),
+    )
+    .unwrap();
+    assert_eq!(prepared.policies.get(ALPHA_TEST_POLICY), Some(&1));
+    // a material without a reference is not counted
+    let plain = with_params(&[("g_AlphaRef", Value::Int(vec![0, 0]))]);
+    let stage = resolve(&shader, program, &plain, None, Unbound::Preview, &mut |_, _| {
+        Ok(None)
+    })
+    .unwrap()
+    .stage;
+    let prepared = Prepared::from_binding(
+        Programs {
+            shader: &shader,
+            bytecode: MTD_PROGRAM,
+            stage: &stage,
+            vertex: None,
+        },
+        &plain,
+        &FrozenFrame::static_bake(0.),
+        |_, _, _| unreachable!("no texture is bound"),
+        |_, _, _| Ok(None),
+    )
+    .unwrap();
+    assert_eq!(prepared.policies.get(ALPHA_TEST_POLICY), None);
+}
+
+/// A SAT parameter the material does not state takes the default its shader bundle's metaparam states, counted; one the
+/// metaparam does not declare is still Unknown.
+#[test]
+fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
+    use primase_fromsoft::metaparam::{Metaparam, MtdParam};
+    let shader = primase_dxbc::Shader::parse(PROGRAM).unwrap();
+    let program = World::default().spawn();
+    let metaparam = Metaparam {
+        constant_buffer_size: 0,
+        shader_id: 0,
+        flags: 0,
+        gxmd_key: 0,
+        ca_param_block_size: 0,
+        unknown_30: 0,
+        unknown_40: 0,
+        unknown_50: 0,
+        textures: Vec::new(),
+        passes: Vec::new(),
+        ca_params: Vec::new(),
+        mtd_params: vec![MtdParam {
+            name: "M_Multiple__snp_missing".into(),
+            start: 0,
+            sequence_index: 0,
+            value_type: 1,
+            not_shader_input: false,
+            srgb: false,
+            colour: false,
+            key: 0,
+            default: [0.75, 0., 0., 0., 0.],
+        }],
+    };
+    let resolution = resolve(
+        &shader,
+        program,
+        &material(),
+        Some(&metaparam),
+        Unbound::Preview,
+        &mut |_, _| Ok(None),
+    )
+    .unwrap();
+    let missing = constants(&resolution.stage, &shader)
+        .into_iter()
+        .find(|c| c.1 == "M_Multiple__snp_missing")
+        .unwrap();
+    assert_eq!(missing.4, bits(&[0.75]));
+    assert_eq!(
+        resolution
+            .policies
+            .get("missing SAT parameter taken from the shader bundle's metaparam default"),
+        Some(&1)
     );
 }

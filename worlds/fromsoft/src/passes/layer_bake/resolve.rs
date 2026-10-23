@@ -4,6 +4,7 @@
 //! as the constants' own words, the engine's per-view, per-frame and per-object values as roles (never values), and
 //! the G-buffer layout of the outputs.
 use crate::materials::{Binding, LayeredMaterial};
+use crate::metaparam::Metaparam;
 use crate::mtd::Value;
 use crate::{Result, invalid};
 use primase_core::Entity;
@@ -34,6 +35,9 @@ pub enum Unbound {
 /// The G-buffer outputs the layered programs write, by render target: the world normal, the gloss (x only), the
 /// albedo, the reflectance and the emission.
 const NORMAL_BIAS_BITS: u32 = 0x3f00_2008;
+
+/// The name of the engine's dither noise texture in the alpha-tested permutations (`<shader>_<switch>_Gbuf_[A].ppo`).
+pub const ENGINE_DITHER_TEXTURE: &str = "g_DitherTexture";
 
 /// `<index>` and role of a texture kind named `…Texture2D_<index>_<Role>…`.
 pub(crate) fn slot_name(kind: &str) -> Option<(u32, &str)> {
@@ -127,12 +131,14 @@ pub struct Resolution {
     pub policies: BTreeMap<String, u64>,
 }
 
-/// Bind the pixel program `shader` (entity `entity`) of a layered `material`. `texture` finds the entity of a texture
-/// by stem and colour space (`true`: sRGB, the albedo maps), or `None` when the reader holds no such file.
+/// Bind the pixel program `shader` (entity `entity`) of a layered `material`. `metaparam` is the parameter definition of
+/// its shader's bundle, which states the default of a parameter the material does not. `texture` finds the entity of a
+/// texture by stem and colour space (`true`: sRGB, the albedo maps), or `None` when the reader holds no such file.
 pub fn resolve(
     shader: &Shader,
     entity: Entity,
     material: &LayeredMaterial,
+    metaparam: Option<&Metaparam>,
     unbound: Unbound,
     texture: &mut dyn FnMut(&str, bool) -> Result<Option<Entity>>,
 ) -> Result<Resolution> {
@@ -206,6 +212,18 @@ pub fn resolve(
             ));
         }
         let register = register(resource)?;
+        // the engine's own texture the alpha-tested permutations declare: dither noise, read only by the dithered fade
+        // (`FC_isDitherAlpha`), which the bake leaves off; the material binds nothing to it
+        if resource.provenance.name == ENGINE_DITHER_TEXTURE {
+            let why = "engine dither texture: read only by the dithered alpha fade, which is off".to_owned();
+            *policies.entry(why.clone()).or_default() += 1;
+            bindings.push(TextureBinding {
+                resource: resource.id,
+                sampler: None,
+                source: TextureSource::Default { value: [0.5; 4], why },
+            });
+            continue;
+        }
         let slot = texture_slot(resource)?;
         // A declared slot retains its semantic role even without a path. In particular an unbound normal gets the
         // flat normal, not the zero of an unknown resource.
@@ -268,13 +286,51 @@ pub fn resolve(
             ));
         }
     }
-    // the engine's values: roles, whatever a consumer freezes them to
+    // the material buffer's engine-named fields, from the MTD's engine-named parameters: the colour the diffuse map is
+    // multiplied by is `g_DiffuseMapColor`'s rgb (and 0), the alpha test's reference `g_AlphaRef`'s first word over 255
+    // when it has one and -100 (never discards) when it has none, its second word over 255 (the second is not seen in
+    // Sekiro's data). The captured contents of this buffer vary per material in exactly these fields
+    // ((1, 0.9216, 0.9216, 0) beside (1, 1, 1, 0); 0.502 = 128 / 255 and -100 in FC_AlphaRef.x). Its z and w are a flag
+    // the engine derives (0 or 1 in the capture) whose source is not established.
+    let definition_param = |name: &str| material.definition.parameters.iter().find(|p| p.name == name);
+    match definition_param("g_DiffuseMapColor").map(|p| &p.value) {
+        Some(Value::Float(v)) if v.len() >= 3 => {
+            constant("FC_DifMapMulCol", 0, 16, words(&[v[0], v[1], v[2], 0.]))?
+        }
+        _ => constant(
+            "FC_DifMapMulCol",
+            0,
+            16,
+            ConstantRole::Unknown {
+                why: "the material states no g_DiffuseMapColor, the colour its diffuse map is multiplied by"
+                    .into(),
+            },
+        )?,
+    }
+    let reference = |word: usize| match definition_param("g_AlphaRef").map(|p| &p.value) {
+        Some(Value::Int(v)) => v.get(word).copied().filter(|&r| r > 0),
+        _ => None,
+    };
     constant(
-        "FC_DifMapMulCol",
+        "FC_AlphaRef",
         0,
-        16,
-        ConstantRole::Frame(FrameParameter::AlbedoTint),
+        8,
+        words(&[
+            reference(0).map_or(-100., |r| r as f32 / 255.),
+            reference(1).map_or(0., |r| r as f32 / 255.),
+        ]),
     )?;
+    constant(
+        "FC_AlphaRef",
+        2,
+        8,
+        ConstantRole::Unknown {
+            why:
+                "the alpha test's flag the engine derives (zw of FC_AlphaRef): its source is not established"
+                    .into(),
+        },
+    )?;
+    // the engine's values: roles, whatever a consumer freezes them to
     constant("mWorld", 0, 48, ConstantRole::Object(ObjectParameter::World))?;
     constant(
         "aColor",
@@ -322,14 +378,29 @@ pub fn resolve(
     for name in names {
         let field = layout.fields[name];
         let Some(param) = material.definition.parameters.iter().find(|p| p.name == *name) else {
-            constant(
-                name,
-                0,
-                field.words * 4,
-                ConstantRole::Unknown {
-                    why: "missing SAT parameter left at frozen zero".into(),
-                },
-            )?;
+            // the shader bundle's metaparam states a default for every parameter it declares: the value of one the
+            // material does not state (a plain value; a colour's intensity is a second parameter of the material)
+            let default = metaparam
+                .and_then(|m| m.mtd_params.iter().find(|p| p.name == *name))
+                .filter(|p| p.value_type != 12);
+            if let Some(p) = default {
+                let n = (field.words as usize).min(p.default.len());
+                *policies
+                    .entry(
+                        "missing SAT parameter taken from the shader bundle's metaparam default".to_owned(),
+                    )
+                    .or_default() += 1;
+                constant(name, 0, field.words * 4, words(&p.default[..n]))?;
+            } else {
+                constant(
+                    name,
+                    0,
+                    field.words * 4,
+                    ConstantRole::Unknown {
+                        why: "missing SAT parameter left at frozen zero".into(),
+                    },
+                )?;
+            }
             continue;
         };
         let mut values = match &param.value {

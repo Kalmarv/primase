@@ -132,6 +132,14 @@ fn lanes_of_input(input: &Input) -> [Lane; 4] {
     }
 }
 
+/// `FC_AlphaRef.x` of a program that does not test alpha: below any alpha (the engine's own value for a plain program).
+const ALPHA_TEST_OFF: f32 = -100.;
+
+/// The policy a bake counts for an alpha-tested material (its `_Gbuf_[A]` program discards against `FC_AlphaRef`): the test
+/// is off, every texel is kept, and the cutout is the albedo's alpha, sampled beside the program.
+pub const ALPHA_TEST_POLICY: &str =
+    "alpha test off in the bake (FC_AlphaRef.x frozen to -100): the cutout is the albedo's alpha";
+
 /// The policy a consumer counts when it runs a skinning program: the pose is the bind pose, every joint's matrix the
 /// identity, so a vertex at weight one on any joint is where it is stored. What the layered pixel program is given
 /// (coordinates, layer weights, tint) does not depend on the pose.
@@ -174,7 +182,6 @@ pub(super) fn frozen_words(
                 .ok_or_else(|| invalid("layer binding", 0, "a texture scroll of a fifth set"))?;
             bits(scroll)
         }
-        ConstantRole::Frame(FrameParameter::AlbedoTint) => bits(&frame.albedo_tint),
         ConstantRole::Frame(FrameParameter::ColourSlot) => bits(&[frame.colour_slot]),
         ConstantRole::Frame(FrameParameter::Time) => {
             policies.insert("global time at the program's sample time".into(), 1);
@@ -217,8 +224,6 @@ pub struct FrozenFrame {
     pub time: f32,
     /// `Frame(Exposure)`: material radiance is baked at unit exposure, not a runtime camera's pre-exposure.
     pub exposure: f32,
-    /// `Frame(AlbedoTint)`: white.
-    pub albedo_tint: [f32; 4],
     /// `Frame(ColourSlot)`: the first.
     pub colour_slot: f32,
     /// `View(CameraPosition)`: overhead.
@@ -245,7 +250,6 @@ impl FrozenFrame {
         Self {
             time,
             exposure: 1.,
-            albedo_tint: [1.; 4],
             colour_slot: 0.,
             camera_position: [0., 1000., 0., 1.],
             inverse_view_projection,
@@ -291,19 +295,26 @@ impl Prepared {
         let program = scratch.spawn();
         let mut views: BTreeMap<Entity, Arc<BaseMipBilinearWrap>> = BTreeMap::new();
         let mut known: BTreeMap<(String, bool), Option<Entity>> = BTreeMap::new();
-        let resolution = resolve(&shader, program, material, Unbound::Preview, &mut |stem, srgb| {
-            let key = (stem.to_owned(), srgb);
-            if let Some(found) = known.get(&key) {
-                return Ok(*found);
-            }
-            let found = image(stem, srgb)?.map(|view| {
-                let e = scratch.spawn();
-                views.insert(e, view);
-                e
-            });
-            known.insert(key, found);
-            Ok(found)
-        })?;
+        let resolution = resolve(
+            &shader,
+            program,
+            material,
+            None,
+            Unbound::Preview,
+            &mut |stem, srgb| {
+                let key = (stem.to_owned(), srgb);
+                if let Some(found) = known.get(&key) {
+                    return Ok(*found);
+                }
+                let found = image(stem, srgb)?.map(|view| {
+                    let e = scratch.spawn();
+                    views.insert(e, view);
+                    e
+                });
+                known.insert(key, found);
+                Ok(found)
+            },
+        )?;
         Self::from_binding(
             Programs {
                 shader: &shader,
@@ -412,6 +423,15 @@ impl Prepared {
             let Some(mut values) = frozen_words(&c.role, frame, &mut policies)? else {
                 continue;
             };
+            // the alpha test is off in a bake: a discarded texel has no G-buffer, and the cutout is the albedo's own alpha,
+            // sampled beside the program
+            if c.name.as_deref() == Some("FC_AlphaRef")
+                && matches!(c.role, ConstantRole::Material(_))
+                && values.first().is_some_and(|w| f32::from_bits(*w) > 0.)
+            {
+                values[0] = ALPHA_TEST_OFF.to_bits();
+                policies.insert(ALPHA_TEST_POLICY.into(), 1);
+            }
             // the words inside a buffer the program reads (it reads no others)
             let Some(&n) = words.get(&slot) else {
                 continue;
@@ -434,6 +454,23 @@ impl Prepared {
                 .resource(bound.resource)
                 .ok_or_else(|| invalid("layer binding", 0, "a texture the shader lacks"))?;
             let register = resolve::register(resource)?;
+            // the engine's dither texture is a constant (the binding states it Default), not a material slot
+            if resource.provenance.name == resolve::ENGINE_DITHER_TEXTURE {
+                match &bound.source {
+                    TextureSource::Default { value, why } => {
+                        *policies.entry(why.clone()).or_default() += 1;
+                        textures.insert(register, Texture::Constant(*value));
+                        continue;
+                    }
+                    _ => {
+                        return Err(invalid(
+                            "layer binding",
+                            0,
+                            "the engine's dither texture is bound to a texture",
+                        ));
+                    }
+                }
+            }
             let slot = resolve::texture_slot(resource)?;
             let role = slots
                 .get(&slot)

@@ -175,27 +175,38 @@ fn run(
             shaders.insert(name.clone(), (entity, parsed));
         }
         let (shader_entity, parsed) = &shaders[&name];
-        let resolution = resolve(parsed, *shader_entity, &material, unbound, &mut |stem, srgb| {
-            let key = (stem.to_owned(), srgb);
-            if let Some(&e) = textures.get(&key) {
-                return Ok(Some(e));
-            }
-            let Some(t) = texture(payloads, stem, srgb)? else {
-                return Ok(None);
-            };
-            let e = world.spawn();
-            world.insert(
-                e,
-                Name(if srgb {
-                    format!("{stem}.dds@srgb")
-                } else {
-                    format!("{stem}.dds")
-                }),
-            );
-            world.insert(e, t);
-            textures.insert(key, e);
-            Ok(Some(e))
-        })
+        let metaparam = world
+            .get::<MaterialShader>(material_entity)
+            .and_then(|m| world.get::<ShaderBundle>(m.0))
+            .and_then(|b| b.parameters.clone());
+        let resolution = resolve(
+            parsed,
+            *shader_entity,
+            &material,
+            metaparam.as_ref(),
+            unbound,
+            &mut |stem, srgb| {
+                let key = (stem.to_owned(), srgb);
+                if let Some(&e) = textures.get(&key) {
+                    return Ok(Some(e));
+                }
+                let Some(t) = texture(payloads, stem, srgb)? else {
+                    return Ok(None);
+                };
+                let e = world.spawn();
+                world.insert(
+                    e,
+                    Name(if srgb {
+                        format!("{stem}.dds@srgb")
+                    } else {
+                        format!("{stem}.dds")
+                    }),
+                );
+                world.insert(e, t);
+                textures.insert(key, e);
+                Ok(Some(e))
+            },
+        )
         .map_err(|e| format!("{name}: {e}"))?;
         for (policy, count) in resolution.policies {
             *policies.entry(policy).or_default() += count;

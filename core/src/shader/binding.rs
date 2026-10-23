@@ -83,8 +83,6 @@ pub enum FrameParameter {
     TimeOfDay,
     /// The exposure the frame's output is scaled by.
     Exposure,
-    /// A colour the frame multiplies albedo by (white is neutral).
-    AlbedoTint,
     /// An index into a palette of colours a draw selects from.
     ColourSlot,
 }
