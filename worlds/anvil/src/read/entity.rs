@@ -649,7 +649,9 @@ impl Cursor<'_> {
     fn raw_component(&mut self, kind: u32) -> Result<Option<Vec<u8>>, Error> {
         let start = self.at;
         match kind {
-            // RigidBodyComponent: 826 bytes, a handle (03, or 05 and a u64), a u32 0, an object, 4 bytes
+            // RigidBodyComponent: 826 bytes, a handle (03, or 05 and a u64), a u32 0, a PhysicsActivityZone object and its
+            // ActivityZoneDesc array (a count and that many 27-byte items: an id, 0x56F0AAEA, a u32 enum, two f32 and
+            // three bytes; the registry's class; count 0 on every body but one, an NPC puppet's with 2)
             0xC177_D702 => {
                 self.take(826, "RigidBodyComponent")?;
                 match self.u8("RigidBodyComponent handle")? {
@@ -668,7 +670,8 @@ impl Cursor<'_> {
                 }
                 self.expect("RigidBodyComponent", 0, 4)?;
                 self.object("RigidBodyComponent", 0x18D5_28B6)?;
-                self.take(4, "RigidBodyComponent")?;
+                let zones = self.count("PhysicsActivityZone count", 27)?;
+                self.take(zones.saturating_mul(27), "PhysicsActivityZone")?;
             }
             // AmbientEffectGeneratorComponent: 4 bytes, a count c, 87 c bytes, 4 bytes
             0x713F_0C7D => {
