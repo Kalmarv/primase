@@ -155,6 +155,31 @@ fn triangles_only(doc: &Value, mesh: u64) -> bool {
         .is_some_and(|ps| ps.iter().all(|p| p.get("mode").is_none_or(|m| m == 4)))
 }
 
+/// Refuses a document where anything but the scenes' root lists names a node: skins (`joints`, `skeleton`, a node's
+/// `skin`), animations (channel targets) or a node's `children`. The tile writer's document has none (a selection
+/// writes no rigs or animations, `GroupBy::None` no group nodes), and [`apply`] renumbers the scene roots alone when it
+/// removes instanced nodes, so anything else would be left naming the wrong node.
+fn placements_only(doc: &Value) -> Result<()> {
+    for key in ["skins", "animations"] {
+        if doc[key].as_array().is_some_and(|a| !a.is_empty()) {
+            return Err(Error::Invalid(format!(
+                "writer returned {key}: a tile document holds placements only"
+            )));
+        }
+    }
+    let nodes = doc["nodes"].as_array().map_or(&[][..], Vec::as_slice);
+    for (i, node) in nodes.iter().enumerate() {
+        for key in ["children", "skin"] {
+            if node.get(key).is_some() {
+                return Err(Error::Invalid(format!(
+                    "writer node {i} has {key}: a tile document holds placements only"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Consume the private placement key emitted by the tile writer and instance only
 /// positive, non-sheared TRS groups sharing the same resolved triangle glTF mesh and the same
 /// `primase.shadows` (an instanced node has one shadow setting, kept on it), each instance's
@@ -164,8 +189,11 @@ pub(super) fn apply(input: Document, enabled: bool) -> Result<(Document, u64)> {
         json: mut doc,
         mut bin,
     } = input;
-    let length = doc["buffers"][0]["byteLength"].as_u64().unwrap_or(0) as usize;
-    bin.truncate(length);
+    // the binary chunk as the writer sized it (a GLB pads it to 4 bytes); a tile draws something, so it has a buffer
+    let length = doc["buffers"][0]["byteLength"]
+        .as_u64()
+        .ok_or_else(|| Error::Invalid("writer returned no buffer 0 byteLength".into()))?;
+    bin.truncate(length as usize);
     let mut nodes = doc["nodes"]
         .as_array()
         .ok_or_else(|| Error::Invalid("writer returned no nodes".into()))?
@@ -229,6 +257,7 @@ pub(super) fn apply(input: Document, enabled: bool) -> Result<(Document, u64)> {
         count += n as u64;
     }
     if count > 0 {
+        placements_only(&doc)?;
         let mut remap = BTreeMap::new();
         let mut kept = Vec::new();
         for (i, node) in nodes.into_iter().enumerate() {
@@ -256,9 +285,7 @@ pub(super) fn apply(input: Document, enabled: bool) -> Result<(Document, u64)> {
     } else {
         doc["nodes"] = json!(nodes);
     }
-    if !bin.is_empty() {
-        doc["buffers"][0]["byteLength"] = json!(bin.len());
-    }
+    doc["buffers"][0]["byteLength"] = json!(bin.len());
     Ok((Document::new(doc, bin), count))
 }
 
@@ -285,5 +312,57 @@ mod tests {
         // a shear and a mirror have no such rotation either
         assert!(at([[1.0, 0.0, 0.0], [0.5, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]]).is_none());
         assert!(at([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]]).is_none());
+    }
+
+    /// A tile document: `placements` nodes of mesh 0 at x = 0, 1, ..., each with its placement key, all scene roots.
+    fn tile(placements: u64) -> Value {
+        let nodes: Vec<Value> = (0..placements)
+            .map(|i| {
+                json!({"mesh": 0, "translation": [i as f32, 0.0, 0.0],
+                       "extras": {"primase": {"web.placement_key": {"version": 1, "value": i}}}})
+            })
+            .collect();
+        json!({"nodes": nodes, "meshes": [{"primitives": [{}]}], "buffers": [{"byteLength": 4}],
+               "bufferViews": [], "accessors": [], "scenes": [{"nodes": (0..placements).collect::<Vec<_>>()}]})
+    }
+
+    /// Instancing removes nodes and renumbers the scene roots: a document where something else names a node is
+    /// refused, not left naming the wrong one; one with nothing instanced is left as it is. The binary chunk keeps
+    /// the writer's length and grows by the instance attributes.
+    #[test]
+    fn instancing_refuses_a_document_naming_nodes_beyond_the_scene_roots() {
+        let run = |doc: Value| apply(Document::new(doc, vec![7, 7, 7, 7, 0, 0, 0, 0]), true);
+        let (out, count) = run(tile(2)).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(out.json["nodes"].as_array().unwrap().len(), 1);
+        assert_eq!(out.json["scenes"][0]["nodes"], json!([0]));
+        // 4 bytes of the writer's, then 2 instances' translation (12), rotation (16) and scale (12) each
+        assert_eq!(out.bin.len(), 4 + 2 * (12 + 16 + 12));
+        assert_eq!(out.json["buffers"][0]["byteLength"], json!(out.bin.len()));
+
+        let mut children = tile(3);
+        children["nodes"][2]["children"] = json!([1]);
+        let mut skin = tile(2);
+        skin["nodes"][1]["skin"] = json!(0);
+        let mut animated = tile(2);
+        animated["animations"] =
+            json!([{"channels": [{"sampler": 0, "target": {"node": 1, "path": "translation"}}]}]);
+        for (doc, error) in [
+            (children, "writer node 2 has children"),
+            (skin, "writer node 1 has skin"),
+            (animated, "writer returned animations"),
+        ] {
+            let e = run(doc).unwrap_err().to_string();
+            assert!(e.contains(error), "{e}");
+        }
+        // nothing instanced: nothing renumbered, so nothing refused
+        let mut alone = tile(1);
+        alone["nodes"][0]["children"] = json!([]);
+        assert_eq!(run(alone).unwrap().1, 0);
+
+        let mut no_length = tile(2);
+        no_length["buffers"] = json!([{}]);
+        let e = run(no_length).unwrap_err().to_string();
+        assert!(e.contains("no buffer 0 byteLength"), "{e}");
     }
 }
