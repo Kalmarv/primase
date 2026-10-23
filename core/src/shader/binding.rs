@@ -312,12 +312,14 @@ impl NormalEncoding {
     }
 }
 
-/// How a scalar is stored in the lanes of an output: `stored = (value / scale)^p`, p being 1/2 for a square root and 1
-/// otherwise, so the value is `stored^(1/p) * scale` (the scale given by its f32 bits).
+/// How a scalar is stored in the lanes of an output: `stored = (value / scale)^(1 / power)`, so the value is
+/// `stored^power * scale` (the scale given by its f32 bits). Power 1 is linear, 2 a square root (a value kept in a
+/// perceptual range), 4 a fourth root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct ScalarEncoding {
-    /// The stored value is the square root of the value over the scale.
-    pub square_root: bool,
+    /// The power the stored value is raised to, to give the value over the scale: 1 for none, 2 for the square root
+    /// stored, 4 for the fourth root. Never 0.
+    pub power: u8,
     /// The scale's f32 bits (1.0 for none).
     pub scale_bits: u32,
 }
@@ -325,23 +327,47 @@ pub struct ScalarEncoding {
 impl ScalarEncoding {
     /// The value as it is (scale 1).
     pub const LINEAR: Self = Self {
-        square_root: false,
+        power: 1,
         scale_bits: 0x3F80_0000,
     };
 
+    /// Stored as the value over `scale`, no power.
+    pub fn linear_over(scale: f32) -> Self {
+        Self::power_of(1, scale)
+    }
+
     /// Stored as the square root of the value over `scale`.
     pub fn square_root_of(scale: f32) -> Self {
+        Self::power_of(2, scale)
+    }
+
+    /// Stored as the `power`th root of the value over `scale` (`power` 0 is taken as 1: no power).
+    pub fn power_of(power: u8, scale: f32) -> Self {
         Self {
-            square_root: true,
+            power: power.max(1),
             scale_bits: scale.to_bits(),
         }
     }
 
     /// The value for a stored one.
     pub fn decode(&self, stored: f32) -> f32 {
-        let scaled = if self.square_root { stored * stored } else { stored };
-        scaled * f32::from_bits(self.scale_bits)
+        stored.powi(i32::from(self.power)) * f32::from_bits(self.scale_bits)
     }
+}
+
+/// What an [`OutputRole::Occlusion`] occludes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Occluded {
+    /// Every light that reaches the surface from outside it: the one occlusion a source has.
+    AllLight,
+    /// The ambient light of the environment itself (the sky and what it scatters): the term a lighting pass scales that
+    /// ambient by, where the source keeps another occlusion for the light of placed artificial sources.
+    NaturalAmbient,
+    /// The ambient light of placed artificial sources (interior and exterior ambient volumes), apart from the
+    /// environment's own ([`Occluded::NaturalAmbient`]).
+    ArtificialAmbient,
 }
 
 /// What lanes of an output stand for.
@@ -358,7 +384,12 @@ pub enum OutputRole {
     Gloss,
     Roughness,
     Metallic,
-    Occlusion,
+    /// The factor the light `of` is scaled by where the surface is shadowed from it (1 unoccluded, 0 fully): the value
+    /// decoded by `encoding`, as the lighting pass multiplies the light by it.
+    Occlusion {
+        of: Occluded,
+        encoding: ScalarEncoding,
+    },
     /// How much of the light a surface reflects as a highlight is blocked where the surface faces away from the
     /// environment (1 unblocked): the term a lighting pass multiplies its specular by, apart from the diffuse
     /// [`OutputRole::Occlusion`].
@@ -383,7 +414,11 @@ pub enum OutputRole {
     /// The screen-space displacement, in pixels, from the fragment's position in the frame being drawn to its
     /// position in the previous frame (x right, y down).
     MotionVector,
-    Emission,
+    /// The light the surface gives off: a scalar in one lane that scales the albedo (the lighting pass adds the albedo
+    /// times it to the lit colour) or a colour in three, the value decoded by `encoding`.
+    Emission {
+        encoding: ScalarEncoding,
+    },
     /// The finished colour of a forward pass.
     Colour,
     /// Something the source writes that is not resolved to a role: the output's index.
@@ -854,6 +889,12 @@ mod tests {
         assert_eq!(e.decode(0.5), 128.0);
         assert_eq!(ScalarEncoding::LINEAR.decode(0.25), 0.25);
         assert_eq!(ScalarEncoding::square_root_of(1.0).decode(0.5), 0.25);
+        // a fourth root over 4: the value is the stored one to the fourth, times 4
+        let fourth = ScalarEncoding::power_of(4, 4.0);
+        assert_eq!(fourth.decode(0.5), 0.25);
+        assert_eq!(ScalarEncoding::linear_over(16.0).decode(0.25), 4.0);
+        // a power of 0 is no power
+        assert_eq!(ScalarEncoding::power_of(0, 2.0), ScalarEncoding::linear_over(2.0));
     }
 
     #[test]
@@ -1018,7 +1059,10 @@ mod tests {
                             index: 0,
                         },
                         lanes: 0b1000,
-                        role: OutputRole::Occlusion,
+                        role: OutputRole::Occlusion {
+                            of: Occluded::AllLight,
+                            encoding: ScalarEncoding::LINEAR,
+                        },
                     },
                 ],
             }],

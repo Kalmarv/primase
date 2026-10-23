@@ -4,8 +4,8 @@
 //! layered material's binding holds, worked out from the HLSL, fxc's listing of its buffers and the material.
 use primase_core::shader::{
     AddressMode, BlendFactor, BlendOp, Compare, ConstantRole, FrameParameter, FrameTexture, InputRole,
-    LaneStream, NormalEncoding, NormalSpace, ObjectParameter, OutputRole, ResourceId, SamplerState, Shader,
-    ShaderBinding, ShaderFormat, Stage, TextureSource, ViewParameter,
+    LaneStream, NormalEncoding, NormalSpace, ObjectParameter, OutputRole, ResourceId, SamplerState,
+    ScalarEncoding, Shader, ShaderBinding, ShaderFormat, Stage, TextureSource, ViewParameter,
 };
 use primase_core::{
     ColorSpace, Entity, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology, World,
@@ -262,7 +262,13 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
             (1, 0b0001, OutputRole::Gloss),
             (2, 0b0111, OutputRole::Albedo),
             (3, 0b0111, OutputRole::Reflectance),
-            (4, 0b0111, OutputRole::Emission),
+            (
+                4,
+                0b0111,
+                OutputRole::Emission {
+                    encoding: ScalarEncoding::LINEAR
+                }
+            ),
         ]
     );
     // every input comes from the vertex stage

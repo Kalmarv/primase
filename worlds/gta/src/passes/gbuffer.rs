@@ -15,8 +15,9 @@
 //! | 2 | x | the specular intensity, stored as its square root |
 //! | 2 | y | the specular falloff over 512, stored as its square root (the lighting passes read `y * y * 512`) |
 //! | 2 | z | the Fresnel term |
-//! | 3 | x, y | the vertex colour's red and green, through constants (not given a role: the data names no meaning) |
-//! | 3 | z | the emission (the constant 0 where the effect has none) |
+//! | 3 | x, y | the occlusion of the natural and of the artificial ambient: `sqrt((a + k * vertex colour) / 2)` through constants; the ambient lighting pass scales each ambient by the square of twice the stored square (`tests/gbuffer_encodings.rs`) |
+//! | 3 | z | the emission over 16 (the constant 0 where the effect has none) |
+//! | 3 | w | a flag: where above one half the ambient pass multiplies both occlusions by `deferredLightTexture2.x`: no role |
 //! | 4 | xy | the screen-space displacement to the previous frame's position, in pixels |
 //!
 //! A program need not write a lane the way its family usually does (one effect stores target 1 as `v / 256`, a program

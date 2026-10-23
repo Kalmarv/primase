@@ -228,3 +228,95 @@ fn the_floored_normals_are_the_normal_to_a_step() {
         assert!((0.0..=1.0).contains(&out[1][3]));
     }
 }
+
+/// `OutputRole::Occlusion` for target 3's x and y is `4 * stored^4` (`resolve_shaders::AMBIENT_OCCLUSION`); the
+/// producer's side of that: a G-buffer program stores `sqrt(v / 2)`, so the decoded value is `v^2`.
+#[test]
+fn target_three_x_and_y_decode_to_the_square_of_what_the_program_adds_up() {
+    let Some(world) = world() else { return };
+    let entity = effect_program(&world, "cpv_only", "6b2704e5");
+    let sh = world.get::<Shader>(entity).unwrap();
+    let shader = executor(&sh.bytecode).unwrap();
+    let occlusion = ScalarEncoding::power_of(4, 4.0);
+    // every constant word is `word` and the vertex colour is `colour` in every lane: x stores sqrt((word + word *
+    // colour) / 2) and y sqrt(0.5 * colour * word)
+    for (colour, word) in [(1.0f32, 0.5f32), (0.8, 0.3), (0.5, 0.9)] {
+        let out = evaluate(&shader, 0.5, word, colour, [0.0, 0.0, 1.0]);
+        let (x, y) = (occlusion.decode(out[3][0]), occlusion.decode(out[3][1]));
+        let (want_x, want_y) = ((word + word * colour).powi(2), (word * colour).powi(2));
+        println!("colour {colour}, word {word}: x {x} (want {want_x}), y {y} (want {want_y})");
+        assert!((x - want_x).abs() < 1e-4 * want_x.max(1.0), "{x} {want_x}");
+        assert!((y - want_y).abs() < 1e-4 * want_y.max(1.0), "{y} {want_y}");
+    }
+}
+
+/// The consumer's side: the ambient lighting pass (`PS_lightTile_ambient`) scales its ambient by the square of
+/// `2 * stored^2` of target 3's x and y, each its own: with only x set the result grows with `stored^4`, and with only
+/// y set likewise. Run on one pixel with every other texel and constant word flat.
+#[test]
+fn the_ambient_lighting_pass_scales_by_the_fourth_power_of_target_three_x_and_y() {
+    let Some(world) = world() else { return };
+    let entity = world
+        .iter::<GtaEffect>()
+        .find(|(_, e)| e.name == "tiled_lighting")
+        .and_then(|(_, e)| {
+            e.programs
+                .iter()
+                .find(|p| p.stage == GtaStage::Pixel && p.name.starts_with("PS_lightTile_ambient_1e1dfaa5"))
+                .and_then(|p| p.shader)
+        })
+        .unwrap();
+    let sh = world.get::<Shader>(entity).unwrap();
+    let shader = executor(&sh.bytecode).unwrap();
+    // the ambient pass reads target 3 as `gBufferTexture3Global`, t15
+    let rt3 = |x: f32, y: f32| {
+        let buffers: Vec<(u32, u32)> = PixelShader::constant_buffers(&shader)
+            .iter()
+            .map(|&(slot, rows)| (slot, rows.saturating_mul(4)))
+            .collect();
+        let mut constants = Constants::new(&Layout {
+            buffers: buffers.clone(),
+            fields: BTreeMap::new(),
+        });
+        for &(slot, words) in &buffers {
+            constants
+                .set_words(slot, 0, &vec![0.5f32.to_bits(); words as usize])
+                .unwrap();
+        }
+        let textures: BTreeMap<u32, Texture> = PixelShader::textures(&shader)
+            .iter()
+            .map(|&slot| {
+                let v = if slot == 15 { [x, y, 0.0, 0.0] } else { [0.5; 4] };
+                (slot, Texture::Constant(v))
+            })
+            .collect();
+        let mut inputs = BTreeMap::new();
+        for v in &PixelShader::interface(&shader).inputs {
+            inputs.insert((v.label.name.clone(), v.label.index), Input::Constant([0.25; 4]));
+        }
+        let raw = evaluate_raw(
+            &shader,
+            &constants,
+            &textures,
+            &inputs,
+            Grid {
+                size: 1,
+                period: [1.0; 2],
+            },
+            &[(0, 0b0111)],
+            Invocation::Scalar,
+        )
+        .unwrap();
+        f32::from_bits(raw.pixels[0][0].0[0])
+    };
+    // x only, then y only, then neither: the part each lane adds, over the part neither does
+    let none = rt3(0.0, 0.0);
+    for (low, high) in [(0.3f32, 0.6f32), (0.2, 0.4)] {
+        let (xl, xh) = (rt3(low, 0.0) - none, rt3(high, 0.0) - none);
+        let (yl, yh) = (rt3(0.0, low) - none, rt3(0.0, high) - none);
+        let want = (high / low).powi(4);
+        println!("x {low} to {high}: {} ; y: {} ; want {want}", xh / xl, yh / yl);
+        assert!((xh / xl - want).abs() < 1e-3 * want, "x: {}", xh / xl);
+        assert!((yh / yl - want).abs() < 1e-3 * want, "y: {}", yh / yl);
+    }
+}

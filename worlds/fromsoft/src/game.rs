@@ -96,7 +96,7 @@ impl Game {
     ///   albedo. `g_GBuffer1Texture.z` (read times 10) and `g_GBuffer2Texture.w` (read times 255, as an integer) are read
     ///   for what is not established, and targets 3 and 4 by no lighting program.
     pub fn gbuffer(self) -> Vec<(u32, u8, primase_core::shader::OutputRole)> {
-        use primase_core::shader::{NormalEncoding, NormalSpace, OutputRole};
+        use primase_core::shader::{NormalEncoding, NormalSpace, OutputRole, ScalarEncoding};
         let normal = OutputRole::Normal {
             encoding: NormalEncoding::XyzBiased {
                 bias_bits: 0x3f00_2008,
@@ -109,7 +109,13 @@ impl Game {
                 (1, 0b0001, OutputRole::Gloss),
                 (2, 0b0111, OutputRole::Albedo),
                 (3, 0b0111, OutputRole::Reflectance),
-                (4, 0b0111, OutputRole::Emission),
+                (
+                    4,
+                    0b0111,
+                    OutputRole::Emission {
+                        encoding: ScalarEncoding::LINEAR,
+                    },
+                ),
             ],
             Game::EldenRing => vec![
                 (0, 0b0111, normal),

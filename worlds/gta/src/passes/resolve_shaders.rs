@@ -52,7 +52,9 @@
 //!   the four G-buffer targets have the roles [`gbuffer`] states: target 0's xyz the albedo, target 1's xyz the world
 //!   normal (where the program stores it as `n * 0.5 + 0.5`), target 2's x the specular intensity and y the specular
 //!   exponent (where the program stores each as a square root, the exponent over 512), z the Fresnel term, target 3's
-//!   z the emission (where the program writes one) and target 4 the motion vector; every other lane, and every
+//!   x and y the occlusion of the natural and of the artificial ambient (`Occlusion`, a fourth power over 4: the
+//!   ambient lighting pass scales by the square of twice the stored square) and z the emission (read times 16), and
+//!   target 4 the motion vector; every other lane, and every
 //!   output of another family or of a program that writes fewer targets, is `Unknown` by its index (the lanes'
 //!   contents are in [`gbuffer`]'s table), but for the one target of a forward-lit `PS_Textured_Zero|Four|Eight`
 //!   program, the finished `Colour`.
@@ -62,9 +64,9 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
     DepthState, Fill, FrameParameter, InputBinding, InputRole, Interface, NormalEncoding, NormalSpace,
-    ObjectMatrix, ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind,
-    SamplerState, ScalarEncoding, Shader, ShaderBinding, Stage, StageBinding, Stencil, StencilFace,
-    StencilOp, SystemValue, TargetState, TextureBinding, TextureSource, ViewParameter,
+    ObjectMatrix, ObjectParameter, Occluded, OutputBinding, OutputRole, RenderState, ResourceId,
+    ResourceKind, SamplerState, ScalarEncoding, Shader, ShaderBinding, Stage, StageBinding, Stencil,
+    StencilFace, StencilOp, SystemValue, TargetState, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
 
@@ -82,6 +84,13 @@ use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
 /// The pixel program family whose targets the pass names roles for (`PS_DeferredTextured` and its alpha-clipped and
 /// sub-sample variants: [`gbuffer`] has the layout and how it was checked).
 const GBUFFER_FAMILY: &str = "PS_DeferredTextured";
+
+/// How the G-buffer's target 3 x and y are stored, by what the ambient lighting pass does with them: it takes
+/// `2 * stored^2` and squares it, the factor it scales the ambient by, so the factor is `4 * stored^4`.
+const AMBIENT_OCCLUSION: ScalarEncoding = ScalarEncoding {
+    power: 4,
+    scale_bits: 0x4080_0000,
+};
 
 /// The forward-lit pixel programs of the shared `Textured` family: `Zero`, `Four` and `Eight` name the number of dynamic
 /// lights the program lights with, and each writes the one colour target (`tests/technique_survey.rs`: the `draw`
@@ -729,9 +738,32 @@ fn output_bindings(
                 lanes(0b1000, OutputRole::Unknown(2));
             }
             (Some(w), 4) if w.motion_written => lanes(0b0011, OutputRole::MotionVector),
-            (Some(w), 3) if w.emission_written => {
-                lanes(0b0100, OutputRole::Emission);
-                lanes(0b1011, OutputRole::Unknown(3));
+            // target 3 as the ambient lighting pass reads it (`PS_lightTile_ambient`, `tests/gbuffer_encodings.rs`): x and y
+            // the occlusion of the natural and of the artificial ambient, each squared after the pass has
+            // squared the stored value and doubled it (a fourth power over 4), z the emission, read times 16; w a flag
+            // that makes the pass multiply both occlusions by `deferredLightTexture2.x`: no role
+            (Some(_), 3) => {
+                lanes(
+                    0b0001,
+                    OutputRole::Occlusion {
+                        of: Occluded::NaturalAmbient,
+                        encoding: AMBIENT_OCCLUSION,
+                    },
+                );
+                lanes(
+                    0b0010,
+                    OutputRole::Occlusion {
+                        of: Occluded::ArtificialAmbient,
+                        encoding: AMBIENT_OCCLUSION,
+                    },
+                );
+                lanes(
+                    0b0100,
+                    OutputRole::Emission {
+                        encoding: ScalarEncoding::linear_over(16.0),
+                    },
+                );
+                lanes(0b1000, OutputRole::Unknown(3));
             }
             (None, 0) if forward && one_colour => lanes(0b1111, OutputRole::Colour),
             (_, n) => lanes(0b1111, OutputRole::Unknown(n)),

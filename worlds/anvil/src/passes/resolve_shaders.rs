@@ -68,10 +68,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{
     AlphaTest, Compare, ConstantBinding, ConstantRole, Cull, DepthState, FrameParameter, InputBinding,
-    InputRole, Interface, NormalEncoding, NormalSpace, ObjectMatrix, ObjectParameter, OutputBinding,
-    OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, ShaderBinding, ShaderFormat,
-    Stage, StageBinding, SystemValue, TextureBinding, TextureDim, TextureSource, VariantKey, Varying,
-    ViewParameter,
+    InputRole, Interface, NormalEncoding, NormalSpace, ObjectMatrix, ObjectParameter, Occluded,
+    OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, ScalarEncoding, Shader,
+    ShaderBinding, ShaderFormat, Stage, StageBinding, SystemValue, TextureBinding, TextureDim, TextureSource,
+    VariantKey, Varying, ViewParameter,
 };
 use primase_core::{ColorSpace, Component, Entity, MaterialVariants, Mesh, Name, Semantic, Texture, World};
 use primase_shader::ConstantReads;
@@ -1190,7 +1190,10 @@ fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Ve
                     0b1000,
                     match class {
                         Some(1) => OutputRole::Metallic,
-                        Some(3..=5) => OutputRole::Occlusion,
+                        Some(3..=5) => OutputRole::Occlusion {
+                            of: Occluded::AllLight,
+                            encoding: ScalarEncoding::LINEAR,
+                        },
                         _ => OutputRole::Unknown(1),
                     },
                 );
@@ -1205,7 +1208,12 @@ fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Ve
                 role(0b0011, OutputRole::MotionVector);
                 match class {
                     Some(1) => {
-                        role(0b0100, OutputRole::Emission);
+                        role(
+                            0b0100,
+                            OutputRole::Emission {
+                                encoding: ScalarEncoding::LINEAR,
+                            },
+                        );
                         role(0b1000, OutputRole::Unknown(2));
                     }
                     _ => {
@@ -1215,7 +1223,13 @@ fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Ve
                 }
             }
             3 if class == Some(1) => {
-                role(0b0001, OutputRole::Occlusion);
+                role(
+                    0b0001,
+                    OutputRole::Occlusion {
+                        of: Occluded::AllLight,
+                        encoding: ScalarEncoding::LINEAR,
+                    },
+                );
                 role(0b0010, OutputRole::Unknown(3));
                 role(0b0100, OutputRole::SpecularOcclusion);
                 role(0b1000, OutputRole::Translucency);
@@ -1394,9 +1408,22 @@ mod key_tests {
                 ),
                 (1, 0b1000, OutputRole::Metallic),
                 (2, 0b0011, OutputRole::MotionVector),
-                (2, 0b0100, OutputRole::Emission),
+                (
+                    2,
+                    0b0100,
+                    OutputRole::Emission {
+                        encoding: ScalarEncoding::LINEAR
+                    }
+                ),
                 (2, 0b1000, OutputRole::Unknown(2)),
-                (3, 0b0001, OutputRole::Occlusion),
+                (
+                    3,
+                    0b0001,
+                    OutputRole::Occlusion {
+                        of: Occluded::AllLight,
+                        encoding: ScalarEncoding::LINEAR
+                    }
+                ),
                 (3, 0b0010, OutputRole::Unknown(3)),
                 (3, 0b0100, OutputRole::SpecularOcclusion),
                 (3, 0b1000, OutputRole::Translucency),
