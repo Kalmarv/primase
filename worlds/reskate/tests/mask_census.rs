@@ -6,7 +6,7 @@ use primase_reskate::{
     components::SkateMaterial,
     passes::{RaiseOptions, raise_skate},
 };
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, oracle};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -38,7 +38,7 @@ fn hash(bytes: &[u8]) -> String {
 
 #[test]
 fn source_mask_channels_match_independent_pixels() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = real_data("PRIMASE_SKATE_MASK_ORACLE") else {
+    let Some(root) = oracle(OracleSet::Pillow, Game::Sekiro, "skate-mask") else {
         return Ok(());
     };
     let census: Census = serde_json::from_slice(&std::fs::read(root.join("cases.json"))?)?;

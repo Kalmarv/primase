@@ -1,8 +1,8 @@
-//! skate.'s render skeleton read from the game's data (`PRIMASE_SKATE_DATA`, `PRIMASE_OODLE9`):
-//! - against ReSkate's EBX reader (`PRIMASE_SKATE_SKELETON_ORACLE`, `renderskeleton.json`): every bone's name,
-//!   parent and name hash, its rest (`LocalPose`), model pose and inverse bind as stored, exactly (the oracle prints
-//!   f32 with 9 significant digits). That reader is the source of our EBX port, so this checks the port and which
-//!   field is which;
+//! skate.'s render skeleton read from the game's data (`installs.skate/Data`, `tools.oodle9`):
+//! - against ReSkate's EBX reader (`oracles.reskate.skate/renderskeleton.json`): every bone's
+//!   name, parent and name hash, its rest (`LocalPose`), model pose and inverse bind as stored, exactly (the oracle
+//!   prints f32 with 9 significant digits). That reader is the source of our EBX port, so this checks the port and
+//!   which field is which;
 //! - the interpretation (a `LinearTransform`'s rows as an affine map's columns, a joint's rest in its parent's space):
 //!   independent of any reader, the asset's own poses agree with it: every model pose is its parent's composed with
 //!   its local pose, and every inverse model pose composed with the model pose is the identity, within f32 rounding.
@@ -11,7 +11,7 @@ use primase_compress::oodle::{Oodle, Version};
 use primase_core::{Rest, Skeleton, World};
 use primase_frostbite::folder::{Folder, Source};
 use primase_reskate::game::skeleton::{SkateSkeletonAsset, check_poses, read_skeleton};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 
 type R = Result<(), Box<dyn std::error::Error>>;
 
@@ -20,11 +20,11 @@ const ASSET: &str = "characters/maincharacters/common/animbase/animbase_default_
 
 #[test]
 fn the_render_skeleton_reads_as_the_game_stores_it() -> R {
-    let (Some(data), Some(dll)) = (real_data("PRIMASE_SKATE_DATA"), real_data("PRIMASE_OODLE9")) else {
+    let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
         return Ok(());
     };
     let folder = Folder::open(data)?;
-    // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.
+    // SAFETY: the configuration names the game's own Oodle DLL as tools.oodle9.
     #[allow(unsafe_code)]
     let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
     let src = Source {
@@ -56,7 +56,7 @@ fn the_render_skeleton_reads_as_the_game_stores_it() -> R {
     );
 
     // ReSkate's reading
-    let Some(oracle) = real_data("PRIMASE_SKATE_SKELETON_ORACLE") else {
+    let Some(oracle) = oracle(OracleSet::Reskate, Game::Skate, "renderskeleton.json") else {
         return Ok(());
     };
     let oracle: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(oracle)?)?;

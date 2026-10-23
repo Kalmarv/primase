@@ -1,11 +1,11 @@
 //! Gates of the post-compile Frostbite readers and writers (`primase_reskate::postcompile`).
 //!
 //! The containers' synthetic gates are in `worlds/frostbite/tests/containers.rs`.
-//! - `patch_round_trip` (`PRIMASE_RESKATE_PATCH`, a Patch folder written by ReSkate Studio's compile, plus
-//!   `PRIMASE_SKATE_DATA`, the game's `Data` folder, and `PRIMASE_OODLE9`, the game's Oodle DLL, for the bundles a
+//! - `patch_round_trip` (`oracles.studio.gta/legion/patch`, a Patch folder written by ReSkate Studio's compile, plus
+//!   `installs.skate/Data`, the game's `Data` folder, and `tools.oodle9`, the game's Oodle DLL, for the bundles a
 //!   Patch places in the base game): every TOC, bundle region, bundle manifest, shader block depot, shader lookup
 //!   table and `layout.toc` read and written again is byte-identical; every MeshSet reads.
-//! - `meshset_census` (`PRIMASE_SKATE_DATA`, `PRIMASE_OODLE9`): every MeshSet of every base-game TOC reads, failures
+//! - `meshset_census` (`installs.skate/Data`, `tools.oodle9`): every MeshSet of every base-game TOC reads, failures
 //!   counted by message.
 
 #![allow(clippy::unwrap_used)]
@@ -20,7 +20,7 @@ use primase_reskate::postcompile::fb::folder::{Folder, Source};
 use primase_reskate::postcompile::fb::toc;
 use primase_reskate::postcompile::fb::{MESHSET, db, depot, lookup};
 use primase_reskate::postcompile::meshset;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use serde_json::{Value, json};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -48,11 +48,11 @@ fn corrupt_section_count_is_an_error() {
 }
 
 fn oodle() -> Option<Oodle> {
-    let p = real_data("PRIMASE_OODLE9")?;
-    // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.
+    let p = tool(Tool::Oodle9)?;
+    // SAFETY: the configuration names the game's own Oodle DLL as tools.oodle9.
     #[allow(unsafe_code)]
     let o = unsafe { Oodle::load(p, Version::V9) };
-    Some(o.expect("PRIMASE_OODLE9 loads"))
+    Some(o.expect("tools.oodle9 loads"))
 }
 
 /// Reads a Patch through our readers, checking each container's round trip into `report`, and returns its summary:
@@ -164,7 +164,7 @@ fn summary(patch: &Path, base: Option<&Folder>, oodle: Option<&Oodle>, report: &
 }
 
 fn base_and_oodle() -> R<(Option<Folder>, Option<Oodle>)> {
-    let base = match real_data("PRIMASE_SKATE_DATA") {
+    let base = match install_file(Game::Skate, "Data") {
         Some(p) => Some(Folder::open(p)?),
         None => None,
     };
@@ -173,7 +173,7 @@ fn base_and_oodle() -> R<(Option<Folder>, Option<Oodle>)> {
 
 #[test]
 fn patch_round_trip() -> R {
-    let Some(patch) = real_data("PRIMASE_RESKATE_PATCH") else {
+    let Some(patch) = oracle(OracleSet::Studio, Game::Gta, "legion/patch") else {
         return Ok(());
     };
     let (base, oodle) = base_and_oodle()?;

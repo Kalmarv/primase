@@ -1,5 +1,5 @@
-//! The costume steps on Studio's own `cosmetic-mesh-import` output (`PRIMASE_RESKATE_FBMOD`, the files with costume
-//! presets) and the game's donor textures (`PRIMASE_SKATE_DATA`, `PRIMASE_OODLE9`):
+//! The costume steps on Studio's own `cosmetic-mesh-import` output (`oracles.baseline.skate/fbmod`, the files with
+//! costume presets) and the game's donor textures (`installs.skate/Data`, `tools.oodle9`):
 //! - `presets::repair` takes exactly the doubly listed pointer slot out of every preset's type-info fixups, leaving
 //!   every value and every other fixup as it was;
 //! - `textures::retexture` with colour and normal replacements: one asset each, every preset's import of a donor
@@ -23,7 +23,7 @@ use primase_reskate::costume::textures::{Donor, HeaderUnknowns, Replacement, gui
 use primase_reskate::costume::thumbnail::{CdnContentHash, Choices};
 use primase_reskate::costume::{ADDITION, costume_presets, morphs, presets, thumbnail};
 use primase_reskate::postcompile::meshset;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_texcodec::{Bcdec, TexDecoder};
 use sha1::Digest;
 
@@ -52,7 +52,7 @@ fn replacement(role: &str, fill: u8) -> Replacement {
 
 /// The Studio files with costume presets.
 fn studio_files(oodle: &Oodle) -> Result<Vec<(String, Fbmod)>, Box<dyn std::error::Error>> {
-    let Some(dir) = real_data("PRIMASE_RESKATE_FBMOD") else {
+    let Some(dir) = oracle(OracleSet::Baseline, Game::Skate, "fbmod") else {
         return Ok(vec![]);
     };
     let mut out = Vec::new();
@@ -102,10 +102,10 @@ fn assert_added_as_studio(original: &Fbmod, added: &[fbmod::Entry], path: &str) 
 }
 #[test]
 fn studio_presets_are_repaired_and_retextured() -> R {
-    let (Some(data), Some(dll)) = (real_data("PRIMASE_SKATE_DATA"), real_data("PRIMASE_OODLE9")) else {
+    let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
         return Ok(());
     };
-    // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.
+    // SAFETY: the configuration names the game's own Oodle DLL as tools.oodle9.
     #[allow(unsafe_code)]
     let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
     let folder = Folder::open(data)?;
@@ -356,10 +356,10 @@ fn glb_positions(b: &[u8]) -> Vec<Vec<[f32; 3]>> {
 
 #[test]
 fn body_shape_targets_are_made_neutral() -> R {
-    let Some(dll) = real_data("PRIMASE_OODLE9") else {
+    let Some(dll) = tool(Tool::Oodle9) else {
         return Ok(());
     };
-    // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.
+    // SAFETY: the configuration names the game's own Oodle DLL as tools.oodle9.
     #[allow(unsafe_code)]
     let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
     for (path, original) in studio_files(&oodle)? {
@@ -475,8 +475,8 @@ fn picture(side: u32) -> thumbnail::Picture {
     }
 }
 
-/// The thumbnail step on Studio's own files (`PRIMASE_RESKATE_FBMOD`) and the game's donor thumbnails
-/// (`PRIMASE_SKATE_DATA`, `PRIMASE_OODLE9`):
+/// The thumbnail step on Studio's own files (`oracles.baseline.skate/fbmod`) and the game's donor thumbnails
+/// (`installs.skate/Data`, `tools.oodle9`):
 /// - the game's own CDN documents state the `NameHash` rule: `name_hash` of the donor texture's `Name` is the donor
 ///   CDN document's `NameHash`, for every stock costume thumbnail;
 /// - `set_thumbnail`: the item's `Thumbnail` and `ThumbnailLarge` imports point at the new CDN documents (they were
@@ -487,10 +487,10 @@ fn picture(side: u32) -> thumbnail::Picture {
 /// - a picture of another size is refused by name and leaves the mod as it was.
 #[test]
 fn studio_item_gets_its_own_thumbnails() -> R {
-    let (Some(data), Some(dll)) = (real_data("PRIMASE_SKATE_DATA"), real_data("PRIMASE_OODLE9")) else {
+    let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
         return Ok(());
     };
-    // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.
+    // SAFETY: the configuration names the game's own Oodle DLL as tools.oodle9.
     #[allow(unsafe_code)]
     let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
     let folder = Folder::open(data)?;

@@ -1,7 +1,7 @@
-//! M0 gate over real scene folders: every folder under `PRIMASE_SCENES_GTA` and `PRIMASE_SCENES_SEKIRO` that holds a
-//! `scene.json` is read and written back.
+//! M0 gate over the real scene folder kept, our earlier exporter's scene of Sekiro's slice A
+//! (`oracles.baseline.sekiro/scene`): every folder under it that holds a `scene.json` is read and written back.
 //!
-//! Oracle: the reference validator (`PRIMASE_SCENE_SKATE`, the C# `scene-skate validate`, the writer's own reader).
+//! Oracle: the reference validator (`tools.scene_skate`, the C# `scene-skate validate`, the writer's own reader).
 //! - Agreement: the reference accepts a folder exactly when our reader does; when both refuse, the causes are
 //!   compared as text (a different cause is reported, not failed).
 //! - For accepted folders: every binary table written back byte-identical; the manifest equal as parsed JSON
@@ -11,10 +11,10 @@
 //!
 //! Counts: agreement, manifests and re-validation per folder; tables and referenced files per file. An input folder
 //! whose scene.json or referenced files change (size or modification time) while it is checked is reported as
-//! changed and counted in no gate; the test fails on one unless `PRIMASE_ALLOW_LIVE=1`.
+//! changed and counted in no gate; the test fails on one unless the debug key `allow_live` is `1`.
 //!
-//! Outputs go to `PRIMASE_OUT` (default: the OS temp folder) and are deleted when they pass.
-//! `PRIMASE_SCENE_FILTER` keeps only folders whose path contains it.
+//! Outputs go to `scratch.root` (default: the OS temp folder) and are deleted when they pass.
+//! The debug key `scene.filter` keeps only folders whose path contains it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ use std::process::Command;
 use primase_core::World;
 use primase_core::gate::{GateReport, Tolerance, compare_json};
 use primase_reskate::{read, write};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Query, Tool, debug, expect_found, resolve, scratch, tool};
 use serde_json::Value;
 
 fn scene_folders(root: &Path, out: &mut Vec<PathBuf>) {
@@ -362,36 +362,30 @@ fn check_folder(dir: &Path, out: &Path, validator: Option<&Path>) -> (Gates, boo
     (g, ok)
 }
 
+/// The scene folders under the real scene folder kept (`oracles.baseline.sekiro/scene`), which must yield one;
+/// `None` when it is not configured.
+fn real_scene_folders() -> Option<Vec<PathBuf>> {
+    let query = Query::Oracle(OracleSet::Baseline, Game::Sekiro, "scene");
+    let root = resolve(query)?;
+    let mut folders = Vec::new();
+    scene_folders(&root, &mut folders);
+    expect_found(query, "scene folders", folders.len());
+    Some(folders)
+}
+
 #[test]
 fn scene_folders_round_trip() {
-    let roots: Vec<(&str, PathBuf)> = ["PRIMASE_SCENES_GTA", "PRIMASE_SCENES_SEKIRO"]
-        .iter()
-        .filter_map(|v| real_data(v).map(|path| (*v, path)))
-        .collect();
-    if roots.is_empty() {
+    let Some(mut folders) = real_scene_folders() else {
         return;
-    }
-    let validator = real_data("PRIMASE_SCENE_SKATE");
-    let filter = primase_testdata::real_data_value("PRIMASE_SCENE_FILTER")
-        .and_then(|value| value.into_string().ok())
-        .unwrap_or_default();
-    let allow_live = primase_testdata::real_data_value("PRIMASE_ALLOW_LIVE")
-        .and_then(|value| value.into_string().ok())
-        .is_some_and(|v| v == "1");
-    let out_root = primase_testdata::real_data_value("PRIMASE_OUT")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("skate-scene-gate");
-    let mut folders = Vec::new();
-    for (name, root) in &roots {
-        let before = folders.len();
-        scene_folders(root, &mut folders);
-        primase_testdata::expect_items(name, "scene folders", folders.len() - before);
-    }
+    };
+    let validator = tool(Tool::SceneSkate);
+    let filter = debug("scene.filter").unwrap_or_default();
+    let allow_live = debug("allow_live").is_some_and(|v| v == "1");
+    let out_root = scratch().join("skate-scene-gate");
     folders.retain(|f| f.to_string_lossy().contains(&filter));
     assert!(
         filter.is_empty() || !folders.is_empty(),
-        "PRIMASE_SCENE_FILTER={filter:?} matched no scene folder under {roots:?}"
+        "scene.filter={filter:?} matched no scene folder"
     );
 
     let mut total = Gates::new();
@@ -442,7 +436,7 @@ fn scene_folders_round_trip() {
     }
     assert!(
         changed.is_empty() || allow_live,
-        "{} input folders changed during the run (PRIMASE_ALLOW_LIVE=1 reports and continues)",
+        "{} input folders changed during the run (the debug key allow_live=1 reports and continues)",
         changed.len()
     );
 }
@@ -521,25 +515,15 @@ fn number_texts(b: &[u8]) -> Vec<&str> {
     out
 }
 
-/// Census behind reading manifests with plain serde_json: every scene.json under the roots is strict JSON (serde_json
-/// refuses a byte-order mark, comments, NaN and infinity), no object has a key twice, and every number gives the
-/// same f32 read through f64 (what the reader does) as read straight from its text. A failure means the real data
-/// now needs more than plain serde_json.
+/// Census behind reading manifests with plain serde_json: every scene.json of the real scene folders is strict JSON
+/// (serde_json refuses a byte-order mark, comments, NaN and infinity), no object has a key twice, and every number
+/// gives the same f32 read through f64 (what the reader does) as read straight from its text. A failure means the
+/// real data now needs more than plain serde_json.
 #[test]
 fn manifests_need_only_plain_json() {
-    let roots: Vec<(&str, PathBuf)> = ["PRIMASE_SCENES_GTA", "PRIMASE_SCENES_SEKIRO"]
-        .iter()
-        .filter_map(|v| real_data(v).map(|path| (*v, path)))
-        .collect();
-    if roots.is_empty() {
+    let Some(folders) = real_scene_folders() else {
         return;
-    }
-    let mut folders = Vec::new();
-    for (name, root) in &roots {
-        let before = folders.len();
-        scene_folders(root, &mut folders);
-        primase_testdata::expect_items(name, "scene folders", folders.len() - before);
-    }
+    };
     let mut gate = GateReport::new(
         "manifests: strict JSON, unique keys, every number the same f32 through f64",
         Tolerance::Exact,

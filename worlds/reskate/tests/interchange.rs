@@ -1187,7 +1187,7 @@ fn invalid_input_fails_with_its_reason() {
             "tables/grind.bin: curve 0 indexes points 1+2 of 2",
         ),
     ];
-    let validator = primase_testdata::real_data("PRIMASE_SCENE_SKATE");
+    let validator = primase_testdata::tool(primase_testdata::Tool::SceneSkate);
     let mut differ = Vec::new();
     for (name, m, edit, want) in cases {
         let d = fixture_with(&format!("bad_{}", name.replace(' ', "_")), &m, edit);
@@ -1249,7 +1249,7 @@ fn reference(v: &Path, dir: &Path) -> Result<(), String> {
 
 #[test]
 fn the_reference_validator_accepts_the_fixture_and_our_output() {
-    let Some(v) = primase_testdata::real_data("PRIMASE_SCENE_SKATE") else {
+    let Some(v) = primase_testdata::tool(primase_testdata::Tool::SceneSkate) else {
         return;
     };
     let src = fixture("oracle_src");

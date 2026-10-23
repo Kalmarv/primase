@@ -1,11 +1,11 @@
 //! Gate of the vertex-blend record stage (`primase_reskate::postcompile::vbrecord`) on a real compile.
 //!
-//! Inputs: `PRIMASE_RESKATE_BLEND_MAP` (a map folder the writer built with `vertex_blend` materials, so with
-//! `vertex_blend.json`), `PRIMASE_RESKATE_BLEND_PATCH` (Studio's Patch of that map, compiled by a build that carries
-//! the weights), `PRIMASE_SKATE_DATA` and `PRIMASE_OODLE9` (the game's data and Oodle). Then:
+//! Inputs: `oracles.baseline.gta/legion/map` (a map folder the writer built with `vertex_blend` materials, so with
+//! `vertex_blend.json`), `oracles.studio.gta/legion/patch` (Studio's Patch of that map, compiled by a build that
+//! carries the weights), `installs.skate/Data` and `tools.oodle9` (the game's data and Oodle). Then:
 //! - every recorded primitive resolves; each one's margin (the best containment among the other keys of its GLB) and
 //!   whether each GLB's sections follow its primitive order are printed;
-//! - the stage is applied into `PRIMASE_OUT` and read back with our readers: every MeshSet reads; each section of a
+//! - the stage is applied into `scratch.root` and read back with our readers: every MeshSet reads; each section of a
 //!   resolved key has the stock decal declaration (both copies), `Color0` = `decal_opacity` of Studio's weight,
 //!   sub-material 0, texture coordinates equal to Studio's `x, y`, tangent frames byte for byte, positions at half
 //!   precision (w = 1) never behind their surface: Studio's position rounded to nearest where that is not behind the
@@ -15,15 +15,15 @@
 //!   texture-set rows are the stock decal's; the root's program records are the game's (Studio's private
 //!   `vertex_blend` program gone) and every row indexes them;
 //! - applied twice, the outputs are byte-identical (determinism);
-//! - `PRIMASE_RESKATE_BLEND_SPEC` (optional): a frozen resolution from an earlier run of this stage (a regression
-//!   baseline, not an independent oracle): its keys must equal ours.
+//! - `oracles.baseline.gta/legion/blend-spec.json` (optional): a frozen resolution from an earlier run of this stage (a
+//!   regression baseline, not an independent oracle): its keys must equal ours.
 
 #![allow(clippy::unwrap_used)]
 
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use common::{BAM, R, ROOT, all_files, index_buffer, meshes, rows, stream};
 use primase_compress::oodle::{Oodle, Version};
@@ -32,20 +32,20 @@ use primase_reskate::postcompile::map_folder;
 use primase_reskate::postcompile::meshset;
 use primase_reskate::postcompile::vblend::{DECAL_DONOR, Donor, StockPrograms, decal_opacity};
 use primase_reskate::postcompile::vbrecord;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use serde_json::Value;
 
 #[test]
 fn vbrecord_gate() -> R {
     let (Some(map), Some(patch), Some(data), Some(dll)) = (
-        real_data("PRIMASE_RESKATE_BLEND_MAP"),
-        real_data("PRIMASE_RESKATE_BLEND_PATCH"),
-        real_data("PRIMASE_SKATE_DATA"),
-        real_data("PRIMASE_OODLE9"),
+        oracle(OracleSet::Baseline, Game::Gta, "legion/map"),
+        oracle(OracleSet::Studio, Game::Gta, "legion/patch"),
+        install_file(Game::Skate, "Data"),
+        tool(Tool::Oodle9),
     ) else {
         return Ok(());
     };
-    // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.
+    // SAFETY: the configuration names the game's own Oodle DLL as tools.oodle9.
     #[allow(unsafe_code)]
     let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
     let base = Folder::open(&data)?;
@@ -99,10 +99,7 @@ fn vbrecord_gate() -> R {
     );
     assert_eq!(resolution.keys.len(), input.record.materials.len());
     // ---- apply, read back
-    let root = primase_testdata::real_data_value("PRIMASE_OUT")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("reskate-vbrecord");
+    let root = primase_testdata::scratch().join("reskate-vbrecord");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root)?;
     let run = |out: &Path| -> R<vbrecord::Resolution> {
@@ -202,7 +199,7 @@ fn vbrecord_gate() -> R {
         );
     }
     // ---- the frozen resolution (a regression baseline)
-    if let Some(spec_path) = real_data("PRIMASE_RESKATE_BLEND_SPEC") {
+    if let Some(spec_path) = oracle(OracleSet::Baseline, Game::Gta, "legion/blend-spec.json") {
         let spec: Value = serde_json::from_slice(&std::fs::read(&spec_path)?)?;
         let theirs: BTreeMap<String, u64> = spec["materials"]
             .as_object()

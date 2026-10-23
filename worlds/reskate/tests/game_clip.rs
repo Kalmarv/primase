@@ -1,4 +1,4 @@
-//! skate. clips read from the game's data (`PRIMASE_SKATE_DATA`, `PRIMASE_OODLE9`), lowered and moved onto the render
+//! skate. clips read from the game's data (`installs.skate/Data`, `tools.oodle9`), lowered and moved onto the render
 //! skeleton: the off-board idle read as stored (`skate.clip`, verified against the rig), lowered to a `core.clip`
 //! (linear between keys, the stated choice), then mapped onto the render skeleton by the rig's own correspondence
 //! (`render_map`, `map-clip{rests=source}`). Exact: at every time checked, each render bone composes to the model-space
@@ -15,17 +15,17 @@ use primase_reskate::game::clip::SkateClip;
 use primase_reskate::game::rig::{insert_rig, render_map};
 use primase_reskate::game::skeleton::read_skeleton;
 use primase_reskate::read::game::{read_clip, read_rig};
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install_file, tool};
 
 type R = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
 fn a_skate_clip_drives_the_render_skeleton_as_it_drives_the_rig() -> R {
-    let (Some(data), Some(dll)) = (real_data("PRIMASE_SKATE_DATA"), real_data("PRIMASE_OODLE9")) else {
+    let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
         return Ok(());
     };
     let folder = Folder::open(data)?;
-    // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.
+    // SAFETY: the configuration names the game's own Oodle DLL as tools.oodle9.
     #[allow(unsafe_code)]
     let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
     let src = Source {

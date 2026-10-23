@@ -1,4 +1,4 @@
-//! skate.'s animation rig read from the game's data (`PRIMASE_SKATE_DATA`, `PRIMASE_OODLE9`): the
+//! skate.'s animation rig read from the game's data (`installs.skate/Data`, `tools.oodle9`): the
 //! `AnimBase_Default_Rig` with its 395-joint `AntSkeletonAsset`, its DOFs and default pose. Every joint has a rotation,
 //! translation and scale DOF with a default (the skeleton's rests). The render skeleton is the rig's: every one of its
 //! 386 bones is a joint of the animation skeleton with the same parent ([`render_map`]), and the rig's default pose,
@@ -13,17 +13,17 @@ use primase_frostbite::folder::{Folder, Source};
 use primase_reskate::game::rig::{DofTarget, SkateAnimRig, insert_rig, render_map};
 use primase_reskate::game::skeleton::{SkateSkeletonAsset, read_skeleton};
 use primase_reskate::read::game::read_rig;
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install_file, tool};
 
 type R = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
 fn the_animation_rig_reads_and_the_render_skeleton_is_its() -> R {
-    let (Some(data), Some(dll)) = (real_data("PRIMASE_SKATE_DATA"), real_data("PRIMASE_OODLE9")) else {
+    let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
         return Ok(());
     };
     let folder = Folder::open(data)?;
-    // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.
+    // SAFETY: the configuration names the game's own Oodle DLL as tools.oodle9.
     #[allow(unsafe_code)]
     let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
     let src = Source {

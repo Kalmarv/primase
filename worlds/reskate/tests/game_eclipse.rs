@@ -1,6 +1,6 @@
-//! skate.'s animation codec read from the game's data (`PRIMASE_SKATE_DATA`, `PRIMASE_OODLE9`): the ECLP resources of
+//! skate.'s animation codec read from the game's data (`installs.skate/Data`, `tools.oodle9`): the ECLP resources of
 //! three clips of `dingolevel_mpr` decode with the track counts, frame ranges and unit quaternions their
-//! `EclipseAnimationAsset`s state, and, with `PRIMASE_SKATE_ECLIPSE_REFERENCE`, to the values our earlier Python
+//! `EclipseAnimationAsset`s state, and, with `oracles.scripts.skate/eclipse`, to the values our earlier Python
 //! decoder (written from the executable's encoder) gives for the same bytes: frames exactly, values within 1e-6. That
 //! reference is a port check, not an independent oracle.
 
@@ -11,7 +11,7 @@ use primase_frostbite::bundle;
 use primase_frostbite::ebx::Value;
 use primase_frostbite::folder::{Folder, Source};
 use primase_reskate::game::eclipse::{Track, decode};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 
@@ -74,12 +74,12 @@ fn compare<T, const N: usize>(
 
 #[test]
 fn the_clips_decode_as_their_assets_state() -> R {
-    let (Some(data), Some(dll)) = (real_data("PRIMASE_SKATE_DATA"), real_data("PRIMASE_OODLE9")) else {
+    let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
         return Ok(());
     };
-    let reference = real_data("PRIMASE_SKATE_ECLIPSE_REFERENCE");
+    let reference = oracle(OracleSet::Scripts, Game::Skate, "eclipse");
     let folder = Folder::open(data)?;
-    // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.
+    // SAFETY: the configuration names the game's own Oodle DLL as tools.oodle9.
     #[allow(unsafe_code)]
     let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
     let src = Source {
