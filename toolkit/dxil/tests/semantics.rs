@@ -1293,3 +1293,129 @@ mod lane_2d {
         }
     }
 }
+
+
+mod ray_queries {
+    use super::*;
+    use primase_shader::D3dClass;
+    use primase_shader::exec::{Geometry, Instance, InstanceFlags, Scene};
+    use std::collections::BTreeMap;
+
+    /// Two bottom-level geometries in one bottom level, the triangle (0,0), (4,0), (0,4) at z = 5 (opaque, geometry 0)
+    /// and at z = 2 (not opaque, geometry 1); instance 0 places it as it is (id 7, contribution 3, mask 0xff) and
+    /// instance 1 moves it 10 along x (id 9, contribution 5, mask 0x02).
+    fn scene() -> Scene {
+        let triangle = |z: f32, opaque: bool| Geometry {
+            positions: vec![[0.0, 0.0, z], [4.0, 0.0, z], [0.0, 4.0, z]],
+            indices: None,
+            opaque,
+        };
+        let moved = [[1.0, 0.0, 0.0, 10.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let placed = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        Scene {
+            bottoms: vec![vec![triangle(5.0, true), triangle(2.0, false)]],
+            instances: vec![
+                Instance {
+                    bottom: 0,
+                    transform: placed,
+                    id: 7,
+                    mask: 0xff,
+                    contribution: 3,
+                    flags: InstanceFlags::default(),
+                },
+                Instance {
+                    bottom: 0,
+                    transform: moved,
+                    id: 9,
+                    mask: 0x02,
+                    contribution: 5,
+                    flags: InstanceFlags::default(),
+                },
+            ],
+        }
+    }
+
+    /// `ray_query_hits.hlsl` on that scene. Per thread: (origin, direction, flags, mask) and the committed hit.
+    #[test]
+    fn rays_find_the_closest_committed_hit_of_the_scene() {
+        for v in ["", ".od"] {
+            let (program, exe) = lifted(&fixture("ray_query_hits", v));
+            let find = |class: Option<D3dClass>| {
+                program
+                    .interface
+                    .resources
+                    .iter()
+                    .find(|r| match class {
+                        Some(c) => r.provenance.d3d.is_some_and(|d| d.class == c && d.register == 0),
+                        None => matches!(r.kind, ResourceKind::AccelerationStructure),
+                    })
+                    .unwrap_or_else(|| panic!("{v}: resource missing"))
+                    .id
+            };
+            let (structure, results, rays) = (
+                find(None),
+                find(Some(D3dClass::UnorderedAccess)),
+                find(Some(D3dClass::ConstantBuffer)),
+            );
+            // thread: origin, direction, flags, mask
+            let threads: [([f32; 3], [f32; 3], u32, u32); 5] = [
+                ([1.0, 1.0, -1.0], [0.0, 0.0, 1.0], 0, 0xff),
+                ([11.0, 1.0, -1.0], [0.0, 0.0, 1.0], 0, 0xff),
+                ([11.0, 1.0, -1.0], [0.0, 0.0, 1.0], 0, 0x01),
+                ([1.0, 1.0, -1.0], [0.0, 0.0, 1.0], 0x80, 0xff),
+                ([1.0, 1.0, 8.0], [0.0, 0.0, -1.0], 0, 0xff),
+            ];
+            let mut rows: Vec<[u32; 4]> = Vec::new();
+            rows.extend(
+                threads
+                    .iter()
+                    .map(|t| [t.0[0], t.0[1], t.0[2], 0.0].map(f32::to_bits)),
+            );
+            rows.extend(
+                threads
+                    .iter()
+                    .map(|t| [t.1[0], t.1[1], t.1[2], 0.0].map(f32::to_bits)),
+            );
+            rows.extend(threads.iter().map(|t| [t.2, t.3, 0, 0]));
+            let mut resources = Resources::default();
+            resources.constants.insert(rays, rows);
+            resources.scenes.insert(structure, scene());
+            let bound = exe.bind_resources(&resources).unwrap();
+            let mut buffers = BTreeMap::from([(results, vec![0u32; 50])]);
+            exe.dispatch(&bound, &mut NoBackend, &mut buffers, [1, 1, 1], 32)
+                .unwrap_or_else(|e| panic!("{v}: {e}"));
+            let words = &buffers[&results];
+            let hit = |t: usize| {
+                let w = &words[10 * t..10 * t + 10];
+                (
+                    w[0],
+                    f32::from_bits(w[1]),
+                    w[2],
+                    w[3],
+                    w[4],
+                    w[5],
+                    w[6],
+                    f32::from_bits(w[7]),
+                    f32::from_bits(w[8]),
+                )
+            };
+            // (status, t, instance index, id, contribution, geometry, primitive, barycentrics)
+            assert_eq!(hit(0), (1, 3.0, 0, 7, 3, 1, 0, 0.25, 0.25), "{v} thread 0");
+            assert_eq!(hit(1), (1, 3.0, 1, 9, 5, 1, 0, 0.25, 0.25), "{v} thread 1");
+            assert_eq!(
+                words[20], 0,
+                "{v} thread 2 sees no instance: the mask excludes instance 1"
+            );
+            assert_eq!(
+                hit(3),
+                (1, 6.0, 0, 7, 3, 0, 0, 0.25, 0.25),
+                "{v} thread 3 culls the non-opaque triangle"
+            );
+            assert_eq!(
+                hit(4),
+                (1, 3.0, 0, 7, 3, 0, 0, 0.25, 0.25),
+                "{v} thread 4 from behind"
+            );
+        }
+    }
+}

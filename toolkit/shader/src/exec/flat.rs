@@ -228,6 +228,14 @@ pub(super) enum Op {
         dst: u32,
         words: u32,
     },
+    /// The intersection a ray query reports: seventeen consecutive registers from `first`, in order the kind, t, custom
+    /// data, instance index, record offset, geometry index, primitive index, barycentrics, front face, then the four
+    /// columns of object to world and of world to object.
+    RqHit {
+        q: u32,
+        committed: bool,
+        first: u32,
+    },
     ArrLen {
         gid: u32,
         elem_words: u32,
@@ -329,6 +337,32 @@ pub(super) enum St {
     },
     /// A group barrier: every live invocation of the group must reach it together.
     Barrier,
+    /// Write the members of an aggregate value to consecutive words of memory.
+    StoreAgg {
+        loc: Loc,
+        members: Vec<(u32, u8)>,
+    },
+    /// Start the ray query `q` on the acceleration structure `scene`, the ray in these registers.
+    RqInit {
+        q: u32,
+        scene: ResourceId,
+        flags: u32,
+        mask: u32,
+        tmin: u32,
+        tmax: u32,
+        origin: u32,
+        direction: u32,
+    },
+    RqProceed {
+        q: u32,
+        result: u32,
+    },
+    RqConfirm {
+        q: u32,
+    },
+    RqTerminate {
+        q: u32,
+    },
     /// A bitmask of the wave's active lanes whose predicate holds (four words), for each lane of the wave.
     WaveBallot {
         predicate: Option<u32>,

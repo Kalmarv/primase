@@ -5,6 +5,7 @@ use super::flat::{
     UnOp, WaveGather, WaveKind, WaveOp, WaveScan,
 };
 use super::mask::{Mask, Wide};
+use super::rayquery::{Built, Query, Reported, Scenes};
 use super::request::{
     Backend, Element, ImageAtomic, ImageLoad, ImageLod, ImageQuery, ImageSample, ImageStore,
 };
@@ -30,6 +31,15 @@ enum Words<'a> {
 #[derive(Debug)]
 pub struct Bound<'a> {
     data: Vec<Words<'a>>,
+    scenes: Scenes,
+}
+
+impl Bound<'_> {
+    /// Give the acceleration structure of resource `id`: what the program's ray queries search.
+    pub fn with_scene(mut self, id: ResourceId, scene: Built) -> Self {
+        self.scenes.insert(id, scene);
+        self
+    }
 }
 
 /// What a run reads besides its inputs: constant buffers (rows of four lanes) and buffers (32-bit words), by resource.
@@ -39,6 +49,8 @@ pub struct Resources {
     pub buffers: BTreeMap<ResourceId, Vec<u32>>,
     /// The elements of arrays of buffers, by resource and element.
     pub elements: BTreeMap<(ResourceId, u32), Vec<u32>>,
+    /// The acceleration structures, by resource.
+    pub scenes: BTreeMap<ResourceId, super::rayquery::Scene>,
 }
 
 impl Executable {
@@ -76,16 +88,23 @@ impl Executable {
                 GlobalKind::Workgroup(_) => Words::Owned(Vec::new()),
             });
         }
-        Ok(Bound { data })
+        Ok(Bound {
+            data,
+            scenes: BTreeMap::new(),
+        })
     }
 
     /// [`Executable::bind`] over a [`Resources`].
     pub fn bind_resources<'a>(&self, resources: &'a Resources) -> Result<Bound<'a>, String> {
-        self.bind_elements(
+        let mut bound = self.bind_elements(
             |id| resources.constants.get(&id).map(Vec::as_slice),
             |id| resources.buffers.get(&id).map(Vec::as_slice),
             |id, k| resources.elements.get(&(id, k)).map(Vec::as_slice),
-        )
+        )?;
+        for (id, scene) in &resources.scenes {
+            bound.scenes.insert(*id, Built::new(scene)?);
+        }
+        Ok(bound)
     }
 }
 
@@ -140,6 +159,8 @@ pub struct Runner<'a, const N: usize, M: Mask = u8> {
     /// The memory a run changes, by global: thread-group memory and the buffers a compute run writes (empty for a
     /// pixel run, which hands its writes to the backend).
     store: Vec<Option<Vec<u32>>>,
+    /// The ray queries of each invocation, by query and lane.
+    queries: Vec<Vec<Option<Query>>>,
     /// The same for the elements of arrays of buffers, by global and element.
     elem_store: Vec<Vec<Option<Vec<u32>>>>,
     /// The lanes of a thread group, and those of them that have left the program.
@@ -226,6 +247,7 @@ impl<'a, const N: usize> Runner<'a, N, u8> {
             killed: 0,
             store: Vec::new(),
             elem_store: Vec::new(),
+            queries: Vec::new(),
             group: 0,
             retired: 0,
             lanes: 0,
@@ -572,6 +594,49 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                         }
                     }
                 }
+                Op::RqHit { q, committed, first } => {
+                    for l in 0..N {
+                        if !active.has(l) {
+                            continue;
+                        }
+                        let b = self.b;
+                        let query = self.query_slots(*q)[l]
+                            .as_ref()
+                            .ok_or("a ray query read before it was initialized")?;
+                        let scene = b
+                            .scenes
+                            .get(&query.scene())
+                            .ok_or("a ray query without its scene")?;
+                        let hit = if *committed {
+                            &query.committed
+                        } else {
+                            &query.candidate
+                        };
+                        let r = hit
+                            .as_ref()
+                            .map_or_else(Reported::none, |h| Reported::of(h, scene));
+                        let first = *first as usize;
+                        let mut put = |k: usize, v: [u32; 4]| self.regs[(first + k) * N + l] = v;
+                        put(0, [r.kind; 4]);
+                        put(1, [r.t.to_bits(); 4]);
+                        put(2, [r.custom; 4]);
+                        put(3, [r.instance; 4]);
+                        put(4, [r.sbt; 4]);
+                        put(5, [r.geometry; 4]);
+                        put(6, [r.primitive; 4]);
+                        put(
+                            7,
+                            [r.barycentrics[0].to_bits(), r.barycentrics[1].to_bits(), 0, 0],
+                        );
+                        put(8, [u32::from(r.front); 4]);
+                        for c in 0..4 {
+                            let o = r.object_to_world[c].map(f32::to_bits);
+                            put(9 + c, [o[0], o[1], o[2], 0]);
+                            let w = r.world_to_object[c].map(f32::to_bits);
+                            put(13 + c, [w[0], w[1], w[2], 0]);
+                        }
+                    }
+                }
                 Op::ArrLen {
                     gid,
                     elem_words,
@@ -777,6 +842,18 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
             }
         }
         Ok(())
+    }
+
+    /// The lanes' states of ray query `q`.
+    fn query_slots(&mut self, q: u32) -> &mut Vec<Option<Query>> {
+        if self.queries.len() <= q as usize {
+            self.queries.resize_with(q as usize + 1, Vec::new);
+        }
+        let slots = &mut self.queries[q as usize];
+        if slots.len() < N {
+            slots.resize(N, None);
+        }
+        slots
     }
 
     /// The wave width and the lane count of a compute run; wave operations outside one are errors.
@@ -1046,6 +1123,95 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                         }
                     }
                 }
+                St::StoreAgg { loc, members } => {
+                    for l in 0..N {
+                        if active.has(l) {
+                            let mut at = 0;
+                            for &(s, n) in members {
+                                let v = self.regs[s as usize * N + l];
+                                self.mem_put(*loc, l, at, n, v)?;
+                                at += u32::from(n);
+                            }
+                        }
+                    }
+                }
+                St::RqInit {
+                    q,
+                    scene,
+                    flags,
+                    mask,
+                    tmin,
+                    tmax,
+                    origin,
+                    direction,
+                } => {
+                    if !self.b.scenes.contains_key(scene) {
+                        return Err(format!(
+                            "no acceleration structure given for resource {}",
+                            scene.0
+                        ));
+                    }
+                    for l in 0..N {
+                        if active.has(l) {
+                            let reg = |s: u32| self.regs[s as usize * N + l];
+                            let float = |s: u32| fl(f(reg(s)[0]), self.ftz);
+                            let vec3 = |s: u32| -> [f32; 3] {
+                                let r = reg(s);
+                                [
+                                    fl(f(r[0]), self.ftz),
+                                    fl(f(r[1]), self.ftz),
+                                    fl(f(r[2]), self.ftz),
+                                ]
+                            };
+                            let query = Query::new(
+                                *scene,
+                                reg(*flags)[0],
+                                reg(*mask)[0],
+                                float(*tmin),
+                                float(*tmax),
+                                vec3(*origin),
+                                vec3(*direction),
+                            );
+                            self.query_slots(*q)[l] = Some(query);
+                        }
+                    }
+                }
+                St::RqProceed { q, result } => {
+                    for l in 0..N {
+                        if active.has(l) {
+                            let b = self.b;
+                            let query = self.query_slots(*q)[l]
+                                .as_mut()
+                                .ok_or("a ray query proceeded before it was initialized")?;
+                            let scene = b
+                                .scenes
+                                .get(&query.scene())
+                                .ok_or("a ray query without its scene")?;
+                            let more = query.proceed(scene);
+                            self.regs[*result as usize * N + l] = [u32::from(more); 4];
+                        }
+                    }
+                }
+                St::RqConfirm { q } => {
+                    for l in 0..N {
+                        if active.has(l) {
+                            self.query_slots(*q)[l]
+                                .as_mut()
+                                .ok_or("a ray query confirmed before it was initialized")?
+                                .confirm()?;
+                        }
+                    }
+                }
+                St::RqTerminate { q } => {
+                    for l in 0..N {
+                        if active.has(l) {
+                            self.query_slots(*q)[l]
+                                .as_mut()
+                                .ok_or("a ray query ended before it was initialized")?
+                                .terminate();
+                        }
+                    }
+                }
                 St::Barrier => {
                     // lockstep makes every write before the barrier visible after it; what a barrier needs is that
                     // every invocation still in the program is at it (D3D leaves a divergent barrier undefined)
@@ -1193,6 +1359,7 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
         self.steps = 0;
         self.samples = [0; N];
         self.killed = M::none();
+        self.queries.clear();
         for o in self.outs.iter_mut() {
             o.clear();
         }
@@ -1515,6 +1682,7 @@ impl Executable {
             killed: Wide::none(),
             store,
             elem_store,
+            queries: Vec::new(),
             group: Wide::first(lanes),
             retired: Wide::none(),
             lanes,
@@ -1561,6 +1729,7 @@ impl<'a, const N: usize> Runner<'a, N, Wide> {
         self.steps = 0;
         self.killed = Wide::none();
         self.retired = Wide::none();
+        self.queries.clear();
         for (i, g) in c.globals.iter().enumerate() {
             if let GlobalKind::Workgroup(words) = g.kind {
                 match &mut self.store[i] {

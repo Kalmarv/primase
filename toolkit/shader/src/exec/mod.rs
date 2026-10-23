@@ -17,12 +17,14 @@ mod compile;
 mod flat;
 mod mask;
 mod pixel;
+mod rayquery;
 mod request;
 mod run;
 
 pub use flat::Executable;
 pub use mask::{Mask, Wide};
 pub use pixel::ProgramShader;
+pub use rayquery::{Built, Geometry, Instance, InstanceFlags, Scene, flags as ray_flags};
 pub use request::{
     Backend, Dim, Element, ImageAtomic, ImageAtomicOp, ImageLoad, ImageLod, ImageQuery, ImageSample,
     ImageStore, QueryKind,

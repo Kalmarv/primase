@@ -75,11 +75,6 @@ pub(super) fn compile(
     function: Option<&str>,
 ) -> Result<Executable, String> {
     let m = &p.module;
-    for (_, g) in m.global_variables.iter() {
-        if matches!(m.types[g.ty].inner, TypeInner::AccelerationStructure { .. }) {
-            return Err(ray_queries());
-        }
-    }
     let ep = match function {
         None => Some(m.entry_points.first().ok_or("no entry point")?),
         Some(_) => None,
@@ -117,11 +112,14 @@ pub(super) fn compile(
     // locals
     let mut local_off: Vec<u32> = Vec::new();
     let mut local_words = 0u32;
-    for (_, l) in f.local_variables.iter() {
-        if matches!(m.types[l.ty].inner, TypeInner::RayQuery { .. }) {
-            return Err(ray_queries());
-        }
+    // a ray query is state the run keeps apart from local memory: its number
+    let mut rq_local: BTreeMap<usize, u32> = BTreeMap::new();
+    for (h, l) in f.local_variables.iter() {
         local_off.push(local_words);
+        if matches!(m.types[l.ty].inner, TypeInner::RayQuery { .. }) {
+            rq_local.insert(h.index(), rq_local.len() as u32);
+            continue;
+        }
         local_words += words(m, l.ty)?;
     }
     // arguments that are arrays (a stage function's control points) live in local memory, one element after another;
@@ -203,6 +201,10 @@ pub(super) fn compile(
     let mut op_of: Vec<Option<Op>> = vec![None; n_expr];
     let mut ptr_of: Vec<Option<Ptr>> = vec![None; n_expr];
     let mut agg_of: Vec<Option<Vec<(u32, u8)>>> = vec![None; n_expr];
+    // the ray query a local-variable expression names
+    let mut rq_of: Vec<Option<u32>> = vec![None; n_expr];
+    // the columns of a matrix member, by the slot that stands for the matrix
+    let mut nested_of: BTreeMap<u32, Vec<(u32, u8)>> = BTreeMap::new();
     // a whole array of a local, read as a value (words, element count, element width)
     let mut mem_agg: Vec<Option<(u32, u32, u8)>> = vec![None; n_expr];
     // the register of the copy that holds a loaded array, which keeps the copy alive
@@ -445,6 +447,9 @@ pub(super) fn compile(
                 } else if let Some(a) = &agg_of[base.index()] {
                     let (s, _) = *a.get(*index as usize).ok_or("aggregate index")?;
                     slot[i] = s;
+                    if let Some(columns) = nested_of.get(&s) {
+                        agg_of[i] = Some(columns.clone());
+                    }
                 } else if let Some((loc, _)) = static_load[base.index()] {
                     op_of[i] = Some(Op::LoadLanes {
                         loc,
@@ -505,6 +510,42 @@ pub(super) fn compile(
                         dynamic: None,
                     });
                 }
+            }
+            E::LocalVariable(l) if rq_local.contains_key(&l.index()) => rq_of[i] = Some(rq_local[&l.index()]),
+            E::RayQueryGetIntersection { query, committed } => {
+                let q = rq_of[query.index()].ok_or("an intersection of something that is not a ray query")?;
+                let first = n_slots as u32;
+                n_slots += 17;
+                let r = |k: u32| first + k;
+                let (o2w, w2o) = (
+                    (0..4).map(|c| (r(9 + c), 3)).collect::<Vec<_>>(),
+                    (0..4).map(|c| (r(13 + c), 3)).collect::<Vec<_>>(),
+                );
+                nested_of.insert(r(9), o2w);
+                nested_of.insert(r(13), w2o);
+                agg_of[i] = Some(vec![
+                    (r(0), 1),
+                    (r(1), 1),
+                    (r(2), 1),
+                    (r(3), 1),
+                    (r(4), 1),
+                    (r(5), 1),
+                    (r(6), 1),
+                    (r(7), 2),
+                    (r(8), 1),
+                    (r(9), 0),
+                    (r(13), 0),
+                ]);
+                op_of[i] = Some(Op::RqHit {
+                    q,
+                    committed: *committed,
+                    first,
+                });
+            }
+            // written by the statement that proceeds the query
+            E::RayQueryProceedResult => {}
+            E::RayQueryVertexPositions { .. } => {
+                return Err("the vertex positions of a ray query's triangle are not carried".into());
             }
             E::LocalVariable(l) => {
                 ptr_of[i] = Some(Ptr {
@@ -851,11 +892,6 @@ pub(super) fn compile(
                     agg_of[i] = Some(vec![(slot[i], 1), (extra as u32, 1)]);
                 }
             }
-            E::RayQueryProceedResult
-            | E::RayQueryGetIntersection { .. }
-            | E::RayQueryVertexPositions { .. } => {
-                return Err(ray_queries());
-            }
             e => return Err(format!("expression {:?}", std::mem::discriminant(e))),
         }
     }
@@ -931,6 +967,9 @@ pub(super) fn compile(
         ptr_of: &'a Vec<Option<Ptr>>,
         agg_of: &'a Vec<Option<Vec<(u32, u8)>>>,
         members_of: &'a Vec<Option<Vec<Member>>>,
+        rq_of: &'a Vec<Option<u32>>,
+        exprs: &'a naga::Arena<E>,
+        resource_of: &'a BTreeMap<usize, (ResourceId, u32)>,
         shape: &'a dyn Fn(Handle<E>) -> Result<Shape, String>,
         image: &'a dyn Fn(Handle<E>) -> Result<ImageRef, String>,
         ops: Vec<(u32, Op)>,
@@ -947,6 +986,10 @@ pub(super) fn compile(
                             let dst = cx.slot[h.index()];
                             for o in operands(op) {
                                 cx.uses[o as usize] += 1;
+                            }
+                            // reads the query and writes registers nothing names: never dropped
+                            if matches!(op, Op::RqHit { .. }) {
+                                cx.uses[dst as usize] += 1;
                             }
                             cx.ops.push((dst, op.clone()));
                         }
@@ -1026,6 +1069,73 @@ pub(super) fn compile(
                         }
                     }
                     out.push(St::Return(members));
+                }
+                Statement::Store { pointer, value } if cx.agg_of[value.index()].is_some() => {
+                    let p = cx.ptr_of[pointer.index()].ok_or("store through a non-pointer")?;
+                    if p.dynamic.is_some() || !matches!(p.loc, Loc::Local(_)) {
+                        return Err("a store of an aggregate to anything but a whole local".into());
+                    }
+                    let members = cx.agg_of[value.index()].clone().expect("checked");
+                    for (s, _) in &members {
+                        cx.uses[*s as usize] += 1;
+                    }
+                    out.push(St::StoreAgg { loc: p.loc, members });
+                }
+                Statement::RayQuery { query, fun } => {
+                    let q = cx.rq_of[query.index()]
+                        .ok_or("a ray query statement on something that is not a query")?;
+                    match fun {
+                        naga::RayQueryFunction::Initialize {
+                            acceleration_structure,
+                            descriptor,
+                        } => {
+                            let naga::Expression::GlobalVariable(g) = cx.exprs[*acceleration_structure]
+                            else {
+                                return Err(
+                                    "a ray query on an acceleration structure that is not a global".into()
+                                );
+                            };
+                            let scene = cx
+                                .resource_of
+                                .get(&g.index())
+                                .ok_or("an unbound acceleration structure")?
+                                .0;
+                            let members = cx.agg_of[descriptor.index()]
+                                .clone()
+                                .ok_or("a ray descriptor that is not a composite")?;
+                            let [
+                                (flags, _),
+                                (mask, _),
+                                (tmin, _),
+                                (tmax, _),
+                                (origin, _),
+                                (direction, _),
+                            ] = members[..]
+                            else {
+                                return Err("a ray descriptor without its six fields".into());
+                            };
+                            for s in [flags, mask, tmin, tmax, origin, direction] {
+                                cx.uses[s as usize] += 1;
+                            }
+                            out.push(St::RqInit {
+                                q,
+                                scene,
+                                flags,
+                                mask,
+                                tmin,
+                                tmax,
+                                origin,
+                                direction,
+                            });
+                        }
+                        naga::RayQueryFunction::Proceed { result } => out.push(St::RqProceed {
+                            q,
+                            result: cx.slot[result.index()],
+                        }),
+                        naga::RayQueryFunction::ConfirmIntersection => out.push(St::RqConfirm { q }),
+                        naga::RayQueryFunction::Terminate => out.push(St::RqTerminate { q }),
+                        naga::RayQueryFunction::GenerateIntersection { .. } => return Err(ray_queries()),
+                    }
                 }
                 Statement::Store { pointer, value } => {
                     let p = cx.ptr_of[pointer.index()].ok_or("store through a non-pointer")?;
@@ -1271,7 +1381,6 @@ pub(super) fn compile(
                 }
                 // one sequential schedule: every write is visible at once
                 Statement::MemoryBarrier(_) => {}
-                Statement::RayQuery { .. } => return Err(ray_queries()),
                 s => return Err(format!("statement {:?}", std::mem::discriminant(s))),
             }
         }
@@ -1334,6 +1443,9 @@ pub(super) fn compile(
         ptr_of: &ptr_of,
         agg_of: &agg_of,
         members_of: &members_of,
+        rq_of: &rq_of,
+        exprs: &f.expressions,
+        resource_of: &resource_of,
         shape: &shape,
         image: &image,
         ops: Vec::new(),
@@ -1467,11 +1579,9 @@ fn is_buffer_array(
     }
 }
 
-/// Why a program that traces rays is refused.
+/// Why a program that generates an intersection is refused.
 fn ray_queries() -> String {
-    "ray queries: the executor has no acceleration structure to traverse (they are GPU-only, and a CPU run would \
-     need the scene's triangles supplied)"
-        .into()
+    "a ray query generates an intersection with a procedural primitive: scenes carry triangles only".into()
 }
 
 /// An image global as an expression names it: the resource, its class, its dimension and whether it is arrayed.
