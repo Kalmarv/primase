@@ -19,11 +19,14 @@
 //! program blends a decal over it and the result toward a constant colour by masks made of the normal and metallic
 //! maps, then multiplies the material's colour and the instance's. Read as dataflow: down the values every path to an
 //! albedo slot passes through (past the clamps, the engine's terms and those blends), the first that is one slot, a
-//! product with one factor that is one albedo slot, or an overlay (`[S2]`'s second layer, `Texture2D_8`, drawn by its
-//! own alpha: the base is what it is drawn over). Where a product has several such factors (`_0`'s `Texture2D_1 * 4.55
-//! * lerp(Texture2D_7, luma, p)`, `C[Fur]`'s strand card times its colour) the base is the one in the shader's main UV
-//! group, the one holding an albedo, a normal and a metallic map (the metaparam's groups: `Texture2D_7` with `_0` and
-//! `_3`; `C[Fur]`'s colour `Texture2D_8` with `_0` and `_3`).
+//! product with one factor that is one albedo slot, or a blend of two layers: an overlay drawn by its own alpha (`[S2]`'s
+//! second layer, `Texture2D_8`) has the base of what it is drawn over. Where a product has several such factors (`_0`'s
+//! `Texture2D_1 * 4.55 * lerp(Texture2D_7, luma, p)`, `C[Fur]`'s strand card times its colour), or a blend's layers by
+//! another slot's mask both have one (`_14` blends `Texture2D_10` over its `Texture2D_1 * Texture2D_7` layer by the
+//! normal map's alpha), the base is the one in the shader's main UV group, the one holding an albedo, a normal and a
+//! metallic map (the metaparam's groups: `Texture2D_7` with `_0` and `_3`; `C[Fur]`'s colour `Texture2D_8` with `_0`
+//! and `_3`). A two-sided cloth that colours its back face from another layer (`_18`, by `SV_IsFrontFace`) has its
+//! front face's base.
 //!
 //! What it does not read is named in [`Reads::left_out`]: a discard against an engine texture (the screen-door dither of
 //! a fade) is not a material slot's coverage.
@@ -38,6 +41,8 @@ const ALBEDO_TARGET: u32 = 2;
 const ALBEDO_KIND: u8 = 1;
 const NORMAL_KIND: u8 = 4;
 const METALLIC_KIND: u8 = 14;
+/// The pixel program's input that says the face drawn is a front face.
+const FRONT_FACE: &str = "SV_IsFrontFace";
 /// `dx.op` codes: sample, sample bias, sample level, sample grad.
 const SAMPLES: [u64; 4] = [60, 61, 62, 63];
 const LOAD_INPUT: u64 = 4;
@@ -326,8 +331,8 @@ impl<'a> Analysis<'a> {
     /// slots by register): down the values every path from it to an albedo slot passes through
     /// ([`Self::colour_dominators`]: the clamps, conversions, the engine's terms and blends toward a constant colour by
     /// masks of other kinds of slot), the first that is made of one slot (that one), a product that names one
-    /// ([`Self::product_base`]) or an overlay ([`Self::overlaid`]: the base of what it is drawn over). A blend of several
-    /// albedo slots by another slot's mask names none: no value below it is on every path.
+    /// ([`Self::product_base`]), a blend of two layers that does ([`Self::blend_base`]), or a choice by the face drawn
+    /// (the base of its front face's colour, [`Self::front_face`]).
     fn base(&self, id: ValueId, slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
         for d in self.colour_dominators(id, slots) {
             if let [one] = self.slots_in(d, slots).into_iter().collect::<Vec<_>>()[..] {
@@ -336,8 +341,11 @@ impl<'a> Analysis<'a> {
             if let Some(one) = self.product_base(d, slots) {
                 return Some(one);
             }
-            if let Some(under) = self.overlaid(d, slots) {
-                return self.base(under, slots);
+            if let Some(one) = self.blend_base(d, slots) {
+                return Some(one);
+            }
+            if let Some(front) = self.front_face(d) {
+                return self.base(front, slots);
             }
         }
         None
@@ -360,9 +368,7 @@ impl<'a> Analysis<'a> {
 
     /// The base of a product of factors made of material slots: the one factor made of one albedo slot that no other
     /// factor reads. Where several are (a detail map multiplied over the material's own albedo: `C[DetailBlend]_0`'s
-    /// `Texture2D_1 * 4.55 * lerp(Texture2D_7, luma, p)`), the one whose UV group ([`Texture::uv_group`]) holds the
-    /// shader's main texture set, an albedo with a normal and a metallic map: a detail map's group holds a detail normal
-    /// map at most.
+    /// `Texture2D_1 * 4.55 * lerp(Texture2D_7, luma, p)`), the one in the shader's main texture set ([`main_set`]).
     fn product_base(&self, id: ValueId, slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
         if !matches!(
             self.op(id),
@@ -388,14 +394,14 @@ impl<'a> Analysis<'a> {
             })
             .filter(|one| made_of.iter().filter(|s| s.contains(one)).count() == 1)
             .collect();
-        let main = |register: &u32| {
-            let group = &slots[register].uv_group;
-            let holds = |kind| slots.values().any(|t| &t.uv_group == group && t.kind == kind);
-            holds(NORMAL_KIND) && holds(METALLIC_KIND)
-        };
         match candidates[..] {
             [one] => Some(one),
-            [_, _, ..] => match candidates.iter().copied().filter(main).collect::<Vec<_>>()[..] {
+            [_, _, ..] => match candidates
+                .iter()
+                .copied()
+                .filter(|r| main_set(*r, slots))
+                .collect::<Vec<_>>()[..]
+            {
                 [one] => Some(one),
                 _ => None,
             },
@@ -403,9 +409,8 @@ impl<'a> Analysis<'a> {
         }
     }
 
-    /// What an overlay is drawn over: `a` of `a + (b - a) * t` whose weight `t` is made of the overlaid colour `b`'s own
-    /// slots and `b` of none of `a`'s (a second layer drawn where its alpha says: `C[DetailBlend][S2]`'s `Texture2D_8`).
-    fn overlaid(&self, id: ValueId, slots: &BTreeMap<u32, &Texture>) -> Option<ValueId> {
+    /// The layers of a blend `a + (b - a) * t`: `a`, `b` and the weight `t`.
+    fn lerp(&self, id: ValueId) -> Option<(ValueId, ValueId, ValueId)> {
         let Some(Op::Binary {
             op: BinaryOp::Add,
             lhs,
@@ -424,25 +429,57 @@ impl<'a> Analysis<'a> {
                 continue;
             };
             for (difference, t) in [(*m0, *m1), (*m1, *m0)] {
-                let Some(Op::Binary {
+                if let Some(Op::Binary {
                     op: BinaryOp::Sub,
                     lhs: b,
                     rhs: from,
                 }) = self.op(difference)
-                else {
-                    continue;
-                };
-                if *from != a {
-                    continue;
-                }
-                let (over, weight) = (self.slots_in(*b, slots), self.slots_in(t, slots));
-                if !weight.is_empty() && weight.is_subset(&over) && over.is_disjoint(&self.slots_in(a, slots))
+                    && *from == a
                 {
-                    return Some(a);
+                    return Some((a, *b, t));
                 }
             }
         }
         None
+    }
+
+    /// The base of a blend of two layers `a + (b - a) * t`: where the weight is made of `b`'s own slots and `b` of none
+    /// of `a`'s, `b` is an overlay drawn by its own alpha (`C[DetailBlend][S2]`'s `Texture2D_8`) and the base is `a`'s;
+    /// otherwise, of the two layers' bases, the one in the shader's main texture set ([`main_set`]: `C[DetailBlend]_14`
+    /// blends `Texture2D_10`, a detail albedo, over its `Texture2D_1 * Texture2D_7` layer by the normal map's alpha).
+    fn blend_base(&self, id: ValueId, slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
+        let (a, b, t) = self.lerp(id)?;
+        let (under, over, weight) = (
+            self.slots_in(a, slots),
+            self.slots_in(b, slots),
+            self.slots_in(t, slots),
+        );
+        if !weight.is_empty() && weight.is_subset(&over) && over.is_disjoint(&under) {
+            return self.base(a, slots);
+        }
+        let bases: BTreeSet<u32> = [self.base(a, slots), self.base(b, slots)]
+            .into_iter()
+            .flatten()
+            .filter(|r| main_set(*r, slots))
+            .collect();
+        match bases.into_iter().collect::<Vec<_>>()[..] {
+            [one] => Some(one),
+            _ => None,
+        }
+    }
+
+    /// The front face's value of a choice by the face drawn: `then` of a `select` whose condition is made of the
+    /// front-facing flag alone (`C[DetailBlend]_18`'s two-sided cloth colours its back face from `Texture2D_8`, its
+    /// front from its `Texture2D_1 * Texture2D_7` layer).
+    fn front_face(&self, id: ValueId) -> Option<ValueId> {
+        let Some(Op::Select { condition, then, .. }) = self.op(id) else {
+            return None;
+        };
+        let leaves = self.leaves_of(*condition);
+        (leaves.textures.is_empty()
+            && !leaves.inputs.is_empty()
+            && leaves.inputs.iter().all(|(name, _, _)| name == FRONT_FACE))
+        .then_some(*then)
     }
 
     /// The values every path from `id` down to an albedo slot's colour (a red, green or blue lane of its sample) passes
@@ -580,6 +617,14 @@ impl<'a> Analysis<'a> {
             })
             .collect()
     }
+}
+
+/// Whether a slot's UV group ([`Texture::uv_group`]) holds the shader's main texture set, an albedo with a normal and a
+/// metallic map: a detail map's group holds a detail normal map at most.
+fn main_set(register: u32, slots: &BTreeMap<u32, &Texture>) -> bool {
+    let group = &slots[&register].uv_group;
+    let holds = |kind| slots.values().any(|t| &t.uv_group == group && t.kind == kind);
+    holds(NORMAL_KIND) && holds(METALLIC_KIND)
 }
 
 /// The slots of the metaparam by register.
