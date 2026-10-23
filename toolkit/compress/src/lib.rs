@@ -193,6 +193,60 @@ impl Decompressor for Deflate {
         inflate(input, expected, false, false)
     }
 }
+/// The most bytes a DEFLATE stream can produce for one byte of input (RFC 1951: a match of 258 bytes takes about two
+/// bits), rounded up: a claimed output size above this times the input is false.
+pub const DEFLATE_MAX_RATIO: usize = 1032;
+
+impl Deflate {
+    /// A complete raw DEFLATE stream whose output size is not stated, at most `max` bytes. The output grows with what
+    /// the stream produces (at most [`DEFLATE_MAX_RATIO`] times its input), never with `max`, so a caller's bound
+    /// taken from an untrusted header costs no memory by itself. Requires the final block marker and exact input
+    /// consumption; more than `max` bytes of output is [`Error::Size`] (`actual` is then `max + 1`).
+    pub fn decompress_up_to(&self, input: &[u8], max: usize) -> Result<Vec<u8>> {
+        let mut d = flate2::Decompress::new(false);
+        let mut out: Vec<u8> = Vec::new();
+        loop {
+            if out.len() == out.capacity() {
+                // double, but never past one byte more than `max`, which is what shows the stream overran it
+                let want = out
+                    .capacity()
+                    .max(4096)
+                    .saturating_mul(2)
+                    .min(max.saturating_add(1));
+                let more = want.saturating_sub(out.len());
+                if more == 0 {
+                    return Err(Error::Size {
+                        expected: max,
+                        actual: out.len(),
+                    });
+                }
+                out.try_reserve_exact(more).map_err(|_| Error::Limit)?;
+            }
+            let taken = usize::try_from(d.total_in()).unwrap_or(usize::MAX);
+            let rest = input.get(taken..).unwrap_or_default();
+            let before = (d.total_in(), d.total_out());
+            let status = d
+                .decompress_vec(rest, &mut out, flate2::FlushDecompress::None)
+                .map_err(|e| invalid("deflate", taken, e))?;
+            if out.len() > max {
+                return Err(Error::Size {
+                    expected: max,
+                    actual: out.len(),
+                });
+            }
+            if status == flate2::Status::StreamEnd {
+                break;
+            }
+            if (d.total_in(), d.total_out()) == before && out.len() < out.capacity() {
+                return Err(invalid("deflate", input.len(), "missing stream end"));
+            }
+        }
+        if usize::try_from(d.total_in()).unwrap_or(usize::MAX) != input.len() {
+            return Err(invalid("deflate", d.total_in() as usize, "trailing input"));
+        }
+        Ok(out)
+    }
+}
 impl Decompressor for Zlib {
     fn decompress(&self, input: &[u8], expected: usize) -> Result<Vec<u8>> {
         inflate(input, expected, true, false)

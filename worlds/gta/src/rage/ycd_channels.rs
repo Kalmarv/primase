@@ -448,7 +448,10 @@ impl Sequence {
                 format!("{frame_bits} bits a frame in items of {frame_length} bytes"),
             ));
         }
-        let mut values: Vec<Vec<f32>> = pending.iter().map(|_| Vec::with_capacity(frames)).collect();
+        // room for the frames of the channels that have any (a static or cached channel stores none per frame)
+        let mut values: Vec<Vec<f32>> = (pending.iter())
+            .map(|p| Vec::with_capacity(if p.frame_bits() > 0 { frames } else { 0 }))
+            .collect();
         for f in 0..frames {
             let mut stream = BitStream {
                 data,

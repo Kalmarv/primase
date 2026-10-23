@@ -1090,6 +1090,7 @@ mod tests {
             graphics: PageFlags(0),
             data: d,
             zero_filled: 0,
+            spent: Default::default(),
         }
     }
 
@@ -1199,6 +1200,7 @@ mod tests {
             graphics: PageFlags(0),
             data: d,
             zero_filled: 0,
+            spent: Default::default(),
         }
     }
 

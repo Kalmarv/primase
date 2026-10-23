@@ -143,6 +143,12 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Element> {
                         if stack.is_empty() && at != 4 {
                             return Err(err(at, "a second root element"));
                         }
+                        if stack.len() >= super::xml::MAX_DEPTH {
+                            return Err(err(
+                                at,
+                                format!("elements nest deeper than {}", super::xml::MAX_DEPTH),
+                            ));
+                        }
                         stack.push(Open {
                             el: Element {
                                 name,
@@ -200,6 +206,28 @@ mod tests {
         out.extend([index, kind]);
         out.extend((n.len() as u16).to_le_bytes());
         out.extend(n.as_bytes());
+    }
+
+    /// Nesting is capped like the text form's.
+    #[test]
+    fn nesting_is_capped() {
+        // the first element names its descriptor, the later ones refer to it by index and kind
+        let build = |depth: usize| {
+            let mut d = MAGIC.to_vec();
+            name(&mut d, 0, 0, "a");
+            d.extend([0, 0, 0, 0, 0, 0]);
+            for _ in 1..depth {
+                d.extend([0, 0]);
+                d.extend([0, 0, 0, 0, 0, 0]);
+            }
+            d.extend([0xFF, 0xFF].repeat(depth));
+            d
+        };
+        assert!(parse(&build(super::super::xml::MAX_DEPTH)).is_ok());
+        let e = parse(&build(super::super::xml::MAX_DEPTH + 1))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("nest deeper than"), "{e}");
     }
 
     #[test]

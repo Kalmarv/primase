@@ -363,6 +363,7 @@ fn fragment_pose(r: &Resource, h: &[u8]) -> Result<Vec<[[f32; 4]; 3]>> {
         0 => Vec::new(),
         p => {
             let n = usize::from(r.block::<0x20>(p)?[0x10]);
+            r.charge(n.saturating_mul(48), p)?;
             let bones = r.records(offset(p, 0x20)?, n, 48)?;
             bones
                 .as_chunks::<48>()
@@ -439,6 +440,7 @@ fn read_lights(r: &Resource, at: u64) -> Result<Vec<LightAttr>> {
     if n == 0 {
         return Ok(Vec::new());
     }
+    r.charge(n.saturating_mul(168), at)?;
     let d = r.records(le::u64(h, 0)?, n, 168)?;
     d.chunks(168).map(LightAttr::read).collect()
 }
@@ -461,6 +463,11 @@ impl Skeleton {
     fn read(r: &Resource, pointer: u64) -> Result<Skeleton> {
         let s = r.at(pointer, 0x70)?;
         let count = usize::from(le::u16(s, 0x5E)?);
+        // per bone: its transform and inverse (48 bytes each), parent and tag
+        r.charge(
+            count.saturating_mul(48 + 48 + 2 + 2).saturating_add(0x70),
+            pointer,
+        )?;
         let transforms = match le::u64(s, 0x30)? {
             0 => return Err(err(pointer, "a skeleton without bone transforms")),
             p => r.records(p, count, 64)?,
@@ -587,6 +594,7 @@ impl Drawable {
     /// The drawable at `pointer` (`0x5000_0000` for a ydr's root).
     pub fn read(r: &Resource, pointer: u64) -> Result<Drawable> {
         let d = r.at(pointer, 0xA8)?;
+        r.charge(0xA8, pointer)?;
         let mut lods: [Vec<Model>; 4] = Default::default();
         for (lod, at) in lods.iter_mut().zip([0x50, 0x58, 0x60, 0x68]) {
             let p = le::u64(d, at)?;
@@ -710,6 +718,7 @@ fn pointer_list(r: &Resource, at: u64) -> Result<Vec<u64>> {
     if n == 0 {
         return Ok(Vec::new());
     }
+    r.charge(n.saturating_mul(8), at)?;
     let p = r.records(le::u64(h, 0)?, n, 8)?;
     Ok(p.as_chunks::<8>()
         .0
@@ -724,6 +733,8 @@ fn read_models(r: &Resource, list: u64) -> Result<Vec<Model>> {
         .map(|p| {
             let m = r.at(p, 0x30)?;
             let n = usize::from(le::u16(m, 0x10)?);
+            // the model's pointers, mapping and boxes, and what each geometry takes is charged by it
+            r.charge(n.saturating_mul(8 + 2 + 32).saturating_add(0x30), p)?;
             if le::u16(m, 0x12)? != le::u16(m, 0x10)? || le::u16(m, 0x2E)? != le::u16(m, 0x10)? {
                 return Err(err(p, "model geometry counts differ"));
             }
@@ -831,6 +842,15 @@ fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Re
         ));
     }
     let n_vertices = usize::try_from(vertex_count).map_err(|_| err(vb_ptr, "vertex count"))?;
+    // the vertices, indices and bone ids it copies (a geometry the lists name twice is copied twice)
+    r.charge(
+        n_vertices
+            .saturating_mul(usize::from(stride))
+            .saturating_add(index_count as usize * 2)
+            .saturating_add(usize::from(le::u16(g, 0x72)?) * 2)
+            .saturating_add(0x98),
+        p,
+    )?;
     let vertices = r
         .records(le::u64(vb, 0x18)?, n_vertices, usize::from(stride))?
         .to_vec();
@@ -905,6 +925,7 @@ fn read_shader_group(r: &Resource, p: u64) -> Result<(Vec<Shader>, Option<Textur
     } else {
         r.records(le::u64(g, 0x10)?, n, 8)?
     };
+    r.charge(n.saturating_mul(8), p)?;
     let shaders = ptrs
         .as_chunks::<8>()
         .0
@@ -930,6 +951,8 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
         return Err(err(infos_ptr, format!("parameter info header {:02x?}", h)));
     }
     let infos = r.records(offset(infos_ptr, 8)?, n_params, 8)?;
+    // each parameter: its name, word and value (a constant buffer's floats at most 4096 bytes)
+    r.charge(n_params.saturating_mul(24).saturating_add(0x40), p)?;
     // constant buffers: the first copy's pointers (the next copy's first pointer ends the last buffer)
     let buffers: Vec<u64> = if n_buffers == 0 {
         Vec::new()
@@ -1179,6 +1202,7 @@ fn pointer_list_u32(r: &Resource, at: u64) -> Result<Vec<u32>> {
     if n == 0 {
         return Ok(Vec::new());
     }
+    r.charge(n.saturating_mul(4), at)?;
     let d = r.records(le::u64(h, 0)?, n, 4)?;
     Ok(d.as_chunks::<4>()
         .0
@@ -1248,6 +1272,7 @@ mod tests {
             graphics: PageFlags(0),
             data,
             zero_filled: 0,
+            spent: Default::default(),
         }
     }
 
@@ -1299,6 +1324,32 @@ mod tests {
             Some([[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 2.0], [0.0, 0.0, 1.0, 3.0]])
         );
         assert_eq!(bones.bone_of_tag(lights[1].bone_id), None);
+    }
+
+    /// A model list whose entries all name one model: the pages hold a few kilobytes of pointers and the list is
+    /// read as many models as it has entries. A list that a few times the resource's size would be is refused.
+    #[test]
+    fn a_list_naming_one_model_over_and_over_is_refused_past_a_few_times_the_resource() {
+        let p = |o: u64| (0x5000_0000u64 + o).to_le_bytes();
+        let model = p(0x300);
+        let drawable = |n: u16| {
+            let mut writes: Vec<(usize, Vec<u8>)> = vec![
+                (0x50, p(0x400).to_vec()),
+                (0x400, p(0x500).to_vec()),
+                (0x408, [&n.to_le_bytes()[..], &n.to_le_bytes()[..]].concat()),
+            ];
+            for i in 0..usize::from(n) {
+                writes.push((0x500 + 8 * i, model.to_vec()));
+            }
+            let w: Vec<(usize, &[u8])> = writes.iter().map(|(o, b)| (*o, b.as_slice())).collect();
+            pages(VERSION, &w)
+        };
+        let fine = Drawable::read(&drawable(100), 0x5000_0000).unwrap();
+        assert_eq!(fine.lods[0].len(), 100);
+        let e = Drawable::read(&drawable(600), 0x5000_0000)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("times the resource"), "{e}");
     }
 
     #[test]

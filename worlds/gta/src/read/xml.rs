@@ -69,6 +69,10 @@ impl Element {
     }
 }
 
+/// The deepest element nesting read. The tree is built iteratively but dropped and walked by recursion, which a document
+/// of a few hundred thousand nested elements overflows the stack of; the game's files nest a dozen deep.
+pub(crate) const MAX_DEPTH: usize = 64;
+
 fn err(what: &str, e: impl std::fmt::Display) -> crate::Error {
     invalid("XML", 0, format!("{what}: {e}"))
 }
@@ -112,6 +116,9 @@ pub(crate) fn parse(bytes: &[u8], what: &str) -> Result<Element> {
                         None => root = Some(el),
                     }
                 } else {
+                    if stack.len() >= MAX_DEPTH {
+                        return Err(err(what, format!("elements nest deeper than {MAX_DEPTH}")));
+                    }
                     stack.push(el);
                 }
             }
@@ -183,6 +190,18 @@ pub(crate) fn parse(bytes: &[u8], what: &str) -> Result<Element> {
 )]
 mod tests {
     use super::*;
+
+    /// Nesting is capped, and a document of hundreds of thousands of nested elements is refused, not a stack overflow.
+    #[test]
+    fn nesting_is_capped() {
+        let nested = |depth: usize| format!("{}{}", "<a>".repeat(depth), "</a>".repeat(depth));
+        assert!(parse(nested(MAX_DEPTH).as_bytes(), "t").is_ok());
+        let e = parse(nested(MAX_DEPTH + 1).as_bytes(), "t")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("nest deeper than 64"), "{e}");
+        assert!(parse(nested(400_000).as_bytes(), "t").is_err());
+    }
 
     #[test]
     fn tree_entities_bom_and_strictness() {

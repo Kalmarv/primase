@@ -8,7 +8,7 @@
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
-use primase_compress::{Decompressor, Deflate};
+use primase_compress::{DEFLATE_MAX_RATIO, Deflate};
 
 use crate::{Result, invalid};
 
@@ -85,9 +85,57 @@ pub struct Resource {
     /// Bytes at the end of the last page the body did not reach, zero-filled (the game allocates whole pages and
     /// inflates into them, so a body may end inside its last page). 0 for almost every resource.
     pub zero_filled: u64,
+    /// What the readers have taken out of the pages so far ([`Resource::charge`]).
+    pub spent: Spent,
+}
+
+/// How many times over a resource's own bytes the readers of it may copy out of it in all. Lists in a resource hold
+/// pointers, and nothing stops two entries naming one object, or the objects of a list each naming a list: a few
+/// hundred bytes can describe gigabytes (measured on bounds: a 185-byte body, 1.7 million bounds, 553 MB). A reader
+/// that copies charges what it takes ([`Resource::charge`]) and a read that has taken more than this many times the
+/// resource is refused. A judgement: an object that a real file shares by reference is charged every time it is read,
+/// and the censuses (`tests/resource_census.rs`) say if any does.
+pub const SPEND_TIMES: usize = 4;
+
+/// The charge counter of a [`Resource`]: shared by the readers of it, copied with it.
+#[derive(Debug, Default)]
+pub struct Spent(std::sync::atomic::AtomicUsize);
+
+impl Clone for Spent {
+    fn clone(&self) -> Self {
+        Spent(std::sync::atomic::AtomicUsize::new(
+            self.0.load(std::sync::atomic::Ordering::Relaxed),
+        ))
+    }
 }
 
 impl Resource {
+    /// Take `bytes` of the resource's allowance ([`SPEND_TIMES`]) for a read that copies them out, at `pointer`. An
+    /// error once the readers have taken more than the allowance: the resource's lists share what they point at.
+    pub fn charge(&self, bytes: usize, pointer: u64) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        let allowance = self.data.len().saturating_mul(SPEND_TIMES);
+        let taken = self
+            .spent
+            .0
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
+                Some(t.saturating_add(bytes))
+            })
+            .unwrap_or(usize::MAX)
+            .saturating_add(bytes);
+        if taken > allowance {
+            return Err(invalid(
+                "RSC7",
+                pointer,
+                format!(
+                    "the reads copy more than {SPEND_TIMES} times the resource's {} bytes (its lists share their objects)",
+                    self.data.len()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// The system pages, then the graphics pages (`data` holds exactly both, as [`inflate`] makes it).
     fn pages(&self) -> (&[u8], &[u8]) {
         usize::try_from(self.system.size())
@@ -150,9 +198,17 @@ pub fn header(stored: &[u8]) -> Result<(u32, PageFlags, PageFlags)> {
     Ok((version, PageFlags(system), PageFlags(graphics)))
 }
 
+/// The most the pages may reach past what the body can inflate to (the zero-filled end of the last page). The flags are
+/// the file's word and a body of a few bytes can name pages of gigabytes; what the body cannot account for is
+/// allocated only up to this, so a header cannot cost memory the body does not back. A judgement, not a measured
+/// bound: the census (`tests/census.rs`) lists every resource whose body ends inside its last page.
+const ZERO_FILL_LIMIT: usize = 64 << 20;
+
 /// Inflate a resource body (already decrypted) laid out by `system` and `graphics`. The body must be one complete
 /// DEFLATE stream consumed to its end that fills the pages exactly, or ends inside the last page (the rest of that
-/// page is zero-filled and counted in `zero_filled`); anything else is an error.
+/// page is zero-filled and counted in `zero_filled`); anything else is an error. The pages are checked against the
+/// body before anything is allocated for them: they may not need more than the body inflates to (a DEFLATE stream
+/// expands at most [`DEFLATE_MAX_RATIO`] to one) plus [`ZERO_FILL_LIMIT`], and the output grows with the stream.
 pub fn inflate(body: &[u8], system: PageFlags, graphics: PageFlags) -> Result<Resource> {
     let size = system
         .size()
@@ -164,25 +220,38 @@ pub fn inflate(body: &[u8], system: PageFlags, graphics: PageFlags) -> Result<Re
     } else {
         system.last_page_size()
     };
-    let (data, zero_filled) = match Deflate.decompress(body, size) {
-        Ok(d) => (d, 0),
-        Err(primase_compress::Error::Size { expected, actual })
-            if expected
-                .checked_sub(actual)
-                .is_some_and(|short| short > 0 && (short as u64) < last) =>
-        {
-            let mut d = Deflate.decompress(body, actual)?;
-            d.resize(expected, 0);
-            (d, expected.abs_diff(actual) as u64)
+    let reach = body.len().saturating_mul(DEFLATE_MAX_RATIO);
+    if size > reach.saturating_add(ZERO_FILL_LIMIT) {
+        return Err(invalid(
+            "RSC7",
+            0,
+            format!(
+                "pages of {size} bytes from a body of {} bytes, which inflates to at most {reach} (and {ZERO_FILL_LIMIT} \
+                 may be left zero)",
+                body.len()
+            ),
+        ));
+    }
+    let mut data = Deflate.decompress_up_to(body, size)?;
+    let zero_filled = size.abs_diff(data.len());
+    if zero_filled > 0 {
+        // the body ends inside the last page only
+        if u64::try_from(zero_filled).map_or(true, |short| short >= last) {
+            return Err(primase_compress::Error::Size {
+                expected: size,
+                actual: data.len(),
+            }
+            .into());
         }
-        Err(e) => return Err(e.into()),
-    };
+        data.resize(size, 0);
+    }
     Ok(Resource {
         version: system.version_bits() << 4 | graphics.version_bits(),
         system,
         graphics,
         data,
-        zero_filled,
+        zero_filled: zero_filled as u64,
+        spent: Spent::default(),
     })
 }
 

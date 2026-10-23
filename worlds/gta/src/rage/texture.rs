@@ -172,6 +172,8 @@ impl TextureDictionary {
         if hashes.iter().zip(hashes.iter().skip(1)).any(|(a, b)| a >= b) {
             return Err(err(pointer, "name hashes not strictly ascending"));
         }
+        // each texture: its record, name and fields as read
+        r.charge(n.saturating_mul(4 + 8 + 128), pointer)?;
         let mut textures = Vec::with_capacity(n);
         if n > 0 {
             let p = r.records(tex_ptr, n, 8)?.as_chunks::<8>().0;

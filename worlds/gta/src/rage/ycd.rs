@@ -113,6 +113,13 @@ fn chains(r: &Resource, table: u64, capacity: usize, entries: usize) -> Result<V
             if guard > entries.saturating_add(1) {
                 return Err(err(table, "a hash table's chain does not end"));
             }
+            // the chains may share their entries: stop at the first one past the count, not after all of them
+            if out.len() >= entries {
+                return Err(err(
+                    table,
+                    format!("more than the {entries} entries stored are in the chains"),
+                ));
+            }
             let e = r.at(at, 32)?;
             out.push((le::u32(e, 0)?, le::u64(e, 8)?));
             at = le::u64(e, 0x10)?;
@@ -146,6 +153,8 @@ fn name_at(r: &Resource, pointer: u64, len: usize, capacity: usize) -> Result<St
 fn sequence(r: &Resource, pointer: u64) -> Result<Sequence> {
     let h = r.at(pointer, 0x20)?;
     let len = usize::try_from(le::u32(h, 4)?).map_err(|_| err(pointer, "a sequence length"))?;
+    // the data is copied: a list naming one sequence over and over copies it every time
+    r.charge(len.saturating_add(0x20), pointer)?;
     let data = r
         .at(
             pointer
@@ -198,6 +207,13 @@ fn animation(r: &Resource, pointer: u64) -> Result<Animation> {
     if seq_count > seq_capacity || bone_count > bone_capacity {
         return Err(err(pointer, "a list with more entries than its capacity"));
     }
+    r.charge(
+        seq_capacity
+            .saturating_mul(8)
+            .saturating_add(bone_count.saturating_mul(4))
+            .saturating_add(96),
+        pointer,
+    )?;
     let pointers = r.records(seq_ptr, seq_capacity, 8)?;
     let sequences = pointers
         .as_chunks::<8>()
@@ -333,5 +349,58 @@ impl ClipDictionary {
             });
         }
         Ok(ClipDictionary { animations, clips })
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    reason = "fixtures, not untrusted bytes"
+)]
+mod tests {
+    use super::*;
+    use crate::rage::resource::PageFlags;
+
+    fn pages(writes: &[(usize, &[u8])]) -> Resource {
+        let mut data = vec![0u8; 0x2000];
+        for (o, b) in writes {
+            data[*o..*o + b.len()].copy_from_slice(b);
+        }
+        Resource {
+            version: VERSION,
+            system: PageFlags((1 << 27) | 4),
+            graphics: PageFlags(0),
+            data,
+            zero_filled: 0,
+            spent: Default::default(),
+        }
+    }
+
+    /// Hash table buckets that all name one chain: the entries are read once for the count they state, not once per
+    /// bucket.
+    #[test]
+    fn buckets_sharing_a_chain_are_stopped_at_the_stated_count() {
+        let entry = (ROOT + 0x200).to_le_bytes();
+        let table: Vec<u8> = (0..4).flat_map(|_| entry).collect();
+        let r = pages(&[(0x100, &table)]);
+        let e = chains(&r, ROOT + 0x100, 4, 1).unwrap_err().to_string();
+        assert!(e.contains("more than the 1 entries stored"), "{e}");
+        // one bucket, one entry: the count
+        assert_eq!(chains(&r, ROOT + 0x100, 1, 1).unwrap(), [(0, 0)]);
+    }
+
+    /// A list naming one sequence again and again copies its data every time: the copies stop at a few times the
+    /// resource.
+    #[test]
+    fn a_sequence_named_over_and_over_is_copied_only_a_few_times_the_resources_size() {
+        let mut header = [0u8; 0x20];
+        header[4..8].copy_from_slice(&0x200u32.to_le_bytes());
+        header[0x10..0x14].copy_from_slice(&0x20u32.to_le_bytes());
+        let r = pages(&[(0x100, &header)]);
+        let refused = (0..200).position(|_| sequence(&r, ROOT + 0x100).is_err());
+        let n = refused.expect("refused once the copies pass the allowance");
+        assert!((50..70).contains(&n), "{n} copies of 544 bytes in 4 x 8 KiB");
     }
 }

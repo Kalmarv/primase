@@ -122,6 +122,7 @@ pub fn read(r: &Resource, p: u64, depth: usize) -> Result<Bound> {
     if depth > 8 {
         return Err(err(p, "composites nest deeper than 8"));
     }
+    r.charge(0x70, p)?;
     let h = r.block::<0x70>(p)?;
     let header = BoundHeader {
         kind: h[0x10],
@@ -147,6 +148,15 @@ pub fn read(r: &Resource, p: u64, depth: usize) -> Result<Bound> {
 fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
     let g = r.block::<0x130>(p)?;
     let (n_vertices, n_polygons) = (le::u32(g, 0xD0)? as usize, le::u32(g, 0xD4)? as usize);
+    // what it copies: vertices (6 bytes, 4 more of colour), polygons (16, one material byte), materials (8 each)
+    r.charge(
+        n_vertices
+            .saturating_mul(10)
+            .saturating_add(n_polygons.saturating_mul(17))
+            .saturating_add(usize::from(g[0x120]).saturating_mul(8))
+            .saturating_add(0x130),
+        p,
+    )?;
     let quantum = le::vec3(g, 0x90)?;
     let centre = le::vec3(g, 0xA0)?;
     let vertices = if n_vertices == 0 {
@@ -265,6 +275,8 @@ fn composite(r: &Resource, p: u64, depth: usize) -> Result<Vec<Child>> {
     if n == 0 {
         return Ok(Vec::new());
     }
+    // each child: its pointer, transform and two flag words
+    r.charge(n.saturating_mul(8 + 64 + 8 + 8), p)?;
     let children = r.records(le::u64(h, 0x70)?, n, 8)?.as_chunks::<8>().0;
     let transforms = r.records(le::u64(h, 0x78)?, n, 64)?.as_chunks::<64>().0;
     // per child its flag words, as stored, or none
@@ -356,5 +368,56 @@ mod polygon_tests {
             }
             p => panic!("{p:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "fixtures, not untrusted bytes"
+)]
+mod budget_tests {
+    use super::*;
+    use crate::rage::resource::PageFlags;
+
+    /// A resource of 64 KiB holding nine bounds at 0x100 intervals: bound `k` is a composite of `fan` children that all
+    /// name bound `k + 1`, down to a box (kind 3) at the ninth.
+    fn shared_tree(fan: u16) -> Resource {
+        let mut data = vec![0u8; 0x10000];
+        for k in 0..9usize {
+            let h = k * 0x100;
+            data[h + 0x10] = if k < 8 { 10 } else { 3 };
+            if k < 8 {
+                data[h + 0xA0..h + 0xA2].copy_from_slice(&fan.to_le_bytes());
+                let children = 0x1000 + k * 0x400;
+                data[h + 0x70..h + 0x78].copy_from_slice(&(0x5000_0000u64 + children as u64).to_le_bytes());
+                data[h + 0x78..h + 0x80].copy_from_slice(&(0x5000_0000u64 + 0xA000).to_le_bytes());
+                for i in 0..usize::from(fan) {
+                    let child = 0x5000_0000u64 + ((k + 1) * 0x100) as u64;
+                    data[children + i * 8..children + i * 8 + 8].copy_from_slice(&child.to_le_bytes());
+                }
+            }
+        }
+        Resource {
+            version: 0,
+            system: PageFlags(7 | 1 << 27),
+            graphics: PageFlags(0),
+            data,
+            zero_filled: 0,
+            spent: Default::default(),
+        }
+    }
+
+    /// Children that share their own children multiply: with 6 to a composite and eight levels, 1.7 million bounds
+    /// from a resource of 64 KiB. The read is refused once its bytes pass a few times the resource's, long before.
+    #[test]
+    fn children_shared_past_the_resources_size_are_refused() {
+        let r = shared_tree(6);
+        let e = read(&r, 0x5000_0000, 0).unwrap_err().to_string();
+        assert!(e.contains("more than"), "{e}");
+        // a tree that is a tree (one child each) reads
+        assert!(read(&shared_tree(1), 0x5000_0000, 0).is_ok());
     }
 }

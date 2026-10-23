@@ -15,7 +15,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use primase_compress::{Decompressor, Deflate};
+use primase_compress::{DEFLATE_MAX_RATIO, Decompressor, Deflate};
 
 use crate::rage::resource::{self, PageFlags, Resource};
 use crate::read::archive::keys::Keys;
@@ -449,6 +449,19 @@ impl Archive {
         }
         let size =
             usize::try_from(size).map_err(|_| invalid("RPF7", self.start, "entry larger than memory"))?;
+        // the stated size is the entry's word: a stream of `data.len()` bytes cannot inflate to more than this
+        if size > data.len().saturating_mul(DEFLATE_MAX_RATIO) {
+            return Err(invalid(
+                "RPF7",
+                self.start,
+                format!(
+                    "{}: {size} bytes from a compressed entry of {} bytes, which inflates to at most {}",
+                    e.path,
+                    data.len(),
+                    data.len().saturating_mul(DEFLATE_MAX_RATIO)
+                ),
+            ));
+        }
         Ok((data, Some(size)))
     }
 

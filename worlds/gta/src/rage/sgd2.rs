@@ -22,13 +22,20 @@
 //!     u32 (not a record size: the offset of something inside the record)
 //!     six lists, in the group order without the two empty ones: u32 count then count u32 indices into the group's
 //!     programs (vertex, pixel, geometry, domain, hull, compute)
-//!     more tables and a string table of parameter names, kept as stored
+//!     tables, kept as stored (the state and technique tables of [`crate::rage::sgd2_effect`] among them)
+//!     'proplst', NUL
+//!     u32 count, then count sections: u32 size, size bytes (the root signature tables, kept as stored)
+//!     u32 size, size bytes: the name block, the NUL-terminated names of parameters and techniques (it starts with an
+//!         empty name and ends with a NUL)
 //! ```
 //!
-//! The size of an effect record is not stored anywhere found: a record ends where the next one's length byte and
-//! name begin. The reader finds that by the shape of a record start (a length byte equal to the printable
-//! identifier that follows it plus its NUL) and holds the result to the declared effect count and the end of the
-//! file, so a file in which the shape also occurs inside a record is refused, not misread.
+//! The size of an effect record is not stored anywhere found, but its end is structural: a record ends with its
+//! name block, which follows the `proplst` marker of the root signature table and the sections after it, each
+//! sized. The reader finds the marker in the bytes after the lists (the state tables before it are not
+//! walked), takes the sections and the name block by their sizes, and the next record starts there, so no record
+//! start is searched for. The result is held to the declared effect count and the end of the file: a record without
+//! its marker, whose sections or name block do not fit, or a file that does not end with the last record is refused.
+//! Both files seen (`sga_win32_60_final.awc` with 388 effects, and its `_init` with 9) read to their last byte this way.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -176,18 +183,69 @@ fn program<'a>(c: &mut Cursor<'a>, group: usize) -> Result<Program<'a>> {
     })
 }
 
-/// Whether a record starts at `p`: a length byte, an identifier of that many bytes less a NUL, and a nonzero word.
-fn record_start(data: &[u8], p: usize) -> Option<usize> {
-    let length = usize::from(*data.get(p)?);
-    let name = data.get(p.checked_add(1)?..p.checked_add(1)?.checked_add(length)?)?;
-    let (nul, text) = name.split_last().map(|(l, t)| (*l, t))?;
-    let ok = nul == 0
-        && text.len() >= 3
-        && text
-            .first()
-            .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
-        && text.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_');
-    ok.then_some(length)
+/// The marker of the root signature table, which the sections and the name block follow.
+const ROOT_SIGNATURES: &[u8] = b"proplst\0";
+
+/// One effect record, from its name to the end of its name block (see the module documentation).
+fn effect<'a>(c: &mut Cursor<'a>, groups: &[Vec<Program<'a>>; 8]) -> Result<Effect<'a>> {
+    let name = c.name()?;
+    let word = c.u32()?;
+    let mut programs: [Vec<u32>; 6] = Default::default();
+    for (list, &g) in programs.iter_mut().zip(EFFECT_LISTS.iter()) {
+        let n = c.u32()? as usize;
+        if n > c.data.len().saturating_sub(c.at).saturating_div(4) {
+            return c.fail(format!("{name}: a list of {n} programs"));
+        }
+        let available = groups.get(g).map_or(0, Vec::len);
+        for _ in 0..n {
+            let index = c.u32()?;
+            if index as usize >= available {
+                return c.fail(format!("{name}: program {index} of a group of {available}"));
+            }
+            list.push(index);
+        }
+    }
+    let rest_start = c.at;
+    let tail = c.data.get(rest_start..).unwrap_or_default();
+    let marker = tail
+        .windows(ROOT_SIGNATURES.len())
+        .position(|w| w == ROOT_SIGNATURES)
+        .ok_or_else(|| {
+            invalid(
+                "sgd2",
+                rest_start as u64,
+                format!("{name}: no root signature table"),
+            )
+        })?;
+    c.at = rest_start
+        .saturating_add(marker)
+        .saturating_add(ROOT_SIGNATURES.len());
+    let sections = c.u32()? as usize;
+    // each section takes at least its size word
+    if sections > c.data.len().saturating_sub(c.at).saturating_div(4) {
+        return c.fail(format!("{name}: {sections} root signature sections"));
+    }
+    for _ in 0..sections {
+        let size = c.u32()? as usize;
+        c.take(size)?;
+    }
+    let size = c.u32()? as usize;
+    let names = c.take(size)?;
+    if names.first() != Some(&0) || names.last() != Some(&0) {
+        return c.fail(format!(
+            "{name}: a name block that does not start and end with a NUL"
+        ));
+    }
+    let rest = c
+        .data
+        .get(rest_start..c.at)
+        .ok_or_else(|| invalid("sgd2", rest_start as u64, "an effect without its rest"))?;
+    Ok(Effect {
+        name,
+        word,
+        programs,
+        rest,
+    })
 }
 
 /// Read a shader database. The whole file is consumed.
@@ -196,7 +254,7 @@ pub fn parse(data: &[u8]) -> Result<Sgd2<'_>> {
     if c.take(4)? != MAGIC {
         return invalid_magic(data);
     }
-    let mut groups: Vec<Vec<Program<'_>>> = Vec::new();
+    let mut groups: Vec<Vec<Program<'_>>> = Vec::with_capacity(8);
     for (g, stage) in GROUP_STAGES.iter().enumerate() {
         let count = c.u32()? as usize;
         if stage.is_none() && count != 0 {
@@ -217,64 +275,19 @@ pub fn parse(data: &[u8]) -> Result<Sgd2<'_>> {
         .map_err(|_| invalid("sgd2", c.at as u64, "eight groups"))?;
 
     let declared = c.u32()? as usize;
-    // each record: its name and word, the lists, the rest
-    let mut starts = Vec::new();
-    let mut p = c.at;
-    while p < data.len() {
-        if let Some(length) = record_start(data, p) {
-            starts.push(p);
-            // the next record starts after at least this name, word and six counts
-            p = p
-                .saturating_add(1)
-                .saturating_add(length)
-                .saturating_add(4)
-                .saturating_add(24);
-        } else {
-            p = p.saturating_add(1);
-        }
-    }
-    if starts.len() != declared {
-        return c.fail(format!(
-            "{declared} effects declared, {} record starts found",
-            starts.len()
-        ));
-    }
-    if starts.first().copied() != Some(c.at) && declared != 0 {
-        return c.fail("bytes between the effect count and the first effect");
+    // each record takes more than a name, a word and six counts
+    if declared > data.len().saturating_sub(c.at).saturating_div(40) {
+        return c.fail(format!("{declared} effects in {} bytes", data.len()));
     }
     let mut effects = Vec::with_capacity(declared);
-    for (i, &start) in starts.iter().enumerate() {
-        let end = starts.get(i.saturating_add(1)).copied().unwrap_or(data.len());
-        let record = data
-            .get(start..end)
-            .ok_or_else(|| invalid("sgd2", start as u64, "an effect past the file"))?;
-        let mut r = Cursor { data: record, at: 0 };
-        let name = r.name().map_err(|e| invalid("sgd2", start as u64, e))?;
-        let word = r.u32()?;
-        let mut programs: [Vec<u32>; 6] = Default::default();
-        for (list, &g) in programs.iter_mut().zip(EFFECT_LISTS.iter()) {
-            let n = r.u32()? as usize;
-            if n > record.len().saturating_div(4) {
-                return r.fail(format!("{name}: a list of {n} programs"));
-            }
-            let available = groups.get(g).map_or(0, Vec::len);
-            for _ in 0..n {
-                let index = r.u32()?;
-                if index as usize >= available {
-                    return r.fail(format!("{name}: program {index} of a group of {available}"));
-                }
-                list.push(index);
-            }
-        }
-        let rest = record
-            .get(r.at..)
-            .ok_or_else(|| invalid("sgd2", start as u64, "an effect without its rest"))?;
-        effects.push(Effect {
-            name,
-            word,
-            programs,
-            rest,
-        });
+    for _ in 0..declared {
+        effects.push(effect(&mut c, &groups)?);
+    }
+    if c.at != data.len() {
+        return c.fail(format!(
+            "{} bytes after the last of {declared} effects",
+            data.len().saturating_sub(c.at)
+        ));
     }
     Ok(Sgd2 { groups, effects })
 }
@@ -341,11 +354,21 @@ mod tests {
                     b.extend(i.to_le_bytes());
                 }
             }
-            // a table and a string table, kept as stored
-            b.extend([0u8, 0, 1, 5, 0x40, 0x41]);
-            b.extend(b"\0Param\0");
+            tail(&mut b);
         }
         b
+    }
+    /// What follows an effect's lists: a table kept as stored, the root signature marker, two sections and the name block.
+    fn tail(b: &mut Vec<u8>) {
+        b.extend([0u8, 0, 1, 5, 0x40, 0x41]);
+        b.extend(ROOT_SIGNATURES);
+        b.extend(2u32.to_le_bytes());
+        for section in [&[1u8, 2, 3][..], &[][..]] {
+            b.extend(u32::try_from(section.len()).unwrap().to_le_bytes());
+            b.extend(section);
+        }
+        b.extend(7u32.to_le_bytes());
+        b.extend(b"\0Param\0");
     }
 
     #[test]
@@ -376,17 +399,64 @@ mod tests {
     #[test]
     fn what_the_layout_does_not_hold_is_refused() {
         let good = database();
-        // the last effect's rest runs to the end of the file, so a cut inside it is not detectable
-        for n in 0..good.len() - "\u{0}\u{0}\u{1}\u{5}@A\0Param\0".len() {
+        // a record ends with its name block, so a cut anywhere, the last record's tail included, is detected
+        for n in 0..good.len() {
             assert!(parse(&good[..n]).is_err(), "a database cut at {n}");
         }
-        // (bytes after the last effect belong to its rest: a record's size is not stored)
+        // and so is anything after the last record
+        let mut more = good.clone();
+        more.extend([0u8; 3]);
+        assert!(
+            parse(&more)
+                .unwrap_err()
+                .to_string()
+                .contains("3 bytes after the last of 2 effects")
+        );
         let mut tag = good.clone();
         tag[4 + 4 + 1 + "P0_0_Wrapped".len() + 1] = 0x33;
         assert!(parse(&tag).unwrap_err().to_string().contains("tag 0x33"));
         let mut wrong = good.clone();
         wrong[0] = b'X';
         assert!(parse(&wrong).unwrap_err().to_string().contains("not SGD2"));
+    }
+
+    /// A record's end is where its name block ends, whatever its name looks like: an effect named with two characters
+    /// (the `_init` database has one) reads, and a record whose marker, sections or name block are wrong is refused
+    /// instead of taking the next record's.
+    #[test]
+    fn a_record_ends_with_its_name_block() {
+        let mut bytes = database();
+        let first = bytes.windows(6).position(|w| w == b"alpha\0").unwrap();
+        // rename the first effect to "im" (length byte, two characters, NUL), keeping the file's length by dropping bytes
+        let mut renamed = bytes[..first - 1].to_vec();
+        renamed.extend([3, b'i', b'm', 0]);
+        renamed.extend(&bytes[first + "alpha\0".len()..]);
+        let db = parse(&renamed).unwrap();
+        assert_eq!((db.effects[0].name, db.effects[1].name), ("im", "beta_x"));
+        // no marker in the first record: it would take the second's, and the count is then one short
+        let marker = bytes.windows(8).position(|w| w == ROOT_SIGNATURES).unwrap();
+        bytes[marker] = b'P';
+        assert!(parse(&bytes).is_err());
+        // a name block that is not a string table
+        let mut blocks = database();
+        let end = blocks.len();
+        blocks[end - 1] = b'x';
+        assert!(
+            parse(&blocks)
+                .unwrap_err()
+                .to_string()
+                .contains("a name block that does not start and end with a NUL")
+        );
+        // more sections than the file has bytes for
+        let mut sections = database();
+        let at = sections.windows(8).position(|w| w == ROOT_SIGNATURES).unwrap() + 8;
+        sections[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(
+            parse(&sections)
+                .unwrap_err()
+                .to_string()
+                .contains("root signature sections")
+        );
     }
 
     #[test]

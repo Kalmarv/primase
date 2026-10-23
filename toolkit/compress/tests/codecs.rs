@@ -115,3 +115,37 @@ fn zstd_one_exact_frame() -> Result<()> {
     assert!(Zstd.decompress(&raw[..raw.len() - 1], 5).is_err());
     Ok(())
 }
+
+/// A stream of unstated size inflates to what it holds, memory following the output and not the bound; more than the
+/// bound, a missing end, trailing input and a damaged stream are refused.
+#[test]
+fn deflate_of_an_unstated_size_is_bounded_by_its_output() -> Result<()> {
+    use primase_compress::DEFLATE_MAX_RATIO;
+    let data: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+    let packed = Deflate.compress(&data)?;
+    assert_eq!(Deflate.decompress_up_to(&packed, data.len())?, data);
+    assert_eq!(Deflate.decompress_up_to(&packed, usize::MAX)?, data);
+    assert!(matches!(
+        Deflate.decompress_up_to(&packed, data.len() - 1),
+        Err(Error::Size { expected, actual }) if expected == data.len() - 1 && actual > expected
+    ));
+    // a run: the stream is tiny and the output the most it can be
+    let zeros = Deflate.compress(&vec![0u8; 1 << 20])?;
+    assert!(
+        zeros.len() * DEFLATE_MAX_RATIO >= 1 << 20,
+        "{} bytes",
+        zeros.len()
+    );
+    assert_eq!(Deflate.decompress_up_to(&zeros, 1 << 20)?.len(), 1 << 20);
+    assert!(
+        Deflate
+            .decompress_up_to(&packed[..packed.len() - 1], usize::MAX)
+            .is_err()
+    );
+    let mut trailing = packed.clone();
+    trailing.push(0);
+    assert!(Deflate.decompress_up_to(&trailing, usize::MAX).is_err());
+    assert!(Deflate.decompress_up_to(&[], usize::MAX).is_err());
+    assert!(Deflate.decompress_up_to(&[0xFF; 16], usize::MAX).is_err());
+    Ok(())
+}

@@ -247,6 +247,27 @@ fn a_body_may_end_inside_its_last_page_only() {
     assert!(primase_gta::rage::resource::inflate(&body(full + 1), sys, gfx).is_err());
 }
 
+/// The sizes in a file are its words: a body is not made to allocate what it cannot inflate to.
+#[test]
+fn a_size_the_stored_bytes_cannot_inflate_to_is_refused_before_it_is_allocated() {
+    // a resource: pages of 512 MiB from a body of a few bytes
+    let body = Deflate.compress(&[7u8; 100]).expect("deflate");
+    let e = primase_gta::rage::resource::inflate(&body, PageFlags(12 | 1 << 4), PageFlags(0))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("inflates to at most"), "{e}");
+    // a binary: an entry stating 4 GiB - 1 bytes over 100 stored bytes
+    let keys = Keys::none();
+    let mut bytes = write_rpf(vec![Item::Deflated("a.bin", vec![7; 5000])]);
+    let at = 16 + 16 + 8;
+    bytes[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let path = temp_file("claim.rpf", &bytes);
+    let a = Archive::open(&path, "claim.rpf", &keys).unwrap();
+    let mut f = std::fs::File::open(&path).unwrap();
+    let e = a.binary(&mut f, 1, &keys).unwrap_err().to_string();
+    assert!(e.contains("which inflates to at most"), "{e}");
+}
+
 #[test]
 fn rejects_broken_tables() {
     let keys = Keys::none();

@@ -48,7 +48,12 @@ fn database(groups: [Vec<(&str, Vec<u8>)>; 8], effects: &[(&str, [Vec<u32>; 6])]
                 b.extend(i.to_le_bytes());
             }
         }
+        // a table kept as stored, the root signature marker with one section, and the name block
         b.extend([0u8, 0, 1, 5, 0x40, 0x41]);
+        b.extend(b"proplst\0");
+        b.extend(1u32.to_le_bytes());
+        b.extend(0u32.to_le_bytes());
+        b.extend(7u32.to_le_bytes());
         b.extend(b"\0Param\0");
     }
     b
