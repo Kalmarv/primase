@@ -1028,6 +1028,8 @@ dependencies = [
  "primase-bytes",
  "primase-compress",
  "primase-core",
+ "primase-dxil",
+ "primase-shader",
  "primase-testdata",
  "serde",
  "serde_json",

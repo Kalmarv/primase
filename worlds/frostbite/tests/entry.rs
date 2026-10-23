@@ -91,7 +91,7 @@ fn texture_formats_map_to_core_layouts() {
     }
     assert_eq!(tex_format(66), tex_format(67));
     assert_eq!(resource_type_name(primase_frostbite::TEXTURE), Some("Texture"));
-    assert_eq!(resource_type_name(depot::RTYPE), Some("ShaderBlockDepot"));
+    assert_eq!(resource_type_name(depot::RTYPE), Some("ShaderBlockDepotResource"));
     assert_eq!(resource_type_name(0), None);
 }
 
@@ -190,7 +190,7 @@ fn the_stock_items_toc_lists_and_reads() -> R {
         .collect();
     let mut w = World::new();
     let (b, e) = all.iter().find(|(_, e)| e.kind == Kind::Ebx).unwrap();
-    let doc = src.read_entry(b, e, &mut w)?;
+    let doc = src.read_entry(b, e, &mut w)?[0];
     assert_eq!(w.get::<FrostbiteEntry>(doc).unwrap().name, e.name);
     let component = w.get::<FrostbiteEbx>(doc).unwrap();
     assert_eq!(src.ebx_type(e)?, component.document.root_type);
@@ -208,7 +208,7 @@ fn the_stock_items_toc_lists_and_reads() -> R {
                 })
         })
         .unwrap();
-    let t = src.read_entry(b, e, &mut w)?;
+    let t = src.read_entry(b, e, &mut w)?[0];
     let pixels = w.get::<Texture>(t).unwrap();
     let header = &w.get::<FrostbiteTexture>(t).unwrap().header;
     assert_eq!(
@@ -225,7 +225,7 @@ fn the_stock_items_toc_lists_and_reads() -> R {
         .iter()
         .find(|(_, e)| e.resource_type == Some(depot::RTYPE))
         .unwrap();
-    let d = src.read_entry(b, e, &mut w)?;
+    let d = src.read_entry(b, e, &mut w)?[0];
     let d = w.get::<FrostbiteDepot>(d).unwrap();
     assert_eq!(d.parameters.len(), d.depot.blocks.len());
 

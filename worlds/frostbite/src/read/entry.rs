@@ -1,16 +1,19 @@
 //! One entry of a bundle read into a world: an EBX document as typed values ([`FrostbiteEbx`]), a texture as a core
 //! texture of the levels its chunk holds with its header ([`FrostbiteTexture`]), a ShaderBlockDepot as its keys,
-//! blocks and parameters ([`FrostbiteDepot`]). Every entity also names where it came from ([`FrostbiteEntry`]).
-//! An entry of any other kind or form is refused, named: nothing is guessed.
+//! blocks and parameters ([`FrostbiteDepot`]), a CompiledBytecode resource as one core shader a DXBC container of it
+//! holds (a DXIL container, its interface read from it; [`FrostbiteBytecode`] keeps the bytes around it). Every entity
+//! also names where it came from ([`FrostbiteEntry`]). An entry of any other kind or form is refused, named: nothing
+//! is guessed.
 
+use primase_core::shader::Shader;
 use primase_core::{ColorSpace, Entity, Name, TexFormat, TexRole, Texture, World};
 
 use super::folder::Source;
 use super::listing::{Bundle, Listed};
 use crate::bundle::Kind;
-use crate::components::{FrostbiteDepot, FrostbiteEbx, FrostbiteEntry, FrostbiteTexture};
+use crate::components::{FrostbiteBytecode, FrostbiteDepot, FrostbiteEbx, FrostbiteEntry, FrostbiteTexture};
 use crate::texture::{self, Storage};
-use crate::{Error, Result, depot};
+use crate::{Error, Result, bytecode, depot};
 
 /// The core layout of a Frostbite texture format ordinal (the colour formats the texture reader decodes: 18 and 20
 /// RGBA8, 23 and 24 BGRA8, 54-57 BC1, 58 and 59 BC2, 60 and 61 BC3, 66 and 67 BC7); `None` for any other.
@@ -31,10 +34,12 @@ fn unsupported(entry: &Listed, what: impl std::fmt::Display) -> Error {
 }
 
 impl Source<'_> {
-    /// `entry` of `bundle` as a new entity of `w`. An EBX document, a texture resource and a ShaderBlockDepot are
-    /// read; a chunk, another resource type, or a texture that is not a 2D map of a colour format the texture reader
-    /// decodes is an [`Error::Unsupported`] naming it.
-    pub fn read_entry(&self, bundle: &Bundle, entry: &Listed, w: &mut World) -> Result<Entity> {
+    /// `entry` of `bundle` as new entities of `w`: one, except a CompiledBytecode resource holding several containers
+    /// (a shader each, named `<name>#<n>`). An EBX document, a texture resource, a ShaderBlockDepot and a
+    /// CompiledBytecode resource are read; a chunk, another resource type, a texture that is not a 2D map of a colour
+    /// format the texture reader decodes, or a container whose interface cannot be read is an [`Error::Unsupported`]
+    /// naming it.
+    pub fn read_entry(&self, bundle: &Bundle, entry: &Listed, w: &mut World) -> Result<Vec<Entity>> {
         let bytes = || self.payload(entry.file, entry.size as usize);
         let meta = bundle
             .manifest
@@ -47,6 +52,7 @@ impl Source<'_> {
             Ebx(Box<FrostbiteEbx>),
             Texture(FrostbiteTexture, Texture),
             Depot(FrostbiteDepot),
+            Bytecode(Vec<(Shader, FrostbiteBytecode)>),
         }
         let read = match (entry.kind, entry.resource_type) {
             (Kind::Ebx, _) => Read::Ebx(Box::new(FrostbiteEbx {
@@ -65,6 +71,9 @@ impl Source<'_> {
                     .collect::<Result<Vec<_>>>()?;
                 Read::Depot(FrostbiteDepot { depot, parameters })
             }
+            (Kind::Res, Some(bytecode::RTYPE)) => {
+                Read::Bytecode(bytecode::read(&bytes()?).map_err(|e| unsupported(entry, e))?)
+            }
             (Kind::Res, Some(t)) => {
                 return Err(unsupported(
                     entry,
@@ -79,33 +88,58 @@ impl Source<'_> {
                 ));
             }
         };
-        let e = w.spawn();
-        w.insert(e, Name(entry.name.clone()));
-        w.insert(
-            e,
-            FrostbiteEntry {
-                toc: entry.toc.clone(),
-                bundle: entry.bundle.clone(),
-                kind: entry.kind,
-                name: entry.name.clone(),
-                resource_type: entry.resource_type,
-                size: entry.size,
-                file: entry.file,
-            },
-        );
-        match read {
+        let spawn = |w: &mut World, name: String| {
+            let e = w.spawn();
+            w.insert(e, Name(name));
+            w.insert(
+                e,
+                FrostbiteEntry {
+                    toc: entry.toc.clone(),
+                    bundle: entry.bundle.clone(),
+                    kind: entry.kind,
+                    name: entry.name.clone(),
+                    resource_type: entry.resource_type,
+                    size: entry.size,
+                    file: entry.file,
+                },
+            );
+            e
+        };
+        let entities = match read {
             Read::Ebx(c) => {
+                let e = spawn(w, entry.name.clone());
                 w.insert(e, *c);
+                vec![e]
             }
             Read::Texture(c, t) => {
+                let e = spawn(w, entry.name.clone());
                 w.insert(e, t);
                 w.insert(e, c);
+                vec![e]
             }
             Read::Depot(c) => {
+                let e = spawn(w, entry.name.clone());
                 w.insert(e, c);
+                vec![e]
             }
-        }
-        Ok(e)
+            Read::Bytecode(programs) => {
+                let several = programs.len() > 1;
+                (programs.into_iter().enumerate())
+                    .map(|(i, (shader, c))| {
+                        let name = if several {
+                            format!("{}#{i}", entry.name)
+                        } else {
+                            entry.name.clone()
+                        };
+                        let e = spawn(w, name);
+                        w.insert(e, shader);
+                        w.insert(e, c);
+                        e
+                    })
+                    .collect()
+            }
+        };
+        Ok(entities)
     }
 
     /// The core texture of a texture resource: its header's levels, cut from the chunk the header names (the levels

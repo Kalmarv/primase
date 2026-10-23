@@ -204,3 +204,42 @@ impl Component for FrostbiteDepot {
 fn checked(v: Value) -> Result<Option<Value>, primase_core::JsonError> {
     primase_core::json::to_value(&v).map(Some)
 }
+
+/// Where a `core.shader` came from in a CompiledBytecode resource, and the bytes around its container as stored: the
+/// container's number among the resource's (`index` of `count`) and its offset in the payload, the tag the payload's
+/// header carries at [`crate::bytecode::TAG_AT`] (`RC2S` for the raster and compute programs, `RPTR` for the raytracing
+/// ones), the bytes before the first container (on container 0 only) and the bytes after this container up to the next
+/// or the payload's end. The header's and the trailing fields are not interpreted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrostbiteBytecode {
+    pub index: usize,
+    pub count: usize,
+    pub offset: usize,
+    pub tag: Option<[u8; 4]>,
+    pub before: Vec<u8>,
+    pub after: Vec<u8>,
+}
+
+impl Component for FrostbiteBytecode {
+    const NAME: &'static str = "frostbite.bytecode";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
+        if self.index >= self.count {
+            return Err(format!("container {} of {}", self.index, self.count));
+        }
+        Ok(())
+    }
+    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
+        Ok(Some(json!({
+            "index": self.index,
+            "count": self.count,
+            "offset": self.offset,
+            "tag": self.tag.map(|t| String::from_utf8_lossy(&t).into_owned()),
+            "before_bytes": self.before.len(),
+            "after_bytes": self.after.len(),
+        })))
+    }
+    fn payload_bytes(&self) -> u64 {
+        (self.before.len() + self.after.len()) as u64
+    }
+}

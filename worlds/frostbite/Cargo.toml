@@ -12,12 +12,14 @@ publish.workspace = true
 primase-bytes.workspace = true
 primase-compress.workspace = true
 primase-core.workspace = true
+primase-dxil.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+primase-shader.workspace = true
 primase-testdata.workspace = true
 
 [lints]

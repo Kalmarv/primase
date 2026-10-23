@@ -10,6 +10,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod bundle;
+pub mod bytecode;
 pub mod components;
 pub mod db;
 pub mod depot;

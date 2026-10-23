@@ -114,16 +114,47 @@ impl Bundle {
     }
 }
 
-/// The name of a resource type this crate reads, `None` for any other.
+/// The name of a resource type the game's executable names and this crate knows, `None` for any other.
 pub fn resource_type_name(rtype: u32) -> Option<&'static str> {
-    Some(match rtype {
-        crate::TEXTURE => "Texture",
-        crate::MESHSET => "MeshSet",
-        depot::RTYPE => "ShaderBlockDepot",
-        lookup::PROGRAM_LOOKUP => "ProgramLookup",
-        lookup::TEXTURE_LOOKUP => "StreamableTextureSetLookup",
-        _ => return None,
-    })
+    TYPE_NAMES
+        .iter()
+        .find(|(id, _)| *id == rtype)
+        .map(|(_, name)| *name)
+}
+
+/// The resource types this crate names and the names the game's executable holds for them (the id is the djb2-xor hash
+/// of the lowercased name: [`type_id`]). A texture, a ShaderBlockDepotResource and a CompiledBytecode are read
+/// ([`Source::read_entry`]); the others are named only.
+pub const TYPE_NAMES: &[(u32, &str)] = &[
+    (crate::TEXTURE, "Texture"),
+    (crate::MESHSET, "MeshSet"),
+    (depot::RTYPE, "ShaderBlockDepotResource"),
+    (crate::bytecode::RTYPE, "CompiledBytecode"),
+    (lookup::PROGRAM_LOOKUP, "ExpressionShaderDatabase"),
+    (
+        lookup::TEXTURE_LOOKUP,
+        "ExpressionShaderStreamableTextureSetLookupTable",
+    ),
+    (0x2FEC_6526, "ShaderStateAssetId"),
+    (0xD489_FACB, "ExpressionShaderRasterPermutation"),
+    (0x95CE_62DD, "ExpressionShaderComputePermutation"),
+    (0xA19B_025D, "ExpressionShaderBindingSet"),
+    (0x7D98_F632, "ExpressionShaderInputLayout"),
+    (0x2500_47B2, "ExpressionShaderRasterPermutationSharedData"),
+    (0x879B_A711, "ExpressionShaderPermutationSharedData"),
+    (0x7A63_0735, "ExpressionShaderStreamableTextureSet"),
+    (0xA895_7ED6, "ExpressionShaderRootSlotInitData"),
+    (0x589B_B36E, "ExpressionShaderPassBinding"),
+    (0x6A5B_E5DB, "ExpressionShaderBindingSignature"),
+    (0xF434_940D, "ShaderParameterCollectionTable"),
+];
+
+/// A resource type's id from its name: the lowercased name hashed with djb2 and xor (`h = 0x1505`, then
+/// `h = h * 33 ^ byte`).
+pub fn type_id(name: &str) -> u32 {
+    name.to_ascii_lowercase()
+        .bytes()
+        .fold(0x1505u32, |h, b| h.wrapping_mul(0x21) ^ u32::from(b))
 }
 
 impl Source<'_> {
