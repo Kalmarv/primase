@@ -222,6 +222,12 @@ pub(super) enum Op {
         kind: QueryKind,
         level: Option<u32>,
     },
+    /// Copy words of local memory (a whole array about to be returned, as it is now).
+    CopyWords {
+        src: Loc,
+        dst: u32,
+        words: u32,
+    },
     ArrLen {
         gid: u32,
         elem_words: u32,
@@ -268,7 +274,13 @@ pub(super) enum LevelOp {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Member {
     Reg(u32, u8),
-    Mem { word: u32, count: u32, width: u8 },
+    /// `keep` is the register of the copy that made them, which a dead-operation pass must not drop.
+    Mem {
+        word: u32,
+        count: u32,
+        width: u8,
+        keep: Option<u32>,
+    },
 }
 
 #[derive(Clone, Debug)]

@@ -562,6 +562,16 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                         }
                     }
                 }
+                Op::CopyWords { src, dst, words } => {
+                    for l in 0..N {
+                        if active.has(l) {
+                            for k in 0..*words {
+                                let w = self.mem_get(*src, l, k, 1)?[0];
+                                self.mem[l * self.c.local_words + (*dst + k) as usize] = w;
+                            }
+                        }
+                    }
+                }
                 Op::ArrLen {
                     gid,
                     elem_words,
@@ -900,8 +910,12 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                                 *cell = new;
                                 (old, swapped)
                             } else {
-                                let GlobalKind::Storage(view) = self.c.globals[g as usize].kind else {
-                                    return Err("atomic on a read-only global".into());
+                                let view = match self.c.globals[g as usize].kind {
+                                    GlobalKind::Storage(view) => view,
+                                    GlobalKind::StorageArray(..) => {
+                                        return Err("atomic on an element of an array of buffers this run does not hold (only a compute run writes them; the backend is not asked for element atomics)".into());
+                                    }
+                                    _ => return Err("atomic on a read-only global".into()),
                                 };
                                 if *fun != AtomOp::Add {
                                     return Err(format!(
@@ -1137,7 +1151,9 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                                             .copy_from_slice(&self.regs[s as usize * N + l][..n as usize]);
                                         members.push(r);
                                     }
-                                    Member::Mem { word, count, width } => {
+                                    Member::Mem {
+                                        word, count, width, ..
+                                    } => {
                                         for k in 0..count as usize {
                                             let at =
                                                 l * self.c.local_words + word as usize + k * width as usize;

@@ -205,6 +205,8 @@ pub(super) fn compile(
     let mut agg_of: Vec<Option<Vec<(u32, u8)>>> = vec![None; n_expr];
     // a whole array of a local, read as a value (words, element count, element width)
     let mut mem_agg: Vec<Option<(u32, u32, u8)>> = vec![None; n_expr];
+    // the register of the copy that holds a loaded array, which keeps the copy alive
+    let mut mem_keep: Vec<Option<u32>> = vec![None; n_expr];
     // the members of a structure that has array members kept in memory
     let mut members_of: Vec<Option<Vec<Member>>> = vec![None; n_expr];
     let mut inits: Vec<(u32, Reg)> = Vec::new();
@@ -332,9 +334,12 @@ pub(super) fn compile(
                         let mut list = Vec::new();
                         for c in components {
                             match (&mem_agg[c.index()], &agg_of[c.index()]) {
-                                (&Some((word, count, width)), _) => {
-                                    list.push(Member::Mem { word, count, width })
-                                }
+                                (&Some((word, count, width)), _) => list.push(Member::Mem {
+                                    word,
+                                    count,
+                                    width,
+                                    keep: mem_keep[c.index()],
+                                }),
                                 (None, Some(inner)) => {
                                     list.extend(inner.iter().map(|&(s, n)| Member::Reg(s, n)))
                                 }
@@ -533,7 +538,16 @@ pub(super) fn compile(
                 {
                     return Err("load of an array of anything but scalars and vectors".into());
                 }
-                mem_agg[i] = Some((word, n.get(), width as u8));
+                // the array as it is now: a store between this load and the return must not change the value
+                let snapshot = local_words;
+                local_words += n.get() * width;
+                op_of[i] = Some(Op::CopyWords {
+                    src: Loc::Local(word),
+                    dst: snapshot,
+                    words: n.get() * width,
+                });
+                mem_agg[i] = Some((snapshot, n.get(), width as u8));
+                mem_keep[i] = Some(slot[i]);
             }
             E::Load { pointer } => {
                 let Shape::V(_, n) = sh else {
@@ -1004,8 +1018,10 @@ pub(super) fn compile(
                             },
                         };
                         for m in &members {
-                            if let Member::Reg(s, _) = m {
-                                cx.uses[*s as usize] += 1;
+                            match m {
+                                Member::Reg(s, _) => cx.uses[*s as usize] += 1,
+                                Member::Mem { keep: Some(s), .. } => cx.uses[*s as usize] += 1,
+                                Member::Mem { .. } => {}
                             }
                         }
                     }
