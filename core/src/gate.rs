@@ -140,7 +140,8 @@ impl JsonCompare {
 
 /// Compare two JSON documents as parsed values: objects by key (key order ignored), arrays in order, strings,
 /// booleans and null exactly, two integers exactly, other numbers by value: equal as f64, else equal as f32
-/// (counted), else within `f32_ulps` f32 steps of each other (counted), else different. A negative zero differs
+/// (counted), else within `f32_ulps` f32 steps of each other (counted), else different. An integer beyond 2^53 has no
+/// f64 of its own, so against a float it is always different. A negative zero differs
 /// from a positive one unless `f32_ulps` allows a step.
 pub fn compare_json(a: &serde_json::Value, b: &serde_json::Value, f32_ulps: u64) -> JsonCompare {
     let mut c = JsonCompare::default();
@@ -183,6 +184,22 @@ fn compare_value(a: &serde_json::Value, b: &serde_json::Value, path: &str, ulps:
                 if x != y {
                     differ(c, path, format!("{x} vs {y}"));
                 }
+                return;
+            }
+            // an integer an f64 cannot hold exactly is equal to no float
+            let beyond_f64 = |n: &serde_json::Number| {
+                const EXACT: u64 = 1 << 53;
+                n.as_u64().map_or_else(
+                    || n.as_i64().is_some_and(|i| i.unsigned_abs() > EXACT),
+                    |u| u > EXACT,
+                )
+            };
+            if beyond_f64(x) || beyond_f64(y) {
+                differ(
+                    c,
+                    path,
+                    format!("{x} vs {y}: an integer beyond 2^53 against a float"),
+                );
                 return;
             }
             let (fx, fy) = (
@@ -280,6 +297,11 @@ mod tests {
         assert_eq!((w.within_ulps, w.max_ulps), (1, 1));
         // integers are exact, whatever the tolerance
         assert!(!compare_json(&p("[16777217]"), &p("[16777216]"), 4).equal());
+        // an integer beyond 2^53 has no f64 of its own: against the float it rounds to, a difference
+        assert!(!compare_json(&p("[9007199254740993]"), &p("[9007199254740992.0]"), 0).equal());
+        assert!(!compare_json(&p("[-9007199254740993]"), &p("[-9007199254740992.0]"), 4).equal());
+        // up to 2^53 an integer and its float are equal
+        assert!(compare_json(&p("[9007199254740992]"), &p("[9007199254740992.0]"), 0).equal());
         assert_eq!(f32_ulps(0.0, -0.0), 0);
         assert_eq!(f32_ulps(-f32::from_bits(1), f32::from_bits(1)), 2);
     }

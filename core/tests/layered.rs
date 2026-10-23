@@ -84,6 +84,8 @@ fn channels_evaluate_by_hand() {
     assert!((l.evaluate(&[0.2, 0.6, 0.25]) - 0.3).abs() < 1e-7);
     assert!((mask_value([0.5, 0.5, 0., 0.], -0.1, [1., 0.5, 0., 0.]) - 0.65).abs() < 1e-7);
     assert_eq!(over_as_sum([0., 0.5, 0.25, 0.], 3), [0.375, 0.375, 0.25, 0.]);
+    // no more slots than the four there are
+    assert_eq!(over_as_sum([0.5; 4], 9), over_as_sum([0.5; 4], 4));
 }
 
 #[test]

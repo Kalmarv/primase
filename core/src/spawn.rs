@@ -126,14 +126,16 @@ impl Pass for PlaceSpawn {
         let ground = match self.at {
             SpawnAt::Ground(g) => g,
             SpawnAt::Centre => {
-                let (mut east, mut north): (Vec<f32>, Vec<f32>) = w
-                    .iter::<Instance>()
-                    .map(|(e, _)| {
-                        let t = w.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
-                        let [x, n] = crate::frame::ground(t.cols[3]);
-                        (x, n)
-                    })
-                    .unzip();
+                // a placement without a transform has no place: it would count as the origin
+                let mut grounds = Vec::new();
+                for (e, _) in w.iter::<Instance>() {
+                    let t = w.get::<Transform>(e).ok_or_else(|| {
+                        format!("place-spawn at=centre: placement {e:?} has no core.transform, so no place to count")
+                    })?;
+                    grounds.push(crate::frame::ground(t.cols[3]));
+                }
+                let (mut east, mut north): (Vec<f32>, Vec<f32>) =
+                    grounds.into_iter().map(|[x, n]| (x, n)).unzip();
                 if east.is_empty() {
                     return Err("place-spawn at=centre: the world has no placement to centre on".into());
                 }
@@ -221,6 +223,28 @@ mod tests {
         assert!(!w.has::<Transform>(e));
         assert!(report.steps[0].log.placed.contains(&e));
         assert!(w.verify_components().is_empty());
+    }
+
+    /// A placement without a transform has no place: the centre refuses it, naming it, rather than counting the origin.
+    #[test]
+    fn a_placement_without_a_transform_is_refused() {
+        let mut w = World::new();
+        placed(&mut w, 10., 10.);
+        let proto = w.spawn();
+        let bare = w.spawn();
+        w.insert(
+            bare,
+            Instance {
+                prototype: proto,
+                variant: 0,
+            },
+        );
+        let err = run(&mut w, "place-spawn").unwrap_err();
+        assert!(
+            err.contains("has no core.transform") && err.contains(&format!("{bare:?}")),
+            "{err}"
+        );
+        assert!(w.iter::<Marker>().next().is_none());
     }
 
     #[test]

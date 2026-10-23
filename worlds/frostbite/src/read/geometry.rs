@@ -11,7 +11,8 @@ use crate::{Error, Result, geometry};
 impl Source<'_> {
     /// The geometry of `meshset` (an entity [`Source::read_entry`] made from a MeshSet of `bundle`, whose LODs' geometry
     /// chunks the bundle or its TOC holds): level 0 as the entity's own `core.mesh` and every other level as an entity
-    /// of its own holding that level's mesh, listed in the entity's `core.lods` (named for the entity and `#lod<n>`).
+    /// of its own holding that level's mesh, listed in the entity's `core.lods` (unnamed: the name, like everything that is the entity's whichever form is drawn,
+    /// stays on it).
     /// A primitive is a section: its position, texture coordinate and colour streams as stored, its triangles, and the
     /// section's material (the `frostbite.material` of its key where [`Source::resolve_materials`] made one); the
     /// elements [`crate::geometry`] does not decode are in each level's `frostbite.vertex_elements`. Everything is read
@@ -63,7 +64,6 @@ impl Source<'_> {
                 continue;
             }
             let e = w.spawn();
-            w.insert(e, Name(format!("{name}#lod{l}")));
             w.insert(e, mesh);
             w.insert(e, elements);
             forms.push(LodForm {

@@ -1760,3 +1760,27 @@ fn ids_the_pass_never_made_are_refused() {
         events();
     }
 }
+
+/// A plan names each part by its group's key: a key twice is refused.
+#[test]
+fn a_partition_key_is_used_once() {
+    let mut w = World::new();
+    let group = |key: &str| primase_core::convert::PartitionGroup {
+        key: key.into(),
+        ..Default::default()
+    };
+    w.insert_resource(PartitionPlan {
+        by: "test".into(),
+        groups: vec![group("cell 0,0"), group("cell 0,1")],
+    });
+    assert!(w.verify_resources().is_empty());
+    w.insert_resource(PartitionPlan {
+        by: "test".into(),
+        groups: vec![group("cell 0,0"), group("cell 0,0")],
+    });
+    let found = w.verify_resources();
+    assert!(
+        found.iter().any(|(_, m)| m.contains("\"cell 0,0\" twice")),
+        "{found:?}"
+    );
+}

@@ -368,6 +368,14 @@ impl Resource for PartitionPlan {
             .collect();
         Ok(Some(serde_json::json!({ "by": self.by, "groups": groups })))
     }
+    /// Each group's key once: reports and the conversion name a part by it.
+    fn verify(&self, _w: &World) -> std::result::Result<(), String> {
+        let mut keys = BTreeSet::new();
+        match self.groups.iter().find(|g| !keys.insert(g.key.as_str())) {
+            Some(g) => Err(format!("partition group key {:?} twice", g.key)),
+            None => Ok(()),
+        }
+    }
     fn references(&self, out: &mut Vec<Entity>) {
         for g in &self.groups {
             out.extend(g.roots.iter().chain(&g.context).copied());

@@ -302,6 +302,10 @@ impl Component for Morphs {
             {
                 return Err(at("frame weights not finite and increasing".into()));
             }
+            // the zero point is no deltas: a frame there would contradict it
+            if t.frames.iter().any(|f| f.weight == 0.0) {
+                return Err(at("a frame at weight 0, where the delta is zero".into()));
+            }
             for (k, f) in t.frames.iter().enumerate() {
                 if let Some(m) = mesh
                     && m.primitives().len() != f.primitives.len()

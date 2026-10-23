@@ -8,7 +8,10 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::pass::{Options, Pass, PassLog};
-use crate::{Component, Entity, Instance, JsonError, MaterialVariants, Mesh, MeshFile, Transform, World};
+use crate::{
+    Collision, Component, Entity, Instance, JsonError, MaterialVariants, Mesh, MeshFile, Name, Source,
+    Transform, World,
+};
 
 /// A prototype's levels of detail (`core.lods`), on the prototype. Its own mesh is one form, at level `detail` (0 the
 /// finest, larger coarser: GTA's 0 high to 3 very low); `forms` are its other forms, as the source lists them
@@ -75,7 +78,8 @@ impl Component for Lods {
         out.extend(self.forms.iter().map(|f| f.form));
     }
     /// `default`, when there is one, one of the forms; with other forms, on an entity with a mesh; each form another
-    /// alive entity, listed once, not placed and without forms of its own. [`SelectLod`] checks it before it changes
+    /// alive entity, listed once, not placed, without forms of its own, and without what stays with the prototype
+    /// whichever form is drawn (`core.name`, `core.source`, `core.collision`). [`SelectLod`] checks it before it changes
     /// anything, so it checks liveness itself, beside the world's check of every reference.
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
         if let Some(d) = self.default
@@ -96,6 +100,19 @@ impl Component for Lods {
             }
             if w.has::<Instance>(f.form) || w.has::<Transform>(f.form) || w.has::<Lods>(f.form) {
                 return Err(format!("form {:?} is placed or has forms of its own", f.form));
+            }
+            if let Some(name) = [
+                (w.has::<Name>(f.form), Name::NAME),
+                (w.has::<Source>(f.form), Source::NAME),
+                (w.has::<Collision>(f.form), Collision::NAME),
+            ]
+            .into_iter()
+            .find_map(|(has, name)| has.then_some(name))
+            {
+                return Err(format!(
+                    "form {:?} holds {name}, which stays with the prototype whichever form is drawn",
+                    f.form
+                ));
             }
         }
         Ok(())
@@ -263,15 +280,25 @@ impl Pass for SelectLod {
 mod tests {
     use super::*;
     use crate::pass::{PassManager, PassRegistry, RunReport};
-    use crate::{Name, Opaque, OpaqueData};
+    use crate::{Opaque, OpaqueData};
+
+    /// A dialect's per-form data, as a reader attaches it to each form: what a test sees moving with the form taken.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Tag(String);
+    impl Component for Tag {
+        const NAME: &'static str = "game.tag";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
+    }
 
     /// A prototype at level 0 with two other forms (level 1 from a file, level 3 drawing nothing), default the
-    /// level-1 form; each form names itself and the coarse one carries opaque game data, so a test sees what moved.
+    /// level-1 form; each form tags itself and the coarse one carries opaque game data, so a test sees what moved; the
+    /// name is the prototype's.
     fn world() -> (World, Entity, [Entity; 2]) {
         let mut w = World::new();
         let proto = w.spawn();
         w.insert(proto, Mesh::default());
-        w.insert(proto, Name("finest".into()));
+        w.insert(proto, Name("the prototype".into()));
+        w.insert(proto, Tag("finest".into()));
         let coarse = w.spawn();
         w.insert(
             coarse,
@@ -281,7 +308,7 @@ mod tests {
                 materials: vec![],
             },
         );
-        w.insert(coarse, Name("coarse".into()));
+        w.insert(coarse, Tag("coarse".into()));
         w.insert_opaque(
             coarse,
             "game.form",
@@ -292,7 +319,7 @@ mod tests {
         )
         .unwrap();
         let nothing = w.spawn();
-        w.insert(nothing, Name("nothing".into()));
+        w.insert(nothing, Tag("nothing".into()));
         w.insert(
             proto,
             Lods {
@@ -346,6 +373,24 @@ mod tests {
         assert_eq!(w.subset(&keep).verify_components(), vec![]);
     }
 
+    /// What stays with the prototype (its name, identity, collision) is refused on a form.
+    #[test]
+    fn a_form_holds_nothing_that_stays_with_the_prototype() {
+        let (mut w, proto, forms) = world();
+        w.insert(forms[1], Name("nothing".into()));
+        let err = w.get::<Lods>(proto).unwrap().verify(proto, &w).unwrap_err();
+        assert!(err.contains("core.name"), "{err}");
+        w.remove::<Name>(forms[1]);
+        w.insert(forms[1], Source("lod/1".into()));
+        assert!(
+            w.get::<Lods>(proto)
+                .unwrap()
+                .verify(proto, &w)
+                .unwrap_err()
+                .contains("core.source")
+        );
+    }
+
     #[test]
     fn choice_follows_the_reference_rule() {
         let lods = |detail: u8, levels: &[u8], default: Option<usize>| Lods {
@@ -383,7 +428,7 @@ mod tests {
         let mut report = RunReport::default();
         m.run(&mut w, &m.registry.parse("select-lod").unwrap(), &mut report)
             .unwrap();
-        assert_eq!(w.get::<Name>(proto).unwrap().0, "finest");
+        assert_eq!(w.get::<Tag>(proto).unwrap().0, "finest");
         assert!(forms.iter().all(|f| !w.is_alive(*f)));
         let step = &report.steps[0];
         assert_eq!(
@@ -426,7 +471,12 @@ mod tests {
             let mut report = RunReport::default();
             m.run(&mut w, &m.registry.parse(pipeline).unwrap(), &mut report)
                 .unwrap();
-            assert_eq!(w.get::<Name>(proto).unwrap().0, name, "{pipeline}");
+            assert_eq!(w.get::<Tag>(proto).unwrap().0, name, "{pipeline}");
+            assert_eq!(
+                w.get::<Name>(proto).unwrap().0,
+                "the prototype",
+                "{pipeline}: the name stays"
+            );
             assert_eq!(
                 (w.has::<Mesh>(proto), w.has::<MeshFile>(proto)),
                 (mesh, file),
@@ -492,7 +542,7 @@ mod tests {
             let mut report = RunReport::default();
             m.run(&mut w, &m.registry.parse("select-lod").unwrap(), &mut report)
                 .unwrap();
-            assert_eq!(w.get::<Name>(proto).unwrap().0, "coarse");
+            assert_eq!(w.get::<Tag>(proto).unwrap().0, "coarse");
             assert!(
                 !w.has::<PerPrimitive>(proto) && !w.has::<MaterialVariants>(proto),
                 "loaded {loaded}: the own form's per-primitive data stayed"
@@ -540,7 +590,7 @@ mod tests {
         assert!(err.to_string().contains("game.thing"), "{err}");
         assert!(w.has::<Mesh>(proto) && w.has::<Lods>(proto));
         assert!(forms.iter().all(|f| w.is_alive(*f)));
-        assert_eq!(w.get::<Name>(proto).unwrap().0, "finest");
+        assert_eq!(w.get::<Tag>(proto).unwrap().0, "finest");
         m.run(
             &mut w,
             &m.registry.parse("select-lod{form=finest}").unwrap(),
@@ -568,7 +618,7 @@ mod tests {
             .run(&mut w, &mut PassLog::default())
             .unwrap_err();
         assert!(err.contains("default form 99 of 1"), "{err}");
-        assert_eq!(w.get::<Name>(proto).unwrap().0, "finest");
+        assert_eq!(w.get::<Tag>(proto).unwrap().0, "finest");
         assert!(forms.iter().all(|e| w.is_alive(*e)) && w.has::<Lods>(second));
         // a form shared by two prototypes
         w.insert(second, w.get::<Lods>(proto).unwrap().clone());
@@ -594,7 +644,7 @@ mod tests {
             "{err}"
         );
         assert!(forms.iter().all(|e| w.is_alive(*e)));
-        assert_eq!(w.get::<Name>(proto).unwrap().0, "finest");
+        assert_eq!(w.get::<Tag>(proto).unwrap().0, "finest");
     }
 
     #[test]

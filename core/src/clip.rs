@@ -239,7 +239,7 @@ impl Component for Clip {
     /// or scale; morphs and controls a scalar), its target exists in the definition it names, one channel per target
     /// and property; keys and values as [`Channel`] says, rotations unit quaternions (within 1e-3); root motion's
     /// likewise; an additive reference a `core.rig_pose` or a `core.clip` with the frame's time within its duration.
-    fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
+    fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
         if !self.duration.is_finite() || self.duration < 0.0 {
             return Err(format!("duration {} not finite and non-negative", self.duration));
         }
@@ -308,6 +308,21 @@ impl Component for Clip {
                         "additive reference time {time} outside its clip's [0, {}]",
                         c.duration
                     ));
+                }
+                // clips additive to clips' frames: the chain ends (in a pose, or a clip that is not additive), or a
+                // clip's values would be relative to themselves
+                let mut seen = BTreeSet::from([e]);
+                let mut next = Some(clip);
+                while let Some(at) = next {
+                    if !seen.insert(at) {
+                        return Err(format!(
+                            "additive references from {e:?} come back to {at:?}: a cycle"
+                        ));
+                    }
+                    next = match w.get::<Clip>(at).and_then(|c| c.additive) {
+                        Some(AdditiveReference::ClipFrame { clip, .. }) => Some(clip),
+                        _ => None,
+                    };
                 }
             }
             _ => {}
@@ -602,6 +617,25 @@ mod tests {
                     Some(AdditiveReference::ClipFrame { clip: c, time: 3.0 })
             },
             "outside its clip",
+        );
+        // additive to its own frame, or to a clip additive to it: a cycle
+        fails(
+            &|w, c, _| {
+                w.get_mut::<Clip>(c).unwrap().additive =
+                    Some(AdditiveReference::ClipFrame { clip: c, time: 0.0 })
+            },
+            "a cycle",
+        );
+        fails(
+            &|w, c, _| {
+                let mut other = w.get::<Clip>(c).unwrap().clone();
+                other.additive = Some(AdditiveReference::ClipFrame { clip: c, time: 0.0 });
+                let o = w.spawn();
+                w.insert(o, other);
+                w.get_mut::<Clip>(c).unwrap().additive =
+                    Some(AdditiveReference::ClipFrame { clip: o, time: 0.0 });
+            },
+            "a cycle",
         );
         // a binding without the rig its joint channels need, or listing a mesh whose morph set the clip does not drive
         fails(

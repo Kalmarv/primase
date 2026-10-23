@@ -140,33 +140,17 @@ impl Skin {
         out
     }
 
-    /// Primitive `i`'s influences against its streams and every binding's palette for it.
-    fn verify_primitive(&self, i: usize, p: &Primitive, w: &World) -> Result<(), String> {
+    /// Primitive `i`'s palettes, which need no vertex: each binding has one exactly when the primitive has influences,
+    /// naming joints of its skeleton with finite inverse binds, and a whole-primitive slot is within every one. Returns
+    /// the number of slots every palette has (the shortest's): every slot a vertex names must be below it.
+    fn verify_palettes(&self, i: usize, w: &World) -> Result<usize, String> {
         let influences = self.influences.get(i).copied().flatten();
-        let palette_lens: Vec<usize> = self
+        let slots_in_every_palette = self
             .bindings
             .iter()
             .map(|b| b.palettes.get(i).cloned().flatten().map_or(0, |p| p.len()))
-            .collect();
-        let max_slot = palette_lens.iter().copied().min().unwrap_or(0);
-        let skin_streams: BTreeSet<Semantic> = p
-            .streams
-            .keys()
-            .copied()
-            .filter(|s| matches!(s, Semantic::Joints(_) | Semantic::Weights(_)))
-            .collect();
-        let expected: BTreeSet<Semantic> = match influences {
-            None | Some(Influences::Whole { .. }) => BTreeSet::new(),
-            Some(Influences::SingleIndex) => [Semantic::Joints(0)].into(),
-            Some(Influences::Streams { sets }) => (0..sets)
-                .flat_map(|k| [Semantic::Joints(k), Semantic::Weights(k)])
-                .collect(),
-        };
-        if skin_streams != expected {
-            return Err(format!(
-                "primitive {i}: joint and weight streams {skin_streams:?} for influences {influences:?}"
-            ));
-        }
+            .min()
+            .unwrap_or(0);
         for b in &self.bindings {
             let palette = b.palettes.get(i).cloned().flatten();
             if palette.is_some() != influences.is_some() {
@@ -200,20 +184,49 @@ impl Skin {
                 }
             }
         }
-        let in_range = |slot: u32| usize::try_from(slot).is_ok_and(|s| s < max_slot);
+        if let Some(Influences::Whole { slot }) = influences
+            && usize::try_from(slot).map_or(true, |s| s >= slots_in_every_palette)
+        {
+            return Err(format!(
+                "primitive {i}: slot {slot} of a palette of {slots_in_every_palette}"
+            ));
+        }
+        Ok(slots_in_every_palette)
+    }
+
+    /// Primitive `i`'s influences against its streams, and its palettes ([`Skin::verify_palettes`]).
+    fn verify_primitive(&self, i: usize, p: &Primitive, w: &World) -> Result<(), String> {
+        let influences = self.influences.get(i).copied().flatten();
+        let slots_in_every_palette = self.verify_palettes(i, w)?;
+        let skin_streams: BTreeSet<Semantic> = p
+            .streams
+            .keys()
+            .copied()
+            .filter(|s| matches!(s, Semantic::Joints(_) | Semantic::Weights(_)))
+            .collect();
+        let expected: BTreeSet<Semantic> = match influences {
+            None | Some(Influences::Whole { .. }) => BTreeSet::new(),
+            Some(Influences::SingleIndex) => [Semantic::Joints(0)].into(),
+            Some(Influences::Streams { sets }) => (0..sets)
+                .flat_map(|k| [Semantic::Joints(k), Semantic::Weights(k)])
+                .collect(),
+        };
+        if skin_streams != expected {
+            return Err(format!(
+                "primitive {i}: joint and weight streams {skin_streams:?} for influences {influences:?}"
+            ));
+        }
+        let in_range = |slot: u32| usize::try_from(slot).is_ok_and(|s| s < slots_in_every_palette);
         match influences {
             None => {}
-            Some(Influences::Whole { slot }) => {
-                if !in_range(slot) {
-                    return Err(format!("primitive {i}: slot {slot} of a palette of {max_slot}"));
-                }
-            }
+            // checked with the palettes
+            Some(Influences::Whole { .. }) => {}
             Some(Influences::SingleIndex) => {
                 let j = joints(&p.streams[&Semantic::Joints(0)])
                     .ok_or_else(|| format!("primitive {i}: Joints(0) is not an integer stream"))?;
                 if let Some(v) = j.iter().position(|j| !in_range(j[0])) {
                     return Err(format!(
-                        "primitive {i}: vertex {v} names slot {} of a palette of {max_slot}",
+                        "primitive {i}: vertex {v} names slot {} of a palette of {slots_in_every_palette}",
                         j[v][0]
                     ));
                 }
@@ -236,7 +249,7 @@ impl Skin {
                     for (v, (j, wt)) in j.iter().zip(&wt).enumerate() {
                         if let Some(x) = j.iter().find(|&&x| !in_range(x)) {
                             return Err(format!(
-                                "primitive {i}: vertex {v} names slot {x} of a palette of {max_slot}"
+                                "primitive {i}: vertex {v} names slot {x} of a palette of {slots_in_every_palette}"
                             ));
                         }
                         if wt.iter().any(|x| !x.is_finite() || *x < 0.0) {
@@ -325,7 +338,11 @@ impl Component for Skin {
                 ));
             }
         }
+        // a mesh not loaded (only its `core.mesh_file`) has no streams to check: its palettes still are
         let Some(mesh) = w.get::<Mesh>(e) else {
+            for i in 0..self.influences.len() {
+                self.verify_palettes(i, w)?;
+            }
             return Ok(());
         };
         if mesh.primitives().len() != self.influences.len() {
@@ -542,6 +559,35 @@ mod tests {
         fails(
             &|w, e, _| w.get_mut::<Skin>(e).unwrap().influences[1] = None,
             "a palette without influences",
+        );
+        // a mesh still only in its file: no streams to check, its palettes still are
+        let unloaded = |w: &mut World, e: Entity| {
+            w.remove::<Mesh>(e);
+            w.insert(
+                e,
+                crate::MeshFile {
+                    path: "skinned.glb".into(),
+                    mesh: 0,
+                    materials: vec![],
+                },
+            );
+        };
+        fails(
+            &|w, e, _| {
+                unloaded(w, e);
+                w.get_mut::<Skin>(e).unwrap().bindings[0].palettes[1]
+                    .as_mut()
+                    .unwrap()[0]
+                    .joint = JointId(99)
+            },
+            "not in its skeleton",
+        );
+        fails(
+            &|w, e, _| {
+                unloaded(w, e);
+                w.get_mut::<Skin>(e).unwrap().influences[1] = Some(Influences::Whole { slot: 5 })
+            },
+            "slot 5 of a palette of 2",
         );
         // the entries do not match the mesh's primitives
         fails(

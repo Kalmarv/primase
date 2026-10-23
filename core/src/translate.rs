@@ -1,14 +1,16 @@
 //! `translate-world{by=X,Y,Z}`: the whole world moved by a stated offset (core's frame, metres), as a program does to
 //! bring an area far from its source's origin near a destination's (a region several kilometres out, for an engine
 //! whose precision or bounds want it near zero). What moves is core's world-space data: every entity's transform and
-//! every transform a state override gives, every curve's points and handles, every ground marker's position; local
+//! every transform a state override gives, every curve's points and handles, every ground marker's position, and a
+//! partition plan's ground areas ([`crate::convert::PartitionPlan`], so its parts still read where their content is); local
 //! geometry (prototypes' meshes, collision, colliders) stays as it is. A dialect component that holds world positions
 //! isn't core's to move: lower it first.
 
+use crate::convert::PartitionPlan;
 use crate::marker::{Curve, Marker};
 use crate::pass::{Options, Pass, PassLog};
 use crate::state::{Override, StateOverride};
-use crate::{Component, Entity, Transform, World};
+use crate::{Component, Entity, Resource, Transform, World};
 
 /// The pass: the world moved by `by`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,7 +63,13 @@ impl Pass for TranslateWorld {
         Options::from([("by".to_owned(), format!("{x},{y},{z}"))])
     }
     fn modifies(&self) -> &[&'static str] {
-        &[Transform::NAME, Curve::NAME, Marker::NAME, StateOverride::NAME]
+        &[
+            Transform::NAME,
+            Curve::NAME,
+            Marker::NAME,
+            StateOverride::NAME,
+            PartitionPlan::NAME,
+        ]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let placed: Vec<Entity> = w.iter::<Transform>().map(|(e, _)| e).collect();
@@ -101,6 +109,13 @@ impl Pass for TranslateWorld {
             if let Some(Marker { ground: Some(g), .. }) = w.get_mut::<Marker>(e) {
                 *g = [(f64::from(g[0]) + east) as f32, (f64::from(g[1]) + north) as f32];
                 log.count("ground markers moved", 1);
+            }
+        }
+        // a plan's areas are ground rectangles [west, south, east, north]: they move with what they hold
+        if let Some(plan) = w.resource_mut::<PartitionPlan>() {
+            for area in plan.groups.iter_mut().filter_map(|g| g.area.as_mut()) {
+                *area = [area[0] + east, area[1] + north, area[2] + east, area[3] + north];
+                log.count("partition areas moved", 1);
             }
         }
         Ok(())
@@ -146,6 +161,14 @@ mod tests {
                 yaw: None,
             },
         );
+        w.insert_resource(PartitionPlan {
+            by: "partition-grid{cell=200}".into(),
+            groups: vec![crate::convert::PartitionGroup {
+                key: "cell".into(),
+                area: Some([-3600.0, -1300.0, -3400.0, -1100.0]),
+                ..Default::default()
+            }],
+        });
         let pass = TranslateWorld {
             by: [3500.0, -2330.0, -1200.0],
         };
@@ -160,5 +183,10 @@ mod tests {
         );
         // east -3500 + 3500, north -1200 - (-1200)
         assert_eq!(w.get::<Marker>(marker).and_then(|m| m.ground), Some([0.0, 0.0]));
+        // the plan's area moves the same: east +3500, north +1200
+        assert_eq!(
+            w.resource::<PartitionPlan>().unwrap().groups[0].area,
+            Some([-100.0, -100.0, 100.0, 100.0])
+        );
     }
 }

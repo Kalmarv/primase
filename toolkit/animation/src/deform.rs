@@ -49,22 +49,23 @@ fn unit(v: [f64; 3]) -> [f64; 3] {
     if len > 0.0 { v.map(|x| x / len) } else { v }
 }
 
-/// A morph target's frame factors at weight `w`, given its frames' weights in order: the deltas to add are each listed
-/// frame's deltas times its factor, `(frame index, factor)`. `w` falls between two points of the zero point `(0, no
-/// deltas)` (present when the first frame's weight is above 0) and the frames; the two neighbours blend linearly,
-/// extrapolating along the first and last segments; a single frame with no zero point holds at factor 1. This is the
-/// rule [`apply_morphs`] uses, public so a consumer deforming elsewhere (a GPU) uses the same factors.
+/// A morph target's frame factors at weight `w`, given its frames' weights (increasing, none zero: what
+/// `core.morphs` verifies): the deltas to add are each listed frame's deltas times its factor, `(frame index, factor)`.
+/// The delta is core's one rule ([`primase_core::morphs`]): piecewise linear in `w` through the zero point `(0, no
+/// deltas)` and each frame's `(weight, deltas)`, the zero point in its place among them, extrapolated along the first
+/// segment below the first point and along the last above the last. [`apply_morphs`] uses it; it is public so a
+/// consumer deforming elsewhere (a GPU) uses the same factors.
 pub fn frame_blend(weights: &[f32], w: f64) -> Vec<(usize, f64)> {
-    // the points: (weight, frame) with the zero point first when the frames start above 0
-    let mut points: Vec<(f64, Option<usize>)> = Vec::new();
-    if weights.first().is_some_and(|&f| f > 0.0) {
-        points.push((0.0, None));
+    if weights.is_empty() {
+        return Vec::new();
     }
-    points.extend(weights.iter().enumerate().map(|(i, &f)| (f64::from(f), Some(i))));
-    if points.len() == 1 {
-        // one frame at weight <= 0 and no zero point: it holds
-        return points[0].1.map(|i| vec![(i, 1.0)]).unwrap_or_default();
-    }
+    let mut points: Vec<(f64, Option<usize>)> = weights
+        .iter()
+        .enumerate()
+        .map(|(i, &f)| (f64::from(f), Some(i)))
+        .collect();
+    let zero = points.partition_point(|p| p.0 < 0.0);
+    points.insert(zero, (0.0, None));
     let k = points
         .windows(2)
         .position(|p| w <= p[1].0)
@@ -494,5 +495,31 @@ mod tests {
         };
         let m = apply_morphs(&v, 0, &sparse, &BTreeMap::from([(MorphId(2), 0.5)])).unwrap();
         assert!(near(m.positions[0], [0.0; 3]) && near(m.positions[1], [0.0, 2.0, 0.0]));
+    }
+
+    /// One rule, through the zero point wherever the frames lie: frames at -1 and 1 put it between them; a single frame
+    /// below zero is a line through (0, 0) too, not a frame held at factor 1.
+    #[test]
+    fn frames_blend_through_the_zero_point() {
+        let near = |a: &[(usize, f64)], b: &[(usize, f64)]| {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|(x, y)| x.0 == y.0 && (x.1 - y.1).abs() < 1e-12)
+        };
+        // -1 and 1: the zero point between them
+        assert!(near(&frame_blend(&[-1.0, 1.0], 0.5), &[(1, 0.5)]));
+        assert!(near(&frame_blend(&[-1.0, 1.0], -0.25), &[(0, 0.25)]));
+        assert!(
+            frame_blend(&[-1.0, 1.0], 0.0)
+                .iter()
+                .all(|(_, f)| f.abs() < 1e-12)
+        );
+        // one frame at -2: a line through (0, 0), extrapolated both ways
+        assert!(near(&frame_blend(&[-2.0], -1.0), &[(0, 0.5)]));
+        assert!(near(&frame_blend(&[-2.0], 1.0), &[(0, -0.5)]));
+        // above the last frame, along the last segment
+        assert!(near(&frame_blend(&[0.5, 1.0], 1.5), &[(0, -1.0), (1, 2.0)]));
+        assert!(frame_blend(&[], 1.0).is_empty());
     }
 }

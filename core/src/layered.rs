@@ -206,8 +206,10 @@ pub fn mask_value(channels: [f32; 4], bias: f32, rgba: [f32; 4]) -> f32 {
     (0..4).map(|i| channels[i] * rgba[i]).sum::<f32>() + bias
 }
 
-/// [`Composition::Over`]'s per-pixel weights as Sum weights: `w_i * prod_{j>i}(1 - w_j)`, slot 0 at full weight.
+/// [`Composition::Over`]'s per-pixel weights as Sum weights: `w_i * prod_{j>i}(1 - w_j)`, slot 0 at full weight, over
+/// the first `slots` slots: at most the four a layered material has (more are the four).
 pub fn over_as_sum(weights: [f32; 4], slots: usize) -> [f32; 4] {
+    let slots = slots.min(weights.len());
     let mut out = [0.0; 4];
     for i in 0..slots {
         let own = if i == 0 { 1.0 } else { weights[i] };

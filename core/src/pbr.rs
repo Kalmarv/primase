@@ -145,7 +145,7 @@ pub enum AlphaMode {
     /// Alpha ignored.
     #[default]
     Opaque,
-    /// Alpha tested: drawn where alpha >= `cutoff`.
+    /// Alpha tested: drawn where alpha >= `cutoff` (finite and >= 0, as glTF's `alphaCutoff`).
     Mask { cutoff: f32 },
     /// Alpha blended over what is behind.
     Blend,
@@ -181,7 +181,7 @@ impl Default for Specular {
 /// A baked metal-rough material (component `pbr.material`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PbrMaterial {
-    /// Linear RGBA, multiplied into `base_color_texture`.
+    /// Linear RGBA, each channel within 0-1 (verified), multiplied into `base_color_texture`.
     pub base_color: [f32; 4],
     /// sRGB colour, alpha in A.
     pub base_color_texture: Option<TextureRef>,
@@ -197,7 +197,7 @@ pub struct PbrMaterial {
     pub occlusion_strength: f32,
     /// Tangent-space normal map in glTF's convention (OpenGL green up, Z stored); a pass converts others first.
     pub normal_texture: Option<TextureRef>,
-    /// Scales the normal map's X and Y.
+    /// Scales the normal map's X and Y; finite.
     pub normal_scale: f32,
     /// Linear RGB, each channel within 0-1 (verified), multiplied into `emissive_texture`.
     pub emissive: [f32; 3],
@@ -226,7 +226,42 @@ impl Component for PbrMaterial {
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
+    /// Every range its fields document: the colours, factors and strengths, the mask cutoff and each texture's
+    /// coordinate transform.
     fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
+        let unit = |x: f32| (0.0..=1.0).contains(&x);
+        if !self.base_color.iter().all(|&c| unit(c)) {
+            return Err(format!("base colour {:?} is not within 0-1", self.base_color));
+        }
+        for (name, x) in [
+            ("metallic", self.metallic),
+            ("roughness", self.roughness),
+            ("occlusion strength", self.occlusion_strength),
+        ] {
+            if !unit(x) {
+                return Err(format!("{name} {x} is not within 0-1"));
+            }
+        }
+        if !self.normal_scale.is_finite() {
+            return Err(format!("normal scale {} is not finite", self.normal_scale));
+        }
+        if let AlphaMode::Mask { cutoff } = self.alpha_mode
+            && !(cutoff.is_finite() && cutoff >= 0.0)
+        {
+            return Err(format!("mask cutoff {cutoff} is not finite and >= 0"));
+        }
+        for (slot, r) in self.slots() {
+            if let Some(t) = r.transform
+                && !t
+                    .offset
+                    .iter()
+                    .chain(&t.scale)
+                    .chain([&t.rotation])
+                    .all(|x| x.is_finite())
+            {
+                return Err(format!("{slot:?} texture transform {t:?} is not finite"));
+            }
+        }
         if !self.emissive.iter().all(|c| (0.0..=1.0).contains(c)) {
             return Err(format!(
                 "emissive {:?} is not within 0-1 (brighter emission is carried by emissive_strength)",
@@ -354,7 +389,93 @@ impl PbrMaterial {
 
 #[cfg(test)]
 mod tests {
-    use super::{PbrMaterial, UvTransform};
+    use super::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
+    use crate::{Component, World};
+
+    /// Each documented range is verified: one field out of it at a time is refused, naming it.
+    #[test]
+    fn verify_covers_every_documented_range() {
+        let mut w = World::new();
+        let e = w.spawn();
+        let texture = w.spawn();
+        let ok = PbrMaterial::default();
+        assert_eq!(ok.verify(e, &w), Ok(()));
+        let refused = |m: PbrMaterial, what: &str| {
+            let err = m.verify(e, &w).unwrap_err();
+            assert!(err.contains(what), "{what}: {err}");
+        };
+        refused(
+            PbrMaterial {
+                base_color: [1.5, 0.0, 0.0, 1.0],
+                ..ok.clone()
+            },
+            "base colour",
+        );
+        refused(
+            PbrMaterial {
+                metallic: -0.1,
+                ..ok.clone()
+            },
+            "metallic",
+        );
+        refused(
+            PbrMaterial {
+                roughness: f32::NAN,
+                ..ok.clone()
+            },
+            "roughness",
+        );
+        refused(
+            PbrMaterial {
+                occlusion_strength: 2.0,
+                ..ok.clone()
+            },
+            "occlusion strength",
+        );
+        refused(
+            PbrMaterial {
+                normal_scale: f32::INFINITY,
+                ..ok.clone()
+            },
+            "normal scale",
+        );
+        refused(
+            PbrMaterial {
+                alpha_mode: AlphaMode::Mask { cutoff: -0.5 },
+                ..ok.clone()
+            },
+            "mask cutoff",
+        );
+        let mut transformed = TextureRef::new(texture);
+        transformed.transform = Some(UvTransform {
+            rotation: f32::NAN,
+            ..UvTransform::IDENTITY
+        });
+        refused(
+            PbrMaterial {
+                normal_texture: Some(transformed),
+                ..ok.clone()
+            },
+            "texture transform",
+        );
+        // a negative normal scale (a flipped map) and a cutoff above 1 are allowed
+        assert_eq!(
+            PbrMaterial {
+                normal_scale: -1.0,
+                ..ok.clone()
+            }
+            .verify(e, &w),
+            Ok(())
+        );
+        assert_eq!(
+            PbrMaterial {
+                alpha_mode: AlphaMode::Mask { cutoff: 1.5 },
+                ..ok
+            }
+            .verify(e, &w),
+            Ok(())
+        );
+    }
 
     /// Every slot, the specular extension's two included, by value and mutably, in one order.
     #[test]

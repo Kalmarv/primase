@@ -103,13 +103,17 @@ impl Component for Curve {
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
-    /// A valid kind and at least two finite points; handles and up directions, when given, one per point and finite
-    /// (up directions of unit length within 1e-3).
+    /// A valid kind and at least two finite points (three for a closed polyline, whose two would only retrace one
+    /// segment; two Bezier segments do enclose a shape); handles and up directions, when given, one per point and
+    /// finite (up directions of unit length within 1e-3).
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         check_kind(&self.kind)?;
         let n = self.points.len();
         if n < 2 {
             return Err(format!("{n} points; a curve has at least 2"));
+        }
+        if self.closed && self.tangents.is_none() && n < 3 {
+            return Err(format!("{n} points; a closed polyline has at least 3"));
         }
         if let Some(i) = self.points.iter().position(|p| !p.iter().all(|v| v.is_finite())) {
             return Err(format!("point {i} {:?} is not finite", self.points[i]));
@@ -243,8 +247,34 @@ mod tests {
         w.insert(short, curve(vec![[0.; 3]]));
         let nan = w.spawn();
         w.insert(nan, curve(vec![[0.; 3], [f32::INFINITY, 0., 0.]]));
+        // closed: a polyline needs a third point; two Bezier points enclose a shape
+        let closed_two = w.spawn();
+        w.insert(
+            closed_two,
+            Curve {
+                closed: true,
+                ..curve(vec![[0.; 3], [1., 0., 0.]])
+            },
+        );
+        let closed_three = w.spawn();
+        w.insert(
+            closed_three,
+            Curve {
+                closed: true,
+                ..curve(vec![[0.; 3], [1., 0., 0.], [0., 0., 1.]])
+            },
+        );
+        let bezier_two = w.spawn();
+        w.insert(
+            bezier_two,
+            Curve {
+                closed: true,
+                tangents: Some(vec![[[0., 0., -1.], [0., 0., 1.]], [[1., 0., 1.], [1., 0., -1.]]]),
+                ..curve(vec![[0.; 3], [1., 0., 0.]])
+            },
+        );
         let found: Vec<Entity> = w.verify_components().into_iter().map(|(_, e, _)| e).collect();
-        assert_eq!(found, [short, nan]);
+        assert_eq!(found, [short, nan, closed_two]);
         assert_eq!(
             w.get::<Curve>(good).unwrap().to_json().unwrap(),
             Some(

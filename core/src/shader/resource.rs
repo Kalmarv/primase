@@ -111,7 +111,8 @@ pub struct Member {
 impl ConstantType {
     /// Bytes from the start of a value of this type to the end of its last byte of data: no padding after the last
     /// matrix line, array element or member (a buffer whose rules pad an array's tail states that in the
-    /// buffer's size). `None` if the layout overflows 32 bits.
+    /// buffer's size). A value with no data (a matrix of no lines or lanes, an array of no elements) is 0. `None` if the
+    /// layout overflows 32 bits.
     pub fn size(&self) -> Option<u32> {
         match self {
             Self::Scalar(s) => Some(s.bytes()),
@@ -127,8 +128,10 @@ impl ConstantType {
                     Majorness::Row => (*rows, *columns),
                     Majorness::Column => (*columns, *rows),
                 };
-                u32::from(lines)
-                    .checked_sub(1)?
+                if lines == 0 || lanes == 0 {
+                    return Some(0);
+                }
+                u32::from(lines - 1)
                     .checked_mul(*stride)?
                     .checked_add(u32::from(lanes).checked_mul(scalar.bytes())?)
             }
@@ -307,6 +310,9 @@ mod tests {
             stride: 16,
         };
         assert_eq!(empty.size(), Some(0));
+        // no lines or no lanes is no data, as an empty array: 0, not an overflow
+        assert_eq!(matrix(0, 3, Majorness::Row).size(), Some(0));
+        assert_eq!(matrix(3, 0, Majorness::Row).size(), Some(0));
         let record = ConstantType::Struct {
             members: vec![
                 Member {

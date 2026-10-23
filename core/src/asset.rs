@@ -9,7 +9,7 @@
 //! want, rewriting the root's list before it despawns them. An asset as a source authors it has no placement unless
 //! the source places its parts (a prefab's renderers); a program that wants one drawn places it (`place-assets`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -52,8 +52,9 @@ impl Component for Asset {
     }
     /// Each member once and not the root; each what its role says, in core's form or still in its source's: a rig a
     /// `core.skeleton`, a clip a `core.clip`, a part or an alternative a prototype (a mesh or a mesh file) or a
-    /// placement, or any of them holding a component outside core (a reader's model, skeleton or clip as the source
-    /// stores it, which a pass lowers).
+    /// placement; or, still in its source's form, a member holding a component outside core (a reader's model,
+    /// skeleton or clip as the source stores it, which a pass lowers) and no core form of another role (a clip member
+    /// that is in core a mesh is no clip, whatever else it holds).
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
         let names = w.component_names();
         let in_source_form = |m: Entity| {
@@ -66,14 +67,16 @@ impl Component for Asset {
             if m == e || !seen.insert(m) {
                 return Err(format!("member {m:?} is the root or listed twice"));
             }
-            let fits = in_source_form(m)
-                || match role {
-                    Role::Rig => w.has::<Skeleton>(m),
-                    Role::Clip => w.has::<crate::Clip>(m),
-                    Role::Part | Role::Alternative => {
-                        w.has::<Mesh>(m) || w.has::<MeshFile>(m) || w.has::<Instance>(m)
-                    }
-                };
+            // each role's core form
+            let rig = w.has::<Skeleton>(m);
+            let clip = w.has::<crate::Clip>(m);
+            let part = w.has::<Mesh>(m) || w.has::<MeshFile>(m) || w.has::<Instance>(m);
+            let (own, other) = match role {
+                Role::Rig => (rig, clip || part),
+                Role::Clip => (clip, rig || part),
+                Role::Part | Role::Alternative => (part, rig || clip),
+            };
+            let fits = own || (!other && in_source_form(m));
             if !fits {
                 return Err(format!("member {m:?} is not what its role {role:?} says"));
             }
@@ -88,7 +91,8 @@ impl Component for Asset {
 /// - each `Part` prototype a placement (`core.instance`, `core.transform`), with a `core.skin_instance` when its mesh
 ///   is skinned to one of the asset's rigs (its first binding to that rig's skeleton);
 /// - `Alternative` members are not placed (choosing one is a selection: counted), and a part the source already
-///   places (a placement member, or a prototype something places) is left as it is.
+///   places (a placement member, or a prototype something places) is left as it is; so is a rig: a skeleton that
+///   already has one keeps it, and parts placed now are skinned to it. Run again, it places nothing.
 ///
 /// The placed entities are content of their own ([`PassLog::place`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -122,18 +126,30 @@ impl Pass for PlaceAssets {
         ]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let placed: BTreeSet<Entity> = w.iter::<Instance>().map(|(_, i)| i.prototype).collect();
+        // what is placed already, and what this run places, as it goes: a part or a rig is placed once
+        let mut placed: BTreeSet<Entity> = w.iter::<Instance>().map(|(_, i)| i.prototype).collect();
+        let mut rigged: BTreeMap<Entity, Entity> = BTreeMap::new();
+        for (rig, r) in w.iter::<RigInstance>() {
+            rigged.entry(r.skeleton).or_insert(rig);
+        }
         let assets: Vec<(Entity, Asset)> = w.iter::<Asset>().map(|(e, a)| (e, a.clone())).collect();
         for (root, asset) in assets {
             let mut rigs: Vec<(Entity, Entity)> = Vec::new();
             for &(m, role) in &asset.members {
-                if role == Role::Rig {
-                    let rig = w.spawn();
-                    w.insert(rig, RigInstance { skeleton: m });
-                    w.insert(rig, Transform::IDENTITY);
-                    log.place_from(rig, root);
-                    rigs.push((m, rig));
+                if role != Role::Rig {
+                    continue;
                 }
+                if let Some(&rig) = rigged.get(&m) {
+                    log.count("rigs already placed, left as they are", 1);
+                    rigs.push((m, rig));
+                    continue;
+                }
+                let rig = w.spawn();
+                w.insert(rig, RigInstance { skeleton: m });
+                w.insert(rig, Transform::IDENTITY);
+                log.place_from(rig, root);
+                rigged.insert(m, rig);
+                rigs.push((m, rig));
             }
             for &(m, role) in &asset.members {
                 match role {
@@ -164,6 +180,7 @@ impl Pass for PlaceAssets {
                         }
                         log.place_from(p, root);
                         log.count("parts placed", 1);
+                        placed.insert(m);
                     }
                     Role::Rig | Role::Clip => {}
                 }
@@ -337,7 +354,7 @@ impl Pass for PartitionByAsset {
             .collect();
         let (assets, rest): (Vec<Entity>, Vec<Entity>) =
             independent.into_iter().partition(|&e| w.has::<Asset>(e));
-        let mut groups: Vec<PartitionGroup> = assets
+        let groups: Vec<PartitionGroup> = assets
             .iter()
             .map(|&root| PartitionGroup {
                 key: AssetField::Key
@@ -349,6 +366,7 @@ impl Pass for PartitionByAsset {
                 area: None,
             })
             .collect();
+        let mut groups = groups;
         log.count("assets, each a part", assets.len() as u64);
         if !rest.is_empty() {
             log.count("content outside any asset, in its own part", rest.len() as u64);
@@ -358,6 +376,15 @@ impl Pass for PartitionByAsset {
                 context: BTreeSet::new(),
                 area: None,
             });
+        }
+        // a part is named by its key: two assets of one source or name (or one named as the rest) can't be told apart
+        let mut keys = BTreeSet::new();
+        if let Some(g) = groups.iter().find(|g| !keys.insert(g.key.as_str())) {
+            return Err(format!(
+                "two parts would be keyed {:?}: assets share a source or a name (or one is named as the content outside \
+                 assets); give them distinct ones",
+                g.key
+            ));
         }
         w.insert_resource(PartitionPlan {
             by: "partition-by-asset".into(),
@@ -484,6 +511,31 @@ mod tests {
         .unwrap();
         assert_eq!(w.verify_components(), vec![]);
         assert!(w.closure([root]).contains(&parts[1]));
+        // in its source's form, but in core another role's: a clip member that is a mesh is no clip
+        let clip_member = parts[0];
+        w.get_mut::<Asset>(root)
+            .unwrap()
+            .members
+            .iter_mut()
+            .find(|(m, _)| *m == clip_member)
+            .unwrap()
+            .1 = Role::Clip;
+        w.insert_opaque(
+            clip_member,
+            "source.clip",
+            crate::Opaque {
+                version: 1,
+                data: crate::OpaqueData::Bytes(vec![4]),
+            },
+        )
+        .unwrap();
+        assert!(
+            w.verify_components()
+                .iter()
+                .any(|(_, _, m)| m.contains("not what its role Clip says")),
+            "{:?}",
+            w.verify_components()
+        );
     }
 
     fn registry() -> PassManager {
@@ -643,6 +695,23 @@ mod tests {
         assert_eq!(log.counts["content outside any asset, in its own part"], 1);
     }
 
+    /// Two assets keyed alike (the same source) would be two parts of one name: refused, naming the key.
+    #[test]
+    fn partition_by_asset_refuses_two_parts_of_one_key() {
+        let m = registry();
+        let (mut w, e) = two_assets();
+        w.insert(e[2], Source("a".into()));
+        let err = m
+            .run(
+                &mut w,
+                &m.registry.parse("partition-by-asset").unwrap(),
+                &mut RunReport::default(),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("keyed \"a\""), "{err}");
+        assert!(w.resource::<PartitionPlan>().is_none());
+    }
+
     /// Placing: one rig, a placement per part (the skinned one with its skin instance on that rig), the alternative
     /// not placed; a part the source already places is left alone.
     #[test]
@@ -680,5 +749,12 @@ mod tests {
             again.steps[0].log.counts["parts the source places, left as they are"],
             2
         );
+        // nor a rig: the skeleton keeps the one it has
+        assert_eq!(w.iter::<RigInstance>().count(), 1);
+        assert_eq!(
+            again.steps[0].log.counts["rigs already placed, left as they are"],
+            1
+        );
+        assert!(again.steps[0].log.placed.is_empty());
     }
 }
