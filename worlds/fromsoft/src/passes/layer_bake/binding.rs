@@ -2,11 +2,14 @@ use super::BaseMipBilinearWrap;
 use super::resolve::{self, Unbound, resolve, textures_of};
 use crate::{Result, invalid, materials::LayeredMaterial};
 use primase_core::Entity;
+use primase_core::parallel::Threads;
 use primase_core::shader::{
     ConstantRole, FrameParameter, ObjectParameter, StageBinding, TextureSource, ViewParameter,
 };
 use primase_dxbc::Shader;
-use primase_shader::{Constants, Grid, Input, Interface, Invocation, Lane, Layout, Texture, evaluate_raw};
+use primase_shader::{
+    Constants, Grid, Input, Interface, Invocation, Lane, Layout, Texture, evaluate_raw_with,
+};
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Frozen per-vertex input for one baked layer-weight group. Choosing groups
@@ -381,18 +384,24 @@ impl Prepared {
         })
     }
     pub fn bake(&self, size: u32, period: [f32; 2], params: Inputs) -> Result<Bake> {
-        Ok(self.bake_channels(size, period, params, false)?.image)
+        Ok(self
+            .bake_channels(Threads::ONE, size, period, params, false)?
+            .image)
     }
+    /// The bake with its reflectance, the shader evaluated on `threads` threads (a row of the grid each at a time):
+    /// the same channels on any count.
     pub(crate) fn bake_with_reflectance(
         &self,
+        threads: Threads,
         size: u32,
         period: [f32; 2],
         params: Inputs,
     ) -> Result<BakedChannels> {
-        self.bake_channels(size, period, params, true)
+        self.bake_channels(threads, size, period, params, true)
     }
     fn bake_channels(
         &self,
+        threads: Threads,
         size: u32,
         period: [f32; 2],
         params: Inputs,
@@ -442,7 +451,8 @@ impl Prepared {
             return Err(invalid("layer binding", 0, "missing TEXCOORD0"));
         }
         // the G-buffer normal, the second output's x, the albedo, the reflectance and the emission
-        let raw = evaluate_raw(
+        let raw = evaluate_raw_with(
+            threads,
             &self.shader,
             &self.constants,
             &self.textures,
@@ -692,11 +702,11 @@ mod tests {
         ] {
             let prepared = prepared_output(true, output);
             let public = prepared
-                .bake_channels(2, [1.; 2], Inputs::default(), false)
+                .bake_channels(Threads::ONE, 2, [1.; 2], Inputs::default(), false)
                 .unwrap();
             assert!(public.reflectance.is_none());
             let internal = prepared
-                .bake_with_reflectance(2, [1.; 2], Inputs::default())
+                .bake_with_reflectance(Threads::ONE, 2, [1.; 2], Inputs::default())
                 .unwrap();
             assert_eq!(public.image.albedo, internal.image.albedo);
             assert_eq!(public.image.normal, internal.image.normal);
@@ -714,6 +724,51 @@ mod tests {
                         assert_eq!(pixel.bits[c], output.unwrap().1[c]);
                     }
                 }
+            }
+        }
+    }
+
+    /// On several threads the bake is the one-thread bake: every channel, the reflectance, the counts.
+    #[test]
+    fn on_any_thread_count_the_bake_is_the_serial_one() {
+        for emissive in [true, false] {
+            let prepared = prepared(emissive);
+            let bake = |n: usize| {
+                prepared
+                    .bake_with_reflectance(Threads::new(n).unwrap(), 7, [4., 2.], Inputs::default())
+                    .unwrap()
+            };
+            let one = bake(1);
+            for n in [2, 5] {
+                let many = bake(n);
+                assert_eq!(many.image.albedo, one.image.albedo, "{n} threads");
+                assert_eq!(many.image.normal, one.image.normal, "{n} threads");
+                assert_eq!(
+                    many.image
+                        .gloss
+                        .as_ref()
+                        .map(|g| g.iter().map(|v| v.to_bits()).collect::<Vec<_>>()),
+                    one.image
+                        .gloss
+                        .as_ref()
+                        .map(|g| g.iter().map(|v| v.to_bits()).collect::<Vec<_>>()),
+                    "{n} threads"
+                );
+                assert_eq!(
+                    many.image
+                        .emissive
+                        .as_ref()
+                        .map(|e| e.iter().map(|v| v.map(f32::to_bits)).collect::<Vec<_>>()),
+                    one.image
+                        .emissive
+                        .as_ref()
+                        .map(|e| e.iter().map(|v| v.map(f32::to_bits)).collect::<Vec<_>>()),
+                    "{n} threads"
+                );
+                assert_eq!(many.image.policies, one.image.policies, "{n} threads");
+                assert_eq!(many.image.instructions, one.image.instructions, "{n} threads");
+                assert_eq!(many.image.samples, one.image.samples, "{n} threads");
+                assert_eq!(many.reflectance, one.reflectance, "{n} threads");
             }
         }
     }

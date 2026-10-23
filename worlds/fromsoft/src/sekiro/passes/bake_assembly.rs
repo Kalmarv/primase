@@ -136,12 +136,14 @@ pub(super) fn assemble(
     let mut replacements = BTreeMap::<(Entity, usize), Vec<(Primitive, Option<Vec<u32>>)>>::new();
     let mut replaced_materials = BTreeSet::new();
     let mut variants = BTreeMap::new();
+    let threads = primase_core::parallel::Threads::of(world);
     for (group_index, group) in bake.groups.iter().enumerate() {
         let prepared = bake.prepare(world, group_index, sample_time)?;
         let size = prepared.bake_size(max_size)?;
         let mut templates = Vec::new();
         for (level, center) in group.centers.iter().enumerate() {
             let channels = prepared.bake_with_reflectance(
+                threads,
                 size,
                 group.period,
                 Inputs {
@@ -472,7 +474,12 @@ mod tests {
             },
         ] {
             let public = prepared.bake(32, prepared.period, inputs)?;
-            let captured = prepared.bake_with_reflectance(32, prepared.period, inputs)?;
+            let captured = prepared.bake_with_reflectance(
+                primase_core::parallel::Threads::ONE,
+                32,
+                prepared.period,
+                inputs,
+            )?;
             for pixel in captured.reflectance.as_ref().unwrap() {
                 assert_eq!(pixel.mask, 7);
                 assert_eq!(pixel.bits, [literal; 3]);
