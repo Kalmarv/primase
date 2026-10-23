@@ -17,14 +17,10 @@
 //! next primitive's. A draw with a restart index (an index list holding the value that cuts a strip) is refused by
 //! [`GeometryShader::draw_indexed`]: what the assembler makes of the vertices around a cut is not measured.
 
-use std::collections::BTreeMap;
-
 use super::pixel::SlotBackend;
+use super::stage::{Bindings, Constants};
 use super::{Bound, Executable, Runner, Scratch};
-use crate::{
-    BufferKind, D3dClass, FunctionSig, GeometryFacts, GsInput, GsOutput, Program, ResourceId, ResourceKind,
-    Sampler, StageFacts, StorageTarget, stage_functions,
-};
+use crate::{FunctionSig, GeometryFacts, GsInput, GsOutput, Program, Sampler, StageFacts, stage_functions};
 
 /// The values of one vertex: a register (four 32-bit lanes) for each varying.
 pub type Vertex = Vec<[u32; 4]>;
@@ -157,10 +153,7 @@ pub struct GeometryShader {
     facts: GeometryFacts,
     inputs: usize,
     outputs: usize,
-    /// The constant buffers by resource, as (register, space).
-    constants: BTreeMap<ResourceId, (u32, u32)>,
-    slots: BTreeMap<ResourceId, u32>,
-    buffers: BTreeMap<ResourceId, BufferKind>,
+    bindings: Bindings,
 }
 
 impl GeometryShader {
@@ -174,28 +167,7 @@ impl GeometryShader {
             .ok_or("a geometry program without its function")?;
         let executable = Executable::function(&program, "main").map_err(|e| e.to_string())?;
         let (inputs, outputs) = (program.interface.inputs.len(), program.interface.outputs.len());
-        let mut constants = BTreeMap::new();
-        let mut slots = BTreeMap::new();
-        let mut buffers = BTreeMap::new();
-        for r in &program.interface.resources {
-            let Some(binding) = r.provenance.d3d else {
-                return Err(format!("resource {} has no D3D bind slot", r.provenance.name));
-            };
-            slots.insert(r.id, binding.register);
-            if matches!(r.kind, ResourceKind::ConstantBuffer { .. })
-                && binding.class == D3dClass::ConstantBuffer
-            {
-                constants.insert(r.id, (binding.register, binding.space));
-            }
-            if let ResourceKind::Buffer(kind)
-            | ResourceKind::Storage {
-                target: StorageTarget::Buffer(kind),
-                ..
-            } = &r.kind
-            {
-                buffers.insert(r.id, *kind);
-            }
-        }
+        let bindings = Bindings::new(&program)?;
         Ok(Self {
             program,
             executable,
@@ -203,9 +175,7 @@ impl GeometryShader {
             facts,
             inputs,
             outputs,
-            constants,
-            slots,
-            buffers,
+            bindings,
         })
     }
 
@@ -239,7 +209,7 @@ impl GeometryShader {
     /// and buffer access go to `sampler` by bind slot.
     pub fn run(
         &self,
-        constants: &BTreeMap<(u32, u32), Vec<[u32; 4]>>,
+        constants: &Constants,
         sampler: &mut dyn Sampler,
         vertices: &[&Vertex],
         primitive: u32,
@@ -264,7 +234,7 @@ impl GeometryShader {
     /// reads.
     pub fn draw(
         &self,
-        constants: &BTreeMap<(u32, u32), Vec<[u32; 4]>>,
+        constants: &Constants,
         sampler: &mut dyn Sampler,
         vertices: &[Vertex],
         topology: Topology,
@@ -303,7 +273,7 @@ impl GeometryShader {
     /// refused: the primitives around a cut are not assembled.
     pub fn draw_indexed(
         &self,
-        constants: &BTreeMap<(u32, u32), Vec<[u32; 4]>>,
+        constants: &Constants,
         sampler: &mut dyn Sampler,
         vertices: &[Vertex],
         indices: &[u32],
@@ -329,22 +299,12 @@ impl GeometryShader {
         self.draw(constants, sampler, &drawn, topology)
     }
 
-    fn bind<'a>(&self, constants: &'a BTreeMap<(u32, u32), Vec<[u32; 4]>>) -> Result<Bound<'a>, String> {
-        self.executable.bind(
-            |id| {
-                let key = self.constants.get(&id)?;
-                constants.get(key).map(Vec::as_slice)
-            },
-            |_| None,
-        )
+    fn bind<'a>(&self, constants: &'a Constants) -> Result<Bound<'a>, String> {
+        self.bindings.bind(&self.executable, constants)
     }
 
     fn backend<'a>(&'a self, sampler: &'a mut dyn Sampler) -> SlotBackend<'a> {
-        SlotBackend {
-            sampler,
-            slots: &self.slots,
-            buffers: &self.buffers,
-        }
+        self.bindings.backend(sampler)
     }
 
     /// One invocation: the registers of the arguments (each input varying for each vertex of the primitive, then the

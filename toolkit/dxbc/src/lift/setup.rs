@@ -261,13 +261,14 @@ impl Setup {
         for d in &decoded.declarations {
             let at = |detail: String| error(d.word, detail);
             match &d.kind {
+                // a hull program declares them again in each of its phases: the most any of them uses
                 Declared::Temps(n) => {
                     if *n > MAX_TEMPS {
                         return Err(at(format!(
                             "dcl_temps {n}: D3D has at most {MAX_TEMPS} temporaries"
                         )));
                     }
-                    setup.temps = *n;
+                    setup.temps = setup.temps.max(*n);
                 }
                 Declared::IndexableTemp {
                     register,

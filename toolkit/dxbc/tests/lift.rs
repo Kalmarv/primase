@@ -300,3 +300,16 @@ fn the_compute_fixture_lifts_validates_and_writes_wgsl() {
         }
     }
 }
+
+/// The hull fixture whose phases declare different numbers of temporaries (tests/fixtures/hull_phases.hlsl, fxc /T hs_5_0:
+/// `dcl_temps 2` in the control-point phase, 1 in the last fork phase) lifts: each phase may use the temporaries it
+/// declared, so the program has the most any of them declares.
+#[test]
+fn a_hull_program_whose_phases_declare_different_temporaries_lifts() {
+    let program = lift(include_bytes!("fixtures/hull_phases.hs.dxbc")).unwrap_or_else(|e| panic!("{e}"));
+    program.validate().unwrap_or_else(|p| panic!("{p:?}"));
+    assert_eq!(program.stage, Stage::Hull);
+    for name in ["main", "patch_constant"] {
+        primase_shader::exec::Executable::function(&program, name).unwrap_or_else(|e| panic!("{name}: {e}"));
+    }
+}

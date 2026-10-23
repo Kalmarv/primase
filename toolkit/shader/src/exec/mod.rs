@@ -22,6 +22,9 @@ mod pixel;
 mod rayquery;
 mod request;
 mod run;
+mod stage;
+pub mod tessellation;
+pub mod tessellator;
 
 pub use flat::Executable;
 pub use mask::{Mask, Wide};
@@ -33,6 +36,7 @@ pub use request::{
     ImageSample, ImageStore, QueryKind, ReportHit, TraceRay,
 };
 pub use run::{Bound, Decision, Dispatched, Output, Resources, Runner, STEP_LIMIT, Scratch};
+pub use stage::Constants;
 
 use crate::{Error, Program};
 
