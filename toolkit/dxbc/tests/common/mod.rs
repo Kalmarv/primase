@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 //! What the executor's gates share: deterministic test vectors for a lifted pixel program (input registers, constant
-//! buffers), a quad's lanes, and a game's shader corpus.
-pub mod differential;
+//! buffers) and a game's shader corpus.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -81,7 +80,7 @@ pub struct Case {
     pub buffers: Vec<(u32, Vec<[u32; 4]>)>,
 }
 
-pub fn case(shader: &dyn PixelShader, other: &dyn PixelShader, c: u32) -> Case {
+pub fn case(shader: &dyn PixelShader, c: u32) -> Case {
     let interface = shader.interface();
     let mut inputs = vec![[0u32; 4]; shader.input_count().max(1)];
     let front = if c >= 2 {
@@ -113,10 +112,9 @@ pub fn case(shader: &dyn PixelShader, other: &dyn PixelShader, c: u32) -> Case {
         }
     }
     let mut buffers = Vec::new();
-    // the buffers of both implementations, each as long as the longer of the two says: a lifted program's array is
-    // the larger of the declared rows and the reflection's
+    // each buffer as long as the program says: its array is the larger of the declared rows and the reflection's
     let mut sizes: BTreeMap<u32, u32> = BTreeMap::new();
-    for &(slot, rows) in shader.constant_buffers().iter().chain(other.constant_buffers()) {
+    for &(slot, rows) in shader.constant_buffers() {
         let e = sizes.entry(slot).or_default();
         *e = (*e).max(rows);
     }
@@ -148,27 +146,8 @@ pub fn case(shader: &dyn PixelShader, other: &dyn PixelShader, c: u32) -> Case {
     Case { inputs, buffers }
 }
 
-/// Lane `k` of a quad: every float input advances by (0.01, 0.02) per step in x and y.
-pub fn quad_lane(shader: &dyn PixelShader, c: &Case, k: usize) -> Vec<[u32; 4]> {
-    let off = (k & 1) as f32 * 0.01 + (k >> 1) as f32 * 0.02;
-    let mut inputs = c.inputs.clone();
-    for v in &shader.interface().inputs {
-        let Some(sig) = v.provenance.d3d else { continue };
-        if v.system.is_some() || v.value.scalar != ScalarType::Float {
-            continue;
-        }
-        let Some(register) = inputs.get_mut(sig.register as usize) else {
-            continue;
-        };
-        for lane in (0..4usize).filter(|b| sig.mask >> b & 1 != 0) {
-            register[lane] = (f32::from_bits(register[lane]) + off).to_bits();
-        }
-    }
-    inputs
-}
-
-/// The buffers as `shader` takes them: each as long as the shader says (the evaluator wants its declared rows exactly,
-/// a lifted program's array may be longer), the contents the same word for word.
+/// The buffers as `shader` takes them: each as long as the shader says (a lifted program's array may be longer than the
+/// declared rows), the contents the same word for word.
 pub fn refs<'a>(c: &'a Case, shader: &dyn PixelShader) -> Vec<(u32, &'a [[u32; 4]])> {
     shader
         .constant_buffers()

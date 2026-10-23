@@ -1,13 +1,21 @@
 //! Synthetic gates on our own dxc-built fixtures (`tests/fixtures/*.hlsl`, compiled with the command at the top of
-//! each): reflection, evaluation against outputs derived from the HLSL by hand, every truncation refused, and a
-//! seeded mutation run that must never panic.
-use primase_dxil::Shader;
+//! each): the lifted interface, execution (`primase_shader::exec::ProgramShader`) against outputs derived from the HLSL by
+//! hand, every truncation refused, and a seeded mutation run that must never panic.
+use primase_dxil::lift;
+use primase_shader::exec::ProgramShader;
 use primase_shader::{
     ConstantType, InterpMode, InterpSampling, PixelShader, ResourceKind, Sample, SampleType, ScalarType,
     SystemValue, TextureDim, Value,
 };
 
 const BLEND: &[u8] = include_bytes!("fixtures/blend.dxil");
+
+/// The fixture lifted, validated and ready to run.
+fn shader(bytes: &[u8]) -> ProgramShader {
+    let program = lift(bytes).unwrap_or_else(|e| panic!("{e}"));
+    program.validate().unwrap_or_else(|p| panic!("{p:?}"));
+    ProgramShader::new(program).unwrap_or_else(|e| panic!("{e}"))
+}
 
 fn f(x: f32) -> u32 {
     x.to_bits()
@@ -30,9 +38,10 @@ fn inputs(front: bool) -> Vec<[u32; 4]> {
 
 #[test]
 fn reflection_names_bindings_and_packing() {
-    let s = Shader::parse(BLEND).unwrap();
+    let s = shader(BLEND);
     let r = s.interface();
-    // (semantic, index, system value, register, lanes, interpolation)
+    // (semantic, index, system value, register, lanes, interpolation): the signature's cells the program reads; the
+    // fixture's SV_Position is declared and never read, so the lift leaves it out
     let inputs: Vec<_> = r
         .inputs
         .iter()
@@ -52,14 +61,6 @@ fn reflection_names_bindings_and_packing() {
     assert_eq!(
         inputs,
         [
-            (
-                "SV_Position",
-                0,
-                Some(SystemValue::FragCoord),
-                0,
-                0b1111,
-                center(InterpMode::Linear)
-            ),
             ("TEXCOORD", 0, None, 1, 0b0011, center(InterpMode::Perspective)),
             ("TEXCOORD", 1, None, 1, 0b0100, center(InterpMode::Perspective)),
             ("TEXCOORD", 2, None, 2, 0b0001, center(InterpMode::Flat)),
@@ -130,7 +131,7 @@ fn reflection_names_bindings_and_packing() {
 
 #[test]
 fn evaluation_matches_the_hlsl() {
-    let s = Shader::parse(BLEND).unwrap();
+    let s = shader(BLEND);
     let cb = constants();
     for front in [false, true] {
         let mut requests = Vec::new();
@@ -159,7 +160,7 @@ fn evaluation_matches_the_hlsl() {
 
 #[test]
 fn missing_bindings_are_errors() {
-    let s = Shader::parse(BLEND).unwrap();
+    let s = shader(BLEND);
     let mut sampler = |_: Sample| Ok([0.; 4]);
     assert!(
         s.execute(&inputs(true)[..2], &[(3, &constants())], &mut sampler)
@@ -180,7 +181,7 @@ fn missing_bindings_are_errors() {
 #[test]
 fn every_truncation_is_refused() {
     for n in 0..BLEND.len() {
-        assert!(Shader::parse(&BLEND[..n]).is_err(), "prefix {n}");
+        assert!(lift(&BLEND[..n]).is_err(), "prefix {n}");
     }
 }
 
@@ -231,7 +232,7 @@ fn mutations_never_panic() {
                 }
             }
         }
-        if let Ok(s) = Shader::parse(&bytes) {
+        if let Some(s) = lift(&bytes).ok().and_then(|p| ProgramShader::new(p).ok()) {
             parsed += 1;
             let rows: Vec<(u32, Vec<[u32; 4]>)> = s
                 .constant_buffers()
@@ -257,7 +258,7 @@ const OPS: &[u8] = include_bytes!("fixtures/ops.dxil");
 
 #[test]
 fn integer_rounding_and_unary_operations_match_the_hlsl() {
-    let s = Shader::parse(OPS).unwrap();
+    let s = shader(OPS);
     // a = (2.5, 3, 8, 4); n = (-7, 5, 0, 0)
     let values = vec![[f(2.5), f(3.), f(8.), f(4.)], [(-7i32) as u32, 5, 0, 0]];
     assert_eq!(s.constant_buffers(), &[(0, 2)]);
@@ -278,12 +279,23 @@ fn integer_rounding_and_unary_operations_match_the_hlsl() {
     }
 }
 
+/// What the fixture uses is what its lift declares: three four-lane outputs, and the program validates.
 #[test]
-fn census_counts_what_the_fixture_uses() {
-    let s = Shader::parse(OPS).unwrap();
-    let c = s.census();
-    assert!(c.refused.is_empty());
-    assert_eq!(c.operations.get("StoreOutput"), Some(&12));
-    assert_eq!(c.instructions.get("SDiv"), Some(&1));
-    assert_eq!(c.instructions.get("Phi"), Some(&1));
+fn the_ops_fixture_lifts_to_the_outputs_it_writes() {
+    let program = lift(OPS).unwrap();
+    program.validate().unwrap_or_else(|p| panic!("{p:?}"));
+    let outputs: Vec<_> = program
+        .interface
+        .outputs
+        .iter()
+        .map(|o| (o.system, o.value.width))
+        .collect();
+    assert_eq!(
+        outputs,
+        [
+            (Some(SystemValue::Target(0)), 4),
+            (Some(SystemValue::Target(1)), 4),
+            (Some(SystemValue::Target(2)), 4)
+        ]
+    );
 }

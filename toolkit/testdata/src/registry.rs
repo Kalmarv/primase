@@ -579,7 +579,7 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Oracle(OracleSet::Corpus, Game::General, "dxbc"),
         status: Status::Live,
         gate: true,
-        about: r#"Sekiro's 390 pixel programs (`.ppo`), Microsoft's disassembly of each (`.ppo.asm`) and the bindings, inputs and constant layout read from that text (`.ppo.reflection.json`); toolkit/dxbc/tests/program.rs, reflection.rs; schema in toolkit/dxbc/README.md"#,
+        about: r#"Sekiro's 390 pixel programs (`.ppo`), Microsoft's disassembly of each (`.ppo.asm`) and the bindings, inputs and constant layout read from that text (`.ppo.reflection.json`); toolkit/dxbc/tests/disassembly.rs, reflection.rs; schema in toolkit/dxbc/README.md"#,
         source: r#"independent: the game's own programs (`corpus.sekiro/shaders`) disassembled by Microsoft's fxc 10.0.26100 (`fxc /nologo /dumpbin`), the reflection read from the disassembly's text by toolkit/dxbc/tests/oracles/dxbc_corpus.py"#,
     },
     Declared {
@@ -665,7 +665,7 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Oracle(OracleSet::D3dDisassembler, Game::Riders, "shader-pack"),
         status: Status::Live,
         gate: false,
-        about: r#"a folder of DXBC containers `NNNN.dxbc` (Riders Republic's ShaderDataDX11.bin, Steam build 25394987, split at its containers: 2,443) each with `NNNN.txt`, Microsoft's D3D Shader Disassembler text of it; toolkit/dxbc/tests/program.rs"#,
+        about: r#"a folder of DXBC containers `NNNN.dxbc` (Riders Republic's ShaderDataDX11.bin, Steam build 25394987, split at its containers: 2,443) each with `NNNN.txt`, Microsoft's D3D Shader Disassembler text of it; toolkit/dxbc/tests/disassembly.rs"#,
         source: r#"independent: Microsoft's D3D Shader Disassembler, run over the user's own install's pack (kept in a private cache)"#,
     },
     Declared {
@@ -976,31 +976,11 @@ pub const DEBUG: &[(&str, &str)] = &[
     ),
     (
         "shader.diff_limit",
-        "how many programs of a corpus the executor comparisons run",
-    ),
-    (
-        "shader.diff_trace",
-        "a DXBC container whose executor and evaluator requests and outputs are printed",
-    ),
-    (
-        "shader.diff_case",
-        "which test case shader.diff_trace prints (default 0)",
-    ),
-    (
-        "shader.diff_text",
-        "a DXBC container whose lifted program is printed as text",
+        "how many programs of a corpus the WARP comparison runs",
     ),
     (
         "shader.warp_all",
         "`1` compares every program the WARP oracle can bind",
-    ),
-    (
-        "shader.warp_evaluator",
-        "`1` runs the DXBC evaluator in the executor's place in the WARP comparison",
-    ),
-    (
-        "shader.speed_runs",
-        "how many invocations of each program the executor timing runs (default 200)",
     ),
     (
         "skatebird.voronoi_level",

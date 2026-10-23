@@ -406,7 +406,7 @@ produced by something other than the code it checks.
 | `oracles.codewalker.gta/resources` | live | yes | optional: a folder of an independent reader's decodings of chosen drawables and texture dictionaries of that install (JSON; schema in `worlds/gta/tests/resource_oracle.rs`) | independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools |
 | `oracles.corpus.elden/shaders` | live | - | a folder (searched recursively) of the DXIL containers of Elden Ring's Shader Model 6 shader bundles (one file per container), lifted, validated and written as WGSL, the refusals counted by reason with an example program; toolkit/dxil/tests/lift_corpus.rs | the user's own install: the containers of its `/shader/*.shaderbnd.dcx` binders and `/shader/*.shaderbdlebnd.dcx` bundles (ray-tracing `[rt]` bundles included), worlds/fromsoft/examples/corpus_elden_shaders.rs |
 | `oracles.corpus.general/codecs.tsv` | live | yes | TSV: codec, compressed path, oracle decoded path (tab-separated) | independent: the games' own streams (Sekiro's DFLT DCX envelopes, skate.'s zlib CAS blocks, Riders Republic's terrain LZ4 blocks, GTA V's raw deflate archive files, cut by the corpus_* example programs) decoded by Python's zlib and the lz4 package 4.4.5, toolkit/compress/tests/oracles/codecs.py |
-| `oracles.corpus.general/dxbc` | live | yes | Sekiro's 390 pixel programs (`.ppo`), Microsoft's disassembly of each (`.ppo.asm`) and the bindings, inputs and constant layout read from that text (`.ppo.reflection.json`); toolkit/dxbc/tests/program.rs, reflection.rs; schema in toolkit/dxbc/README.md | independent: the game's own programs (`corpus.sekiro/shaders`) disassembled by Microsoft's fxc 10.0.26100 (`fxc /nologo /dumpbin`), the reflection read from the disassembly's text by toolkit/dxbc/tests/oracles/dxbc_corpus.py |
+| `oracles.corpus.general/dxbc` | live | yes | Sekiro's 390 pixel programs (`.ppo`), Microsoft's disassembly of each (`.ppo.asm`) and the bindings, inputs and constant layout read from that text (`.ppo.reflection.json`); toolkit/dxbc/tests/disassembly.rs, reflection.rs; schema in toolkit/dxbc/README.md | independent: the game's own programs (`corpus.sekiro/shaders`) disassembled by Microsoft's fxc 10.0.26100 (`fxc /nologo /dumpbin`), the reflection read from the disassembly's text by toolkit/dxbc/tests/oracles/dxbc_corpus.py |
 | `oracles.corpus.gta/legacy-effects` | unheld: it needs GTA V Legacy's install, which no machine holds (the Enhanced edition has no effect files) | - | a folder (searched recursively) of GTA V Legacy's compiled effects (`.fxc`, RAGE `rgxe`) as extracted from the install (the Enhanced edition has none); every one is read, its programs' containers checked and lifted; worlds/gta/tests/fxc_census.rs | the user's own install: the effect files extracted from its archives |
 | `oracles.corpus.gta/shader-database.awc` | live | - | GTA V Enhanced's shader database (`sga_win32_60_final.awc`, magic `SGD2`, from update/update2.rpf `common/shaders/fxdb`) as the install stores it after decryption and decompression: every program and effect is read, every program lifted; worlds/gta/tests/fxc_census.rs | the user's own install: the file extracted from its archive, worlds/gta/examples/corpus_gta_shader_database.rs |
 | `oracles.corpus.riders/shaders` | live | - | a folder (searched recursively) of the DXBC containers of Riders Republic's shader pack (ShaderDataDX11.bin, split at its containers), lifted, validated and written as WGSL, the refusals counted by reason; toolkit/dxbc/tests/lift_corpus.rs | the user's own install: the programs split from its shader pack |
@@ -418,7 +418,7 @@ produced by something other than the code it checks.
 | `oracles.corpus.skate/ebx` | live | - | a folder of EBX documents as the game wrote them, mirroring their asset paths (searched recursively); every field's value must survive a rewrite, and the byte layout is compared with the reference writer; worlds/frostbite/tests/ebx.rs | the game's own EBX documents |
 | `oracles.corpus.skate/shaders` | live | - | a folder (searched recursively) of the DXIL containers of skate.'s CompiledBytecode resources (one file per container), lifted, validated and written as WGSL, the refusals counted by reason with an example program; toolkit/dxil/tests/lift_corpus.rs | the user's own install: the containers of its superbundles' CompiledBytecode resources, worlds/reskate/examples/corpus_skate_shaders.rs |
 | `oracles.corpus.sledding/shaders` | live | - | a folder (searched recursively) of the DXBC containers of a Unity player's compiled pixel programs, as primase-unity extracts them, lifted, validated and written as WGSL, the refusals counted by reason; toolkit/dxbc/tests/lift_corpus.rs | the user's own install: the programs read from its shader assets |
-| `oracles.d3d-disassembler.riders/shader-pack` | live | - | a folder of DXBC containers `NNNN.dxbc` (Riders Republic's ShaderDataDX11.bin, Steam build 25394987, split at its containers: 2,443) each with `NNNN.txt`, Microsoft's D3D Shader Disassembler text of it; toolkit/dxbc/tests/program.rs | independent: Microsoft's D3D Shader Disassembler, run over the user's own install's pack (kept in a private cache) |
+| `oracles.d3d-disassembler.riders/shader-pack` | live | - | a folder of DXBC containers `NNNN.dxbc` (Riders Republic's ShaderDataDX11.bin, Steam build 25394987, split at its containers: 2,443) each with `NNNN.txt`, Microsoft's D3D Shader Disassembler text of it; toolkit/dxbc/tests/disassembly.rs | independent: Microsoft's D3D Shader Disassembler, run over the user's own install's pack (kept in a private cache) |
 | `oracles.game-code.stuntboost/levels` | live | yes | the game's own parsers run over that install: per level part `<L>_<N>.json` (node names as its `ParsedName` reads them; its collision model as `SE.CollisionModel` loads it: meshes, grippable bits, ramps, ledges) and `<L>_<N>.tris.bin` (every collision triangle); worlds/stuntboost/tests/oracle.rs | independent: the game's own code via reflection, the oracle tool kept with the game's private tools |
 | `oracles.khronos.general/sample-assets` | live | yes | a folder of Khronos glTF-Sample-Assets models, one folder per model (`<Model>/<Model>.glb` or `.gltf` with its buffers, `expected.json` written by pygltflib from the same file, `validator.json` by the Khronos validator and, for a model with images, `images.json` by Pillow) | third-party: Khronos glTF-Sample-Assets at commit 15cd02d304e54cb42a4db4eefe719f76190f4b68; expected.json by pygltflib 1.16.5; images.json by Pillow 11.0.0 |
 | `oracles.pillow.sekiro/skate-mask` | live | yes | PNGs and independent mask pixel hashes in `cases.json`; schema below | independent: Pillow's decode and channel mapping of the game's own textures, generated by a script kept with the private oracle tools |
@@ -468,13 +468,8 @@ produced by something other than the code it checks.
 | `gta.region` | only this named gate region of worlds/gta/tests/region_pipeline.rs |
 | `scene.filter` | only scene folders whose path contains this text |
 | `allow_live` | `1` lets a real-data gate report input folders that changed during the run and continue |
-| `shader.diff_limit` | how many programs of a corpus the executor comparisons run |
-| `shader.diff_trace` | a DXBC container whose executor and evaluator requests and outputs are printed |
-| `shader.diff_case` | which test case shader.diff_trace prints (default 0) |
-| `shader.diff_text` | a DXBC container whose lifted program is printed as text |
+| `shader.diff_limit` | how many programs of a corpus the WARP comparison runs |
 | `shader.warp_all` | `1` compares every program the WARP oracle can bind |
-| `shader.warp_evaluator` | `1` runs the DXBC evaluator in the executor's place in the WARP comparison |
-| `shader.speed_runs` | how many invocations of each program the executor timing runs (default 200) |
 | `skatebird.voronoi_level` | the SkateBIRD level the Voronoi bake test bakes (default `level1`) |
 | `skatebird.voronoi_digest` | the digest the Voronoi bake test's maps must have |
 | `fromsoft.bake_digest` | the digest the baked layer textures of Sekiro's m11_01 must have (printed by an earlier run) |
@@ -584,12 +579,7 @@ produced by something other than the code it checks.
 | `PRIMASE_SHADER_CORPUS_RR` | `oracles.corpus.riders/shaders` |
 | `PRIMASE_SHADER_CORPUS_UNITY` | `oracles.corpus.sledding/shaders` |
 | `PRIMASE_SHADER_DIFF_LIMIT` | debug key `shader.diff_limit` |
-| `PRIMASE_SHADER_DIFF_TRACE` | debug key `shader.diff_trace` |
-| `PRIMASE_SHADER_DIFF_CASE` | debug key `shader.diff_case` |
-| `PRIMASE_SHADER_DIFF_TEXT` | debug key `shader.diff_text` |
 | `PRIMASE_SHADER_WARP_ALL` | debug key `shader.warp_all` |
-| `PRIMASE_SHADER_WARP_EVALUATOR` | debug key `shader.warp_evaluator` |
-| `PRIMASE_SHADER_SPEED_RUNS` | debug key `shader.speed_runs` |
 | `PRIMASE_SKATEBIRD_VORONOI_LEVEL` | debug key `skatebird.voronoi_level` |
 | `PRIMASE_SKATEBIRD_VORONOI_DIGEST` | debug key `skatebird.voronoi_digest` |
 | `PRIMASE_ANVIL_BAKE_DIGEST` | debug key `anvil.bake_digest` |

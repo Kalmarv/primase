@@ -76,12 +76,6 @@ fn a_vertex_program_decodes_to_typed_declarations_and_instructions() {
     );
 }
 
-/// The evaluator reads pixel programs only, and says so; the decoder reads the vertex program.
-#[test]
-fn the_evaluator_refuses_what_the_decoder_reads() {
-    assert!(primase_dxbc::Program::from_words(&vertex()).is_err());
-}
-
 #[test]
 fn declarations_carry_their_fields() {
     // dcl_constantbuffer cb3[12], dynamicIndexed; dcl_sampler s1, mode_comparison;

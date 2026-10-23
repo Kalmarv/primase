@@ -20,8 +20,15 @@ use primase_gta::components::{GtaEffect, GtaStage};
 use primase_gta::passes::gbuffer;
 use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
+use primase_shader::exec::ProgramShader;
 use primase_shader::{Constants, Grid, Input, Invocation, Layout, PixelShader, Texture, evaluate_raw};
 use primase_testdata::{Game, install, keys};
+
+/// A program lifted and ready to run, or why not.
+fn executor(bytecode: &[u8]) -> Result<ProgramShader, String> {
+    let program = primase_dxil::lift(bytecode).map_err(|e| e.to_string())?;
+    ProgramShader::new(program).map_err(|e| e.to_string())
+}
 
 /// What a pixel is evaluated with.
 #[derive(Clone, Copy)]
@@ -67,7 +74,7 @@ fn unit(v: [f32; 3]) -> [f32; 3] {
 }
 
 /// One pixel of `shader`: the four words of each target, or why not.
-fn run(shader: &primase_dxil::Shader, s: Setup) -> Result<Vec<[f32; 4]>, String> {
+fn run(shader: &ProgramShader, s: Setup) -> Result<Vec<[f32; 4]>, String> {
     let buffers: Vec<(u32, u32)> = PixelShader::constant_buffers(shader)
         .iter()
         .map(|&(slot, rows)| (slot, rows.saturating_mul(4)))
@@ -306,11 +313,11 @@ fn the_deferred_programs_write_one_g_buffer() {
                 Err(why) => *static_text.refused.entry(why).or_default() += 1,
             }
         }
-        // the evaluator's subset of DXIL does not cover every program
-        let shader = match primase_dxil::Shader::parse(&sh.bytecode) {
+        // the lift and the executor do not cover every program
+        let shader = match executor(&sh.bytecode) {
             Ok(s) => s,
-            Err(e) => {
-                *unevaluated.entry(e.detail).or_default() += 1;
+            Err(why) => {
+                *unevaluated.entry(why).or_default() += 1;
                 continue;
             }
         };
@@ -391,7 +398,7 @@ fn the_deferred_programs_write_one_g_buffer() {
     for ((stem, widths), count) in &signatures {
         println!("  {count:>5} {stem} writes targets of widths {widths:?}");
     }
-    println!("programs the evaluator does not cover, by reason: {unevaluated:?}");
+    println!("programs the executor does not cover, by reason: {unevaluated:?}");
     for ((group, t, l), lane) in &matrix {
         let responds: Vec<String> = CLASSES
             .iter()

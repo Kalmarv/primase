@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 //! The DXIL reader on the control-flow and memory fixtures (dxc 1.7, default optimisation and -Od): loops are read as
 //! backward branches, a switch as a switch, a local array as an alloca with getelementptr, loads and stores. The
-//! evaluated subset (`Shader::parse`) refuses each by name.
+//! lift takes the loops as structured ones.
 use primase_dxil::module::{Module, Op};
 
 fn module(name: &str) -> Module {
@@ -34,20 +34,15 @@ fn loops_are_backward_branches() {
             _ => false,
         });
         assert!(back >= 3, "{name}: {back} backward branches (three loops)");
-        let e = primase_dxil::Shader::parse(
-            &std::fs::read(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("tests/fixtures")
-                    .join(name),
-            )
-            .unwrap(),
+        // the lift takes them as structured loops
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(name),
         )
-        .unwrap_err();
-        // the first refusal by name: at -Od the no-op marker loads come first
-        assert!(
-            e.detail.contains("backward branch") || e.detail.contains("Load"),
-            "{e}"
-        );
+        .unwrap();
+        let program = primase_dxil::lift(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        program.validate().unwrap_or_else(|p| panic!("{name}: {p:?}"));
     }
 }
 

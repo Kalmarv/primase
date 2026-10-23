@@ -212,12 +212,7 @@ pub const OLDER: &[(&str, Query)] = {
         ("PRIMASE_SHADER_CORPUS_RR", Oracle(Corpus, Riders, "shaders")),
         ("PRIMASE_SHADER_CORPUS_UNITY", Oracle(Corpus, Sledding, "shaders")),
         ("PRIMASE_SHADER_DIFF_LIMIT", Debug("shader.diff_limit")),
-        ("PRIMASE_SHADER_DIFF_TRACE", Debug("shader.diff_trace")),
-        ("PRIMASE_SHADER_DIFF_CASE", Debug("shader.diff_case")),
-        ("PRIMASE_SHADER_DIFF_TEXT", Debug("shader.diff_text")),
         ("PRIMASE_SHADER_WARP_ALL", Debug("shader.warp_all")),
-        ("PRIMASE_SHADER_WARP_EVALUATOR", Debug("shader.warp_evaluator")),
-        ("PRIMASE_SHADER_SPEED_RUNS", Debug("shader.speed_runs")),
         (
             "PRIMASE_SKATEBIRD_VORONOI_LEVEL",
             Debug("skatebird.voronoi_level"),

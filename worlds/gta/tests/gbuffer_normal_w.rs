@@ -25,8 +25,15 @@ use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaStage};
 use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
+use primase_shader::exec::ProgramShader;
 use primase_shader::{Constants, Grid, Input, Invocation, Layout, PixelShader, Texture, evaluate_raw};
 use primase_testdata::{Game, install, keys};
+
+/// A program lifted and ready to run, or why not.
+fn executor(bytecode: &[u8]) -> Result<ProgramShader, String> {
+    let program = primase_dxil::lift(bytecode).map_err(|e| e.to_string())?;
+    ProgramShader::new(program).map_err(|e| e.to_string())
+}
 
 fn world() -> Option<World> {
     let (dir, keys) = (install(Game::Gta)?, keys(Game::Gta)?);
@@ -67,7 +74,7 @@ fn quantise(c: [f32; 4]) -> [f32; 4] {
     c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() / 255.0)
 }
 
-fn target_one(shader: &primase_dxil::Shader, normal: [f32; 3]) -> [f32; 4] {
+fn target_one(shader: &ProgramShader, normal: [f32; 3]) -> [f32; 4] {
     let buffers: Vec<(u32, u32)> = PixelShader::constant_buffers(shader)
         .iter()
         .map(|&(slot, rows)| (slot, rows.saturating_mul(4)))
@@ -198,7 +205,7 @@ fn the_twiddle_programs_fill_w_and_the_plain_programs_do_not_need_it() {
     let Some(world) = world() else { return };
     let load = |effect: &str, hash: &str| {
         let sh = world.get::<Shader>(effect_program(&world, effect, hash)).unwrap();
-        primase_dxil::Shader::parse(&sh.bytecode).unwrap()
+        executor(&sh.bytecode).unwrap()
     };
     let twiddle = load("normal_spec_twiddle_tnt", "95313230");
     let plain = load("cpv_only", "6b2704e5");

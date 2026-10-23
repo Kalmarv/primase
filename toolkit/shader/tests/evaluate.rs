@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 //! `evaluate` on one HLSL fixture compiled to both bytecodes (tests/fixtures/evaluate.hlsl), with outputs worked out
 //! from the HLSL, and constant packing worked out from D3D's packing rules.
+use primase_shader::exec::ProgramShader;
 use primase_shader::{
     BufferLayout, Constant, ConstantType, Constants, D3dBinding, D3dClass, Execution, Field, Grid, Image,
     Input, Interface, Lane, Layout, Majorness, Member, PixelShader, Resource, ResourceId, ResourceKind,
@@ -9,15 +10,24 @@ use primase_shader::{
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+fn executor(program: primase_shader::Program) -> ProgramShader {
+    program.validate().unwrap_or_else(|p| panic!("{p:?}"));
+    ProgramShader::new(program).unwrap()
+}
+
 fn shaders() -> Vec<(&'static str, Box<dyn PixelShader>)> {
     vec![
         (
             "DXBC",
-            Box::new(primase_dxbc::Shader::parse(include_bytes!("fixtures/evaluate.dxbc")).unwrap()),
+            Box::new(executor(
+                primase_dxbc::lift(include_bytes!("fixtures/evaluate.dxbc")).unwrap(),
+            )),
         ),
         (
             "DXIL",
-            Box::new(primase_dxil::Shader::parse(include_bytes!("fixtures/evaluate.dxil")).unwrap()),
+            Box::new(executor(
+                primase_dxil::lift(include_bytes!("fixtures/evaluate.dxil")).unwrap(),
+            )),
         ),
     ]
 }

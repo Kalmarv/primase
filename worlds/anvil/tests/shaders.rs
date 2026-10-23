@@ -1,8 +1,7 @@
 //! The shader pack's census: every container of `ShaderDataDX11.bin` (in the folder `installs.riders` names),
 //! checked by its own checksum and the pack by its trailing MD5 ([`containers`]); each container's stage counted; each
-//! pixel program parsed by primase-dxbc (its program, then the program with the container's signatures), the failures
-//! counted by their message (numbers taken out), most first: what the evaluator lacks, by how many pixel shaders it
-//! stops. A count, not an oracle. Run by hand: `cargo test -p primase-anvil --test shaders -- --ignored --nocapture`.
+//! pixel program lifted by primase-dxbc, the refusals counted by their message (numbers taken out), most first: what the
+//! lift lacks, by how many pixel shaders it stops. A count, not an oracle. Run by hand: `cargo test -p primase-anvil --test shaders -- --ignored --nocapture`.
 
 use std::collections::BTreeMap;
 
@@ -31,7 +30,6 @@ fn every_container_of_the_shader_pack() {
     );
     let mut stages: BTreeMap<String, u64> = BTreeMap::new();
     let mut program: BTreeMap<String, u64> = BTreeMap::new();
-    let mut shader: BTreeMap<String, u64> = BTreeMap::new();
     for c in &all {
         let code = primase_dxcontainer::chunks(c)
             .expect("directory")
@@ -61,22 +59,13 @@ fn every_container_of_the_shader_pack() {
         if stage != "pixel" {
             continue;
         }
-        let p = match primase_dxbc::Program::parse(c) {
-            Ok(_) => "parsed".to_owned(),
+        let lifted = match primase_dxbc::lift(c) {
+            Ok(_) => "lifted".to_owned(),
             Err(e) => kind(&e.detail),
         };
-        *program.entry(p).or_default() += 1;
-        let s = match primase_dxbc::Shader::parse_stripped(c) {
-            Ok(_) => "parsed".to_owned(),
-            Err(e) => kind(&e.detail),
-        };
-        *shader.entry(s).or_default() += 1;
+        *program.entry(lifted).or_default() += 1;
     }
-    for (title, t) in [
-        ("stages", &stages),
-        ("pixel programs", &program),
-        ("pixel shaders with signatures", &shader),
-    ] {
+    for (title, t) in [("stages", &stages), ("pixel programs", &program)] {
         println!("{title}:");
         let mut rows: Vec<_> = t.iter().collect();
         rows.sort_by(|a, b| b.1.cmp(a.1));

@@ -23,8 +23,15 @@ use primase_gta::components::{GtaEffect, GtaShaderTable, GtaStage};
 use primase_gta::passes::gbuffer;
 use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
+use primase_shader::exec::ProgramShader;
 use primase_shader::{Constants, Grid, Input, Invocation, Layout, PixelShader, Texture, evaluate_raw};
 use primase_testdata::{Game, install, keys};
+
+/// A program lifted and ready to run, or why not.
+fn executor(bytecode: &[u8]) -> Result<ProgramShader, String> {
+    let program = primase_dxil::lift(bytecode).map_err(|e| e.to_string())?;
+    ProgramShader::new(program).map_err(|e| e.to_string())
+}
 
 fn world() -> Option<World> {
     let (dir, keys) = (install(Game::Gta)?, keys(Game::Gta)?);
@@ -48,7 +55,7 @@ fn target_two_decodes_to_the_materials_specular_parameters() {
         })
         .unwrap();
     let sh = world.get::<Shader>(entity).unwrap();
-    let shader = primase_dxil::Shader::parse(&sh.bytecode).unwrap();
+    let shader = executor(&sh.bytecode).unwrap();
     let intensity_encoding = ScalarEncoding::square_root_of(1.0);
     let exponent_encoding = ScalarEncoding::square_root_of(512.0);
     for (specular, colour, mask) in [

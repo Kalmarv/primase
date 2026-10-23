@@ -9,8 +9,9 @@ use primase_shader::{
 };
 use std::collections::BTreeMap;
 
-/// A fixture's interface from each bytecode. DXBC's interpolation is the program's: only a program inside the
-/// evaluated subset (`program`) reads it; the resource fixture uses doubles and views, which the evaluator refuses.
+/// A fixture's interface from each bytecode. DXBC's interpolation is the program's: only the lift of the program reads it
+/// (the signature has none), so the varyings fixture is lifted and the resource fixture, which uses doubles (the lifter
+/// refuses them), is reflected.
 fn interfaces(resources: bool) -> Vec<(&'static str, Interface)> {
     let (dxbc, dxil): (&[u8], &[u8]) = if resources {
         (
@@ -29,7 +30,7 @@ fn interfaces(resources: bool) -> Vec<(&'static str, Interface)> {
             if resources {
                 primase_dxbc::reflection(dxbc).unwrap()
             } else {
-                primase_dxbc::Shader::parse(dxbc).unwrap().interface
+                primase_dxbc::lift(dxbc).unwrap().interface
             },
         ),
         ("DXIL", primase_dxil::interface(dxil).unwrap()),

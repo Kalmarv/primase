@@ -3,8 +3,8 @@
 //! that is not ours: each case is rendered by WARP on one pixel with the same input registers and constant buffers,
 //! and run on [`ProgramShader`]; every lane both write must agree bit for bit (the fixtures use no transcendental).
 //!
-//! The fixtures are the control-flow and memory ones the DXIL evaluator cannot run (flow, loops, switch, arrays, bits;
-//! default and -Od builds), the resource arrays (textures of different sizes in space 1, samplers in space 2) and the
+//! The fixtures are the sampled and integer ones (blend, ops), the control-flow and memory ones (flow, loops, switch,
+//! arrays, bits; default and -Od builds), the resource arrays (textures of different sizes in space 1, samplers in space 2) and the
 //! pixel operations a texture load at an offset and the half conversions need. Needs `tools.warp` (the oracle program)
 //! and `tools.dxc` (for the oracle's vertex shader); it works in `warp` under the scratch folder. The vertex shader is
 //! generated from the container's interface ([`primase_dxil::interface`]): every input varying read from
@@ -116,6 +116,8 @@ fn vertex_hlsl(interface: &Interface) -> String {
 
 struct Case {
     name: String,
+    /// Whether the oracle renders a front face (and the executor is told it does).
+    front: bool,
     inputs: BTreeMap<u32, [u32; 4]>,
     buffers: BTreeMap<u32, Vec<[u32; 4]>>,
     /// The oracle's `texture` lines, as written after the keyword.
@@ -125,7 +127,8 @@ struct Case {
 /// What the executor makes of a case: per output member, its four lanes and a mask of those written.
 type Ours = Result<Vec<([u32; 4], u8)>, String>;
 
-/// The executor's run of a program with no resources but its constant buffers.
+/// The executor's run of a program with constant buffers, and textures that are one colour each (the case's `texture`
+/// lines of the form `<slot> <four hex words>`).
 fn plain(program: &Program, c: &Case) -> Ours {
     let shader = ProgramShader::new(program.clone()).unwrap();
     let position = program
@@ -144,8 +147,35 @@ fn plain(program: &Program, c: &Case) -> Ours {
     if let Some(p) = position {
         inputs[p as usize] = [0.5f32, 0.5, 0.5, 1.0].map(f32::to_bits);
     }
+    let front = program
+        .interface
+        .inputs
+        .iter()
+        .find(|v| v.system == Some(SystemValue::FrontFacing))
+        .and_then(|v| v.provenance.d3d);
+    if let Some(d) = front {
+        inputs[d.register as usize][d.mask.trailing_zeros() as usize] = if c.front { u32::MAX } else { 0 };
+    }
     let refs: Vec<(u32, &[[u32; 4]])> = c.buffers.iter().map(|(s, v)| (*s, v.as_slice())).collect();
-    let mut sampler = |_: Sample| Err("no textures in these fixtures".to_owned());
+    let colours: BTreeMap<u32, [f32; 4]> = c
+        .textures
+        .iter()
+        .map(|t| {
+            let mut words = t.split_whitespace();
+            let slot = words.next().unwrap().parse().unwrap();
+            let mut colour = [0f32; 4];
+            for lane in &mut colour {
+                *lane = f32::from_bits(u32::from_str_radix(words.next().unwrap(), 16).unwrap());
+            }
+            (slot, colour)
+        })
+        .collect();
+    let mut sampler = |q: Sample| {
+        colours
+            .get(&q.texture)
+            .copied()
+            .ok_or_else(|| format!("no texture at t{}", q.texture))
+    };
     let e = shader
         .execute(&inputs, &refs, &mut sampler)
         .map_err(|e| e.to_string())?;
@@ -161,7 +191,9 @@ fn plain(program: &Program, c: &Case) -> Ours {
 }
 
 /// Render `cases` of the container on WARP and compare every lane the executor writes, as `ours` makes it of the lifted
-/// program (its output members in the order of the interface's outputs).
+/// program (its output members in the order of the interface's outputs). A float lane agrees when it is bit for bit the
+/// same, or within `tolerance` relative (0 for the fixtures that use no `exp`, `log`, `sin`, `cos` or `rsqrt`, which
+/// Direct3D leaves to the implementation within a few units in the last place).
 fn compare(
     container: &Path,
     cases: &[Case],
@@ -169,6 +201,7 @@ fn compare(
     warp: &Path,
     scratch: &Path,
     ours: &dyn Fn(&Program, &Case) -> Ours,
+    tolerance: f64,
 ) -> (usize, Vec<String>) {
     let bytes = std::fs::read(container).unwrap();
     let program = primase_dxil::lift(&bytes).unwrap();
@@ -210,10 +243,11 @@ fn compare(
     let mut ran = BTreeMap::new();
     for c in cases {
         text.push_str(&format!(
-            "case {}\napi d3d12\nps {}\nvs {}\nfront 1\n",
+            "case {}\napi d3d12\nps {}\nvs {}\nfront {}\n",
             c.name,
             container.display(),
-            vs.display()
+            vs.display(),
+            u8::from(c.front)
         ));
         for (r, w) in &c.inputs {
             text.push_str(&format!("input {r} {}\n", hex(w)));
@@ -261,7 +295,7 @@ fn compare(
                 continue;
             }
         };
-        for (k, (reg, _)) in targets.iter().enumerate() {
+        for (k, (reg, kind)) in targets.iter().enumerate() {
             for lane in 0..4 {
                 let (values, mask) = execution[k];
                 if mask & (1 << lane) == 0 {
@@ -273,6 +307,15 @@ fn compare(
                 lanes += 1;
                 if f32::from_bits(our_bits).is_nan() && f32::from_bits(warp_bits).is_nan() {
                     continue;
+                }
+                if *kind == "float" && warp_bits != our_bits {
+                    let (a, b) = (
+                        f64::from(f32::from_bits(our_bits)),
+                        f64::from(f32::from_bits(warp_bits)),
+                    );
+                    if (a - b).abs() <= tolerance * a.abs().max(b.abs()) {
+                        continue;
+                    }
                 }
                 if warp_bits != our_bits {
                     mismatches.push(format!(
@@ -305,6 +348,7 @@ fn lifted_fixtures_agree_with_warp() {
     // Values { float4 a; int4 n; }, t = TEXCOORD0 at register 1
     let case = |name: &str, a: [f32; 4], n: [i32; 4], t: [f32; 2]| Case {
         name: name.to_owned(),
+        front: true,
         inputs: BTreeMap::from([(1, [f(t[0]), f(t[1]), 0, 0])]),
         buffers: BTreeMap::from([(0, vec![a.map(f32::to_bits), n.map(|x| x as u32)])]),
         textures: Vec::new(),
@@ -334,6 +378,7 @@ fn lifted_fixtures_agree_with_warp() {
         rows.extend(table);
         Case {
             name: name.to_owned(),
+            front: true,
             inputs: BTreeMap::from([(1, [0, 0, 0, 0])]),
             buffers: BTreeMap::from([(0, rows)]),
             textures: Vec::new(),
@@ -348,6 +393,7 @@ fn lifted_fixtures_agree_with_warp() {
     // Values { float4 f; uint4 u; int4 i; }; no divide by zero
     let bits_case = |name: &str, f4: [f32; 4], u4: [u32; 4], i4: [i32; 4]| Case {
         name: name.to_owned(),
+        front: true,
         inputs: BTreeMap::new(),
         buffers: BTreeMap::from([(0, vec![f4.map(f32::to_bits), u4, i4.map(|x| x as u32)])]),
         textures: Vec::new(),
@@ -388,15 +434,90 @@ fn lifted_fixtures_agree_with_warp() {
                 .iter()
                 .map(|c| Case {
                     name: format!("{}{}", c.name, variant.replace('.', "_")),
+                    front: c.front,
                     inputs: c.inputs.clone(),
                     buffers: c.buffers.clone(),
                     textures: Vec::new(),
                 })
                 .collect();
-            let (lanes, mismatches) = compare(&container, &named, &dxc, &warp, &scratch, &plain);
+            let (lanes, mismatches) = compare(&container, &named, &dxc, &warp, &scratch, &plain, 0.0);
             total += lanes;
             all.extend(mismatches);
         }
+    }
+    println!("{total} output lanes compared with WARP, {} differ", all.len());
+    for m in &all {
+        println!("MISMATCH {m}");
+    }
+    assert!(total > 0 && all.is_empty());
+}
+
+/// `blend.dxil` and `ops.dxil`, the sampled and the integer-and-rounding fixtures: the executor's values for them are
+/// worked out by hand in `fixtures.rs`; here WARP's. `ops` raises `exp2`, `log2` and `rsqrt`, which Direct3D leaves to the
+/// implementation within a few units in the last place: its float lanes agree within 1e-5 relative.
+#[test]
+fn lifted_blend_and_ops_agree_with_warp() {
+    let Some((dxc, warp, scratch)) = tools() else {
+        return;
+    };
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    // blend: uv, weight and id inputs (TEXCOORD0 to 2), constants scale, bias and flags (b3), one texture (t2)
+    let mut blend = Vec::new();
+    for (k, (uv, w, id)) in [
+        ([0.25f32, 0.75], 0.4f32, 7u32),
+        ([0.6, 0.1], 0.9, 3),
+        ([0.0, 1.0], -2.0, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for front in [false, true] {
+            let colour = [0.3, 0.7, 0.2 + k as f32 * 0.1, 1.0].map(f);
+            blend.push(Case {
+                name: format!("blend{k}{}", if front { "f" } else { "b" }),
+                front,
+                inputs: BTreeMap::from([(1, [f(uv[0]), f(uv[1]), f(w), 0]), (2, [id, 0, 0, 0])]),
+                buffers: BTreeMap::from([(
+                    3,
+                    vec![
+                        [f(2.), f(4.), f(1.5), 0],
+                        [f(0.5), f(0.25), f(0.1), 0],
+                        [5, 0, 0, 0],
+                    ],
+                )]),
+                textures: vec![format!("2 {}", hex(&colour))],
+            });
+        }
+    }
+    // ops: constants a and n (b0), t (TEXCOORD0)
+    let ops: Vec<Case> = [
+        ([2.5f32, 3., 8., 4.], [-7i32, 5], [0.75f32, 0.25]),
+        ([-1.25, 0.5, 0.125, 9.], [100, 3], [0.1, 0.9]),
+        ([3.5, -2., 1024., 0.0625], [-1, 0], [0.5, 0.5]),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(k, (a, n, t))| Case {
+        name: format!("ops{k}"),
+        front: true,
+        inputs: BTreeMap::from([(1, [f(t[0]), f(t[1]), 0, 0])]),
+        buffers: BTreeMap::from([(0, vec![a.map(f32::to_bits), [n[0] as u32, n[1] as u32, 0, 0]])]),
+        textures: Vec::new(),
+    })
+    .collect();
+    let (mut total, mut all) = (0, Vec::new());
+    for (fixture, cases, tolerance) in [("blend.dxil", &blend, 0.0), ("ops.dxil", &ops, 1e-5)] {
+        let (lanes, mismatches) = compare(
+            &dir.join(fixture),
+            cases,
+            &dxc,
+            &warp,
+            &scratch,
+            &plain,
+            tolerance,
+        );
+        total += lanes;
+        all.extend(mismatches);
     }
     println!("{total} output lanes compared with WARP, {} differ", all.len());
     for m in &all {
@@ -501,6 +622,7 @@ fn lifted_resource_arrays_and_pixel_operations_agree_with_warp() {
     // Select { uint2 which; float2 uv; }; texture i of the array in space 1 at t(i), the single one at t8
     let arrays = |name: &str, which: [u32; 2]| Case {
         name: name.to_owned(),
+        front: true,
         inputs: BTreeMap::new(),
         buffers: BTreeMap::from([(0, vec![[which[0], which[1], f(0.25), f(0.75)]])]),
         textures: (0..4u32)
@@ -511,6 +633,7 @@ fn lifted_resource_arrays_and_pixel_operations_agree_with_warp() {
     // Values { float h; uint packed; }; img (t0) is a 16 by 16 ramp
     let ops = |name: &str, h: f32, packed: u32| Case {
         name: name.to_owned(),
+        front: true,
         inputs: BTreeMap::new(),
         buffers: BTreeMap::from([(0, vec![[f(h), packed, 0, 0]])]),
         textures: vec![format!("0 {} 16x16 ramp", uniform(0.0))],
@@ -535,17 +658,25 @@ fn lifted_resource_arrays_and_pixel_operations_agree_with_warp() {
             arrays("arrays_2_3", [2, 3]),
         ]);
         let container = dir.join(format!("resource_arrays{variant}.dxil"));
-        let (lanes, mismatches) = compare(&container, &cases, &dxc, &warp, &scratch, &|program, c| {
-            let mut backend = Sized {
-                array: resource_at(program, 0, D3dClass::ShaderResource),
-            };
-            run_with_backend(
-                program,
-                c.buffers[&0].clone(),
-                &[[f(0.5), f(0.5), f(0.5), f(1.0)]],
-                &mut backend,
-            )
-        });
+        let (lanes, mismatches) = compare(
+            &container,
+            &cases,
+            &dxc,
+            &warp,
+            &scratch,
+            &|program, c| {
+                let mut backend = Sized {
+                    array: resource_at(program, 0, D3dClass::ShaderResource),
+                };
+                run_with_backend(
+                    program,
+                    c.buffers[&0].clone(),
+                    &[[f(0.5), f(0.5), f(0.5), f(1.0)]],
+                    &mut backend,
+                )
+            },
+            0.0,
+        );
         total += lanes;
         all.extend(mismatches);
         // the offset load and the half conversions; the sample index and its position need a multisampled target
@@ -555,12 +686,20 @@ fn lifted_resource_arrays_and_pixel_operations_agree_with_warp() {
             ops("ops2", 65504.0, 0xc400),
         ]);
         let container = dir.join(format!("pixel_ops{variant}.dxil"));
-        let (lanes, mismatches) = compare(&container, &cases, &dxc, &warp, &scratch, &|program, c| {
-            let mut out = run_with_backend(program, c.buffers[&0].clone(), &[[0, 0, 0, 0]], &mut Ramp)?;
-            // Target1's x and y are the sample's position: not compared
-            out[1].1 &= 0b1100;
-            Ok(out)
-        });
+        let (lanes, mismatches) = compare(
+            &container,
+            &cases,
+            &dxc,
+            &warp,
+            &scratch,
+            &|program, c| {
+                let mut out = run_with_backend(program, c.buffers[&0].clone(), &[[0, 0, 0, 0]], &mut Ramp)?;
+                // Target1's x and y are the sample's position: not compared
+                out[1].1 &= 0b1100;
+                Ok(out)
+            },
+            0.0,
+        );
         total += lanes;
         all.extend(mismatches);
     }

@@ -6,9 +6,9 @@
 //!
 //! Needs `tools.warp` (the oracle program) and `tools.fxc` (Microsoft's `fxc`, for the oracle's vertex shader), and a
 //! corpus folder (the corpus oracle set's `sekiro/shaders`, `riders/shaders`, `sledding/shaders`); it works in
-//! `warp` under the scratch folder. By default only the programs with a texture that is not a plain 2D one run, the
-//! ones the DXBC evaluator cannot (sampling a 3D, cube or cube-array texture is refused there); the debug key
-//! `shader.warp_all=1` runs every program the oracle can bind.
+//! `warp` under the scratch folder. By default only the programs with a texture that is not a plain 2D one run (1D, 3D, cube
+//! and arrayed shapes: the dimension plumbing); the debug key `shader.warp_all=1` runs every program the
+//! oracle can bind.
 //!
 //! Textures are uniform and every sampler point-filters with clamp, so a sample cannot depend on its coordinate: the
 //! gate checks the arithmetic around it, the dimension plumbing and the declared shapes, not the sampler. Direct3D
@@ -264,7 +264,7 @@ impl Sampler for Uniform {
         })
     }
     fn load(&mut self, r: primase_shader::Load) -> Result<[u32; 4], String> {
-        // the evaluator's plain load: x, y and an array layer or 3D slice in the third lane
+        // a plain load: x, y and an array layer or 3D slice in the third lane
         let (dim, layers) = self.shapes[&r.texture];
         let (layer, z) = match dim {
             TextureDim::D3 => (None, r.texel[2]),
@@ -442,10 +442,6 @@ fn run_program(
         *t.errors.entry(format!("fxc: {first}")).or_default() += 1;
         return;
     }
-    let evaluator = debug("shader.warp_evaluator")
-        .is_some_and(|v| v == "1")
-        .then(|| primase_dxbc::Shader::parse(bytes).or_else(|_| primase_dxbc::Shader::parse_stripped(bytes)))
-        .and_then(Result::ok);
     let interface = shader.interface().clone();
     let targets: Vec<(u32, u32, u8, ScalarType)> = interface
         .outputs
@@ -466,7 +462,7 @@ fn run_program(
     let mut text = String::new();
     let mut ours = Vec::new();
     for c in 0..cases {
-        let case = case(&shader, &shader, c);
+        let case = case(&shader, c);
         let front = if c >= 2 {
             !c.is_multiple_of(3)
         } else {
@@ -520,14 +516,8 @@ fn run_program(
             samples: 0,
         };
         let zero = vec![[[0u32; 4]; 2]; case.inputs.len()];
-        // the debug key `shader.warp_evaluator=1` runs the DXBC evaluator in the executor's place: which of the two a
-        // disagreement belongs to, or the harness
-        let run: &dyn PixelShader = match &evaluator {
-            Some(e) => e,
-            None => &shader,
-        };
-        let refs = common::refs(&case, run);
-        ours.push(run.execute_with_derivatives(&case.inputs, &zero, &refs, &mut sampler));
+        let refs = common::refs(&case, &shader);
+        ours.push(shader.execute_with_derivatives(&case.inputs, &zero, &refs, &mut sampler));
     }
     let cases_path = scratch.join(format!("{tag}.cases.txt"));
     let results_path = scratch.join(format!("{tag}.warp.jsonl"));

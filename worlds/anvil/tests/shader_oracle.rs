@@ -2,14 +2,14 @@
 //! container its MaterialTemplate body holds, unmodified) on random inputs, and its outputs compared with the formulas
 //! the pass makes its textures of ([`primase_anvil::passes::formulas`]). The method is the Riders Republic notes'
 //! (docs/material-spec.md §8: uniform textures, chosen constants and interpolants, decoys in the constants the shader
-//! shouldn't read), the evaluator primase's own; the permutations are the notes' (their opaque G-buffer one per
+//! shouldn't read), the executor primase's own; the permutations are the notes' (their opaque G-buffer one per
 //! template). Each test asserts its largest differences under 1e-6 and prints them.
 
 use primase_anvil::passes::formulas::{Rough, emission, metalness, occlusion, roughness, sat, tint, tinted};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::template;
 use primase_core::layered::height_blend;
-use primase_dxbc::Shader;
+use primase_shader::exec::ProgramShader;
 use primase_shader::{Load, PixelShader, Sample, Sampler, Store};
 use primase_testdata::{Game, install};
 
@@ -36,8 +36,14 @@ impl Random {
     }
 }
 
+/// The program lifted and ready to run.
+fn executor(container: &[u8]) -> ProgramShader {
+    let program = primase_dxbc::lift(container).unwrap_or_else(|e| panic!("the shader lifts: {e}"));
+    ProgramShader::new(program).unwrap_or_else(|e| panic!("the shader runs: {e}"))
+}
+
 /// The pixel shader at body offset `offset` of the MaterialTemplate at entry `entry` of the forge file `forge`.
-fn shader(forge: &str, entry: usize, offset: usize) -> Option<Shader> {
+fn shader(forge: &str, entry: usize, offset: usize) -> Option<ProgramShader> {
     let dir = install(Game::Riders)?;
     let mut archive = Archive::open(&[dir.join(forge)]).expect("archive");
     let body = archive.resource(At { forge: 0, entry }).expect("template").body;
@@ -48,7 +54,7 @@ fn shader(forge: &str, entry: usize, offset: usize) -> Option<Shader> {
             all.iter().map(|(a, _)| a).collect::<Vec<_>>()
         )
     });
-    Some(Shader::parse_stripped(container).expect("the shader parses"))
+    Some(executor(container))
 }
 
 fn bits(v: [f64; 4]) -> [u32; 4] {
@@ -101,32 +107,27 @@ impl Sampler for Uniform<'_> {
 /// (slot, row, value) of the other constant buffers, all else zeros (no LOD bias, no instance position); the frame
 /// inputs a fixed plausible frame.
 fn run_with(
-    s: &Shader,
+    s: &ProgramShader,
     textures: &[(u32, [f64; 4])],
     cb3: &[[f64; 4]],
     colour: [f64; 4],
     engine: &[(u32, usize, [f64; 4])],
 ) -> Vec<[f64; 4]> {
-    let inputs: Vec<[u32; 4]> = s
-        .interface()
-        .inputs
-        .iter()
-        .map(|i| {
-            match (
-                i.label.name.as_str(),
-                i.provenance.d3d.expect("a D3D register").register,
-            ) {
-                ("SV_Position", _) => bits([0.5, 0.5, 0.5, 1.0]),
-                ("COLOR", _) if i.label.index == 0 => bits(colour),
-                // a second vertex colour (MAD_Grounds' tire scalar, COLOR1.x): 1s
-                ("COLOR", _) => bits([1.0; 4]),
-                ("SV_IsFrontFace", _) => [u32::MAX; 4],
-                (_, 1) => bits([0.3, 0.6, 0.0, 0.0]),
-                (_, r) if r % 2 == 1 => bits([1.0, 0.0, 0.0, 0.0]),
-                _ => bits([0.0, 0.0, 1.0, 1.0]),
-            }
-        })
-        .collect();
+    // by register: the lift's interface holds the signature elements the program reads
+    let mut inputs = vec![[0u32; 4]; s.input_count()];
+    for i in &s.interface().inputs {
+        let register = i.provenance.d3d.expect("a D3D register").register;
+        inputs[register as usize] = match (i.label.name.as_str(), register) {
+            ("SV_Position", _) => bits([0.5, 0.5, 0.5, 1.0]),
+            ("COLOR", _) if i.label.index == 0 => bits(colour),
+            // a second vertex colour (MAD_Grounds' tire scalar, COLOR1.x): 1s
+            ("COLOR", _) => bits([1.0; 4]),
+            ("SV_IsFrontFace", _) => [u32::MAX; 4],
+            (_, 1) => bits([0.3, 0.6, 0.0, 0.0]),
+            (_, r) if r % 2 == 1 => bits([1.0, 0.0, 0.0, 0.0]),
+            _ => bits([0.0, 0.0, 1.0, 1.0]),
+        };
+    }
     let buffers: Vec<(u32, Vec<[u32; 4]>)> = s
         .constant_buffers()
         .iter()
@@ -154,7 +155,7 @@ fn run_with(
 }
 
 /// [`run_with`] with no engine constants.
-fn run(s: &Shader, textures: &[(u32, [f64; 4])], cb3: &[[f64; 4]], colour: [f64; 4]) -> Vec<[f64; 4]> {
+fn run(s: &ProgramShader, textures: &[(u32, [f64; 4])], cb3: &[[f64; 4]], colour: [f64; 4]) -> Vec<[f64; 4]> {
     run_with(s, textures, cb3, colour, &[])
 }
 
@@ -548,7 +549,7 @@ fn mad_tex1_terrain_blend() {
 /// the exposure (loaded); cb3[1..7] Metalness, Emissive Scale, Hue, Saturate, Luminosity, Alpha, Vertex Color (0 or
 /// 1), the UV rows at `uv`. o0 = (albedo tinted everywhere, roughness raw), o1.w metalness, o2.z the emission: the
 /// mask's lane `lane` times the scale over the exposure.
-fn emissive(s: &Shader, seed: u64, uv: usize, lane: usize, template: &str) {
+fn emissive(s: &ProgramShader, seed: u64, uv: usize, lane: usize, template: &str) {
     let mut r = Random(seed);
     let mut worst = Worst::default();
     for case in 0..40 {
@@ -642,7 +643,7 @@ fn mad_tex1_graffiti_mode() {
 
 /// The G-buffer pixel program (key 0x400000, docs/shaders.md §6.2) of the MaterialTemplate named `template` in the
 /// forge file `forge`, found through its permutation table.
-fn gbuffer(forge: &str, template: &str) -> Option<Shader> {
+fn gbuffer(forge: &str, template: &str) -> Option<ProgramShader> {
     let dir = install(Game::Riders)?;
     let mut archive = Archive::open(&[dir.join(forge)]).expect("archive");
     let names = &archive.forge(0).expect("forge").names;
@@ -656,7 +657,7 @@ fn gbuffer(forge: &str, template: &str) -> Option<Shader> {
         .iter()
         .find(|x| x.stage == template::Stage::Pixel && x.key == 0x40_0000)
         .expect("the G-buffer permutation");
-    Some(Shader::parse_stripped(program.container).expect("the shader parses"))
+    Some(executor(program.container))
 }
 
 /// MAD_Tex1_TeamColoured (§27.9): MAD_Tex1's formulas with its rows moved: cb3[1] Metalness, [2] Roughness Offset,
@@ -850,7 +851,7 @@ fn mad_tex1_graffiti_mode_decal_fx() {
 }
 
 /// The pixel program of key `key` of the MaterialTemplate named `template` in the forge file `forge`.
-fn gbuffer_key(forge: &str, template: &str, key: u32) -> Option<Shader> {
+fn gbuffer_key(forge: &str, template: &str, key: u32) -> Option<ProgramShader> {
     let dir = install(Game::Riders)?;
     let mut archive = Archive::open(&[dir.join(forge)]).expect("archive");
     let names = &archive.forge(0).expect("forge").names;
@@ -864,12 +865,12 @@ fn gbuffer_key(forge: &str, template: &str, key: u32) -> Option<Shader> {
         .iter()
         .find(|x| x.stage == template::Stage::Pixel && x.key == key)
         .expect("the permutation");
-    Some(Shader::parse_stripped(program.container).expect("the shader parses"))
+    Some(executor(program.container))
 }
 
 /// The pixel program of key `key` of the MaterialTemplate named `template`, in the first of Riders Republic's forges
 /// (patch first) that holds it.
-fn template_key(template: &str, key: u32) -> Option<Shader> {
+fn template_key(template: &str, key: u32) -> Option<ProgramShader> {
     let dir = install(Game::Riders)?;
     for forge in [
         "DataPC_MAD_USNAT_patch_01.forge",
@@ -891,7 +892,7 @@ fn template_key(template: &str, key: u32) -> Option<Shader> {
             .iter()
             .find(|x| x.stage == template::Stage::Pixel && x.key == key)
             .expect("the permutation");
-        return Some(Shader::parse_stripped(program.container).expect("the shader parses"));
+        return Some(executor(program.container));
     }
     panic!("no template {template}")
 }
