@@ -245,17 +245,31 @@ impl Gltf {
                 extras: o.get("extras").cloned(),
             });
         }
-        // a forest: following parents from any node ends at a root
+        // a forest: following parents from any node ends at a root. Each node is walked once: a walk stops at a node an
+        // earlier walk finished (`Done`) and is a cycle when it comes back to one of its own (`Walking`).
+        #[derive(Clone, Copy, PartialEq)]
+        enum Seen {
+            No,
+            Walking,
+            Done,
+        }
+        let mut seen = vec![Seen::No; out.len()];
         for start in 0..out.len() {
             let mut at = start;
-            for _ in 0..=out.len() {
+            let mut walked = Vec::new();
+            while seen[at] == Seen::No {
+                seen[at] = Seen::Walking;
+                walked.push(at);
                 match parent[at] {
                     Some(p) => at = p,
                     None => break,
                 }
             }
-            if parent[at].is_some() {
+            if seen[at] == Seen::Walking && parent[at].is_some() {
                 return Err(invalid(&format!("nodes[{start}]"), "is in a cycle of children"));
+            }
+            for n in walked {
+                seen[n] = Seen::Done;
             }
         }
         Ok(out)
@@ -281,6 +295,10 @@ impl Gltf {
         let o = Obj::new(s, &path)?;
         o.only(&["nodes", "name"])?;
         let roots = indices(&o, "nodes", nodes, "node")?.unwrap_or_default();
+        let mut listed = std::collections::BTreeSet::new();
+        if let Some(r) = roots.iter().find(|r| !listed.insert(**r)) {
+            return Err(invalid(&path, &format!("root node {r} is listed twice")));
+        }
         let parented: std::collections::BTreeSet<usize> = self
             .nodes()?
             .iter()

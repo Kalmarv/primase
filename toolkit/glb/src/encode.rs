@@ -5,7 +5,7 @@ use primase_core::json::f32s_value;
 use primase_core::{Component, Mesh, Primitive, Semantic, Stream, Topology};
 use serde_json::{Map, Value, json};
 
-use crate::read::bounds;
+use crate::read::{ElementType, bounds};
 use crate::{Document, Error, Result};
 
 #[cfg(not(target_endian = "little"))]
@@ -108,23 +108,23 @@ impl Buffers {
                 (Semantic::Position, Stream::F32x3(p)) => ("POSITION".to_owned(), self.positions(p)),
                 (Semantic::Normal, Stream::F32x3(v)) => (
                     "NORMAL".to_owned(),
-                    self.floats(bytemuck::cast_slice(v), count, "VEC3", None),
+                    self.floats(bytemuck::cast_slice(v), count, ElementType::Vec3, None),
                 ),
                 (Semantic::Tangent, Stream::F32x4(v)) => (
                     "TANGENT".to_owned(),
-                    self.floats(bytemuck::cast_slice(v), count, "VEC4", None),
+                    self.floats(bytemuck::cast_slice(v), count, ElementType::Vec4, None),
                 ),
                 (Semantic::TexCoord(n), Stream::F32x2(v)) => (
                     format!("TEXCOORD_{n}"),
-                    self.floats(bytemuck::cast_slice(v), count, "VEC2", None),
+                    self.floats(bytemuck::cast_slice(v), count, ElementType::Vec2, None),
                 ),
                 (Semantic::Color(n), Stream::F32x3(v)) => (
                     format!("COLOR_{n}"),
-                    self.floats(bytemuck::cast_slice(v), count, "VEC3", None),
+                    self.floats(bytemuck::cast_slice(v), count, ElementType::Vec3, None),
                 ),
                 (Semantic::Color(n), Stream::F32x4(v)) => (
                     format!("COLOR_{n}"),
-                    self.floats(bytemuck::cast_slice(v), count, "VEC4", None),
+                    self.floats(bytemuck::cast_slice(v), count, ElementType::Vec4, None),
                 ),
                 (Semantic::Color(n), Stream::U8x4(v)) => (
                     format!("COLOR_{n}"),
@@ -160,30 +160,22 @@ impl Buffers {
         })
     }
 
-    /// An accessor over `values`, `kind` (`SCALAR`, `VEC3`, `VEC4`, `MAT4`, ...) of floats, its view targeting vertex
-    /// data when `vertex` (attributes, morph targets) and nothing otherwise (inverse binds, animation keys); `min`
-    /// and `max` written when given (glTF requires them of positions and animation inputs).
+    /// An accessor over `values`, `element` of floats, its view targeting vertex data when `vertex` (attributes, morph
+    /// targets) and nothing otherwise (inverse binds, animation keys); `min` and `max` written when given (glTF requires
+    /// them of positions and animation inputs).
     pub fn float_accessor(
         &mut self,
         values: &[f32],
-        kind: &str,
+        element: ElementType,
         min_max: Option<(Vec<f32>, Vec<f32>)>,
         vertex: bool,
     ) -> usize {
-        let width = match kind {
-            "SCALAR" => 1,
-            "VEC2" => 2,
-            "VEC3" => 3,
-            "VEC4" => 4,
-            "MAT4" => 16,
-            other => panic!("accessor type {other} is not one the writers use"),
-        };
         let view = self.view(bytemuck::cast_slice(values), vertex.then_some(ARRAY_BUFFER));
         let mut a = Map::new();
         a.insert("bufferView".into(), json!(view));
         a.insert("componentType".into(), json!(5126));
-        a.insert("count".into(), json!(values.len() / width));
-        a.insert("type".into(), json!(kind));
+        a.insert("count".into(), json!(values.len() / element.components()));
+        a.insert("type".into(), json!(element.name()));
         if let Some((lo, hi)) = min_max {
             a.insert("min".into(), f32s_value(&lo));
             a.insert("max".into(), f32s_value(&hi));
@@ -210,16 +202,27 @@ impl Buffers {
 
     fn positions(&mut self, p: &[[f32; 3]]) -> usize {
         let (lo, hi) = bounds(p).expect("primitive() rejects empty primitives");
-        self.floats(bytemuck::cast_slice(p), p.len(), "VEC3", Some((&lo, &hi)))
+        self.floats(
+            bytemuck::cast_slice(p),
+            p.len(),
+            ElementType::Vec3,
+            Some((&lo, &hi)),
+        )
     }
 
-    fn floats(&mut self, bytes: &[u8], count: usize, kind: &str, minmax: Option<(&[f32], &[f32])>) -> usize {
+    fn floats(
+        &mut self,
+        bytes: &[u8],
+        count: usize,
+        element: ElementType,
+        minmax: Option<(&[f32], &[f32])>,
+    ) -> usize {
         let view = self.view(bytes, Some(ARRAY_BUFFER));
         let mut a = Map::new();
         a.insert("bufferView".into(), json!(view));
         a.insert("componentType".into(), json!(5126));
         a.insert("count".into(), json!(count));
-        a.insert("type".into(), json!(kind));
+        a.insert("type".into(), json!(element.name()));
         if let Some((lo, hi)) = minmax {
             a.insert("min".into(), f32s_value(lo));
             a.insert("max".into(), f32s_value(hi));

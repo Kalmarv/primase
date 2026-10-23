@@ -37,6 +37,11 @@ const UNSIGNED_SHORT: u64 = 5123;
 const UNSIGNED_INT: u64 = 5125;
 const FLOAT: u64 = 5126;
 
+/// The most elements the reader makes up for an accessor that has no `bufferView` (all zeros) or a sparse substitution:
+/// the file's `count` is all that bounds them, so a few hundred bytes of JSON would otherwise ask for gigabytes. A dense
+/// accessor is bounded by its view. 16,777,216 elements: a 16 M-vertex float VEC3 attribute is 192 MB.
+pub const MAX_MATERIALISED_ELEMENTS: usize = 1 << 24;
+
 /// A parsed glTF document: its JSON and its binary buffers.
 #[derive(Debug)]
 pub struct Gltf {
@@ -102,6 +107,17 @@ pub enum ElementType {
 }
 
 impl ElementType {
+    /// The glTF `type` string.
+    pub fn name(self) -> &'static str {
+        match self {
+            ElementType::Scalar => "SCALAR",
+            ElementType::Vec2 => "VEC2",
+            ElementType::Vec3 => "VEC3",
+            ElementType::Vec4 => "VEC4",
+            ElementType::Mat4 => "MAT4",
+        }
+    }
+
     /// Components per element.
     pub fn components(self) -> usize {
         match self {
@@ -717,7 +733,7 @@ impl Gltf {
                 } else {
                     (count - 1)
                         .checked_mul(stride)
-                        .and_then(|x| x.checked_add(offset + elem))
+                        .and_then(|x| x.checked_add(offset.checked_add(elem)?))
                         .ok_or_else(|| invalid(&path, "size overflows"))?
                 };
                 if need > bytes.len() {
@@ -729,7 +745,17 @@ impl Gltf {
         let (bytes, stride, declared_stride) = match (dense, sparse) {
             (Some((bytes, stride, declared)), None) => (Cow::Borrowed(bytes), stride, declared),
             (dense, sparse) => {
-                // Zeros or a sparse substitution: the elements are materialised tightly packed.
+                // Zeros or a sparse substitution: the elements are materialised tightly packed. The count is the
+                // file's word and nothing else bounds it (a dense accessor is bounded by its view), so it is bounded here.
+                if count > MAX_MATERIALISED_ELEMENTS {
+                    return Err(invalid(
+                        &path,
+                        &format!(
+                            "{count} elements without a bufferView or with a sparse substitution; the reader materialises \
+                             at most {MAX_MATERIALISED_ELEMENTS}"
+                        ),
+                    ));
+                }
                 let total = count
                     .checked_mul(elem)
                     .ok_or_else(|| invalid(&path, "size overflows"))?;
@@ -959,7 +985,8 @@ impl Accessor<'_> {
             SHORT => ComponentType::I16,
             UNSIGNED_SHORT => ComponentType::U16,
             UNSIGNED_INT => ComponentType::U32,
-            _ => ComponentType::F32,
+            FLOAT => ComponentType::F32,
+            c => return Err(invalid(&self.path, &format!("componentType {c}"))),
         };
         // glTF 3.6.2.3: only 8- and 16-bit integers are normalized
         if self.normalized && matches!(component, ComponentType::U32 | ComponentType::F32) {
