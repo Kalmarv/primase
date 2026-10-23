@@ -8,6 +8,7 @@ use crate::materials::{Definition, Material};
 use crate::passes::program_reads::{self, Reads, SlotRead};
 use crate::sekiro::source::{MaterialShader, ShaderBundle, ShaderStage};
 use primase_core::{Entity, World};
+use std::collections::BTreeMap;
 
 /// A slot the programs read and the lowered UV set (`TexCoord(n)`) they sample it with.
 #[derive(Clone, Debug, PartialEq)]
@@ -46,6 +47,7 @@ pub(super) struct Unread {
 }
 
 /// What a material's G-buffer programs read.
+#[derive(Clone)]
 struct Programs {
     /// The pixel program's file name.
     name: String,
@@ -54,24 +56,109 @@ struct Programs {
     uv_inputs: Vec<(u32, u8)>,
 }
 
-/// What the material's own G-buffer pixel program ([`crate::materials::MaterialView::gbuffer_program`]: its shader,
-/// static switch and alpha reference select it) and the shader's G-buffer vertex program read, with the vertex
-/// program's UV inputs and the pixel program's name. `Ok(None)`: not a material binary's, or the material has no bundle;
-/// `Err`: the programs could not be read (counted by the caller).
-fn read(world: &World, entity: Entity, material: &Material) -> Result<Option<Programs>, Unread> {
-    if !matches!(material.definition, Some(Definition::Matbin(_))) {
-        return Ok(None);
+/// The material binaries' G-buffer programs as read so far in one run, by the shader's bundle and the pixel program's
+/// name: materials share programs, and lifting one is the cost.
+#[derive(Default)]
+pub(super) struct Reader {
+    read: BTreeMap<(Entity, String), Result<Programs, Unread>>,
+}
+
+impl Reader {
+    /// What the material's own G-buffer pixel program ([`crate::materials::MaterialView::gbuffer_program`]: its
+    /// shader, static switch and alpha reference select it) and the shader's G-buffer vertex program read, with the
+    /// vertex program's UV inputs and the pixel program's name. `Ok(None)`: not a material binary's, or the material
+    /// has no bundle; `Err`: the programs could not be read (counted by the caller).
+    fn read(
+        &mut self,
+        world: &World,
+        entity: Entity,
+        material: &Material,
+    ) -> Result<Option<Programs>, Unread> {
+        if !matches!(material.definition, Some(Definition::Matbin(_))) {
+            return Ok(None);
+        }
+        let Some(view) = material.view() else {
+            return Ok(None);
+        };
+        let Some(bundle_entity) = world.get::<MaterialShader>(entity).map(|m| m.0) else {
+            return Ok(None);
+        };
+        let Some(bundle) = world.get::<ShaderBundle>(bundle_entity) else {
+            return Ok(None);
+        };
+        let name = view.gbuffer_program();
+        self.read
+            .entry((bundle_entity, name.clone()))
+            .or_insert_with(|| programs(bundle, name))
+            .clone()
+            .map(Some)
     }
-    let Some(view) = material.view() else {
-        return Ok(None);
-    };
-    let Some(bundle) = world.get::<MaterialShader>(entity).map(|m| m.0) else {
-        return Ok(None);
-    };
-    let Some(bundle) = world.get::<ShaderBundle>(bundle) else {
-        return Ok(None);
-    };
-    let name = view.gbuffer_program();
+
+    /// What a material's alpha-tested program says about its alpha test, or why it could not say it (`Err`, counted
+    /// by the caller). `Ok(None)`: a material this does not apply to (not a material binary's, or one drawn without an
+    /// alpha test).
+    pub(super) fn coverage(
+        &mut self,
+        world: &World,
+        entity: Entity,
+        material: &Material,
+    ) -> Result<Option<Coverage>, Unread> {
+        let Some(Programs {
+            name,
+            reads,
+            uv_inputs,
+        }) = self.read(world, entity, material)?
+        else {
+            return Ok(None);
+        };
+        if !name.ends_with("_[A].ppo") {
+            return Ok(None);
+        }
+        let [slot] = &reads.coverage[..] else {
+            return Err(Unread {
+                why: format!("{} slots reach the alpha test, not one", reads.coverage.len()),
+                program: name,
+            });
+        };
+        Ok(Some(Coverage {
+            slot: sampled(&name, slot, &uv_inputs, "coverage")?,
+            vertex_alpha: reads.coverage_vertex_alpha,
+            left_out: reads.left_out.into_iter().collect(),
+        }))
+    }
+
+    /// What a material's G-buffer program says its albedo is made of: the base slot and how it is sampled, or why it
+    /// could not say (`Err`, counted by the caller). `Ok(None)`: not a material binary's.
+    pub(super) fn base(
+        &mut self,
+        world: &World,
+        entity: Entity,
+        material: &Material,
+    ) -> Result<Option<Base>, Unread> {
+        let Some(Programs {
+            name,
+            reads,
+            uv_inputs,
+        }) = self.read(world, entity, material)?
+        else {
+            return Ok(None);
+        };
+        let Some(slot) = reads.base.as_ref() else {
+            return Err(Unread {
+                program: name,
+                why: "no one slot is the albedo's base".into(),
+            });
+        };
+        Ok(Some(Base {
+            slot: sampled(&name, slot, &uv_inputs, "base")?,
+            blended: reads.colour.len() > 1,
+            program: name,
+        }))
+    }
+}
+
+/// What the pixel program `name` of `bundle` and the bundle's G-buffer vertex program read, both lifted.
+fn programs(bundle: &ShaderBundle, name: String) -> Result<Programs, Unread> {
     let unread = |why: String| Unread {
         program: name.clone(),
         why,
@@ -87,13 +174,14 @@ fn read(world: &World, entity: Entity, material: &Material) -> Result<Option<Pro
         .or_else(|| bundle.program(&format!("{}_Gbuf_Skin.vpo", bundle.name)))
         .filter(|p| p.stage == ShaderStage::Vertex)
         .ok_or_else(|| unread(format!("{}: no G-buffer vertex program", bundle.name)))?;
-    let reads = program_reads::read(&pixel.code, &vertex.code, meta).map_err(unread)?;
-    let uv_inputs = program_reads::vertex_uv_inputs(&vertex.code).map_err(unread)?;
-    Ok(Some(Programs {
-        name,
+    let pixel = program_reads::lift(pixel.format, &pixel.code).map_err(unread)?;
+    let vertex = program_reads::lift(vertex.format, &vertex.code).map_err(unread)?;
+    let reads = program_reads::read(&pixel, &vertex, meta).map_err(unread)?;
+    Ok(Programs {
+        uv_inputs: program_reads::vertex_uv_inputs(&vertex),
         reads,
-        uv_inputs,
-    }))
+        name,
+    })
 }
 
 /// The UV set a slot is sampled with: its `u` and `v` made of one vertex input's pair.
@@ -118,59 +206,4 @@ fn sampled(name: &str, slot: &SlotRead, uv_inputs: &[(u32, u8)], what: &str) -> 
         binding: slot.texture.clone(),
         texcoord,
     })
-}
-
-/// What a material's alpha-tested program says about its alpha test, or why it could not say it (`Err`, counted by the
-/// caller). `Ok(None)`: a material this does not apply to (not a material binary's, or one drawn without an alpha test).
-pub(super) fn coverage(
-    world: &World,
-    entity: Entity,
-    material: &Material,
-) -> Result<Option<Coverage>, Unread> {
-    let Some(Programs {
-        name,
-        reads,
-        uv_inputs,
-    }) = read(world, entity, material)?
-    else {
-        return Ok(None);
-    };
-    if !name.ends_with("_[A].ppo") {
-        return Ok(None);
-    }
-    let [slot] = &reads.coverage[..] else {
-        return Err(Unread {
-            why: format!("{} slots reach the alpha test, not one", reads.coverage.len()),
-            program: name,
-        });
-    };
-    Ok(Some(Coverage {
-        slot: sampled(&name, slot, &uv_inputs, "coverage")?,
-        vertex_alpha: reads.coverage_vertex_alpha,
-        left_out: reads.left_out.into_iter().collect(),
-    }))
-}
-
-/// What a material's G-buffer program says its albedo is made of: the base slot and how it is sampled, or why it could
-/// not say (`Err`, counted by the caller). `Ok(None)`: not a material binary's.
-pub(super) fn base(world: &World, entity: Entity, material: &Material) -> Result<Option<Base>, Unread> {
-    let Some(Programs {
-        name,
-        reads,
-        uv_inputs,
-    }) = read(world, entity, material)?
-    else {
-        return Ok(None);
-    };
-    let Some(slot) = reads.base.as_ref() else {
-        return Err(Unread {
-            program: name,
-            why: "no one slot is the albedo's base".into(),
-        });
-    };
-    Ok(Some(Base {
-        slot: sampled(&name, slot, &uv_inputs, "base")?,
-        blended: reads.colour.len() > 1,
-        program: name,
-    }))
 }

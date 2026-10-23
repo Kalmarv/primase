@@ -17,9 +17,11 @@
 //! cooperative-matrix expressions.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use naga::{
-    ArraySize, BinaryOperator, DerivativeAxis, DerivativeControl, Expression, Handle, MathFunction,
-    RelationalFunction, ScalarKind, Statement, TypeInner, UnaryOperator,
+use naga::{ArraySize, Expression, Handle, Statement, TypeInner};
+/// The module's operations a [`Op`] names, re-exported so a consumer matches them without naming naga.
+pub use naga::{
+    BinaryOperator, DerivativeAxis, DerivativeControl, MathFunction, RelationalFunction, ScalarKind,
+    UnaryOperator,
 };
 
 use crate::{Interface, Label, Program, ResourceId, Stage, entry_io};

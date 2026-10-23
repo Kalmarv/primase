@@ -1,15 +1,15 @@
-//! What an Elden Ring material's compiled programs read, from the programs themselves (DXIL): which material texture
-//! slots decide whether a pixel is drawn at all (the alpha test), which colour the G-buffer's albedo, and where each is
-//! sampled (which vertex UV set, which pair of it). A preview chooses its textures from this, not from slot numbers or
-//! shader names.
+//! What a material's compiled programs read, from the programs themselves: which material texture slots decide whether
+//! a pixel is drawn at all (the alpha test), which colour the G-buffer's albedo, and where each is sampled (which vertex
+//! UV set, which pair of it). A preview chooses its textures from this, not from slot numbers or shader names.
 //!
-//! The pixel program is read as a dataflow: each `dx.op.sample*` names a texture register (the metaparam's texture
-//! slot number is the register) and its coordinates are made of an interpolant (`TEXCOORD4.xy`) scaled and offset by
-//! the material's constants; each `discard` is guarded by the compares that decide it (a flag made of several, a
-//! `phi` of constants, is followed to the branches that select its constants); each store to render target 2 is the
-//! albedo (the layout of the G-buffer the programs write: target 0 the normal, which reads the normal maps and the
-//! normal and tangent interpolants, target 1 the metallic and gloss, which reads the metallic map, target 2 the albedo,
-//! which reads the albedo maps). The vertex program then says which vertex input each interpolant is made of.
+//! The programs are read lifted ([`lift`]: DXIL and DXBC alike), as the value graph of their entry point
+//! ([`primase_shader::flow::Values`]): each texel names a texture resource, which is a material slot of the shader's
+//! metaparam where the metaparam names it ([`slot_of`]); its coordinates are made of an interpolant (`TEXCOORD4.xy`)
+//! scaled and offset by the material's constants; each discard is guarded by the conditions that decide it; render
+//! target 2 is the albedo (the layout of the G-buffer the programs write: target 0 the normal, which reads the normal
+//! maps and the normal and tangent interpolants, target 1 the metallic and gloss, which reads the metallic map, target 2
+//! the albedo, which reads the albedo maps). The vertex program then says which vertex input each interpolant is made
+//! of.
 //!
 //! The albedo's base ([`Reads::base`]) is the slot the program blends the others over: Elden Ring's `C[DetailBlend]`
 //! (`_6_Gbuf.ppo`) writes `saturate(detail * 4.55 * lerp(t7, luma(t7), p))`, `detail` a lerp of three detail albedos
@@ -31,8 +31,9 @@
 //! What it does not read is named in [`Reads::left_out`]: a discard against an engine texture (the screen-door dither of
 //! a fade) is not a material slot's coverage.
 use crate::metaparam::{Metaparam, Texture};
-use primase_dxil::module::{BinaryOp, Constant, Function, Instruction, Module, Op, Value, ValueId};
-use primase_dxil::reflection::{self, Element, Range};
+use primase_core::shader::{Resource, ResourceId, ResourceKind, ShaderFormat};
+use primase_shader::Program;
+use primase_shader::flow::{BinaryOperator, Node, NodeId, Op, Read, UnaryOperator, Values};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The render target the programs write the albedo to.
@@ -43,12 +44,6 @@ const NORMAL_KIND: u8 = 4;
 const METALLIC_KIND: u8 = 14;
 /// The pixel program's input that says the face drawn is a front face.
 const FRONT_FACE: &str = "SV_IsFrontFace";
-/// `dx.op` codes: sample, sample bias, sample level, sample grad.
-const SAMPLES: [u64; 4] = [60, 61, 62, 63];
-const LOAD_INPUT: u64 = 4;
-const STORE_OUTPUT: u64 = 5;
-const CBUFFER_LOAD: u64 = 59;
-const DISCARD: u64 = 82;
 
 /// A vertex input component: `TEXCOORD0.z` is `("TEXCOORD", 0, 2)`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -85,65 +80,126 @@ pub struct Reads {
     pub left_out: BTreeSet<&'static str>,
 }
 
-/// A program's dataflow.
-struct Analysis<'a> {
-    module: &'a Module,
-    function: &'a Function,
-    defs: HashMap<ValueId, &'a Instruction>,
-    ranges: Vec<Range>,
-    inputs: BTreeMap<u32, Element>,
-    outputs: BTreeMap<u32, Element>,
+/// A program's container of `format` (a game's [`crate::Game::shader_format`]) lifted: DXBC or DXIL.
+pub fn lift(format: ShaderFormat, bytes: &[u8]) -> Result<Program, String> {
+    match format {
+        ShaderFormat::Dxbc => primase_dxbc::lift(bytes).map_err(|e| e.to_string()),
+        ShaderFormat::Dxil => primase_dxil::lift(bytes).map_err(|e| e.to_string()),
+        other => Err(format!("a FromSoftware program of format {other:?}")),
+    }
+}
+
+/// How a texture resource of a program was matched to the metaparam's slot ([`slot_of`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SlotMatch {
+    /// The resource's name is the slot's name.
+    Name,
+    /// The resource's name and the slot's hold the same `Texture2D_N`.
+    Number,
+    /// The resource's register is the slot's index.
+    Register,
+}
+
+/// The metaparam slot a texture resource of a program stands for, and how it was matched: the slot of the same name;
+/// else the slot whose name holds the same `Texture2D_N` (the material's binding: Elden Ring's metaparam names
+/// `C[DetailBlend]`'s slot 1 `C_DetailBlend__snp_Texture2D_7_AlbedoMap` and the program the texture at its register 1
+/// `C_DetailBlend_snp_0_Texture2D_7`); else, for a resource the program names otherwise, the slot whose index is its
+/// register. `None`: no slot of the metaparam (an engine texture).
+pub fn slot_of(resource: &Resource, meta: &Metaparam) -> Option<(u32, SlotMatch)> {
+    if !matches!(resource.kind, ResourceKind::Texture { .. }) {
+        return None;
+    }
+    let name = &resource.provenance.name;
+    if let Some(t) = meta.textures.iter().find(|t| &t.name == name) {
+        return Some((u32::from(t.slot), SlotMatch::Name));
+    }
+    if let Some(n) = texture_number(name) {
+        return meta
+            .textures
+            .iter()
+            .find(|t| texture_number(&t.name) == Some(n))
+            .map(|t| (u32::from(t.slot), SlotMatch::Number));
+    }
+    let register = resource.provenance.d3d.as_ref()?.register;
+    meta.textures
+        .iter()
+        .any(|t| u32::from(t.slot) == register)
+        .then_some((register, SlotMatch::Register))
+}
+
+/// The `N` of a `Texture2D_N` in a resource's or a slot's name.
+fn texture_number(name: &str) -> Option<u32> {
+    let (_, rest) = name.split_once("Texture2D_")?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 /// An input component: its element's name and index, and the component.
 type Interpolant = (String, u32, u8);
 
-/// A sample of a texture register and the inputs its coordinates are made of.
+/// A texture leaf: the material slot it is (`None`: an engine texture) and the lane.
+type TextureLane = (Option<u32>, u8);
+
+/// A sample of a material slot and the inputs its coordinates are made of.
 struct Sample {
-    register: u32,
+    slot: u32,
     u: Option<Interpolant>,
     v: Option<Interpolant>,
 }
 
 /// The two layers of a blend `a + (b - a) * t` as sums of signed terms, and its weight ([`Analysis::lerp`]).
 struct Layers {
-    under: Vec<(ValueId, bool)>,
-    over: Vec<(ValueId, bool)>,
-    weight: ValueId,
+    under: Vec<(NodeId, bool)>,
+    over: Vec<(NodeId, bool)>,
+    weight: NodeId,
 }
 
 /// One step of what a value is made of ([`Analysis::step`]).
 enum Step {
-    /// A texture component: the sample's register and lane.
-    Texture(u32, u8),
+    /// A component of a sampled texel: the texture and the lane.
+    Texture(TextureLane),
     /// A vertex input component.
     Input(Interpolant),
     /// The values it is computed from.
-    Of(Vec<ValueId>),
+    Of(Vec<NodeId>),
+}
+
+/// A value's leaves: the texture components it is made of and the input components it reads.
+#[derive(Default)]
+struct Leaves {
+    textures: BTreeSet<TextureLane>,
+    inputs: BTreeSet<Interpolant>,
+}
+
+/// A program's value graph, with its texture resources' slots.
+struct Analysis<'a> {
+    program: &'a Program,
+    values: Values,
+    slots: BTreeMap<ResourceId, u32>,
 }
 
 /// The values below one that reach an albedo slot's colour ([`Analysis::colour_dominators`]).
 struct Reaching<'w, 'a> {
     analysis: &'w Analysis<'a>,
-    /// The albedo slots' registers.
+    /// The albedo slots.
     albedo: &'w BTreeSet<u32>,
     /// Whether each value visited reaches one.
-    reach: HashMap<ValueId, bool>,
+    reach: HashMap<NodeId, bool>,
     /// The reaching values each is computed from.
-    from: HashMap<ValueId, Vec<ValueId>>,
+    from: HashMap<NodeId, Vec<NodeId>>,
     /// The reaching values in postorder.
-    order: Vec<ValueId>,
+    order: Vec<NodeId>,
 }
 
 impl Reaching<'_, '_> {
-    fn visit(&mut self, id: ValueId) -> bool {
+    fn visit(&mut self, id: NodeId) -> bool {
         if let Some(&r) = self.reach.get(&id) {
             return r;
         }
         self.reach.insert(id, false);
         let r = match self.analysis.step(id) {
             // an albedo map's alpha is a mask (a coverage, an overlay's weight), not its colour
-            Step::Texture(register, lane) => lane < 3 && self.albedo.contains(&register),
+            Step::Texture((slot, lane)) => lane < 3 && slot.is_some_and(|s| self.albedo.contains(&s)),
             Step::Input(_) => false,
             Step::Of(values) => {
                 let mut r = false;
@@ -164,185 +220,125 @@ impl Reaching<'_, '_> {
     }
 }
 
-/// A value's leaves: the texture components it is made of (register, component) and the input components it reads
-/// (element name and index, component).
-#[derive(Default)]
-struct Leaves {
-    textures: BTreeSet<(u32, u8)>,
-    inputs: BTreeSet<(String, u32, u8)>,
-}
-
 impl<'a> Analysis<'a> {
-    fn new(module: &'a Module) -> Result<Self, String> {
-        let entry = reflection::entry(module).map_err(|e| e.to_string())?;
-        let function = module
-            .functions
-            .iter()
-            .find(|f| f.value == entry)
-            .ok_or("no entry function")?;
-        let ranges = reflection::ranges(module)
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|(r, _, _)| r)
-            .collect();
-        let (inputs, outputs) = reflection::elements(module).map_err(|e| e.to_string())?;
-        let mut defs = HashMap::new();
-        for i in &function.instructions {
-            if let Some((id, _)) = i.result {
-                defs.insert(id, i);
-            }
-        }
+    fn new(program: &'a Program, meta: Option<&Metaparam>) -> Result<Self, String> {
+        let values = Values::of_program(program)?;
+        let slots = match meta {
+            Some(meta) => program
+                .interface
+                .resources
+                .iter()
+                .filter_map(|r| Some((r.id, slot_of(r, meta)?.0)))
+                .collect(),
+            None => BTreeMap::new(),
+        };
         Ok(Analysis {
-            module,
-            function,
-            defs,
-            ranges,
-            inputs: inputs.into_iter().map(|e| (e.id, e)).collect(),
-            outputs: outputs.into_iter().map(|e| (e.id, e)).collect(),
+            program,
+            values,
+            slots,
         })
     }
 
-    fn value(&self, id: ValueId) -> Option<&'a Value> {
-        if id < self.function.first {
-            self.module.values.get(id)
-        } else {
-            self.function.locals.get(id - self.function.first)
+    /// What a value is made of, one step down: a texture component (a sample's slot and lane), a vertex input
+    /// component, or the values it is computed from. A constant's value is the material's or the engine's, not a
+    /// texture's: it is made of none. A merge or a loop value is made of its arms (what decides among them is a
+    /// condition, not a part of the value).
+    fn step(&self, id: NodeId) -> Step {
+        match self.values.node(id) {
+            Node::Texel {
+                resource,
+                lane,
+                read: Read::Sample,
+                ..
+            } => Step::Texture((resource.and_then(|r| self.slots.get(&r).copied()), *lane)),
+            Node::Texel {
+                coordinate, controls, ..
+            } => Step::Of(coordinate.iter().chain(controls).copied().collect()),
+            Node::Input { input, lane } => match self.program.interface.inputs.get(*input) {
+                Some(v) => Step::Input((v.label.name.clone(), v.label.index, *lane)),
+                None => Step::Of(Vec::new()),
+            },
+            Node::Global { .. } | Node::Query { .. } | Node::Literal(_) => Step::Of(Vec::new()),
+            Node::Op { operands, .. } => Step::Of(operands.clone()),
+            Node::Merge { arms, .. } | Node::Loop { arms, .. } => Step::Of(arms.clone()),
         }
     }
 
-    fn int(&self, id: ValueId) -> Option<i64> {
-        match self.value(id)? {
-            Value::Constant(Constant::Integer(i)) => Some(*i),
-            Value::Constant(Constant::Null) => Some(0),
-            _ => None,
-        }
-    }
-
-    /// The `dx.op` an operation calls: its code and arguments.
-    fn call(&self, op: &'a Op) -> Option<(u64, &'a [ValueId])> {
-        let Op::Call { function, args } = op else {
-            return None;
-        };
-        if !self.module.name(*function)?.starts_with("dx.op.") {
-            return None;
-        }
-        let code = u64::try_from(self.int(*args.first()?)?).ok()?;
-        Some((code, args))
-    }
-
-    /// The register of the shader resource a handle value names.
-    fn register(&self, handle: ValueId) -> Option<u32> {
-        let (code, args) = self.call(&self.defs.get(&handle)?.op)?;
-        match code {
-            // createHandle: class, range id
-            57 => {
-                let class = u8::try_from(self.int(*args.get(1)?)?).ok()?;
-                let id = u32::try_from(self.int(*args.get(2)?)?).ok()?;
-                self.ranges
-                    .iter()
-                    .find(|r| r.class == class && r.id == id)
-                    .map(|r| r.lower)
-            }
-            // createHandleFromBinding: the binding's lower bound
-            217 => {
-                let Value::Constant(Constant::Aggregate(a)) = self.value(*args.get(1)?)? else {
-                    return None;
-                };
-                u32::try_from(self.int(*a.first()?)?).ok()
-            }
-            // annotateHandle
-            216 => self.register(*args.get(1)?),
-            _ => None,
-        }
-    }
-
-    /// What a value is made of, one step down: a texture component (a sample's register and lane), a vertex input
-    /// component, or the values it is computed from (a constant buffer load is made of none: its value is the
-    /// material's or the engine's, not a texture's).
-    fn step(&self, id: ValueId) -> Step {
-        let Some(i) = self.defs.get(&id) else {
-            return Step::Of(Vec::new());
-        };
-        match &i.op {
-            Op::ExtractValue { aggregate, indices } => {
-                if let Some(agg) = self.defs.get(aggregate)
-                    && let Some((code, args)) = self.call(&agg.op)
-                    && SAMPLES.contains(&code)
-                    && let (Some(register), Some(&lane)) =
-                        (args.get(1).and_then(|h| self.register(*h)), indices.first())
-                {
-                    return Step::Texture(register, lane as u8);
-                }
-                Step::Of(vec![*aggregate])
-            }
-            Op::Call { args, .. } => {
-                let Some((code, a)) = self.call(&i.op) else {
-                    return Step::Of(args.clone());
-                };
-                match code {
-                    LOAD_INPUT => {
-                        if let (Some(sig), Some(col)) = (
-                            a.get(1).and_then(|v| self.int(*v)),
-                            a.get(3).and_then(|v| self.int(*v)),
-                        ) && let Some(e) = u32::try_from(sig).ok().and_then(|s| self.inputs.get(&s))
-                        {
-                            let component = (col - i64::from(e.column)).clamp(0, 255) as u8;
-                            return Step::Input((e.name.clone(), e.index, component));
-                        }
-                        Step::Of(Vec::new())
-                    }
-                    CBUFFER_LOAD => Step::Of(Vec::new()),
-                    _ => Step::Of(a.get(1..).unwrap_or_default().to_vec()),
-                }
-            }
-            op => Step::Of(op.operands()),
-        }
-    }
-
-    /// What a value is made of.
-    fn leaves(&self, id: ValueId, seen: &mut BTreeSet<ValueId>, out: &mut Leaves) {
+    /// What a value is made of; `deciding` also follows what decides among a merge's arms and a loop's iterations
+    /// (what decides a discard).
+    fn leaves(&self, id: NodeId, deciding: bool, seen: &mut BTreeSet<NodeId>, out: &mut Leaves) {
         if !seen.insert(id) {
             return;
         }
+        if deciding {
+            match self.values.node(id) {
+                Node::Merge { condition, .. } => {
+                    for &c in condition {
+                        self.leaves(c, deciding, seen, out);
+                    }
+                }
+                Node::Loop { exit, .. } => {
+                    for &c in exit {
+                        self.leaves(c, deciding, seen, out);
+                    }
+                }
+                _ => {}
+            }
+        }
         match self.step(id) {
-            Step::Texture(register, lane) => {
-                out.textures.insert((register, lane));
+            Step::Texture(t) => {
+                out.textures.insert(t);
             }
             Step::Input(input) => {
                 out.inputs.insert(input);
             }
             Step::Of(values) => {
                 for x in values {
-                    self.leaves(x, seen, out);
+                    self.leaves(x, deciding, seen, out);
                 }
             }
         }
     }
 
-    /// The material slots (registers of `slots`) a value is made of.
-    fn slots_in<V>(&self, id: ValueId, slots: &BTreeMap<u32, V>) -> BTreeSet<u32> {
+    fn leaves_of(&self, id: NodeId) -> Leaves {
+        let mut out = Leaves::default();
+        self.leaves(id, false, &mut BTreeSet::new(), &mut out);
+        out
+    }
+
+    /// The material slots a value is made of.
+    fn slots_in(&self, id: NodeId) -> BTreeSet<u32> {
         self.leaves_of(id)
             .textures
             .into_iter()
-            .map(|(register, _)| register)
-            .filter(|register| slots.contains_key(register))
+            .filter_map(|(slot, _)| slot)
             .collect()
     }
 
-    /// The operation a value is the result of.
-    fn op(&self, id: ValueId) -> Option<&'a Op> {
-        self.defs.get(&id).map(|i| &i.op)
+    /// The operation a value is: its operation and operands.
+    fn op(&self, id: NodeId) -> Option<(Op, &[NodeId])> {
+        match self.values.node(id) {
+            Node::Op { op, operands } => Some((*op, operands)),
+            _ => None,
+        }
+    }
+
+    fn binary(&self, id: NodeId, which: BinaryOperator) -> Option<(NodeId, NodeId)> {
+        match self.op(id)? {
+            (Op::Binary(op), [l, r]) if op == which => Some((*l, *r)),
+            _ => None,
+        }
     }
 
     /// The slot a value of the albedo is made of with the other material slots blended over it (`slots`: the shader's
-    /// slots by register): down the values every path from it to an albedo slot passes through
+    /// slots by number): down the values every path from it to an albedo slot passes through
     /// ([`Self::colour_dominators`]: the clamps, conversions, the engine's terms and blends toward a constant colour by
     /// masks of other kinds of slot), the first that is made of one slot (that one), a product that names one
     /// ([`Self::product_base`]), a blend of two layers that does ([`Self::blend_base`]), or a choice by the face drawn
     /// (the base of its front face's colour, [`Self::front_face`]).
-    fn base(&self, id: ValueId, slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
+    fn base(&self, id: NodeId, slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
         for d in self.colour_dominators(id, slots) {
-            if let [one] = self.slots_in(d, slots).into_iter().collect::<Vec<_>>()[..] {
+            if let [one] = self.slots_in(d).into_iter().collect::<Vec<_>>()[..] {
                 return Some(one);
             }
             if let Some(one) = self.product_base(d, slots) {
@@ -359,44 +355,32 @@ impl<'a> Analysis<'a> {
     }
 
     /// The factors of a product: its operands, and theirs where they are products.
-    fn factors(&self, id: ValueId, out: &mut Vec<ValueId>) {
-        match self.op(id) {
-            Some(Op::Binary {
-                op: BinaryOp::Mul,
-                lhs,
-                rhs,
-            }) => {
-                self.factors(*lhs, out);
-                self.factors(*rhs, out);
+    fn factors(&self, id: NodeId, out: &mut Vec<NodeId>) {
+        match self.binary(id, BinaryOperator::Multiply) {
+            Some((l, r)) => {
+                self.factors(l, out);
+                self.factors(r, out);
             }
-            _ => out.push(id),
+            None => out.push(id),
         }
     }
 
     /// The base of a product of factors made of material slots: the one factor made of one albedo slot that no other
     /// factor reads. Where several are (a detail map multiplied over the material's own albedo: `C[DetailBlend]_0`'s
     /// `Texture2D_1 * 4.55 * lerp(Texture2D_7, luma, p)`), the one in the shader's main texture set ([`main_set`]).
-    fn product_base(&self, id: ValueId, slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
-        if !matches!(
-            self.op(id),
-            Some(Op::Binary {
-                op: BinaryOp::Mul,
-                ..
-            })
-        ) {
-            return None;
-        }
+    fn product_base(&self, id: NodeId, slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
+        self.binary(id, BinaryOperator::Multiply)?;
         let mut factors = Vec::new();
         self.factors(id, &mut factors);
         let made_of: Vec<BTreeSet<u32>> = factors
             .into_iter()
-            .map(|f| self.slots_in(f, slots))
+            .map(|f| self.slots_in(f))
             .filter(|s| !s.is_empty())
             .collect();
         let candidates: Vec<u32> = made_of
             .iter()
             .filter_map(|s| match s.iter().copied().collect::<Vec<_>>()[..] {
-                [one] if slots[&one].kind == ALBEDO_KIND => Some(one),
+                [one] if slots.get(&one).is_some_and(|t| t.kind == ALBEDO_KIND) => Some(one),
                 _ => None,
             })
             .filter(|one| made_of.iter().filter(|s| s.contains(one)).count() == 1)
@@ -417,26 +401,19 @@ impl<'a> Analysis<'a> {
     }
 
     /// A sum's terms with their signs (`true` added, `false` subtracted): the operands of its additions and
-    /// subtractions, and theirs where they are sums. A value that is no sum is its one term.
-    fn terms(&self, id: ValueId, positive: bool, out: &mut Vec<(ValueId, bool)>) {
-        match self.op(id) {
-            Some(Op::Binary {
-                op: BinaryOp::Add,
-                lhs,
-                rhs,
-            }) => {
-                self.terms(*lhs, positive, out);
-                self.terms(*rhs, positive, out);
-            }
-            Some(Op::Binary {
-                op: BinaryOp::Sub,
-                lhs,
-                rhs,
-            }) => {
-                self.terms(*lhs, positive, out);
-                self.terms(*rhs, !positive, out);
-            }
-            _ => out.push((id, positive)),
+    /// subtractions and the operand of a negation, and theirs where they are sums. A value that is no sum is its one
+    /// term.
+    fn terms(&self, id: NodeId, positive: bool, out: &mut Vec<(NodeId, bool)>) {
+        if let Some((l, r)) = self.binary(id, BinaryOperator::Add) {
+            self.terms(l, positive, out);
+            self.terms(r, positive, out);
+        } else if let Some((l, r)) = self.binary(id, BinaryOperator::Subtract) {
+            self.terms(l, positive, out);
+            self.terms(r, !positive, out);
+        } else if let Some((Op::Unary(UnaryOperator::Negate), [x])) = self.op(id) {
+            self.terms(*x, !positive, out);
+        } else {
+            out.push((id, positive));
         }
     }
 
@@ -444,17 +421,12 @@ impl<'a> Analysis<'a> {
     /// blends is folded: `C[DetailBlend][S2]_2` writes `((P - L) + (c * t8 - P) * t8.a) * w + L`): one term is a product
     /// one of whose factors, `D`, is a sum holding the negation of each of the other terms (`a`); `b` is the rest of `D`
     /// (`D + a`). Returns `a`'s terms, `b`'s and the weight `t`.
-    fn lerp(&self, terms: &[(ValueId, bool)]) -> Option<Layers> {
+    fn lerp(&self, terms: &[(NodeId, bool)]) -> Option<Layers> {
         for (i, &(product, positive)) in terms.iter().enumerate() {
-            let Some(Op::Binary {
-                op: BinaryOp::Mul,
-                lhs,
-                rhs,
-            }) = self.op(product)
-            else {
+            let Some((lhs, rhs)) = self.binary(product, BinaryOperator::Multiply) else {
                 continue;
             };
-            let under: Vec<(ValueId, bool)> = terms
+            let under: Vec<(NodeId, bool)> = terms
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| *j != i)
@@ -463,7 +435,7 @@ impl<'a> Analysis<'a> {
             if under.is_empty() {
                 continue;
             }
-            for (difference, weight) in [(*lhs, *rhs), (*rhs, *lhs)] {
+            for (difference, weight) in [(lhs, rhs), (rhs, lhs)] {
                 let mut over = Vec::new();
                 self.terms(difference, positive, &mut over);
                 // each term of `a` cancels one negated term of `D`
@@ -488,12 +460,12 @@ impl<'a> Analysis<'a> {
     }
 
     /// The material slots a sum of terms is made of.
-    fn slots_of(&self, terms: &[(ValueId, bool)], slots: &BTreeMap<u32, &Texture>) -> BTreeSet<u32> {
-        terms.iter().flat_map(|(t, _)| self.slots_in(*t, slots)).collect()
+    fn slots_of(&self, terms: &[(NodeId, bool)]) -> BTreeSet<u32> {
+        terms.iter().flat_map(|(t, _)| self.slots_in(*t)).collect()
     }
 
     /// The base of a sum of terms: of one added term, that term's ([`Self::base`]); of a blend, the blend's.
-    fn terms_base(&self, terms: &[(ValueId, bool)], slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
+    fn terms_base(&self, terms: &[(NodeId, bool)], slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
         match terms {
             [(one, true)] => self.base(*one, slots),
             _ => self.layers_base(terms, slots),
@@ -501,7 +473,7 @@ impl<'a> Analysis<'a> {
     }
 
     /// The base of a value that is a blend of two layers ([`Self::lerp`]).
-    fn blend_base(&self, id: ValueId, slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
+    fn blend_base(&self, id: NodeId, slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
         let mut terms = Vec::new();
         self.terms(id, true, &mut terms);
         if terms.len() < 2 {
@@ -514,13 +486,9 @@ impl<'a> Analysis<'a> {
     /// of `a`'s, `b` is an overlay drawn by its own alpha (`C[DetailBlend][S2]`'s `Texture2D_8`) and the base is `a`'s;
     /// otherwise, of the two layers' bases, the one in the shader's main texture set ([`main_set`]: `C[DetailBlend]_14`
     /// blends `Texture2D_10`, a detail albedo, over its `Texture2D_1 * Texture2D_7` layer by the normal map's alpha).
-    fn layers_base(&self, terms: &[(ValueId, bool)], slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
+    fn layers_base(&self, terms: &[(NodeId, bool)], slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
         let Layers { under, over, weight } = self.lerp(terms)?;
-        let (a, b, t) = (
-            self.slots_of(&under, slots),
-            self.slots_of(&over, slots),
-            self.slots_in(weight, slots),
-        );
+        let (a, b, t) = (self.slots_of(&under), self.slots_of(&over), self.slots_in(weight));
         if !t.is_empty() && t.is_subset(&b) && b.is_disjoint(&a) {
             return self.terms_base(&under, slots);
         }
@@ -535,28 +503,28 @@ impl<'a> Analysis<'a> {
         }
     }
 
-    /// The front face's value of a choice by the face drawn: `then` of a `select` whose condition is made of the
-    /// front-facing flag alone (`C[DetailBlend]_18`'s two-sided cloth colours its back face from `Texture2D_8`, its
+    /// The front face's value of a choice by the face drawn: the accepted value of a select whose condition is made of
+    /// the front-facing flag alone (`C[DetailBlend]_18`'s two-sided cloth colours its back face from `Texture2D_8`, its
     /// front from its `Texture2D_1 * Texture2D_7` layer).
-    fn front_face(&self, id: ValueId) -> Option<ValueId> {
-        let Some(Op::Select { condition, then, .. }) = self.op(id) else {
+    fn front_face(&self, id: NodeId) -> Option<NodeId> {
+        let Some((Op::Select, [condition, accept, _])) = self.op(id) else {
             return None;
         };
         let leaves = self.leaves_of(*condition);
         (leaves.textures.is_empty()
             && !leaves.inputs.is_empty()
             && leaves.inputs.iter().all(|(name, _, _)| name == FRONT_FACE))
-        .then_some(*then)
+        .then_some(*accept)
     }
 
     /// The values every path from `id` down to an albedo slot's colour (a red, green or blue lane of its sample) passes
     /// through, `id` first, nearest first: the dominators of those lanes in the dataflow rooted at `id` (Cooper, Harvey
     /// and Kennedy's iteration over the values that reach one, in reverse postorder). Empty when `id` reaches none.
-    fn colour_dominators(&self, id: ValueId, slots: &BTreeMap<u32, &Texture>) -> Vec<ValueId> {
+    fn colour_dominators(&self, id: NodeId, slots: &BTreeMap<u32, &Texture>) -> Vec<NodeId> {
         let albedo: BTreeSet<u32> = slots
             .iter()
             .filter(|(_, t)| t.kind == ALBEDO_KIND)
-            .map(|(register, _)| *register)
+            .map(|(slot, _)| *slot)
             .collect();
         let mut walk = Reaching {
             analysis: self,
@@ -571,7 +539,7 @@ impl<'a> Analysis<'a> {
         // reverse postorder from `id`, the albedo samples all leading to one sink past the last
         let Reaching { from, mut order, .. } = walk;
         order.reverse();
-        let index: HashMap<ValueId, usize> = order.iter().enumerate().map(|(n, v)| (*v, n)).collect();
+        let index: HashMap<NodeId, usize> = order.iter().enumerate().map(|(n, v)| (*v, n)).collect();
         let sink = order.len();
         let mut preds: Vec<Vec<usize>> = vec![Vec::new(); sink + 1];
         for (n, v) in order.iter().enumerate() {
@@ -621,131 +589,86 @@ impl<'a> Analysis<'a> {
         chain
     }
 
-    fn leaves_of(&self, id: ValueId) -> Leaves {
-        let mut out = Leaves::default();
-        self.leaves(id, &mut BTreeSet::new(), &mut out);
-        out
-    }
-
-    /// The conditions that decide a discard in `block`: the compares of the branches into it; where one is a `phi` of
-    /// constants (a flag several compares set), the compares of the branches that end the blocks the constants come from.
-    fn discard_conditions(&self, block: usize) -> Vec<ValueId> {
-        let terminator = |b: usize| {
-            self.function.instructions.iter().find_map(|i| match &i.op {
-                Op::CondBranch { condition, .. } if i.block == b => Some(*condition),
-                _ => None,
-            })
-        };
-        let mut out = Vec::new();
-        for i in &self.function.instructions {
-            let Op::CondBranch {
-                condition,
-                then,
-                otherwise,
-            } = &i.op
-            else {
-                continue;
-            };
-            if *then != block && *otherwise != block {
-                continue;
-            }
-            match self.defs.get(condition).map(|d| &d.op) {
-                Some(Op::Phi { incoming }) => {
-                    out.extend(incoming.iter().filter_map(|(_, from)| terminator(*from)));
-                }
-                _ => out.push(*condition),
-            }
-        }
-        out
-    }
-
-    /// The vertex input component a texture coordinate lane is made of, when it is made of exactly one input.
-    fn only_input(&self, id: ValueId) -> Option<Interpolant> {
+    /// The vertex input component a value is made of, when it is made of exactly one input.
+    fn only_input(&self, id: NodeId) -> Option<Interpolant> {
         let leaves = self.leaves_of(id);
         let mut it = leaves.inputs.into_iter();
         let one = it.next()?;
         it.next().is_none().then_some(one)
     }
 
-    /// Every sample of a material slot: its register and the interpolant components its coordinates are made of.
+    /// Every node the outputs and the discards are made of, in the order the program computes them.
+    fn reachable(&self) -> BTreeSet<NodeId> {
+        let mut seen = BTreeSet::new();
+        let mut work: Vec<NodeId> = self.values.outputs().values().copied().collect();
+        work.extend(self.values.discards().iter().flatten());
+        while let Some(id) = work.pop() {
+            if seen.insert(id) {
+                work.extend(self.values.operands(id));
+            }
+        }
+        seen
+    }
+
+    /// Every sample of a material slot: its slot and the interpolant components its coordinates are made of, in the
+    /// order the program computes them.
     fn samples(&self) -> Vec<Sample> {
-        self.function
-            .instructions
-            .iter()
-            .filter_map(|i| {
-                let (code, args) = self.call(&i.op)?;
-                SAMPLES.contains(&code).then_some(())?;
-                let register = self.register(*args.get(1)?)?;
-                Some(Sample {
-                    register,
-                    u: self.only_input(*args.get(3)?),
-                    v: self.only_input(*args.get(4)?),
-                })
+        self.reachable()
+            .into_iter()
+            .filter_map(|id| match self.values.node(id) {
+                Node::Texel {
+                    resource: Some(r),
+                    read: Read::Sample,
+                    coordinate,
+                    ..
+                } => Some(Sample {
+                    slot: *self.slots.get(r)?,
+                    u: coordinate.first().and_then(|c| self.only_input(*c)),
+                    v: coordinate.get(1).and_then(|c| self.only_input(*c)),
+                }),
+                _ => None,
             })
             .collect()
+    }
+
+    /// The output varying labelled `name`, `index`.
+    fn output(&self, name: &str, index: u32) -> Option<usize> {
+        self.program
+            .interface
+            .outputs
+            .iter()
+            .position(|v| v.label.index == index && v.label.name.eq_ignore_ascii_case(name))
     }
 }
 
 /// Whether a slot's UV group ([`Texture::uv_group`]) holds the shader's main texture set, an albedo with a normal and a
 /// metallic map: a detail map's group holds a detail normal map at most.
-fn main_set(register: u32, slots: &BTreeMap<u32, &Texture>) -> bool {
-    let group = &slots[&register].uv_group;
-    let holds = |kind| slots.values().any(|t| &t.uv_group == group && t.kind == kind);
+fn main_set(slot: u32, slots: &BTreeMap<u32, &Texture>) -> bool {
+    let Some(t) = slots.get(&slot) else {
+        return false;
+    };
+    let holds = |kind| slots.values().any(|s| s.uv_group == t.uv_group && s.kind == kind);
     holds(NORMAL_KIND) && holds(METALLIC_KIND)
 }
 
-/// The slots of the metaparam by register.
-fn slots(meta: &Metaparam) -> BTreeMap<u32, &str> {
-    meta.textures
+/// What the pixel program `pixel` and the vertex program `vertex` (lifted, [`lift`]) read of the material whose
+/// shader's metaparam is `meta`.
+pub fn read(pixel: &Program, vertex: &Program, meta: &Metaparam) -> Result<Reads, String> {
+    let ps = Analysis::new(pixel, Some(meta))?;
+    let vs = Analysis::new(vertex, None)?;
+    let names: BTreeMap<u32, &str> = meta
+        .textures
         .iter()
         .map(|t| (u32::from(t.slot), t.name.as_str()))
-        .collect()
-}
-
-/// What the pixel program `pixel` and the vertex program `vertex` (DXIL containers) read of the material whose
-/// shader's metaparam is `meta`.
-pub fn read(pixel: &[u8], vertex: &[u8], meta: &Metaparam) -> Result<Reads, String> {
-    let chunks = primase_dxcontainer::chunks(pixel).map_err(|e| e.to_string())?;
-    let module = reflection::module(&chunks, b"DXIL")
-        .map_err(|e| e.to_string())?
-        .ok_or("no DXIL module")?;
-    let ps = Analysis::new(&module)?;
-    let slot = slots(meta);
-    let vs_chunks = primase_dxcontainer::chunks(vertex).map_err(|e| e.to_string())?;
-    let vs_module = reflection::module(&vs_chunks, b"DXIL")
-        .map_err(|e| e.to_string())?
-        .ok_or("no DXIL module")?;
-    let vs = Analysis::new(&vs_module)?;
+        .collect();
     let mut reads = Reads::default();
 
     // where each interpolant component comes from in the vertex program
     let mut origin: BTreeMap<Interpolant, Interpolant> = BTreeMap::new();
-    for i in &vs.function.instructions {
-        let Some((code, args)) = vs.call(&i.op) else {
-            continue;
-        };
-        if code != STORE_OUTPUT {
-            continue;
-        }
-        let (Some(sig), Some(col), Some(&value)) = (
-            args.get(1).and_then(|v| vs.int(*v)),
-            args.get(3).and_then(|v| vs.int(*v)),
-            args.get(4),
-        ) else {
-            continue;
-        };
-        let Some(e) = u32::try_from(sig).ok().and_then(|s| vs.outputs.get(&s)) else {
-            continue;
-        };
+    for (&(output, lane), &value) in vs.values.outputs() {
+        let label = &vertex.interface.outputs[output].label;
         if let Some(one) = vs.only_input(value) {
-            origin.insert(
-                (
-                    e.name.clone(),
-                    e.index,
-                    (col - i64::from(e.column)).clamp(0, 255) as u8,
-                ),
-                one,
-            );
+            origin.insert((label.name.clone(), label.index, lane), one);
         }
     }
     let vertex_input = |from: &Option<Interpolant>| {
@@ -758,37 +681,36 @@ pub fn read(pixel: &[u8], vertex: &[u8], meta: &Metaparam) -> Result<Reads, Stri
             })
     };
     let samples = ps.samples();
-    let read_of = |register: u32| {
-        let sample = samples.iter().find(|s| s.register == register)?;
+    let read_of = |slot: u32| {
+        let sample = samples.iter().find(|s| s.slot == slot)?;
         Some(SlotRead {
-            texture: (*slot.get(&register)?).to_owned(),
+            texture: (*names.get(&slot)?).to_owned(),
             u: vertex_input(&sample.u),
             v: vertex_input(&sample.v),
         })
     };
 
-    // the alpha test
+    // the alpha test: what decides each discard
     let mut coverage = BTreeSet::new();
-    for i in &ps.function.instructions {
-        let Some((code, _)) = ps.call(&i.op) else {
-            continue;
-        };
-        if code != DISCARD {
-            continue;
-        }
-        for condition in ps.discard_conditions(i.block) {
-            let leaves = ps.leaves_of(condition);
-            for &(register, lane) in &leaves.textures {
-                if lane == 3 && slot.contains_key(&register) {
-                    coverage.insert(register);
-                } else if !slot.contains_key(&register) {
-                    reads
-                        .left_out
-                        .insert("a discard against an engine texture (a screen-door dither)");
+    for conditions in ps.values.discards() {
+        for &condition in conditions {
+            let mut leaves = Leaves::default();
+            ps.leaves(condition, true, &mut BTreeSet::new(), &mut leaves);
+            for &(slot, lane) in &leaves.textures {
+                match slot {
+                    Some(slot) if lane == 3 => {
+                        coverage.insert(slot);
+                    }
+                    Some(_) => {}
+                    None => {
+                        reads
+                            .left_out
+                            .insert("a discard against an engine texture (a screen-door dither)");
+                    }
                 }
             }
-            for (name, index, component) in &leaves.inputs {
-                if let Some(v) = origin.get(&(name.clone(), *index, *component))
+            for interpolant in &leaves.inputs {
+                if let Some(v) = origin.get(interpolant)
                     && v.0 == "COLOR"
                     && v.2 == 3
                 {
@@ -797,8 +719,8 @@ pub fn read(pixel: &[u8], vertex: &[u8], meta: &Metaparam) -> Result<Reads, Stri
             }
         }
     }
-    for register in coverage {
-        if let Some(read) = read_of(register) {
+    for slot in coverage {
+        if let Some(read) = read_of(slot) {
             reads.coverage.push(read);
         }
     }
@@ -807,43 +729,29 @@ pub fn read(pixel: &[u8], vertex: &[u8], meta: &Metaparam) -> Result<Reads, Stri
     let textures: BTreeMap<u32, &Texture> = meta.textures.iter().map(|t| (u32::from(t.slot), t)).collect();
     let mut colour = BTreeSet::new();
     let mut bases = BTreeSet::new();
-    for i in &ps.function.instructions {
-        let Some((code, args)) = ps.call(&i.op) else {
-            continue;
-        };
-        if code != STORE_OUTPUT {
-            continue;
-        }
-        let (Some(sig), Some(&value)) = (args.get(1).and_then(|v| ps.int(*v)), args.get(4)) else {
-            continue;
-        };
-        let Some(e) = u32::try_from(sig).ok().and_then(|s| ps.outputs.get(&s)) else {
-            continue;
-        };
-        if e.name != "SV_Target" || e.index != ALBEDO_TARGET {
-            continue;
-        }
-        let mut lane_colour = BTreeSet::new();
-        for (register, _) in ps.leaves_of(value).textures {
-            if slot.contains_key(&register) {
-                lane_colour.insert(register);
+    if let Some(albedo) = ps.output("SV_Target", ALBEDO_TARGET) {
+        for lane in 0..4u8 {
+            let Some(value) = ps.values.output(albedo, lane) else {
+                continue;
+            };
+            let lane_colour: BTreeSet<u32> = ps
+                .leaves_of(value)
+                .textures
+                .into_iter()
+                .filter_map(|(slot, _)| slot)
+                .collect();
+            // the colour's lanes (x, y, z) name the base; the alpha is other data (a lane of no material slot has none)
+            if lane < 3 && !lane_colour.is_empty() {
+                bases.insert(ps.base(value, &textures));
             }
+            colour.extend(lane_colour);
         }
-        // the colour's lanes (x, y, z) name the base; the alpha is other data (a lane of no material slot has none)
-        let colour_lane = args
-            .get(3)
-            .and_then(|v| ps.int(*v))
-            .is_some_and(|c| (0..3).contains(&(c - i64::from(e.column))));
-        if colour_lane && !lane_colour.is_empty() {
-            bases.insert(ps.base(value, &textures));
-        }
-        colour.extend(lane_colour);
     }
     if let [Some(base)] = bases.into_iter().collect::<Vec<_>>()[..] {
         reads.base = read_of(base);
     }
-    for register in colour {
-        if let Some(read) = read_of(register) {
+    for slot in colour {
+        if let Some(read) = read_of(slot) {
             reads.colour.push(read);
         }
     }
@@ -867,24 +775,21 @@ pub fn uv_set(vertex_inputs: &[(u32, u8)], input: &VertexInput) -> Option<u8> {
 }
 
 /// The UV inputs (index, components) of a vertex program.
-pub fn vertex_uv_inputs(vertex: &[u8]) -> Result<Vec<(u32, u8)>, String> {
-    let chunks = primase_dxcontainer::chunks(vertex).map_err(|e| e.to_string())?;
-    let module = reflection::module(&chunks, b"DXIL")
-        .map_err(|e| e.to_string())?
-        .ok_or("no DXIL module")?;
-    let (inputs, _) = reflection::elements(&module).map_err(|e| e.to_string())?;
-    let mut out: Vec<(u32, u8)> = inputs
+pub fn vertex_uv_inputs(vertex: &Program) -> Vec<(u32, u8)> {
+    let mut out: Vec<(u32, u8)> = vertex
+        .interface
+        .inputs
         .iter()
-        .filter(|e| e.name == "TEXCOORD")
-        .map(|e| (e.index, e.columns))
+        .filter(|v| v.label.name.eq_ignore_ascii_case("TEXCOORD"))
+        .map(|v| (v.label.index, v.value.width))
         .collect();
     out.sort_unstable();
-    Ok(out)
+    out
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{VertexInput, uv_set};
+    use super::{VertexInput, texture_number, uv_set};
 
     fn input(index: u32, component: u8) -> VertexInput {
         VertexInput {
@@ -913,5 +818,16 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// A material texture's number is the `N` of its `Texture2D_N`, whatever follows it.
+    #[test]
+    fn a_texture_resource_is_numbered_by_its_texture2d_n() {
+        assert_eq!(
+            texture_number("C_DetailBlend__snp_Texture2D_7_AlbedoMap_0"),
+            Some(7)
+        );
+        assert_eq!(texture_number("Fur_NTC_snp_Texture2D_10_NormalMap"), Some(10));
+        assert_eq!(texture_number("g_ShadowMap"), None);
     }
 }

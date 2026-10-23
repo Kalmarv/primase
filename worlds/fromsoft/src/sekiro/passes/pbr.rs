@@ -218,11 +218,12 @@ fn normal_binding<'a>(m: &'a Material, preview: &Preview) -> Option<&'a Binding>
 /// Layered base/normal textures must already be baked and bound by assembly.
 pub fn required_textures(world: &World) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
+    let mut reader = coverage::Reader::default();
     for (e, m) in world.iter::<Material>() {
         if m.skip.is_some() || m.layered.is_some() {
             continue;
         }
-        let base = coverage::base(world, e, m);
+        let base = reader.base(world, e, m);
         let key = base
             .as_ref()
             .ok()
@@ -431,6 +432,7 @@ fn lower_materials(
     let mut log = PassLog::default();
     let mut previews = BTreeSet::new();
     let mut cache = existing_textures(world);
+    let mut reader = coverage::Reader::default();
     for (e, m) in sources {
         if m.skip.is_some() {
             log.count("materials of a skipped source class not lowered", 1);
@@ -458,10 +460,10 @@ fn lower_materials(
             }
         }
         // A material binary's base colour is the slot its G-buffer program makes the albedo of, the others blended over
-        // it (`coverage::base`): Elden Ring's C[DetailBlend] colours from its own Texture2D_7 under shared detail maps
-        // in lower slots, which the preview's slot policy would pick
+        // it (`coverage::Reader::base`): Elden Ring's C[DetailBlend] colours from its own Texture2D_7 under shared
+        // detail maps in lower slots, which the preview's slot policy would pick
         let base = if m.layered.is_none() {
-            coverage::base(world, e, &m)
+            reader.base(world, e, &m)
         } else {
             Ok(None)
         };
@@ -508,7 +510,7 @@ fn lower_materials(
         // with, not the preview's slot: the cut-out is in that slot's alpha (`coverage`)
         let mut coverage_vertex_alpha = false;
         if !baked && m.class == "cutout" && p.base_color_texture.is_none() {
-            match coverage::coverage(world, e, &m) {
+            match reader.coverage(world, e, &m) {
                 Ok(Some(c)) => {
                     let binding = m.bindings.get(&c.slot.binding).filter(|b| {
                         b.available
