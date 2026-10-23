@@ -192,6 +192,13 @@ layout the install holds, `path` (the archive path), `models` (`name`, `kind`) a
 `hit_filter` (collision parts, else null). Repeated names follow the reference's
 convention: later uses become `"<name> {n}"`, in file order.
 
+`btl::LightBank::read` reads versions 16 (Sekiro) and 18 (Elden Ring), which share the 232-byte light record, and
+keeps the stored version; other versions are refused. Elden Ring's banks are checked against SoulsFormatsNEXT's BTL
+(`btl.jsonl`, `tests/btl_census.rs`): one record per bank the install holds, `path`, then either `error` (the
+reference refuses it; ours must refuse it too) or `version` and `lights` (`name`, `type`, `diffuse`/`specular` RGB,
+`diffuse_power`, `specular_power`, `cast_shadows`, `cone_angle`, `position`, `rotation`, `radius`; floats as bit
+patterns).
+
 Parts also carry their entity ID and eight entity group IDs as stored (sentinels -1 and 0 included); event scripts
 address a part by any positive one of them (`Part::entity_ids`). `PRIMASE_FROMSOFT_STATE_ORACLE` is a folder from an
 independent reader. Its `entities.jsonl` has one record per map file: `path` and `parts`, each with `index`, `name`,

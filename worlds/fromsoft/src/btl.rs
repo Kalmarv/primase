@@ -1,5 +1,5 @@
-//! BTL version 16 light-bank values. The file stores RGB bytes; their transfer
-//! function and the mapping of intensity into target watts are lowering policy.
+//! BTL light-bank values: versions 16 (Sekiro) and 18 (Elden Ring) share the 232-byte light record. The file stores
+//! RGB bytes; their transfer function and the mapping of intensity into target watts are lowering policy.
 use crate::{
     Result,
     bytes::View,
@@ -30,8 +30,12 @@ pub struct Light {
 }
 #[derive(Debug, Clone)]
 pub struct LightBank {
+    /// The stored version: one of [`VERSIONS`].
+    pub version: u32,
     pub lights: Vec<Light>,
 }
+/// The versions whose light record this reader knows.
+pub const VERSIONS: [u32; 2] = [16, 18];
 impl LightBank {
     pub fn read(bytes: &[u8]) -> Result<Self> {
         let v = View {
@@ -40,7 +44,10 @@ impl LightBank {
             be: false,
         };
         v.expect(0, &2u32.to_le_bytes())?;
-        v.expect(4, &16u32.to_le_bytes())?;
+        let version = v.u32(4)?;
+        if !VERSIONS.contains(&version) {
+            return Err(invalid("BTL", 4, format!("unsupported version {version}")));
+        }
         let count = v.u32(8)? as usize;
         let names_length = v.u32(12)? as usize;
         v.expect(16, &[0; 4])?;
@@ -118,6 +125,30 @@ impl LightBank {
                 auxiliary,
             });
         }
-        Ok(Self { lights })
+        Ok(Self { version, lights })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LightBank;
+
+    /// A hand-made bank with no lights: the 60-byte header, version 16 or 18 read, any other refused.
+    #[test]
+    fn versions() {
+        let bank = |version: u32| {
+            let mut b = vec![0u8; 60];
+            b[0..4].copy_from_slice(&2u32.to_le_bytes());
+            b[4..8].copy_from_slice(&version.to_le_bytes());
+            b[20..24].copy_from_slice(&232u32.to_le_bytes());
+            b
+        };
+        for version in [16, 18] {
+            let read = LightBank::read(&bank(version)).expect("known version");
+            assert_eq!((read.version, read.lights.len()), (version, 0));
+        }
+        for version in [15, 17] {
+            assert!(LightBank::read(&bank(version)).is_err());
+        }
     }
 }
