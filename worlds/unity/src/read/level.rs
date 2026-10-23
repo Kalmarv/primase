@@ -1908,7 +1908,7 @@ mod tests {
         assert_eq!(json["colliders_not_colliding"]["trigger"], 5);
         assert_eq!(json["skipped"]["no mesh"], 1);
         // every field of the struct is there
-        assert_eq!(json.as_object().map(serde_json::Map::len), Some(21));
+        assert_eq!(json.as_object().map(serde_json::Map::len), Some(24));
     }
 
     #[test]

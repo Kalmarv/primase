@@ -1315,17 +1315,18 @@ mod tests {
         assert!(!plain[0].1.streams.contains_key(&Semantic::Joints(0)));
         let (skinned, notices) = m.skinned_primitives(0..1, SkinWeights::Bones(4)).unwrap();
         let p = &skinned[0].1;
-        // vertices 0, 1 and 3 are used, in that order
+        // vertices 0, 1 and 3 are used; the mirror reverses the triangle's winding (0, 3, 1), so the compaction meets
+        // them in that order
         assert_eq!(
             p.streams[&Semantic::Joints(0)],
-            Stream::U16x4(vec![[1, 0, 0, 0], [0, 0, 0, 0], [0, 1, 0, 0]])
+            Stream::U16x4(vec![[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 0]])
         );
         assert_eq!(
             p.streams[&Semantic::Weights(0)],
             Stream::F32x4(vec![
                 [0.5, 0.5, 0.0, 0.0],
-                [1.0, 0.0, 0.0, 0.0],
-                [0.25, 0.75, 0.0, 0.0]
+                [0.25, 0.75, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0]
             ])
         );
         assert_eq!(

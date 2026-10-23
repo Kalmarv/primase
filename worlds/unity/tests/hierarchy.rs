@@ -4,6 +4,9 @@
 //! `renderer_inactive`, `renderer_lod1plus`, `renderer_kept`), for the player `installs.sledding/Sledding Game_Data`
 //! read with the type tree package `tools.unity_tpk`.
 //!
+//! The scan lists the mesh renderers: skinned renderers (SkinnedMeshRenderer, with their bones) are left out of it and of the
+//! mesh gate here, their placements and prototypes of the world's checks of the skins.
+//!
 //! Every drawn renderer: path, layer, mesh, materials, static-batch slice and shadow mode exactly; the world matrix
 //! within the scan's rounding (5e-7) plus 1e-12 relative (the two readers sum the products in another order). Then the
 //! level in the world: one placement per renderer, its transform converted back to Unity's frame the f32 matrix bit
@@ -49,7 +52,9 @@ fn renderers_match_the_scan() {
     )
     .unwrap();
     let scene = Scene::read(&player, level).unwrap();
-    let (all, skipped) = scene.renderers(&player).unwrap();
+    let (every, skipped) = scene.renderers(&player).unwrap();
+    // the scan's renderers are the mesh renderers
+    let all: Vec<_> = every.iter().filter(|r| r.skin.is_none()).cloned().collect();
     // drawn as stored: no off flag, and not only in a coarser level of a LODGroup
     let groups = scene.lod_groups_under(&player, None).unwrap();
     let (mut zero, mut rest) = (
@@ -164,10 +169,10 @@ fn renderers_match_the_scan() {
         "world: renderer transforms, back in Unity's frame, the f32 matrix bit for bit",
         Tolerance::Exact,
     );
-    // the scene's renderers (terrain trees are gated with the terrains)
+    // the scene's mesh renderers (terrain trees are gated with the terrains, skinned renderers with the skins)
     let entities: Vec<_> = w
         .iter::<UnityRenderer>()
-        .filter(|(e, _)| !w.has::<UnityTreeInstance>(*e))
+        .filter(|(e, _)| !w.has::<UnityTreeInstance>(*e) && !w.has::<primase_core::SkinInstance>(*e))
         .collect();
     assert_eq!(entities.len(), ours.len());
     for ((e, u), r) in entities.iter().zip(&ours) {
@@ -263,6 +268,7 @@ world: {} renderer entities ({left_out} left out by unity-drawn), {} prototypes 
     // the meshes or slices placed as stored (a mesh drawn both as a LODGroup's LOD 0 and alone has two prototypes)
     let placed_slices: std::collections::BTreeSet<String> = w
         .iter::<Instance>()
+        .filter(|(e, _)| !w.has::<primase_core::SkinInstance>(*e))
         .map(|(_, i)| {
             let m = w.get::<UnityMesh>(i.prototype).unwrap();
             let sub = m.submeshes.map_or(Json::Null, |(a, b)| json!([a, b]));
@@ -288,6 +294,10 @@ fn world_meshes(player: &Player, w: &World) -> GateReport {
     );
     let mut corners = 0u64;
     for (e, mesh, u) in w.iter2::<Mesh, UnityMesh>() {
+        // a skinned mesh carries joint and weight streams the channels do not have: gated with the skins
+        if w.has::<primase_core::Skin>(e) {
+            continue;
+        }
         // its provenance names the mesh (and slice) it was read from
         let want = match u.submeshes {
             Some((a, n)) => format!("unity mesh {}/{} submeshes {a}+{n}", u.mesh.file, u.mesh.path_id),
