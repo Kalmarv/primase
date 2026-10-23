@@ -453,6 +453,63 @@ mod tests {
         assert!(err.contains("both water and left out"), "{err}");
     }
 
+    /// A selection resolves state first (`resolve-state`, then the lowering): the clauses the parts hold inside their record
+    /// are reduced by it as `core.condition` is, so the lowering copies none on an axis that is gone. A file whose only
+    /// part needs the flag on (off by default) is absent, a file whose part needs it off is present with no condition, and
+    /// no soup is left conditioned on a removed axis.
+    #[test]
+    fn the_parts_clauses_are_reduced_when_state_is_resolved_before_the_lowering() {
+        use primase_core::state::{Domain, Literal, ResolveState, Scope, StateAxis};
+        let mut w = World::new();
+        let flag = w.spawn();
+        w.insert(
+            flag,
+            StateAxis {
+                key: "fromsoft.flag.1".into(),
+                domain: Domain::Bool,
+                default: Some(0),
+                scope: Scope::Global,
+                class: "event".into(),
+                source: "event flag 1".into(),
+            },
+        );
+        let clause = |values| Some(Clause(vec![Literal { axis: flag, values }]));
+        for (file, condition) in [
+            ("on.hkx", clause(0b10)),
+            ("off.hkx", clause(0b01)),
+            ("always.hkx", None),
+        ] {
+            let e = w.spawn();
+            let mut r = record(file, 8, vec![NEAR], vec![104]);
+            r.parts[0].condition = condition;
+            w.insert(e, r);
+        }
+        let mut log = PassLog::default();
+        ResolveState::default().run(&mut w, &mut log).unwrap();
+        let mut files: Vec<(String, Option<Clause>)> = w
+            .iter::<MapCollision>()
+            .map(|(_, m)| (m.file.clone(), m.parts[0].condition.clone()))
+            .collect();
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        // the flag is off: the file needing it on is not present, the others hold whatever is left open (nothing)
+        assert_eq!(
+            files,
+            [("always.hkx".to_owned(), None), ("off.hkx".to_owned(), None)]
+        );
+        let pass = LowerFromSoftCollision {
+            hit_filters: HitFilters::new([8]).unwrap(),
+            water: BTreeSet::new(),
+            leave_out: BTreeSet::new(),
+            reach: None,
+        };
+        pass.run(&mut w, &mut PassLog::default()).unwrap();
+        assert_eq!(w.iter::<Condition>().count(), 0);
+        assert_eq!(
+            soups(&w).keys().cloned().collect::<Vec<_>>(),
+            ["game".to_owned(), "water".to_owned()]
+        );
+    }
+
     #[test]
     fn a_chosen_file_with_bodies_the_reader_could_not_decode_is_refused() {
         let mut w = world();

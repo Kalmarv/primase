@@ -103,6 +103,42 @@ impl Component for MapCollision {
             }
         }
     }
+    /// The parts' clauses reduced as `core.condition` is (`resolve-state` runs before the lowering in a selection, and
+    /// removes the axes a lowering would copy a clause on): a part whose clause fails in the resolved state leaves the
+    /// record, a clause left with no literal becomes none (the part is there whatever the other axes are), and a record
+    /// left with no part is not present: its entity is not.
+    fn restate(&self, resolved: &primase_core::state::Resolved<'_>) -> primase_core::world::Restated<Self> {
+        use primase_core::world::Restated;
+        if !self.parts.iter().any(|p| {
+            p.condition
+                .as_ref()
+                .is_some_and(|c| c.0.iter().any(|l| resolved.has(l.axis)))
+        }) {
+            return Restated::Unchanged;
+        }
+        let mut parts = Vec::with_capacity(self.parts.len());
+        for part in &self.parts {
+            let condition = match &part.condition {
+                None => None,
+                Some(c) => match resolved.reduce(c) {
+                    None => continue,
+                    Some(r) if r.0.is_empty() => None,
+                    Some(r) => Some(r),
+                },
+            };
+            parts.push(CollisionPart {
+                condition,
+                ..part.clone()
+            });
+        }
+        if parts.is_empty() {
+            return Restated::Absent;
+        }
+        Restated::Replaced(MapCollision {
+            parts,
+            ..self.clone()
+        })
+    }
     /// 36 bytes per triangle and 4 per material.
     fn payload_bytes(&self) -> u64 {
         self.triangles.len() as u64 * 36 + self.materials.len() as u64 * 4

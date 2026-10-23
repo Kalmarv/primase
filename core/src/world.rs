@@ -142,6 +142,27 @@ pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
     fn apply_linear(&self, _l: &crate::Linear) -> Linearity<Self> {
         Linearity::Unsupported
     }
+
+    /// The component after `resolve-state` ([`crate::state::ResolveState`]) gave the axes in `resolved` their values: a
+    /// component that holds [`crate::state::Clause`]s of its own (a record of parts each present in some states) reduces
+    /// them as `core.condition` is reduced ([`crate::state::Resolved::reduce`]: a clause that fails is dropped, a clause
+    /// left with no literal holds whatever the other axes are). [`Restated::Absent`] says the entity is not present in
+    /// this state (every clause failed): it is despawned as one whose `core.condition` fails is. The default holds no
+    /// clause: [`Restated::Unchanged`].
+    fn restate(&self, _resolved: &crate::state::Resolved<'_>) -> Restated<Self> {
+        Restated::Unchanged
+    }
+}
+
+/// What a component becomes when `resolve-state` resolves axes ([`Component::restate`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Restated<T> {
+    /// It names no resolved axis: kept as it is.
+    Unchanged,
+    /// Its clauses reduced.
+    Replaced(T),
+    /// Nothing of it is present in the resolved state: its entity is not.
+    Absent,
 }
 
 /// What a component's value holds of its entity's mesh ([`Component::GEOMETRY`]): whether an edit of the primitives
@@ -395,6 +416,8 @@ trait AnyColumn: Any + Send + Sync {
     fn copy_entity(&mut self, from: Entity, to: Entity);
     /// `e`'s value under [`Component::apply_linear`], not stored yet; `None` when `e` has none.
     fn linear(&self, e: Entity, l: &crate::Linear) -> Option<Linearity<Box<dyn Any + Send>>>;
+    /// Every value restated ([`Component::restate`]) in place; the entities whose value says they are not present.
+    fn restate_all(&mut self, resolved: &crate::state::Resolved<'_>) -> Vec<Entity>;
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
@@ -523,6 +546,17 @@ impl<T: Component> AnyColumn for Column<T> {
             Linearity::Drop => Linearity::Drop,
             Linearity::Unsupported => Linearity::Unsupported,
         })
+    }
+    fn restate_all(&mut self, resolved: &crate::state::Resolved<'_>) -> Vec<Entity> {
+        let mut absent = Vec::new();
+        for (e, v) in &mut self.values {
+            match v.restate(resolved) {
+                Restated::Unchanged => {}
+                Restated::Replaced(restated) => *v = restated,
+                Restated::Absent => absent.push(*e),
+            }
+        }
+        absent
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -818,6 +852,20 @@ impl World {
         }
         self.note_copy(e, d);
         Some(d)
+    }
+
+    /// Every typed component restated for the axes `resolved` gave values ([`Component::restate`]): the entities some
+    /// component says are not present in that state, sorted and without repeats, for the caller to remove. The values
+    /// of every other component are replaced in place. Opaque components hold no clause a pass could read.
+    pub fn restate_components(&mut self, resolved: &crate::state::Resolved<'_>) -> Vec<Entity> {
+        let mut absent: Vec<Entity> = self
+            .columns
+            .values_mut()
+            .flat_map(|c| c.restate_all(resolved))
+            .collect();
+        absent.sort();
+        absent.dedup();
+        absent
     }
 
     /// Map `e`'s local space by `l`: every component of `e` through [`Component::apply_linear`]. All or nothing:

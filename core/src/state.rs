@@ -156,6 +156,23 @@ pub struct Literal {
     pub values: u64,
 }
 
+/// The values `resolve-state` gave the axes it resolved, for a component that holds [`Clause`]s of its own
+/// ([`crate::world::Component::restate`]); an axis it kept or could not resolve has no value here.
+#[derive(Clone, Copy, Debug)]
+pub struct Resolved<'a>(&'a BTreeMap<Entity, u32>);
+
+impl Resolved<'_> {
+    /// `clause` with its literals on resolved axes evaluated, as for a `core.condition`: `None` when one of them fails,
+    /// else the literals on the other axes (empty: the clause holds whatever they are).
+    pub fn reduce(&self, clause: &Clause) -> Option<Clause> {
+        clause.reduce(self.0)
+    }
+    /// Whether `axis` was resolved.
+    pub fn has(&self, axis: Entity) -> bool {
+        self.0.contains_key(&axis)
+    }
+}
+
 /// An AND of literals; an empty clause holds in every state.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Clause(pub Vec<Literal>);
@@ -864,6 +881,12 @@ impl Pass for ResolveState {
             log.count(&format!("override {}", ov.kind()), 1);
         }
 
+        // components that hold clauses of their own, reduced as the conditions are
+        for e in w.restate_components(&Resolved(&values)) {
+            if w.is_alive(e) {
+                remove_not_present(w, e, log, "not present in the resolved state");
+            }
+        }
         for (e, _) in &axes {
             if !kept.contains(e) {
                 w.remove::<StateAxis>(*e);
@@ -1083,6 +1106,93 @@ mod tests {
         let mut log = PassLog::default();
         resolve_state(&opts)?.run(w, &mut log)?;
         Ok(log)
+    }
+
+    /// A record of parts, each with a clause of its own (as a collision file's parts are): not `core.condition`, so it is
+    /// the component's own [`Component::restate`] that `resolve-state` runs.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Parts(Vec<(&'static str, Option<Clause>)>);
+    impl Component for Parts {
+        const NAME: &'static str = "test.parts";
+        const GEOMETRY: crate::Geometry = crate::Geometry::None;
+        fn references(&self, out: &mut Vec<Entity>) {
+            for (_, c) in &self.0 {
+                if let Some(c) = c {
+                    out.extend(c.0.iter().map(|l| l.axis));
+                }
+            }
+        }
+        fn restate(&self, resolved: &Resolved<'_>) -> crate::world::Restated<Self> {
+            use crate::world::Restated;
+            let mut parts = Vec::new();
+            for (name, clause) in &self.0 {
+                let clause = match clause {
+                    None => None,
+                    Some(c) => match resolved.reduce(c) {
+                        None => continue,
+                        Some(r) if r.0.is_empty() => None,
+                        Some(r) => Some(r),
+                    },
+                };
+                parts.push((*name, clause));
+            }
+            if parts.is_empty() {
+                Restated::Absent
+            } else if parts == self.0 {
+                Restated::Unchanged
+            } else {
+                Restated::Replaced(Parts(parts))
+            }
+        }
+    }
+
+    /// A clause a component holds is reduced as a condition is: a part whose clause fails leaves the record, one that always
+    /// holds loses its clause, a literal on a kept axis stays, and a record left with no part is despawned with the entity
+    /// that has only it. With 8302 kept the clause on it stays, as a condition's would.
+    #[test]
+    fn a_clause_inside_a_component_is_reduced_by_resolving_state() {
+        let mut c = castle();
+        let f8302 =
+            c.w.iter::<StateAxis>()
+                .find(|(_, a)| a.key == "fromsoft.flag.8302")
+                .unwrap()
+                .0;
+        let record = c.w.spawn();
+        c.w.insert(
+            record,
+            Parts(vec![
+                ("always", None),
+                ("needs 8301", Some(Clause(vec![on(c.f8301)]))),
+                ("not 8301", Some(Clause(vec![off(c.f8301)]))),
+                (
+                    "8301 off and 8302 on",
+                    Some(Clause(vec![off(c.f8301), on(f8302)])),
+                ),
+            ]),
+        );
+        let only = c.w.spawn();
+        c.w.insert(only, Parts(vec![("needs 8301", Some(Clause(vec![on(c.f8301)])))]));
+        run_keep(&mut c.w, "", "fromsoft.flag.8302").unwrap();
+        // 8301 is off by default: the part needing it leaves, the other clauses keep what is still open
+        assert_eq!(
+            c.w.get::<Parts>(record),
+            Some(&Parts(vec![
+                ("always", None),
+                ("not 8301", None),
+                ("8301 off and 8302 on", Some(Clause(vec![on(f8302)]))),
+            ]))
+        );
+        // a record none of whose parts is present is not
+        assert!(!c.w.is_alive(only));
+        // and with everything resolved no clause on an axis is left to name a removed one
+        let mut all = castle();
+        let record = all.w.spawn();
+        all.w.insert(
+            record,
+            Parts(vec![("not 8301", Some(Clause(vec![off(all.f8301)])))]),
+        );
+        run(&mut all.w, "");
+        assert_eq!(all.w.get::<Parts>(record), Some(&Parts(vec![("not 8301", None)])));
     }
 
     /// Keeping 8302 (8301 and 8306 at their defaults, off): the intact walls keep only their 8302 literal, the
