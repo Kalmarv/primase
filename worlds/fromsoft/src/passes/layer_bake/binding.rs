@@ -145,6 +145,16 @@ pub const INSTANCE_DATA_POLICY: &str = "instance record frozen to its zeros: env
 /// `FC_AlphaRef.x` of a program that does not test alpha: below any alpha (the engine's own value for a plain program).
 const ALPHA_TEST_OFF: f32 = -100.;
 
+/// The policy a consumer counts when it freezes the dither and camera-fade fields to zero (both fades off: every fragment kept).
+/// The five fields (`FC_isDitherAlpha`, `FC_isEnableCameraDitherFade`, `FC_DitherEnable`, `FC_CameraFadeEnd`,
+/// `FC_CameraFadeInvRange`) are read by the 102 `_[A]` programs only, and a fade discards only inside its flag's test (the camera
+/// fade under `FC_isEnableCameraDitherFade`, the dither under `FC_DitherEnable > 0` and `FC_isDitherAlpha != 0`). In a capture of
+/// the running game (a castle interior, 11,252 draws of `_Gbuf_[A]` programs, the buffers read back from the D3D11 context) the
+/// camera-fade flag and `FC_isDitherAlpha` were zero in every draw, `FC_DitherEnable` zero in 11,153 and one in 99 (with
+/// `FC_isDitherAlpha` zero in those), so the engine's value for a draw that does not fade is zero; the end and the inverse range were
+/// never set in 10,244 of the draws (NaN or infinity) and other numbers in the rest, read only under the flag.
+pub const FADE_POLICY: &str = "dither and camera fades off in the bake (the flags and their parameters frozen to zero): the engine sets them per draw";
+
 /// The policy a bake counts for an alpha-tested material (its `_Gbuf_[A]` program discards against `FC_AlphaRef`): the test
 /// is off, every texel is kept, and the cutout is the albedo's alpha, sampled beside the program.
 pub const ALPHA_TEST_POLICY: &str =
@@ -196,6 +206,16 @@ pub(super) fn frozen_words(
             (0..64).flat_map(|_| bits(&frame.world)).collect()
         }
         ConstantRole::Object(ObjectParameter::InstanceColour) => bits(&frame.instance_colour),
+        ConstantRole::Object(
+            ObjectParameter::CameraFadeEnabled
+            | ObjectParameter::CameraFadeEnd
+            | ObjectParameter::CameraFadeInverseRange
+            | ObjectParameter::DitherAlphaEnabled
+            | ObjectParameter::DitherEnabled,
+        ) => {
+            policies.insert(FADE_POLICY.into(), 1);
+            vec![0]
+        }
         ConstantRole::Object(ObjectParameter::TextureScroll(set)) => {
             policies.insert(TEXTURE_SCROLL_POLICY.into(), 1);
             let scroll = frame
@@ -946,6 +966,28 @@ impl PipelineState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dither and camera-fade fields freeze to zero (both fades off), counted once as [`FADE_POLICY`].
+    #[test]
+    fn the_fade_fields_freeze_to_zero_and_are_counted() {
+        let mut policies = BTreeMap::new();
+        for parameter in [
+            ObjectParameter::CameraFadeEnabled,
+            ObjectParameter::CameraFadeEnd,
+            ObjectParameter::CameraFadeInverseRange,
+            ObjectParameter::DitherAlphaEnabled,
+            ObjectParameter::DitherEnabled,
+        ] {
+            let words = frozen_words(
+                &ConstantRole::Object(parameter),
+                &FrozenFrame::static_bake(0.),
+                &mut policies,
+            )
+            .unwrap();
+            assert_eq!(words, Some(vec![0]), "{parameter:?}");
+        }
+        assert_eq!(policies, BTreeMap::from([(FADE_POLICY.to_owned(), 1)]));
+    }
 
     fn prepared(writes: bool) -> Prepared {
         prepared_output(writes, None)

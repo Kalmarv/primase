@@ -473,6 +473,39 @@ pub fn resolve(
         4,
         ConstantRole::Frame(FrameParameter::ColourSlot),
     )?;
+    // the dither and camera-fade fields an alpha-tested program reads from the per-draw buffers (cbMatDynParam and
+    // cbModelParam, all 102 `_[A]` programs): the engine's per-draw state, never the material's (the MTD's
+    // g_GX_DisableCameraFade only allows the fade). Each is a role; what a consumer freezes them to is its own
+    constant(
+        "FC_isDitherAlpha",
+        0,
+        4,
+        ConstantRole::Object(ObjectParameter::DitherAlphaEnabled),
+    )?;
+    constant(
+        "FC_isEnableCameraDitherFade",
+        0,
+        4,
+        ConstantRole::Object(ObjectParameter::CameraFadeEnabled),
+    )?;
+    constant(
+        "FC_DitherEnable",
+        0,
+        4,
+        ConstantRole::Object(ObjectParameter::DitherEnabled),
+    )?;
+    constant(
+        "FC_CameraFadeEnd",
+        0,
+        4,
+        ConstantRole::Object(ObjectParameter::CameraFadeEnd),
+    )?;
+    constant(
+        "FC_CameraFadeInvRange",
+        0,
+        4,
+        ConstantRole::Object(ObjectParameter::CameraFadeInverseRange),
+    )?;
     constant(
         "FC_MatrixInvViewProj",
         0,

@@ -1240,3 +1240,47 @@ fn a_blended_material_is_bound_to_its_forward_program() {
     ]);
     assert_eq!(additive.pass_program(), "M[Multiple]_27_Gbuf.ppo");
 }
+
+/// The dither and camera-fade fields an alpha-tested program reads from the per-draw buffers are the engine's per-draw state
+/// (roles of the object), never a material word and never unbound; a consumer that freezes them gets zero (both fades off) and
+/// counts it.
+#[test]
+fn the_dither_and_camera_fade_fields_are_object_roles() {
+    const FADE: &[u8] = include_bytes!("fixtures/fade.dxbc");
+    let shader = executor(FADE);
+    let program = World::default().spawn();
+    let resolution = resolve(
+        &shader,
+        program,
+        &material(),
+        None,
+        Unbound::Preview,
+        &mut |_, _| Ok(None),
+    )
+    .unwrap();
+    let roles: BTreeMap<_, _> = resolution
+        .stage
+        .constants
+        .iter()
+        .map(|c| (c.name.clone().unwrap(), (c.offset, c.size, c.role.clone())))
+        .collect();
+    let object = |p| ConstantRole::Object(p);
+    for (name, offset, parameter) in [
+        ("FC_isDitherAlpha", 0, ObjectParameter::DitherAlphaEnabled),
+        (
+            "FC_isEnableCameraDitherFade",
+            0,
+            ObjectParameter::CameraFadeEnabled,
+        ),
+        ("FC_DitherEnable", 0, ObjectParameter::DitherEnabled),
+        ("FC_CameraFadeEnd", 0, ObjectParameter::CameraFadeEnd),
+        (
+            "FC_CameraFadeInvRange",
+            0,
+            ObjectParameter::CameraFadeInverseRange,
+        ),
+    ] {
+        let (_, size, role) = &roles[name];
+        assert_eq!((*size, role), (4, &object(parameter)), "{name} at {offset}");
+    }
+}

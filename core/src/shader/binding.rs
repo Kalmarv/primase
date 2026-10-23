@@ -79,6 +79,20 @@ pub enum ObjectParameter {
     MatrixBase,
     /// The instance's user clip plane (the vertex program's clip distance against it).
     ClipPlane,
+    /// Whether the draw fades by the camera's distance, dithered (a flag the engine sets per draw): a program that reads it
+    /// keeps a fragment where `distance * CameraFadeInverseRange - CameraFadeEnd` is not below the dither noise.
+    CameraFadeEnabled,
+    /// The camera fade's end term, subtracted from the distance scaled by [`ObjectParameter::CameraFadeInverseRange`].
+    CameraFadeEnd,
+    /// The camera fade's inverse range: the factor the fragment's distance from the camera is scaled by.
+    CameraFadeInverseRange,
+    /// Whether the instance is drawn with dithered transparency (a per-draw flag): a program that reads it, with
+    /// [`ObjectParameter::DitherEnabled`] set, discards a fragment by the dither noise against the amount the instance record
+    /// carries.
+    DitherAlphaEnabled,
+    /// The second per-model flag of the dithered transparency, set together with [`ObjectParameter::DitherAlphaEnabled`]
+    /// (a program reads both, and fades only where both are on).
+    DitherEnabled,
 }
 
 /// A value of the frame being drawn.
