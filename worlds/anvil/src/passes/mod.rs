@@ -11,6 +11,7 @@ mod listed;
 mod material;
 mod resolve_shaders;
 mod select;
+mod skeleton;
 mod splat;
 mod water;
 mod world_uv;
@@ -26,6 +27,7 @@ pub use resolve_shaders::{
     shading_class,
 };
 pub use select::{CollisionOnly, Keep, Overlap, SelectAnvilEntities};
+pub use skeleton::LowerAnvilSkeleton;
 pub use splat::{Splat, SplatUv};
 pub use water::{LowerAnvilWater, Shore};
 pub use world_uv::LowerAnvilWorldUv;
@@ -2869,6 +2871,11 @@ pub fn register(reg: &mut PassRegistry) {
             ("normal", "terrain"),
             ("max-plants", "1000000"),
         ],
+    );
+    reg.register_requiring(
+        "lower-anvil-skeleton",
+        |o| Ok(Box::new(LowerAnvilSkeleton::from_options(o)?)),
+        &[("own-transform", "refuse")],
     );
     reg.register_requiring(
         "lower-anvil-data-layers",

@@ -2,6 +2,8 @@
 
 use primase_core::{Component, Entity, World};
 
+use crate::read::skeleton::StoredSkeleton;
+
 /// A MeshShape's triangle geometry ([`crate::read::mesh_shape::Geometry`]) on its prototype: positions converted into
 /// core's frame through the frame the reader was given (stated by the program, as the shape's units and frame are not
 /// established), faces as position-index triangles (reversed when that frame mirrors, so their fronts stay), and each
@@ -639,6 +641,20 @@ impl Component for AnvilTerrainGroups {
         let bytes: usize = self.tiles.iter().map(|t| t.group.len() + t.weight.len()).sum();
         u64::try_from(bytes).unwrap_or(u64::MAX)
     }
+}
+
+/// A Skeleton as stored (`anvil.skeleton`), on an entity of its own named for it: its bones, pose groups and the rest
+/// ([`StoredSkeleton`]), and the frame the reader was given (the bones' positions and rotations are in the game's source
+/// frame). `lower-anvil-skeleton` makes a `core.skeleton` of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilSkeleton {
+    pub frame: primase_core::frame::SourceFrame,
+    pub skeleton: StoredSkeleton,
+}
+
+impl Component for AnvilSkeleton {
+    const NAME: &'static str = "anvil.skeleton";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
 /// One WaterPatchDesc.

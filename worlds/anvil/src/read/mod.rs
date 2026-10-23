@@ -24,6 +24,7 @@ pub mod shader_pack;
 pub mod shader_source;
 pub mod shape;
 pub mod shapes;
+pub mod skeleton;
 pub mod template;
 pub mod terrain;
 pub mod terrain_material;

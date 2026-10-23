@@ -42,9 +42,9 @@ use primase_core::{Entity, Instance, Name, Transform, World};
 use crate::components::{
     AnvilBounds, AnvilCollisionFilter, AnvilCollisionOnly, AnvilCollisionShape, AnvilDataLayers,
     AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake, AnvilGrass, AnvilGrassModel,
-    AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilWater, BoundTexture,
-    CollisionMaterialRef, DataLayerAction, DeferredDecal, GrassSystemSetup, MaterialBinding, MaterialValue,
-    ShapeGeometry, TextureFrom,
+    AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilSkeleton,
+    AnvilWater, BoundTexture, CollisionMaterialRef, DataLayerAction, DeferredDecal, GrassSystemSetup,
+    MaterialBinding, MaterialValue, ShapeGeometry, TextureFrom,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::ddecal::{
@@ -65,6 +65,7 @@ use crate::read::shape::{
     StoredReferenceList, StoredSphere,
 };
 use crate::read::shapes::anvil_mesh_shape;
+use crate::read::skeleton::{SKELETON, StoredSkeleton};
 use crate::read::template::{self, BindingKind};
 use crate::read::textures;
 use crate::read::water::{StoredWater, WATER_COMPONENT};
@@ -376,6 +377,8 @@ pub struct Placer<'a> {
     shaders: HashMap<u64, Entity>,
     /// Per Material id, its entity (`None`: not a Material, or not read).
     materials: HashMap<u64, Option<Entity>>,
+    /// Per Skeleton id, its entity (`None`: not a Skeleton, or not read).
+    skeletons: HashMap<u64, Option<Entity>>,
     /// Per TextureMap id, its texture's entity.
     textures: HashMap<u64, Option<Entity>>,
     /// Per DDecalModel id, its entity (`None`: not a DDecalModel, or not read).
@@ -439,6 +442,7 @@ impl<'a> Placer<'a> {
             read_shaders: false,
             shaders: HashMap::new(),
             materials: HashMap::new(),
+            skeletons: HashMap::new(),
             textures: HashMap::new(),
             decal_models: HashMap::new(),
             objects: HashMap::new(),
@@ -594,6 +598,46 @@ impl<'a> Placer<'a> {
         }
         self.world.insert(e, mesh);
         Ok(e)
+    }
+
+    /// The entity holding the Skeleton `id` names, read once: its [`AnvilSkeleton`], named for the entry. `None` where
+    /// it isn't a Skeleton or can't be read (recorded in `placed`).
+    pub fn skeleton(&mut self, id: u64, placed: &mut Placed) -> Option<Entity> {
+        if let Some(&e) = self.skeletons.get(&id) {
+            return e;
+        }
+        let e = match self.read_skeleton(id) {
+            Ok(e) => e,
+            Err(why) => {
+                placed.refused.push((id, format!("skeleton: {why}")));
+                None
+            }
+        };
+        self.skeletons.insert(id, e);
+        e
+    }
+
+    fn read_skeleton(&mut self, id: u64) -> Result<Option<Entity>, String> {
+        let Some(at) = self.archive.find(id) else {
+            return Ok(None);
+        };
+        let r = self.archive.resource(at).map_err(|e| e.to_string())?;
+        if r.type_id != SKELETON {
+            return Ok(None);
+        }
+        let skeleton = StoredSkeleton::parse(&r.body).map_err(|e| e.to_string())?;
+        let e = self.world.spawn();
+        if let Some(name) = self.name(at) {
+            self.world.insert(e, Name(name));
+        }
+        self.world.insert(
+            e,
+            AnvilSkeleton {
+                frame: self.frame,
+                skeleton,
+            },
+        );
+        Ok(Some(e))
     }
 
     /// The entity holding the Material `id` names, read once: its [`AnvilMaterial`], its textures read too. `None`

@@ -18,6 +18,7 @@ use crate::read::mesh::{MATERIAL, MESH};
 use crate::read::mesh_shape::MESH_SHAPE;
 use crate::read::mip::COMPILED_MIP;
 use crate::read::shape::{BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE};
+use crate::read::skeleton::SKELETON;
 use crate::read::terrain_material::{COLLISION_MATERIAL, TERRAIN_MATERIAL, TERRAIN_MATERIAL_BANK};
 use crate::read::tnl::TERRAIN_NODE_LAYER;
 
@@ -47,10 +48,11 @@ pub enum Kind {
     CollisionMaterial,
     FloorHeightData,
     DecalModel,
+    Skeleton,
 }
 
 /// Every kind, in declaration order.
-pub const KINDS: [Kind; 23] = [
+pub const KINDS: [Kind; 24] = [
     Kind::Mesh,
     Kind::Material,
     Kind::MaterialTemplate,
@@ -74,6 +76,7 @@ pub const KINDS: [Kind; 23] = [
     Kind::CollisionMaterial,
     Kind::FloorHeightData,
     Kind::DecalModel,
+    Kind::Skeleton,
 ];
 
 impl Kind {
@@ -108,6 +111,7 @@ impl Kind {
             Kind::CollisionMaterial => COLLISION_MATERIAL,
             Kind::FloorHeightData => FLOOR_HEIGHT_DATA,
             Kind::DecalModel => DDECAL_MODEL,
+            Kind::Skeleton => SKELETON,
         }
     }
 
@@ -137,6 +141,7 @@ impl Kind {
             Kind::CollisionMaterial => "CollisionMaterial",
             Kind::FloorHeightData => "FloorHeightData",
             Kind::DecalModel => "DDecalModel",
+            Kind::Skeleton => "Skeleton",
         }
     }
 }
