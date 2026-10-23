@@ -355,7 +355,7 @@ impl<F: FnMut(Sample) -> std::result::Result<[f32; 4], String>> Sampler for F {
 }
 
 /// What one evaluation wrote.
-#[derive(Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Execution {
     /// One entry per output register.
     pub outputs: Vec<[u32; 4]>,
@@ -409,24 +409,25 @@ pub trait PixelShader: std::fmt::Debug + Sync {
         self.execute(inputs, buffers, sampler)
     }
     /// Evaluate invocations that share their inputs' screen derivatives (`derivatives`, as
-    /// [`PixelShader::execute_with_derivatives`] takes them), each as that would alone: the same outputs, instructions
-    /// and samples. On an error, the first failing invocation's index and its error. The sampler may be asked in
-    /// another order than one invocation after another. The default evaluates them one after another.
+    /// [`PixelShader::execute_with_derivatives`] takes them), each as that would alone: `each` is given every
+    /// invocation's index and execution (the same outputs, instructions and samples), in order. On an error, the first
+    /// failing invocation's index and its error, `each` given those before it. The sampler may be asked in another
+    /// order than one invocation after another. The default evaluates them one after another.
     fn execute_lanes(
         &self,
         inputs: &[&[[u32; 4]]],
         derivatives: &[[[u32; 4]; 2]],
         buffers: &[(u32, &[[u32; 4]])],
         sampler: &mut dyn Sampler,
-    ) -> std::result::Result<Vec<Execution>, (usize, Error)> {
-        inputs
-            .iter()
-            .enumerate()
-            .map(|(i, one)| {
-                self.execute_with_derivatives(one, derivatives, buffers, sampler)
-                    .map_err(|e| (i, e))
-            })
-            .collect()
+        each: &mut dyn FnMut(usize, &Execution),
+    ) -> std::result::Result<(), (usize, Error)> {
+        for (i, one) in inputs.iter().enumerate() {
+            let e = self
+                .execute_with_derivatives(one, derivatives, buffers, sampler)
+                .map_err(|e| (i, e))?;
+            each(i, &e);
+        }
+        Ok(())
     }
     /// Evaluate a 2 x 2 quad together (lanes 0, 1 the top row, 2, 3 the bottom), its derivatives and implicit
     /// levels of detail the quad's own. A bytecode without quad evaluation refuses.

@@ -142,6 +142,8 @@ pub struct Output {
 pub struct Scratch<const N: usize> {
     regs: Vec<Reg>,
     mem: Vec<u32>,
+    /// Each lane's result members, their room kept.
+    outs: [Vec<Reg>; N],
 }
 impl<const N: usize> Scratch<N> {
     pub fn new(exe: &Executable) -> Self {
@@ -154,6 +156,7 @@ impl<const N: usize> Scratch<N> {
         Self {
             regs,
             mem: vec![0; exe.local_words * N],
+            outs: std::array::from_fn(|_| Vec::new()),
         }
     }
 }
@@ -303,7 +306,7 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
             steps: 0,
             lane_steps: [0; N],
             samples: [0; N],
-            outs: std::array::from_fn(|_| Vec::new()),
+            outs: scratch.outs,
             decisions: [Decision::None; N],
             killed: M::none(),
             store: Vec::new(),
@@ -322,6 +325,7 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
         Scratch {
             regs: self.regs,
             mem: self.mem,
+            outs: self.outs,
         }
     }
 
@@ -1567,7 +1571,9 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                     self.retired = self.retired.or(active);
                     for l in 0..N {
                         if active.has(l) {
-                            let mut members = Vec::with_capacity(result.len());
+                            // into the lane's own room, kept from run to run
+                            let mut members = std::mem::take(&mut self.outs[l]);
+                            members.clear();
                             for member in result {
                                 match *member {
                                     Member::Reg(s, n) => {
@@ -1616,6 +1622,28 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
 
     /// [`Runner::run`] with lanes `0..count` only; the outputs of the others are empty (independent invocations).
     pub fn run_first(&mut self, args: [&[[u32; 4]]; N], count: usize) -> Result<[Output; N], String> {
+        self.run_in_place(args, count)?;
+        let c: &'a Executable = self.c;
+        Ok(std::array::from_fn(|l| {
+            let (values, discarded, steps, samples) = self.lane(l);
+            Output {
+                pointees: c
+                    .pointer_args
+                    .iter()
+                    .map(|&(_, off, words)| self.read_locals(l, off as usize, words as usize))
+                    .collect(),
+                decision: self.decisions[l],
+                values: values.to_vec(),
+                discarded,
+                steps,
+                samples,
+            }
+        }))
+    }
+
+    /// [`Runner::run_first`] with the results left in the runner, for [`Runner::lane`] to read: a run that
+    /// allocates nothing once the runner's room is grown.
+    pub(super) fn run_in_place(&mut self, args: [&[[u32; 4]]; N], count: usize) -> Result<(), String> {
         if count > N || (count < N && self.grouping != Grouping::Independent) {
             return Err(format!(
                 "{count} of {N} lanes run: only independent invocations run fewer than all"
@@ -1660,20 +1688,16 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
         }
         let c: &'a Executable = self.c;
         self.block(&c.body, M::first(count))?;
-        let (steps, lane_steps, samples) = (self.steps, self.lane_steps, self.samples);
-        let independent = self.grouping == Grouping::Independent;
-        Ok(std::array::from_fn(|l| Output {
-            pointees: c
-                .pointer_args
-                .iter()
-                .map(|&(_, off, words)| self.read_locals(l, off as usize, words as usize))
-                .collect(),
-            decision: self.decisions[l],
-            values: std::mem::take(&mut self.outs[l]),
-            discarded: self.killed.has(l),
-            steps: if independent { lane_steps[l] } else { steps },
-            samples: samples[l],
-        }))
+        Ok(())
+    }
+
+    /// Lane `l` of the last run: its result members, whether it was discarded, its steps and its samples.
+    pub(super) fn lane(&self, l: usize) -> (&[Reg], bool, u64, u64) {
+        let steps = match self.grouping {
+            Grouping::Independent => self.lane_steps[l],
+            Grouping::Quad | Grouping::Group => self.steps,
+        };
+        (&self.outs[l], self.killed.has(l), steps, self.samples[l])
     }
 }
 
@@ -2064,7 +2088,7 @@ impl Executable {
             steps: 0,
             lane_steps: [0; N],
             samples: [0; N],
-            outs: std::array::from_fn(|_| Vec::new()),
+            outs: scratch.outs,
             decisions: [Decision::None; N],
             killed: Wide::none(),
             store,

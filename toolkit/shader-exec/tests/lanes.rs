@@ -173,10 +173,15 @@ fn a_pixel_past_the_step_limit_stops_the_run_as_it_stops_alone() {
             alone.detail.contains("execution budget exceeded"),
             "{name}: {alone}"
         );
+        let mut given = Vec::new();
         let (at, error) = shader
-            .execute_lanes(&lanes, &derivatives, &buffers, &mut sampler)
+            .execute_lanes(&lanes, &derivatives, &buffers, &mut sampler, &mut |i, _| {
+                given.push(i)
+            })
             .unwrap_err();
         assert_eq!((at, error.to_string()), (12, alone.to_string()), "{name}");
+        // the invocations before the first failing one, in order
+        assert_eq!(given, (0..12).collect::<Vec<_>>(), "{name}");
         assert!(
             shader
                 .execute_lockstep(&lanes, &derivatives, &buffers, &mut sampler)

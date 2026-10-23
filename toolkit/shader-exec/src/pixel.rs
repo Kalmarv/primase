@@ -62,6 +62,13 @@ pub struct ProgramShader {
 /// The invocations [`PixelShader::execute_lanes`] runs in lockstep at a time.
 const LANES: usize = 16;
 
+/// The buffers lockstep runs reuse: every invocation's entry arguments, and the execution given to the caller.
+#[derive(Default)]
+struct Room {
+    arguments: Vec<[u32; 4]>,
+    execution: Execution,
+}
+
 fn lanes_of(mask: u8) -> Vec<u8> {
     (0..4).filter(|l| mask >> l & 1 != 0).collect()
 }
@@ -243,6 +250,13 @@ impl ProgramShader {
 
     /// The entry arguments for one invocation's input registers.
     fn arguments_of(&self, inputs: &[[u32; 4]]) -> Result<Vec<[u32; 4]>, Error> {
+        let mut out = Vec::with_capacity(self.arguments.len());
+        self.arguments_into(inputs, &mut out)?;
+        Ok(out)
+    }
+
+    /// [`ProgramShader::arguments_of`] appended to `out`.
+    fn arguments_into(&self, inputs: &[[u32; 4]], out: &mut Vec<[u32; 4]>) -> Result<(), Error> {
         if inputs.len() < self.input_count {
             return Err(error(format!(
                 "{} input registers given, {} needed",
@@ -250,7 +264,6 @@ impl ProgramShader {
                 self.input_count
             )));
         }
-        let mut out = Vec::with_capacity(self.arguments.len());
         for a in &self.arguments {
             let mut value = [0u32; 4];
             if let Some(register) = inputs.get(a.register) {
@@ -265,7 +278,7 @@ impl ProgramShader {
             }
             out.push(value);
         }
-        Ok(out)
+        Ok(())
     }
 
     fn derivatives_of(&self, derivatives: &[[[u32; 4]; 2]]) -> Vec<[[u32; 4]; 2]> {
@@ -286,24 +299,36 @@ impl ProgramShader {
     }
 
     fn execution(&self, o: super::Output) -> Execution {
-        let mut outputs = vec![[0u32; 4]; self.output_count];
-        let mut output_masks = vec![0u8; self.output_count];
-        for (m, value) in self.members.iter().zip(&o.values) {
+        let mut e = Execution::default();
+        self.execution_into(&o.values, o.discarded, o.steps, o.samples, &mut e);
+        e
+    }
+
+    /// What a run's result members `values` are in the register view, written over `e`.
+    fn execution_into(
+        &self,
+        values: &[[u32; 4]],
+        discarded: bool,
+        steps: u64,
+        samples: u64,
+        e: &mut Execution,
+    ) {
+        e.outputs.clear();
+        e.outputs.resize(self.output_count, [0; 4]);
+        e.output_masks.clear();
+        e.output_masks.resize(self.output_count, 0);
+        for (m, value) in self.members.iter().zip(values) {
             if m.register == usize::MAX {
                 continue;
             }
             for (i, lane) in m.lanes.iter().enumerate() {
-                outputs[m.register][*lane as usize] = value[i];
+                e.outputs[m.register][*lane as usize] = value[i];
             }
-            output_masks[m.register] |= m.written;
+            e.output_masks[m.register] |= m.written;
         }
-        Execution {
-            outputs,
-            output_masks,
-            instructions: usize::try_from(o.steps).unwrap_or(usize::MAX),
-            samples: usize::try_from(o.samples).unwrap_or(usize::MAX),
-            discarded: o.discarded,
-        }
+        e.instructions = usize::try_from(steps).unwrap_or(usize::MAX);
+        e.samples = usize::try_from(samples).unwrap_or(usize::MAX);
+        e.discarded = discarded;
     }
 
     fn bound<'a>(&self, buffers: &[(u32, &'a [[u32; 4]])]) -> Result<super::Bound<'a>, Error> {
@@ -573,23 +598,31 @@ impl PixelShader for ProgramShader {
         derivatives: &[[[u32; 4]; 2]],
         buffers: &[(u32, &[[u32; 4]])],
         sampler: &mut dyn Sampler,
-    ) -> Result<Vec<Execution>, (usize, Error)> {
-        let mut out = Vec::with_capacity(inputs.len());
+        each: &mut dyn FnMut(usize, &Execution),
+    ) -> Result<(), (usize, Error)> {
+        let lane_derivatives = self.derivatives_of(derivatives);
+        let mut room = Room::default();
         for (k, chunk) in inputs.chunks(LANES).enumerate() {
-            match self.execute_lockstep(chunk, derivatives, buffers, sampler) {
-                Ok(done) => out.extend(done),
-                // run again one invocation after another: the error is then the first failing one's, as alone
-                Err(_) => {
-                    for (i, one) in chunk.iter().enumerate() {
-                        let done = self
-                            .run_scalar(one, Some(derivatives), buffers, sampler)
-                            .map_err(|e| (k * LANES + i, e))?;
-                        out.push(done);
-                    }
+            let together = self.run_lanes(
+                chunk,
+                &lane_derivatives,
+                buffers,
+                sampler,
+                &mut room,
+                &mut |i, e| each(k * LANES + i, e),
+            );
+            // a run that stops is run again one invocation after another: the error is then the first failing
+            // one's, as alone, and the invocations before it are given
+            if together.is_err() {
+                for (i, one) in chunk.iter().enumerate() {
+                    let done = self
+                        .run_scalar(one, Some(derivatives), buffers, sampler)
+                        .map_err(|e| (k * LANES + i, e))?;
+                    each(k * LANES + i, &done);
                 }
             }
         }
-        Ok(out)
+        Ok(())
     }
 
     fn execute_quad(
@@ -626,32 +659,43 @@ impl ProgramShader {
         sampler: &mut dyn Sampler,
     ) -> Result<Vec<Execution>, Error> {
         let derivatives = self.derivatives_of(derivatives);
+        let mut room = Room::default();
         let mut out = Vec::with_capacity(inputs.len());
         for chunk in inputs.chunks(LANES) {
-            out.extend(self.run_lanes(chunk, &derivatives, buffers, sampler)?);
+            self.run_lanes(chunk, &derivatives, buffers, sampler, &mut room, &mut |_, e| {
+                out.push(e.clone())
+            })?;
         }
         Ok(out)
     }
 
-    /// Up to [`LANES`] invocations in lockstep, sharing `derivatives` (the entry arguments').
+    /// Up to [`LANES`] invocations in lockstep, sharing `derivatives` (the entry arguments'), each one's execution
+    /// given to `each` (with its index in `inputs`) once all have run, in `room`'s buffers.
     fn run_lanes(
         &self,
         inputs: &[&[[u32; 4]]],
         derivatives: &[[[u32; 4]; 2]],
         buffers: &[(u32, &[[u32; 4]])],
         sampler: &mut dyn Sampler,
-    ) -> Result<Vec<Execution>, Error> {
+        room: &mut Room,
+        each: &mut dyn FnMut(usize, &Execution),
+    ) -> Result<(), Error> {
         let bound = self.bound(buffers)?;
-        let arguments = inputs
-            .iter()
-            .map(|one| self.arguments_of(one))
-            .collect::<Result<Vec<_>, _>>()?;
-        let count = arguments.len();
-        let Some(last) = arguments.last() else {
-            return Ok(Vec::new());
-        };
+        let width = self.arguments.len();
+        room.arguments.clear();
+        for one in inputs {
+            self.arguments_into(one, &mut room.arguments)?;
+        }
+        let count = inputs.len();
+        if count == 0 {
+            return Ok(());
+        }
         // the lanes past the invocations are given the last one's arguments and not run
-        let args: [&[[u32; 4]]; LANES] = std::array::from_fn(|l| arguments.get(l).unwrap_or(last).as_slice());
+        let arguments = &room.arguments;
+        let args: [&[[u32; 4]]; LANES] = std::array::from_fn(|l| {
+            let i = l.min(count - 1);
+            &arguments[i * width..(i + 1) * width]
+        });
         let mut backend = self.backend(sampler);
         let scratch = take(&self.lane_scratch).unwrap_or_else(|| Scratch::new(&self.executable));
         let mut runner = Runner::<LANES, u16>::with_scratch(
@@ -661,14 +705,16 @@ impl ProgramShader {
             Some(derivatives),
             scratch,
         );
-        let outputs = runner.run_first(args, count);
+        let run = runner.run_in_place(args, count);
+        if run.is_ok() {
+            for l in 0..count {
+                let (values, discarded, steps, samples) = runner.lane(l);
+                self.execution_into(values, discarded, steps, samples, &mut room.execution);
+                each(l, &room.execution);
+            }
+        }
         give_back(&self.lane_scratch, runner.into_scratch());
-        Ok(outputs
-            .map_err(error)?
-            .into_iter()
-            .take(count)
-            .map(|o| self.execution(o))
-            .collect())
+        run.map_err(error)
     }
 
     fn run_scalar(

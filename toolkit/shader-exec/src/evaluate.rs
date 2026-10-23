@@ -303,6 +303,16 @@ pub enum Invocation {
     Quads,
 }
 
+/// One row's (or row of quads') kept results: the pixels in the order kept, per pixel its targets' bits and written
+/// lanes, and the counts.
+#[derive(Default)]
+struct Kept {
+    pixels: Vec<usize>,
+    values: Vec<([u32; 4], u8)>,
+    instructions: u64,
+    samples: u64,
+}
+
 /// Every requested output of every pixel, as the program wrote it.
 #[derive(Debug)]
 pub struct Raw {
@@ -409,51 +419,53 @@ pub fn evaluate_raw_with(
         .map(|(s, v)| (*s, v.as_slice()))
         .collect();
     let size = grid.size as usize;
-    // the registers of pixel (x, y), which may lie past the grid (a quad's helper lanes)
-    let at = |x: u32, y: u32| -> Vec<[u32; 4]> {
+    // the registers of pixel (x, y), which may lie past the grid (a quad's helper lanes), written over `r`
+    let place = |x: u32, y: u32, r: &mut [[u32; 4]]| {
         let u = (x as f32 + 0.5) / grid.size as f32 * grid.period[0];
         let v = (y as f32 + 0.5) / grid.size as f32 * grid.period[1];
-        let mut r = registers.clone();
+        r.copy_from_slice(&registers);
         for &(register, lane, source) in &placed {
             r[register][lane] = if source == Lane::U { u } else { v }.to_bits();
         }
+    };
+    let at = |x: u32, y: u32| -> Vec<[u32; 4]> {
+        let mut r = registers.clone();
+        place(x, y, &mut r);
         r
     };
-    // one row's (or row of quads') kept results: pixel index, then per target its bits and written lanes
-    type Kept = Vec<(usize, Vec<([u32; 4], u8)>)>;
-    let kept = |result: &crate::Execution| -> Vec<([u32; 4], u8)> {
-        targets
-            .iter()
-            .map(|&(register, mask)| {
+    let row = |y: u32| -> Result<Kept, Error> {
+        let mut sampler = Bound(textures);
+        let mut out = Kept::default();
+        let mut keep = |pixel: usize, result: &crate::Execution| {
+            out.instructions += result.instructions as u64;
+            out.samples += result.samples as u64;
+            out.pixels.push(pixel);
+            for &(register, mask) in targets {
                 let written = result.output_masks.get(register as usize).copied().unwrap_or(0) & mask;
                 let bits = result.outputs.get(register as usize).copied().unwrap_or([0; 4]);
-                (bits, written)
-            })
-            .collect()
-    };
-    let row = |y: u32| -> Result<(Kept, u64, u64), Error> {
-        let mut sampler = Bound(textures);
-        let (mut out, mut instructions, mut samples): (Kept, u64, u64) = (Vec::new(), 0, 0);
-        let mut keep = |pixel: usize, result: &crate::Execution| {
-            instructions += result.instructions as u64;
-            samples += result.samples as u64;
-            out.push((pixel, kept(result)));
+                out.values.push((bits, written));
+            }
         };
         match invocation {
             Invocation::Scalar => {
-                // the row's pixels together, each as it evaluates alone
-                let registers: Vec<Vec<[u32; 4]>> = (0..grid.size).map(|x| at(x, y)).collect();
-                let lanes: Vec<&[[u32; 4]]> = registers.iter().map(Vec::as_slice).collect();
+                // the row's pixels together, each as it evaluates alone, their registers side by side
+                let width = registers.len();
+                let mut row_registers = vec![[0u32; 4]; width * size];
+                for (x, r) in (0..grid.size).zip(row_registers.chunks_exact_mut(width.max(1))) {
+                    place(x, y, &mut r[..width]);
+                }
+                let lanes: Vec<&[[u32; 4]]> = (0..size)
+                    .map(|x| &row_registers[x * width..(x + 1) * width])
+                    .collect();
                 let first = (y * grid.size) as usize;
-                let results = shader
-                    .execute_lanes(&lanes, &derivatives, &refs, &mut sampler)
+                shader
+                    .execute_lanes(&lanes, &derivatives, &refs, &mut sampler, &mut |x, result| {
+                        keep(first + x, result)
+                    })
                     .map_err(|(x, mut e)| {
                         e.detail = format!("pixel {}: {}", first + x, e.detail);
                         e
                     })?;
-                for (x, result) in results.iter().enumerate() {
-                    keep(first + x, result);
-                }
             }
             Invocation::Quads => {
                 for x in (0..grid.size).step_by(2) {
@@ -477,7 +489,7 @@ pub fn evaluate_raw_with(
                 }
             }
         }
-        Ok((out, instructions, samples))
+        Ok(out)
     };
     let rows: Vec<u32> = match invocation {
         Invocation::Scalar => (0..grid.size).collect(),
@@ -489,12 +501,12 @@ pub fn evaluate_raw_with(
         targets.iter().map(|_| vec![([0; 4], 0); size * size]).collect();
     let (mut instructions, mut samples) = (0u64, 0u64);
     for r in done {
-        let (kept, i, s) = r?;
-        instructions += i;
-        samples += s;
-        for (pixel, values) in kept {
-            for (t, v) in values.into_iter().enumerate() {
-                pixels[t][pixel] = v;
+        let kept = r?;
+        instructions += kept.instructions;
+        samples += kept.samples;
+        for (k, &pixel) in kept.pixels.iter().enumerate() {
+            for (t, target) in pixels.iter_mut().enumerate() {
+                target[pixel] = kept.values[k * targets.len() + t];
             }
         }
     }
