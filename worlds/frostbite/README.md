@@ -12,12 +12,12 @@ manifests, the native DB, data folders and CAS archives, shader block depots, sh
   hand-worked values and written back byte for byte. They cover structure and detect regressions; they are not
   independent correctness evidence.
 - **Carry**: values moved from one document into another keep their instances, imports and arrays through a rewrite.
-- **Real data**, with three inputs:
-  - `PRIMASE_FROSTBITE_EBX`: a folder of stock documents extracted from the game's `Data`, mirroring their asset
+- **Real data** (the real-data configuration, CONTRIBUTING.md), with three inputs:
+  - the corpus oracle set's `skate/ebx`: a folder of stock documents extracted from the game's `Data`, mirroring their asset
     paths (for example `characters/customization/configs/cas_main_bundlereftable.ebx`). Every document must keep
     every field's value through read -> write -> read.
-  - `PRIMASE_RESKATE_CLI` and `PRIMASE_SKATE_DATA`: the reference reader and writer, and the install whose `Data`
-    folder it reads (its parent is the game root). The writer's byte layout is compared with the reference's own
+  - `tools.reskate_cli` and `installs.skate`: the reference reader and writer, and the game root it reads (the
+    install, whose `Data` folder holds the archives). The writer's byte layout is compared with the reference's own
     rewrite of each document: where the reference reproduces the stock bytes, ours must too; documents where the
     reference itself differs from stock are counted and listed by name. This comparison measures agreement with the
     port's source; value preservation on stock data is the independent check.

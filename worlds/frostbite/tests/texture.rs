@@ -1,5 +1,5 @@
 //! Texture resource headers: hand-built headers read and written back, the refusals, the level sizes of the formats
-//! ReSkate decodes; and, on the game's data (`PRIMASE_SKATE_DATA`, `PRIMASE_OODLE9`), every texture resource of
+//! ReSkate decodes; and, on the game's data (`installs.skate/Data`, `tools.oodle9`), every texture resource of
 //! `Win32/items.toc` read and written back byte for byte, its chunk size the sum of its mip sizes, and for a 2D
 //! texture or array (kinds 0 and 3) of a format the table knows its mip sizes the chain of one slice; every resource id
 //! is odd and byte 0x21 is the level count; among the textures whose first mip is 0, `unknown_00` and byte 0x20 are
@@ -12,7 +12,7 @@ use primase_compress::oodle::{Oodle, Version};
 use primase_frostbite::bundle;
 use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::texture::{self, Storage, TextureHeader};
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install_file, tool};
 use std::collections::BTreeMap;
 
 type R = Result<(), Box<dyn std::error::Error>>;
@@ -101,11 +101,11 @@ fn level_sizes_follow_the_format() {
 
 #[test]
 fn every_texture_of_the_items_toc_reads_and_writes_back() -> R {
-    let (Some(data), Some(dll)) = (real_data("PRIMASE_SKATE_DATA"), real_data("PRIMASE_OODLE9")) else {
+    let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
         return Ok(());
     };
     let folder = Folder::open(data)?;
-    // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.
+    // SAFETY: the configuration names the game's own Oodle DLL as tools.oodle9.
     #[allow(unsafe_code)]
     let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
     let src = Source {

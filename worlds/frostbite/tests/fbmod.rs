@@ -1,6 +1,6 @@
 //! `.fbmod` gates: hand-built containers of every entry kind read back to the same values and write again byte for
 //! byte, the bytes of a small one are checked against the layout worked by hand, and what the reader refuses is
-//! refused. The real-data gate reads every file of `PRIMASE_RESKATE_FBMOD`.
+//! refused. The real-data gate reads every file of `oracles.baseline.skate/fbmod`.
 //!
 //! BASELINE: the real files are ReSkate Studio's own output (`cosmetic-mesh-import`, 2026-10-12), a round-trip baseline
 //! of our producer's files, not an oracle. Each file's entry listing (kind, name, decoded size, stored size, one line
@@ -284,29 +284,31 @@ fn fbmod_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> std:
     Ok(())
 }
 
-/// Every file of `PRIMASE_RESKATE_FBMOD`: read, written again byte for byte, every payload decoded to the size its
-/// entry states (Oodle blocks with `PRIMASE_OODLE9`). Prints the entry counts by kind and one line per entry.
+/// Every file of `oracles.baseline.skate/fbmod`: read, written again byte for byte, every payload decoded to
+/// the size its entry states (Oodle blocks with `tools.oodle9`). Prints the entry counts by kind and one line per
+/// entry.
 #[test]
 #[allow(unsafe_code)]
 fn real_files_round_trip() -> R {
-    let Some(dir) = primase_testdata::real_data("PRIMASE_RESKATE_FBMOD") else {
-        eprintln!("SKIPPED: PRIMASE_RESKATE_FBMOD not set");
+    use primase_testdata::{Game, OracleSet, Query, Tool, expect_found, resolve, tool};
+    let mods = Query::Oracle(OracleSet::Baseline, Game::Skate, "fbmod");
+    let Some(dir) = resolve(mods) else {
         return Ok(());
     };
-    let oodle = match primase_testdata::real_data("PRIMASE_OODLE9") {
+    let oodle = match tool(Tool::Oodle9) {
         // SAFETY: the gate configuration names the user's own trusted game DLL.
         Some(p) => {
             Some(unsafe { primase_compress::oodle::Oodle::load(p, primase_compress::oodle::Version::V9)? })
         }
         None => {
-            eprintln!("PRIMASE_OODLE9 not set: files with Oodle payloads fail");
+            eprintln!("tools.oodle9 not configured: files with Oodle payloads fail");
             None
         }
     };
     let mut files = Vec::new();
     fbmod_files(&dir, &mut files)?;
     files.sort();
-    assert!(!files.is_empty(), "PRIMASE_RESKATE_FBMOD holds no .fbmod files");
+    expect_found(mods, ".fbmod files", files.len());
     for path in &files {
         let name = path.file_name().unwrap().to_string_lossy();
         let bytes = std::fs::read(path)?;

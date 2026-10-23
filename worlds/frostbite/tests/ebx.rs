@@ -1,5 +1,5 @@
 //! EBX gates: committed synthetic documents read to their expected values and written back byte for byte, values
-//! carried between documents, and a census over real documents named by `PRIMASE_FROSTBITE_EBX`.
+//! carried between documents, and a census over real documents named by `oracles.corpus.skate/ebx`.
 //!
 //! BASELINE: the synthetic fixtures were produced from the writer's own layout rules (a standalone layout script) and
 //! checked with a throwaway trace reader, so their byte-identical read->write assertions detect regressions; they are
@@ -8,7 +8,7 @@
 //!
 //! Our EBX code is a port of ReSkate's, so comparing our bytes with the reference writer's bytes (`reskate_cli
 //! ebx-rewrite-diff`) measures agreement with the port's source, not independent correctness. The independent check is
-//! the `PRIMASE_FROSTBITE_EBX` corpus of stock documents: every field's value must survive a rewrite, and one stock
+//! the `oracles.corpus.skate/ebx` corpus of stock documents: every field's value must survive a rewrite, and one stock
 //! document's fields are spot-checked against ReSkate's C++ reader output.
 //!
 //! `refl.ebx` carries a REFL reflection table with an exported root, an internal child, a pointer, a CString and two
@@ -297,29 +297,22 @@ fn ebx_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> std::i
 /// reader prints (`ebx-values`), a third-party decode rather than ours.
 #[test]
 fn real_documents_census() -> R {
-    let Some(dir) = primase_testdata::real_data_value("PRIMASE_FROSTBITE_EBX") else {
-        eprintln!("SKIPPED: PRIMASE_FROSTBITE_EBX not set");
+    use primase_testdata::{Game, OracleSet, Query, Tool, expect_found, install, resolve, tool};
+    let corpus = Query::Oracle(OracleSet::Corpus, Game::Skate, "ebx");
+    let Some(dir) = resolve(corpus) else {
         return Ok(());
     };
     let mut files = Vec::new();
-    ebx_files(std::path::Path::new(&dir), &mut files)?;
+    ebx_files(&dir, &mut files)?;
     files.sort();
-    assert!(!files.is_empty(), "PRIMASE_FROSTBITE_EBX holds no .ebx documents");
+    expect_found(corpus, ".ebx documents", files.len());
 
-    let reference = match (
-        primase_testdata::real_data_value("PRIMASE_RESKATE_CLI"),
-        primase_testdata::real_data_value("PRIMASE_SKATE_DATA"),
-    ) {
-        (Some(cli), Some(data)) => {
-            let root = std::path::Path::new(&data)
-                .parent()
-                .ok_or("PRIMASE_SKATE_DATA has no parent to use as the game root")?
-                .to_path_buf();
-            Some((std::path::PathBuf::from(cli), root))
-        }
+    // the reference writer runs over the game root, the install
+    let reference = match (tool(Tool::ReskateCli), install(Game::Skate)) {
+        (Some(cli), Some(root)) => Some((cli, root)),
         _ => {
             eprintln!(
-                "SKIPPED: reference writer comparison (set PRIMASE_RESKATE_CLI and PRIMASE_SKATE_DATA)"
+                "SKIPPED: reference writer comparison (configure tools.reskate_cli and installs.skate)"
             );
             None
         }
@@ -348,7 +341,7 @@ fn real_documents_census() -> R {
         };
         let asset = path
             .strip_prefix(&dir)
-            .map_err(|_| format!("{}: outside PRIMASE_FROSTBITE_EBX", path.display()))?
+            .map_err(|_| format!("{}: outside {}", path.display(), dir.display()))?
             .to_string_lossy()
             .replace('\\', "/");
         let asset = asset.strip_suffix(".ebx").unwrap_or(asset.as_str()).to_string();
