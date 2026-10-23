@@ -2,7 +2,7 @@
 //! fsnp material tables and source-frame conventions belong here.
 use crate::pose::{pose, pose_columns, posed};
 use crate::{Result, invalid};
-use primase_havok::{Compendium, ConvexCore, Tagfile, Value};
+use primase_havok::{Compendium, ConvexCore, CustomKind, Tagfile, Value};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -18,17 +18,23 @@ pub struct Soup {
     pub unkeyed_triangle_data: usize,
     /// The shape classes of bodies [`read_map`] has no decoder for, one per body: listed, not read.
     pub unread_bodies: Vec<String>,
+    /// Custom primitives whose data is not an extern shape reference ([`primase_havok::CustomKind::Unread`]): not read.
+    pub unread_custom_primitives: usize,
 }
 
 /// Shape key to material, the count of all-ones (invalid) keys, and the count of triangle-data rows beyond the key
 /// table. The key table is indexed like the triangle data and may be shorter; a triangle whose key the table does
 /// not map has no material (-1) and is counted as unmapped.
-fn material_keys(shape: Value<'_, '_>) -> Result<(BTreeMap<u32, i32>, usize, usize)> {
+fn material_keys(shape: Value<'_, '_>, empty_mesh: bool) -> Result<(BTreeMap<u32, i32>, usize, usize)> {
     let parameter = shape.field("pParam")?.dereference()?;
     let triangle_data = parameter.field("triangleDataArray")?.array()?;
     let primitive_data = parameter.field("primitiveDataArray")?.array()?;
     let keys = shape.field("triangleIndexToShapeKey")?.array()?;
     let bits = shape.field("numShapeKeyBits")?.unsigned()?;
+    // A mesh of no triangles has no key bits: its rows identify nothing, and are counted as beyond the table.
+    if bits == 0 && empty_mesh && keys.len() <= triangle_data.len() {
+        return Ok((BTreeMap::new(), 0, triangle_data.len()));
+    }
     if !(1..=32).contains(&bits) || (!triangle_data.is_empty() && keys.len() > triangle_data.len()) {
         return Err(invalid(
             "collision",
@@ -96,7 +102,15 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
                     continue;
                 }
                 let mesh = primase_havok::compressed_mesh(shape.field("data")?.dereference()?)?;
-                let (keys, invalid_keys, unkeyed) = material_keys(shape)?;
+                if mesh.custom.iter().any(|c| c.kind != CustomKind::Unread) {
+                    return Err(invalid(
+                        "collision",
+                        shape.offset,
+                        "a map mesh referencing extern shapes is not read",
+                    ));
+                }
+                soup.unread_custom_primitives += mesh.custom.len();
+                let (keys, invalid_keys, unkeyed) = material_keys(shape, mesh.triangles.is_empty())?;
                 soup.invalid_material_keys += invalid_keys;
                 soup.unkeyed_triangle_data += unkeyed;
                 soup.dead_primitives += mesh.dead_primitives;
@@ -124,15 +138,81 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
 pub enum BodyGeometry {
     /// A compressed mesh: its triangles posed by the body, in the file frame, and their HitMtrl IDs.
     Mesh(Soup),
-    /// A convex shape (box, polytope, capsule): its stored core and convex radius in the body's own space, a capsule's
-    /// stored segment, and the body's pose in the file frame. It stores no material.
+    /// A convex shape (box, polytope, capsule, cylinder, triangle): its stored core and convex radius in its own space,
+    /// a capsule's stored segment, the shape's placement in the body's space where a compressed mesh holds it as an
+    /// extern shape (`instance`, columns: rotation x, y and z, then the translation), and the body's pose in the file
+    /// frame. It stores no material.
     Convex {
         core: ConvexCore,
         /// A capsule's segment end points `a`, `b` (its radius is the core's).
         capsule: Option<[[f32; 3]; 2]>,
+        instance: Option<[[f32; 3]; 4]>,
         position: [f32; 3],
         orientation: [f32; 4],
     },
+}
+
+/// The convex shape classes a body or an extern shape instance may be, read as their core ([`ConvexCore::read`]).
+const CONVEX_SHAPES: [&str; 6] = [
+    "hknpBoxShape",
+    "hknpConvexPolytopeShape",
+    "hknpCapsuleShape",
+    "hknpCylinderShape",
+    "hknpConvexShape",
+    "hknpTriangleShape",
+];
+
+/// The affine map (columns) from a convex shape's space to the file frame: its extern instance's transform, if any,
+/// then the body's pose; composed in f64.
+pub fn shape_to_file(
+    instance: Option<&[[f32; 3]; 4]>,
+    position: [f32; 3],
+    orientation: [f32; 4],
+) -> [[f32; 3]; 4] {
+    let body = pose_columns(position, orientation);
+    match instance {
+        None => body,
+        Some(inner) => {
+            let wide = |m: &[[f32; 3]; 4]| m.map(|c| c.map(f64::from));
+            crate::pose::compose(&wide(&body), &wide(inner)).map(|c| c.map(|x| x as f32))
+        }
+    }
+}
+
+/// A convex shape's geometry: its core, a capsule's segment, its extern `instance` placement and the body's pose.
+fn convex(
+    shape: Value<'_, '_>,
+    p: [f32; 4],
+    q: [f32; 4],
+    instance: Option<[[f32; 3]; 4]>,
+) -> Result<BodyGeometry> {
+    if !CONVEX_SHAPES.contains(&shape.type_name()) {
+        return Err(invalid(
+            "collision",
+            shape.offset,
+            format!("unsupported extern shape {}", shape.type_name()),
+        ));
+    }
+    let capsule = if shape.type_name() == "hknpCapsuleShape" {
+        let end = |name: &str| -> Result<[f32; 3]> {
+            let v = shape.field(name)?.vector::<4>()?;
+            if v[..3].iter().all(|f| f.is_finite()) {
+                Ok([v[0], v[1], v[2]])
+            } else {
+                Err(invalid("collision", shape.offset, "nonfinite capsule segment"))
+            }
+        };
+        Some([end("a")?, end("b")?])
+    } else {
+        None
+    };
+    Ok(BodyGeometry::Convex {
+        core: ConvexCore::read(shape)?,
+        capsule,
+        instance,
+        position: [p[0], p[1], p[2]],
+        orientation: q,
+    })
 }
 
 impl BodyGeometry {
@@ -144,11 +224,12 @@ impl BodyGeometry {
             BodyGeometry::Mesh(soup) => Ok(soup.triangles.clone()),
             BodyGeometry::Convex {
                 core,
+                instance,
                 position,
                 orientation,
                 ..
             } => {
-                let pose = pose_columns(*position, *orientation);
+                let pose = shape_to_file(instance.as_ref(), *position, *orientation);
                 Ok(core
                     .expanded_triangles()?
                     .into_iter()
@@ -191,12 +272,23 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
                     return Err(invalid("collision", body.offset, "nonfinite body transform"));
                 }
                 let shape = body.field("shape")?.dereference()?;
-                let geometry = match shape.type_name() {
+                let name = body.field("name")?.string()?;
+                let motion_type = body.field("motionType")?.unsigned()?;
+                let mut add = |shape: Value<'_, '_>, geometry| {
+                    result.push(Body {
+                        name: name.clone(),
+                        motion_type,
+                        shape: shape.type_name().into(),
+                        geometry,
+                    })
+                };
+                match shape.type_name() {
                     "fsnpCustomParamCompressedMeshShape" | "hknpCompressedMeshShape" => {
                         let mesh = primase_havok::compressed_mesh(shape.field("data")?.dereference()?)?;
+                        let instances = primase_havok::extern_shapes(shape, &mesh)?;
                         let (keys, invalid_keys, unkeyed) =
                             if shape.type_name() == "fsnpCustomParamCompressedMeshShape" {
-                                material_keys(shape)?
+                                material_keys(shape, mesh.triangles.is_empty())?
                             } else {
                                 (BTreeMap::new(), 0, 0)
                             };
@@ -204,6 +296,11 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
                             invalid_material_keys: invalid_keys,
                             unkeyed_triangle_data: unkeyed,
                             dead_primitives: mesh.dead_primitives,
+                            unread_custom_primitives: mesh
+                                .custom
+                                .iter()
+                                .filter(|c| c.kind == CustomKind::Unread)
+                                .count(),
                             ..Soup::default()
                         };
                         for tri in mesh.triangles {
@@ -220,29 +317,18 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
                             }
                             soup.triangles.push(vertices);
                         }
-                        BodyGeometry::Mesh(soup)
-                    }
-                    "hknpBoxShape" | "hknpConvexPolytopeShape" | "hknpCapsuleShape" | "hknpCylinderShape" => {
-                        let capsule = if shape.type_name() == "hknpCapsuleShape" {
-                            let end = |name: &str| -> Result<[f32; 3]> {
-                                let v = shape.field(name)?.vector::<4>()?;
-                                if v[..3].iter().all(|f| f.is_finite()) {
-                                    Ok([v[0], v[1], v[2]])
-                                } else {
-                                    Err(invalid("collision", shape.offset, "nonfinite capsule segment"))
-                                }
-                            };
-                            Some([end("a")?, end("b")?])
-                        } else {
-                            None
-                        };
-                        BodyGeometry::Convex {
-                            core: primase_havok::ConvexCore::read(shape)?,
-                            capsule,
-                            position: [p[0], p[1], p[2]],
-                            orientation: q,
+                        // a mesh made of extern shapes only is those shapes, not an empty mesh besides them
+                        if !soup.triangles.is_empty() || instances.is_empty() {
+                            add(shape, BodyGeometry::Mesh(soup));
+                        }
+                        for instance in instances {
+                            add(
+                                instance.shape,
+                                convex(instance.shape, p, q, Some(instance.transform))?,
+                            );
                         }
                     }
+                    kind if CONVEX_SHAPES.contains(&kind) => add(shape, convex(shape, p, q, None)?),
                     other => {
                         return Err(invalid(
                             "collision",
@@ -250,13 +336,7 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
                             format!("unsupported object shape {other}"),
                         ));
                     }
-                };
-                result.push(Body {
-                    name: body.field("name")?.string()?,
-                    motion_type: body.field("motionType")?.unsigned()?,
-                    shape: shape.type_name().into(),
-                    geometry,
-                });
+                }
             }
         }
     }

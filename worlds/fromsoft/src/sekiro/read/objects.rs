@@ -3,7 +3,6 @@
 //! convex shapes as their stored core and radius.
 use crate::collision::BodyGeometry;
 use crate::pose::FRAME;
-use crate::pose::pose_columns;
 use crate::sekiro::source::{ObjectBody, ObjectCollisionFile, ObjectGeometry, Resolution};
 use crate::{Result, collision};
 use std::collections::BTreeMap;
@@ -17,6 +16,8 @@ pub struct Report {
     /// Their bodies by stored motion type, and by shape class.
     pub bodies_by_motion: BTreeMap<u64, usize>,
     pub bodies_by_shape: BTreeMap<String, usize>,
+    /// Compressed-mesh custom primitives of an unknown kind ([`primase_havok::CustomKind::Unread`]): not read.
+    pub unread_custom_primitives: usize,
 }
 
 /// An object's collision `file` (decoded `bytes`) of `resolution`: every body as stored, in the prototype's space.
@@ -32,24 +33,30 @@ pub fn bodies(
             *report.bodies_by_motion.entry(body.motion_type).or_default() += 1;
             *report.bodies_by_shape.entry(body.shape.clone()).or_default() += 1;
             let geometry = match body.geometry {
-                BodyGeometry::Mesh(soup) => ObjectGeometry::Mesh {
-                    triangles: soup
-                        .triangles
-                        .into_iter()
-                        .map(|t| t.map(|v| FRAME.point(v)))
-                        .collect(),
-                    materials: soup.materials,
-                },
+                BodyGeometry::Mesh(soup) => {
+                    report.unread_custom_primitives += soup.unread_custom_primitives;
+                    ObjectGeometry::Mesh {
+                        triangles: soup
+                            .triangles
+                            .into_iter()
+                            .map(|t| t.map(|v| FRAME.point(v)))
+                            .collect(),
+                        materials: soup.materials,
+                    }
+                }
                 BodyGeometry::Convex {
                     core,
                     capsule,
+                    instance,
                     position,
                     orientation,
                 } => ObjectGeometry::Convex {
                     core,
                     capsule,
-                    // the body's pose, then the file frame's reflection into the world frame's axes
-                    to_prototype: pose_columns(position, orientation).map(|c| FRAME.point(c)),
+                    // an extern shape's placement and the body's pose, then the file frame's reflection into the
+                    // world frame's axes
+                    to_prototype: collision::shape_to_file(instance.as_ref(), position, orientation)
+                        .map(|c| FRAME.point(c)),
                 },
             };
             ObjectBody {

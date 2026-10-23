@@ -3,9 +3,11 @@
 //! compendium, and chosen assets' collision). For every compressed mesh shape a file holds, the mesh tree's sections as
 //! stored (codec parameters as f32 bits, first packed vertex, packed vertex count, first shared vertex, first
 //! primitive, primitive count, read through the 2018 section layout), its packed and shared vertices, shared-vertex
-//! index and primitives, and the shape's triangle-to-shape-key table, compared exactly. The shapes of a file are
-//! compared as a set (each reader walks the object graph its own way). Nothing here checks the triangle decode; the
-//! stored data it starts from is what is compared.
+//! index and primitives, the shape's triangle-to-shape-key table, and its extern shape instances (the transform's
+//! sixteen stored floats and the scale as f32 bits, the instanced shape's class, convex radius and stored vertices),
+//! compared exactly. The shapes of a file are compared as a set (each reader walks the object graph its own way).
+//! Nothing here checks the triangle decode; the stored data it starts from is what is compared, and each extern
+//! instance's transform as [`primase_havok::extern_shapes`] reads it is checked against its stored floats.
 use primase_fromsoft::{Binder, Game, dcx::Decoder};
 use primase_havok::{Compendium, Tagfile, Value, mesh_sections};
 
@@ -46,6 +48,43 @@ fn shape_record(shape: Value<'_, '_>) -> Result<Json> {
     } else {
         Json::Null
     };
+    let bits = |v: &[f32]| {
+        v.iter()
+            .map(|f| format!("{:08x}", f.to_bits()))
+            .collect::<Vec<_>>()
+    };
+    let stored = shape.field("externShapes")?.array()?;
+    let mut externs = Vec::new();
+    for i in 0..stored.len() {
+        let instance = stored.get(i)?;
+        let inner = instance.field("shape")?.dereference()?;
+        let vertices = match inner.field("vertices") {
+            Ok(v) => {
+                let v = v.array()?;
+                Json::from(
+                    (0..v.len())
+                        .map(|j| Ok(bits(&v.get(j)?.vector::<4>()?)))
+                        .collect::<Result<Vec<_>>>()?,
+                )
+            }
+            Err(_) => Json::Null,
+        };
+        externs.push(json!({
+            "transform": bits(&instance.field("transform")?.vector::<16>()?),
+            "scale": bits(&instance.field("scale")?.vector::<4>()?),
+            "kind": inner.type_name(),
+            "convex_radius": format!("{:08x}", inner.field("convexRadius")?.float()?.to_bits()),
+            "vertices": vertices,
+        }));
+    }
+    // the instances' transforms as the reader takes them: each column's xyz of the stored words
+    let mesh = primase_havok::compressed_mesh(data)?;
+    for (i, instance) in primase_havok::extern_shapes(shape, &mesh)?.iter().enumerate() {
+        let t = stored.get(i)?.field("transform")?.vector::<16>()?;
+        if (0..4).any(|c| instance.transform[c] != [t[4 * c], t[4 * c + 1], t[4 * c + 2]]) {
+            return Err(format!("extern shape {i}: transform read otherwise than stored").into());
+        }
+    }
     let sections: Vec<Json> = mesh_sections(data)?
         .iter()
         .map(|s| {
@@ -68,6 +107,7 @@ fn shape_record(shape: Value<'_, '_>) -> Result<Json> {
         "shared_vertices_index": unsigned("sharedVerticesIndex")?,
         "primitives": primitives,
         "triangle_to_shape_key": keys,
+        "extern_shapes": externs,
     }))
 }
 

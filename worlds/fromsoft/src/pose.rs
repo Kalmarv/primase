@@ -21,7 +21,7 @@ pub(crate) fn affine_point(m: &Matrix, p: [f64; 3]) -> [f64; 3] {
     let v = affine_vector(m, p);
     std::array::from_fn(|i| v[i] + m[3][i])
 }
-fn compose(parent: &Matrix, local: &Matrix) -> Matrix {
+pub(crate) fn compose(parent: &Matrix, local: &Matrix) -> Matrix {
     [
         affine_vector(parent, local[0]),
         affine_vector(parent, local[1]),

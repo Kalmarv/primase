@@ -443,7 +443,7 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   filters' parts name stay as source.
 - `lower-fromsoft-object-collision{resolution=high|low|high-else-low,convex=tessellate|leave-out}` places every
   placed object prototype's bodies of the files of the chosen resolution (a prototype
-  without one is counted) with each placement into an `objects` soup
+  without one is counted; extern shape instances are convex bodies of their own) with each placement into an `objects` soup
   (`objects_state<n>` for conditioned placements), at their stored pose whatever
   their motion type (counted). A soup cannot hold a rounded shape, so `convex`
   is required: `tessellate` gives a convex body the intersection of its planes
@@ -561,8 +561,23 @@ checked against HKLib ac40bc9 (`havok.jsonl` of `oracles.soulsformats.elden/form
 per file, `file` (`<binder path>:<member>`), then `error` or `shapes`, each `kind`, `bits_per_key`, `sections`
 (`codec` as six f32 bit patterns, `first_packed_vertex`, `packed_vertices`, `first_shared_vertex`,
 `first_primitive`, `primitives`), `packed_vertices`, `shared_vertices`, `shared_vertices_index`, `primitives` (four
-indices each) and `triangle_to_shape_key` (FromSoft's custom-param shape, else null). A file's shapes are compared as
-a set; the triangle decode built on them is not part of this check.
+indices each), `triangle_to_shape_key` (FromSoft's custom-param shape, else null) and `extern_shapes` (each instance's
+`transform`, its sixteen stored floats in order, `scale`, the instanced shape's `kind`, `convex_radius` and stored
+`vertices`, as bit patterns). A file's shapes are compared as a set; the triangle decode built on them is not part of
+this check, and the extern instances' transforms as the reader takes them are checked against the stored floats.
+
+Object bodies (`collision::read_bodies`) are compressed meshes and the convex classes (box, polytope, capsule,
+cylinder, plain convex, triangle). A compressed mesh's primitives whose second and fourth indices are equal are
+custom primitives, not triangles: in every compressed mesh of both games' object and map collision, no triangle or
+quad has them equal. Their first index names their data in the shared-vertex index. Data `[146, w, low, high]`
+(indices `[k, k, 4, k]`) references the mesh's extern shape instance `low | high << 16`: a convex shape placed by the
+instance's own transform, read as one more body of the same name and motion type (`BodyGeometry::Convex::instance`),
+posed by that transform and then the body's; each instance is referenced exactly once (Elden Ring's assets: 262
+instances in 22 files, every one equal to HKLib's reading). Data whose first word ends in byte 0x52 (`[0x2252, 8,
+0x3d4d]`, in Sekiro's objects and one Elden Ring asset) is of a kind whose meaning is not known: counted, not read.
+A mesh made of extern shapes only is those shapes. A shape key table of zero bits is accepted on a mesh of no
+triangles (its rows identify nothing). `tests/asset_collision.rs` reads and tessellates every asset collision file
+of the install (15,942).
 
 The reader preserves raw authored roof collision. Roof smoothing, generated
 opened-up surfaces, and object collision are not included in this step.

@@ -203,6 +203,11 @@ impl Report {
                 "materials defined by material binaries whose shader bundles are not read yet",
             ),
             (
+                self.collision.unread_custom_primitives + self.object_collision.unread_custom_primitives,
+                NoticeKind::Unsupported,
+                "collision mesh custom primitives of an unknown kind (records whose first word ends in 0x52), not read",
+            ),
+            (
                 usize::from(self.extras.spawn_points_not_read),
                 NoticeKind::Unsupported,
                 "spawn points not read: the map layout's spawn region code is not known",

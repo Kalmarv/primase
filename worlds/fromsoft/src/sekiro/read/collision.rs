@@ -31,6 +31,8 @@ pub struct Report {
     pub missing_files: Vec<String>,
     /// Bodies of the read files whose shape class has no decoder, by class: listed on their file, not read.
     pub unread_bodies: BTreeMap<String, usize>,
+    /// Compressed-mesh custom primitives of an unknown kind ([`primase_havok::CustomKind::Unread`]): not read.
+    pub unread_custom_primitives: usize,
 }
 
 fn leaf(name: &str) -> String {
@@ -118,6 +120,7 @@ pub fn read(
         report.triangles += raw.triangles.len();
         report.unbound_triangles += raw.unmapped;
         report.unkeyed_triangle_data += raw.unkeyed_triangle_data;
+        report.unread_custom_primitives += raw.unread_custom_primitives;
         for shape in &raw.unread_bodies {
             *report.unread_bodies.entry(shape.clone()).or_default() += 1;
         }
