@@ -561,10 +561,10 @@ pub const DECLARED: &[Declared] = &[
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::General, "dxbc"),
-        status: Status::Blocked,
+        status: Status::Live,
         gate: true,
-        about: r#"shader binaries, independent disassembly and optional raw-register value fixtures; schema in toolkit/dxbc/README.md"#,
-        source: r#"the game's own shaders with third-party disassembly; the existing raw-register traces came from our own interpreter, not independently"#,
+        about: r#"Sekiro's 390 pixel programs (`.ppo`), Microsoft's disassembly of each (`.ppo.asm`) and the bindings, inputs and constant layout read from that text (`.ppo.reflection.json`); toolkit/dxbc/tests/program.rs, reflection.rs; schema in toolkit/dxbc/README.md"#,
+        source: r#"independent: the game's own programs (`corpus.sekiro/shaders`) disassembled by Microsoft's fxc 10.0.26100 (`fxc /nologo /dumpbin`), the reflection read from the disassembly's text by toolkit/dxbc/tests/oracles/dxbc_corpus.py"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Gta, "legacy-effects"),

@@ -118,8 +118,11 @@ are format identifiers; no third-party interpreter implementation is included.
 ## Optional independent gates
 
 `oracles.corpus.general/dxbc` selects a directory of `.ppo` binaries with matching
-`.ppo.asm` independent disassemblies. The test compares the complete executable
-opcode sequence and count, including ret. Nothing is copied into the repository.
+`.ppo.asm` independent disassemblies (Microsoft's fxc `/dumpbin`) and the
+`.ppo.reflection.json` `tests/oracles/dxbc_corpus.py` reads from that text. The test
+compares the complete executable opcode sequence and count, including ret; the
+programs the reader refuses are counted by reason and held to pinned counts (a new
+reason, or more, fails). Nothing is copied into the repository.
 An optional `.ppo.state.json` supplies raw u32 arrays `inputs`, `outputs`, and
 `buffers` (array indexed by buffer slot; unbound slots are null). Arrays contain
 four consecutive words per register. The value oracle uses a constant sampler
