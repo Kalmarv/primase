@@ -54,6 +54,10 @@ pub type PassOptions = BTreeMap<String, Options>;
 pub struct PassLog {
     pub counts: BTreeMap<String, u64>,
     pub approximations: BTreeMap<String, u64>,
+    /// Of [`PassLog::approximations`], the entities each reason was recorded on ([`PassLog::approximate_on`]): the
+    /// material or mesh the approximation concerns, by reason. An approximation recorded with [`PassLog::approximate`]
+    /// names none. The ids are the world's the pass ran on; the manager refuses one that is not alive after the pass.
+    pub approximated_on: BTreeMap<String, BTreeSet<Entity>>,
     /// What the pass left out because what it makes has no form for it, by reason (`collision triangles on a surface
     /// with no skate surface, left out: PHYS_CASTER`). A conversion reports each as an unsupported notice.
     pub omitted: BTreeMap<String, u64>,
@@ -85,6 +89,14 @@ impl PassLog {
     /// Record `n` items lowered with an approximation (`"layer blend baked at 1024 px"`).
     pub fn approximate(&mut self, what: &str, n: u64) {
         *self.approximations.entry(what.to_owned()).or_default() += n;
+    }
+
+    /// Record `n` items lowered with an approximation, on the entity `e` they concern (a material whose base albedo
+    /// could not be read): [`PassLog::approximate`] and the entity kept with the reason ([`PassLog::approximated_on`]).
+    /// The count stays the number of items, not of entities: one call per item, or `n` items of one entity.
+    pub fn approximate_on(&mut self, e: Entity, what: &str, n: u64) {
+        self.approximate(what, n);
+        self.approximated_on.entry(what.to_owned()).or_default().insert(e);
     }
 
     /// Record `n` items left out because what the pass makes has no form for them (see [`PassLog::omitted`]).
@@ -130,6 +142,7 @@ impl PassLog {
         let PassLog {
             counts,
             approximations,
+            approximated_on,
             omitted,
             removed,
             placed,
@@ -144,6 +157,9 @@ impl PassLog {
         }
         for (k, n) in approximations {
             self.approximate(&k, n);
+        }
+        for (k, entities) in approximated_on {
+            self.approximated_on.entry(k).or_default().extend(entities);
         }
         for (k, n) in omitted {
             self.omit(&k, n);
@@ -1502,6 +1518,18 @@ impl PassManager {
                 },
             });
         }
+        // what it attributed an approximation to is alive: a pass that names a dead entity has a bug, not a notice
+        if let Some((what, e)) = log
+            .approximated_on
+            .iter()
+            .flat_map(|(what, entities)| entities.iter().map(move |e| (what, e)))
+            .find(|(_, e)| !w.is_alive(**e))
+        {
+            return Err(Error::Pass {
+                pass: text.to_owned(),
+                message: format!("approximation {what:?} attributed to {e:?}, which is not alive after it"),
+            });
+        }
         if let Some((e, s)) = log.placed_from.iter().find(|(_, s)| s.index() >= made.end) {
             return Err(Error::Pass {
                 pass: text.to_owned(),
@@ -2858,6 +2886,63 @@ mod tests {
         assert!(run("gone").unwrap_err().contains("which is not alive after it"));
         // a consumed intermediate with output placed from it passes; what came from it is placed
         assert_eq!(run("consumed"), Ok(2));
+    }
+
+    /// Attributes an approximation to what `which` says: a live entity, or one it despawns again.
+    struct Attributer {
+        which: &'static str,
+    }
+    impl Pass for Attributer {
+        fn name(&self) -> &'static str {
+            "attributer"
+        }
+        fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+            let e = w.spawn();
+            if self.which == "gone" {
+                w.despawn(e);
+            }
+            log.approximate_on(e, "base albedo could not be read", 1);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_approximation_is_attributed_to_a_live_entity() {
+        let run = |which| {
+            let pipeline = Pipeline {
+                passes: vec![Box::new(Attributer { which })],
+            };
+            let mut report = RunReport::default();
+            PassManager::new(PassRegistry::new())
+                .run(&mut world(), &pipeline, &mut report)
+                .map(|()| report.steps[0].log.clone())
+                .map_err(|e| e.to_string())
+        };
+        let log = run("live").expect("a live entity is accepted");
+        assert_eq!(log.approximations["base albedo could not be read"], 1);
+        assert_eq!(log.approximated_on["base albedo could not be read"].len(), 1);
+        assert!(run("gone").unwrap_err().contains("attributed to"));
+    }
+
+    /// The entities an absorbed log attributed approximations to join, and an unattributed approximation names none.
+    #[test]
+    fn absorb_keeps_the_entities_an_approximation_was_attributed_to() {
+        let mut w = World::new();
+        let (a, b) = (w.spawn(), w.spawn());
+        let mut log = PassLog::default();
+        log.approximate_on(a, "unread", 1);
+        log.approximate("rounded", 2);
+        let mut other = PassLog::default();
+        other.approximate_on(b, "unread", 3);
+        log.absorb(other);
+        assert_eq!(
+            log.approximations,
+            BTreeMap::from([("rounded".to_owned(), 2), ("unread".to_owned(), 4)])
+        );
+        assert_eq!(
+            log.approximated_on,
+            BTreeMap::from([("unread".to_owned(), BTreeSet::from([a, b]))])
+        );
     }
 
     /// One entity with toy.layered, toy.file and game.thing (culled), one with toy.mesh and toy.file (kept).

@@ -548,6 +548,11 @@ pub struct Notice {
     pub count: u64,
     /// At most [`NOTICE_EXAMPLES`].
     pub examples: Vec<String>,
+    /// The entities an approximation was attributed to ([`crate::pass::PassLog::approximate_on`]), at most
+    /// [`NOTICE_EXAMPLES`]; the count still counts every case. Ids of the world the pass ran on: set only for the passes
+    /// of a whole-world run (the select, decided and finalized runs), empty for the runs of groups and parts, whose
+    /// worlds differ, and for every notice that is not an approximation.
+    pub entities: Vec<Entity>,
 }
 
 impl Notice {
@@ -558,6 +563,7 @@ impl Notice {
             reason: reason.into(),
             count,
             examples: Vec::new(),
+            entities: Vec::new(),
         }
     }
 
@@ -711,6 +717,9 @@ impl ConvertReport {
     pub fn notices(&self) -> Vec<Notice> {
         let mut out = self.reported.clone();
         let mut derived: BTreeMap<(String, NoticeKind, String), (u64, Vec<String>)> = BTreeMap::new();
+        // the entities approximations of the whole-world runs were attributed to, by the notice they join
+        let attributed: std::cell::RefCell<BTreeMap<(String, NoticeKind, String), BTreeSet<Entity>>> =
+            std::cell::RefCell::new(BTreeMap::new());
         let mut add = |stage: &str, kind: NoticeKind, reason: &str, n: u64, part: Option<String>| {
             let (count, examples) = derived
                 .entry((stage.to_owned(), kind, reason.to_owned()))
@@ -734,6 +743,15 @@ impl ConvertReport {
             for step in &run.steps {
                 for (k, v) in &step.log.approximations {
                     add(&step.pass, NoticeKind::Approximation, k, *v, at.clone());
+                    if at.is_none()
+                        && let Some(on) = step.log.approximated_on.get(k)
+                    {
+                        attributed
+                            .borrow_mut()
+                            .entry((step.pass.clone(), NoticeKind::Approximation, k.clone()))
+                            .or_default()
+                            .extend(on.iter().copied());
+                    }
                 }
                 for (k, v) in &step.log.omitted {
                     add(&step.pass, NoticeKind::Unsupported, k, *v, at.clone());
@@ -865,6 +883,11 @@ impl ConvertReport {
             derived
                 .into_iter()
                 .map(|((stage, kind, reason), (count, examples))| Notice {
+                    entities: attributed
+                        .borrow()
+                        .get(&(stage.clone(), kind, reason.clone()))
+                        .map(|e| e.iter().copied().take(NOTICE_EXAMPLES).collect())
+                        .unwrap_or_default(),
                     stage,
                     kind,
                     reason,

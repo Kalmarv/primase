@@ -519,22 +519,25 @@ fn lower_materials(
                         });
                         p.base_color_texture = Some(r);
                         coverage_vertex_alpha = c.vertex_alpha;
-                        log.approximate(
+                        log.approximate_on(
+                            e,
                             "alpha-tested material drawn with its coverage texture alone: the colour slots its program blends in are left out",
                             1,
                         );
                         for what in c.left_out {
-                            log.approximate(&format!("alpha test: {what} left out"), 1);
+                            log.approximate_on(e, &format!("alpha test: {what} left out"), 1);
                         }
                     } else {
-                        log.approximate(
+                        log.approximate_on(
+                            e,
                             "alpha-tested material whose coverage texture is not held: the base albedo's alpha tested",
                             1,
                         );
                     }
                 }
                 Ok(None) => {}
-                Err(_) => log.approximate(
+                Err(_) => log.approximate_on(
+                    e,
                     "alpha-tested material whose programs' alpha test could not be read: the base albedo's alpha tested",
                     1,
                 ),
@@ -547,7 +550,7 @@ fn lower_materials(
                 if fresh {
                     p.base_color = fallback_base_color(&m);
                 }
-                log.approximate(why, 1);
+                log.approximate_on(e, why, 1);
             } else if p.base_color_texture.is_none()
                 && let Some(name) = &pv.albedo
             {
@@ -575,7 +578,7 @@ fn lower_materials(
                 p.base_color_texture = Some(r);
             } else if fresh && pv.albedo.is_none() && p.base_color_texture.is_none() {
                 p.base_color = fallback_base_color(&m);
-                log.approximate("missing base texture: preview fallback colour", 1);
+                log.approximate_on(e, "missing base texture: preview fallback colour", 1);
             }
             if p.normal_texture.is_none()
                 && let Some(name) = &pv.normal
@@ -860,6 +863,35 @@ mod tests {
             world.iter::<Texture>().count(),
             1,
             "no second decode of the reader's texture"
+        );
+    }
+    /// A material drawn without a base texture names itself in the approximation: the log keeps the entity, so a view can
+    /// mark that material's draws, and a material with a base texture names none.
+    #[test]
+    fn a_material_without_a_base_texture_is_named_in_its_approximation() {
+        let mut world = World::new();
+        let material = |name: &str| {
+            crate::materials::resolve(
+                &crate::flver::Material {
+                    name: name.into(),
+                    mtd: format!("{name}.mtd"),
+                    gx: vec![],
+                    textures: vec![],
+                },
+                None,
+                |_| false,
+            )
+        };
+        let bare = world.spawn();
+        world.insert(bare, material("bare"));
+        let log = lower(&mut world, &BTreeMap::<String, Vec<u8>>::new(), None).unwrap();
+        assert_eq!(
+            log.approximations["missing base texture: preview fallback colour"],
+            1
+        );
+        assert_eq!(
+            log.approximated_on["missing base texture: preview fallback colour"],
+            BTreeSet::from([bare])
         );
     }
     #[test]

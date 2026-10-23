@@ -356,6 +356,7 @@ impl Writer for GlbParts {
                 reason,
                 count,
                 examples: files,
+                entities: Vec::new(),
             })
             .collect();
         Ok(Finished { report, notices })
