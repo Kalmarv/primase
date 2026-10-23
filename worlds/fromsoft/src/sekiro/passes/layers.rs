@@ -80,7 +80,10 @@ impl<'a> AreaBake<'a> {
             .as_ref()
             .ok_or_else(|| invalid("area bake", group, "group index"))?;
         let (shader, stage) = Self::bound(world, g)?;
-        let view = |t: &Texture, srgb: bool| -> Result<Arc<crate::layer_bake::BaseMipBilinearWrap>> {
+        let view = |t: &Texture,
+                    srgb: bool,
+                    address: [primase_image::sampling::Address; 2]|
+         -> Result<Arc<crate::layer_bake::BaseMipBilinearWrap>> {
             let level = t
                 .levels
                 .first()
@@ -88,8 +91,8 @@ impl<'a> AreaBake<'a> {
             let pixels = primase_texcodec::Decoder::default()
                 .decode_rgba8(t.format, t.width, t.height, level)
                 .map_err(|e| invalid("area bake pixels", 0, e))?;
-            Ok(Arc::new(crate::layer_bake::BaseMipBilinearWrap::new(
-                t.width, t.height, &pixels, srgb,
+            Ok(Arc::new(crate::layer_bake::BaseMipBilinearWrap::addressed(
+                t.width, t.height, &pixels, srgb, address,
             )?))
         };
         crate::layer_bake::Prepared::from_binding(
@@ -97,18 +100,18 @@ impl<'a> AreaBake<'a> {
             &stage,
             material,
             &crate::layer_bake::FrozenFrame::static_bake(sample_time),
-            |entity: Entity, srgb| {
+            |entity: Entity, srgb, address| {
                 let t = world.get::<Texture>(entity).ok_or_else(|| {
                     invalid("area bake", group, "a bound texture entity without core.texture")
                 })?;
-                view(t, srgb)
+                view(t, srgb, address)
             },
-            |name, srgb| {
+            |name, srgb, address| {
                 let Some(bytes) = self.payloads.get(name) else {
                     return Ok(None);
                 };
                 let texture = primase_dds::read(bytes).map_err(|e| invalid("area bake DDS", 0, e))?;
-                view(&texture, srgb).map(Some)
+                view(&texture, srgb, address).map(Some)
             },
         )
     }

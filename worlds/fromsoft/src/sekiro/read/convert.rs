@@ -243,6 +243,7 @@ mod tests {
                     texture: texture.into(),
                     scale: [1.; 2],
                     uv_number: 1,
+                    address: [None; 2],
                     available: true,
                 },
             );

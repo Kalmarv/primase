@@ -228,7 +228,15 @@ pub fn resolve(
         let source = match (found, unbound) {
             (Some(texture), _) => TextureSource::Texture {
                 texture,
-                sampler: SamplerState::default(),
+                // the addressing the FLVER stores for this binding; the source states no filters
+                sampler: SamplerState {
+                    wrap: [
+                        binding.and_then(|b| b.address[0]),
+                        binding.and_then(|b| b.address[1]),
+                        None,
+                    ],
+                    ..SamplerState::default()
+                },
             },
             (None, Unbound::Preview) => {
                 let why = format!("preview default for missing {role} binding");

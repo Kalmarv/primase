@@ -41,6 +41,7 @@ fn source(shader: &str) -> materials::Material {
                 kind: kind.to_string(),
                 path: format!("{name}.dds"),
                 scale: [1.; 2],
+                ..Default::default()
             })
             .collect(),
     };
@@ -332,6 +333,7 @@ fn selected_normal_identity_controls_both_transforms() {
             texture: "selected".into(),
             scale: [2., 1.],
             uv_number: 1,
+            address: [None; 2],
             available: true,
         },
     );

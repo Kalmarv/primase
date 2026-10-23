@@ -3,18 +3,22 @@
 //! Sekiro's naming (tests/fixtures/layered.hlsl, compiled with fxc): the constants, texture slots and outputs a
 //! layered material's binding holds, worked out from the HLSL, fxc's listing of its buffers and the material.
 use primase_core::shader::{
-    ConstantRole, FrameParameter, InputRole, NormalEncoding, NormalSpace, ObjectParameter, OutputRole,
-    ResourceId, SamplerState, Shader, ShaderBinding, ShaderFormat, Stage, TextureSource, ViewParameter,
+    AddressMode, ConstantRole, FrameParameter, InputRole, NormalEncoding, NormalSpace, ObjectParameter,
+    OutputRole, ResourceId, SamplerState, Shader, ShaderBinding, ShaderFormat, Stage, TextureSource,
+    ViewParameter,
 };
 use primase_core::{ColorSpace, Entity, Name, TexFormat, TexRole, Texture, World};
 use primase_fromsoft::layer_bake::resolve::{Unbound, resolve};
 use primase_fromsoft::materials::{Binding, LayeredMaterial, Material};
 use primase_fromsoft::mtd::{self, MaterialDefinition, Parameter, Value};
 use primase_fromsoft::sekiro::source::{ShaderPrograms, TexturePayloads};
+use primase_image::sampling::Address;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 mod common;
 
+/// The addressing the albedo's FLVER record stores: repeat along u, mirrored repeat along v.
+const GRASS_ADDRESS: [Option<AddressMode>; 2] = [Some(AddressMode::Repeat), Some(AddressMode::Mirror)];
 const PROGRAM: &[u8] = include_bytes!("fixtures/layered.dxbc");
 
 fn texture_kind(kind: &str) -> mtd::Texture {
@@ -26,11 +30,12 @@ fn texture_kind(kind: &str) -> mtd::Texture {
         extra: Vec::new(),
     }
 }
-fn bound(stem: &str, scale: [f32; 2]) -> Binding {
+fn bound(stem: &str, scale: [f32; 2], address: [Option<AddressMode>; 2]) -> Binding {
     Binding {
         texture: stem.into(),
         scale,
         uv_number: 0,
+        address,
         available: true,
     }
 }
@@ -63,8 +68,14 @@ fn material() -> LayeredMaterial {
             block_lengths: Vec::new(),
         },
         bindings: BTreeMap::from([
-            ("A_Texture2D_8_AlbedoMap".into(), bound("grass_a", [2., 3.])),
-            ("B_Texture2D_8_AlbedoMap".into(), bound("other", [9., 9.])),
+            (
+                "A_Texture2D_8_AlbedoMap".into(),
+                bound("grass_a", [2., 3.], GRASS_ADDRESS),
+            ),
+            (
+                "B_Texture2D_8_AlbedoMap".into(),
+                bound("other", [9., 9.], [None; 2]),
+            ),
         ]),
     }
 }
@@ -195,7 +206,11 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
                 "Texture2D_8".to_owned(),
                 TextureSource::Texture {
                     texture: grass,
-                    sampler: SamplerState::default()
+                    // the stored addressing along u and v; the source states none along w, and no filters
+                    sampler: SamplerState {
+                        wrap: [Some(AddressMode::Repeat), Some(AddressMode::Mirror), None],
+                        ..SamplerState::default()
+                    }
                 }
             ),
         ]
@@ -410,11 +425,12 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
         &stage,
         &layered,
         &FrozenFrame::static_bake(1.5),
-        |_, srgb| {
+        |_, srgb, address| {
             assert!(srgb, "the albedo is the only bound texture");
+            assert_eq!(address, [Address::Wrap, Address::Mirror]);
             view()
         },
-        |_, _| Ok(None),
+        |_, _, _| Ok(None),
     )
     .unwrap();
     for (policy, count) in [

@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::{Interface, Label, ResourceId, ResourceKind, Shader, Stage};
 use crate::components::{Semantic, Texture, TextureFile};
 use crate::json::JsonError;
-use crate::pbr::{Filters, Wrap};
+use crate::pbr::Filters;
 use crate::world::{Component, Entity};
 
 /// What a pixel or vertex stage's input is.
@@ -97,11 +97,27 @@ pub struct ConstantBinding {
     pub role: ConstantRole,
 }
 
+/// What a texture coordinate outside 0 to 1 reads, along one axis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AddressMode {
+    /// The texture repeats.
+    Repeat,
+    /// The texture repeats, every other copy mirrored.
+    Mirror,
+    /// The edge texel.
+    Clamp,
+    /// The sampler's border colour.
+    Border,
+    /// Mirrored once about the origin, then the edge texel.
+    MirrorOnce,
+}
+
 /// A sampler's state as the source stores it, for a texture slot: each part `None` where the source states none.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct SamplerState {
-    /// Wrap along u, v and w.
-    pub wrap: [Option<Wrap>; 3],
+    /// Addressing along u, v and w.
+    pub wrap: [Option<AddressMode>; 3],
     pub filters: Filters,
 }
 
@@ -541,7 +557,7 @@ mod tests {
                     source: TextureSource::Texture {
                         texture,
                         sampler: SamplerState {
-                            wrap: [Some(Wrap::Repeat); 3],
+                            wrap: [Some(AddressMode::Repeat); 3],
                             filters: Filters::default(),
                         },
                     },

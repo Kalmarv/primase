@@ -58,16 +58,19 @@ fn overrides_fixed_slots_and_preserves_all_layers() {
             kind: "Texture2D_8_AlbedoMap".into(),
             path: "custom_a.dds".into(),
             scale: [2., 3.],
+            ..Default::default()
         },
         flver::Texture {
             kind: "Texture2D_3_NormalMap".into(),
             path: "custom_n.dds".into(),
             scale: [1.; 2],
+            ..Default::default()
         },
         flver::Texture {
             kind: "Texture2D_5_AlbedoMap".into(),
             path: "moss_a.dds".into(),
             scale: [4.; 2],
+            ..Default::default()
         },
     ];
     let m = materials::resolve(&src, Some(&definition()), |_| true);
@@ -87,6 +90,7 @@ fn missing_albedo_uses_available_layer() {
         kind: "Texture2D_2_AlbedoMap".into(),
         path: "available_a.dds".into(),
         scale: [1.; 2],
+        ..Default::default()
     });
     let m = materials::resolve(&src, Some(&definition()), |n| n == "available_a");
     assert_eq!(preview(&m).albedo.as_deref(), Some("available_a"));
@@ -126,8 +130,49 @@ fn numeric_slot_ties_prefer_the_selected_mtd_declaration() {
         kind: "Foreign_Texture2D_8_AlbedoMap_0".into(),
         path: "aaa_foreign_a.dds".into(),
         scale: [1.; 2],
+        ..Default::default()
     });
     let m = materials::resolve(&s, Some(&d), |_| true);
     assert_eq!(preview(&m).albedo.as_deref(), Some("fixed_wood_a"));
     assert_eq!(m.bindings.len(), 2);
+}
+
+/// A FLVER texture record's tiling types become the binding's addressing: the types the record states, `None`
+/// where it states none, and the MTD-only bindings state none.
+#[test]
+fn the_stored_tiling_types_become_the_bindings_addressing() {
+    use primase_core::shader::AddressMode;
+    use primase_fromsoft::flver::Tiling;
+    let mut src = source();
+    src.textures = vec![
+        flver::Texture {
+            kind: "Texture2D_8_AlbedoMap".into(),
+            path: "a.dds".into(),
+            tiling: [Tiling::Repeat, Tiling::MirrorRepeat],
+            ..Default::default()
+        },
+        flver::Texture {
+            kind: "Texture2D_3_NormalMap".into(),
+            path: "n.dds".into(),
+            tiling: [Tiling::Clamp, Tiling::None],
+            ..Default::default()
+        },
+        flver::Texture {
+            kind: "Texture2D_5_AlbedoMap".into(),
+            path: "b.dds".into(),
+            tiling: [Tiling::Border, Tiling::MirrorOnce],
+            ..Default::default()
+        },
+    ];
+    let m = materials::resolve(&src, Some(&definition()), |_| true);
+    let address = |kind: &str| m.layered.as_ref().unwrap().bindings[kind].address;
+    assert_eq!(
+        address("Texture2D_8_AlbedoMap"),
+        [Some(AddressMode::Repeat), Some(AddressMode::Mirror)]
+    );
+    assert_eq!(address("Texture2D_3_NormalMap"), [Some(AddressMode::Clamp), None]);
+    assert_eq!(
+        address("Texture2D_5_AlbedoMap"),
+        [Some(AddressMode::Border), Some(AddressMode::MirrorOnce)]
+    );
 }

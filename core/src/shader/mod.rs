@@ -20,10 +20,10 @@ mod resource;
 use serde::Serialize;
 
 pub use binding::{
-    AlphaTest, Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull,
-    DepthState, FrameParameter, InputBinding, InputRole, NormalEncoding, NormalSpace, ObjectParameter,
-    OutputBinding, OutputRole, RenderState, SamplerState, ShaderBinding, StageBinding, TextureBinding,
-    TextureSource, ViewParameter,
+    AddressMode, AlphaTest, Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding,
+    ConstantRole, Cull, DepthState, FrameParameter, InputBinding, InputRole, NormalEncoding, NormalSpace,
+    ObjectParameter, OutputBinding, OutputRole, RenderState, SamplerState, ShaderBinding, StageBinding,
+    TextureBinding, TextureSource, ViewParameter,
 };
 pub use interface::{
     D3dSignature, Interface, InterpMode, InterpSampling, Interpolation, Label, ScalarType, SystemValue,

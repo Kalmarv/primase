@@ -1,12 +1,14 @@
 use super::BaseMipBilinearWrap;
 use super::resolve::{self, Unbound, resolve, textures_of};
+use super::sampler::address;
 use crate::{Result, invalid, materials::LayeredMaterial};
 use primase_core::Entity;
 use primase_core::parallel::Threads;
 use primase_core::shader::{
-    ConstantRole, FrameParameter, ObjectParameter, StageBinding, TextureSource, ViewParameter,
+    AddressMode, ConstantRole, FrameParameter, ObjectParameter, StageBinding, TextureSource, ViewParameter,
 };
 use primase_dxbc::Shader;
+use primase_image::sampling::Address;
 use primase_shader::{
     Constants, Grid, Input, Interface, Invocation, Lane, Layout, Texture, evaluate_raw_with,
 };
@@ -174,13 +176,13 @@ impl Prepared {
             &resolution.stage,
             material,
             &FrozenFrame::static_bake(sample_time),
-            |texture, _| {
+            |texture, _, _| {
                 views
                     .get(&texture)
                     .cloned()
                     .ok_or_else(|| invalid("layer binding", 0, "a texture the caller did not supply"))
             },
-            image,
+            |name, srgb, _| image(name, srgb),
         )
     }
 
@@ -195,8 +197,8 @@ impl Prepared {
         stage: &StageBinding,
         material: &LayeredMaterial,
         frame: &FrozenFrame,
-        mut texture: impl FnMut(Entity, bool) -> Result<Arc<BaseMipBilinearWrap>>,
-        mut stem: impl FnMut(&str, bool) -> Result<Option<Arc<BaseMipBilinearWrap>>>,
+        mut texture: impl FnMut(Entity, bool, [Address; 2]) -> Result<Arc<BaseMipBilinearWrap>>,
+        mut stem: impl FnMut(&str, bool, [Address; 2]) -> Result<Option<Arc<BaseMipBilinearWrap>>>,
     ) -> Result<Self> {
         let (program, interface) = (&shader.program, &shader.interface);
         let leaf = material
@@ -289,7 +291,7 @@ impl Prepared {
         let slots = resolve::slots(material)?;
         let (period, period_exact) = sampled_period(interface, material)?;
         let mut textures = BTreeMap::new();
-        let mut cache = BTreeMap::<(Entity, bool), Arc<BaseMipBilinearWrap>>::new();
+        let mut cache = BTreeMap::<(Entity, bool, [Option<AddressMode>; 2]), Arc<BaseMipBilinearWrap>>::new();
         let mut largest_colour_dimension = 0;
         for bound in &stage.textures {
             let resource = interface
@@ -301,12 +303,21 @@ impl Prepared {
                 .get(&slot)
                 .map_or_else(|| resolve::declared_role(material, slot), |(role, _)| Ok(*role))?;
             let source = match &bound.source {
-                TextureSource::Texture { texture: entity, .. } => {
-                    let key = (*entity, role == "AlbedoMap");
+                TextureSource::Texture {
+                    texture: entity,
+                    sampler,
+                } => {
+                    let stated = [sampler.wrap[0], sampler.wrap[1]];
+                    if stated.contains(&None) {
+                        *policies
+                            .entry("texture slot with no stored addressing sampled with wrap".into())
+                            .or_default() += 1;
+                    }
+                    let key = (*entity, role == "AlbedoMap", stated);
                     let image = match cache.entry(key) {
                         std::collections::btree_map::Entry::Occupied(found) => found.into_mut(),
                         std::collections::btree_map::Entry::Vacant(slot) => {
-                            slot.insert(texture(key.0, key.1)?)
+                            slot.insert(texture(key.0, key.1, [address(stated[0])?, address(stated[1])?])?)
                         }
                     };
                     if key.1 {
@@ -343,7 +354,11 @@ impl Prepared {
         let mut alpha = None;
         let mut alpha_bytes = 0;
         if let Some((_, (_, binding))) = main
-            && let Some(t) = stem(&binding.texture, true)?
+            && let Some(t) = stem(
+                &binding.texture,
+                true,
+                [address(binding.address[0])?, address(binding.address[1])?],
+            )?
         {
             alpha_bytes = t.decoded_bytes();
             alpha = Some((

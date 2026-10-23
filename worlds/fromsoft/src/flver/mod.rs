@@ -18,6 +18,46 @@ pub struct Texture {
     pub path: String,
     pub kind: String,
     pub scale: [f32; 2],
+    /// How the texture repeats along u and v (`TilingTypeU`, `TilingTypeV`).
+    pub tiling: [Tiling; 2],
+    /// The three floats after the tiling types, whose meaning is not known.
+    pub unknown: [f32; 3],
+}
+impl Default for Texture {
+    fn default() -> Self {
+        Texture {
+            path: String::new(),
+            kind: String::new(),
+            scale: [1.; 2],
+            tiling: [Tiling::None; 2],
+            unknown: [0.; 3],
+        }
+    }
+}
+/// A texture's tiling type along one axis, as the FLVER texture record stores it (SoulsFormatsNEXT's `TilingType`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub enum Tiling {
+    /// None stated.
+    #[default]
+    None,
+    Repeat,
+    MirrorRepeat,
+    Clamp,
+    Border,
+    MirrorOnce,
+}
+impl Tiling {
+    fn read(byte: u8) -> Option<Tiling> {
+        Some(match byte {
+            0 => Tiling::None,
+            1 => Tiling::Repeat,
+            2 => Tiling::MirrorRepeat,
+            3 => Tiling::Clamp,
+            4 => Tiling::Border,
+            5 => Tiling::MirrorOnce,
+            _ => return None,
+        })
+    }
 }
 /// Raw, uninterpreted material extension record; payload bytes retain source order.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -264,14 +304,15 @@ impl Model {
         for i in 0..texture_count {
             let o = texture + i * 32;
             v.expect(o + 18, &[0; 2])?;
-            v.boolean(o + 17)?;
-            if v.u8(o + 16)? > 2 {
-                return Err(invalid(v.format, o + 16, "texture flag"));
-            }
+            let tiling = |at: usize| -> Result<Tiling> {
+                Tiling::read(v.u8(at)?).ok_or_else(|| invalid(v.format, at, "texture tiling type"))
+            };
             textures.push(Some(Texture {
                 path: string(&meta, count(&v, o)?)?,
                 kind: string(&meta, count(&v, o + 4)?)?,
                 scale: [float(&v, o + 8)?, float(&v, o + 12)?],
+                tiling: [tiling(o + 16)?, tiling(o + 17)?],
+                unknown: [float(&v, o + 20)?, float(&v, o + 24)?, float(&v, o + 28)?],
             }));
         }
         let mut materials = Vec::new();

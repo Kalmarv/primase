@@ -660,6 +660,7 @@ mod tests {
                 texture: "main_a".into(),
                 scale: [1.; 2],
                 uv_number: 1,
+                address: [None; 2],
                 available: true,
             },
         );

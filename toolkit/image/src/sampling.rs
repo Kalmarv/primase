@@ -15,6 +15,10 @@ pub enum Address {
     Wrap,
     /// The edge texel.
     Clamp,
+    /// Repeats the texture, every other copy mirrored.
+    Mirror,
+    /// Mirrored once about the origin, then the edge texel.
+    MirrorOnce,
 }
 
 impl Address {
@@ -23,6 +27,13 @@ impl Address {
         match self {
             Address::Wrap => i.rem_euclid(n) as usize,
             Address::Clamp => i.clamp(0, n - 1) as usize,
+            // texel -1 is texel 0 mirrored, -2 is 1, ...: the pattern 0 1 .. n-1 n-1 .. 0 repeats every 2n texels
+            Address::Mirror => {
+                let m = i.rem_euclid(2 * n);
+                (if m < n { m } else { 2 * n - 1 - m }) as usize
+            }
+            // mirrored once about the origin (-1 reads 0, -2 reads 1, ...), then the edge texel
+            Address::MirrorOnce => (if i < 0 { -1 - i } else { i }).clamp(0, n - 1) as usize,
         }
     }
 }
@@ -232,6 +243,24 @@ impl Decoded {
 #[allow(clippy::unwrap_used, reason = "test fixtures")]
 mod tests {
     use super::*;
+
+    /// Texel indices out of range, worked by hand for four texels: repeat, mirrored repeat (-1 reads 0, 4 reads 3, the
+    /// pattern 0 1 2 3 3 2 1 0 repeating), clamp, and mirrored once about the origin then the edge.
+    #[test]
+    fn addressing_out_of_range() {
+        let read =
+            |a: Address, from: i64, to: i64| -> Vec<usize> { (from..=to).map(|i| a.index(i, 4)).collect() };
+        assert_eq!(read(Address::Wrap, -5, 5), [3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1]);
+        assert_eq!(
+            read(Address::Mirror, -5, 8),
+            [3, 3, 2, 1, 0, 0, 1, 2, 3, 3, 2, 1, 0, 0]
+        );
+        assert_eq!(read(Address::Clamp, -2, 5), [0, 0, 0, 1, 2, 3, 3, 3]);
+        assert_eq!(
+            read(Address::MirrorOnce, -5, 5),
+            [3, 3, 2, 1, 0, 0, 1, 2, 3, 3, 3]
+        );
+    }
 
     /// A 2 x 1 texture, black then white: halfway between the texel centres is half white; at the left texel's centre
     /// black; wrapped, the left edge blends the right texel in, clamped it doesn't; sRGB colour decoded before

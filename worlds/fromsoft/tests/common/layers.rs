@@ -52,12 +52,14 @@ fn partial_bindings_do_not_identify_a_material() {
                 kind: "Texture2D_8_AlbedoMap".into(),
                 path: "colour.dds".into(),
                 scale: [1.; 2],
-            },
+            ..Default::default()
+        },
             flver::Texture {
                 kind: "Texture2D_3_NormalMap".into(),
                 path: "normal.dds".into(),
                 scale: [2.; 2],
-            },
+            ..Default::default()
+        },
         ],
     };
     let definition = mtd::MaterialDefinition {

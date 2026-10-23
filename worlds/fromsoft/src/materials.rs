@@ -7,6 +7,19 @@ use crate::{
 };
 use std::collections::BTreeMap;
 
+/// The addressing a FLVER tiling type states; `None` where it states none.
+pub fn address(tiling: flver::Tiling) -> Option<primase_core::shader::AddressMode> {
+    use primase_core::shader::AddressMode;
+    match tiling {
+        flver::Tiling::None => None,
+        flver::Tiling::Repeat => Some(AddressMode::Repeat),
+        flver::Tiling::MirrorRepeat => Some(AddressMode::Mirror),
+        flver::Tiling::Clamp => Some(AddressMode::Clamp),
+        flver::Tiling::Border => Some(AddressMode::Border),
+        flver::Tiling::MirrorOnce => Some(AddressMode::MirrorOnce),
+    }
+}
+
 pub fn stem(path: &str) -> String {
     let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);
     leaf.rsplit_once('.').map_or(leaf, |x| x.0).to_lowercase()
@@ -36,6 +49,7 @@ pub fn resolve(
                         texture: stem(&t.path),
                         scale: [1.; 2],
                         uv_number: t.uv_number,
+                        address: [None; 2],
                     },
                 );
             }
@@ -53,6 +67,7 @@ pub fn resolve(
                     texture: stem(&t.path),
                     scale: t.scale,
                     uv_number,
+                    address: t.tiling.map(address),
                 },
             );
         }

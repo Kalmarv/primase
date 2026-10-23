@@ -430,6 +430,7 @@ mod tests {
                         kind: kind.clone(),
                         path: format!("{}.dds", b["texture"].as_str().unwrap()),
                         scale: serde_json::from_value(b["scale"].clone()).unwrap(),
+                        ..Default::default()
                     })
                     .collect(),
             },
@@ -591,6 +592,7 @@ mod tests {
                 texture: "base".into(),
                 scale: [2., 1.],
                 uv_number: 1,
+                address: [None; 2],
                 available: true,
             },
         );
