@@ -482,3 +482,49 @@ fn each_return_leaves_with_its_own_result() {
         ]
     );
 }
+
+/// `SV_Target0 = float4(uv.x, uv.y, uv.y, uv.x)`, the argument named by two expressions: both are the one argument.
+#[test]
+fn an_argument_named_by_several_expressions_is_the_same_value_in_each() {
+    let mut b = Builder::new();
+    let f2 = b.ty_of(Kind::F, 2);
+    let first = b.app(naga::Expression::FunctionArgument(0));
+    let second = b.app(naga::Expression::FunctionArgument(0));
+    let x = b.lane(val(first, Kind::F, 2), 0);
+    let y = b.lane(val(second, Kind::F, 2), 1);
+    let colour = b.compose(&[x, y, y, x]);
+    let out_ty = result_type(&mut b);
+    let out = b.app(naga::Expression::Compose {
+        ty: out_ty,
+        components: vec![colour.expr],
+    });
+    b.push(naga::Statement::Return { value: Some(out) });
+    let module = b.finish(
+        "main",
+        naga::ShaderStage::Fragment,
+        vec![argument("TEXCOORD0", f2)],
+        Some(out_ty),
+        false,
+    );
+    let program = Program {
+        module,
+        stage: Stage::Pixel,
+        entry: "main".into(),
+        interface: Interface {
+            stage: Stage::Pixel,
+            inputs: vec![varying("TEXCOORD", 2, 0x3)],
+            outputs: vec![target()],
+            resources: Vec::new(),
+        },
+        bindings: Vec::new(),
+        conventions: Conventions::D3D,
+        modes: D3dModes::ALL,
+        provenance: provenance(),
+        notes: Vec::new(),
+    };
+    let shader = ProgramShader::new(program).unwrap();
+    let e = shader
+        .execute(&[bits([0.25, 0.75, 0.0, 0.0])], &[], &mut Unused)
+        .unwrap();
+    assert_eq!(lanes(e.outputs[0]), [0.25, 0.75, 0.75, 0.25]);
+}

@@ -236,7 +236,8 @@ fn a_vertex_program() {
         assert_eq!(o.values[1], [f(1.0), f(3.0), 0, 0], "{v}");
         // tint * (4 + 1)
         assert_eq!(o.values[2], [f(2.5), f(5.0), f(10.0), f(20.0)], "{v}");
-        // (the executor returns the clip distance array member as zeros: asserted when it carries arrays)
+        // the clip distance array member is returned as its elements, after the others: position.y
+        assert_eq!(o.values[3], [f(2.0), 0, 0, 0], "{v}");
     }
 }
 

@@ -227,7 +227,16 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                     op_of[i] = Some(Op::Compose { parts, np: np as u8 });
                 }
                 _ => {
-                    agg_of[i] = Some(components.iter().map(|c| (slot[c.index()], nlanes(*c))).collect());
+                    // a member that is itself an aggregate (an array, a structure) contributes its members in
+                    // order, so a returned structure is the flat list of its vectors and scalars
+                    let mut members = Vec::new();
+                    for c in components {
+                        match &agg_of[c.index()] {
+                            Some(inner) => members.extend(inner.iter().copied()),
+                            None => members.push((slot[c.index()], nlanes(*c))),
+                        }
+                    }
+                    agg_of[i] = Some(members);
                 }
             },
             E::Splat { size, value } => {
@@ -328,7 +337,12 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                 if args.len() <= *a as usize {
                     args.resize(*a as usize + 1, (0, 0));
                 }
-                args[*a as usize] = (i as u32, n);
+                // an argument may be named by several expressions: they share the first one's register
+                if args[*a as usize].1 == 0 {
+                    args[*a as usize] = (i as u32, n);
+                } else {
+                    slot[i] = args[*a as usize].0;
+                }
             }
             E::GlobalVariable(g) => {
                 if let Some(gid) = gid_of.get(&g.index()) {
