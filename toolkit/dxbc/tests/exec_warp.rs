@@ -160,7 +160,19 @@ fn vertex_hlsl(program: &Program) -> Option<String> {
     let mut body = String::new();
     for register in 1..=last {
         let mut cursor = 0u32;
-        let mut style = String::new();
+        // elements that share a register share their interpolation (the compiler packs by it), so the register has one
+        // style: the one of the first element the program reads, and an element it does not read (whose interpolation
+        // its signature does not state) takes it too
+        let in_register =
+            |v: &primase_shader::Varying| v.provenance.d3d.is_some_and(|s| s.register + shift == register);
+        let style = inputs
+            .iter()
+            .copied()
+            .filter(|v| in_register(v))
+            .find(|v| v.used)
+            .or_else(|| inputs.iter().copied().find(|v| in_register(v)))
+            .map(modifiers)
+            .unwrap_or_default();
         for (n, v) in inputs.iter().enumerate() {
             let sig = v.provenance.d3d?;
             if sig.register + shift != register {
@@ -169,9 +181,6 @@ fn vertex_hlsl(program: &Program) -> Option<String> {
             let (first, width) = (sig.mask.trailing_zeros(), sig.mask.count_ones());
             if u32::from(sig.mask) != ((1u32 << width) - 1) << first {
                 return None;
-            }
-            if style.is_empty() {
-                style = modifiers(v);
             }
             if first > cursor {
                 members += &format!(
@@ -193,12 +202,15 @@ fn vertex_hlsl(program: &Program) -> Option<String> {
             let swizzle: String = (first..first + width)
                 .map(|b| ["x", "y", "z", "w"][b as usize])
                 .collect();
+            let own = if v.used || ty != "float" {
+                modifiers(v)
+            } else {
+                style.clone()
+            };
             members += &format!(
-                "  {}{name} f{n} : {}{};
+                "  {own}{name} f{n} : {}{};
 ",
-                modifiers(v),
-                v.label.name,
-                v.label.index
+                v.label.name, v.label.index
             );
             body += &format!(
                 "  o.f{n} = {conv}(r[{}].{swizzle});

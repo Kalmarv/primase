@@ -693,7 +693,14 @@ fn lifted_resource_arrays_and_pixel_operations_agree_with_warp() {
             &warp,
             &scratch,
             &|program, c| {
-                let mut out = run_with_backend(program, c.buffers[&0].clone(), &[[0, 0, 0, 0]], &mut Ramp)?;
+                // main(float4 pos : SV_Position, uint sample : SV_SampleIndex): the fragment's position and the sample's
+                // index, neither of which a compared output depends on
+                let mut out = run_with_backend(
+                    program,
+                    c.buffers[&0].clone(),
+                    &[[0, 0, 0, 0], [0, 0, 0, 0]],
+                    &mut Ramp,
+                )?;
                 // Target1's x and y are the sample's position: not compared
                 out[1].1 &= 0b1100;
                 Ok(out)
