@@ -267,3 +267,44 @@ AA==
         out
     }
 }
+
+/// A 32-byte key written as 64 hexadecimal digits, refused unless its SHA-256 is `sha256`: key material the user
+/// supplies is held to the digest the game's data states, never to the key itself.
+pub(crate) fn checked_key(hex: &str, sha256: &[u8; 32]) -> Result<[u8; 32], String> {
+    use sha2::{Digest, Sha256};
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!(
+            "{} characters, not a key's 64 hexadecimal digits",
+            hex.len()
+        ));
+    }
+    let mut key = [0u8; 32];
+    for (i, k) in key.iter_mut().enumerate() {
+        *k = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
+    }
+    if Sha256::digest(key)[..] != sha256[..] {
+        return Err("not the key the game states (its SHA-256 differs)".into());
+    }
+    Ok(key)
+}
+
+#[cfg(test)]
+mod checked_key_tests {
+    use super::checked_key;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn a_key_is_held_to_its_digest() {
+        let key = [7u8; 32];
+        let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+        let digest: [u8; 32] = Sha256::digest(key).into();
+        assert_eq!(checked_key(&hex, &digest).unwrap(), key);
+        assert!(checked_key(&hex, &[0; 32]).unwrap_err().contains("SHA-256"));
+        assert!(
+            checked_key(&hex[..62], &digest)
+                .unwrap_err()
+                .contains("62 characters")
+        );
+        assert!(checked_key(&"zz".repeat(32), &digest).is_err());
+    }
+}

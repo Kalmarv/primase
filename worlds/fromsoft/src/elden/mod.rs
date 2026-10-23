@@ -20,6 +20,31 @@ pub(crate) const ARCHIVES: ArchiveSet = ArchiveSet {
     keys: KeySource::Supplied,
 };
 
+/// Elden Ring's params: `regulation.bin` beside the executable, AES-256-CBC encrypted (the file's first 16 bytes the
+/// initialisation vector), holding a DCX envelope (ZSTD in the game's current release) around the param binder. The key
+/// is the user's key material, as the archives' are ([`KeySource::Supplied`]): `regulation.key` in the keys folder, the
+/// 32 bytes as 64 hexadecimal digits (the key SoulsFormats' `RegulationDecryptor` names for the game), held to its
+/// SHA-256 here.
+pub(crate) const PARAMS: crate::game::ParamSource = crate::game::ParamSource::Regulation {
+    file: "regulation.bin",
+    key_file: "regulation.key",
+    key_sha256: [
+        0xcb, 0x34, 0x9d, 0x15, 0xa6, 0x49, 0x29, 0x69, 0xe3, 0xc8, 0x01, 0xdb, 0xf4, 0xd6, 0x0c, 0x72, 0x1e,
+        0x9c, 0x58, 0xab, 0xd4, 0xb4, 0x0c, 0xfc, 0x5b, 0x87, 0xaf, 0xf2, 0x53, 0xd6, 0x8c, 0x72,
+    ],
+};
+
+/// Elden Ring's NPC param, `NPC_PARAM_ST` data version 9 with rows of 736 bytes: `modelDispMask0..15` in bytes 330 and
+/// 331, `16..31` in bytes 334 and 335 (Paramdex's `ER/Defs/NpcParam.xml` as Smithbox ships it at `cbd477a8`,
+/// FormatVersion 203, its fields laid out as SoulsFormats' `PARAMDEF` packs them; the fields its `RemovedVersion`
+/// marks gone are not in the game's current rows; the `npc_outfits` test holds every row's bits to SoulsFormats'
+/// reading of regulation 11730034 with that definition at the regulation's version).
+pub(crate) const NPC_PARAM: crate::param::NpcLayout = crate::param::NpcLayout {
+    data_version: 9,
+    row_size: 736,
+    mask_bytes: [330, 331, 334, 335],
+};
+
 /// An asset model `AEGnnn_mmm`: its binder `/asset/aeg/aegnnn/aegnnn_mmm.geombnd.dcx` and FLVER member; its collision is
 /// in binders of its own, `aegnnn_mmm_h.geomhkxbnd.dcx` (high resolution, member `aegnnn_mmm_h.hkx`, a subset of the
 /// assets) and `aegnnn_mmm_l.geomhkxbnd.dcx` (low, `aegnnn_mmm_l.hkx`, every collidable asset).

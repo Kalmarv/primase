@@ -207,8 +207,8 @@ pub const KEYS: &[Entry] = &[
     },
     Entry {
         key: "keys.elden",
-        about: "the user's Elden Ring archive keys, one PKCS#1 `RSA PUBLIC KEY` PEM per archive named after its stem",
-        source: "the community unpacker's published keys (UXM's ArchiveKeys.cs), written out by a script kept with the game's private tools",
+        about: "the user's Elden Ring archive keys, one PKCS#1 `RSA PUBLIC KEY` PEM per archive named after its stem, and `regulation.key`, the key of `regulation.bin` as 64 hexadecimal digits (held to the SHA-256 worlds/fromsoft/src/elden/mod.rs states)",
+        source: "the community unpacker's published keys (UXM's ArchiveKeys.cs) and SoulsFormats' RegulationDecryptor key for the game, written out by a script kept with the game's private tools",
         gate: false,
     },
 ];
@@ -490,6 +490,13 @@ pub const DECLARED: &[Declared] = &[
         gate: true,
         about: r#"layer-bake pipeline states of an area's layered materials (cases.json; per case, size cap and weight variant a state folder) with WARP's outputs for each (warp/); schema in worlds/fromsoft/README.md; worlds/fromsoft/tests/layer_pilot.rs"#,
         source: r#"the states: our own bake's (its stated policy), written by worlds/fromsoft/examples/layer_pilot_states.rs over the user's install (m11_01, region -170,180,-50,300); independent: Microsoft's WARP (d3d10warp 6.2.26100.9711) running the game's programs on them, through a thin quad host kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Baseline, Game::Sekiro, "outfits"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder of the old C# character exporter's manifests, one `<id>.json` per character (`c1010`): the NPC row chosen, the display masks it showed (`options.DisplayMasks`), and per source mesh its material, display mask and whether it was included, hidden by its mask or left out as equipment; worlds/fromsoft/tests/npc_outfits.rs"#,
+        source: r#"regression baseline: the manifests our earlier C# exporter (sekiro-skate SekiroExtract, CharacterExport.cs) wrote for the Sekiro character pack 0.2.x; our own output, so it detects a change of the selection and checks no correctness"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Baseline, Game::Sekiro, "scene"),
@@ -795,6 +802,13 @@ pub const DECLARED: &[Declared] = &[
         source: r#"independent: SoulsFormatsNEXT ee1dd61 with UXM 9501be8's keys and path hash, and HKLib ac40bc9 for Havok, the Elden Ring harness's format modes (kept with the private oracle tools)"#,
     },
     Declared {
+        query: Query::Oracle(OracleSet::SoulsFormats, Game::Elden, "npc.jsonl"),
+        status: Status::Live,
+        gate: false,
+        about: r#"JSON lines: one of the NPC param's header facts (`kind` param: member, regulation version, paramType, dataVersion, detected and definition row size, format flags, unk06, row count), one per row (`kind` row: id, name, the 32 modelDispMask cells), then one per Enemy and DummyEnemy part of every map the UXM dictionary names (`kind` enemy or dummy: map path, part name, model, NPCParamID); worlds/fromsoft/tests/npc_outfits.rs"#,
+        source: r#"independent: SoulsFormatsNEXT ee1dd61 (RegulationDecryptor, PARAM with Paramdex's ER/Defs/NpcParam.xml as Smithbox cbd477a8 ships it, applied at the regulation's version; MSBE), the Elden Ring harness's `npc` mode (kept with the private oracle tools)"#,
+    },
+    Declared {
         query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "census"),
         status: Status::Live,
         gate: true,
@@ -821,6 +835,13 @@ pub const DECLARED: &[Declared] = &[
         gate: true,
         about: r#"independent MTD fields and block lengths (mtd.jsonl, mtd-boundaries.jsonl); schema in worlds/fromsoft/README.md; worlds/fromsoft/tests/mtd_census.rs"#,
         source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`mtd` mode): the fields from its MTD reader, the consumed block lengths from its writer's rewrite of each file"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "npc"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder of SoulsFormats dumps of the Sekiro NPC param and of characters' materials: npcparam.json (NpcParam.param of gameparam.parambnd.dcx read by PARAM with Paramdex's NpcParam.xml: header facts, row size, every row's id, name and every cell by its internal name), per character id `<id>.materials.json` (the FLVER's materials by index, name and MTD, and each mesh's material index), and `enemies.jsonl` with `maps.json` (every Enemy and DummyEnemy part of the install's ten MSBS maps: map, model name, NPCParamID, ThinkParamID); worlds/fromsoft/tests/npc_outfits.rs"#,
+        source: r#"independent: SoulsFormats 9c0da6b with Paramdex's SDT/Defs/NpcParam.xml (sha256 dc4be2da), through a thin dump harness kept with the private oracle tools (`params`, `chrmaterials` and `enemies` modes)"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "objects"),

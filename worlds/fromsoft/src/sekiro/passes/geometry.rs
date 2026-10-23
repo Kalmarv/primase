@@ -11,9 +11,10 @@ use super::blockers::BlockerCards;
 use crate::components::models::{RigidModel, SkeletonOf, SourceModel};
 use crate::flver::{FaceSetKind, Model, Part};
 use crate::materials::{self, Material};
-use crate::sekiro::components::lowered::UvTiling;
+use crate::sekiro::components::lowered::{SourceMeshes, UvTiling};
 use crate::sekiro::source::{
-    FaceCull, LayerInputs, MaterialShader, MaterialSlots, PrototypeSource, ShaderBundle, ShaderStage,
+    FaceCull, LayerInputs, MaterialShader, MaterialSlots, MeshMasks, PrototypeSource, ShaderBundle,
+    ShaderStage,
 };
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::world::Resource;
@@ -230,14 +231,17 @@ struct Level {
     primitives: Vec<Primitive>,
     inputs: Vec<Vec<Semantic>>,
     cull: Vec<bool>,
+    /// Per primitive, the FLVER mesh it was lowered from.
+    source_mesh: Vec<u32>,
     /// Per primitive, its influences when its prototype keeps a skin.
     skin: Vec<Option<Influences>>,
 }
 
 impl Level {
-    /// Its primitives on `e` as a mesh, with their face-set cull, any layer inputs, and its skin (bound by `palette`:
-    /// the skeleton and its slots) when its primitives have influences.
-    fn insert(self, world: &mut World, e: Entity, palette: Option<&(Entity, Vec<Slot>)>) {
+    /// Its primitives on `e` as a mesh, with their face-set cull, any layer inputs, their FLVER meshes when `sources`
+    /// (a prototype whose meshes carry display mask marks), and its skin (bound by `palette`: the skeleton and its
+    /// slots) when its primitives have influences.
+    fn insert(self, world: &mut World, e: Entity, palette: Option<&(Entity, Vec<Slot>)>, sources: bool) {
         if let Some((skeleton, slots)) = palette
             && self.skin.iter().any(Option::is_some)
         {
@@ -264,6 +268,9 @@ impl Level {
                 primitives: self.cull,
             },
         );
+        if sources {
+            world.insert(e, SourceMeshes(self.source_mesh));
+        }
         if self.inputs.iter().any(|i| !i.is_empty()) {
             world.insert(
                 e,
@@ -574,6 +581,7 @@ impl LowerFromSoftGeometry {
                 });
                 out.inputs.push(members);
                 out.cull.push(f.cull);
+                out.source_mesh.push(index as u32);
                 log.count(&format!("level {level} primitives"), 1);
             }
             mesh_levels.push(levels);
@@ -654,6 +662,7 @@ impl Pass for LowerFromSoftGeometry {
             Lods::NAME,
             LayerInputs::NAME,
             FaceCull::NAME,
+            SourceMeshes::NAME,
             UvTiling::NAME,
             BlockerCards::NAME,
         ]
@@ -756,13 +765,14 @@ impl Pass for LowerFromSoftGeometry {
             }
             let finest = out.levels.remove(&0).unwrap_or_default();
             let palette = out.palette.take();
+            let sources = world.has::<MeshMasks>(prototype);
             let mut forms = Vec::new();
             for (level, lowered) in out.levels {
                 let form = world.spawn();
-                lowered.insert(world, form, palette.as_ref());
+                lowered.insert(world, form, palette.as_ref(), sources);
                 forms.push(LodForm { detail: level, form });
             }
-            finest.insert(world, prototype, palette.as_ref());
+            finest.insert(world, prototype, palette.as_ref(), sources);
             if palette.is_some() {
                 log.count("prototypes lowered with their skin", 1);
             }

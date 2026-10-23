@@ -8,8 +8,8 @@
 mod components;
 pub mod passes;
 mod read;
-pub use components::source;
 pub use components::source::Region;
+pub use components::{lowered, source};
 pub use passes::collision;
 pub use passes::extras;
 pub use passes::object_collision as objects;
@@ -23,7 +23,21 @@ pub use read::character::{
 pub use read::collision::Report as CollisionReport;
 pub use read::extras::{Report as ExtrasReport, light_record};
 pub use read::objects::Report as ObjectCollisionReport;
+pub use read::params::{NpcPlacement, npc_placements, read_npc_param, read_param};
 pub use read::{convert, states};
+
+/// Sekiro's params: the binder `param/gameparam/gameparam.parambnd.dcx` of its archives.
+pub(crate) const PARAMS: crate::game::ParamSource =
+    crate::game::ParamSource::Archived("/param/gameparam/gameparam.parambnd.dcx");
+
+/// Sekiro's NPC param, `NPC_PARAM_ST` data version 14 with rows of 896 bytes: `modelDispMask0..15` in bytes 334 and
+/// 335, `16..31` in bytes 338 and 339 (Paramdex's `SDT/Defs/NpcParam.xml`, FormatVersion 202; the `npc_outfits` test
+/// holds every row's bits to SoulsFormats' reading of the install's file with that definition).
+pub(crate) const NPC_PARAM: crate::param::NpcLayout = crate::param::NpcLayout {
+    data_version: 14,
+    row_size: 896,
+    mask_bytes: [334, 335, 338, 339],
+};
 
 /// Data1 to Data5 with base-37 u32 path hashes and Sekiro's (Dark Souls III's) file records; the keys the community
 /// unpackers publish.

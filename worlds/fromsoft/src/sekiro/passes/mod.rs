@@ -16,6 +16,7 @@ pub mod lights;
 pub mod materials;
 pub mod normals;
 pub mod object_collision;
+pub mod outfits;
 pub mod pbr;
 pub(super) mod reflectance;
 pub mod resolve_shaders;
@@ -85,6 +86,7 @@ pub fn register(registry: &mut PassRegistry) {
             ("speedtree-frame", "program"),
         ],
     );
+    outfits::register(registry);
     registry.register("drop-fromsoft-far", |o| without_options(o, DropFromSoftFar));
     registry.register_requiring(
         "resolve-fromsoft-shaders",

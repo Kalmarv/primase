@@ -1,6 +1,6 @@
-//! DCX DFLT and KRAK envelopes. Only documented header permutations are accepted.
+//! DCX DFLT, KRAK and ZSTD envelopes. Only documented header permutations are accepted.
 use crate::{Result, bytes::View, invalid};
-use primase_compress::{Decompressor, Zlib, oodle::Oodle};
+use primase_compress::{Decompressor, Zlib, Zstd, oodle::Oodle};
 /// The compression a DCX envelope names at offset 40 (`KRAK`, `DFLT`), or `None` for bytes that are not one.
 pub fn compression(data: &[u8]) -> Option<[u8; 4]> {
     if !data.starts_with(b"DCX\0") {
@@ -15,6 +15,8 @@ pub enum Compression {
     Kraken,
     /// zlib.
     Deflate,
+    /// One zstd frame: Elden Ring's `regulation.bin` once decrypted.
+    Zstd,
 }
 
 /// A validated DCX envelope: how its payload is compressed, the payload as stored and the size it decodes to.
@@ -90,6 +92,13 @@ impl<'a> Envelope<'a> {
                 }
                 Compression::Deflate
             }
+            // SoulsFormats' `DCX.DecompressDCXZSTD`: KRAK's header with any level byte
+            b"ZSTD" => {
+                if version != 0x11000 || a != 0x44 || flag != 0 {
+                    return Err(invalid("DCX", 4, "unknown ZSTD variant"));
+                }
+                Compression::Zstd
+            }
             _ => return Err(invalid("DCX", 40, "unsupported compression")),
         };
         Ok(Self {
@@ -115,6 +124,7 @@ impl Decoder<'_> {
                 .ok_or_else(|| invalid("DCX", 40, "Oodle required"))?
                 .decompress(envelope.payload, envelope.decoded_size)?),
             Compression::Deflate => Ok(Zlib.decompress(envelope.payload, envelope.decoded_size)?),
+            Compression::Zstd => Ok(Zstd.decompress(envelope.payload, envelope.decoded_size)?),
         }
     }
     pub fn decode_if_dcx(&self, data: &[u8]) -> Result<Vec<u8>> {
@@ -127,10 +137,15 @@ impl Decoder<'_> {
 }
 #[cfg(test)]
 mod compression_tests {
-    use super::{Compression, Envelope};
+    use super::{Compression, Decoder, Envelope};
 
     /// A KRAK envelope (the layout of a 0x11000 `DCX` with the 0x44 `DCP` block, level 9) around `payload`.
     fn krak(decoded: u32, payload: &[u8]) -> Vec<u8> {
+        envelope(b"KRAK", decoded, payload)
+    }
+
+    /// An envelope of `kind` laid out as [`krak`]'s.
+    fn envelope(kind: &[u8; 4], decoded: u32, payload: &[u8]) -> Vec<u8> {
         let mut b = b"DCX\0".to_vec();
         for (at, word) in [(4, 0x11000u32), (8, 0x18), (12, 0x24), (16, 0x44), (20, 0x4c)] {
             b.resize(at, 0);
@@ -140,7 +155,7 @@ mod compression_tests {
         b.extend(decoded.to_be_bytes());
         b.extend((payload.len() as u32).to_be_bytes());
         b.extend(*b"DCP\0");
-        b.extend(*b"KRAK");
+        b.extend(*kind);
         b.extend(0x20u32.to_be_bytes());
         b.extend([9, 0, 0, 0]);
         b.extend(0u32.to_be_bytes());
@@ -164,6 +179,28 @@ mod compression_tests {
         let mut dirty = bytes;
         dirty.push(1);
         assert!(Envelope::parse(&dirty, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn a_zstd_envelope_decodes_its_frame() {
+        let text = b"NpcParam.param";
+        // one zstd frame (RFC 8878): magic, a single-segment descriptor with a one-byte content size, and one raw block
+        // (last, type 0, its size in the top bits of the three-byte header)
+        let mut frame = vec![0x28, 0xb5, 0x2f, 0xfd, 0x20, text.len() as u8];
+        frame.extend(&(((text.len() as u32) << 3) | 1).to_le_bytes()[..3]);
+        frame.extend(text);
+        let bytes = envelope(b"ZSTD", text.len() as u32, &frame);
+        assert_eq!(
+            Envelope::parse(&bytes, usize::MAX).unwrap().compression,
+            Compression::Zstd
+        );
+        let decoder = Decoder {
+            oodle: None,
+            max_output: 1 << 20,
+        };
+        assert_eq!(decoder.decode(&bytes).unwrap(), text);
+        // a size the frame does not decode to is refused
+        assert!(decoder.decode(&envelope(b"ZSTD", 3, &frame)).is_err());
     }
 
     #[test]

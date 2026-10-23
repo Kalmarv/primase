@@ -23,6 +23,10 @@
 //!   (`lower-fromsoft-geometry` gives the lowered meshes their `core.skin` from it);
 //! - its materials (`fromsoft.material`, resolved against the install's material definitions) and the texture and
 //!   shader-program payloads they bind, which assets read into one world share;
+//! - for a character, the display mask marks of its meshes (`fromsoft.mesh_masks`: the `#<k>#` in each mesh's material
+//!   name) and, when it has any, the NPC param's rows (`fromsoft.npc_rows`, from where the game keeps its params
+//!   ([`crate::Game::params`]): each row's id and its 32 `modelDispMask` bits), which `raise-fromsoft-display-masks`
+//!   and `select-fromsoft-outfit` turn into a choice of outfit;
 //! - a root holding `core.asset` (the skeleton as its rig, the prototype as its part) and `core.source`
 //!   (`chr/<id>`, `parts/<name>`).
 //!
@@ -52,6 +56,8 @@ pub struct CharacterReport {
     pub meshes: usize,
     pub materials: usize,
     pub textures: usize,
+    /// The meshes whose material name carries a display mask mark.
+    pub masked_meshes: usize,
     /// Members of the binders this reader does not read, by name.
     pub unread: Vec<String>,
     /// Shaders its materials name whose bundle the install does not hold.
@@ -218,6 +224,31 @@ fn named_parts(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The numbers `#<k>#` in a material name, in order: a `#`, one or more digits, a `#`. The scan continues after the
+/// closing `#`, so `#20#_Material #89` marks 20 and not 89. A number beyond `u32` is refused.
+fn display_marks(material: &str) -> Result<Vec<u32>> {
+    let mut marks = Vec::new();
+    let mut rest = material;
+    while let Some(open) = rest.find('#') {
+        let after = &rest[open + 1..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 && after.as_bytes().get(digits) == Some(&b'#') {
+            let k = after[..digits].parse::<u32>().map_err(|_| {
+                invalid(
+                    "FromSoftware character",
+                    0,
+                    format!("material {material:?}: mark {} is too large", &after[..digits]),
+                )
+            })?;
+            marks.push(k);
+            rest = &after[digits + 1..];
+        } else {
+            rest = after;
+        }
+    }
+    Ok(marks)
+}
+
 /// The member of `binder` whose file name is `leaf`.
 fn member<'b>(binder: &'b Binder, leaf: &str) -> Option<&'b crate::BinderFile> {
     binder.files.iter().find(|f| {
@@ -288,6 +319,7 @@ impl Item<'_> {
 /// What reading several assets into one world shares: the install, the material definitions, the materials made so
 /// far (one entity per distinct resolved material, whichever asset binds it) and the texture and shader payloads.
 struct Reading<'a> {
+    install: Install,
     archive: Archive,
     game: Game,
     decoder: &'a Decoder<'a>,
@@ -298,6 +330,8 @@ struct Reading<'a> {
     bundles: shaders::Bundles,
     /// Each material entity made and the shader its definition names.
     material_shaders: Vec<(Entity, String)>,
+    /// The NPC param's rows, once a character with display masks is read.
+    npc_rows: Option<Vec<crate::param::NpcRow>>,
 }
 
 impl<'a> Reading<'a> {
@@ -305,6 +339,7 @@ impl<'a> Reading<'a> {
         let archive = install.open()?;
         let definitions = game_material_definitions(&archive, decoder, install.game)?;
         Ok(Reading {
+            install: install.clone(),
             archive,
             game: install.game,
             decoder,
@@ -314,6 +349,7 @@ impl<'a> Reading<'a> {
             programs: BTreeMap::new(),
             bundles: shaders::Bundles::default(),
             material_shaders: Vec::new(),
+            npc_rows: None,
         })
     }
 
@@ -358,6 +394,30 @@ impl<'a> Reading<'a> {
             meshes: model.meshes.len(),
             ..CharacterReport::default()
         };
+        // a character's display masks; a part is worn by the player, whom no NPC row dresses
+        let marks = match item {
+            Item::Character(_) => Some(
+                model
+                    .meshes
+                    .iter()
+                    .map(|m| {
+                        let material = model.materials.get(m.material).ok_or_else(|| {
+                            invalid(
+                                "FromSoftware character",
+                                0,
+                                format!("a mesh names material {}, which does not exist", m.material),
+                            )
+                        })?;
+                        display_marks(&material.name)
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+            Item::Part(_) => None,
+        };
+        report.masked_meshes = marks.iter().flatten().filter(|m| !m.is_empty()).count();
+        if report.masked_meshes > 0 && self.npc_rows.is_none() {
+            self.npc_rows = Some(super::params::read_npc_param(&self.install, archive, decoder)?.rows);
+        }
         let definitions = &self.definitions;
         // textures: what the binder embeds, a character's own texbnd, the texbnds of the other characters its
         // materials name, the textures shared by every character, and the system textures materials fall back to
@@ -551,6 +611,9 @@ impl<'a> Reading<'a> {
         w.insert(prototype, Source(key.clone()));
         w.insert(prototype, SourceModel(model));
         w.insert(prototype, source::MaterialSlots(slots));
+        if let Some(marks) = marks {
+            w.insert(prototype, source::MeshMasks(marks));
+        }
         w.insert(
             prototype,
             source::PrototypeSource {
@@ -586,6 +649,9 @@ impl<'a> Reading<'a> {
     fn finish(self, w: &mut World) {
         w.insert_resource(source::TexturePayloads(self.textures));
         w.insert_resource(source::ShaderPrograms(self.programs));
+        if let Some(rows) = self.npc_rows {
+            w.insert_resource(source::NpcRows(rows));
+        }
         self.bundles.spawn(w, &self.material_shaders);
     }
 }
@@ -778,10 +844,11 @@ impl Reader for CharacterReader<'_> {
             report.push((
                 "fromsoft character".into(),
                 format!(
-                    "{}: {} bones, {} meshes, {} materials, {} textures{}",
+                    "{}: {} bones, {} meshes ({} with display masks), {} materials, {} textures{}",
                     r.id,
                     r.bones,
                     r.meshes,
+                    r.masked_meshes,
                     r.materials,
                     r.textures,
                     r.animations.as_ref().map_or(String::new(), |a| format!(
@@ -854,6 +921,19 @@ mod tests {
         ] {
             assert!(named_parts(none).is_empty(), "{none}");
         }
+    }
+
+    #[test]
+    fn display_marks_are_the_numbers_between_hashes() {
+        assert_eq!(display_marks("#00#").unwrap(), [0]);
+        assert_eq!(display_marks("#20#_Material #89").unwrap(), [20]);
+        assert_eq!(display_marks("#11#c1050_head").unwrap(), [11]);
+        assert_eq!(display_marks("#15#_2_em").unwrap(), [15]);
+        assert_eq!(display_marks("#07##08#").unwrap(), [7, 8]);
+        for none in ["", "kimono2", "Material #91", "##", "#a#", "# 4#", "#12", "1side"] {
+            assert!(display_marks(none).unwrap().is_empty(), "{none}");
+        }
+        assert!(display_marks("#99999999999#").is_err());
     }
 
     #[test]

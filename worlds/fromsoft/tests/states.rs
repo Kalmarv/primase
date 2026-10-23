@@ -36,6 +36,7 @@ fn part(name: &str, kind: PartKind, entity_id: i32, groups: &[i32]) -> Part {
         kind,
         model: None,
         hit_filter: None,
+        npc_param: None,
         position: [0.; 3],
         rotation_degrees: [0.; 3],
         scale: [1.; 3],

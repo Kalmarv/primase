@@ -197,6 +197,23 @@ impl Game {
         }
     }
 
+    /// Where the game keeps its params ([`crate::param::Param`]): Sekiro in a binder of its archives, Elden Ring in
+    /// `regulation.bin` beside its executable, encrypted.
+    pub fn params(self) -> ParamSource {
+        match self {
+            Game::Sekiro => crate::sekiro::PARAMS,
+            Game::EldenRing => crate::elden::PARAMS,
+        }
+    }
+
+    /// Where the game's NPC param keeps the 32 `modelDispMask` bits ([`crate::param::NpcParam`]).
+    pub fn npc_param(self) -> crate::param::NpcLayout {
+        match self {
+            Game::Sekiro => crate::sekiro::NPC_PARAM,
+            Game::EldenRing => crate::elden::NPC_PARAM,
+        }
+    }
+
     /// Whether a map model belongs to the game's distant-backdrop series (Sekiro's `m9xxxxx`).
     pub fn far_model(self, model: &str) -> bool {
         match self {
@@ -204,6 +221,21 @@ impl Game {
             Game::EldenRing => false,
         }
     }
+}
+
+/// Where a game keeps its params ([`Game::params`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParamSource {
+    /// A binder in the game's archives, by path.
+    Archived(&'static str),
+    /// A file beside the executable (`root` of an [`crate::Install`]), AES-256-CBC encrypted (its first 16 bytes the
+    /// initialisation vector), holding a DCX envelope around the param binder. The key is the user's key material: the
+    /// file `key_file` of the keys folder ([`crate::Keys::from_folder`]), whose SHA-256 must be `key_sha256`.
+    Regulation {
+        file: &'static str,
+        key_file: &'static str,
+        key_sha256: [u8; 32],
+    },
 }
 
 /// Where a placed object's model is stored ([`Game::object_model`]).

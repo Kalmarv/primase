@@ -732,3 +732,32 @@ impl Component for MaterialShader {
         out.push(self.0);
     }
 }
+
+/// The display mask marks of each FLVER mesh of a character's model (`fromsoft.mesh_masks`, on the prototype), by mesh
+/// index: the numbers `#<k>#` in the name of the mesh's material, in the order they stand there (none: the mesh
+/// carries no mark). The game shows a marked mesh when `modelDispMask<k>` of the NPC's row is set
+/// ([`NpcRow`](crate::param::NpcRow)); whether a mesh with several marks needs all or one of them is not established,
+/// so they are kept as stored.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct MeshMasks(pub Vec<Vec<u32>>);
+impl Component for MeshMasks {
+    const NAME: &'static str = "fromsoft.mesh_masks";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+}
+
+/// The NPC param's rows as the reader reads them (`fromsoft.npc_rows`): every row's id and its 32 display mask bits.
+/// Which character a row dresses is the program's statement, given to the pass that selects an outfit.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct NpcRows(pub Vec<crate::param::NpcRow>);
+impl Resource for NpcRows {
+    const NAME: &'static str = "fromsoft.npc_rows";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
+}

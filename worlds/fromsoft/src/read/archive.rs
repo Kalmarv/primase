@@ -61,13 +61,18 @@ impl NameDictionary {
     }
 }
 
-/// The RSA public keys of a game's archive pairs (big-endian modulus and exponent), by pair stem.
+/// The RSA public keys of a game's archive pairs (big-endian modulus and exponent), by pair stem, and the key of its
+/// encrypted params where the game has one ([`crate::game::ParamSource::Regulation`]).
 #[derive(Clone)]
-pub struct Keys(BTreeMap<&'static str, (Vec<u8>, Vec<u8>)>);
+pub struct Keys {
+    pairs: BTreeMap<&'static str, (Vec<u8>, Vec<u8>)>,
+    regulation: Option<[u8; 32]>,
+}
 impl std::fmt::Debug for Keys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Keys")
-            .field(&self.0.keys().collect::<Vec<_>>())
+        f.debug_struct("Keys")
+            .field("pairs", &self.pairs.keys().collect::<Vec<_>>())
+            .field("regulation", &self.regulation.is_some())
             .finish()
     }
 }
@@ -79,33 +84,55 @@ impl Keys {
         let KeySource::Published(keys) = set.keys else {
             return None;
         };
-        Some(Self(
-            set.pairs
+        Some(Self {
+            pairs: set
+                .pairs
                 .iter()
                 .zip(keys)
                 .map(|(pair, (n, e))| (pair.stem, (n.to_vec(), e.to_vec())))
                 .collect(),
-        ))
+            regulation: None,
+        })
     }
     /// Keys the caller supplies: a PKCS#1 `RSA PUBLIC KEY` PEM file per archive pair in `folder`, named after the
-    /// last component of the pair's stem (`Data0.pem`, `sd.pem`). A pair without a file has no key; opening an
-    /// install that holds it then fails.
+    /// last component of the pair's stem (`Data0.pem`, `sd.pem`), and, for a game whose params are encrypted, their key
+    /// in the file the game names ([`crate::game::ParamSource::Regulation`]: 64 hexadecimal digits, refused unless its
+    /// SHA-256 is the one the game states). A pair without a file has no key; opening an install that holds it then
+    /// fails. Without the params' key file, reading the params fails, naming it.
     pub fn from_folder(folder: impl AsRef<Path>, game: Game) -> Result<Self> {
         let folder = folder.as_ref();
-        let mut keys = BTreeMap::new();
+        let mut pairs = BTreeMap::new();
         for pair in game.archives().pairs {
             let file = folder.join(format!("{}.pem", pair.name()));
             if file.is_file() {
                 let key = crate::keys::pem_public_key(&std::fs::read_to_string(&file)?)
                     .map_err(|e| invalid("PEM", 0, format!("{}: {e}", file.display())))?;
-                keys.insert(pair.stem, key);
+                pairs.insert(pair.stem, key);
             }
         }
-        Ok(Self(keys))
+        let mut regulation = None;
+        if let crate::game::ParamSource::Regulation {
+            key_file, key_sha256, ..
+        } = game.params()
+        {
+            let file = folder.join(key_file);
+            if file.is_file() {
+                let text = std::fs::read_to_string(&file)?;
+                regulation = Some(
+                    crate::keys::checked_key(text.trim(), &key_sha256)
+                        .map_err(|e| invalid("key", 0, format!("{}: {e}", file.display())))?,
+                );
+            }
+        }
+        Ok(Self { pairs, regulation })
     }
     /// The key of the pair `stem`: its modulus and exponent.
     pub fn get(&self, stem: &str) -> Option<(&[u8], &[u8])> {
-        self.0.get(stem).map(|(n, e)| (n.as_slice(), e.as_slice()))
+        self.pairs.get(stem).map(|(n, e)| (n.as_slice(), e.as_slice()))
+    }
+    /// The key of the game's encrypted params, when the keys folder supplied it.
+    pub fn regulation(&self) -> Option<&[u8; 32]> {
+        self.regulation.as_ref()
     }
 }
 
@@ -176,7 +203,6 @@ impl Archive {
                 continue;
             }
             let (n, e) = keys
-                .0
                 .get(pair.stem)
                 .ok_or_else(|| invalid("RSA", 0, format!("no key for {}", pair.stem)))?;
             let plain = unwrap_rsa(&std::fs::read(&bhd)?, n, e)?;

@@ -190,6 +190,10 @@ pub struct Part {
     pub model: Option<usize>,
     /// Collision-part hit filter; absent on other part kinds.
     pub hit_filter: Option<u8>,
+    /// An enemy's or dummy enemy's NPC param row (`NPCParamID`, type data +12 in both generations: two zero words,
+    /// the think param row, then the NPC row, as SoulsFormats' `MSBS`/`MSBE` `EnemyBase.ReadTypeData` read them);
+    /// absent on other part kinds.
+    pub npc_param: Option<i32>,
     pub position: [f32; 3],
     pub rotation_degrees: [f32; 3],
     pub scale: [f32; 3],
@@ -442,6 +446,13 @@ impl MapLayout {
                 },
                 hit_filter: if kind == PartKind::Collision {
                     Some(r.slice(r.size(104)?, 1)?[0])
+                } else {
+                    None
+                },
+                npc_param: if matches!(kind, PartKind::Enemy | PartKind::DummyEnemy) {
+                    let data = r.size(104)?;
+                    r.expect(data, &[0; 8])?;
+                    Some(i32_at(data + 12)?)
                 } else {
                     None
                 },

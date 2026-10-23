@@ -7,6 +7,7 @@ pub mod collision;
 pub mod convert;
 pub mod extras;
 pub mod objects;
+pub mod params;
 pub(super) mod shaders;
 pub(super) mod shadows;
 pub mod states;
