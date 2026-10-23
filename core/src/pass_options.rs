@@ -402,11 +402,6 @@ impl<'a> Given<'a> {
     pub fn optional_choice<T: Choice>(&self, key: &str) -> Option<T> {
         self.optional(key).map(|text| self.of(key, text))
     }
-
-    /// Every option given, as text.
-    pub fn options(&self) -> &'a Options {
-        self.options
-    }
 }
 
 #[cfg(test)]
@@ -463,7 +458,7 @@ mod tests {
                 g.optional("size"),
                 g.optional_choice::<Detail>("fallback"),
             );
-            Ok(Box::new(Toy(g.options().clone())))
+            Ok(Box::new(Toy(Options::new())))
         },
     };
 

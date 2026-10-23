@@ -513,45 +513,36 @@ pub const RESOLVE_STATE: PassSpec = PassSpec {
 };
 
 fn resolve_state(g: &Given) -> Result<Box<dyn Pass>, String> {
-    let mut assign = BTreeMap::new();
-    let mut assign_class = BTreeMap::new();
+    let items = |v: Option<&str>| -> Vec<String> {
+        v.unwrap_or_default()
+            .split(';')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    // `key:value` items into a map, each key once
+    let pairs = |option: &str, what: &str| -> Result<BTreeMap<String, String>, String> {
+        let mut out = BTreeMap::new();
+        for item in items(g.optional(option)) {
+            let (key, value) = item
+                .split_once(':')
+                .ok_or_else(|| format!("{option} item {item:?} is not {what}"))?;
+            if out
+                .insert(key.trim().to_owned(), value.trim().to_owned())
+                .is_some()
+            {
+                return Err(format!("{option}: {} twice", key.trim()));
+            }
+        }
+        Ok(out)
+    };
+    let assign = pairs("assign", "key:value")?;
+    let assign_class = pairs("assign-class", "class:value")?;
     let mut keep = BTreeSet::new();
-    for (k, v) in g.options() {
-        match k.as_str() {
-            "assign-class" => {
-                for item in v.split(';').map(str::trim).filter(|s| !s.is_empty()) {
-                    let (class, value) = item
-                        .split_once(':')
-                        .ok_or_else(|| format!("assign-class item {item:?} is not class:value"))?;
-                    if assign_class
-                        .insert(class.trim().to_owned(), value.trim().to_owned())
-                        .is_some()
-                    {
-                        return Err(format!("assign-class: {class} twice"));
-                    }
-                }
-            }
-            "keep" => {
-                for key in v.split(';').map(str::trim).filter(|s| !s.is_empty()) {
-                    if !keep.insert(key.to_owned()) {
-                        return Err(format!("keep: {key} twice"));
-                    }
-                }
-            }
-            "assign" => {
-                for item in v.split(';').map(str::trim).filter(|s| !s.is_empty()) {
-                    let (key, value) = item
-                        .split_once(':')
-                        .ok_or_else(|| format!("assign item {item:?} is not key:value"))?;
-                    if assign
-                        .insert(key.trim().to_owned(), value.trim().to_owned())
-                        .is_some()
-                    {
-                        return Err(format!("assign: {key} twice"));
-                    }
-                }
-            }
-            _ => unreachable!("the declaration's check lets no other option through"),
+    for key in items(g.optional("keep")) {
+        if !keep.insert(key.clone()) {
+            return Err(format!("keep: {key} twice"));
         }
     }
     if let Some(k) = keep.iter().find(|k| assign.contains_key(*k)) {
