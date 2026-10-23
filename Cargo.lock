@@ -1071,6 +1071,7 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "indexmap",
+ "naga",
  "primase-compress",
  "primase-core",
  "primase-dxbc",
