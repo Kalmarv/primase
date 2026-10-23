@@ -481,17 +481,22 @@ impl Pass for LowerAnvilMesh {
                     log.omit("vertices with a zero normal: up", zero);
                 }
                 if a.tangents.len() == n {
+                    let mut zero = 0u64;
                     let tangents = a
                         .tangents
                         .iter()
                         .map(|&[x, y, z, sign]| {
-                            let t = m
-                                .frame
-                                .direction(unit_length([x, y, z]).unwrap_or([1.0, 0.0, 0.0]));
+                            let t = m.frame.direction(unit_length([x, y, z]).unwrap_or_else(|| {
+                                zero += 1;
+                                [1.0, 0.0, 0.0]
+                            }));
                             [t[0], t[1], t[2], if flip { -sign } else { sign }]
                         })
                         .collect();
                     streams.insert(Semantic::Tangent, Stream::F32x4(tangents));
+                    if zero > 0 {
+                        log.omit("vertices with a zero tangent: +x", zero);
+                    }
                 }
             }
             if !a.colour.is_empty() && a.colour.len() == n {
