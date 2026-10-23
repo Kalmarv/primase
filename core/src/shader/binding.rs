@@ -186,6 +186,38 @@ pub enum NormalEncoding {
     Octahedral,
 }
 
+/// How a scalar is stored in the lanes of an output: `stored = (value / scale)^p`, p being 1/2 for a square root and 1
+/// otherwise, so the value is `stored^(1/p) * scale` (the scale given by its f32 bits).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct ScalarEncoding {
+    /// The stored value is the square root of the value over the scale.
+    pub square_root: bool,
+    /// The scale's f32 bits (1.0 for none).
+    pub scale_bits: u32,
+}
+
+impl ScalarEncoding {
+    /// The value as it is (scale 1).
+    pub const LINEAR: Self = Self {
+        square_root: false,
+        scale_bits: 0x3F80_0000,
+    };
+
+    /// Stored as the square root of the value over `scale`.
+    pub fn square_root_of(scale: f32) -> Self {
+        Self {
+            square_root: true,
+            scale_bits: scale.to_bits(),
+        }
+    }
+
+    /// The value for a stored one.
+    pub fn decode(&self, stored: f32) -> f32 {
+        let scaled = if self.square_root { stored * stored } else { stored };
+        scaled * f32::from_bits(self.scale_bits)
+    }
+}
+
 /// What lanes of an output stand for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -203,6 +235,21 @@ pub enum OutputRole {
     Occlusion,
     /// Specular reflectance at normal incidence.
     Reflectance,
+    /// The strength of the specular term, how much light the surface reflects as a highlight (0 to 1 once decoded).
+    SpecularIntensity {
+        encoding: ScalarEncoding,
+    },
+    /// How tight the specular highlight is: the material's falloff or exponent as the source's lighting uses it
+    /// (what lighting derives from it, a Blinn-Phong exponent for instance, is the source's).
+    SpecularExponent {
+        encoding: ScalarEncoding,
+    },
+    /// The source's Fresnel term for the surface, as the source stores it (how the lighting turns it into a
+    /// reflectance at grazing angles is the source's).
+    Fresnel,
+    /// The screen-space displacement, in pixels, from the fragment's position in the frame being drawn to its
+    /// position in the previous frame (x right, y down).
+    MotionVector,
     Emission,
     /// The finished colour of a forward pass.
     Colour,
@@ -485,6 +532,15 @@ mod tests {
         TextureDim, Value as Lanes, Varying, VaryingProvenance,
     };
     use crate::shader::{Resource, ResourceKind as Kind};
+
+    #[test]
+    fn a_scalar_encoding_decodes_what_it_stores() {
+        // stored = sqrt(value / 512): the value is the stored one squared times 512
+        let e = ScalarEncoding::square_root_of(512.0);
+        assert_eq!(e.decode(0.5), 128.0);
+        assert_eq!(ScalarEncoding::LINEAR.decode(0.25), 0.25);
+        assert_eq!(ScalarEncoding::square_root_of(1.0).decode(0.5), 0.25);
+    }
 
     fn varying(name: &str, width: u8) -> Varying {
         Varying {

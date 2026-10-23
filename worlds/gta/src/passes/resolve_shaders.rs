@@ -26,16 +26,18 @@
 //! - **Inputs and outputs.** The vertex stage's inputs are the mesh streams their semantics name (terrain weights are
 //!   `COLOR1`); the pixel stage's are the vertex stage's. The outputs of a `PS_DeferredTextured*` program that writes
 //!   the four G-buffer targets have the roles [`gbuffer`] states: target 0's xyz the albedo, target 1's xyz the world
-//!   normal (where the program stores it biased by 0.5), target 3's z the emission (where the program writes one);
-//!   every other lane, and every output of another family or of a program that writes fewer targets, is `Unknown` by
-//!   its index (the lanes' contents are in [`gbuffer`]'s table; the vocabulary has no role for them).
+//!   normal (where the program stores it as `n * 0.5 + 0.5`), target 2's x the specular intensity and y the specular
+//!   exponent (where the program stores each as a square root, the exponent over 512), z the Fresnel term, target 3's
+//!   z the emission (where the program writes one) and target 4 the motion vector; every other lane, and every
+//!   output of another family or of a program that writes fewer targets, is `Unknown` by its index (the lanes'
+//!   contents are in [`gbuffer`]'s table).
 use std::collections::BTreeMap;
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{
     ConstantBinding, ConstantRole, D3dClass, InputBinding, InputRole, NormalEncoding, NormalSpace,
-    ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceKind, SamplerState, Shader,
-    ShaderBinding, Stage, StageBinding, SystemValue, TextureBinding, TextureSource, ViewParameter,
+    ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceKind, SamplerState, ScalarEncoding,
+    Shader, ShaderBinding, Stage, StageBinding, SystemValue, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
 
@@ -447,6 +449,38 @@ fn output_bindings(
                 );
                 lanes(0b1000, OutputRole::Unknown(1));
             }
+            (Some(w), 2) => {
+                lanes(
+                    0b0001,
+                    if w.specular_intensity_sqrt {
+                        OutputRole::SpecularIntensity {
+                            encoding: ScalarEncoding::square_root_of(1.0),
+                        }
+                    } else {
+                        OutputRole::Unknown(2)
+                    },
+                );
+                lanes(
+                    0b0010,
+                    if w.specular_exponent_sqrt_over_512 {
+                        OutputRole::SpecularExponent {
+                            encoding: ScalarEncoding::square_root_of(512.0),
+                        }
+                    } else {
+                        OutputRole::Unknown(2)
+                    },
+                );
+                lanes(
+                    0b0100,
+                    if w.fresnel_written {
+                        OutputRole::Fresnel
+                    } else {
+                        OutputRole::Unknown(2)
+                    },
+                );
+                lanes(0b1000, OutputRole::Unknown(2));
+            }
+            (Some(w), 4) if w.motion_written => lanes(0b0011, OutputRole::MotionVector),
             (Some(w), 3) if w.emission_written => {
                 lanes(0b0100, OutputRole::Emission);
                 lanes(0b1011, OutputRole::Unknown(3));

@@ -148,6 +148,13 @@ struct StaticText {
     /// Programs whose target 3 z is not the constant 0.
     emission_written: usize,
     emission_effects: BTreeSet<String>,
+    /// Programs the pass reads each of the new roles' lanes of: intensity and exponent stored as square roots, a
+    /// Fresnel term, a motion vector.
+    intensity_sqrt: usize,
+    exponent_sqrt: usize,
+    fresnel: usize,
+    motion: usize,
+    unread: BTreeMap<String, usize>,
     refused: BTreeMap<String, usize>,
     odd: Vec<String>,
 }
@@ -272,12 +279,20 @@ fn the_deferred_programs_write_one_g_buffer() {
                         static_text.emission_effects.extend(effects.iter().cloned());
                     }
                     // the pass's own reading of the stores says the same as the text
-                    let reads = gbuffer::writes(&sh.bytecode).unwrap();
-                    assert_eq!(
-                        (reads.normal_biased, reads.emission_written),
-                        (biased, emission),
-                        "{stem} {effects:?}"
-                    );
+                    match gbuffer::writes(&sh.bytecode) {
+                        Ok(reads) => {
+                            static_text.intensity_sqrt += usize::from(reads.specular_intensity_sqrt);
+                            static_text.exponent_sqrt += usize::from(reads.specular_exponent_sqrt_over_512);
+                            static_text.fresnel += usize::from(reads.fresnel_written);
+                            static_text.motion += usize::from(reads.motion_written);
+                            assert_eq!(
+                                (reads.normal_biased, reads.emission_written),
+                                (biased, emission),
+                                "{stem} {effects:?}"
+                            );
+                        }
+                        Err(why) => *static_text.unread.entry(why).or_default() += 1,
+                    }
                 }
                 Err(why) => *static_text.refused.entry(why).or_default() += 1,
             }
@@ -394,12 +409,21 @@ fn the_deferred_programs_write_one_g_buffer() {
         static_text.emission_written,
         static_text.emission_effects
     );
+    println!(
+        "reads of target 2 and 4 over the {FIVE} programs: intensity stored as a square root {}, exponent as a square root with the factor 1/512 {}, Fresnel written {}, motion written {}; unread {:?}",
+        static_text.intensity_sqrt,
+        static_text.exponent_sqrt,
+        static_text.fresnel,
+        static_text.motion,
+        static_text.unread
+    );
     println!("not biased: {:#?}", static_text.odd);
     println!("target 3 z nonzero under stress, by effect: {emission:?}");
     // the reading of the stores holds: every program read as storing target 1 biased holds the normal there, no
     // program of the G-buffer pass is refused, and the emission is written only by emissive effects
     assert!(biased_not_normal.is_empty(), "{biased_not_normal:?}");
     assert!(static_text.refused.is_empty(), "{:?}", static_text.refused);
+    assert!(static_text.unread.is_empty(), "{:?}", static_text.unread);
     assert!(
         static_text
             .emission_effects

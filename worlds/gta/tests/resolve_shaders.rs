@@ -75,7 +75,16 @@ fn a_regions_materials_are_bound_or_left_with_a_reason() {
         println!("  output roles of the bound pixel stages: {roles:#?}");
         if vertex != "VS_TransformCube" {
             assert!(
-                roles.keys().any(|r| r.ends_with(": Albedo")) && roles.keys().any(|r| r.contains("Normal")),
+                [
+                    "Albedo",
+                    "Normal",
+                    "SpecularIntensity",
+                    "SpecularExponent",
+                    "Fresnel",
+                    "MotionVector"
+                ]
+                .iter()
+                .all(|role| roles.keys().any(|r| r.contains(role))),
                 "{roles:?}"
             );
         }

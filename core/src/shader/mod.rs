@@ -22,8 +22,8 @@ use serde::Serialize;
 pub use binding::{
     AddressMode, AlphaTest, Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding,
     ConstantRole, Cull, DepthState, FrameParameter, InputBinding, InputRole, LaneStream, NormalEncoding,
-    NormalSpace, ObjectParameter, OutputBinding, OutputRole, RenderState, SamplerState, ShaderBinding,
-    StageBinding, TextureBinding, TextureSource, ViewParameter,
+    NormalSpace, ObjectParameter, OutputBinding, OutputRole, RenderState, SamplerState, ScalarEncoding,
+    ShaderBinding, StageBinding, TextureBinding, TextureSource, ViewParameter,
 };
 pub use interface::{
     D3dSignature, DomainFacts, GeometryFacts, GsInput, GsOutput, HullFacts, Interface, InterpMode,
