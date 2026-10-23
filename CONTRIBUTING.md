@@ -312,8 +312,9 @@ afresh when needed, without mutating the environment. Ignored private names are 
 `primase-data.*.toml`; only the placeholder example is tracked.
 
 For one release the older configuration still works: each `PRIMASE_*` variable, in the environment or in a flat file
-of them, stands for the key the last table gives and says it is deprecated once; `real_data("PRIMASE_...")` asks for
-what it stands for. Migrate a test by asking its query directly.
+of them, stands for the key the last table gives and says it is deprecated once (`PRIMASE_REQUIRE_REAL_DATA` for
+`[run] require`, `1` meaning `all`); `real_data("PRIMASE_...")` asks for what it stands for. Migrate a test by asking
+its query directly.
 
 A declared file's `status`: `live`, the obligation stands and the input it names is acceptable; `blocked`, the
 obligation stands but no acceptable input exists yet (the existing data is not independent of what it checks, or its
@@ -389,6 +390,7 @@ produced by something other than the code it checks.
 | `oracles.baseline.sekiro/scene` | live | yes | our earlier exporter's skate-scene folder of an area: scene.json (region, materials), its collision tables (a regression baseline, not an independent reference) and textures; checks/tests/web_texture_decode.rs, worlds/fromsoft/tests/material_assignments.rs, shadow_census.rs | regression baseline: our earlier C# exporter's scene of the area, not an independent reference; placements are checked against the SoulsFormats dump instead |
 | `oracles.baseline.skate/fbmod` | live | - | a folder of `.fbmod` files (searched recursively); each is read, written again byte for byte and every payload decoded (`tools.oodle9` for Oodle blocks); worlds/frostbite/tests/fbmod.rs. The costume files among them (top level, with Studio's `<name>.readback.glb` beside them when present) also gate the costume steps with `installs.skate/Data`: worlds/reskate/tests/costume.rs | ReSkate Studio 2026-10-12 `cosmetic-mesh-import` output: our own producer's files, a round-trip baseline, not an oracle |
 | `oracles.codewalker.gta/active.json` | live | yes | optional: an independent reader's live-file tables of that install (JSON; schema in `worlds/gta/tests/archive_set.rs`) | independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools |
+| `oracles.codewalker.gta/ShadersGen9Conversion.xml` | live | - | optional: CodeWalker's `ShadersGen9Conversion.xml`, which names every effect's texture and constant parameters (current and previous name, constant-buffer offset); `worlds/gta/tests/program_tables.rs` holds the shader database's parameter records to it | independent: CodeWalker.Core 485d56b, a data file of its repository (CodeWalker.Core/ShadersGen9Conversion.xml) |
 | `oracles.codewalker.gta/bounds` | live | yes | props' embedded collision bounds (a ydr's own, a yft's first physics LOD's) as an independent reader (CodeWalker) reads them: a folder of JSON files, one per prop, `{path, leaves: [{type, flags, polygons: [{type, material, vertices (placed)}] or corners (8, placed)}]}`; `lower-gta-embedded-collision`'s triangles are checked against them (needs `installs.gta`, `keys.gta`); `worlds/gta/tests/embedded_bounds.rs` | independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools |
 | `oracles.codewalker.gta/frames.json` | live | yes | one ydr's high-detail geometries as an independent reader (CodeWalker) reads them, as stored in GTA's frame: one JSON file `{path, value: {models: [{geometries: [{positions, normals, tangents (xyzw), texcoords, indices}]}]}}`; the frame change, triangle fronts and bitangent sign are checked against it (needs `installs.gta`, `keys.gta`), and its stored tangent frames against the frames its texture coordinates give; `worlds/gta/tests/handedness.rs`, `uv_frames.rs` | independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools |
 | `oracles.codewalker.gta/gtxd.json` | live | yes | optional: an independent reader's texture dictionary parents of that install with their source files (JSON; schema in `worlds/gta/tests/gtxd.rs`) | independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools |
@@ -480,6 +482,7 @@ produced by something other than the code it checks.
 | `PRIMASE_GTA_LISTING` | `oracles.codewalker.gta/listing.jsonl` |
 | `PRIMASE_GTA_ACTIVE` | `oracles.codewalker.gta/active.json` |
 | `PRIMASE_GTA_RESOURCES` | `oracles.codewalker.gta/resources` |
+| `PRIMASE_GTA_SHADER_CONVERSION` | `oracles.codewalker.gta/ShadersGen9Conversion.xml` |
 | `PRIMASE_GTA_PARITY` | `oracles.codewalker.gta/parity` |
 | `PRIMASE_GTA_GTXD` | `oracles.codewalker.gta/gtxd.json` |
 | `PRIMASE_GTA_FILTER` | debug key `gta.archive_filter` |
