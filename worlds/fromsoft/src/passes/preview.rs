@@ -7,6 +7,8 @@ use crate::materials::Material;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Preview {
     pub albedo: Option<String>,
+    /// The key of the binding `albedo` is.
+    pub albedo_binding: Option<String>,
     pub normal: Option<String>,
     pub metallic: Option<String>,
     pub emissive: Option<String>,
@@ -30,6 +32,12 @@ fn texture_family(name: &str) -> &str {
 /// available normal map of the same texture family, otherwise slots 3, 0, then the lowest; the first metallic and
 /// emissive bindings. Among bindings of one slot, the selected MTD's own declarations come first.
 pub fn preview(m: &Material) -> Preview {
+    preview_with(m, None)
+}
+
+/// [`preview`] with the base colour the binding `albedo_key` where it names an available base-colour binding (what the
+/// material's own programs make the albedo of), the policy's otherwise; the normal map follows the base colour chosen.
+pub fn preview_with(m: &Material, albedo_key: Option<&str>) -> Preview {
     let mut p = Preview {
         uv_scale: [1.; 2],
         ..Preview::default()
@@ -65,8 +73,13 @@ pub fn preview(m: &Material) -> Preview {
     };
     albedo.sort_by_key(rank);
     normal.sort_by_key(rank);
-    if let Some(a) = albedo.iter().find(|a| a.0 == 8).or(albedo.first()) {
+    let named = albedo.iter().find(|a| Some(a.2.as_str()) == albedo_key);
+    if let Some(a) = named
+        .or_else(|| albedo.iter().find(|a| a.0 == 8))
+        .or(albedo.first())
+    {
         p.albedo = Some(a.1.clone());
+        p.albedo_binding = Some(a.2.clone());
         let scale = m.bindings[a.2].scale;
         if scale.iter().all(|x| x.is_finite() && *x > 0.) {
             p.uv_scale = scale;

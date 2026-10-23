@@ -5,7 +5,7 @@
 //! never glTF's fully metallic default of 1, and every such material is counted.
 mod coverage;
 mod gx;
-use crate::preview::{Preview, is_emissive, preview};
+use crate::preview::{Preview, is_emissive, preview_with};
 use crate::{
     Result, invalid,
     materials::{Binding, Material},
@@ -218,11 +218,12 @@ fn normal_binding<'a>(m: &'a Material, preview: &Preview) -> Option<&'a Binding>
 /// Layered base/normal textures must already be baked and bound by assembly.
 pub fn required_textures(world: &World) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
-    for (_, m) in world.iter::<Material>() {
+    for (e, m) in world.iter::<Material>() {
         if m.skip.is_some() || m.layered.is_some() {
             continue;
         }
-        let preview = preview(m);
+        let base = coverage::base(world, e, m).ok().flatten();
+        let preview = preview_with(m, base.as_ref().map(|b| b.slot.binding.as_str()));
         names.extend(preview.albedo);
         names.extend(preview.normal);
         if simple(&m.shader)
@@ -424,7 +425,21 @@ fn lower_materials(
                 ),
             }
         }
-        let pv = preview(&m);
+        // A material binary's base colour is the slot its G-buffer program makes the albedo of, the others blended over
+        // it (`coverage::base`): Elden Ring's C[DetailBlend] colours from its own Texture2D_7 under shared detail maps
+        // in lower slots, which the preview's slot policy would pick
+        let base = if m.layered.is_none() {
+            coverage::base(world, e, &m)
+        } else {
+            Ok(None)
+        };
+        let pv = preview_with(
+            &m,
+            base.as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .map(|b| b.slot.binding.as_str()),
+        );
         let previewed = unbaked;
         if previewed {
             previews.insert(e);
@@ -462,14 +477,14 @@ fn lower_materials(
         if !baked && m.class == "cutout" && p.base_color_texture.is_none() {
             match coverage::coverage(world, e, &m) {
                 Ok(Some(c)) => {
-                    let binding = m.bindings.get(&c.binding).filter(|b| {
+                    let binding = m.bindings.get(&c.slot.binding).filter(|b| {
                         b.available
                             && payloads.contains_key(&b.texture)
                             && b.scale.iter().all(|v| v.is_finite())
                     });
                     if let Some(b) = binding {
                         let mut r = TextureRef::new(texture(world, payloads, &mut cache, &b.texture, false)?);
-                        r.texcoord = c.texcoord;
+                        r.texcoord = c.slot.texcoord;
                         r.transform = Some(UvTransform {
                             scale: b.scale,
                             ..UvTransform::IDENTITY
@@ -501,9 +516,34 @@ fn lower_materials(
             if p.base_color_texture.is_none()
                 && let Some(name) = &pv.albedo
             {
-                p.base_color_texture = Some(TextureRef::new(texture(
-                    world, payloads, &mut cache, name, false,
-                )?));
+                let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, false)?);
+                match &base {
+                    Ok(Some(b)) if pv.albedo_binding.as_deref() == Some(b.slot.binding.as_str()) => {
+                        r.texcoord = b.slot.texcoord;
+                        let scale = m.bindings[&b.slot.binding].scale;
+                        if scale.iter().all(|v| v.is_finite()) {
+                            r.transform = Some(UvTransform {
+                                scale,
+                                ..UvTransform::IDENTITY
+                            });
+                        }
+                        if b.blended {
+                            log.approximate(
+                                "material binary drawn with its base albedo alone: the slots its program blends over it are left out",
+                                1,
+                            );
+                        }
+                    }
+                    Ok(Some(_)) => {
+                        log.approximate("material binary whose base albedo is not held: preview slot", 1)
+                    }
+                    Ok(None) => {}
+                    Err(_) => log.approximate(
+                        "material binary whose program's base albedo could not be read: preview slot",
+                        1,
+                    ),
+                }
+                p.base_color_texture = Some(r);
             } else if fresh && pv.albedo.is_none() && p.base_color_texture.is_none() {
                 p.base_color = fallback_base_color(&m);
                 log.approximate("missing base texture: preview fallback colour", 1);
