@@ -9,8 +9,8 @@ use std::collections::BTreeSet;
 use primase_core::convert::{Notice, NoticeKind, Reader, Report, Result};
 use primase_core::{Entity, Mesh, World};
 
-use crate::level::{LevelOptions, LevelReport, read_level_with};
-use crate::player::Player;
+use crate::level::{LevelOptions, LevelReport, read_character, read_level_with};
+use crate::player::{ObjRef, Player};
 
 /// The stage notices name.
 const STAGE: &str = "unity reader";
@@ -19,6 +19,8 @@ const STAGE: &str = "unity reader";
 pub struct UnityReader<'a> {
     pub player: &'a Player,
     pub level: String,
+    /// The Animator whose character it reads instead of the whole scene ([`UnityReader::character`]).
+    character: Option<ObjRef>,
     options: LevelOptions,
     pending: Vec<Notice>,
 }
@@ -37,6 +39,19 @@ impl<'a> UnityReader<'a> {
         UnityReader {
             player,
             level: level.into(),
+            character: None,
+            options: LevelOptions::default(),
+            pending: Vec::new(),
+        }
+    }
+
+    /// The reader of the character of Animator `animator` ([`crate::level::read_character`]: the prefab below its
+    /// GameObject, in the file that holds it).
+    pub fn character(player: &'a Player, animator: ObjRef) -> UnityReader<'a> {
+        UnityReader {
+            player,
+            level: animator.file.clone(),
+            character: Some(animator),
             options: LevelOptions::default(),
             pending: Vec::new(),
         }
@@ -53,9 +68,26 @@ impl<'a> UnityReader<'a> {
     /// [`Reader::read`] returns. The notices are kept for [`Reader::notices`].
     pub fn read_world(&mut self) -> Result<(World, LevelReport, Report)> {
         let mut w = World::new();
-        let level = read_level_with(self.player, &self.level, &self.options, &mut w)?;
+        let (level, what) = match &self.character {
+            Some(animator) => (
+                read_character(self.player, animator, &self.options, &mut w)?,
+                format!("{}/{}", animator.file, animator.path_id),
+            ),
+            None => (
+                read_level_with(self.player, &self.level, &self.options, &mut w)?,
+                self.level.clone(),
+            ),
+        };
         self.notices_of(&level);
-        let report = vec![("unity level".into(), format!("{}: {level:?}", self.level))];
+        let report = vec![(
+            if self.character.is_some() {
+                "unity character"
+            } else {
+                "unity level"
+            }
+            .into(),
+            format!("{what}: {level:?}"),
+        )];
         Ok((w, level, report))
     }
 
