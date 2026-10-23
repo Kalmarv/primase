@@ -797,6 +797,9 @@ pub struct MaterialFlags {
 
 impl MaterialFlags {
     /// Booleans by their registry names (index j).
+    pub const Z_WRITE_DISABLED_OPAQUE: usize = 0;
+    pub const Z_WRITE_DISABLED_ALPHA: usize = 1;
+    pub const Z_TEST_DISABLED: usize = 2;
     pub const LAYER_MATERIAL: usize = 3;
     pub const PRE_TRANSPARENT: usize = 10;
     pub const FLIP_NORMAL_ON_BACK_FACE: usize = 11;

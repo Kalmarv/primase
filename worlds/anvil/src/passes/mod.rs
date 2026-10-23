@@ -8,6 +8,7 @@ mod decals;
 pub mod formulas;
 mod listed;
 mod material;
+mod resolve_shaders;
 mod select;
 mod splat;
 mod water;
@@ -17,6 +18,9 @@ pub use decals::{Family, FamilyRule, LowerAnvilDecals, TerrainDecals, family};
 pub use listed::{Coarse, SelectAnvilListed};
 pub use material::{
     AlphaChoice, Decals1Cutout, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo, world_uv_rows,
+};
+pub use resolve_shaders::{
+    ResolveAnvilShaders, UnsetTexture, material_constants, render_state, shading_class,
 };
 pub use select::{CollisionOnly, Keep, Overlap, SelectAnvilEntities};
 pub use splat::{Splat, SplatUv};
@@ -2752,6 +2756,11 @@ pub(crate) fn placed_at(origin: [f32; 3]) -> Transform {
 
 /// Register Anvil's passes by name.
 pub fn register(reg: &mut PassRegistry) {
+    reg.register_requiring(
+        "resolve-anvil-shaders",
+        |o| Ok(Box::new(ResolveAnvilShaders::from_options(o)?)),
+        &[("unset-textures", "white"), ("vertex-layout", "none")],
+    );
     reg.register_requiring(
         "lower-anvil-collision",
         |o| Ok(Box::new(LowerAnvilCollision::from_options(o)?)),
