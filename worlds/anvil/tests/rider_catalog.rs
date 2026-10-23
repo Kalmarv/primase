@@ -45,6 +45,8 @@ fn the_slot_tables_list_parts_and_their_variants_and_state_a_default_where_they_
         ("heads", 12, 0, 0),
         ("eyes", 1, 0, 0),
         ("mad_chr_innermouth_u", 2, 0, 0),
+        ("hair_activator", 61, 0, 0),
+        ("beard_activator", 94, 0, 0),
     ];
     assert_eq!(
         found,
@@ -69,6 +71,17 @@ fn the_slot_tables_list_parts_and_their_variants_and_state_a_default_where_they_
         .expect("a stated head");
     assert_eq!(head.name, "MAD_CHR_HEAD_000_U");
     assert!(by("ubody").in_default && !by("outfits").in_default);
+    // the hairs table lists no part itself: its activators are slots whose parts are the styles of each haircut and the
+    // per-head tables of each beard (the hair materials table is no slot), and their weights are odds
+    let hair = by("hair_activator");
+    let named =
+        |slot: &primase_anvil::read::rider::RiderSlot, name: &str| slot.parts.iter().any(|p| p.name == name);
+    assert!(named(hair, "MAD_CHR_Hair_005_U_Full") && named(hair, "MAD_CHR_Hair_005_U_Cut"));
+    assert_eq!(hair.table_name, "MAD_CHR_BODY_HAIR_ACTIVATOR");
+    let beard = by("beard_activator");
+    assert!(named(beard, "MAD_CHR_Beard_001_U_H000") && named(beard, "MAD_CHR_Beard_001_U_H006"));
+    assert!(hair.stated.is_none() && beard.stated.is_none());
+    assert!(!c.slots.iter().any(|s| s.table_name == "MAD_CHR_HAIR_Materials"));
     // a part's stated variant is a listed variant whose weight is 1.0
     let upper = by("ubody")
         .parts

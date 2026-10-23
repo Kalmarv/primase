@@ -241,7 +241,11 @@ fn key_of(name: &str) -> String {
 }
 
 /// The slots [`SLOTS_DEFAULT`] and [`BODY`] list, each with the parts it lists and their variants. A table those list
-/// that lists no part table (the hairs, whose rows nest further tables) is left out.
+/// that lists no part table within [`NESTING`] levels is not a slot itself but may hold some: the tables it links are
+/// tried as slots in their own right, one level only. The body's hairs table is such a table: it links the hair
+/// activator (the haircuts, each a table of its `Full` and `Cut` styles, which are the parts), the beard activator (the
+/// beards, each a head selector listing its table per head, which are the parts) and the hair materials (no part, so no
+/// slot). A table whose links make no slot either is left out.
 pub fn rider_catalog(archive: &mut Archive) -> Result<RiderCatalog, Error> {
     let mut listed: Vec<(u64, bool)> = Vec::new();
     for name in [SLOTS_DEFAULT, BODY] {
@@ -266,55 +270,73 @@ pub fn rider_catalog(archive: &mut Archive) -> Result<RiderCatalog, Error> {
         if !seen.insert(id) {
             continue;
         }
-        let (t, table_name) = table(archive, id)?;
-        let mut parts = Vec::new();
-        for part in part_tables(archive, &t)? {
-            let (pt, name) = table(archive, part)?;
-            let mut links: Vec<u64> = Vec::new();
-            for row in &pt.rows {
-                for (_, l) in row.links()? {
-                    if type_of(archive, l) == Some(BUILD_TABLE) && !links.contains(&l) {
-                        links.push(l);
-                    }
-                }
-            }
-            let variants = part_variants(archive, &links)?;
-            parts.push(CatalogPart {
-                table: part,
-                name,
-                variants,
-            });
-        }
-        if parts.is_empty() {
+        if let Some(slot) = slot_of(archive, id, in_default)? {
+            slots.push(slot);
             continue;
         }
-        // the one part linked by the slot's one row of weight 1.0
-        let mut weighted = t.rows.iter().filter(|r| r.weight == 1.0);
-        let stated_part = match (weighted.next(), weighted.next()) {
-            (Some(row), None) => {
-                let mut mine = Vec::new();
-                for (_, l) in row.links()? {
-                    if parts.iter().any(|p| p.table == l) {
-                        mine.push(l);
-                    }
-                }
-                match mine.as_slice() {
-                    [one] => Some(*one),
-                    _ => None,
-                }
+        // no part within reach: the tables this one links may be slots
+        let (t, _) = table(archive, id)?;
+        for (link, _) in linked_tables(archive, &t)? {
+            if !seen.insert(link) {
+                continue;
             }
-            _ => None,
-        };
-        slots.push(RiderSlot {
-            key: key_of(&table_name),
-            table_name,
-            table: id,
-            in_default,
-            parts,
-            stated: stated_part,
-        });
+            if let Some(slot) = slot_of(archive, link, in_default)? {
+                slots.push(slot);
+            }
+        }
     }
     Ok(RiderCatalog { slots })
+}
+
+/// The slot the table `id` is: its parts and their variants; `None` where it lists no part within [`NESTING`] levels.
+fn slot_of(archive: &mut Archive, id: u64, in_default: bool) -> Result<Option<RiderSlot>, Error> {
+    let (t, table_name) = table(archive, id)?;
+    let mut parts = Vec::new();
+    for part in part_tables(archive, &t)? {
+        let (pt, name) = table(archive, part)?;
+        let mut links: Vec<u64> = Vec::new();
+        for row in &pt.rows {
+            for (_, l) in row.links()? {
+                if type_of(archive, l) == Some(BUILD_TABLE) && !links.contains(&l) {
+                    links.push(l);
+                }
+            }
+        }
+        let variants = part_variants(archive, &links)?;
+        parts.push(CatalogPart {
+            table: part,
+            name,
+            variants,
+        });
+    }
+    if parts.is_empty() {
+        return Ok(None);
+    }
+    // the one part linked by the slot's one row of weight 1.0
+    let mut weighted = t.rows.iter().filter(|r| r.weight == 1.0);
+    let stated_part = match (weighted.next(), weighted.next()) {
+        (Some(row), None) => {
+            let mut mine = Vec::new();
+            for (_, l) in row.links()? {
+                if parts.iter().any(|p| p.table == l) {
+                    mine.push(l);
+                }
+            }
+            match mine.as_slice() {
+                [one] => Some(*one),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    Ok(Some(RiderSlot {
+        key: key_of(&table_name),
+        table_name,
+        table: id,
+        in_default,
+        parts,
+        stated: stated_part,
+    }))
 }
 
 /// The texture of the crowd's skin palette (`MAD_CHR_BULK`'s: the one skin palette the forges hold).
