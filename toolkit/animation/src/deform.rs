@@ -4,8 +4,8 @@
 //! Linear blend skinning: each vertex's matrix is `sum_i w_i J_i B_i` (`J_i` its slot's joint in the skeleton's space
 //! under the pose, `B_i` the slot's inverse bind); its position goes through that matrix, its normal through the
 //! inverse transpose of its linear part and its tangent through the linear part, both then of unit length (a tangent's
-//! w kept). Weights are used as stored, except under [`WeightRule::EngineNormalizes`], where they are divided by their
-//! sum.
+//! w kept). Weights are used as stored, except under [`WeightRule::EngineNormalizes`], where each is divided by the
+//! larger of their sum and the rule's floor (a floor of zero: the sum, and a vertex with no weight is refused).
 
 use std::collections::BTreeMap;
 
@@ -217,16 +217,17 @@ pub fn influences(p: &Primitive, how: Influences, rule: WeightRule) -> Result<Ve
             return Err(Error(format!("vertex {i}: a weight is {w}")));
         }
     }
-    if rule == WeightRule::EngineNormalizes {
-        for (i, v) in out.iter_mut().enumerate() {
-            let sum: f64 = v.iter().map(|(_, w)| w).sum();
-            if !sum.is_finite() || sum <= 0.0 {
-                return Err(Error(format!(
-                    "vertex {i}: weights sum to {sum}, nothing to normalise"
-                )));
-            }
-            v.iter_mut().for_each(|(_, w)| *w /= sum);
+    for (i, v) in out.iter_mut().enumerate() {
+        let sum: f64 = v.iter().map(|(_, w)| w).sum();
+        let Some(divisor) = rule.divisor(sum) else {
+            break;
+        };
+        if !divisor.is_finite() || divisor <= 0.0 {
+            return Err(Error(format!(
+                "vertex {i}: weights sum to {sum}, nothing to normalise"
+            )));
         }
+        v.iter_mut().for_each(|(_, w)| *w /= divisor);
     }
     Ok(out)
 }
@@ -420,13 +421,65 @@ mod tests {
             &Vertices::of(&doubled).unwrap(),
             &doubled,
             Influences::Streams { sets: 1 },
-            WeightRule::EngineNormalizes,
+            WeightRule::EngineNormalizes { floor: 0.0 },
             Deformation::Linear,
             &palette,
             &model,
         )
         .unwrap();
         assert!(near(d.positions[0], [0.0, 1.5, 0.0]));
+    }
+
+    /// Hand-worked, floor 0.001: weights 0.5 + 0.5 sum to 1 (above the floor) and divide by 1, so the vertex at (0, 1, 0)
+    /// between joints at y 0 and 2 (inverse binds identity and T(0,-1,0)) lands at y 1.5; weights 0.0002 + 0.0002 sum to
+    /// 0.0004, under the floor, and divide by 0.001: the total weight is 0.4 and the vertex at 0.4 of the blend, y 0.6;
+    /// four zero weights leave the zero matrix, the origin, where floor 0 refuses them.
+    #[test]
+    fn the_engine_floor_bounds_the_divisor() {
+        let palette = [
+            Slot {
+                joint: JointId(1),
+                inverse_bind: Transform::IDENTITY,
+            },
+            Slot {
+                joint: JointId(2),
+                inverse_bind: {
+                    let mut t = Transform::IDENTITY;
+                    t.cols[3] = [0.0, -1.0, 0.0];
+                    t
+                },
+            },
+        ];
+        let model = BTreeMap::from([
+            (JointId(1), translate([0.0; 3])),
+            (JointId(2), translate([0.0, 2.0, 0.0])),
+        ]);
+        let at = |weights: [f32; 4], floor: f32| {
+            let p = primitive(vec![
+                (Semantic::Position, Stream::F32x3(vec![[0.0, 1.0, 0.0]])),
+                (Semantic::Joints(0), Stream::U8x4(vec![[0, 1, 0, 0]])),
+                (Semantic::Weights(0), Stream::F32x4(vec![weights])),
+            ]);
+            skin(
+                &Vertices::of(&p).unwrap(),
+                &p,
+                Influences::Streams { sets: 1 },
+                WeightRule::EngineNormalizes { floor },
+                Deformation::Linear,
+                &palette,
+                &model,
+            )
+        };
+        assert!(near(
+            at([0.5, 0.5, 0.0, 0.0], 0.001).unwrap().positions[0],
+            [0.0, 1.5, 0.0]
+        ));
+        assert!(near(
+            at([0.0002, 0.0002, 0.0, 0.0], 0.001).unwrap().positions[0],
+            [0.0, 0.6, 0.0]
+        ));
+        assert!(near(at([0.0; 4], 0.001).unwrap().positions[0], [0.0; 3]));
+        assert!(at([0.0; 4], 0.0).unwrap_err().0.contains("nothing to normalise"));
     }
 
     /// Hand-worked: a joint turned a quarter about z turns a skinned normal (1,0,0) to (0,1,0), and a non-uniform
@@ -584,10 +637,14 @@ mod tests {
             ([f32::NAN, 1.0, 0.0, 0.0], WeightRule::AsStored, "a weight is NaN"),
             (
                 [f32::NAN, 1.0, 0.0, 0.0],
-                WeightRule::EngineNormalizes,
+                WeightRule::EngineNormalizes { floor: 0.0 },
                 "a weight is NaN",
             ),
-            ([0.0; 4], WeightRule::EngineNormalizes, "nothing to normalise"),
+            (
+                [0.0; 4],
+                WeightRule::EngineNormalizes { floor: 0.0 },
+                "nothing to normalise",
+            ),
         ] {
             let p = with(weights);
             let err = skin(

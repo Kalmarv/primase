@@ -4,8 +4,8 @@
 //! skin: each primitive of a dynamic mesh gets `Joints(0)` (the bones its vertices name, as stored: the FLVER's bone
 //! indices, which index the skeleton directly when the mesh has no palette) and `Weights(0)` (as stored), and each form
 //! a `core.skin` binding them to that skeleton, every joint a slot with the inverse of its rest in the skeleton's space
-//! as its inverse bind (dynamic vertices are stored in that bind pose), the weights `AsStored` (the game's rule for
-//! their sum is not established) and the deformation linear. A mesh with a palette (palette-relative indices) or a
+//! as its inverse bind (dynamic vertices are stored in that bind pose), the weights
+//! `EngineNormalizes { floor: `[`SKIN_WEIGHT_FLOOR`]` }` (the game's rule, below) and the deformation linear. A mesh with a palette (palette-relative indices) or a
 //! static mesh (vertices in their bone's space) in a bound model is refused: neither is established for these files.
 use super::blockers::BlockerCards;
 use crate::components::models::{RigidModel, SkeletonOf, SourceModel};
@@ -22,6 +22,14 @@ use primase_core::{
     Primitive, Semantic, Skeleton, Skin, Slot, Source, Stream, Topology, Transform, WeightRule, World,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+/// The lower bound of the divisor the games' skinning vertex programs divide the four weights of a vertex by. Read
+/// from the programs themselves (disassembled): Elden Ring's `C[DetailBlend]_Fwd_Skin.vpo` (Shader Model 6, `dxc
+/// -dumpbin`) computes `dot4(1, 1, 1, 1, weights)`, `FMax(0x3F50624DE0000000, sum)` (0.001) and divides each weight by
+/// it, and so does its `_Gbuf_Skin` program; Sekiro's `Character_AMSN_[DetailBlend]_Gbuf_Skin.vpo` (Shader Model 5,
+/// `fxc -dumpbin`) does the same in `dp4 r0.x, l(1, 1, 1, 1), v4.xyzw` / `max r0.x, r0.x, l(0.001)` / `div r2.xyzw,
+/// v4.xyzw, r0.xxxx`. A vertex whose four weights are all zero is left with the zero matrix (Elden Ring's c3000 has 743).
+pub const SKIN_WEIGHT_FLOOR: f32 = 0.001;
 
 /// A two-way choice of `lower-fromsoft-geometry` with its option words.
 macro_rules! choice {
@@ -243,7 +251,9 @@ impl Level {
                         deformation: Deformation::Linear,
                     }],
                     influences: self.skin,
-                    weights: WeightRule::AsStored,
+                    weights: WeightRule::EngineNormalizes {
+                        floor: SKIN_WEIGHT_FLOOR,
+                    },
                 },
             );
         }

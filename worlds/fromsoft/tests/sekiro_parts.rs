@@ -473,7 +473,7 @@ fn the_wolf_assembles_and_its_parts_stay_their_own() -> Result<()> {
     let new_skeleton = assembled_world.get::<Skeleton>(new_rig).ok_or("skeleton")?;
     let new_rests = model_transforms(new_skeleton, &locals(new_skeleton, None))?;
     let (mut max_all, mut max_stored) = (0.0f64, 0.0f64);
-    let rule = WeightRule::EngineNormalizes;
+    let rule = WeightRule::EngineNormalizes { floor: 0.001 };
     for (id, (rig_part, _)) in &by_part {
         let own_skeleton = world.get::<Skeleton>(*rig_part).ok_or("part skeleton")?;
         let own_rests: BTreeMap<_, Affine> = model_transforms(own_skeleton, &locals(own_skeleton, None))?;

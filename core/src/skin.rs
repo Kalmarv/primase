@@ -44,12 +44,16 @@ pub enum Influences {
 }
 
 /// What a source says of its stored weights.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum WeightRule {
     /// Each vertex's weights sum to 1 as stored (within quantisation).
     SumsToOne,
-    /// The engine divides by their sum when it draws.
-    EngineNormalizes,
+    /// The engine divides each weight by `max(sum, floor)` when it draws: a vertex whose weights sum to `floor` or
+    /// more is normalised to sum 1, one that sums to less keeps a total below 1 (all four weights zero leave the
+    /// zero matrix). `floor` is the divisor's lower bound, finite and zero or more; zero is the plain sum (a vertex
+    /// with no weight has nothing to divide, and a pass using the rule refuses it). FromSoft's skinning programs
+    /// use a floor of 0.001.
+    EngineNormalizes { floor: f32 },
     /// The source states nothing of their sum: used as stored.
     AsStored,
 }
@@ -88,6 +92,17 @@ pub struct Skin {
     pub influences: Vec<Option<Influences>>,
     pub weights: WeightRule,
     pub bindings: Vec<Binding>,
+}
+
+impl WeightRule {
+    /// The divisor the engine applies to a vertex whose weights sum to `sum`; `None` for the rules that apply none
+    /// (the weights are used as stored).
+    pub fn divisor(self, sum: f64) -> Option<f64> {
+        match self {
+            WeightRule::EngineNormalizes { floor } => Some(sum.max(f64::from(floor))),
+            WeightRule::SumsToOne | WeightRule::AsStored => None,
+        }
+    }
 }
 
 /// How far a [`WeightRule::SumsToOne`] vertex's weights may sum from 1: one step of 8-bit storage over four
@@ -324,6 +339,11 @@ impl Component for Skin {
     /// vertex names within every binding's palette (padding included), weights finite and non-negative, and summing to
     /// 1 under [`WeightRule::SumsToOne`].
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
+        if let WeightRule::EngineNormalizes { floor } = self.weights
+            && (!floor.is_finite() || floor < 0.0)
+        {
+            return Err(format!("weight rule floor {floor}: finite, zero or more"));
+        }
         let mut ids = BTreeSet::new();
         for b in &self.bindings {
             if !ids.insert(b.id) {
@@ -502,6 +522,24 @@ mod tests {
         low(&mut w, e);
         w.get_mut::<Skin>(e).unwrap().weights = WeightRule::AsStored;
         assert_eq!(errors(&w), Vec::<String>::new());
+        // the divisor floor of the engine-normalised rule: finite and not negative
+        for floor in [f32::NAN, -0.001, f32::INFINITY] {
+            let (mut w, e, _) = world();
+            w.get_mut::<Skin>(e).unwrap().weights = WeightRule::EngineNormalizes { floor };
+            assert!(
+                errors(&w).iter().any(|m| m.contains("floor")),
+                "{floor}: {:?}",
+                errors(&w)
+            );
+        }
+        let (mut w, e, _) = world();
+        w.get_mut::<Skin>(e).unwrap().weights = WeightRule::EngineNormalizes { floor: 0.001 };
+        assert_eq!(errors(&w), Vec::<String>::new());
+        // the divisor is max(sum, floor)
+        let rule = WeightRule::EngineNormalizes { floor: 0.001 };
+        assert_eq!(rule.divisor(0.996), Some(0.996));
+        assert_eq!(rule.divisor(0.0), Some(0.001));
+        assert_eq!(WeightRule::AsStored.divisor(0.5), None);
         // a negative float weight
         fails(
             &|w, e, _| {
