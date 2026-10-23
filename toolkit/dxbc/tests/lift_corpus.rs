@@ -30,6 +30,8 @@ struct Census {
     written: usize,
     refused: BTreeMap<String, usize>,
     invalid: Vec<String>,
+    /// Lifted programs the executor refuses, by reason, with the first program of each.
+    unrunnable: BTreeMap<String, (usize, String)>,
 }
 
 fn census(variable: &str) {
@@ -77,7 +79,17 @@ fn census(variable: &str) {
             primase_shader::emit::wgsl(&program)
         };
         match written {
-            Ok(_) => c.written += 1,
+            Ok(_) => {
+                c.written += 1;
+                // the executor compiles it too, or refuses it by name
+                if let Err(e) = primase_shader::exec::Executable::new(&program) {
+                    let entry = c
+                        .unrunnable
+                        .entry(e.to_string())
+                        .or_insert((0, path.display().to_string()));
+                    entry.0 += 1;
+                }
+            }
             Err(e) => c.invalid.push(format!("{}: {e}", path.display())),
         }
     }
@@ -91,6 +103,9 @@ fn census(variable: &str) {
     );
     for (reason, n) in &c.refused {
         println!("  refused {n:5}  {reason}");
+    }
+    for (reason, (n, example)) in &c.unrunnable {
+        println!("  not executable {n:5}  {reason}  (e.g. {example})");
     }
     for line in c.invalid.iter().take(20) {
         println!("  INVALID {line}");

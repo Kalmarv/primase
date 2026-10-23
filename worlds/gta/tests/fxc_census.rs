@@ -139,7 +139,7 @@ fn the_enhanced_shader_database() {
     let (mut lifted, mut programs) = (0, 0);
     let mut refused: BTreeMap<String, usize> = BTreeMap::new();
     let mut invalid = Vec::new();
-    let mut unrunnable: BTreeMap<String, usize> = BTreeMap::new();
+    let mut unrunnable: BTreeMap<String, (usize, String)> = BTreeMap::new();
     // per group: programs, lifted
     let mut tally: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
     for (g, stage) in sgd2::GROUP_STAGES.iter().enumerate() {
@@ -179,7 +179,10 @@ fn the_enhanced_shader_database() {
                             }
                             // the executor compiles it too, or refuses it by name
                             if let Err(e) = primase_shader::exec::Executable::new(&p) {
-                                *unrunnable.entry(e.to_string()).or_default() += 1;
+                                unrunnable
+                                    .entry(e.to_string())
+                                    .or_insert((0usize, program.name.to_string()))
+                                    .0 += 1;
                             }
                         }
                     }
@@ -197,8 +200,8 @@ fn the_enhanced_shader_database() {
         println!("  refused {n:5}  {reason}");
     }
     println!("LIFTED per group (programs, lifted): {tally:?}");
-    for (reason, n) in &unrunnable {
-        println!("  not executable {n:5}  {reason}");
+    for (reason, (n, example)) in &unrunnable {
+        println!("  not executable {n:5}  {reason}  (e.g. {example})");
     }
     for line in invalid.iter().take(20) {
         println!("  INVALID {line}");
