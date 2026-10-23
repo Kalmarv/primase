@@ -234,24 +234,26 @@ mod tests {
 
     #[test]
     fn a_table_refuses_what_it_cannot_state() {
-        let base = |pairs: &str, notes: &str| {
-            format!(r#"{{"version": 1, "from": "a", "to": "b", "pairs": {pairs}{notes}}}"#)
+        let versioned = |version: u32, pairs: &str, notes: &str| {
+            format!(r#"{{"version": {version}, "from": "a", "to": "b", "pairs": {pairs}{notes}}}"#)
         };
+        let base = |pairs: &str, notes: &str| versioned(1, pairs, notes);
+        let v2 = |pairs: &str, notes: &str| versioned(2, pairs, notes);
         for (text, why) in [
             (
                 base(r#"[["a", "X"], ["a", "Y"]]"#, ""),
                 "source joint a listed twice",
             ),
             (
-                base(r#"[["a", "X"]]"#, r#", "placements": {"Y": {"t": [0, 0, 0]}}"#),
+                v2(r#"[["a", "X"]]"#, r#", "placements": {"Y": {"t": [0, 0, 0]}}"#),
                 "a placement of Y, which no pair lists as a target",
             ),
             (
-                base(r#"[["a", "X"]]"#, r#", "placements": {"X": {"r": [0, 0, 0, 2]}}"#),
+                v2(r#"[["a", "X"]]"#, r#", "placements": {"X": {"r": [0, 0, 0, 2]}}"#),
                 "not a unit quaternion",
             ),
             (
-                base(r#"[["a", "X"]]"#, r#", "placements": {"X": {"q": [0, 0, 0, 1]}}"#),
+                v2(r#"[["a", "X"]]"#, r#", "placements": {"X": {"q": [0, 0, 0, 1]}}"#),
                 "unknown field",
             ),
             (

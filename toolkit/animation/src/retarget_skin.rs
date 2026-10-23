@@ -699,7 +699,7 @@ mod tests {
             .inverse_bind
             .cols[3][0] -= 0.5;
         w.insert(proto, skin_c);
-        let err = run(&mut w, "retarget-skin{unmapped=ancestor}").unwrap_err();
+        let err = run(&mut w, "retarget-skin{unmapped=ancestor,placement=automatic}").unwrap_err();
         assert!(
             err.contains("joint j3's inverse bind") && err.contains("not in that space"),
             "{err}"
@@ -713,7 +713,7 @@ mod tests {
         let first = w.iter::<JointMap>().next().map(|(_, m)| m.clone()).unwrap();
         let again = w.spawn();
         w.insert(again, first);
-        let err = run(&mut w, "retarget-skin{unmapped=ancestor}").unwrap_err();
+        let err = run(&mut w, "retarget-skin{unmapped=ancestor,placement=automatic}").unwrap_err();
         assert!(err.contains("two joint maps from skeleton"), "{err}");
     }
 
@@ -802,7 +802,7 @@ mod tests {
             },
         );
         assert_eq!(w.verify_components(), vec![]);
-        let report = run(&mut w, "retarget-skin{unmapped=nearest}").unwrap();
+        let report = run(&mut w, "retarget-skin{unmapped=nearest,placement=automatic}").unwrap();
         let moved: Vec<&String> = report.steps[0]
             .log
             .approximations
@@ -829,7 +829,7 @@ mod tests {
             err.contains("unmapped=refuse|ancestor|nearest is required"),
             "{err}"
         );
-        let err = run(&mut w, "retarget-skin{unmapped=ancestor}").unwrap_err();
+        let err = run(&mut w, "retarget-skin{unmapped=ancestor,placement=automatic}").unwrap_err();
         assert!(err.contains("placement=automatic|stated is required"), "{err}");
         // nearest: the cloth point goes to the mapped joint nearest the cloth joint at rest (the hand, 0.14 away; the arm is 0.41)
         let (mut w, proto, _) = world();
@@ -944,7 +944,7 @@ mod tests {
         assert_eq!(w.verify_components(), vec![]);
     }
 
-    /// `automatic` refuses a map that has a placement, and `stated` one that has none.
+    /// `automatic` refuses a map that has a placement, and `stated` a world that has none.
     #[test]
     fn the_placement_choice_is_checked() {
         let (mut w, ..) = world();
@@ -953,6 +953,7 @@ mod tests {
         assert!(err.contains("placement=automatic would ignore it"), "{err}");
         let (mut w, ..) = world();
         let err = run(&mut w, "retarget-skin{unmapped=ancestor,placement=stated}").unwrap_err();
-        assert!(err.contains("has no core.joint_placement"), "{err}");
+        // the pass's own requirement refuses a world with no placement at all
+        assert!(err.contains("requires core.joint_placement"), "{err}");
     }
 }

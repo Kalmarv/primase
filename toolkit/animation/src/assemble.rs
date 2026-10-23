@@ -1606,7 +1606,8 @@ mod tests {
     /// `assembled` and `refuse` still refuse it.
     #[test]
     fn weighted_rests_beyond_the_tolerance_are_reported_when_asked_and_the_part_stays_as_stored() {
-        // both parts weight the Neck; the head part's sits 3 mm higher than the body's
+        // both parts weight the Neck; the head part's sits 3 mm higher than the body's; the assembled rest is the first
+        // weighting part's (the head's), so it is the body whose rest differs from it
         let build = || {
             let mut w = World::new();
             part(
@@ -1624,7 +1625,7 @@ mod tests {
         let report = run(&mut w, report_own).unwrap();
         let log = &report.steps[0].log;
         assert_eq!(
-            log.approximations["joint Neck: the rest in head differs from the assembled rest (taken from body) by 3.000e-3 (beyond tolerance 0.001; the part weights the joint and stays bound to its own rest and inverse binds)"],
+            log.approximations["joint Neck: the rest in body differs from the assembled rest (taken from head) by 3.000e-3 (beyond tolerance 0.001; the part weights the joint and stays bound to its own rest and inverse binds)"],
             1
         );
         assert_eq!(
@@ -1637,7 +1638,7 @@ mod tests {
         assert!(
             log.approximations
                 .keys()
-                .any(|k| k.starts_with("vertices of head sit up to ")),
+                .any(|k| k.starts_with("vertices of body sit up to ")),
             "{:?}",
             log.approximations
         );
