@@ -266,3 +266,33 @@ fn every_option_is_required() {
     );
     assert!(pass.approximates().starts_with("grass placed by a stand-in"));
 }
+
+/// A rule whose `TilingLogCount` makes more candidates than the ceiling allows is refused naming the rule, not run
+/// with a candidate: 4^20 over a ceiling of 100.
+#[test]
+fn a_tiling_count_over_the_ceiling_is_refused_naming_the_rule() {
+    let (mut w, _, _) = world();
+    let mut lib = w
+        .iter::<AnvilGrass>()
+        .next()
+        .map(|(_, g)| g.library.clone())
+        .expect("library");
+    lib.groups[0].rules[0].tiling_log_count = 20;
+    let (e, _) = w
+        .iter::<AnvilGrass>()
+        .map(|(e, g)| (e, g.setup.clone()))
+        .next()
+        .expect("setup");
+    let setup = w.get::<AnvilGrass>(e).map(|g| g.setup.clone()).expect("setup");
+    w.insert(e, AnvilGrass { setup, library: lib });
+    let mut o = options(1, 100);
+    o.insert("tiling".to_owned(), "rule".to_owned());
+    let pass = LowerAnvilGrass::from_options(&o).expect("options");
+    let error = pass
+        .run(&mut w, &mut PassLog::default())
+        .expect_err("over the ceiling");
+    assert!(
+        error.contains("TilingLogCount 20") && error.contains("0x4"),
+        "{error}"
+    );
+}

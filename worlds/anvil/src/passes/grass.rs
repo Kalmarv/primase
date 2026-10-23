@@ -251,25 +251,34 @@ struct Ground<'t> {
 }
 
 impl Ground<'_> {
-    /// The height at local sample (`i`, `j`): row `i` along y, column `j` along x, each from -2 to 129.
-    fn height(&self, i: i64, j: i64) -> f64 {
-        let at =
-            |v: i64| usize::try_from(v.saturating_add(i64::from(TerrainTile::CORE_AT as i32))).unwrap_or(0);
-        let (r, c) = (at(i).min(TERRAIN_TILE - 1), at(j).min(TERRAIN_TILE - 1));
-        self.unit * f64::from(self.tile.heights[r * TERRAIN_TILE + c]) + self.offset
+    /// The height at local sample (`i`, `j`): row `i` along y, column `j` along x, each from -2 to 129 (the tile's 132
+    /// samples from its index 0: the two before a node's core are its neighbours', the core's 128 follow, and the two
+    /// after). A plant lies within half a sample of a core sample, so its four samples are -1 to 128: an index outside
+    /// the tile is an error naming it, never an edge sample taken for it.
+    fn height(&self, i: i64, j: i64) -> Result<f64, String> {
+        let at = |v: i64| {
+            v.checked_add(TerrainTile::CORE_AT as i64)
+                .and_then(|v| usize::try_from(v).ok())
+                .filter(|&v| v < TERRAIN_TILE)
+                .ok_or_else(|| {
+                    format!("ground sample ({i}, {j}) lies outside the node's tile of {TERRAIN_TILE} samples")
+                })
+        };
+        let (r, c) = (at(i)?, at(j)?);
+        Ok(self.unit * f64::from(self.tile.heights[r * TERRAIN_TILE + c]) + self.offset)
     }
     /// The height and the unit normal (source frame, z up) at fractional local sample (`fi`, `fj`): bilinear between the
     /// four samples about it, the normal that surface's.
-    fn at(&self, fi: f64, fj: f64) -> (f64, V3) {
+    fn at(&self, fi: f64, fj: f64) -> Result<(f64, V3), String> {
         let (i0, j0) = (fi.floor(), fj.floor());
         let (ty, tx) = (fi - i0, fj - j0);
         let (i0, j0) = (i0 as i64, j0 as i64);
-        let (h00, h01) = (self.height(i0, j0), self.height(i0, j0 + 1));
-        let (h10, h11) = (self.height(i0 + 1, j0), self.height(i0 + 1, j0 + 1));
+        let (h00, h01) = (self.height(i0, j0)?, self.height(i0, j0 + 1)?);
+        let (h10, h11) = (self.height(i0 + 1, j0)?, self.height(i0 + 1, j0 + 1)?);
         let z = (1.0 - ty) * ((1.0 - tx) * h00 + tx * h01) + ty * ((1.0 - tx) * h10 + tx * h11);
         let dzdx = ((1.0 - ty) * (h01 - h00) + ty * (h11 - h10)) / self.spacing;
         let dzdy = ((1.0 - tx) * (h10 - h00) + tx * (h11 - h01)) / self.spacing;
-        (z, norm([-dzdx, -dzdy, 1.0]))
+        Ok((z, norm([-dzdx, -dzdy, 1.0])))
     }
 }
 
@@ -462,10 +471,21 @@ impl Pass for LowerAnvilGrass {
                             };
                             let mut rng = Rng::new(self.seed, gx, gy, g, k);
                             let candidates = if self.tiling {
-                                4u32.checked_pow(u32::from(rule.tiling_log_count)).unwrap_or(1)
+                                4u64.checked_pow(u32::from(rule.tiling_log_count)).ok_or_else(|| {
+                                    format!(
+                                        "grass rule {:#x} of group {g}: TilingLogCount {} makes more candidates than a u64 holds",
+                                        rule.id, rule.tiling_log_count
+                                    )
+                                })?
                             } else {
                                 1
                             };
+                            if candidates > self.max_plants {
+                                return Err(format!(
+                                    "grass rule {:#x} of group {g}: TilingLogCount {} makes {candidates} candidates a sample, over max-plants {}",
+                                    rule.id, rule.tiling_log_count, self.max_plants
+                                ));
+                            }
                             for _ in 0..candidates {
                                 let count = match self.density {
                                     Density::PerSample => u32::from(rng.unit() < f64::from(rule.density)),
@@ -491,7 +511,7 @@ impl Pass for LowerAnvilGrass {
                                             self.max_plants
                                         ));
                                     }
-                                    let (z, n) = ground.at(fi, fj);
+                                    let (z, n) = ground.at(fi, fj)?;
                                     let yaw = rng.between(0.0, std::f64::consts::TAU);
                                     let s = if self.scale && rule.scaling_enabled {
                                         let (a, b) = (f64::from(rule.scale_a), f64::from(rule.scale_b));
