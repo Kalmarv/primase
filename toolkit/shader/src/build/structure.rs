@@ -281,7 +281,42 @@ impl Analysis<'_> {
 pub fn structure(cfg: &Cfg) -> Result<Code, Error> {
     let analysis = analyse(cfg)?;
     let _ = &analysis.idom;
-    Ok(analysis.do_tree(0, &mut Vec::new()))
+    Ok(simplify(analysis.do_tree(0, &mut Vec::new())))
+}
+
+/// Drop the branches out of a block that leave it by falling off its end anyway: a `Br` at the end of its body, of an
+/// arm of an `if` or `switch` that ends it, or of a nested block's body. A block nothing else leaves then needs no
+/// construct of its own when lowered. Behaviour is unchanged.
+fn simplify(code: Code) -> Code {
+    fn tail(code: &mut Code, label: Label) {
+        match code {
+            Code::Br(l) if *l == label => *code = Code::Seq(Vec::new()),
+            Code::Seq(items) => {
+                if let Some(last) = items.last_mut() {
+                    tail(last, label);
+                }
+            }
+            Code::If(_, a, b) => {
+                tail(a, label);
+                tail(b, label);
+            }
+            Code::Switch(_, arms) => arms.iter_mut().for_each(|a| tail(a, label)),
+            Code::Block(m, body) if *m != label => tail(body, label),
+            _ => {}
+        }
+    }
+    match code {
+        Code::Seq(items) => Code::Seq(items.into_iter().map(simplify).collect()),
+        Code::Block(label, body) => {
+            let mut body = simplify(*body);
+            tail(&mut body, label);
+            Code::Block(label, Box::new(body))
+        }
+        Code::Loop(label, body) => Code::Loop(label, Box::new(simplify(*body))),
+        Code::If(n, a, b) => Code::If(n, Box::new(simplify(*a)), Box::new(simplify(*b))),
+        Code::Switch(n, arms) => Code::Switch(n, arms.into_iter().map(simplify).collect()),
+        other => other,
+    }
 }
 
 // ---------------------------------------------------------------- lowering
