@@ -1,6 +1,7 @@
-//! Optional private real-data gate. The TSV is produced by independent existing
-//! Python/C# container readers; bytes stay outside the repository. Codec names:
-//! lz4, deflate, zlib, zlib-unterminated. Oodle uses the DLL module's gate instead.
+//! Optional private real-data gate over `oracles.corpus.general/codecs.tsv`: game streams with what third-party decoders
+//! make of them (`tests/oracles/codecs.py`: Python's zlib and the lz4 package). Each row is
+//! `codec<TAB>input<TAB>reference`, a relative path relative to the TSV's folder; bytes stay outside the repository.
+//! Codec names: lz4, deflate, zlib, zlib-unterminated. Oodle uses the DLL module's gate instead.
 use primase_compress::{Decompressor, Deflate, Lz4, Zlib, ZlibUnterminated};
 use primase_core::gate::{GateReport, Tolerance};
 use primase_testdata::{Game, OracleSet, oracle};
@@ -10,7 +11,12 @@ fn corpus() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
     let mut report = GateReport::new("independent real codec corpus", Tolerance::Exact);
-    for line in std::fs::read_to_string(path)?
+    let folder = path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+    let mut rows = 0;
+    for line in std::fs::read_to_string(&path)?
         .lines()
         .filter(|s| !s.is_empty() && !s.starts_with('#'))
     {
@@ -25,13 +31,20 @@ fn corpus() -> Result<(), Box<dyn std::error::Error>> {
             "zlib-unterminated" => &ZlibUnterminated,
             name => return Err(format!("unknown codec {name}").into()),
         };
-        let input = std::fs::read(fields[1])?;
-        let reference = std::fs::read(fields[2])?;
+        // a relative path is the TSV's folder's
+        let input = std::fs::read(folder.join(fields[1]))?;
+        let reference = std::fs::read(folder.join(fields[2]))?;
+        rows += 1;
         match codec.decompress(&input, reference.len()) {
             Ok(output) => report.compare_bytes(fields[1], &output, &reference),
             Err(e) => report.fail(fields[1], e.to_string()),
         }
     }
+    primase_testdata::expect_found(
+        primase_testdata::Query::Oracle(OracleSet::Corpus, Game::General, "codecs.tsv"),
+        "streams",
+        rows,
+    );
     println!("{report}");
     report.assert_passed();
     Ok(())

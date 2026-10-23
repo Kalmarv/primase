@@ -24,7 +24,10 @@ Synthetic tests cover empty input, short/trailing/corrupt input, size mismatches
 and block boundaries. Optional real-data gates read the real-data configuration
 (CONTRIBUTING.md): the `tools.oodle5`/`oodle6`/`oodle9` DLLs and the corpus
 oracle set. Its `general/codecs.tsv` supports `lz4`, `deflate`, `zlib`, and
-`zlib-unterminated` rows. Oodle cross-checks use oozextract only as
+`zlib-unterminated` rows, paths relative to the TSV; `tests/oracles/codecs.py`
+makes it from game streams the `corpus_*` example programs cut (Sekiro's DFLT
+envelopes, skate.'s zlib CAS blocks, Riders Republic's LZ4 terrain blocks),
+decoded by Python's zlib and the lz4 package. Oodle cross-checks use oozextract only as
 a development dependency. Its 0.5.5 Kraken restart defect has a synthetic
 regression test; DCX checks report blocked whole-stream comparisons separately
 from per-quantum comparisons and native round trips.
