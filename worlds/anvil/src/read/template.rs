@@ -765,6 +765,33 @@ pub fn permutations(body: &[u8]) -> Result<Vec<Permutation<'_>>, PermutationErro
     Ok(out)
 }
 
+/// A template's permutations ([`permutations`]) as the tables of its [`AnvilShaders`]: each stage's keys, sorted, and
+/// each program's container once, however many permutations name it.
+pub fn shader_tables(read: &[Permutation<'_>]) -> crate::components::AnvilShaders {
+    let mut programs: Vec<(usize, Vec<u8>)> = Vec::new();
+    let (mut pixel, mut vertex) = (Vec::new(), Vec::new());
+    for p in read {
+        let index = match programs.iter().position(|(at, _)| *at == p.at) {
+            Some(i) => i,
+            None => {
+                programs.push((p.at, p.container.to_vec()));
+                programs.len().saturating_sub(1)
+            }
+        };
+        match p.stage {
+            Stage::Pixel => pixel.push((p.key, index)),
+            Stage::Vertex => vertex.push((p.key, index)),
+        }
+    }
+    pixel.sort_unstable();
+    vertex.sort_unstable();
+    crate::components::AnvilShaders {
+        pixel,
+        vertex,
+        programs: programs.into_iter().map(|(_, p)| p).collect(),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, reason = "test fixtures built by hand")]
 mod tests {
@@ -791,6 +818,36 @@ mod tests {
         string(b, b"Category");
         b.extend(1u32.to_le_bytes());
         string(b, b"MAD");
+    }
+
+    #[test]
+    fn the_shader_tables_are_sorted_by_key_and_share_a_program() {
+        static A: [u8; 4] = [1; 4];
+        static B: [u8; 4] = [2; 4];
+        static C: [u8; 4] = [3; 4];
+        let (a, b, c) = (&A[..], &B[..], &C[..]);
+        let permutation = |stage, key, at: usize, container: &'static [u8]| Permutation {
+            stage,
+            key,
+            code_hash: 0,
+            at,
+            container,
+        };
+        let read = [
+            permutation(Stage::Vertex, 9, 100, a),
+            permutation(Stage::Pixel, 9, 200, b),
+            permutation(Stage::Vertex, 3, 100, a),
+            permutation(Stage::Pixel, 4, 300, c),
+        ];
+        let t = shader_tables(&read);
+        assert_eq!(t.programs, [a.to_vec(), b.to_vec(), c.to_vec()]);
+        assert_eq!(
+            (t.vertex.as_slice(), t.pixel.as_slice()),
+            (&[(3, 0), (9, 0)][..], &[(4, 2), (9, 1)][..])
+        );
+        // the same key in both stages names each stage's own program
+        assert_eq!((t.vertex(9), t.pixel(9)), (Some(a), Some(b)));
+        assert_eq!((t.vertex(4), t.pixel(3)), (None, None));
     }
 
     #[test]

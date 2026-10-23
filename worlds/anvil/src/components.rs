@@ -807,22 +807,35 @@ impl MaterialFlags {
     pub const BOOLEAN_42452A12: usize = 34;
 }
 
-/// A MaterialTemplate's pixel-stage shader permutations (`anvil.shaders`, on an entity of its own, named as the
-/// template, that its Materials name): each ShaderKey and its program's DXBC container, as stored
-/// (`crate::read::template::permutations`). The vertex stage's are not kept.
+/// A MaterialTemplate's shader permutations (`anvil.shaders`, on an entity of its own, named as the template, that
+/// its Materials name): each stage's ShaderKeys and their programs' DXBC containers, as stored
+/// (`crate::read::template::permutations`). A key names a permutation within its stage (the engine's ShaderKey, bits
+/// 22 to 29 its pass); the same key may be in both stages, each with its own program.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilShaders {
-    /// (ShaderKey, index into `programs`), sorted by key: the engine looks a key up exactly.
+    /// (ShaderKey, index into `programs`) of the pixel stage, sorted by key: the engine looks a key up exactly.
     pub pixel: Vec<(u32, usize)>,
+    /// The same for the vertex stage.
+    pub vertex: Vec<(u32, usize)>,
+    /// The containers, each once: permutations that share a program share its index.
     pub programs: Vec<Vec<u8>>,
 }
 
 impl AnvilShaders {
+    fn program(&self, stage: &[(u32, usize)], key: u32) -> Option<&[u8]> {
+        let at = stage.binary_search_by_key(&key, |&(k, _)| k).ok()?;
+        let &(_, program) = stage.get(at)?;
+        self.programs.get(program).map(Vec::as_slice)
+    }
+
     /// The program the pixel key `key` names.
     pub fn pixel(&self, key: u32) -> Option<&[u8]> {
-        let at = self.pixel.binary_search_by_key(&key, |&(k, _)| k).ok()?;
-        let &(_, program) = self.pixel.get(at)?;
-        self.programs.get(program).map(Vec::as_slice)
+        self.program(&self.pixel, key)
+    }
+
+    /// The program the vertex key `key` names.
+    pub fn vertex(&self, key: u32) -> Option<&[u8]> {
+        self.program(&self.vertex, key)
     }
 }
 

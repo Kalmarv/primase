@@ -42,9 +42,8 @@ use primase_core::{Entity, Instance, Name, Transform, World};
 use crate::components::{
     AnvilBounds, AnvilCollisionFilter, AnvilCollisionOnly, AnvilCollisionShape, AnvilDataLayers,
     AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake, AnvilLodDistances, AnvilLods,
-    AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilShaders, AnvilWater, BoundTexture,
-    CollisionMaterialRef, DataLayerAction, DeferredDecal, MaterialBinding, MaterialValue, ShapeGeometry,
-    TextureFrom,
+    AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilWater, BoundTexture, CollisionMaterialRef,
+    DataLayerAction, DeferredDecal, MaterialBinding, MaterialValue, ShapeGeometry, TextureFrom,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::ddecal::{DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, StoredDecalModel, StoredDeferredDecals};
@@ -396,7 +395,7 @@ impl<'a> Placer<'a> {
         self
     }
 
-    /// The placer reading, with each Material, its template's pixel shader permutations ([`AnvilShaders`], on an
+    /// The placer reading, with each Material, its template's shader permutations ([`AnvilShaders`], on an
     /// entity per template).
     pub fn with_shaders(mut self) -> Placer<'a> {
         self.read_shaders = true;
@@ -775,30 +774,11 @@ impl<'a> Placer<'a> {
             return Ok(e);
         }
         let read = template::permutations(body).map_err(|source| Error::Permutations { at, source })?;
-        let mut programs: Vec<(usize, Vec<u8>)> = Vec::new();
-        let mut pixel = Vec::new();
-        for p in read.iter().filter(|p| p.stage == template::Stage::Pixel) {
-            let index = match programs.iter().position(|(at, _)| *at == p.at) {
-                Some(i) => i,
-                None => {
-                    programs.push((p.at, p.container.to_vec()));
-                    programs.len().saturating_sub(1)
-                }
-            };
-            pixel.push((p.key, index));
-        }
-        pixel.sort_unstable();
         let e = self.world.spawn();
         if let Some(name) = self.name(at) {
             self.world.insert(e, Name(name));
         }
-        self.world.insert(
-            e,
-            AnvilShaders {
-                pixel,
-                programs: programs.into_iter().map(|(_, p)| p).collect(),
-            },
-        );
+        self.world.insert(e, template::shader_tables(&read));
         self.shaders.insert(id, e);
         Ok(e)
     }
