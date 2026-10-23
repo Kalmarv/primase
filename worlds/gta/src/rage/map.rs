@@ -139,6 +139,11 @@ pub struct MapHeader {
 }
 
 impl MapHeader {
+    /// What its content flags say it holds ([`MapContent`]).
+    pub fn content(&self) -> MapContent {
+        MapContent::from_flags(self.content_flags)
+    }
+
     pub fn from_root(s: &Struct) -> Result<Self> {
         name_is(s, &["CMapData"])?;
         Ok(MapHeader {
@@ -149,6 +154,57 @@ impl MapHeader {
             streaming_extents: [s.vec3("streamingExtentsMin")?, s.vec3("streamingExtentsMax")?],
             entities_extents: [s.vec3("entitiesExtentsMin")?, s.vec3("entitiesExtentsMax")?],
         })
+    }
+}
+
+/// What a map holds, as its content flags (`CMapData.contentFlags`) state it, bit by bit. The meanings are CodeWalker's
+/// (CodeWalker.Core 485d56b, `YmapFile.CalcFlags`, which sets each bit from what the map holds): the game's own
+/// files are not documented. Bits no meaning is known for are kept in [`MapContent::unknown`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MapContent {
+    /// Bit 0 (1): high-detail entities (`lodLevel` HD or ORPHANHD).
+    pub hd: bool,
+    /// Bit 1 (2): LOD entities.
+    pub lod: bool,
+    /// Bit 2 (4): SLOD2 and coarser entities (SLOD2, SLOD3, SLOD4; [`MapContent::slod`] is set with it).
+    pub slod2: bool,
+    /// Bit 3 (8): interior instances (`CMloInstanceDef`).
+    pub interiors: bool,
+    /// Bit 4 (16): SLOD entities (SLOD1 and coarser).
+    pub slod: bool,
+    /// Bit 5 (32): occluders (box occluders or occlusion models).
+    pub occluders: bool,
+    /// Bit 6 (64): physics dictionaries (the map's collision).
+    pub physics: bool,
+    /// Bit 7 (128): LOD lights.
+    pub lod_lights: bool,
+    /// Bit 8 (256): distant LOD lights.
+    pub distant_lights: bool,
+    /// Bit 10 (1024): grass instance batches.
+    pub grass: bool,
+    /// The bits set that no meaning is known for (bit 9 and bits 11 to 31), as stored.
+    pub unknown: u32,
+}
+
+impl MapContent {
+    const KNOWN: u32 = 0b101_1111_1111;
+
+    /// The content flags `flags` bit by bit.
+    pub fn from_flags(flags: u32) -> MapContent {
+        let bit = |n: u32| flags & 1u32.checked_shl(n).unwrap_or(0) != 0;
+        MapContent {
+            hd: bit(0),
+            lod: bit(1),
+            slod2: bit(2),
+            interiors: bit(3),
+            slod: bit(4),
+            occluders: bit(5),
+            physics: bit(6),
+            lod_lights: bit(7),
+            distant_lights: bit(8),
+            grass: bit(10),
+            unknown: flags & !Self::KNOWN,
+        }
     }
 }
 
@@ -265,5 +321,41 @@ impl MapTypes {
                 .collect::<Result<_>>()?,
             dependencies: s.hashes("dependencies")?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MapContent;
+
+    /// Each bit to its field (CodeWalker's meanings), the unknown bits kept as stored.
+    #[test]
+    fn content_flags_bit_by_bit() {
+        assert_eq!(MapContent::from_flags(0), MapContent::default());
+        let all = MapContent::from_flags(u32::MAX);
+        assert!(
+            all.hd
+                && all.lod
+                && all.slod2
+                && all.interiors
+                && all.slod
+                && all.occluders
+                && all.physics
+                && all.lod_lights
+                && all.distant_lights
+                && all.grass
+        );
+        assert_eq!(all.unknown, !0b101_1111_1111);
+        let c = MapContent::from_flags(1 | 16 | 64 | 512);
+        assert_eq!(
+            c,
+            MapContent {
+                hd: true,
+                slod: true,
+                physics: true,
+                unknown: 512,
+                ..MapContent::default()
+            }
+        );
     }
 }

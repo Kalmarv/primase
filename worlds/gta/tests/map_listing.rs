@@ -42,6 +42,28 @@ fn every_listed_header_is_the_decoded_files() {
                     .expect("root"),
             )
             .expect("map data");
+            // the content flags agree with what the map holds, bit by bit where the full decode reads it
+            // (CodeWalker's meanings: HD and orphan-HD 1, LOD 2, SLOD2 and coarser 4, interiors 8, SLOD and coarser 16,
+            // physics dictionaries 64)
+            let c = l.header.content();
+            let levels: Vec<i32> = full.entities.iter().map(|e| e.lod_level).collect();
+            let has = |want: &[i32]| levels.iter().any(|l| want.contains(l));
+            assert_eq!(
+                (c.hd, c.lod, c.slod2, c.interiors, c.slod, c.physics),
+                (
+                    has(&[0, 5]),
+                    has(&[1]),
+                    has(&[3, 4, 6]),
+                    full.entities
+                        .iter()
+                        .any(|e| e.kind == primase_gta::rage::map::EntityKind::Interior),
+                    has(&[2, 3, 4, 6]),
+                    !full.physics_dictionaries.is_empty()
+                ),
+                "{state}: {} content flags {:#x}",
+                l.path,
+                l.header.content_flags
+            );
             let h = &l.header;
             assert_eq!(
                 (
