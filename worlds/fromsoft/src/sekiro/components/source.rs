@@ -221,18 +221,28 @@ impl Component for ObjectBodies {
     }
 }
 
-/// What a read covered (`fromsoft.read_scope`): the area, the region it was bounded to (east/north rectangle in the
-/// world frame) and its placement margin, and whether event-flag world states were read. Passes that crop to the
-/// read region read it here, so a program need not restate it.
+/// A region a read is bounded to: an east/north rectangle in the world frame, `[x0, y0, x1, y1]`, and the metres around
+/// it a placement's extent may reach in from and still be read. Both are the caller's: a stated region states its
+/// margin.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Region {
+    pub rect: [f32; 4],
+    pub margin: f32,
+}
+
+/// What a read covered (`fromsoft.read_scope`): the area, the region it was bounded to with its placement margin, and
+/// whether event-flag world states were read. Passes that crop to the read region read it here, so a program need not
+/// restate it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ReadScope {
     pub area: String,
-    pub region: Option<[f32; 4]>,
-    pub region_margin: f32,
+    pub region: Option<Region>,
     pub states: bool,
 }
 impl Resource for ReadScope {
     const NAME: &'static str = "fromsoft.read_scope";
+    /// 2: the region's margin is the region's (`region.margin`), absent with it.
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
     }

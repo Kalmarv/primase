@@ -112,7 +112,7 @@ pub(super) fn crop(
     let scope = world
         .resource::<ReadScope>()
         .ok_or("reach crops around the read region: the world has no fromsoft.read_scope")?;
-    Ok(scope.region.map(|r| (r, reach)))
+    Ok(scope.region.map(|r| (r.rect, reach)))
 }
 
 /// Whether a world-frame triangle's centre lies beyond `reach` metres outside the east/north rectangle `r`.
@@ -365,8 +365,10 @@ mod tests {
         w.insert(b, record("b.hkx", 15, vec![NEAR], vec![1]));
         w.insert_resource(ReadScope {
             area: "m00_00_00_00".into(),
-            region: Some([-10., -10., 10., 10.]),
-            region_margin: 30.,
+            region: Some(crate::sekiro::source::Region {
+                rect: [-10., -10., 10., 10.],
+                margin: 30.,
+            }),
             states: false,
         });
         w

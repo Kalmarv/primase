@@ -44,7 +44,10 @@ fn slice_a_reads_through_the_convert_loop() {
         max_output: 1024 * 1024 * 1024,
     };
     let options = sekiro::Options {
-        region: Some([-170.0, 180.0, -50.0, 300.0]),
+        region: Some(sekiro::Region {
+            rect: [-170.0, 180.0, -50.0, 300.0],
+            margin: 30.0,
+        }),
         ..Default::default()
     };
     let mut reader = AreaReader::new(&root, "m11_01", decoder, options.clone());
@@ -101,9 +104,11 @@ fn the_reader_declares_every_name_it_emits() {
     let mut seen = BTreeSet::new();
     for states in [sekiro::StateClasses::None, sekiro::StateClasses::Event] {
         let options = sekiro::Options {
-            region: Some([-170.0, 180.0, -50.0, 300.0]),
+            region: Some(sekiro::Region {
+                rect: [-170.0, 180.0, -50.0, 300.0],
+                margin: 30.0,
+            }),
             states,
-            ..Default::default()
         };
         let mut reader = AreaReader::new(&root, "m11_01", decoder, options);
         let (world, _) = reader.read().unwrap();

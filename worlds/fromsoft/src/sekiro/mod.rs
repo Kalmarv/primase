@@ -9,6 +9,7 @@ mod components;
 pub mod passes;
 mod read;
 pub use components::source;
+pub use components::source::Region;
 pub use passes::collision;
 pub use passes::extras;
 pub use passes::object_collision as objects;

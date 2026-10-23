@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     let region = [-170.0, 180.0, -50.0, 300.0];
     let oodle = load_oodle(Path::new("C:/Games/Sekiro/oo2core_6_win64.dll"))?;
     let decoder = Decoder { oodle: Some(&oodle), max_output: 1 << 30 };
-    let options = sekiro::Options { region: Some(region), region_margin: 30.0, ..Default::default() };
+    let options = sekiro::Options { region: Some(sekiro::Region { rect: region, margin: 30.0 }), ..Default::default() };
     let mut reader = AreaReader::new("C:/Games/Sekiro", "m11_01", decoder, options);
     let e = EncodingOptions {
         out_root: "out".into(),

@@ -1,7 +1,7 @@
 //! Reading one Sekiro area ([`read_area`]): its placed models, materials, texture files, layered-shader programs,
 //! collision files and bodies, lights, hang edges and spawn points, selected and in the world frame, as source records.
 use super::{collision, extras, objects, shaders, shadows, states, textures};
-use crate::sekiro::source;
+use crate::sekiro::source::{self, Region};
 use crate::{
     Archive, Binder, Result,
     dcx::Decoder,
@@ -16,14 +16,13 @@ use std::{
     path::Path,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Options {
-    /// East/north rectangle in the world frame that the read keeps: placements whose model's extent reaches it within
-    /// `region_margin`, lights and spawn points inside it. Collision files are read whole whatever the region (their
-    /// crop is `reach` on the collision passes). None reads the whole area.
-    pub region: Option<[f32; 4]>,
-    /// Metres around the region within which a placement's extent must reach (the caller's choice; 30 m by default).
-    pub region_margin: f32,
+    /// The region the read keeps ([`Region`]: a rectangle and its margin, both the caller's): placements whose
+    /// model's extent reaches the rectangle within the margin, lights and spawn points inside the rectangle. Collision
+    /// files are read whole whatever the region (their crop is `reach` on the collision passes). None reads the whole
+    /// area.
+    pub region: Option<Region>,
     /// Which world states to bring in ([`states`]): none (default, every part present) or the event-flag rules of the
     /// block's script, as axes and conditions for `resolve-state`.
     pub states: StateClasses,
@@ -35,15 +34,6 @@ pub enum StateClasses {
     None,
     /// Event flags (`fromsoft.flag.<id>`) from the block's part-state common functions.
     Event,
-}
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            region: None,
-            region_margin: 30.,
-            states: StateClasses::None,
-        }
-    }
 }
 /// What a read found and kept. Counts are source records (placements, prototypes, materials, texture files).
 #[derive(Default, Debug)]
@@ -247,7 +237,9 @@ fn area_name(area: &str) -> Result<String> {
 }
 /// Whether a placement of a model with world-frame box `[min, max]` reaches the region within its margin.
 fn inside(bounds: &[[f32; 3]; 2], t: &Transform, o: &Options) -> bool {
-    let Some(r) = o.region else { return true };
+    let Some(Region { rect: r, margin }) = o.region else {
+        return true;
+    };
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
     for mask in 0..8 {
@@ -261,10 +253,7 @@ fn inside(bounds: &[[f32; 3]; 2], t: &Transform, o: &Options) -> bool {
             max[i] = max[i].max(p[i]);
         }
     }
-    max[0] >= r[0] - o.region_margin
-        && min[0] < r[2] + o.region_margin
-        && max[2] >= r[1] - o.region_margin
-        && min[2] < r[3] + o.region_margin
+    max[0] >= r[0] - margin && min[0] < r[2] + margin && max[2] >= r[1] - margin && min[2] < r[3] + margin
 }
 
 /// A read model: the FLVER as stored, its resolved materials, its posed extent in the world frame, and for an object
@@ -346,12 +335,12 @@ pub fn read_area(
     if destination.entities().next().is_some() {
         return Err(invalid("Sekiro area", 0, "destination must be empty"));
     }
-    if !options.region_margin.is_finite()
-        || options.region_margin < 0.
-        || options
-            .region
-            .is_some_and(|r| !r.iter().all(|v| v.is_finite()) || r[0] >= r[2] || r[1] >= r[3])
-    {
+    if options.region.is_some_and(|Region { rect: r, margin }| {
+        !(margin.is_finite() && margin >= 0.)
+            || !r.iter().all(|v| v.is_finite())
+            || r[0] >= r[2]
+            || r[1] >= r[3]
+    }) {
         return Err(invalid("Sekiro area", 0, "invalid region"));
     }
     let area = area_name(area)?;
@@ -567,11 +556,17 @@ pub fn read_area(
         report.far_placements += usize::from(far);
     }
     report.collision = collision::read(&archive, decoder, &area, &layout, states.as_mut(), &mut world)?;
-    report.extras = extras::assemble(&archive, decoder, &area, &layout, options.region, &mut world)?;
+    report.extras = extras::assemble(
+        &archive,
+        decoder,
+        &area,
+        &layout,
+        options.region.map(|r| r.rect),
+        &mut world,
+    )?;
     world.insert_resource(source::ReadScope {
         area: area.clone(),
         region: options.region,
-        region_margin: options.region_margin,
         states: states.is_some(),
     });
     report.states = states.map(|s| s.report);
@@ -582,7 +577,7 @@ pub fn read_area(
 
 #[cfg(test)]
 mod tests {
-    use super::{Options, Report, select_placements};
+    use super::{Options, Region, Report, select_placements};
     use primase_core::Transform;
     use primase_core::convert::NoticeKind;
     use std::collections::BTreeMap;
@@ -650,7 +645,10 @@ mod tests {
         ]);
         let mut report = Report::default();
         let options = Options {
-            region: Some([-10., -10., 10., 10.]),
+            region: Some(Region {
+                rect: [-10., -10., 10., 10.],
+                margin: 30.,
+            }),
             ..Options::default()
         };
         assert_eq!(
@@ -665,5 +663,33 @@ mod tests {
             ),
             (2, 1, 1)
         );
+    }
+
+    /// A stated region states its margin, and a margin that isn't a finite distance is refused by name before anything
+    /// is read (here a folder that isn't an install).
+    #[test]
+    fn a_region_states_a_usable_margin() {
+        let decoder = crate::read::dcx::Decoder {
+            oodle: None,
+            max_output: 1,
+        };
+        for margin in [-1.0, f32::NAN, f32::INFINITY] {
+            let options = Options {
+                region: Some(Region {
+                    rect: [-10., -10., 10., 10.],
+                    margin,
+                }),
+                ..Options::default()
+            };
+            let e = super::read_area(
+                "/nonexistent",
+                "m11_01",
+                &decoder,
+                &options,
+                &mut primase_core::World::default(),
+            )
+            .unwrap_err();
+            assert!(e.to_string().contains("invalid region"), "{margin}: {e}");
+        }
     }
 }

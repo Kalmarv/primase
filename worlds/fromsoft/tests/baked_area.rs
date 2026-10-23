@@ -31,7 +31,10 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
                 max_output: 1024 * 1024 * 1024,
             },
             &sekiro::Options {
-                region: Some(serde_json::from_value(manifest["region"].clone())?),
+                region: Some(sekiro::Region {
+                    rect: serde_json::from_value(manifest["region"].clone())?,
+                    margin: 30.0,
+                }),
                 ..Default::default()
             },
             &mut world,

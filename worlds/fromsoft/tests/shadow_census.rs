@@ -112,7 +112,10 @@ fn selected_placement_shadows() -> Result<(), Box<dyn std::error::Error>> {
         "m11_01",
         &decoder,
         &sekiro::Options {
-            region: Some(region),
+            region: Some(sekiro::Region {
+                rect: region,
+                margin: 30.0,
+            }),
             ..Default::default()
         },
         &mut world,

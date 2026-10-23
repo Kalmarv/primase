@@ -233,7 +233,10 @@ fn installed_area_against_soulsformats() -> Result<()> {
         "m11_01",
         &decoder,
         &sekiro::Options {
-            region: Some(REGION),
+            region: Some(sekiro::Region {
+                rect: REGION,
+                margin: 30.0,
+            }),
             ..Default::default()
         },
         &mut world,

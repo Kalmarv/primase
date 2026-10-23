@@ -23,7 +23,10 @@ fn slice_a_keeps_the_bundle_of_every_shader_its_materials_name() {
         max_output: 1024 * 1024 * 1024,
     };
     let options = sekiro::Options {
-        region: Some([-170.0, 180.0, -50.0, 300.0]),
+        region: Some(sekiro::Region {
+            rect: [-170.0, 180.0, -50.0, 300.0],
+            margin: 30.0,
+        }),
         ..Default::default()
     };
     let mut world = World::new();
