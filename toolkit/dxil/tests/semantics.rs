@@ -771,7 +771,6 @@ mod waves {
     }
 }
 
-
 mod stage_functions {
     use super::*;
     use primase_shader::exec::Runner;
@@ -925,7 +924,6 @@ mod stage_functions {
     }
 }
 
-
 mod half_ops {
     use super::*;
 
@@ -1041,7 +1039,6 @@ mod image_atomics {
         }
     }
 }
-
 
 mod buffer_arrays {
     use super::*;
