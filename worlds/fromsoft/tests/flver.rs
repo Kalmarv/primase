@@ -1,4 +1,4 @@
-use primase_fromsoft::flver::{FaceSet, Model};
+use primase_fromsoft::flver::{FaceSet, FaceSetKind, Model, is_speedtree};
 fn put(b: &mut [u8], o: usize, v: u32) {
     b[o..o + 4].copy_from_slice(&v.to_le_bytes());
 }
@@ -142,6 +142,49 @@ fn restarts_and_degenerate_joints_preserve_reference_order() {
     assert_eq!(f.triangulate(), [0, 1, 2, 3, 2, 1, 3, 4, 5, 6, 7, 8, 9, 8, 7]);
 }
 #[test]
+fn level_of_detail_zero_excludes_every_coarser_level_and_motion_blur() {
+    let face = |flags| FaceSet {
+        flags,
+        strip: false,
+        cull: true,
+        indices: vec![],
+    };
+    // Edge-compressed (bit 30) LOD0 face sets stay LOD0.
+    for flags in [0, 0x4000_0000] {
+        assert!(face(flags).is_lod0(), "{flags:#x}");
+    }
+    for flags in [0x0100_0000, 0x0200_0000, 0x0300_0000, 0x0400_0000, 0x8000_0000] {
+        assert!(!face(flags).is_lod0(), "{flags:#x}");
+    }
+    // Elden Ring's far stand-ins are levels 3 and 4 of the same field, not level 0 and not refused.
+    assert_eq!(face(0x0300_0000).kind(), FaceSetKind::Lod(3));
+    assert_eq!(face(0x0400_0000).kind(), FaceSetKind::Lod(4));
+    assert_eq!(face(0x8400_0000).kind(), FaceSetKind::MotionBlur(4));
+    assert_eq!(face(0x4100_0000).kind(), FaceSetKind::Lod(1));
+}
+/// Zero padding after the data block to the next 2048-byte boundary is accepted, a non-zero byte in it or padding to
+/// another boundary is refused.
+#[test]
+fn padding_to_2048_bytes_after_the_data() {
+    let f = fixture();
+    let mut padded = f.clone();
+    padded.resize(f.len().next_multiple_of(0x800), 0);
+    assert!(Model::read(&padded).is_ok());
+    let mut dirty = padded.clone();
+    *dirty.last_mut().unwrap() = 1;
+    assert!(Model::read(&dirty).is_err());
+    let mut short = f.clone();
+    short.push(0);
+    assert!(Model::read(&short).is_err());
+}
+#[test]
+fn speedtree_is_the_header_flag() {
+    let mut f = fixture();
+    assert!(!is_speedtree(&f));
+    f[0x6a..0x6c].copy_from_slice(&[0x00, 0x80]);
+    assert!(is_speedtree(&f));
+}
+#[test]
 fn truncated_and_invalid_references_are_rejected() {
     let bytes = fixture();
     for n in 0..bytes.len() {
@@ -159,4 +202,45 @@ fn truncated_and_invalid_references_are_rejected() {
         put(&mut bad, o, v);
         assert!(Model::read(&bad).is_err(), "field {o}");
     }
+}
+/// The fixture with a second mesh (record at 208, 48 bytes inserted after the first) that has neither face sets nor
+/// vertex buffers, and the exporter's sentinel bounds for version 0x2001a: minimum -inf, maximum NaN, three more NaN
+/// words, in the nine free metadata words before the data (412..448 in the fixture, 460..496 here).
+fn with_empty_mesh(bounds: [f32; 9]) -> Vec<u8> {
+    let f = fixture();
+    let mut b = f[..208].to_vec();
+    b.extend([0; 48]);
+    b.extend(&f[208..]);
+    put(&mut b, 32, 2);
+    // Absolute offsets at or past the insertion move by 48: the data start, the material's two names, the first
+    // mesh's face-set and buffer references, and the layout's members (old 284, now 332).
+    for (o, v) in [
+        (12, 448),
+        (128, 408),
+        (132, 410),
+        (196, 400),
+        (204, 404),
+        (332, 320),
+    ] {
+        put(&mut b, o, v + 48);
+    }
+    put(&mut b, 208 + 24, 460);
+    for (j, x) in bounds.into_iter().enumerate() {
+        put(&mut b, 460 + j * 4, x.to_bits());
+    }
+    b
+}
+#[test]
+fn a_mesh_without_face_sets_or_buffers_is_empty_and_its_sentinel_bounds_are_unchecked() {
+    let (inf, nan) = (f32::NEG_INFINITY, f32::NAN);
+    let model = Model::read(&with_empty_mesh([inf, inf, inf, nan, nan, nan, nan, nan, nan])).unwrap();
+    assert_eq!(model.meshes.len(), 2);
+    assert_eq!(model.meshes[0].vertices[1].position, [1., 0., 0.]);
+    let empty = &model.meshes[1];
+    assert!(empty.vertices.is_empty() && empty.faces.is_empty() && empty.layouts.is_empty());
+    // A mesh with geometry still needs finite bounds: the same sentinel on the first mesh is refused.
+    let mut bad = with_empty_mesh([0.; 9]);
+    put(&mut bad, 160 + 24, 460);
+    put(&mut bad, 460, nan.to_bits());
+    assert!(Model::read(&bad).is_err());
 }

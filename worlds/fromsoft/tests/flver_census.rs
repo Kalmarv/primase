@@ -1,9 +1,12 @@
-//! Whole-install FLVER attributes and strip ordering against the independent C# decoder.
-use primase_fromsoft::{Archive, Binder, NameDictionary, dcx::Decoder, flver::Model};
+//! Whole-install FLVER attributes and strip ordering against an independent decoder, for each game configured:
+//! SoulsFormats' census of Sekiro (`PRIMASE_FROMSOFT_BHD_ORACLE`), SoulsFormatsNEXT's of Elden Ring
+//! (`PRIMASE_ELDEN_BHD_ORACLE`). A FLVER the reference refuses (a record with `error`) must be refused by ours too.
+use primase_fromsoft::{Binder, Game, NameDictionary, bhd::PathHash, dcx::Decoder, flver::Model};
 use primase_testdata::real_data;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+mod common;
 #[allow(unsafe_code)]
 mod native {
     pub fn load(path: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
@@ -21,6 +24,7 @@ struct Counts {
     normal_components: u64,
     normal_changed: u64,
     normal_max_ulp: u32,
+    agreed_rejections: usize,
 }
 /// The independent decoder divides by 127; the game multiplies by its rounded
 /// reciprocal. Recover the unique encoded integer only after checking the
@@ -60,6 +64,16 @@ fn visit(
             .remove(id)
             .ok_or_else(|| format!("unexpected FLVER {id}"))?;
         assert_eq!(sha(bytes), want["sha256"].as_str().ok_or("sha")?, "{id}");
+        if let Some(theirs) = want.get("error") {
+            return match Model::read(bytes) {
+                Ok(_) => Err(format!("{id}: read, the reference refuses it: {theirs}").into()),
+                Err(e) => {
+                    counts.agreed_rejections += 1;
+                    println!("Agreed FLVER rejection {id}: ours {e}; reference {theirs}");
+                    Ok(())
+                }
+            };
+        }
         let model = Model::read(bytes)?;
         assert_eq!(
             u64::from(model.version),
@@ -145,25 +159,51 @@ fn visit(
 }
 #[test]
 fn all_flver_models() -> Result<()> {
-    let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
-        return Ok(());
-    };
-    let Some(oracle) = real_data("PRIMASE_FROMSOFT_BHD_ORACLE") else {
-        return Ok(());
-    };
-    let Some(names) = real_data("PRIMASE_FROMSOFT_NAMES") else {
-        return Ok(());
-    };
     let Some(dll) = real_data("PRIMASE_OODLE6") else {
         return Ok(());
     };
     let dll = native::load(dll)?;
     let decoder = Decoder {
         oodle: Some(&dll),
-        max_output: 512 * 1024 * 1024,
+        max_output: 1 << 30,
     };
-    let archive = Archive::open(root)?;
-    let names = NameDictionary::read(names)?;
+    for (game, oracle, names) in [
+        (
+            Game::Sekiro,
+            "PRIMASE_FROMSOFT_BHD_ORACLE",
+            "PRIMASE_FROMSOFT_NAMES",
+        ),
+        (Game::EldenRing, "PRIMASE_ELDEN_BHD_ORACLE", "PRIMASE_ELDEN_NAMES"),
+    ] {
+        let (Some(archive), Some(oracle), Some(names)) =
+            (common::archive(game)?, real_data(oracle), real_data(names))
+        else {
+            continue;
+        };
+        flver_models(
+            game,
+            &archive,
+            &oracle,
+            &NameDictionary::read_for(names, game)?,
+            &decoder,
+        )?;
+    }
+    Ok(())
+}
+
+fn flver_models(
+    game: Game,
+    archive: &primase_fromsoft::Archive,
+    oracle: &std::path::Path,
+    names: &NameDictionary,
+    decoder: &Decoder<'_>,
+) -> Result<()> {
+    let decoder = *decoder;
+    // the reference writes a hash at its game's width
+    let width = match game.archives().hash {
+        PathHash::Base37 => 8,
+        PathHash::Base133 => 16,
+    };
     let mut expected = BTreeMap::new();
     for line in std::fs::read_to_string(oracle.join("flver/models.jsonl"))?.lines() {
         let value: serde_json::Value = serde_json::from_str(line)?;
@@ -186,7 +226,7 @@ fn all_flver_models() -> Result<()> {
         if name.is_some_and(|n| n.ends_with("bdt")) {
             continue;
         }
-        let id = format!("{}/{hash:08x}", entry.shard);
+        let id = format!("{}/{hash:0width$x}", entry.shard);
         let result = (|| -> Result<()> {
             let bytes = archive.read_hash(hash, &decoder)?;
             if bytes.starts_with(b"BHF4") {
@@ -219,8 +259,10 @@ fn all_flver_models() -> Result<()> {
         }
     }
     println!(
-        "FLVER models {}, meshes {}, split binders {}, remaining oracle {}, failures {}",
+        "{}: FLVER models {}, agreed rejections {}, meshes {}, split binders {}, remaining oracle {}, failures {}",
+        game.name(),
         counts.models,
+        counts.agreed_rejections,
         counts.meshes,
         split,
         expected.len(),

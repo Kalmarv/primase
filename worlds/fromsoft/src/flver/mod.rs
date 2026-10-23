@@ -106,8 +106,10 @@ impl FaceSet {
         }
         out
     }
+    /// Not a motion-blur face set (bit 31) and of level of detail 0: bits 24 to 26 hold the level (Sekiro's face sets
+    /// use 1 and 2; Elden Ring's also 3 and 4, the coarse stand-ins its assets carry for far views).
     pub fn is_lod0(&self) -> bool {
-        self.flags & 0x8300_0000 == 0
+        self.flags & 0x8700_0000 == 0
     }
 }
 #[derive(Clone, Debug)]
@@ -205,7 +207,11 @@ impl Model {
         let data_start = count(&v, 12)?;
         let data_len = count(&v, 16)?;
         v.slice(data_start, data_len)?;
-        if data_start + data_len != data.len() {
+        // Elden Ring's files may be zero-padded after the data block to the next 2048-byte boundary.
+        let end = data_start + data_len;
+        if !(end == data.len()
+            || (data.len() == end.next_multiple_of(0x800) && data[end..].iter().all(|&b| b == 0)))
+        {
             return Err(invalid(v.format, 16, "data length mismatch"));
         }
         let meta = View {
@@ -429,14 +435,32 @@ impl Model {
             let palette = (0..palette_len)
                 .map(|i| meta.u32(start + i * 4))
                 .collect::<Result<Vec<u32>>>()?;
+            let face_refs = refs(&meta, count(&v, o + 36)?, count(&v, o + 32)?, face_count)?;
+            let buffers = refs(&meta, count(&v, o + 44)?, count(&v, o + 40)?, vb_count)?;
+            // A mesh with neither face sets nor vertex buffers is empty: its bounds are the exporter's sentinel
+            // (minimum -inf, maximum NaN in Elden Ring's files) and are read but not required to be finite.
+            let empty = face_refs.is_empty() && buffers.is_empty();
             let bounds = count(&v, o + 24)?;
             if bounds != 0 {
                 for j in 0..if version == 0x2001a { 9 } else { 6 } {
-                    float(&meta, bounds + j * 4)?;
+                    if empty {
+                        meta.u32(bounds + j * 4)?;
+                    } else {
+                        float(&meta, bounds + j * 4)?;
+                    }
                 }
             }
-            let face_refs = refs(&meta, count(&v, o + 36)?, count(&v, o + 32)?, face_count)?;
-            let buffers = refs(&meta, count(&v, o + 44)?, count(&v, o + 40)?, vb_count)?;
+            if empty {
+                meshes.push(Mesh {
+                    dynamic,
+                    material,
+                    palette,
+                    layouts: Vec::new(),
+                    vertices: Vec::new(),
+                    faces: Vec::new(),
+                });
+                continue;
+            }
             if buffers.is_empty() || buffers.len() > 3 {
                 return Err(invalid(v.format, o + 40, "vertex buffer count"));
             }
@@ -520,4 +544,11 @@ impl Model {
             meshes,
         })
     }
+}
+
+/// Whether a FLVER stores SpeedTree vegetation: the high half of its header word at 0x68 is 0x8000. Its vertex layouts
+/// address several streams with per-stream offsets, which [`Model::read`] does not decode (nor does the reference
+/// reader, SoulsFormatsNEXT).
+pub fn is_speedtree(data: &[u8]) -> bool {
+    data.starts_with(b"FLVER\0L\0") && data.get(0x6a..0x6c) == Some(&[0x00, 0x80][..])
 }

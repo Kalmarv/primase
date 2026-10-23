@@ -14,15 +14,10 @@ pub enum FaceSetKind {
 }
 
 impl super::FaceSet {
-    /// Flags `0x0100_0000` and `0x0200_0000` are levels 1 and 2, `0x8000_0000` the motion-blur variant; edge
-    /// compression is refused when the model is read.
+    /// Bits 24 to 26 of the flags are the level of detail (`0x0100_0000` level 1 ... `0x0400_0000` level 4),
+    /// `0x8000_0000` the motion-blur variant; edge compression is refused when the model is read.
     pub fn kind(&self) -> FaceSetKind {
-        let level = match self.flags & 0x0300_0000 {
-            0 => 0,
-            0x0100_0000 => 1,
-            0x0200_0000 => 2,
-            _ => 3,
-        };
+        let level = ((self.flags >> 24) & 7) as u8;
         if self.flags & 0x8000_0000 != 0 {
             FaceSetKind::MotionBlur(level)
         } else {

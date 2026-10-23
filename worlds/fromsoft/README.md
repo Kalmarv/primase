@@ -116,6 +116,16 @@ UVs retain both their signed-short interpretation and their original four bytes
 with the destination UV slot, so layer weights do not lose their provenance.
 The supported container is little-endian Unicode FLVER2, versions `0x20013`,
 `0x20014`, `0x20016` and `0x2001a`. Other variants return errors.
+Elden Ring's files may be zero-padded after the data block to the next 2048-byte
+boundary (other trailing bytes are refused). A mesh with neither face sets nor vertex
+buffers is read as empty; its bounds are the exporter's sentinel (-inf, NaN) and are
+read, not required finite. A face set's level of detail is bits 24 to 26 of its flags
+(`FaceSet::kind`, `is_lod0`): Sekiro's face sets use levels 0 to 2, Elden Ring's also 3
+and 4 (115 and 62 face sets in the install, both SoulsFormats censuses), the coarse
+stand-ins its assets carry for far views; `lower-fromsoft-geometry` gives every level a
+`core.lods` form. `flver::is_speedtree` recognises SpeedTree FLVERs (0x8000 in the high
+half of the header word at 0x68), whose multi-stream layouts neither this reader nor
+SoulsFormatsNEXT decodes.
 
 `Model::geometry(materials)` selects the first LOD0 face set per mesh, compacts
 vertices in first-use order, converts through the core frame, normalizes stored
@@ -124,8 +134,10 @@ Caller-supplied material decisions control mesh exclusion and main-layer UV
 scale. It retains vertices referenced by faces that later fail the area check.
 It does not bake layered materials or split parts into baked weight levels.
 
-The archive oracle directory adds `flver/models.jsonl`, one record per FLVER2
-found in the archive and its binders, `id` the shard/hex hash followed by
+The archive oracle directory (`PRIMASE_FROMSOFT_BHD_ORACLE`, `PRIMASE_ELDEN_BHD_ORACLE`; `tests/flver_census.rs`
+runs one body for each game) adds `flver/models.jsonl`, one record per FLVER2
+found in the archive and its binders (a FLVER the reference refuses: `id`, `sha256` and `error`; ours must refuse
+it too), `id` the shard/hex hash followed by
 `/b<index>` or `/s<index>` for single/split binder members. Each record contains
 the input SHA256, version and meshes. Each mesh records its material, vertex
 count, vertex digest and face sets (flags, strip/culling booleans, index digest
