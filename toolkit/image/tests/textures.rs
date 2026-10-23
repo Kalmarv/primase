@@ -268,3 +268,16 @@ fn normalize_normals_runs_on_a_world_without_textures() {
     let mut report = pass::RunReport::default();
     manager.run(&mut w, &pipeline, &mut report).unwrap();
 }
+
+/// A PNG whose first chunk is not IHDR is refused by name, before any byte is taken for the header's colour type.
+#[test]
+fn a_png_must_start_with_its_header() {
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    for kind in [b"tEXt", b"IEND"] {
+        bytes.extend([0, 0, 0, 0]);
+        bytes.extend(kind);
+        bytes.extend([0, 0, 0, 0]);
+    }
+    let error = primase_image::read_png(&bytes).unwrap_err().to_string();
+    assert!(error.contains("first chunk is not IHDR"), "{error}");
+}

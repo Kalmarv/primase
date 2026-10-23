@@ -954,7 +954,8 @@ impl World {
         if !opaque.is_empty() {
             opaque.sort();
             return Err(format!(
-                "{e:?}: opaque components can't follow a change to a primitive's vertices: {opaque:?} (remove them,                  or give them a typed form, before the pass)"
+                "{e:?}: opaque components can't follow a change to a primitive's vertices: {opaque:?} (remove them, \
+                 or give them a typed form, before the pass)"
             ));
         }
         let mut done = Vec::new();

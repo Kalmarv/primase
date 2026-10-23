@@ -57,18 +57,6 @@ pub fn fnv1a32_utf16le(s: &str) -> u32 {
         .flat_map(u16::to_le_bytes)
         .fold(0x811c9dc5u32, |h, c| (h ^ u32::from(c)).wrapping_mul(0x01000193))
 }
-/// Standard FNV-1 64 over bytes, offset basis 0xcbf29ce484222325, prime 0x100000001b3.
-pub fn fnv1_64(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf29ce484222325u64, |h, &b| {
-        h.wrapping_mul(0x100000001b3) ^ u64::from(b)
-    })
-}
-/// Standard FNV-1a 64 over bytes with the same basis and prime as [`fnv1_64`].
-pub fn fnv1a_64(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf29ce484222325u64, |h, &b| {
-        (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
-    })
-}
 /// Extend skate-writer Hash64 state by one word: Murmur3 constants, rotl31 for
 /// the word and rotl27 for the state, then state*5+0x52DCE729 (wrapping u64).
 /// Default initial state is 0x9E3779B97F4A7C15; finalize with [`content_finish`].
@@ -128,8 +116,6 @@ mod tests {
             )),
             0x30c66d82292e7540
         );
-        assert_eq!(fnv1_64(b"hello"), 0x7b495389bdbdd4c7);
-        assert_eq!(fnv1a_64(b"hello"), 0xa430d84680aabd0b);
         assert_eq!(joaat(b"adder"), 0xb779a091);
         assert_eq!(joaat(b"ADDER"), 0xb779a091);
         assert_eq!(joaat_exact(b"adder"), 0xb779a091);

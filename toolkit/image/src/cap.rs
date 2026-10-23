@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::{Entity, Name, NormalX, NormalZ, TexFormat, TexRole, Texture, World};
+use primase_core::{
+    Component, Entity, Name, NormalX, NormalZ, TexFormat, TexRole, Texture, TextureFile, World,
+};
 use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::{Image, Result, Samples, half, pick_level, resize_normals};
@@ -206,14 +208,6 @@ impl CapTextures {
         self.max
     }
 
-    pub fn role_cap(&self, role: CapRole) -> Option<u32> {
-        match role {
-            CapRole::Color => self.color,
-            CapRole::Normal => self.normal,
-            CapRole::Mask => self.mask,
-        }
-    }
-
     /// The caps by name, lower case.
     pub fn name_caps(&self) -> &BTreeMap<String, u32> {
         &self.names
@@ -313,7 +307,15 @@ impl Pass for CapTextures {
         o
     }
     fn modifies(&self) -> &[&'static str] {
-        &["core.texture"]
+        &[Texture::NAME]
+    }
+    /// The file link of a texture whose levels it dropped or remade: the file no longer holds them.
+    fn removes(&self) -> &[&'static str] {
+        &[TextureFile::NAME]
+    }
+    /// Only the textures: the file links go as a side effect.
+    fn legalizes(&self) -> &[&'static str] {
+        &[]
     }
     fn approximates(&self) -> &'static str {
         "textures with no stored level within the cap: box-filtered from their smallest level, decoded to RGBA8"
@@ -330,26 +332,43 @@ impl Pass for CapTextures {
         let Some(mut textures) = w.column_mut::<Texture>() else {
             return Ok(());
         };
+        // the textures whose levels changed: their file links no longer match
+        let mut changed = Vec::new();
         for (e, t) in textures.iter_mut() {
             let (from_w, from_h) = (t.width, t.height);
             let cap = self.cap(t, names.get(&e).map(String::as_str));
             match cap_texture(t, cap, self.mode).map_err(|err| format!("{e:?}: {err}"))? {
                 Capped::Within => log.count("textures within the cap", 1),
                 Capped::Data => log.count("data textures kept whole", 1),
-                Capped::Level { level, .. } => log.count(&format!("textures: stored level {level} kept"), 1),
-                Capped::Downscaled { width, height } => log.approximate(
-                    &format!("{e:?}: {from_w}x{from_h}, no stored level within {cap}, box-filtered to {width}x{height}"),
-                    1,
-                ),
-                Capped::LeftLarge { level, width, height } => log.count(
-                    &format!("{e:?}: normal map with X not in red or Z not stored, left at stored level {level} ({width}x{height})"),
-                    1,
-                ),
-                Capped::Smallest { level, width, height } => log.count(
-                    &format!("{e:?}: no stored level within {cap}, left at its smallest, stored level {level} ({width}x{height})"),
-                    1,
-                ),
+                Capped::Level { level, .. } => {
+                    changed.push(e);
+                    log.count(&format!("textures: stored level {level} kept"), 1)
+                }
+                Capped::Downscaled { width, height } => {
+                    changed.push(e);
+                    log.approximate(
+                        &format!("{e:?}: {from_w}x{from_h}, no stored level within {cap}, box-filtered to {width}x{height}"),
+                        1,
+                    )
+                }
+                Capped::LeftLarge { level, width, height } => {
+                    changed.push(e);
+                    log.count(
+                        &format!("{e:?}: normal map with X not in red or Z not stored, left at stored level {level} ({width}x{height})"),
+                        1,
+                    )
+                }
+                Capped::Smallest { level, width, height } => {
+                    changed.push(e);
+                    log.count(
+                        &format!("{e:?}: no stored level within {cap}, left at its smallest, stored level {level} ({width}x{height})"),
+                        1,
+                    )
+                }
             }
+        }
+        for e in changed {
+            w.remove::<TextureFile>(e);
         }
         Ok(())
     }
@@ -377,6 +396,24 @@ mod tests {
     fn chain() -> Texture {
         let levels = (0..4u8).map(|i| vec![10 + i; (8usize >> i).pow(2) * 4]).collect();
         rgba8(8, 8, levels, TexRole::Color)
+    }
+
+    /// A texture whose levels the pass changed no longer matches its file; one it left whole keeps the link.
+    #[test]
+    fn a_changed_texture_loses_its_file_link() {
+        let mut w = World::new();
+        let (changed, within) = (w.spawn(), w.spawn());
+        w.insert(changed, chain());
+        w.insert(within, rgba8(2, 2, vec![vec![0; 16], vec![0; 4]], TexRole::Color));
+        for e in [changed, within] {
+            w.insert(e, TextureFile { path: "a.png".into() });
+        }
+        CapTextures::new(4)
+            .unwrap()
+            .run(&mut w, &mut PassLog::default())
+            .unwrap();
+        assert!(!w.has::<TextureFile>(changed));
+        assert!(w.has::<TextureFile>(within));
     }
 
     #[test]

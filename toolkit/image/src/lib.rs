@@ -162,6 +162,11 @@ fn envelope(data: &[u8]) -> Result<Vec<[u8; 4]>> {
 pub fn read_png(data: &[u8]) -> Result<Png> {
     let ignored_ancillary = envelope(data)?;
     let mut decoder = png::Decoder::new(Cursor::new(data));
+    // the first chunk is the header (the PNG specification's rule), whose colour type is its ninth byte: indexed
+    // images keep their indices here, the others are expanded
+    if data.get(12..16) != Some(b"IHDR".as_slice()) {
+        return Err(Error::Invalid("PNG: the first chunk is not IHDR".into()));
+    }
     if data.get(25) != Some(&3) {
         decoder.set_transformations(png::Transformations::EXPAND);
     }

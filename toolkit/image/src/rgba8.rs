@@ -7,7 +7,7 @@
 //! 8-bit images does not make on its own: a program converts them first with this pass.
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::{Component, Entity, Name, TexFormat, TexRole, Texture, World};
+use primase_core::{Component, Entity, Name, TexFormat, TexRole, Texture, TextureFile, World};
 use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::texture::level_dimensions;
@@ -18,20 +18,7 @@ use crate::texture::level_dimensions;
 /// channels (16-bit, 10-bit, the 5- and 6-bit ones of packed 16-bit formats, EAC's 11-bit, ASTC), floating point
 /// (16- and 32-bit, BC6H: values outside 0-1 and finer than 1/255) and signed formats (values below 0).
 pub fn rgba8_exact(format: TexFormat) -> bool {
-    use TexFormat::*;
-    match format {
-        R8Unorm | A8Unorm | Rg8Unorm | Rgba8Unorm | Bgra8Unorm | Bgrx8Unorm | B4g4r4a4Unorm => true,
-        Bc1 | Bc2 | Bc3 | Bc4Unorm | Bc5Unorm | Bc7 => true,
-        Etc1 | Etc2Rgb | Etc2Rgba | Etc2RgbA1 => true,
-        R8Snorm | Rg8Snorm | Rgba8Snorm | Rg16Snorm | Bc4Snorm | Bc5Snorm => false,
-        R16Float | Rg16Float | Rgba16Float | R32Float | Rg32Float | Rgba32Float | Bc6hUfloat | Bc6hSfloat => {
-            false
-        }
-        B5g6r5Unorm | B5g5r5a1Unorm | Rgb10a2Unorm | R16Unorm | Rg16Unorm | Rgba16Unorm => false,
-        EacR11Unorm | EacRg11Unorm | Astc { .. } => false,
-        // a format added later is not exact until shown to be
-        _ => false,
-    }
+    conversion(format).is_none()
 }
 
 /// How a format not exact in 8-bit RGBA is converted to it.
@@ -45,18 +32,28 @@ enum Conversion {
     Signed,
 }
 
+/// How `format` is converted to 8-bit RGBA, `None` for the formats it holds exactly ([`rgba8_exact`]). Every format
+/// is named: none is exact, rounded or clamped by default.
 fn conversion(format: TexFormat) -> Option<Conversion> {
     use TexFormat::*;
-    if rgba8_exact(format) {
-        return None;
-    }
-    Some(match format {
-        R8Snorm | Rg8Snorm | Rgba8Snorm | Rg16Snorm | Bc4Snorm | Bc5Snorm => Conversion::Signed,
+    match format {
+        R8Unorm | A8Unorm | Rg8Unorm | Rgba8Unorm | Bgra8Unorm | Bgrx8Unorm | B4g4r4a4Unorm => None,
+        Bc1 | Bc2 | Bc3 | Bc4Unorm | Bc5Unorm | Bc7 => None,
+        Etc1 | Etc2Rgb | Etc2Rgba | Etc2RgbA1 => None,
+        R8Snorm | Rg8Snorm | Rgba8Snorm | Rg16Snorm | Bc4Snorm | Bc5Snorm => Some(Conversion::Signed),
         R16Float | Rg16Float | Rgba16Float | R32Float | Rg32Float | Rgba32Float | Bc6hUfloat | Bc6hSfloat => {
-            Conversion::Clamped
+            Some(Conversion::Clamped)
         }
-        _ => Conversion::Rounded,
-    })
+        B5g6r5Unorm
+        | B5g5r5a1Unorm
+        | Rgb10a2Unorm
+        | R16Unorm
+        | Rg16Unorm
+        | Rgba16Unorm
+        | EacR11Unorm
+        | EacRg11Unorm
+        | Astc { .. } => Some(Conversion::Rounded),
+    }
 }
 
 /// What `lower-textures-rgba8` does with a signed texture that is not a normal map.
@@ -107,6 +104,14 @@ impl Pass for LowerTexturesRgba8 {
     // no `requires`: a world (or part) without textures has nothing to convert
     fn modifies(&self) -> &[&'static str] {
         &[Texture::NAME]
+    }
+    /// The file link of a texture whose pixels it changed: the file no longer holds them.
+    fn removes(&self) -> &[&'static str] {
+        &[TextureFile::NAME]
+    }
+    /// Only the textures: the file links go as a side effect.
+    fn legalizes(&self) -> &[&'static str] {
+        &[]
     }
     fn approximates(&self) -> &'static str {
         "textures converted to 8-bit RGBA: wider values rounded, floating point clamped to 0-1, signed normal maps in \
@@ -185,6 +190,7 @@ impl Pass for LowerTexturesRgba8 {
         }
         for (e, t) in done {
             w.insert(e, t);
+            w.remove::<TextureFile>(e);
         }
         Ok(())
     }

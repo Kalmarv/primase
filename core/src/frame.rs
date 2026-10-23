@@ -111,11 +111,6 @@ impl SourceFrame {
         self.metres_per_unit
     }
 
-    /// The same axes in another unit.
-    pub const fn with_metres_per_unit(self, metres_per_unit: f64) -> SourceFrame {
-        SourceFrame::new(self.axes, metres_per_unit)
-    }
-
     /// The determinant of the axis part: +1 when the source is right-handed like the world, -1 when it is
     /// left-handed (converting mirrors).
     pub const fn determinant(&self) -> i32 {
@@ -124,10 +119,6 @@ impl SourceFrame {
         let even = (a.index() + 1) % 3 == b.index() && (b.index() + 1) % 3 == c.index();
         let negs = a.is_negative() as u32 + b.is_negative() as u32 + c.is_negative() as u32;
         if even == negs.is_multiple_of(2) { 1 } else { -1 }
-    }
-
-    pub const fn is_right_handed(&self) -> bool {
-        self.determinant() == 1
     }
 
     /// Whether converting a mesh mirrors it, so its triangles' winding must be reversed to keep their fronts.
@@ -237,7 +228,7 @@ mod tests {
     fn handedness_follows_the_determinant() {
         assert_eq!(SourceFrame::WORLD.determinant(), 1);
         assert_eq!(SourceFrame::ENU.determinant(), 1);
-        assert!(SourceFrame::ENU.is_right_handed() && !SourceFrame::ENU.flips_winding());
+        assert!(!SourceFrame::ENU.flips_winding());
         for f in [FROMSOFT, UNITY, FORZA] {
             assert_eq!(f.determinant(), -1, "{f:?}");
             assert!(f.flips_winding());
@@ -378,7 +369,7 @@ mod tests {
 
     #[test]
     fn scale_applies_to_points_and_translations_only() {
-        let cm = SourceFrame::WORLD.with_metres_per_unit(0.01);
+        let cm = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::PosZ], 0.01);
         assert_eq!(cm.point([100.0, 250.0, -50.0]), [1.0, 2.5, -0.5]);
         assert_eq!(cm.direction([0.0, 1.0, 0.0]), [0.0, 1.0, 0.0]);
         let m = Transform {

@@ -957,15 +957,6 @@ pub struct PartSize {
     pub written: BTreeMap<String, u64>,
 }
 
-impl PartSize {
-    pub fn loaded_total(&self) -> u64 {
-        self.loaded.values().sum()
-    }
-    pub fn written_total(&self) -> u64 {
-        self.written.values().sum()
-    }
-}
-
 fn sizes(w: &World) -> BTreeMap<String, u64> {
     w.payload_bytes()
         .into_iter()

@@ -284,7 +284,8 @@ impl GeometryShader {
             && let Some(at) = indices.iter().position(|&i| i == cut)
         {
             return Err(format!(
-                "index {at} is the restart index {cut:#x}: a draw with a strip restart is not assembled (the                  primitives around a cut are not measured on the D3D reference)"
+                "index {at} is the restart index {cut:#x}: a draw with a strip restart is not assembled (the \
+                 primitives around a cut are not measured on the D3D reference)"
             ));
         }
         let drawn = indices

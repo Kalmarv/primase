@@ -197,9 +197,19 @@ fn a_closed_bezier_curve_does_not_repeat_its_first_point() {
     let mut w = world();
     let e = w.spawn();
     w.insert(e, quarter(true));
-    run(&mut w, "flatten-curves");
+    run(&mut w, "flatten-curves{tolerance=0.005}");
     let c = w.get::<Curve>(e).unwrap();
     assert!(c.closed);
     assert_ne!(c.points.last(), c.points.first());
     assert_eq!(c.up.as_ref().unwrap().len(), c.points.len());
+}
+
+/// How closely a polyline follows its curve is the program's: a pipeline without the tolerance does not parse.
+#[test]
+fn flatten_curves_needs_its_tolerance() {
+    let mut reg = PassRegistry::new();
+    primase_meshops::register(&mut reg);
+    let error = reg.parse("flatten-curves").expect_err("no default").to_string();
+    assert!(error.contains("tolerance is required"), "{error}");
+    assert!(reg.parse("flatten-curves{tolerance=0.01}").is_ok());
 }

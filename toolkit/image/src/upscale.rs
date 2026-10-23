@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::{Entity, Name, TexFormat, TexRole, Texture, World};
+use primase_core::{Component, Entity, Name, TexFormat, TexRole, Texture, TextureFile, World};
 
 use crate::{Image, Samples};
 
@@ -134,7 +134,15 @@ impl Pass for UpscaleNearest {
         o
     }
     fn modifies(&self) -> &[&'static str] {
-        &["core.texture"]
+        &[Texture::NAME]
+    }
+    /// The file link of an enlarged texture: the file no longer holds its pixels.
+    fn removes(&self) -> &[&'static str] {
+        &[TextureFile::NAME]
+    }
+    /// Only the textures: the file links go as a side effect.
+    fn legalizes(&self) -> &[&'static str] {
+        &[]
     }
     fn approximates(&self) -> &'static str {
         "nearest-sampled textures enlarged so linear filtering blends only across their texel blocks; lower mip levels \
@@ -210,6 +218,7 @@ impl Pass for UpscaleNearest {
                 normal: t.normal,
             };
             w.insert(e, enlarged);
+            w.remove::<TextureFile>(e);
             log.count(
                 &format!("textures enlarged {k} times by nearest neighbour: {name}"),
                 1,

@@ -6,8 +6,10 @@
 //! read those (DDS in `primase-dds`, a game's own enum in its world crate).
 
 /// How a texture's bytes are laid out.
+///
+/// Closed on purpose, as `SurfaceClass` is: a classification of every format (`rgba8_exact`, a decoder's table) matches
+/// it without a wildcard, so adding a format fails to compile until each one says what it does with it.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-#[non_exhaustive]
 pub enum TexFormat {
     // ---- uncompressed, 8 bits per channel
     R8Unorm,

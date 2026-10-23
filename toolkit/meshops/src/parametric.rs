@@ -17,9 +17,12 @@ pub(crate) fn register(reg: &mut PassRegistry) {
         no_options(o)?;
         Ok(Box::new(TessellateColliders))
     });
-    reg.register("flatten-curves", |o: &Options| {
-        Ok(Box::new(FlattenCurves::from_options(o)?))
-    });
+    // how closely the polyline follows the curve is the program's: no default
+    reg.register_requiring(
+        "flatten-curves",
+        |o: &Options| Ok(Box::new(FlattenCurves::from_options(o)?)),
+        &[("tolerance", "0.005")],
+    );
 }
 
 fn no_options(o: &Options) -> Result<(), String> {
@@ -187,9 +190,6 @@ pub struct FlattenCurves {
 }
 
 impl FlattenCurves {
-    /// 5 mm.
-    pub const DEFAULT_TOLERANCE: f32 = 0.005;
-
     /// Within `tolerance` metres of each curve: an error unless it is finite and above 0.
     pub fn new(tolerance: f32) -> Result<FlattenCurves, String> {
         if !(tolerance.is_finite() && tolerance > 0.0) {
@@ -204,30 +204,24 @@ impl FlattenCurves {
         self.tolerance
     }
 
-    /// From its options (`tolerance`, [`FlattenCurves::DEFAULT_TOLERANCE`] unless given), through
-    /// [`FlattenCurves::new`].
+    /// From its options (`tolerance`, required: how closely the polyline follows the curve is the program's choice),
+    /// through [`FlattenCurves::new`].
     pub fn from_options(o: &Options) -> Result<FlattenCurves, String> {
-        let mut tolerance = FlattenCurves::DEFAULT_TOLERANCE;
+        let mut tolerance = None;
         for (k, v) in o {
             match k.as_str() {
                 "tolerance" => {
-                    tolerance = v
-                        .parse()
-                        .map_err(|_| format!("tolerance {v} is not a positive number of metres"))?;
+                    tolerance = Some(
+                        v.parse()
+                            .map_err(|_| format!("tolerance {v} is not a positive number of metres"))?,
+                    );
                 }
                 _ => return Err(format!("unknown option {k}")),
             }
         }
-        FlattenCurves::new(tolerance)
-    }
-}
-
-impl Default for FlattenCurves {
-    /// Within [`FlattenCurves::DEFAULT_TOLERANCE`].
-    fn default() -> Self {
-        FlattenCurves {
-            tolerance: FlattenCurves::DEFAULT_TOLERANCE,
-        }
+        FlattenCurves::new(
+            tolerance.ok_or("tolerance is required: the metres a polyline may lie from its curve")?,
+        )
     }
 }
 

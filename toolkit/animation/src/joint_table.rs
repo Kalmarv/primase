@@ -67,11 +67,6 @@ impl JointTable {
         Ok(t)
     }
 
-    /// The table as JSON text, pairs in their order.
-    pub fn to_text(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_default()
-    }
-
     /// The pairs as joint ids of `from` and `to` (a `core.joint_map`'s pairs), in the table's order.
     pub fn resolve(&self, from: &Skeleton, to: &Skeleton) -> Result<Vec<(JointId, JointId)>> {
         let (a, b) = (by_name(from, "source")?, by_name(to, "target")?);
@@ -124,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn a_table_resolves_by_name_and_round_trips() {
+    fn a_table_resolves_by_name() {
         let text = r#"{"version": 1, "from": "a", "to": "b", "pairs": [["hips", "Root"], ["head", "Head"]],
             "notes": {"hips": "carries the spine"}}"#;
         let t = JointTable::parse(text).unwrap();
@@ -135,7 +130,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(pairs, [(JointId(10), JointId(10)), (JointId(12), JointId(11))]);
-        assert_eq!(JointTable::parse(&t.to_text()).unwrap(), t);
     }
 
     #[test]
