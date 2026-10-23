@@ -202,6 +202,36 @@ fn an_own_transform_is_composed_into_the_roots_or_refused() {
     assert_eq!(translation, [0.0, 0.0, 2.0]);
 }
 
+/// `replace` makes the root's rest the own position and rotation (the engine's runtime pose), whatever the root stored,
+/// and leaves the rest of the tree.
+#[test]
+fn an_own_transform_replaces_the_roots_rest() {
+    let half = std::f32::consts::FRAC_1_SQRT_2;
+    let own = ([10.0, 0.0, 0.964, 0.0], [0.0, 0.0, half, half]);
+    let s = lowered(own, SourceFrame::WORLD, "replace").expect("replaced");
+    let Rest::Trs {
+        translation,
+        rotation,
+        ..
+    } = s.joints[0].rest
+    else {
+        panic!("not a TRS");
+    };
+    assert_eq!(translation, [10.0, 0.0, 0.964]);
+    assert_eq!(rotation, [0.0, 0.0, half, half]);
+    // a child keeps its stored rest
+    let Rest::Trs { translation, .. } = s.joints[1].rest else {
+        panic!("not a TRS");
+    };
+    assert_eq!(translation, [0.0, 0.0, 2.0]);
+    // the identity as own: the root's rest is the identity, not what it stored
+    let s = lowered(IDENTITY, SourceFrame::WORLD, "replace").expect("replaced");
+    let Rest::Trs { rotation, .. } = s.joints[0].rest else {
+        panic!("not a TRS");
+    };
+    assert_eq!(rotation, [0.0, 0.0, 0.0, 1.0]);
+}
+
 #[test]
 fn the_option_is_required() {
     assert!(LowerAnvilSkeleton::from_options(&Options::new()).is_err());

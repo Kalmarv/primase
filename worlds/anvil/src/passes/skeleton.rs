@@ -1,4 +1,4 @@
-//! `lower-anvil-skeleton{own-transform=compose|refuse|ignore}`: a Skeleton ([`AnvilSkeleton`]) becomes a `core.skeleton`.
+//! `lower-anvil-skeleton{own-transform=replace|compose|refuse|ignore}`: a Skeleton ([`AnvilSkeleton`]) becomes a `core.skeleton`.
 //!
 //! - **Joints** (read): one per bone, listed in the skeleton's order, its [`JointId`] the bone's position there, its
 //!   parent the bone whose object id the bone's parent pointer names (a bone the skeleton doesn't hold is an error,
@@ -7,17 +7,26 @@
 //!   reader was given into the world's.
 //! - **Name** (read): the bone stores its name's CRC-32 and no string, so a joint is named by that hash in eight
 //!   hexadecimal digits (`07c159a2` is "Head"): provenance, as the core says a name is, not identity.
-//! - **The skeleton's own transform** (stored, its place in the rig not established): `own-transform=compose` puts it in
-//!   front of each root bone's rest (a root's parent space being the skeleton's), `refuse` is an error where it isn't
-//!   the identity, `ignore` leaves it out. 16 of the 361 skeletons the Riders Republic census read through this field
-//!   have one that isn't. What the data says: a human rig's (`MAD_CHR_Skel_U`: 0.964 up and a quarter turn about z) is
-//!   not in its bones' stored global transforms, nor in the mesh bind poses (a mesh's `InitialMatrixInverse` equals the
-//!   inverse of the bone's stored rest world matrix on every bone of 22 of 118 mesh and rig pairs with one, and of none
-//!   when it is composed), and its root bone's own local position already holds the 0.964 that a clip's root track
-//!   replaces (on the three clips looked at, 0.84 to 0.93 up), so composing it would count it twice. The choice stays
-//!   the program's.
+//! - **The skeleton's own transform**: a Skeleton stores a position and a rotation of its own. `own-transform=replace`
+//!   makes the root bone's rest the own position and rotation, **as the engine's runtime pose does**; `compose` puts
+//!   it in front of each root bone's rest, `refuse` is an error where it isn't the identity, `ignore` leaves it out.
+//!   What the data says (Riders Republic, build 25394987): of the 1,120 Skeleton root rows the root bone's local
+//!   position and rotation equal the own ones on 1,033 (so composing counts them twice, and replacing and ignoring
+//!   agree); the exceptions are the human rig `MAD_CHR_Skel_U` (root rotation the identity, own 0.964 up and a quarter
+//!   turn about z) and the bike `MAD_CHR_Skel_Bike_U` (root rotation a quarter turn about z backwards, own the quarter
+//!   turn forwards). The skeleton's bones' stored global transforms and the meshes' bind poses
+//!   (`InitialMatrixInverse` equals the inverse of the bone's stored rest world matrix on every bone of 22 of the 118
+//!   mesh and rig pairs whose rig has a non-identity own transform, and of none when it is composed) do not hold it.
+//!   The engine's own pose arrays in the memory of a running game (the world snapshot: records of position, rotation
+//!   and scale per bone) hold, for the human rig, a root at (0, 0, 0.964) turned a quarter turn about z with every
+//!   other bone at its stored local, and for the bike a root turned a quarter turn about z **forwards** (its stored
+//!   root rotation is backwards, so neither composing, which gives the identity, nor ignoring gives it) at height
+//!   0.012 (a value no Skeleton holds; its source isn't established). Each Skeleton has exactly one bone without a
+//!   parent, its root, the first bone (1,138 of 1,138). So the engine replaces the root's local transform with the
+//!   own one: the human faces along x in the bones' space and along y after it, the bike's front along -y before and
+//!   along y after, both facing the game's forward.
 //!
-//! `lower-anvil-rig{own-transform=compose|refuse|ignore}`: the same for a SkeletonComponent's rig ([`AnvilRig`]: its main
+//! `lower-anvil-rig{own-transform=replace|compose|refuse|ignore}`: the same for a SkeletonComponent's rig ([`AnvilRig`]: its main
 //! Skeleton's and addons' bones joined by name), joints in the rig's order, the main Skeleton's own transform the rig's.
 //!
 //! Left out, counted: the pose groups (SkeletonPoses of SkeletonPoseBones, kept as bytes), the IKData, the Reflex
@@ -32,6 +41,8 @@ use crate::components::{AnvilRig, AnvilSkeleton};
 /// What a pass does with a skeleton's own position and rotation (see the module documentation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwnTransform {
+    /// The root's rest is the own position and rotation (the engine's runtime pose).
+    Replace,
     /// Composed in front of each root's rest.
     Compose,
     /// An error where it isn't the identity.
@@ -48,7 +59,7 @@ pub struct LowerAnvilSkeleton {
 }
 
 impl LowerAnvilSkeleton {
-    /// From its options: `own-transform=compose|refuse|ignore`, required.
+    /// From its options: `own-transform=replace|compose|refuse|ignore`, required.
     pub fn from_options(o: &Options) -> Result<LowerAnvilSkeleton, String> {
         Ok(LowerAnvilSkeleton {
             own_transform: own_transform_option(o)?,
@@ -83,8 +94,8 @@ struct RawJoint {
     rotation: [f32; 4],
 }
 
-/// The joints of `raw` in its order, the own transform (`position` and `rotation`) composed in front of each root's rest
-/// or left out, or refused where it isn't the identity, as `own` says.
+/// The joints of `raw` in its order, the own transform (`position` and `rotation`) the root's rest, composed in front
+/// of it or left out, or refused where it isn't the identity, as `own` says.
 fn joints_of(
     raw: &[RawJoint],
     position: [f32; 4],
@@ -112,6 +123,10 @@ fn joints_of(
                 .transpose()?;
             let mut translation = r.translation;
             let mut rot = r.rotation;
+            if parent.is_none() && own == OwnTransform::Replace {
+                translation = own_position;
+                rot = rotation;
+            }
             if parent.is_none() && own == OwnTransform::Compose && !identity {
                 let moved = rotate(own_rotation, translation.map(f64::from));
                 translation = std::array::from_fn(|k| (f64::from(own_position[k]) + moved[k]) as f32);
@@ -134,6 +149,7 @@ fn joints_of(
 /// The option's value for `own`.
 fn own_transform_name(own: OwnTransform) -> &'static str {
     match own {
+        OwnTransform::Replace => "replace",
         OwnTransform::Compose => "compose",
         OwnTransform::Refuse => "refuse",
         OwnTransform::Ignore => "ignore",
@@ -146,11 +162,14 @@ fn own_transform_option(o: &Options) -> Result<OwnTransform, String> {
         return Err(format!("unknown option {k}"));
     }
     match o.get("own-transform").map(String::as_str) {
+        Some("replace") => Ok(OwnTransform::Replace),
         Some("compose") => Ok(OwnTransform::Compose),
         Some("refuse") => Ok(OwnTransform::Refuse),
         Some("ignore") => Ok(OwnTransform::Ignore),
-        Some(v) => Err(format!("own-transform={v} is not compose, refuse or ignore")),
-        None => Err("own-transform is required: own-transform=compose|refuse|ignore".to_owned()),
+        Some(v) => Err(format!(
+            "own-transform={v} is not replace, compose, refuse or ignore"
+        )),
+        None => Err("own-transform is required: own-transform=replace|compose|refuse|ignore".to_owned()),
     }
 }
 
@@ -239,7 +258,7 @@ pub struct LowerAnvilRig {
 }
 
 impl LowerAnvilRig {
-    /// From its options: `own-transform=compose|refuse|ignore`, required.
+    /// From its options: `own-transform=replace|compose|refuse|ignore`, required.
     pub fn from_options(o: &Options) -> Result<LowerAnvilRig, String> {
         Ok(LowerAnvilRig {
             own_transform: own_transform_option(o)?,
