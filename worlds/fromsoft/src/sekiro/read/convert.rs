@@ -23,7 +23,7 @@ use crate::sekiro::source::{ShaderPrograms, TexturePayloads};
 
 /// Every component and resource an area's read and load put in a world, by name (the names in the namespaces
 /// [`Reader::emits`] states): what a coverage report lists of this reader. The reader's honesty test (real data:
-/// `PRIMASE_SEKIRO_DIR`, `PRIMASE_OODLE6`) reads slice A of m11_01 and checks that its world holds no other name.
+/// `installs.sekiro`, `tools.oodle6`) reads slice A of m11_01 and checks that its world holds no other name.
 pub const EMITTED_NAMES: &[&str] = &[
     "core.condition",
     "core.instance",

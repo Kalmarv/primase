@@ -165,11 +165,10 @@ impl StoredVertices {
 
     /// Each vertex's position: its first three i16 times its fourth over 32768 (the exact product rounded once to f32,
     /// a zero product +0). Equal bit for bit to the third-party RRAssetStudio's positions on every mesh both read
-    /// (worlds/anvil/tests/census.rs with PRIMASE_ANVIL_RRAS_MESHES). Before that comparison its evidence was the
-    /// extrema alone: on
-    /// every fixture in tests/meshes.rs each axis's least and greatest differs from the header's stored bound by at
-    /// most one step (`|w| / 32768`; largest 1.14e-4), and the census measures the same on every mesh of strides 16
-    /// (2,036) and 28 (86) in Riders Republic. No stored value checks a vertex between them.
+    /// (worlds/anvil/tests/census.rs with `oracles.rrassetstudio.riders/meshes`). Before that comparison its evidence
+    /// was the extrema alone: on every fixture in tests/meshes.rs each axis's least and greatest differs from the
+    /// header's stored bound by at most one step (`|w| / 32768`; largest 1.14e-4), and the census measures the same on
+    /// every mesh of strides 16 (2,036) and 28 (86) in Riders Republic. No stored value checks a vertex between them.
     pub fn positions(&self) -> impl Iterator<Item = [f32; 3]> {
         self.heads().map(|(xyz, w)| {
             let s = f32::from(w) / 32768.0;
