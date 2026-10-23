@@ -622,32 +622,7 @@ impl Builder<'_> {
             return Ok(p.clone());
         }
         let v = self.player.decode(r)?;
-        // every field is required: one missing, or of another type, is an error naming it and the object
-        let missing = |k: &str, of: &str| {
-            crate::invalid(format!("PhysicMaterial {}:{}: no {of} {k}", r.file, r.path_id))
-        };
-        let f = |k: &str| {
-            v.get(k)
-                .and_then(Value::as_f32)
-                .ok_or_else(|| missing(k, "number"))
-        };
-        let i = |k: &str| {
-            v.get(k)
-                .and_then(Value::as_i64)
-                .ok_or_else(|| missing(k, "integer"))
-        };
-        let p = UnityPhysicMaterial {
-            name: v
-                .get("m_Name")
-                .and_then(Value::as_str)
-                .ok_or_else(|| missing("m_Name", "string"))?
-                .to_owned(),
-            dynamic_friction: f("m_DynamicFriction")?,
-            static_friction: f("m_StaticFriction")?,
-            bounciness: f("m_Bounciness")?,
-            friction_combine: i("m_FrictionCombine")?,
-            bounce_combine: i("m_BounceCombine")?,
-        };
+        let p = read_physic_material(&v, &format!("{}:{}", r.file, r.path_id))?;
         self.physic_materials.insert(r.clone(), p.clone());
         Ok(p)
     }
@@ -1325,9 +1300,147 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
     Ok(b.report)
 }
 
+/// The five fields of a PhysicMaterial, by the two names a type tree gives them: Unity 6 and its kin prefix them
+/// (`m_DynamicFriction`), 2019.4 does not (`dynamicFriction`).
+const PHYSIC_FIELDS: [(&str, &str); 5] = [
+    ("m_DynamicFriction", "dynamicFriction"),
+    ("m_StaticFriction", "staticFriction"),
+    ("m_Bounciness", "bounciness"),
+    ("m_FrictionCombine", "frictionCombine"),
+    ("m_BounceCombine", "bounceCombine"),
+];
+
+/// A PhysicMaterial object (`object` names it for errors). Every field is required: `m_Name` and the five of
+/// [`PHYSIC_FIELDS`], all under one family of names. A material with both families, or a partial family, or a field of
+/// another type, is an error naming the object and the fields (never read as frictionless).
+fn read_physic_material(v: &Value, object: &str) -> Result<UnityPhysicMaterial> {
+    let fail = |what: String| crate::invalid(format!("PhysicMaterial {object}: {what}"));
+    let present = |names: Vec<&'static str>| -> Vec<&'static str> {
+        names.into_iter().filter(|k| v.get(k).is_some()).collect()
+    };
+    let prefixed = present(PHYSIC_FIELDS.iter().map(|f| f.0).collect());
+    let plain = present(PHYSIC_FIELDS.iter().map(|f| f.1).collect());
+    let family: Vec<&str> = match (prefixed.len(), plain.len()) {
+        (5, 0) => PHYSIC_FIELDS.iter().map(|f| f.0).collect(),
+        (0, 5) => PHYSIC_FIELDS.iter().map(|f| f.1).collect(),
+        (p, q) => {
+            return Err(fail(format!(
+                "not one complete family of fields: has {prefixed:?} ({p} of 5 m_-prefixed) and {plain:?} ({q} of 5 unprefixed)"
+            )));
+        }
+    };
+    let f = |k: &str| {
+        v.get(k)
+            .and_then(Value::as_f32)
+            .ok_or_else(|| fail(format!("{k} is not a number")))
+    };
+    let i = |k: &str| {
+        v.get(k)
+            .and_then(Value::as_i64)
+            .ok_or_else(|| fail(format!("{k} is not an integer")))
+    };
+    Ok(UnityPhysicMaterial {
+        name: v
+            .get("m_Name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| fail("no string m_Name".into()))?
+            .to_owned(),
+        dynamic_friction: f(family[0])?,
+        static_friction: f(family[1])?,
+        bounciness: f(family[2])?,
+        friction_combine: i(family[3])?,
+        bounce_combine: i(family[4])?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fields(names: &[&str]) -> Value {
+        let value = |k: &str| match k {
+            "m_Name" => Value::String("Grippy".into()),
+            "m_FrictionCombine" | "frictionCombine" => Value::Int(1),
+            "m_BounceCombine" | "bounceCombine" => Value::Int(2),
+            "m_DynamicFriction" | "dynamicFriction" => Value::Float(0.25),
+            "m_StaticFriction" | "staticFriction" => Value::Float(0.5),
+            _ => Value::Float(0.75),
+        };
+        Value::Struct(names.iter().map(|k| ((*k).into(), value(k))).collect())
+    }
+
+    const PREFIXED: [&str; 6] = [
+        "m_Name",
+        "m_DynamicFriction",
+        "m_StaticFriction",
+        "m_Bounciness",
+        "m_FrictionCombine",
+        "m_BounceCombine",
+    ];
+    const PLAIN: [&str; 6] = [
+        "m_Name",
+        "dynamicFriction",
+        "staticFriction",
+        "bounciness",
+        "frictionCombine",
+        "bounceCombine",
+    ];
+
+    /// A material with every field under the `m_` names (Unity 6) or under the plain ones (2019.4) reads the same.
+    #[test]
+    fn physic_materials_read_under_either_family_of_names() {
+        let want = UnityPhysicMaterial {
+            name: "Grippy".into(),
+            dynamic_friction: 0.25,
+            static_friction: 0.5,
+            bounciness: 0.75,
+            friction_combine: 1,
+            bounce_combine: 2,
+        };
+        assert_eq!(read_physic_material(&fields(&PREFIXED), "f:1").unwrap(), want);
+        assert_eq!(read_physic_material(&fields(&PLAIN), "f:1").unwrap(), want);
+    }
+
+    /// Both families, a partial family, a missing name or a field of another type is an error naming the object.
+    #[test]
+    fn physic_materials_refuse_mixed_partial_and_mistyped_fields() {
+        let both: Vec<&str> = PREFIXED.iter().chain(&PLAIN[1..]).copied().collect();
+        let mixed = [
+            "m_Name",
+            "m_DynamicFriction",
+            "staticFriction",
+            "bounciness",
+            "m_FrictionCombine",
+            "bounceCombine",
+        ];
+        for (names, why) in [
+            (both, "both families"),
+            (mixed.to_vec(), "a mix"),
+            (PREFIXED[..5].to_vec(), "a partial prefixed family"),
+            (PLAIN[1..3].to_vec(), "a partial plain family"),
+            (vec!["m_Name"], "no field"),
+        ] {
+            let e = read_physic_material(&fields(&names), "level1:42")
+                .unwrap_err()
+                .to_string();
+            assert!(
+                e.contains("level1:42") && e.contains("not one complete family"),
+                "{why}: {e}"
+            );
+        }
+        let e = read_physic_material(&fields(&PLAIN[1..]), "level1:42")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("level1:42") && e.contains("m_Name"), "{e}");
+        let mut v = fields(&PLAIN);
+        let Value::Struct(f) = &mut v else { unreachable!() };
+        f.iter_mut().find(|(k, _)| &**k == "bounciness").unwrap().1 = Value::String("x".into());
+        let e = read_physic_material(&v, "level1:42").unwrap_err().to_string();
+        assert!(
+            e.contains("level1:42") && e.contains("bounciness is not a number"),
+            "{e}"
+        );
+    }
 
     fn obj(pid: i64) -> ObjRef {
         ObjRef {
