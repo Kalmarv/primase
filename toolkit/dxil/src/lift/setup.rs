@@ -84,6 +84,7 @@ impl Setup {
         let mut system_out: BTreeSet<u8> = BTreeSet::new();
         let mut used_ranges: BTreeSet<(u8, u32)> = BTreeSet::new();
         let mut used_bindings: BTreeSet<(u8, u32, u32)> = BTreeSet::new();
+        let mut sample_index = false;
         for inst in &entry.instructions {
             let Op::Call { function, args } = &inst.op else {
                 continue;
@@ -137,6 +138,8 @@ impl Setup {
                         return Err(error(inst.at, "a handle of a computed range"));
                     }
                 }
+                // SampleIndex: the pixel's sample number, which the input signature does not list
+                90 => sample_index = true,
                 217 => {
                     let Some((class, lower, space)) = binding_of(m, entry, args[1]) else {
                         return Err(error(inst.at, "a handle of a binding that is not constant"));
@@ -165,6 +168,27 @@ impl Setup {
         let none = BTreeSet::new();
         interface.inputs.retain(|v| keeps(v, &cells_in, &none));
         interface.outputs.retain(|v| keeps(v, &cells_out, &system_out));
+        if sample_index
+            && !interface
+                .inputs
+                .iter()
+                .any(|v| v.system == Some(SystemValue::SampleIndex))
+        {
+            interface.inputs.push(primase_shader::Varying {
+                label: primase_shader::Label {
+                    name: "SV_SampleIndex".into(),
+                    index: 0,
+                },
+                system: Some(SystemValue::SampleIndex),
+                value: primase_shader::Value {
+                    scalar: primase_shader::ScalarType::Uint,
+                    width: 1,
+                },
+                interp: None,
+                used: true,
+                provenance: primase_shader::VaryingProvenance::default(),
+            });
+        }
         // the resources the program creates handles for, numbered anew
         let mut resources = Vec::new();
         let mut ranges = Vec::new();

@@ -117,6 +117,18 @@ fn the_enhanced_shader_database() {
     let db = sgd2::parse(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let counts: Vec<usize> = db.groups.iter().map(Vec::len).collect();
     println!("groups {counts:?}, {} effects", db.effects.len());
+    let mut world = primase_core::World::new();
+    let table = primase_gta::read::shaders::add_shader_database(&mut world, &db);
+    println!(
+        "world: {} effects, {} shader entities, {} interfaces not read",
+        table.effects.len(),
+        table.shaders,
+        table.unread.len()
+    );
+    for (name, reason) in table.unread.iter().take(10) {
+        println!("  unread {name}: {reason}");
+    }
+    assert_eq!(table.effects.len(), db.effects.len());
     let mut tags: BTreeMap<u8, usize> = BTreeMap::new();
     for g in &db.groups {
         for p in g {

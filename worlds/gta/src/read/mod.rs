@@ -9,6 +9,7 @@ pub mod gtxd;
 pub mod mount;
 pub(crate) mod rbf;
 pub mod region;
+pub mod shaders;
 pub mod source;
 pub mod water;
 pub(crate) mod xml;

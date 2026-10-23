@@ -8,6 +8,8 @@
 //! | LOD form | `core.mesh` and [`GtaSources`] (one of the drawable's coarser LODs), [`GtaBlendStreams`] likewise, unplaced |
 //! | material | [`GtaShader`] (one per drawable and shader) |
 //! | texture | `core.texture`, `core.name`, `core.source` |
+//! | effect | [`GtaEffect`] (the programs a drawable's shader name selects) |
+//! | shader program | `core.shader`, `core.name` |
 
 pub mod collision;
 pub mod state;
@@ -220,6 +222,46 @@ impl Component for GtaShader {
             GtaParam::Texture { texture, .. } => *texture,
             _ => None,
         }));
+    }
+}
+
+/// The stage of a shader program of the Enhanced shader database.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GtaStage {
+    Vertex,
+    Pixel,
+    Geometry,
+    Domain,
+    Hull,
+    Compute,
+}
+
+/// One program an effect names: its stage, its name in the database and, where the program is a vertex or pixel
+/// program whose interface was read, its `core.shader` entity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GtaEffectProgram {
+    pub stage: GtaStage,
+    pub name: String,
+    pub shader: Option<Entity>,
+}
+
+/// An effect of the shader database (what a drawable's shader name selects): the programs it can run, per stage in the
+/// database's order, with the permutations (a name carries its hash). The programs are shared between effects.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GtaEffect {
+    pub name: String,
+    pub programs: Vec<GtaEffectProgram>,
+}
+
+impl Component for GtaEffect {
+    const NAME: &'static str = "gta.effect";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.programs.iter().filter_map(|p| p.shader));
     }
 }
 

@@ -56,7 +56,7 @@ pub const GROUP_STAGES: [Option<ProgramStage>; 8] = [
     None,
 ];
 /// The groups an effect lists programs of, in the order of its lists.
-const EFFECT_LISTS: [usize; 6] = [0, 1, 2, 3, 4, 5];
+pub const EFFECT_LISTS: [usize; 6] = [0, 1, 2, 3, 4, 5];
 
 /// One shader program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -219,6 +219,32 @@ impl Lift<'_> {
             67 => self.texture_store(args),
             68 | 139 => self.buffer_load(inst, args),
             72 => self.get_dimensions(inst, args),
+            75 => self.sample_position(inst, args),
+            // LegacyF32ToF16 and LegacyF16ToF32: the half in the low 16 bits of an integer
+            130 => {
+                self.notes.insert(
+                    "f32tof16 is written through pack2x16float: its rounding is the implementation's".into(),
+                );
+                let x = self.float(args[1])?;
+                let zero = self.b.lit_f(0.0);
+                let pair = self.b.compose(&[x, zero]);
+                let packed = self.b.math(naga::MathFunction::Pack2x16float, &[pair]);
+                let low = self.b.lit_u(0xffff);
+                let r = self.b.binary(naga::BinaryOperator::And, packed, low);
+                scalar!(r)
+            }
+            131 => {
+                let x = self.uint(args[1])?;
+                let low = self.b.lit_u(0xffff);
+                let x = self.b.binary(naga::BinaryOperator::And, x, low);
+                let pair = self.b.math(naga::MathFunction::Unpack2x16float, &[x]);
+                let r = self.b.lane(pair, 0);
+                scalar!(r)
+            }
+            90 => {
+                let index = self.system_input(SystemValue::SampleIndex)?;
+                scalar!(index)
+            }
             82 => {
                 let c = self.scalar(args[1])?;
                 let c = self.b.bitcast_to(c, Kind::B);
@@ -313,6 +339,34 @@ impl Lift<'_> {
         let kind = self.kind_of_type(ty)?;
         let r = self.b.bitcast_to(lane_value, kind);
         self.define_result(inst.result, Lv::Scalar(r))
+    }
+
+    /// The value of the input varying that carries a system value the signature does not list.
+    fn system_input(&mut self, system: SystemValue) -> Result<Val> {
+        let io = self.setup.io.clone();
+        let Some(index) = io
+            .arguments
+            .iter()
+            .position(|item| self.setup.interface.inputs[item.varyings[0]].system == Some(system))
+        else {
+            return self.refuse(format!("{system:?} has no input"));
+        };
+        let primase_shader::IoType::Value(carried) = io.arguments[index].ty else {
+            return self.refuse("an array-typed input");
+        };
+        let expr = match self.argument_exprs.get(&index) {
+            Some(&e) => e,
+            None => {
+                let e = self.b.app(E::FunctionArgument(index as u32));
+                self.argument_exprs.insert(index, e);
+                e
+            }
+        };
+        Ok(Val {
+            expr,
+            kind: Kind::of(carried.scalar),
+            width: carried.width,
+        })
     }
 
     /// `StoreOutput(element, row, column, value)`: one lane of an output element, kept as raw bits.

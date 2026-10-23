@@ -26,7 +26,45 @@ pub(super) struct Resources {
     depth: BTreeSet<usize>,
     /// The access the program makes of each unordered-access view: (loads, stores).
     views: BTreeMap<usize, (bool, bool)>,
+    /// The table of D3D's standard sample positions, made when a program asks for one.
+    sample_positions: Option<Handle<GlobalVariable>>,
 }
+
+/// D3D's standard sample positions in sixteenths of a pixel from its centre (x right, y down), for 1, 2, 4, 8 and 16
+/// samples one after the other: the positions of a count start at `count - 1`.
+const STANDARD_POSITIONS: [(i8, i8); 31] = [
+    (0, 0),
+    (4, 4),
+    (-4, -4),
+    (-2, -6),
+    (6, -2),
+    (-6, 2),
+    (2, 6),
+    (1, -3),
+    (-1, 3),
+    (5, 1),
+    (-3, -5),
+    (-5, 5),
+    (-7, -1),
+    (3, 7),
+    (7, -7),
+    (1, 1),
+    (-1, -3),
+    (-3, 2),
+    (4, -1),
+    (-5, -2),
+    (2, 5),
+    (5, 3),
+    (3, -5),
+    (-2, 6),
+    (0, -7),
+    (-4, -6),
+    (-6, 4),
+    (-8, 0),
+    (7, -4),
+    (6, 7),
+    (-7, -8),
+];
 
 fn dim_of(d: TextureDim) -> naga::ImageDimension {
     match d {
@@ -672,9 +710,14 @@ impl Lift<'_> {
         let (dim, arrayed, multi, kind, depth) = self.texture_shape(resource)?;
         let (coordinate, array_index) = self.coordinates(args, 3, dim, arrayed, Kind::I)?;
         let mut coordinate = coordinate;
-        if let Some(offset) = self.sample_offset(args, 6 + usize::from(arrayed), dim)? {
-            let _ = offset;
-            return self.refuse("a texel offset on a load");
+        // a load's constant texel offset moves the texel it reads
+        if let Some(offset) = self.sample_offset(args, 6, dim)? {
+            let offset = Val {
+                expr: offset,
+                kind: Kind::I,
+                width: coordinate.width,
+            };
+            coordinate = self.b.binary(Bo::Add, coordinate, offset);
         }
         let storage = class == 1;
         let (level, sample) = if storage {
@@ -810,6 +853,76 @@ impl Lift<'_> {
         parts.truncate(3);
         parts.push(levels);
         self.define_result(inst.result, Lv::Agg(parts.into_iter().map(Lv::Scalar).collect()))
+    }
+
+    /// `Texture2DMSGetSamplePosition(handle, sample)`: the sample's offset from the pixel's centre in pixels, as D3D's
+    /// standard pattern for the texture's sample count gives it.
+    pub(super) fn sample_position(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
+        let (resource, image) = self.handle_expr(args[1], 0)?;
+        let (_, _, multi, _, _) = self.texture_shape(resource)?;
+        if !multi {
+            return self.refuse("a sample position of a texture that is not multisampled");
+        }
+        self.notes.insert(
+            "a sample position is D3D's standard pattern for the texture's sample count (1, 2, 4, 8 or 16)"
+                .into(),
+        );
+        let table = match self.resources.sample_positions {
+            Some(g) => g,
+            None => {
+                let v2 = self.b.ty_of(Kind::F, 2);
+                let ty = self.b.ty(TypeInner::Array {
+                    base: v2,
+                    size: ArraySize::Constant(NonZeroU32::new(31).expect("31 is not 0")),
+                    stride: 8,
+                });
+                let mut rows = Vec::new();
+                for (x, y) in STANDARD_POSITIONS {
+                    let (x, y) = (f32::from(x) / 16.0, f32::from(y) / 16.0);
+                    let x = self.b.global_expr(E::Literal(naga::Literal::F32(x)));
+                    let y = self.b.global_expr(E::Literal(naga::Literal::F32(y)));
+                    rows.push(self.b.global_expr(E::Compose {
+                        ty: v2,
+                        components: vec![x, y],
+                    }));
+                }
+                let init = self.b.global_expr(E::Compose { ty, components: rows });
+                let g = self.b.global(GlobalVariable {
+                    name: Some("sample_positions".into()),
+                    space: AddressSpace::Private,
+                    binding: None,
+                    ty,
+                    init: Some(init),
+                    memory_decorations: Default::default(),
+                });
+                self.resources.sample_positions = Some(g);
+                g
+            }
+        };
+        // the table row of sample `s` of `n`: n - 1 + (s & (n - 1)), kept inside the table
+        let count = Val {
+            expr: self.b.app(E::ImageQuery {
+                image,
+                query: ImageQuery::NumSamples,
+            }),
+            kind: Kind::U,
+            width: 1,
+        };
+        let one = self.b.lit_u(1);
+        let below = self.b.binary(Bo::Subtract, count, one);
+        let sample = self.uint(args[2])?;
+        let within = self.b.binary(Bo::And, sample, below);
+        let row = self.b.binary(Bo::Add, below, within);
+        let last = self.b.lit_u(30);
+        let row = self.b.math(naga::MathFunction::Min, &[row, last]);
+        let base = self.b.global_ptr(table);
+        let element = self.b.app(E::Access {
+            base,
+            index: row.expr,
+        });
+        let position = self.b.load(element, Kind::F, 2);
+        let (x, y) = (self.b.lane(position, 0), self.b.lane(position, 1));
+        self.define_result(inst.result, Lv::Agg(vec![Lv::Scalar(x), Lv::Scalar(y)]))
     }
 
     /// `BufferLoad(handle, index, offset)`: four lanes of a typed, raw or structured buffer.
