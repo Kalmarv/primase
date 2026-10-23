@@ -1,8 +1,9 @@
-//! The `Bumped Specular Voronoi` bake of one SkateBIRD level, run as the lab runs it (`PRIMASE_UNITY_V21_DATA` and
-//! `PRIMASE_UNITY_TPK`; the level `PRIMASE_SKATEBIRD_VORONOI_LEVEL`, default `level1`): read the level, resolve and lower
-//! it, bake the materials with `lower-skatebird-voronoi`, and print a digest of every baked map. The digests are the
-//! evidence that a change under the bake (the executor behind the shader) leaves its output byte for byte as it was:
-//! run it before and after and compare, or pass the earlier digest in `PRIMASE_SKATEBIRD_VORONOI_DIGEST`.
+//! The `Bumped Specular Voronoi` bake of one SkateBIRD level, run as the lab runs it
+//! (`installs.skatebird/SkateBIRD_Data` and `tools.unity_tpk`; the level the debug key `skatebird.voronoi_level` names,
+//! default `level1`): read the level, resolve and lower it, bake the materials with `lower-skatebird-voronoi`, and
+//! print a digest of every baked map. The digests are the evidence that a change under the bake (the executor behind
+//! the shader) leaves its output byte for byte as it was: run it before and after and compare, or give the earlier
+//! digest as the debug key `skatebird.voronoi_digest`.
 
 #![allow(clippy::unwrap_used)]
 
@@ -12,7 +13,7 @@ use primase_core::convert::Reader;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Name, Texture, World};
 use primase_skatebird::SkatebirdReader;
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, debug, install_file, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::player::Player;
 use sha2::{Digest, Sha256};
@@ -33,12 +34,12 @@ fn hex(bytes: &[u8]) -> String {
 #[test]
 fn the_baked_maps_of_a_level() {
     let (Some(data), Some(tpk)) = (
-        real_data("PRIMASE_UNITY_V21_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
+        install_file(Game::Skatebird, "SkateBIRD_Data"),
+        tool(Tool::UnityTpk),
     ) else {
         return;
     };
-    let level = std::env::var("PRIMASE_SKATEBIRD_VORONOI_LEVEL").unwrap_or_else(|_| "level1".into());
+    let level = debug("skatebird.voronoi_level").unwrap_or_else(|| "level1".into());
     let player = Player::open(
         &data,
         TypeTreePackage::parse(&std::fs::read(tpk).unwrap()).unwrap(),
@@ -91,7 +92,7 @@ fn the_baked_maps_of_a_level() {
         hex(&h.finalize())
     };
     println!("{level}: {} baked maps, digest {total}", digests.len());
-    if let Ok(expected) = std::env::var("PRIMASE_SKATEBIRD_VORONOI_DIGEST") {
+    if let Some(expected) = debug("skatebird.voronoi_digest") {
         assert_eq!(total, expected, "the baked maps differ from the digest given");
     }
 }

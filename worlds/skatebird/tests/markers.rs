@@ -1,5 +1,5 @@
-//! SkateBIRD's reset points and mission givers read from the game (`PRIMASE_UNITY_V21_DATA`, with
-//! `PRIMASE_UNITY_TPK`), after the Unity level read, over the levels the game ships. Facts measured independently
+//! SkateBIRD's reset points and mission givers read from the game (`installs.skatebird/SkateBIRD_Data`, with
+//! `tools.unity_tpk`), after the Unity level read, over the levels the game ships. Facts measured independently
 //! (UnityPy over the same player): each level stores at most one starting `ResetPosition`, level7 none, seven
 //! across the levels; every script's fields decode by the measured layouts (an unknown layout fails the read); every
 //! marker has a transform, a name and a source.
@@ -8,7 +8,7 @@
 
 use primase_core::{Name, Source, Transform, World};
 use primase_skatebird::components::{SkatebirdMissionGiver, SkatebirdResetPosition};
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::level::read_level;
 use primase_unity::player::Player;
@@ -20,8 +20,8 @@ const LEVELS: [&str; 8] = [
 #[test]
 fn every_level_s_reset_points_and_mission_givers_are_read() {
     let (Some(data), Some(tpk)) = (
-        real_data("PRIMASE_UNITY_V21_DATA"),
-        real_data("PRIMASE_UNITY_TPK"),
+        install_file(Game::Skatebird, "SkateBIRD_Data"),
+        tool(Tool::UnityTpk),
     ) else {
         return;
     };
