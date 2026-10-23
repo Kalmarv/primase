@@ -125,8 +125,24 @@ read, not required finite. A face set's level of detail is bits 24 to 26 of its 
 and 4 (115 and 62 face sets in the install, both SoulsFormats censuses), the coarse
 stand-ins its assets carry for far views; `lower-fromsoft-geometry` gives every level a
 `core.lods` form. `flver::is_speedtree` recognises SpeedTree FLVERs (0x8000 in the high
-half of the header word at 0x68), whose multi-stream layouts neither this reader nor
-SoulsFormatsNEXT decodes.
+half of the header word at 0x68). A SpeedTree layout member's first word is its stream
+(low half) and a modifier (high half): 0x8000 marks a member of a stream the file does
+not store, offsets count per stream (`Member::stored`, `Member::offset`). Elden Ring's
+119 SpeedTree models all declare the same unstored stream, a `Float4` position and two
+`Float4` UV members that the game's SpeedTree vertex programs read as the instance's
+position and basis (they build a basis from TEXCOORD0 and 1 and multiply TEXCOORD2
+through it), so it is supplied per instance at draw time: the data block holds exactly
+the stored stream's buffers, the face indices and alignment. A vertex buffer's stride is
+its stored members'; `Model::read` decodes them into `Vertex::speedtree` as the input
+assembler gives them to the vertex program (`Half4`/`Half2` 0x2e/0x2d as half floats,
+`UByte4Norm` 0x13 as x / 255, `Float4`/`Float2` as stored) and sets nothing else of the
+vertex; `Model::decode` refuses a SpeedTree model, whose members are its shaders'. In
+these files (header word at 0x68 with 5 in its low half) a GX list terminator's length
+counts its padding only, as SoulsFormatsNEXT reads it. SoulsFormatsNEXT ee1dd61 refuses
+every one of the 119 ("Index was out of range"), so no independent decoder checks them:
+the stored stream's first member (UV2, `Half4` in every layout but the billboard cards')
+read as halves lies inside each model's header bounds in all 119 (read as 16-bit
+integers, in none).
 
 `Model::geometry(materials)` selects the first LOD0 face set per mesh, compacts
 vertices in first-use order, converts through the core frame, normalizes stored
@@ -366,7 +382,7 @@ whose layouts place the small tile's big assets as `<tile>-<part>` in their own 
 set to `Include` also reads those parts, moved into the map's frame by that offset. The map layout's generation says
 the rest (part kinds: Sekiro's objects, Elden Ring's assets; spawn regions).
 
-Elden Ring's read does not yet read world states (`states: event` is refused) or decode SpeedTree models (their
+Elden Ring's read does not yet read world states (`states: event` is refused) or lower SpeedTree models (their
 placements are left out, by model): each is in `Report::notices`. `tests/elden_area.rs` accounts for every map
 piece and asset part of the Academy of Raya Lucaria (m14_00_00_00) and of the Shaded Castle tile with its parents
 against SoulsFormatsNEXT's layouts, translations exact.

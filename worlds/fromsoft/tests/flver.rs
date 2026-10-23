@@ -83,6 +83,34 @@ fn gx_records_retain_uninterpreted_payload_and_exclude_terminator() {
     put(&mut bytes, 424, 1000);
     assert!(Model::read(&bytes).is_err());
 }
+#[test]
+fn a_gx_terminator_counts_only_its_padding_where_the_header_word_at_0x68_is_5() {
+    // the fixture's material with one GX record and a terminator whose length field is 0: no padding
+    let mut bytes = fixture();
+    bytes.splice(448..448, [0; 48]);
+    put(&mut bytes, 12, 496);
+    put(&mut bytes, 148, 416);
+    bytes[416..420].copy_from_slice(b"GXMD");
+    put(&mut bytes, 420, 123);
+    put(&mut bytes, 424, 28);
+    put(&mut bytes, 444, 0x7fff_ffff);
+    put(&mut bytes, 448, 100);
+    put(&mut bytes, 452, 0);
+    // ordinarily the length counts the 12-byte header too: 0 is short
+    assert!(
+        Model::read(&bytes)
+            .unwrap_err()
+            .to_string()
+            .contains("short GX record")
+    );
+    // with 5 in the header word at 0x68 (Elden Ring's SpeedTree files) it counts the padding only
+    bytes[0x68..0x6a].copy_from_slice(&5u16.to_le_bytes());
+    assert_eq!(Model::read(&bytes).unwrap().materials[0].gx.len(), 1);
+    // and that padding must be zero: 4 bytes of it reach into the vertex data
+    put(&mut bytes, 452, 4);
+    put(&mut bytes, 456, 1);
+    assert!(Model::read(&bytes).is_err());
+}
 
 #[test]
 fn packed_attributes_keep_layer_bytes() {
@@ -243,4 +271,78 @@ fn a_mesh_without_face_sets_or_buffers_is_empty_and_its_sentinel_bounds_are_unch
     put(&mut bad, 160 + 24, 460);
     put(&mut bad, 460, nan.to_bits());
     assert!(Model::read(&bad).is_err());
+}
+
+/// The fixture as a SpeedTree model: two members of an instance stream the file does not store (stream 1, modifier
+/// 0x8000, `Float4` at 0 and 16), then the stored stream: a `Half4` at 0 and a `Float4` at 8 (24 bytes, the buffer's
+/// stride); each vertex stores the halves 1, 2, 3, 0 and the floats 4, 5, 6, 7 (plus its index in the last).
+fn speedtree_fixture() -> Vec<u8> {
+    let mut b = fixture();
+    b[0x6a..0x6c].copy_from_slice(&[0x00, 0x80]);
+    for (i, (word, offset, kind)) in [
+        (0x8000_0001u32, 0, 3),
+        (0x8000_0001, 16, 3),
+        (0, 0, 0x2e),
+        (0, 8, 3),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let o = 320 + i * 20;
+        put(&mut b, o, word);
+        put(&mut b, o + 4, offset);
+        put(&mut b, o + 8, kind);
+        put(&mut b, o + 12, 5);
+        put(&mut b, o + 16, i as u32);
+    }
+    for i in 0..3 {
+        let o = 454 + i * 24;
+        for (j, h) in [0x3c00u16, 0x4000, 0x4200, 0].into_iter().enumerate() {
+            b[o + j * 2..o + j * 2 + 2].copy_from_slice(&h.to_le_bytes());
+        }
+        for (j, x) in [4f32, 5., 6., 7. + i as f32].into_iter().enumerate() {
+            put(&mut b, o + 8 + j * 4, x.to_bits());
+        }
+    }
+    b
+}
+#[test]
+fn a_speedtree_model_keeps_its_stored_members_and_lists_the_instance_stream() {
+    let m = Model::read(&speedtree_fixture()).unwrap();
+    assert!(m.speedtree);
+    let stored: Vec<(bool, usize, u32)> = m.layouts[0]
+        .iter()
+        .map(|x| (x.stored, x.offset, x.kind))
+        .collect();
+    assert_eq!(
+        stored,
+        [(false, 0, 3), (false, 16, 3), (true, 0, 0x2e), (true, 8, 3)]
+    );
+    for (i, v) in m.meshes[0].vertices.iter().enumerate() {
+        assert_eq!(v.speedtree, [[1., 2., 3., 0.], [4., 5., 6., 7. + i as f32]]);
+        // nothing else of a SpeedTree vertex is set
+        assert_eq!(v.position, [0.; 3]);
+        assert!(v.uvs.is_empty());
+    }
+    // its members are its shader's: no geometry is decoded from them
+    assert!(m.decode(0, 0).unwrap_err().to_string().contains("SpeedTree"));
+}
+#[test]
+fn speedtree_layouts_are_read_strictly() {
+    // a modifier other than 0 or 0x8000
+    let mut b = speedtree_fixture();
+    put(&mut b, 320, 0x1234_0001);
+    assert!(Model::read(&b).unwrap_err().to_string().contains("modifier"));
+    // a stored member's offset that is not contiguous in its stream
+    let mut b = speedtree_fixture();
+    put(&mut b, 320 + 3 * 20 + 4, 12);
+    assert!(Model::read(&b).unwrap_err().to_string().contains("noncontiguous"));
+    // a stored type the SpeedTree vertex does not decode (Float3 at 0; the stride no longer adds up either way)
+    let mut b = speedtree_fixture();
+    put(&mut b, 320 + 2 * 20 + 8, 0x11);
+    assert!(Model::read(&b).is_err());
+    // the same layout in an ordinary model is refused: its instance members are not contiguous with the stored ones
+    let mut b = speedtree_fixture();
+    b[0x6a..0x6c].copy_from_slice(&[0, 0]);
+    assert!(Model::read(&b).is_err());
 }

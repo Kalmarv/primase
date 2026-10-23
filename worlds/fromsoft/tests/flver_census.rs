@@ -1,7 +1,8 @@
 //! Whole-install FLVER attributes and strip ordering against an independent decoder, for each game configured:
 //! SoulsFormats' census of Sekiro (`oracles.soulsformats.sekiro/census`), SoulsFormatsNEXT's of Elden Ring
 //! (`oracles.soulsformats.elden/census`). A FLVER the reference refuses (a record with `error`) must be refused by ours
-//! too.
+//! too, except a SpeedTree FLVER: the reference refuses every one of Elden Ring's (an index out of range), ours
+//! reads their stored members; they are counted.
 use primase_fromsoft::{Binder, Game, NameDictionary, bhd::PathHash, dcx::Decoder, flver::Model};
 
 use sha2::{Digest, Sha256};
@@ -26,6 +27,8 @@ struct Counts {
     normal_changed: u64,
     normal_max_ulp: u32,
     agreed_rejections: usize,
+    /// SpeedTree FLVERs the reference refuses and ours reads.
+    speedtree_read: usize,
 }
 /// The independent decoder divides by 127; the game multiplies by its rounded
 /// reciprocal. Recover the unique encoded integer only after checking the
@@ -67,6 +70,10 @@ fn visit(
         assert_eq!(sha(bytes), want["sha256"].as_str().ok_or("sha")?, "{id}");
         if let Some(theirs) = want.get("error") {
             return match Model::read(bytes) {
+                Ok(m) if m.speedtree => {
+                    counts.speedtree_read += 1;
+                    Ok(())
+                }
                 Ok(_) => Err(format!("{id}: read, the reference refuses it: {theirs}").into()),
                 Err(e) => {
                     counts.agreed_rejections += 1;
@@ -278,10 +285,12 @@ fn flver_models(
         }
     }
     println!(
-        "{}: FLVER models {}, agreed rejections {}, meshes {}, split binders {}, remaining oracle {}, failures {}",
+        "{}: FLVER models {}, agreed rejections {}, SpeedTree models the reference refuses read {}, meshes {}, split \
+         binders {}, remaining oracle {}, failures {}",
         game.name(),
         counts.models,
         counts.agreed_rejections,
+        counts.speedtree_read,
         counts.meshes,
         split,
         expected.len(),

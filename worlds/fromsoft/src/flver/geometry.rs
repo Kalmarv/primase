@@ -47,6 +47,14 @@ impl Model {
     /// Decode face set `face_set` of mesh `source_mesh` ([`Part`]): no triangle is dropped or reordered, and no
     /// material decision applies. `None` when it has no whole triangle.
     pub fn decode(&self, source_mesh: usize, face_set: usize) -> Result<Option<Part>> {
+        if self.speedtree {
+            // its positions and normals are members its game shaders interpret; nothing here reads them as such
+            return Err(invalid(
+                "FLVER geometry",
+                source_mesh,
+                "a SpeedTree model's vertices are its shader's members, not positions",
+            ));
+        }
         let m = self
             .meshes
             .get(source_mesh)

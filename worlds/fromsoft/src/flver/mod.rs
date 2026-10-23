@@ -7,7 +7,14 @@ pub use vertex::Vertex;
 
 #[derive(Clone, Debug)]
 pub struct Member {
+    /// The member's first word as stored: 0 in an ordinary layout; in a SpeedTree layout its stream (low half) and a
+    /// modifier (high half: 0x8000 for a member that is not stored, see `stored`).
     pub unknown: u32,
+    /// Whether the mesh's vertex buffer stores the member. A SpeedTree layout also declares members of a stream the
+    /// file does not hold (modifier 0x8000: the per-instance position and two basis vectors the game supplies at draw
+    /// time); they are listed, never read.
+    pub stored: bool,
+    /// The member's offset in its stream (the vertex buffer for a stored member).
     pub offset: usize,
     pub kind: u32,
     pub semantic: u32,
@@ -135,6 +142,8 @@ pub struct Bone {
 pub struct Model {
     pub bones: Vec<Bone>,
     pub version: u32,
+    /// A SpeedTree model ([`is_speedtree`]): its vertices carry their stored members in [`Vertex::speedtree`] only.
+    pub speedtree: bool,
     pub layouts: Vec<Vec<Member>>,
     pub materials: Vec<Material>,
     pub meshes: Vec<Mesh>,
@@ -280,6 +289,7 @@ impl Model {
                 parent: v.u16(o + 28)? as i16,
             });
         }
+        let speedtree = is_speedtree(data);
         let mut layouts = Vec::new();
         for i in 0..layout_count {
             let o = layout + i * 16;
@@ -288,21 +298,35 @@ impl Model {
             let mut p = count(&v, o + 12)?;
             let a = table(&meta, &mut p, n, 20)?;
             let mut members = Vec::new();
-            let mut offset = 0;
+            // each stream's members are contiguous in it: an ordinary layout's one stream, a SpeedTree layout's stored
+            // stream and each stream it declares but does not store
+            let mut offsets = std::collections::BTreeMap::<(bool, u16), usize>::new();
             for j in 0..n {
                 let r = a + j * 20;
-                if count(&v, r + 4)? != offset {
+                let word = v.u32(r)?;
+                let (stored, stream) = if speedtree {
+                    match word >> 16 {
+                        0 => (true, word as u16),
+                        0x8000 => (false, word as u16),
+                        _ => return Err(invalid(v.format, r, "SpeedTree member modifier")),
+                    }
+                } else {
+                    (true, 0)
+                };
+                let kind = v.u32(r + 8)?;
+                let offset = offsets.entry((stored, stream)).or_default();
+                if count(&v, r + 4)? != *offset {
                     return Err(invalid(v.format, r + 4, "noncontiguous vertex layout"));
                 }
-                let kind = v.u32(r + 8)?;
                 members.push(Member {
-                    unknown: v.u32(r)?,
-                    offset,
+                    unknown: word,
+                    stored,
+                    offset: *offset,
                     kind,
                     semantic: v.u32(r + 12)?,
                     index: v.u32(r + 16)?,
                 });
-                offset += vertex::size(kind)?;
+                *offset += vertex::size(kind)?;
             }
             layouts.push(members);
         }
@@ -321,6 +345,7 @@ impl Model {
                 unknown: [float(&v, o + 20)?, float(&v, o + 24)?, float(&v, o + 28)?],
             }));
         }
+        let gx_padding_only = v.u16(0x68)? == 5;
         let mut materials = Vec::new();
         for i in 0..mat_count {
             let o = mat + i * 32;
@@ -346,16 +371,25 @@ impl Model {
                 loop {
                     let id = meta.u32(gx)?;
                     let len = count(&meta, gx + 8)?;
-                    if len < 12 {
-                        return Err(invalid(v.format, gx, "short GX record"));
-                    }
-                    meta.slice(gx, len)?;
                     if matches!(id, 0x7fff_ffff | 0xffff_ffff) {
-                        if v.u32(gx + 4)? != 100 || v.slice(gx + 12, len - 12)?.iter().any(|&b| b != 0) {
+                        // the terminator's length counts its zero padding and its 12-byte header, except in a file
+                        // whose header word at 0x68 has 5 in its low half (Elden Ring's SpeedTree models), where it
+                        // counts the padding only (as SoulsFormatsNEXT reads it)
+                        let padding = if gx_padding_only {
+                            len
+                        } else {
+                            len.checked_sub(12)
+                                .ok_or_else(|| invalid(v.format, gx, "short GX record"))?
+                        };
+                        if v.u32(gx + 4)? != 100 || v.slice(gx + 12, padding)?.iter().any(|&b| b != 0) {
                             return Err(invalid(v.format, gx, "GX terminator"));
                         }
                         break;
                     }
+                    if len < 12 {
+                        return Err(invalid(v.format, gx, "short GX record"));
+                    }
+                    meta.slice(gx, len)?;
                     gx_items.push(GxItem {
                         id: meta.slice(gx, 4)?.try_into().expect("four-byte checked slice"),
                         version: meta.u32(gx + 4)?,
@@ -484,6 +518,7 @@ impl Model {
                 let stride = count(&v, r + 8)?;
                 let expected = members
                     .iter()
+                    .filter(|m| m.stored)
                     .try_fold(0usize, |a, m| vertex::size(m.kind).map(|s| a + s))?;
                 if stride != expected || stride == 0 {
                     return Err(invalid(v.format, r + 8, "vertex stride"));
@@ -507,7 +542,12 @@ impl Model {
             let mut vertices = vec![Vertex::default(); n];
             for &(l, stride, start) in &streams {
                 for (j, vert) in vertices.iter_mut().enumerate() {
-                    vert.read(v.slice(start + j * stride, stride)?, &layouts[l], 2048.)?;
+                    let data = v.slice(start + j * stride, stride)?;
+                    if speedtree {
+                        vert.read_speedtree(data, &layouts[l])?;
+                    } else {
+                        vert.read(data, &layouts[l], 2048.)?;
+                    }
                 }
             }
             let mut mesh_faces = Vec::new();
@@ -539,6 +579,7 @@ impl Model {
         Ok(Self {
             bones,
             version,
+            speedtree,
             layouts,
             materials,
             meshes,
@@ -546,9 +587,10 @@ impl Model {
     }
 }
 
-/// Whether a FLVER stores SpeedTree vegetation: the high half of its header word at 0x68 is 0x8000. Its vertex layouts
-/// address several streams with per-stream offsets, which [`Model::read`] does not decode (nor does the reference
-/// reader, SoulsFormatsNEXT).
+/// Whether a FLVER stores SpeedTree vegetation: the high half of its header word at 0x68 is 0x8000. Its layouts' members
+/// name their stream and whether the file stores them ([`Member::stored`]), with offsets per stream; [`Model::read`]
+/// reads the stored ones into [`Vertex::speedtree`] (the reference reader, SoulsFormatsNEXT ee1dd61, refuses every
+/// one of Elden Ring's 119).
 pub fn is_speedtree(data: &[u8]) -> bool {
     data.starts_with(b"FLVER\0L\0") && data.get(0x6a..0x6c) == Some(&[0x00, 0x80][..])
 }

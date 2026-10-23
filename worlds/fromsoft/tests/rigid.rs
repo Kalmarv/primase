@@ -9,6 +9,7 @@ use primase_fromsoft::{
 fn model() -> Model {
     Model {
         version: 0x2001a,
+        speedtree: false,
         layouts: vec![],
         materials: vec![Material {
             name: "test".into(),

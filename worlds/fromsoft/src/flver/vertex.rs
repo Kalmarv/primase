@@ -16,11 +16,16 @@ pub struct Vertex {
     pub tangents: Vec<[f32; 4]>,
     pub bitangent: [f32; 4],
     pub colors: Vec<[f32; 4]>,
+    /// A SpeedTree vertex's stored members in layout order, each as its format gives it to a vertex program (four
+    /// lanes, unused ones zero): half floats as floats, normalized unsigned bytes as `x / 255`, floats as stored.
+    /// What each member stands for is the game's shader's, not the layout's semantic: nothing else of the vertex is
+    /// set.
+    pub speedtree: Vec<[f32; 4]>,
 }
 
 pub(super) fn size(kind: u32) -> Result<usize> {
     Ok(match kind {
-        0x10..=0x13 | 0x15 | 0x2f => 4,
+        0x10..=0x13 | 0x15 | 0x2d | 0x2f => 4,
         1 | 0x16 | 0x18 | 0x1a | 0x2e => 8,
         2 => 12,
         3 => 16,
@@ -29,6 +34,48 @@ pub(super) fn size(kind: u32) -> Result<usize> {
 }
 
 impl Vertex {
+    /// A SpeedTree vertex's stored members ([`Vertex::speedtree`]): `Float4` (3), `Float2` (1), `Half4` (0x2e),
+    /// `Half2` (0x2d) and `UByte4Norm` (0x13), the formats Elden Ring's SpeedTree layouts store; others are refused.
+    pub(super) fn read_speedtree(&mut self, data: &[u8], members: &[Member]) -> Result<()> {
+        let v = View {
+            data,
+            format: "FLVER SpeedTree vertex",
+            be: false,
+        };
+        let mut at = 0;
+        for m in members.iter().filter(|m| m.stored) {
+            let n = size(m.kind)?;
+            let raw = v.slice(at, n)?;
+            let mut lanes = [0f32; 4];
+            match m.kind {
+                1 | 3 => {
+                    for (k, lane) in lanes.iter_mut().take(n / 4).enumerate() {
+                        *lane = f32::from_bits(v.u32(at + k * 4)?);
+                    }
+                }
+                0x2d | 0x2e => {
+                    for (k, lane) in lanes.iter_mut().take(n / 2).enumerate() {
+                        *lane = half(v.u16(at + k * 2)?);
+                    }
+                }
+                0x13 => {
+                    for (lane, &b) in lanes.iter_mut().zip(raw) {
+                        *lane = f32::from(b) / 255.;
+                    }
+                }
+                other => {
+                    return Err(invalid(v.format, at, format!("SpeedTree member type {other:#x}")));
+                }
+            }
+            if lanes.iter().any(|x| !x.is_finite()) {
+                return Err(invalid(v.format, at, "non-finite SpeedTree member"));
+            }
+            self.speedtree.push(lanes);
+            at += n;
+        }
+        Ok(())
+    }
+
     pub(super) fn read(&mut self, data: &[u8], members: &[Member], uv_factor: f32) -> Result<()> {
         let v = View {
             data,
@@ -143,5 +190,18 @@ impl Vertex {
             }
         }
         Ok(())
+    }
+}
+
+/// An IEEE 754 half-precision value (subnormals, infinities and NaN as such).
+fn half(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 != 0 { -1f32 } else { 1. };
+    let exponent = i32::from((bits >> 10) & 0x1f);
+    let mantissa = f32::from(bits & 0x3ff);
+    sign * match exponent {
+        0 => mantissa * 2f32.powi(-24),
+        31 if mantissa == 0. => f32::INFINITY,
+        31 => f32::NAN,
+        e => (1. + mantissa / 1024.) * 2f32.powi(e - 15),
     }
 }

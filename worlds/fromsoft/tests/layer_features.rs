@@ -9,6 +9,7 @@ use primase_fromsoft::{
 fn semantic_indices_are_not_uv_storage_slots() {
     let member = |kind, index| Member {
         unknown: 0,
+        stored: true,
         offset: 0,
         kind,
         semantic: 5,
@@ -22,6 +23,7 @@ fn semantic_indices_are_not_uv_storage_slots() {
     let model = Model {
         bones: vec![],
         version: 0x2001a,
+        speedtree: false,
         materials: vec![],
         layouts: vec![vec![member(3, 0), member(0x13, 2), member(0x13, 3)]],
         meshes: vec![Mesh {
@@ -49,6 +51,7 @@ fn semantic_indices_are_not_uv_storage_slots() {
 fn a_layered_mesh_keeps_its_second_uv_set_and_second_colour() {
     let member = |kind, semantic, index| Member {
         unknown: 0,
+        stored: true,
         offset: 0,
         kind,
         semantic,
@@ -70,6 +73,7 @@ fn a_layered_mesh_keeps_its_second_uv_set_and_second_colour() {
     let model = |layouts| Model {
         bones: vec![],
         version: 0x2001a,
+        speedtree: false,
         materials: vec![],
         layouts,
         meshes: vec![Mesh {
