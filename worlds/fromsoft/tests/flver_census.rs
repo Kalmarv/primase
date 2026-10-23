@@ -45,7 +45,8 @@ static REFERENCE_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 /// `UByte4Norm` (`0x13`) member, four unorm bytes `(b0, b1, 0)` and `(b2, b3, 0)`, and a kind `0x2e` member, whose four
 /// 16-bit words it reads as int16 over the UV factor, likewise two UVs. The reader's values are what the game's programs
 /// receive (the `0x13` member as unorm bytes, the `0x2e` member as half floats, both a float `TEXCOORDn xyzw` used
-/// unscaled; see `Vertex::uvs`), so this projects them back onto the reference's packing of the same stored bytes:
+/// unscaled; the `0x2e` member is a pivot point in the model's space, not a texture coordinate; see `Vertex::uvs`), so
+/// this projects them back onto the reference's packing of the same stored bytes:
 /// the unorm lanes as they are, the half lanes through their 16-bit words. SoulsFormats' census of Sekiro has one UV
 /// per member.
 fn reference_uvs(

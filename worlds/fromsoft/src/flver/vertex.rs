@@ -17,14 +17,22 @@ pub struct Vertex {
     /// (`0x13`) member is four normalised unsigned bytes (`b / 255`), which the program reads as a float `TEXCOORDn` and
     /// passes on unscaled: Elden Ring's `M[AMSN_V][Mb3][Ov_N]_Gbuf.vpo` (`TEXCOORD1 xyzw float`, loaded by
     /// `dx.op.loadInput.f32` at lines 288-290 of its disassembly and stored to the output unchanged at lines 501-503) and
-    /// Sekiro's `M_MultipleGround__Gbuf.vpo` (`TEXCOORD1..6` float, `mov o5.x, v5.x` and the like, lines 222-228) alike. A
-    /// `Half4` (`0x2e`) member is four IEEE half floats, which is also a float `TEXCOORDn xyzw` in the program with no
-    /// scale: Elden Ring's `M[AMSN_V]_Vesitation_Emissive_Glow_Gbuf.vpo` declares `TEXCOORD3 xyzw float`, loads it with
-    /// `dx.op.loadInput.f32` (lines 400-402), multiplies and adds it into a vector (lines 575-585) and stores it
-    /// unchanged (lines 962-964); no 1/2048 or 1/1024 follows the load, as one does for the `Short2` member
-    /// (`TEXCOORD0 int`, `sitofp` then a multiply by 2^-11). Read as int16 over the UV factor (SoulsFormats'
-    /// `Short4toFloat4B`, SoulsFormatsNEXT's mislabelled `Half4` UV branch) the first mesh's vector would be
-    /// (5.5, -11.9, -8.8) for an asset whose vertices span 0.1; as halves it is (0.065, -0.010, -0.721).
+    /// Sekiro's `M_MultipleGround__Gbuf.vpo` (`TEXCOORD1..6` float, `mov o5.x, v5.x` and the like, lines 222-228) alike.
+    ///
+    /// A `Half4` (`0x2e`) member is not a texture coordinate: it is a point in the model's space, xyz as IEEE half floats
+    /// and w zero, the pivot vegetation sways about. The program takes it as a float `TEXCOORDn xyzw` and treats it as a
+    /// position. Elden Ring's `M[AMSN_V]_Vesitation_Emissive_Glow_Gbuf.vpo` multiplies `TEXCOORD3.xyz` by three rows of
+    /// an instance matrix and adds each row's `w` (the translation), the same affine transform it applies to `POSITION0`
+    /// with its own matrix rows. Only meshes of pivot materials store one: Sekiro's `…_Translucency_Pivot…`,
+    /// `…_Pivot_Parent…` and `snake_Pivot` MTDs (306 meshes, 978,040 vertices), and Elden Ring's grass, `Vesitation` and
+    /// tree assets (1,586 meshes, 5,301,513 vertices; a SpeedTree mesh's member is in [`Vertex::speedtree`] instead).
+    /// The value is constant over a group of vertices and lies near them: a Sekiro m11_00 map piece's member is
+    /// (99.0, -49.72, -89.5) for vertices at (98.9, -47.5, -89.9). Its magnitude follows the model's coordinates, up to
+    /// 487.75 in Sekiro and 2118.0 in Elden Ring, every value a half's. Read as int16 over the UV factor (SoulsFormats'
+    /// `Short4toFloat4B`, SoulsFormatsNEXT's mislabelled `Half4` UV branch), no value could exceed 16, so that reading
+    /// is not the game's. The lanes outside [0, 1] are expected: they are coordinates in metres. The w lane is zero in
+    /// every one of these members, in both games. The member is kept here, in stream order, because the programs number
+    /// their `TEXCOORDn` inputs by that order.
     pub uvs: Vec<[f32; 4]>,
     /// The four stored bytes of each `UByte4Norm` UV member and the index in [`Vertex::uvs`] of its attribute, for layer
     /// weights (the same values as that attribute's lanes before the `/ 255`).
