@@ -134,3 +134,21 @@ fn sdk_2018_member_counts_carry_property_counts() {
     assert_eq!(tag.types[1].properties, 0);
     assert!(Tagfile::read(&fixture_with(b"20170100", packed(3)), None).is_err());
 }
+
+/// A string index equal to the table's length is out of bounds, not the empty string the split after the last NUL would
+/// make of it.
+#[test]
+fn a_string_index_at_the_end_of_the_table_is_an_error() {
+    let mut bytes = fixture();
+    assert!(Tagfile::read(&bytes, None).is_ok());
+    // the type names section: 5 types (the null one counted), each a string index and no template parameters; the last
+    // type's name is string 3 of the 4 the table holds: 4 names no string
+    let names = [5u8, 0, 0, 1, 0, 2, 0, 3, 0];
+    let at = bytes
+        .windows(names.len())
+        .position(|w| w == names)
+        .expect("the names section");
+    bytes[at + 7] = 4;
+    let error = Tagfile::read(&bytes, None).unwrap_err().to_string();
+    assert!(error.contains("string index out of bounds"), "{error}");
+}

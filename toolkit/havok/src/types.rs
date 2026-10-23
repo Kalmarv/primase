@@ -107,8 +107,10 @@ fn strings(section: Section<'_>) -> Result<Vec<String>> {
     if section.payload.last() != Some(&0) {
         return Err(invalid(section.offset, "unterminated string table"));
     }
-    section
-        .payload
+    // the table's strings are the NUL-terminated runs: the empty run after the last NUL is no string, so an index
+    // equal to the table's length is out of bounds, not an empty name
+    let strings = &section.payload[..section.payload.len() - 1];
+    strings
         .split(|&b| b == 0)
         .map(|b| {
             String::from_utf8(b.to_vec()).map_err(|_| invalid(section.offset, "invalid UTF-8 string table"))
@@ -266,24 +268,35 @@ pub(crate) fn read_types(section: Section<'_>) -> Result<Vec<Type>> {
         {
             return Err(invalid(section.offset, format!("invalid type reference in {i}")));
         }
-        let mut parent = t.parent;
-        for _ in 0..count {
-            if parent == 0 {
-                break;
-            }
-            if parent == i {
-                return Err(invalid(section.offset, "cyclic type inheritance"));
-            }
-            parent = types[parent].parent;
-            if parent >= count {
-                return Err(invalid(section.offset, "invalid parent type"));
-            }
-        }
-        if parent != 0 {
-            return Err(invalid(section.offset, "cyclic parent chain"));
-        }
+    }
+    if let Some(i) = parent_cycle(&types) {
+        return Err(invalid(section.offset, format!("type {i} inherits from itself")));
     }
     Ok(types)
+}
+
+/// A type on a cycle of parents, if there is one: every type's parent chain must end at the null type 0. Linear in the
+/// types: a type is visited once, however many chains pass through it. Every `parent` must be below `types.len()`.
+fn parent_cycle(types: &[Type]) -> Option<usize> {
+    // 0: not visited, 1: on the chain being followed, 2: known to end at the null type
+    let mut state = vec![0u8; types.len()];
+    state[0] = 2;
+    for start in 1..types.len() {
+        let mut chain = Vec::new();
+        let mut at = start;
+        while state[at] == 0 {
+            state[at] = 1;
+            chain.push(at);
+            at = types[at].parent;
+        }
+        if state[at] == 1 {
+            return Some(at);
+        }
+        for t in chain {
+            state[t] = 2;
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -324,6 +337,38 @@ mod tests {
             }
         }
     }
+    /// Parent chains that end at the null type pass, however long and however many share a tail (a type visited once,
+    /// not once per chain through it: a chain of this many was ~5e9 steps); a cycle is found, a self-parent too.
+    #[test]
+    fn parent_chains_are_checked_in_one_pass() {
+        let typed = |parents: &[usize]| -> Vec<Type> {
+            parents
+                .iter()
+                .map(|&parent| Type {
+                    parent,
+                    ..Type::default()
+                })
+                .collect()
+        };
+        let n = 100_000;
+        let chain: Vec<usize> = (0..n).map(|i: usize| i.saturating_sub(1)).collect();
+        assert_eq!(parent_cycle(&typed(&chain)), None);
+        // 0 null, 1 and 2 hang from 0, 3 from 2, 4 from 3
+        assert_eq!(parent_cycle(&typed(&[0, 0, 0, 2, 3])), None);
+        assert!(
+            parent_cycle(&typed(&[0, 2, 1])).is_some(),
+            "1 and 2 are each other's parent"
+        );
+        assert!(
+            parent_cycle(&typed(&[0, 1])).is_some(),
+            "a type that is its own parent"
+        );
+        assert!(
+            parent_cycle(&typed(&[0, 0, 3, 4, 2])).is_some(),
+            "a cycle beyond the first type"
+        );
+    }
+
     #[test]
     fn reserved_integer_markers_are_errors() {
         for first in 0xfa..=0xff {
