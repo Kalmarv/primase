@@ -584,21 +584,36 @@ fn bad_worlds_are_errors() {
         .expect("a listed primitive")
         .streams_mut()
         .insert(Semantic::Position, Stream::F32x3(vec![[f32::NAN; 3]; 4]));
+    // refused at the entry by the world's own check, and by the writer when the caller says it verified
     assert!(
         write(&w, &options())
             .unwrap_err()
             .to_string()
-            .contains("non-finite")
+            .contains("not finite")
+    );
+    assert!(
+        write(
+            &w,
+            &WriteOptions {
+                verified: true,
+                ..options()
+            }
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("non-finite")
     );
 
     let mut w = b.world.clone();
     w.remove::<primase_core::Transform>(b.regular);
-    assert!(
-        write(&w, &options())
-            .unwrap_err()
-            .to_string()
-            .contains("without core.transform")
-    );
+    let e = write(&w, &options()).unwrap_err().to_string();
+    assert!(e.contains("a placement without a core.transform"), "{e}");
+    let verified = WriteOptions {
+        verified: true,
+        ..options()
+    };
+    let e = write(&w, &verified).unwrap_err().to_string();
+    assert!(e.contains("placement without core.transform"), "{e}");
 
     // the writer reads no file: the loaded world writes the same with its source file gone bad
     let before = write(&b.world, &options()).unwrap().0;

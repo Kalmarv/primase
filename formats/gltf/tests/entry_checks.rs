@@ -114,14 +114,12 @@ fn a_spots_cones_are_gltfs() {
     let half_pi = std::f32::consts::FRAC_PI_2;
     assert!(write_spot(0.2, 0.4).is_ok());
     assert!(write_spot(0.0, half_pi).is_ok());
-    for (inner, outer) in [
-        (0.2, 0.1),
-        (-0.1, 0.4),
-        (0.2, half_pi + 0.01),
-        (0.0, 0.0),
-        (0.2, f32::NAN),
-    ] {
+    for (inner, outer) in [(0.2, 0.1), (-0.1, 0.4), (0.2, half_pi + 0.01), (0.0, 0.0)] {
         let e = write_spot(inner, outer).unwrap_err();
         assert!(e.contains("spot cones"), "{inner} {outer}: {e}");
     }
+    // a NaN cone never reaches the cone check: the light's component is written into the node's extras first, as
+    // JSON, which has no NaN, and that refusal names the field
+    let e = write_spot(0.2, f32::NAN).unwrap_err();
+    assert!(e.contains("outer_cone") && e.contains("non-finite"), "{e}");
 }

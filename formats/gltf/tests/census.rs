@@ -16,7 +16,10 @@
 use std::path::{Path, PathBuf};
 
 use primase_core::gate::{GateReport, Tolerance};
-use primase_core::{Mesh, Name, Primitive, Semantic, Transform, World};
+use primase_core::{
+    Binding, BindingId, Deformation, Influences, Joint, JointId, Mesh, Name, Primitive, Rest, Semantic,
+    Skeleton, Skin, Slot, Stream, Transform, WeightRule, World,
+};
 use primase_glb::Gltf;
 use primase_gltf::{GroupBy, WriteOptions, write};
 use primase_testdata::{Game, OracleSet, Query, expect_found, resolve};
@@ -33,6 +36,79 @@ fn model(dir: &Path) -> Result<Gltf, String> {
         std::fs::read(dir.join(uri)).map_err(|e| e.to_string())
     })
     .map_err(|e| e.to_string())
+}
+
+/// The skin a mesh's joint and weight streams need to be in a world (they are a mesh's only with a `core.skin`): a
+/// skeleton of as many joints as the streams name, each slot of a primitive's palette its own joint with an identity
+/// inverse bind, the weights as the file stores them. The skin is shaped by the streams alone: the file's own skin is
+/// not read here, the census gates the mesh. `None` for a mesh without skin streams.
+fn skin_for(w: &mut World, mesh: &Mesh) -> Option<Skin> {
+    if !mesh.primitives().iter().any(primase_core::skin::has_skin_streams) {
+        return None;
+    }
+    let slots = |p: &Primitive| -> u32 {
+        p.streams
+            .iter()
+            .filter(|(s, _)| matches!(s, Semantic::Joints(_)))
+            .flat_map(|(_, st)| match st {
+                Stream::U8x4(v) => v.iter().flatten().map(|&j| u32::from(j)).collect::<Vec<_>>(),
+                Stream::U16x4(v) => v.iter().flatten().map(|&j| u32::from(j)).collect(),
+                _ => Vec::new(),
+            })
+            .max()
+            .map_or(1, |m| m + 1)
+    };
+    let palette_len = mesh.primitives().iter().map(slots).max().unwrap_or(1);
+    let skeleton = w.spawn();
+    w.insert(
+        skeleton,
+        Skeleton {
+            joints: (0..palette_len)
+                .map(|id| Joint {
+                    id: JointId(id),
+                    name: format!("joint{id}"),
+                    parent: None,
+                    rest: Rest::Affine(Transform::IDENTITY),
+                })
+                .collect(),
+        },
+    );
+    let influences: Vec<Option<Influences>> = mesh
+        .primitives()
+        .iter()
+        .map(|p| {
+            let sets = (0..u8::MAX)
+                .take_while(|&k| {
+                    p.streams.contains_key(&Semantic::Joints(k))
+                        && p.streams.contains_key(&Semantic::Weights(k))
+                })
+                .count();
+            match (sets, p.streams.contains_key(&Semantic::Joints(0))) {
+                (0, false) => None,
+                (0, true) => Some(Influences::SingleIndex),
+                (n, _) => Some(Influences::Streams {
+                    sets: u8::try_from(n).unwrap(),
+                }),
+            }
+        })
+        .collect();
+    let palette: Vec<Slot> = (0..palette_len)
+        .map(|id| Slot {
+            joint: JointId(id),
+            inverse_bind: Transform::IDENTITY,
+        })
+        .collect();
+    let palettes = influences.iter().map(|i| i.map(|_| palette.clone())).collect();
+    Some(Skin {
+        influences,
+        weights: WeightRule::AsStored,
+        bindings: vec![Binding {
+            id: BindingId(0),
+            skeleton,
+            palettes,
+            deformation: Deformation::Linear,
+        }],
+    })
 }
 
 /// A primitive's streams as the mesh-alone round trip keeps them: without joints and weights, which glTF holds only
@@ -78,6 +154,9 @@ fn census(models: &[PathBuf], gate: &mut GateReport) -> (u64, u64, u64) {
                     let e = world.spawn();
                     world.insert(e, Transform::IDENTITY);
                     world.insert(e, mesh.clone());
+                    if let Some(skin) = skin_for(&mut world, &mesh) {
+                        world.insert(e, skin);
+                    }
                     originals.push(mesh);
                 }
                 Err(e) => gate.fail(format!("{item} mesh {i}"), e.to_string()),
@@ -138,6 +217,9 @@ fn single_mesh_agrees(name: &str, mesh: &Mesh) -> Result<(), String> {
     }
     let mut w = World::new();
     let e = w.spawn();
+    if let Some(skin) = skin_for(&mut w, &bare) {
+        w.insert(e, skin);
+    }
     w.insert(e, bare);
     w.insert(e, Name(name.to_owned()));
     let options = WriteOptions {
@@ -158,6 +240,16 @@ fn single_mesh_agrees(name: &str, mesh: &Mesh) -> Result<(), String> {
     .map(serde_json::Value::from);
     if generators != want {
         return Err(format!("generators {generators:?}"));
+    }
+    // the writer keeps a prototype's skin in its node's extras; the encoder takes a mesh alone and has none
+    for node in docs[1].json["nodes"].as_array_mut().into_iter().flatten() {
+        if let Some(extras) = node
+            .get_mut("extras")
+            .and_then(|e| e.get_mut("primase"))
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            extras.remove("core.skin");
+        }
     }
     let [a, b] = &docs;
     if serde_json::to_string(&a.json).unwrap() != serde_json::to_string(&b.json).unwrap() {

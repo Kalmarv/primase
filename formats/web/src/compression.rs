@@ -219,22 +219,27 @@ fn stored(doc: &Value, bin: &[u8], site: Site) -> Result<Stored> {
                 s: numbers(&n["scale"], [1.; 3])?,
             }
         }
-        Site::Instance { index, streams } => {
-            let value = |stream: usize| -> Result<[f64; 4]> {
-                let mut v = [0.0; 4];
-                for (k, x) in v.iter_mut().enumerate() {
-                    *x = f64::from(instance_value(doc, bin, streams[stream], index, k)?);
-                }
-                Ok(v)
-            };
-            let (t, r, s) = (value(0)?, value(1)?, value(2)?);
-            Stored::Trs {
-                t: [t[0], t[1], t[2]],
-                r,
-                s: [s[0], s[1], s[2]],
-            }
-        }
+        Site::Instance { index, streams } => Stored::Trs {
+            // each stream holds as many components as its attribute has: 3 translations, 4 rotation, 3 scales
+            t: instance_components::<3>(doc, bin, streams[0], index)?,
+            r: instance_components::<4>(doc, bin, streams[1], index)?,
+            s: instance_components::<3>(doc, bin, streams[2], index)?,
+        },
     })
+}
+
+/// The `N` components of element `index` of an f32 instance stream, which must hold exactly `N` per element.
+fn instance_components<const N: usize>(
+    doc: &Value,
+    bin: &[u8],
+    accessor: usize,
+    index: usize,
+) -> Result<[f64; N]> {
+    let mut out = [0.0; N];
+    for (k, x) in out.iter_mut().enumerate() {
+        *x = f64::from(instance_value(doc, bin, accessor, index, k)?);
+    }
+    Ok(out)
 }
 
 /// Byte offset of component `k` of element `index` of a tightly packed f32 accessor.
@@ -653,6 +658,36 @@ mod tests {
             message(stride(&json!({"type": "VEC3", "componentType": 5124}))).contains("component type 5124")
         );
         assert!(message(stride(&json!({"componentType": 5126}))).contains("accessor type None"));
+    }
+
+    /// The last element of an instance's streams reads: translation and scale are three components, rotation four, so the
+    /// last element of a tightly packed VEC3 stream is not read for a fourth (that runs past the buffer).
+    #[test]
+    fn the_last_instance_of_a_tightly_packed_set_of_streams_reads() {
+        let floats = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let mut bin = floats(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]); // two translations
+        bin.extend(floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0])); // two rotations
+        bin.extend(floats(&[1.0, 1.0, 1.0, 7.0, 8.0, 9.0])); // two scales
+        let accessor = |ty: &str, view: usize| json!({"bufferView": view, "componentType": 5126, "count": 2, "type": ty});
+        let doc = json!({
+            "accessors": [accessor("VEC3", 0), accessor("VEC4", 1), accessor("VEC3", 2)],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": 24},
+                {"buffer": 0, "byteOffset": 24, "byteLength": 32},
+                {"buffer": 0, "byteOffset": 56, "byteLength": 24},
+            ],
+        });
+        let site = Site::Instance {
+            index: 1,
+            streams: [0, 1, 2],
+        };
+        let Stored::Trs { t, r, s } = stored(&doc, &bin, site).unwrap() else {
+            panic!("an instance stores a translation, rotation and scale");
+        };
+        assert_eq!(
+            (t, r, s),
+            ([4.0, 5.0, 6.0], [0.0, 0.0, 1.0, 0.0], [7.0, 8.0, 9.0])
+        );
     }
 
     /// An accessor whose elements run past the buffer, and an instance stream that does.

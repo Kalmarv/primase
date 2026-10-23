@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
     Collision, Component, Entity, Instance, LodForm, Lods, Marker, Mesh, Name, Primitive, Semantic, Stream,
-    Topology, Transform, World,
+    Surfaces, Topology, Transform, World,
 };
 use primase_gltf::{GroupBy, Selected, Selection, WriteOptions, WriteReport};
 use serde_json::Value;
@@ -199,13 +199,17 @@ fn a_mesh_beside_a_marker_and_a_collision_soup_reports_them() {
     w.insert(proto, quad(Some(m)));
     let a = place(&mut w, proto, "a", 0.);
     marker(&mut w);
+    // the soup's surface is one of the world's
+    let mut surfaces = Surfaces::default();
+    let ground = surfaces.index("ground").unwrap();
+    w.insert_resource(surfaces);
     let soup = w.spawn();
     w.insert(
         soup,
         Collision {
             positions: vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]],
             triangles: vec![[0, 1, 2]],
-            surfaces: vec![0],
+            surfaces: vec![ground],
         },
     );
     let (doc, report) = written(&w, None);

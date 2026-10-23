@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{
-    Entity, Instance, MaterialVariants, Mesh, Name, Opaque, OpaqueData, Primitive, Semantic, Source, Stream,
-    TextureFile, Tile, Topology, Transform, World,
+    Binding, BindingId, Deformation, Entity, Influences, Instance, Joint, JointId, MaterialVariants, Mesh,
+    Name, Opaque, OpaqueData, Primitive, Rest, Semantic, Skeleton, Skin, Slot, Source, Stream, TextureFile,
+    Tile, Topology, Transform, WeightRule, World,
 };
 use serde_json::json;
 
@@ -322,8 +323,38 @@ pub fn build(dir: &Path) -> Built {
         ]),
     );
 
+    // a rail whose vertices name one joint each (`Joints(0)` alone), bound to a one-joint skeleton nobody rigs: the
+    // writer draws it in its bind pose, without the skin, and counts it
+    let skeleton = w.spawn();
+    w.insert(
+        skeleton,
+        Skeleton {
+            joints: vec![Joint {
+                id: JointId(1),
+                name: "rail root".into(),
+                parent: None,
+                rest: Rest::Affine(Transform::IDENTITY),
+            }],
+        },
+    );
     let proto_lines = w.spawn();
     w.insert(proto_lines, Name("rail".into()));
+    w.insert(
+        proto_lines,
+        Skin {
+            influences: vec![Some(Influences::SingleIndex)],
+            weights: WeightRule::AsStored,
+            bindings: vec![Binding {
+                id: BindingId(0),
+                skeleton,
+                palettes: vec![Some(vec![Slot {
+                    joint: JointId(1),
+                    inverse_bind: Transform::IDENTITY,
+                }])],
+                deformation: Deformation::Linear,
+            }],
+        },
+    );
     w.insert(
         proto_lines,
         Mesh::new(vec![Primitive {
