@@ -174,6 +174,12 @@ fn signature(bytes: &[u8], kind: &[u8; 4], stage: Stage, output: bool) -> Result
         .collect()
 }
 
+/// A hull or domain program's patch-constant signature elements as stored (the `PCSG` chunk).
+pub fn patch_signature_elements(bytes: &[u8]) -> Result<Vec<SignatureElement>> {
+    let directory = chunks(bytes)?;
+    signature_elements_of(chunk(&directory, b"PCSG")?, b"PCSG")
+}
+
 /// A container's input and output signature elements as stored, and its stage: for a consumer that maps only the
 /// elements it uses ([`signatures`] maps all and refuses the container for one it cannot map, used or not).
 pub fn signature_elements(bytes: &[u8]) -> Result<(Stage, Vec<SignatureElement>, Vec<SignatureElement>)> {
@@ -235,6 +241,8 @@ fn stage(directory: &[crate::Chunk<'_>]) -> Result<Stage> {
     match token >> 16 {
         0 => Ok(Stage::Pixel),
         1 => Ok(Stage::Vertex),
+        3 => Ok(Stage::Hull),
+        4 => Ok(Stage::Domain),
         5 => Ok(Stage::Compute),
         kind => Err(error(
             0,

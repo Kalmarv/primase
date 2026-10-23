@@ -12,8 +12,13 @@ use crate::decode::{Instruction, Register};
 
 impl Lift<'_> {
     pub(super) fn body(&mut self) -> Result<()> {
+        self.body_range(0..usize::MAX)
+    }
+
+    /// The instructions whose first word is in `words`: all of them, or one phase of a hull program.
+    pub(super) fn body_range(&mut self, words: std::ops::Range<usize>) -> Result<()> {
         let decoded = self.decoded;
-        for ins in &decoded.instructions {
+        for ins in decoded.instructions.iter().filter(|i| words.contains(&i.word)) {
             if self.returned {
                 // unreachable: a `ret` at the top level ended the program
                 break;
@@ -545,6 +550,14 @@ impl Lift<'_> {
                     cases,
                 });
             }
+            "ret" if self.in_phase => {
+                // the end of a hull phase: the function goes on with the next
+                if !self.frames.is_empty() {
+                    return self.refuse("a return inside the control flow of a hull phase");
+                }
+                self.returned = true;
+            }
+            "retc" if self.in_phase => return self.refuse("a conditional return in a hull phase"),
             "ret" => {
                 if self.frames.is_empty() {
                     self.returned = true;

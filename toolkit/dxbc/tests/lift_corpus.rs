@@ -70,7 +70,13 @@ fn census(variable: &str) {
                 continue;
             }
         }
-        match primase_shader::emit::wgsl(&program) {
+        // a program of a stage with no WGSL stage is written as its functions
+        let written = if primase_shader::stage_functions(&program.interface).is_ok_and(|f| f.is_some()) {
+            primase_shader::emit::wgsl_functions(&program)
+        } else {
+            primase_shader::emit::wgsl(&program)
+        };
+        match written {
             Ok(_) => c.written += 1,
             Err(e) => c.invalid.push(format!("{}: {e}", path.display())),
         }

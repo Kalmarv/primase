@@ -42,6 +42,22 @@ pub enum Register {
     ThreadGroupId,
     ThreadIdInGroup,
     ThreadIdInGroupFlattened,
+    /// `vOutputControlPointID`, `vForkInstanceID`, `vJoinInstanceID`: a hull program's phase numbers.
+    OutputControlPointId,
+    ForkInstanceId,
+    JoinInstanceId,
+    /// `vicp[point][register]`: an input control point of a hull or domain program.
+    InputControlPoint,
+    /// `vocp[point][register]`: an output control point a hull program's patch-constant phases read.
+    OutputControlPoint,
+    /// `vpc[register]`: a patch constant a domain program reads (or a hull program's join phase).
+    InputPatchConstant,
+    /// `vDomain`: a domain program's location in its patch.
+    InputDomainPoint,
+    /// `m<n>`: a geometry program's output stream.
+    Stream,
+    /// `vGSInstanceID`.
+    GsInstanceId,
 }
 impl Register {
     /// How many index dimensions an operand of this register has in Shader Model 5.0.
@@ -59,8 +75,16 @@ impl Register {
             | Register::ThreadId
             | Register::ThreadGroupId
             | Register::ThreadIdInGroup
-            | Register::ThreadIdInGroupFlattened => 0,
-            Register::Constant | Register::IndexableTemp => 2,
+            | Register::ThreadIdInGroupFlattened
+            | Register::OutputControlPointId
+            | Register::ForkInstanceId
+            | Register::JoinInstanceId
+            | Register::InputDomainPoint
+            | Register::GsInstanceId => 0,
+            Register::Constant
+            | Register::IndexableTemp
+            | Register::InputControlPoint
+            | Register::OutputControlPoint => 2,
             _ => 1,
         }
     }
@@ -79,6 +103,15 @@ impl Register {
             12 => Register::OutputDepth,
             13 => Register::Null,
             15 => Register::OutputCoverage,
+            16 => Register::Stream,
+            22 => Register::OutputControlPointId,
+            23 => Register::ForkInstanceId,
+            24 => Register::JoinInstanceId,
+            25 => Register::InputControlPoint,
+            26 => Register::OutputControlPoint,
+            27 => Register::InputPatchConstant,
+            28 => Register::InputDomainPoint,
+            37 => Register::GsInstanceId,
             30 => Register::Uav,
             31 => Register::GroupSharedMemory,
             32 => Register::ThreadId,
@@ -325,6 +358,8 @@ struct Cursor<'a> {
     words: &'a [u32],
     at: usize,
     origin: usize,
+    /// The program's type: the input registers of a geometry, hull or domain program are indexed by vertex.
+    kind: ProgramType,
 }
 impl Cursor<'_> {
     fn take(&mut self) -> Result<u32> {
@@ -382,7 +417,11 @@ impl Cursor<'_> {
             }
         }
         let dimensions = (t >> 20) & 3;
-        if dimensions != register.dimensions() {
+        let expected = match (register, self.kind) {
+            (Register::Input, ProgramType::Geometry | ProgramType::Hull | ProgramType::Domain) => 2,
+            _ => register.dimensions(),
+        };
+        if dimensions != expected {
             return Err(error(pos, "unexpected operand index dimensions"));
         }
         let mut indices = Vec::new();
@@ -497,6 +536,7 @@ pub fn decode(words: &[u32]) -> Result<Decoded> {
             words: &words[at + 1..at + len],
             at: 0,
             origin: at + 1,
+            kind,
         };
         let mut extensions = Vec::new();
         let mut extended = t >> 31 != 0;

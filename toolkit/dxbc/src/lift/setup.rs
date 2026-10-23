@@ -7,13 +7,69 @@ use std::collections::{BTreeMap, BTreeSet};
 use naga::ImageDimension;
 use primase_shader::build::Kind;
 use primase_shader::{
-    Access, BufferKind, BufferLayout, D3dBinding, D3dClass, EntryIo, Interface, Label, Resource, ResourceId,
-    ResourceKind, ResourceProvenance, SampleType, ScalarType, Stage, StorageTarget, SystemValue, TextureDim,
-    Value, Varying, VaryingProvenance, entry_io,
+    Access, BufferKind, BufferLayout, D3dBinding, D3dClass, DomainFacts, EntryIo, HullFacts, Interface,
+    Label, Partitioning, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType,
+    Stage, StageFacts, StorageTarget, SystemValue, TessDomain, TessTopology, TextureDim, Value, Varying,
+    VaryingProvenance, entry_io,
 };
 
 use crate::decode::{Declared, Decoded, Register, Selection};
 use crate::{Result, error, reflection, signature_elements};
+
+/// A phase of a hull program: the control-point phase, or a fork or join phase of its patch-constant function, with
+/// the words of the token stream it covers and how many instances it runs.
+#[derive(Clone, Debug)]
+pub(crate) struct Phase {
+    pub kind: PhaseKind,
+    pub words: std::ops::Range<usize>,
+    pub instances: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PhaseKind {
+    ControlPoint,
+    Fork,
+    Join,
+}
+
+/// The phases of a hull program, in order, from the phase markers among its declarations.
+fn phases_of(decoded: &Decoded) -> Vec<Phase> {
+    let mut starts: Vec<(usize, PhaseKind)> = decoded
+        .declarations
+        .iter()
+        .filter_map(|d| match d.opcode {
+            114 => Some((d.word, PhaseKind::ControlPoint)),
+            115 => Some((d.word, PhaseKind::Fork)),
+            116 => Some((d.word, PhaseKind::Join)),
+            _ => None,
+        })
+        .collect();
+    starts.sort_by_key(|(word, _)| *word);
+    let mut phases = Vec::new();
+    for (i, (start, kind)) in starts.iter().enumerate() {
+        let end = starts.get(i + 1).map_or(usize::MAX, |(w, _)| *w);
+        // the instance count a fork or join phase declares
+        let instances = decoded
+            .declarations
+            .iter()
+            .find_map(|d| match &d.kind {
+                Declared::Other { opcode, words, .. }
+                    if (*start..end).contains(&d.word)
+                        && matches!((opcode, kind), (153, PhaseKind::Fork) | (154, PhaseKind::Join)) =>
+                {
+                    words.first().copied()
+                }
+                _ => None,
+            })
+            .unwrap_or(1);
+        phases.push(Phase {
+            kind: *kind,
+            words: *start..end,
+            instances,
+        });
+    }
+    phases
+}
 
 /// One declared resource, with what the module's global for it needs.
 #[derive(Clone, Debug)]
@@ -114,6 +170,13 @@ pub(crate) struct Setup {
     pub temps: u32,
     /// The lanes of each input register the program declares it reads.
     pub declared_inputs: BTreeMap<u32, u8>,
+    /// The functions of a program of a stage with no entry point (see [`primase_shader::stage_functions`]).
+    pub sigs: Option<Vec<primase_shader::FunctionSig>>,
+    /// A hull program's phases (empty for the other stages).
+    pub phases: Vec<Phase>,
+    /// The registers of the patch constants (a hull program's outputs of its fork and join phases, a domain
+    /// program's inputs) as the interface's patch-constant varyings place them, with the lanes declared.
+    pub declared_patch: BTreeMap<u32, u8>,
     pub notes: BTreeSet<String>,
 }
 
@@ -140,6 +203,9 @@ impl Setup {
             indexable: Vec::new(),
             temps: 0,
             declared_inputs: BTreeMap::new(),
+            sigs: None,
+            phases: Vec::new(),
+            declared_patch: BTreeMap::new(),
             notes: BTreeSet::new(),
         }
     }
@@ -149,6 +215,17 @@ impl Setup {
         debug_assert_eq!(signature_stage, stage);
         let mut setup = Self::empty();
         let refuse = |detail: String| error(0, detail);
+        let phases = phases_of(decoded);
+        // a declaration inside a fork or join phase is the patch-constant function's, else the control-point phase's
+        // or the whole program's
+        let in_patch_phase = |word: usize| {
+            phases
+                .iter()
+                .any(|p| p.kind != PhaseKind::ControlPoint && p.words.contains(&word))
+        };
+        // what the declarations of a hull or domain program state about its patch
+        let (mut input_points, mut output_points, mut tess_domain) = (0u32, 0u32, 0u32);
+        let (mut partitioning, mut topology, mut max_factor) = (0u32, 0u32, 64.0f32.to_bits());
         let mut declared_inputs: BTreeMap<u32, u8> = BTreeMap::new();
         let (mut primitive_id, mut input_coverage) = (false, false);
         let (mut depth, mut coverage, mut stencil) = (None, false, false);
@@ -192,11 +269,12 @@ impl Setup {
                     interpolation,
                     name,
                 } => match operand.register {
-                    Register::Input => {
+                    Register::Input | Register::InputControlPoint => {
                         let Selection::Mask(mask) = operand.selection else {
                             return Err(at("an input declaration without a lane mask".into()));
                         };
-                        let register = operand.indices.first().map_or(0, |i| i.base);
+                        // a control point is indexed first, the register last
+                        let register = operand.indices.last().map_or(0, |i| i.base);
                         *declared_inputs.entry(register).or_default() |= mask;
                         if let Some(mode) = interpolation {
                             let interp = primase_shader::d3d::interpolation(*mode).map_err(at)?;
@@ -204,6 +282,18 @@ impl Setup {
                         }
                         let _ = name;
                     }
+                    Register::InputPatchConstant => {
+                        let Selection::Mask(mask) = operand.selection else {
+                            return Err(at("a patch constant declaration without a lane mask".into()));
+                        };
+                        let register = operand.indices.first().map_or(0, |i| i.base);
+                        *setup.declared_patch.entry(register).or_default() |= mask;
+                    }
+                    // the phases' numbers and the domain location are arguments of the functions
+                    Register::OutputControlPointId
+                    | Register::ForkInstanceId
+                    | Register::JoinInstanceId
+                    | Register::InputDomainPoint => {}
                     Register::PrimitiveId => primitive_id = true,
                     Register::InputCoverage => input_coverage = true,
                     Register::ThreadId => {
@@ -226,7 +316,11 @@ impl Setup {
                             return Err(at("an output declaration without a lane mask".into()));
                         };
                         let register = operand.indices.first().map_or(0, |i| i.base);
-                        *declared_outputs.entry(register).or_default() |= mask;
+                        if in_patch_phase(d.word) {
+                            *setup.declared_patch.entry(register).or_default() |= mask;
+                        } else {
+                            *declared_outputs.entry(register).or_default() |= mask;
+                        }
                     }
                     Register::OutputDepth => depth = Some(SystemValue::Depth),
                     Register::OutputDepthGreaterEqual => depth = Some(SystemValue::DepthGreaterEqual),
@@ -382,6 +476,30 @@ impl Setup {
                         atomic: None,
                     });
                 }
+                // the phases (their markers and instance counts are read from the declarations as a whole), a
+                // register range the program only addresses statically, and what a hull program states of its patch
+                Declared::Other {
+                    opcode: 113..=116 | 153 | 154 | 91,
+                    ..
+                } => {}
+                Declared::Other {
+                    opcode: 147, control, ..
+                } => input_points = *control,
+                Declared::Other {
+                    opcode: 148, control, ..
+                } => output_points = *control,
+                Declared::Other {
+                    opcode: 149, control, ..
+                } => tess_domain = *control,
+                Declared::Other {
+                    opcode: 150, control, ..
+                } => partitioning = *control,
+                Declared::Other {
+                    opcode: 151, control, ..
+                } => topology = *control,
+                Declared::Other {
+                    opcode: 152, words, ..
+                } => max_factor = words.first().copied().unwrap_or(max_factor),
                 Declared::Other { opcode, .. } => {
                     return Err(at(format!(
                         "{} ({opcode}) is not lifted",
@@ -391,6 +509,7 @@ impl Setup {
             }
         }
         setup.declared_inputs = declared_inputs;
+        setup.phases = phases;
         // the access the program makes of each typed view
         for ins in &decoded.instructions {
             let (operand, store) = match ins.opcode {
@@ -637,6 +756,60 @@ impl Setup {
                 ScalarType::Uint,
             ));
         }
+        // the patch of a hull program (its patch constants are written by the fork and join phases) or a domain program
+        // (it reads them): the patch-constant signature's elements the program declares
+        if matches!(stage, Stage::Hull | Stage::Domain) {
+            let output = stage == Stage::Hull;
+            let mut patch_constants = Vec::new();
+            for e in crate::patch_signature_elements(bytes)? {
+                if setup
+                    .declared_patch
+                    .get(&e.register)
+                    .is_some_and(|m| m & e.mask != 0)
+                {
+                    patch_constants.push(e.varying(stage, output)?);
+                }
+            }
+            let code = |name: &str, value: u32, limit: u32| -> Result<u32> {
+                if (1..=limit).contains(&value) {
+                    Ok(value)
+                } else {
+                    Err(refuse(format!("{name}: {value} is not mapped")))
+                }
+            };
+            let domain = match code("dcl_tess_domain", tess_domain, 3)? {
+                1 => TessDomain::Isoline,
+                2 => TessDomain::Triangle,
+                _ => TessDomain::Quad,
+            };
+            interface.facts = if output {
+                StageFacts::Hull(HullFacts {
+                    domain,
+                    partitioning: match code("dcl_tess_partitioning", partitioning, 4)? {
+                        1 => Partitioning::Integer,
+                        2 => Partitioning::Pow2,
+                        3 => Partitioning::FractionalOdd,
+                        _ => Partitioning::FractionalEven,
+                    },
+                    topology: match code("dcl_tess_output_primitive", topology, 4)? {
+                        1 => TessTopology::Point,
+                        2 => TessTopology::Line,
+                        3 => TessTopology::TriangleCw,
+                        _ => TessTopology::TriangleCcw,
+                    },
+                    input_control_points: code("dcl_input_control_point_count", input_points, 32)?,
+                    output_control_points: code("dcl_output_control_point_count", output_points, 32)?,
+                    max_tess_factor_bits: max_factor,
+                    patch_constants,
+                })
+            } else {
+                StageFacts::Domain(DomainFacts {
+                    domain,
+                    input_control_points: code("dcl_input_control_point_count", input_points, 32)?,
+                    patch_constants,
+                })
+            };
+        }
         // a compute program's ids are system inputs the signature does not list
         for id in setup.ids.clone() {
             let (name, width) = match id {
@@ -811,6 +984,7 @@ impl Setup {
                 },
             });
         }
+        // a vertex program that writes no position feeds a tessellator (or a stream-output stage): it is functions
         if stage == Stage::Vertex
             && !setup
                 .interface
@@ -818,12 +992,12 @@ impl Setup {
                 .iter()
                 .any(|v| v.system == Some(SystemValue::ClipPosition))
         {
-            return Err(refuse(
-                "a vertex program that writes no SV_Position (a stream-output or geometry-feeding stage)"
-                    .into(),
-            ));
+            setup.interface.facts = StageFacts::VertexWithoutPosition;
         }
-        setup.io = entry_io(&setup.interface).map_err(refuse)?;
+        setup.sigs = primase_shader::stage_functions(&setup.interface).map_err(refuse)?;
+        if setup.sigs.is_none() {
+            setup.io = entry_io(&setup.interface).map_err(refuse)?;
+        }
         Ok(setup)
     }
 }

@@ -26,6 +26,16 @@ impl<'a> Lift<'a> {
             outputs: Default::default(),
             indexable: Default::default(),
             ids: Default::default(),
+            sig: None,
+            control_points: None,
+            output_points: None,
+            patch_in: None,
+            domain_point: None,
+            point_id: None,
+            fork_id: None,
+            join_id: None,
+            in_phase: false,
+            pending_decl: None,
             primitive_id: None,
             input_coverage: None,
             depth: None,
@@ -39,6 +49,34 @@ impl<'a> Lift<'a> {
             result_type: None,
             setup,
         };
+        lift.declare_resources()?;
+        if lift.setup.sigs.is_none() {
+            lift.declare_locals();
+        }
+        Ok(lift)
+    }
+
+    /// The function's locals: the registers it uses, four raw lanes each. A program of several functions makes them
+    /// again for each.
+    pub(super) fn declare_locals(&mut self) {
+        let decoded = self.decoded;
+        let lift = self;
+        lift.temps.clear();
+        lift.inputs.clear();
+        lift.outputs.clear();
+        lift.indexable.clear();
+        lift.ids.clear();
+        lift.primitive_id = None;
+        lift.control_points = None;
+        lift.output_points = None;
+        lift.patch_in = None;
+        lift.domain_point = None;
+        lift.point_id = None;
+        lift.fork_id = None;
+        lift.join_id = None;
+        lift.input_coverage = None;
+        lift.depth = None;
+        lift.coverage = None;
         let u4 = lift.u4();
         for n in 0..lift.setup.temps {
             let local = lift.b.local(&format!("r{n}"), u4);
@@ -108,8 +146,8 @@ impl<'a> Lift<'a> {
                 }
             }
         }
-        // registers the output signature places elements in
-        for v in &lift.setup.interface.outputs {
+        // registers the output signature (or a function's results) places elements in
+        for v in &lift.result_varyings() {
             if let Some(d3d) = v.provenance.d3d
                 && d3d.register != u32::MAX
                 && !lift.outputs.contains_key(&d3d.register)
@@ -118,8 +156,6 @@ impl<'a> Lift<'a> {
                 lift.outputs.insert(d3d.register, local);
             }
         }
-        lift.declare_resources()?;
-        Ok(lift)
     }
 
     /// The entry arguments and result type, and the stores of each argument into its input register lanes.
@@ -211,6 +247,9 @@ impl<'a> Lift<'a> {
 
     /// Pack the output registers into the result and return it.
     pub(super) fn epilogue(&mut self) -> Result<()> {
+        if self.sig.is_some() {
+            return self.function_epilogue();
+        }
         let Some(result) = self.result_type else {
             self.b.push(Statement::Return { value: None });
             return Ok(());

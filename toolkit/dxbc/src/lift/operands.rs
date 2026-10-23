@@ -31,6 +31,24 @@ impl Lift<'_> {
                 let p = self.b.local_ptr(local);
                 Ok(self.b.load(p, Kind::U, 4))
             }
+            // a hull, domain or geometry program's inputs are indexed by control point (or vertex) first
+            Register::Input | Register::InputControlPoint
+                if op.indices.len() == 2
+                    && matches!(
+                        self.stage,
+                        primase_shader::Stage::Hull
+                            | primase_shader::Stage::Domain
+                            | primase_shader::Stage::Geometry
+                    ) =>
+            {
+                self.control_point_register(op, false)
+            }
+            Register::OutputControlPoint => self.control_point_register(op, true),
+            Register::InputPatchConstant => self.patch_constant_register(op),
+            Register::InputDomainPoint
+            | Register::OutputControlPointId
+            | Register::ForkInstanceId
+            | Register::JoinInstanceId => self.id_register(op.register),
             Register::Input => {
                 if op.indices[0].relative.is_some() {
                     return self.refuse("a relative-indexed input register");

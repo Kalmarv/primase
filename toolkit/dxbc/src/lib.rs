@@ -18,7 +18,9 @@ pub use program::{
     Dimension, InputDeclaration, Instruction, Operand, Program, Register, ResourceDeclaration, ReturnType,
     Selection,
 };
-pub use reflection::{SignatureElement, reflection, signature_elements, signatures};
+pub use reflection::{
+    SignatureElement, patch_signature_elements, reflection, signature_elements, signatures,
+};
 
 #[derive(Debug, thiserror::Error)]
 #[error("DXBC at word {word}: {detail}")]

@@ -25,6 +25,7 @@ mod io;
 mod operands;
 mod resources;
 mod setup;
+mod tessellation;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -64,14 +65,12 @@ pub fn lift(bytes: &[u8]) -> Result<Program> {
     if let Some(&version) = words.first() {
         let kind = match version >> 16 {
             2 => "gs",
-            3 => "hs",
-            4 => "ds",
             _ => "",
         };
         if !kind.is_empty() {
             return Err(error(
                 0,
-                format!("{kind} programs are outside the lifted stages (ps, vs, cs)"),
+                format!("{kind} programs are outside the lifted stages (ps, vs, cs, hs, ds)"),
             ));
         }
     }
@@ -80,11 +79,13 @@ pub fn lift(bytes: &[u8]) -> Result<Program> {
         crate::decode::ProgramType::Pixel => Stage::Pixel,
         crate::decode::ProgramType::Vertex => Stage::Vertex,
         crate::decode::ProgramType::Compute => Stage::Compute,
+        crate::decode::ProgramType::Hull => Stage::Hull,
+        crate::decode::ProgramType::Domain => Stage::Domain,
         other => {
             return Err(error(
                 0,
                 format!(
-                    "{} programs are outside the lifted stages (ps, vs, cs)",
+                    "{} programs are outside the lifted stages (ps, vs, cs, hs, ds)",
                     other.name()
                 ),
             ));
@@ -92,6 +93,12 @@ pub fn lift(bytes: &[u8]) -> Result<Program> {
     };
     let setup = setup::Setup::new(bytes, &decoded, stage)?;
     let mut lift = Lift::new(&decoded, stage, setup)?;
+    if let Some(sigs) = lift.setup.sigs.clone() {
+        for sig in &sigs {
+            lift.run_function(sig)?;
+        }
+        return lift.finish_functions(decoded.target());
+    }
     if stage == Stage::Compute {
         lift.b.workgroup_size = lift
             .setup
@@ -133,6 +140,22 @@ struct Lift<'a> {
     indexable: BTreeMap<u32, (Handle<LocalVariable>, u32)>,
     /// `vThreadID`, `vThreadGroupID`, `vThreadIDInGroup` and `vThreadIDInGroupFlattened`, by the system value each is.
     ids: BTreeMap<primase_shader::SystemValue, Handle<LocalVariable>>,
+    /// A hull, domain or position-less vertex program's function being lifted (see [`primase_shader::stage_functions`]).
+    sig: Option<primase_shader::FunctionSig>,
+    /// The control points of a hull or domain program: `v[point][register]` and a hull program's `vocp`, as arrays of
+    /// registers, `registers` of them to a point.
+    control_points: Option<(Handle<LocalVariable>, u32)>,
+    output_points: Option<(Handle<LocalVariable>, u32)>,
+    /// A domain program's patch constants `vpc[register]`, `vDomain`, and the phase numbers of a hull program.
+    patch_in: Option<Handle<LocalVariable>>,
+    domain_point: Option<Handle<LocalVariable>>,
+    point_id: Option<Handle<LocalVariable>>,
+    fork_id: Option<Handle<LocalVariable>>,
+    join_id: Option<Handle<LocalVariable>>,
+    /// Lifting a phase of a hull program: a `ret` ends the phase, not the function.
+    in_phase: bool,
+    /// The declared arguments and result of the function being lifted, until it is closed.
+    pending_decl: Option<primase_shader::build::FunctionDecl>,
     /// `vPrim`, `vCoverage`, `oDepth` and `oMask`, lane 0.
     primitive_id: Option<Handle<LocalVariable>>,
     input_coverage: Option<Handle<LocalVariable>>,
