@@ -295,16 +295,13 @@ fn real_files_round_trip() -> R {
     let Some(dir) = resolve(mods) else {
         return Ok(());
     };
-    let oodle = match tool(Tool::Oodle9) {
-        // SAFETY: the gate configuration names the user's own trusted game DLL.
-        Some(p) => {
-            Some(unsafe { primase_compress::oodle::Oodle::load(p, primase_compress::oodle::Version::V9)? })
-        }
-        None => {
-            eprintln!("tools.oodle9 not configured: files with Oodle payloads fail");
-            None
-        }
+    // the files' payloads are Oodle blocks: without the library the test has nothing to decode them with
+    let Some(dll) = tool(Tool::Oodle9) else {
+        return Ok(());
     };
+    // SAFETY: the gate configuration names the user's own trusted game DLL.
+    let oodle =
+        Some(unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V9)? });
     let mut files = Vec::new();
     fbmod_files(&dir, &mut files)?;
     files.sort();

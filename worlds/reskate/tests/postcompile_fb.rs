@@ -176,9 +176,12 @@ fn patch_round_trip() -> R {
     let Some(patch) = oracle(OracleSet::Studio, Game::Gta, "legion/patch") else {
         return Ok(());
     };
-    let (base, oodle) = base_and_oodle()?;
+    // the Patch's chunks lie in the base game's files, Oodle-compressed: both are needed to read it
+    let (Some(base), Some(oodle)) = base_and_oodle()? else {
+        return Ok(());
+    };
     let mut report = GateReport::new("Studio Patch read + write", Tolerance::Exact);
-    let s = summary(&patch, base.as_ref(), oodle.as_ref(), &mut report)?;
+    let s = summary(&patch, Some(&base), Some(&oodle), &mut report)?;
     println!("{report}");
     println!(
         "meshsets {} depots {} program rows {} texture-set rows {}",
