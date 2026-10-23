@@ -1,7 +1,11 @@
 //! What a test may ask the real-data configuration for: the games' installs and keys, the tools, the oracle sets and
 //! the debug keys, each declared once with what it is, where it comes from and whether the landing gate needs it. The
 //! configuration file names them by their keys (`installs.sekiro`, `tools.warp`, `oracles.root`); see the crate
-//! documentation for its layout.
+//! documentation for its layout. Every file a test asks for inside an install or an oracle set is declared too
+//! ([`DECLARED`]), with what it holds, where it comes from and whether its obligation stands: a query for an undeclared
+//! file fails, so a mistyped path never skips quietly.
+
+use crate::query::Query;
 
 /// A game primase reads, as the configuration names its install, keys and oracle folders. [`Game::General`] is no
 /// game's: oracle sets about a format or a tool rather than one game.
@@ -123,6 +127,18 @@ pub struct Entry {
     pub source: &'static str,
     /// The landing gate must have it (`[run] require = 'gate'`).
     pub gate: bool,
+}
+
+/// An oracle set: one producer's outputs, under `<oracles.root>/<set>/`; its files are declared one by one
+/// ([`DECLARED`]), each with whether the landing gate needs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Set {
+    /// Its folder under `oracles.root`, as `oracles.<set>`.
+    pub key: &'static str,
+    /// What its files are.
+    pub about: &'static str,
+    /// Its producer, and so how far its files are independent of what they check.
+    pub source: &'static str,
 }
 
 /// Every install, by [`Game::key`].
@@ -258,96 +274,629 @@ pub const TOOLS: &[Entry] = &[
 ];
 
 /// Every oracle set, by [`OracleSet::key`]: its folder under `oracles.root` holds one folder per [`Game::key`].
-pub const ORACLE_SETS: &[Entry] = &[
-    Entry {
+pub const ORACLE_SETS: &[Set] = &[
+    Set {
         key: "oracles.unitypy",
         about: "UnityPy's readings of a Unity player (object tables, samples, meshes, textures, materials, shaders, frames, listings)",
         source: "independent: UnityPy, through dump scripts kept with the private oracle tools",
-        gate: true,
     },
-    Entry {
+    Set {
         key: "oracles.codewalker",
         about: "CodeWalker's readings of a GTA V install (archive listings, live-file tables, texture parents, resources, frames, bounds)",
         source: "independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools",
-        gate: true,
     },
-    Entry {
+    Set {
         key: "oracles.soulsformats",
         about: "SoulsFormats' readings of FromSoftware archives and files (rigid parts, skins, parts, census, frames, formats)",
         source: "independent: SoulsFormats 9c0da6b (Sekiro) and SoulsFormatsNEXT ee1dd61 (Elden Ring), through a thin dump harness kept with the private oracle tools",
-        gate: true,
     },
-    Entry {
+    Set {
         key: "oracles.uxm",
         about: "UXM's path dictionaries (`dictionary.txt`, UTF-8, one archive path per line)",
         source: "third-party: UXM-Selective-Unpack 9501be8's dictionaries",
-        gate: true,
     },
-    Entry {
+    Set {
         key: "oracles.game-code",
         about: "a game's own code run over its install (STUNTBOOST's parsers via reflection: one JSON per level part)",
         source: "independent: the game's own code via reflection, the oracle tool kept with the game's private tools",
-        gate: true,
     },
-    Entry {
+    Set {
         key: "oracles.rrassetstudio",
         about: "RRAssetStudio's read of every Mesh of a Riders Republic install (`summary.jsonl`, one row per Mesh)",
         source: "third-party: RRAssetStudio v3, run over the user's own install by the primase-oracles harness",
-        gate: false,
     },
-    Entry {
+    Set {
         key: "oracles.khronos",
         about: "Khronos glTF-Sample-Assets, one folder per model, with their expected readings",
         source: "third-party: Khronos glTF-Sample-Assets at commit 15cd02d304e54cb42a4db4eefe719f76190f4b68; expectations by pygltflib and Pillow",
-        gate: true,
     },
-    Entry {
+    Set {
         key: "oracles.studio",
         about: "ReSkate Studio's compiles of maps our writer built (Patch folders)",
         source: "third-party: ReSkate Studio 20261012's compile output",
-        gate: true,
     },
-    Entry {
+    Set {
         key: "oracles.reskate",
         about: "ReSkate's own readers' readings of skate. data (the render skeleton)",
         source: "ReSkate's EBX reader (the source primase's EBX reader is ported from), through our C++ harness: a port check",
-        gate: false,
     },
-    Entry {
+    Set {
         key: "oracles.d3d-disassembler",
         about: "Microsoft's D3D shader disassembly of a game's shader containers (`NNNN.dxbc` with its listing)",
         source: "independent: Microsoft's D3D Shader Disassembler, run over the user's own install",
-        gate: false,
     },
-    Entry {
+    Set {
         key: "oracles.pillow",
         about: "Pillow's decodings of game textures and what is computed from them (the skate mask cases)",
         source: "independent: Pillow's decode and channel mapping of the game's own textures, generated by a script kept with the private oracle tools",
-        gate: true,
     },
-    Entry {
+    Set {
         key: "oracles.port",
         about: "another exporter's output for a game (its level folder, materials joined to their objects, terrain unpacked)",
         source: "another exporter's output: an appearance baseline, not a reading of the source",
-        gate: true,
     },
-    Entry {
+    Set {
         key: "oracles.corpus",
         about: "the games' own files cut from their installs (shader containers, EBX documents, Havok tagfiles, DCX files, CAS frames)",
         source: "the user's own installs: files extracted as stored",
-        gate: false,
     },
-    Entry {
+    Set {
         key: "oracles.scripts",
         about: "measurements by our own scripts over game data, separate from the readers they check (normal curl, texture statistics, shadow and state records, the eclipse reference)",
         source: "our own scripts kept with the private oracle tools: separate from the readers under test, not third-party; some producers are not recorded yet",
-        gate: true,
     },
-    Entry {
+    Set {
         key: "oracles.baseline",
         about: "our own earlier outputs kept to detect change (an earlier exporter's scene, a map our writer built, a frozen stage result)",
         source: "regression baselines: our own earlier outputs, not independent oracles",
+    },
+];
+
+/// Whether a declared file's obligation stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    /// The obligation stands and the input it names is acceptable.
+    Live,
+    /// The obligation stands, but no acceptable input exists yet (the existing data is not independent, or its
+    /// producer is gone): `source` names the replacement. It is a landing-gate input, so a gate run without it fails:
+    /// its tests never pass by skipping.
+    Blocked,
+    /// Its owner retired the obligation: an older name only ([`crate::legacy`]), never declared here.
+    Retired,
+}
+
+/// A file or folder a test asks for inside an install ([`Query::Install`] with a path) or an oracle set
+/// ([`Query::Oracle`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Declared {
+    pub query: Query,
+    pub status: Status,
+    /// The landing gate must have it (`[run] require = 'gate'`).
+    pub gate: bool,
+    /// What it is, its layout or schema, and the tests that read it.
+    pub about: &'static str,
+    /// Where its data comes from, and so how far it is independent of what it checks.
+    pub source: &'static str,
+}
+
+/// The declaration of `query`, a file in an install or an oracle set; `None` for an undeclared one, and for queries
+/// the configuration's keys name whole (an install, keys, a tool, the scratch folder, a debug key).
+pub fn declaration(query: Query) -> Option<&'static Declared> {
+    DECLARED.iter().find(|d| d.query == query)
+}
+
+/// Every file of an install or an oracle set a test asks for, by its query's key.
+pub const DECLARED: &[Declared] = &[
+    Declared {
+        query: Query::Install(Game::Riders, Some("DataPC_MAD_USNAT.forge")),
+        status: Status::Live,
+        gate: false,
+        about: r#"a large Anvil forge of version 27 (Riders Republic, Steam build 25394987: `DataPC_MAD_USNAT.forge`, 15,650,919,308 bytes, 767,463 entries; its tables are read, about 163 MB); worlds/anvil/tests/mesh_shape.rs, shapes.rs, meshes.rs"#,
+        source: r#"the user's own install; two MeshShape bodies' prefixes, section runs and tails hand-checked in a separate read-only decode (games/riders-republic docs/recon/meshshape-second-fixture.md, c068d20)"#,
+    },
+    Declared {
+        query: Query::Install(Game::Riders, Some("DataPC_MAD_USNAT_patch_01.forge")),
+        status: Status::Live,
+        gate: false,
+        about: r#"the patch forge of installs.riders/DataPC_MAD_USNAT.forge (Riders Republic, Steam build 25394987: `DataPC_MAD_USNAT_patch_01.forge`, 1,331,014,794 bytes, 320,777 entries); worlds/anvil/tests/meshes.rs"#,
+        source: r#"the user's own install; four Mesh bodies' descriptors, buffers and splits hand-checked in a separate read-only decode (games/riders-republic docs/recon/mesh-second-fixture.md, a03c970)"#,
+    },
+    Declared {
+        query: Query::Install(Game::Riders, Some("DataPC_MAD_WhiteRoom.forge")),
+        status: Status::Live,
+        gate: false,
+        about: r#"the base forge of installs.riders/DataPC_MAD_WhiteRoom_patch_01.forge's patch (Riders Republic, Steam build 25394987: `DataPC_MAD_WhiteRoom.forge`, 8,951,822 bytes, 388 entries); worlds/anvil/tests/data.rs"#,
+        source: r#"the user's own install; two resource blocks' sizes, checksums, names and class ids hand-checked in a separate read-only decode (games/riders-republic docs/recon/archive-reader-fit.md, a9f4959)"#,
+    },
+    Declared {
+        query: Query::Install(Game::Riders, Some("DataPC_MAD_WhiteRoom_patch_01.forge")),
+        status: Status::Live,
+        gate: false,
+        about: r#"one Anvil forge archive of version 27 (Riders Republic, Steam build 25394987: `DataPC_MAD_WhiteRoom_patch_01.forge`, 1,021,872 bytes, 337 entries); worlds/anvil/tests/forge.rs"#,
+        source: r#"the user's own install; rows hand-checked against a separate read-only census of the file"#,
+    },
+    Declared {
+        query: Query::Install(Game::Skate, Some("Data")),
+        status: Status::Live,
         gate: true,
+        about: r#"the skate. install's `Data` folder (its `layout.toc`, TOCs and CAS archives), read only"#,
+        source: r#"the user's own install"#,
+    },
+    Declared {
+        query: Query::Install(Game::Skatebird, Some("SkateBIRD_Data")),
+        status: Status::Live,
+        gate: true,
+        about: r#"SkateBIRD's data folder (`SkateBIRD_Data`, a Unity 2019.4.20f1 player: SerializedFile version 21 containers), read with `tools.unity_tpk`; `worlds/unity/tests/serialized_census.rs`, `worlds/skatebird/tests/markers.rs`"#,
+        source: r#"the user's own install"#,
+    },
+    Declared {
+        query: Query::Install(Game::Sledding, Some("Sledding Game_Data")),
+        status: Status::Live,
+        gate: true,
+        about: r#"a Unity player's data folder (`<Game>_Data`, holding `globalgamemanagers` and the `levelN` / `*.assets` files)"#,
+        source: r#"the user's own install"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Baseline, Game::Gta, "legion/blend-spec.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: a frozen resolution of that record against that Patch (a regression baseline of our own stage), `{"materials": {name: key}}`"#,
+        source: r#"regression baseline: an earlier run of our own stage, frozen; not an independent oracle"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Baseline, Game::Gta, "legion/map"),
+        status: Status::Live,
+        gate: true,
+        about: r#"a map folder the ReSkate writer built with `vertex_blend` materials (holding `vertex_blend.json`); `worlds/reskate/tests/postcompile_vbrecord.rs`"#,
+        source: r#"our own writer's output: the stage's input, not a reference"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Baseline, Game::Sekiro, "ktx2-tiles"),
+        status: Status::Blocked,
+        gate: true,
+        about: r#"a web tile export with KTX2 textures and its plain set, both written from the same prepared cell worlds (one conversion writing both sets, `primase_web::convert::tiles`): tiles.json, the tiles, images/, plain/tiles.json and its tiles; formats/web/tests/ktx2_audit.rs"#,
+        source: r#"the existing export's producer is gone (scene_to_tiles --ktx2 of oracles.baseline.sekiro/scene, removed) and its plain set was not prepared alike (16 of 172 images at their source size), so nothing independent gives those images' encoder input; replacement: a program converting a scene to both sets in one conversion, its KTX2 images then checked with an independent decoder (the pure-Rust basisu transcoder) against the plain set and the printed hashes with the viewer's WASM transcoder"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Baseline, Game::Sekiro, "layer-pilot"),
+        status: Status::Blocked,
+        gate: true,
+        about: r#"bounded layered-shader pilot inputs and reference pixels; schema in worlds/fromsoft/README.md"#,
+        source: r#"the existing pilot came from our earlier C# exporter's layer bake; replacement: the game's shaders on WARP"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Baseline, Game::Sekiro, "scene"),
+        status: Status::Live,
+        gate: true,
+        about: r#"our earlier exporter's skate-scene folder of an area: scene.json (region, materials), its collision tables (a regression baseline, not an independent reference) and textures; checks/tests/web_texture_decode.rs, worlds/fromsoft/tests/material_assignments.rs, shadow_census.rs"#,
+        source: r#"regression baseline: our earlier C# exporter's scene of the area, not an independent reference; placements are checked against the SoulsFormats dump instead"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Baseline, Game::Skate, "fbmod"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder of `.fbmod` files (searched recursively); each is read, written again byte for byte and every payload decoded (`tools.oodle9` for Oodle blocks); worlds/frostbite/tests/fbmod.rs. The costume files among them (top level, with Studio's `<name>.readback.glb` beside them when present) also gate the costume steps with `installs.skate/Data`: worlds/reskate/tests/costume.rs"#,
+        source: r#"ReSkate Studio 2026-10-12 `cosmetic-mesh-import` output: our own producer's files, a round-trip baseline, not an oracle"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "active.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: an independent reader's live-file tables of that install (JSON; schema in `worlds/gta/tests/archive_set.rs`)"#,
+        source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "bounds"),
+        status: Status::Live,
+        gate: true,
+        about: r#"props' embedded collision bounds (a ydr's own, a yft's first physics LOD's) as an independent reader (CodeWalker) reads them: a folder of JSON files, one per prop, `{path, leaves: [{type, flags, polygons: [{type, material, vertices (placed)}] or corners (8, placed)}]}`; `lower-gta-embedded-collision`'s triangles are checked against them (needs `installs.gta`, `keys.gta`); `worlds/gta/tests/embedded_bounds.rs`"#,
+        source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "frames.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"one ydr's high-detail geometries as an independent reader (CodeWalker) reads them, as stored in GTA's frame: one JSON file `{path, value: {models: [{geometries: [{positions, normals, tangents (xyzw), texcoords, indices}]}]}}`; the frame change, triangle fronts and bitangent sign are checked against it (needs `installs.gta`, `keys.gta`), and its stored tangent frames against the frames its texture coordinates give; `worlds/gta/tests/handedness.rs`, `uv_frames.rs`"#,
+        source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "gtxd.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: an independent reader's texture dictionary parents of that install with their source files (JSON; schema in `worlds/gta/tests/gtxd.rs`)"#,
+        source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "listing.jsonl"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: an independent reader's listing of every archive of that install (JSON lines; schema in `worlds/gta/tests/census.rs`)"#,
+        source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "parity"),
+        status: Status::Live,
+        gate: false,
+        about: r#"optional: a folder holding `dump.jsonl`, an independent reader's decoding of every file the gate regions' placements reach (the CodeWalker harness's `batch` mode over the list `parity_list` writes; schema in `worlds/gta/tests/parity.rs`)"#,
+        source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools (`batch` mode, written when needed)"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "resources"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: a folder of an independent reader's decodings of chosen drawables and texture dictionaries of that install (JSON; schema in `worlds/gta/tests/resource_oracle.rs`)"#,
+        source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::General, "codecs.tsv"),
+        status: Status::Live,
+        gate: true,
+        about: r#"TSV: codec, compressed path, oracle decoded path (tab-separated)"#,
+        source: r#"game data with a third-party decoder's output"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::General, "dxbc"),
+        status: Status::Blocked,
+        gate: true,
+        about: r#"shader binaries, independent disassembly and optional raw-register value fixtures; schema in toolkit/dxbc/README.md"#,
+        source: r#"the game's own shaders with third-party disassembly; the existing raw-register traces came from our own interpreter, not independently"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Gta, "legacy-effects"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder (searched recursively) of GTA V Legacy's compiled effects (`.fxc`, RAGE `rgxe`) as extracted from the install (the Enhanced edition has none); every one is read, its programs' containers checked and lifted; worlds/gta/tests/fxc_census.rs"#,
+        source: r#"the user's own install: the effect files extracted from its archives"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Gta, "shader-database.awc"),
+        status: Status::Live,
+        gate: false,
+        about: r#"GTA V Enhanced's shader database (`sga_win32_60_final.awc`, magic `SGD2`, from update/update2.rpf `common/shaders/fxdb`) as the install stores it after decryption and decompression: every program and effect is read, every program lifted; worlds/gta/tests/fxc_census.rs"#,
+        source: r#"the user's own install: the file extracted from its archive"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Riders, "shaders"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder (searched recursively) of the DXBC containers of Riders Republic's shader pack (ShaderDataDX11.bin, split at its containers), lifted, validated and written as WGSL, the refusals counted by reason; toolkit/dxbc/tests/lift_corpus.rs"#,
+        source: r#"the user's own install: the programs split from its shader pack"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Sekiro, "dcx"),
+        status: Status::Live,
+        gate: true,
+        about: r#"folder recursively containing loose KRAK DCX files"#,
+        source: r#"the game's own files, extracted from the user's install"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok"),
+        status: Status::Blocked,
+        gate: true,
+        about: r#"loose Havok 2016.2 tagfiles, matching compendium, and optional independent `.hkx.soup` oracle files; schema in toolkit/havok/README.md"#,
+        source: r#"the game's own tagfiles; the `.hkx.soup` oracle needs an independent reader (Havoc or HKLib thin dump)"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Sekiro, "object-hkx"),
+        status: Status::Live,
+        gate: true,
+        about: r#"a folder of Havok tagfiles holding object convex bodies, checked against their stored half-spaces; `toolkit/havok/tests/convex_corpus.rs`"#,
+        source: r#"the game's own tagfiles, checked against their own stored half-spaces"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Sekiro, "shaders"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder (searched recursively) of the DXBC containers of Sekiro's extracted pixel and vertex programs (`.ppo`, `.vpo`), lifted, validated and written as WGSL, the refusals counted by reason; toolkit/dxbc/tests/lift_corpus.rs"#,
+        source: r#"the user's own install: the programs extracted from its shader archives"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Skate, "cas"),
+        status: Status::Live,
+        gate: true,
+        about: r#"directory of indexed individual `.casblock` frames"#,
+        source: r#"the game's own CAS frames, cut from the user's install"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Skate, "ebx"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder of EBX documents as the game wrote them, mirroring their asset paths (searched recursively); every field's value must survive a rewrite, and the byte layout is compared with the reference writer; worlds/frostbite/tests/ebx.rs"#,
+        source: r#"the game's own EBX documents"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Sledding, "shaders"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder (searched recursively) of the DXBC containers of a Unity player's compiled pixel programs, as primase-unity extracts them, lifted, validated and written as WGSL, the refusals counted by reason; toolkit/dxbc/tests/lift_corpus.rs"#,
+        source: r#"the user's own install: the programs read from its shader assets"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::D3dDisassembler, Game::Riders, "shader-pack"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder of DXBC containers `NNNN.dxbc` (Riders Republic's ShaderDataDX11.bin, Steam build 25394987, split at its containers: 2,443) each with `NNNN.txt`, Microsoft's D3D Shader Disassembler text of it; toolkit/dxbc/tests/program.rs"#,
+        source: r#"independent: Microsoft's D3D Shader Disassembler, run over the user's own install's pack (kept in a private cache)"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::GameCode, Game::Stuntboost, "levels"),
+        status: Status::Live,
+        gate: true,
+        about: r#"the game's own parsers run over that install: per level part `<L>_<N>.json` (node names as its `ParsedName` reads them; its collision model as `SE.CollisionModel` loads it: meshes, grippable bits, ramps, ledges) and `<L>_<N>.tris.bin` (every collision triangle); worlds/stuntboost/tests/oracle.rs"#,
+        source: r#"independent: the game's own code via reflection, the oracle tool kept with the game's private tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Khronos, Game::General, "sample-assets"),
+        status: Status::Live,
+        gate: true,
+        about: r#"a folder of Khronos glTF-Sample-Assets models, one folder per model (`<Model>/<Model>.glb` or `.gltf` with its buffers, `expected.json` written by pygltflib from the same file, `validator.json` by the Khronos validator and, for a model with images, `images.json` by Pillow)"#,
+        source: r#"third-party: Khronos glTF-Sample-Assets at commit 15cd02d304e54cb42a4db4eefe719f76190f4b68; expected.json by pygltflib 1.16.5; images.json by Pillow 11.0.0"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Pillow, Game::Sekiro, "skate-mask"),
+        status: Status::Live,
+        gate: true,
+        about: r#"PNGs and independent mask pixel hashes in `cases.json`; schema below"#,
+        source: r#"independent: Pillow's decode and channel mapping of the game's own textures, generated by a script kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Port, Game::Sledding, "level1"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: another exporter's output folder for that game's `level1` and its materials joined to their objects (JSON; schema in `worlds/unity/tests/lower.rs`)"#,
+        source: r#"another exporter's output: an appearance baseline, not a reading of the source"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Port, Game::Sledding, "materials.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: another exporter's output folder for that game's `level1` and its materials joined to their objects (JSON; schema in `worlds/unity/tests/lower.rs`)"#,
+        source: r#"another exporter's output, joined by a script kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Port, Game::Sledding, "terrain"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: that exporter's terrain pieces unpacked (raw arrays, `index.json`, its layer means; schema in `worlds/unity/tests/terrain.rs`)"#,
+        source: r#"another exporter's terrain, unpacked by a script kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Reskate, Game::Skate, "renderskeleton.json"),
+        status: Status::Live,
+        gate: false,
+        about: r#"skate.'s render skeleton as ReSkate's EBX reader reads it (`renderskeleton.json`: every bone's name, parent, name hash, rest and world basis rows and translation, inverse bind rows); worlds/reskate/tests/game_skeleton.rs"#,
+        source: r#"ReSkate's EBX reader (the source primase's EBX reader is ported from) through our C++ harness `cos_skeleton` (games/sekiro tools/reskate-spec, commit 1e43b57): checks the port and the field reading, not the interpretation; the test's independent evidence is the asset's own poses agreeing with each other"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::RrAssetStudio, Game::Riders, "meshes"),
+        status: Status::Live,
+        gate: false,
+        about: r#"RRAssetStudio v3's read of every Mesh in installs.riders (a folder: summary.jsonl, one row per Mesh with counts, submeshes and material ids, and SHA-256s of its positions as f32 and absolute indices as u32, little-endian; sample/; identity.json); worlds/anvil/tests/census.rs, run by hand"#,
+        source: r#"a third-party oracle: RRAssetStudio v3 (zip SHA-256 f13edec5...) run over the user's own install by the primase-oracles harness dumps/rras-anvil (d5c48a9); identity.json pins its modules and the forges"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Scripts, Game::Sekiro, "dds"),
+        status: Status::Blocked,
+        gate: true,
+        about: r#"trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md"#,
+        source: r#"the C# oracle's decoder source is gone; replacement: a third-party DDS decoder"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Scripts, Game::Sekiro, "normal-curl.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"a JSON list of curl measurements of Sekiro normal maps by a script separate from the reader (`name`, `verdict` per map); `worlds/fromsoft/tests/normal_basis.rs`"#,
+        source: r#"our own measurement script over the game's normal maps (separate from the reader under test, not a third-party reader)"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Scripts, Game::Sekiro, "pbr"),
+        status: Status::Live,
+        gate: true,
+        about: r#"source DDS in `census/dds` plus independent `texture-statistics.json` channel extrema and means; `worlds/fromsoft/tests/pbr_census.rs`"#,
+        source: r#"the install's own DDS with statistics computed by a script kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Scripts, Game::Sekiro, "reflectance.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"a JSON file naming one layered material's G-buffer program (path, sha256, the dielectric literal's offset and bits) and its DDS inputs (paths, sha256), whose traced reflectance the static bake must reproduce at every texel while the other lowered channels stay unchanged; `worlds/fromsoft/src/sekiro/passes/bake_assembly.rs`"#,
+        source: r#"the game's own shader program and textures from the user's install, with the literal's offset read from the program's bytes; the file only names and hashes them"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Scripts, Game::Sekiro, "shadow"),
+        status: Status::Live,
+        gate: true,
+        about: r#"original decompressed `map.msb` and independent `shadows.json` (source SHA-256 and ordered part names plus six raw shadow fields); `worlds/fromsoft/tests/shadow_census.rs`"#,
+        source: r#"the install's map.msb with shadows.json; the JSON's producer is not recorded yet"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Scripts, Game::Sekiro, "state"),
+        status: Status::Live,
+        gate: true,
+        about: r#"independent MSB part entity IDs and groups (`entities.jsonl`) and event-script decode (`emevd.jsonl`); schema in worlds/fromsoft/README.md"#,
+        source: r#"a private dump tool's MSB/EMEVD reading; only its build output is retained, so its independence is not yet shown"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Scripts, Game::Skate, "eclipse"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder of the decodings of three skate. clips' ECLP resources (`c_proto_ofbnb_idle_lfoot`, `c_proto_onb_inair_bs_grab_method_loop`, `c_proto_onb_trick_o_varialheel_high`): per clip `<clip>.eclp` (the bytes), `<clip>.tracks.json` (formats and every rotation, translation and scalar track's frames and values), and `sha256.txt` of the bytes; worlds/reskate/tests/game_eclipse.rs"#,
+        source: r#"our own earlier Python decoder (from the executable's encoder), a port check, not an independent oracle"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::SoulsFormats, Game::Elden, "census"),
+        status: Status::Live,
+        gate: false,
+        about: r#"an independent census of installs.elden in oracles.soulsformats.sekiro/census's schema (the archives' decrypted headers as `<name>.plain`, entries.tsv, binders.tsv, errors.tsv, samples; hashes 16 hex digits; an archive's shard is its index in UXM's Elden Ring archive list); worlds/fromsoft/tests/census.rs"#,
+        source: r#"independent: SoulsFormatsNEXT ee1dd61 with UXM 9501be8's keys, RSA and path hash, the Elden Ring harness's `census` mode (kept with the private oracle tools)"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::SoulsFormats, Game::Elden, "format"),
+        status: Status::Live,
+        gate: false,
+        about: r#"an independent reader's field-by-field reading of Elden Ring files read from installs.elden (JSON lines, floats as hex bit patterns): `msb.jsonl` (every map layout: its models, and every part with kind, model, transform, entity IDs, shadow controls and hit filter), `btl.jsonl` (every light bank: its version and lights, or the reference's refusal), `havok.jsonl` (chosen tiles' map collision and assets' collision: every compressed mesh shape's stored sections, vertices, primitives and shape keys); schema in worlds/fromsoft/README.md; worlds/fromsoft/tests/msb_census.rs, btl_census.rs, havok_census.rs"#,
+        source: r#"independent: SoulsFormatsNEXT ee1dd61 with UXM 9501be8's keys and path hash, and HKLib ac40bc9 for Havok, the Elden Ring harness's format modes (kept with the private oracle tools)"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "census"),
+        status: Status::Live,
+        gate: true,
+        about: r#"reference archive outputs; schema in worlds/fromsoft/README.md"#,
+        source: r#"independent: SoulsFormats 9c0da6b with UXM's Sekiro dictionary, the dump harness's census mode (kept with the private oracle tools)"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "frames"),
+        status: Status::Live,
+        gate: true,
+        about: r#"a folder holding `frames.jsonl`: SoulsFormats' reading of a few Sekiro models as stored (per mesh its LOD0 face set, per vertex position, normal, tangents and UV0); `worlds/fromsoft/tests/handedness.rs`"#,
+        source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (frames mode)"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "m11_01"),
+        status: Status::Live,
+        gate: true,
+        about: r#"a SoulsFormats dump of an area: parts.jsonl (every MSB map piece and object part with its model and matrix), models.jsonl, missing-rigid.jsonl (placed models it could not dump, with why) and per placed model a binary of mesh/vertex counts followed by position and normal f32 triples in model space; worlds/fromsoft/tests/rigid_census.rs, sekiro_scene.rs"#,
+        source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`rigid` mode)"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "materials"),
+        status: Status::Blocked,
+        gate: true,
+        about: r#"independent MTD fields, area material assignments and per-model texture availability for object collision; schema in worlds/fromsoft/README.md"#,
+        source: r#"the earlier oracle is gone; replacement: SoulsFormats' MTD reading in the dump harness, hand-worked fixtures for assignments and availability"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "objects"),
+        status: Status::Blocked,
+        gate: true,
+        about: r#"main-HKX body fixtures for reference bd77fcb, decoded by an independent Havok reader; worlds/fromsoft/tests/object_collision.rs"#,
+        source: r#"the existing fixtures were decoded by our earlier C# exporter, not independently; replacement: a thin dump through Havoc (SoulsAssetPipeline d11caf9)"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "parts"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder of SoulsFormats dumps of the Wolf's parts, one folder per part name (`bd_m_9120_l`): the files of oracles.soulsformats.sekiro/skin's skeleton.json, meshes.jsonl, meshes/<i>.bin and chrbnd.json (the partsbnd's members), for the part's FLVER; worlds/fromsoft/tests/sekiro_parts.rs"#,
+        source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`skin` mode, area `part:<name>`)"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "skin"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder of SoulsFormats dumps of Sekiro characters, one folder per character id (`c1010`): skeleton.json (every FLVER bone's name, parent, stored transform and ComputeLocalTransform), meshes.jsonl (each mesh's dynamic flag, palette, face sets and layouts), meshes/<i>.bin (per vertex position, normal, bone indices and weights as stored), dummies.json, anibnd.json; worlds/fromsoft/tests/character_skin.rs"#,
+        source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`skin` mode)"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "tpf"),
+        status: Status::Blocked,
+        gate: true,
+        about: r#"independent texture-package census (packages.jsonl, area-dds/, errors.tsv); schema in worlds/fromsoft/README.md; worlds/fromsoft/tests/tpf_census.rs, tpf_pixels.rs"#,
+        source: r#"not built (a stated coverage gap): SoulsFormats' TPF reader in the dump harness's census mode; build it when a step 20 or in-game difference points at textures"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Studio, Game::Gta, "legion/patch"),
+        status: Status::Live,
+        gate: true,
+        about: r#"ReSkate Studio's Patch folder (its `layout.toc`, `Win32` TOCs and CAS archives) of the map in `oracles.baseline.gta/legion/map`, compiled by a build that carries the vertex-blend weight (validated: 20261012); `worlds/reskate/tests/postcompile_fb.rs`, `postcompile_vbrecord.rs`"#,
+        source: r#"third-party: ReSkate Studio 20261012's compile of that map"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::UnityPy, Game::Skatebird, "census.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"an independent UnityPy object-table census of that folder (JSON; schema in `worlds/unity/tests/serialized_census.rs`)"#,
+        source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::UnityPy, Game::Skatebird, "listing.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: an independent reader's (UnityPy) object names and BuildSettings scene list of `installs.skatebird/SkateBIRD_Data` (JSON; schema in `worlds/unity/tests/listing.rs`)"#,
+        source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::UnityPy, Game::Sledding, "frames.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"an independent reader's (UnityPy) decoding of a few meshes in Unity's own frame (vertices, normals, tangents, UV0, submesh triangles); `worlds/unity/tests/handedness.rs`"#,
+        source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::UnityPy, Game::Sledding, "listing.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: an independent reader's (UnityPy) object names and BuildSettings scene list of `installs.sledding/Sledding Game_Data` (JSON; schema in `worlds/unity/tests/listing.rs`)"#,
+        source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::UnityPy, Game::Sledding, "materials.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: an independent reader's materials of that folder (JSON; schema in `worlds/unity/tests/material.rs`)"#,
+        source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::UnityPy, Game::Sledding, "meshes.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: an independent reader's decoded meshes of that folder (JSON; schema in `worlds/unity/tests/mesh.rs`)"#,
+        source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::UnityPy, Game::Sledding, "samples.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: an independent reader's decoded sample objects of that folder (JSON; schema in `worlds/unity/tests/oracle.rs`)"#,
+        source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::UnityPy, Game::Sledding, "scan.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: an independent reader's scan of a level of that folder (JSON; schema in `worlds/unity/tests/hierarchy.rs`)"#,
+        source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::UnityPy, Game::Sledding, "shader-programs.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"an independent reader's (UnityPy) compiled fragment programs of every shader (per pass the player variants, keywords, program type and code hash, and the constant buffers, textures and samplers); `worlds/unity/tests/program.rs`"#,
+        source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::UnityPy, Game::Sledding, "shader-state.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"an independent reader's (UnityPy) shader render state of every material (subshader tags; per pass LightMode, blend factors, zwrite and cull with their bound properties); `worlds/unity/tests/material.rs`"#,
+        source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::UnityPy, Game::Sledding, "sun.json"),
+        status: Status::Live,
+        gate: true,
+        about: r#"an independent reader's (UnityPy) record of the scan level's RenderSettings sun as stored, the render-pipeline asset classes, the shining directional lights and the main-light choice; `worlds/unity/tests/light.rs`"#,
+        source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::UnityPy, Game::Sledding, "textures"),
+        status: Status::Live,
+        gate: true,
+        about: r#"optional: an independent reader's decoded textures of that folder (a folder of PNGs and `index.json`; schema in `worlds/unity/tests/texture.rs`)"#,
+        source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Uxm, Game::Elden, "dictionary.txt"),
+        status: Status::Live,
+        gate: false,
+        about: r#"caller-provided UTF-8 Elden Ring path dictionary"#,
+        source: r#"third-party: UXM's Elden Ring path dictionary"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Uxm, Game::Sekiro, "dictionary.txt"),
+        status: Status::Live,
+        gate: true,
+        about: r#"caller-provided UTF-8 Sekiro path dictionary"#,
+        source: r#"third-party: UXM's Sekiro path dictionary"#,
     },
 ];
 

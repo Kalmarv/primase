@@ -1,10 +1,26 @@
 # Copy to an ignored primase-data.toml, then set PRIMASE_DATA to its absolute path.
 # These are placeholders only. Keep private files outside the repository or under
 # the ignored primase-data.toml / primase-data.*.toml names; never commit real paths.
-# A partial map is expected. All values, including flags, must be quoted strings.
-PRIMASE_SEKIRO_DIR = 'D:/placeholder/games/Sekiro'
-PRIMASE_UNITY_DATA = 'D:/placeholder/games/Example/Example_Data'
-PRIMASE_UNITY_TPK = 'D:/placeholder/fixtures/typetrees.tpk'
-PRIMASE_OUT = 'D:/placeholder/output'
-PRIMASE_SCENE_FILTER = 'example-scene'
-PRIMASE_ALLOW_LIVE = '0'
+# Every section and key is optional: a test whose input is not configured skips.
+# The keys are CONTRIBUTING.md's real-data tables; an unknown one is an error.
+
+[installs]
+sekiro = 'D:/placeholder/games/Sekiro'
+sledding = 'D:/placeholder/games/Sledding Game'
+
+[keys]
+gta = 'D:/placeholder/keys/gta'
+
+[tools]
+unity_tpk = 'D:/placeholder/tools/typetrees.tpk'
+
+[oracles]
+# <root>/<set>/<game>/<file>: oracles.codewalker.gta/listing.jsonl is <root>/codewalker/gta/listing.jsonl
+root = 'D:/placeholder/oracles'
+
+[scratch]
+root = 'D:/placeholder/scratch'
+
+[run]
+# 'gate': every input the landing gate must have fails when missing; 'all': every input
+require = 'gate'

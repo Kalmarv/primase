@@ -1,6 +1,6 @@
-//! Every `PRIMASE_*` variable the workspace reads, with what it is: the one registry. The architecture test
-//! fails on a `PRIMASE_*` name in a source file that is not declared here, and on an entry nothing reads;
-//! CONTRIBUTING.md's real-data table is checked against it. Descriptions are generic: no local paths.
+//! Every older `PRIMASE_*` variable, for one release ([`crate::legacy`] translates each to its query; the
+//! registry proper is [`crate::registry`]). The architecture test fails on a `PRIMASE_*` name in a source file that is
+//! not declared here, and on an untranslated entry nothing reads. Descriptions are generic: no local paths.
 
 /// What a variable is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,18 +40,7 @@ pub struct Variable {
     pub source: &'static str,
 }
 
-/// Whether a variable's obligation stands.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Status {
-    /// The obligation stands and the input it names is acceptable.
-    Live,
-    /// The obligation stands, but no acceptable input exists yet (the existing data is not independent, or its
-    /// producer is gone): `source` names the replacement. Its tests fail when required, never pass by skipping.
-    Blocked,
-    /// Its owner retired the obligation; the tests that still read it drop it in their owner's step. Never a
-    /// landing-gate input.
-    Retired,
-}
+pub use crate::registry::Status;
 
 /// Every variable, in the order of the CONTRIBUTING table.
 pub const VARIABLES: &[Variable] = &[

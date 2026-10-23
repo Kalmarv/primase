@@ -1,4 +1,4 @@
-//! The real-data configuration: the TOML file `PRIMASE_DATA` names, read into one [`Config`].
+//! The real-data configuration: the TOML file `PRIMASE_DATA` names, read into one `Config`.
 //!
 //! ```toml
 //! [installs]
@@ -147,6 +147,21 @@ impl Config {
             self.legacy.insert(query.key(), (value, name));
         }
     }
+}
+
+/// Check `text` as a configuration file in the structured format (the example file's check): its sections and keys
+/// known, its values strings, `[run] require` one of `gate` and `all`. The older flat map is refused.
+pub fn validate(text: &str) -> Result<(), ConfigError> {
+    let path = Path::new("(text)");
+    let flat =
+        toml::from_str::<toml::Table>(text).is_ok_and(|t| !t.is_empty() && t.values().all(|v| v.is_str()));
+    if flat {
+        return Err(ConfigError::Invalid {
+            path: path.to_owned(),
+            detail: "the older flat map of PRIMASE_* names: write the structured sections".into(),
+        });
+    }
+    Config::default().parse(path, text)
 }
 
 impl Config {

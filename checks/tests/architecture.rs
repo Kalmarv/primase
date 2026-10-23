@@ -1726,7 +1726,7 @@ fn variable_literals_see_built_names() {
 
 #[test]
 fn real_data_variables_are_declared() {
-    use primase_testdata::{Kind, VARIABLES};
+    use primase_testdata::VARIABLES;
     let declared: BTreeSet<&str> = VARIABLES.iter().map(|v| v.name).collect();
     // names read by sources: every member crate's .rs files
     let mut found: BTreeMap<String, String> = BTreeMap::new();
@@ -1769,47 +1769,210 @@ fn real_data_variables_are_declared() {
         "declared but read nowhere (remove them): {stale:?}"
     );
 
-    // CONTRIBUTING.md's table, row by row, is the registry without the test-internal kinds; `-` stands for no source
+    // CONTRIBUTING.md's real-data tables are the registry's, as primase_testdata::doc makes them
     let contributing = read(&root().join("CONTRIBUTING.md"));
-    let rows: Vec<[String; 5]> = contributing
-        .lines()
-        .filter_map(|l| l.strip_prefix("| `PRIMASE_"))
-        .map(|l| {
-            let mut cells = l.trim_end_matches(" |").splitn(5, " | ").map(str::to_owned);
-            let mut cell = || cells.next().unwrap_or_default();
-            let name = String::from("PRIMASE_") + cell().trim_end_matches('`');
-            [name, cell(), cell(), cell(), cell()]
-        })
-        .collect();
-    let want: Vec<[String; 5]> = VARIABLES
-        .iter()
-        .filter(|v| !matches!(v.kind, Kind::Test | Kind::Child))
-        .map(|v| {
-            [
-                v.name.to_owned(),
-                format!("{:?}", v.kind).to_lowercase(),
-                format!("{:?}", v.status).to_lowercase(),
-                v.about.to_owned(),
-                if v.source.is_empty() { "-" } else { v.source }.to_owned(),
-            ]
-        })
-        .collect();
-    assert_eq!(
-        rows, want,
-        "CONTRIBUTING.md's real-data table differs from the registry"
+    let (begin, end) = (primase_testdata::doc::BEGIN, primase_testdata::doc::END);
+    let block = contributing
+        .split_once(begin)
+        .and_then(|(_, rest)| rest.split_once(end))
+        .map(|(inside, _)| format!("{begin}{inside}{end}\n"));
+    let want = primase_testdata::doc::tables();
+    assert!(
+        block.as_deref() == Some(want.as_str()),
+        "CONTRIBUTING.md's real-data tables differ from the registry; between its markers they read:\n{want}"
     );
 
-    // the example configuration only names declared variables a person sets
+    // the example configuration is one in the structured format
     let example = read(&root().join("primase-data.example.toml"));
-    for line in example.lines().filter(|l| l.starts_with("PRIMASE_")) {
-        let name = line.split_whitespace().next().unwrap();
-        let v = primase_testdata::declared(name)
-            .unwrap_or_else(|| panic!("primase-data.example.toml names undeclared {name}"));
-        assert!(
-            !matches!(v.kind, Kind::Test | Kind::Child | Kind::Runtime),
-            "primase-data.example.toml sets {name}, which a person does not set"
-        );
+    primase_testdata::config::validate(&example).unwrap_or_else(|e| panic!("primase-data.example.toml: {e}"));
+}
+
+/// The calls of a typed real-data query in a source text, each with its arguments as written (top-level commas, comments
+/// left out): `oracle(..)` and `install_file(..)` called through `primase_testdata::` or imported from it, and
+/// `Query::Oracle(..)` and `Query::Install(..)`.
+fn query_calls(text: &str) -> Vec<(&'static str, Vec<String>)> {
+    let code: String = text
+        .lines()
+        .map(|l| if l.trim_start().starts_with("//") { "" } else { l })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let imported = |name: &str| {
+        code.lines().any(|l| {
+            l.trim_start().starts_with("use primase_testdata::")
+                && l.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .any(|w| w == name)
+        })
+    };
+    let mut calls = Vec::new();
+    for (kind, word) in [
+        ("oracle", "oracle("),
+        ("install_file", "install_file("),
+        ("oracle", "Query::Oracle("),
+        ("install", "Query::Install("),
+    ] {
+        let mut from = 0;
+        while let Some(i) = code[from..].find(word).map(|i| i + from) {
+            from = i + word.len();
+            let before = code[..i].chars().next_back();
+            if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+                continue;
+            }
+            let qualified = code[..i].ends_with("primase_testdata::");
+            if !word.starts_with("Query::") && !qualified && !(before != Some(':') && imported(kind)) {
+                continue;
+            }
+            if code[..i].trim_end().ends_with("fn") {
+                continue;
+            }
+            // the arguments up to the matching parenthesis
+            let (mut depth, mut args, mut arg, mut quoted) = (1, Vec::new(), String::new(), false);
+            for c in code[from..].chars() {
+                match c {
+                    '"' => quoted = !quoted,
+                    '(' if !quoted => depth += 1,
+                    ')' if !quoted => depth -= 1,
+                    ',' if !quoted && depth == 1 => {
+                        args.push(std::mem::take(&mut arg));
+                        continue;
+                    }
+                    _ => {}
+                }
+                if depth == 0 {
+                    break;
+                }
+                arg.push(c);
+            }
+            args.push(arg);
+            let args = args
+                .into_iter()
+                .map(|a| a.trim().trim_start_matches("primase_testdata::").to_owned())
+                .filter(|a| !a.is_empty())
+                .collect();
+            calls.push((kind, args));
+        }
     }
+    calls
+}
+
+#[test]
+fn query_calls_see_typed_queries() {
+    // assembled, so this file's own text holds no such call
+    let q = '"';
+    let src = format!(
+        "use primase_testdata::{{oracle, Game}};\n// oracle(s) in a comment\nlet a = oracle(OracleSet::Corpus, Game::Sekiro, {q}dcx{q});\n\
+         let b = primase_testdata::install_file(\n    Game::Skate,\n    {q}Data{q},\n);\nlet c = Query::Oracle(OracleSet::Corpus, game, {q}shaders{q});\n\
+         let d = ImageQuery::Size(x); fn oracle(x: u8) {{}}\n"
+    );
+    let calls = query_calls(&src);
+    assert_eq!(
+        calls,
+        [
+            (
+                "oracle",
+                vec![
+                    "OracleSet::Corpus".to_owned(),
+                    "Game::Sekiro".to_owned(),
+                    format!("{q}dcx{q}")
+                ]
+            ),
+            (
+                "install_file",
+                vec!["Game::Skate".to_owned(), format!("{q}Data{q}")]
+            ),
+            (
+                "oracle",
+                vec![
+                    "OracleSet::Corpus".to_owned(),
+                    "game".to_owned(),
+                    format!("{q}shaders{q}")
+                ]
+            ),
+        ]
+    );
+}
+
+/// Every typed real-data query in the workspace's sources names a file the registry declares
+/// (`primase_testdata::registry::DECLARED`), its relative path a string literal: a mistyped path fails here, before any
+/// run, and one built at run time cannot hide. The game may be a variable where the set and path are literal (one
+/// corpus per game): the run then refuses an undeclared game.
+#[test]
+fn real_data_queries_are_declared() {
+    use primase_testdata::Query;
+    use primase_testdata::registry::DECLARED;
+    // (set or `install`, game, relative path)
+    let declared: Vec<(String, String, String)> = DECLARED
+        .iter()
+        .map(|d| match d.query {
+            Query::Oracle(s, g, rel) => (
+                format!("OracleSet::{s:?}"),
+                format!("Game::{g:?}"),
+                format!("\"{rel}\""),
+            ),
+            Query::Install(g, Some(rel)) => {
+                ("install".to_owned(), format!("Game::{g:?}"), format!("\"{rel}\""))
+            }
+            other => panic!("{other:?} is declared, not a file"),
+        })
+        .collect();
+    let literal =
+        |a: &str| a.len() >= 2 && a.starts_with('"') && a.ends_with('"') && !a[1..a.len() - 1].contains('"');
+    let mut problems = Vec::new();
+    for m in members() {
+        for file in rust_files(&root().join(&m.path))
+            .into_iter()
+            .filter(|f| !f.starts_with("toolkit/testdata/"))
+        {
+            let text = read(&root().join(&file));
+            if !text.contains("primase_testdata") {
+                continue;
+            }
+            for (kind, args) in query_calls(&text) {
+                let (set, game, rel) = match (kind, args.as_slice()) {
+                    ("oracle", [set, game, rel]) => (set.clone(), game, rel),
+                    ("install_file", [game, rel]) => ("install".to_owned(), game, rel),
+                    ("install", [_, none]) if none == "None" => continue,
+                    ("install", [game, some]) => {
+                        match some.strip_prefix("Some(").and_then(|r| r.strip_suffix(')')) {
+                            Some(rel) => ("install".to_owned(), game, &rel.trim().to_owned()),
+                            None => {
+                                problems.push(format!(
+                                    "{file}: Query::Install({game}, {some}): write Some(\"path\") or None"
+                                ));
+                                continue;
+                            }
+                        }
+                    }
+                    _ => {
+                        problems.push(format!(
+                            "{file}: {kind}({}) is not a query the check reads",
+                            args.join(", ")
+                        ));
+                        continue;
+                    }
+                };
+                let call = format!("{kind}({set}, {game}, {rel})");
+                if !literal(rel) {
+                    problems.push(format!(
+                        "{file}: {call}: write the relative path as a string literal"
+                    ));
+                    continue;
+                }
+                if set != "install" && !set.starts_with("OracleSet::") {
+                    problems.push(format!("{file}: {call}: name the oracle set as OracleSet::<Set>"));
+                    continue;
+                }
+                let known = declared
+                    .iter()
+                    .any(|(s, g, r)| *s == set && r == rel && (g == game || !game.starts_with("Game::")));
+                if !known {
+                    problems.push(format!(
+                        "{file}: {call} is not declared in toolkit/testdata/src/registry.rs (DECLARED)"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(problems.is_empty(), "real-data queries:\n{}", problems.join("\n"));
 }
 
 /// Every break there was, by identity (its table and every field but `reason` and `removed_when`). The list only

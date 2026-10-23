@@ -1,8 +1,10 @@
 //! Dev-only real-data configuration: where a test finds the games' installs, keys, the tools it runs, the oracle sets
 //! it compares against and where it may write. `PRIMASE_DATA` names one TOML file ([`config`] shows its layout);
-//! tests ask through typed queries ([`install`], [`keys`], [`tool`], [`oracle`], [`scratch`], [`debug`]) declared in
-//! [`registry`]. An unset entry skips the test with one line naming its configuration key, unless `[run] require`
-//! says the gate must have it; a set entry whose path is gone always fails.
+//! tests ask through typed queries ([`install`], [`install_file`], [`keys`], [`tool`], [`oracle`], [`scratch`],
+//! [`debug`]) declared in [`registry`], every file of an install or an oracle set one by one. An unset entry skips the
+//! test with one line naming its configuration key, unless `[run] require` says the gate must have it; a set entry
+//! whose path is gone always fails, and so does a file the registry does not declare. CONTRIBUTING.md's tables are
+//! made from the registry ([`doc`]).
 //!
 //! For one release the older `PRIMASE_*` names still work ([`legacy`]): asked through [`real_data`], set in the
 //! environment or in the older flat file. Add this crate only in dev-dependencies. It has no dependency on core.
@@ -12,11 +14,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 pub mod config;
+pub mod doc;
 mod inputs;
 pub mod legacy;
+mod query;
 pub mod registry;
 pub use inputs::{Kind, Status, VARIABLES, Variable, declared};
-pub use legacy::Query;
+pub use query::Query;
 pub use registry::{Game, OracleSet, Tool};
 
 use config::Config;
@@ -39,22 +43,33 @@ fn load() -> Config {
     Config::load(&environment, |path| std::fs::read_to_string(path)).unwrap_or_else(|e| panic!("{e}"))
 }
 
-/// The registry entry a query's configuration key belongs to, for its gate flag and description.
-fn entry_of(query: Query) -> Option<&'static registry::Entry> {
+/// Whether the landing gate must have what `query` names: a declared file's own flag ([`registry::DECLARED`]), else
+/// its configuration key's ([`registry::INSTALLS`], [`registry::KEYS`], [`registry::TOOLS`]). A file in an install or
+/// an oracle set that is not declared fails: a mistyped path must not skip quietly.
+#[track_caller]
+fn gate_of(query: Query) -> bool {
     let key = match query {
-        Query::Install(g, _) => format!("installs.{}", g.key()),
+        Query::Install(_, Some(_)) | Query::Oracle(..) => {
+            return registry::declaration(query)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{} is not declared in toolkit/testdata/src/registry.rs (DECLARED): declare it there, with \
+                         what it holds and where it comes from",
+                        query.key()
+                    )
+                })
+                .gate;
+        }
+        Query::Install(g, None) => format!("installs.{}", g.key()),
         Query::Keys(g) => format!("keys.{}", g.key()),
         Query::Tool(t) => format!("tools.{}", t.key()),
-        Query::Oracle(s, _, _) => format!("oracles.{}", s.key()),
-        Query::Scratch(_) => return Some(&registry::SCRATCH),
-        Query::Debug(_) | Query::Retired => return None,
+        Query::Scratch(_) | Query::Debug(_) | Query::Retired => return false,
     };
     registry::INSTALLS
         .iter()
         .chain(registry::KEYS)
         .chain(registry::TOOLS)
-        .chain(registry::ORACLE_SETS)
-        .find(|e| e.key == key)
+        .any(|e| e.key == key && e.gate)
 }
 
 /// The older names already said to be deprecated in this process.
@@ -77,12 +92,12 @@ fn configured(config: &Config, query: Query) -> Option<PathBuf> {
 }
 
 /// Resolve `query` to an existing path, or skip: unset prints one SKIP line naming the test and the configuration key,
-/// unless the configuration's `[run] require` is `all`, or `gate` and the entry is one the landing gate must have;
-/// set but missing always fails.
+/// unless the configuration's `[run] require` is `all`, or `gate` and the entry is one the landing gate must have (a
+/// blocked file always is); set but missing always fails, and so does an undeclared file.
 #[track_caller]
 pub fn resolve(query: Query) -> Option<PathBuf> {
+    let gate = gate_of(query);
     let config = load();
-    let gate = entry_of(query).is_some_and(|e| e.gate);
     let require = match config.require.as_deref() {
         Some("all") => true,
         Some("gate") => gate,
@@ -212,12 +227,27 @@ pub fn expect_items(name: &str, what: &str, n: usize) {
     }
 }
 
+/// What the registry says `query` names: a declared file's description, else its configuration key's.
+fn about_of(query: Query) -> &'static str {
+    if let Some(d) = registry::declaration(query) {
+        return d.about;
+    }
+    let key = query.root().map(|(key, _)| key).unwrap_or_default();
+    registry::INSTALLS
+        .iter()
+        .chain(registry::KEYS)
+        .chain(registry::TOOLS)
+        .chain([&registry::SCRATCH])
+        .find(|e| e.key == key)
+        .map_or("", |e| e.about)
+}
+
 /// A configured input that yields nothing is a failure, not a pass: call it after enumerating what `query` gave
 /// (`what`: "scene folders", "drawables"), with how many were found.
 #[track_caller]
 pub fn expect_found(query: Query, what: &str, n: usize) {
     if n == 0 {
-        let about = entry_of(query).map_or("", |e| e.about);
+        let about = about_of(query);
         panic!("{} is set but yielded 0 {what} (expected: {about})", query.key());
     }
 }
@@ -357,7 +387,12 @@ mod tests {
                     "{}: debug key {key} undeclared",
                     v.name
                 ),
-                (_, Some(q)) => assert!(entry_of(q).is_some(), "{}: {q:?} has no registry entry", v.name),
+                (_, Some(q @ (Query::Install(_, Some(_)) | Query::Oracle(..)))) => {
+                    let d = registry::declaration(q)
+                        .unwrap_or_else(|| panic!("{}: {} is not declared", v.name, q.key()));
+                    assert_eq!((d.status, d.gate), (v.status, v.gate), "{}", v.name);
+                }
+                (_, Some(q)) => assert!(!about_of(q).is_empty(), "{}: {q:?} has no registry entry", v.name),
             }
         }
         // the registry's own rules: unique keys, something to say for each
@@ -365,14 +400,67 @@ mod tests {
             .iter()
             .chain(registry::KEYS)
             .chain(registry::TOOLS)
-            .chain(registry::ORACLE_SETS)
             .map(|e| e.key)
+            .chain(registry::ORACLE_SETS.iter().map(|s| s.key))
             .collect();
         let n = keys.len();
         keys.sort_unstable();
         keys.dedup();
         assert_eq!(keys.len(), n);
         assert!(registry::DEBUG.iter().all(|(_, about)| !about.is_empty()));
+    }
+
+    #[test]
+    fn every_declared_file_is_one_of_an_install_or_oracle_set_and_says_what_it_is() {
+        let mut keys: Vec<String> = registry::DECLARED.iter().map(|d| d.query.key()).collect();
+        let n = keys.len();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), n, "a file declared twice");
+        for d in registry::DECLARED {
+            let key = d.query.key();
+            assert!(
+                matches!(d.query, Query::Install(_, Some(_)) | Query::Oracle(..)),
+                "{key}: only files in an install or an oracle set are declared"
+            );
+            assert!(
+                !d.about.is_empty() && !d.source.is_empty(),
+                "{key}: say what it is and where it comes from"
+            );
+            assert!(
+                d.status != Status::Retired,
+                "{key}: a retired obligation is removed, not declared"
+            );
+            // a blocked file is a landing-gate input: a gate run without it fails, it never passes by skipping
+            assert!(
+                d.status != Status::Blocked || d.gate,
+                "{key}: blocked, so a landing-gate input"
+            );
+            let rel = match d.query {
+                Query::Install(_, Some(rel)) | Query::Oracle(_, _, rel) => rel,
+                _ => unreachable!(),
+            };
+            assert!(
+                !rel.is_empty()
+                    && !rel.starts_with('/')
+                    && !rel.contains('\\')
+                    && !rel.split('/').any(|p| p == ".."),
+                "{key}: a relative, /-separated path inside its folder"
+            );
+        }
+    }
+
+    #[test]
+    fn an_undeclared_file_fails_and_a_required_blocked_one_never_skips() {
+        let typo = std::panic::catch_unwind(|| {
+            resolve(Query::Oracle(OracleSet::Corpus, Game::General, "codecs.tsvx"))
+        });
+        assert!(typo.is_err(), "a mistyped oracle path fails");
+        let typo = std::panic::catch_unwind(|| resolve(Query::Install(Game::Skate, Some("Date"))));
+        assert!(typo.is_err(), "a mistyped install path fails");
+        for d in registry::DECLARED.iter().filter(|d| d.status == Status::Blocked) {
+            assert!(gate_of(d.query), "{}", d.query.key());
+        }
     }
 
     #[test]
