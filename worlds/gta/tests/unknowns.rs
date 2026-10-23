@@ -9,12 +9,12 @@
 use std::collections::BTreeMap;
 
 use primase_core::World;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, PassLog};
 use primase_core::shader::{
     ConstantRole, InputRole, OutputRole, RenderState, Shader, ShaderBinding, Stage, TextureSource,
 };
 use primase_gta::components::{GtaEffectTechniques, GtaMaterialEffect, GtaShader, GtaShaderTable};
-use primase_gta::passes::resolve_shaders::ResolveGtaShaders;
+use primase_gta::passes::resolve_shaders::RESOLVE_GTA_SHADERS;
 use primase_gta::read::source::GtaSource;
 use primase_testdata::{Game, debug, install, keys};
 
@@ -40,7 +40,8 @@ fn what_is_left_unknown_on_a_region() {
         ("unset-textures".to_owned(), "white".to_owned()),
     ]);
     let mut log = PassLog::default();
-    ResolveGtaShaders::from_options(&options)
+    RESOLVE_GTA_SHADERS
+        .instance(&options)
         .unwrap()
         .run(&mut world, &mut log)
         .unwrap();

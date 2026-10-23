@@ -14,7 +14,7 @@
 //! keeps the colour written here (the `gta.tinted` resource lists the materials whose primitives it wrote).
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Instance, Lods, Mesh, Semantic, Stream, Texture, World};
 use primase_texcodec::{Decoder, TexDecoder};
@@ -125,6 +125,13 @@ fn vertices(m: Option<&Mesh>) -> u64 {
         m.primitives().iter().map(|p| p.vertex_count() as u64).sum()
     })
 }
+
+/// `gta-tint`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, the tints are the game's own.
+pub const GTA_TINT: PassSpec = PassSpec {
+    name: "gta-tint",
+    options: &[],
+    make: |_| Ok(Box::new(GtaTintVariants)),
+};
 
 impl Pass for GtaTintVariants {
     fn name(&self) -> &'static str {

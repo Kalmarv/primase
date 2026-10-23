@@ -9,7 +9,7 @@
 //! and tangents are left out), in GTA's frame (the frame conversion is a signed permutation, so this is bit-exact with posing before it), and removes
 //! `gta.bones` (the skeleton stays). A primitive on a bone that has no pose is left as stored, counted. Every other
 //! GTA pass on meshes refuses a mesh still holding bones, so this one runs first.
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use std::collections::BTreeMap;
 
 use primase_core::{Entity, Lods, Mesh, Semantic, Stream, World};
@@ -138,6 +138,13 @@ fn transform(r: &Pose, v: [f32; 3], w: f64) -> [f32; 3] {
 /// `gta-pose-fragments` (see the module documentation).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PoseFragments;
+
+/// `gta-pose-fragments`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, it poses by the game's own rule.
+pub const GTA_POSE_FRAGMENTS: PassSpec = PassSpec {
+    name: "gta-pose-fragments",
+    options: &[],
+    make: |_| Ok(Box::new(PoseFragments)),
+};
 
 impl Pass for PoseFragments {
     fn name(&self) -> &'static str {

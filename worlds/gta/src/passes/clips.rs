@@ -19,7 +19,7 @@ use primase_core::asset::{Asset, Role};
 use primase_core::clip::{
     Channel, Clip, ClipTarget, Extrapolation, Interpolation, Property, RootMotion, RootSpace,
 };
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::skeleton::{JointId, Rest, Skeleton};
 use primase_core::{Entity, Name, World};
 
@@ -115,6 +115,13 @@ fn keys(t: &GtaAnimationTrack, property: Property, times: &[f32]) -> (Vec<f32>, 
     let n = frames.len();
     (times.iter().copied().take(n).collect(), values)
 }
+
+/// `lower-gta-clips`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by the game's own rule.
+pub const LOWER_GTA_CLIPS: PassSpec = PassSpec {
+    name: "lower-gta-clips",
+    options: &[],
+    make: |_| Ok(Box::new(LowerGtaClips)),
+};
 
 impl Pass for LowerGtaClips {
     fn name(&self) -> &'static str {

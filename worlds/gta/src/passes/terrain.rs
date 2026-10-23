@@ -27,7 +27,7 @@
 use std::collections::BTreeMap;
 
 use primase_core::layered::{Channel, Source};
-use primase_core::pass::{Pass, PassLog, pass_text};
+use primase_core::pass::{Pass, PassLog, PassSpec, pass_text};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef};
 use primase_core::{
     ColorSpace, Entity, Layer, LayerWeights, LayeredMaterial, Semantic, Stream, TexRole, Texture,
@@ -105,6 +105,13 @@ pub fn layer_weights(mode: Weights, lookup: Option<Entity>) -> LayerWeights {
 /// `gta-terrain-layers` (see the module documentation).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GtaTerrainLayers;
+
+/// `gta-terrain-layers`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by the game's own rule.
+pub const GTA_TERRAIN_LAYERS: PassSpec = PassSpec {
+    name: "gta-terrain-layers",
+    options: &[],
+    make: |_| Ok(Box::new(GtaTerrainLayers)),
+};
 
 impl Pass for GtaTerrainLayers {
     fn name(&self) -> &'static str {

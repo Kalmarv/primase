@@ -11,7 +11,7 @@
 
 use std::collections::BTreeSet;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Entity, TexRole, Texture, World};
 
 use crate::components::{GtaParam, GtaShader};
@@ -19,6 +19,13 @@ use crate::components::{GtaParam, GtaShader};
 /// See the module documentation.
 #[derive(Debug, Default)]
 pub struct ClassifyGtaTextureRoles;
+
+/// `classify-gta-texture-roles`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, a texture's role is its shaders' own.
+pub const CLASSIFY_GTA_TEXTURE_ROLES: PassSpec = PassSpec {
+    name: "classify-gta-texture-roles",
+    options: &[],
+    make: |_| Ok(Box::new(ClassifyGtaTextureRoles)),
+};
 
 impl Pass for ClassifyGtaTextureRoles {
     fn name(&self) -> &'static str {

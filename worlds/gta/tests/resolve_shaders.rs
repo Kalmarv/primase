@@ -5,13 +5,13 @@
 //!
 //! Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, PassLog};
 use std::collections::BTreeMap;
 
 use primase_core::shader::{ConstantRole, SamplerState, Shader, ShaderBinding, Stage, TextureSource};
 use primase_core::{Component, World};
 use primase_gta::components::{GtaParam, GtaShader};
-use primase_gta::passes::resolve_shaders::ResolveGtaShaders;
+use primase_gta::passes::resolve_shaders::RESOLVE_GTA_SHADERS;
 use primase_gta::read::source::GtaSource;
 use primase_testdata::{Game, debug, install, keys};
 
@@ -22,7 +22,8 @@ fn run(world: &World, technique: &str) -> (World, PassLog) {
     ]);
     let mut w = world.clone();
     let mut log = PassLog::default();
-    ResolveGtaShaders::from_options(&options)
+    RESOLVE_GTA_SHADERS
+        .instance(&options)
         .unwrap()
         .run(&mut w, &mut log)
         .unwrap();

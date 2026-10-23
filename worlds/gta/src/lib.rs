@@ -54,104 +54,35 @@ pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) 
     }
 }
 
-/// Registers the GTA passes by name: `gta-pose-fragments`, `lower-gta-skin`, `lower-gta-clips`, `lower-gta-pbr{night}` (`night` required), `gta-winding`, `gta-tint`, `gta-terrain-layers`,
-/// `gta-vertex-colours`, `gta-select-region{x0,y0,x1,y1,max_priority,min_size}`, `gta-select-stand-ins{levels,x0,y0,x1,y1}`,
-/// `gta-leave-out-interiors`,
-/// `lower-gta-lights{hour,candela-per-unit,x0,y0,x1,y1}` (`hour` and `candela-per-unit` required), `gta-select-collision{detail}` (`detail` required), `lower-gta-collision{x0,y0,x1,y1,foliage,river}`,
-/// `lower-gta-embedded-collision{foliage,river}` (their `foliage` and `river` required),
-/// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1,clip}` (`clip` required), `lower-gta-water` and `resolve-gta-shaders{technique,
-/// unset-textures}` (both required).
+/// Registers the GTA passes by their declarations: the lowerings by GTA's own rules take no option; the region, the
+/// stand-in levels, the collision detail and flagged volumes, the water's clip, the shader technique, day or night and
+/// the lights' hour and calibration are the caller's choices, required.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    use primase_core::pass::{Options, Pass};
-    fn none(o: &Options, pass: impl Pass + 'static) -> std::result::Result<Box<dyn Pass>, String> {
-        match o.keys().next() {
-            Some(k) => Err(format!("unknown option {k}")),
-            None => Ok(Box::new(pass)),
-        }
+    use passes::*;
+    for spec in [
+        &roles::CLASSIFY_GTA_TEXTURE_ROLES,
+        &pose::GTA_POSE_FRAGMENTS,
+        &skin::LOWER_GTA_SKIN,
+        &clips::LOWER_GTA_CLIPS,
+        &lower::LOWER_GTA_PBR,
+        &winding::GTA_WINDING,
+        &tint::GTA_TINT,
+        &terrain::GTA_TERRAIN_LAYERS,
+        &vertex_colours::GTA_VERTEX_COLOURS,
+        &select::GTA_SELECT_REGION,
+        &collision::LOWER_GTA_COLLISION,
+        &select::GTA_SELECT_STAND_INS,
+        &collision::GTA_SELECT_COLLISION,
+        &collision::LOWER_GTA_EMBEDDED_COLLISION,
+        &surfaces::LOWER_GTA_SURFACES,
+        &water::GTA_SELECT_WATER,
+        &water::LOWER_GTA_WATER,
+        &resolve_shaders::RESOLVE_GTA_SHADERS,
+        &lights::LOWER_GTA_LIGHTS,
+        &interiors::GTA_LEAVE_OUT_INTERIORS,
+    ] {
+        reg.add(spec);
     }
-    reg.register("classify-gta-texture-roles", |o| {
-        none(o, passes::roles::ClassifyGtaTextureRoles)
-    });
-    reg.register("gta-pose-fragments", |o| none(o, passes::pose::PoseFragments));
-    reg.register("lower-gta-skin", |o| none(o, passes::skin::LowerGtaSkin));
-    reg.register("lower-gta-clips", |o| none(o, passes::clips::LowerGtaClips));
-    // day or night lighting is the caller's choice: no default
-    reg.register_requiring(
-        "lower-gta-pbr",
-        |o| Ok(Box::new(passes::lower::LowerGtaPbr::from_options(o)?)),
-        &[("night", "false")],
-    );
-    reg.register("gta-winding", |o| none(o, passes::winding::GtaWinding));
-    reg.register("gta-tint", |o| none(o, passes::tint::GtaTintVariants));
-    reg.register("gta-terrain-layers", |o| {
-        none(o, passes::terrain::GtaTerrainLayers)
-    });
-    reg.register("gta-vertex-colours", |o| {
-        none(o, passes::vertex_colours::GtaVertexColours)
-    });
-    // the region is the caller's choice: no default
-    reg.register_requiring(
-        "gta-select-region",
-        |o| Ok(Box::new(passes::select::SelectRegion::from_options(o)?)),
-        &[("x0", "0"), ("y0", "0"), ("x1", "1"), ("y1", "1")],
-    );
-    // whether flagged collision is dropped is the caller's choice: no default
-    let volumes = [("foliage", "leave-out"), ("river", "leave-out")];
-    reg.register_requiring(
-        "lower-gta-collision",
-        |o| Ok(Box::new(passes::collision::LowerGtaCollision::from_options(o)?)),
-        &volumes,
-    );
-    // the levels a far view draws are the caller's choice: no default
-    reg.register_requiring(
-        "gta-select-stand-ins",
-        |o| Ok(Box::new(passes::select::SelectStandIns::from_options(o)?)),
-        &[("levels", "2;3;4")],
-    );
-    // which detail of the map's collision is kept is the caller's choice: no default
-    reg.register_requiring(
-        "gta-select-collision",
-        |o| Ok(Box::new(passes::collision::SelectCollision::from_options(o)?)),
-        &[("detail", "plain")],
-    );
-    reg.register_requiring(
-        "lower-gta-embedded-collision",
-        |o| {
-            Ok(Box::new(
-                passes::collision::LowerGtaEmbeddedCollision::from_options(o)?,
-            ))
-        },
-        &volumes,
-    );
-    reg.register("lower-gta-surfaces", |o| {
-        none(o, passes::surfaces::LowerGtaSurfaces)
-    });
-    // how the water is clipped is the caller's choice: no default
-    reg.register_requiring(
-        "gta-select-water",
-        |o| Ok(Box::new(passes::water::SelectGtaWater::from_options(o)?)),
-        &[("clip", "region")],
-    );
-    reg.register("lower-gta-water", |o| none(o, passes::water::LowerGtaWater));
-    // which technique of an effect a draw uses (pass, vertex format, alpha mode) is the draw's choice: no default
-    reg.register_requiring(
-        "resolve-gta-shaders",
-        |o| {
-            Ok(Box::new(
-                passes::resolve_shaders::ResolveGtaShaders::from_options(o)?,
-            ))
-        },
-        &[("technique", "deferred_draw"), ("unset-textures", "white")],
-    );
-    // which hour's lights are drawn, and their calibration, are the caller's choices: no defaults
-    reg.register_requiring(
-        "lower-gta-lights",
-        |o| Ok(Box::new(passes::lights::LowerGtaLights::from_options(o)?)),
-        &[("hour", "every"), ("candela-per-unit", "1771")],
-    );
-    reg.register("gta-leave-out-interiors", |o| {
-        Ok(Box::new(passes::interiors::LeaveOutInteriors::from_options(o)?))
-    });
 }
 
 #[cfg(test)]

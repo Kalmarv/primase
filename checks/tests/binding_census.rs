@@ -13,7 +13,7 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::too_many_lines)]
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog, PassManager, PassRegistry, RunReport};
+use primase_core::pass::{Options, PassLog, PassManager, PassRegistry, RunReport};
 use primase_core::shader::{ConstantRole, InputRole, OutputRole, RenderState, ShaderBinding, TextureSource};
 use primase_core::{Component, World};
 use serde_json::{Value, json};
@@ -161,7 +161,7 @@ fn print(v: &Value) {
 #[test]
 fn gta_vespucci() {
     use primase_gta::components::GtaShader;
-    use primase_gta::passes::resolve_shaders::ResolveGtaShaders;
+    use primase_gta::passes::resolve_shaders::RESOLVE_GTA_SHADERS;
     use primase_gta::read::source::GtaSource;
     use primase_testdata::{Game, install, keys};
     let (Some(dir), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
@@ -180,7 +180,8 @@ fn gta_vespucci() {
         ]);
         let mut w = world.clone();
         let mut log = PassLog::default();
-        ResolveGtaShaders::from_options(&options)
+        RESOLVE_GTA_SHADERS
+            .instance(&options)
             .unwrap()
             .run(&mut w, &mut log)
             .unwrap();

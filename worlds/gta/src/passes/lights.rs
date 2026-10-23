@@ -27,14 +27,14 @@
 //! - shadows unknown.
 //!
 //! An hour mask of zero means always on, as GTA does.
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::state::{Clause, Condition, Literal};
 use primase_core::{Entity, Instance, Light, LightKind, Name, Source, Transform, World};
 
 use crate::components::GTA;
 use crate::components::{GtaLight, GtaLights, GtaSkeleton};
 use crate::passes::pose::Pose;
-use crate::passes::rect::{GroundRect, Hour};
+use crate::passes::rect::{GroundRect, Hour, X0, X1, Y0, Y1};
 
 /// Which lights `lower-gta-lights` places, by their hours.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,46 +68,52 @@ pub struct LowerGtaLights {
 }
 
 impl LowerGtaLights {
-    pub fn from_options(o: &Options) -> Result<LowerGtaLights, String> {
-        for k in o.keys() {
-            if !["hour", "candela-per-unit", "x0", "y0", "x1", "y1"].contains(&k.as_str()) {
-                return Err(format!("unknown option {k}"));
-            }
-        }
-        let hours = match o.get("hour").map(String::as_str) {
-            Some("every") => LightHours::Every,
-            Some("state") => LightHours::State,
-            Some(v) => LightHours::At(
+    /// From its declared options.
+    fn from_given(g: &Given) -> Result<LowerGtaLights, String> {
+        let hours = match g.required("hour") {
+            "every" => LightHours::Every,
+            "state" => LightHours::State,
+            v => LightHours::At(
                 Hour::parse(v).map_err(|_| format!("hour: {v} is none of 0-23, every and state"))?,
             ),
-            None => {
-                return Err(
-                    "hour is required (0-23, every or state): which lights are placed is the caller's choice"
-                        .into(),
-                );
-            }
         };
-        let candela_per_unit = match o.get("candela-per-unit") {
-            Some(v) => v
-                .parse::<f32>()
-                .ok()
-                .filter(|c| c.is_finite() && *c > 0.0)
-                .ok_or_else(|| format!("candela-per-unit: {v} is not a finite number above 0"))?,
-            None => {
-                return Err(
-                    "candela-per-unit is required (candela per unit of GTA's light intensity, above 0): \
-                            the calibration is the caller's"
-                        .into(),
-                );
-            }
-        };
+        let v = g.required("candela-per-unit");
+        let candela_per_unit = v
+            .parse::<f32>()
+            .ok()
+            .filter(|c| c.is_finite() && *c > 0.0)
+            .ok_or_else(|| format!("candela-per-unit: {v} is not a finite number above 0"))?;
         Ok(LowerGtaLights {
             hours,
             candela_per_unit,
-            region: GroundRect::from_options(o)?,
+            region: GroundRect::from_given(g)?,
         })
     }
 }
+
+/// `lower-gta-lights`' declaration ([`primase_core::pass::PassRegistry::add`]): which hour's lights are drawn, and
+/// their calibration, are the caller's choices, no defaults.
+pub const LOWER_GTA_LIGHTS: PassSpec = PassSpec {
+    name: "lower-gta-lights",
+    options: &[
+        OptionSpec::required(
+            "hour",
+            "every",
+            "which lights are placed: those on at an hour 0-23, every one with its hours, or every one with its hours \
+             as state",
+        ),
+        OptionSpec::required(
+            "candela-per-unit",
+            "1771",
+            "candela per unit of GTA's light intensity, finite and above 0: the caller's calibration",
+        ),
+        X0,
+        Y0,
+        X1,
+        Y1,
+    ],
+    make: |g| Ok(Box::new(LowerGtaLights::from_given(g)?)),
+};
 
 /// `v` taken by `pose` (rows `[x, y, z, translation]`), with its translation when `w` is 1.
 fn posed(pose: &Pose, v: [f32; 3], w: f32) -> [f32; 3] {
@@ -425,7 +431,7 @@ mod tests {
     /// pass.
     #[test]
     fn the_hour_and_the_calibration_are_required() {
-        use super::{LightHours, LowerGtaLights};
+        use super::{LOWER_GTA_LIGHTS, LightHours, LowerGtaLights};
         use primase_core::pass::Options;
         let lights = |hour: Option<&str>, candela: Option<&str>| {
             let mut o = Options::new();
@@ -435,25 +441,28 @@ mod tests {
             if let Some(v) = candela {
                 o.insert("candela-per-unit".into(), v.into());
             }
-            LowerGtaLights::from_options(&o)
+            LOWER_GTA_LIGHTS.instance(&o)
         };
-        assert_eq!(
-            lights(None, Some("1771")).unwrap_err(),
-            "hour is required (0-23, every or state): which lights are placed is the caller's choice"
+        assert!(
+            lights(None, Some("1771"))
+                .err()
+                .unwrap()
+                .starts_with("hour is required: ")
         );
         assert_eq!(
-            lights(Some("noon"), Some("1771")).unwrap_err(),
+            lights(Some("noon"), Some("1771")).err().unwrap(),
             "hour: noon is none of 0-23, every and state"
         );
         assert!(lights(Some("24"), Some("1771")).is_err());
-        assert_eq!(
-            lights(Some("every"), None).unwrap_err(),
-            "candela-per-unit is required (candela per unit of GTA's light intensity, above 0): the calibration is \
-             the caller's"
+        assert!(
+            lights(Some("every"), None)
+                .err()
+                .unwrap()
+                .starts_with("candela-per-unit is required: ")
         );
         for bad in ["0", "-1", "inf", "NaN", "bright"] {
             assert_eq!(
-                lights(Some("every"), Some(bad)).unwrap_err(),
+                lights(Some("every"), Some(bad)).err().unwrap(),
                 format!("candela-per-unit: {bad} is not a finite number above 0")
             );
         }
@@ -464,11 +473,16 @@ mod tests {
             ("state", LightHours::State),
         ] {
             let pass = lights(Some(v), Some("1771")).unwrap();
-            assert_eq!((pass.hours, pass.candela_per_unit), (hours, 1771.0), "{v}");
+            let typed = LowerGtaLights {
+                hours,
+                candela_per_unit: 1771.0,
+                region: None,
+            };
+            assert_eq!(pass.options(), typed.options(), "{v}");
             assert_eq!(pass.options()["candela-per-unit"], "1771", "{v}");
             assert_eq!(
-                LowerGtaLights::from_options(&pass.options()).unwrap(),
-                pass,
+                LOWER_GTA_LIGHTS.instance(&pass.options()).unwrap().options(),
+                pass.options(),
                 "{v}"
             );
         }

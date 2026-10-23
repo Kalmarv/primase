@@ -1,7 +1,7 @@
 //! Values the GTA passes take, each checked once where it is made: [`GroundRect`] (a rectangle of GTA's ground) and
 //! [`Hour`] (an hour of GTA's clock). A pass holding one needs no check of its own, and a pass's options parse into
 //! the same types.
-use primase_core::pass::Options;
+use primase_core::pass::{Given, OptionSpec, Options};
 
 /// The hours GTA's night-only surfaces and lights are on, bit h for hour h: 00-05 and 20-23, the hours the city's
 /// street lamps' light records name (`time_flags` 0xF0003F on the lamps of every region read so far).
@@ -40,10 +40,11 @@ impl GroundRect {
         x >= x0 && x < x1 && y >= y0 && y < y1
     }
 
-    /// Options `x0`, `y0`, `x1`, `y1` of `o`: all four (checked as [`GroundRect::new`]) or none.
-    pub fn from_options(o: &Options) -> Result<Option<GroundRect>, String> {
+    /// Options `x0`, `y0`, `x1`, `y1` of a declaration that has them ([`X0`]..[`Y1`], or [`X0_REQUIRED`]..
+    /// [`Y1_REQUIRED`]): all four (checked as [`GroundRect::new`]) or none.
+    pub fn from_given(g: &Given) -> Result<Option<GroundRect>, String> {
         let num = |k: &str| -> Result<Option<f32>, String> {
-            o.get(k)
+            g.optional(k)
                 .map(|v| v.parse().map_err(|_| format!("{k}: not a number: {v}")))
                 .transpose()
         };
@@ -62,6 +63,39 @@ impl GroundRect {
         }
     }
 }
+
+/// The rectangle's west edge, `x0`: with `y0`, `x1` and `y1`, all four or none (none: no rectangle, the whole map).
+pub const X0: OptionSpec = OptionSpec::optional(
+    "x0",
+    "0",
+    "metres east: the rectangle's west edge, with y0, x1 and y1 (without the four: the whole map)",
+);
+/// The rectangle's south edge, `y0`.
+pub const Y0: OptionSpec = OptionSpec::optional(
+    "y0",
+    "0",
+    "metres north: the rectangle's south edge, with x0, x1 and y1 (without the four: the whole map)",
+);
+/// The rectangle's east edge, `x1`.
+pub const X1: OptionSpec = OptionSpec::optional(
+    "x1",
+    "1",
+    "metres east: the rectangle's east edge, with x0, y0 and y1 (without the four: the whole map)",
+);
+/// The rectangle's north edge, `y1`.
+pub const Y1: OptionSpec = OptionSpec::optional(
+    "y1",
+    "1",
+    "metres north: the rectangle's north edge, with x0, y0 and x1 (without the four: the whole map)",
+);
+/// [`X0`], required: a pass whose region is the caller's choice.
+pub const X0_REQUIRED: OptionSpec = OptionSpec::required("x0", "0", "metres east: the region's west edge");
+/// [`Y0`], required.
+pub const Y0_REQUIRED: OptionSpec = OptionSpec::required("y0", "0", "metres north: the region's south edge");
+/// [`X1`], required.
+pub const X1_REQUIRED: OptionSpec = OptionSpec::required("x1", "1", "metres east: the region's east edge");
+/// [`Y1`], required.
+pub const Y1_REQUIRED: OptionSpec = OptionSpec::required("y1", "1", "metres north: the region's north edge");
 
 /// An hour of GTA's clock, 0-23.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
@@ -125,14 +159,22 @@ mod tests {
         }
         let r = GroundRect::new([95.0, -1034.0, 295.5, -834.0]).unwrap();
         assert!(r.contains(95.0, -1034.0) && !r.contains(295.5, -900.0));
-        let mut o = Options::new();
+        // through a declaration that takes a rectangle: all four or none, checked as GroundRect::new
+        let volumes = [("foliage", "keep"), ("river", "keep")].map(|(k, v)| (k.to_owned(), v.to_owned()));
+        let mut o = Options::from(volumes.clone());
         r.insert_options(&mut o);
-        assert_eq!(GroundRect::from_options(&o), Ok(Some(r)));
-        assert_eq!(GroundRect::from_options(&Options::new()), Ok(None));
+        let made = |o: &Options| crate::passes::collision::LOWER_GTA_COLLISION.instance(o);
+        assert_eq!(made(&o).unwrap().options(), o);
+        assert!(
+            !made(&Options::from(volumes))
+                .unwrap()
+                .options()
+                .contains_key("x0")
+        );
         o.remove("y1");
-        assert!(GroundRect::from_options(&o).is_err());
+        assert!(made(&o).is_err());
         o.insert("y1".into(), "-2000".into());
-        assert!(GroundRect::from_options(&o).is_err());
+        assert!(made(&o).is_err());
     }
 
     #[test]

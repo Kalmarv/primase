@@ -4,7 +4,7 @@
 //! whose triangles, summed over the primitive (each face normal, unnormalised, against the sum of its corners' stored
 //! normals), face away from the stored normals has every triangle's order reversed: the earlier skate exporter's rule.
 //! A primitive without normals keeps the game's order. Runs before `gta-tint`, so a geometry is judged whole.
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Primitive, Semantic, Stream, World};
 
 use crate::passes::lower::for_each_mesh;
@@ -46,6 +46,13 @@ pub fn faces_away(p: &Primitive) -> Option<bool> {
 /// `gta-winding` (see the module documentation).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GtaWinding;
+
+/// `gta-winding`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, the winding is the game's own.
+pub const GTA_WINDING: PassSpec = PassSpec {
+    name: "gta-winding",
+    options: &[],
+    make: |_| Ok(Box::new(GtaWinding)),
+};
 
 impl Pass for GtaWinding {
     fn name(&self) -> &'static str {

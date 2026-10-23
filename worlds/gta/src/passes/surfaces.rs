@@ -14,7 +14,7 @@
 //! TEMP slots) are left unclassified and counted by name, as are names the table does not know.
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{SurfaceClass, Surfaces, World};
 
 use SurfaceClass::*;
@@ -182,6 +182,13 @@ pub fn surface_class(name: &str) -> Option<SurfaceClass> {
 /// `lower-gta-surfaces` (see the module documentation).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LowerGtaSurfaces;
+
+/// `lower-gta-surfaces`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by the game's own rule.
+pub const LOWER_GTA_SURFACES: PassSpec = PassSpec {
+    name: "lower-gta-surfaces",
+    options: &[],
+    make: |_| Ok(Box::new(LowerGtaSurfaces)),
+};
 
 impl Pass for LowerGtaSurfaces {
     fn name(&self) -> &'static str {

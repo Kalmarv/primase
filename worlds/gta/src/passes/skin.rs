@@ -22,7 +22,7 @@
 //! skinned to the ped's skeleton, which its fragment carries).
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::skeleton::{Joint, JointId, Rest, Skeleton};
 use primase_core::skin::{Binding, BindingId, Deformation, Influences, Skin, Slot, WeightRule};
 use primase_core::{Entity, Lods, Mesh, Semantic, Stream, Transform, World};
@@ -56,6 +56,13 @@ fn skeleton_of(s: &crate::rage::drawable::Skeleton) -> Skeleton {
         .collect();
     Skeleton { joints }.converted(&GTA)
 }
+
+/// `lower-gta-skin`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by the game's own rule.
+pub const LOWER_GTA_SKIN: PassSpec = PassSpec {
+    name: "lower-gta-skin",
+    options: &[],
+    make: |_| Ok(Box::new(LowerGtaSkin)),
+};
 
 impl Pass for LowerGtaSkin {
     fn name(&self) -> &'static str {

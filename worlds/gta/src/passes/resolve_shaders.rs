@@ -61,7 +61,7 @@
 //!   program, the finished `Colour`.
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::shader::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
     DepthState, Fill, FrameParameter, InputBinding, InputRole, Interface, NormalEncoding, NormalSpace,
@@ -271,6 +271,11 @@ pub enum UnsetTexture {
     Leave,
 }
 
+impl Choice for UnsetTexture {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("white", UnsetTexture::White), ("leave", UnsetTexture::Leave)];
+}
+
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolveGtaShaders {
@@ -286,36 +291,33 @@ impl ResolveGtaShaders {
         }
     }
 
-    /// From its options (both required), through [`ResolveGtaShaders::new`].
-    pub fn from_options(o: &Options) -> Result<Self, String> {
-        let (mut technique, mut unset) = (None, None);
-        for (k, v) in o {
-            match k.as_str() {
-                "technique" => {
-                    if v.is_empty() || !v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-                        return Err(format!("technique={v:?} is not a technique name"));
-                    }
-                    technique = Some(v.clone());
-                }
-                "unset-textures" => {
-                    unset = Some(match v.as_str() {
-                        "white" => UnsetTexture::White,
-                        "leave" => UnsetTexture::Leave,
-                        _ => return Err(format!("unset-textures={v} is not white or leave")),
-                    });
-                }
-                _ => return Err(format!("unknown option {k}")),
-            }
+    /// From its declared options: `technique` a technique name.
+    fn from_given(g: &Given) -> Result<Self, String> {
+        let technique = g.required("technique");
+        if technique.is_empty() || !technique.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return Err(format!("technique={technique:?} is not a technique name"));
         }
-        Ok(Self {
-            technique: technique.ok_or(
-                "technique is required: the technique drawn with (deferred_draw, deferred_drawskinned, lightweight0_draw...)",
-            )?,
-            unset: unset
-                .ok_or("unset-textures is required: what a texture parameter with no texture reads")?,
-        })
+        Ok(Self::new(technique, g.choice("unset-textures")))
     }
 }
+
+/// `resolve-gta-shaders`' declaration ([`primase_core::pass::PassRegistry::add`]): which technique of an effect a draw
+/// uses (pass, vertex format, alpha mode) is the draw's choice, no default.
+pub const RESOLVE_GTA_SHADERS: PassSpec = PassSpec {
+    name: "resolve-gta-shaders",
+    options: &[
+        OptionSpec::required(
+            "technique",
+            "deferred_draw",
+            "the technique drawn with (deferred_draw, deferred_drawskinned, lightweight0_draw...)",
+        ),
+        OptionSpec::choice::<UnsetTexture>(
+            "unset-textures",
+            "a texture parameter with no texture reads white, or is left missing",
+        ),
+    ],
+    make: |g| Ok(Box::new(ResolveGtaShaders::from_given(g)?)),
+};
 
 /// The permutation hash and the name without it of a program name `<stem>_<8 hex digits>_Wrapped`.
 pub fn split_program_name(name: &str) -> Option<(&str, &str)> {
@@ -1122,14 +1124,7 @@ impl Pass for ResolveGtaShaders {
     fn options(&self) -> Options {
         Options::from([
             ("technique".to_owned(), self.technique.clone()),
-            (
-                "unset-textures".to_owned(),
-                match self.unset {
-                    UnsetTexture::White => "white",
-                    UnsetTexture::Leave => "leave",
-                }
-                .to_owned(),
-            ),
+            ("unset-textures".to_owned(), self.unset.text().to_owned()),
         ])
     }
     fn requires(&self) -> &[&'static str] {
@@ -1744,32 +1739,36 @@ mod tests {
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect::<Options>()
         };
-        assert!(ResolveGtaShaders::from_options(&o(&[])).is_err());
-        assert!(ResolveGtaShaders::from_options(&o(&[("unset-textures", "white")])).is_err());
+        assert!(RESOLVE_GTA_SHADERS.instance(&o(&[])).is_err());
         assert!(
-            ResolveGtaShaders::from_options(&o(&[
-                ("technique", "deferred draw"),
-                ("unset-textures", "white")
-            ]))
-            .is_err()
+            RESOLVE_GTA_SHADERS
+                .instance(&o(&[("unset-textures", "white")]))
+                .is_err()
+        );
+        assert!(
+            RESOLVE_GTA_SHADERS
+                .instance(&o(&[("technique", "deferred draw"), ("unset-textures", "white")]))
+                .is_err()
         );
         // the options of the previous version name programs, not a technique
         assert!(
-            ResolveGtaShaders::from_options(&o(&[
-                ("pixel", "PS_DeferredTextured"),
-                ("vertex", "VS_TransformD"),
-                ("unset-textures", "white")
-            ]))
-            .is_err()
+            RESOLVE_GTA_SHADERS
+                .instance(&o(&[
+                    ("pixel", "PS_DeferredTextured"),
+                    ("vertex", "VS_TransformD"),
+                    ("unset-textures", "white")
+                ]))
+                .is_err()
         );
-        let p = ResolveGtaShaders::from_options(&o(&[
-            ("technique", "deferred_drawskinned"),
-            ("unset-textures", "leave"),
-        ]))
-        .unwrap();
+        let p = RESOLVE_GTA_SHADERS
+            .instance(&o(&[
+                ("technique", "deferred_drawskinned"),
+                ("unset-textures", "leave"),
+            ]))
+            .unwrap();
         assert_eq!(
-            p,
-            ResolveGtaShaders::new("deferred_drawskinned", UnsetTexture::Leave)
+            p.options(),
+            ResolveGtaShaders::new("deferred_drawskinned", UnsetTexture::Leave).options()
         );
         assert_eq!(p.options()["technique"], "deferred_drawskinned");
     }

@@ -5,7 +5,7 @@
 //! none of them a colour).
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, LayeredMaterial, Semantic, Stream, World};
 
@@ -24,6 +24,13 @@ use crate::passes::shader_class::Class;
 /// occlusion) is not all 255, which no PBR channel carries.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GtaVertexColours;
+
+/// `gta-vertex-colours`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by the game's own rule.
+pub const GTA_VERTEX_COLOURS: PassSpec = PassSpec {
+    name: "gta-vertex-colours",
+    options: &[],
+    make: |_| Ok(Box::new(GtaVertexColours)),
+};
 
 impl Pass for GtaVertexColours {
     fn name(&self) -> &'static str {

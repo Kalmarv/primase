@@ -81,11 +81,11 @@ fn the_reader_declares_every_name_it_emits() {
 #[test]
 fn the_reader_reads_the_shader_database_with_the_load_when_asked() {
     use primase_core::convert::Reader;
-    use primase_core::pass::{Options, Pass, PassLog};
+    use primase_core::pass::{Options, PassLog};
     use primase_core::shader::{Shader, ShaderBinding};
     use primase_gta::components::{GtaEffect, GtaMaterialEffect};
     use primase_gta::convert::{EMITTED_NAMES, GtaOptions, GtaReader, SHADER_NAMES};
-    use primase_gta::passes::resolve_shaders::ResolveGtaShaders;
+    use primase_gta::passes::resolve_shaders::RESOLVE_GTA_SHADERS;
     let (Some(install), Some(keys)) = (
         primase_testdata::install(primase_testdata::Game::Gta),
         primase_testdata::keys(primase_testdata::Game::Gta),
@@ -147,7 +147,8 @@ fn the_reader_reads_the_shader_database_with_the_load_when_asked() {
         ("technique".to_owned(), "deferred_draw".to_owned()),
         ("unset-textures".to_owned(), "white".to_owned()),
     ]);
-    ResolveGtaShaders::from_options(&o)
+    RESOLVE_GTA_SHADERS
+        .instance(&o)
         .unwrap()
         .run(&mut w, &mut PassLog::default())
         .unwrap();

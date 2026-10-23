@@ -1,5 +1,5 @@
 //! `gta-leave-out-interiors`: the placements an interior holds, left out.
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Entity, World};
 
 use crate::components::GtaEntity;
@@ -9,14 +9,13 @@ use crate::components::GtaEntity;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LeaveOutInteriors;
 
-impl LeaveOutInteriors {
-    pub fn from_options(o: &Options) -> std::result::Result<LeaveOutInteriors, String> {
-        match o.keys().next() {
-            Some(k) => Err(format!("unknown option {k}")),
-            None => Ok(LeaveOutInteriors),
-        }
-    }
-}
+/// `gta-leave-out-interiors`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, an interior
+/// placement is the game's.
+pub const GTA_LEAVE_OUT_INTERIORS: PassSpec = PassSpec {
+    name: "gta-leave-out-interiors",
+    options: &[],
+    make: |_| Ok(Box::new(LeaveOutInteriors)),
+};
 
 impl Pass for LeaveOutInteriors {
     fn name(&self) -> &'static str {

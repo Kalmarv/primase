@@ -24,12 +24,12 @@
 //! (`clip=kept`) reads it.
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Instance, JsonError, Name, Resource, Transform, World};
 
 use crate::components::GTA;
 use crate::components::{GtaArchetype, GtaEntity};
-use crate::passes::rect::GroundRect;
+use crate::passes::rect::{GroundRect, X0, X0_REQUIRED, X1, X1_REQUIRED, Y0, Y0_REQUIRED, Y1, Y1_REQUIRED};
 
 /// How far outside the region a box may reach and still be judged by its box, not its pivot (metres): the reach that
 /// export read its regions with, and the reader's customary one. It is fixed on purpose, as every rule here is that
@@ -125,19 +125,14 @@ impl SelectRegion {
         self.region
     }
 
-    pub fn from_options(o: &Options) -> Result<SelectRegion, String> {
-        for k in o.keys() {
-            if !["x0", "y0", "x1", "y1", "max_priority", "min_size"].contains(&k.as_str()) {
-                return Err(format!("unknown option {k}"));
-            }
-        }
-        let region = GroundRect::from_options(o)?
-            .ok_or("x0, y0, x1 and y1 are required: the region is the caller's choice")?;
+    /// From its declared options, through [`SelectRegion::new`] and the setters.
+    fn from_given(g: &Given) -> Result<SelectRegion, String> {
+        let region = GroundRect::from_given(g)?.expect("the declaration requires x0, y0, x1 and y1");
         let mut pass = SelectRegion::new(region);
-        if let Some(v) = o.get("max_priority") {
+        if let Some(v) = g.optional("max_priority") {
             pass = pass.max_priority(PriorityLevel::parse(v)?);
         }
-        if let Some(v) = o.get("min_size") {
+        if let Some(v) = g.optional("min_size") {
             let metres = v.parse().map_err(|_| format!("min_size: not a number: {v}"))?;
             pass = pass.min_size(metres)?;
         }
@@ -199,6 +194,29 @@ struct Candidate {
     arch: GtaArchetype,
     t: Transform,
 }
+
+/// `gta-select-region`'s declaration ([`primase_core::pass::PassRegistry::add`]): the region is the caller's
+/// choice, no default.
+pub const GTA_SELECT_REGION: PassSpec = PassSpec {
+    name: "gta-select-region",
+    options: &[
+        X0_REQUIRED,
+        Y0_REQUIRED,
+        X1_REQUIRED,
+        Y1_REQUIRED,
+        OptionSpec::optional(
+            "max_priority",
+            "3",
+            "0-3: the least important priority level kept (default every level)",
+        ),
+        OptionSpec::optional(
+            "min_size",
+            "0",
+            "metres, finite and not negative: placements of a smaller bounding radius dropped (default 0)",
+        ),
+    ],
+    make: |g| Ok(Box::new(SelectRegion::from_given(g)?)),
+};
 
 impl Pass for SelectRegion {
     fn name(&self) -> &'static str {
@@ -432,25 +450,38 @@ impl SelectStandIns {
         self.region
     }
 
-    pub fn from_options(o: &Options) -> Result<SelectStandIns, String> {
-        for k in o.keys() {
-            if !["levels", "x0", "y0", "x1", "y1"].contains(&k.as_str()) {
-                return Err(format!("unknown option {k}"));
-            }
-        }
-        let levels = o
-            .get("levels")
-            .ok_or("levels is required (1-4, 6): which stand-ins a far view draws is the caller's choice")?
+    /// From its declared options, through [`SelectStandIns::new`].
+    fn from_given(g: &Given) -> Result<SelectStandIns, String> {
+        let levels = g
+            .required("levels")
             .split(';')
             .map(StandInLevel::parse)
             .collect::<Result<_, _>>()?;
         let pass = SelectStandIns::new(levels)?;
-        Ok(match GroundRect::from_options(o)? {
+        Ok(match GroundRect::from_given(g)? {
             Some(r) => pass.within(r),
             None => pass,
         })
     }
 }
+
+/// `gta-select-stand-ins`' declaration ([`primase_core::pass::PassRegistry::add`]): which levels a far view draws is
+/// the caller's choice, no default.
+pub const GTA_SELECT_STAND_INS: PassSpec = PassSpec {
+    name: "gta-select-stand-ins",
+    options: &[
+        OptionSpec::required(
+            "levels",
+            "2;3;4",
+            "the stand-in levels kept, joined by ; (1 LOD, 2 SLOD1, 3 SLOD2, 4 SLOD3, 6 SLOD4)",
+        ),
+        X0,
+        Y0,
+        X1,
+        Y1,
+    ],
+    make: |g| Ok(Box::new(SelectStandIns::from_given(g)?)),
+};
 
 impl Pass for SelectStandIns {
     fn name(&self) -> &'static str {
@@ -567,7 +598,7 @@ mod stand_in_tests {
         let inner = placed(&mut w, 3, Some(4), 1.0);
         let mut o = Options::new();
         o.insert("levels".into(), "2;3;4".into());
-        let pass = SelectStandIns::from_options(&o).unwrap();
+        let pass = GTA_SELECT_STAND_INS.instance(&o).unwrap();
         let mut log = PassLog::default();
         pass.run(&mut w, &mut log).unwrap();
         let alive: Vec<Entity> = w.iter::<Instance>().map(|(e, _)| e).collect();
@@ -579,7 +610,8 @@ mod stand_in_tests {
             o.insert(k.into(), v.into());
         }
         let mut log = PassLog::default();
-        SelectStandIns::from_options(&o)
+        GTA_SELECT_STAND_INS
+            .instance(&o)
             .unwrap()
             .run(&mut w, &mut log)
             .unwrap();
@@ -658,15 +690,18 @@ mod stand_in_tests {
     fn levels_are_stand_in_levels() {
         let mut o = Options::new();
         o.insert("levels".into(), "0;2".into());
-        assert!(SelectStandIns::from_options(&o).is_err());
-        assert!(SelectStandIns::from_options(&Options::new()).is_err());
+        assert!(GTA_SELECT_STAND_INS.instance(&o).is_err());
+        assert!(GTA_SELECT_STAND_INS.instance(&Options::new()).is_err());
         assert!(SelectStandIns::new(BTreeSet::new()).is_err());
         o.insert("levels".into(), "2;3;4".into());
-        let made = SelectStandIns::from_options(&o).unwrap();
-        assert_eq!(
-            made.levels(),
-            &BTreeSet::from([StandInLevel::Slod1, StandInLevel::Slod2, StandInLevel::Slod3])
-        );
+        let made = GTA_SELECT_STAND_INS.instance(&o).unwrap();
+        let typed = SelectStandIns::new(BTreeSet::from([
+            StandInLevel::Slod1,
+            StandInLevel::Slod2,
+            StandInLevel::Slod3,
+        ]))
+        .unwrap();
+        assert_eq!(made.options(), typed.options());
         assert_eq!(made.options(), o);
     }
 }

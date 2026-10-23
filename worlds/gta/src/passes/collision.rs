@@ -26,13 +26,13 @@
 //! by these bounds; the map's ybn bounds hold the static map's.
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Collision, Entity, Instance, Surfaces, Transform, World};
 
 use crate::components::GTA;
 use crate::components::GtaEntity;
 use crate::components::collision::{EMBEDDED_COLLISION_DISABLED, GtaBounds, GtaEmbeddedBounds, GtaMaterials};
-use crate::passes::rect::GroundRect;
+use crate::passes::rect::{GroundRect, X0, X1, Y0, Y1};
 use crate::rage::bounds::{Bound, Contents, Polygon};
 
 /// A map bound's detail: the plain bounds a body walks or rolls on, or the finer copies the game keeps for weapons
@@ -72,15 +72,10 @@ pub struct SelectCollision {
 }
 
 impl SelectCollision {
-    pub fn from_options(o: &Options) -> std::result::Result<SelectCollision, String> {
-        for k in o.keys() {
-            if k != "detail" {
-                return Err(format!("unknown option {k}"));
-            }
-        }
-        let details = o
-            .get("detail")
-            .ok_or("detail is required (plain, hi or ma, `;` between): which collision is written is the caller's choice")?
+    /// From its declared options.
+    fn from_given(g: &Given) -> std::result::Result<SelectCollision, String> {
+        let details = g
+            .required("detail")
             .split(';')
             .map(|d| match d.trim().to_ascii_lowercase().as_str() {
                 "plain" => Ok(BoundDetail::Plain),
@@ -92,6 +87,18 @@ impl SelectCollision {
         Ok(SelectCollision { details })
     }
 }
+
+/// `gta-select-collision`'s declaration ([`primase_core::pass::PassRegistry::add`]): which collision is written is the
+/// caller's choice, no default.
+pub const GTA_SELECT_COLLISION: PassSpec = PassSpec {
+    name: "gta-select-collision",
+    options: &[OptionSpec::required(
+        "detail",
+        "plain",
+        "the map collision details kept, joined by ; (plain, hi, ma)",
+    )],
+    make: |g| Ok(Box::new(SelectCollision::from_given(g)?)),
+};
 
 impl Pass for SelectCollision {
     fn name(&self) -> &'static str {
@@ -133,25 +140,15 @@ pub enum Flagged {
     LeaveOut,
 }
 
+impl Choice for Flagged {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("keep", Flagged::Keep), ("leave-out", Flagged::LeaveOut)];
+}
+
 impl Flagged {
     /// The option value.
     pub fn as_str(self) -> &'static str {
-        match self {
-            Flagged::Keep => "keep",
-            Flagged::LeaveOut => "leave-out",
-        }
-    }
-
-    /// Option `k`'s value in `o`, required.
-    fn from_option(o: &Options, k: &str) -> std::result::Result<Flagged, String> {
-        match o.get(k).map(String::as_str) {
-            Some("keep") => Ok(Flagged::Keep),
-            Some("leave-out") => Ok(Flagged::LeaveOut),
-            Some(v) => Err(format!("{k}={v}: keep or leave-out")),
-            None => Err(format!(
-                "{k} is required (keep or leave-out): whether collision flagged {k} is dropped is the caller's choice"
-            )),
-        }
+        self.text()
     }
 }
 
@@ -177,12 +174,12 @@ impl FlaggedVolumes {
         river: Flagged::LeaveOut,
     };
 
-    /// The `foliage` and `river` options of `o`.
-    pub fn from_options(o: &Options) -> std::result::Result<FlaggedVolumes, String> {
-        Ok(FlaggedVolumes {
-            foliage: Flagged::from_option(o, "foliage")?,
-            river: Flagged::from_option(o, "river")?,
-        })
+    /// The `foliage` and `river` options ([`FOLIAGE`], [`RIVER`]) of a declaration that has them.
+    fn from_given(g: &Given) -> FlaggedVolumes {
+        FlaggedVolumes {
+            foliage: g.choice("foliage"),
+            river: g.choice("river"),
+        }
     }
 
     fn insert_options(self, o: &mut Options) {
@@ -191,6 +188,17 @@ impl FlaggedVolumes {
         }
     }
 }
+
+/// `foliage`, as both collision lowerings take it.
+const FOLIAGE: OptionSpec = OptionSpec::choice::<Flagged>(
+    "foliage",
+    "collision flagged foliage kept, or left out (whether it is dropped is the caller's choice)",
+);
+/// `river`, as both collision lowerings take it.
+const RIVER: OptionSpec = OptionSpec::choice::<Flagged>(
+    "river",
+    "collision flagged river kept, or left out (whether it is dropped is the caller's choice)",
+);
 
 /// What both collision lowerings approximate.
 const APPROXIMATES: &str = "spheres as 32-triangle spheres, capsule and cylinder polygons as 8-sided tubes, capsule, \
@@ -204,19 +212,18 @@ pub struct LowerGtaCollision {
     pub volumes: FlaggedVolumes,
 }
 
-impl LowerGtaCollision {
-    pub fn from_options(o: &Options) -> std::result::Result<LowerGtaCollision, String> {
-        for k in o.keys() {
-            if !["x0", "y0", "x1", "y1", "foliage", "river"].contains(&k.as_str()) {
-                return Err(format!("unknown option {k}"));
-            }
-        }
-        Ok(LowerGtaCollision {
-            region: GroundRect::from_options(o)?,
-            volumes: FlaggedVolumes::from_options(o)?,
-        })
-    }
-}
+/// `lower-gta-collision`'s declaration ([`primase_core::pass::PassRegistry::add`]): whether flagged collision is
+/// dropped is the caller's choice; the region is optional.
+pub const LOWER_GTA_COLLISION: PassSpec = PassSpec {
+    name: "lower-gta-collision",
+    options: &[X0, Y0, X1, Y1, FOLIAGE, RIVER],
+    make: |g| {
+        Ok(Box::new(LowerGtaCollision {
+            region: GroundRect::from_given(g)?,
+            volumes: FlaggedVolumes::from_given(g),
+        }))
+    },
+};
 
 /// A soup in GTA's frame with GTA material indices, before the region and the frame.
 #[derive(Default)]
@@ -647,16 +654,17 @@ pub struct LowerGtaEmbeddedCollision {
     pub volumes: FlaggedVolumes,
 }
 
-impl LowerGtaEmbeddedCollision {
-    pub fn from_options(o: &Options) -> std::result::Result<LowerGtaEmbeddedCollision, String> {
-        if let Some(k) = o.keys().find(|k| !["foliage", "river"].contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        Ok(LowerGtaEmbeddedCollision {
-            volumes: FlaggedVolumes::from_options(o)?,
-        })
-    }
-}
+/// `lower-gta-embedded-collision`'s declaration ([`primase_core::pass::PassRegistry::add`]): as
+/// `lower-gta-collision`'s, without a region.
+pub const LOWER_GTA_EMBEDDED_COLLISION: PassSpec = PassSpec {
+    name: "lower-gta-embedded-collision",
+    options: &[FOLIAGE, RIVER],
+    make: |g| {
+        Ok(Box::new(LowerGtaEmbeddedCollision {
+            volumes: FlaggedVolumes::from_given(g),
+        }))
+    },
+};
 
 impl Pass for LowerGtaEmbeddedCollision {
     fn name(&self) -> &'static str {
@@ -893,9 +901,12 @@ mod tests {
                     (k.to_owned(), v.to_owned())
                 })
                 .collect();
-            assert_eq!(FlaggedVolumes::from_options(&o), Ok(volumes));
             assert_eq!(
-                LowerGtaEmbeddedCollision::from_options(&o).map(|p| p.options()),
+                LOWER_GTA_EMBEDDED_COLLISION.instance(&o).map(|p| p.options()),
+                Ok(LowerGtaEmbeddedCollision { volumes }.options())
+            );
+            assert_eq!(
+                LOWER_GTA_EMBEDDED_COLLISION.instance(&o).map(|p| p.options()),
                 Ok(o.clone())
             );
             let mut soup = Soup::default();
@@ -944,24 +955,28 @@ mod tests {
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect();
-        let made = LowerGtaCollision::from_options(&o).unwrap();
+        let made = LOWER_GTA_COLLISION.instance(&o).unwrap();
         assert_eq!(made.options(), o);
-        assert_eq!(made.region.map(GroundRect::get), Some([-1.0, -2.0, 3.0, 4.0]));
+        let typed = LowerGtaCollision {
+            region: Some(GroundRect::new([-1.0, -2.0, 3.0, 4.0]).unwrap()),
+            volumes: FlaggedVolumes {
+                foliage: Flagged::Keep,
+                river: Flagged::LeaveOut,
+            },
+        };
+        assert_eq!(made.options(), typed.options());
         // a region GroundRect refuses is refused from options too
         let mut reversed = o.clone();
         reversed.insert("x1".into(), "-5".into());
-        assert!(LowerGtaCollision::from_options(&reversed).is_err());
+        assert!(LOWER_GTA_COLLISION.instance(&reversed).is_err());
         for missing in ["foliage=keep", "river=keep", ""] {
             let o: Options = missing
                 .split_once('=')
                 .map(|(k, v)| (k.to_owned(), v.to_owned()))
                 .into_iter()
                 .collect();
-            assert!(LowerGtaCollision::from_options(&o).is_err(), "{missing:?}");
-            assert!(
-                LowerGtaEmbeddedCollision::from_options(&o).is_err(),
-                "{missing:?}"
-            );
+            assert!(LOWER_GTA_COLLISION.instance(&o).is_err(), "{missing:?}");
+            assert!(LOWER_GTA_EMBEDDED_COLLISION.instance(&o).is_err(), "{missing:?}");
         }
     }
 
@@ -1173,10 +1188,11 @@ mod tests {
         let hi = spawn(Some("hi"));
         let ma = spawn(Some("ma"));
         let mut log = PassLog::default();
-        assert!(SelectCollision::from_options(&Options::new()).is_err());
+        assert!(GTA_SELECT_COLLISION.instance(&Options::new()).is_err());
         let mut plain_only = Options::new();
         plain_only.insert("detail".into(), "plain".into());
-        SelectCollision::from_options(&plain_only)
+        GTA_SELECT_COLLISION
+            .instance(&plain_only)
             .unwrap()
             .run(&mut w, &mut log)
             .unwrap();
@@ -1199,7 +1215,8 @@ mod tests {
         }
         let mut o = Options::new();
         o.insert("detail".into(), "plain;hi".into());
-        SelectCollision::from_options(&o)
+        GTA_SELECT_COLLISION
+            .instance(&o)
             .unwrap()
             .run(&mut w2, &mut PassLog::default())
             .unwrap();

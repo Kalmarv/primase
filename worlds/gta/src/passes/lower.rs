@@ -28,7 +28,7 @@
 //!   before normalising: glTF's normal texture with that scale, in [`GTA_NORMALS`] (`normalize-normals` converts it).
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{
     ColorSpace, DrawLayer, DrawOrder, Entity, Lods, Mesh, Name, NormalBasis, NormalConvention, NormalGreen,
@@ -544,40 +544,35 @@ pub enum Night {
     State,
 }
 
-impl LowerGtaPbr {
-    pub fn from_options(o: &Options) -> Result<LowerGtaPbr, String> {
-        if let Some(k) = o.keys().find(|k| k.as_str() != "night") {
-            return Err(format!("unknown option {k}"));
-        }
-        let night = match o.get("night").map(String::as_str) {
-            Some("false") => Night::Day,
-            Some("true") => Night::Night,
-            Some("state") => Night::State,
-            Some(v) => return Err(format!("night: not true, false or state: {v}")),
-            None => {
-                return Err(
-                    "night is required (true, false or state): which of GTA's times is drawn is the caller's choice"
-                        .into(),
-                );
-            }
-        };
-        Ok(LowerGtaPbr { night })
-    }
+impl Choice for Night {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("false", Night::Day),
+        ("true", Night::Night),
+        ("state", Night::State),
+    ];
 }
+
+/// `lower-gta-pbr`'s declaration ([`primase_core::pass::PassRegistry::add`]): which of GTA's times is drawn is the
+/// caller's choice, no default.
+pub const LOWER_GTA_PBR: PassSpec = PassSpec {
+    name: "lower-gta-pbr",
+    options: &[OptionSpec::choice::<Night>(
+        "night",
+        "day (night-only geometry dropped), night, or both with the hour kept as state",
+    )],
+    make: |g| {
+        Ok(Box::new(LowerGtaPbr {
+            night: g.choice("night"),
+        }))
+    },
+};
 
 impl Pass for LowerGtaPbr {
     fn name(&self) -> &'static str {
         "lower-gta-pbr"
     }
     fn options(&self) -> Options {
-        let mut o = Options::new();
-        let night = match self.night {
-            Night::Day => "false",
-            Night::Night => "true",
-            Night::State => "state",
-        };
-        o.insert("night".into(), night.into());
-        o
+        Options::from([("night".to_owned(), self.night.text().to_owned())])
     }
     // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
     // surface, a cell whose shaders all draw nothing) as it is
@@ -1875,19 +1870,16 @@ mod tests {
     /// `night` is required and names the time drawn; the options a pass gives read back as the same pass.
     #[test]
     fn the_night_option_is_required() {
-        use super::{LowerGtaPbr, Night};
+        use super::{LOWER_GTA_PBR, LowerGtaPbr, Night};
         use primase_core::pass::{Options, Pass};
         let pbr = |v: Option<&str>| {
             let mut o = Options::new();
             if let Some(v) = v {
                 o.insert("night".into(), v.into());
             }
-            LowerGtaPbr::from_options(&o)
+            LOWER_GTA_PBR.instance(&o)
         };
-        assert_eq!(
-            pbr(None).unwrap_err(),
-            "night is required (true, false or state): which of GTA's times is drawn is the caller's choice"
-        );
+        assert!(pbr(None).err().unwrap().starts_with("night is required: "));
         assert!(pbr(Some("dusk")).is_err());
         for (v, night) in [
             ("false", Night::Day),
@@ -1895,8 +1887,12 @@ mod tests {
             ("state", Night::State),
         ] {
             let pass = pbr(Some(v)).unwrap();
-            assert_eq!(pass.night, night, "{v}");
-            assert_eq!(LowerGtaPbr::from_options(&pass.options()).unwrap(), pass, "{v}");
+            assert_eq!(pass.options(), LowerGtaPbr { night }.options(), "{v}");
+            assert_eq!(
+                LOWER_GTA_PBR.instance(&pass.options()).unwrap().options(),
+                pass.options(),
+                "{v}"
+            );
         }
     }
 }

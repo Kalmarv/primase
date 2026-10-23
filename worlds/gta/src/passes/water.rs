@@ -20,7 +20,7 @@
 //! counted. The surfaces are counted by height: the sea (z = 0) and above it.
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{
     Collision, Entity, Instance, MaterialUsage, Mesh, Name, Primitive, Resource, Semantic, Stream, Surfaces,
@@ -29,7 +29,7 @@ use primase_core::{
 
 use crate::components::GTA;
 use crate::components::water::{GtaWater, GtaWaterSurface, area};
-use crate::passes::rect::GroundRect;
+use crate::passes::rect::{GroundRect, X0, X1, Y0, Y1};
 use crate::passes::select::RegionExtent;
 
 /// A convex polygon clipped to the rectangle `[x0, y0, x1, y1]` (Sutherland-Hodgman); empty when nothing is inside.
@@ -77,6 +77,14 @@ pub enum Clip {
     None,
 }
 
+impl Choice for Clip {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("region", Clip::Region),
+        ("kept", Clip::Kept),
+        ("none", Clip::None),
+    ];
+}
+
 /// `gta-select-water{x0,y0,x1,y1,clip}` (see the module documentation), made by [`SelectGtaWater::new`], which
 /// checks that `clip=kept` has its region.
 #[derive(Clone, Debug, PartialEq)]
@@ -102,25 +110,29 @@ impl SelectGtaWater {
     pub fn clip(&self) -> Clip {
         self.clip
     }
+}
 
-    pub fn from_options(o: &Options) -> std::result::Result<SelectGtaWater, String> {
-        for k in o.keys() {
-            if !["x0", "y0", "x1", "y1", "clip"].contains(&k.as_str()) {
-                return Err(format!("unknown option {k}"));
-            }
-        }
-        let clip =
-            match o.get("clip").map(String::as_str) {
-                Some("region") => Clip::Region,
-                Some("kept") => Clip::Kept,
-                Some("none") => Clip::None,
-                Some(v) => return Err(format!("clip: {v} is none of region, kept and none")),
-                None => return Err(
-                    "clip is required (region, kept or none): what water is written is the caller's choice"
-                        .into(),
-                ),
-            };
-        SelectGtaWater::new(GroundRect::from_options(o)?, clip)
+/// `gta-select-water`'s declaration ([`primase_core::pass::PassRegistry::add`]): how the water is clipped is the
+/// caller's choice, no default; the region is optional.
+pub const GTA_SELECT_WATER: PassSpec = PassSpec {
+    name: "gta-select-water",
+    options: &[
+        X0,
+        Y0,
+        X1,
+        Y1,
+        OptionSpec::choice::<Clip>(
+            "clip",
+            "the water clipped to the region, to the region and as far as gta.region_extent reaches, or none written",
+        ),
+    ],
+    make: |g| Ok(Box::new(SelectGtaWater::from_given(g)?)),
+};
+
+impl SelectGtaWater {
+    /// From its declared options, through [`SelectGtaWater::new`].
+    fn from_given(g: &Given) -> std::result::Result<SelectGtaWater, String> {
+        SelectGtaWater::new(GroundRect::from_given(g)?, g.choice("clip"))
     }
 }
 
@@ -133,12 +145,7 @@ impl Pass for SelectGtaWater {
         if let Some(r) = self.region {
             r.insert_options(&mut o);
         }
-        let clip = match self.clip {
-            Clip::Region => "region",
-            Clip::Kept => "kept",
-            Clip::None => "none",
-        };
-        o.insert("clip".into(), clip.into());
+        o.insert("clip".into(), self.clip.text().into());
         o
     }
     fn requires(&self) -> &[&'static str] {
@@ -244,6 +251,13 @@ pub fn water_material(specular_falloff: Option<f32>) -> PbrMaterial {
         ..PbrMaterial::default()
     }
 }
+
+/// `lower-gta-water`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by the game's own rule.
+pub const LOWER_GTA_WATER: PassSpec = PassSpec {
+    name: "lower-gta-water",
+    options: &[],
+    make: |_| Ok(Box::new(LowerGtaWater)),
+};
 
 impl Pass for LowerGtaWater {
     fn name(&self) -> &'static str {
@@ -388,13 +402,13 @@ mod tests {
         assert!((area(&t) / 2.0 - 75.0).abs() < 1e-3, "{t:?}");
     }
 
-    fn select(region: [f32; 4], clip: &str) -> SelectGtaWater {
+    fn select(region: [f32; 4], clip: &str) -> Box<dyn Pass> {
         let mut o = Options::new();
         for (k, v) in ["x0", "y0", "x1", "y1"].into_iter().zip(region) {
             o.insert(k.into(), v.to_string());
         }
         o.insert("clip".into(), clip.into());
-        SelectGtaWater::from_options(&o).unwrap()
+        GTA_SELECT_WATER.instance(&o).unwrap()
     }
 
     fn surfaces(w: &World) -> Vec<GtaWaterSurface> {
@@ -454,16 +468,13 @@ mod tests {
         let mut o = Options::new();
         o.insert("clip".into(), "kept".into());
         assert!(
-            SelectGtaWater::from_options(&o).is_err(),
+            GTA_SELECT_WATER.instance(&o).is_err(),
             "clip=kept without a region"
         );
         o.insert("clip".into(), "all".into());
-        assert!(SelectGtaWater::from_options(&o).is_err());
-        let error = SelectGtaWater::from_options(&Options::new()).unwrap_err();
-        assert_eq!(
-            error,
-            "clip is required (region, kept or none): what water is written is the caller's choice"
-        );
+        assert!(GTA_SELECT_WATER.instance(&o).is_err());
+        let error = GTA_SELECT_WATER.instance(&Options::new()).err().unwrap();
+        assert!(error.starts_with("clip is required: "), "{error}");
     }
 
     /// Two files: each placement carries its file's value on `gta.water`; resolve-state keeps the world map's by
