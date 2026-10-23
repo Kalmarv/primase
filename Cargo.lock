@@ -976,6 +976,7 @@ dependencies = [
 name = "primase-dxil"
 version = "0.1.0"
 dependencies = [
+ "naga",
  "primase-bytes",
  "primase-shader",
  "primase-testdata",
