@@ -27,8 +27,8 @@
 //! - **Textures.** A texture parameter binds the texture the material's property of that name holds; a property the
 //!   material leaves unset takes the shader's declared default, valued from the editor oracle
 //!   (`primase-oracles/unity/default-textures`: [`default_colour`], whose doc states the version and colour-space gap;
-//!   a player holds no default texture of the engine), counted by name; a default it does not value is `Missing`. A texture of Unity's own that the
-//!   material has no property of is the frame's ([`frame_texture`]: the camera's depth and colour, the main light's
+//!   a player holds no default texture of the engine), counted by name; a default it does not value is `Missing`. A
+//!   texture of Unity's own that the material has no property of is the frame's ([`frame_texture`]: the camera's depth and colour, the main light's
 //!   shadow map or screen-space shadows, the occlusion, the nearest reflection probe, the light-probe volume), counted
 //!   by name; the other engine textures the parameters name are `Missing` with the reason, and a slot the parameters do
 //!   not name is `Missing` (a 2021.2 player stores a variant's textures in its parameter blob, which
