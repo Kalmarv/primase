@@ -11,7 +11,7 @@ use primase_core::{
 
 use crate::deform::{Vertices, influences, skin};
 use crate::fit::{Fit, FitReport, Measure, Rig, fitted, joint_report};
-use crate::placement::place;
+use crate::placement::{Frames, frames, place};
 use crate::pose::{Affine, affine, compose, inverse, locals, model_transforms, transform};
 
 /// Where the weight of a source joint the map does not list goes.
@@ -393,6 +393,27 @@ impl RetargetSkin {
                 "placement=stated: map {map:?} has no core.joint_placement"
             )),
         }
+    }
+
+    /// The frames the map's target joints stand at in the source's model space under this fit, before and after
+    /// `offsets` (by target joint): what an editor draws the target skeleton at ([`crate::placement::frames`]). The
+    /// offsets are the caller's, whatever `placement` says; none are read from the world.
+    pub fn frames(
+        &self,
+        w: &World,
+        map: Entity,
+        offsets: &BTreeMap<JointId, JointOffset>,
+    ) -> Result<BTreeMap<JointId, Frames>, String> {
+        let joint_map = w.get::<JointMap>(map).ok_or("the entity holds no joint map")?;
+        let plan = Plan::new(w, joint_map, &self.fit, &BTreeMap::new())?;
+        frames(
+            &plan.source,
+            &plan.source_rest,
+            &plan.fitted,
+            &plan.target_rest,
+            &plan.pairs,
+            offsets,
+        )
     }
 
     /// What the fit would do, per joint map that a skin is bound to, without changing anything ([`FitReport`]): the
@@ -1264,6 +1285,35 @@ mod tests {
                 .any(|k| k.starts_with("fit: vertex group j3 moved at most"))
         );
         assert!(logged.keys().any(|k| k.starts_with("fit: segment j2 to j3 of")));
+    }
+
+    /// The frames an editor draws: the automatic one of a target joint sits at its source joint (the positions fit), the
+    /// placed one moves by the stated translation, and a joint with no offset keeps its automatic frame.
+    #[test]
+    fn the_frames_of_the_target_joints_follow_the_stated_offsets() {
+        let (w, ..) = world();
+        let map = w.iter::<JointMap>().next().map(|(e, _)| e).unwrap();
+        let pass = RetargetSkin {
+            unmapped: UnmappedJoints::Ancestor,
+            placement: Placement::Automatic,
+            fit: Fit::Positions,
+        };
+        let offsets = BTreeMap::from([(JointId(30), up(0.1))]);
+        let f = pass.frames(&w, map, &offsets).unwrap();
+        assert_eq!(f.len(), 3);
+        let hand = f[&JointId(30)];
+        for (got, want) in hand.automatic[3].iter().zip([0.7, 1.5, 0.0]) {
+            assert!((got - want).abs() < 1e-6, "{:?}", hand.automatic);
+        }
+        for (got, want) in hand.placed[3].iter().zip([0.7, 1.6, 0.0]) {
+            assert!((got - want).abs() < 1e-6, "{:?}", hand.placed);
+        }
+        assert_eq!(f[&JointId(20)].automatic, f[&JointId(20)].placed);
+        // an offset of a joint no pair names is refused
+        let err = pass
+            .frames(&w, map, &BTreeMap::from([(JointId(99), up(0.1))]))
+            .unwrap_err();
+        assert!(err.contains("no pair names"), "{err}");
     }
 
     /// `fit=lengths` runs through the whole pass and leaves a world the checks accept.
