@@ -162,7 +162,14 @@ fn every_programs_table_agrees_with_its_interface() {
                     }
                     (ResourceKind::Texture { .. }, D3dClass::ShaderResource) => {
                         textures += 1;
-                        table.resources.iter().any(at)
+                        if r.is_unbounded() {
+                            // a bindless heap (PS_DebugBvh's `g_Bindless_Texture2D_half4[]`, space 4): the table's
+                            // records name its binding group, not the heap's own space
+                            unbounded += 1;
+                            true
+                        } else {
+                            table.resources.iter().any(at)
+                        }
                     }
                     (ResourceKind::Sampler { .. }, D3dClass::Sampler) => {
                         samplers += 1;
@@ -190,7 +197,7 @@ fn every_programs_table_agrees_with_its_interface() {
     }
     println!(
         "{programs} programs, {constants} constant records, {named} records named; against interfaces: {buffers} constant buffers, \
-         {textures} textures, {samplers} samplers ({unbounded} unbounded arrays, not tabulated); resources without a record in the          other stages, by group: {other_stages:?}; {sized} constants sized by their type ({root_constants} more in root constants, which have no size), {overlapping} followed by another that starts inside them; the type bytes the pass does not size: {unsized_kinds:?}"
+         {textures} textures, {samplers} samplers ({unbounded} unbounded arrays of textures and samplers, not tabulated); resources without a record in the          other stages, by group: {other_stages:?}; {sized} constants sized by their type ({root_constants} more in root constants, which have no size), {overlapping} followed by another that starts inside them; the type bytes the pass does not size: {unsized_kinds:?}"
     );
     assert!(programs > 10_000);
 }

@@ -170,7 +170,9 @@ pub struct MapContent {
     pub slod2: bool,
     /// Bit 3 (8): interior instances (`CMloInstanceDef`).
     pub interiors: bool,
-    /// Bit 4 (16): SLOD entities (SLOD1 and coarser).
+    /// Bit 4 (16): SLOD entities (SLOD1 and coarser), as CodeWalker sets it. The game's own files follow that for most
+    /// maps and not for all: of the install's 4,592 story maps 541 set it with such entities, 79 hold them without it
+    /// and 40 set it holding none (5,424 online maps: 544, 219 and 117), so it is not a function of the entities.
     pub slod: bool,
     /// Bit 5 (32): occluders (box occluders or occlusion models).
     pub occluders: bool,

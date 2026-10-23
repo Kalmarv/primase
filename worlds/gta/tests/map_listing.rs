@@ -1,7 +1,9 @@
 //! The install's map listing ([`primase_gta::read::region::list_maps`]) against the whole files: for every live map
 //! file of both map states, the header it lists (name, parent, flags, content flags, both extents) is the one the full
 //! decode of the file ([`MapData`], as a region read decodes the maps it places) holds, and its entity count the number
-//! of entities that decode reads; the listing is the same on one thread and on eight.
+//! of entities that decode reads; the listing is the same on one thread and on eight. The content flags agree with what
+//! the map holds for the bits the entities state exactly (HD, LOD, SLOD2 and coarser, interiors, physics); bit 4
+//! (`slod`) does not follow the entities' levels in the game's own files, so it is counted, not asserted.
 //!
 //! Needs `installs.gta` and `keys.gta`.
 use primase_core::parallel::Threads;
@@ -22,10 +24,15 @@ fn every_listed_header_is_the_decoded_files() {
     let keys = Keys::from_dir(&keys).expect("keys");
     let install = Install::open(&dir, &keys).expect("install");
     let (story, online) = archive_sets(&install, &keys, States::All).expect("archive sets");
-    for (state, set) in [
+    // bit 4 against "an entity at SLOD1 or coarser", over both states: (both, bit only, entities only)
+    let mut slod = [(0usize, 0usize, 0usize); 2];
+    for (n, (state, set)) in [
         ("story", &story),
         ("online", online.as_ref().expect("online set")),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let started = std::time::Instant::now();
         let listed = list_maps(set, &keys, Threads::new(8).unwrap()).expect("listing");
         println!("{state}: {} maps listed in {:?}", listed.len(), started.elapsed());
@@ -43,13 +50,22 @@ fn every_listed_header_is_the_decoded_files() {
             )
             .expect("map data");
             // the content flags agree with what the map holds, bit by bit where the full decode reads it
-            // (CodeWalker's meanings: HD and orphan-HD 1, LOD 2, SLOD2 and coarser 4, interiors 8, SLOD and coarser 16,
-            // physics dictionaries 64)
+            // (CodeWalker's meanings: HD and orphan-HD 1, LOD 2, SLOD2 and coarser 4, interiors 8, physics dictionaries
+            // 64); bit 16 (SLOD and coarser) is counted: the game's files set it for most maps with SLOD1 entities and
+            // leave it off for some, and set it for some maps with none
             let c = l.header.content();
             let levels: Vec<i32> = full.entities.iter().map(|e| e.lod_level).collect();
             let has = |want: &[i32]| levels.iter().any(|l| want.contains(l));
+            let entities_slod = has(&[2, 3, 4, 6]);
+            let counts = &mut slod[n];
+            match (c.slod, entities_slod) {
+                (true, true) => counts.0 += 1,
+                (true, false) => counts.1 += 1,
+                (false, true) => counts.2 += 1,
+                (false, false) => {}
+            }
             assert_eq!(
-                (c.hd, c.lod, c.slod2, c.interiors, c.slod, c.physics),
+                (c.hd, c.lod, c.slod2, c.interiors, c.physics),
                 (
                     has(&[0, 5]),
                     has(&[1]),
@@ -57,7 +73,6 @@ fn every_listed_header_is_the_decoded_files() {
                     full.entities
                         .iter()
                         .any(|e| e.kind == primase_gta::rage::map::EntityKind::Interior),
-                    has(&[2, 3, 4, 6]),
                     !full.physics_dictionaries.is_empty()
                 ),
                 "{state}: {} content flags {:#x}",
@@ -88,5 +103,9 @@ fn every_listed_header_is_the_decoded_files() {
                 l.path
             );
         }
+        let (both, bit_only, entities_only) = slod[n];
+        println!(
+            "{state}: bit 4 set with SLOD1-or-coarser entities in {both} maps, without them in {bit_only}, unset with them in {entities_only}"
+        );
     }
 }
