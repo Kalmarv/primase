@@ -36,6 +36,15 @@ pub struct ReadReport {
     pub water: Vec<(String, [usize; 3])>,
 }
 
+/// A live map file and the map states it is live in ([`GtaSource::list_maps`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapEntry {
+    pub map: crate::read::region::MapListing,
+    /// Live in story mode's archive set, and in GTA Online's.
+    pub story: bool,
+    pub online: bool,
+}
+
 /// An opened install: its key material, both maps' archive sets and each one's texture dictionary parents.
 pub struct GtaSource {
     keys: Keys,
@@ -134,6 +143,33 @@ impl GtaSource {
 
     pub(crate) fn lookups(&self) -> Result<Lookups<'_>> {
         Lookups::new(self.story(), Some(self.online()))
+    }
+
+    /// Every live map file of both map states as its header states it ([`crate::read::region::list_maps`]): one entry
+    /// per file, with the states it is live in (a file both states mount once, with both), sorted by path then file.
+    /// On `threads` threads: the same list on any count.
+    pub fn list_maps(&self, threads: primase_core::parallel::Threads) -> Result<Vec<MapEntry>> {
+        let mut by_file: std::collections::BTreeMap<
+            (String, crate::read::archive::archive_set::FileRef),
+            MapEntry,
+        > = std::collections::BTreeMap::new();
+        for (set, story) in [(&self.story, true), (&self.online, false)] {
+            for map in crate::read::region::list_maps(set, &self.keys, threads)? {
+                let entry = by_file
+                    .entry((map.path.clone(), map.file))
+                    .or_insert_with(|| MapEntry {
+                        map,
+                        story: false,
+                        online: false,
+                    });
+                if story {
+                    entry.story = true;
+                } else {
+                    entry.online = true;
+                }
+            }
+        }
+        Ok(by_file.into_values().collect())
     }
 
     /// Every entity of both maps within `reach` metres of `region` (`[x0, y0, x1, y1]`), with its prototype and its

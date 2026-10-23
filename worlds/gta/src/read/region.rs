@@ -40,6 +40,7 @@ use crate::read::archive::archive_set::{ArchiveSet, FileRef, Install, MapState};
 use crate::read::archive::keys::Keys;
 use crate::read::assets::{Lookup, Payload};
 use crate::{Result, invalid};
+use primase_core::parallel::Threads;
 
 /// Which map states to read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,6 +134,62 @@ fn decode(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<crate::rage::meta
 /// A map file's header, the whole file walked and checked ([`Meta::root_scalars`]) but its entities not kept.
 fn header(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<MapHeader> {
     MapHeader::from_root(&meta(set, keys, f)?.root_scalars()?)
+}
+
+/// One live map file as its header states it ([`list_maps`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapListing {
+    /// The file's path in the install.
+    pub path: String,
+    pub file: FileRef,
+    /// Its own fields: name, LOD parent, flags (bit 0: script-managed), content flags, streaming and entity extents.
+    pub header: MapHeader,
+    /// Its entities (`CMapData.entities`), counted, none read.
+    pub entities: usize,
+    /// The script-managed map that governs it: itself, or the nearest of its LOD parent chain that is (as
+    /// [`read_region`] conditions its placements).
+    pub ipl: Option<String>,
+}
+
+/// Every live map file of `set`, each as its header states it ([`MapListing`]): every file walked and checked as a
+/// region read walks it ([`Meta::root_outline`]), no entity read; in the order of the set's map table (by name hash).
+/// The files are read on `threads` threads, one each at a time: the same list on any count.
+pub fn list_maps(set: &ArchiveSet, keys: &Keys, threads: Threads) -> Result<Vec<MapListing>> {
+    let files: Vec<FileRef> = set
+        .tables
+        .get("ymap")
+        .into_iter()
+        .flat_map(|t| t.values().copied())
+        .collect();
+    let entities = primase_hash::joaat_exact(b"entities");
+    let outlines = primase_core::parallel::map(threads, &files, |_, &f| -> Result<(MapHeader, usize)> {
+        let (root, counts) = meta(set, keys, f)?.root_outline()?;
+        let count = *counts
+            .get(&entities)
+            .ok_or_else(|| invalid("CMapData", 0, format!("{}: no entities array", set.path(f))))?;
+        Ok((MapHeader::from_root(&root)?, count))
+    })
+    .map_err(|e| invalid("map listing", 0, e.to_string()))?;
+    let mut listed = Vec::with_capacity(files.len());
+    for (&f, outline) in files.iter().zip(outlines) {
+        let (header, count) = outline?;
+        listed.push((f, header, count));
+    }
+    // every live map's chain entry, so a parent is never read twice
+    let mut chain: BTreeMap<u32, (bool, u32, String)> = listed
+        .iter()
+        .map(|(f, h, _)| (h.name, (h.flags & 1 != 0, h.parent, map_name(set.path(*f)))))
+        .collect();
+    Ok(listed
+        .into_iter()
+        .map(|(file, header, entities)| MapListing {
+            path: set.path(file).to_string(),
+            file,
+            ipl: ipl_of(set, keys, &mut chain, &header),
+            header,
+            entities,
+        })
+        .collect())
 }
 
 /// A map's script-managed map: itself, or the nearest of its LOD parent chain that is (its name). `chain` holds what is

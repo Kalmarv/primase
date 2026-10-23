@@ -373,17 +373,30 @@ impl Meta {
     /// arrays): its structures, pointers, arrays, strings and data blocks are left out. The whole tree is walked and
     /// checked as [`Meta::root`] checks it, an error where that one errs; nothing beyond those fields is kept.
     pub fn root_scalars(&self) -> Result<Struct> {
-        self.walk_root(Keep::Scalars).map(|(s, _)| s)
+        self.root_outline().map(|(s, _)| s)
+    }
+
+    /// [`Meta::root_scalars`], and the element count each of the root's array fields states, by field name (its
+    /// elements walked and checked, none kept).
+    pub fn root_outline(&self) -> Result<(Struct, BTreeMap<u32, usize>)> {
+        let mut counts = BTreeMap::new();
+        let (root, _) = self.walk_root(Keep::Scalars, Some(&mut counts))?;
+        Ok((root, counts))
     }
 
     /// Decodes the root block's first structure, and counts per block the bytes the decoding never reached (a
     /// structure covers its whole extent, padding included; a string covers its terminating NUL).
     pub fn root_covered(&self) -> Result<(Struct, Vec<usize>)> {
-        self.walk_root(Keep::All)
+        self.walk_root(Keep::All, None)
     }
 
-    /// The root structure walked and checked, keeping what `keep` says, and the bytes of each block never reached.
-    fn walk_root(&self, keep: Keep) -> Result<(Struct, Vec<usize>)> {
+    /// The root structure walked and checked, keeping what `keep` says, and the bytes of each block never reached;
+    /// `counts`, when given, gets the element count of each of the root's array fields.
+    fn walk_root(
+        &self,
+        keep: Keep,
+        counts: Option<&mut BTreeMap<u32, usize>>,
+    ) -> Result<(Struct, Vec<usize>)> {
         let block = self
             .blocks
             .get(self.root)
@@ -403,8 +416,12 @@ impl Meta {
             budget: MAX_DEPTH
                 .saturating_add(1)
                 .saturating_mul(bytes.saturating_add(1)),
+            counts: None,
         };
         let root = self.decode_struct(self.root, 0, info, 0, keep, &mut walk)?;
+        if let Some(c) = counts {
+            *c = walk.counts.unwrap_or_default();
+        }
         Ok((
             root,
             walk.seen
@@ -604,6 +621,11 @@ impl Meta {
                     let (count, cap) = (usize::from(u16_at(v, 8)?), usize::from(u16_at(v, 10)?));
                     if u32_at(v, 12)? != 0 || cap < count {
                         return Err(err(here, format!("array count {count}, capacity {cap}")));
+                    }
+                    if depth == 0 {
+                        walk.counts
+                            .get_or_insert_with(BTreeMap::new)
+                            .insert(f.name, count);
                     }
                     Value::Array(self.decode_array(el, u64_at(v, 0)?, count, depth, inner, walk)?)
                 }
@@ -810,6 +832,8 @@ struct Walk {
     /// a structure once, so a tree of non-empty structures decodes at most `MAX_DEPTH + 1` per byte of its blocks;
     /// embedded fields that overlap could otherwise decode one exponentially often.
     budget: usize,
+    /// The element count of each of the root's array fields, by field name.
+    counts: Option<BTreeMap<u32, usize>>,
 }
 
 /// How deep structures may nest (embedded, pointed at or array elements).
@@ -1100,6 +1124,9 @@ mod tests {
                 fields: vec![(joaat(b"count"), Value::U32(3))],
             }
         );
+        // and the root's arrays' element counts
+        let (_, counts) = m.root_outline().expect("decodes");
+        assert_eq!(counts, BTreeMap::from([(joaat(b"items"), 3)]));
     }
 
     /// `root` refuses `m` with an error containing `what`, and `root_scalars` with the same error.
