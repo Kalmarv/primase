@@ -11,6 +11,9 @@ fn fixture(name: &str) -> Vec<u8> {
     .unwrap()
 }
 
+/// Fixtures that are a library of several programs, whose programs are the per-export fixtures beside them.
+const WHOLE_LIBRARIES: [&str; 1] = ["ray_subobjects.dxil"];
+
 #[test]
 fn every_fixture_lifts() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -22,6 +25,17 @@ fn every_fixture_lifts() {
     names.sort();
     let mut failures = Vec::new();
     for name in &names {
+        // a whole library holds several programs: `lift` refuses it by name, and each program of it is a container of
+        // its own (ray_subobjects.<export>.dxil), which this loop lifts
+        if WHOLE_LIBRARIES.contains(&name.as_str()) {
+            match lift(&fixture(name)) {
+                Err(e) if e.to_string().contains("not exactly one entry point") => {}
+                other => failures.push(format!(
+                    "{name}: expected the refusal of a whole library, got {other:?}"
+                )),
+            }
+            continue;
+        }
         match lift(&fixture(name)) {
             Err(e) => failures.push(format!("{name}: lift: {e}")),
             Ok(p) => {
