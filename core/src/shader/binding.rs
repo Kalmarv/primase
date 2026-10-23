@@ -504,6 +504,9 @@ pub struct StencilFace {
 pub struct Stencil {
     pub read_mask: u8,
     pub write_mask: u8,
+    /// The reference value the test compares against and `Replace` writes, where the source states one (D3D12 sets it
+    /// per draw: a source that stores it per draw states none).
+    pub reference: Option<u8>,
     pub front: StencilFace,
     pub back: StencilFace,
 }

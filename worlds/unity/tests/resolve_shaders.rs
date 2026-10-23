@@ -93,10 +93,22 @@ fn census(label: &str, data: &std::path::Path, tpk: &std::path::Path, level: &st
                 .run(&mut world, &mut log)
                 .unwrap();
             let mut checked = 0;
+            // the stated render state: a depth state on every bound material, and how many state a stencil, a depth
+            // bias, a blend, a write mask that is not all four channels
+            let (mut depth, mut stencil, mut bias, mut blended, mut masked) = (0usize, 0, 0, 0, 0);
             for (e, b) in world.iter::<ShaderBinding>() {
                 b.verify(e, &world).unwrap_or_else(|why| panic!("{label}: {why}"));
                 checked += 1;
+                depth += usize::from(b.state.depth.is_some());
+                stencil += usize::from(b.state.stencil.is_some());
+                bias += usize::from(b.state.depth_bias.is_some());
+                blended += usize::from(b.state.blend.is_some());
+                masked += usize::from(b.state.targets[0].is_some_and(|t| t.write_mask != 0xf));
             }
+            println!(
+                "  render state: depth {depth}, stencil {stencil}, depth bias {bias}, blend {blended}, write mask not rgba {masked} of {checked}"
+            );
+            assert_eq!(depth, checked, "{label}: a bound material without a depth state");
             println!(
                 "  tier {tier}, keywords {keywords}: {checked} bindings verified, {:?}",
                 started.elapsed()

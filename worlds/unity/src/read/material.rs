@@ -4,7 +4,9 @@
 
 use crate::read::player::{ObjRef, Player};
 use crate::read::value::{Array, Value};
-use crate::shader::{PassKind, ShaderPass, ShaderValue, SubShader};
+use crate::shader::{
+    PassKind, PassState, ShaderPass, ShaderStencilOp, ShaderTargetBlend, ShaderValue, SubShader,
+};
 use crate::{Result, invalid};
 
 /// A texture property: the texture (`None`: no texture set) and its tiling (`_ST`) with Unity's bottom-left origin.
@@ -196,6 +198,59 @@ fn shader_value(v: Option<&Value>, what: &str) -> Result<ShaderValue> {
     Ok(ShaderValue { value, property })
 }
 
+/// A render target's blend (`rtBlend<n>`).
+fn target_blend(rt: &Value) -> Result<ShaderTargetBlend> {
+    Ok(ShaderTargetBlend {
+        src: shader_value(rt.get("srcBlend"), "srcBlend")?,
+        dst: shader_value(rt.get("destBlend"), "destBlend")?,
+        src_alpha: shader_value(rt.get("srcBlendAlpha"), "srcBlendAlpha")?,
+        dst_alpha: shader_value(rt.get("destBlendAlpha"), "destBlendAlpha")?,
+        op: shader_value(rt.get("blendOp"), "blendOp")?,
+        op_alpha: shader_value(rt.get("blendOpAlpha"), "blendOpAlpha")?,
+        mask: shader_value(rt.get("colMask"), "colMask")?,
+    })
+}
+
+/// A stencil face's operations (`stencilOp`, `stencilOpFront`, `stencilOpBack`).
+fn stencil_op(st: &Value, what: &str) -> Result<ShaderStencilOp> {
+    let op = st
+        .get(what)
+        .ok_or_else(|| invalid(format!("shader pass: no {what}")))?;
+    Ok(ShaderStencilOp {
+        pass: shader_value(op.get("pass"), "stencil pass")?,
+        fail: shader_value(op.get("fail"), "stencil fail")?,
+        z_fail: shader_value(op.get("zFail"), "stencil zFail")?,
+        comp: shader_value(op.get("comp"), "stencil comp")?,
+    })
+}
+
+/// A pass's render state beyond the first target's blend, depth write and culling (`m_State`).
+fn pass_state(st: &Value, name: &str) -> Result<PassState> {
+    let mut targets = Vec::with_capacity(8);
+    for n in 0..8 {
+        let rt = st
+            .get(&format!("rtBlend{n}"))
+            .ok_or_else(|| invalid(format!("shader {name}: a pass without rtBlend{n}")))?;
+        targets.push(target_blend(rt)?);
+    }
+    Ok(PassState {
+        targets,
+        separate_blend: st
+            .get("rtSeparateBlend")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| invalid(format!("shader {name}: a pass without rtSeparateBlend")))?,
+        z_test: shader_value(st.get("zTest"), "zTest")?,
+        offset_factor: shader_value(st.get("offsetFactor"), "offsetFactor")?,
+        offset_units: shader_value(st.get("offsetUnits"), "offsetUnits")?,
+        stencil_ref: shader_value(st.get("stencilRef"), "stencilRef")?,
+        stencil_read_mask: shader_value(st.get("stencilReadMask"), "stencilReadMask")?,
+        stencil_write_mask: shader_value(st.get("stencilWriteMask"), "stencilWriteMask")?,
+        stencil_op: stencil_op(st, "stencilOp")?,
+        stencil_op_front: stencil_op(st, "stencilOpFront")?,
+        stencil_op_back: stencil_op(st, "stencilOpBack")?,
+    })
+}
+
 impl ShaderData {
     /// Read the Shader `r` of `player`.
     pub fn read(player: &Player, r: &ObjRef) -> Result<Self> {
@@ -236,6 +291,7 @@ impl ShaderData {
                         dst_blend: shader_value(rt.get("destBlend"), "destBlend")?,
                         zwrite: shader_value(st.get("zWrite"), "zWrite")?,
                         cull: shader_value(st.get("culling"), "culling")?,
+                        state: pass_state(st, &name)?,
                     });
                 }
                 subshaders.push(SubShader {

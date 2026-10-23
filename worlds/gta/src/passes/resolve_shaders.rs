@@ -177,6 +177,7 @@ fn render_state(t: &GtaEffectTechniques, pass: &GtaPass, notes: &mut Vec<&'stati
                 })
             };
             state.stencil = face(&d.front).zip(face(&d.back)).map(|(front, back)| Stencil {
+                reference: None,
                 read_mask: d.stencil_read_mask,
                 write_mask: d.stencil_write_mask,
                 front,

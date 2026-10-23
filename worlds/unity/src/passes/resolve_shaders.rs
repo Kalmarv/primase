@@ -20,16 +20,23 @@
 //!   the camera's depth) the program reads and the parameters do not name are `Missing`. The sampler state is Unity's
 //!   packed value ([`crate::components::Parameters::samplers`]): not decoded.
 //! - **Outputs.** The fragment stage's first target is the finished colour of a forward pass; the others `Unknown`.
-//! - **State.** The pass's blend factors where they map to the vocabulary (`SrcAlphaSaturate` does not: counted),
-//!   `Blend One Zero` being no blending, and its culling; its depth write is stored without its depth test, so no
-//!   depth state is stated.
+//! - **State.** The pass's stored render state (`m_State`), each value the material's property where the pass binds
+//!   it to one: every render target's blend (colour and alpha equations: factors and operation; `Blend One Zero` is no
+//!   blending; the pass blends each target itself only when it says so, otherwise every target takes the first's, whose
+//!   stored copies are defaults) and colour mask (the target's own: an unindexed `ColorMask` states target 0 only), the
+//!   culling, the depth test (`Disabled` passes everything) and write, `Offset factor, units` as the slope-scaled and
+//!   constant depth bias, and the stencil (the reference, the masks, and per face the operations and comparison: the
+//!   common `Comp`, `Pass`, `Fail` and `ZFail` stand for a face that states none of its own; a pass whose faces always
+//!   pass and keep has no stencil). A value the vocabulary has none for (`SrcAlphaSaturate`, a logical blend
+//!   operation, a mask that is not a byte) leaves that part unstated and the pass is counted. Not stated: the fill, the
+//!   winding, `ZClip`, alpha-to-coverage and the conservative flag.
 use std::collections::BTreeMap;
 
 use primase_core::shader::{
-    Blend, BlendEquation, BlendFactor, BlendOp, ConstantBinding, ConstantRole, Cull, D3dClass, InputBinding,
-    InputRole, Interface, ObjectParameter, OutputBinding, OutputRole, RenderState, SamplerState, Shader,
-    ShaderBinding, ShaderFormat, Stage, StageBinding, SystemValue, TextureBinding, TextureSource,
-    ViewParameter,
+    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
+    DepthBias, DepthState, InputBinding, InputRole, Interface, ObjectParameter, OutputBinding, OutputRole,
+    RenderState, SamplerState, Shader, ShaderBinding, ShaderFormat, Stage, StageBinding, Stencil,
+    StencilFace, StencilOp, SystemValue, TargetState, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_core::{Component, Entity, Name, Semantic, Texture, World};
 
@@ -257,8 +264,126 @@ fn blend_factor(mode: u8) -> Option<BlendFactor> {
     })
 }
 
-/// The render state the material's draw pass states (see the module documentation), and whether its blend factors
-/// had one that does not map.
+/// Unity's `BlendOp` as the vocabulary's; `None` for the logical operations (5 and up).
+fn blend_op(op: u8) -> Option<BlendOp> {
+    Some(match op {
+        0 => BlendOp::Add,
+        1 => BlendOp::Subtract,
+        2 => BlendOp::ReverseSubtract,
+        3 => BlendOp::Min,
+        4 => BlendOp::Max,
+        _ => return None,
+    })
+}
+
+/// Unity's `CompareFunction` as the vocabulary's; `None` for 0 (disabled) and what is not one.
+fn compare(function: u8) -> Option<Compare> {
+    Some(match function {
+        1 => Compare::Never,
+        2 => Compare::Less,
+        3 => Compare::Equal,
+        4 => Compare::LessEqual,
+        5 => Compare::Greater,
+        6 => Compare::NotEqual,
+        7 => Compare::GreaterEqual,
+        8 => Compare::Always,
+        _ => return None,
+    })
+}
+
+/// Unity's `StencilOp` as the vocabulary's.
+fn stencil_op(op: u8) -> Option<StencilOp> {
+    Some(match op {
+        0 => StencilOp::Keep,
+        1 => StencilOp::Zero,
+        2 => StencilOp::Replace,
+        3 => StencilOp::IncrementClamp,
+        4 => StencilOp::DecrementClamp,
+        5 => StencilOp::Invert,
+        6 => StencilOp::IncrementWrap,
+        7 => StencilOp::DecrementWrap,
+        _ => return None,
+    })
+}
+
+/// A state value that is a whole number in `0..=max`: the material's property where one is bound
+/// ([`UnityMaterial::state_value`]).
+fn whole(m: &UnityMaterial, v: &crate::shader::ShaderValue, max: u8) -> Option<u8> {
+    let x = m.state_value(v);
+    (x.fract() == 0.0 && (0.0..=f32::from(max)).contains(&x)).then_some(x as u8)
+}
+
+/// What a target's blend states: `Ok(None)` for no blending (`Blend One Zero`, both equations, `Add`), `Err(())` for a
+/// value the vocabulary has none for (`SrcAlphaSaturate`, a logical operation), and `Ok(None)` too where a factor is
+/// not a whole `BlendMode` (the property is unset: nothing is stated).
+fn target_blend(m: &UnityMaterial, t: &crate::shader::ShaderTargetBlend) -> Result<Option<Blend>, ()> {
+    let equation = |src, dst, op| -> Option<Result<BlendEquation, ()>> {
+        let (src, dst, op) = (
+            whole(m, src, crate::shader::blend_mode::LAST)?,
+            whole(m, dst, crate::shader::blend_mode::LAST)?,
+            whole(m, op, u8::MAX)?,
+        );
+        Some(match (blend_factor(src), blend_factor(dst), blend_op(op)) {
+            (Some(source), Some(destination), Some(op)) => Ok(BlendEquation {
+                source,
+                destination,
+                op,
+            }),
+            _ => Err(()),
+        })
+    };
+    let (Some(colour), Some(alpha)) = (
+        equation(&t.src, &t.dst, &t.op),
+        equation(&t.src_alpha, &t.dst_alpha, &t.op_alpha),
+    ) else {
+        return Ok(None);
+    };
+    let (colour, alpha) = (colour?, alpha?);
+    let none = BlendEquation {
+        source: BlendFactor::One,
+        destination: BlendFactor::Zero,
+        op: BlendOp::Add,
+    };
+    Ok((colour != none || alpha != none).then_some(Blend { colour, alpha }))
+}
+
+/// A stencil face of the pass: its own operations where it states some (not Unity's defaults), else the common ones
+/// (`Comp`, `Pass`, `Fail` and `ZFail` set both faces, `CompFront` and the like one). `None` where the face does not
+/// test (`Comp Disabled`) or a value is not one the vocabulary has; a face that always passes and keeps is the
+/// no-op face.
+fn stencil_face(
+    m: &UnityMaterial,
+    common: &crate::shader::ShaderStencilOp,
+    own: &crate::shader::ShaderStencilOp,
+) -> Option<Option<StencilFace>> {
+    let fields =
+        |o: &crate::shader::ShaderStencilOp| [&o.pass, &o.fail, &o.z_fail, &o.comp].map(|v| whole(m, v, 8));
+    let stated = |o: &crate::shader::ShaderStencilOp| {
+        o.pass.property.is_some()
+            || o.fail.property.is_some()
+            || o.z_fail.property.is_some()
+            || o.comp.property.is_some()
+            || [o.pass.value, o.fail.value, o.z_fail.value]
+                .iter()
+                .any(|v| *v != 0.0)
+            || o.comp.value != 8.0
+    };
+    let source = if stated(own) { own } else { common };
+    let [pass, fail, z_fail, comp] = fields(source);
+    let (pass, fail, z_fail, comp) = (pass?, fail?, z_fail?, comp?);
+    if comp == 0 {
+        return Some(None);
+    }
+    Some(Some(StencilFace {
+        fail: stencil_op(fail)?,
+        depth_fail: stencil_op(z_fail)?,
+        pass: stencil_op(pass)?,
+        compare: compare(comp)?,
+    }))
+}
+
+/// The render state the material's draw pass states (see the module documentation), and whether it had a value the
+/// vocabulary has none for (a blend factor, a blend or stencil operation, a mask or reference that is not a byte).
 pub fn render_state(m: &UnityMaterial, programs: &UnityPrograms) -> (RenderState, bool) {
     let mut state = RenderState::default();
     let mut unmapped = false;
@@ -269,23 +394,34 @@ pub fn render_state(m: &UnityMaterial, programs: &UnityPrograms) -> (RenderState
     else {
         return (state, false);
     };
-    if let Some((src, dst)) = m.blend_factors(pass) {
-        match (blend_factor(src), blend_factor(dst)) {
-            (Some(BlendFactor::One), Some(BlendFactor::Zero)) => {}
-            (Some(source), Some(destination)) => {
-                let eq = BlendEquation {
-                    source,
-                    destination,
-                    op: BlendOp::Add,
-                };
-                state.blend = Some(Blend {
-                    colour: eq,
-                    alpha: eq,
-                });
-            }
-            _ => unmapped = true,
+    let detail = &pass.state;
+    // the blend of a target: its own where the pass blends each target separately, else the first target's (the
+    // stored blends of targets 1 to 7 are then defaults the engine does not use)
+    let mut blends = Vec::with_capacity(detail.targets.len());
+    for (i, t) in detail.targets.iter().enumerate() {
+        let source = if detail.separate_blend {
+            t
+        } else {
+            detail.targets.first().unwrap_or(t)
+        };
+        let blend = target_blend(m, source).unwrap_or_else(|()| {
+            unmapped = true;
+            None
+        });
+        // the colour mask is the target's own (an unindexed `ColorMask` states target 0 only)
+        let mask = whole(m, &t.mask, 15);
+        if mask.is_none() {
+            unmapped = true;
+        }
+        blends.push(blend);
+        if let Some(slot) = state.targets.get_mut(i) {
+            *slot = Some(TargetState {
+                blend,
+                write_mask: mask.unwrap_or(0xf),
+            });
         }
     }
+    state.blend = blends.first().copied().flatten();
     let cull = m.state_value(&pass.cull);
     state.cull = match cull as i64 {
         0 => Some(Cull::None),
@@ -293,6 +429,58 @@ pub fn render_state(m: &UnityMaterial, programs: &UnityPrograms) -> (RenderState
         2 => Some(Cull::Back),
         _ => None,
     };
+    // the depth test (`Disabled` passes everything) and write
+    state.depth = Some(DepthState {
+        test: whole(m, &detail.z_test, 8)
+            .and_then(|f| if f == 0 { Some(Compare::Always) } else { compare(f) })
+            .unwrap_or_else(|| {
+                unmapped = true;
+                Compare::LessEqual
+            }),
+        write: m.state_value(&pass.zwrite) != 0.0,
+    });
+    // `Offset factor, units`: ShaderLab's factor scales the maximum depth slope and its units the smallest resolvable
+    // depth difference, which is D3D12's slope-scaled and constant bias
+    let (factor, units) = (
+        m.state_value(&detail.offset_factor),
+        m.state_value(&detail.offset_units),
+    );
+    if factor != 0.0 || units != 0.0 {
+        state.depth_bias = Some(DepthBias {
+            constant: units,
+            slope_scaled: factor,
+            clamp: 0.0,
+        });
+    }
+    let front = stencil_face(m, &detail.stencil_op, &detail.stencil_op_front);
+    let back = stencil_face(m, &detail.stencil_op, &detail.stencil_op_back);
+    let masks = (
+        whole(m, &detail.stencil_read_mask, 255),
+        whole(m, &detail.stencil_write_mask, 255),
+        whole(m, &detail.stencil_ref, 255),
+    );
+    match (front, back, masks) {
+        (Some(front), Some(back), (Some(read_mask), Some(write_mask), Some(reference))) => {
+            let noop = StencilFace {
+                fail: StencilOp::Keep,
+                depth_fail: StencilOp::Keep,
+                pass: StencilOp::Keep,
+                compare: Compare::Always,
+            };
+            let (front, back) = (front.unwrap_or(noop), back.unwrap_or(noop));
+            // faces that always pass and keep are no stencil test
+            if front != noop || back != noop {
+                state.stencil = Some(Stencil {
+                    read_mask,
+                    write_mask,
+                    reference: Some(reference),
+                    front,
+                    back,
+                });
+            }
+        }
+        _ => unmapped = true,
+    }
     (state, unmapped)
 }
 
@@ -442,7 +630,7 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
             let (state, unmapped) = render_state(&m, &programs);
             if unmapped {
                 *counts
-                    .entry("passes whose blend factors do not map to the vocabulary (SrcAlphaSaturate): blending unstated".into())
+                    .entry("passes with a render-state value the vocabulary has none for (SrcAlphaSaturate, a logical operation, a mask that is not a byte): that part unstated".into())
                     .or_default() += 1;
             }
             world.insert(material, ShaderBinding { stages: bound, state });
@@ -878,6 +1066,136 @@ mod tests {
         let (s, unmapped) = render_state(&m, &programs(0, 1));
         assert_eq!((s.blend, unmapped), (None, true));
         assert_eq!(render_state(&m, &programs(3, 0)).0, RenderState::default());
+    }
+
+    /// The rest of the pass's stored state: the depth test and write, the offset, the stencil with its faces, each
+    /// target's blend and mask, and the property a value is bound to.
+    #[test]
+    fn state_holds_the_depth_the_offset_the_stencil_and_every_target() {
+        let mut m = material();
+        let programs = UnityPrograms {
+            shader: "S".into(),
+            subshader: 0,
+            pass: 0,
+            texture_defaults: Vec::new(),
+            variants: Vec::new(),
+            vertex: Vec::new(),
+            geometry: Vec::new(),
+            hull: Vec::new(),
+            domain: Vec::new(),
+        };
+        let v = |x| fixture::value(x, None);
+        let mut pass = fixture::own(None, 5.0, 10.0);
+        pass.zwrite = v(0.0);
+        pass.state.z_test = v(8.0);
+        pass.state.offset_factor = v(-1.0);
+        pass.state.offset_units = v(-2.0);
+        // target 0 masks the alpha away; the others keep the default
+        pass.state.targets[0].mask = v(7.0);
+        pass.state.stencil_ref = v(2.0);
+        pass.state.stencil_read_mask = v(15.0);
+        // Comp Equal, Pass Replace: both faces; CompBack Never: the back face's own
+        pass.state.stencil_op.comp = v(3.0);
+        pass.state.stencil_op.pass = v(2.0);
+        pass.state.stencil_op_back.comp = v(1.0);
+        m.shader_state = vec![fixture::sub(&[], vec![pass])];
+        let (s, unmapped) = render_state(&m, &programs);
+        assert!(!unmapped);
+        let eq = BlendEquation {
+            source: BlendFactor::SrcAlpha,
+            destination: BlendFactor::OneMinusSrcAlpha,
+            op: BlendOp::Add,
+        };
+        let blend = Blend {
+            colour: eq,
+            alpha: eq,
+        };
+        assert_eq!(
+            s.depth,
+            Some(DepthState {
+                test: Compare::Always,
+                write: false
+            })
+        );
+        assert_eq!(
+            s.depth_bias,
+            Some(DepthBias {
+                constant: -2.0,
+                slope_scaled: -1.0,
+                clamp: 0.0
+            })
+        );
+        // every target takes target 0's blend (the pass does not blend separately); the masks are each its own
+        assert_eq!(s.blend, Some(blend));
+        assert!(
+            s.targets
+                .iter()
+                .all(|t| t.is_some_and(|t| t.blend == Some(blend)))
+        );
+        assert_eq!(s.targets[0].map(|t| t.write_mask), Some(7));
+        assert_eq!(s.targets[1].map(|t| t.write_mask), Some(15));
+        let stencil = s.stencil.unwrap();
+        assert_eq!(
+            (stencil.read_mask, stencil.write_mask, stencil.reference),
+            (15, 255, Some(2))
+        );
+        assert_eq!(
+            stencil.front,
+            StencilFace {
+                fail: StencilOp::Keep,
+                depth_fail: StencilOp::Keep,
+                pass: StencilOp::Replace,
+                compare: Compare::Equal
+            }
+        );
+        assert_eq!(stencil.back.compare, Compare::Never);
+        // a disabled comparison and a pass that always passes and keeps state no stencil
+        let mut plain = fixture::own(None, 1.0, 0.0);
+        plain.state.stencil_op.comp = v(0.0);
+        m.shader_state = vec![fixture::sub(&[], vec![plain, fixture::own(None, 1.0, 0.0)])];
+        assert_eq!(
+            render_state(
+                &m,
+                &UnityPrograms {
+                    pass: 0,
+                    ..programs.clone()
+                }
+            )
+            .0
+            .stencil,
+            None
+        );
+        assert_eq!(
+            render_state(
+                &m,
+                &UnityPrograms {
+                    pass: 1,
+                    ..programs.clone()
+                }
+            )
+            .0
+            .stencil,
+            None
+        );
+        // separate blends: each target its own
+        let mut separate = fixture::own(None, 1.0, 0.0);
+        separate.state.separate_blend = true;
+        separate.state.targets[2].src = v(1.0);
+        separate.state.targets[2].dst = v(1.0);
+        separate.state.targets[2].src_alpha = v(1.0);
+        separate.state.targets[2].dst_alpha = v(1.0);
+        m.shader_state = vec![fixture::sub(&[], vec![separate])];
+        let s = render_state(&m, &programs).0;
+        assert_eq!(s.targets[0].and_then(|t| t.blend), None);
+        assert_eq!(
+            s.targets[2].and_then(|t| t.blend).map(|b| b.colour.destination),
+            Some(BlendFactor::One)
+        );
+        // a logical blend operation and a stencil operation outside the range are unmapped and counted
+        let mut odd = fixture::own(None, 1.0, 0.0);
+        odd.state.targets[0].op = v(7.0);
+        m.shader_state = vec![fixture::sub(&[], vec![odd])];
+        assert!(render_state(&m, &programs).1);
     }
 
     #[test]
