@@ -337,3 +337,104 @@ fn a_rider_lowers_with_its_zones_baked_and_its_skin_left_to_the_placeholder() {
         "{placeholders:?}"
     );
 }
+
+/// The skin Material of a head baked with a tone and with white: the Material's own factors cancel (the mud window and
+/// the Diffuse), leaving the tint the record gives, `lerp(1, tone, W)` with `W = Normal.b` (the exponent byte 255): held
+/// texel by texel on the head's own masks. Without a tone the pass leaves the skin to `lower-anvil-material`.
+#[test]
+fn a_skin_material_bakes_with_the_chosen_tone_as_its_tint() {
+    let Some(mut archive) = open() else {
+        return;
+    };
+    let tone = [199u8, 144, 113];
+    let bake = |archive: &mut Archive, skin: Option<[u8; 3]>| -> (World, Entity, AnvilMaterial, PassLog) {
+        let mut w = rider(archive, &["MAD_CHR_HEAD_001_U"]);
+        let (entity, m) = w
+            .iter::<AnvilMaterial>()
+            .find(|(_, m)| m.template_name.as_deref() == Some("MAD_CHR_Skin"))
+            .map(|(e, m)| (e, m.clone()))
+            .expect("the head's skin Material");
+        let mut o = options();
+        o.insert("size".into(), "256".into());
+        if let Some([r, g, b]) = skin {
+            o.insert("skin-tone".into(), format!("{r},{g},{b}"));
+        }
+        let pass = BakeAnvilMaterial::from_options(&o).expect("options");
+        assert_eq!(pass.options().contains_key("skin-tone"), skin.is_some());
+        let mut log = PassLog::default();
+        pass.run(&mut w, &mut log).expect("bake");
+        (w, entity, m, log)
+    };
+    // no tone: not baked
+    let (w, entity, _, log) = bake(&mut archive, None);
+    assert!(w.get::<PbrMaterial>(entity).is_none());
+    assert!(!log.counts.keys().any(|k| k.contains("MAD_CHR_Skin")));
+    let (w_tone, e_tone, m, log) = bake(&mut archive, Some(tone));
+    let (w_white, e_white, _, _) = bake(&mut archive, Some([255; 3]));
+    assert_eq!(
+        log.counts.get("MAD_CHR_Skin Materials baked"),
+        Some(&1),
+        "{:?}",
+        log.counts
+    );
+    assert!(
+        log.approximations
+            .keys()
+            .any(|k| k.contains("MAD_CHR_Skin Materials baked with the chosen skin-tone"))
+    );
+    let facial = m
+        .values
+        .iter()
+        .find(|(k, _)| *k == crc("Use_Facial_Hair"))
+        .map(|(_, v)| v.clone());
+    assert_eq!(
+        facial,
+        Some(MaterialValue::Float(0.0)),
+        "the head's facial hair is off: {facial:?}"
+    );
+    let base_of = |w: &World, e: Entity| {
+        let t = w
+            .get::<PbrMaterial>(e)
+            .and_then(|p| p.base_color_texture.as_ref())
+            .map(|t| t.texture)
+            .expect("base");
+        w.get::<Texture>(t).expect("texture").levels[0].clone()
+    };
+    let (a, b) = (base_of(&w_tone, e_tone), base_of(&w_white, e_white));
+    let normal = {
+        let e = m
+            .textures
+            .iter()
+            .find(|t| t.shader_slot == 1)
+            .and_then(|t| t.texture)
+            .expect("the Normal");
+        Levels::of(w_tone.get::<Texture>(e).expect("normal")).expect("levels")
+    };
+    let lin = primase_image::srgb8_to_linear;
+    let (mut compared, mut off) = (0u64, 0u64);
+    for y in (0..256i64).step_by(4) {
+        for x in (0..256i64).step_by(4) {
+            // the normal's texel under the bake's (256 px over the normal's own size)
+            let nx = x * i64::from(normal.width) / 256;
+            let ny = y * i64::from(normal.height) / 256;
+            let nz = f64::from(normal.texel(0, nx, ny, [Address::Wrap; 2])[2]) / 255.0;
+            let at = (y as usize * 256 + x as usize) * 4;
+            for c in 0..3 {
+                let white = lin(b[at + c]);
+                if white < 0.02 {
+                    continue;
+                }
+                let t = f64::from(tone[c]) / 255.0;
+                let expected = (white * (1.0 + nz * (t - 1.0))).clamp(0.0, 1.0);
+                let got = lin(a[at + c]);
+                compared += 1;
+                if (got - expected).abs() > 0.03 * expected.max(0.05) + 0.01 {
+                    off += 1;
+                }
+            }
+        }
+    }
+    println!("skin: {compared} channel values compared, {off} off the tint formula");
+    assert!(compared > 5000);
+    assert!(off * 50 < compared, "{off} of {compared}");
+}

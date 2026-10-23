@@ -55,6 +55,21 @@
 //!   where the Material binds none, the decal pair as no decal. The exposure `t23` is 1. A Material that isn't covered
 //!   (`MAD_CHR_Skin` reads the character's customisation from a per-instance buffer) is left to `lower-anvil-material`.
 //!
+//! - **The character skin** (`MAD_CHR_Skin`; §18.3), with `skin-tone=R,G,B`: its plain G-buffer program writes black, the
+//!   skin colour coming from a per-instance record in a typed buffer (`t70`) that the engine builds from the character's
+//!   customisation, which the forge data does not hold. The pass runs the permutation with the per-instance data (key bit
+//!   `0x8000`) and gives it a record built from the program's own unpack (read from its disassembly): four words at
+//!   element 3 of `t70` that element 0 points to; `w0`: the tint where the normal's blue (the skin mask: high on flat
+//!   skin, low in the cavities) is high in its top three bytes, a metalness byte in its low one; `w1`: the tint where it
+//!   is low; `w2`: the translucency byte; `w3`: the facial-hair colour and the mask's exponent byte (`albedo = Diffuse *
+//!   lerp(w1, 1, W) * lerp(1, w0, W)`, `W = |Normal.b|^(exponent / 255)`, a facial-hair colour mixed in by the Diffuse's
+//!   alpha times the Material's `Use_Facial_Hair`). **What is stated, not read**: `skin-tone` is the one colour the
+//!   caller chooses, used as `w0` (the engine's own conversion from a tone to the record is not read); `w1` white (no
+//!   tint in the cavities), the facial-hair colour the tone itself (no separate beard colour), the exponent byte 255
+//!   (W the mask itself), the metalness and translucency bytes 0, no vertex occlusion (`COLOR0.y` 1), no fade (the
+//!   record's fade pair that discards pixels is 0 and 1) and instance 0. Without `skin-tone` a skin Material is left to
+//!   `lower-anvil-material`.
+//!
 //! A recipe whose paint is a pattern its shader computes (Road's lane lines) is baked over one period of the pattern in
 //! the shader's own UV, its Material's UV transform set to the identity, and that transform scaled by the period put
 //! on the texture references instead (`lower-anvil-material`'s reading of a UV transform, so `shader-uv` there too):
@@ -143,6 +158,10 @@ enum Role {
     NormalSign,
     TangentView,
     Clip,
+    /// The tangent with its bitangent sign +1.
+    TangentSign,
+    /// The instance index, 0, as the constant interpolant a per-instance-data permutation reads.
+    Instance,
 }
 
 impl Role {
@@ -150,6 +169,8 @@ impl Role {
         match self {
             Role::WorldPosition => [0.0; 4],
             Role::Tangent => [1.0, 0.0, 0.0, 0.0],
+            Role::TangentSign => [1.0, 0.0, 0.0, 1.0],
+            Role::Instance => [0.0; 4],
             Role::Normal | Role::TangentView => [0.0, 0.0, 1.0, 0.0],
             Role::NormalSign => [0.0, 0.0, 1.0, 1.0],
             Role::Clip => [0.0, 0.0, 0.0, 1.0],
@@ -210,6 +231,9 @@ struct Recipe {
     /// The character zones' family (`template` a prefix): its slots are the textures the program samples, its rows the
     /// ones the template binds, its mud, detail array and absent decals as the module documentation states.
     zones: bool,
+    /// MAD_CHR_Skin: the permutation with per-instance data, its record built from `skin-tone`, `COLOR0` (the vertex
+    /// occlusion) 1 (see the module documentation).
+    skin: bool,
 }
 
 /// MAD_Tex1_Rocks (docs/material-spec.md §14.6; its G-buffer program 0x25A2D read): dirt colours at rows 1 to 3,
@@ -234,6 +258,7 @@ const ROCKS: Recipe = Recipe {
     camera: false,
     object_origin: false,
     zones: false,
+    skin: false,
 };
 
 /// MAD_Tex1_UniqueNormalGradient (§27.3; its G-buffer program read): `Dirt tiling` 1, `Base tiling` 2, the zones'
@@ -256,6 +281,7 @@ const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
     camera: true,
     object_origin: false,
     zones: false,
+    skin: false,
 };
 
 /// MAD_Road (§27.4; its G-buffer program read): `2.Metalness` 1, `4.Emissive Scale` 2, `Hue` 3, `Saturate` 4,
@@ -280,6 +306,7 @@ const ROAD: Recipe = Recipe {
     camera: false,
     object_origin: false,
     zones: false,
+    skin: false,
 };
 
 /// MAD_Tex1_UniqueNormal_DiffuseBlend (§27.8; its G-buffer program read): `Use AO` 1, `3 - DETAILS -Tiling` 2 and
@@ -299,6 +326,7 @@ const UNIQUE_NORMAL_DIFFUSE_BLEND: Recipe = Recipe {
     camera: false,
     object_origin: false,
     zones: false,
+    skin: false,
 };
 
 /// MAD_Tex1_Graffiti_Monster (§27.14.2; its G-buffer program read): `Use AO` 1, `EmissivePower` 2, `FresnelOffset` 3,
@@ -319,6 +347,7 @@ const GRAFFITI_MONSTER: Recipe = Recipe {
     camera: false,
     object_origin: true,
     zones: false,
+    skin: false,
 };
 
 /// MAD_Hero_Ice (§27.2; its G-buffer program read): `TilingGlobal` 1, `FresnelFalloff` 2, `LightDirectionFalloff` 3,
@@ -343,6 +372,7 @@ const HERO_ICE: Recipe = Recipe {
     camera: false,
     object_origin: false,
     zones: false,
+    skin: false,
 };
 
 /// MAD_IceBrick (§27.6; its G-buffer program read): Hero_Ice's albedo without its object normal or parallax, rows 1
@@ -361,6 +391,7 @@ const ICE_BRICK: Recipe = Recipe {
     camera: false,
     object_origin: false,
     zones: false,
+    skin: false,
 };
 
 /// MAD_CHR_5Zones_* (§18.2, §19; the G-buffer programs of the 17 templates read): its interpolants after the UV are the
@@ -379,7 +410,55 @@ const FIVE_ZONES: Recipe = Recipe {
     camera: false,
     object_origin: false,
     zones: true,
+    skin: false,
 };
+
+/// MAD_CHR_Skin (§18.3; its per-instance-data G-buffer program read): `TEXCOORD1` the normal, 2 the tangent with its
+/// bitangent sign, 3 the instance index (a constant), 4 the clip position; `Diffuse` t75, `Normal` t76 (its blue the
+/// tone mask), `Texture` t77 (the mud normal), the record's buffer t70.
+const SKIN: Recipe = Recipe {
+    template: "MAD_CHR_Skin",
+    interpolants: &[
+        (1, Role::Normal),
+        (2, Role::TangentSign),
+        (3, Role::Instance),
+        (4, Role::Clip),
+    ],
+    light: Light::None,
+    pattern: None,
+    rows: &[],
+    slots: &[0, 1, 2],
+    unkept: &[],
+    engine: &[],
+    terrain: None,
+    camera: false,
+    object_origin: false,
+    zones: false,
+    skin: true,
+};
+
+/// The key bit of the permutations with per-instance data (`t70`).
+const INSTANCE_DATA: u32 = 0x8000;
+
+/// The record `t70` holds for a skin of `tone` (see the module documentation): element 0 points at the record, element
+/// 3.
+fn skin_record(tone: [u8; 3]) -> Arc<[[u32; 4]]> {
+    let colour = |c: [u8; 3], low: u8| {
+        (u32::from(c[0]) << 24) | (u32::from(c[1]) << 16) | (u32::from(c[2]) << 8) | u32::from(low)
+    };
+    // w2 is read as a float (the program's visibility test is `0 < w2`) and by its low byte (the translucency): 1.0
+    Arc::from([
+        [0, 0, 0, 0],
+        [0; 4],
+        [0; 4],
+        [
+            colour(tone, 0),
+            colour([255; 3], 0),
+            1.0f32.to_bits(),
+            colour(tone, 255),
+        ],
+    ])
+}
 
 /// The properties of the zones' templates the bake states instead of reading a texture: the mud layer's mask
 /// (`FX-MUD_NormalMask`), the generic `Texture` (the engine-bound detail array), the decal and its normal.
@@ -405,6 +484,7 @@ const RECIPES: &[Recipe] = &[
     ICE_BRICK,
     GRAFFITI_MONSTER,
     FIVE_ZONES,
+    SKIN,
 ];
 
 /// The pass (see the module documentation). Each shader evaluation runs on the world's stated threads (`core.threads`,
@@ -422,6 +502,9 @@ pub struct BakeAnvilMaterial {
     pub view_cosine: f32,
     /// How far the camera is from the surface (metres), for a program that mixes by the distance.
     pub camera_distance: f32,
+    /// The skin colour (`skin-tone=R,G,B`), where the caller chooses one: without it `MAD_CHR_Skin` Materials are not
+    /// baked.
+    pub skin_tone: Option<[u8; 3]>,
 }
 
 impl BakeAnvilMaterial {
@@ -437,6 +520,7 @@ impl BakeAnvilMaterial {
             "view-cosine",
             "camera-distance",
             "unset",
+            "skin-tone",
         ];
         if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));
@@ -499,7 +583,22 @@ impl BakeAnvilMaterial {
         if !(camera_distance.is_finite() && camera_distance > 0.0) {
             return Err(format!("camera-distance {camera_distance}: finite and above 0"));
         }
+        let skin_tone = match o.get("skin-tone") {
+            None => None,
+            Some(v) => {
+                let bytes: Vec<u8> = v
+                    .split(',')
+                    .map(|c| c.trim().parse::<u8>())
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| format!("skin-tone={v}: three bytes R,G,B (0 to 255)"))?;
+                Some(
+                    <[u8; 3]>::try_from(bytes)
+                        .map_err(|_| format!("skin-tone={v}: three bytes R,G,B (0 to 255)"))?,
+                )
+            }
+        };
         Ok(BakeAnvilMaterial {
+            skin_tone,
             size,
             normal_green,
             shader_uv,
@@ -817,6 +916,10 @@ impl BakeAnvilMaterial {
             };
             textures.insert(75 + slot, primase_shader_exec::Texture::Image(Arc::new(image)));
         }
+        if recipe.skin {
+            let tone = self.skin_tone.ok_or("no skin-tone")?;
+            textures.insert(70, primase_shader_exec::Texture::Buffer(skin_record(tone)));
+        }
         let constant = |v: [f32; 4]| Input::Constant(v);
         let mut inputs = BTreeMap::from([
             (("SV_Position".to_owned(), 0), constant([0.0, 0.0, 0.0, 1.0])),
@@ -824,6 +927,10 @@ impl BakeAnvilMaterial {
         ]);
         for &(index, role) in recipe.interpolants {
             inputs.insert(("TEXCOORD".to_owned(), index), constant(role.value()));
+        }
+        if recipe.skin {
+            // the vertex occlusion: 1, none
+            inputs.insert(("COLOR".to_owned(), 0), constant([1.0; 4]));
         }
         let raw = evaluate_raw_with(
             primase_core::parallel::Threads::of(w),
@@ -944,7 +1051,7 @@ impl Pass for BakeAnvilMaterial {
         "bake-anvil-material"
     }
     fn options(&self) -> Options {
-        Options::from([
+        let mut o = Options::from([
             ("size".to_owned(), self.size.to_string()),
             (
                 "normal-green".to_owned(),
@@ -966,8 +1073,13 @@ impl Pass for BakeAnvilMaterial {
             ("terrain-ao".to_owned(), self.terrain_ao.to_string()),
             ("sun-elevation".to_owned(), self.sun_elevation.to_string()),
             ("view-cosine".to_owned(), self.view_cosine.to_string()),
+            ("camera-distance".to_owned(), self.camera_distance.to_string()),
             ("unset".to_owned(), "white".to_owned()),
-        ])
+        ]);
+        if let Some([r, g, b]) = self.skin_tone {
+            o.insert("skin-tone".to_owned(), format!("{r},{g},{b}"));
+        }
+        o
     }
     fn provides(&self) -> &[&'static str] {
         &[PbrMaterial::NAME, Texture::NAME, VertexColor::NAME]
@@ -982,7 +1094,12 @@ impl Pass for BakeAnvilMaterial {
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let materials: Vec<Entity> = w
             .iter::<AnvilMaterial>()
-            .filter(|(_, m)| m.template_name.as_deref().is_some_and(|t| recipe_of(t).is_some()))
+            .filter(|(_, m)| {
+                m.template_name
+                    .as_deref()
+                    .and_then(recipe_of)
+                    .is_some_and(|r| !r.skin || self.skin_tone.is_some())
+            })
             .map(|(e, _)| e)
             .collect();
         let normal = NormalConvention {
@@ -999,7 +1116,10 @@ impl Pass for BakeAnvilMaterial {
                 .and_then(recipe_of)
                 .ok_or("listed above")?;
             let template = m.template_name.clone().unwrap_or_default();
-            let program = match (gbuffer_pixel_key(&m.flags), m.shaders) {
+            let program = match (
+                gbuffer_pixel_key(&m.flags).map(|k| if recipe.skin { k | INSTANCE_DATA } else { k }),
+                m.shaders,
+            ) {
                 (Err(why), _) => Err(why.to_owned()),
                 (Ok(_), None) => Err("its template's shaders weren't read (Placer::with_shaders)".to_owned()),
                 (Ok(key), Some(s)) => w
@@ -1090,6 +1210,18 @@ impl Pass for BakeAnvilMaterial {
             );
             w.insert(e, VertexColor::Ignored);
             log.count(&format!("{} Materials baked", template), 1);
+            if recipe.zones {
+                log.approximate(
+                    "MAD_CHR_5Zones Materials baked with the mud layer left out (HideDirt 1, a runtime dirt state), the                      engine-bound detail array flat and no decal where the Material binds none",
+                    1,
+                );
+            }
+            if recipe.skin {
+                log.approximate(
+                    "MAD_CHR_Skin Materials baked with the chosen skin-tone as the tint where the tone mask is high and                      the engine's record otherwise stated (white where it is low, the facial hair the tone, exponent 1,                      no metalness or translucency byte, no vertex occlusion): the engine's own conversion from a tone                      to the record is not read",
+                    1,
+                );
+            }
             if recipe.camera {
                 log.approximate(
                     &format!(

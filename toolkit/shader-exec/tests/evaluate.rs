@@ -498,3 +498,35 @@ fn a_constant_texture_answers_loads() {
     assert!(raw.pixels[0].iter().all(|&p| p == (bits, 15)));
     assert!(run(Texture::Image(Arc::new(Coordinates))).is_err());
 }
+
+/// A buffer answers a load with the element at the texel's x (here 1), as its four words; a load past its end is an
+/// error, and so is a sample of one.
+#[test]
+fn a_buffer_answers_loads_by_element() {
+    let shader = Loads(Interface {
+        stage: Stage::Pixel,
+        inputs: vec![],
+        outputs: vec![],
+        resources: vec![],
+        facts: Default::default(),
+    });
+    let grid = Grid {
+        size: 2,
+        period: [1.; 2],
+    };
+    let constants = Constants::new(&Layout::default());
+    let run = |texture: Texture| {
+        primase_shader_exec::evaluate_raw(
+            &shader,
+            &constants,
+            &BTreeMap::from([(0, texture)]),
+            &BTreeMap::new(),
+            grid,
+            &[(0, 15)],
+            primase_shader_exec::Invocation::Scalar,
+        )
+    };
+    let raw = run(Texture::Buffer(Arc::from([[1, 2, 3, 4], [5, 6, 7, 8]]))).unwrap();
+    assert!(raw.pixels[0].iter().all(|&p| p == ([5, 6, 7, 8], 15)));
+    assert!(run(Texture::Buffer(Arc::from([[1, 2, 3, 4]]))).is_err());
+}

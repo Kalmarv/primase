@@ -210,6 +210,9 @@ pub enum Texture {
     Image(Arc<dyn Image>),
     /// One value everywhere: what a sample returns, and a load the value's bits (as a float view returns them).
     Constant([f32; 4]),
+    /// A buffer of four-word elements: what a load of element `x` returns (an element past the end is an error); a
+    /// sample is an error.
+    Buffer(Arc<[[u32; 4]]>),
 }
 
 /// The textures by slot, answering samples and loads.
@@ -223,6 +226,7 @@ impl Sampler for Bound<'_> {
             }
             Some(Texture::Image(image)) => image.sample(s.uv, s.lod),
             Some(Texture::Constant(c)) => Ok(*c),
+            Some(Texture::Buffer(_)) => Err(format!("t{}: a sample of a buffer", s.texture)),
             None => Err(format!("t{} has no texture", s.texture)),
         }
     }
@@ -230,6 +234,11 @@ impl Sampler for Bound<'_> {
         match self.0.get(&l.texture) {
             Some(Texture::Constant(c)) => Ok(c.map(f32::to_bits)),
             Some(Texture::Image(_)) => Err(format!("t{}: a load of an image", l.texture)),
+            Some(Texture::Buffer(elements)) => usize::try_from(l.texel[0])
+                .ok()
+                .and_then(|i| elements.get(i))
+                .copied()
+                .ok_or_else(|| format!("t{}: element {} of {}", l.texture, l.texel[0], elements.len())),
             None => Err(format!("t{} has no texture", l.texture)),
         }
     }
