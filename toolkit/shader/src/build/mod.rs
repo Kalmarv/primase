@@ -66,6 +66,14 @@ pub fn component(lane: u8) -> SwizzleComponent {
 }
 
 /// A module and the entry function being built, with a stack of the blocks open for structured control flow.
+///
+/// What a lifter reads decides the shapes of the values it hands the builder, so an operation asked of values that cannot
+/// do it (a vector of 2 lanes added to one of 3) is not a bug of the builder and does not panic: it records the first such
+/// fault and returns a value of the shape asked for. The contract is the lifter's: it calls [`Builder::check`] where it
+/// can name what it was reading (after each instruction or statement) and before it finishes the module, and turns a fault
+/// into a refusal. `finish`, `finish_mesh`, `finish_functions` and `end_function` panic on a fault nobody checked, which a
+/// lifter that follows the contract cannot reach from its input; that panic, and the one on control flow left open, are
+/// for a lifter's own bugs.
 #[derive(Debug)]
 pub struct Builder {
     pub module: Module,
