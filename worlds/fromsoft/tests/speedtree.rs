@@ -51,7 +51,7 @@ struct Prepared {
 }
 
 fn prepare(code: &[u8]) -> Result<Prepared> {
-    let program = primase_dxil::lift(code).map_err(|e| primase_dxil::refusal_reason(&e).to_string())?;
+    let program = primase_dxil::lift(code).map_err(|e| e.reason().to_string())?;
     let exe = Executable::new(&program)?;
     let mut resources = Resources::default();
     for r in &program.interface.resources {
