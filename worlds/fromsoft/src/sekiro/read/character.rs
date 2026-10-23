@@ -110,6 +110,17 @@ pub fn animation_notices(a: &AnimationReport) -> Vec<Notice> {
             |n, f| n.example(f.clone()),
         ));
     }
+    if !a.absent_components.is_empty() {
+        out.push(a.absent_components.iter().take(3).fold(
+            Notice::new(
+                "fromsoft animations",
+                NoticeKind::Approximation,
+                "animation track components with a NaN or infinite stored value or range, read as absent",
+                a.absent_components.len() as u64,
+            ),
+            |n, f| n.example(f.clone()),
+        ));
+    }
     if !a.unread.is_empty() {
         out.push(a.unread.iter().take(3).fold(
             Notice::new(

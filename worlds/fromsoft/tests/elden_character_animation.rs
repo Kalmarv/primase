@@ -155,8 +155,8 @@ fn elden_ring_clips_move_onto_the_model_by_the_games_own_rule() -> Result<()> {
 }
 
 /// M3: the animation binders of a character are the ones its markers (`.txt`, or `.blf` in Elden Ring) name; the one
-/// animation of the install the reader refuses says where (`c2030/a001_009000`: a NaN stored in the scale of the bone
-/// `R_Egg`, a leaf bone of the held item).
+/// animation of the install with a NaN stored (`c2030/a001_009000`: the quantisation ranges of the scale of the bone
+/// `R_Egg`, a leaf bone of the held item) is read with those three components absent, named.
 #[test]
 fn elden_ring_divisions_are_read_from_the_blf_markers_and_a_refusal_names_its_bone() -> Result<()> {
     let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
@@ -194,11 +194,15 @@ fn elden_ring_divisions_are_read_from_the_blf_markers_and_a_refusal_names_its_bo
         &mut w,
     )?;
     let a = report.animations.unwrap();
-    let why = a.refused.keys().next().unwrap();
+    // the one animation whose scale range is NaN is read, that component as absent, and named
+    assert!(a.refused.is_empty(), "{:?}", a.refused);
+    assert_eq!(a.absent_components.len(), 3, "{:?}", a.absent_components);
     assert!(
-        why.contains("track 119 scale") && why.contains("the track drives the bone R_Egg"),
+        a.absent_components
+            .iter()
+            .all(|c| c.starts_with("scale ") && c.ends_with("of R_Egg in a001_009000")),
         "{:?}",
-        a.refused
+        a.absent_components
     );
     Ok(())
 }

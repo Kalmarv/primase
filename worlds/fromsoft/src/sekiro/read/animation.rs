@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 
 use primase_core::{Entity, Name, World};
 use primase_havok::animation::{Container, Skeleton, container};
-use primase_havok::world::{insert_animation, insert_skeleton};
+use primase_havok::world::{HavokAnimation, insert_animation, insert_skeleton};
 use primase_havok::{Compendium, Tagfile};
 
 use crate::{Archive, Binder, Result, dcx::Decoder};
@@ -40,6 +40,9 @@ pub struct AnimationReport {
     /// The binders read besides the character's own (`c0000_a000_hi`, ...), by name, in the order the marker members
     /// list them.
     pub companions: Vec<String>,
+    /// Vector components of a track whose stored value or quantisation range is NaN or infinite (`scale x of R_Egg in
+    /// a001_009000`): they cannot be decoded and are read as absent, the program's `absent` choice standing for them.
+    pub absent_components: Vec<String>,
     /// Files not read, by reason, each with the stems of its first few.
     pub refused: BTreeMap<String, Vec<String>>,
     /// Members of the binders this reader does not read (`c1010.tae`, ...), by name.
@@ -227,6 +230,20 @@ pub(super) fn read(
         }
         match insert_animation(w, &file, &c, *skeleton, havok, &crate::pose::FRAME) {
             Ok(Some(e)) => {
+                if let Some(h) = w.get::<HavokAnimation>(e) {
+                    let unreadable = h.spline.unreadable.clone();
+                    let bones = h.track_to_bone.clone();
+                    for u in unreadable {
+                        let bone = bones
+                            .get(u.track)
+                            .and_then(|&b| usize::try_from(b).ok())
+                            .and_then(|b| havok.bones.get(b))
+                            .map_or_else(|| format!("track {}", u.track), |b| b.name.clone());
+                        out.report
+                            .absent_components
+                            .push(format!("{} of {bone} in {file}", u.part));
+                    }
+                }
                 read_names.insert(file, set);
                 out.report.animations += 1;
                 out.animations.push(e);

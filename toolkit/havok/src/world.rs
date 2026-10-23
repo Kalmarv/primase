@@ -600,6 +600,21 @@ impl Pass for LowerHavokClips {
                 continue;
             }
             let clip = lower(&a, name, self)?;
+            for u in &a.spline.unreadable {
+                let bone = a
+                    .track_to_bone
+                    .get(u.track)
+                    .and_then(|&b| usize::try_from(b).ok())
+                    .and_then(|b| w.get::<CoreSkeleton>(a.skeleton).and_then(|s| s.joints.get(b)))
+                    .map_or_else(|| format!("track {}", u.track), |j| j.name.clone());
+                log.count(
+                    &format!(
+                        "{} of {bone} in {name}: a stored value or range is NaN or infinite, read as absent (as `absent` says)",
+                        u.part
+                    ),
+                    1,
+                );
+            }
             if a.extracted_motion.is_some() {
                 match self.root_motion {
                     RootMotionUse::Leave => {
@@ -722,6 +737,7 @@ mod tests {
                 skeleton,
                 spline: SplineAnimation {
                     blocks: vec![vec![moving, idle]],
+                    unreadable: vec![],
                     duration: 2.0,
                     num_frames: 3,
                     max_frames_per_block: 256,

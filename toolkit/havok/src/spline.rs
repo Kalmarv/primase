@@ -226,12 +226,18 @@ impl Reader<'_> {
 
     fn f32(&mut self) -> Result<f32> {
         let at = self.at;
-        let v = f32::from_le_bytes(self.array()?);
+        let v = self.raw_f32()?;
         if v.is_finite() {
             Ok(v)
         } else {
             Err(invalid(at, "a stored float is not finite"))
         }
+    }
+
+    /// A float as stored, finite or not (a vector component's value or range, where a non-finite one is that
+    /// component's own: see [`Unreadable`]).
+    fn raw_f32(&mut self) -> Result<f32> {
+        Ok(f32::from_le_bytes(self.array()?))
     }
 
     /// Skip to the next multiple of `align` (a position in the whole data).
@@ -288,7 +294,7 @@ fn quantized(r: &mut Reader, scalar: Scalar, min: f32, max: f32) -> Result<f32> 
     Ok((f64::from(min) + (f64::from(max) - f64::from(min)) * ratio) as f32)
 }
 
-fn vector(r: &mut Reader, flags: u8, scalar: Scalar) -> Result<Vector> {
+fn vector(r: &mut Reader, flags: u8, scalar: Scalar, unreadable: &mut Vec<usize>) -> Result<Vector> {
     let spline = SPLINE[..3].iter().any(|f| flags & f != 0);
     let state = |i: usize| {
         if flags & SPLINE[i] != 0 {
@@ -302,7 +308,13 @@ fn vector(r: &mut Reader, flags: u8, scalar: Scalar) -> Result<Vector> {
     if !spline {
         let mut read = |i: usize| -> Result<Component> {
             if state(i) == 2 {
-                Ok(Component::Static(r.f32()?))
+                let v = r.raw_f32()?;
+                if v.is_finite() {
+                    Ok(Component::Static(v))
+                } else {
+                    unreadable.push(i);
+                    Ok(Component::Absent)
+                }
             } else {
                 Ok(Component::Absent)
             }
@@ -320,8 +332,20 @@ fn vector(r: &mut Reader, flags: u8, scalar: Scalar) -> Result<Vector> {
     let mut component = [Component::Absent, Component::Absent, Component::Absent];
     for ((bound, comp), i) in bounds.iter_mut().zip(component.iter_mut()).zip(0..) {
         match state(i) {
-            1 => *bound = (r.f32()?, r.f32()?),
-            2 => *comp = Component::Static(r.f32()?),
+            1 => {
+                *bound = (r.raw_f32()?, r.raw_f32()?);
+                if !(bound.0.is_finite() && bound.1.is_finite()) {
+                    unreadable.push(i);
+                }
+            }
+            2 => {
+                let v = r.raw_f32()?;
+                if v.is_finite() {
+                    *comp = Component::Static(v);
+                } else {
+                    unreadable.push(i);
+                }
+            }
             _ => {}
         }
     }
@@ -334,7 +358,7 @@ fn vector(r: &mut Reader, flags: u8, scalar: Scalar) -> Result<Vector> {
         }
     }
     for ((comp, curve), i) in component.iter_mut().zip(curves).zip(0..) {
-        if state(i) == 1 {
+        if state(i) == 1 && !unreadable.contains(&i) {
             *comp = Component::Spline(curve);
         }
     }
@@ -432,11 +456,26 @@ fn rotation(r: &mut Reader, flags: u8, code: u8) -> Result<Rotation> {
     }
 }
 
+/// A vector component (a position or scale axis) of a track whose stored value, or the range its quantised control
+/// points are scaled between, is NaN or infinite: no value can be decoded from it (Elden Ring's `c2030/a001_009000` has
+/// one, the scale of the leaf bone `R_Egg`, all six stored bounds NaN). Its control points are still skipped, and the
+/// component is [`Component::Absent`], so the caller's `absent` stands for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unreadable {
+    pub block: usize,
+    pub track: usize,
+    /// `position x`, `scale z`, ...
+    pub part: &'static str,
+}
+
 /// A decoded `hkaSplineCompressedAnimation`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SplineAnimation {
     /// One list of transform tracks for each block.
     pub blocks: Vec<Vec<Track>>,
+    /// The vector components whose stored value or quantisation range is not finite, which [`Self::sample`] takes as
+    /// absent.
+    pub unreadable: Vec<Unreadable>,
     pub duration: f32,
     pub num_frames: u32,
     pub max_frames_per_block: u32,
@@ -475,6 +514,7 @@ impl SplineAnimation {
             return Err(invalid(0, "the block offsets do not match the block count"));
         }
         let mut out = Vec::with_capacity(blocks);
+        let mut unreadable = Vec::new();
         for b in 0..blocks {
             let start = s.block_offsets[b] as usize;
             if !start.is_multiple_of(16) {
@@ -484,10 +524,11 @@ impl SplineAnimation {
                 bytes: &s.data,
                 at: start,
             };
-            out.push(block(&mut r, animation.transform_tracks, s, b)?);
+            out.push(block(&mut r, animation.transform_tracks, s, b, &mut unreadable)?);
         }
         Ok(SplineAnimation {
             blocks: out,
+            unreadable,
             duration: animation.duration,
             num_frames: s.num_frames,
             max_frames_per_block: s.max_frames_per_block,
@@ -610,7 +651,13 @@ impl SplineAnimation {
 }
 
 /// One block: its tracks, ending where the float data begins.
-fn block(r: &mut Reader, tracks: usize, s: &SplineData, index: usize) -> Result<Vec<Track>> {
+fn block(
+    r: &mut Reader,
+    tracks: usize,
+    s: &SplineData,
+    index: usize,
+    unreadable: &mut Vec<Unreadable>,
+) -> Result<Vec<Track>> {
     let masks = (0..tracks).map(|_| mask(r)).collect::<Result<Vec<_>>>()?;
     r.pad(4)?;
     let mut out = Vec::with_capacity(tracks);
@@ -624,11 +671,22 @@ fn block(r: &mut Reader, tracks: usize, s: &SplineData, index: usize) -> Result<
                 )
             }
         };
-        let position = vector(r, m.position_flags, m.position).map_err(at("position"))?;
+        let mut bad = Vec::new();
+        let position = vector(r, m.position_flags, m.position, &mut bad).map_err(at("position"))?;
+        unreadable.extend(bad.drain(..).map(|axis| Unreadable {
+            block: index,
+            track,
+            part: ["position x", "position y", "position z"][axis],
+        }));
         r.pad(4)?;
         let rotation = rotation(r, m.rotation_flags, m.rotation).map_err(at("rotation"))?;
         r.pad(4)?;
-        let scale = vector(r, m.scale_flags, m.scale).map_err(at("scale"))?;
+        let scale = vector(r, m.scale_flags, m.scale, &mut bad).map_err(at("scale"))?;
+        unreadable.extend(bad.drain(..).map(|axis| Unreadable {
+            block: index,
+            track,
+            part: ["scale x", "scale y", "scale z"][axis],
+        }));
         r.pad(4)?;
         out.push(Track {
             position,
@@ -830,6 +888,48 @@ mod tests {
         assert_eq!(t.translation, [10.0, 2.0, 30.0, 0.0]);
         assert_eq!(t.rotation, [0.0, 1.0, 0.0, 0.0]);
         assert_eq!(t.scale, [1.0, 1.0, 1.0, 0.0]);
+    }
+
+    /// A stored value that is NaN is that component's own: it reads as absent (the caller's `absent` stands for it) and
+    /// is named in `unreadable`, where it used to refuse the whole animation (Elden Ring's `c2030/a001_009000`).
+    #[test]
+    fn a_nan_component_is_read_as_absent_and_named() {
+        let mut d = static_block(f32::NAN, 5.0);
+        let end = d.len() as u32;
+        pad(&mut d, 16);
+        let a = animation(d, 1, &[(0, end)], 256, 2);
+        let s = SplineAnimation::parse(&a).unwrap();
+        assert_eq!(
+            s.unreadable,
+            [Unreadable {
+                block: 0,
+                track: 0,
+                part: "position x"
+            }]
+        );
+        let t = s.sample(0, 0.0, &IDENTITY, Absent::NEUTRAL).unwrap();
+        // x absent (neutral zero), z as stored
+        assert_eq!(t.translation, [0.0, 0.0, 5.0, 0.0]);
+        // an infinite one too, and a finite animation has none
+        let mut d = static_block(f32::INFINITY, 0.0);
+        let end = d.len() as u32;
+        pad(&mut d, 16);
+        assert_eq!(
+            SplineAnimation::parse(&animation(d, 1, &[(0, end)], 256, 2))
+                .unwrap()
+                .unreadable
+                .len(),
+            1
+        );
+        let mut d = static_block(1.0, 2.0);
+        let end = d.len() as u32;
+        pad(&mut d, 16);
+        assert!(
+            SplineAnimation::parse(&animation(d, 1, &[(0, end)], 256, 2))
+                .unwrap()
+                .unreadable
+                .is_empty()
+        );
     }
 
     /// A block that ends elsewhere than the data says is refused naming both places.
