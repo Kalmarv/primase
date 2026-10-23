@@ -82,6 +82,9 @@ impl ConvexCore {
     /// vertex's incident offset planes no longer meet at a single point.
     pub fn expanded_triangles(&self) -> Result<Vec<[[f32; 3]; 3]>> {
         self.validate()?;
+        if let Some(triangles) = self.flat_triangles()? {
+            return Ok(triangles);
+        }
         let mut planes = Vec::<[f64; 4]>::new();
         for plane in &self.planes {
             let p = plane.map(f64::from);
@@ -138,17 +141,22 @@ impl ConvexCore {
             let output = face.map(|i| vertices[i].map(|x| x as f32));
             for p in output {
                 let p = p.map(f64::from);
+                let bound = plane_bound(p);
                 if p.iter().any(|x| !x.is_finite())
-                    || planes.iter().any(|q| distance(*q, p) > 1e-5)
-                    || planes.iter().filter(|q| distance(**q, p).abs() <= 1e-5).count() < 3
+                    || planes.iter().any(|q| distance(*q, p) > bound)
+                    || planes.iter().filter(|q| distance(**q, p).abs() <= bound).count() < 3
                 {
-                    return Err(invalid(0, "convex f32 vertex exceeds 0.01 mm plane bound"));
+                    return Err(invalid(
+                        0,
+                        "convex f32 vertex exceeds its plane bound (0.01 mm or 4 f32 ULP)",
+                    ));
                 }
             }
             if !planes.iter().any(|q| {
-                output
-                    .iter()
-                    .all(|p| distance(*q, p.map(f64::from)).abs() <= 1e-5)
+                output.iter().all(|p| {
+                    let p = p.map(f64::from);
+                    distance(*q, p).abs() <= plane_bound(p)
+                })
             }) {
                 return Err(invalid(0, "convex hull has an unsupported closing face"));
             }
@@ -162,6 +170,85 @@ impl ConvexCore {
         }
         Ok(triangles)
     }
+    /// A core of zero thickness (two opposite stored planes at one offset, every vertex on them) bounds no volume:
+    /// it is a polygon. Its faces on those planes, offset by the radius and fan-triangulated, are the tessellation;
+    /// the rim of height 2 x radius is not emitted (with radius 0 there is none). `None` for a core with volume.
+    fn flat_triangles(&self) -> Result<Option<Vec<[[f32; 3]; 3]>>> {
+        let normalized: Vec<[f64; 4]> = self
+            .planes
+            .iter()
+            .map(|p| {
+                let p = p.map(f64::from);
+                let length = dot([p[0], p[1], p[2]], [p[0], p[1], p[2]]).sqrt();
+                if length == 0. {
+                    return Err(invalid(0, "zero convex plane normal"));
+                }
+                Ok(p.map(|x| x / length))
+            })
+            .collect::<Result<_>>()?;
+        // Offsets agree to f32 rounding (four units in the last place of the offset, or of 1).
+        let same =
+            |a: f64, b: f64| (a - b).abs() <= 4. * f64::from(f32::EPSILON) * a.abs().max(b.abs()).max(1.);
+        let opposite = |a: &[f64; 4], b: &[f64; 4]| (0..4).all(|k| same(a[k], -b[k]));
+        let Some(base) = normalized
+            .iter()
+            .find(|a| normalized.iter().any(|b| opposite(a, b)))
+            .copied()
+        else {
+            return Ok(None);
+        };
+        let on_base = |v: [f32; 3]| {
+            let v = v.map(f64::from);
+            same(dot([base[0], base[1], base[2]], v), -base[3])
+        };
+        if !self.vertices.iter().all(|&v| on_base(v)) {
+            return Err(invalid(
+                0,
+                "zero-thickness convex core with vertices off its plane",
+            ));
+        }
+        let mut triangles = Vec::new();
+        let mut emitted = Vec::<[f64; 4]>::new();
+        for (face, plane) in self.faces.iter().zip(&normalized) {
+            let facing = (0..4).all(|k| same(plane[k], base[k])) || opposite(plane, &base);
+            if !facing || emitted.iter().any(|e| (0..4).all(|k| same(e[k], plane[k]))) {
+                continue;
+            }
+            emitted.push(*plane);
+            let normal = [plane[0], plane[1], plane[2]];
+            let radius = f64::from(self.radius);
+            let corner = |i: usize| -> [f64; 3] {
+                let v = self.vertices[i].map(f64::from);
+                std::array::from_fn(|k| v[k] + radius * normal[k])
+            };
+            for k in 1..face.len() - 1 {
+                let mut t = [corner(face[0]), corner(face[k]), corner(face[k + 1])];
+                // Wind each triangle counter-clockwise about its face's outward normal.
+                if dot(cross(sub(t[1], t[0]), sub(t[2], t[0])), normal) < 0. {
+                    t.swap(1, 2);
+                }
+                let output = t.map(|p| p.map(|x| x as f32));
+                let rounded = output.map(|p| p.map(f64::from));
+                let area = cross(sub(rounded[1], rounded[0]), sub(rounded[2], rounded[0]));
+                if output.iter().flatten().any(|x| !x.is_finite()) {
+                    return Err(invalid(0, "nonfinite flat convex vertex"));
+                }
+                if dot(area, area) > 0. {
+                    triangles.push(output);
+                }
+            }
+        }
+        if triangles.is_empty() {
+            return Err(invalid(0, "zero-thickness convex core without area"));
+        }
+        Ok(Some(triangles))
+    }
+}
+/// 0.01 mm, or four f32 units in the last place at the vertex's magnitude when that is coarser (shapes far from their
+/// body's origin cannot be rounded to f32 more closely).
+fn plane_bound(p: [f64; 3]) -> f64 {
+    let magnitude = p.iter().fold(0f64, |m, x| m.max(x.abs()));
+    1e-5f64.max(magnitude * 4. * f64::from(f32::EPSILON))
 }
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
