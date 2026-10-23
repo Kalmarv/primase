@@ -298,6 +298,11 @@ impl Pass for LowerFromSoftObjectCollision {
     fn requires(&self) -> &[&'static str] {
         &[ObjectBodies::NAME]
     }
+    /// A read region may place no model that has collision files (the reader gives `fromsoft.object_collision` only
+    /// to those): nothing to lower, the step recorded as skipped.
+    fn may_lack_inputs(&self) -> bool {
+        true
+    }
     fn provides(&self) -> &[&'static str] {
         &[
             Collision::NAME,

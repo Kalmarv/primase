@@ -498,3 +498,34 @@ fn fromsoft_textures_lose_their_transforms_and_other_materials_keep_theirs() {
         1
     );
 }
+
+/// A read region that places no model with collision files has no `fromsoft.object_collision`: the object collision
+/// lowering has nothing to do there, and its step is recorded as skipped, not failed.
+#[test]
+fn object_collision_is_skipped_where_no_placed_model_has_collision() {
+    use primase_core::pass::{Options, PassManager, Pipeline, RunReport};
+    let options: Options = [
+        ("resolution", "high-else-low"),
+        ("convex", "rounded:0.01"),
+        ("leave-out", ""),
+        ("leave-out-motion", ""),
+        ("convex-surface", "default"),
+        ("reach", "none"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    .collect();
+    let pass = super::object_collision::LowerFromSoftObjectCollision::from_options(&options).unwrap();
+    let mut world = World::new();
+    let mut report = RunReport::default();
+    PassManager::new(PassRegistry::new())
+        .run_part(
+            &mut world,
+            &Pipeline {
+                passes: vec![Box::new(pass)],
+            },
+            &mut report,
+        )
+        .unwrap();
+    assert_eq!(report.steps[0].skipped, ["fromsoft.object_collision"]);
+}
