@@ -486,7 +486,9 @@ impl Prepared {
                 .ok_or_else(|| invalid("layer binding", 0, "a texture the shader lacks"))?;
             let register = resolve::register(resource)?;
             // an engine texture (no material slot in its name) is a constant, as the binding states it Default
-            if resolve::texture_slot(resource).is_err() {
+            if resolve::texture_slot(resource).is_err()
+                && !resolve::named_by_material(material, &resource.provenance.name)
+            {
                 match &bound.source {
                     TextureSource::Default { value, why } => {
                         *policies.entry(why.clone()).or_default() += 1;
@@ -502,10 +504,7 @@ impl Prepared {
                     }
                 }
             }
-            let slot = resolve::texture_slot(resource)?;
-            let role = slots
-                .get(&slot)
-                .map_or_else(|| resolve::declared_role(material, slot), |(role, _)| Ok(*role))?;
+            let (role, _) = resolve::role_and_binding(material, &slots, resource)?;
             let source = match &bound.source {
                 TextureSource::Texture {
                     texture: entity,

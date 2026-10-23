@@ -36,6 +36,53 @@ pub enum Unbound {
 /// albedo, the reflectance and the emission.
 const NORMAL_BIAS_BITS: u32 = 0x3f00_2008;
 
+/// Whether the material names a texture kind exactly as a program resource: the fixed-function (`GXFlver_*`) programs
+/// call their textures `g_DiffuseTexture`, `g_SpecularTexture`, `g_BumpmapTexture`, as the material's own kinds, not by
+/// numbered slot.
+pub(crate) fn named_by_material(material: &LayeredMaterial, name: &str) -> bool {
+    material.bindings.contains_key(name) || material.definition.textures.iter().any(|t| t.kind == name)
+}
+
+/// The role a texture kind named without a slot number has, from its name: a diffuse texture is the albedo, a bump map the
+/// normal map, anything else carries its name's own role.
+fn kind_role(name: &str) -> &'static str {
+    if name.contains("Diffuse") {
+        "AlbedoMap"
+    } else if name.contains("Bump") {
+        "NormalMap"
+    } else {
+        "OtherMap"
+    }
+}
+
+/// A program texture's role and the material's binding for it: for a numbered slot (`Texture2D_<n>`) by the slot's number
+/// (a declared slot retains its role even without a path: an unbound normal gets the flat normal, not the zero of an
+/// unknown resource), for a fixed-function texture by the kind's own name.
+pub(crate) fn role_and_binding<'a>(
+    material: &'a LayeredMaterial,
+    slots: &BTreeMap<u32, (&'a str, &'a Binding)>,
+    resource: &Resource,
+) -> Result<(&'a str, Option<&'a Binding>)> {
+    Ok(match texture_slot(resource) {
+        Ok(slot) => {
+            let fallback_role = declared_role(material, slot)?;
+            slots
+                .get(&slot)
+                .map_or((fallback_role, None), |(role, b)| (*role, Some(*b)))
+        }
+        Err(_) => {
+            let name = resource.provenance.name.as_str();
+            let kind = material
+                .definition
+                .textures
+                .iter()
+                .find(|t| t.kind == name)
+                .map_or(name, |t| t.kind.as_str());
+            (kind_role(kind), material.bindings.get(name))
+        }
+    })
+}
+
 /// The name of the engine's dither noise texture in the alpha-tested permutations (`<shader>_<switch>_Gbuf_[A].ppo`).
 pub const ENGINE_DITHER_TEXTURE: &str = "g_DitherTexture";
 
@@ -215,7 +262,7 @@ pub fn resolve(
         // a texture that is not a material slot (no `Texture2D_<n>` in its name) is the engine's own: the dither noise the
         // alpha-tested permutations read for the dithered fade (a neutral grey: the fade is off), a depth or scene texture
         // of a program that reads one (zero). The material binds nothing to it; each is counted by name.
-        if texture_slot(resource).is_err() {
+        if texture_slot(resource).is_err() && !named_by_material(material, &resource.provenance.name) {
             let name = &resource.provenance.name;
             let (value, what) = if name == ENGINE_DITHER_TEXTURE {
                 ([0.5; 4], "read only by the dithered alpha fade, which is off")
@@ -231,13 +278,7 @@ pub fn resolve(
             });
             continue;
         }
-        let slot = texture_slot(resource)?;
-        // A declared slot retains its semantic role even without a path. In particular an unbound normal gets the
-        // flat normal, not the zero of an unknown resource.
-        let fallback_role = declared_role(material, slot)?;
-        let (role, binding) = slots
-            .get(&slot)
-            .map_or((fallback_role, None), |(role, b)| (*role, Some(*b)));
+        let (role, binding) = role_and_binding(material, &slots, resource)?;
         let mut found = None;
         if let Some(b) = binding {
             found = texture(&b.texture, role == "AlbedoMap")?;

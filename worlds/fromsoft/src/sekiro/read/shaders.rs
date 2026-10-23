@@ -62,6 +62,32 @@ impl Bundles {
                 wanted.remove(key);
             }
         }
+        // a shader without a bundle may be a fixed-function one, whose programs are in one binder by name
+        if let Some(path) = game.fixed_function_binder()
+            && archive.contains(path)
+            && wanted.iter().any(|w| fixed_function(w))
+        {
+            let binder = Binder::read(&archive.read(path, decoder)?, decoder)?;
+            for shader in wanted
+                .iter()
+                .filter(|w| fixed_function(w))
+                .copied()
+                .collect::<Vec<_>>()
+            {
+                let programs = fixed_function_programs(game, shader, &binder)?;
+                if !programs.is_empty() {
+                    self.bundles.insert(
+                        shader.clone(),
+                        ShaderBundle {
+                            name: shader.clone(),
+                            programs,
+                            parameters: None,
+                        },
+                    );
+                    wanted.remove(shader);
+                }
+            }
+        }
         self.missing.extend(wanted.into_iter().cloned());
         Ok(())
     }
@@ -102,6 +128,50 @@ impl Bundles {
             }
         }
     }
+}
+
+/// Whether a shader is of the fixed-function family: the `GXFlver_` shaders have programs but no bundle.
+fn fixed_function(shader: &str) -> bool {
+    shader.starts_with("GXFlver_")
+}
+
+/// The G-buffer programs of a fixed-function shader in its binder, by exact name: the pixel programs
+/// `<shader>_Gbuf.ppo` and `<shader>_Gbuf_[A].ppo` and the vertex programs `<shader>_GBuf.vpo`, `<shader>_GBuf_Skin.vpo` and
+/// their `@[cl]` permutations. The permutations of an effect the engine selects per instance (`_Bloody`, `_Burn`, `_Cm`,
+/// `_Df`, `_Cloth`, `_Phantom`, `_ZFeather`, `_Decal[A]`: the same shader with that effect's code) are not taken: nothing in
+/// a material says which an instance draws with. Each program's container states the shader kind its extension names.
+fn fixed_function_programs(game: Game, shader: &str, binder: &Binder) -> Result<Vec<ShaderProgram>> {
+    let format = game.shader_format();
+    let names = [
+        (format!("{shader}_Gbuf.ppo"), ShaderStage::Pixel, 0),
+        (format!("{shader}_Gbuf_[A].ppo"), ShaderStage::Pixel, 0),
+        (format!("{shader}_GBuf.vpo"), ShaderStage::Vertex, 1),
+        (format!("{shader}_GBuf@[cl].vpo"), ShaderStage::Vertex, 1),
+        (format!("{shader}_GBuf_Skin.vpo"), ShaderStage::Vertex, 1),
+        (format!("{shader}_GBuf_Skin@[cl].vpo"), ShaderStage::Vertex, 1),
+    ];
+    let mut programs = Vec::new();
+    for (name, stage, kind) in names {
+        let Some(file) = binder.files.iter().find(|f| leaf(f.name.as_deref()) == name) else {
+            continue;
+        };
+        let found = shader_kind(format, &file.bytes)
+            .map_err(|e| invalid("shader binder", 0, format!("{shader}: {name}: {e}")))?;
+        if found != Some(kind) {
+            return Err(invalid(
+                "shader binder",
+                0,
+                format!("{shader}: {name}: its code is of another shader type than its extension"),
+            ));
+        }
+        programs.push(ShaderProgram {
+            name,
+            stage,
+            format,
+            code: file.bytes.clone().into(),
+        });
+    }
+    Ok(programs)
 }
 
 /// The shader kind (0 pixel, 1 vertex, 3 hull, 4 domain) a program's container states, read as the game's `format`.

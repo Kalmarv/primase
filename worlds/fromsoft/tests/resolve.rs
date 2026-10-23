@@ -1074,3 +1074,97 @@ fn a_one_set_vertex_program_binds_its_coordinates_as_the_first_set() {
         .unwrap();
     assert_eq!(uv, InputRole::Stream(Semantic::TexCoord(0)));
 }
+
+/// A fixed-function (`GXFlver_*`) material's textures are addressed by the kind's own name, as the program calls them
+/// (`g_DiffuseTexture` is its albedo, in colour; `g_BumpmapTexture` its normal map), not by a slot number; the engine's
+/// dither noise stays the engine's. Its program is `<shader>_Gbuf.ppo` (no static switch).
+#[test]
+fn a_fixed_function_materials_textures_are_bound_by_their_kind_names() {
+    const FIXED: &[u8] = include_bytes!("fixtures/fixed_function.dxbc");
+    let shader = primase_dxbc::Shader::parse(FIXED).unwrap();
+    let mut world = World::default();
+    let (program, albedo, normal) = (world.spawn(), world.spawn(), world.spawn());
+    let layered = LayeredMaterial {
+        mtd: "M[ARSN]".into(),
+        definition: MaterialDefinition {
+            shader: "N:\\NTC\\data\\Material\\mtd\\GXFlver_ColDifSpcBumpIbl.spx".into(),
+            description: String::new(),
+            parameters: vec![
+                Parameter {
+                    name: "g_DiffuseMapColor".into(),
+                    value: Value::Float(vec![0.5, 0.25, 1.]),
+                },
+                Parameter {
+                    name: "g_AlphaRef".into(),
+                    value: Value::Int(vec![0, 0]),
+                },
+            ],
+            textures: vec![texture_kind("g_DiffuseTexture"), texture_kind("g_BumpmapTexture")],
+            block_lengths: Vec::new(),
+        },
+        bindings: BTreeMap::from([
+            ("g_DiffuseTexture".into(), bound("brick_a", [2., 3.], [None; 2])),
+            ("g_BumpmapTexture".into(), bound("brick_n", [4., 5.], [None; 2])),
+        ]),
+    };
+    assert_eq!(layered.gbuffer_program(), "GXFlver_ColDifSpcBumpIbl_Gbuf.ppo");
+    let mut asked = Vec::new();
+    let resolution = resolve(
+        &shader,
+        program,
+        &layered,
+        None,
+        Unbound::Preview,
+        &mut |stem, srgb| {
+            asked.push((stem.to_owned(), srgb));
+            Ok(match stem {
+                "brick_a" => Some(albedo),
+                "brick_n" => Some(normal),
+                _ => None,
+            })
+        },
+    )
+    .unwrap();
+    // the albedo as a colour image, the normal map as data
+    asked.sort();
+    assert_eq!(
+        asked,
+        [("brick_a".to_owned(), true), ("brick_n".to_owned(), false)]
+    );
+    let source = |name: &str| {
+        let resource = shader
+            .interface
+            .resources
+            .iter()
+            .find(|r| r.provenance.name == name)
+            .unwrap();
+        resolution
+            .stage
+            .textures
+            .iter()
+            .find(|t| t.resource == resource.id)
+            .unwrap()
+            .source
+            .clone()
+    };
+    assert!(
+        matches!(source("g_DiffuseTexture"), TextureSource::Texture { texture, .. } if texture == albedo)
+    );
+    assert!(
+        matches!(source("g_BumpmapTexture"), TextureSource::Texture { texture, .. } if texture == normal)
+    );
+    assert!(matches!(
+        source("g_DitherTexture"),
+        TextureSource::Default { value, .. } if value == [0.5; 4]
+    ));
+    // the tiling of t0 and t3 (the registers) from the bindings' scales, the colour from g_DiffuseMapColor
+    let tiling: Vec<_> = constants(&resolution.stage, &shader)
+        .into_iter()
+        .filter(|c| c.1 == "FC_TextureTilingScale")
+        .map(|c| (c.2, c.4))
+        .collect();
+    assert_eq!(
+        tiling,
+        [(0, bits(&[2., 3., 0., 0.])), (48, bits(&[4., 5., 0., 0.]))]
+    );
+}

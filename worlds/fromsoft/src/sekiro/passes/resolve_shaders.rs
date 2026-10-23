@@ -260,8 +260,13 @@ fn run(
         let bundle = world
             .get::<MaterialShader>(material_entity)
             .and_then(|m| world.get::<ShaderBundle>(m.0));
+        // `<shader>_Gbuf.vpo`; the fixed-function shaders spell it `_GBuf`
         let vertex = bundle
-            .and_then(|b| b.program(&format!("{}_Gbuf{}.vpo", b.name, if skin { "_Skin" } else { "" })))
+            .and_then(|b| {
+                ["Gbuf", "GBuf"].iter().find_map(|g| {
+                    b.program(&format!("{}_{g}{}.vpo", b.name, if skin { "_Skin" } else { "" }))
+                })
+            })
             .map(|p| (p.name.clone(), p.code.clone()));
         if skin {
             t.skinned += 1;

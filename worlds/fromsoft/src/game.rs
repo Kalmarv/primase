@@ -92,6 +92,16 @@ impl Game {
         }
     }
 
+    /// The binder holding the programs of the fixed-function material shaders, which have no bundle of their own: Sekiro's
+    /// `GXFlver_*` family (`/shader/gxflvershader.shaderbnd.dcx`: DXBC programs by file name, one per permutation of
+    /// the shader's variant, effect (`Bloody`, `Burn`, `Cm`, `Df`, `Cloth`, `Phantom`, `ZFeather`, `Decal[A]`) and pass).
+    pub fn fixed_function_binder(self) -> Option<&'static str> {
+        match self {
+            Game::Sekiro => Some("/shader/gxflvershader.shaderbnd.dcx"),
+            Game::EldenRing => None,
+        }
+    }
+
     /// The container format of the game's compiled shader programs: Shader Model 5 DXBC (Sekiro), Shader Model 6 DXIL
     /// (Elden Ring).
     pub fn shader_format(self) -> primase_core::shader::ShaderFormat {
