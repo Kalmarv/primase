@@ -1,9 +1,9 @@
 //! The glTF reader. A character written by the writer reads back to the same motion: posed by the clip at several
 //! times, every vertex where the original's is (the writer's node tree read as a skeleton with the rig's root above
-//! it). Against the Khronos glTF-Sample-Assets (`PRIMASE_KHRONOS_GLTF`, third-party files with pygltflib's reading of
-//! each in `expected.json`): every model reads and verifies; skins' joints and inverse bind matrices are the
-//! document's; each channel on a joint is a clip channel, each `weights` channel one per morph target, the rest
-//! counted; mesh default weights are the morph targets' defaults.
+//! it). Against the Khronos glTF-Sample-Assets (`oracles.khronos.general/sample-assets`, third-party files with
+//! pygltflib's reading of each in `expected.json`): every model reads and verifies; skins' joints and inverse bind
+//! matrices are the document's; each channel on a joint is a clip channel, each `weights` channel one per morph target,
+//! the rest counted; mesh default weights are the morph targets' defaults.
 
 #![allow(clippy::unwrap_used)]
 
@@ -276,7 +276,11 @@ fn a_written_character_reads_back_to_the_same_motion() {
 
 /// The model folders of the Khronos fixtures, if the variable is set.
 fn khronos() -> Vec<std::path::PathBuf> {
-    let Some(dir) = primase_testdata::real_data("PRIMASE_KHRONOS_GLTF") else {
+    let Some(dir) = primase_testdata::oracle(
+        primase_testdata::OracleSet::Khronos,
+        primase_testdata::Game::General,
+        "sample-assets",
+    ) else {
         return Vec::new();
     };
     let mut out: Vec<_> = std::fs::read_dir(dir)
@@ -560,7 +564,13 @@ fn khronos_models_pose_as_blender_poses_them() {
             }
         }
     }
-    if primase_testdata::real_data("PRIMASE_KHRONOS_GLTF").is_some() {
+    if primase_testdata::oracle(
+        primase_testdata::OracleSet::Khronos,
+        primase_testdata::Game::General,
+        "sample-assets",
+    )
+    .is_some()
+    {
         assert!(checked > 0, "no blender_pose.json beside the fixtures");
     }
 }

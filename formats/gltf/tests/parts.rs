@@ -2,7 +2,7 @@
 //! reader, divided by `partition-by-asset` (after `select-assets`, or not), each part placed by `place-assets` and
 //! written by `GlbParts`: one file per asset named by its source, the loose content in a part of its own, what the
 //! glTF does not write told once over the parts, two parts that would share a file refused; the Khronos validator on
-//! every file when `PRIMASE_GLTF_VALIDATOR` is set.
+//! every file when `tools.gltf_validator` is set.
 #![allow(clippy::unwrap_used)]
 
 mod common;
@@ -190,7 +190,7 @@ fn two_parts_sharing_a_file_name_are_refused() {
 /// Oracle: the Khronos glTF-Validator on every file: no errors.
 #[test]
 fn khronos_validator_accepts_each_part() {
-    let Some(validator) = primase_testdata::real_data("PRIMASE_GLTF_VALIDATOR") else {
+    let Some(validator) = primase_testdata::tool(primase_testdata::Tool::GltfValidator) else {
         return;
     };
     let m = manager();

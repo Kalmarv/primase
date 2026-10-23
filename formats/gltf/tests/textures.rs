@@ -3,11 +3,11 @@
 //! - A hand-worked document: one PNG image sampled as base colour and as a normal map (two texture entities, one per
 //!   use), a JPEG, a KTX2 and an unknown image refused by name, a sampler, a texture transform; read, lowered by the
 //!   pass manager with its checks on, and every value compared with what the document states.
-//! - T1 (`PRIMASE_KHRONOS_GLTF`, third-party files): every image of every fixture is identified as the Khronos
-//!   validator and Pillow identify it (`validator.json`'s `info.resources`, and `images.json`, which `dump_images.py`
-//!   writes with Pillow): a PNG is read at the size the validator reports with exactly the RGBA8 pixels Pillow decodes
-//!   (sha256 of the rows), a JPEG is refused by name, and each lowered material states the factors its JSON states
-//!   (defaults per the specification) with a texture exactly where its image was read.
+//! - T1 (`oracles.khronos.general/sample-assets`, third-party files): every image of every fixture is identified as the
+//!   Khronos validator and Pillow identify it (`validator.json`'s `info.resources`, and `images.json`, which
+//!   `dump_images.py` writes with Pillow): a PNG is read at the size the validator reports with exactly the RGBA8
+//!   pixels Pillow decodes (sha256 of the rows), a JPEG is refused by name, and each lowered material states the
+//!   factors its JSON states (defaults per the specification) with a texture exactly where its image was read.
 
 #![allow(clippy::unwrap_used)]
 
@@ -177,7 +177,11 @@ fn validator_image(validator: &Value, i: usize) -> (String, u64, u64) {
 
 #[test]
 fn t1_khronos_images_and_materials_read_as_the_validator_and_pillow_see_them() {
-    let Some(root) = primase_testdata::real_data("PRIMASE_KHRONOS_GLTF") else {
+    let Some(root) = primase_testdata::oracle(
+        primase_testdata::OracleSet::Khronos,
+        primase_testdata::Game::General,
+        "sample-assets",
+    ) else {
         return;
     };
     let mut models: Vec<_> = std::fs::read_dir(root)

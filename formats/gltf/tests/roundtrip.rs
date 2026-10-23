@@ -1,6 +1,7 @@
-//! Writer gates: write the synthetic world, read the GLB back with our strict reader, compare everything with the
-//! world (geometry bit for bit, transforms bit for bit, baked mirrors and shears against independent properties,
-//! materials, textures, extras, report counts); a non-rigid placement refused; determinism; the Khronos validator when `PRIMASE_GLTF_VALIDATOR` is set.
+//! Writer gates: write the synthetic world, read the GLB back with our strict reader, compare everything with the world
+//! (geometry bit for bit, transforms bit for bit, baked mirrors and shears against independent properties, materials,
+//! textures, extras, report counts); a non-rigid placement refused; determinism; the Khronos validator when
+//! `tools.gltf_validator` is set.
 
 // Test code: helpers outside #[test] functions unwrap too (clippy.toml allows it only inside them).
 #![allow(clippy::unwrap_used)]
@@ -684,7 +685,7 @@ fn load_mesh_files_restores_meshes() {
 /// purpose: readers generate them, and game meshes often have none).
 #[test]
 fn khronos_validator_accepts_output() {
-    let Some(validator) = primase_testdata::real_data("PRIMASE_GLTF_VALIDATOR") else {
+    let Some(validator) = primase_testdata::tool(primase_testdata::Tool::GltfValidator) else {
         return;
     };
     let dir = scratch("validator");

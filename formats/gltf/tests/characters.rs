@@ -1,6 +1,6 @@
 //! Characters in glTF: a rig as a node tree, a skinned placement with its skin (palettes unified, a whole-bound
 //! primitive spelled out), morph targets and an occurrence's weights, a clip as an animation; what glTF has no form for
-//! counted; weights that do not sum to 1 refused; the Khronos validator when `PRIMASE_GLTF_VALIDATOR` is set.
+//! counted; weights that do not sum to 1 refused; the Khronos validator when `tools.gltf_validator` is set.
 
 #![allow(clippy::unwrap_used)]
 
@@ -359,7 +359,7 @@ fn unnormalised_weights_are_refused_and_a_rigless_placement_is_counted() {
 /// influences name joint 0, as it expects).
 #[test]
 fn khronos_validator_accepts_characters() {
-    let Some(validator) = primase_testdata::real_data("PRIMASE_GLTF_VALIDATOR") else {
+    let Some(validator) = primase_testdata::tool(primase_testdata::Tool::GltfValidator) else {
         return;
     };
     let dir = scratch("characters-validator");

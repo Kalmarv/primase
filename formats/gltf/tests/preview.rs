@@ -2,7 +2,7 @@
 //! head's mesh, a skin tone as a material variant, a sword on a socket. It is written by `PreviewParts` through a
 //! conversion with every choice open; the manifest is checked against the GLB's own JSON (the nodes, meshes and
 //! joints it points to), round-tripped, replayed as a recipe, and each GLB goes through the Khronos validator when
-//! `PRIMASE_GLTF_VALIDATOR` is set.
+//! `tools.gltf_validator` is set.
 #![allow(clippy::unwrap_used)]
 
 mod common;
@@ -647,7 +647,7 @@ fn a_recipe_then_resolve_state_equals_resolving_at_once() {
 /// meshes), and on the file of a resolved world: no errors.
 #[test]
 fn khronos_validator_accepts_each_preview_glb() {
-    let Some(validator) = primase_testdata::real_data("PRIMASE_GLTF_VALIDATOR") else {
+    let Some(validator) = primase_testdata::tool(primase_testdata::Tool::GltfValidator) else {
         return;
     };
     let (dir, _) = preview("preview-validator", wardrobe().w, "");
