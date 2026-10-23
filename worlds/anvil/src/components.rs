@@ -2,9 +2,6 @@
 
 use primase_core::{Component, Entity, World};
 
-use crate::read::entity::GrassSetup;
-use crate::read::grass::StoredGrassLibrary;
-
 /// A MeshShape's triangle geometry ([`crate::read::mesh_shape::Geometry`]) on its prototype: positions converted into
 /// core's frame through the frame the reader was given (stated by the program, as the shape's units and frame are not
 /// established), faces as position-index triangles (reversed when that frame mirrors, so their fronts stay), and each
@@ -208,7 +205,7 @@ impl Component for AnvilLods {
     }
 }
 
-/// A collision placement's RigidBody filter (`anvil.collision_filter`: [`crate::read::entity::CollisionFilter`]): its
+/// A collision placement's RigidBody filter (`anvil.collision_filter`; the reader's `CollisionFilter` reads it): its
 /// `QueryFlags` and two `CollisionLayerBits` as bit masks by the registry's slots
 /// ([`query`], [`layer`]), and its `IsGround` as stored (what it marks
 /// isn't established: fences, lights and steel sheets among its 33,960, docs/placement.md §19.3).
@@ -476,12 +473,132 @@ impl Component for AnvilGrassModel {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
-/// The grass system's setup (`anvil.grass`): the GrassComponent of `SETUP_GrassUS_NAT` as stored, and the
+/// A GrassModel's settings, as the registry's class stores them (docs/grass.md §2.2): the six f32, the bytes and the
+/// enum, the imposter shader levels, and the 23 bytes after them that the class list doesn't name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GrassModelSettings {
+    pub z_offset: f32,
+    pub height_scale_for_occlusion: f32,
+    pub terrain_normal_follower_ratio: f32,
+    pub root_height: f32,
+    pub softness: f32,
+    pub normal_bend_factor: f32,
+    pub visible_virtual_lod_count: u8,
+    pub texture_atlas_element_count: u8,
+    /// `RaycastTranslucency` (the enum `GrassModel::RaycastTranslucency`).
+    pub raycast_translucency: u32,
+    /// `ImposterStartShaderModelLodIndex` and the two after it: three bytes.
+    pub imposter_shader_start_model_lod_index: [u8; 3],
+    pub imposter_lookat_ratio: f32,
+    /// The 23 bytes that follow: a LOD table of 5 bytes (`00 01 02 03 03`), four f32 and 2 bytes. The four f32 are the
+    /// model's LOD switch distances in metres by the notes' reading by value: (0, 10, 20, 40) on 26 models, (0, 5, 10,
+    /// 20) on 16 and (0, 20, 40, 80) on 4 (counted over the 46 models).
+    pub unnamed: [u8; 23],
+}
+
+impl GrassModelSettings {
+    /// The f32 at `at` of the 23 unnamed bytes, 0 where it lies outside them.
+    fn unnamed_f32(&self, at: usize) -> f32 {
+        self.unnamed
+            .get(at..at.saturating_add(4))
+            .and_then(|w| <[u8; 4]>::try_from(w).ok())
+            .map_or(0.0, f32::from_le_bytes)
+    }
+    /// The four f32 after the LOD table in the unnamed bytes: the model's LOD switch distances in metres, by the
+    /// notes' reading by value.
+    pub fn switch_distances(&self) -> [f32; 4] {
+        [5, 9, 13, 17].map(|at| self.unnamed_f32(at))
+    }
+}
+
+/// One model of the library: its settings and its bounding volume.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredGrassModel {
+    pub id: u64,
+    pub settings: GrassModelSettings,
+    /// The BoundingVolume object's id, its six f32 (min and max) and the 24 bytes after them as stored.
+    pub bounds_id: u64,
+    pub bounds: [f32; 6],
+    pub bounds_rest: [u8; 24],
+}
+
+/// A rule: one model that may grow where its group is picked (a GrassPatternElement).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredGrassRule {
+    pub id: u64,
+    /// `GrassModelIndex`: the position in the setup's ManagedEntities (and the library's models). 0 to 50 occur;
+    /// 46 to 50 name no model.
+    pub model: u16,
+    pub tiling_log_count: u8,
+    pub density: f32,
+    pub tilt_factor: f32,
+    pub scaling_enabled: bool,
+    pub scale_a: f32,
+    pub scale_b: f32,
+    pub height_scaling_enabled: bool,
+    pub height_scale_a: f32,
+    pub height_scale_b: f32,
+    /// The field `63D19E01` (5.0 on 145 rules, 0.0 on 66, 2.5 on others): not named.
+    pub unnamed_f32: f32,
+    /// The 49 bytes after it as stored (a byte 100, a u16, ten f32 of 1.0 and six bytes).
+    pub unnamed: [u8; 49],
+}
+
+/// A group: the rules that apply where a ground sample picks it (a GrassPattern).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredGrassGroup {
+    pub id: u64,
+    pub rules: Vec<StoredGrassRule>,
+}
+
+/// A GrassPatternLibrary body as stored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredGrassLibrary {
+    pub models: Vec<StoredGrassModel>,
+    pub groups: Vec<StoredGrassGroup>,
+    /// The 256-byte table that follows the groups: the group of a material (`FF`: none; all but entry 255 on Riders
+    /// Republic's, whose entry 255 is 184).
+    pub table: [u8; 256],
+    /// The 187 bytes after the table, as stored (zeros).
+    pub rest: Vec<u8>,
+}
+
+/// The GrassComponent of `SETUP_GrassUS_NAT` as stored, less what only its reading needs: its ids, the inline
+/// GrassSettings' body as stored, the ManagedEntities and the library it names.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GrassSystemSetup {
+    /// The GrassComponent's own object id (its instance's).
+    pub id: u64,
+    /// The ClassID of the GrassPatternLibrary it names.
+    pub library: Option<u64>,
+    /// The inline GrassSettings object's id.
+    pub settings_id: u64,
+    /// Its body as stored: WorldExtent, WorldMinZ and WorldMaxZ (u32), the WorldBoundingBox (a BoundingVolume), then
+    /// `GrassVisibilityDistance` (a u16), 16 f32, four tables of 16 u16 (the LOD start distances by model class)
+    /// and the run of floats and bytes the notes did not assign to field names (docs/grass.md §2.1).
+    pub settings: Vec<u8>,
+    /// ManagedEntities: the GrassVisual Entities' ids, in order (a model's number is its position).
+    pub entities: Vec<u64>,
+}
+
+impl GrassSystemSetup {
+    /// The GrassSettings' `GrassVisibilityDistance` (metres: 250 on both copies), after its three u32 and its
+    /// BoundingVolume.
+    pub fn visibility_distance(&self) -> Option<u16> {
+        let at: usize = 12 + 8 + 4 + 24 + 4;
+        self.settings
+            .get(at..at.checked_add(2)?)
+            .and_then(|w| <[u8; 2]>::try_from(w).ok())
+            .map(u16::from_le_bytes)
+    }
+}
+
+/// The grass system's setup (`anvil.grass`): the GrassComponent of `SETUP_GrassUS_NAT` ([`GrassSystemSetup`]) and the
 /// GrassPatternLibrary it names (its models' settings, its groups of rules and its material table), on an entity of its
 /// own.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilGrass {
-    pub setup: GrassSetup,
+    pub setup: GrassSystemSetup,
     pub library: StoredGrassLibrary,
 }
 

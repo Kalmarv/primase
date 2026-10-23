@@ -4,10 +4,9 @@
 //! same options give the same plants and another seed others, `max-plants` is refused not truncated, and the setup, the
 //! models' placements and the rasters are consumed.
 use primase_anvil::components::{
-    AnvilGrass, AnvilGrassModel, AnvilTerrain, AnvilTerrainGroups, GroupTile, TerrainTile,
+    AnvilGrass, AnvilGrassModel, AnvilTerrain, AnvilTerrainGroups, GrassSystemSetup, GroupTile, TerrainTile,
 };
 use primase_anvil::passes::{CellPoint, Density, LowerAnvilGrass};
-use primase_anvil::read::entity::{GrassSetup, MeshInstance};
 use primase_anvil::read::grass::{
     GrassModelSettings, StoredGrassGroup, StoredGrassLibrary, StoredGrassModel, StoredGrassRule,
 };
@@ -66,28 +65,9 @@ fn library() -> StoredGrassLibrary {
     }
 }
 
-fn setup() -> GrassSetup {
-    let bounds = primase_anvil::read::entity::BoundingVolume {
+fn setup() -> GrassSystemSetup {
+    GrassSystemSetup {
         id: 0,
-        min: [0.0; 3],
-        max: [0.0; 3],
-        word: 0,
-    };
-    GrassSetup {
-        head: [0; 4],
-        object: None,
-        id: 0,
-        instance: MeshInstance {
-            id: 0,
-            instances: Vec::new(),
-            bounds,
-            reserved: [0; 16],
-            compiled: [0; 17],
-            material_infos: Vec::new(),
-            instance_bounds: Vec::new(),
-        },
-        instance_extra: Vec::new(),
-        tail: Vec::new(),
         library: None,
         settings_id: 0,
         settings: Vec::new(),

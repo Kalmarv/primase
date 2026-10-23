@@ -43,8 +43,8 @@ use crate::components::{
     AnvilBounds, AnvilCollisionFilter, AnvilCollisionOnly, AnvilCollisionShape, AnvilDataLayers,
     AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake, AnvilGrass, AnvilGrassModel,
     AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilWater, BoundTexture,
-    CollisionMaterialRef, DataLayerAction, DeferredDecal, MaterialBinding, MaterialValue, ShapeGeometry,
-    TextureFrom,
+    CollisionMaterialRef, DataLayerAction, DeferredDecal, GrassSystemSetup, MaterialBinding, MaterialValue,
+    ShapeGeometry, TextureFrom,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::ddecal::{
@@ -1326,7 +1326,13 @@ impl<'a> Placer<'a> {
                     self.world.insert(
                         g,
                         AnvilGrass {
-                            setup: (**setup).clone(),
+                            setup: GrassSystemSetup {
+                                id: setup.id,
+                                library: setup.library.map(|r| r.id),
+                                settings_id: setup.settings_id,
+                                settings: setup.settings.clone(),
+                                entities: setup.entities.clone(),
+                            },
                             library,
                         },
                     );
