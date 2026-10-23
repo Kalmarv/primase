@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use super::flat::{
-    AtomOp, BinOp, CvtOp, Executable, GlobalKind, LevelOp, Loc, MathOp, Op, Pick, Ptr, Reg, Res, St, UnOp,
-    WaveGather, WaveKind, WaveOp, WaveScan,
+    AtomOp, BinOp, CvtOp, Executable, GlobalKind, LevelOp, Loc, MathOp, Member, Op, Pick, Ptr, Reg, Res, St,
+    UnOp, WaveGather, WaveKind, WaveOp, WaveScan,
 };
 use super::mask::{Mask, Wide};
 use super::request::{
@@ -1024,11 +1024,25 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                     for l in 0..N {
                         if active.has(l) {
                             let mut members = Vec::with_capacity(result.len());
-                            for (s, n) in result {
-                                let mut r = [0u32; 4];
-                                r[..*n as usize]
-                                    .copy_from_slice(&self.regs[*s as usize * N + l][..*n as usize]);
-                                members.push(r);
+                            for member in result {
+                                match *member {
+                                    Member::Reg(s, n) => {
+                                        let mut r = [0u32; 4];
+                                        r[..n as usize]
+                                            .copy_from_slice(&self.regs[s as usize * N + l][..n as usize]);
+                                        members.push(r);
+                                    }
+                                    Member::Mem { word, count, width } => {
+                                        for k in 0..count as usize {
+                                            let at =
+                                                l * self.c.local_words + word as usize + k * width as usize;
+                                            let mut r = [0u32; 4];
+                                            r[..width as usize]
+                                                .copy_from_slice(&self.mem[at..at + width as usize]);
+                                            members.push(r);
+                                        }
+                                    }
+                                }
                             }
                             self.outs[l] = members;
                         }

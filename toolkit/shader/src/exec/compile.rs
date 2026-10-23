@@ -10,8 +10,8 @@ use naga::{
 };
 
 use super::flat::{
-    AtomOp, BinOp, CvtOp, Executable, GlobalDesc, GlobalKind, LevelOp, Loc, MathOp, Op, Pick, Ptr, Reg, Res,
-    St, UnOp, WaveGather, WaveKind, WaveOp, WaveScan,
+    AtomOp, BinOp, CvtOp, Executable, GlobalDesc, GlobalKind, LevelOp, Loc, MathOp, Member, Op, Pick, Ptr,
+    Reg, Res, St, UnOp, WaveGather, WaveKind, WaveOp, WaveScan,
 };
 use super::request::{Dim, ImageAtomicOp, QueryKind};
 use crate::{Program, ResourceId};
@@ -182,6 +182,10 @@ pub(super) fn compile(
     let mut op_of: Vec<Option<Op>> = vec![None; n_expr];
     let mut ptr_of: Vec<Option<Ptr>> = vec![None; n_expr];
     let mut agg_of: Vec<Option<Vec<(u32, u8)>>> = vec![None; n_expr];
+    // a whole array of a local, read as a value (words, element count, element width)
+    let mut mem_agg: Vec<Option<(u32, u32, u8)>> = vec![None; n_expr];
+    // the members of a structure that has array members kept in memory
+    let mut members_of: Vec<Option<Vec<Member>>> = vec![None; n_expr];
     let mut inits: Vec<(u32, Reg)> = Vec::new();
     let mut args: Vec<(u32, u8)> = Vec::new();
     // static load per expression (for fusion): (loc, n)
@@ -302,6 +306,21 @@ pub(super) fn compile(
                         }
                     }
                     agg_of[i] = Some(members);
+                    if components.iter().any(|c| mem_agg[c.index()].is_some()) {
+                        let mut list = Vec::new();
+                        for c in components {
+                            match (&mem_agg[c.index()], &agg_of[c.index()]) {
+                                (&Some((word, count, width)), _) => {
+                                    list.push(Member::Mem { word, count, width })
+                                }
+                                (None, Some(inner)) => {
+                                    list.extend(inner.iter().map(|&(s, n)| Member::Reg(s, n)))
+                                }
+                                (None, None) => list.push(Member::Reg(slot[c.index()], nlanes(*c))),
+                            }
+                        }
+                        members_of[i] = Some(list);
+                    }
                 }
             },
             E::Splat { size, value } => {
@@ -417,7 +436,8 @@ pub(super) fn compile(
                     dynamic: Some((slot[index.index()], stride, len)),
                 });
             }
-            E::FunctionArgument(a) if array_arg[*a as usize].is_some() => {}
+            // read by index, or returned whole
+            E::FunctionArgument(a) if array_arg[*a as usize].is_some() => mem_agg[i] = array_arg[*a as usize],
             E::FunctionArgument(a) => {
                 let Shape::V(_, n) = sh else {
                     return Err("aggregate argument".into());
@@ -445,6 +465,34 @@ pub(super) fn compile(
                     loc: Loc::Local(local_off[l.index()]),
                     dynamic: None,
                 })
+            }
+            // a whole array of a local, for a result that returns it
+            E::Load { pointer } if matches!(sh, Shape::Other) => {
+                let p = ptr_of[pointer.index()].ok_or("load through a non-pointer")?;
+                let (Loc::Local(word), None) = (p.loc, p.dynamic) else {
+                    return Err("load of an aggregate that is not a whole local".into());
+                };
+                let TypeInner::Pointer { base: t, .. } = inner(*pointer) else {
+                    return Err("load of an aggregate through a non-pointer".into());
+                };
+                let TypeInner::Array {
+                    base,
+                    size: naga::ArraySize::Constant(n),
+                    ..
+                } = &m.types[*t].inner
+                else {
+                    return Err("load of an aggregate that is not an array".into());
+                };
+                let width = words(m, *base)?;
+                if width > 4
+                    || !matches!(
+                        m.types[*base].inner,
+                        TypeInner::Scalar(_) | TypeInner::Vector { .. }
+                    )
+                {
+                    return Err("load of an array of anything but scalars and vectors".into());
+                }
+                mem_agg[i] = Some((word, n.get(), width as u8));
             }
             E::Load { pointer } => {
                 let Shape::V(_, n) = sh else {
@@ -808,6 +856,7 @@ pub(super) fn compile(
         op_of: &'a Vec<Option<Op>>,
         ptr_of: &'a Vec<Option<Ptr>>,
         agg_of: &'a Vec<Option<Vec<(u32, u8)>>>,
+        members_of: &'a Vec<Option<Vec<Member>>>,
         shape: &'a dyn Fn(Handle<E>) -> Result<Shape, String>,
         image: &'a dyn Fn(Handle<E>) -> Result<ImageRef, String>,
         ops: Vec<(u32, Op)>,
@@ -883,20 +932,22 @@ pub(super) fn compile(
                 Statement::Continue => out.push(St::Continue),
                 Statement::Kill => out.push(St::Kill),
                 Statement::Return { value } => {
-                    let mut members = Vec::new();
+                    let mut members: Vec<Member> = Vec::new();
                     if let Some(v) = value {
                         // a structure of members, or one vector or scalar
-                        let agg = match cx.agg_of[v.index()].clone() {
-                            Some(a) => a,
-                            None => match (cx.shape)(*v)? {
-                                Shape::V(_, n) => vec![(cx.slot[v.index()], n)],
+                        members = match (&cx.members_of[v.index()], &cx.agg_of[v.index()]) {
+                            (Some(list), _) => list.clone(),
+                            (None, Some(a)) => a.iter().map(|&(s, n)| Member::Reg(s, n)).collect(),
+                            (None, None) => match (cx.shape)(*v)? {
+                                Shape::V(_, n) => vec![Member::Reg(cx.slot[v.index()], n)],
                                 _ => return Err("return of a non-aggregate".into()),
                             },
                         };
-                        for (s, _) in &agg {
-                            cx.uses[*s as usize] += 1;
+                        for m in &members {
+                            if let Member::Reg(s, _) = m {
+                                cx.uses[*s as usize] += 1;
+                            }
                         }
-                        members = agg;
                     }
                     out.push(St::Return(members));
                 }
@@ -1200,10 +1251,11 @@ pub(super) fn compile(
         op_of: &op_of,
         ptr_of: &ptr_of,
         agg_of: &agg_of,
+        members_of: &members_of,
         shape: &shape,
         image: &image,
         ops: Vec::new(),
-        uses: vec![0; n_expr],
+        uses: vec![0; n_slots],
     };
     let mut body = block(&mut cx, &f.body)?;
     let mut ops = std::mem::take(&mut cx.ops);

@@ -248,6 +248,14 @@ pub(super) enum LevelOp {
     Gradient(u32, u32),
 }
 
+/// One member of a function's result: a register, or the elements of an array in the invocation's local memory (each
+/// element comes out as an entry of its own).
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Member {
+    Reg(u32, u8),
+    Mem { word: u32, count: u32, width: u8 },
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum St {
     Run(u32, u32),
@@ -331,8 +339,8 @@ pub(super) enum St {
     },
     Break,
     Continue,
-    /// Leave, with these members as the result (slot and lanes each, in the order of the interface's outputs).
-    Return(Vec<(u32, u8)>),
+    /// Leave, with these members as the result (in the order of the interface's outputs).
+    Return(Vec<Member>),
     Kill,
 }
 

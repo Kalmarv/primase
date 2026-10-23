@@ -299,3 +299,46 @@ fn a_geometry_program_is_a_function_of_a_primitive_returning_its_vertices() {
     }
     assert!(p.validate().is_err());
 }
+
+/// The geometry function runs for one primitive: the three input vertices come back as the output array, then the
+/// vertex count (3) and the strip starts (1, 0, 0); each array element is an entry of its own.
+#[test]
+fn the_geometry_function_returns_its_vertices_count_and_strip_starts() {
+    use primase_shader::exec::{Executable, Resources, Runner};
+    let p = geometry();
+    let exe = Executable::function(&p, "main").unwrap();
+    let bits = |x: [f32; 4]| x.map(f32::to_bits);
+    let vertices = [
+        bits([1.0, 2.0, 3.0, 4.0]),
+        bits([5.0, 6.0, 7.0, 8.0]),
+        bits([9.0, 10.0, 11.0, 12.0]),
+    ];
+    // the three vertices' COLOR0, SV_PrimitiveID, SV_GSInstanceID
+    let registers = [vertices[0], vertices[1], vertices[2], [7, 0, 0, 0], [0, 0, 0, 0]];
+    let resources = Resources::default();
+    let bound = exe.bind_resources(&resources).unwrap();
+    struct None_;
+    impl primase_shader::exec::Backend for None_ {
+        fn sample(
+            &mut self,
+            _: primase_shader::exec::ImageSample<primase_shader::exec::Element>,
+        ) -> Result<[f32; 4], String> {
+            Err("none".into())
+        }
+    }
+    let mut backend = None_;
+    let mut runner = Runner::<1>::new(&exe, &bound, &mut backend, None);
+    let [out] = runner.run([&registers]).unwrap();
+    assert_eq!(
+        out.values,
+        [
+            vertices[0],
+            vertices[1],
+            vertices[2],
+            [3, 0, 0, 0],
+            [1, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ]
+    );
+}
