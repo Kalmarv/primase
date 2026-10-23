@@ -622,15 +622,31 @@ impl Builder<'_> {
             return Ok(p.clone());
         }
         let v = self.player.decode(r)?;
-        let f = |k: &str| v.get(k).and_then(Value::as_f32).unwrap_or(0.0);
-        let i = |k: &str| v.get(k).and_then(Value::as_i64).unwrap_or(0);
+        // every field is required: one missing, or of another type, is an error naming it and the object
+        let missing = |k: &str, of: &str| {
+            crate::invalid(format!("PhysicMaterial {}:{}: no {of} {k}", r.file, r.path_id))
+        };
+        let f = |k: &str| {
+            v.get(k)
+                .and_then(Value::as_f32)
+                .ok_or_else(|| missing(k, "number"))
+        };
+        let i = |k: &str| {
+            v.get(k)
+                .and_then(Value::as_i64)
+                .ok_or_else(|| missing(k, "integer"))
+        };
         let p = UnityPhysicMaterial {
-            name: v.get("m_Name").and_then(Value::as_str).unwrap_or("").to_owned(),
-            dynamic_friction: f("m_DynamicFriction"),
-            static_friction: f("m_StaticFriction"),
-            bounciness: f("m_Bounciness"),
-            friction_combine: i("m_FrictionCombine"),
-            bounce_combine: i("m_BounceCombine"),
+            name: v
+                .get("m_Name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| missing("m_Name", "string"))?
+                .to_owned(),
+            dynamic_friction: f("m_DynamicFriction")?,
+            static_friction: f("m_StaticFriction")?,
+            bounciness: f("m_Bounciness")?,
+            friction_combine: i("m_FrictionCombine")?,
+            bounce_combine: i("m_BounceCombine")?,
         };
         self.physic_materials.insert(r.clone(), p.clone());
         Ok(p)
