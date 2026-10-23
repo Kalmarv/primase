@@ -348,16 +348,38 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
         Ok(())
     }
 
+    /// Where local word `word` of lane `lane` is: the words outermost and the lanes innermost, as in the registers.
+    #[inline(always)]
+    fn local(word: usize, lane: usize) -> usize {
+        word * N + lane
+    }
+    /// The first local word of `n` from `word`, refusing words past the program's locals.
+    #[inline(always)]
+    fn locals(&self, word: usize, n: usize) -> Result<usize, String> {
+        if word + n > self.c.local_words {
+            return Err("local index out of range".into());
+        }
+        Ok(word)
+    }
+    /// Lane `lane`'s local words `at..at + n`.
+    fn read_locals(&self, lane: usize, at: usize, n: usize) -> Vec<u32> {
+        (at..at + n).map(|w| self.mem[Self::local(w, lane)]).collect()
+    }
+    /// Lane `lane`'s local words from `at` set to `words`.
+    fn write_locals(&mut self, lane: usize, at: usize, words: &[u32]) {
+        for (k, w) in words.iter().enumerate() {
+            self.mem[Self::local(at + k, lane)] = *w;
+        }
+    }
+
     fn mem_get(&mut self, loc: Loc, lane: usize, extra: u32, n: u8) -> Result<Reg, String> {
         let mut r = [0u32; 4];
         match loc {
             Loc::Local(o) => {
-                let base = lane * self.c.local_words + (o + extra) as usize;
-                let s = self
-                    .mem
-                    .get(base..base + n as usize)
-                    .ok_or("local index out of range")?;
-                r[..n as usize].copy_from_slice(s);
+                let base = self.locals((o + extra) as usize, n as usize)?;
+                for (i, w) in r.iter_mut().take(n as usize).enumerate() {
+                    *w = self.mem[Self::local(base + i, lane)];
+                }
             }
             Loc::Elem(g, o, pick) => {
                 let base = (o + extra) as usize;
@@ -420,12 +442,10 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
     fn mem_put(&mut self, loc: Loc, lane: usize, extra: u32, n: u8, v: Reg) -> Result<(), String> {
         match loc {
             Loc::Local(o) => {
-                let base = lane * self.c.local_words + (o + extra) as usize;
-                let s = self
-                    .mem
-                    .get_mut(base..base + n as usize)
-                    .ok_or("local index out of range")?;
-                s.copy_from_slice(&v[..n as usize]);
+                let base = self.locals((o + extra) as usize, n as usize)?;
+                for (i, w) in v.iter().take(n as usize).enumerate() {
+                    self.mem[Self::local(base + i, lane)] = *w;
+                }
                 Ok(())
             }
             Loc::Elem(g, o, pick) => {
@@ -511,6 +531,37 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
             let (dst, op) = &c.ops[k as usize];
             let dst = *dst as usize * N;
             match op {
+                // a local's words, at offsets the compiler checked: read straight from every lane's memory
+                Op::Load {
+                    loc: Loc::Local(o),
+                    n,
+                } => {
+                    let (base, n) = (self.locals(*o as usize, *n as usize)?, *n as usize);
+                    each!(active, l, {
+                        let mut r = [0u32; 4];
+                        for (i, w) in r.iter_mut().take(n).enumerate() {
+                            *w = self.mem[Self::local(base + i, l)];
+                        }
+                        self.regs[dst + l] = r;
+                    })
+                }
+                Op::LoadLanes {
+                    loc: Loc::Local(o),
+                    offs,
+                    n,
+                } => {
+                    let (o, n) = (*o as usize, *n as usize);
+                    for &k in &offs[..n] {
+                        self.locals(o + k as usize, 1)?;
+                    }
+                    each!(active, l, {
+                        let mut r = [0u32; 4];
+                        for (w, &k) in r.iter_mut().zip(&offs[..n]) {
+                            *w = self.mem[Self::local(o + k as usize, l)];
+                        }
+                        self.regs[dst + l] = r;
+                    })
+                }
                 Op::Load { loc, n } => each!(active, l, {
                     self.regs[dst + l] = self.mem_get(*loc, l, 0, *n)?;
                 }),
@@ -672,7 +723,8 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                         if active.has(l) {
                             for k in 0..*words {
                                 let w = self.mem_get(*src, l, k, 1)?[0];
-                                self.mem[l * self.c.local_words + (*dst + k) as usize] = w;
+                                let at = self.locals((*dst + k) as usize, 1)?;
+                                self.mem[Self::local(at, l)] = w;
                             }
                         }
                     }
@@ -981,6 +1033,25 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
             }
             match st {
                 St::Run(lo, hi) => self.ops(*lo, *hi, active)?,
+                St::Store {
+                    loc: Loc::Local(o),
+                    src,
+                    n,
+                } => {
+                    let (base, n, src) = (
+                        self.locals(*o as usize, *n as usize)?,
+                        *n as usize,
+                        *src as usize * N,
+                    );
+                    for l in 0..N {
+                        if active.has(l) {
+                            let v = self.regs[src + l];
+                            for (i, w) in v.iter().take(n).enumerate() {
+                                self.mem[Self::local(base + i, l)] = *w;
+                            }
+                        }
+                    }
+                }
                 St::Store { loc, src, n } => {
                     for l in 0..N {
                         if active.has(l) {
@@ -1323,8 +1394,8 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                             (word(0), word(1), word(2), word(3), word(4));
                         let (origin, direction) = (vec3(5), vec3(7));
                         let (t_min, t_max) = (f(word(6)), f(word(8)));
-                        let at = l * self.c.local_words + payload.0 as usize;
-                        let mut words = self.mem[at..at + payload.1 as usize].to_vec();
+                        let at = payload.0 as usize;
+                        let mut words = self.read_locals(l, at, payload.1 as usize);
                         self.sampler.trace_ray(super::request::TraceRay {
                             scene: *scene,
                             flags,
@@ -1338,7 +1409,7 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                             t_max,
                             payload: &mut words,
                         })?;
-                        self.mem[at..at + payload.1 as usize].copy_from_slice(&words);
+                        self.write_locals(l, at, &words);
                     }
                 }
                 St::RtReport {
@@ -1351,14 +1422,14 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                         if !active.has(l) {
                             continue;
                         }
-                        let at = l * self.c.local_words + attributes.0 as usize;
-                        let mut words = self.mem[at..at + attributes.1 as usize].to_vec();
+                        let at = attributes.0 as usize;
+                        let mut words = self.read_locals(l, at, attributes.1 as usize);
                         let accepted = self.sampler.report_hit(super::request::ReportHit {
                             t: f(self.regs[*t as usize * N + l][0]),
                             hit_kind: self.regs[*kind as usize * N + l][0],
                             attributes: &mut words,
                         })?;
-                        self.mem[at..at + attributes.1 as usize].copy_from_slice(&words);
+                        self.write_locals(l, at, &words);
                         if let Some(r) = result {
                             self.regs[*r as usize * N + l] = [u32::from(accepted); 4];
                         }
@@ -1369,13 +1440,13 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                         if !active.has(l) {
                             continue;
                         }
-                        let at = l * self.c.local_words + parameter.0 as usize;
-                        let mut words = self.mem[at..at + parameter.1 as usize].to_vec();
+                        let at = parameter.0 as usize;
+                        let mut words = self.read_locals(l, at, parameter.1 as usize);
                         self.sampler.call_shader(super::request::CallShader {
                             index: self.regs[*index as usize * N + l][0],
                             parameter: &mut words,
                         })?;
-                        self.mem[at..at + parameter.1 as usize].copy_from_slice(&words);
+                        self.write_locals(l, at, &words);
                     }
                 }
                 St::RqGenerate { q, t } => {
@@ -1509,11 +1580,11 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                                         word, count, width, ..
                                     } => {
                                         for k in 0..count as usize {
-                                            let at =
-                                                l * self.c.local_words + word as usize + k * width as usize;
+                                            let at = word as usize + k * width as usize;
                                             let mut r = [0u32; 4];
-                                            r[..width as usize]
-                                                .copy_from_slice(&self.mem[at..at + width as usize]);
+                                            for (i, w) in r.iter_mut().take(width as usize).enumerate() {
+                                                *w = self.mem[Self::local(at + i, l)];
+                                            }
                                             members.push(r);
                                         }
                                     }
@@ -1552,6 +1623,7 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
         }
         self.steps = 0;
         self.lane_steps = [0; N];
+        self.mem.fill(0);
         self.samples = [0; N];
         self.killed = M::none();
         self.queries.clear();
@@ -1572,18 +1644,17 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                     self.regs[*s as usize * N + l] = args[l][self.c.arg_at[i]];
                 }
             }
-            for w in self.mem[l * self.c.local_words..(l + 1) * self.c.local_words].iter_mut() {
-                *w = 0;
-            }
             for &(at, off, count, width) in &self.c.array_args {
                 for k in 0..count as usize {
-                    let base = l * self.c.local_words + off as usize + k * width as usize;
-                    self.mem[base..base + width as usize].copy_from_slice(&args[l][at + k][..width as usize]);
+                    let base = off as usize + k * width as usize;
+                    for (i, w) in args[l][at + k][..width as usize].iter().enumerate() {
+                        self.mem[Self::local(base + i, l)] = *w;
+                    }
                 }
             }
             for &(at, off, words) in &self.c.pointer_args {
                 for w in 0..words as usize {
-                    self.mem[l * self.c.local_words + off as usize + w] = args[l][at + w / 4][w % 4];
+                    self.mem[Self::local(off as usize + w, l)] = args[l][at + w / 4][w % 4];
                 }
             }
         }
@@ -1595,10 +1666,7 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
             pointees: c
                 .pointer_args
                 .iter()
-                .map(|&(_, off, words)| {
-                    let at = l * c.local_words + off as usize;
-                    self.mem[at..at + words as usize].to_vec()
-                })
+                .map(|&(_, off, words)| self.read_locals(l, off as usize, words as usize))
                 .collect(),
             decision: self.decisions[l],
             values: std::mem::take(&mut self.outs[l]),
@@ -2092,8 +2160,8 @@ impl<'a, const N: usize> Runner<'a, N, Wide> {
                 };
                 self.regs[*slot as usize * N + l] = value;
             }
-            for w in self.mem[l * c.local_words..(l + 1) * c.local_words].iter_mut() {
-                *w = 0;
+            for w in 0..c.local_words {
+                self.mem[Self::local(w, l)] = 0;
             }
         }
         self.block(&c.body, self.group)?;
