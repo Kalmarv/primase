@@ -9,6 +9,7 @@ pub mod emevd;
 pub mod flver;
 pub mod game;
 mod keys;
+pub mod matbin;
 pub mod materials;
 pub mod metaparam;
 pub mod msb;

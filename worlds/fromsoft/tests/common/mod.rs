@@ -100,16 +100,16 @@ pub fn image_passes(world: &mut primase_core::World, pipeline: &str) -> primase_
     report
 }
 
-/// A configured game's archives (`PRIMASE_SEKIRO_DIR`, or `PRIMASE_ELDEN_DIR` with `PRIMASE_ELDEN_KEYS`), or `None`
-/// when the configuration lacks them.
+/// A configured game's archives (`installs.sekiro`, or `installs.elden` with `keys.elden`), or `None` when the
+/// configuration lacks them.
 pub fn archive(
     game: primase_fromsoft::Game,
 ) -> Result<Option<primase_fromsoft::Archive>, Box<dyn std::error::Error>> {
     use primase_fromsoft::{Archive, Game, Keys};
-    use primase_testdata::real_data;
+    use primase_testdata::{Game as Data, install, keys};
     Ok(match game {
-        Game::Sekiro => real_data("PRIMASE_SEKIRO_DIR").map(Archive::open).transpose()?,
-        Game::EldenRing => match (real_data("PRIMASE_ELDEN_DIR"), real_data("PRIMASE_ELDEN_KEYS")) {
+        Game::Sekiro => install(Data::Sekiro).map(Archive::open).transpose()?,
+        Game::EldenRing => match (install(Data::Elden), keys(Data::Elden)) {
             (Some(dir), Some(keys)) => Some(Archive::open_game(dir, game, &Keys::from_folder(keys, game)?)?),
             _ => None,
         },
