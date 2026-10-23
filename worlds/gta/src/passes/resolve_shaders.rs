@@ -721,10 +721,25 @@ fn output_bindings(
 pub fn engine_reason(name: &str) -> Option<&'static str> {
     Some(match name {
         "globalScalars2" => {
-            "engine frame scalars: lane y divides the clip depth of a see-through fade (VS_Transform_SeeThrough) and lane z is subtracted from a squared-distance fade of the vertex colour (VS_TransformD); no game-free meaning established"
+            "engine frame scalars: in the vertex programs lane y divides the clip depth of a see-through fade (VS_Transform_SeeThrough) and lane z is subtracted from a squared-distance fade of the vertex colour (VS_TransformD); in the pixel programs lane z is multiplied as 1 - z into a wetness term and stored as the top bit of the state byte of target 0 w (floor(128 z)); no game-free meaning established"
         }
         "globalScalars" => {
-            "engine frame scalars: lanes y and z are passed on to the pixel stage (VS_decalFx); no game-free meaning established"
+            "engine frame scalars: lanes y and z are passed on to the pixel stage (VS_decalFx); in the pixel programs lane x multiplies the alpha (the diffuse alpha times the vertex alpha, before the alpha test), and lanes z and y multiply the vertex colour's x and y into the ambient terms of targets 0 w and 3; no game-free meaning established"
+        }
+        "gStippleAlpha" => {
+            "a word whose low two bits are bits 6 and 7 of the state byte the G-buffer programs write to target 0 w ((word << 6) & 192); no game-free meaning established"
+        }
+        "gTemporalAntiGhosting" => {
+            "a flag: the state byte the G-buffer programs write to target 0 w is 23 where the word is non-zero and 7 where it is zero (bit 4); no game-free meaning established"
+        }
+        "gDynamicBakesAndWetness" => {
+            "lanes x and y are the constant and the up-facing coefficient of a scale, y * (0.5 + 0.5 n.z) + x, that multiplies globalScalars z and the vertex colour into the state byte of target 0 w (the ped programs); lane z scales a wetness term (it multiplies the up-facing term that darkens the albedo and raises the specular, the material's wetnessMultiplier applying after, in the parallax programs) and the blend between a dirt texture's channels (the vehicle programs); no game-free meaning established"
+        }
+        "gLightArtificialIntAmbient0" => {
+            "lanes x, y and z are a colour the lighting passes blend with five neighbouring ambient colours (natural, interior and exterior, two each); lane w is added to the vertex colour's x scaled by globalScalars z and stored in target 3 x by the G-buffer programs; no game-free meaning established"
+        }
+        "gTransparencyAASamples" => {
+            "a scalar the hair and foliage alpha-clip programs test: where positive they take alpha 1 and skip the diffuse texture's alpha; no game-free meaning established"
         }
         "gClothVertexStride" => {
             "lane z: where non-zero, the vertex position is read from a structured buffer at (z * vertex index) >> 2 instead of the mesh stream (the cloth programs); that buffer is not in the vocabulary"
