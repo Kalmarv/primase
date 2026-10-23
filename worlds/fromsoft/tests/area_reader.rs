@@ -2,7 +2,7 @@
 //! `fromsoft`, every placed prototype with geometry boxed by its stored model's world box, and the whole world as one
 //! part written with every placement the read kept.
 //!
-//! Needs `PRIMASE_SEKIRO_DIR` and `PRIMASE_OODLE6`.
+//! Needs `installs.sekiro` and `tools.oodle6`.
 #![allow(clippy::unwrap_used)]
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -15,7 +15,7 @@ use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::rigid::SourceModel;
 use primase_fromsoft::sekiro::convert::AreaReader;
 use primase_fromsoft::sekiro::{self, world_bounds};
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install, tool};
 mod common;
 
 /// Every part's placements.
@@ -35,7 +35,7 @@ impl Writer for Placements {
 
 #[test]
 fn slice_a_reads_through_the_convert_loop() {
-    let (Some(root), Some(dll)) = (real_data("PRIMASE_SEKIRO_DIR"), real_data("PRIMASE_OODLE6")) else {
+    let (Some(root), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
         return;
     };
     let dll = common::oodle(dll).unwrap();
@@ -92,7 +92,7 @@ fn slice_a_reads_through_the_convert_loop() {
 /// report lists): slice A, read and loaded whole, holds no other name, and every declared name.
 #[test]
 fn the_reader_declares_every_name_it_emits() {
-    let (Some(root), Some(dll)) = (real_data("PRIMASE_SEKIRO_DIR"), real_data("PRIMASE_OODLE6")) else {
+    let (Some(root), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
         return;
     };
     let dll = common::oodle(dll).unwrap();

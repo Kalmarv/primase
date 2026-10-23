@@ -10,7 +10,7 @@ use primase_fromsoft::{
     materials::{Binding, LayeredMaterial, stem},
     mtd::MaterialDefinition,
 };
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, oracle};
 use primase_texcodec::{Decoder, TexDecoder};
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
@@ -25,7 +25,7 @@ fn decode_error(e: impl std::fmt::Display) -> primase_fromsoft::Error {
 
 #[test]
 fn five_permutation_pilot() -> Result<()> {
-    let Some(root) = real_data("PRIMASE_FROMSOFT_LAYER_PILOT") else {
+    let Some(root) = oracle(OracleSet::Baseline, Game::Sekiro, "layer-pilot") else {
         return Ok(());
     };
     let cases: Value = serde_json::from_slice(&std::fs::read(root.join("cases.json"))?)?;

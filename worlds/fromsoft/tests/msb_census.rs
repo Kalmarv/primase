@@ -1,13 +1,13 @@
 //! An area's MSB as stored, against an independent reading: SoulsFormats' parts of the same area
-//! (`PRIMASE_FROMSOFT_RIGID_ORACLE`'s parts.jsonl, every map piece and object part). Each part by name: its kind and
-//! model, and its position, rotation (degrees) and scale bit for bit. The matrices derived from them are checked
-//! against the same dump by sekiro_scene.rs. Not covered here: other part kinds (enemies, collisions, dummies) and
-//! map offsets, which the dump doesn't hold (an open coverage gap, CONTRIBUTING's real-data table). Elden Ring's
-//! layouts are checked whole, every part of every kind, against SoulsFormatsNEXT's reading of them.
+//! (`oracles.soulsformats.sekiro/m11_01`'s parts.jsonl, every map piece and object part). Each part by name: its kind
+//! and model, and its position, rotation (degrees) and scale bit for bit. The matrices derived from them are checked
+//! against the same dump by sekiro_scene.rs. Not covered here: other part kinds (enemies, collisions, dummies) and map
+//! offsets, which the dump doesn't hold (an open coverage gap, CONTRIBUTING's real-data table). Elden Ring's layouts
+//! are checked whole, every part of every kind, against SoulsFormatsNEXT's reading of them.
 use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::msb::PartKind;
 use primase_fromsoft::{Archive, dcx::Decoder, msb::MapLayout};
-use primase_testdata::real_data;
+
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
@@ -37,13 +37,17 @@ fn bytes(v: &[f32]) -> Vec<u8> {
 
 #[test]
 fn stored_parts_match_an_independent_reading() -> Result<()> {
-    let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(root) = primase_testdata::install(primase_testdata::Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dump) = real_data("PRIMASE_FROMSOFT_RIGID_ORACLE") else {
+    let Some(dump) = primase_testdata::oracle(
+        primase_testdata::OracleSet::SoulsFormats,
+        primase_testdata::Game::Sekiro,
+        "m11_01",
+    ) else {
         return Ok(());
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = primase_testdata::tool(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = native::load(dll)?;
@@ -107,17 +111,24 @@ fn stored_parts_match_an_independent_reading() -> Result<()> {
 }
 
 /// Every map layout of a game against an independent reader's reading of the same files (`msb.jsonl` of the game's
-/// format oracle: SoulsFormatsNEXT ee1dd61's MSBE for Elden Ring, `PRIMASE_ELDEN_FORMAT_ORACLE`): the models' names,
-/// and every part of every kind by name: its kind, model, position, rotation and scale (f32 bit patterns), entity ID
-/// and groups, the six shadow controls and a collision part's hit filter.
+/// format oracle: SoulsFormatsNEXT ee1dd61's MSBE for Elden Ring, `oracles.soulsformats.elden/format`): the models'
+/// names, and every part of every kind by name: its kind, model, position, rotation and scale (f32 bit patterns),
+/// entity ID and groups, the six shadow controls and a collision part's hit filter.
 #[test]
 fn every_layout_matches_an_independent_reading() -> Result<()> {
     use primase_fromsoft::Game;
-    for (game, var) in [(Game::EldenRing, "PRIMASE_ELDEN_FORMAT_ORACLE")] {
+    for (game, format) in [(
+        Game::EldenRing,
+        primase_testdata::oracle(
+            primase_testdata::OracleSet::SoulsFormats,
+            primase_testdata::Game::Elden,
+            "format",
+        ),
+    )] {
         let (Some(archive), Some(oracle), Some(dll)) = (
             common::archive(game)?,
-            real_data(var),
-            real_data("PRIMASE_OODLE6"),
+            format,
+            primase_testdata::tool(primase_testdata::Tool::Oodle6),
         ) else {
             continue;
         };

@@ -1,11 +1,12 @@
 //! The slice read and its geometry lowered by the explicit legacy choices, checked against independent data: a
-//! SoulsFormats dump of the area (`PRIMASE_FROMSOFT_RIGID_ORACLE`: MSB parts with their matrices, every placed model's
-//! FLVER in model space) and material fixtures worked out by hand from that dump's FLVER materials and MTD names.
+//! SoulsFormats dump of the area (`oracles.soulsformats.sekiro/m11_01`: MSB parts with their matrices, every placed
+//! model's FLVER in model space) and material fixtures worked out by hand from that dump's FLVER materials and MTD
+//! names.
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Instance, Mesh, Source, Transform, World};
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::{dcx::Decoder, sekiro, sekiro::source::PrototypeSource};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -109,13 +110,13 @@ fn model_key(part: &Value) -> Result<String> {
 
 #[test]
 fn whole_area_placements_in_both_directions() -> Result<()> {
-    let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(root) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = tool(Tool::Oodle6) else {
         return Ok(());
     };
-    let Some(dump) = real_data("PRIMASE_FROMSOFT_RIGID_ORACLE") else {
+    let Some(dump) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "m11_01") else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -213,13 +214,13 @@ fn whole_area_placements_in_both_directions() -> Result<()> {
 
 #[test]
 fn installed_area_against_soulsformats() -> Result<()> {
-    let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(root) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = tool(Tool::Oodle6) else {
         return Ok(());
     };
-    let Some(dump) = real_data("PRIMASE_FROMSOFT_RIGID_ORACLE") else {
+    let Some(dump) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "m11_01") else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;

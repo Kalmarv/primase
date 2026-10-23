@@ -5,18 +5,18 @@
 //! one value allowed): textures, render passes, CAParams and MtdParams, no difference. Each program's extension agrees
 //! with the shader type of its DXBC container, counted by stage.
 //!
-//! Needs `PRIMASE_SEKIRO_DIR` and `PRIMASE_OODLE6`.
+//! Needs `installs.sekiro` and `tools.oodle6`.
 #![allow(clippy::unwrap_used)]
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::metaparam::Metaparam;
 use primase_fromsoft::{Archive, Binder};
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install, tool};
 use std::collections::BTreeMap;
 mod common;
 
 #[test]
 fn every_metaparam_of_the_install() {
-    let (Some(root), Some(dll)) = (real_data("PRIMASE_SEKIRO_DIR"), real_data("PRIMASE_OODLE6")) else {
+    let (Some(root), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
         return;
     };
     let dll = common::oodle(dll).unwrap();

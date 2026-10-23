@@ -1,20 +1,20 @@
 //! The shader bundles slice A of m11_01 keeps: one `fromsoft.shader_bundle` per shader its kept materials name, every
 //! program of the bundle by stage, each material linked to its bundle by `fromsoft.material_shader`.
 //!
-//! Needs `PRIMASE_SEKIRO_DIR` and `PRIMASE_OODLE6`.
+//! Needs `installs.sekiro` and `tools.oodle6`.
 #![allow(clippy::unwrap_used)]
 use primase_core::{Name, World};
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::source::{MaterialShader, ShaderBundle, ShaderStage};
 use primase_fromsoft::sekiro::{self, read_area};
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install, tool};
 use std::collections::BTreeMap;
 mod common;
 
 #[test]
 fn slice_a_keeps_the_bundle_of_every_shader_its_materials_name() {
-    let (Some(root), Some(dll)) = (real_data("PRIMASE_SEKIRO_DIR"), real_data("PRIMASE_OODLE6")) else {
+    let (Some(root), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
         return;
     };
     let dll = common::oodle(dll).unwrap();

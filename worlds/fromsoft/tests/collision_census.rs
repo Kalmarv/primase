@@ -3,7 +3,7 @@
 //! binders are counted as outside the map/object reader's scope.
 use primase_fromsoft::{Archive, Binder, NameDictionary, dcx::Decoder};
 use primase_havok::{Compendium, Tagfile};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
@@ -13,13 +13,13 @@ fn native(path: &std::path::Path) -> primase_compress::Result<primase_compress::
 }
 #[test]
 fn installed_collision_types() -> Result<()> {
-    let Some(dir) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(dir) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(names) = real_data("PRIMASE_FROMSOFT_NAMES") else {
+    let Some(names) = oracle(OracleSet::Uxm, Game::Sekiro, "dictionary.txt") else {
         return Ok(());
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = tool(Tool::Oodle6) else {
         return Ok(());
     };
     let oodle = native(&dll)?;

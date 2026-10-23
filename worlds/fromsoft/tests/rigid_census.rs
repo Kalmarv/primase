@@ -7,19 +7,19 @@
 use primase_core::pass::PassLog;
 use primase_fromsoft::msb::{MapLayout, PartKind};
 use primase_fromsoft::{Archive, Binder, dcx::Decoder, flver::Model, rigid::lower_model};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 use std::collections::BTreeSet;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[test]
 #[allow(unsafe_code)]
 fn full_castle_rigid_vertices() -> Result<()> {
-    let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(root) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = tool(Tool::Oodle6) else {
         return Ok(());
     };
-    let Some(oracle) = real_data("PRIMASE_FROMSOFT_RIGID_ORACLE") else {
+    let Some(oracle) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "m11_01") else {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.

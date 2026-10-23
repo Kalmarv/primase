@@ -2,7 +2,7 @@
 //! then joined by part name to the placements an installed-area read selects.
 use primase_core::{ShadowCast, Shadows, Source, World};
 use primase_fromsoft::{dcx::Decoder, msb::MapLayout, msb::ShadowFlags, sekiro};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
@@ -24,7 +24,11 @@ struct Part {
 
 #[test]
 fn source_shadow_flags() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = primase_testdata::real_data("PRIMASE_FROMSOFT_SHADOW_ORACLE") else {
+    let Some(root) = primase_testdata::oracle(
+        primase_testdata::OracleSet::Scripts,
+        primase_testdata::Game::Sekiro,
+        "shadow",
+    ) else {
         return Ok(());
     };
     let data = std::fs::read(root.join("map.msb"))?;
@@ -84,16 +88,16 @@ fn native(path: std::path::PathBuf) -> primase_compress::Result<primase_compress
 /// a mapping written here, and the report counts are recounted from the join.
 #[test]
 fn selected_placement_shadows() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = real_data("PRIMASE_FROMSOFT_SHADOW_ORACLE") else {
+    let Some(root) = oracle(OracleSet::Scripts, Game::Sekiro, "shadow") else {
         return Ok(());
     };
-    let Some(install) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(install) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = tool(Tool::Oodle6) else {
         return Ok(());
     };
-    let Some(scene) = real_data("PRIMASE_FROMSOFT_SCENE") else {
+    let Some(scene) = oracle(OracleSet::Baseline, Game::Sekiro, "scene") else {
         return Ok(());
     };
     let oracle: Oracle = serde_json::from_slice(&std::fs::read(root.join("shadows.json"))?)?;

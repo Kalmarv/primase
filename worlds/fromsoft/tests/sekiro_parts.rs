@@ -1,9 +1,9 @@
-//! The Wolf's parts (`am_m_9120_l`, `bd_m_9120_l`, `lg_m_9120_l`, `hd_m_9120_l`, `fc_m_0220_l`) read each as an asset of
-//! its own against SoulsFormats' reading of the same files (`PRIMASE_FROMSOFT_PART_ORACLE`, one folder per part): every
-//! bone's name, parent and local transform, every mesh's dynamic flag, palette and vertex count, and every vertex's
-//! position, bone indices and weights as stored. Then the parts assembled (`assemble-character`): the assembled
-//! skeleton against a hierarchy and rests rebuilt from the oracle's own bone records, and every part's vertices at the
-//! assembled rest against their own rest.
+//! The Wolf's parts (`am_m_9120_l`, `bd_m_9120_l`, `lg_m_9120_l`, `hd_m_9120_l`, `fc_m_0220_l`) read each as an asset
+//! of its own against SoulsFormats' reading of the same files (`oracles.soulsformats.sekiro/parts`, one folder per
+//! part): every bone's name, parent and local transform, every mesh's dynamic flag, palette and vertex count, and every
+//! vertex's position, bone indices and weights as stored. Then the parts assembled (`assemble-character`): the
+//! assembled skeleton against a hierarchy and rests rebuilt from the oracle's own bone records, and every part's
+//! vertices at the assembled rest against their own rest.
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_animation::deform::{Vertices, skin};
@@ -13,7 +13,7 @@ use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Asset, Entity, JointMap, Mesh, Name, Role, Skeleton, Skin, WeightRule, World};
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::rigid::SourceModel;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -85,13 +85,13 @@ fn row_mul(a: &[f64; 16], b: &[f64; 16]) -> [f64; 16] {
 fn read(
     world: &mut World,
 ) -> Result<Option<(std::path::PathBuf, Vec<primase_fromsoft::sekiro::CharacterReport>)>> {
-    let Some(install) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(install) = install(Game::Sekiro) else {
         return Ok(None);
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = tool(Tool::Oodle6) else {
         return Ok(None);
     };
-    let Some(oracle) = real_data("PRIMASE_FROMSOFT_PART_ORACLE") else {
+    let Some(oracle) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "parts") else {
         return Ok(None);
     };
     // SAFETY: explicitly supplied trusted native decoder.

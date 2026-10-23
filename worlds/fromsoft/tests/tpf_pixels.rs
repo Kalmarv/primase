@@ -3,7 +3,7 @@ use primase_core::{
     TexFormat,
     gate::{GateReport, Tolerance},
 };
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, oracle};
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 use std::{
     collections::BTreeMap,
@@ -29,10 +29,10 @@ fn query(input: &mut impl Write, output: &mut impl Read, path: &std::path::Path)
 }
 #[test]
 fn area_pixels() -> Result<()> {
-    let Some(root) = real_data("PRIMASE_FROMSOFT_TPF_ORACLE") else {
+    let Some(root) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "tpf") else {
         return Ok(());
     };
-    let Some(csharp) = real_data("PRIMASE_FROMSOFT_DDS_ORACLE") else {
+    let Some(csharp) = oracle(OracleSet::Scripts, Game::Sekiro, "dds") else {
         return Ok(());
     };
     let mut cs = Command::new("dotnet")

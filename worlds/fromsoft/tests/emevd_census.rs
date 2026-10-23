@@ -1,13 +1,13 @@
 //! Event scripts over the installed game. Census: every script the archive holds (the common scripts and every map
 //! block m10..m99 / 00..09, probed by path) reads to its end. Oracle: an independent reader's decode
-//! (`emevd.jsonl` in `PRIMASE_FROMSOFT_STATE_ORACLE`: per script the decompressed file's sha256 and every event's id,
+//! (`emevd.jsonl` in `oracles.scripts.sekiro/state`: per script the decompressed file's sha256 and every event's id,
 //! rest behaviour, instructions as bank, id, argument bytes and layer, parameter substitutions, linked files and
 //! strings) must equal ours exactly, and it must list the same scripts as the census found.
 use std::collections::BTreeMap;
 
 use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::{Archive, dcx::Decoder, emevd::Script};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 use sha2::{Digest, Sha256};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
@@ -39,7 +39,7 @@ fn scripts(archive: &Archive) -> Vec<String> {
 
 #[test]
 fn every_script_reads_and_matches_an_independent_reader() -> Result<()> {
-    let (Some(root), Some(dll)) = (real_data("PRIMASE_SEKIRO_DIR"), real_data("PRIMASE_OODLE6")) else {
+    let (Some(root), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
         return Ok(());
     };
     let dll = native::load(dll)?;
@@ -82,7 +82,7 @@ fn every_script_reads_and_matches_an_independent_reader() -> Result<()> {
     println!("part-state common functions called: {state_calls:?}");
     assert!(!paths.is_empty(), "no event script in the archive");
 
-    let Some(oracle) = real_data("PRIMASE_FROMSOFT_STATE_ORACLE") else {
+    let Some(oracle) = oracle(OracleSet::Scripts, Game::Sekiro, "state") else {
         return Ok(());
     };
     let mut gate = GateReport::new("EMEVD decode", Tolerance::Exact);

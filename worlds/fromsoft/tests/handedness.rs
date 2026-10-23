@@ -1,7 +1,7 @@
 //! Handedness of the FLVER geometry's frame change, on a real Sekiro model against SoulsFormats' reading of it.
 //!
-//! `PRIMASE_FROMSOFT_FRAMES` is a folder holding `frames.jsonl`: a thin dump of SoulsFormats' reading of a few models
-//! as stored, in the game's frame: per mesh its LOD0 face set (`CullBackfaces`, the triangles of
+//! `oracles.soulsformats.sekiro/frames` is a folder holding `frames.jsonl`: a thin dump of SoulsFormats' reading of a
+//! few models as stored, in the game's frame: per mesh its LOD0 face set (`CullBackfaces`, the triangles of
 //! `FaceSet.Triangulate(true)`) and per vertex position, normal, tangents (xyzw) and UV0. The facts checked against:
 //! - the frame: left-handed, +Y up; the world is `C = diag(1, 1, -1)` of it;
 //! - which side is a triangle's front: for a face set the game culls, the side its stored normals face, which for
@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use primase_fromsoft::flver::Model;
 use primase_fromsoft::geometry::MaterialGeometry;
 use primase_fromsoft::{Archive, Binder, dcx::Decoder};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 use serde_json::Value as Json;
 
 #[allow(unsafe_code)]
@@ -91,9 +91,9 @@ struct Corner {
 #[test]
 fn mirror_is_undone_in_the_geometry() {
     let (Some(root), Some(dll), Some(frames)) = (
-        real_data("PRIMASE_SEKIRO_DIR"),
-        real_data("PRIMASE_OODLE6"),
-        real_data("PRIMASE_FROMSOFT_FRAMES"),
+        install(Game::Sekiro),
+        tool(Tool::Oodle6),
+        oracle(OracleSet::SoulsFormats, Game::Sekiro, "frames"),
     ) else {
         return;
     };

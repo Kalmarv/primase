@@ -1,12 +1,12 @@
-//! `bake-fromsoft-layers` on Sekiro's m11_01 (the region of `PRIMASE_FROMSOFT_SCENE`, as `baked_area.rs` reads it), and a
-//! SHA-256 of every baked texture (by name: its size, its levels) and of the lot. The digest is the evidence that a change
-//! under the bake (the program executor behind the shader) leaves its output byte for byte as it was: run before and after
-//! and compare, or give the earlier total in `PRIMASE_FROMSOFT_BAKE_DIGEST`.
+//! `bake-fromsoft-layers` on Sekiro's m11_01 (the region of `oracles.baseline.sekiro/scene`, as `baked_area.rs` reads
+//! it), and a SHA-256 of every baked texture (by name: its size, its levels) and of the lot. The digest is the evidence
+//! that a change under the bake (the program executor behind the shader) leaves its output byte for byte as it was: run
+//! before and after and compare, or give the earlier total as the debug key `fromsoft.bake_digest`.
 #![allow(clippy::unwrap_used)]
 
 use primase_core::{Name, Texture, World};
 use primase_fromsoft::{dcx::Decoder, sekiro};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 use sha2::{Digest, Sha256};
 mod common;
 
@@ -17,9 +17,9 @@ fn hex(bytes: &[u8]) -> String {
 #[test]
 fn the_baked_textures_of_m11_01() {
     let (Some(install), Some(dll), Some(reference)) = (
-        real_data("PRIMASE_SEKIRO_DIR"),
-        real_data("PRIMASE_OODLE6"),
-        real_data("PRIMASE_FROMSOFT_SCENE"),
+        install(Game::Sekiro),
+        tool(Tool::Oodle6),
+        oracle(OracleSet::Baseline, Game::Sekiro, "scene"),
     ) else {
         return;
     };
@@ -83,7 +83,7 @@ fn the_baked_textures_of_m11_01() {
     }
     let total = hex(&total.finalize());
     println!("{} baked textures, digest {total}", digests.len());
-    if let Ok(expected) = std::env::var("PRIMASE_FROMSOFT_BAKE_DIGEST") {
+    if let Some(expected) = primase_testdata::debug("fromsoft.bake_digest") {
         assert_eq!(total, expected, "the baked textures differ from the digest given");
     }
 }

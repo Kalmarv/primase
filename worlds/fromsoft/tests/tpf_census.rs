@@ -4,7 +4,7 @@ use primase_fromsoft::{
     dcx::Decoder,
     tpf::{Package, TextureKind},
 };
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -90,16 +90,16 @@ fn visit(
 }
 #[test]
 fn all_texture_packages() -> Result<()> {
-    let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(root) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(oracle) = real_data("PRIMASE_FROMSOFT_TPF_ORACLE") else {
+    let Some(oracle) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "tpf") else {
         return Ok(());
     };
-    let Some(names) = real_data("PRIMASE_FROMSOFT_NAMES") else {
+    let Some(names) = primase_testdata::oracle(OracleSet::Uxm, Game::Sekiro, "dictionary.txt") else {
         return Ok(());
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = tool(Tool::Oodle6) else {
         return Ok(());
     };
     let dll = native::load(dll)?;

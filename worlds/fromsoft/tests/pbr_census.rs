@@ -2,7 +2,7 @@
 //! BC interpolation conventions may differ by one UNORM8 step. BC4's Pillow
 //! grayscale expansion is compared on R only, not its replicated G/B channels.
 use primase_core::TexFormat;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, oracle};
 use primase_texcodec::TexDecoder;
 use serde::Deserialize;
 #[derive(Deserialize)]
@@ -16,7 +16,7 @@ struct Record {
 }
 #[test]
 fn source_channel_statistics() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = real_data("PRIMASE_FROMSOFT_PBR_ORACLE") else {
+    let Some(root) = oracle(OracleSet::Scripts, Game::Sekiro, "pbr") else {
         return Ok(());
     };
     let records: Vec<Record> = serde_json::from_slice(&std::fs::read(root.join("texture-statistics.json"))?)?;

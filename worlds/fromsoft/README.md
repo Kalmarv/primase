@@ -41,10 +41,10 @@ a NIST AES vector, encrypted ranges, nested envelopes, hash tables, truncations,
 and single-byte mutations. Real gates skip when their environment variables
 are unset. Use `cargo test -p primase-fromsoft -- --nocapture`.
 
-- `PRIMASE_SEKIRO_DIR`: directory containing the five BHD/BDT pairs.
-- `PRIMASE_OODLE6`: explicitly trusted version-6 native library.
-- `PRIMASE_FROMSOFT_NAMES`: optional path dictionary for the named-count gate.
-- `PRIMASE_FROMSOFT_BHD_ORACLE`: directory of independent reference decoder
+- `installs.sekiro`: directory containing the five BHD/BDT pairs.
+- `tools.oodle6`: explicitly trusted version-6 native library.
+- `oracles.uxm.sekiro/dictionary.txt`: optional path dictionary for the named-count gate.
+- `oracles.soulsformats.sekiro/census`: directory of independent reference decoder
   output (SoulsFormats 9c0da6b with UXM), generated from the same installation. Its files are:
   - `<name>.plain` per archive (`Data1.plain` ... ; named after the stem's last
     component): complete RSA-unwrapped headers.
@@ -58,7 +58,7 @@ are unset. Use `cargo test -p primase-fromsoft -- --nocapture`.
     decoded bytes in `samples/<hash>.bin`. Include varied entries and every
     indexed path for a selected map area.
 
-- `PRIMASE_ELDEN_DIR`, `PRIMASE_ELDEN_KEYS`, `PRIMASE_ELDEN_NAMES`, `PRIMASE_ELDEN_BHD_ORACLE`: the same for
+- `installs.elden`, `keys.elden`, `oracles.uxm.elden/dictionary.txt`, `oracles.soulsformats.elden/census`: the same for
   Elden Ring (its `Game` folder, its key folder, UXM's dictionary, and a census in the same schema written by
   SoulsFormatsNEXT ee1dd61 with UXM's keys, RSA and 64-bit hash; hashes are 16 hex digits). `tests/census.rs` runs
   one body for each game configured. The dictionary must name exactly the entries the reference names.
@@ -87,7 +87,7 @@ mips and colour-space tags. Cube/volume payloads are retained by the container
 reader but explicitly rejected by this 2D import. Bindings assign semantic roles
 and normal conventions; package parsing does not infer them from a name.
 
-The TPF corpus gate reads its own oracle directory, `PRIMASE_FROMSOFT_TPF_ORACLE`,
+The TPF corpus gate reads its own oracle directory, `oracles.soulsformats.sekiro/tpf`,
 which is not built yet (a stated coverage gap; see CONTRIBUTING.md), with
 `packages.jsonl`: one object per discovered package, with `id` (shard/hex
 hash, followed by `/b<index>` or `/s<index>` for single/split binder children),
@@ -96,7 +96,7 @@ Each texture records name/format/kind/mipmaps/flags, DDS size/SHA256 and, for ar
 2D images, width/height and decoded RGBA SHA256. Area DDS inputs reside at
 `area-dds/<uppercase-sha256>.dds`; none belong in the repository.
 
-The pixel gate additionally requires `PRIMASE_FROMSOFT_DDS_ORACLE`, an explicitly
+The pixel gate additionally requires `oracles.scripts.sekiro/dds`, an explicitly
 trusted .NET assembly launched with `dotnet`. For each DDS path on stdin it
 writes a binary response to stdout: status byte (0 success), little-endian u64
 length, and that many RGBA8 bytes (UTF-8 error text for nonzero status). Diagnostics
@@ -134,7 +134,7 @@ Caller-supplied material decisions control mesh exclusion and main-layer UV
 scale. It retains vertices referenced by faces that later fail the area check.
 It does not bake layered materials or split parts into baked weight levels.
 
-The archive oracle directory (`PRIMASE_FROMSOFT_BHD_ORACLE`, `PRIMASE_ELDEN_BHD_ORACLE`; `tests/flver_census.rs`
+The archive oracle directory (`oracles.soulsformats.sekiro/census`, `oracles.soulsformats.elden/census`; `tests/flver_census.rs`
 runs one body for each game) adds `flver/models.jsonl`, one record per FLVER2
 found in the archive and its binders (a FLVER the reference refuses: `id`, `sha256` and `error`; ours must refuse
 it too), `id` the shard/hex hash followed by
@@ -147,7 +147,7 @@ tangent count u32 and f32x4 values, colour count u32 and RGBA f32x4 values,
 repeated for every vertex. Indices are u32. Digests are uppercase SHA256.
 
 Area geometry is checked against the SoulsFormats dump of every placed model
-(`PRIMASE_FROMSOFT_RIGID_ORACLE`, `tests/rigid_census.rs` and `tests/sekiro_scene.rs`);
+(`oracles.soulsformats.sekiro/m11_01`, `tests/rigid_census.rs` and `tests/sekiro_scene.rs`);
 the earlier exporter's pre-bake geometry, once compared here, is retired with its input.
 
 Packed normal/tangent bytes follow the consumer shader operation:
@@ -190,13 +190,13 @@ reflection for handedness. MapOffset places map-local resources separately;
 it must not be added to part placements a second time.
 
 The MSB reading is checked against an independent one: SoulsFormats' parts of the same area,
-`PRIMASE_FROMSOFT_RIGID_ORACLE`'s `parts.jsonl` (every map piece and object part with its `name`, `kind`, model,
+`oracles.soulsformats.sekiro/m11_01`'s `parts.jsonl` (every map piece and object part with its `name`, `kind`, model,
 `position`, `rotation` in degrees and `scale`). Each part's stored values must match bit for bit (`msb_census.rs`); the
 matrices derived from them are checked against the same dump by `sekiro_scene.rs`. Other part kinds and map offsets
 have no independent reference yet: an open coverage gap (build one when a step 20 or in-game Sekiro difference points at this area).
 
 Elden Ring's layouts are checked whole against SoulsFormatsNEXT ee1dd61's MSBE
-(`PRIMASE_ELDEN_FORMAT_ORACLE`'s `msb.jsonl`, `tests/msb_census.rs`): one record per
+(`oracles.soulsformats.elden/format`'s `msb.jsonl`, `tests/msb_census.rs`): one record per
 layout the install holds, `path` (the archive path), `models` (`name`, `kind`) and
 `parts`: `name`, `kind` (the reference's class name), `model`, `position`/`rotation`/
 `scale` (three f32 bit patterns as hex strings), `entity_id`, `entity_group_ids`,
@@ -212,16 +212,16 @@ reference refuses it; ours must refuse it too) or `version` and `lights` (`name`
 patterns).
 
 Parts also carry their entity ID and eight entity group IDs as stored (sentinels -1 and 0 included); event scripts
-address a part by any positive one of them (`Part::entity_ids`). `PRIMASE_FROMSOFT_STATE_ORACLE` is a folder from an
+address a part by any positive one of them (`Part::entity_ids`). `oracles.scripts.sekiro/state` is a folder from an
 independent reader. Its `entities.jsonl` has one record per map file: `path` and `parts`, each with `index`, `name`,
 `entity_id` and `entity_group_ids` (8 integers). The gate (`tests/msb_entities.rs`) requires the same part count and
 names and exact values.
 
 Each part's six MSB shadow controls are kept raw in `msb::ShadowFlags`.
-`PRIMASE_FROMSOFT_SHADOW_ORACLE` is a folder holding one original `map.msb` and
+`oracles.scripts.sekiro/shadow` is a folder holding one original `map.msb` and
 an independent reader's `shadows.json` (`sha256`, ordered `parts` with `name`
 and the six fields). The gate compares every part exactly. With
-`PRIMASE_SEKIRO_DIR`, `PRIMASE_OODLE6` and `PRIMASE_FROMSOFT_SCENE` (for its
+`installs.sekiro`, `tools.oodle6` and `oracles.baseline.sekiro/scene` (for its
 region) it also reads area m11_01 and joins every selected placement by name.
 
 Area assembly attaches a selected placement's raw controls as
@@ -240,7 +240,7 @@ their instructions (bank, id, argument bytes as stored, layer), parameter substi
 arguments fill which bytes of an instruction's), linked-file offsets and the string table. Every byte is accounted
 for (tables, each instruction's arguments, strings; at most 15 zero bytes of alignment between them); a field
 outside its known values, an overlap or an instruction or parameter no event owns is an error. Nothing is
-interpreted. `PRIMASE_FROMSOFT_STATE_ORACLE`'s `emevd.jsonl` has one record per script: `path`, `sha256` (of the
+interpreted. `oracles.scripts.sekiro/state`'s `emevd.jsonl` has one record per script: `path`, `sha256` (of the
 decompressed file), `format`, `events` (each `id`, `rest`, `instructions` with `bank`, `id`, `args` as lowercase hex
 and `layer` or null, `parameters` with `instruction`, `target`, `source`, `bytes`, `unk`), `linked_files` and
 `strings` (hex). `tests/emevd_census.rs` reads every script the archive holds (the common scripts and every map
@@ -261,7 +261,7 @@ always present. Calls that cannot be decided statically, other common functions 
 presence, even when a decided rule also names them, and `Report::states` counts them. A known call whose arguments
 are not exactly seven whole words, or are filled by substitution, counts as undecidable. No independent reference
 checks these rules yet (a stated coverage gap, CONTRIBUTING.md); the facts they read, MSB entity IDs and the
-scripts' decode, are checked against `PRIMASE_FROMSOFT_STATE_ORACLE` (`tests/msb_entities.rs`,
+scripts' decode, are checked against `oracles.scripts.sekiro/state` (`tests/msb_entities.rs`,
 `tests/emevd_census.rs`).
 
 The area's placements are checked against a SoulsFormats dump of its MSB in `tests/sekiro_scene.rs` (below).
@@ -306,7 +306,7 @@ constant or map; without either, a material is dielectric (metallic 0), not
 glTF's default of 1, and is counted as an approximation. Material identity is chosen by the caller, independently of
 any reference exporter's string formatting or key hashing.
 
-`PRIMASE_FROMSOFT_MATERIAL_ORACLE` supplies two independent outputs:
+`oracles.soulsformats.sekiro/materials` supplies two independent outputs:
 `mtd-boundaries.jsonl` lists independently audited block starts, kinds, declared
 and consumed lengths for every file. The gate counts length mismatches.
 `mtd.jsonl` lists binder names, decoded SHA256, shader, description, typed
@@ -314,9 +314,9 @@ parameters and every texture declaration; `models.jsonl` lists model keys,
 texture availability and per-FLVER-material assignments. The first gate compares
 stored fields exactly, including f32 bits. The second isolates selection policy
 using the oracle's availability input and compares assignments, then checks
-the material references on each part in `PRIMASE_FROMSOFT_SCENE`. It is not a
+the material references on each part in `oracles.baseline.sekiro/scene`. It is not a
 gate of archive texture discovery, which belongs to area assembly. Both require
-`PRIMASE_SEKIRO_DIR` and `PRIMASE_OODLE6`; absent inputs skip explicitly.
+`installs.sekiro` and `tools.oodle6`; absent inputs skip explicitly.
 
 ## Material binaries (Elden Ring)
 
@@ -474,7 +474,7 @@ select-lod{form=finest}`. On m11_01 it reproduces that reader's placements, mesh
 travel markers exactly.
 
 `tests/sekiro_scene.rs` checks reads against a SoulsFormats dump of the area
-(`PRIMASE_FROMSOFT_RIGID_ORACLE`). The whole-area read, before any pass, places
+(`oracles.soulsformats.sekiro/m11_01`). The whole-area read, before any pass, places
 every dumped map piece and object part except those of the models the dump could
 not read either (missing from the read) and exactly the parts of the models the
 dump holds no vertex of (empty), and nothing else. Slice A's read accounts
@@ -484,7 +484,7 @@ composition every
 lowered vertex is a vertex of its FLVER in model space within 0.2 mm; four
 material fixtures worked out by hand from the dump keep their class, base and
 normal texture. `fromsoft_collision_scene.rs` (retired) compared the map collision,
-lowered with the composition's options, with the scene our earlier C# exporter wrote (`PRIMASE_FROMSOFT_SCENE`, a regression
+lowered with the composition's options, with the scene our earlier C# exporter wrote (`oracles.baseline.sekiro/scene`, a regression
 baseline, read through the ReSkate interchange tables): all non-roof triangles and
 the water table agree exactly. The light, ledge and marker passes are checked by
 hand-worked cases (`tests/extras_policy.rs`, primase-meshops' curve tests); the
@@ -533,7 +533,7 @@ bitangent and green by the normalized tangent, rebuilds positive Z, and
 normalizes the result. Sampled blue goes separately to o1.x, not to normal Z.
 It uses the evidenced source basis and shared Z reconstruction.
 
-`PRIMASE_FROMSOFT_NORMAL_CURL` supplies a JSON array of independently measured `name` and `verdict` values; the
+`oracles.scripts.sekiro/normal-curl.json` supplies a JSON array of independently measured `name` and `verdict` values; the
 gate reports all classifications and names every OpenGL verdict as a measurement, not a conversion exception. The
 sampled source frames this section used to be checked against came from our earlier exporter's dump and are gone; the
 basis is checked by the hand-worked probes above.
@@ -557,7 +557,7 @@ map by their base value modulo 100 to core surface names where the class's surfa
 is known.
 
 Elden Ring's collision is Havok 2018.1 (`primase-havok`'s `SDK_VERSIONS`). Its stored compressed meshes are
-checked against HKLib ac40bc9 (`havok.jsonl` of `PRIMASE_ELDEN_FORMAT_ORACLE`, `tests/havok_census.rs`): one record
+checked against HKLib ac40bc9 (`havok.jsonl` of `oracles.soulsformats.elden/format`, `tests/havok_census.rs`): one record
 per file, `file` (`<binder path>:<member>`), then `error` or `shapes`, each `kind`, `bits_per_key`, `sections`
 (`codec` as six f32 bit patterns, `first_packed_vertex`, `packed_vertices`, `first_shared_vertex`,
 `first_primitive`, `primitives`), `packed_vertices`, `shared_vertices`, `shared_vertices_index`, `primitives` (four
@@ -620,7 +620,7 @@ bindings, zero-initialized buffer words, and frozen policies are counted.
 Normal output inverts the binary G-buffer bias and retains the source tangent
 basis; consumer lowering remains separate. The main albedo supplies alpha.
 
-The optional `PRIMASE_FROMSOFT_LAYER_PILOT` fixture directory contains:
+The optional `oracles.baseline.sekiro/layer-pilot` fixture directory contains:
 
 - `cases.json`: array of `{id, model, mtd, shader, switch}`.
 - `<id>.mtd` and `<id>.ppo`: original material and pixel-shader bytes.
@@ -657,7 +657,7 @@ shader behavior or format requirements.
 
 The layer bake's area grouping, UV periods and images have no independent reference: the earlier inventory and
 its control came from our earlier exporter's layer bake. An open coverage gap (build one when a step 20 or in-game Sekiro difference points at this area; the reference
-would be the game's layer shaders run on WARP, `PRIMASE_FROMSOFT_LAYER_PILOT`).
+would be the game's layer shaders run on WARP, `oracles.baseline.sekiro/layer-pilot`).
 
 The opt-in `layer_area_pixels` tests additionally require
 `<scope>-d3d-control/<record-index>-{albedo,normal}.rgba`, with indices in the
@@ -768,7 +768,7 @@ nonfinite, variable and unsupported values have no metallic evidence: they also
 use factor 0, counted as unsupported reflectance and as the unevidenced-metallic
 approximation; ORM blue 255 remains a neutral multiplier. Counts are per
 newly referenced output material, excluding unused bake levels and repeated
-primitive uses. The optional `PRIMASE_FROMSOFT_REFLECTANCE_ORACLE` gate checks the
+primitive uses. The optional `oracles.scripts.sekiro/reflectance.json` gate checks the
 picked jar's original shader literal and DDS inputs, capture-path neutrality,
 and unchanged other lowered channels; final old/new export parity is separate.
 

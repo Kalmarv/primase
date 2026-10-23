@@ -1,9 +1,9 @@
 //! MSB part entity IDs and entity group IDs, exact as stored, against an independent reader (SoulsFormats' MSBS):
-//! `entities.jsonl` in `PRIMASE_FROMSOFT_STATE_ORACLE` holds, per map file, every part's index, name, entity ID and
+//! `entities.jsonl` in `oracles.scripts.sekiro/state` holds, per map file, every part's index, name, entity ID and
 //! eight group IDs. Every map file it lists is read; a part count, name or value that differs fails the gate.
 use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::{Archive, dcx::Decoder, msb::MapLayout};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
 mod native {
@@ -22,9 +22,9 @@ fn ints(v: &serde_json::Value) -> Result<Vec<i32>> {
 #[test]
 fn part_entities_match_an_independent_reader() -> Result<()> {
     let (Some(root), Some(oracle), Some(dll)) = (
-        real_data("PRIMASE_SEKIRO_DIR"),
-        real_data("PRIMASE_FROMSOFT_STATE_ORACLE"),
-        real_data("PRIMASE_OODLE6"),
+        install(Game::Sekiro),
+        oracle(OracleSet::Scripts, Game::Sekiro, "state"),
+        tool(Tool::Oodle6),
     ) else {
         return Ok(());
     };

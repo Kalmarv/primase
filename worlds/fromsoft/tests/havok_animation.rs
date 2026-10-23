@@ -1,5 +1,5 @@
-//! Every character animation binder of the install (`PRIMASE_SEKIRO_DIR`, with the install's own Oodle library
-//! `PRIMASE_OODLE6`) read as Havok animation containers.
+//! Every character animation binder of the install (`installs.sekiro`, with the install's own Oodle library
+//! `tools.oodle6`) read as Havok animation containers.
 //!
 //! - H1: every `.hkx` of every `chr/c<id>.anibnd.dcx` is a tagfile whose `hkaAnimationContainer` reads. A file with a
 //!   skeleton holds one and no animation; a file with an animation holds one animation and one binding that binds it,
@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use primase_fromsoft::{Archive, Binder, dcx::Decoder};
 use primase_havok::animation::{Tracks, container};
 use primase_havok::{Compendium, Tagfile};
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install, tool};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -27,7 +27,7 @@ fn native(path: &std::path::Path) -> primase_compress::Result<primase_compress::
 
 #[test]
 fn h1_every_character_animation_file_reads() -> Result<()> {
-    let (Some(dir), Some(dll)) = (real_data("PRIMASE_SEKIRO_DIR"), real_data("PRIMASE_OODLE6")) else {
+    let (Some(dir), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
         return Ok(());
     };
     let oodle = native(&dll)?;

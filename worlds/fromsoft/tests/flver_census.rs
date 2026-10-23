@@ -1,8 +1,9 @@
 //! Whole-install FLVER attributes and strip ordering against an independent decoder, for each game configured:
-//! SoulsFormats' census of Sekiro (`PRIMASE_FROMSOFT_BHD_ORACLE`), SoulsFormatsNEXT's of Elden Ring
-//! (`PRIMASE_ELDEN_BHD_ORACLE`). A FLVER the reference refuses (a record with `error`) must be refused by ours too.
+//! SoulsFormats' census of Sekiro (`oracles.soulsformats.sekiro/census`), SoulsFormatsNEXT's of Elden Ring
+//! (`oracles.soulsformats.elden/census`). A FLVER the reference refuses (a record with `error`) must be refused by ours
+//! too.
 use primase_fromsoft::{Binder, Game, NameDictionary, bhd::PathHash, dcx::Decoder, flver::Model};
-use primase_testdata::real_data;
+
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -159,7 +160,7 @@ fn visit(
 }
 #[test]
 fn all_flver_models() -> Result<()> {
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = primase_testdata::tool(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = native::load(dll)?;
@@ -170,14 +171,32 @@ fn all_flver_models() -> Result<()> {
     for (game, oracle, names) in [
         (
             Game::Sekiro,
-            "PRIMASE_FROMSOFT_BHD_ORACLE",
-            "PRIMASE_FROMSOFT_NAMES",
+            primase_testdata::oracle(
+                primase_testdata::OracleSet::SoulsFormats,
+                primase_testdata::Game::Sekiro,
+                "census",
+            ),
+            primase_testdata::oracle(
+                primase_testdata::OracleSet::Uxm,
+                primase_testdata::Game::Sekiro,
+                "dictionary.txt",
+            ),
         ),
-        (Game::EldenRing, "PRIMASE_ELDEN_BHD_ORACLE", "PRIMASE_ELDEN_NAMES"),
+        (
+            Game::EldenRing,
+            primase_testdata::oracle(
+                primase_testdata::OracleSet::SoulsFormats,
+                primase_testdata::Game::Elden,
+                "census",
+            ),
+            primase_testdata::oracle(
+                primase_testdata::OracleSet::Uxm,
+                primase_testdata::Game::Elden,
+                "dictionary.txt",
+            ),
+        ),
     ] {
-        let (Some(archive), Some(oracle), Some(names)) =
-            (common::archive(game)?, real_data(oracle), real_data(names))
-        else {
+        let (Some(archive), Some(oracle), Some(names)) = (common::archive(game)?, oracle, names) else {
             continue;
         };
         flver_models(

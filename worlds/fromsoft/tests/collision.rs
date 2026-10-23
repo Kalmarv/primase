@@ -4,7 +4,11 @@ use primase_fromsoft::collision;
 use primase_havok::Compendium;
 #[test]
 fn castle_raw_soups() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(dir) = primase_testdata::real_data("PRIMASE_HAVOK_CORPUS") else {
+    let Some(dir) = primase_testdata::oracle(
+        primase_testdata::OracleSet::Corpus,
+        primase_testdata::Game::Sekiro,
+        "havok",
+    ) else {
         return Ok(());
     };
     let mut files = std::fs::read_dir(dir)?

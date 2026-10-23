@@ -5,18 +5,18 @@ use primase_core::{DrawLayer, DrawOrder, Entity, MaterialUsage, Mesh, Name, Text
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::source::{FaceCull, MaterialSlots, PrototypeSource};
 use primase_fromsoft::{dcx::Decoder, sekiro};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 use std::collections::BTreeMap;
 mod common;
 #[test]
 fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(install) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(install) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = tool(Tool::Oodle6) else {
         return Ok(());
     };
-    let Some(reference) = real_data("PRIMASE_FROMSOFT_SCENE") else {
+    let Some(reference) = oracle(OracleSet::Baseline, Game::Sekiro, "scene") else {
         return Ok(());
     };
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(reference.join("scene.json"))?)?;

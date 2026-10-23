@@ -446,7 +446,7 @@ fn path_hash_reference_values() {
 }
 
 /// Elden Ring's 64-bit path hash: two paths of UXM's dictionary as UXM hashes them, both keys of the installed
-/// index (SoulsFormatsNEXT's census of it, `PRIMASE_ELDEN_BHD_ORACLE`).
+/// index (SoulsFormatsNEXT's census of it, `oracles.soulsformats.elden/census`).
 #[test]
 fn path_hash64_reference_values() {
     use primase_fromsoft::archive::path_hash64;

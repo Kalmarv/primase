@@ -1,7 +1,7 @@
 //! Consumer basis proof. The sample manifest contains independent stored frames,
 //! not an exporter-selected green convention. Curl verdicts are measurements only.
 use primase_fromsoft::{flver::tangent_to_scene, sekiro::normals::consumer_basis};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 mod common;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -46,7 +46,7 @@ fn handedness_and_axis_swap_follow_shader_basis() {
 }
 #[test]
 fn curl_verdicts_are_named_measurements() -> Result<()> {
-    let Some(path) = real_data("PRIMASE_FROMSOFT_NORMAL_CURL") else {
+    let Some(path) = oracle(OracleSet::Scripts, Game::Sekiro, "normal-curl.json") else {
         return Ok(());
     };
     let rows: Vec<serde_json::Value> = serde_json::from_slice(&std::fs::read(path)?)?;
@@ -198,10 +198,10 @@ fn gx_emissive_basis_rebuilds_z_independent_of_blue() {
 fn castle_gx_emissive_geometry() -> Result<()> {
     use primase_core::{Instance, Mesh, Name, World};
     use primase_fromsoft::{dcx::Decoder, materials::Material, sekiro};
-    let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(root) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = tool(Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;

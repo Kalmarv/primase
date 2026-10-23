@@ -1,14 +1,14 @@
-//! Elden Ring's Havok 2018 collision against an independent reader: HKLib's reading of the same files
-//! (`havok.jsonl` of `PRIMASE_ELDEN_FORMAT_ORACLE`, the oracle harness's `havok` mode: the map collision of chosen
-//! tiles with their compendium, and chosen assets' collision). For every compressed mesh shape a file holds, the mesh
-//! tree's sections as stored (codec parameters as f32 bits, first packed vertex, packed vertex count, first shared
-//! vertex, first primitive, primitive count, read through the 2018 section layout), its packed and shared vertices,
-//! shared-vertex index and primitives, and the shape's triangle-to-shape-key table, compared exactly. The shapes of a
-//! file are compared as a set (each reader walks the object graph its own way). Nothing here checks the triangle
-//! decode; the stored data it starts from is what is compared.
+//! Elden Ring's Havok 2018 collision against an independent reader: HKLib's reading of the same files (`havok.jsonl` of
+//! `oracles.soulsformats.elden/format`, the oracle harness's `havok` mode: the map collision of chosen tiles with their
+//! compendium, and chosen assets' collision). For every compressed mesh shape a file holds, the mesh tree's sections as
+//! stored (codec parameters as f32 bits, first packed vertex, packed vertex count, first shared vertex, first
+//! primitive, primitive count, read through the 2018 section layout), its packed and shared vertices, shared-vertex
+//! index and primitives, and the shape's triangle-to-shape-key table, compared exactly. The shapes of a file are
+//! compared as a set (each reader walks the object graph its own way). Nothing here checks the triangle decode; the
+//! stored data it starts from is what is compared.
 use primase_fromsoft::{Binder, Game, dcx::Decoder};
 use primase_havok::{Compendium, Tagfile, Value, mesh_sections};
-use primase_testdata::real_data;
+
 use serde_json::{Value as Json, json};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
@@ -95,8 +95,12 @@ fn shapes(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<String>> 
 fn compressed_meshes_match_an_independent_reading() -> Result<()> {
     let (Some(archive), Some(oracle), Some(dll)) = (
         common::archive(Game::EldenRing)?,
-        real_data("PRIMASE_ELDEN_FORMAT_ORACLE"),
-        real_data("PRIMASE_OODLE6"),
+        primase_testdata::oracle(
+            primase_testdata::OracleSet::SoulsFormats,
+            primase_testdata::Game::Elden,
+            "format",
+        ),
+        primase_testdata::tool(primase_testdata::Tool::Oodle6),
     ) else {
         return Ok(());
     };

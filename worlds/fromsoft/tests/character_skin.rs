@@ -1,29 +1,29 @@
-//! A Sekiro character read by itself against SoulsFormats' reading of the same files (`PRIMASE_FROMSOFT_SKIN_ORACLE`,
-//! one folder per character id): every bone's name, parent and local transform (ours converted back to the file's
-//! frame, against SoulsFormats' `ComputeLocalTransform`, within 2e-5 for f32 Euler arithmetic), every mesh's dynamic
-//! flag, palette and vertex count, and every vertex's position, bone indices and weights as stored (exact). Every
-//! texture its materials bind is read (some are kept in other characters' and shared packages). Then the character
-//! lowered with its skin verifies: `core.skin` and `core.mesh` hold together.
+//! A Sekiro character read by itself against SoulsFormats' reading of the same files
+//! (`oracles.soulsformats.sekiro/skin`, one folder per character id): every bone's name, parent and local transform
+//! (ours converted back to the file's frame, against SoulsFormats' `ComputeLocalTransform`, within 2e-5 for f32 Euler
+//! arithmetic), every mesh's dynamic flag, palette and vertex count, and every vertex's position, bone indices and
+//! weights as stored (exact). Every texture its materials bind is read (some are kept in other characters' and shared
+//! packages). Then the character lowered with its skin verifies: `core.skin` and `core.mesh` hold together.
 use std::collections::BTreeSet;
 
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Skeleton, World};
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::rigid::SourceModel;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[test]
 #[allow(unsafe_code)]
 fn characters_read_as_soulsformats_reads_them() -> Result<()> {
-    let Some(install) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(install) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = tool(Tool::Oodle6) else {
         return Ok(());
     };
-    let Some(oracle) = real_data("PRIMASE_FROMSOFT_SKIN_ORACLE") else {
+    let Some(oracle) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "skin") else {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
@@ -185,10 +185,10 @@ impl primase_core::convert::Writer for Kept {
 #[test]
 #[allow(unsafe_code)]
 fn a_character_converts_as_one_part_per_asset() -> Result<()> {
-    let Some(install) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(install) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = tool(Tool::Oodle6) else {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.

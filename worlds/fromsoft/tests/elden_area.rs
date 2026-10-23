@@ -1,12 +1,12 @@
 //! Elden Ring maps read through the shared area read ([`sekiro::read_game_area`]) against SoulsFormatsNEXT's reading of
-//! the same layouts (`msb.jsonl` of `PRIMASE_ELDEN_FORMAT_ORACLE`): the Academy of Raya Lucaria (m14_00_00_00, a legacy
-//! dungeon) by itself, and the Shaded Castle tile (m60_39_54_00) with its parent tiles' parts for it. Every map piece
-//! and asset part the reference lists is accounted for (a placement, or a model the archive lacks, a SpeedTree model
-//! or a model whose face sets use no vertex), and each placement stands at the part's stored position, moved by its
-//! parent tile's offset where a parent places it: translation exact, with the core frame's z reversed.
+//! the same layouts (`msb.jsonl` of `oracles.soulsformats.elden/format`): the Academy of Raya Lucaria (m14_00_00_00, a
+//! legacy dungeon) by itself, and the Shaded Castle tile (m60_39_54_00) with its parent tiles' parts for it. Every map
+//! piece and asset part the reference lists is accounted for (a placement, or a model the archive lacks, a SpeedTree
+//! model or a model whose face sets use no vertex), and each placement stands at the part's stored position, moved by
+//! its parent tile's offset where a parent places it: translation exact, with the core frame's z reversed.
 use primase_core::{Instance, Source, Transform, World};
 use primase_fromsoft::{Game, Install, Keys, dcx::Decoder, sekiro};
-use primase_testdata::real_data;
+
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
@@ -34,10 +34,14 @@ fn reference_parts(oracle: &std::path::Path, maps: &[&str]) -> Result<BTreeMap<S
 #[test]
 fn every_placed_part_is_accounted_for() -> Result<()> {
     let (Some(root), Some(keys), Some(oracle), Some(dll)) = (
-        real_data("PRIMASE_ELDEN_DIR"),
-        real_data("PRIMASE_ELDEN_KEYS"),
-        real_data("PRIMASE_ELDEN_FORMAT_ORACLE"),
-        real_data("PRIMASE_OODLE6"),
+        primase_testdata::install(primase_testdata::Game::Elden),
+        primase_testdata::keys(primase_testdata::Game::Elden),
+        primase_testdata::oracle(
+            primase_testdata::OracleSet::SoulsFormats,
+            primase_testdata::Game::Elden,
+            "format",
+        ),
+        primase_testdata::tool(primase_testdata::Tool::Oodle6),
     ) else {
         return Ok(());
     };

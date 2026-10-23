@@ -376,7 +376,11 @@ mod tests {
         use primase_texcodec::TexDecoder;
         use sha2::{Digest, Sha256};
         use std::sync::Arc;
-        let Some(path) = primase_testdata::real_data("PRIMASE_FROMSOFT_REFLECTANCE_ORACLE") else {
+        let Some(path) = primase_testdata::oracle(
+            primase_testdata::OracleSet::Scripts,
+            primase_testdata::Game::Sekiro,
+            "reflectance.json",
+        ) else {
             return Ok(());
         };
         let oracle: serde_json::Value = serde_json::from_slice(&primase_testdata::read_input(path)?)?;

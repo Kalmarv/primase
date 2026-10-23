@@ -5,7 +5,7 @@
 //! Compressed positions, motion classifications and materials remain exact.
 //! Reference names have a byte-widening defect, reversed only for comparison.
 use primase_fromsoft::collision;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, oracle};
 use std::{
     fs,
     io::{Cursor, Read},
@@ -77,7 +77,7 @@ fn surface_distance_detects_displacement_and_tessellation() {
 }
 #[test]
 fn castle_object_bodies() -> Result<()> {
-    let Some(dir) = real_data("PRIMASE_FROMSOFT_OBJECT_ORACLE") else {
+    let Some(dir) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "objects") else {
         return Ok(());
     };
     let mut files = fs::read_dir(&dir)?

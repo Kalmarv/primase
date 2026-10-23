@@ -7,7 +7,7 @@ use primase_fromsoft::{
     archive::Archive,
     bhd::{Header, unwrap_rsa},
 };
-use primase_testdata::real_data;
+
 use std::path::PathBuf;
 
 /// One game's install, its keys and the independent census of it, when the configuration names them.
@@ -20,25 +20,41 @@ struct Install {
 }
 
 fn install(game: Game) -> Result<Option<Install>, Box<dyn std::error::Error>> {
-    let (dir, oracle, names) = match game {
+    let (root, oracle, names) = match game {
         Game::Sekiro => (
-            "PRIMASE_SEKIRO_DIR",
-            "PRIMASE_FROMSOFT_BHD_ORACLE",
-            "PRIMASE_FROMSOFT_NAMES",
+            primase_testdata::install(primase_testdata::Game::Sekiro),
+            primase_testdata::oracle(
+                primase_testdata::OracleSet::SoulsFormats,
+                primase_testdata::Game::Sekiro,
+                "census",
+            ),
+            primase_testdata::oracle(
+                primase_testdata::OracleSet::Uxm,
+                primase_testdata::Game::Sekiro,
+                "dictionary.txt",
+            ),
         ),
         Game::EldenRing => (
-            "PRIMASE_ELDEN_DIR",
-            "PRIMASE_ELDEN_BHD_ORACLE",
-            "PRIMASE_ELDEN_NAMES",
+            primase_testdata::install(primase_testdata::Game::Elden),
+            primase_testdata::oracle(
+                primase_testdata::OracleSet::SoulsFormats,
+                primase_testdata::Game::Elden,
+                "census",
+            ),
+            primase_testdata::oracle(
+                primase_testdata::OracleSet::Uxm,
+                primase_testdata::Game::Elden,
+                "dictionary.txt",
+            ),
         ),
     };
-    let (Some(root), Some(oracle)) = (real_data(dir), real_data(oracle)) else {
+    let (Some(root), Some(oracle)) = (root, oracle) else {
         return Ok(None);
     };
     let keys = match Keys::published(game) {
         Some(keys) => keys,
         None => {
-            let Some(folder) = real_data("PRIMASE_ELDEN_KEYS") else {
+            let Some(folder) = primase_testdata::keys(primase_testdata::Game::Elden) else {
                 return Ok(None);
             };
             Keys::from_folder(folder, game)?
@@ -49,7 +65,7 @@ fn install(game: Game) -> Result<Option<Install>, Box<dyn std::error::Error>> {
         root,
         keys,
         oracle,
-        names: real_data(names),
+        names,
     }))
 }
 
@@ -149,7 +165,7 @@ mod native {
 /// Every indexed entry is attempted; corrupt entries remain explicit failures.
 #[test]
 fn whole_install() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = primase_testdata::tool(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let oodle = native::load(dll)?;

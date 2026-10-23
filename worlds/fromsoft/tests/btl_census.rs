@@ -1,19 +1,26 @@
 //! Every light bank of a game against an independent reader's reading of the same files (`btl.jsonl` of the game's
-//! format oracle: SoulsFormatsNEXT ee1dd61's BTL for Elden Ring, `PRIMASE_ELDEN_FORMAT_ORACLE`): the stored version
-//! and every light's name, type, colours, powers, shadow flag, cone, position, rotation and radius, floats as bit
-//! patterns. A bank the reference refuses must be refused by ours too.
+//! format oracle: SoulsFormatsNEXT ee1dd61's BTL for Elden Ring, `oracles.soulsformats.elden/format`): the stored
+//! version and every light's name, type, colours, powers, shadow flag, cone, position, rotation and radius, floats as
+//! bit patterns. A bank the reference refuses must be refused by ours too.
 use primase_fromsoft::{Game, btl::LightBank, dcx::Decoder};
-use primase_testdata::real_data;
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
 
 #[test]
 fn every_light_bank_matches_an_independent_reading() -> Result<()> {
-    for (game, var) in [(Game::EldenRing, "PRIMASE_ELDEN_FORMAT_ORACLE")] {
+    for (game, format) in [(
+        Game::EldenRing,
+        primase_testdata::oracle(
+            primase_testdata::OracleSet::SoulsFormats,
+            primase_testdata::Game::Elden,
+            "format",
+        ),
+    )] {
         let (Some(archive), Some(oracle), Some(dll)) = (
             common::archive(game)?,
-            real_data(var),
-            real_data("PRIMASE_OODLE6"),
+            format,
+            primase_testdata::tool(primase_testdata::Tool::Oodle6),
         ) else {
             continue;
         };
