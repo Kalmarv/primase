@@ -243,3 +243,21 @@ fn needs_the_targets_choice_and_gltf_maps_and_leaves_what_has_no_frame() {
     let err = run(&mut world, "uv-frame-normals{bitangent=+v}").unwrap_err();
     assert!(err.contains("normalize-normals"), "{err}");
 }
+
+#[test]
+fn a_primitive_that_is_not_a_triangle_list_is_left_as_it_is() {
+    let mut world = World::new();
+    let t = normal_map(&mut world, NormalConvention::GLTF);
+    let m = material(&mut world, t);
+    let mesh = quad(&mut world, m, 1., PLAIN, Some([1., 0., 0., -1.]));
+    let mut lines = world.get::<Mesh>(mesh).unwrap().primitives()[0].clone();
+    lines.topology = Topology::Lines;
+    lines.indices = Some(vec![0, 1, 2, 3, 0, 3]);
+    world.insert(mesh, Mesh::new(vec![lines]));
+    let report = run(&mut world, "uv-frame-normals{bitangent=-v}").unwrap();
+    assert_eq!(
+        report.steps[0].log.counts["primitives that are not triangle lists left as they are"],
+        1
+    );
+    assert_eq!(tangents(&world, mesh), vec![[1., 0., 0., -1.]; 4]);
+}

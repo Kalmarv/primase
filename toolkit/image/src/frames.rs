@@ -160,6 +160,11 @@ fn run(world: &mut World, bitangent: Bitangent, log: &mut PassLog) -> Result<()>
             let Some(r) = p.material.and_then(|m| bound.get(&m)) else {
                 continue;
             };
+            if p.topology != primase_core::Topology::Triangles {
+                // lines and points have no surface to put a frame on; their index lists are not triples
+                log.count("primitives that are not triangle lists left as they are", 1);
+                continue;
+            }
             let (Some(positions), Some(normals), Some(Stream::F32x4(supplied)), Some(Stream::F32x2(uv))) = (
                 stream3(p, Semantic::Position),
                 stream3(p, Semantic::Normal),

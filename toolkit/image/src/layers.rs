@@ -104,11 +104,12 @@ impl Pass for BakeLayerChannels {
             }
         }
         // every primitive drawn with each material, and a colour stream none of them has
+        let layered: BTreeSet<Entity> = materials.iter().map(|(e, _)| *e).collect();
         let mut drawn: BTreeMap<Entity, Vec<(Entity, usize)>> = BTreeMap::new();
         for (mesh, m) in w.iter::<Mesh>() {
             for (i, p) in m.primitives().iter().enumerate() {
                 if let Some(mat) = p.material
-                    && materials.iter().any(|(e, _)| *e == mat)
+                    && layered.contains(&mat)
                 {
                     drawn.entry(mat).or_default().push((mesh, i));
                 }
@@ -300,17 +301,22 @@ fn sample(m: &Decoded, r: &TextureRef, uv: [f32; 2]) -> [f32; 4] {
         let at = |t: f32, n: u32| (t * n as f32).floor() as i64;
         return texel(at(uv[0], m.width), at(uv[1], m.height));
     }
-    let fx = uv[0] * m.width as f32 - 0.5;
-    let fy = uv[1] * m.height as f32 - 0.5;
+    // scaled to texels in f32; a coordinate that overflows there (finite as stored) is scaled in f64, where it cannot
+    let texels = |t: f32, n: u32| -> f64 {
+        let scaled = t * n as f32 - 0.5;
+        if scaled.is_finite() {
+            f64::from(scaled)
+        } else {
+            f64::from(t) * f64::from(n) - 0.5
+        }
+    };
+    let (fx, fy) = (texels(uv[0], m.width), texels(uv[1], m.height));
     let (x0, y0) = (fx.floor(), fy.floor());
-    let (tx, ty) = (fx - x0, fy - y0);
+    let (tx, ty) = ((fx - x0) as f32, (fy - y0) as f32);
     let (x0, y0) = (x0 as i64, y0 as i64);
-    let (a, b, c, d) = (
-        texel(x0, y0),
-        texel(x0 + 1, y0),
-        texel(x0, y0 + 1),
-        texel(x0 + 1, y0 + 1),
-    );
+    // saturating: a coordinate past the i64 range is a texel by the wrap mode, not an overflow
+    let (x1, y1) = (x0.saturating_add(1), y0.saturating_add(1));
+    let (a, b, c, d) = (texel(x0, y0), texel(x1, y0), texel(x0, y1), texel(x1, y1));
     std::array::from_fn(|k| {
         let top = a[k] + (b[k] - a[k]) * tx;
         let bottom = c[k] + (d[k] - c[k]) * tx;

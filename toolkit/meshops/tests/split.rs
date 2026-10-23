@@ -435,3 +435,25 @@ fn a_placements_own_collision_stays_on_one_copy() {
     );
     assert_eq!(log.counts["collision placements in no group"], 1);
 }
+
+#[test]
+fn an_asset_that_listed_the_split_prototype_stops_listing_it() {
+    use primase_core::{Asset, Role};
+    let Scene {
+        mut w,
+        prototype,
+        placement,
+        ..
+    } = scene();
+    let asset = w.spawn();
+    w.insert(
+        asset,
+        Asset {
+            members: vec![(prototype, Role::Part), (placement, Role::Part)],
+        },
+    );
+    run(&mut w, pass(&[("Floor_", "park"), ("Wall_", "room")], 0.01)).unwrap();
+    assert!(!w.is_alive(prototype));
+    let members = &w.get::<Asset>(asset).unwrap().members;
+    assert!(members.iter().all(|(m, _)| w.is_alive(*m)), "{members:?}");
+}

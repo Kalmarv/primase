@@ -106,12 +106,20 @@ pub fn despawn(w: &mut World, e: Entity, log: &mut PassLog, why: &str) -> bool {
     for (m, n) in held(w, e) {
         log.dropped(m, why, n);
     }
+    let gone = w.despawn(e);
+    unlist(w, e, log);
+    gone
+}
+
+/// Every `core.asset` that lists `e` as a member stops listing it, counted as "asset members dropped with the entity they
+/// listed". For a pass that despawns an entity whose primitives or placements are kept elsewhere, and so declares nothing
+/// left out ([`despawn`] declares what the entity held); it declares that it modifies `core.asset`.
+pub fn unlist(w: &mut World, e: Entity, log: &mut PassLog) {
     let listing: Vec<Entity> = w
         .iter::<Asset>()
         .filter(|(_, a)| a.members.iter().any(|(m, _)| *m == e))
         .map(|(a, _)| a)
         .collect();
-    let gone = w.despawn(e);
     for a in listing {
         if let Some(asset) = w.get_mut::<Asset>(a) {
             let before = asset.members.len();
@@ -122,7 +130,6 @@ pub fn despawn(w: &mut World, e: Entity, log: &mut PassLog, why: &str) -> bool {
             );
         }
     }
-    gone
 }
 
 /// Whether the pass manager runs the conservation diagnostics (see the module documentation).

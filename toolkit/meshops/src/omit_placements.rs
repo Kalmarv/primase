@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use primase_core::convert::PartScope;
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::{Collision, Component, Entity, Instance, Name, Source, World};
+use primase_core::{Asset, Collision, Component, Entity, Instance, Name, Source, World};
 
 /// What becomes of a selected placement's collision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,9 +85,10 @@ impl Pass for OmitPlacements {
     fn removes(&self) -> &[&'static str] {
         &[Instance::NAME]
     }
-    /// A placement keeping its prototype's collision is pointed at the copy.
+    /// A placement keeping its prototype's collision is pointed at the copy; a placement despawned stops being listed by
+    /// the assets that list it.
     fn modifies(&self) -> &[&'static str] {
-        &[Instance::NAME]
+        &[Instance::NAME, Asset::NAME]
     }
     /// It lowers nothing: what it takes away is left out.
     fn legalizes(&self) -> &[&'static str] {
@@ -120,7 +121,7 @@ impl Pass for OmitPlacements {
         let mut copies: BTreeMap<Entity, Entity> = BTreeMap::new();
         for (e, prototype) in selected {
             if self.collision == PlacementCollision::Omit {
-                w.despawn(e);
+                primase_core::ledger::despawn(w, e, log, "placements omitted");
                 continue;
             }
             if w.has::<Collision>(e) {
@@ -129,7 +130,7 @@ impl Pass for OmitPlacements {
                 continue;
             }
             let Some(collision) = w.get::<Collision>(prototype).cloned() else {
-                w.despawn(e);
+                primase_core::ledger::despawn(w, e, log, "placements with no collision to keep");
                 log.count("placements with no collision to keep, despawned", 1);
                 continue;
             };
@@ -267,5 +268,55 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("Level/Roof"), "{err}");
+    }
+
+    /// The placements it despawns are declared as left out (the conservation diagnostics enforced), including when a
+    /// kept placement has no collision to keep, and an asset that listed one stops listing it.
+    #[test]
+    fn despawned_placements_are_declared_and_leave_their_assets() {
+        use primase_core::ledger::Conservation;
+        use primase_core::{Asset, Role};
+        let enforced = |w: &mut World, pass: OmitPlacements| {
+            let mut report = RunReport::default();
+            PassManager::new(PassRegistry::new())
+                .with_pass_checks(true)
+                .with_conservation(Conservation::Enforce)
+                .run(
+                    w,
+                    &Pipeline {
+                        passes: vec![Box::new(pass)],
+                    },
+                    &mut report,
+                )
+                .map(|()| report)
+                .map_err(|e| e.to_string())
+        };
+        let omit = || OmitPlacements {
+            prefixes: vec!["Level/Ceiling".into()],
+            collision: PlacementCollision::Omit,
+        };
+        let (mut w, _, [a, b, _]) = world();
+        let asset = w.spawn();
+        w.insert(
+            asset,
+            Asset {
+                members: vec![(a, Role::Part), (b, Role::Part)],
+            },
+        );
+        enforced(&mut w, omit()).unwrap();
+        assert!(!w.is_alive(a) && !w.is_alive(b));
+        assert_eq!(w.get::<Asset>(asset).unwrap().members, []);
+        // kept for their collision, with none to keep: despawned, and declared
+        let (mut w, prototype, [a, b, floor]) = world();
+        w.remove::<Collision>(prototype);
+        enforced(
+            &mut w,
+            OmitPlacements {
+                prefixes: vec!["Level/Ceiling".into()],
+                collision: PlacementCollision::Keep,
+            },
+        )
+        .unwrap();
+        assert!(!w.is_alive(a) && !w.is_alive(b) && w.is_alive(floor));
     }
 }

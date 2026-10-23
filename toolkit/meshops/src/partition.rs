@@ -198,6 +198,14 @@ impl PartitionGrid {
         ))
     }
 
+    /// The cell `p` stands in by position alone.
+    fn cell_at(&self, p: [f64; 2]) -> (i64, i64) {
+        (
+            ((p[0] - self.origin[0]) / self.cell).floor() as i64,
+            ((p[1] - self.origin[1]) / self.cell).floor() as i64,
+        )
+    }
+
     /// Whether `p` is within `halo` of cell `c` (and not in it).
     fn near(&self, c: (i64, i64), p: [f64; 2]) -> bool {
         let lo = [
@@ -207,6 +215,68 @@ impl PartitionGrid {
         let d = |x: f64, lo: f64| (lo - x).max(x - (lo + self.cell)).max(0.0);
         let (dx, dy) = (d(p[0], lo[0]), d(p[1], lo[1]));
         self.halo > 0.0 && (dx * dx + dy * dy).sqrt() <= self.halo
+    }
+}
+
+/// Placed content by the grid cell it stands in (its position alone: tiles and regions do not move it), so a cell finds
+/// the content within its halo from the cells around it, not from all of the content.
+struct Buckets {
+    by_cell: BTreeMap<(i64, i64), Vec<usize>>,
+    /// How many cells a halo reaches past a cell's own (one more than the distance needs, for rounding).
+    reach: i64,
+}
+
+impl Buckets {
+    fn of(grid: &PartitionGrid, at: &[(Entity, [f64; 2])]) -> Buckets {
+        let mut by_cell: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+        if grid.halo > 0.0 {
+            for (k, (_, p)) in at.iter().enumerate() {
+                by_cell.entry(grid.cell_at(*p)).or_default().push(k);
+            }
+        }
+        // saturating: a halo past the i64 cells is every cell
+        let reach = (grid.halo / grid.cell).ceil() as i64;
+        Buckets {
+            by_cell,
+            reach: reach.saturating_add(1),
+        }
+    }
+
+    /// The indices of the content that may stand within the halo of cell `c`: everything in the cells `reach` around it
+    /// (all of the content when that is more cells than there are occupied ones). None without a halo, which makes
+    /// every cell's context empty.
+    fn near<'a>(&'a self, grid: &PartitionGrid, c: (i64, i64)) -> Box<dyn Iterator<Item = usize> + 'a> {
+        if grid.halo <= 0.0 {
+            return Box::new(std::iter::empty());
+        }
+        let side = self.reach.saturating_mul(2).saturating_add(1);
+        let square = u128::try_from(side)
+            .unwrap_or(u128::MAX)
+            .saturating_mul(u128::try_from(side).unwrap_or(u128::MAX));
+        if square > self.by_cell.len() as u128 {
+            let (reach, lo) = (
+                self.reach,
+                (c.0.saturating_sub(self.reach), c.1.saturating_sub(self.reach)),
+            );
+            let hi = (c.0.saturating_add(reach), c.1.saturating_add(reach));
+            Box::new(
+                self.by_cell
+                    .range((lo.0, i64::MIN)..=(hi.0, i64::MAX))
+                    .filter(move |((_, y), _)| (lo.1..=hi.1).contains(y))
+                    .flat_map(|(_, ks)| ks.iter().copied()),
+            )
+        } else {
+            let (x0, y0) = (c.0.saturating_sub(self.reach), c.1.saturating_sub(self.reach));
+            Box::new((0..side).flat_map(move |dx| {
+                (0..side).flat_map(move |dy| {
+                    self.by_cell
+                        .get(&(x0.saturating_add(dx), y0.saturating_add(dy)))
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                })
+            }))
+        }
     }
 }
 
@@ -400,11 +470,12 @@ impl Pass for PartitionGrid {
         }
         let mut groups = Vec::new();
         let mut shared = 0;
+        let buckets = Buckets::of(self, &at);
         for (&c, roots) in &cells {
-            let context: BTreeSet<Entity> = at
-                .iter()
-                .filter(|(e, p)| !roots.contains(e) && self.near(c, *p))
-                .map(|(e, _)| *e)
+            let context: BTreeSet<Entity> = buckets
+                .near(self, c)
+                .filter(|&k| !roots.contains(&at[k].0) && self.near(c, at[k].1))
+                .map(|k| at[k].0)
                 .collect();
             shared += context.len();
             let (w0, s0) = (
@@ -892,5 +963,40 @@ mod tests {
             }
         }
         assert_eq!(owned, BTreeMap::from([(e0, 1), (e1, 1), (e2, 1)]));
+    }
+    /// A cell finds the content within its halo from the cells around it: the same content a scan of all of it finds, for
+    /// halos smaller than, equal to and many times a cell, and none without a halo.
+    #[test]
+    fn the_content_near_a_cell_is_found_from_the_cells_around_it() {
+        let mut w = World::new();
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 20_000) as f64 / 100.0 - 100.0
+        };
+        let at: Vec<(Entity, [f64; 2])> = (0..300).map(|_| (w.spawn(), [next(), next()])).collect();
+        for (cell, halo) in [
+            (10.0, 3.0),
+            (10.0, 10.0),
+            (10.0, 25.0),
+            (3.0, 100.0),
+            (7.5, 0.5),
+            (50.0, 1e9),
+            (10.0, 0.0),
+        ] {
+            let grid = PartitionGrid::new(cell).unwrap().with_halo(halo).unwrap();
+            let buckets = Buckets::of(&grid, &at);
+            let cells: BTreeSet<(i64, i64)> = at.iter().map(|(_, p)| grid.cell_at(*p)).collect();
+            for c in cells {
+                let brute: BTreeSet<usize> = (0..at.len()).filter(|&k| grid.near(c, at[k].1)).collect();
+                let found: BTreeSet<usize> = buckets
+                    .near(&grid, c)
+                    .filter(|&k| grid.near(c, at[k].1))
+                    .collect();
+                assert_eq!(found, brute, "cell {cell}, halo {halo}, cell {c:?}");
+            }
+        }
     }
 }

@@ -171,3 +171,24 @@ fn a_stated_nearest_filter_samples_the_nearest_texel() {
         &vec![[0.2, 0., 0., 0.], [0.4, 1., 0., 0.], [0.6, 1., 0., 0.]]
     );
 }
+
+/// A texture coordinate past the integer range (finite, so the world verifies) samples a texel by the wrap mode; the
+/// bilinear neighbour of the last integer used to overflow.
+#[test]
+fn a_texture_coordinate_past_the_integer_range_samples_a_texel() {
+    for uv in [[1e30f32, 0.5], [0.5, -1e30], [f32::MAX, f32::MAX]] {
+        let (mut w, host, proto) = world(Composition::Sum);
+        let m = w.get_mut::<Mesh>(proto).unwrap();
+        if let Some(Stream::F32x2(coordinates)) = m
+            .primitive_mut(0)
+            .unwrap()
+            .streams_mut()
+            .get_mut(&Semantic::TexCoord(0))
+        {
+            coordinates[1] = uv;
+        }
+        bake(&mut w);
+        let l = w.get::<LayeredMaterial>(host).unwrap();
+        assert!(!l.weights.per_pixel(), "{uv:?}");
+    }
+}

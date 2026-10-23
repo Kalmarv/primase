@@ -195,7 +195,7 @@ impl Pass for SplitByCollision {
         ])
     }
     fn modifies(&self) -> &[&'static str] {
-        &[Instance::NAME, Name::NAME]
+        &[Instance::NAME, Name::NAME, primase_core::Asset::NAME]
     }
     /// A prototype no placement places once its placements are split.
     fn despawns_entities(&self) -> bool {
@@ -468,7 +468,9 @@ impl Pass for SplitByCollision {
         let placed: BTreeSet<Entity> = w.iter::<Instance>().map(|(_, i)| i.prototype).collect();
         let sources: BTreeSet<Entity> = selected.iter().map(|(_, i)| i.prototype).collect();
         for p in sources.difference(&placed) {
+            // its primitives stand in the copies: nothing is left out to declare, but no asset keeps listing it
             w.despawn(*p);
+            primase_core::ledger::unlist(w, *p, log);
             log.count("prototypes left unplaced by the split, despawned", 1);
         }
         Ok(())
