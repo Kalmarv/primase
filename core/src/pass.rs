@@ -1144,13 +1144,13 @@ impl PassManager {
         }
     }
 
-    /// Check every pass as it runs: its effects entity by entity against its declarations (what it adds to or takes
-    /// from an entity, what it despawns, the resources it writes: [`Pass::provides`], [`Pass::removes`],
-    /// [`Pass::modifies`]), and the components' validators on what it leaves. Each costs a scan of the world per pass,
-    /// so they are on in debug builds (the test suites) and off in release builds unless asked for, like the
-    /// conservation diagnostics. What a pass's names do across the whole world is checked either way, and a conversion
-    /// validates at its boundaries (what was read and loaded, the merged summaries, a part or group before writing)
-    /// either way.
+    /// Check every pass's effects entity by entity against its declarations as it runs: what it adds to or takes from
+    /// an entity, what it despawns, the resources it writes ([`Pass::provides`], [`Pass::removes`],
+    /// [`Pass::modifies`]). On in debug builds (the test suites) and off in release builds unless asked for, like the
+    /// conservation diagnostics: it checks the passes' code, not the data, and costs a scan of the world per name per
+    /// pass (measured on a Unity level of 16,000 placements: 0.46 s over 12 passes, on top of the verifier's 0.26 s).
+    /// What a pass's names do across the whole world is checked either way, and the verifier ([`Component::verify`],
+    /// [`crate::Resource::verify`], the validators) runs after every pass in every build.
     pub fn with_pass_checks(mut self, on: bool) -> Self {
         self.pass_checks = on;
         self
@@ -1486,8 +1486,9 @@ impl PassManager {
         removed.sort();
         if self.pass_checks {
             self.check_entity_effects(w, p, text, log, &held_before, &effects)?;
-            self.verify(w, text)?;
         }
+        // the documented contract: the verifier runs after every pass, in every build
+        self.verify(w, text)?;
         Ok(StepReport {
             pass: text.to_owned(),
             approximates: p.approximates(),
@@ -3828,6 +3829,33 @@ mod tests {
         m.add_validator(Box::new(NoPbr));
         let err = m
             .convert(&mut world(), &gltf(), Mode::Partial, &PassOptions::new())
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "verify after bake: no-pbr on e0: pbr is banned here"
+        );
+    }
+
+    /// The verifier runs after every pass whatever the pass checks say: with them off (a release build's default),
+    /// a world the pass left invalid is still refused, naming the pass.
+    #[test]
+    fn the_verifier_runs_with_the_pass_checks_off() {
+        struct NoPbr;
+        impl Validator for NoPbr {
+            fn name(&self) -> &'static str {
+                "no-pbr"
+            }
+            fn check(&self, w: &World) -> Vec<(Option<Entity>, String)> {
+                w.iter::<Pbr>()
+                    .map(|(e, _)| (Some(e), "pbr is banned here".to_owned()))
+                    .collect()
+            }
+        }
+        let mut m = PassManager::new(registry(false)).with_pass_checks(false);
+        m.add_validator(Box::new(NoPbr));
+        let pipeline = m.registry.parse("load, bake").unwrap();
+        let err = m
+            .run(&mut world(), &pipeline, &mut RunReport::default())
             .unwrap_err();
         assert_eq!(
             err.to_string(),
