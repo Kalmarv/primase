@@ -716,3 +716,57 @@ mod compute {
         }
     }
 }
+
+mod waves {
+    use super::*;
+    use primase_shader::D3dClass;
+    use std::collections::BTreeMap;
+
+    /// `waves.hlsl`: 64 invocations in one group, 13 result words each, on waves of 32 lanes (invocation i is lane
+    /// i % 32 of wave i / 32). The values are the arithmetic of the source.
+    #[test]
+    fn wave_operations_over_waves_of_thirty_two_lanes() {
+        for v in BOTH {
+            let (program, exe) = lifted(&fixture("waves", v));
+            assert_eq!(exe.workgroup_size(), Some([64, 1, 1]), "{v}");
+            let results = program
+                .interface
+                .resources
+                .iter()
+                .find(|r| {
+                    r.provenance
+                        .d3d
+                        .is_some_and(|d| d.class == D3dClass::UnorderedAccess && d.register == 0)
+                })
+                .unwrap()
+                .id;
+            let mut buffers = BTreeMap::from([(results, vec![0u32; 64 * 13])]);
+            let resources = Resources::default();
+            let bound = exe.bind_resources(&resources).unwrap();
+            exe.dispatch(&bound, &mut NoBackend, &mut buffers, [1, 1, 1], 32)
+                .unwrap_or_else(|e| panic!("{v}: {e}"));
+            let words = &buffers[&results];
+            for i in 0..64u32 {
+                let (lane, wave) = (i % 32, i / 32);
+                let at = (i * 13) as usize;
+                let got = &words[at..at + 13];
+                let want = [
+                    lane,
+                    if wave == 0 { 496 } else { 1520 },
+                    wave * 32,
+                    wave * 32 + 31,
+                    0xffff_ffff,
+                    u32::from(wave == 0),
+                    u32::from(wave == 1),
+                    0x5555_5555,
+                    lane * lane.saturating_sub(1) / 2 + 32 * wave * lane,
+                    wave * 32,
+                    wave * 32 + 5,
+                    i ^ 1,
+                    u32::from(lane == 0),
+                ];
+                assert_eq!(got, want, "{v} invocation {i}");
+            }
+        }
+    }
+}
