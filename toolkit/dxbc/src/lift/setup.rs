@@ -125,6 +125,7 @@ impl Setup {
                 inputs: Vec::new(),
                 outputs: Vec::new(),
                 resources: Vec::new(),
+                facts: Default::default(),
             },
             io: EntryIo {
                 arguments: Vec::new(),
@@ -520,6 +521,7 @@ impl Setup {
             inputs: Vec::new(),
             outputs: Vec::new(),
             resources: Vec::new(),
+            facts: Default::default(),
         };
         for e in &input_elements {
             let declared = setup

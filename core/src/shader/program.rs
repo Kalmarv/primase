@@ -57,7 +57,7 @@ mod tests {
     use crate::World;
     use crate::shader::{
         BufferKind, BufferLayout, Constant, ConstantType, Label, Resource, ResourceId, ResourceKind,
-        ResourceProvenance, ScalarType, Stage, Value as Lanes, Varying, VaryingProvenance,
+        ResourceProvenance, ScalarType, Stage, StageFacts, Value as Lanes, Varying, VaryingProvenance,
     };
 
     fn varying(name: &str, index: u32, width: u8) -> Varying {
@@ -110,6 +110,7 @@ mod tests {
             inputs: vec![varying("TEXCOORD", 0, 2)],
             outputs: vec![varying("SV_Target", 0, 4)],
             resources: vec![buffer(0, 16, 0)],
+            facts: Default::default(),
         }
     }
 
@@ -136,6 +137,12 @@ mod tests {
             (Box::new(|i| i.inputs[0].value.width = 5), "width"),
             (Box::new(|i| i.resources.push(buffer(0, 16, 0))), "id 0"),
             (Box::new(|i| i.resources[0].count = 0), "no bindings"),
+            // facts of another stage, or a hull program without its patch
+            (
+                Box::new(|i| i.facts = StageFacts::VertexForTessellation),
+                "Pixel program with",
+            ),
+            (Box::new(|i| i.stage = Stage::Hull), "without its patch facts"),
             (Box::new(|i| i.resources = vec![buffer(0, 16, 4)]), "past the end"),
             (
                 Box::new(|i| {

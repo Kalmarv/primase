@@ -33,7 +33,7 @@ mod io;
 mod text;
 mod validate;
 
-pub use io::{EntryIo, IoItem, IoType, entry_io};
+pub use io::{EntryIo, FnItem, FunctionSig, IoItem, IoType, entry_io, stage_functions};
 pub use validate::{Problem, validate};
 
 use naga::{Handle, Module};

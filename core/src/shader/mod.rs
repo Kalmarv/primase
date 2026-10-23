@@ -26,8 +26,9 @@ pub use binding::{
     StageBinding, TextureBinding, TextureSource, ViewParameter,
 };
 pub use interface::{
-    D3dSignature, Interface, InterpMode, InterpSampling, Interpolation, Label, ScalarType, SystemValue,
-    Value, Varying, VaryingProvenance,
+    D3dSignature, DomainFacts, HullFacts, Interface, InterpMode, InterpSampling, Interpolation, Label,
+    Partitioning, ScalarType, StageFacts, SystemValue, TessDomain, TessTopology, Value, Varying,
+    VaryingProvenance,
 };
 pub use program::Shader;
 pub use resource::{
@@ -61,4 +62,11 @@ pub enum Stage {
     Pixel,
     /// A compute program: no varyings, system inputs naming the invocation, a thread group size.
     Compute,
+    /// A hull program: the control-point phase and the patch-constant function of a tessellated patch (see
+    /// [`StageFacts::Hull`]).
+    Hull,
+    /// A domain program: a vertex of a tessellated patch from its domain location (see [`StageFacts::Domain`]).
+    Domain,
+    /// A geometry program.
+    Geometry,
 }

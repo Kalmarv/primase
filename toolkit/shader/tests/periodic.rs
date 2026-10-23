@@ -70,6 +70,7 @@ fn shader(f: fn(f32, f32) -> f32) -> Uv {
             }],
             outputs: Vec::new(),
             resources: Vec::new(),
+            facts: Default::default(),
         },
         f,
     )

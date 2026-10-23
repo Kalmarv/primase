@@ -209,6 +209,7 @@ fn program(cfg: &Cfg, seed: u32) -> Result<Program, structure::Error> {
             },
         }],
         resources: vec![],
+        facts: Default::default(),
     };
     let _ = InterpMode::Flat;
     let mut b = Builder::new();

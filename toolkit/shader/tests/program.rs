@@ -162,6 +162,7 @@ fn program() -> Program {
                     d3d: None,
                 },
             }],
+            facts: Default::default(),
         },
         bindings: vec![(ResourceId(0), cb_global)],
         conventions: Conventions::D3D,

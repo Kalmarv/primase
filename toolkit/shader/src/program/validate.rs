@@ -7,7 +7,7 @@ use std::fmt;
 use naga::{AddressSpace, ImageClass, ScalarKind, ShaderStage, TypeInner};
 
 use super::Program;
-use super::io::{IoType, entry_io};
+use super::io::{FunctionSig, IoType, entry_io, stage_functions};
 use crate::{Access, BufferKind, ResourceKind, SampleType, ScalarType, StorageTarget, TextureDim, Value};
 
 /// One rule a program broke.
@@ -99,7 +99,148 @@ fn is_value(inner: &TypeInner, v: Value) -> bool {
     }
 }
 
+/// Whether a module type is the interface type `ty`.
+fn matches_io(module: &naga::Module, ty: &IoType, handle: naga::Handle<naga::Type>) -> bool {
+    let types = &module.types;
+    match ty {
+        IoType::Value(v) => is_value(&types[handle].inner, *v),
+        IoType::ClipDistances(n) => matches!(
+            &types[handle].inner,
+            TypeInner::Array { base, size: naga::ArraySize::Constant(len), .. }
+                if len.get() == *n && types[*base].inner == TypeInner::Scalar(naga::Scalar::F32)
+        ),
+        IoType::Array(v, n) => matches!(
+            &types[handle].inner,
+            TypeInner::Array { base, size: naga::ArraySize::Constant(len), .. }
+                if len.get() == *n && is_value(&types[*base].inner, *v)
+        ),
+    }
+}
+
+/// A program of a stage that has no entry point: its functions are the ones [`stage_functions`] names, with the
+/// arguments and result members it says, no bindings, and the module has no entry point.
+fn functions(p: &Program, sigs: &[FunctionSig], problems: &mut Vec<Problem>) {
+    let mut fail = |m: String| problems.push(Problem::Program(m));
+    if !p.module.entry_points.is_empty() {
+        fail(format!(
+            "a {:?} program has {} entry points; it is made of functions",
+            p.stage,
+            p.module.entry_points.len()
+        ));
+    }
+    if p.module.functions.len() != sigs.len() {
+        fail(format!(
+            "a {:?} program is {} functions, the module has {}",
+            p.stage,
+            sigs.len(),
+            p.module.functions.len()
+        ));
+    }
+    if sigs.iter().all(|s| s.name != p.entry) {
+        fail(format!(
+            "the program's entry {} is not one of its functions",
+            p.entry
+        ));
+    }
+    for sig in sigs {
+        let Some((_, f)) = p
+            .module
+            .functions
+            .iter()
+            .find(|(_, f)| f.name.as_deref() == Some(sig.name))
+        else {
+            fail(format!("the function {} is missing", sig.name));
+            continue;
+        };
+        if f.arguments.len() != sig.arguments.len() {
+            fail(format!(
+                "{}: {} arguments for {} expected",
+                sig.name,
+                f.arguments.len(),
+                sig.arguments.len()
+            ));
+        }
+        for (item, arg) in sig.arguments.iter().zip(&f.arguments) {
+            if arg.name.as_deref() != Some(item.name.as_str()) {
+                fail(format!(
+                    "{}: argument {} is named {:?}",
+                    sig.name, item.name, arg.name
+                ));
+            }
+            if !matches_io(&p.module, &item.ty, arg.ty) {
+                fail(format!(
+                    "{}: argument {}'s type is not {:?}",
+                    sig.name, item.name, item.ty
+                ));
+            }
+            if arg.binding.is_some() {
+                fail(format!("{}: argument {} has a binding", sig.name, item.name));
+            }
+        }
+        match (&f.result, sig.result.is_empty()) {
+            (None, true) => {}
+            (None, false) => fail(format!(
+                "{}: results declared but the function returns nothing",
+                sig.name
+            )),
+            (Some(_), true) => fail(format!(
+                "{}: the function returns a value but has no results",
+                sig.name
+            )),
+            (Some(result), false) => match &p.module.types[result.ty].inner {
+                TypeInner::Struct { members, .. } if members.len() == sig.result.len() => {
+                    for (item, m) in sig.result.iter().zip(members) {
+                        if m.name.as_deref() != Some(item.name.as_str()) {
+                            fail(format!(
+                                "{}: result {} is named {:?}",
+                                sig.name, item.name, m.name
+                            ));
+                        }
+                        if !matches_io(&p.module, &item.ty, m.ty) {
+                            fail(format!(
+                                "{}: result {}'s type is not {:?}",
+                                sig.name, item.name, item.ty
+                            ));
+                        }
+                        if m.binding.is_some() {
+                            fail(format!("{}: result {} has a binding", sig.name, item.name));
+                        }
+                    }
+                }
+                _ => fail(format!(
+                    "{}: the result is not a structure of {} members",
+                    sig.name,
+                    sig.result.len()
+                )),
+            },
+        }
+        if p.interface.stage != p.stage {
+            fail(format!(
+                "stages disagree: the program {:?}, its interface {:?}",
+                p.stage, p.interface.stage
+            ));
+        }
+    }
+    // labels are unique within a direction
+    for (what, list) in [("input", &p.interface.inputs), ("output", &p.interface.outputs)] {
+        let mut seen = BTreeSet::new();
+        for v in list.iter() {
+            if !seen.insert(&v.label) {
+                fail(format!(
+                    "{what} label {} repeats",
+                    Program::varying_name(&v.label)
+                ));
+            }
+        }
+    }
+}
+
 fn interface(p: &Program, problems: &mut Vec<Problem>) {
+    match stage_functions(&p.interface) {
+        Err(e) => return problems.push(Problem::Program(e)),
+        Ok(Some(sigs)) => return functions(p, &sigs, problems),
+        Ok(None) => {}
+    }
     let mut fail = |m: String| problems.push(Problem::Program(m));
     let [entry] = p.module.entry_points.as_slice() else {
         return fail(format!(
@@ -158,14 +299,7 @@ fn interface(p: &Program, problems: &mut Vec<Problem>) {
     };
     let function = &entry.function;
     let types = &p.module.types;
-    let matches_type = |ty: &IoType, handle| match ty {
-        IoType::Value(v) => is_value(&types[handle].inner, *v),
-        IoType::ClipDistances(n) => matches!(
-            &types[handle].inner,
-            TypeInner::Array { base, size: naga::ArraySize::Constant(len), .. }
-                if len.get() == *n && types[*base].inner == TypeInner::Scalar(naga::Scalar::F32)
-        ),
-    };
+    let matches_type = |ty: &IoType, handle| matches_io(&p.module, ty, handle);
 
     // inputs: one argument each
     if function.arguments.len() != io.arguments.len() {

@@ -254,6 +254,7 @@ fn reflected(members: Vec<Member>) -> Reflected {
                     }),
                 },
             }],
+            facts: Default::default(),
         },
         vec![(2, 16)],
     )
@@ -458,6 +459,7 @@ fn a_constant_texture_answers_loads() {
         inputs: vec![],
         outputs: vec![],
         resources: vec![],
+        facts: Default::default(),
     });
     let grid = Grid {
         size: 2,

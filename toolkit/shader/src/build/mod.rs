@@ -7,7 +7,7 @@ pub mod behaviour;
 mod entry;
 pub mod structure;
 
-pub use entry::EntryDecl;
+pub use entry::{EntryDecl, FunctionDecl};
 
 use naga::{
     BinaryOperator, Block, Expression, Function, GlobalVariable, Handle, Literal, LocalVariable,
@@ -419,6 +419,24 @@ impl Builder {
     /// Finish the module: the function built so far becomes the one entry point `name` of `stage`, with these
     /// arguments (each bound or a structure with bound members) and result structure. All control flow must be
     /// closed.
+    /// Close the function being built as the module's function `name` with these arguments and result, and start an
+    /// empty one: a program of a stage with no entry point is several of them (see [`crate::stage_functions`]).
+    pub fn end_function(&mut self, name: &str, decl: FunctionDecl) -> Handle<naga::Function> {
+        assert_eq!(self.blocks.len(), 1, "unclosed control flow (a lifter bug)");
+        let mut function = std::mem::take(&mut self.function);
+        function.name = Some(name.to_owned());
+        function.arguments = decl.arguments;
+        function.result = decl.result.map(|ty| naga::FunctionResult { ty, binding: None });
+        function.body = std::mem::replace(&mut self.blocks[0], Block::new());
+        self.module.functions.append(function, Span::UNDEFINED)
+    }
+
+    /// Finish a module that has functions and no entry point.
+    pub fn finish_functions(self) -> Module {
+        assert_eq!(self.blocks.len(), 1, "unclosed control flow (a lifter bug)");
+        self.module
+    }
+
     pub fn finish(
         mut self,
         name: &str,

@@ -41,6 +41,15 @@ impl Executable {
     /// Check `program` (its module and its interface) and compile it. A construct the executor does not run (a
     /// 64-bit value, an atomic other than add, an image atomic) is refused here, by name.
     pub fn new(program: &Program) -> Result<Self, Error> {
+        if crate::stage_functions(&program.interface)
+            .map_err(error)?
+            .is_some()
+        {
+            return Err(error(format!(
+                "a {:?} program is functions, not an entry point: the executor does not run it yet",
+                program.stage
+            )));
+        }
         let info = program.validate().map_err(|problems| {
             error(
                 problems

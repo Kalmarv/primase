@@ -4,7 +4,7 @@
 
 use naga::Binding;
 
-use crate::{Interface, Label, ScalarType, Stage, SystemValue, Value, Varying};
+use crate::{Interface, Label, ScalarType, Stage, StageFacts, SystemValue, Value, Varying};
 
 /// The type of an entry point argument or result member.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,6 +14,8 @@ pub enum IoType {
     /// An array of this many floats: the clip distances of a vertex stage, all of its `SV_ClipDistance` outputs
     /// together.
     ClipDistances(u32),
+    /// An array of this value: a hull or domain program's control points (one per point), a hull program's outputs.
+    Array(Value, u32),
 }
 
 /// One argument or result member.
@@ -142,6 +144,98 @@ fn location(stage: Stage, output: bool, v: &Varying, at: u32) -> Binding {
         blend_src: None,
         per_primitive: false,
     }
+}
+
+/// One argument or result member of a stage function.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FnItem {
+    pub name: String,
+    pub ty: IoType,
+}
+
+/// A function of a program that has no entry point: its name, arguments and result members (a structure `Out` when
+/// there are any).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FunctionSig {
+    pub name: &'static str,
+    pub arguments: Vec<FnItem>,
+    pub result: Vec<FnItem>,
+}
+
+/// The functions a program of a stage naga has no entry point for is made of; `None` for a stage that is an entry
+/// point. The arguments carry no bindings: they are named after the varying they carry, as an entry point's are.
+///
+/// - A vertex program whose outputs feed a tessellator: `main(inputs) -> Out`.
+/// - A hull program: `main(inputs as arrays of the input control points, SV_OutputControlPointID: u32) -> Out`, the
+///   control-point phase, run for each output control point; and `patch_constant(inputs as arrays of the input
+///   control points, outputs as arrays of the output control points under `out_<name>`, SV_PrimitiveID: u32) -> Out`,
+///   the patch-constant phase, run once for a patch, its result the patch constants.
+/// - A domain program: `main(patch constants, inputs as arrays of the input control points, SV_DomainLocation:
+///   vec3<f32>, SV_PrimitiveID: u32) -> Out`.
+pub fn stage_functions(interface: &Interface) -> Result<Option<Vec<FunctionSig>>, String> {
+    let stage = interface.stage;
+    let values = |list: &[Varying], output: bool| -> Vec<FnItem> {
+        list.iter()
+            .map(|v| FnItem {
+                name: varying_name(&v.label),
+                ty: IoType::Value(carried(stage, output, v)),
+            })
+            .collect()
+    };
+    let arrays = |list: &[Varying], output: bool, prefix: &str, n: u32| -> Vec<FnItem> {
+        list.iter()
+            .map(|v| FnItem {
+                name: format!("{prefix}{}", varying_name(&v.label)),
+                ty: IoType::Array(carried(stage, output, v), n),
+            })
+            .collect()
+    };
+    let scalar = |name: &str, width: u8, scalar: ScalarType| FnItem {
+        name: name.into(),
+        ty: IoType::Value(Value { scalar, width }),
+    };
+    Ok(match (&interface.stage, &interface.facts) {
+        (Stage::Vertex, StageFacts::VertexForTessellation) => Some(vec![FunctionSig {
+            name: "main",
+            arguments: values(&interface.inputs, false),
+            result: values(&interface.outputs, true),
+        }]),
+        (Stage::Hull, StageFacts::Hull(h)) => {
+            let mut main_args = arrays(&interface.inputs, false, "", h.input_control_points);
+            main_args.push(scalar("SV_OutputControlPointID", 1, ScalarType::Uint));
+            let mut constant_args = arrays(&interface.inputs, false, "", h.input_control_points);
+            constant_args.extend(arrays(&interface.outputs, true, "out_", h.output_control_points));
+            constant_args.push(scalar("SV_PrimitiveID", 1, ScalarType::Uint));
+            Some(vec![
+                FunctionSig {
+                    name: "main",
+                    arguments: main_args,
+                    result: values(&interface.outputs, true),
+                },
+                FunctionSig {
+                    name: "patch_constant",
+                    arguments: constant_args,
+                    result: values(&h.patch_constants, true),
+                },
+            ])
+        }
+        (Stage::Domain, StageFacts::Domain(d)) => {
+            let mut args = values(&d.patch_constants, false);
+            args.extend(arrays(&interface.inputs, false, "", d.input_control_points));
+            args.push(scalar("SV_DomainLocation", 3, ScalarType::Float));
+            args.push(scalar("SV_PrimitiveID", 1, ScalarType::Uint));
+            Some(vec![FunctionSig {
+                name: "main",
+                arguments: args,
+                result: values(&interface.outputs, true),
+            }])
+        }
+        (Stage::Hull | Stage::Domain, _) => {
+            return Err(format!("a {stage:?} program without its patch facts"));
+        }
+        (Stage::Geometry, _) => return Err("geometry programs are not carried".into()),
+        _ => None,
+    })
 }
 
 /// The entry point's arguments and result members for `interface`. `Err` says why the module cannot carry it (a

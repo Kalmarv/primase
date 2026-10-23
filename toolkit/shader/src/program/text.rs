@@ -4,7 +4,7 @@
 use std::fmt::Write;
 
 use super::{ClipDepth, Error, Origin, Program};
-use crate::{BufferKind, InterpMode, InterpSampling, ResourceKind, Stage, SystemValue, Varying};
+use crate::{BufferKind, InterpMode, InterpSampling, ResourceKind, Stage, StageFacts, SystemValue, Varying};
 
 fn lanes(v: &Varying) -> String {
     format!("{:?}{}", v.value.scalar, v.value.width).to_lowercase()
@@ -50,7 +50,7 @@ fn varying(out: &mut String, direction: &str, v: &Varying) {
 }
 
 pub(super) fn text(p: &Program) -> Result<String, Error> {
-    let wgsl = crate::emit::wgsl(p)?;
+    let wgsl = crate::emit::wgsl_functions(p)?;
     let mut out = String::new();
     let _ = writeln!(out, "// primase shader program v{}", super::VERSION);
     let _ = writeln!(
@@ -60,6 +60,9 @@ pub(super) fn text(p: &Program) -> Result<String, Error> {
             Stage::Vertex => "vertex",
             Stage::Pixel => "pixel",
             Stage::Compute => "compute",
+            Stage::Hull => "hull",
+            Stage::Domain => "domain",
+            Stage::Geometry => "geometry",
             _ => "other",
         },
         p.entry
@@ -93,6 +96,40 @@ pub(super) fn text(p: &Program) -> Result<String, Error> {
         "// d3d divide_by_zero={} float_to_int={} min_max_nan={} saturate_nan={} flush_denormals={}",
         m.divide_by_zero, m.float_to_int, m.min_max_nan, m.saturate_nan, m.flush_denormals
     );
+    match &p.interface.facts {
+        StageFacts::None => {}
+        StageFacts::VertexForTessellation => {
+            let _ = writeln!(out, "// feeds a tessellator: functions, no entry point");
+        }
+        StageFacts::Hull(h) => {
+            let _ = writeln!(
+                out,
+                "// hull domain={:?} partitioning={:?} topology={:?} control_points={}->{} max_tess_factor={}",
+                h.domain,
+                h.partitioning,
+                h.topology,
+                h.input_control_points,
+                h.output_control_points,
+                f32::from_bits(h.max_tess_factor_bits)
+            );
+            for v in &h.patch_constants {
+                varying(&mut out, "patch_constant", v);
+            }
+        }
+        StageFacts::Domain(d) => {
+            let _ = writeln!(
+                out,
+                "// domain domain={:?} control_points={}",
+                d.domain, d.input_control_points
+            );
+            for v in &d.patch_constants {
+                varying(&mut out, "patch_constant", v);
+            }
+        }
+        other => {
+            let _ = writeln!(out, "// facts {other:?}");
+        }
+    }
     for note in &p.notes {
         let _ = writeln!(out, "// note {note}");
     }

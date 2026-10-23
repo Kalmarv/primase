@@ -545,6 +545,7 @@ mod tests {
                     ),
                     resource(2, Kind::Sampler { comparison: false }),
                 ],
+                facts: Default::default(),
             },
         }
     }

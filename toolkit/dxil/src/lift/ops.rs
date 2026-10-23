@@ -460,6 +460,7 @@ impl Lift<'_> {
         let mut parts = Vec::new();
         for item in &io.results {
             let part = match item.ty {
+                primase_shader::IoType::Array(..) => return self.refuse("an array-typed output"),
                 primase_shader::IoType::ClipDistances(n) => {
                     let mut components = Vec::new();
                     for &i in &item.varyings {

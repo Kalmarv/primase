@@ -263,6 +263,7 @@ pub fn signatures(bytes: &[u8]) -> Result<Interface> {
         inputs: signature_of(&directory, &[b"ISGN", b"ISG1"], stage, false)?,
         outputs: signature_of(&directory, &[b"OSGN", b"OSG1", b"OSG5"], stage, true)?,
         resources: Vec::new(),
+        facts: Default::default(),
     })
 }
 
@@ -575,5 +576,6 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
         inputs: signature_of(&directory, &[b"ISGN", b"ISG1"], program_stage, false)?,
         outputs: signature_of(&directory, &[b"OSGN", b"OSG1", b"OSG5"], program_stage, true)?,
         resources,
+        facts: Default::default(),
     })
 }

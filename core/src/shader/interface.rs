@@ -152,6 +152,73 @@ pub struct Varying {
     pub provenance: VaryingProvenance,
 }
 
+/// The shape a tessellator gives a patch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TessDomain {
+    Isoline,
+    Triangle,
+    Quad,
+}
+
+/// How the tessellator spaces the vertices it adds along an edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Partitioning {
+    Integer,
+    Pow2,
+    FractionalOdd,
+    FractionalEven,
+}
+
+/// What the tessellator emits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TessTopology {
+    Point,
+    Line,
+    TriangleCw,
+    TriangleCcw,
+}
+
+/// What a hull program states about its patch beyond its varyings. The patch-constant varyings are its outputs per
+/// patch (`SV_TessFactor`, `SV_InsideTessFactor`, whatever the domain program reads); `outputs` of the interface are
+/// its control points'.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct HullFacts {
+    pub domain: TessDomain,
+    pub partitioning: Partitioning,
+    pub topology: TessTopology,
+    pub input_control_points: u32,
+    pub output_control_points: u32,
+    /// The largest tessellation factor, as the bits of an `f32` (the interface is hashed).
+    pub max_tess_factor_bits: u32,
+    pub patch_constants: Vec<Varying>,
+}
+
+/// What a domain program states about its patch: the same domain as the hull program that feeds it, how many control
+/// points it reads, and the patch-constant varyings it reads (`inputs` of the interface are its control points').
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct DomainFacts {
+    pub domain: TessDomain,
+    pub input_control_points: u32,
+    pub patch_constants: Vec<Varying>,
+}
+
+/// Facts about a program a stage's varyings and resources do not carry.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum StageFacts {
+    #[default]
+    None,
+    /// A vertex program whose outputs feed a hull program: it writes no clip-space position, so the program is a
+    /// function (`main`) and not an entry point.
+    VertexForTessellation,
+    Hull(HullFacts),
+    Domain(DomainFacts),
+}
+
 /// What a program exposes: its stage, the varyings it takes and gives, and the resources it binds.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct Interface {
@@ -159,8 +226,54 @@ pub struct Interface {
     pub inputs: Vec<Varying>,
     pub outputs: Vec<Varying>,
     pub resources: Vec<Resource>,
+    pub facts: StageFacts,
 }
 impl Interface {
+    /// The facts agree with the stage: a hull or domain program states its patch, nothing else does, and a vertex
+    /// program that feeds a tessellator is a vertex program.
+    fn verify_facts(&self) -> Result<(), String> {
+        let patch = |what: &str, count: u32, constants: &[Varying]| -> Result<(), String> {
+            if !(1..=32).contains(&count) {
+                return Err(format!("{what}: {count} control points, not 1 to 32"));
+            }
+            for (i, v) in constants.iter().enumerate() {
+                if !(1..=4).contains(&v.value.width) {
+                    return Err(format!(
+                        "patch constant {}{} has a width of {}, not 1 to 4",
+                        v.label.name, v.label.index, v.value.width
+                    ));
+                }
+                if constants[..i].iter().any(|other| other.label == v.label) {
+                    return Err(format!(
+                        "patch constant {}{} is listed twice",
+                        v.label.name, v.label.index
+                    ));
+                }
+            }
+            Ok(())
+        };
+        match (&self.stage, &self.facts) {
+            (Stage::Hull, StageFacts::Hull(h)) => {
+                patch("hull input", h.input_control_points, &h.patch_constants)?;
+                patch("hull output", h.output_control_points, &[])?;
+                let factor = f32::from_bits(h.max_tess_factor_bits);
+                if !(1.0..=64.0).contains(&factor) {
+                    return Err(format!("a maximum tessellation factor of {factor}"));
+                }
+                Ok(())
+            }
+            (Stage::Domain, StageFacts::Domain(d)) => {
+                patch("domain", d.input_control_points, &d.patch_constants)
+            }
+            (Stage::Vertex, StageFacts::VertexForTessellation) => Ok(()),
+            (Stage::Hull | Stage::Domain, _) => {
+                Err(format!("a {:?} program without its patch facts", self.stage))
+            }
+            (_, StageFacts::None) => Ok(()),
+            (stage, facts) => Err(format!("{stage:?} program with {facts:?}")),
+        }
+    }
+
     /// The resource with this id.
     pub fn resource(&self, id: ResourceId) -> Option<&Resource> {
         self.resources.iter().find(|r| r.id == id)
@@ -170,6 +283,7 @@ impl Interface {
     /// unique, every resource spanning at least one binding with a buffer stride or element width that means
     /// something, and every constant of a buffer inside it (with a layout that does not overflow).
     pub fn verify(&self) -> Result<(), String> {
+        self.verify_facts()?;
         for (direction, varyings) in [("input", &self.inputs), ("output", &self.outputs)] {
             for (i, v) in varyings.iter().enumerate() {
                 if !(1..=4).contains(&v.value.width) {

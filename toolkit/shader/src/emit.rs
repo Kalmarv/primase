@@ -10,7 +10,33 @@ use crate::{Program, ProgramError as Error};
 /// origin), and a pipeline built from it states them where it meets the pipeline. Behaviours of D3D the body spells
 /// out ([`crate::D3dModes`]) are plain operations in the text; the denormal flush is the source's expectation, which
 /// WGSL leaves to the implementation.
+///
+/// A program of a stage WGSL has no entry point for (a hull, domain or geometry program, a vertex program that feeds a
+/// tessellator) is refused by name: a consumer that tessellates writes its own program from these (see
+/// [`wgsl_functions`] for the functions as text).
 pub fn wgsl(program: &Program) -> Result<String, Error> {
+    if crate::stage_functions(&program.interface)
+        .map_err(Error::Invalid)?
+        .is_some()
+    {
+        return Err(Error::Unsupported {
+            writer: "wgsl",
+            detail: format!(
+                "a {:?} program{} has no WGSL stage: it is functions, not an entry point",
+                program.stage,
+                if program.stage == crate::Stage::Vertex {
+                    " that feeds a tessellator"
+                } else {
+                    ""
+                }
+            ),
+        });
+    }
+    wgsl_functions(program)
+}
+
+/// The module as WGSL whatever its stage: for a program of a stage with no entry point, its functions, to be read.
+pub fn wgsl_functions(program: &Program) -> Result<String, Error> {
     let info = program.validate().map_err(|problems| {
         Error::Invalid(
             problems

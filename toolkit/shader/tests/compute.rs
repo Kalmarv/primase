@@ -144,6 +144,7 @@ fn program(size: [u32; 3]) -> Program {
                     }),
                 },
             }],
+            facts: Default::default(),
         },
         bindings: vec![(ResourceId(0), words)],
         conventions: Conventions::D3D,

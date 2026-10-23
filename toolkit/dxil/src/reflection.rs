@@ -771,5 +771,6 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
             .transpose()?
             .unwrap_or_default(),
         resources,
+        facts: Default::default(),
     })
 }
