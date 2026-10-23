@@ -10,8 +10,14 @@
 //!   (the vertex and the pixel program, or the vertex program alone of a depth-only pass). Which technique a draw uses
 //!   (its pass, its vertex format, its alpha mode) is the draw's choice, not the material's, so `technique` is a
 //!   required option. An effect without that technique, with several passes in it, with a tessellated pass (the hull
-//!   and domain stages are not bound) or with no technique table (the post-processing and lighting effects) leaves its
-//!   materials unbound, by name.
+//!   and domain stages are not bound), a compute pass or with no technique table (the post-processing and lighting
+//!   effects) leaves its materials unbound, by name.
+//! - **Render state.** The pass names a record of each of the effect's tables ([`GtaPass::rasterizer`], `depth_stencil`
+//!   and `blend`): the cull mode, the depth test and write, and the blend of render target 0 (colour and alpha
+//!   equations, in the vocabulary's factors: a blend of a factor it has none for, such as source alpha saturate, is
+//!   left `None` and counted). An effect without a table states none of it. The other render targets' blends and every
+//!   target's write mask (the vocabulary has one blend and no mask), the stencil, the polygon offset and the fill mode
+//!   are not carried; the alpha test is not a render state in GTA (the cutoff is a shader constant).
 //! - **Constants.** Each constant buffer a program declares is the table record at its register and space; each
 //!   constant of the record is bound at its byte offset (a constant past the end of the buffer the program declares is
 //!   one it does not read, and is left out, counted). A constant the effect renames (its parameter records:
@@ -34,9 +40,10 @@ use std::collections::BTreeMap;
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{
-    ConstantBinding, ConstantRole, D3dClass, InputBinding, InputRole, NormalEncoding, NormalSpace,
-    ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceKind, SamplerState, ScalarEncoding,
-    Shader, ShaderBinding, Stage, StageBinding, SystemValue, TextureBinding, TextureSource, ViewParameter,
+    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
+    DepthState, InputBinding, InputRole, NormalEncoding, NormalSpace, ObjectParameter, OutputBinding,
+    OutputRole, RenderState, ResourceKind, SamplerState, ScalarEncoding, Shader, ShaderBinding, Stage,
+    StageBinding, SystemValue, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
 
@@ -51,9 +58,102 @@ use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
 /// sub-sample variants: [`gbuffer`] has the layout and how it was checked).
 const GBUFFER_FAMILY: &str = "PS_DeferredTextured";
 
+/// The render state a pass names, from its effect's tables, and what could not be carried.
+fn render_state(t: &GtaEffectTechniques, pass: &GtaPass, notes: &mut Vec<&'static str>) -> RenderState {
+    let cull = t
+        .rasterizer
+        .get(usize::from(pass.rasterizer))
+        .and_then(|r| match r.cull {
+            1 => Some(Cull::None),
+            2 => Some(Cull::Front),
+            3 => Some(Cull::Back),
+            _ => None,
+        });
+    let compare = |f: u8| match f {
+        1 => Some(Compare::Never),
+        2 => Some(Compare::Less),
+        3 => Some(Compare::Equal),
+        4 => Some(Compare::LessEqual),
+        5 => Some(Compare::Greater),
+        6 => Some(Compare::NotEqual),
+        7 => Some(Compare::GreaterEqual),
+        8 => Some(Compare::Always),
+        _ => None,
+    };
+    let depth = t
+        .depth_stencil
+        .get(usize::from(pass.depth_stencil))
+        .and_then(|d| {
+            if d.depth_enable == 0 {
+                Some(DepthState {
+                    test: Compare::Always,
+                    write: false,
+                })
+            } else {
+                compare(d.depth_func).map(|test| DepthState {
+                    test,
+                    write: d.depth_write_mask == 1,
+                })
+            }
+        });
+    let factor = |f: u8| match f {
+        1 => Some(BlendFactor::Zero),
+        2 => Some(BlendFactor::One),
+        3 => Some(BlendFactor::SrcColour),
+        4 => Some(BlendFactor::OneMinusSrcColour),
+        5 => Some(BlendFactor::SrcAlpha),
+        6 => Some(BlendFactor::OneMinusSrcAlpha),
+        7 => Some(BlendFactor::DstAlpha),
+        8 => Some(BlendFactor::OneMinusDstAlpha),
+        9 => Some(BlendFactor::DstColour),
+        10 => Some(BlendFactor::OneMinusDstColour),
+        _ => None,
+    };
+    let op = |o: u8| match o {
+        1 => Some(BlendOp::Add),
+        2 => Some(BlendOp::Subtract),
+        3 => Some(BlendOp::ReverseSubtract),
+        4 => Some(BlendOp::Min),
+        5 => Some(BlendOp::Max),
+        _ => None,
+    };
+    let blend = t.blend.get(usize::from(pass.blend)).and_then(|b| {
+        let target = b.targets.first()?;
+        if target.enable == 0 {
+            notes.push("blend disabled on render target 0 (left None)");
+            return None;
+        }
+        let equation = |s, d, o| {
+            Some(BlendEquation {
+                source: factor(s)?,
+                destination: factor(d)?,
+                op: op(o)?,
+            })
+        };
+        let colour = equation(target.src, target.dest, target.op);
+        let alpha = equation(target.src_alpha, target.dest_alpha, target.op_alpha);
+        match colour.zip(alpha) {
+            Some((colour, alpha)) => Some(Blend { colour, alpha }),
+            None => {
+                notes.push("a blend factor or operation outside the vocabulary (left None)");
+                None
+            }
+        }
+    });
+    RenderState {
+        blend,
+        depth,
+        cull,
+        alpha_test: None,
+    }
+}
+
 /// The programs an effect's materials are bound to.
 #[derive(Clone)]
 struct Chosen {
+    /// The pass's render state and what it could not carry.
+    state: RenderState,
+    notes: Vec<&'static str>,
     /// None for a depth-only pass.
     pixel: Option<Entity>,
     vertex: Entity,
@@ -132,6 +232,9 @@ pub fn select_pass<'a>(techniques: &'a GtaEffectTechniques, name: &str) -> Resul
     let [pass] = technique.passes.as_slice() else {
         return Err(format!("technique {name} has {} passes", technique.passes.len()));
     };
+    if pass.compute.is_some() {
+        return Err(format!("technique {name} is a compute pass"));
+    }
     if pass.hull.is_some() || pass.domain.is_some() {
         return Err(format!(
             "technique {name} is tessellated (the hull and domain stages are not bound)"
@@ -653,7 +756,11 @@ impl Pass for ResolveGtaShaders {
                                 .and_then(|s| gbuffer::writes(&s.bytecode))
                         })
                     });
+                    let mut notes = Vec::new();
+                    let state = render_state(techniques, pass, &mut notes);
                     Ok(Chosen {
+                        state,
+                        notes,
                         pixel: pixel.map(|(entity, _)| entity),
                         vertex,
                         writes,
@@ -661,6 +768,8 @@ impl Pass for ResolveGtaShaders {
                 })
                 .clone();
             let Chosen {
+                state,
+                notes,
                 pixel,
                 vertex,
                 writes,
@@ -697,13 +806,10 @@ impl Pass for ResolveGtaShaders {
                 continue;
             }
             counts.add("materials bound");
-            bound.push((
-                material,
-                ShaderBinding {
-                    stages,
-                    state: RenderState::default(),
-                },
-            ));
+            for note in &notes {
+                counts.add(&format!("render state: {note}"));
+            }
+            bound.push((material, ShaderBinding { stages, state }));
         }
         for (e, b) in bound {
             world.insert(e, b);
@@ -741,6 +847,11 @@ mod tests {
         GtaPass {
             vertex,
             pixel,
+            geometry: None,
+            compute: None,
+            rasterizer: 0,
+            depth_stencil: 0,
+            blend: 0,
             hull: tessellated
                 .then(|| program(GtaStage::Hull, "HS_x_0174add1_Wrapped"))
                 .flatten(),
@@ -802,6 +913,7 @@ mod tests {
                     vec![pass(None, program(P, "PS_x_7903a05e_Wrapped"), false)],
                 ),
             ],
+            rasterizer: Vec::new(),
             depth_stencil: Vec::new(),
             blend: Vec::new(),
             samplers: Vec::new(),
@@ -862,6 +974,120 @@ mod tests {
         assert!(names("broken").unwrap_err().contains("no vertex program"));
         // the name is exact
         assert!(names("Deferred_draw").is_err());
+    }
+
+    fn target(enable: u8, src: u8, dest: u8) -> crate::rage::sgd2_effect::TargetBlend {
+        crate::rage::sgd2_effect::TargetBlend {
+            enable,
+            src,
+            dest,
+            op: 1,
+            src_alpha: 1,
+            dest_alpha: 6,
+            op_alpha: 1,
+            write_mask: 7,
+        }
+    }
+
+    /// A pass's render state is the records of its effect's tables it names, in the vocabulary's terms: the cull mode,
+    /// the depth test and write, render target 0's blend; a blend factor the vocabulary lacks, a disabled blend and an
+    /// effect without tables leave `None` (the first two with a note).
+    #[test]
+    fn a_passes_state_is_the_records_it_names() {
+        use crate::rage::sgd2_effect::{Blend as BlendRecord, DepthStencil, Rasterizer, StencilFace};
+        let face = StencilFace {
+            fail_op: 1,
+            depth_fail_op: 1,
+            pass_op: 1,
+            func: 8,
+        };
+        let depth = |enable, write, func| DepthStencil {
+            depth_enable: enable,
+            depth_write_mask: write,
+            depth_func: func,
+            stencil_enable: 0,
+            stencil_read_mask: 0xff,
+            stencil_write_mask: 0xff,
+            front: face,
+            back: face,
+            tail: [0; 10],
+        };
+        let blend = |t: crate::rage::sgd2_effect::TargetBlend| BlendRecord {
+            head: [0; 4],
+            targets: [t; 8],
+        };
+        let rasterizer = |cull| Rasterizer {
+            fill: 3,
+            cull,
+            front_counter_clockwise: 1,
+            offset: 0.0,
+            raw: [0; 16],
+        };
+        let mut t = techniques();
+        t.rasterizer = vec![rasterizer(3), rasterizer(1)];
+        t.depth_stencil = vec![depth(1, 0, 5), depth(1, 1, 2), depth(0, 0, 8)];
+        t.blend = vec![target(1, 5, 6), target(0, 2, 1), target(1, 11, 6)]
+            .into_iter()
+            .map(blend)
+            .collect();
+        let mut p = pass(None, None, false);
+        let mut notes = Vec::new();
+        // record 0 of each: back faces culled, depth tested GREATER without writing, source alpha over its inverse
+        let state = render_state(&t, &p, &mut notes);
+        assert_eq!(state.cull, Some(Cull::Back));
+        assert_eq!(
+            state.depth,
+            Some(DepthState {
+                test: Compare::Greater,
+                write: false
+            })
+        );
+        let b = state.blend.unwrap();
+        assert_eq!(
+            (
+                b.colour.source,
+                b.colour.destination,
+                b.alpha.source,
+                b.alpha.destination
+            ),
+            (
+                BlendFactor::SrcAlpha,
+                BlendFactor::OneMinusSrcAlpha,
+                BlendFactor::Zero,
+                BlendFactor::OneMinusSrcAlpha
+            )
+        );
+        assert!(notes.is_empty());
+        // record 1: no culling, depth LESS with writes, blending off; record 2: depth off, a factor outside the vocabulary
+        p.rasterizer = 1;
+        p.depth_stencil = 1;
+        p.blend = 1;
+        let state = render_state(&t, &p, &mut notes);
+        assert_eq!((state.cull, state.blend), (Some(Cull::None), None));
+        assert_eq!(
+            state.depth,
+            Some(DepthState {
+                test: Compare::Less,
+                write: true
+            })
+        );
+        p.depth_stencil = 2;
+        p.blend = 2;
+        let state = render_state(&t, &p, &mut notes);
+        assert_eq!(
+            state.depth,
+            Some(DepthState {
+                test: Compare::Always,
+                write: false
+            })
+        );
+        assert_eq!(state.blend, None);
+        assert_eq!(notes.len(), 2);
+        // an effect without tables states none
+        assert_eq!(
+            render_state(&techniques(), &pass(None, None, false), &mut Vec::new()),
+            RenderState::default()
+        );
     }
 
     #[test]

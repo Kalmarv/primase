@@ -120,3 +120,106 @@ fn every_effect_with_a_technique_table_reads_in_full() {
     assert_eq!(with_additive.get("default"), Some(&false));
     assert_eq!(with_greater.get("default"), Some(&true));
 }
+
+/// The pass records name the effect's state tables: over the effects with two or more records of a table, the values of
+/// the pass byte are exactly the indices of the table (each record used, none past it), and an effect with one record or
+/// none names index 0 on every pass; and the records the passes name fit what the techniques are called.
+#[test]
+fn the_passes_name_the_records_of_their_effects_state_tables() {
+    let (Some(dir), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
+        return;
+    };
+    let source = GtaSource::open(&dir, &keys).unwrap();
+    let mut world = World::new();
+    source.add_shader_database(&mut world).unwrap();
+    let (mut multi, mut covered) = ([0usize; 3], [0usize; 3]);
+    let mut violations = Vec::new();
+    // by technique name: (passes, passes whose render target 0 write mask is 8 / enabled blend with factors / opaque)
+    let (mut write_alpha, mut write_alpha_masked) = (0usize, 0usize);
+    let (mut refraction, mut refraction_blended) = (0usize, 0usize);
+    let (mut reflection, mut reflection_opaque) = (0usize, 0usize);
+    let (mut imposters, mut imposters_uncullled) = (0usize, 0usize);
+    for (entity, effect) in world.iter::<GtaEffect>() {
+        let Some(t) = world.get::<GtaEffectTechniques>(entity) else {
+            continue;
+        };
+        let tables = [t.rasterizer.len(), t.depth_stencil.len(), t.blend.len()];
+        let mut used: [std::collections::BTreeSet<u8>; 3] = Default::default();
+        for technique in &t.techniques {
+            for pass in &technique.passes {
+                for (k, index) in [pass.rasterizer, pass.depth_stencil, pass.blend]
+                    .into_iter()
+                    .enumerate()
+                {
+                    used[k].insert(index);
+                }
+                let blend = t.blend.get(usize::from(pass.blend)).map(|b| b.targets[0]);
+                let name = technique.name.as_str();
+                if name.starts_with("deferredsubsamplewritealpha") {
+                    write_alpha += 1;
+                    write_alpha_masked += usize::from(blend.is_some_and(|b| b.write_mask == 8));
+                }
+                // the licence plate's refraction passes are opaque (its one exception)
+                if name.starts_with("lightweight")
+                    && name.contains("WaterRefractionAlpha")
+                    && effect.name != "vehicle_licenseplate"
+                {
+                    refraction += 1;
+                    refraction_blended +=
+                        usize::from(blend.is_some_and(|b| b.enable == 1 && b.src == 5 && b.dest == 6));
+                }
+                if (name.starts_with("reflectiongbuffer") || name.starts_with("mirrorReflectiongbuffer"))
+                    && !t.blend.is_empty()
+                {
+                    reflection += 1;
+                    reflection_opaque +=
+                        usize::from(blend.is_some_and(|b| b.enable == 0 && b.write_mask == 0xf));
+                }
+                // the cut-out billboards of the distant trees are drawn two-sided (their shadow is not; the water effects' `imposter_draw` is another thing)
+                if name.starts_with("imposter")
+                    && name != "impostershadow_draw"
+                    && (effect.name.starts_with("trees") || effect.name == "bvh_skinning")
+                {
+                    imposters += 1;
+                    imposters_uncullled += usize::from(
+                        t.rasterizer
+                            .get(usize::from(pass.rasterizer))
+                            .is_some_and(|r| r.cull == 1),
+                    );
+                }
+            }
+        }
+        for k in 0..3 {
+            if tables[k] >= 2 {
+                multi[k] += 1;
+                let all: std::collections::BTreeSet<u8> = (0..u8::try_from(tables[k]).unwrap()).collect();
+                if used[k] == all {
+                    covered[k] += 1;
+                } else {
+                    violations.push(format!(
+                        "{} table {k}: {} records, passes name {:?}",
+                        effect.name, tables[k], used[k]
+                    ));
+                }
+            } else if used[k].iter().any(|&i| i != 0) {
+                violations.push(format!(
+                    "{} table {k}: {} records, passes name {:?}",
+                    effect.name, tables[k], used[k]
+                ));
+            }
+        }
+    }
+    println!(
+        "effects with two or more records whose passes name exactly their indices: rasterizer {}/{}, depth-stencil {}/{}, blend {}/{}",
+        covered[0], multi[0], covered[1], multi[1], covered[2], multi[2]
+    );
+    println!(
+        "deferredsubsamplewritealpha passes with the alpha-only write mask {write_alpha_masked}/{write_alpha}; water refraction passes blending source alpha over its inverse {refraction_blended}/{refraction}; reflection passes opaque in all channels {reflection_opaque}/{reflection}; imposter passes without culling {imposters_uncullled}/{imposters}"
+    );
+    assert!(violations.is_empty(), "{violations:?}");
+    assert!(multi[0] >= 15 && multi[1] >= 50 && multi[2] >= 150, "{multi:?}");
+    assert_eq!(write_alpha_masked, write_alpha);
+    assert_eq!(refraction_blended, refraction);
+    assert_eq!(reflection_opaque, reflection);
+    assert_eq!(imposters_uncullled, imposters);
+}

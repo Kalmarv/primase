@@ -5,6 +5,9 @@
 //!
 //! ```text
 //! (a header of tables kept as stored)
+//! u32 nRaster, nRaster rasterizer records of 16 bytes:
+//!     FillMode (D3D12: WIREFRAME = 2, SOLID = 3), CullMode (NONE = 1, FRONT = 2, BACK = 3), FrontCounterClockwise,
+//!     a byte kept, 4 bytes kept, an f32 (the polygon offset: 0 but on the two foam effects), 4 bytes kept
 //! u32 nDS, nDS depth-stencil records of 24 bytes:
 //!     the 14 bytes of a D3D12_DEPTH_STENCIL_DESC with one-byte fields (DepthEnable, DepthWriteMask, DepthFunc,
 //!     StencilEnable, StencilReadMask, StencilWriteMask, then front and back face: StencilFailOp,
@@ -18,16 +21,17 @@
 //! u32 nTechniques, nTechniques entries of 4 bytes: u16 offset of the technique's name in the name block (bit 15
 //!     set on every second entry; ignored), u8 (kept), u8 the technique's number of passes
 //! u32 nPasses (the sum), nPasses pass records of 24 bytes, the passes of the first technique first:
-//!     u8 vertex program, u8 pixel program, u8 geometry program, u8 hull and domain program (each the 1-based position
-//!     in the effect's list of that stage, 0 for none), 20 bytes kept as stored
+//!     u8 vertex, pixel, geometry, domain, hull and compute program (each the 1-based position in the effect's list of
+//!     that stage, 0 for none), 2 zero bytes, u8 rasterizer record, u8 depth-stencil record, u8 blend record (each the
+//!     0-based index into the effect's table, 0 where the effect has no table), 13 bytes kept as stored
 //! (the root signature table, `proplst`, and the name block: u32 length, the NUL-terminated names to the end)
 //! ```
 //!
 //! The enumerations are Direct3D 12's (blend factors ZERO = 1, ONE = 2, ..., INV_SRC_ALPHA = 6; comparison functions
 //! NEVER = 1, LESS = 2, ..., GREATER = 5, ALWAYS = 8; address modes WRAP = 1, MIRROR = 2, CLAMP = 3), which the records'
-//! values fit on every record of the shader database (`tests/effect_techniques.rs`). Which of the depth-stencil and
-//! blend records a pass draws with is not among the fields named: the pass record's remaining 20 bytes are kept as
-//! stored.
+//! values fit on every record of the shader database (`tests/effect_techniques.rs`). That the pass record's bytes 8, 9
+//! and 10 index the rasterizer, depth-stencil and blend tables is the census's finding: over the effects with two or
+//! more records of a table, the values of the byte are exactly the indices of the table, each used and none past it.
 //!
 //! The tables are found from the technique table, the one place in the record that says what it is: the position
 //! where a count of 1 to 512 is followed by that many entries whose name offsets are the starts of names in the name
@@ -46,10 +50,25 @@ use crate::{Result, invalid};
 const FORMAT: &str = "sgd2 effect techniques";
 /// The marker of the root signature table, which the name block follows.
 const ROOT_SIGNATURES: &[u8] = b"proplst\0";
+const RASTERIZER: usize = 16;
 const DEPTH_STENCIL: usize = 24;
 const BLEND: usize = 68;
 const SAMPLER: usize = 36;
 const PASS: usize = 24;
+
+/// A rasterizer state (D3D12 values).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Rasterizer {
+    /// WIREFRAME = 2, SOLID = 3.
+    pub fill: u8,
+    /// NONE = 1, FRONT = 2, BACK = 3.
+    pub cull: u8,
+    pub front_counter_clockwise: u8,
+    /// The f32 at byte 8: the polygon offset, 0 but on the two foam effects (-0.1 and 0.2); not named further.
+    pub offset: f32,
+    /// The record, as stored.
+    pub raw: [u8; RASTERIZER],
+}
 
 /// One face of a depth-stencil state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -116,8 +135,13 @@ pub struct Pass {
     pub vertex: u8,
     pub pixel: u8,
     pub geometry: u8,
-    /// The hull program and the domain program of a tessellated pass (the same position in both lists).
-    pub tessellation: u8,
+    pub domain: u8,
+    pub hull: u8,
+    pub compute: u8,
+    /// The pass's records of the effect's tables.
+    pub rasterizer: u8,
+    pub depth_stencil: u8,
+    pub blend: u8,
     /// The record, as stored.
     pub raw: Vec<u8>,
 }
@@ -132,6 +156,7 @@ pub struct Technique {
 /// An effect's techniques and the state tables before them.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct EffectTechniques {
+    pub rasterizer: Vec<Rasterizer>,
     pub depth_stencil: Vec<DepthStencil>,
     pub blend: Vec<Blend>,
     pub samplers: Vec<SamplerDesc>,
@@ -217,6 +242,22 @@ fn technique_table(rest: &[u8], block: &[u8], at: usize) -> Option<(Vec<(usize, 
     }
     let records = after.checked_add(4)?;
     (records.checked_add(total.checked_mul(PASS)?)? <= rest.len()).then_some((entries, records))
+}
+
+fn rasterizer(r: &[u8]) -> Option<Rasterizer> {
+    let raw: [u8; RASTERIZER] = array(r, 0)?;
+    let s = Rasterizer {
+        fill: byte(r, 0),
+        cull: byte(r, 1),
+        front_counter_clockwise: byte(r, 2),
+        offset: f32_at(r, 8)?,
+        raw,
+    };
+    ((2..=3).contains(&s.fill)
+        && (1..=3).contains(&s.cull)
+        && s.front_counter_clockwise <= 1
+        && s.offset.is_finite())
+    .then_some(s)
 }
 
 fn depth_stencil(r: &[u8]) -> Option<DepthStencil> {
@@ -369,24 +410,31 @@ pub fn parse(rest: &[u8]) -> Result<Option<EffectTechniques>> {
                 vertex: byte(&raw, 0),
                 pixel: byte(&raw, 1),
                 geometry: byte(&raw, 2),
-                tessellation: byte(&raw, 3),
+                domain: byte(&raw, 3),
+                hull: byte(&raw, 4),
+                compute: byte(&raw, 5),
+                rasterizer: byte(&raw, 8),
+                depth_stencil: byte(&raw, 9),
+                blend: byte(&raw, 10),
                 raw: raw.to_vec(),
             });
             pass_at = pass_at.saturating_add(PASS);
         }
         techniques.push(Technique { name, passes: list });
     }
-    // the state tables, backwards from the technique table: samplers, blend, depth-stencil
+    // the state tables, backwards from the technique table: samplers, blend, depth-stencil, rasterizer
     let mut chain = Vec::new();
     for (s_at, samplers) in table_before(rest, at, SAMPLER, 64, sampler) {
         for (b_at, blends) in table_before(rest, s_at, BLEND, 16, blend) {
             for (d_at, depth) in table_before(rest, b_at, DEPTH_STENCIL, 16, depth_stencil) {
-                chain.push((depth, blends.clone(), samplers.clone(), d_at));
+                for (_, rasterizers) in table_before(rest, d_at, RASTERIZER, 8, rasterizer) {
+                    chain.push((rasterizers, depth.clone(), blends.clone(), samplers.clone()));
+                }
             }
         }
     }
     let mut chain = chain.into_iter();
-    let Some((depth_stencil, blend, samplers, _)) = chain.next() else {
+    let Some((rasterizer, depth_stencil, blend, samplers)) = chain.next() else {
         return Err(invalid(
             FORMAT,
             at as u64,
@@ -400,7 +448,26 @@ pub fn parse(rest: &[u8]) -> Result<Option<EffectTechniques>> {
             "the state tables before the technique table are ambiguous",
         ));
     }
+    // a pass names a record of each table, or the first where the effect has none
+    for technique in &techniques {
+        for pass in &technique.passes {
+            for (what, index, len) in [
+                ("rasterizer", pass.rasterizer, rasterizer.len()),
+                ("depth-stencil", pass.depth_stencil, depth_stencil.len()),
+                ("blend", pass.blend, blend.len()),
+            ] {
+                if usize::from(index) >= len.max(1) {
+                    return Err(invalid(
+                        FORMAT,
+                        at as u64,
+                        format!("{}: a pass names {what} record {index} of {len}", technique.name),
+                    ));
+                }
+            }
+        }
+    }
     Ok(Some(EffectTechniques {
+        rasterizer,
         depth_stencil,
         blend,
         samplers,
@@ -458,8 +525,8 @@ mod tests {
         r.extend([9u8, 0x80, 1, 2]); // skin at 9, flag bit set, 2 passes
         r.extend(3u32.to_le_bytes());
         for (v, p, t) in [(1u8, 1u8, 0u8), (2, 1, 0), (2, 2, 1)] {
-            let mut pass = vec![v, p, 0, t];
-            pass.extend([0; 20]);
+            let mut pass = vec![v, p, 0, t, t, 0, 0, 0, 0, 0, 0];
+            pass.extend([0; 13]);
             r.extend(pass);
         }
         r.extend(b"proplst\0");
@@ -496,7 +563,48 @@ mod tests {
             ("skin", 2)
         );
         let p = &t.techniques[1].passes[1];
-        assert_eq!((p.vertex, p.pixel, p.tessellation), (2, 2, 1));
+        assert_eq!((p.vertex, p.pixel, p.domain, p.hull), (2, 2, 1, 1));
+        assert_eq!((p.rasterizer, p.depth_stencil, p.blend), (0, 0, 0));
+    }
+
+    fn with_rasterizers(mut r: Vec<u8>, records: &[[u8; 16]]) -> Vec<u8> {
+        // the rasterizer table sits just before the depth-stencil count (at 12)
+        let mut table = (records.len() as u32).to_le_bytes().to_vec();
+        for rec in records {
+            table.extend(rec);
+        }
+        r.splice(8..12, table);
+        r
+    }
+
+    #[test]
+    fn a_rasterizer_table_before_the_depth_stencil_table_is_read() {
+        let mut foam = [3u8, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0];
+        foam[8..12].copy_from_slice(&0.2f32.to_le_bytes());
+        let none = [3u8, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0];
+        let back = [3u8, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0];
+        let t = parse(&with_rasterizers(record(), &[back, foam]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(t.rasterizer.len(), 2);
+        assert_eq!((t.rasterizer[0].fill, t.rasterizer[0].cull), (3, 3));
+        assert_eq!(t.rasterizer[1].offset, 0.2);
+        // a one-record table
+        let t = parse(&with_rasterizers(record(), &[none])).unwrap().unwrap();
+        assert_eq!(t.rasterizer.len(), 1);
+        assert_eq!(t.rasterizer[0].cull, 1);
+        // a table with no records is the record() of the other tests
+        assert!(parse(&record()).unwrap().unwrap().rasterizer.is_empty());
+    }
+
+    #[test]
+    fn a_pass_naming_a_record_the_table_lacks_is_refused() {
+        let mut r = record();
+        let marker = r.windows(8).rposition(|w| w == b"proplst\0").unwrap();
+        // the last pass record's blend byte (10): the effect has one blend record
+        r[marker - 24 + 10] = 3;
+        let why = parse(&r).unwrap_err().to_string();
+        assert!(why.contains("blend record 3 of 1"), "{why}");
     }
 
     #[test]

@@ -265,15 +265,22 @@ impl Component for GtaEffect {
     }
 }
 
-/// One pass of a technique: the programs it runs (the vertex and pixel programs, and the hull and domain programs of a
-/// tessellated pass), each as the effect lists it, and the pass record as stored (its first four bytes are the programs'
-/// positions; the other 20 are not read).
+/// One pass of a technique: the programs it runs (the vertex and pixel programs, the hull and domain programs of a
+/// tessellated pass, a compute program), each as the effect lists it, the records of the effect's state tables it
+/// draws with, and the pass record as stored.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct GtaPass {
     pub vertex: Option<GtaEffectProgram>,
     pub pixel: Option<GtaEffectProgram>,
+    pub geometry: Option<GtaEffectProgram>,
     pub hull: Option<GtaEffectProgram>,
     pub domain: Option<GtaEffectProgram>,
+    pub compute: Option<GtaEffectProgram>,
+    /// The 0-based records of [`GtaEffectTechniques::rasterizer`], [`GtaEffectTechniques::depth_stencil`] and
+    /// [`GtaEffectTechniques::blend`] the pass draws with (0 where the effect has no table: the engine's default).
+    pub rasterizer: u8,
+    pub depth_stencil: u8,
+    pub blend: u8,
     pub record: Vec<u8>,
 }
 
@@ -286,11 +293,12 @@ pub struct GtaTechnique {
 }
 
 /// An effect's techniques ([`crate::rage::sgd2_effect`]) on its `gta.effect` entity, and the fixed-function state
-/// tables stored with them (which of the tables a pass draws with is not read). An effect of the post-processing and
+/// tables stored with them (each pass names its records). An effect of the post-processing and
 /// lighting kinds has none.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GtaEffectTechniques {
     pub techniques: Vec<GtaTechnique>,
+    pub rasterizer: Vec<crate::rage::sgd2_effect::Rasterizer>,
     pub depth_stencil: Vec<crate::rage::sgd2_effect::DepthStencil>,
     pub blend: Vec<crate::rage::sgd2_effect::Blend>,
     pub samplers: Vec<crate::rage::sgd2_effect::SamplerDesc>,
@@ -305,10 +313,17 @@ impl Component for GtaEffectTechniques {
     fn references(&self, out: &mut Vec<Entity>) {
         for pass in self.techniques.iter().flat_map(|t| &t.passes) {
             out.extend(
-                [&pass.vertex, &pass.pixel, &pass.hull, &pass.domain]
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|p| p.shader),
+                [
+                    &pass.vertex,
+                    &pass.pixel,
+                    &pass.geometry,
+                    &pass.hull,
+                    &pass.domain,
+                    &pass.compute,
+                ]
+                .into_iter()
+                .flatten()
+                .filter_map(|p| p.shader),
             );
         }
     }

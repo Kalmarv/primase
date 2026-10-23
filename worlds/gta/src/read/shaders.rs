@@ -190,8 +190,7 @@ pub fn add_shader_database(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
 }
 
 /// An effect's techniques with each pass's programs named: positions are 1-based in the effect's lists of a stage
-/// (vertex, pixel, geometry, domain, hull, compute); the hull and domain program of a tessellated pass is at the same
-/// position in both lists.
+/// (vertex, pixel, geometry, domain, hull, compute).
 fn techniques(
     t: &sgd2_effect::EffectTechniques,
     listed: &[Vec<GtaEffectProgram>],
@@ -216,17 +215,16 @@ fn techniques(
     for technique in &t.techniques {
         let mut passes = Vec::with_capacity(technique.passes.len());
         for p in &technique.passes {
-            if p.geometry != 0 {
-                return Err(format!(
-                    "{}: a pass with a geometry program ({})",
-                    technique.name, p.geometry
-                ));
-            }
             passes.push(GtaPass {
                 vertex: at(0, p.vertex)?,
                 pixel: at(1, p.pixel)?,
-                domain: at(3, p.tessellation)?,
-                hull: at(4, p.tessellation)?,
+                geometry: at(2, p.geometry)?,
+                domain: at(3, p.domain)?,
+                hull: at(4, p.hull)?,
+                compute: at(5, p.compute)?,
+                rasterizer: p.rasterizer,
+                depth_stencil: p.depth_stencil,
+                blend: p.blend,
                 record: p.raw.clone(),
             });
         }
@@ -237,6 +235,7 @@ fn techniques(
     }
     Ok(GtaEffectTechniques {
         techniques: out,
+        rasterizer: t.rasterizer.clone(),
         depth_stencil: t.depth_stencil.clone(),
         blend: t.blend.clone(),
         samplers: t.samplers.clone(),

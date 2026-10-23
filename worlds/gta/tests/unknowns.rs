@@ -109,11 +109,31 @@ fn what_is_left_unknown_on_a_region() {
     let mut constants: BTreeMap<(u32, String, String), usize> = BTreeMap::new();
     let mut textures: BTreeMap<(String, &'static str), usize> = BTreeMap::new();
     let mut default_state = 0usize;
+    let mut cull: BTreeMap<String, usize> = BTreeMap::new();
+    let mut depth: BTreeMap<String, usize> = BTreeMap::new();
+    let mut blend: BTreeMap<String, usize> = BTreeMap::new();
     let mut samplers_bound = 0usize;
     for (_, binding) in world.iter::<ShaderBinding>() {
         if binding.state == RenderState::default() {
             default_state += 1;
         }
+        *cull.entry(format!("{:?}", binding.state.cull)).or_default() += 1;
+        *depth
+            .entry(
+                binding
+                    .state
+                    .depth
+                    .map_or("none".to_owned(), |d| format!("{:?} write {}", d.test, d.write)),
+            )
+            .or_default() += 1;
+        *blend
+            .entry(binding.state.blend.map_or("none".to_owned(), |b| {
+                format!(
+                    "{:?}/{:?} alpha {:?}/{:?}",
+                    b.colour.source, b.colour.destination, b.alpha.source, b.alpha.destination
+                )
+            }))
+            .or_default() += 1;
         for stage in &binding.stages {
             let program = world.get::<Shader>(stage.shader).unwrap();
             let table = &world.get::<GtaShaderTable>(stage.shader).unwrap().0;
@@ -203,7 +223,7 @@ fn what_is_left_unknown_on_a_region() {
         }
     }
     println!(
-        "render state left at the default: {default_state} of {bound}; samplers bound: {samplers_bound}"
+        "render state left at the default: {default_state} of {bound}; samplers bound: {samplers_bound}; cull {cull:?}; depth {depth:?}; blend {blend:?}"
     );
     println!("output lanes left Unknown (stage target lanes: bindings):");
     for (k, n) in &outputs {
