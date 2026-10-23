@@ -114,7 +114,7 @@ fn stored_parts_match_an_independent_reading() -> Result<()> {
 /// format oracle: SoulsFormatsNEXT ee1dd61's MSBE for Elden Ring, `oracles.soulsformats.elden/format`): the models'
 /// names, and every part of every kind by name: its kind, model, position, rotation and scale (f32 bit patterns),
 /// entity ID and groups, the six shadow controls and a collision part's hit filter; and every spawn point region in
-/// file order (name, position and rotation).
+/// file order (name, position and rotation; a repeated name renamed as the reference renames it, over every region).
 #[test]
 fn every_layout_matches_an_independent_reading() -> Result<()> {
     use primase_fromsoft::Game;
@@ -160,8 +160,11 @@ fn every_layout_matches_an_independent_reading() -> Result<()> {
             if want_models != have_models {
                 failures.push(format!("{path}: model names differ"));
             }
-            // the spawn point regions, in file order: name, position and rotation as stored
+            // the spawn point regions, in file order: name, position and rotation as stored. The reference renames a
+            // repeated name over every region of every type (m12_04_00_00 stores one spawn point name five times)
             let points = layout.spawn_points().map_err(|e| format!("{path}: {e}"))?;
+            let mut region_names = layout.region_names().map_err(|e| format!("{path}: {e}"))?;
+            common::disambiguate(&mut region_names);
             let want_points = record["spawn_points"].as_array().ok_or("spawn_points")?;
             if points.len() != want_points.len() {
                 failures.push(format!(
@@ -172,11 +175,11 @@ fn every_layout_matches_an_independent_reading() -> Result<()> {
             } else {
                 for (p, want) in points.iter().zip(want_points) {
                     spawn_points += 1;
-                    if Some(p.name.as_str()) != want["name"].as_str()
+                    if Some(region_names[p.region].as_str()) != want["name"].as_str()
                         || p.position.map(f32::to_bits) != common::bits3(&want["position"])?
                         || p.rotation_degrees.map(f32::to_bits) != common::bits3(&want["rotation"])?
                     {
-                        failures.push(format!("{path} spawn point {}: differs", p.name));
+                        failures.push(format!("{path} spawn point {}: differs", region_names[p.region]));
                     }
                 }
             }

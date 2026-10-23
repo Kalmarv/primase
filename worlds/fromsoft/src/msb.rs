@@ -543,10 +543,37 @@ impl MapOffset {
 #[derive(Clone, Debug)]
 pub struct SpawnPoint {
     pub name: String,
+    /// Its index among the layout's regions, in file order ([`MapLayout::region_names`]).
+    pub region: usize,
     pub position: [f32; 3],
     pub rotation_degrees: [f32; 3],
 }
 impl MapLayout {
+    /// The regions' section (`POINT_PARAM_ST`).
+    fn regions(&self) -> Result<&Section> {
+        self.sections
+            .iter()
+            .find(|s| s.name == "POINT_PARAM_ST")
+            .ok_or_else(|| invalid("MSB", 0, "missing region section"))
+    }
+
+    /// Every region's name as stored, in file order, of every region type. Names repeat: a reader that keys regions
+    /// by name renames the repeats over this whole list (SoulsFormats: `"<name> {n}"`).
+    pub fn region_names(&self) -> Result<Vec<String>> {
+        self.regions()?
+            .records
+            .iter()
+            .map(|data| {
+                let v = View {
+                    data,
+                    format: "MSB region",
+                    be: false,
+                };
+                text(&v, pointer(&v, 0, 96)?)
+            })
+            .collect()
+    }
+
     /// The checkpoint/warp spawn regions, in generations whose region code is known; an error otherwise.
     pub fn spawn_points(&self) -> Result<Vec<SpawnPoint>> {
         let code = self.generation.spawn_region.ok_or_else(|| {
@@ -556,13 +583,8 @@ impl MapLayout {
                 format!("{}: spawn region code not known", self.generation.name),
             )
         })?;
-        let section = self
-            .sections
-            .iter()
-            .find(|s| s.name == "POINT_PARAM_ST")
-            .ok_or_else(|| invalid("MSB", 0, "missing region section"))?;
         let mut points = Vec::new();
-        for data in &section.records {
+        for (region, data) in self.regions()?.records.iter().enumerate() {
             let v = View {
                 data,
                 format: "MSB region",
@@ -574,6 +596,7 @@ impl MapLayout {
             v.slice(0, 96)?;
             points.push(SpawnPoint {
                 name: text(&v, pointer(&v, 0, 96)?)?,
+                region,
                 position: vector(&v, 20)?,
                 rotation_degrees: vector(&v, 32)?,
             });
