@@ -187,10 +187,29 @@ impl LayeredMaterial {
         }
         Ok(self.gbuffer_program())
     }
+    /// Whether the game draws the material in its forward pass (blended, after the lighting) rather than the G-buffer pass:
+    /// `g_BlendMode` 2, the alpha-blended materials. The capture of the running game drew every one the MTDs could be matched
+    /// to (cloud and ground fog, the moon, the sky dome, GXFlver `_al`) with `<shader>_Fwd[_[A]].ppo` and every opaque
+    /// material with `_Gbuf`; the other blend modes (3, 4, 5) were matched to no draw and keep the G-buffer program.
+    pub fn is_forward(&self) -> bool {
+        self.blend_mode() == 2
+    }
+    /// The pass the material is drawn in, as its programs' file names spell it: `Fwd` for a forward material, `Gbuf`.
+    pub fn pass(&self) -> &'static str {
+        if self.is_forward() { "Fwd" } else { "Gbuf" }
+    }
     /// The G-buffer pixel program file the material's shader, its static switch where it states one and its alpha
     /// reference select: `<shader>[_<switch>]_Gbuf[_[A]].ppo`. A layered shader has a switch (all 34 of each of the three
     /// have their programs); the other SAT shaders of Sekiro state none and have one program (`<shader>_Gbuf.ppo`).
     pub fn gbuffer_program(&self) -> String {
+        self.program_in("Gbuf")
+    }
+    /// The pixel program the material is drawn with ([`LayeredMaterial::pass`]'s): `<shader>[_<switch>]_<pass>[_[A]].ppo`.
+    /// Of a pass the engine also draws with shadow permutations (`FwdSdw`, `FwdSSdw`: a per-instance choice) the plain one.
+    pub fn pass_program(&self) -> String {
+        self.program_in(self.pass())
+    }
+    fn program_in(&self, pass: &str) -> String {
         let leaf = self.definition.shader.rsplit(['/', '\\']).next().unwrap_or("");
         let shader = leaf.rsplit_once('.').map_or(leaf, |x| x.0);
         let switch = self
@@ -204,7 +223,7 @@ impl LayeredMaterial {
             })
             .map_or(String::new(), |s| format!("_{s}"));
         let alpha = if self.alpha_reference() > 0 { "_[A]" } else { "" };
-        format!("{shader}{switch}_Gbuf{alpha}.ppo")
+        format!("{shader}{switch}_{pass}{alpha}.ppo")
     }
 }
 impl Component for LayeredMaterial {

@@ -135,9 +135,10 @@ fn fixed_function(shader: &str) -> bool {
     shader.starts_with("GXFlver_")
 }
 
-/// The G-buffer programs of a fixed-function shader in its binder, by exact name: the pixel programs
-/// `<shader>_Gbuf.ppo` and `<shader>_Gbuf_[A].ppo` and the vertex programs `<shader>_GBuf.vpo`, `<shader>_GBuf_Skin.vpo` and
-/// their `@[cl]` permutations. The permutations of an effect the engine selects per instance (`_Bloody`, `_Burn`, `_Cm`,
+/// The G-buffer and forward programs of a fixed-function shader in its binder, by exact name: the pixel programs
+/// `<shader>_Gbuf.ppo`, `<shader>_Gbuf_[A].ppo`, `<shader>_Fwd.ppo` and `<shader>_Fwd_[A].ppo` and the vertex programs
+/// `<shader>_GBuf.vpo`, `<shader>_GBuf_Skin.vpo`, `<shader>_Fwd.vpo`, `<shader>_Fwd_Skin.vpo` and their `@[cl]` permutations
+/// (the forward pass's shadow permutations, `FwdSdw` and `FwdSSdw`, are the engine's per-instance choice and not taken). The permutations of an effect the engine selects per instance (`_Bloody`, `_Burn`, `_Cm`,
 /// `_Df`, `_Cloth`, `_Phantom`, `_ZFeather`, `_Decal[A]`: the same shader with that effect's code) are not taken: nothing in
 /// a material says which an instance draws with. Each program's container states the shader kind its extension names.
 fn fixed_function_programs(game: Game, shader: &str, binder: &Binder) -> Result<Vec<ShaderProgram>> {
@@ -149,6 +150,12 @@ fn fixed_function_programs(game: Game, shader: &str, binder: &Binder) -> Result<
         (format!("{shader}_GBuf@[cl].vpo"), ShaderStage::Vertex, 1),
         (format!("{shader}_GBuf_Skin.vpo"), ShaderStage::Vertex, 1),
         (format!("{shader}_GBuf_Skin@[cl].vpo"), ShaderStage::Vertex, 1),
+        (format!("{shader}_Fwd.ppo"), ShaderStage::Pixel, 0),
+        (format!("{shader}_Fwd_[A].ppo"), ShaderStage::Pixel, 0),
+        (format!("{shader}_Fwd.vpo"), ShaderStage::Vertex, 1),
+        (format!("{shader}_Fwd@[cl].vpo"), ShaderStage::Vertex, 1),
+        (format!("{shader}_Fwd_Skin.vpo"), ShaderStage::Vertex, 1),
+        (format!("{shader}_Fwd_Skin@[cl].vpo"), ShaderStage::Vertex, 1),
     ];
     let mut programs = Vec::new();
     for (name, stage, kind) in names {

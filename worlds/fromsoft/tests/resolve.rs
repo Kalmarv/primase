@@ -1212,3 +1212,31 @@ fn the_render_state_is_what_the_capture_settled() {
             .is_none()
     );
 }
+
+/// An alpha-blended material (`g_BlendMode` 2) is drawn in the forward pass: its pixel program is `<shader>_<switch>_Fwd`
+/// (`_[A]` with an alpha reference), not `_Gbuf`, and the forward program's render target 0 is the finished colour.
+#[test]
+fn a_blended_material_is_bound_to_its_forward_program() {
+    let opaque = with_params(&[
+        ("GXFT_SATStaticSwitch", Value::Int(vec![27])),
+        ("g_AlphaRef", Value::Int(vec![128, 0])),
+    ]);
+    assert!(!opaque.is_forward());
+    assert_eq!(opaque.pass_program(), "M[Multiple]_27_Gbuf_[A].ppo");
+    let blended = with_params(&[
+        ("GXFT_SATStaticSwitch", Value::Int(vec![27])),
+        ("g_AlphaRef", Value::Int(vec![128, 0])),
+        ("g_BlendMode", Value::Int(vec![2])),
+    ]);
+    assert!(blended.is_forward());
+    assert_eq!(blended.pass(), "Fwd");
+    assert_eq!(blended.pass_program(), "M[Multiple]_27_Fwd_[A].ppo");
+    // the G-buffer name stays what the layered readers ask for
+    assert_eq!(blended.gbuffer_program(), "M[Multiple]_27_Gbuf_[A].ppo");
+    // a blend mode the capture matched to no draw keeps the G-buffer program
+    let additive = with_params(&[
+        ("GXFT_SATStaticSwitch", Value::Int(vec![27])),
+        ("g_BlendMode", Value::Int(vec![4])),
+    ]);
+    assert_eq!(additive.pass_program(), "M[Multiple]_27_Gbuf.ppo");
+}

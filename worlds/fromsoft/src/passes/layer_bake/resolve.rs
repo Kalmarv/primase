@@ -299,17 +299,13 @@ pub fn resolve(
         else {
             unreachable!("textures_of yields textures")
         };
-        if resource.count != 1 || dim != primase_core::shader::TextureDim::D2 || arrayed || multisampled {
-            return Err(invalid(
-                "layer binding",
-                0,
-                "only individual Texture2D resources are supported",
-            ));
-        }
+        let individual_2d =
+            resource.count == 1 && dim == primase_core::shader::TextureDim::D2 && !arrayed && !multisampled;
         let register = register(resource)?;
         // a texture that is not a material slot (no `Texture2D_<n>` in its name) is the engine's own: the dither noise the
         // alpha-tested permutations read for the dithered fade (a neutral grey: the fade is off), a depth or scene texture
-        // of a program that reads one (zero). The material binds nothing to it; each is counted by name.
+        // of a program that reads one, the volumes and cube maps of a forward program's lighting (zero). The material binds
+        // nothing to it; each is counted by name.
         if texture_slot(resource).is_err() && !named_by_material(material, &resource.provenance.name) {
             let name = &resource.provenance.name;
             let (value, what) = if name == ENGINE_DITHER_TEXTURE {
@@ -325,6 +321,16 @@ pub fn resolve(
                 source: TextureSource::Default { value, why },
             });
             continue;
+        }
+        if !individual_2d {
+            return Err(invalid(
+                "layer binding",
+                0,
+                format!(
+                    "{}: a material texture slot that is not an individual Texture2D",
+                    resource.provenance.name
+                ),
+            ));
         }
         let (role, binding) = role_and_binding(material, &slots, resource)?;
         let mut found = None;
@@ -374,7 +380,14 @@ pub fn resolve(
         });
     }
     for &slot in PixelShader::textures(shader) {
-        if !textures_of(interface).any(|r| register(r).is_ok_and(|reg| reg == slot)) {
+        // a texture register the program reads names a resource: a texture, or the structured buffer a forward program's
+        // lights are read from
+        if !interface.resources.iter().any(|r| {
+            !matches!(
+                r.kind,
+                ResourceKind::ConstantBuffer { .. } | ResourceKind::Sampler { .. }
+            ) && register(r).is_ok_and(|reg| reg == slot)
+        }) {
             return Err(invalid(
                 "layer binding",
                 0,
@@ -561,7 +574,7 @@ pub fn resolve(
         }
         constant(name, 0, values.len() as u32 * 4, words(&values))?;
     }
-    let outputs = output_bindings(interface);
+    let outputs = output_bindings(interface, material.is_forward());
     let inputs = interface
         .inputs
         .iter()
@@ -584,8 +597,9 @@ pub fn resolve(
 }
 
 /// The G-buffer layout: render target 0 the world normal, 1 the gloss in x, 2 the albedo, 3 the reflectance and 4 the
-/// emission, in the lanes the layered programs write them; only those the program declares.
-fn output_bindings(interface: &Interface) -> Vec<OutputBinding> {
+/// emission, in the lanes the layered programs write them; only those the program declares. A forward program's render
+/// target 0 is the finished colour (its target 1, drawn to a target the capture does not name, has no role).
+fn output_bindings(interface: &Interface, forward: bool) -> Vec<OutputBinding> {
     let normal = OutputRole::Normal {
         encoding: NormalEncoding::XyzBiased {
             bias_bits: NORMAL_BIAS_BITS,
@@ -602,6 +616,8 @@ fn output_bindings(interface: &Interface) -> Vec<OutputBinding> {
             continue;
         }
         let (lanes, role) = match n {
+            0 if forward => (0b1111, OutputRole::Colour),
+            _ if forward => continue,
             0 => (0b0111, normal),
             1 => (0b0001, OutputRole::Gloss),
             2 => (0b0111, OutputRole::Albedo),

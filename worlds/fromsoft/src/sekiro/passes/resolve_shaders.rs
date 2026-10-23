@@ -28,6 +28,12 @@ use std::collections::BTreeMap;
 /// (`<shader>_Gbuf_Skin.vpo`); otherwise the unskinned one (`<shader>_Gbuf.vpo`). Run it after the geometry lowering, so
 /// the primitives exist.
 ///
+/// A material the game draws in its forward pass (`g_BlendMode` 2, [`crate::materials::LayeredMaterial::is_forward`]) is bound to
+/// its `<shader>[_<switch>]_Fwd[_[A]].ppo` and `_Fwd[_Skin].vpo` instead (the plain forward permutation: the shadowed ones,
+/// `_FwdSdw` and `_FwdSSdw`, are the engine's per-instance choice), whose render target 0 is the finished colour; what the
+/// forward programs read from the engine (the scene depth and SSAO, the irradiance volumes, the IBL cube maps, the volume fog)
+/// is bound as engine textures at zero, counted by name, never a material's.
+///
 /// The binding's render state is [`render_state`]'s: what a capture of the running game settles from the material's MTD
 /// (depth test and write, the alpha blend of `g_BlendMode` 2), and nothing it does not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,7 +198,7 @@ fn run(
     let mut policies: BTreeMap<String, u64> = BTreeMap::new();
     for (material_entity, material, is_layered) in candidates {
         let t = &mut tally[usize::from(!is_layered)];
-        let name = material.gbuffer_program();
+        let name = material.pass_program();
         // the layered programs the reader kept, else the one the shader's bundle holds under that name
         let bytes = programs.get(&name).cloned().or_else(|| {
             world
@@ -268,10 +274,10 @@ fn run(
         let bundle = world
             .get::<MaterialShader>(material_entity)
             .and_then(|m| world.get::<ShaderBundle>(m.0));
-        // `<shader>_Gbuf.vpo`; the fixed-function shaders spell it `_GBuf`
+        // `<shader>_<pass>.vpo`; the fixed-function shaders spell the G-buffer's `_GBuf`
         let vertex = bundle
             .and_then(|b| {
-                ["Gbuf", "GBuf"].iter().find_map(|g| {
+                [material.pass(), "GBuf"].iter().find_map(|g| {
                     b.program(&format!("{}_{g}{}.vpo", b.name, if skin { "_Skin" } else { "" }))
                 })
             })
