@@ -147,5 +147,17 @@ pub fn read_records(d: &[u8], meta: &[u8; 16]) -> Result<Vec<ProgramRecord>> {
         .collect()
 }
 
-/// ExpressionShaderStreamableTextureSet: what a texture lookup row's value is the id of.
+/// ExpressionShaderStreamableTextureSet: what a texture lookup row's value is the id of. It lists the texture
+/// parameters of a material, not texture assets: neither the id of a texture's resource nor the GUID of its asset
+/// occurs in the set of any of the 64 materials of a sample of 15 bundles (0 of 987 references; the link from a
+/// material to its textures is the depot block's, [`crate::textures`]). Layout, as read from the first 192 bytes of
+/// three sets (5, 2 and 14 entries; not read by this crate):
+///
+/// ```text
+/// 0x00 u32 count    0x04 u32 end of the entries (16 + 32 x count in all three)    0x08 8 zero bytes
+/// 0x10 count x 32 bytes: u32 1, u32 0x21, f32 1.0, u32 0, u64 parameter name hash (0x37e6de277c4250cc, the
+///      first of one set, is a name in depot blocks), u32 type (0x14c5fc30, a texture reference), u16 1, u16 a
+///      word that is not a function of the name hash (0x3487 occurs under two different hashes)
+/// then a tail (88, 44 and 236 bytes in the three), not decoded
+/// ```
 pub const STREAMABLE_TEXTURE_SET: u32 = 0x7A63_0735;
