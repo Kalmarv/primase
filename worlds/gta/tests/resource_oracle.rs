@@ -1,6 +1,6 @@
 //! Drawables and texture dictionaries against an independent reader's decoding of the same files.
 //!
-//! Oracle (`PRIMASE_GTA_RESOURCES`): a folder of JSON files `{path, kind: "drawable" | "ytd", value}`:
+//! Oracle (`oracles.codewalker.gta/resources`): a folder of JSON files `{path, kind: "drawable" | "ytd", value}`:
 //! - drawable: bounds, LOD distances, render masks, the embedded texture count, shaders (`name`, and per texture or
 //!   constant-buffer parameter in stored order: `g9_name`, `texture`, `values` padded to four floats), and per LOD
 //!   the models (`render_mask`, `skeleton_binding`, `shader_mapping`) with their geometries (`shader`, `vertices`,
@@ -12,7 +12,7 @@
 //! layout; the comparison uses the stored names it also reports and compares components by semantic, so neither
 //! transformation hides a difference. Floats compare bit for bit.
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
+//! Needs `installs.gta` and `keys.gta`.
 use std::fs::File;
 
 mod codewalker;
@@ -23,15 +23,15 @@ use primase_gta::rage::resource::Resource;
 use primase_gta::rage::texture::TextureDictionary;
 use primase_gta::read::archive::archive_set::Install;
 use primase_gta::read::archive::keys::Keys;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, keys, oracle};
 use serde_json::Value;
 
 #[test]
 fn drawables_and_textures_against_the_oracle() {
     let (Some(dir), Some(key_dir), Some(oracle)) = (
-        real_data("PRIMASE_GTA_DIR"),
-        real_data("PRIMASE_GTA_KEYS"),
-        real_data("PRIMASE_GTA_RESOURCES"),
+        install(Game::Gta),
+        keys(Game::Gta),
+        oracle(OracleSet::CodeWalker, Game::Gta, "resources"),
     ) else {
         return;
     };

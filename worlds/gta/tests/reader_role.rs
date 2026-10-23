@@ -3,7 +3,7 @@
 //! `select-lod` chooses), fragments keep their bones unposed (`gta.bones`; `gta-pose-fragments` poses), and materials
 //! stay GTA shaders (`gta.shader`; `lower-gta-pbr` lowers, so no `pbr.material` exists yet).
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`; reads a corner of Legion Square.
+//! Needs `installs.gta` and `keys.gta`; reads a corner of Legion Square.
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Instance, Lods};
 use primase_gta::components::{GtaBones, GtaShader};
@@ -12,8 +12,8 @@ use primase_gta::read::source::GtaSource;
 #[test]
 fn the_reader_keeps_levels_of_detail_bones_and_shaders_as_stored() {
     let (Some(dir), Some(keys)) = (
-        primase_testdata::real_data("PRIMASE_GTA_DIR"),
-        primase_testdata::real_data("PRIMASE_GTA_KEYS"),
+        primase_testdata::install(primase_testdata::Game::Gta),
+        primase_testdata::keys(primase_testdata::Game::Gta),
     ) else {
         return;
     };
@@ -42,8 +42,8 @@ fn the_reader_keeps_levels_of_detail_bones_and_shaders_as_stored() {
 #[test]
 fn the_reader_declares_every_name_it_emits() {
     let (Some(dir), Some(keys)) = (
-        primase_testdata::real_data("PRIMASE_GTA_DIR"),
-        primase_testdata::real_data("PRIMASE_GTA_KEYS"),
+        primase_testdata::install(primase_testdata::Game::Gta),
+        primase_testdata::keys(primase_testdata::Game::Gta),
     ) else {
         return;
     };

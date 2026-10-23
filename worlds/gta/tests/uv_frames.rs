@@ -1,14 +1,14 @@
 //! GTA's stored tangent frames are the frames its texture coordinates give, with the bitangent along +v: on them
-//! `uv-frame-normals{bitangent=+v}` has nothing to do. Measured on `PRIMASE_GTA_FRAMES` (CodeWalker's reading of one
-//! ydr's geometries as stored): per triangle, the stored frame its bump maps are drawn in (red along T, green along
-//! GTA's binormal `cross(T, N) * w`, `GTA_NORMALS`) against the frame derived from UV0. The frame change to the world
-//! is a rotation, so the comparison is made in GTA's frame. Triangles without a UV frame (degenerate coordinates)
-//! are left out of the share.
+//! `uv-frame-normals{bitangent=+v}` has nothing to do. Measured on `oracles.codewalker.gta/frames.json` (CodeWalker's
+//! reading of one ydr's geometries as stored): per triangle, the stored frame its bump maps are drawn in (red along T,
+//! green along GTA's binormal `cross(T, N) * w`, `GTA_NORMALS`) against the frame derived from UV0. The frame change to
+//! the world is a rotation, so the comparison is made in GTA's frame. Triangles without a UV frame (degenerate
+//! coordinates) are left out of the share.
 #![allow(clippy::unwrap_used)]
 
 use primase_meshops::frames::{AxisMap, axis_map, uv_axes};
 use primase_meshops::vector::Vec3;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, oracle};
 use serde_json::Value as Json;
 use std::collections::BTreeMap;
 
@@ -18,7 +18,7 @@ fn v3(j: &Json) -> [f32; 3] {
 
 #[test]
 fn stored_frames_are_the_uv_frames() {
-    let Some(frames) = real_data("PRIMASE_GTA_FRAMES") else {
+    let Some(frames) = oracle(OracleSet::CodeWalker, Game::Gta, "frames.json") else {
         return;
     };
     let oracle: Json = serde_json::from_slice(&std::fs::read(&frames).unwrap()).unwrap();

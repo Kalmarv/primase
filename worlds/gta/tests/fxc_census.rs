@@ -1,9 +1,10 @@
 #![allow(clippy::unwrap_used)]
-//! Every compiled effect (`.fxc`) of an install: read to its last byte, each program's container checked (DXBC or
-//! DXIL part), lifted to the shader representation where it is a vertex or pixel program, and the census printed
-//! (effects, programs per stage, shader models, refusals by reason). The reader fails on a file it cannot read to
-//! its end; the lift's refusals are counted, not failures, but a program that lifts must validate and write WGSL.
-//! Needs `PRIMASE_GTA_SHADERS`, a folder of Legacy's `.fxc` files (the Enhanced edition has none: see `sgd2.rs`).
+//! Every compiled effect (`.fxc`) of an install: read to its last byte, each program's container checked (DXBC or DXIL
+//! part), lifted to the shader representation where it is a vertex or pixel program, and the census printed (effects,
+//! programs per stage, shader models, refusals by reason). The reader fails on a file it cannot read to its end; the
+//! lift's refusals are counted, not failures, but a program that lifts must validate and write WGSL. Needs
+//! `oracles.corpus.gta/legacy-effects`, a folder of Legacy's `.fxc` files (the Enhanced edition has none: see
+//! `sgd2.rs`).
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -26,7 +27,11 @@ fn files(root: &Path, out: &mut Vec<PathBuf>) {
 
 #[test]
 fn every_effect_of_the_install() {
-    let Some(root) = primase_testdata::real_data("PRIMASE_GTA_SHADERS") else {
+    let Some(root) = primase_testdata::oracle(
+        primase_testdata::OracleSet::Corpus,
+        primase_testdata::Game::Gta,
+        "legacy-effects",
+    ) else {
         return;
     };
     let mut paths = Vec::new();
@@ -103,14 +108,18 @@ fn every_effect_of_the_install() {
     );
 }
 
-/// GTA V Enhanced's shader database: `PRIMASE_GTA_SHADER_DB`, the `sga_win32_60_final.awc` file (or its `_init`
-/// sibling) as the install stores it after decryption and decompression. Every group and effect is read to the end
-/// of the file; every program's container is checked and every program lifted (DXIL), validated and
-/// written as WGSL; the effects' program lists are checked to name programs of the right stage.
+/// GTA V Enhanced's shader database: `oracles.corpus.gta/shader-database.awc`, the `sga_win32_60_final.awc` file (or
+/// its `_init` sibling) as the install stores it after decryption and decompression. Every group and effect is read to
+/// the end of the file; every program's container is checked and every program lifted (DXIL), validated and written as
+/// WGSL; the effects' program lists are checked to name programs of the right stage.
 #[test]
 fn the_enhanced_shader_database() {
     use primase_gta::rage::sgd2;
-    let Some(path) = primase_testdata::real_data("PRIMASE_GTA_SHADER_DB") else {
+    let Some(path) = primase_testdata::oracle(
+        primase_testdata::OracleSet::Corpus,
+        primase_testdata::Game::Gta,
+        "shader-database.awc",
+    ) else {
         return;
     };
     let bytes = std::fs::read(&path).unwrap();

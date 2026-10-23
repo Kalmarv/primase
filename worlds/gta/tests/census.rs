@@ -2,12 +2,11 @@
 //! with an independent reader's listing of the same install, then every binary entry and every resource decoded
 //! to its exact end. Failures are counted by kind.
 //!
-//! Oracle (`PRIMASE_GTA_LISTING`): an independent reader's listing, JSON lines, one archive per line:
-//! `{"path": "x64a.rpf\\levels\\gta5\\...rpf", "file_size": n, "start": n, "encryption": u32,
-//!   "entries": [[path, "dir"] | [path, "bin", block, stored, size, encrypted] | [path, "res", block, stored, system, graphics]]}`
-//! with archive and entry paths lowercase, relative to the install, joined by `\`.
-//! Needs `PRIMASE_GTA_DIR` (the install) and `PRIMASE_GTA_KEYS` (key material, see `Keys::from_dir`);
-//! `PRIMASE_GTA_FILTER` limits the archives to paths containing that text.
+//! Oracle (`oracles.codewalker.gta/listing.jsonl`): an independent reader's listing, JSON lines, one archive per line:
+//! `{"path": "x64a.rpf\\levels\\gta5\\...rpf", "file_size": n, "start": n, "encryption": u32, "entries": [[path, "dir"]
+//! | [path, "bin", block, stored, size, encrypted] | [path, "res", block, stored, system, graphics]]}` with archive and
+//! entry paths lowercase, relative to the install, joined by `\`. Needs `installs.gta` (the install) and `keys.gta`
+//! (key material, see `Keys::from_dir`); the debug key `gta.archive_filter` limits the archives to paths containing that text.
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -15,7 +14,7 @@ use std::sync::Mutex;
 
 use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::archive::rpf::{Archive, EntryKind};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, keys};
 
 #[derive(serde::Deserialize)]
 struct OracleArchive {
@@ -169,16 +168,15 @@ fn walk(a: &Archive, f: &mut File, keys: &Keys, oracle: &BTreeMap<String, Oracle
 
 #[test]
 fn every_archive_reads_and_every_entry_decodes() {
-    let (Some(dir), Some(key_dir)) = (real_data("PRIMASE_GTA_DIR"), real_data("PRIMASE_GTA_KEYS")) else {
+    let (Some(dir), Some(key_dir)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
     let keys = Keys::from_dir(&key_dir).expect("key material");
-    let filter = primase_testdata::real_data_value("PRIMASE_GTA_FILTER")
-        .and_then(|value| value.into_string().ok())
+    let filter = primase_testdata::debug("gta.archive_filter")
         .unwrap_or_default()
         .to_lowercase();
     let mut oracle = BTreeMap::new();
-    if let Some(listing) = real_data("PRIMASE_GTA_LISTING") {
+    if let Some(listing) = primase_testdata::oracle(OracleSet::CodeWalker, Game::Gta, "listing.jsonl") {
         for line in std::fs::read_to_string(listing).expect("listing").lines() {
             let o: OracleArchive = serde_json::from_str(line).expect("listing line");
             oracle.insert(o.path.clone(), o);

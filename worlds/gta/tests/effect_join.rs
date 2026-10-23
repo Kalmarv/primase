@@ -6,7 +6,7 @@
 //! names a vertex and a pixel program with a `core.shader` entity whose container is what the database stores. The
 //! counts are printed.
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`; `PRIMASE_GTA_REGION` (`x0,y0,x1,y1`) names the region, Vespucci
+//! Needs `installs.gta` and `keys.gta`; the debug key `gta.region` (`x0,y0,x1,y1`) names the region, Vespucci
 //! Beach by default.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use std::collections::BTreeSet;
@@ -14,15 +14,14 @@ use std::collections::BTreeSet;
 use primase_core::World;
 use primase_gta::components::{GtaEffect, GtaMaterialEffect, GtaShader, GtaStage};
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{real_data, real_data_value};
+use primase_testdata::{Game, debug, install, keys};
 
 #[test]
 fn every_material_of_a_region_joins_its_effect() {
-    let (Some(dir), Some(keys)) = (real_data("PRIMASE_GTA_DIR"), real_data("PRIMASE_GTA_KEYS")) else {
+    let (Some(dir), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
-    let region: Vec<f32> = real_data_value("PRIMASE_GTA_REGION")
-        .and_then(|v| v.into_string().ok())
+    let region: Vec<f32> = debug("gta.region")
         .unwrap_or_else(|| "-1500,-1650,-1150,-1330".into())
         .split(',')
         .map(|v| v.trim().parse().unwrap())

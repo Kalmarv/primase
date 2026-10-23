@@ -7,11 +7,11 @@
 //!   constant buffer, texture and sampler it declares has a record of the same class at its register and space (a
 //!   texture or sampler arrays of unbounded length excepted), and a constant buffer's record has the size the
 //!   interface declares rounded up to 16 bytes.
-//! - Against CodeWalker's `ShadersGen9Conversion.xml` (`PRIMASE_GTA_SHADER_CONVERSION`, optional): for every constant
+//! - Against CodeWalker's `ShadersGen9Conversion.xml` (`oracles.codewalker.gta/ShadersGen9Conversion.xml`, optional): for every constant
 //!   buffer parameter of an effect that one of the effect's programs reads under the XML's `old` name, the effect's
 //!   parameter records hold the pair (old name, current name) with the XML's offset.
 //!
-//! The counts are printed. Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
+//! The counts are printed. Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -20,7 +20,7 @@ use primase_gta::components::{GtaEffect, GtaEffectParameters, GtaShaderTable};
 use primase_gta::rage::sgd2;
 use primase_gta::rage::sgd2_table;
 use primase_gta::read::source::GtaSource;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, keys, oracle};
 
 /// The `Item`s of CodeWalker's file: each effect's name and its CBuffer parameters (current name, old name, offset).
 fn conversion(xml: &str) -> BTreeMap<String, Vec<(String, String, u16)>> {
@@ -68,7 +68,7 @@ fn conversion(xml: &str) -> BTreeMap<String, Vec<(String, String, u16)>> {
 
 #[test]
 fn every_programs_table_agrees_with_its_interface() {
-    let (Some(dir), Some(keys)) = (real_data("PRIMASE_GTA_DIR"), real_data("PRIMASE_GTA_KEYS")) else {
+    let (Some(dir), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
     let source = GtaSource::open(&dir, &keys).unwrap();
@@ -153,9 +153,9 @@ fn every_programs_table_agrees_with_its_interface() {
 #[test]
 fn the_effects_parameter_records_hold_codewalkers_offsets() {
     let (Some(dir), Some(keys), Some(xml)) = (
-        real_data("PRIMASE_GTA_DIR"),
-        real_data("PRIMASE_GTA_KEYS"),
-        real_data("PRIMASE_GTA_SHADER_CONVERSION"),
+        install(Game::Gta),
+        keys(Game::Gta),
+        oracle(OracleSet::CodeWalker, Game::Gta, "ShadersGen9Conversion.xml"),
     ) else {
         return;
     };

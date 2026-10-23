@@ -2,7 +2,7 @@
 //! Failures are counted by message; resource versions, bound kinds (nested composites' children included), polygon
 //! kinds, material counts and the composite transforms' fourth words are counted. Every ybn must read.
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`; `PRIMASE_GTA_FILTER` limits the archives to paths containing that
+//! Needs `installs.gta` and `keys.gta`; the debug key `gta.archive_filter` limits the archives to paths containing that
 //! text.
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -12,7 +12,7 @@ use primase_gta::rage::bounds::{Bound, Contents, Polygon, read_ybn};
 use primase_gta::read::archive::archive_set::Install;
 use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::archive::rpf::EntryKind;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install, keys};
 
 #[derive(Default)]
 struct Tally {
@@ -56,10 +56,10 @@ fn count(b: &Bound, t: &mut BTreeMap<String, u64>) {
 
 #[test]
 fn every_ybn_reads() {
-    let (Some(dir), Some(key_dir)) = (real_data("PRIMASE_GTA_DIR"), real_data("PRIMASE_GTA_KEYS")) else {
+    let (Some(dir), Some(key_dir)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
-    let filter = std::env::var("PRIMASE_GTA_FILTER").unwrap_or_default();
+    let filter = primase_testdata::debug("gta.archive_filter").unwrap_or_default();
     let keys = Keys::from_dir(&key_dir).expect("key material");
     let install = Install::open(&dir, &keys).expect("install");
     let tally = Mutex::new(Tally::default());

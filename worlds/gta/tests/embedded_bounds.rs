@@ -1,10 +1,10 @@
 //! Props' embedded collision against CodeWalker's reading of the same bounds.
 //!
-//! `PRIMASE_GTA_BOUNDS` is a folder of thin dumps of CodeWalker's reading of props' bounds (a ydr's own, a yft's first
-//! physics LOD's): per leaf bound in order its type and the composite flags it was placed with, and per polygon its
-//! type, its material's type and (triangles) its vertices placed by CodeWalker (the geometry's centre and the child's
-//! transform). Each prop is read the way a conversion reads it (one prototype, `attach_assets`) and lowered by
-//! `lower-gta-embedded-collision`.
+//! `oracles.codewalker.gta/bounds` is a folder of thin dumps of CodeWalker's reading of props' bounds (a ydr's own, a
+//! yft's first physics LOD's): per leaf bound in order its type and the composite flags it was placed with, and per
+//! polygon its type, its material's type and (triangles) its vertices placed by CodeWalker (the geometry's centre and
+//! the child's transform). Each prop is read the way a conversion reads it (one prototype, `attach_assets`) and lowered
+//! by `lower-gta-embedded-collision`.
 //!
 //! Checked: the prototype's collision is CodeWalker's triangles in order, each placed within 0.1 mm (the core frame
 //! `C (x, y, z) = (x, z, -y)` of CodeWalker's position) and made of its material's name in `materials.dat`; the
@@ -23,7 +23,7 @@ use primase_gta::read::archive::archive_set::{ArchiveSet, Install, MapState};
 use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::assets::attach_assets;
 use primase_gta::read::collision::material_names;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, keys, oracle};
 use serde_json::Value as Json;
 
 /// How many triangles our lowering makes of a polygon or primitive bound that is no triangle.
@@ -66,9 +66,9 @@ fn corners_in(c: &Collision, at: usize, n: usize, points: &Json, corners: usize,
 #[test]
 fn props_collide_by_codewalkers_reading_of_their_bounds() {
     let (Some(dir), Some(keys), Some(dumps)) = (
-        real_data("PRIMASE_GTA_DIR"),
-        real_data("PRIMASE_GTA_KEYS"),
-        real_data("PRIMASE_GTA_BOUNDS"),
+        install(Game::Gta),
+        keys(Game::Gta),
+        oracle(OracleSet::CodeWalker, Game::Gta, "bounds"),
     ) else {
         return;
     };

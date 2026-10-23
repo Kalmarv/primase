@@ -3,7 +3,7 @@
 //! decode of the file ([`MapData`], as a region read decodes the maps it places) holds, and its entity count the number
 //! of entities that decode reads; the listing is the same on one thread and on eight.
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
+//! Needs `installs.gta` and `keys.gta`.
 use primase_core::parallel::Threads;
 use primase_gta::rage::map::MapData;
 use primase_gta::rage::meta::Meta;
@@ -14,8 +14,8 @@ use primase_gta::read::region::{States, archive_sets, list_maps};
 #[test]
 fn every_listed_header_is_the_decoded_files() {
     let (Some(dir), Some(keys)) = (
-        primase_testdata::real_data("PRIMASE_GTA_DIR"),
-        primase_testdata::real_data("PRIMASE_GTA_KEYS"),
+        primase_testdata::install(primase_testdata::Game::Gta),
+        primase_testdata::keys(primase_testdata::Game::Gta),
     ) else {
         return;
     };

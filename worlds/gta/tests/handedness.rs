@@ -1,8 +1,8 @@
 //! Handedness of the GTA reader's frame change, on a real drawable against CodeWalker's reading of it.
 //!
-//! `PRIMASE_GTA_FRAMES` is a thin dump of CodeWalker's reading of one ydr's high-detail geometries as stored, in
-//! GTA's frame: per vertex position, normal, tangent (xyzw), first texture coordinate, and the index buffer. The facts
-//! checked against:
+//! `oracles.codewalker.gta/frames.json` is a thin dump of CodeWalker's reading of one ydr's high-detail geometries as
+//! stored, in GTA's frame: per vertex position, normal, tangent (xyzw), first texture coordinate, and the index buffer.
+//! The facts checked against:
 //! - the frame: east, north, up (right-handed); the world is `C (x, y, z) = (x, z, -y)` of it, a rotation;
 //! - which side is a triangle's front: along `cross(b - a, c - a)` in GTA's coordinates, the side its stored normals
 //!   face (nearly every geometry of the install; `gta-winding` turns the few that do not);
@@ -19,7 +19,7 @@ use primase_gta::rage::map::{ArchetypeDef, ArchetypeKind};
 use primase_gta::read::archive::archive_set::{ArchiveSet, Install, MapState};
 use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::assets::attach_assets;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, keys, oracle};
 use serde_json::Value as Json;
 
 fn v3(j: &Json) -> [f32; 3] {
@@ -55,9 +55,9 @@ fn c<T: Copy + std::ops::Neg<Output = T>>(v: [T; 3]) -> [T; 3] {
 #[test]
 fn frame_change_keeps_fronts_and_bitangents() {
     let (Some(dir), Some(keys), Some(frames)) = (
-        real_data("PRIMASE_GTA_DIR"),
-        real_data("PRIMASE_GTA_KEYS"),
-        real_data("PRIMASE_GTA_FRAMES"),
+        install(Game::Gta),
+        keys(Game::Gta),
+        oracle(OracleSet::CodeWalker, Game::Gta, "frames.json"),
     ) else {
         return;
     };

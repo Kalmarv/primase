@@ -1,17 +1,17 @@
 //! Texture dictionary parents against an independent reader's table of the same install.
 //!
-//! Oracle (`PRIMASE_GTA_GTXD`): JSON `{parents: {child hash: parent hash}, sources: {path: [[child, parent], ...]}}`,
-//! `sources` listing every gtxd file and `vehicles.meta` of the install with its pairs. That reader also takes the
-//! vehicles' texture dictionary pairs from `vehicles.meta` (named class `vehicles`: they are vehicle data, read with
-//! the vehicles); every other difference fails the gate.
+//! Oracle (`oracles.codewalker.gta/gtxd.json`): JSON `{parents: {child hash: parent hash}, sources: {path: [[child,
+//! parent], ...]}}`, `sources` listing every gtxd file and `vehicles.meta` of the install with its pairs. That reader
+//! also takes the vehicles' texture dictionary pairs from `vehicles.meta` (named class `vehicles`: they are vehicle
+//! data, read with the vehicles); every other difference fails the gate.
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
+//! Needs `installs.gta` and `keys.gta`.
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_gta::read::archive::archive_set::{ArchiveSet, Install, MapState};
 use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::gtxd::TextureParents;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, keys, oracle};
 
 #[derive(serde::Deserialize)]
 struct Oracle {
@@ -22,9 +22,9 @@ struct Oracle {
 #[test]
 fn texture_parents_against_the_oracle() {
     let (Some(dir), Some(key_dir), Some(oracle)) = (
-        real_data("PRIMASE_GTA_DIR"),
-        real_data("PRIMASE_GTA_KEYS"),
-        real_data("PRIMASE_GTA_GTXD"),
+        install(Game::Gta),
+        keys(Game::Gta),
+        oracle(OracleSet::CodeWalker, Game::Gta, "gtxd.json"),
     ) else {
         return;
     };

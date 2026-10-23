@@ -8,7 +8,7 @@
 //! - `one archive`: both maps are in the same archive, so the game's data itself places the entity twice;
 //! - `known`: the pairs in [`KNOWN`], placements two packs both author.
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
+//! Needs `installs.gta` and `keys.gta`.
 use std::collections::BTreeMap;
 use std::fs::File;
 
@@ -17,7 +17,7 @@ use primase_gta::rage::meta::Meta;
 use primase_gta::read::archive::archive_set::MapState;
 use primase_gta::read::archive::archive_set::{ArchiveSet, Install};
 use primase_gta::read::archive::keys::Keys;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install, keys};
 
 /// Static maps of different packs that author the same placement (ymap names, either order).
 const KNOWN: [(&str, &str); 1] = [("h4_yacht_critical_0.ymap", "hei_ch3_12_critical_0.ymap")];
@@ -35,7 +35,7 @@ fn file_name(path: &str) -> &str {
 
 #[test]
 fn no_placement_is_live_twice() {
-    let (Some(dir), Some(key_dir)) = (real_data("PRIMASE_GTA_DIR"), real_data("PRIMASE_GTA_KEYS")) else {
+    let (Some(dir), Some(key_dir)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
     let keys = Keys::from_dir(&key_dir).expect("key material");

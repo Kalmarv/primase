@@ -1,10 +1,10 @@
 //! The live-file tables of an install against an independent reader's tables of the same install.
 //!
-//! Oracle (`PRIMASE_GTA_ACTIVE`): JSON `{kind: {name hash (decimal): path}}` for the kinds ymap, ytyp, ydr, ydd,
-//! yft, ytd, ybn, paths as in the census listing. That reader applies the multiplayer packs' map changes, so the
-//! comparison is with GTA Online's map ([`MapState::Online`]). It follows its own rules where they differ from the
-//! game's mount data (`archive_set`). Every difference is put in one of these named classes and counted; anything
-//! else fails the gate:
+//! Oracle (`oracles.codewalker.gta/active.json`): JSON `{kind: {name hash (decimal): path}}` for the kinds ymap, ytyp,
+//! ydr, ydd, yft, ytd, ybn, paths as in the census listing. That reader applies the multiplayer packs' map changes, so
+//! the comparison is with GTA Online's map ([`MapState::Online`]). It follows its own rules where they differ from the
+//! game's mount data (`archive_set`). Every difference is put in one of these named classes and counted; anything else
+//! fails the gate:
 //! - `skipped pack`: our copy is in `patchday27ng`, a pack that reader leaves out on purpose (its source calls this
 //!   a hack against the map breaking: run pack by pack, that pack's story overlays and the multiplayer maps would
 //!   both be live);
@@ -14,20 +14,20 @@
 //! - `mount order`: both copies are mounted and ours ranks later (overlay archives over plain ones, then mount
 //!   order); that reader ignores overlay flags and takes the last copy in file-system order.
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
+//! Needs `installs.gta` and `keys.gta`.
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_gta::read::archive::archive_set::MapState;
 use primase_gta::read::archive::archive_set::{ArchiveSet, Install};
 use primase_gta::read::archive::keys::Keys;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, keys, oracle};
 
 #[test]
 fn live_files_against_the_oracle() {
     let (Some(dir), Some(key_dir), Some(active)) = (
-        real_data("PRIMASE_GTA_DIR"),
-        real_data("PRIMASE_GTA_KEYS"),
-        real_data("PRIMASE_GTA_ACTIVE"),
+        install(Game::Gta),
+        keys(Game::Gta),
+        oracle(OracleSet::CodeWalker, Game::Gta, "active.json"),
     ) else {
         return;
     };

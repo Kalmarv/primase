@@ -1,17 +1,17 @@
 //! The install's listing against an independent reader's: every archive of the install and, in each, every file
 //! with the numbers its table of contents gives.
 //!
-//! Oracle (`PRIMASE_GTA_LISTING`, CodeWalker.Core 485d56b through a dump harness; schema in `census.rs`): one archive
-//! per line. A resource's oracle record holds its page flags, whose sizes are the pages' bytes
-//! ([`PageFlags::size`], the size the inflated body is checked against in `census.rs`).
-//! Needs `PRIMASE_GTA_DIR`, `PRIMASE_GTA_KEYS` and `PRIMASE_GTA_LISTING`.
+//! Oracle (`oracles.codewalker.gta/listing.jsonl`, CodeWalker.Core 485d56b through a dump harness; schema in
+//! `census.rs`): one archive per line. A resource's oracle record holds its page flags, whose sizes are the pages'
+//! bytes ([`PageFlags::size`], the size the inflated body is checked against in `census.rs`). Needs `installs.gta`,
+//! `keys.gta` and `oracles.codewalker.gta/listing.jsonl`.
 use std::collections::BTreeMap;
 
 use primase_gta::rage::resource::PageFlags;
 use primase_gta::read::archive::archive_set::Install;
 use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::archive::listing::Storage;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, keys, oracle};
 
 #[derive(serde::Deserialize)]
 struct OracleArchive {
@@ -22,9 +22,9 @@ struct OracleArchive {
 #[test]
 fn the_listing_is_the_oracles_archives_and_files() {
     let (Some(dir), Some(key_dir), Some(listing)) = (
-        real_data("PRIMASE_GTA_DIR"),
-        real_data("PRIMASE_GTA_KEYS"),
-        real_data("PRIMASE_GTA_LISTING"),
+        install(Game::Gta),
+        keys(Game::Gta),
+        oracle(OracleSet::CodeWalker, Game::Gta, "listing.jsonl"),
     ) else {
         return;
     };

@@ -3,7 +3,7 @@
 //! checked against the files' enum descriptions), reaching every byte of every data block (a structure covers its extent,
 //! a string its NUL). Failures are counted by message, unreached bytes by block type.
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
+//! Needs `installs.gta` and `keys.gta`.
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Mutex;
@@ -14,7 +14,7 @@ use primase_gta::read::archive::archive_set::Install;
 use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::archive::rpf::EntryKind;
 use primase_hash::joaat_exact;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install, keys};
 
 /// The enums `map` documents, value by value, as the files' enum descriptions must name them.
 const ENUMS: [(&str, &[&str]); 3] = [
@@ -84,7 +84,7 @@ struct Tally {
 
 #[test]
 fn every_ymap_and_ytyp_decodes() {
-    let (Some(dir), Some(key_dir)) = (real_data("PRIMASE_GTA_DIR"), real_data("PRIMASE_GTA_KEYS")) else {
+    let (Some(dir), Some(key_dir)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
     let keys = Keys::from_dir(&key_dir).expect("key material");

@@ -11,7 +11,7 @@ use crate::read::source::{GtaSource, prototype_box};
 
 /// Every component and resource a region's read and load put in a world, by name (the names in the namespaces
 /// [`Reader::emits`] states): what a coverage report lists of this reader. The reader's honesty test (real data:
-/// `PRIMASE_GTA_DIR`, `PRIMASE_GTA_KEYS`) reads a corner of Legion Square and checks that its world holds no other name.
+/// `installs.gta`, `keys.gta`) reads a corner of Legion Square and checks that its world holds no other name.
 pub const EMITTED_NAMES: &[&str] = &[
     "core.condition",
     "core.instance",

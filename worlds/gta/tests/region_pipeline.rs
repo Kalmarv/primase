@@ -6,7 +6,7 @@
 //! (`pbr.material`, or a layered terrain material). The counts that review a region (tinted primitives and the
 //! triangles straddling palette columns, decals, vertex-alpha surfaces, layered terrain, LOD forms) are printed.
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`; `PRIMASE_GTA_REGION` limits it to one named region.
+//! Needs `installs.gta` and `keys.gta`; the debug key `gta.region` limits it to one named region.
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Instance, LayeredMaterial, Mesh};
@@ -40,12 +40,12 @@ const PART: &str = "select-lod{form=finest}, lower-gta-embedded-collision{foliag
 #[test]
 fn every_named_region_through_the_gta_passes() {
     let (Some(dir), Some(keys)) = (
-        primase_testdata::real_data("PRIMASE_GTA_DIR"),
-        primase_testdata::real_data("PRIMASE_GTA_KEYS"),
+        primase_testdata::install(primase_testdata::Game::Gta),
+        primase_testdata::keys(primase_testdata::Game::Gta),
     ) else {
         return;
     };
-    let only = primase_testdata::real_data_value("PRIMASE_GTA_REGION");
+    let only = primase_testdata::debug("gta.region");
     let source = GtaSource::open(&dir, &keys).expect("install");
     let mut registry = PassRegistry::new();
     registry.register("select-lod", primase_core::select_lod);

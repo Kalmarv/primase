@@ -1,7 +1,8 @@
 //! One archive entry read as itself ([`GtaSource::read_entry`]) against an independent reader's decoding of the same
 //! files, and the structure the entry kinds promise.
 //!
-//! Oracle (`PRIMASE_GTA_RESOURCES`, CodeWalker.Core 485d56b through a dump harness; schema in `resource_oracle.rs`):
+//! Oracle (`oracles.codewalker.gta/resources`, CodeWalker.Core 485d56b through a dump harness; schema in
+//! `resource_oracle.rs`):
 //! - a drawable: its box and sphere bit for bit, its shaders (one material each), and per geometry of the high level
 //!   its vertex count and index count (one primitive each, in order);
 //! - a texture dictionary: per texture its name, size, levels and data length (one `core.texture` each, in order).
@@ -9,13 +10,13 @@
 //! Also: the drawable's prototype is the first live archetype's (`gta.archetype`) and its asset (`core.asset`) holds
 //! it as a part; a file that is not a drawable, texture dictionary or bound is refused.
 //!
-//! Needs `PRIMASE_GTA_DIR`, `PRIMASE_GTA_KEYS` and `PRIMASE_GTA_RESOURCES`.
+//! Needs `installs.gta`, `keys.gta` and `oracles.codewalker.gta/resources`.
 use primase_core::asset::{Asset, Role};
 use primase_core::{Mesh, Name, Texture, Transform};
 use primase_gta::components::collision::GtaBounds;
 use primase_gta::components::{GtaArchetype, GtaDrawable, GtaShader};
 use primase_gta::read::source::GtaSource;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, keys};
 use serde_json::Value;
 
 fn oracle(dir: &std::path::Path, file: &str) -> Value {
@@ -33,9 +34,9 @@ fn f32s(v: &Value) -> Vec<u32> {
 #[test]
 fn drawables_textures_and_the_rest_read_as_themselves() {
     let (Some(dir), Some(keys), Some(resources)) = (
-        real_data("PRIMASE_GTA_DIR"),
-        real_data("PRIMASE_GTA_KEYS"),
-        real_data("PRIMASE_GTA_RESOURCES"),
+        install(Game::Gta),
+        keys(Game::Gta),
+        primase_testdata::oracle(OracleSet::CodeWalker, Game::Gta, "resources"),
     ) else {
         return;
     };
@@ -170,7 +171,7 @@ fn drawables_textures_and_the_rest_read_as_themselves() {
 fn a_map_file_places_what_a_region_read_places_of_it() {
     use primase_core::{Instance, Transform};
     use primase_gta::components::GtaEntity;
-    let (Some(dir), Some(keys)) = (real_data("PRIMASE_GTA_DIR"), real_data("PRIMASE_GTA_KEYS")) else {
+    let (Some(dir), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
     let source = GtaSource::open(&dir, &keys).expect("install");

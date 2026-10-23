@@ -1,12 +1,12 @@
 //! Field parity with CodeWalker over whole areas: every file the placements of the gate regions reach, read by our
 //! reader and by CodeWalker (an independent reader), compared field by field.
 //!
-//! Oracle (`PRIMASE_GTA_PARITY`): a folder holding `dump.jsonl`, written by the CodeWalker harness's `batch` mode from
-//! a list of archive paths, one JSON line per file: `{path, kind, value}` with `kind` one of `drawable` (a ydr),
-//! `fragment` (a yft's main drawable), `ydd` (`[{hash, drawable}]`), `ytd`, `ymap` (the header, `entities` and
-//! `interiors` apart, each in file order, every field) and `ytyp` (`archetypes` in file order, every base field, a
-//! time archetype's `time_flags`), or `{path, kind: "error", message}` where CodeWalker could not read the file.
-//! Drawables and texture dictionaries are compared as `resource_oracle.rs` compares them; floats compare bit for bit.
+//! Oracle (`oracles.codewalker.gta/parity`): a folder holding `dump.jsonl`, written by the CodeWalker harness's `batch`
+//! mode from a list of archive paths, one JSON line per file: `{path, kind, value}` with `kind` one of `drawable` (a
+//! ydr), `fragment` (a yft's main drawable), `ydd` (`[{hash, drawable}]`), `ytd`, `ymap` (the header, `entities` and
+//! `interiors` apart, each in file order, every field) and `ytyp` (`archetypes` in file order, every base field, a time
+//! archetype's `time_flags`), or `{path, kind: "error", message}` where CodeWalker could not read the file. Drawables
+//! and texture dictionaries are compared as `resource_oracle.rs` compares them; floats compare bit for bit.
 //!
 //! Known disagreements are listed in `parity-exceptions.toml` with a reason: each matches the differences of the files
 //! whose path contains its `path` and whose field starts with its `field`. An exception that matches nothing fails the
@@ -14,9 +14,9 @@
 //!
 //! The list itself is made by `parity_list` (ignored; run it explicitly): every ymap, ytyp, drawable, fragment,
 //! drawable dictionary and texture dictionary the placements of Legion and Vespucci reach (read with 600 m of
-//! reach), written to `PRIMASE_OUT/gta-parity/list.txt`.
+//! reach), written to `gta-parity/list.txt` under the scratch folder.
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
+//! Needs `installs.gta` and `keys.gta`.
 use std::collections::BTreeSet;
 use std::fs::File;
 
@@ -33,7 +33,7 @@ use primase_gta::rage::texture::TextureDictionary;
 use primase_gta::read::archive::archive_set::{ArchiveSet, Install, MapState};
 use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::source::GtaSource;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, keys, oracle};
 use serde_json::Value;
 
 /// The areas listed: the gate regions, `[x0, y0, x1, y1]` in GTA ground coordinates, read with this reach.
@@ -245,13 +245,10 @@ fn open(dir: &std::path::Path, key_dir: &std::path::Path) -> (Install, Keys) {
 #[test]
 #[ignore = "writes the list for the harness; run explicitly"]
 fn parity_list() {
-    let (Some(dir), Some(key_dir), Some(out)) = (
-        real_data("PRIMASE_GTA_DIR"),
-        real_data("PRIMASE_GTA_KEYS"),
-        primase_testdata::real_data_value("PRIMASE_OUT"),
-    ) else {
+    let (Some(dir), Some(key_dir)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
+    let out = primase_testdata::scratch();
     let source = GtaSource::open(&dir, &key_dir).expect("install");
     let (install, keys) = open(&dir, &key_dir);
     let set = ArchiveSet::build(install, &keys, MapState::Online).expect("archive set");
@@ -303,9 +300,9 @@ fn parity_list() {
 #[test]
 fn parity_with_codewalker() {
     let (Some(dir), Some(key_dir), Some(oracle)) = (
-        real_data("PRIMASE_GTA_DIR"),
-        real_data("PRIMASE_GTA_KEYS"),
-        real_data("PRIMASE_GTA_PARITY"),
+        install(Game::Gta),
+        keys(Game::Gta),
+        oracle(OracleSet::CodeWalker, Game::Gta, "parity"),
     ) else {
         return;
     };
@@ -389,7 +386,11 @@ fn parity_with_codewalker() {
             failed += 1;
         }
     }
-    primase_testdata::expect_items("PRIMASE_GTA_PARITY", "dumped files", files);
+    primase_testdata::expect_found(
+        primase_testdata::Query::Oracle(OracleSet::CodeWalker, Game::Gta, "parity"),
+        "dumped files",
+        files,
+    );
     for (e, n) in exceptions.exception.iter().zip(&used) {
         println!(
             "exception {} / {}: {n} differences ({})",
