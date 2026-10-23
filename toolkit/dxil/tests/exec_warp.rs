@@ -5,10 +5,10 @@
 //!
 //! The fixtures are the control-flow and memory ones the DXIL evaluator cannot run (flow, loops, switch, arrays, bits;
 //! default and -Od builds), the resource arrays (textures of different sizes in space 1, samplers in space 2) and the
-//! pixel operations a texture load at an offset and the half conversions need. Needs `PRIMASE_WARP` (the oracle program), `PRIMASE_DXC` (for the oracle's vertex shader)
-//! and `PRIMASE_WARP_SCRATCH` (a folder). The vertex shader is generated from the container's interface
-//! ([`primase_dxil::interface`]): every input varying read from `cbuffer Case : register(b0, space1) { uint4 r[32]; }`,
-//! row by register.
+//! pixel operations a texture load at an offset and the half conversions need. Needs `tools.warp` (the oracle program)
+//! and `tools.dxc` (for the oracle's vertex shader); it works in `warp` under the scratch folder. The vertex shader is
+//! generated from the container's interface ([`primase_dxil::interface`]): every input varying read from
+//! `cbuffer Case : register(b0, space1) { uint4 r[32]; }`, row by register.
 use primase_shader::exec::{
     Backend, Element, Executable, ImageLoad, ImageQuery, ImageSample, ProgramShader, QueryKind, Resources,
     Runner,
@@ -17,7 +17,7 @@ use primase_shader::{
     D3dClass, Interface, InterpMode, InterpSampling, PixelShader, Program, ResourceId, Sample, ScalarType,
     SystemValue,
 };
-use primase_testdata::real_data;
+use primase_testdata::{Tool, scratch, tool};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -287,13 +287,18 @@ fn compare(
     (lanes, mismatches)
 }
 
+/// `tools.dxc` and `tools.warp`, and the WARP comparison's folder under the scratch folder; `None` unless both tools
+/// are configured.
+fn tools() -> Option<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
+    let (dxc, warp) = (tool(Tool::Dxc)?, tool(Tool::Warp)?);
+    let scratch = scratch().join("warp");
+    std::fs::create_dir_all(&scratch).unwrap();
+    Some((dxc, warp, scratch))
+}
+
 #[test]
 fn lifted_fixtures_agree_with_warp() {
-    let (Some(dxc), Some(warp), Some(scratch)) = (
-        real_data("PRIMASE_DXC"),
-        real_data("PRIMASE_WARP"),
-        real_data("PRIMASE_WARP_SCRATCH"),
-    ) else {
+    let Some((dxc, warp, scratch)) = tools() else {
         return;
     };
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -487,11 +492,7 @@ impl Backend for Ramp {
 
 #[test]
 fn lifted_resource_arrays_and_pixel_operations_agree_with_warp() {
-    let (Some(dxc), Some(warp), Some(scratch)) = (
-        real_data("PRIMASE_DXC"),
-        real_data("PRIMASE_WARP"),
-        real_data("PRIMASE_WARP_SCRATCH"),
-    ) else {
+    let Some((dxc, warp, scratch)) = tools() else {
         return;
     };
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");

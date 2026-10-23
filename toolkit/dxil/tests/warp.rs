@@ -1,18 +1,17 @@
-//! Evaluation against Microsoft's WARP rasterizer on the fixtures (see `common/warp.rs`): `PRIMASE_WARP` (the WARP
-//! oracle program), `PRIMASE_DXC` and `PRIMASE_WARP_SCRATCH` (a folder for case files and results). Skips unless all
-//! three are set.
+//! Evaluation against Microsoft's WARP rasterizer on the fixtures (see `common/warp.rs`): `tools.warp` (the WARP
+//! oracle program) and `tools.dxc`, with the case files and results in `warp` under the scratch folder. Skips unless
+//! both tools are configured.
 mod common;
 use common::warp::{Case, Result, compare};
-use primase_testdata::real_data;
+use primase_testdata::{Tool, scratch, tool};
 use std::collections::BTreeMap;
 use std::path::Path;
 
 fn tools() -> Option<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
-    Some((
-        real_data("PRIMASE_DXC")?,
-        real_data("PRIMASE_WARP")?,
-        real_data("PRIMASE_WARP_SCRATCH")?,
-    ))
+    let (dxc, warp) = (tool(Tool::Dxc)?, tool(Tool::Warp)?);
+    let scratch = scratch().join("warp");
+    std::fs::create_dir_all(&scratch).ok()?;
+    Some((dxc, warp, scratch))
 }
 fn f(x: f32) -> u32 {
     x.to_bits()

@@ -202,8 +202,7 @@ impl Rng {
 /// require that parsing and, when it parses, evaluating return without panicking.
 #[test]
 fn mutations_never_panic() {
-    let runs: usize = std::env::var("PRIMASE_DXIL_FUZZ_RUNS")
-        .ok()
+    let runs: usize = primase_testdata::debug("dxil.fuzz_runs")
         .and_then(|v| v.parse().ok())
         .unwrap_or(3000);
     let mut rng = Rng(0x5eed_d0c5_1a7e_c0de);

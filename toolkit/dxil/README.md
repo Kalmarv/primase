@@ -54,9 +54,9 @@ running it on a rasterizer.
 - `tests/fixtures.rs`: our own HLSL (`tests/fixtures/*.hlsl`, compiled with the dxc command in each file):
   reflection (signature packing, resource names and slots, buffer field names and offsets), evaluation against
   outputs worked out from the HLSL, missing bindings refused, every truncation of a fixture refused, and a seeded
-  mutation run (`PRIMASE_DXIL_FUZZ_RUNS`, default 3000).
+  mutation run (the debug key `dxil.fuzz_runs`, default 3000).
 - `tests/warp.rs`: the fixtures rendered by Microsoft's WARP rasterizer (Direct3D 12) through a separate oracle
-  program (`PRIMASE_WARP`; its vertex shader compiled with `PRIMASE_DXC`) and evaluated by this crate on the same
+  program (`tools.warp`; its vertex shader compiled with `tools.dxc`) and evaluated by this crate on the same
   inputs: unmarked lanes must agree bit for bit, marked lanes within 1e-5 relative.
 - Real data (Elden Ring's G-buffer pixel programs, read by the Elden Ring reader): of 2,110, 2,031 are inside
   the subset (37 refused for loops, 42 for `alloca`), and each one's instruction count and calls equal `dxc -dumpbin`'s;
