@@ -1,0 +1,191 @@
+//! The older `PRIMASE_*` names, for one release: what each stands for in the structured configuration
+//! ([`translate`]). A test still asking for an old name through [`crate::real_data`] gets what its new query
+//! gives; a configuration still setting one (the flat file, or the environment) sets that query's file or folder,
+//! and says so once.
+use std::ffi::OsString;
+use std::path::PathBuf;
+
+use crate::registry::{Game, OracleSet, Tool};
+
+/// What a test asks the configuration for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Query {
+    /// A game's install, or a file or folder inside it (relative, `/`-separated).
+    Install(Game, Option<&'static str>),
+    Keys(Game),
+    Tool(Tool),
+    /// A file or folder of an oracle set's folder for a game (relative, `/`-separated).
+    Oracle(OracleSet, Game, &'static str),
+    /// The scratch root, or a folder under it.
+    Scratch(Option<&'static str>),
+    /// A debug key ([`crate::registry::DEBUG`]).
+    Debug(&'static str),
+    /// A name whose obligation its owners retired: never set.
+    Retired,
+}
+
+impl Query {
+    /// The query's key: the configuration key and, for a file or folder inside, its relative path
+    /// (`installs.riders/DataPC_MAD_USNAT.forge`, `oracles.codewalker.gta/listing.jsonl`).
+    pub fn key(self) -> String {
+        match self {
+            Query::Install(g, None) => format!("installs.{}", g.key()),
+            Query::Install(g, Some(rel)) => format!("installs.{}/{rel}", g.key()),
+            Query::Keys(g) => format!("keys.{}", g.key()),
+            Query::Tool(t) => format!("tools.{}", t.key()),
+            Query::Oracle(s, g, rel) => format!("oracles.{}.{}/{rel}", s.key(), g.key()),
+            Query::Scratch(None) => "scratch.root".to_owned(),
+            Query::Scratch(Some(rel)) => format!("scratch.root/{rel}"),
+            Query::Debug(k) => format!("debug.{k}"),
+            Query::Retired => "retired".to_owned(),
+        }
+    }
+
+    /// The structured configuration key it is resolved from, and the path below it (`oracles.root` and
+    /// `codewalker/gta/listing.jsonl`).
+    pub(crate) fn root(self) -> Option<(String, PathBuf)> {
+        let rel = |parts: &[&str]| -> PathBuf { parts.iter().flat_map(|p| p.split('/')).collect() };
+        match self {
+            Query::Install(g, rel_path) => Some((
+                format!("installs.{}", g.key()),
+                rel(&rel_path.into_iter().collect::<Vec<_>>()),
+            )),
+            Query::Keys(g) => Some((format!("keys.{}", g.key()), PathBuf::new())),
+            Query::Tool(t) => Some((format!("tools.{}", t.key()), PathBuf::new())),
+            Query::Oracle(s, g, r) => Some(("oracles.root".to_owned(), rel(&[s.key(), g.key(), r]))),
+            Query::Scratch(r) => Some(("scratch.root".to_owned(), rel(&r.into_iter().collect::<Vec<_>>()))),
+            Query::Debug(_) | Query::Retired => None,
+        }
+    }
+}
+
+/// What the older name `name` stands for; `None` for names that are not configuration (a child process's handoff,
+/// the configuration file itself, primase-testdata's own test names).
+pub fn translate(name: &str) -> Option<Query> {
+    use Game::*;
+    use OracleSet::*;
+    use Query::*;
+    Some(match name.strip_prefix("PRIMASE_")? {
+        "SCENES_GTA" | "SCENES_SEKIRO" | "MAPS_GTA" => Retired,
+        "GTA_DIR" => Install(Gta, None),
+        "GTA_KEYS" => Keys(Gta),
+        "GTA_LISTING" => Oracle(CodeWalker, Gta, "listing.jsonl"),
+        "GTA_ACTIVE" => Oracle(CodeWalker, Gta, "active.json"),
+        "GTA_RESOURCES" => Oracle(CodeWalker, Gta, "resources"),
+        "GTA_PARITY" => Oracle(CodeWalker, Gta, "parity"),
+        "GTA_GTXD" => Oracle(CodeWalker, Gta, "gtxd.json"),
+        "GTA_FRAMES" => Oracle(CodeWalker, Gta, "frames.json"),
+        "GTA_BOUNDS" => Oracle(CodeWalker, Gta, "bounds"),
+        "GTA_SHADERS" => Oracle(Corpus, Gta, "legacy-effects"),
+        "GTA_SHADER_DB" => Oracle(Corpus, Gta, "shader-database.awc"),
+        "GTA_FILTER" => Debug("gta.archive_filter"),
+        "GTA_REGION" => Debug("gta.region"),
+        "SCENE_FILTER" => Debug("scene.filter"),
+        "RESKATE_PATCH" | "RESKATE_BLEND_PATCH" => Oracle(Studio, Gta, "legion/patch"),
+        "RESKATE_BLEND_MAP" => Oracle(Baseline, Gta, "legion/map"),
+        "RESKATE_BLEND_SPEC" => Oracle(Baseline, Gta, "legion/blend-spec.json"),
+        "SKATE_DATA" => Install(Skate, Some("Data")),
+        "UNITY_V21_DATA" => Install(Skatebird, Some("SkateBIRD_Data")),
+        "UNITY_V21_CENSUS" => Oracle(UnityPy, Skatebird, "census.json"),
+        "UNITY_V21_LISTING" => Oracle(UnityPy, Skatebird, "listing.json"),
+        "UNITY_DATA" => Install(Sledding, Some("Sledding Game_Data")),
+        "UNITY_TPK" => Tool(self::Tool::UnityTpk),
+        "UNITY_LISTING" => Oracle(UnityPy, Sledding, "listing.json"),
+        "UNITY_ORACLE" => Oracle(UnityPy, Sledding, "samples.json"),
+        "UNITY_SCAN" => Oracle(UnityPy, Sledding, "scan.json"),
+        "UNITY_MESHES" => Oracle(UnityPy, Sledding, "meshes.json"),
+        "UNITY_TEXTURES" => Oracle(UnityPy, Sledding, "textures"),
+        "UNITY_MATERIALS" => Oracle(UnityPy, Sledding, "materials.json"),
+        "UNITY_SUN" => Oracle(UnityPy, Sledding, "sun.json"),
+        "UNITY_SHADERS" => Oracle(UnityPy, Sledding, "shader-state.json"),
+        "UNITY_PROGRAMS" => Oracle(UnityPy, Sledding, "shader-programs.json"),
+        "UNITY_FRAMES" => Oracle(UnityPy, Sledding, "frames.json"),
+        "UNITY_PORT" => Oracle(Port, Sledding, "level1"),
+        "UNITY_PORT_MATERIALS" => Oracle(Port, Sledding, "materials.json"),
+        "UNITY_PORT_TERRAIN" => Oracle(Port, Sledding, "terrain"),
+        "STUNTBOOST_DIR" => Install(Stuntboost, None),
+        "STUNTBOOST_ORACLE" => Oracle(GameCode, Stuntboost, "levels"),
+        "ANVIL_DIR" => Install(Riders, None),
+        "ANVIL_FORGE" => Install(Riders, Some("DataPC_MAD_WhiteRoom_patch_01.forge")),
+        "ANVIL_FORGE_BASE" => Install(Riders, Some("DataPC_MAD_WhiteRoom.forge")),
+        "ANVIL_FORGE_USNAT" => Install(Riders, Some("DataPC_MAD_USNAT.forge")),
+        "ANVIL_FORGE_USNAT_PATCH" => Install(Riders, Some("DataPC_MAD_USNAT_patch_01.forge")),
+        "ANVIL_RRAS_MESHES" => Oracle(RrAssetStudio, Riders, "meshes"),
+        "OUT" => Scratch(None),
+        "WARP_SCRATCH" => Scratch(Some("warp")),
+        "ALLOW_LIVE" => Debug("allow_live"),
+        "SCENE_SKATE" => Tool(self::Tool::SceneSkate),
+        "GLTF_VALIDATOR" => Tool(self::Tool::GltfValidator),
+        "KHRONOS_GLTF" => Oracle(Khronos, General, "sample-assets"),
+        "OODLE5" => Tool(self::Tool::Oodle5),
+        "OODLE6" => Tool(self::Tool::Oodle6),
+        "OODLE9" => Tool(self::Tool::Oodle9),
+        "DCX" => Oracle(Corpus, Sekiro, "dcx"),
+        "CAS_SAMPLES" => Oracle(Corpus, Skate, "cas"),
+        "CODEC_CORPUS" => Oracle(Corpus, General, "codecs.tsv"),
+        "SEKIRO_DIR" => Install(Sekiro, None),
+        "ELDEN_DIR" => Install(Elden, None),
+        "ELDEN_KEYS" => Keys(Elden),
+        "ELDEN_NAMES" => Oracle(Uxm, Elden, "dictionary.txt"),
+        "ELDEN_BHD_ORACLE" => Oracle(SoulsFormats, Elden, "census"),
+        "ELDEN_FORMAT_ORACLE" => Oracle(SoulsFormats, Elden, "format"),
+        "FROMSOFT_NAMES" => Oracle(Uxm, Sekiro, "dictionary.txt"),
+        "FROMSOFT_RIGID_ORACLE" => Oracle(SoulsFormats, Sekiro, "m11_01"),
+        "FROMSOFT_SKIN_ORACLE" => Oracle(SoulsFormats, Sekiro, "skin"),
+        "FROMSOFT_PART_ORACLE" => Oracle(SoulsFormats, Sekiro, "parts"),
+        "FROMSOFT_BHD_ORACLE" => Oracle(SoulsFormats, Sekiro, "census"),
+        "FROMSOFT_FRAMES" => Oracle(SoulsFormats, Sekiro, "frames"),
+        "FROMSOFT_MATERIAL_ORACLE" => Oracle(SoulsFormats, Sekiro, "materials"),
+        "FROMSOFT_TPF_ORACLE" => Oracle(SoulsFormats, Sekiro, "tpf"),
+        "FROMSOFT_OBJECT_ORACLE" => Oracle(SoulsFormats, Sekiro, "objects"),
+        "FROMSOFT_SHADOW_ORACLE" => Oracle(Scripts, Sekiro, "shadow"),
+        "FROMSOFT_STATE_ORACLE" => Oracle(Scripts, Sekiro, "state"),
+        "FROMSOFT_PBR_ORACLE" => Oracle(Scripts, Sekiro, "pbr"),
+        "FROMSOFT_REFLECTANCE_ORACLE" => Oracle(Scripts, Sekiro, "reflectance.json"),
+        "FROMSOFT_NORMAL_CURL" => Oracle(Scripts, Sekiro, "normal-curl.json"),
+        "FROMSOFT_DDS_ORACLE" => Oracle(Scripts, Sekiro, "dds"),
+        "FROMSOFT_LAYER_PILOT" => Oracle(Baseline, Sekiro, "layer-pilot"),
+        "FROMSOFT_SCENE" => Oracle(Baseline, Sekiro, "scene"),
+        "WEB_KTX2_TILES" => Oracle(Baseline, Sekiro, "ktx2-tiles"),
+        "HAVOK_CORPUS" => Oracle(Corpus, Sekiro, "havok"),
+        "HAVOK_OBJECT_CORPUS" => Oracle(Corpus, Sekiro, "object-hkx"),
+        "SKATE_SKELETON_ORACLE" => Oracle(Reskate, Skate, "renderskeleton.json"),
+        "SKATE_ECLIPSE_REFERENCE" => Oracle(Scripts, Skate, "eclipse"),
+        "SKATE_MASK_ORACLE" => Oracle(Pillow, Sekiro, "skate-mask"),
+        "FROSTBITE_EBX" => Oracle(Corpus, Skate, "ebx"),
+        "RESKATE_CLI" => Tool(self::Tool::ReskateCli),
+        "RESKATE_FBMOD" => Oracle(Baseline, Skate, "fbmod"),
+        "DXBC_SHADERS" => Oracle(Corpus, General, "dxbc"),
+        "DXBC_PACK_DISASSEMBLY" => Oracle(D3dDisassembler, Riders, "shader-pack"),
+        "SHADER_CORPUS_SEKIRO" => Oracle(Corpus, Sekiro, "shaders"),
+        "SHADER_CORPUS_RR" => Oracle(Corpus, Riders, "shaders"),
+        "SHADER_CORPUS_UNITY" => Oracle(Corpus, Sledding, "shaders"),
+        "SHADER_DIFF_LIMIT" => Debug("shader.diff_limit"),
+        "SHADER_DIFF_TRACE" => Debug("shader.diff_trace"),
+        "SHADER_DIFF_CASE" => Debug("shader.diff_case"),
+        "SHADER_DIFF_TEXT" => Debug("shader.diff_text"),
+        "SHADER_WARP_ALL" => Debug("shader.warp_all"),
+        "SHADER_WARP_EVALUATOR" => Debug("shader.warp_evaluator"),
+        "SHADER_SPEED_RUNS" => Debug("shader.speed_runs"),
+        "SKATEBIRD_VORONOI_LEVEL" => Debug("skatebird.voronoi_level"),
+        "SKATEBIRD_VORONOI_DIGEST" => Debug("skatebird.voronoi_digest"),
+        "ANVIL_BAKE_DIGEST" => Debug("anvil.bake_digest"),
+        "DXIL_FUZZ_RUNS" => Debug("dxil.fuzz_runs"),
+        "DXC" => Tool(self::Tool::Dxc),
+        "FXC" => Tool(self::Tool::Fxc),
+        "WARP" => Tool(self::Tool::Warp),
+        _ => return None,
+    })
+}
+
+/// Every older configuration name set in the environment, with its value (a child's handoff, the configuration
+/// file's own name and the test names are not configuration).
+pub(crate) fn from_environment(
+    environment: &impl Fn(&str) -> Option<OsString>,
+) -> Vec<(&'static str, OsString)> {
+    crate::VARIABLES
+        .iter()
+        .filter(|v| translate(v.name).is_some())
+        .filter_map(|v| environment(v.name).map(|value| (v.name, value)))
+        .collect()
+}
