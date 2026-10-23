@@ -57,6 +57,15 @@ pub const IMPOSTOR_INSTANCE_DATA: u32 = 0xB3F0_6BC3;
 pub const LIGHT_INSTANCE: u32 = 0x554C_614C;
 /// A SplashFXInstanceData's type.
 pub const SPLASH_FX_INSTANCE_DATA: u32 = 0xB8B0_8A89;
+/// A GrassVisual's type: a Visual of one grass model (the registry's class, a Visual and one byte).
+pub const GRASS_VISUAL: u32 = 0x8FA8_0D8D;
+/// A GrassComponent's type: the grass system's setup (a Visual, the library it names, its settings and its models).
+pub const GRASS_COMPONENT: u32 = 0xCB28_F06D;
+/// A GrassVisualInstance's type, and a GrassInstance's (the GrassComponent's).
+const GRASS_VISUAL_INSTANCE: u32 = 0xD456_9683;
+const GRASS_INSTANCE: u32 = 0x9C95_4A88;
+/// A GrassSettings' type.
+const GRASS_SETTINGS: u32 = 0x3BE0_5B93;
 
 /// Why an Entity body can't be read.
 #[derive(Debug, thiserror::Error)]
@@ -193,6 +202,65 @@ pub struct Visual {
     pub tail: Vec<u8>,
 }
 
+/// A GrassVisual component as stored: the Visual's head and the model's Mesh, the GrassVisualInstance (a MeshInstanceData
+/// with no instance matrices on all 46 of Riders Republic's) with the u16 array it stores, the Visual's tail and the
+/// model's number. The grass instances themselves are not stored here (docs/grass.md: the engine creates them at run
+/// time).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GrassVisual {
+    pub head: [u8; 4],
+    /// The model's Mesh (a Mesh directly, not a LODSelector).
+    pub object: Option<Reference>,
+    /// The GrassVisualInstance's id.
+    pub id: u64,
+    pub instance: MeshInstance,
+    /// The GrassVisualInstance's u16 array: 0 to 2 (or 3) after four times the model's number on the 46 models (read
+    /// by the registry as an array of u16; the Mesh's ranges by value).
+    pub ranges: Vec<u16>,
+    /// Its 125-byte Visual tail, as stored.
+    pub tail: Vec<u8>,
+    /// `GrassModelID`: the model's number (0 to 45, in the order of the setup's ManagedEntities).
+    pub model: u8,
+}
+
+/// A GrassComponent as stored (the one of `SETUP_GrassUS_NAT`): the Visual part (head, the object it names, the
+/// GrassInstance with a MeshInstanceData's fields and the bytes after them, the tail), the library reference, the
+/// GrassSettings as stored and the ManagedEntities' ids. Read over its extent (the settings' run isn't assigned to the
+/// registry's field names, so it has no length rule: see [`StoredEntity::parse`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GrassSetup {
+    pub head: [u8; 4],
+    pub object: Option<Reference>,
+    pub id: u64,
+    pub instance: MeshInstance,
+    /// The bytes between the MeshInstanceData's fields and the Visual tail, as stored (none on both copies: the
+    /// GrassInstance stores nothing there).
+    pub instance_extra: Vec<u8>,
+    pub tail: Vec<u8>,
+    /// `GrassPatternLibraryReference`: the library (a GrassPatternLibrary).
+    pub library: Option<Reference>,
+    /// The inline GrassSettings object's id.
+    pub settings_id: u64,
+    /// Its body as stored: WorldExtent, WorldMinZ and WorldMaxZ (u32), the WorldBoundingBox (a BoundingVolume), then
+    /// `GrassVisibilityDistance` (a u16), 16 f32, four tables of 16 u16 (the LOD start distances by model class)
+    /// and the run of floats and bytes the notes did not assign to field names (docs/grass.md §2.1).
+    pub settings: Vec<u8>,
+    /// ManagedEntities: the GrassVisual Entities' ids, in order (a model's number is its position).
+    pub entities: Vec<u64>,
+}
+
+impl GrassSetup {
+    /// The GrassSettings' `GrassVisibilityDistance` (metres: 250 on both copies), after its three u32 and its
+    /// BoundingVolume.
+    pub fn visibility_distance(&self) -> Option<u16> {
+        let at: usize = 12 + 8 + 4 + 24 + 4;
+        self.settings
+            .get(at..at.checked_add(2)?)
+            .and_then(|w| <[u8; 2]>::try_from(w).ok())
+            .map(u16::from_le_bytes)
+    }
+}
+
 /// A component: its id, type and body.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Component {
@@ -216,6 +284,10 @@ pub enum ComponentBody {
         shape: Option<Reference>,
         bytes: Vec<u8>,
     },
+    /// A GrassVisual: one grass model.
+    GrassVisual(GrassVisual),
+    /// A GrassComponent: the grass system's setup, read over its extent.
+    GrassSetup(Box<GrassSetup>),
     /// A type stepped over by its length rule, its bytes kept as stored.
     Raw(Vec<u8>),
     /// A component whose bytes no rule here reads, kept as stored: its type has no length rule, or a rule of a type
@@ -552,6 +624,112 @@ impl Cursor<'_> {
         self.expect("Visual tail handle", 3, 1)?;
         self.take(116, "Visual tail")?;
         Ok(self.b.get(start..self.at).unwrap_or_default().to_vec())
+    }
+    /// A Visual's head, the object it names and its instance's id and type (which must be `kind`): the start of a
+    /// grass Visual, whose instance has the MeshInstanceData's fields.
+    fn grass_head(&mut self, kind: u32) -> Result<([u8; 4], Option<Reference>, u64), Error> {
+        let head = self.array::<4>("GrassVisual")?;
+        let object = self.reference()?;
+        self.expect("GrassVisual instance tag", 0, 1)?;
+        let id = self.object("GrassVisual instance", kind)?;
+        Ok((head, object, id))
+    }
+    /// A GrassVisual's body: [`GrassVisual`].
+    fn grass_visual(&mut self) -> Result<GrassVisual, Error> {
+        let (head, object, id) = self.grass_head(GRASS_VISUAL_INSTANCE)?;
+        let instance = self.mesh_instance(id)?;
+        let n = self.count("GrassVisualInstance range count", 2)?;
+        let ranges = (0..n)
+            .map(|_| Ok(u16::from_le_bytes(self.array::<2>("GrassVisualInstance range")?)))
+            .collect::<Result<Vec<_>, Error>>()?;
+        // GrassImposterProperties: a null pointer on all 46
+        self.expect("GrassImposterProperties pointer", 3, 1)?;
+        let tail = self.visual_tail()?;
+        let model = self.u8("GrassModelID")?;
+        Ok(GrassVisual {
+            head,
+            object,
+            id,
+            instance,
+            ranges,
+            tail,
+            model,
+        })
+    }
+    /// A GrassComponent's body over the extent that ends at `end`: [`GrassSetup`]. The settings' run has no length
+    /// rule, so the library reference and the settings object are found from the Visual tail's end, and the
+    /// ManagedEntities (a u32 count and that many 9-byte links, the body's last field) from the end.
+    fn grass_setup(&mut self, end: usize) -> Result<GrassSetup, Error> {
+        let (head, object, id) = self.grass_head(GRASS_INSTANCE)?;
+        let instance = self.mesh_instance(id)?;
+        // the settings object's type, 12 bytes after the library reference, 125 after the Visual tail's start
+        let settings_type = (self.at..end)
+            .find(|&at| self.word_at(at) == Some(GRASS_SETTINGS))
+            .ok_or(Error::Value {
+                what: "GrassSettings",
+                at: self.at,
+                found: 0,
+                read: "an object of type 0x3BE05B93",
+            })?;
+        let settings_id_at = settings_type.saturating_sub(8);
+        let library_at = settings_id_at.saturating_sub(reference::LENGTH);
+        let tail_at = library_at.saturating_sub(125);
+        let extra = self
+            .b
+            .get(self.at..tail_at)
+            .ok_or(Error::Short {
+                what: "GrassInstance",
+                at: self.at,
+                have: self.b.len(),
+            })?
+            .to_vec();
+        self.at = tail_at;
+        let tail = self.visual_tail()?;
+        let library = self.reference()?;
+        let settings_id = self.object("GrassSettings", GRASS_SETTINGS)?;
+        let body_at = self.at;
+        // ManagedEntities: the count whose links fill the rest of the body
+        let links_at = (body_at..end)
+            .find(|&at| {
+                let Some(k) = self.word_at(at).and_then(|k| usize::try_from(k).ok()) else {
+                    return false;
+                };
+                k.checked_mul(9)
+                    .and_then(|bytes| bytes.checked_add(at)?.checked_add(4))
+                    == Some(end)
+                    && (0..k).all(|j| {
+                        at.checked_add(4)
+                            .and_then(|a| a.checked_add(j.checked_mul(9)?))
+                            .and_then(|a| self.b.get(a))
+                            .is_some_and(|&t| matches!(t, 0 | 1))
+                    })
+            })
+            .ok_or(Error::Value {
+                what: "GrassComponent ManagedEntities",
+                at: body_at,
+                found: 0,
+                read: "a count of 9-byte links ending the body",
+            })?;
+        let settings = self.b.get(body_at..links_at).unwrap_or_default().to_vec();
+        self.at = links_at;
+        let k = self.count("ManagedEntities count", 9)?;
+        let mut entities = Vec::with_capacity(k);
+        for _ in 0..k {
+            self.link_tag("ManagedEntities link")?;
+            entities.push(self.u64("ManagedEntities link")?);
+        }
+        Ok(GrassSetup {
+            head,
+            object,
+            id,
+            instance,
+            instance_extra: extra,
+            tail,
+            library,
+            settings_id,
+            settings,
+            entities,
+        })
     }
     fn visual(&mut self) -> Result<Visual, Error> {
         let head = self.array::<4>("Visual")?;
@@ -1116,6 +1294,8 @@ impl StoredEntity {
             ComponentBody::Visual(v) => Some(v),
             ComponentBody::StaticDecal(_)
             | ComponentBody::RigidBody { .. }
+            | ComponentBody::GrassVisual(_)
+            | ComponentBody::GrassSetup(_)
             | ComponentBody::Raw(_)
             | ComponentBody::Unread(_) => None,
         })
@@ -1196,6 +1376,19 @@ const TAIL_DESCRIPTOR_TYPE: usize = TAIL_BOUNDS_TYPE + 4 + 24 + 4 + 8;
 const ENTITY_DESCRIPTOR: u32 = 0x6012_1A9E;
 
 impl Cursor<'_> {
+    /// A component's body over the extent that ends at `end`, for the types read only so (no length rule); `None`
+    /// where the type has none or the body does not read to `end`.
+    fn by_extent(&mut self, kind: u32, end: usize) -> Option<ComponentBody> {
+        match kind {
+            GRASS_COMPONENT => self
+                .grass_setup(end)
+                .ok()
+                .filter(|_| self.at == end)
+                .map(|g| ComponentBody::GrassSetup(Box::new(g))),
+            _ => None,
+        }
+    }
+
     /// A link's tag byte, `00` or `01`.
     fn link_tag(&mut self, what: &'static str) -> Result<(), Error> {
         let at = self.at;
@@ -1231,6 +1424,7 @@ impl Cursor<'_> {
         Ok(Some(match kind {
             VISUAL => ComponentBody::Visual(self.visual()?),
             STATIC_DECAL => ComponentBody::StaticDecal(self.visual()?),
+            GRASS_VISUAL => ComponentBody::GrassVisual(self.grass_visual()?),
             RIGID_BODY => {
                 let Some(bytes) = self.raw_component(kind)? else {
                     return Ok(None);
@@ -1451,7 +1645,12 @@ impl Cursor<'_> {
             };
             let body = match part.component_body(kind, body_start) {
                 Ok(Some(body)) if part.at == body_end => body,
-                _ => ComponentBody::Unread(bytes.to_vec()),
+                _ => Cursor {
+                    b: part.b,
+                    at: body_start,
+                }
+                .by_extent(kind, body_end)
+                .unwrap_or_else(|| ComponentBody::Unread(bytes.to_vec())),
             };
             out.push(Component { tag, id, kind, body });
             if let Some(h) = next {
