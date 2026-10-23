@@ -55,7 +55,8 @@ pub struct VertexState {
     /// The input registers of each run, at the cell's corners `(u, v)` = (0, 0), (1, 0), (0, 1) and (1, 1) in this
     /// order. Every structured buffer the program reads gives zero (one instance, index zero).
     pub corners: [Vec<[u32; 4]>; 4],
-    /// The output registers each run wrote, in the same order.
+    /// The output registers each run wrote, in the same order: the varyings by register. A system value's register (the
+    /// position, the clip distances) is the pipeline's and is not computed here: it reads zero.
     pub outputs: [Vec<[u32; 4]>; 4],
 }
 

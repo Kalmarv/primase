@@ -9,12 +9,14 @@
 //! it: `warp.json` (its status by stage), `target<r>.f32` (each target register's four f32 lanes per pixel, row-major),
 //! `alpha.f32` (the albedo alpha sampled beside the program) and `vertex-outputs.json` (the vertex program's output
 //! registers at the four corners, as the state's `outputs`; null for a register stream output cannot carry, which
-//! `warp.json` lists under `vertex.not_streamed`: the clip distances, which no pixel input reads).
+//! `warp.json` lists under `vertex.not_streamed`: the clip distances).
 //!
 //! Our executor's and WARP's outputs each go through the bake's own rules ([`PipelineState::bake`]): the albedo and
 //! normal bytes must agree within one level, the second output's x and the emission within one level of 1/255 or a
 //! thousandth of the value, the albedo alpha within one level, and the vertex outputs within four units in the last
-//! place. Float differences are reported per target.
+//! place. Float differences are reported per target. A vertex program's system-value outputs (the position, the clip
+//! distances) are not in our executor's register view of a vertex run, and no pixel input reads them: they are counted,
+//! not compared.
 use primase_core::parallel::Threads;
 use primase_fromsoft::layer_bake::{Encoded, PipelineState, TARGETS};
 use primase_shader::Raw;
@@ -87,6 +89,7 @@ struct Census {
     worst_normal: [u8; 4],
     worst_vertex_ulps: u64,
     not_streamed: usize,
+    system_registers: usize,
     worst_float: [f64; 5],
 }
 
@@ -218,9 +221,17 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
                     .map(|a| a.iter().filter_map(|n| n["register"].as_u64()).collect())
                     .unwrap_or_default();
                 c.not_streamed += not_streamed.len();
+                // the system values' registers: the pipeline's, not a varying of ours
+                let system: Vec<usize> = primase_dxbc::reflection(&vertex.bytecode)?
+                    .outputs
+                    .iter()
+                    .filter(|o| o.system.is_some())
+                    .filter_map(|o| o.provenance.d3d.map(|d| d.register as usize))
+                    .collect();
+                c.system_registers += system.len();
                 for (corner, registers) in vertex.outputs.iter().enumerate() {
                     for (r, lanes) in registers.iter().enumerate() {
-                        if theirs[corner][r].is_null() && not_streamed.contains(&(r as u64)) {
+                        if system.contains(&r) {
                             continue;
                         }
                         for (lane, &bits) in lanes.iter().enumerate() {
@@ -243,8 +254,8 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
     assert!(c.states > 0, "no state checked");
     println!(
         "layer pilot against WARP: {} states, {} pixels; vertex runs {}, alpha images {}; worst albedo levels {:?}, \
-         normal levels {:?}, vertex ulps {} (registers stream output cannot carry {}), float difference by \
-         target {:?}",
+         normal levels {:?}, vertex ulps {} (system-value registers not compared {}, of them not streamed {}), float \
+         difference by target {:?}",
         c.states,
         c.pixels,
         c.vertex_runs,
@@ -252,6 +263,7 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
         c.worst_bytes,
         c.worst_normal,
         c.worst_vertex_ulps,
+        c.system_registers,
         c.not_streamed,
         c.worst_float
     );
