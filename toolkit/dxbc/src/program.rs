@@ -1,57 +1,9 @@
-use crate::{Result, chunks, error, opcodes::NAMES};
+use crate::decode::{Declaration, Declared, decode, opcode_name};
+use crate::{Result, chunks, error};
 use primase_shader::Interpolation;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Register {
-    Temp,
-    Input,
-    Output,
-    Constant,
-    Immediate,
-    Texture,
-    Sampler,
-    Null,
-    /// An unordered-access view (`u<n>`).
-    Uav,
-    /// The immediate constant buffer (`icb[n]`), its rows the program's own.
-    ImmediateBuffer,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Selection {
-    Mask(u8),
-    Swizzle([u8; 4]),
-    Scalar(u8),
-    None,
-}
-#[derive(Clone, Debug)]
-pub struct Operand {
-    pub register: Register,
-    pub selection: Selection,
-    pub indices: Vec<Index>,
-    pub immediate: [u32; 4],
-    /// 0 none, 1 negate, 2 absolute, 3 negated absolute (float sources); 4 two's-complement negate (an integer
-    /// instruction's negate).
-    pub modifier: u8,
-}
-#[derive(Clone, Debug)]
-pub struct Index {
-    pub base: u32,
-    pub relative: Option<Box<Operand>>,
-}
-#[derive(Clone, Debug)]
-pub struct Instruction {
-    pub word: usize,
-    pub opcode: u16,
-    pub saturate: bool,
-    /// A conditional (`if`, `breakc`, `continuec`) taken when its operand is nonzero (`_nz`), else when zero (`_z`).
-    pub nonzero: bool,
-    pub operands: Vec<Operand>,
-}
-impl Instruction {
-    pub fn name(&self) -> &'static str {
-        NAMES[self.opcode as usize]
-    }
-}
+pub use crate::decode::{Index, Instruction, Operand, Register, Selection};
+
 /// A declared resource's shape: what its loads and samples address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dimension {
@@ -194,129 +146,91 @@ pub(crate) fn resource_operand(opcode: u16) -> Option<usize> {
     }
 }
 
+/// The operands the evaluated subset takes for an opcode; `None` for an opcode outside the subset.
+fn operand_count(opcode: u16) -> Option<usize> {
+    Some(match opcode {
+        // break, continue, else, endif, endloop, loop, ret
+        2 | 7 | 18 | 21 | 22 | 48 | 62 => 0,
+        // breakc, continuec, if, discard
+        3 | 8 | 13 | 31 => 1,
+        11 | 12 | 25..=28 | 40 | 43 | 47 | 54 | 59 | 64..=68 | 75 | 86 | 122..=125 | 129 => 2,
+        0 | 1
+        | 14..=17
+        | 24
+        | 29
+        | 30
+        | 32..=34
+        | 36
+        | 37
+        | 39
+        | 41
+        | 42
+        | 49
+        | 51
+        | 52
+        | 56
+        | 57
+        | 60
+        | 77
+        | 79
+        | 80
+        | 83..=85
+        | 87
+        // ld: destination, address, resource; store_uav_typed: view, address, value
+        | 45
+        | 164 => 3,
+        // ubfe (width, offset, source); ld_structured (element, byte offset, resource); imm_atomic_iadd
+        // (result, view, address, value); store_structured (view, element, byte offset, value); imul and
+        // udiv (two destinations, two sources)
+        35 | 38 | 50 | 55 | 69 | 78 | 138 | 167 | 168 | 180 => 4,
+        // sample_b and sample_l (a bias or level after the sampler); bfi (width, offset, insert, base)
+        72 | 74 | 140 => 5,
+        73 => 6,
+        _ => return None,
+    })
+}
+
+/// Whether the evaluated subset reads an operand as it is decoded: only these registers, no minimum precision, and
+/// dynamic addressing only of a constant buffer or the immediate constant buffer by a direct temporary or input.
+fn supported_operand(o: &Operand, word: usize) -> Result<()> {
+    if !matches!(
+        o.register,
+        Register::Temp
+            | Register::Input
+            | Register::Output
+            | Register::Constant
+            | Register::Immediate
+            | Register::Texture
+            | Register::Sampler
+            | Register::Null
+            | Register::Uav
+            | Register::ImmediateBuffer
+    ) {
+        return Err(error(word, format!("unsupported operand register type {:?}", o.register)));
+    }
+    if o.precision != 0 || o.non_uniform {
+        return Err(error(word, "unsupported extended operand (precision/modifier)"));
+    }
+    for (d, i) in o.indices.iter().enumerate() {
+        let Some(r) = &i.relative else { continue };
+        if !matches!(r.register, Register::Temp | Register::Input)
+            || !matches!(r.selection, Selection::Scalar(_))
+            || r.modifier != 0
+            || r.precision != 0
+            || r.indices.iter().any(|i| i.relative.is_some())
+        {
+            return Err(error(word, "relative index must select a direct temp/input component"));
+        }
+        if !((o.register == Register::Constant && d == 1) || o.register == Register::ImmediateBuffer) {
+            return Err(error(word, "dynamic register addressing outside a constant buffer"));
+        }
+    }
+    Ok(())
+}
+
 /// The screen-derivative instructions (`deriv_rtx`, `deriv_rty` and their SM5 coarse and fine forms).
 pub(crate) fn derivative(opcode: u16) -> bool {
     matches!(opcode, 11 | 12 | 122..=125)
-}
-struct Cursor<'a> {
-    words: &'a [u32],
-    at: usize,
-    origin: usize,
-}
-impl Cursor<'_> {
-    fn take(&mut self) -> Result<u32> {
-        let value = *self
-            .words
-            .get(self.at)
-            .ok_or_else(|| error(self.origin + self.at, "truncated instruction"))?;
-        self.at += 1;
-        Ok(value)
-    }
-    fn operand(&mut self, depth: usize) -> Result<Operand> {
-        let pos = self.origin + self.at;
-        if depth > 2 {
-            return Err(error(pos, "nested relative operand exceeds bound"));
-        }
-        let t = self.take()?;
-        let components = t & 3;
-        let selection = match components {
-            0 => Selection::None,
-            1 => Selection::Scalar(0),
-            2 => match (t >> 2) & 3 {
-                0 => Selection::Mask(((t >> 4) & 15) as u8),
-                1 => Selection::Swizzle(std::array::from_fn(|i| ((t >> (4 + 2 * i)) & 3) as u8)),
-                2 => Selection::Scalar(((t >> 4) & 3) as u8),
-                _ => return Err(error(pos, "reserved component selection")),
-            },
-            _ => return Err(error(pos, "unsupported N-component operand")),
-        };
-        let register = match (t >> 12) & 255 {
-            0 => Register::Temp,
-            1 => Register::Input,
-            2 => Register::Output,
-            4 => Register::Immediate,
-            6 => Register::Sampler,
-            7 => Register::Texture,
-            8 => Register::Constant,
-            9 => Register::ImmediateBuffer,
-            13 => Register::Null,
-            30 => Register::Uav,
-            n => return Err(error(pos, format!("unsupported operand register type {n}"))),
-        };
-        let mut modifier = 0;
-        if t >> 31 != 0 {
-            let ext = self.take()?;
-            // Only the full-precision source modifier extension is supported.
-            if ext & !0xff != 0 || ext & 63 != 1 {
-                return Err(error(pos, "unsupported extended operand (precision/modifier)"));
-            }
-            modifier = ((ext >> 6) & 3) as u8;
-        }
-        let dimensions = (t >> 20) & 3;
-        let expected = match register {
-            Register::Immediate | Register::Null => 0,
-            Register::Constant => 2,
-            Register::ImmediateBuffer => 1,
-            _ => 1,
-        };
-        if dimensions != expected {
-            return Err(error(pos, "unexpected operand index dimensions"));
-        }
-        let mut indices = Vec::new();
-        for d in 0..dimensions {
-            let representation = (t >> (22 + 3 * d)) & 7;
-            if !matches!(representation, 0 | 2 | 3) {
-                return Err(error(pos, "unsupported 64-bit/reserved index"));
-            }
-            let base = if representation != 2 { self.take()? } else { 0 };
-            let relative = if representation != 0 {
-                let op = self.operand(depth + 1)?;
-                if !matches!(op.register, Register::Temp | Register::Input)
-                    || !matches!(op.selection, Selection::Scalar(_))
-                    || op.modifier != 0
-                    || op.indices.iter().any(|i| i.relative.is_some())
-                {
-                    return Err(error(
-                        pos,
-                        "relative index must select a direct temp/input component",
-                    ));
-                }
-                Some(Box::new(op))
-            } else {
-                None
-            };
-            indices.push(Index { base, relative });
-        }
-        // This bounded subset only permits dynamic addressing within a cbuffer or the immediate constant buffer.
-        if indices.iter().enumerate().any(|(d, i)| {
-            i.relative.is_some()
-                && !((register == Register::Constant && d == 1) || register == Register::ImmediateBuffer)
-        }) {
-            return Err(error(
-                pos,
-                "dynamic register addressing outside a constant buffer",
-            ));
-        }
-        let mut immediate = [0; 4];
-        if register == Register::Immediate {
-            match components {
-                1 => immediate = [self.take()?; 4],
-                2 => {
-                    for x in &mut immediate {
-                        *x = self.take()?;
-                    }
-                }
-                _ => return Err(error(pos, "immediate requires one or four components")),
-            }
-        }
-        Ok(Operand {
-            register,
-            selection,
-            indices,
-            immediate,
-            modifier,
-        })
-    }
 }
 impl Program {
     pub fn temp_count(&self) -> usize {
@@ -394,6 +308,7 @@ impl Program {
         if words.len() > 1_048_576 {
             return Err(error(1, "program exceeds word budget"));
         }
+        let decoded = decode(words)?;
         let mut p = Self {
             code: Vec::new(),
             temps: 0,
@@ -409,93 +324,26 @@ impl Program {
             samplers: Vec::new(),
             jumps: Vec::new(),
         };
-        let mut at = 2;
-        let mut ended = false;
-        let mut execution = false;
-        while at < words.len() {
-            let t = words[at];
-            let opcode = (t & 0x7ff) as u16;
-            // customdata: its class in the opcode token's upper bits, its length (these two words included) the next
-            // word; only the immediate constant buffer (class 3), a declaration, is read
-            if opcode == 53 {
-                let len = words.get(at + 1).copied().unwrap_or(0) as usize;
-                if len < 2 || at + len > words.len() {
-                    return Err(error(at, "invalid customdata length"));
-                }
-                if t >> 11 != 3 {
-                    return Err(error(at, format!("unsupported customdata class {}", t >> 11)));
-                }
-                if execution || !p.immediates.is_empty() || !(len - 2).is_multiple_of(4) {
-                    return Err(error(
-                        at,
-                        "an immediate constant buffer after code, repeated, or of partial rows",
-                    ));
-                }
-                p.immediates = words[at + 2..at + len].as_chunks::<4>().0.to_vec();
-                at += len;
-                continue;
+        let first_instruction = decoded.instructions.first().map(|i| i.word);
+        for d in &decoded.declarations {
+            if first_instruction.is_some_and(|w| d.word > w) {
+                return Err(error(d.word, "declaration after executable instruction"));
             }
-            let name = NAMES.get(opcode as usize).copied().unwrap_or("unknown opcode");
-            let count = match opcode {
-                // break, continue, else, endif, endloop, loop, ret; and the declarations, read on their own
-                2 | 7 | 18 | 21 | 22 | 48 | 62 | 88..=90 | 98..=101 | 104 | 106 | 156 | 158 | 162 => 0,
-                // breakc, continuec, if, discard
-                3 | 8 | 13 | 31 => 1,
-                11 | 12 | 25..=28 | 40 | 43 | 47 | 54 | 59 | 64..=68 | 75 | 86 | 122..=125 | 129 => 2,
-                0
-                | 1
-                | 14..=17
-                | 24
-                | 29
-                | 30
-                | 32..=34
-                | 36
-                | 37
-                | 39
-                | 41
-                | 42
-                | 49
-                | 51
-                | 52
-                | 56
-                | 57
-                | 60
-                | 77
-                | 79
-                | 80
-                | 83..=85
-                | 87
-                // ld: destination, address, resource; store_uav_typed: view, address, value
-                | 45
-                | 164 => 3,
-                // ubfe (width, offset, source); ld_structured (element, byte offset, resource); imm_atomic_iadd
-                // (result, view, address, value); store_structured (view, element, byte offset, value); imul and
-                // udiv (two destinations, two sources)
-                35 | 38 | 50 | 55 | 69 | 78 | 138 | 167 | 168 | 180 => 4,
-                // sample_b and sample_l (a bias or level after the sampler); bfi (width, offset, insert, base)
-                72 | 74 | 140 => 5,
-                73 => 6,
-                _ => return Err(error(at, format!("unsupported {name} ({opcode})"))),
-            };
+            p.declaration(d)?;
+        }
+        let mut ended = false;
+        for mut ins in decoded.instructions {
+            let at = ins.word;
+            let name = ins.name();
+            let count = operand_count(ins.opcode)
+                .ok_or_else(|| error(at, format!("unsupported {name} ({})", ins.opcode)))?;
             if ended {
                 return Err(error(at, "instructions after final ret"));
             }
-            let len = ((t >> 24) & 127) as usize;
-            if len == 0 || at + len > words.len() {
-                return Err(error(at, "invalid instruction length"));
-            }
-            let mut c = Cursor {
-                words: &words[at + 1..at + len],
-                at: 0,
-                origin: at + 1,
-            };
-            let mut extended = t >> 31 != 0;
             let mut seen = 0;
-            let (mut dimension, mut returns) = (None, None);
-            while extended {
-                let ext = c.take()?;
+            for &ext in &ins.extensions {
                 let kind = ext & 63;
-                if !matches!(opcode, 45 | 69 | 72 | 73 | 74 | 167)
+                if !matches!(ins.opcode, 45 | 69 | 72 | 73 | 74 | 167)
                     || kind > 3
                     || kind == 0
                     || seen & (1 << kind) != 0
@@ -503,73 +351,52 @@ impl Program {
                     return Err(error(at, "unsupported or repeated opcode extension"));
                 }
                 seen |= 1 << kind;
-                let payload = ext & 0x7fff_ffff;
-                // sample offsets zero; the resource's dimension (a structured buffer's stride with it) and return type,
-                // checked against its declaration
+                // sample offsets zero; the resource's dimension (a structured buffer's stride with it) and return
+                // type, checked against its declaration
                 let valid = match kind {
-                    1 => payload == 1,
-                    2 => {
-                        dimension = Some(((payload >> 6) & 31, payload >> 11));
-                        true
-                    }
-                    3 => {
-                        returns = ReturnType::of(payload >> 6);
-                        returns.is_some()
-                    }
-                    _ => false,
+                    1 => ext & 0x7fff_ffff == 1,
+                    3 => ins.return_type().and_then(ReturnType::of).is_some(),
+                    _ => true,
                 };
                 if !valid {
                     return Err(error(at, "unsupported sample offset/dimension/return type"));
                 }
-                extended = ext >> 31 != 0;
             }
-            if (88..=106).contains(&opcode) || matches!(opcode, 156 | 158 | 162) {
-                if execution {
-                    return Err(error(at, "declaration after executable instruction"));
-                }
-                p.declaration(opcode, t, &mut c)?;
-            } else {
-                execution = true;
-                // the conditionals' test (bit 18: nonzero) is their only control besides saturation
-                let test = if matches!(opcode, 3 | 8 | 13 | 31) {
-                    0x4_0000
-                } else {
-                    0
-                };
-                if t & 0x00ff_d800 & !test != 0 {
-                    return Err(error(at, "unsupported instruction controls"));
-                }
-                let mut operands = Vec::new();
-                for _ in 0..count {
-                    operands.push(c.operand(0)?);
-                }
-                // on an integer instruction the negate modifier is two's-complement negation (modifier 4 here)
-                if integer_sources(opcode) {
-                    for o in &mut operands {
-                        if o.modifier == 1 {
-                            o.modifier = 4;
-                        }
+            // the conditionals' test (bit 18: nonzero) is their only control besides saturation
+            let test = if matches!(ins.opcode, 3 | 8 | 13 | 31) { 0x80 } else { 0 };
+            if ins.control & 0x1ffb & !test != 0 {
+                return Err(error(at, "unsupported instruction controls"));
+            }
+            if ins.operands.len() != count {
+                return Err(error(
+                    at,
+                    if ins.operands.len() > count {
+                        format!("unconsumed {name} tokens")
+                    } else {
+                        "truncated instruction".to_owned()
+                    },
+                ));
+            }
+            for o in &ins.operands {
+                supported_operand(o, at)?;
+            }
+            // on an integer instruction the negate modifier is two's-complement negation (modifier 4 here)
+            if integer_sources(ins.opcode) {
+                for o in &mut ins.operands {
+                    if o.modifier == 1 {
+                        o.modifier = 4;
                     }
                 }
-                let ins = Instruction {
-                    word: at,
-                    opcode,
-                    saturate: t & 0x2000 != 0,
-                    nonzero: t & 0x4_0000 != 0,
-                    operands,
-                };
-                p.validate(&ins)?;
-                p.validate_extension(&ins, dimension, returns)?;
-                ended = opcode == 62;
-                p.code.push(ins);
             }
-            if c.at != c.words.len() {
-                return Err(error(at, format!("unconsumed {name} tokens")));
-            }
-            at += len;
+            let dimension = ins.resource_dimension();
+            let returns = ins.return_type().and_then(ReturnType::of);
+            p.validate(&ins)?;
+            p.validate_extension(&ins, dimension, returns)?;
+            ended = ins.opcode == 62;
+            p.code.push(ins);
         }
         if !ended {
-            return Err(error(at, "missing final ret"));
+            return Err(error(words.len(), "missing final ret"));
         }
         p.jumps = p.structure()?;
         Ok(p)
@@ -623,137 +450,172 @@ impl Program {
         }
         Ok(jumps)
     }
-    fn declaration(&mut self, opcode: u16, token: u32, c: &mut Cursor<'_>) -> Result<()> {
-        let pos = c.origin - 1;
-        let controls = match opcode {
-            88 => 0xf800,
-            // the dimension, and globally coherent (bit 16)
-            156 => 0x1_f800,
-            // globally coherent
-            158 => 0x1_0000,
-            162 => 0,
-            89 => 0x800,
-            // refactoring allowed (bit 11) and early depth-stencil (bit 13): neither changes an evaluation's outputs
-            106 => 0x2800,
-            98..=100 => 0x7800,
-            _ => 0,
+    fn declaration(&mut self, d: &Declaration) -> Result<()> {
+        let pos = d.word;
+        let name = opcode_name(d.opcode);
+        let unsupported = || error(pos, format!("unsupported {name} ({})", d.opcode));
+        let controls = |allowed: u32| -> Result<()> {
+            if d.control & 0x1fff & !allowed != 0 {
+                Err(error(pos, "unsupported declaration controls"))
+            } else {
+                Ok(())
+            }
         };
-        if token & 0x00ff_f800 & !controls != 0 {
-            return Err(error(pos, "unsupported declaration controls"));
-        }
-        match opcode {
-            104 => {
-                self.temps = c.take()? as usize;
+        let plain = |o: &Operand| -> Result<()> {
+            if o.modifier != 0 || o.precision != 0 || o.indices.iter().any(|i| i.relative.is_some()) {
+                Err(error(pos, "indirect/modified declaration"))
+            } else {
+                Ok(())
+            }
+        };
+        match &d.kind {
+            Declared::Temps(n) => {
+                controls(0)?;
+                self.temps = *n as usize;
                 if self.temps > 4096 {
                     return Err(error(pos, "temp limit"));
                 }
             }
-            106 => {}
-            _ => {
-                let o = c.operand(0)?;
-                if o.modifier != 0 || o.indices.iter().any(|i| i.relative.is_some()) {
-                    return Err(error(pos, "indirect/modified declaration"));
+            // refactoring allowed and early depth-stencil: neither changes an evaluation's outputs
+            Declared::GlobalFlags(_) => controls(0b101)?,
+            Declared::ImmediateBuffer(rows) => {
+                controls(0x1fff)?;
+                if !self.immediates.is_empty() {
+                    return Err(error(pos, "a repeated immediate constant buffer"));
                 }
-                let i = o
-                    .indices
-                    .first()
-                    .ok_or_else(|| error(pos, "missing declaration index"))?
-                    .base;
-                match opcode {
-                    88 if o.register == Register::Texture => {
-                        // a buffer (1), texture2d (3), texture3d (5), cube (6), texture2darray (8) or cube array
-                        // (10), its four lanes one return type
-                        let dimension = match (token >> 11) & 31 {
-                            1 => Dimension::Buffer,
-                            3 => Dimension::Texture2d,
-                            5 => Dimension::Texture3d,
-                            6 => Dimension::TextureCube,
-                            8 => Dimension::Texture2dArray,
-                            10 => Dimension::TextureCubeArray,
-                            _ => {
-                                return Err(error(
-                                    pos,
-                                    "only buffer, texture2d, texture2darray, texture3d, cube and cube-array resources \
-                                     supported",
-                                ));
-                            }
-                        };
-                        let returns = ReturnType::of(c.take()?)
-                            .filter(|r| *r != ReturnType::Mixed)
-                            .ok_or_else(|| error(pos, "a texture's lanes of one float, uint or sint type"))?;
-                        self.declare(pos, i, dimension, returns)?;
-                    }
-                    156 if o.register == Register::Uav => {
-                        let dimension = match (token >> 11) & 31 {
-                            3 => Dimension::Texture2d,
-                            5 => Dimension::Texture3d,
-                            8 => Dimension::Texture2dArray,
-                            _ => {
-                                return Err(error(
-                                    pos,
-                                    "only texture2d, texture2darray and texture3d views supported",
-                                ));
-                            }
-                        };
-                        let returns = ReturnType::of(c.take()?)
-                            .filter(|r| *r != ReturnType::Mixed)
-                            .ok_or_else(|| error(pos, "a view's lanes of one float, uint or sint type"))?;
-                        self.declare_view(pos, i, dimension, returns)?;
-                    }
-                    158 if o.register == Register::Uav => {
-                        let stride = c.take()?;
-                        if stride == 0 || stride % 4 != 0 || stride > 2048 {
-                            return Err(error(pos, "structured stride"));
-                        }
-                        self.declare_view(pos, i, Dimension::Structured(stride), ReturnType::Mixed)?;
-                    }
-                    162 if o.register == Register::Texture => {
-                        let stride = c.take()?;
-                        if stride == 0 || stride % 4 != 0 || stride > 2048 {
-                            return Err(error(pos, "structured stride"));
-                        }
-                        self.declare(pos, i, Dimension::Structured(stride), ReturnType::Mixed)?;
-                    }
-                    89 if o.register == Register::Constant => {
-                        let size = o.indices[1].base;
-                        if i >= 14 || size > 4096 || self.constant_buffers.iter().any(|&(n, _)| n == i) {
-                            return Err(error(pos, "invalid/duplicate cbuffer"));
-                        }
-                        self.constant_buffers.push((i, size));
-                    }
-                    90 if o.register == Register::Sampler => {
-                        if (token >> 11) & 15 != 0 || i >= 16 || self.samplers.contains(&i) {
-                            return Err(error(pos, "unsupported/duplicate sampler"));
-                        }
-                        self.samplers.push(i);
-                    }
-                    98..=100 if o.register == Register::Input => {
-                        if i >= 32 {
-                            return Err(error(pos, "input limit"));
-                        }
-                        self.inputs = self.inputs.max(i as usize + 1);
-                        let Selection::Mask(mask @ 1..=15) = o.selection else {
-                            return Err(error(pos, "an input declaration without a lane mask"));
-                        };
-                        self.input_declarations.push(InputDeclaration {
-                            register: i,
-                            mask,
-                            interpolation: primase_shader::d3d::interpolation((token >> 11) & 15)
-                                .map_err(|detail| error(pos, detail))?,
-                        });
-                        if opcode != 98 {
-                            c.take()?;
-                        }
-                    }
-                    101 if o.register == Register::Output => {
-                        if i >= 8 {
-                            return Err(error(pos, "output limit"));
-                        }
-                        self.outputs = self.outputs.max(i as usize + 1);
-                    }
-                    _ => return Err(error(pos, "declaration register mismatch")),
-                }
+                self.immediates = rows.clone();
             }
+            Declared::CustomData { class } => {
+                return Err(error(pos, format!("unsupported customdata class {class}")));
+            }
+            Declared::Resource {
+                slot,
+                dimension,
+                samples,
+                token,
+                ..
+            } => {
+                // a buffer (1), texture2d (3), texture3d (5), cube (6), texture2darray (8) or cube array (10), its
+                // four lanes one return type
+                controls(0x1f)?;
+                let _ = samples;
+                let dimension = match dimension {
+                    1 => Dimension::Buffer,
+                    3 => Dimension::Texture2d,
+                    5 => Dimension::Texture3d,
+                    6 => Dimension::TextureCube,
+                    8 => Dimension::Texture2dArray,
+                    10 => Dimension::TextureCubeArray,
+                    _ => {
+                        return Err(error(
+                            pos,
+                            "only buffer, texture2d, texture2darray, texture3d, cube and cube-array resources \
+                             supported",
+                        ));
+                    }
+                };
+                let returns = ReturnType::of(*token)
+                    .filter(|r| *r != ReturnType::Mixed)
+                    .ok_or_else(|| error(pos, "a texture's lanes of one float, uint or sint type"))?;
+                self.declare(pos, *slot, dimension, returns)?;
+            }
+            Declared::UavTyped {
+                slot,
+                dimension,
+                token,
+                ..
+            } => {
+                // the dimension, and globally coherent (bit 16)
+                controls(0x3f)?;
+                let dimension = match dimension {
+                    3 => Dimension::Texture2d,
+                    5 => Dimension::Texture3d,
+                    8 => Dimension::Texture2dArray,
+                    _ => {
+                        return Err(error(
+                            pos,
+                            "only texture2d, texture2darray and texture3d views supported",
+                        ));
+                    }
+                };
+                let returns = ReturnType::of(*token)
+                    .filter(|r| *r != ReturnType::Mixed)
+                    .ok_or_else(|| error(pos, "a view's lanes of one float, uint or sint type"))?;
+                self.declare_view(pos, *slot, dimension, returns)?;
+            }
+            Declared::UavStructured { slot, stride, .. } => {
+                // globally coherent
+                controls(0x20)?;
+                if *stride == 0 || stride % 4 != 0 || *stride > 2048 {
+                    return Err(error(pos, "structured stride"));
+                }
+                self.declare_view(pos, *slot, Dimension::Structured(*stride), ReturnType::Mixed)?;
+            }
+            Declared::ResourceStructured { slot, stride } => {
+                controls(0)?;
+                if *stride == 0 || stride % 4 != 0 || *stride > 2048 {
+                    return Err(error(pos, "structured stride"));
+                }
+                self.declare(pos, *slot, Dimension::Structured(*stride), ReturnType::Mixed)?;
+            }
+            Declared::ConstantBuffer {
+                slot,
+                rows,
+                dynamic,
+                dimensions: _,
+            } => {
+                controls(1)?;
+                let _ = dynamic;
+                if *slot >= 14 || *rows > 4096 || self.constant_buffers.iter().any(|&(n, _)| n == *slot) {
+                    return Err(error(pos, "invalid/duplicate cbuffer"));
+                }
+                self.constant_buffers.push((*slot, *rows));
+            }
+            Declared::Sampler { slot, mode } => {
+                controls(0)?;
+                if *mode != 0 || *slot >= 16 || self.samplers.contains(slot) {
+                    return Err(error(pos, "unsupported/duplicate sampler"));
+                }
+                self.samplers.push(*slot);
+            }
+            Declared::Input {
+                operand,
+                interpolation: Some(mode),
+                name,
+            } if matches!(d.opcode, 98..=100) => {
+                controls(0xf)?;
+                plain(operand)?;
+                let i = operand.indices.first().map_or(0, |i| i.base);
+                if operand.register != Register::Input {
+                    return Err(error(pos, "declaration register mismatch"));
+                }
+                if i >= 32 {
+                    return Err(error(pos, "input limit"));
+                }
+                self.inputs = self.inputs.max(i as usize + 1);
+                let Selection::Mask(mask @ 1..=15) = operand.selection else {
+                    return Err(error(pos, "an input declaration without a lane mask"));
+                };
+                let _ = name;
+                self.input_declarations.push(InputDeclaration {
+                    register: i,
+                    mask,
+                    interpolation: primase_shader::d3d::interpolation(*mode).map_err(|detail| error(pos, detail))?,
+                });
+            }
+            Declared::Output { operand, name: None } if d.opcode == 101 => {
+                controls(0)?;
+                plain(operand)?;
+                let i = operand.indices.first().map_or(0, |i| i.base);
+                if operand.register != Register::Output {
+                    return Err(error(pos, "declaration register mismatch"));
+                }
+                if i >= 8 {
+                    return Err(error(pos, "output limit"));
+                }
+                self.outputs = self.outputs.max(i as usize + 1);
+            }
+            _ => return Err(unsupported()),
         }
         Ok(())
     }
