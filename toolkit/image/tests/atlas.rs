@@ -11,7 +11,7 @@ use primase_core::{
     ColorSpace, Entity, MaterialVariants, Mesh, MeshFile, Name, NormalConvention, Primitive, Semantic,
     Stream, TexFormat, TexRole, Texture, TextureFile, Topology, World,
 };
-use primase_image::{GUTTER, PackTextureAtlas, linear_to_srgb8};
+use primase_image::{GUTTER, PACK_TEXTURE_ATLAS, PackTextureAtlas, linear_to_srgb8};
 
 fn run(w: &mut World, size: u32) -> Result<RunReport, String> {
     let mut report = RunReport::default();
@@ -549,23 +549,30 @@ fn slot_atlases_with_the_same_pixels_share_one_texture() {
 #[test]
 fn the_size_is_required_and_checked() {
     let ok = Options::from([("size".to_owned(), "2048".to_owned())]);
-    assert_eq!(PackTextureAtlas::from_options(&ok).unwrap().size(), 2048);
+    assert_eq!(
+        PACK_TEXTURE_ATLAS.instance(&ok).unwrap().options()["size"],
+        "2048"
+    );
     assert!(
-        PackTextureAtlas::from_options(&Options::new())
-            .unwrap_err()
+        PACK_TEXTURE_ATLAS
+            .instance(&Options::new())
+            .err()
+            .unwrap()
             .contains("size is required")
     );
     for v in ["0", "8", "x", "99999"] {
         let o = Options::from([("size".to_owned(), v.to_owned())]);
-        assert!(PackTextureAtlas::from_options(&o).is_err(), "{v}");
+        assert!(PACK_TEXTURE_ATLAS.instance(&o).is_err(), "{v}");
     }
     let o = Options::from([
         ("size".to_owned(), "64".to_owned()),
         ("max".to_owned(), "1".to_owned()),
     ]);
     assert!(
-        PackTextureAtlas::from_options(&o)
-            .unwrap_err()
+        PACK_TEXTURE_ATLAS
+            .instance(&o)
+            .err()
+            .unwrap()
             .contains("unknown option max")
     );
     let mut registry = PassRegistry::new();

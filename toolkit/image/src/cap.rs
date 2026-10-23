@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Component, Entity, Name, NormalX, NormalZ, TexFormat, TexRole, Texture, TextureFile, World,
 };
@@ -217,43 +217,32 @@ impl CapTextures {
         self.mode
     }
 
-    /// From its options, through [`CapTextures::new`] and the same setters.
-    pub fn from_options(o: &Options) -> std::result::Result<CapTextures, String> {
-        let max = o
-            .get("max")
-            .ok_or("cap-textures needs max=N, the largest side in pixels the program wants")?;
-        let mut pass = CapTextures::new(pixels("max", max)?)?;
-        let mut mode = CapMode::default();
-        for (k, v) in o {
-            match k.as_str() {
-                "max" => {}
-                "color" => pass = pass.with_role_cap(CapRole::Color, pixels(k, v)?)?,
-                "normal" => pass = pass.with_role_cap(CapRole::Normal, pixels(k, v)?)?,
-                "mask" => pass = pass.with_role_cap(CapRole::Mask, pixels(k, v)?)?,
-                "names" => {
-                    for pair in v.split(';').filter(|p| !p.is_empty()) {
-                        let (name, cap) = pair
-                            .rsplit_once(':')
-                            .ok_or_else(|| format!("names={v}: each entry is NAME:N"))?;
-                        pass = pass.with_name_cap(name, pixels("names", cap)?)?;
-                    }
-                }
-                "beyond" => {
-                    mode.beyond = match v.as_str() {
-                        "filter" => Beyond::Filter,
-                        "keep" => Beyond::Keep,
-                        _ => return Err(format!("beyond={v} is filter or keep")),
-                    }
-                }
-                "normals" => {
-                    mode.normals = match v.as_str() {
-                        "renormalize" => NormalDownscale::Renormalize,
-                        "box" => NormalDownscale::Box,
-                        _ => return Err(format!("normals={v} is renormalize or box")),
-                    }
-                }
-                _ => return Err(format!("unknown option {k}")),
+    /// From the options [`CAP_TEXTURES`] declares, through [`CapTextures::new`] and the same setters.
+    fn from_given(g: &Given) -> std::result::Result<CapTextures, String> {
+        let mut pass = CapTextures::new(pixels("max", g.required("max"))?)?;
+        for (k, role) in [
+            ("color", CapRole::Color),
+            ("normal", CapRole::Normal),
+            ("mask", CapRole::Mask),
+        ] {
+            if let Some(v) = g.optional(k) {
+                pass = pass.with_role_cap(role, pixels(k, v)?)?;
             }
+        }
+        if let Some(v) = g.optional("names") {
+            for pair in v.split(';').filter(|p| !p.is_empty()) {
+                let (name, cap) = pair
+                    .rsplit_once(':')
+                    .ok_or_else(|| format!("names={v}: each entry is NAME:N"))?;
+                pass = pass.with_name_cap(name, pixels("names", cap)?)?;
+            }
+        }
+        let mut mode = CapMode::default();
+        if let Some(beyond) = g.optional_choice::<Beyond>("beyond") {
+            mode.beyond = beyond;
+        }
+        if let Some(normals) = g.optional_choice::<NormalDownscale>("normals") {
+            mode.normals = normals;
         }
         Ok(pass.with_mode(mode))
     }
@@ -273,10 +262,47 @@ impl CapTextures {
     }
 }
 
-/// [`CapTextures::from_options`] as a pass factory.
-pub fn cap_textures(o: &Options) -> std::result::Result<Box<dyn Pass>, String> {
-    Ok(Box::new(CapTextures::from_options(o)?))
+impl Choice for Beyond {
+    const VALUES: &'static [(&'static str, Self)] = &[("filter", Beyond::Filter), ("keep", Beyond::Keep)];
 }
+
+impl Choice for NormalDownscale {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("renormalize", NormalDownscale::Renormalize),
+        ("box", NormalDownscale::Box),
+    ];
+}
+
+/// `cap-textures`' declaration ([`primase_core::pass::PassRegistry::add`]): the cap is the program's, required.
+pub const CAP_TEXTURES: PassSpec = PassSpec {
+    name: "cap-textures",
+    options: &[
+        OptionSpec::required("max", "256", "pixels: the largest side a texture keeps"),
+        OptionSpec::optional(
+            "color",
+            "512",
+            "pixels: the cap of colour textures; without it, max",
+        ),
+        OptionSpec::optional("normal", "512", "pixels: the cap of normal maps; without it, max"),
+        OptionSpec::optional("mask", "512", "pixels: the cap of mask textures; without it, max"),
+        OptionSpec::optional(
+            "names",
+            "sky:1024",
+            "NAME:N entries, `;` between: the cap of the textures so named (lower case), before their role's",
+        ),
+        OptionSpec::optional_choice::<Beyond>(
+            "beyond",
+            "a texture whose smallest stored level is over its cap: that level box-filtered down to the cap, or \
+             kept; without it, filter",
+        ),
+        OptionSpec::optional_choice::<NormalDownscale>(
+            "normals",
+            "how a normal map is filtered down: each vector renormalized, or the stored values boxed; without it, \
+             renormalize",
+        ),
+    ],
+    make: |g| Ok(Box::new(CapTextures::from_given(g)?)),
+};
 
 impl Pass for CapTextures {
     fn name(&self) -> &'static str {
@@ -299,10 +325,10 @@ impl Pass for CapTextures {
             o.insert("names".to_owned(), names.join(";"));
         }
         if self.mode.beyond == Beyond::Keep {
-            o.insert("beyond".to_owned(), "keep".to_owned());
+            o.insert("beyond".to_owned(), Beyond::Keep.text().to_owned());
         }
         if self.mode.normals == NormalDownscale::Box {
-            o.insert("normals".to_owned(), "box".to_owned());
+            o.insert("normals".to_owned(), NormalDownscale::Box.text().to_owned());
         }
         o
     }
@@ -501,7 +527,7 @@ mod tests {
     #[test]
     fn the_pass_counts_every_texture_and_needs_max() {
         let mut r = PassRegistry::new();
-        r.register_requiring("cap-textures", cap_textures, &[("max", "256")]);
+        r.add(&CAP_TEXTURES);
         let m = PassManager::new(r);
         let mut w = World::new();
         let es: Vec<_> = (0..3).map(|_| w.spawn()).collect();
@@ -525,7 +551,7 @@ mod tests {
         assert_eq!(report.steps[0].pass, "cap-textures{max=2}");
         // max has no default: a pipeline without it does not parse, nor does a struct with none exist
         let err = m.registry.parse("cap-textures").unwrap_err();
-        assert!(err.to_string().contains("needs max=N"), "{err}");
+        assert!(err.to_string().contains("max is required: "), "{err}");
         assert!(CapTextures::new(0).is_err());
         assert!(
             CapTextures::new(4)
@@ -604,7 +630,7 @@ mod tests {
     #[test]
     fn names_and_roles_choose_the_cap() {
         let mut r = PassRegistry::new();
-        r.register_requiring("cap-textures", cap_textures, &[("max", "256")]);
+        r.add(&CAP_TEXTURES);
         let m = PassManager::new(r);
         let pipeline = m
             .registry

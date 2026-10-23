@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{ColorSpace, Component, Entity, Name, TexFormat, TexRole, Texture, World};
 
@@ -28,14 +28,11 @@ pub enum OrmSize {
     Occlusion,
 }
 
-impl OrmSize {
-    /// Its option word.
-    pub fn word(self) -> &'static str {
-        match self {
-            OrmSize::MetallicRoughness => "metallic-roughness",
-            OrmSize::Occlusion => "occlusion",
-        }
-    }
+impl Choice for OrmSize {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("metallic-roughness", OrmSize::MetallicRoughness),
+        ("occlusion", OrmSize::Occlusion),
+    ];
 }
 
 /// What becomes of a level of the packed image the other map does not store (`missing-levels=`).
@@ -47,14 +44,11 @@ pub enum MissingLevels {
     Refuse,
 }
 
-impl MissingLevels {
-    /// Its option word.
-    pub fn word(self) -> &'static str {
-        match self {
-            MissingLevels::Generate => "generate",
-            MissingLevels::Refuse => "refuse",
-        }
-    }
+impl Choice for MissingLevels {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("generate", MissingLevels::Generate),
+        ("refuse", MissingLevels::Refuse),
+    ];
 }
 
 /// `pack-orm` (see the module documentation): `size`, which map gives the packed image its size and levels;
@@ -77,24 +71,11 @@ impl PackOrm {
         self.missing_levels
     }
     /// From its options (both required), through [`PackOrm::new`].
-    pub fn from_options(o: &Options) -> Result<PackOrm, String> {
-        let mut size = None;
-        let mut missing = None;
-        for (k, v) in o {
-            match (k.as_str(), v.as_str()) {
-                ("size", "metallic-roughness") => size = Some(OrmSize::MetallicRoughness),
-                ("size", "occlusion") => size = Some(OrmSize::Occlusion),
-                ("size", v) => return Err(format!("size={v} is not metallic-roughness or occlusion")),
-                ("missing-levels", "generate") => missing = Some(MissingLevels::Generate),
-                ("missing-levels", "refuse") => missing = Some(MissingLevels::Refuse),
-                ("missing-levels", v) => return Err(format!("missing-levels={v} is not generate or refuse")),
-                (k, _) => return Err(format!("unknown option {k}")),
-            }
-        }
-        Ok(PackOrm::new(
-            size.ok_or("pack-orm needs size=metallic-roughness|occlusion")?,
-            missing.ok_or("pack-orm needs missing-levels=generate|refuse")?,
-        ))
+    fn from_given(g: &Given) -> PackOrm {
+        PackOrm::new(
+            g.choice::<OrmSize>("size"),
+            g.choice::<MissingLevels>("missing-levels"),
+        )
     }
 }
 
@@ -215,14 +196,28 @@ impl PackOrm {
     }
 }
 
+/// `pack-orm`'s declaration ([`primase_core::pass::PassRegistry::add`]): packing, the packed size and what to do
+/// without a level are the program's, both options required.
+pub const PACK_ORM: PassSpec = PassSpec {
+    name: "pack-orm",
+    options: &[
+        OptionSpec::choice::<OrmSize>("size", "which map gives the packed image its size and levels"),
+        OptionSpec::choice::<MissingLevels>(
+            "missing-levels",
+            "a level the other map does not store: made from its full level, box-filtered down, or refused",
+        ),
+    ],
+    make: |g| Ok(Box::new(PackOrm::from_given(g))),
+};
+
 impl Pass for PackOrm {
     fn name(&self) -> &'static str {
         "pack-orm"
     }
     fn options(&self) -> Options {
         Options::from([
-            ("size".to_owned(), self.size.word().to_owned()),
-            ("missing-levels".to_owned(), self.missing_levels.word().to_owned()),
+            ("size".to_owned(), self.size.text().to_owned()),
+            ("missing-levels".to_owned(), self.missing_levels.text().to_owned()),
         ])
     }
     // a world without materials has nothing to pack
@@ -553,11 +548,14 @@ mod tests {
             PackOrm::new(OrmSize::MetallicRoughness, MissingLevels::Generate),
             PackOrm::new(OrmSize::Occlusion, MissingLevels::Refuse),
         ] {
-            assert_eq!(PackOrm::from_options(&pass.options()), Ok(pass));
+            let again = PACK_ORM.instance(&pass.options()).unwrap();
+            assert_eq!(again.options(), pass.options());
         }
-        assert!(PackOrm::from_options(&Options::new()).is_err());
+        assert!(PACK_ORM.instance(&Options::new()).is_err());
         assert!(
-            PackOrm::from_options(&Options::from([("size".into(), "metallic-roughness".into())])).is_err()
+            PACK_ORM
+                .instance(&Options::from([("size".into(), "metallic-roughness".into())]))
+                .is_err()
         );
     }
 }

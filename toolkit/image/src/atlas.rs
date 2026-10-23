@@ -45,7 +45,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::layered::LayeredMaterial;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, Filters, PbrMaterial, TextureRef, TextureSlot, Wrap};
 use primase_core::{
     ColorSpace, Component, DrawOrder, Entity, MaterialUsage, MaterialVariants, Mesh, MeshFile, Name,
@@ -87,20 +87,12 @@ impl PackTextureAtlas {
     }
 
     /// From its options: `size`, required.
-    pub fn from_options(o: &Options) -> Result<PackTextureAtlas, String> {
-        let mut size = None;
-        for (k, v) in o {
-            match k.as_str() {
-                "size" => {
-                    size = Some(
-                        v.parse::<u32>()
-                            .map_err(|_| format!("size={v} is not a number of texels"))?,
-                    )
-                }
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        PackTextureAtlas::new(size.ok_or("size is required (texels a side of the largest atlas)")?)
+    fn from_given(g: &Given) -> Result<PackTextureAtlas, String> {
+        let v = g.required("size");
+        PackTextureAtlas::new(
+            v.parse::<u32>()
+                .map_err(|_| format!("size={v} is not a number of texels"))?,
+        )
     }
 }
 
@@ -681,6 +673,18 @@ impl PackTextureAtlas {
         Ok(edits)
     }
 }
+
+/// `pack-texture-atlas`' declaration ([`primase_core::pass::PassRegistry::add`]): the atlas size is the
+/// destination's, required.
+pub const PACK_TEXTURE_ATLAS: PassSpec = PassSpec {
+    name: "pack-texture-atlas",
+    options: &[OptionSpec::required(
+        "size",
+        "2048",
+        "texels a side of the largest atlas",
+    )],
+    make: |g| Ok(Box::new(PackTextureAtlas::from_given(g)?)),
+};
 
 impl Pass for PackTextureAtlas {
     fn name(&self) -> &'static str {

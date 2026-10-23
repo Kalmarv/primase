@@ -9,62 +9,51 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::layered::{Composition, Source, height_blend, over_as_sum};
-use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
+use primase_core::pass::{Pass, PassLog, PassRegistry, PassSpec};
 use primase_core::pbr::{Filter, TextureRef, Wrap};
 use primase_core::{
     Component, Entity, LayeredMaterial, Mesh, Semantic, Stream, Texture, WeightMapping, World,
 };
 use primase_texcodec::{Decoder, TexDecoder};
 
-/// Register this crate's passes.
+/// Register this crate's passes by their declarations.
 pub fn register(reg: &mut PassRegistry) {
-    // the cap is the program's: no default
-    // the atlas size is the destination's: no default
-    reg.register_requiring(
-        "pack-texture-atlas",
-        |o: &Options| Ok(Box::new(crate::PackTextureAtlas::from_options(o)?)),
-        &[("size", "2048")],
-    );
-    // what a destination that draws one material needs is the program's: both options required
-    reg.register_requiring(
-        "set-material-modes",
-        |o: &Options| Ok(Box::new(crate::SetMaterialModes::from_options(o)?)),
-        &[("alpha", "opaque"), ("double-sided", "false")],
-    );
-    reg.register_requiring("cap-textures", crate::cap_textures, &[("max", "256")]);
-    reg.register("bake-layer-channels", |o: &Options| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(BakeLayerChannels)),
-    });
-    reg.register("lower-textures-rgba8", |o: &Options| {
-        Ok(Box::new(crate::LowerTexturesRgba8::from_options(o)?))
-    });
-    reg.register("normalize-normals", |o: &Options| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(crate::NormalizeNormals)),
-    });
-    reg.register_requiring(
-        "uv-frame-normals",
-        |o: &Options| Ok(Box::new(crate::UvFrameNormals::from_options(o)?)),
-        &[("bitangent", "-v")],
-    );
-    // packing, the packed size and what to do without a level are the program's: no default
-    reg.register_requiring(
-        "pack-orm",
-        |o: &Options| Ok(Box::new(crate::PackOrm::from_options(o)?)),
-        &[("size", "metallic-roughness"), ("missing-levels", "generate")],
-    );
-    reg.register("bake-normal-scale", |o: &Options| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(crate::BakeNormalScale)),
-    });
-    // which textures are enlarged, and how much, are the program's: no default
-    reg.register_requiring(
-        "upscale-nearest",
-        crate::upscale_nearest,
-        &[("factor", "2"), ("textures", "pixels")],
-    );
+    for spec in [
+        &crate::atlas::PACK_TEXTURE_ATLAS,
+        &crate::modes::SET_MATERIAL_MODES,
+        &crate::cap::CAP_TEXTURES,
+        &BAKE_LAYER_CHANNELS,
+        &crate::rgba8::LOWER_TEXTURES_RGBA8,
+        &NORMALIZE_NORMALS,
+        &crate::frames::UV_FRAME_NORMALS,
+        &crate::orm::PACK_ORM,
+        &BAKE_NORMAL_SCALE,
+        &crate::upscale::UPSCALE_NEAREST,
+    ] {
+        reg.add(spec);
+    }
 }
+
+/// `bake-layer-channels`' declaration: no options.
+pub const BAKE_LAYER_CHANNELS: PassSpec = PassSpec {
+    name: "bake-layer-channels",
+    options: &[],
+    make: |_| Ok(Box::new(BakeLayerChannels)),
+};
+
+/// `normalize-normals`' declaration: no options.
+pub const NORMALIZE_NORMALS: PassSpec = PassSpec {
+    name: "normalize-normals",
+    options: &[],
+    make: |_| Ok(Box::new(crate::NormalizeNormals)),
+};
+
+/// `bake-normal-scale`'s declaration: no options.
+pub const BAKE_NORMAL_SCALE: PassSpec = PassSpec {
+    name: "bake-normal-scale",
+    options: &[],
+    make: |_| Ok(Box::new(crate::BakeNormalScale)),
+};
 
 #[derive(Debug)]
 pub struct BakeLayerChannels;
@@ -322,4 +311,47 @@ fn sample(m: &Decoded, r: &TextureRef, uv: [f32; 2]) -> [f32; 4] {
         let bottom = c[k] + (d[k] - c[k]) * tx;
         top + (bottom - top) * ty
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The crate registers exactly these passes by their declarations: those with required options are made only with
+    /// them, and every one says what it takes.
+    #[test]
+    fn the_image_passes_register_by_name() {
+        let mut reg = PassRegistry::new();
+        register(&mut reg);
+        let names = [
+            "bake-layer-channels",
+            "bake-normal-scale",
+            "cap-textures",
+            "lower-textures-rgba8",
+            "normalize-normals",
+            "pack-orm",
+            "pack-texture-atlas",
+            "set-material-modes",
+            "upscale-nearest",
+            "uv-frame-normals",
+        ];
+        assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        let free = [
+            "bake-layer-channels",
+            "bake-normal-scale",
+            "lower-textures-rgba8",
+            "normalize-normals",
+        ];
+        for name in names {
+            assert_eq!(reg.requires_options(name), !free.contains(&name), "{name}");
+            assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");
+            let bare = reg.make(name, &primase_core::pass::Options::new());
+            assert_eq!(bare.is_err(), !free.contains(&name), "{name}");
+        }
+        assert!(
+            reg.describe("upscale-nearest")
+                .unwrap()
+                .starts_with("upscale-nearest{(factor|size)*,textures*}\n")
+        );
+    }
 }

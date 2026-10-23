@@ -10,7 +10,7 @@
 //! discarded, a blended one draws opaque, a double-sided one made single-sided no longer draws its back faces, and a
 //! single-sided one made double-sided draws them (lit with the flipped normal).
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{Name, World};
 
@@ -28,26 +28,57 @@ impl SetMaterialModes {
     }
 
     /// From its options, both required: `alpha=opaque|keep`, `double-sided=false|true|keep`.
-    pub fn from_options(o: &Options) -> Result<SetMaterialModes, String> {
-        if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "alpha" | "double-sided")) {
-            return Err(format!("unknown option {k}"));
-        }
-        let opaque = match o.get("alpha").map(String::as_str) {
-            Some("opaque") => true,
-            Some("keep") => false,
-            Some(v) => return Err(format!("alpha={v}: opaque or keep")),
-            None => return Err("set-material-modes needs alpha=opaque|keep".into()),
+    fn from_given(g: &Given) -> SetMaterialModes {
+        let opaque = g.choice::<Alpha>("alpha") == Alpha::Opaque;
+        let double_sided = match g.choice::<Sides>("double-sided") {
+            Sides::False => Some(false),
+            Sides::True => Some(true),
+            Sides::Keep => None,
         };
-        let double_sided = match o.get("double-sided").map(String::as_str) {
-            Some("true") => Some(true),
-            Some("false") => Some(false),
-            Some("keep") => None,
-            Some(v) => return Err(format!("double-sided={v}: false, true or keep")),
-            None => return Err("set-material-modes needs double-sided=false|true|keep".into()),
-        };
-        Ok(SetMaterialModes::new(opaque, double_sided))
+        SetMaterialModes::new(opaque, double_sided)
     }
 }
+
+/// Option `alpha`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Alpha {
+    Opaque,
+    Keep,
+}
+
+impl Choice for Alpha {
+    const VALUES: &'static [(&'static str, Self)] = &[("opaque", Alpha::Opaque), ("keep", Alpha::Keep)];
+}
+
+/// Option `double-sided`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sides {
+    False,
+    True,
+    Keep,
+}
+
+impl Choice for Sides {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("false", Sides::False),
+        ("true", Sides::True),
+        ("keep", Sides::Keep),
+    ];
+}
+
+/// `set-material-modes`' declaration ([`primase_core::pass::PassRegistry::add`]): what a destination that draws one
+/// material needs is the program's, both options required.
+pub const SET_MATERIAL_MODES: PassSpec = PassSpec {
+    name: "set-material-modes",
+    options: &[
+        OptionSpec::choice::<Alpha>("alpha", "every material made opaque, or its alpha mode kept"),
+        OptionSpec::choice::<Sides>(
+            "double-sided",
+            "every material single-sided, double-sided, or as it is",
+        ),
+    ],
+    make: |g| Ok(Box::new(SetMaterialModes::from_given(g))),
+};
 
 impl Pass for SetMaterialModes {
     fn name(&self) -> &'static str {
@@ -57,13 +88,19 @@ impl Pass for SetMaterialModes {
         Options::from([
             (
                 "alpha".to_owned(),
-                if self.opaque { "opaque" } else { "keep" }.to_owned(),
+                if self.opaque { Alpha::Opaque } else { Alpha::Keep }
+                    .text()
+                    .to_owned(),
             ),
             (
                 "double-sided".to_owned(),
-                self.double_sided
-                    .map_or("keep", |d| if d { "true" } else { "false" })
-                    .to_owned(),
+                match self.double_sided {
+                    Some(false) => Sides::False,
+                    Some(true) => Sides::True,
+                    None => Sides::Keep,
+                }
+                .text()
+                .to_owned(),
             ),
         ])
     }

@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Name, TexFormat, TexRole, Texture, TextureFile, World};
 
 use crate::{Image, Samples};
@@ -56,16 +56,10 @@ impl UpscaleNearest {
         &self.textures
     }
 
-    /// From its options: `factor` or `size` (one of them), and `textures` (names separated by `;`), required.
-    pub fn from_options(o: &Options) -> Result<UpscaleNearest, String> {
-        if let Some(k) = o
-            .keys()
-            .find(|k| !matches!(k.as_str(), "factor" | "size" | "textures"))
-        {
-            return Err(format!("unknown option {k}"));
-        }
+    /// From the options [`UPSCALE_NEAREST`] declares: `factor` or `size` (one of them), and `textures`.
+    fn from_given(g: &Given) -> Result<UpscaleNearest, String> {
         let number = |k: &str| -> Result<Option<u32>, String> {
-            o.get(k)
+            g.optional(k)
                 .map(|v| {
                     v.parse::<u32>()
                         .map_err(|_| format!("{k}={v} is not a whole number"))
@@ -73,20 +67,11 @@ impl UpscaleNearest {
                 .transpose()
         };
         let by = match (number("factor")?, number("size")?) {
-            (Some(n), None) => UpscaleBy::Factor(n),
+            (Some(n), _) => UpscaleBy::Factor(n),
             (None, Some(s)) => UpscaleBy::Size(s),
-            _ => {
-                return Err(
-                    "one of factor (the enlargement) or size (the larger side to reach) is required".into(),
-                );
-            }
+            (None, None) => unreachable!("the declaration's check gives one of factor and size"),
         };
-        let textures = o
-            .get("textures")
-            .ok_or("textures is required: the names of the textures to enlarge, separated by ;")?
-            .split(';')
-            .map(str::to_owned)
-            .collect();
+        let textures = g.required("textures").split(';').map(str::to_owned).collect();
         UpscaleNearest::new(by, textures)
     }
 
@@ -99,10 +84,26 @@ impl UpscaleNearest {
     }
 }
 
-/// [`UpscaleNearest::from_options`] as a pass factory.
-pub fn upscale_nearest(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(UpscaleNearest::from_options(o)?))
-}
+/// `upscale-nearest`'s declaration ([`primase_core::pass::PassRegistry::add`]): which textures are enlarged, and how
+/// much, are the program's.
+pub const UPSCALE_NEAREST: PassSpec = PassSpec {
+    name: "upscale-nearest",
+    options: &[
+        OptionSpec::one_of("by", "factor", "2", "the whole enlargement, at least 2"),
+        OptionSpec::one_of(
+            "by",
+            "size",
+            "256",
+            "the larger side to reach, in texels: the least whole factor that does",
+        ),
+        OptionSpec::required(
+            "textures",
+            "pixels",
+            "the names of the textures to enlarge, `;` between",
+        ),
+    ],
+    make: |g| Ok(Box::new(UpscaleNearest::from_given(g)?)),
+};
 
 /// `rgba` (`w` x `h`) with each texel an `k` x `k` block.
 pub fn enlarge_nearest(w: u32, h: u32, rgba: &[u8], k: u32) -> Vec<u8> {
@@ -303,13 +304,15 @@ mod tests {
     fn the_choices_are_required_and_printed() {
         let o =
             |kv: &[(&str, &str)]| -> Options { kv.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect() };
-        assert!(UpscaleNearest::from_options(&o(&[("textures", "a")])).is_err());
-        assert!(UpscaleNearest::from_options(&o(&[("factor", "2")])).is_err());
-        assert!(
-            UpscaleNearest::from_options(&o(&[("factor", "2"), ("size", "64"), ("textures", "a")])).is_err()
+        let make = |kv: &[(&str, &str)]| UPSCALE_NEAREST.instance(&o(kv));
+        assert!(make(&[("textures", "a")]).is_err());
+        assert!(make(&[("factor", "2")]).is_err());
+        assert!(make(&[("factor", "2"), ("size", "64"), ("textures", "a")]).is_err());
+        assert!(make(&[("factor", "1"), ("textures", "a")]).is_err());
+        let p = make(&[("size", "256"), ("textures", "a;b")]).unwrap();
+        assert_eq!(
+            UPSCALE_NEAREST.instance(&p.options()).unwrap().options(),
+            p.options()
         );
-        assert!(UpscaleNearest::from_options(&o(&[("factor", "1"), ("textures", "a")])).is_err());
-        let p = UpscaleNearest::from_options(&o(&[("size", "256"), ("textures", "a;b")])).unwrap();
-        assert_eq!(UpscaleNearest::from_options(&p.options()).unwrap(), p);
     }
 }

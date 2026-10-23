@@ -1,7 +1,7 @@
 //! `uv-frame-normals`: normal maps re-expressed in the tangent frame derived from texture coordinates, for a target
 //! that derives its own frame from them instead of reading supplied tangents.
 use crate::{Error, Result};
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
     Component, Entity, Mesh, Name, NormalConvention, Semantic, Stream, TexFormat, TexRole, Texture,
@@ -45,19 +45,10 @@ pub struct UvFrameNormals {
 }
 
 impl UvFrameNormals {
-    pub fn from_options(o: &Options) -> std::result::Result<Self, String> {
-        let mut bitangent = None;
-        for (k, v) in o {
-            match (k.as_str(), v.as_str()) {
-                ("bitangent", "+v") => bitangent = Some(Bitangent::PlusV),
-                ("bitangent", "-v") => bitangent = Some(Bitangent::MinusV),
-                ("bitangent", v) => return Err(format!("bitangent={v} is not +v or -v")),
-                _ => return Err(format!("unknown option {k}")),
-            }
+    fn from_given(g: &Given) -> Self {
+        UvFrameNormals {
+            bitangent: g.choice::<Bitangent>("bitangent"),
         }
-        Ok(UvFrameNormals {
-            bitangent: bitangent.ok_or("bitangent=+v|-v is required: it is the target's frame")?,
-        })
     }
 }
 
@@ -75,19 +66,27 @@ fn stream3(p: &primase_core::Primitive, s: Semantic) -> Option<&Vec<[f32; 3]>> {
     }
 }
 
+impl Choice for Bitangent {
+    const VALUES: &'static [(&'static str, Self)] = &[("-v", Bitangent::MinusV), ("+v", Bitangent::PlusV)];
+}
+
+/// `uv-frame-normals`' declaration ([`primase_core::pass::PassRegistry::add`]): the bitangent is the target's frame,
+/// required.
+pub const UV_FRAME_NORMALS: PassSpec = PassSpec {
+    name: "uv-frame-normals",
+    options: &[OptionSpec::choice::<Bitangent>(
+        "bitangent",
+        "the direction of v the derived bitangent runs along: the target's frame",
+    )],
+    make: |g| Ok(Box::new(UvFrameNormals::from_given(g))),
+};
+
 impl Pass for UvFrameNormals {
     fn name(&self) -> &'static str {
         "uv-frame-normals"
     }
     fn options(&self) -> Options {
-        Options::from([(
-            "bitangent".to_owned(),
-            match self.bitangent {
-                Bitangent::PlusV => "+v",
-                Bitangent::MinusV => "-v",
-            }
-            .to_owned(),
-        )])
+        Options::from([("bitangent".to_owned(), self.bitangent.text().to_owned())])
     }
     fn requires(&self) -> &[&'static str] {
         &[PbrMaterial::NAME]

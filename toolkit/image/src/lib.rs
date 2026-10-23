@@ -3,27 +3,27 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 mod atlas;
-pub use atlas::{GUTTER, PackTextureAtlas};
+pub use atlas::{GUTTER, PACK_TEXTURE_ATLAS, PackTextureAtlas};
 mod cap;
-pub use cap::{Beyond, CapMode, CapRole, CapTextures, Capped, NormalDownscale, cap_texture, cap_textures};
+pub use cap::{Beyond, CAP_TEXTURES, CapMode, CapRole, CapTextures, Capped, NormalDownscale, cap_texture};
 mod channels;
 mod frames;
 mod jpeg;
 pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels, map_rgba8_levels_with};
-pub use frames::{Bitangent, UvFrameNormals};
+pub use frames::{Bitangent, UV_FRAME_NORMALS, UvFrameNormals};
 pub use jpeg::{Jpeg, JpegColor, read_jpeg};
 mod layers;
-pub use layers::{BakeLayerChannels, register};
+pub use layers::{BAKE_LAYER_CHANNELS, BAKE_NORMAL_SCALE, BakeLayerChannels, NORMALIZE_NORMALS, register};
 mod modes;
-pub use modes::SetMaterialModes;
+pub use modes::{SET_MATERIAL_MODES, SetMaterialModes};
 mod normals;
 mod orm;
-pub use orm::{MissingLevels, OrmSize, PackOrm};
+pub use orm::{MissingLevels, OrmSize, PACK_ORM, PackOrm};
 mod qoi;
 mod rgba8;
 pub mod sampling;
 pub use qoi::{Qoi, QoiChannels, QoiColorspace, read_qoi};
-pub use rgba8::{LowerTexturesRgba8, SignedData, rgba8_exact};
+pub use rgba8::{LOWER_TEXTURES_RGBA8, LowerTexturesRgba8, SignedData, rgba8_exact};
 mod texture;
 mod upscale;
 pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_normals, scale_normal};
@@ -33,7 +33,7 @@ pub use texture::{
     BakeNormalScale, NormalizeNormals, TextureLoadReport, bake_normal_scale, decode_texture_file,
     load_textures, normalize_normals, texture_level_png, texture_level_rgba8, texture_level_rgba8_with,
 };
-pub use upscale::{MAX_UPSCALED, UpscaleBy, UpscaleNearest, enlarge_nearest, upscale_nearest};
+pub use upscale::{MAX_UPSCALED, UPSCALE_NEAREST, UpscaleBy, UpscaleNearest, enlarge_nearest};
 
 use thiserror::Error;
 

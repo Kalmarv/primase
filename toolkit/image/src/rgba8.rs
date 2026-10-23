@@ -6,7 +6,7 @@
 //! accepts, that decode is the format's meaning; for the others it is an approximation, which a writer embedding
 //! 8-bit images does not make on its own: a program converts them first with this pass.
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Name, TexFormat, TexRole, Texture, TextureFile, World};
 use primase_texcodec::{Decoder, TexDecoder};
 
@@ -77,19 +77,27 @@ pub struct LowerTexturesRgba8 {
 }
 
 impl LowerTexturesRgba8 {
-    pub fn from_options(o: &Options) -> Result<Self, String> {
-        let mut pass = LowerTexturesRgba8::default();
-        for (k, v) in o {
-            match (k.as_str(), v.as_str()) {
-                ("signed-data", "remap") => pass.signed_data = SignedData::Remap,
-                ("signed-data", "refuse") => pass.signed_data = SignedData::Refuse,
-                ("signed-data", v) => return Err(format!("signed-data={v} is not remap or refuse")),
-                (k, _) => return Err(format!("unknown option {k}")),
-            }
+    fn from_given(g: &Given) -> Self {
+        LowerTexturesRgba8 {
+            signed_data: g.optional_choice::<SignedData>("signed-data").unwrap_or_default(),
         }
-        Ok(pass)
     }
 }
+
+impl Choice for SignedData {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("refuse", SignedData::Refuse), ("remap", SignedData::Remap)];
+}
+
+/// `lower-textures-rgba8`'s declaration ([`primase_core::pass::PassRegistry::add`]).
+pub const LOWER_TEXTURES_RGBA8: PassSpec = PassSpec {
+    name: "lower-textures-rgba8",
+    options: &[OptionSpec::optional_choice::<SignedData>(
+        "signed-data",
+        "a signed texture that is not a normal map: refused, or remapped as a normal map is; without it, refuse",
+    )],
+    make: |g| Ok(Box::new(LowerTexturesRgba8::from_given(g))),
+};
 
 impl Pass for LowerTexturesRgba8 {
     fn name(&self) -> &'static str {
@@ -98,7 +106,9 @@ impl Pass for LowerTexturesRgba8 {
     fn options(&self) -> Options {
         match self.signed_data {
             SignedData::Refuse => Options::new(),
-            SignedData::Remap => Options::from([("signed-data".to_owned(), "remap".to_owned())]),
+            SignedData::Remap => {
+                Options::from([("signed-data".to_owned(), SignedData::Remap.text().to_owned())])
+            }
         }
     }
     // no `requires`: a world (or part) without textures has nothing to convert
@@ -309,10 +319,12 @@ mod tests {
                 signed_data: SignedData::Remap,
             },
         ] {
-            assert_eq!(LowerTexturesRgba8::from_options(&pass.options()).unwrap(), pass);
+            let again = LOWER_TEXTURES_RGBA8.instance(&pass.options()).unwrap();
+            assert_eq!(again.options(), pass.options());
         }
         assert!(
-            LowerTexturesRgba8::from_options(&Options::from([("signed".to_owned(), "x".to_owned())]))
+            LOWER_TEXTURES_RGBA8
+                .instance(&Options::from([("signed".to_owned(), "x".to_owned())]))
                 .is_err()
         );
     }

@@ -6,7 +6,7 @@ use primase_core::ledger::Conservation;
 use primase_core::pass::{Options, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{Entity, Name, World};
-use primase_image::SetMaterialModes;
+use primase_image::SET_MATERIAL_MODES;
 
 fn run(w: &mut World, alpha: &str, double_sided: &str) -> Result<RunReport, String> {
     let options: Options = [("alpha", alpha), ("double-sided", double_sided)]
@@ -20,7 +20,7 @@ fn run(w: &mut World, alpha: &str, double_sided: &str) -> Result<RunReport, Stri
         .run(
             w,
             &Pipeline {
-                passes: vec![Box::new(SetMaterialModes::from_options(&options)?)],
+                passes: vec![SET_MATERIAL_MODES.instance(&options)?],
             },
             &mut report,
         )
@@ -127,24 +127,27 @@ fn both_options_are_required_and_checked() {
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect();
-        SetMaterialModes::from_options(&o)
+        SET_MATERIAL_MODES.instance(&o)
     };
     assert!(make(&[("alpha", "opaque"), ("double-sided", "keep")]).is_ok());
-    assert!(make(&[("double-sided", "keep")]).unwrap_err().contains("alpha"));
-    assert!(make(&[("alpha", "keep")]).unwrap_err().contains("double-sided"));
+    assert!(make(&[("double-sided", "keep")]).err().unwrap().contains("alpha"));
+    assert!(make(&[("alpha", "keep")]).err().unwrap().contains("double-sided"));
     assert!(
         make(&[("alpha", "mask"), ("double-sided", "keep")])
-            .unwrap_err()
+            .err()
+            .unwrap()
             .contains("alpha=mask")
     );
     assert!(
         make(&[("alpha", "keep"), ("double-sided", "yes")])
-            .unwrap_err()
+            .err()
+            .unwrap()
             .contains("double-sided=yes")
     );
     assert!(
         make(&[("alpha", "keep"), ("double-sided", "keep"), ("x", "1")])
-            .unwrap_err()
+            .err()
+            .unwrap()
             .contains("x")
     );
 }
