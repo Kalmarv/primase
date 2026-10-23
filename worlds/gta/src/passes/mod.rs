@@ -6,6 +6,7 @@ pub mod lights;
 pub mod lower;
 pub mod pose;
 pub mod rect;
+pub mod resolve_shaders;
 pub mod roles;
 pub mod select;
 pub mod shader_class;

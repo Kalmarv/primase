@@ -239,18 +239,32 @@ pub fn parse(bytes: &[u8]) -> Result<ProgramTable> {
 }
 
 impl ProgramTable {
-    /// The constant records the `i`th resource owns.
+    /// The constant records the `i`th resource owns. The records are stored in the order of the names: each buffer's
+    /// constants are named in a block that ends with the buffer's own name, so the records go by where the buffers'
+    /// names stand, which is not always the order of the resource records (a buffer of space 1 can stand between those
+    /// of space 0, and a buffer the program reads through root constants after the others).
     pub fn constants_of(&self, i: usize) -> &[TableConstant] {
+        let Some(mine) = self.resources.get(i) else {
+            return &[];
+        };
+        let key = |k: usize, r: &TableResource| (self.name_position(r.name).unwrap_or(usize::MAX), k);
         let before: usize = self
             .resources
             .iter()
-            .take(i)
-            .map(|r| usize::from(r.constants))
+            .enumerate()
+            .filter(|&(k, r)| key(k, r) < key(i, mine))
+            .map(|(_, r)| usize::from(r.constants))
             .sum();
-        let own = self.resources.get(i).map_or(0, |r| usize::from(r.constants));
         self.constants
-            .get(before..before.saturating_add(own))
+            .get(before..before.saturating_add(usize::from(mine.constants)))
             .unwrap_or_default()
+    }
+
+    /// Where in the names the one a hash is the joaat of stands.
+    fn name_position(&self, hash: u32) -> Option<usize> {
+        self.names.iter().position(|n| {
+            primase_hash::joaat(n.as_bytes()) == hash || primase_hash::joaat_exact(n.as_bytes()) == hash
+        })
     }
 
     /// The name a hash is the joaat of, in the name's own case or lowercase.
@@ -398,6 +412,27 @@ mod tests {
         assert_eq!(t.name_of(t.constants[0].name), Some("specularFresnel"));
         assert_eq!(t.name_of(t.resources[1].name), Some("DiffuseTex"));
         assert_eq!(t.name_of(0), None);
+    }
+
+    #[test]
+    fn constants_follow_the_names_not_the_records() {
+        // a buffer "late" listed before one "early": the records of the one whose names come first are first
+        let (early, late) = (primase_hash::joaat(b"early"), primase_hash::joaat(b"late"));
+        let mut x = Vec::new();
+        x.extend(2u16.to_le_bytes());
+        x.extend(3u32.to_le_bytes());
+        x.extend(0u16.to_le_bytes());
+        x.extend(resource(9, 2, 0, 64, late, late));
+        x.extend(resource(8, 1, 1, 16, early, early));
+        x.extend(constant(12, 0, early, early));
+        x.extend(constant(12, 0, late, late));
+        x.extend(constant(12, 16, late, late));
+        x.extend(b"a\0early\0b\0c\0late\0");
+        let t = parse(&x).unwrap();
+        assert_eq!(t.constants_of(1).len(), 1);
+        assert_eq!(t.constants_of(1)[0].offset, 0);
+        assert_eq!(t.constants_of(0).len(), 2);
+        assert_eq!(t.constants_of(0)[1].offset, 16);
     }
 
     #[test]
