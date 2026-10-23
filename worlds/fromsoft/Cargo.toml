@@ -30,6 +30,7 @@ aes.workspace = true
 num-bigint.workspace = true
 sha2.workspace = true
 [dev-dependencies]
+primase-compress = { workspace = true, features = ["reference-decoder"] }
 primase-testdata.workspace = true
 sha2.workspace = true
 [lints]

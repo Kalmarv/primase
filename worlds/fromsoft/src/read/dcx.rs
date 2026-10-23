@@ -8,14 +8,26 @@ pub fn compression(data: &[u8]) -> Option<[u8; 4]> {
     }
     data.get(40..44)?.try_into().ok()
 }
-/// Explicit native decoder and caller-controlled allocation ceiling in bytes.
-#[derive(Debug, Clone, Copy)]
-pub struct Decoder<'a> {
-    pub oodle: Option<&'a Oodle>,
-    pub max_output: usize,
+/// How an envelope's payload is compressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compression {
+    /// Oodle Kraken: needs the game's library.
+    Kraken,
+    /// zlib.
+    Deflate,
 }
-impl Decoder<'_> {
-    pub fn decode(&self, data: &[u8]) -> Result<Vec<u8>> {
+
+/// A validated DCX envelope: how its payload is compressed, the payload as stored and the size it decodes to.
+#[derive(Debug, Clone, Copy)]
+pub struct Envelope<'a> {
+    pub compression: Compression,
+    pub payload: &'a [u8],
+    pub decoded_size: usize,
+}
+
+impl<'a> Envelope<'a> {
+    /// Reads the envelope's header, accepting only the documented permutations; a decoded size over `max_output` is refused.
+    pub fn parse(data: &'a [u8], max_output: usize) -> Result<Self> {
         let v = View {
             data,
             format: "DCX",
@@ -48,12 +60,12 @@ impl Decoder<'_> {
         if b != if a == 0x24 { 0x2c } else { 0x4c } {
             return Err(invalid("DCX", 20, "header offsets"));
         }
-        let expected = v.u32(28)? as usize;
+        let decoded_size = v.u32(28)? as usize;
         let size = v.u32(32)? as usize;
-        if expected > self.max_output {
+        if decoded_size > max_output {
             return Err(invalid("DCX", 28, "output exceeds configured limit"));
         }
-        let src = v.slice(76, size)?;
+        let payload = v.slice(76, size)?;
         let end = 76 + size;
         if data.len() - end >= 16 || data[end..].iter().any(|&x| x != 0) {
             return Err(invalid(
@@ -62,15 +74,12 @@ impl Decoder<'_> {
                 "trailing data, expected at most 15 zero alignment bytes",
             ));
         }
-        match v.slice(40, 4)? {
+        let compression = match v.slice(40, 4)? {
             b"KRAK" => {
                 if version != 0x11000 || a != 0x44 || ![6, 9].contains(&level) || flag != 0 {
                     return Err(invalid("DCX", 4, "unknown KRAK variant"));
                 }
-                Ok(self
-                    .oodle
-                    .ok_or_else(|| invalid("DCX", 40, "Oodle required"))?
-                    .decompress(src, expected)?)
+                Compression::Kraken
             }
             b"DFLT" => {
                 if !matches!(
@@ -79,9 +88,33 @@ impl Decoder<'_> {
                 ) {
                     return Err(invalid("DCX", 4, "unknown DFLT variant"));
                 }
-                Ok(Zlib.decompress(src, expected)?)
+                Compression::Deflate
             }
-            _ => Err(invalid("DCX", 40, "unsupported compression")),
+            _ => return Err(invalid("DCX", 40, "unsupported compression")),
+        };
+        Ok(Self {
+            compression,
+            payload,
+            decoded_size,
+        })
+    }
+}
+
+/// Explicit native decoder and caller-controlled allocation ceiling in bytes.
+#[derive(Debug, Clone, Copy)]
+pub struct Decoder<'a> {
+    pub oodle: Option<&'a Oodle>,
+    pub max_output: usize,
+}
+impl Decoder<'_> {
+    pub fn decode(&self, data: &[u8]) -> Result<Vec<u8>> {
+        let envelope = Envelope::parse(data, self.max_output)?;
+        match envelope.compression {
+            Compression::Kraken => Ok(self
+                .oodle
+                .ok_or_else(|| invalid("DCX", 40, "Oodle required"))?
+                .decompress(envelope.payload, envelope.decoded_size)?),
+            Compression::Deflate => Ok(Zlib.decompress(envelope.payload, envelope.decoded_size)?),
         }
     }
     pub fn decode_if_dcx(&self, data: &[u8]) -> Result<Vec<u8>> {
@@ -94,6 +127,45 @@ impl Decoder<'_> {
 }
 #[cfg(test)]
 mod compression_tests {
+    use super::{Compression, Envelope};
+
+    /// A KRAK envelope (the layout of a 0x11000 `DCX` with the 0x44 `DCP` block, level 9) around `payload`.
+    fn krak(decoded: u32, payload: &[u8]) -> Vec<u8> {
+        let mut b = b"DCX\0".to_vec();
+        for (at, word) in [(4, 0x11000u32), (8, 0x18), (12, 0x24), (16, 0x44), (20, 0x4c)] {
+            b.resize(at, 0);
+            b.extend(word.to_be_bytes());
+        }
+        b.extend(*b"DCS\0");
+        b.extend(decoded.to_be_bytes());
+        b.extend((payload.len() as u32).to_be_bytes());
+        b.extend(*b"DCP\0");
+        b.extend(*b"KRAK");
+        b.extend(0x20u32.to_be_bytes());
+        b.extend([9, 0, 0, 0]);
+        b.extend(0u32.to_be_bytes());
+        b.extend([0, 0, 0, 0]);
+        b.extend(0u32.to_be_bytes());
+        b.extend(0x10100u32.to_be_bytes());
+        b.extend(*b"DCA\0");
+        b.extend(8u32.to_be_bytes());
+        b.extend(payload);
+        b
+    }
+
+    #[test]
+    fn an_envelope_names_its_payload_and_decoded_size() {
+        let bytes = krak(1000, &[1, 2, 3]);
+        let e = Envelope::parse(&bytes, usize::MAX).unwrap();
+        assert_eq!(e.compression, Compression::Kraken);
+        assert_eq!((e.decoded_size, e.payload), (1000, &[1, 2, 3][..]));
+        // a decoded size over the ceiling, and trailing bytes that are not alignment zeros, are refused
+        assert!(Envelope::parse(&bytes, 999).is_err());
+        let mut dirty = bytes;
+        dirty.push(1);
+        assert!(Envelope::parse(&dirty, usize::MAX).is_err());
+    }
+
     #[test]
     fn the_envelope_names_its_compression() {
         let mut krak = b"DCX\0".to_vec();
