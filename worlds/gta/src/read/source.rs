@@ -98,6 +98,16 @@ impl GtaSource {
     /// `fxdb` folder, found by the listing; an install with none, or with several, is an error. Reads and lifts the
     /// interface of about 11,000 programs: call it once per world.
     pub fn add_shader_database(&self, w: &mut World) -> Result<(ShaderTable, EffectJoin)> {
+        let bytes = self.shader_database_bytes()?;
+        let db = crate::rage::sgd2::parse(&bytes)?;
+        let table = add_shader_database(w, &db);
+        let join = join_materials(w, &table.effects);
+        Ok((table, join))
+    }
+
+    /// The install's shader database file (`sga_win32_60_final.awc` of the `fxdb` folder), decrypted and unpacked as
+    /// stored; an install with none, or with several, is an error.
+    pub fn shader_database_bytes(&self) -> Result<Vec<u8>> {
         let mut found = self
             .install()
             .listing()
@@ -116,11 +126,7 @@ impl GtaSource {
                 format!("more than one {SHADER_DATABASE} in the install"),
             ));
         }
-        let bytes = self.install().binary(file.file, self.keys())?;
-        let db = crate::rage::sgd2::parse(&bytes)?;
-        let table = add_shader_database(w, &db);
-        let join = join_materials(w, &table.effects);
-        Ok((table, join))
+        self.install().binary(file.file, self.keys())
     }
 
     pub(crate) fn keys(&self) -> &Keys {
