@@ -49,7 +49,9 @@ pub enum ViewParameter {
     InverseView,
     InverseProjection,
     InverseViewProjection,
-    /// Render target width and height in pixels.
+    /// The render target's size as four values: width and height in pixels, then the uv-space step programs add to a
+    /// coordinate to move whole texels (the reciprocals, by use: GTA's SSAO vertex program offsets a coordinate by two
+    /// times each).
     ViewportSize,
     /// The previous frame's view-projection matrix (what a motion vector is measured against).
     PreviousViewProjection,
@@ -142,8 +144,9 @@ pub enum FrameParameter {
     LightDirection,
     /// The colour (rgb) of that light.
     LightColour,
-    /// The colour (xyz) of the directional ambient light; its w scales the ambient terms a vertex carries, growing from
-    /// 1 (no change) with distance.
+    /// The directional ambient light as four values: its colour (xyz: a lighting program adds each channel to the same
+    /// channel of the lit colour, scaled by how much the surface faces an ambient direction it also reads), and a w that
+    /// scales the ambient terms a vertex carries, growing from 1 (no change) with distance.
     DirectionalAmbientColour,
 }
 

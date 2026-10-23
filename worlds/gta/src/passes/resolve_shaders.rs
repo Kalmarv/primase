@@ -350,9 +350,12 @@ pub fn engine_role(name: &str) -> Option<ConstantRole> {
         )),
         "gViewInverse" => ConstantRole::View(ViewParameter::InverseView),
         "gPrevViewProj" => ConstantRole::View(ViewParameter::PreviousViewProjection),
+        // x, y scale a coordinate into pixels and z, w are uv offsets of whole texels (tests/engine_lanes.rs)
         "globalScreenSize" => ConstantRole::View(ViewParameter::ViewportSize),
         "gDirectionalLight" => ConstantRole::Frame(FrameParameter::LightDirection),
         "gDirectionalColour" => ConstantRole::Frame(FrameParameter::LightColour),
+        // xyz are added to the lit colour's channels by the lighting programs, w scales the vertex colour
+        // (tests/engine_lanes.rs)
         "gDirectionalAmbientColour" => ConstantRole::Frame(FrameParameter::DirectionalAmbientColour),
         "globalAnimUV0" => ConstantRole::Object(ObjectParameter::TextureTransformRow(0)),
         "globalAnimUV1" => ConstantRole::Object(ObjectParameter::TextureTransformRow(1)),
