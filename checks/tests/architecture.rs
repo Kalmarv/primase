@@ -425,6 +425,13 @@ fn edge_allowed(from: &Member, to: &Member, dev: bool) -> bool {
     normal || (dev && from.layer() != "core" && to_layer == "formats")
 }
 
+/// Whether a dependency's manifest entry turns on the feature `feature`.
+fn enables(spec: &toml::Value, feature: &str) -> bool {
+    spec.get("features")
+        .and_then(|f| f.as_array())
+        .is_some_and(|f| f.iter().any(|f| f.as_str() == Some(feature)))
+}
+
 #[test]
 fn dependencies() {
     let members = members();
@@ -454,6 +461,12 @@ fn dependencies() {
                     "{} has {} in [{section}]: the test-input registry is only ever a dev-dependency",
                     m.path,
                     to.path
+                );
+                assert!(
+                    dev || !(to.name == "primase-compress" && enables(spec, "reference-decoder")),
+                    "{} enables primase-compress's `reference-decoder` in [{section}]: the second Kraken decoder is a test aid, \
+                     only a dev-dependency may turn it on, so no production crate links it",
+                    m.path
                 );
                 if !edge_allowed(m, to, dev) {
                     found.insert(format!("{} -> {} ({section})", m.path, to.path));

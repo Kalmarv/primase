@@ -17,7 +17,8 @@ libloading.workspace = true
 oozextract = { workspace = true, optional = true }
 
 [features]
-# oozextract as a second Kraken decoder (`reference`), for the gates that hold the game's Oodle library to it
+# oozextract as a second Kraken decoder (`reference`), for the gates that hold the game's Oodle library to it. Only a
+# [dev-dependencies] entry may enable it, so no production crate links it (checks/tests/architecture.rs `dependencies`).
 reference-decoder = ["dep:oozextract"]
 
 [dev-dependencies]
