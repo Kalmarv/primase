@@ -727,14 +727,8 @@ mod tests {
         assert!(err.contains("additive"), "{err}");
         let (mut w, ..) = world();
         for (bad, why) in [
-            (
-                "retarget-clip{reference=rest}",
-                "translation=root|none is required",
-            ),
-            (
-                "retarget-clip{translation=root}",
-                "reference=rest|aligned is required",
-            ),
+            ("retarget-clip{reference=rest}", "translation is required: "),
+            ("retarget-clip{translation=root}", "reference is required: "),
             ("retarget-clip{reference=t,translation=root}", "rest or aligned"),
         ] {
             let err = run(&mut w, bad).unwrap_err();

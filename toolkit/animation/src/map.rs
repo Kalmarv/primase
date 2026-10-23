@@ -919,6 +919,6 @@ mod tests {
             "map-clip{unmapped=refuse,rests=target}",
         )
         .unwrap_err();
-        assert!(e.contains("reparented=refuse|model-space is required"), "{e}");
+        assert!(e.contains("reparented is required: "), "{e}");
     }
 }
