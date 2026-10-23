@@ -282,8 +282,22 @@ fn each_disagreement_between_module_and_interface_is_found() {
 
     // a system value no stage binding carries
     let mut p = program();
-    p.interface.inputs[1].system = Some(SystemValue::ViewportArrayIndex);
+    p.interface.inputs[1].system = Some(SystemValue::StencilRef);
     assert!(problems(&p).iter().any(|m| m.contains("has no built-in binding")));
+
+    // the layer and viewport indices have no built-in either, but travel as flat varyings (WebGPU has none to read), so
+    // the module and the interface still agree
+    for system in [
+        SystemValue::RenderTargetArrayIndex,
+        SystemValue::ViewportArrayIndex,
+    ] {
+        let mut p = program();
+        p.interface.inputs[1].system = Some(system);
+        assert!(
+            !problems(&p).iter().any(|m| m.contains("has no built-in binding")),
+            "{system:?}"
+        );
+    }
 }
 
 #[test]
