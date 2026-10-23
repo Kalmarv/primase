@@ -162,6 +162,17 @@ pub struct SamplerState {
     pub filters: Filters,
 }
 
+/// An image of the frame being drawn that a program reads: the consumer supplies it from its own frame, as it supplies a view or
+/// frame constant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum FrameTexture {
+    /// The depth the frame's depth pass wrote, the hardware depth in `x`: a program that reads it linearises it with the scene
+    /// constants' depth parameters (soft edges of fog, foam and water against the geometry behind).
+    SceneDepth,
+}
+
 /// What a texture slot samples.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -170,6 +181,8 @@ pub enum TextureSource {
     Texture { texture: Entity, sampler: SamplerState },
     /// No texture; the slot reads this value everywhere, and why.
     Default { value: [f32; 4], why: String },
+    /// An image of the frame being drawn, which the consumer supplies.
+    Frame(FrameTexture),
     /// Nothing is bound and the source says no default: a consumer must not invent one.
     Missing,
 }

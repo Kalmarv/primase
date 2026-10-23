@@ -10,9 +10,9 @@ use crate::{Result, invalid};
 use primase_core::Entity;
 use primase_core::shader::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, DepthState,
-    FrameParameter, InputBinding, InputRole, LaneStream, NormalEncoding, NormalSpace, ObjectParameter,
-    OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Stage, StageBinding,
-    TargetState, TextureBinding, TextureSource, ViewParameter,
+    FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, NormalEncoding, NormalSpace,
+    ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Stage,
+    StageBinding, TargetState, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_shader::exec::ProgramShader;
 use primase_shader::{D3dClass, Interface, Layout, PixelShader, Resource, SystemValue};
@@ -86,6 +86,10 @@ pub(crate) fn role_and_binding<'a>(
 
 /// The name of the engine's dither noise texture in the alpha-tested permutations (`<shader>_<switch>_Gbuf_[A].ppo`).
 pub const ENGINE_DITHER_TEXTURE: &str = "g_DitherTexture";
+
+/// The name of the scene depth texture the forward programs of fog, foam and water read (`t56`: the hardware depth in x,
+/// linearised with `FC_DepthComputeParam`: view depth `-z / (x - depth)`): the frame's, bound as one.
+pub const ENGINE_SCENE_DEPTH_TEXTURE: &str = "g_DepthTexture";
 
 /// `<index>` and role of a texture kind named `…Texture2D_<index>_<Role>…`.
 pub(crate) fn slot_name(kind: &str) -> Option<(u32, &str)> {
@@ -308,6 +312,14 @@ pub fn resolve(
         // nothing to it; each is counted by name.
         if texture_slot(resource).is_err() && !named_by_material(material, &resource.provenance.name) {
             let name = &resource.provenance.name;
+            if name == ENGINE_SCENE_DEPTH_TEXTURE {
+                bindings.push(TextureBinding {
+                    resource: resource.id,
+                    sampler: None,
+                    source: TextureSource::Frame(FrameTexture::SceneDepth),
+                });
+                continue;
+            }
             let (value, what) = if name == ENGINE_DITHER_TEXTURE {
                 ([0.5; 4], "read only by the dithered alpha fade, which is off")
             } else {

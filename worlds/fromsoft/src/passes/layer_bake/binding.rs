@@ -514,6 +514,14 @@ impl Prepared {
                         textures.insert(register, SlotTexture::Constant(*value));
                         continue;
                     }
+                    TextureSource::Frame(frame) => {
+                        // the layered programs read no frame image; a static bake has none to give a program that does
+                        *policies
+                            .entry(format!("{frame:?} of the frame left at zero in the bake"))
+                            .or_default() += 1;
+                        textures.insert(register, SlotTexture::Constant([0.; 4]));
+                        continue;
+                    }
                     _ => {
                         return Err(invalid(
                             "layer binding",
@@ -551,6 +559,13 @@ impl Prepared {
                 TextureSource::Default { value, why } => {
                     *policies.entry(why.clone()).or_default() += 1;
                     SlotTexture::Constant(*value)
+                }
+                TextureSource::Frame(_) => {
+                    return Err(invalid(
+                        "layer binding",
+                        0,
+                        "a material texture slot is bound to a frame image",
+                    ));
                 }
                 TextureSource::Missing => continue,
             };

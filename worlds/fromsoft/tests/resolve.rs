@@ -3,8 +3,8 @@
 //! Sekiro's naming (tests/fixtures/layered.hlsl, compiled with fxc): the constants, texture slots and outputs a
 //! layered material's binding holds, worked out from the HLSL, fxc's listing of its buffers and the material.
 use primase_core::shader::{
-    AddressMode, BlendFactor, BlendOp, Compare, ConstantRole, FrameParameter, InputRole, LaneStream,
-    NormalEncoding, NormalSpace, ObjectParameter, OutputRole, ResourceId, SamplerState, Shader,
+    AddressMode, BlendFactor, BlendOp, Compare, ConstantRole, FrameParameter, FrameTexture, InputRole,
+    LaneStream, NormalEncoding, NormalSpace, ObjectParameter, OutputRole, ResourceId, SamplerState, Shader,
     ShaderBinding, ShaderFormat, Stage, TextureSource, ViewParameter,
 };
 use primase_core::{
@@ -1283,4 +1283,43 @@ fn the_dither_and_camera_fade_fields_are_object_roles() {
         let (_, size, role) = &roles[name];
         assert_eq!((*size, role), (4, &object(parameter)), "{name} at {offset}");
     }
+}
+
+/// The scene depth a forward program reads (fog, foam, water: the hardware depth at `t56`) is the frame's own image, bound as a
+/// frame texture the consumer supplies; the other engine textures stay counted zeros.
+#[test]
+fn the_scene_depth_is_a_frame_texture() {
+    const FORWARD: &[u8] = include_bytes!("fixtures/forward.dxbc");
+    let shader = executor(FORWARD);
+    let program = World::default().spawn();
+    let resolution = resolve(
+        &shader,
+        program,
+        &material(),
+        None,
+        Unbound::Preview,
+        &mut |_, _| Ok(None),
+    )
+    .unwrap();
+    let source = |name: &str| {
+        let resource = shader
+            .interface()
+            .resources
+            .iter()
+            .find(|r| r.provenance.name == name)
+            .unwrap();
+        resolution
+            .stage
+            .textures
+            .iter()
+            .find(|t| t.resource == resource.id)
+            .unwrap()
+            .source
+            .clone()
+    };
+    assert_eq!(
+        source("g_DepthTexture"),
+        TextureSource::Frame(FrameTexture::SceneDepth)
+    );
+    assert!(matches!(source("g_SSAOTexture"), TextureSource::Default { value, .. } if value == [0.; 4]));
 }
