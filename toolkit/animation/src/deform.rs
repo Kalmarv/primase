@@ -216,10 +216,6 @@ pub fn influences(p: &Primitive, how: Influences, rule: WeightRule) -> Result<Ve
         if let Some((_, w)) = v.iter().find(|(_, w)| !w.is_finite()) {
             return Err(Error(format!("vertex {i}: a weight is {w}")));
         }
-        // no influence at all: the vertex would collapse to the origin whatever the rule says about sums
-        if v.is_empty() {
-            return Err(Error(format!("vertex {i}: all its weights are zero")));
-        }
     }
     if rule == WeightRule::EngineNormalizes {
         for (i, v) in out.iter_mut().enumerate() {
@@ -236,7 +232,10 @@ pub fn influences(p: &Primitive, how: Influences, rule: WeightRule) -> Result<Ve
 }
 
 /// `v` (primitive `p`'s vertices, perhaps already morphed) skinned by `palette` under a pose giving each joint's
-/// transform in the skeleton's space (`model`, from [`crate::pose::model_transforms`]).
+/// transform in the skeleton's space (`model`, from [`crate::pose::model_transforms`]). A vertex with no weight has the
+/// zero matrix and lands at the origin, as its weights state (Elden Ring's vertex programs do the same with the four
+/// zero weights of its few such meshes: their sum is floored at 0.001 before it divides the weights, so none is left
+/// to blend); [`skin_counted`] says how many.
 pub fn skin(
     v: &Vertices,
     p: &Primitive,
@@ -246,6 +245,19 @@ pub fn skin(
     palette: &[Slot],
     model: &BTreeMap<JointId, Affine>,
 ) -> Result<Vertices> {
+    skin_counted(v, p, how, rule, deformation, palette, model).map(|(out, _)| out)
+}
+
+/// [`skin`] and the number of vertices that have no weight (and so the zero matrix).
+pub fn skin_counted(
+    v: &Vertices,
+    p: &Primitive,
+    how: Influences,
+    rule: WeightRule,
+    deformation: Deformation,
+    palette: &[Slot],
+    model: &BTreeMap<JointId, Affine>,
+) -> Result<(Vertices, u64)> {
     match deformation {
         Deformation::Linear => {}
     }
@@ -259,6 +271,7 @@ pub fn skin(
         })
         .collect::<Result<_>>()?;
     let per_vertex = influences(p, how, rule)?;
+    let unweighted = per_vertex.iter().filter(|v| v.is_empty()).count() as u64;
     let mut out = Vertices {
         positions: Vec::with_capacity(v.positions.len()),
         normals: v.normals.as_ref().map(|_| Vec::new()),
@@ -306,7 +319,7 @@ pub fn skin(
             dst.push([d[0] as f32, d[1] as f32, d[2] as f32, t[3]]);
         }
     }
-    Ok(out)
+    Ok((out, unweighted))
 }
 
 #[cfg(test)]
@@ -549,10 +562,12 @@ mod tests {
         assert_eq!(t[1][3], -1.0);
     }
 
-    /// A vertex with no weight is refused whatever the rule (it would collapse to the origin), and a NaN weight or a
-    /// NaN sum is refused by name rather than compared past.
+    /// A NaN weight is refused by name (it compares false against every bound), under every rule; a vertex with no
+    /// weight is skinned by its weights as stored, the zero matrix, and counted (Elden Ring's c3000 holds 743 such
+    /// vertices in one mesh, whose vertex programs collapse them the same way); under `EngineNormalizes` its sum has
+    /// nothing to divide by and stays refused.
     #[test]
-    fn unweighted_and_nan_vertices_are_refused() {
+    fn nan_weights_are_refused_and_unweighted_vertices_are_counted() {
         let palette = [Slot {
             joint: JointId(1),
             inverse_bind: Transform::IDENTITY,
@@ -566,15 +581,13 @@ mod tests {
             ])
         };
         for (weights, rule, what) in [
-            ([0.0; 4], WeightRule::AsStored, "all its weights are zero"),
-            ([0.0; 4], WeightRule::SumsToOne, "all its weights are zero"),
             ([f32::NAN, 1.0, 0.0, 0.0], WeightRule::AsStored, "a weight is NaN"),
             (
                 [f32::NAN, 1.0, 0.0, 0.0],
                 WeightRule::EngineNormalizes,
                 "a weight is NaN",
             ),
-            ([0.0; 4], WeightRule::EngineNormalizes, "all its weights are zero"),
+            ([0.0; 4], WeightRule::EngineNormalizes, "nothing to normalise"),
         ] {
             let p = with(weights);
             let err = skin(
@@ -592,6 +605,22 @@ mod tests {
                 "{rule:?}: {}",
                 err.0
             );
+        }
+        // no weight under the stored weights: the zero matrix, the vertex at the origin, counted
+        for rule in [WeightRule::AsStored, WeightRule::SumsToOne] {
+            let p = with([0.0; 4]);
+            let (s, none) = skin_counted(
+                &Vertices::of(&p).unwrap(),
+                &p,
+                Influences::Streams { sets: 1 },
+                rule,
+                Deformation::Linear,
+                &palette,
+                &model,
+            )
+            .unwrap();
+            assert_eq!(s.positions, [[0.0; 3]], "{rule:?}");
+            assert_eq!(none, 1, "{rule:?}");
         }
     }
 

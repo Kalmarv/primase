@@ -205,7 +205,8 @@ impl Pass for EvaluateClip {
 /// rests), in the occurrence's own space. Each such occurrence gets a prototype of its own (a copy of the one it drew,
 /// with the posed mesh and without skin, morphs, file link or joint and weight streams); one drawing its own mesh is
 /// changed in place. Exact for that pose; the animation is not kept (counted). A skinned prototype with levels of
-/// detail is refused: choose a form first (`select-lod`). A clip binding listing a posed occurrence no longer drives
+/// detail is refused: choose a form first (`select-lod`). A vertex with no weight keeps the zero matrix its weights
+/// give it and lands at the origin (counted). A clip binding listing a posed occurrence no longer drives
 /// it: the occurrence leaves its list (counted).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PoseSkin;
@@ -290,9 +291,24 @@ impl Pass for PoseSkin {
                     && let (Some(Some(how)), Some(Some(palette))) =
                         (skin.influences.get(i), binding.palettes.get(i))
                 {
-                    v = crate::deform::skin(&v, &p, *how, skin.weights, binding.deformation, palette, model)
-                        .map_err(|x| format!("{drawn:?} primitive {i}: {}", x.0))?;
+                    let (posed_v, none) = crate::deform::skin_counted(
+                        &v,
+                        &p,
+                        *how,
+                        skin.weights,
+                        binding.deformation,
+                        palette,
+                        model,
+                    )
+                    .map_err(|x| format!("{drawn:?} primitive {i}: {}", x.0))?;
+                    v = posed_v;
                     log.count("primitives skinned at a pose", 1);
+                    if none > 0 {
+                        log.count(
+                            "skinned vertices with no weight, left at the origin (their blend matrix is zero)",
+                            none,
+                        );
+                    }
                 }
                 let streams = p.streams_mut();
                 streams.retain(|s, _| !matches!(s, Semantic::Joints(_) | Semantic::Weights(_)));
