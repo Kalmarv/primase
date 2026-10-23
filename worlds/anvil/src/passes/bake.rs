@@ -3,7 +3,8 @@
 //! whose templates the lowering can't express as texture lookups ([`AnvilMaterial`]; MAD_Tex1_Rocks and
 //! MAD_Tex1_UniqueNormalGradient and MAD_Tex1_UniqueNormal_DiffuseBlend, which combine maps at several UV sets per
 //! pixel, MAD_Hero_Ice and MAD_IceBrick, whose colour depends on the sun and the eye, MAD_Road, whose paint its
-//! shader computes per pixel, and MAD_Tex1_Graffiti_Monster, which sums three normal maps at two tilings) become
+//! shader computes per pixel, MAD_Tex1_Graffiti_Monster, which sums three normal maps at two tilings, and
+//! MAD_CHR_Hair_Anisotropic, whose colour mixes a root and a tip colour by the strand map) become
 //! metal-rough PBR by running the game's own G-buffer pixel shader
 //! over the Material's texture space and decoding what it writes (Riders Republic docs/shaders.md §6,
 //! docs/material-spec.md §14.6, §15.4).
@@ -30,7 +31,9 @@
 //!   the normal: as a stored normal map is read, so `normal-green` states its green as `lower-anvil-material`'s
 //!   does); layout B (classes 3 to 5: Rocks) has no metalness (the lighting pass uses F0 0.04 and the albedo as
 //!   diffuse) and its occlusion in `o1.w`, its specular occlusion and translucency in `o2.zw`; layout A (class 1)
-//!   its metalness in `o1.w`, emission in `o2.z`, occlusion, specular occlusion and translucency in `o3.xzw`.
+//!   its metalness in `o1.w`, emission in `o2.z`, occlusion, specular occlusion and translucency in `o3.xzw`; class 2
+//!   (hair) has no metalness (the lighting pass fixes F0), its occlusion in `o3.y`, its specular occlusion and
+//!   translucency as layout B's, in `o2.zw`.
 //!   Occlusion is a texture where it isn't 1 everywhere; specular occlusion, translucency and emission have no place
 //!   here: where they aren't (1, 0, 0) everywhere, reported. Opaque, single-sided, vertex colour ignored (the
 //!   programs read none).
@@ -69,6 +72,16 @@
 //!   (W the mask itself), the metalness and translucency bytes 0, no vertex occlusion (`COLOR0.y` 1), no fade (the
 //!   record's fade pair that discards pixels is 0 and 1) and instance 0. Without `skin-tone` a skin Material is left to
 //!   `lower-anvil-material`.
+//!
+//! - **The character hair** (`MAD_CHR_Hair_Anisotropic`; §18.5, shading class 2): the zones' colours (three bands of the
+//!   strand, each a root and a tip colour, contrast and offset, tinted by the ID and occlusion maps), roughness, the
+//!   normal and the occlusion (`Diffuse`'s blue), from `Mask1`, `Diffuse` and `Normal` (t75 to t77) and rows 5 to 47. The
+//!   program picks the band by the mesh's vertex colour (red) and takes its occlusion from it (green): the bake states
+//!   a vertex colour of red 0, green 1, the first zone and no vertex occlusion, which is exact where the Material's
+//!   second and third zone are off (rows 24 and 25 zero) and otherwise counted. Its specular occlusion (`o2.z`: the
+//!   camera's distance and the eye's angle), translucency (`o2.w`) and the strand direction its anisotropic highlight
+//!   reads (`o1.w`, `o3.x`, `o3.z`) have no place in a Material: left out, counted. Opaque: the cut-out of a hair card
+//!   (`AlphaTestEnabled`) is not in this permutation, its program has no alpha, and is not baked.
 //!
 //! A recipe whose paint is a pattern its shader computes (Road's lane lines) is baked over one period of the pattern in
 //! the shader's own UV, its Material's UV transform set to the identity, and that transform scaled by the period put
@@ -231,9 +244,21 @@ struct Recipe {
     /// The character zones' family (`template` a prefix): its slots are the textures the program samples, its rows the
     /// ones the template binds, its mud, detail array and absent decals as the module documentation states.
     zones: bool,
-    /// MAD_CHR_Skin: the permutation with per-instance data, its record built from `skin-tone`, `COLOR0` (the vertex
-    /// occlusion) 1 (see the module documentation).
+    /// MAD_CHR_Skin: the permutation with per-instance data, its record built from `skin-tone` (see the module
+    /// documentation).
     skin: bool,
+    /// The vertex colour (`COLOR0`) the program reads, which a flat surface has one value of.
+    vertex_colour: Option<VertexColour>,
+}
+
+/// What a recipe states of the vertex colour its program reads: the one value every texel has, and the `cb3` rows whose
+/// switches make the program pick by the vertex colour something that one value hides (a Material with a switch on is
+/// baked as the value gives and counted, `picked` saying what).
+#[derive(Clone, Copy)]
+struct VertexColour {
+    value: [f32; 4],
+    switches: &'static [u32],
+    picked: &'static str,
 }
 
 /// MAD_Tex1_Rocks (docs/material-spec.md §14.6; its G-buffer program 0x25A2D read): dirt colours at rows 1 to 3,
@@ -259,6 +284,7 @@ const ROCKS: Recipe = Recipe {
     object_origin: false,
     zones: false,
     skin: false,
+    vertex_colour: None,
 };
 
 /// MAD_Tex1_UniqueNormalGradient (§27.3; its G-buffer program read): `Dirt tiling` 1, `Base tiling` 2, the zones'
@@ -282,6 +308,7 @@ const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
     object_origin: false,
     zones: false,
     skin: false,
+    vertex_colour: None,
 };
 
 /// MAD_Road (§27.4; its G-buffer program read): `2.Metalness` 1, `4.Emissive Scale` 2, `Hue` 3, `Saturate` 4,
@@ -307,6 +334,7 @@ const ROAD: Recipe = Recipe {
     object_origin: false,
     zones: false,
     skin: false,
+    vertex_colour: None,
 };
 
 /// MAD_Tex1_UniqueNormal_DiffuseBlend (§27.8; its G-buffer program read): `Use AO` 1, `3 - DETAILS -Tiling` 2 and
@@ -327,6 +355,7 @@ const UNIQUE_NORMAL_DIFFUSE_BLEND: Recipe = Recipe {
     object_origin: false,
     zones: false,
     skin: false,
+    vertex_colour: None,
 };
 
 /// MAD_Tex1_Graffiti_Monster (§27.14.2; its G-buffer program read): `Use AO` 1, `EmissivePower` 2, `FresnelOffset` 3,
@@ -348,6 +377,7 @@ const GRAFFITI_MONSTER: Recipe = Recipe {
     object_origin: true,
     zones: false,
     skin: false,
+    vertex_colour: None,
 };
 
 /// MAD_Hero_Ice (§27.2; its G-buffer program read): `TilingGlobal` 1, `FresnelFalloff` 2, `LightDirectionFalloff` 3,
@@ -373,6 +403,7 @@ const HERO_ICE: Recipe = Recipe {
     object_origin: false,
     zones: false,
     skin: false,
+    vertex_colour: None,
 };
 
 /// MAD_IceBrick (§27.6; its G-buffer program read): Hero_Ice's albedo without its object normal or parallax, rows 1
@@ -392,6 +423,7 @@ const ICE_BRICK: Recipe = Recipe {
     object_origin: false,
     zones: false,
     skin: false,
+    vertex_colour: None,
 };
 
 /// MAD_CHR_5Zones_* (§18.2, §19; the G-buffer programs of the 17 templates read): its interpolants after the UV are the
@@ -411,6 +443,7 @@ const FIVE_ZONES: Recipe = Recipe {
     object_origin: false,
     zones: true,
     skin: false,
+    vertex_colour: None,
 };
 
 /// MAD_CHR_Skin (§18.3; its per-instance-data G-buffer program read): `TEXCOORD1` the normal, 2 the tangent with its
@@ -435,6 +468,45 @@ const SKIN: Recipe = Recipe {
     object_origin: false,
     zones: false,
     skin: true,
+    // the vertex occlusion: 1, none
+    vertex_colour: Some(VertexColour {
+        value: [1.0; 4],
+        switches: &[],
+        picked: "",
+    }),
+};
+
+/// MAD_CHR_Hair_Anisotropic (§18.5; its G-buffer program read): `TEXCOORD1` the world position, 2 the tangent, 3 the
+/// normal and its bitangent sign, 4 the clip position; `COLOR0` red picks the hair zone by band (rows 18, 24 and 25: the
+/// smoothness of the bands and the switches of the second and third zone), green is the vertex occlusion; rows 5 to
+/// 47 (the distance fade, the zones' root and tip colours, contrasts and offsets, the roughness, the occlusion and
+/// translucency scalars); `Mask1` t75 (its blue the zones' ID tint), `Diffuse` t76 (its green the position along the
+/// strand the colours blend by, its blue the occlusion) and `Normal` t77 (shading class 2). The specular
+/// occlusion (`o2.z`, the camera's distance and the eye's angle), the translucency (`o2.w`) and the strand direction
+/// the anisotropic highlight reads (`o1.w`, `o3.x`, `o3.z`) have no place in a Material and are left out.
+const HAIR_ANISOTROPIC: Recipe = Recipe {
+    template: "MAD_CHR_Hair_Anisotropic",
+    interpolants: WORLD_TANGENT_NORMAL,
+    light: Light::None,
+    pattern: None,
+    rows: &[
+        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+        31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+    ],
+    slots: &[0, 1, 2],
+    unkept: &[],
+    engine: &[],
+    terrain: None,
+    camera: false,
+    object_origin: false,
+    zones: false,
+    skin: false,
+    // red 0: the first zone; green 1: no vertex occlusion
+    vertex_colour: Some(VertexColour {
+        value: [0.0, 1.0, 1.0, 1.0],
+        switches: &[24, 25],
+        picked: "the hair zones the mesh's vertex colour (its red) picks: their second or third zone is on, baked as the                  first (red 0)",
+    }),
 };
 
 /// The key bit of the permutations with per-instance data (`t70`).
@@ -485,6 +557,7 @@ const RECIPES: &[Recipe] = &[
     GRAFFITI_MONSTER,
     FIVE_ZONES,
     SKIN,
+    HAIR_ANISOTROPIC,
 ];
 
 /// The pass (see the module documentation). Each shader evaluation runs on the world's stated threads (`core.threads`,
@@ -728,6 +801,8 @@ struct Baked {
     /// Whether the Material mixes in the terrain's ambient occlusion, and its sediments.
     terrain_ao: bool,
     sediment: bool,
+    /// Whether the Material has a switch on that its mesh's vertex colour would pick from ([`VertexColour`]).
+    vertex_picked: bool,
     /// A pattern's: the transform from the mesh's UV to its texture.
     transform: Option<UvTransform>,
 }
@@ -943,9 +1018,8 @@ impl BakeAnvilMaterial {
         for &(index, role) in recipe.interpolants {
             inputs.insert(("TEXCOORD".to_owned(), index), constant(role.value()));
         }
-        if recipe.skin {
-            // the vertex occlusion: 1, none
-            inputs.insert(("COLOR".to_owned(), 0), constant([1.0; 4]));
+        if let Some(colour) = recipe.vertex_colour {
+            inputs.insert(("COLOR".to_owned(), 0), constant(colour.value));
         }
         let raw = evaluate_raw_with(
             primase_core::parallel::Threads::of(w),
@@ -971,6 +1045,9 @@ impl BakeAnvilMaterial {
             metal: false,
             terrain_ao,
             sediment,
+            vertex_picked: recipe
+                .vertex_colour
+                .is_some_and(|c| c.switches.iter().any(|r| switched(*r))),
             transform: None,
         };
         if let Some((_, q, f)) = &period {
@@ -1011,9 +1088,13 @@ impl BakeAnvilMaterial {
                 let (metal, ao, specular, translucency, emission) = match class {
                     3..=5 => (0.0, o1[3], o2[2], o2[3], 0.0),
                     1 if o3_written => (o1[3], o3[0], o3[2], o3[3], o2[2]),
+                    // the lighting pass's class 2 (hair): the albedo, roughness and normal as the others, F0 fixed (no
+                    // metalness), the occlusion where layout A reads it from `o3.x` read from `o3.y`, the specular
+                    // occlusion and translucency of layout B (`o2.z`, `o2.w`)
+                    2 if o3_written => (0.0, o3[1], o2[2], o2[3], 0.0),
                     _ => {
                         return Err(format!(
-                            "shading class {class}, not layout A's (1, four targets) or B's (3 to 5)"
+                            "shading class {class}, not layout A's (1, four targets), the hair's (2) or B's (3 to 5)"
                         ));
                     }
                 };
@@ -1225,6 +1306,11 @@ impl Pass for BakeAnvilMaterial {
                     "MAD_CHR_Skin Materials baked with the chosen skin-tone as the tint where the tone mask is high and the engine's record otherwise stated (white where it is low, the facial hair the tone, exponent 1, no metalness or translucency byte, no vertex occlusion): the engine's own conversion from a tone to the record is not read",
                     1,
                 );
+            }
+            if baked.vertex_picked
+                && let Some(colour) = recipe.vertex_colour
+            {
+                log.approximate(&format!("{template} Materials with {}", colour.picked), 1);
             }
             if recipe.camera {
                 log.approximate(
