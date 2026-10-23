@@ -31,9 +31,18 @@ use crate::components::GTA;
 use crate::components::{GtaArchetype, GtaEntity};
 use crate::passes::rect::GroundRect;
 
-/// How far outside the region a box may reach and still be judged by its box, not its pivot (metres).
+/// How far outside the region a box may reach and still be judged by its box, not its pivot (metres): the reach that
+/// export read its regions with, and the reader's customary one. It is fixed on purpose, as every rule here is that
+/// export's: the reader reads every entity within a reach and this rule judges the ones it kept, so a program that
+/// reads with another reach still gets this rule's 600 m; a program that wants another selects with its own pass.
 const REACH: f32 = 600.0;
-/// Reflection proxy entities: whole flag words that export skipped.
+/// Reflection proxy entities: the whole entity flag words that export skipped. No flag bit is known to mean
+/// "reflection proxy" (CodeWalker marks such words "reflection proxy?", with the question mark). Of the two gate regions'
+/// 154,000 placements (Legion Square, Vespucci Beach), 33 have one of these words, 32 of them of archetypes named like
+/// a proxy (`reflprox`, `rfl_proxy`, `mirroronly`); bits 25 and 27 are set on 6 and 15 placements, all of them in these
+/// words, and bit 29 on 28, of which 4 (words `0x20180000` and `0x20580006`, not in the list) are not named like a
+/// proxy. So a rule by one bit would keep or drop placements this list does not, on the evidence of names only; the
+/// list stays the export's until a bit is decoded from the game itself.
 const REFLECTION_PROXY_FLAGS: [u32; 6] = [135790592, 135790593, 672661504, 536870912, 35127296, 39321602];
 
 /// `gta.region_extent`: the ground extent `[x0, y0, x1, y1]` (GTA coordinates) of the placements `gta-select-region`
