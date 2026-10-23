@@ -115,10 +115,10 @@ pub(crate) struct OutputRgb {
     pub mask: u8,
 }
 fn dxbc(e: primase_dxbc::Error) -> crate::Error {
-    invalid("layer DXBC", e.word * 4, e.detail)
+    invalid("layer DXBC", e.at * 4, e.detail)
 }
 fn lifting(e: primase_dxbc::Error) -> crate::Error {
-    invalid("layer lift", e.word * 4, e.detail)
+    invalid("layer lift", e.at * 4, e.detail)
 }
 fn evaluation(e: primase_shader::Error) -> crate::Error {
     invalid("layer bake", e.at, e.detail)

@@ -1,0 +1,5 @@
+# lifted fixtures of primase-mojoshader
+# versions lifter=2 program=1
+gamma.ps	lifted	dbdfa48ea54f2ccfb6190542d7ede92fd6a7c23a4c466a2365facb11d4bb95f9
+vertex.vs	lifted	3e94b5d905d5fb0eb6cee3ca2dd547f278b60d7927a17eb8e2e8877bcfca53cc
+control.ps	lifted	72ec8cf5f29e8f7de748ce5bd8718b7c0bb72a5b7dcb9435f8709602f03a9b27

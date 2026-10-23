@@ -66,7 +66,7 @@ impl<'a> AreaBake<'a> {
         })?;
         let shader = primase_dxbc::Shader {
             program: primase_dxbc::Program::parse(&program.bytecode)
-                .map_err(|e| invalid("layer DXBC", e.word * 4, e.detail))?,
+                .map_err(|e| invalid("layer DXBC", e.at * 4, e.detail))?,
             interface: program.interface.clone(),
         };
         let vertex = binding

@@ -33,15 +33,22 @@ use primase_shader::build::{Builder, Kind, Val};
 use primase_shader::{Conventions, D3dModes, Program, Provenance, ShaderFormat, Stage, StageFacts};
 
 use crate::module::{Function, Module, Op, Type, TypeId, ValueId};
-use crate::{Error, Result, error};
+use crate::{Result, error};
 
-/// The version of the lifter: bumped when what it produces for the same bytecode changes.
-pub const LIFTER_VERSION: u32 = 1;
+/// The version of the lifter: bumped when what it produces for the same bytecode changes, so a cache keyed by the
+/// bytecode's hash knows what is stale; gated by `tests/versions.rs` (the lifted fixtures hashed under it, `primase_shader::gate`).
+pub const LIFTER_VERSION: u32 = 2;
 
 /// Lift a DXIL container's entry function. A pixel or vertex program is the scope; every construct the lifter does not
 /// carry (a wide integer, a resource array, an irreducible loop, an operation it has no meaning for) is an `Err` naming
 /// the bit offset of the instruction and the reason.
 pub fn lift(container: &[u8]) -> Result<Program> {
+    let mut program = lift_program(container)?;
+    program.provenance.source_hash = Some(primase_shader::source_hash(container));
+    Ok(program)
+}
+
+fn lift_program(container: &[u8]) -> Result<Program> {
     let chunks = crate::chunks(container)?;
     let module = crate::reflection::module(&chunks, b"DXIL")?.ok_or_else(|| error(0, "no DXIL part"))?;
     let part = crate::program(
@@ -464,6 +471,7 @@ impl<'m> Lift<'m> {
                 target,
                 lifter: "primase-dxil".into(),
                 lifter_version: LIFTER_VERSION,
+                // the hash of the bytes, which `lift` sets
                 source_hash: None,
             },
             notes: self.notes.into_iter().chain(limit_notes).collect(),
@@ -505,14 +513,10 @@ impl<'m> Lift<'m> {
                 target,
                 lifter: "primase-dxil".into(),
                 lifter_version: LIFTER_VERSION,
+                // the hash of the bytes, which `lift` sets
                 source_hash: None,
             },
             notes: self.notes.into_iter().chain(limit_notes).collect(),
         })
     }
-}
-
-/// A refusal, for callers that count them by reason: the detail with its numbers removed.
-pub fn refusal_reason(e: &Error) -> String {
-    e.detail.chars().filter(|c| !c.is_ascii_digit()).collect()
 }

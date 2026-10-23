@@ -24,19 +24,14 @@ mod lower;
 
 use primase_shader::{Program, Stage};
 
-/// Why a program is refused: the line of the source and what in it is outside the dialect.
-#[derive(Debug, thiserror::Error)]
-#[error("MojoShader GLSL at line {line}: {detail}")]
-pub struct Error {
-    pub line: usize,
-    pub detail: String,
-}
+/// Why a program is refused: the line of the source and what in it is outside the dialect
+/// ([`primase_shader::Refusal`]).
+pub type Error = primase_shader::Refusal;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// The reason of a refusal without the line, to count refusals by.
-pub fn refusal_reason(e: &Error) -> String {
-    e.detail.clone()
+pub(crate) fn error(line: usize, detail: impl Into<String>) -> Error {
+    Error::new("MojoShader GLSL", primase_shader::Unit::Line, line, detail)
 }
 
 /// What the caller knows about the program that its text does not say.
@@ -80,11 +75,14 @@ pub struct Attribute {
     pub index: u32,
 }
 
-/// The version of the lifter: bumped when what it produces for the same text changes.
-pub const LIFTER_VERSION: u32 = 1;
+/// The version of the lifter: bumped when what it produces for the same text changes, so a cache keyed by the text's
+/// hash knows what is stale; gated by `tests/lift.rs` (the programs there lifted and hashed under it, `primase_shader::gate`).
+pub const LIFTER_VERSION: u32 = 2;
 
 /// Lift the vertex or pixel program `source`. Only [`Stage::Vertex`] and [`Stage::Pixel`] are programs of this
 /// dialect.
 pub fn lift(source: &str, stage: Stage, hints: &Hints) -> Result<Program> {
-    lower::lift(source, stage, hints)
+    let mut program = lower::lift(source, stage, hints)?;
+    program.provenance.source_hash = Some(primase_shader::source_hash(source.as_bytes()));
+    Ok(program)
 }

@@ -107,6 +107,17 @@ was asked for, and the lifter asks (`Builder::check`) where it is reading, to re
 instruction; a builder with a fault nobody asked for cannot be finished. The builder's assertions are for what a lifter
 got wrong itself, such as control flow left open.
 
+## Versions
+
+`PROGRAM_VERSION` and each lifter's `LIFTER_VERSION` are what a cache keyed by a bytecode's hash trusts to know that a
+program it holds is stale. They are gated: a lifter's tests (`toolkit/dxbc/tests/versions.rs`,
+`toolkit/dxil/tests/versions.rs`, the last test of `toolkit/mojoshader/tests/lift.rs`) lift its committed fixtures and
+compare a table of their outcomes (the program's text form hashed, or the refusal) under both versions with the
+committed `tests/lifted.hashes`. Output that changed under unchanged versions fails and says which to bump; a bump
+fails until the table is replaced by the current one, which the failing test writes beside it
+(`tests/lifted.hashes.new`). The text form includes naga's WGSL, so a naga upgrade that changes it is a bump too. A
+program a lifter makes carries `source_hash`, the SHA-256 of the bytes it was given, which the lifter computes.
+
 ## Support ledger
 
 What the lifters make of every program of every corpus the project holds, counted by the census tests (`toolkit/dxbc/tests/lift_corpus.rs`, `toolkit/dxil/tests/lift_corpus.rs`, `worlds/gta/tests/fxc_census.rs`, `worlds/stuntboost/tests/effects.rs`) in one run on main `08b8fbe` plus the one-line executor fix in the commit that adds this section (without it the GTA census panics in `Executable::new`: a provenance index past the expressions). Release build, the corpora from the oracle tree (`oracles.corpus.<game>/shaders`) and the STUNTBOOST install's `Content/Effects`; the numbers are the tests' own output, recounted from that run. Lifted is `lift` returning a program; validated is `Program::validate`; written is `emit::wgsl` (or `wgsl_functions` for a stage with no entry point) succeeding; executable is `Executable::new` succeeding. It does not take the function-form stages (hull, domain, geometry and tessellator-feeding vertex programs), which run as functions through `Executable::function`, nor ray tracing pipeline programs, mesh programs and procedural-primitive ray queries, which are refused by name; the column counts the programs `Executable::new` takes.

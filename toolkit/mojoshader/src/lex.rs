@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{Error, Result};
+use crate::{Result, error};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Token {
@@ -49,13 +49,6 @@ const PUNCTS: [&str; 32] = [
     "+=", "-=", "*=", "/=", "==", "!=", "<=", ">=", "&&", "||", "++", "--", "(", ")", "[", "]", "{", "}",
     ";", ",", ".", "+", "-", "*", "/", "<", ">", "=", "?", ":", "!", "%",
 ];
-
-fn error(line: usize, detail: impl Into<String>) -> Error {
-    Error {
-        line,
-        detail: detail.into(),
-    }
-}
 
 /// Tokenize `source`, expanding the `#define` aliases.
 pub(crate) fn lex(source: &str) -> Result<Lexed> {

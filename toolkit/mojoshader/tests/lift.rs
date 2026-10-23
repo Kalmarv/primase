@@ -289,3 +289,35 @@ fn constants_the_program_cannot_hold_are_said_in_its_notes() {
     sorted.dedup();
     assert_eq!(p.notes, sorted);
 }
+
+/// The version gate (`primase_shader::gate`): what the lifter makes of these programs is hashed under `LIFTER_VERSION` and
+/// `PROGRAM_VERSION` in `tests/lifted.hashes`. A change to the output without a bump of the version that names it fails here,
+/// and so does a bump without the table of that version; the current table is written to `tests/lifted.hashes.new`.
+#[test]
+fn what_the_lifter_makes_of_its_programs_is_the_versions() {
+    let programs = [
+        ("gamma.ps", GAMMA, Stage::Pixel, hints()),
+        ("vertex.vs", VERTEX, Stage::Vertex, hints()),
+        ("control.ps", CONTROL, Stage::Pixel, Hints::default()),
+    ];
+    let outcomes: Vec<_> = programs
+        .into_iter()
+        .map(|(name, source, stage, hints)| {
+            let outcome = lift(source, stage, &hints)
+                .map(|p| p.text().unwrap())
+                .map_err(|e| e.to_string());
+            (name.to_owned(), outcome)
+        })
+        .collect();
+    let current = primase_shader::gate::table(
+        "primase-mojoshader",
+        primase_mojoshader::LIFTER_VERSION,
+        &outcomes,
+    );
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let committed = std::fs::read_to_string(dir.join("lifted.hashes")).unwrap_or_default();
+    if let Err(what) = primase_shader::gate::check(&committed, &current) {
+        std::fs::write(dir.join("lifted.hashes.new"), &current).unwrap();
+        panic!("{what}; the current table is tests/lifted.hashes.new");
+    }
+}

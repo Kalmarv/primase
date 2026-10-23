@@ -58,7 +58,7 @@ fn census(game: Game) {
             Err(e) => {
                 let entry = c
                     .refused
-                    .entry(primase_dxil::refusal_reason(&e))
+                    .entry(e.group())
                     .or_insert((0, path.display().to_string()));
                 entry.0 += 1;
                 continue;

@@ -68,9 +68,9 @@ fn every_effect_of_the_install() {
                     continue;
                 }
                 let result = if is_dxil {
-                    primase_dxil::lift(&shader.bytecode).map_err(|e| primase_dxil::refusal_reason(&e))
+                    primase_dxil::lift(&shader.bytecode).map_err(|e| e.group())
                 } else {
-                    primase_dxbc::lift(&shader.bytecode).map_err(|e| primase_dxbc::refusal_reason(&e))
+                    primase_dxbc::lift(&shader.bytecode).map_err(|e| e.group())
                 };
                 match result {
                     Err(reason) => *refused.entry(reason).or_default() += 1,
@@ -175,7 +175,7 @@ fn the_enhanced_shader_database() {
             match primase_dxil::lift(program.container) {
                 Err(e) => {
                     refused
-                        .entry(primase_dxil::refusal_reason(&e))
+                        .entry(e.group())
                         .or_insert((0, format!("{}: {}", program.name, e.detail)))
                         .0 += 1;
                 }

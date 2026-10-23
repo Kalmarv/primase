@@ -11,7 +11,7 @@ mod program;
 mod reflection;
 pub use decode::{Index, decode};
 pub use evaluate::{RegisterValue, Trace};
-pub use lift::{LIFTER_VERSION, lift, refusal_reason};
+pub use lift::{LIFTER_VERSION, lift};
 pub use primase_shader::{
     AtomicAdd, Execution, Interface, Load, Lod, PixelShader, Resource, Sample, Sampler, Store, Varying,
 };
@@ -23,18 +23,11 @@ pub use reflection::{
     SignatureElement, patch_signature_elements, reflection, signature_elements, signatures,
 };
 
-#[derive(Debug, thiserror::Error)]
-#[error("DXBC at word {word}: {detail}")]
-pub struct Error {
-    pub word: usize,
-    pub detail: String,
-}
+/// A DXBC program or container refused or unreadable: the word it is at and why ([`primase_shader::Refusal`]).
+pub type Error = primase_shader::Refusal;
 pub type Result<T> = std::result::Result<T, Error>;
 pub(crate) fn error(word: usize, detail: impl Into<String>) -> Error {
-    Error {
-        word,
-        detail: detail.into(),
-    }
+    Error::new("DXBC", primase_shader::Unit::Word, word, detail)
 }
 
 /// A parsed program with its container's interface: the [`PixelShader`] a bytecode-independent caller evaluates.
@@ -83,7 +76,7 @@ impl Shader {
 fn shader_error(e: Error) -> primase_shader::Error {
     primase_shader::Error {
         bytecode: "DXBC",
-        at: e.word,
+        at: e.at,
         detail: e.detail,
     }
 }

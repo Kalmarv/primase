@@ -549,6 +549,7 @@ impl Lift<'_> {
                 target,
                 lifter: "primase-dxbc".into(),
                 lifter_version: super::LIFTER_VERSION,
+                // the hash of the bytes, which `lift` sets
                 source_hash: None,
             },
             notes: self.notes.into_iter().chain(limit_notes).collect(),

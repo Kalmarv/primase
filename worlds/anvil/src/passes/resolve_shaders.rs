@@ -472,7 +472,7 @@ impl Pass for ResolveAnvilShaders {
                                 Err(e) => Err(format!(
                                     "a {} program the lifter refuses: {}",
                                     if is_vertex { "vertex" } else { "pixel" },
-                                    primase_dxbc::refusal_reason(&e)
+                                    e.group()
                                 )),
                                 Ok(program) => {
                                     let e = world.spawn();

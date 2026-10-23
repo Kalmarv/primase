@@ -18,6 +18,7 @@ pub mod d3d;
 pub mod emit;
 mod evaluate;
 pub mod exec;
+pub mod gate;
 mod limits;
 mod program;
 pub mod rt;
@@ -34,6 +35,7 @@ pub use primase_core::shader::{
     TextureDim, Value, Varying, VaryingProvenance,
 };
 mod periodic;
+mod refusal;
 pub use limits::{WEBGPU_BASELINE, compute_limit_notes, interface_notes};
 pub use periodic::{evaluate_periodic, evaluate_periodic_with};
 pub use program::{
@@ -41,6 +43,7 @@ pub use program::{
     Origin, Problem, Program, Provenance, VERSION as PROGRAM_VERSION, entry_io, mesh_vertex_io,
     stage_functions,
 };
+pub use refusal::{Refusal, Unit, source_hash};
 
 /// How a sample request picks its level of detail.
 #[derive(Clone, Copy, Debug, PartialEq)]

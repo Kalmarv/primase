@@ -373,10 +373,7 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                 };
                 if !shaders.contains_key(&variant.code) {
                     let made = match primase_dxbc::lift(&variant.code) {
-                        Err(e) => Err(format!(
-                            "a program the lifter refuses: {}",
-                            primase_dxbc::refusal_reason(&e)
-                        )),
+                        Err(e) => Err(format!("a program the lifter refuses: {}", e.group())),
                         Ok(program) => {
                             let e = world.spawn();
                             world.insert(e, Name(format!("{}-{:?}", programs.shader, stage)));

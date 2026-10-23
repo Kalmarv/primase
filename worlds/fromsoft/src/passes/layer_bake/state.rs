@@ -334,7 +334,7 @@ impl PipelineState {
         let pixel = &d["pixel"];
         let bytecode: Arc<[u8]> = file(&pixel["bytecode"])?.as_slice().into();
         let lifted = primase_shader::exec::ProgramShader::new(
-            primase_dxbc::lift(&bytecode).map_err(|e| invalid("layer bake state", e.word * 4, e.detail))?,
+            primase_dxbc::lift(&bytecode).map_err(|e| invalid("layer bake state", e.at * 4, e.detail))?,
         )
         .map_err(|e| invalid("layer bake state", e.at, e.detail))?;
         let layout =

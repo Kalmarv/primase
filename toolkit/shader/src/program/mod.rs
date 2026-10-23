@@ -41,7 +41,8 @@ use naga::{Handle, Module};
 use crate::{Interface, ResourceId, ShaderFormat, Stage};
 
 /// The version of the program representation: bumped when what a program means changes (a convention, a mode, how
-/// the module carries the interface).
+/// the module carries the interface). Each lifter's tests hash what it makes of its fixtures under this and its own version
+/// (`primase_shader::gate`), so a change that moves them without a bump of one of the two fails.
 pub const VERSION: u32 = 1;
 
 /// Which way clip space's depth runs.
@@ -120,7 +121,8 @@ pub struct Provenance {
     /// The lifter that built it and its version, so a cache keyed by (bytecode hash, lifter version) knows what is stale.
     pub lifter: String,
     pub lifter_version: u32,
-    /// The hash of the bytecode as the caller states it (algorithm in the caller's words: `sha256:...`), if it does.
+    /// The hash of the bytes the lifter was given (`sha256:` and the digits, [`crate::source_hash`]), which the lifter
+    /// computes: a program a lifter made has it, one built by hand may not.
     pub source_hash: Option<String>,
 }
 

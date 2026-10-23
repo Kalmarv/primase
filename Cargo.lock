@@ -1191,6 +1191,7 @@ dependencies = [
  "primase-core",
  "primase-dxbc",
  "primase-dxil",
+ "sha2",
  "thiserror",
 ]
 

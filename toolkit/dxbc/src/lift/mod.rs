@@ -34,15 +34,21 @@ use primase_shader::build::Builder;
 use primase_shader::{Conventions, D3dModes, Program, Provenance, ShaderFormat, Stage};
 
 use crate::decode::{Decoded, decode};
-use crate::{Error, Result, chunks, error};
+use crate::{Result, chunks, error};
 
 /// The version of the lifter: bumped when what it produces for the same bytecode changes, so a cache keyed by the
-/// bytecode's hash knows what is stale.
-pub const LIFTER_VERSION: u32 = 1;
+/// bytecode's hash knows what is stale; gated by `tests/versions.rs` (the lifted fixtures hashed under it, `primase_shader::gate`).
+pub const LIFTER_VERSION: u32 = 2;
 
 /// Lift a DXBC container's program. A pixel or vertex program of Shader Model 4 or 5 is the scope; everything else,
 /// and every instruction or declaration the lifter does not carry, is an `Err` naming the word and the reason.
 pub fn lift(bytes: &[u8]) -> Result<Program> {
+    let mut program = lift_program(bytes)?;
+    program.provenance.source_hash = Some(primase_shader::source_hash(bytes));
+    Ok(program)
+}
+
+fn lift_program(bytes: &[u8]) -> Result<Program> {
     let directory = chunks(bytes)?;
     let code = directory
         .iter()
@@ -196,14 +202,10 @@ impl<'a> Lift<'a> {
                 target,
                 lifter: "primase-dxbc".into(),
                 lifter_version: LIFTER_VERSION,
+                // the hash of the bytes, which `lift` sets
                 source_hash: None,
             },
             notes: self.notes.into_iter().chain(limit_notes).collect(),
         })
     }
-}
-
-/// A refusal, for callers that count them by reason: the detail with its numbers removed.
-pub fn refusal_reason(e: &Error) -> String {
-    e.detail.chars().filter(|c| !c.is_ascii_digit()).collect()
 }

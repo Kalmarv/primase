@@ -18,7 +18,7 @@ use primase_shader::{
 };
 
 use crate::lex::{self, Spanned, Token};
-use crate::{Error, Hints, LIFTER_VERSION, Result};
+use crate::{Hints, LIFTER_VERSION, Result, error};
 
 /// What a name stands for.
 #[derive(Clone, Debug)]
@@ -76,13 +76,6 @@ struct Lower<'a> {
     outputs: Vec<(Varying, Handle<LocalVariable>)>,
     notes: Vec<String>,
     loops: u32,
-}
-
-fn error(line: usize, detail: impl Into<String>) -> Error {
-    Error {
-        line,
-        detail: detail.into(),
-    }
 }
 
 fn float_value(width: u8) -> Value {
@@ -1435,6 +1428,7 @@ impl Lower<'_> {
                 target: self.hints.target.clone(),
                 lifter: "primase-mojoshader".into(),
                 lifter_version: LIFTER_VERSION,
+                // the hash of the text, which `lift` sets
                 source_hash: None,
             },
             notes,

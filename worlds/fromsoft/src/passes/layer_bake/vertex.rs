@@ -97,7 +97,7 @@ impl VertexStage {
     /// ground family, whose second layer weight is read from another lane.
     pub fn new(vertex: &CoreShader, stage: &StageBinding, ground: bool, frame: &FrozenFrame) -> Result<Self> {
         let lifted = ProgramShader::new(
-            primase_dxbc::lift(&vertex.bytecode).map_err(|e| invalid("vertex lift", e.word * 4, e.detail))?,
+            primase_dxbc::lift(&vertex.bytecode).map_err(|e| invalid("vertex lift", e.at * 4, e.detail))?,
         )
         .map_err(|e| invalid("vertex program", e.at, e.detail))?;
         let mut policies = BTreeMap::new();

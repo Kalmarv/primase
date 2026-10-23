@@ -9,22 +9,15 @@ pub mod module;
 pub mod rdat;
 pub mod reflection;
 pub use evaluate::{Census, Shader};
-pub use lift::{LIFTER_VERSION, lift, refusal_reason};
+pub use lift::{LIFTER_VERSION, lift};
 pub use reflection::interface;
 
-#[derive(Debug, thiserror::Error)]
-#[error("DXIL at bit {bit}: {detail}")]
-pub struct Error {
-    /// Bit offset in the bitcode (or byte offset times eight in the container) where the problem is.
-    pub bit: usize,
-    pub detail: String,
-}
+/// A DXIL program or container refused or unreadable: the bit it is at (in the bitcode, or eight times a byte of the
+/// container) and why ([`primase_shader::Refusal`]).
+pub type Error = primase_shader::Refusal;
 pub type Result<T> = std::result::Result<T, Error>;
 pub(crate) fn error(bit: usize, detail: impl Into<String>) -> Error {
-    Error {
-        bit,
-        detail: detail.into(),
-    }
+    Error::new("DXIL", primase_shader::Unit::Bit, bit, detail)
 }
 
 /// The `DXIL` part of a DXBC container: the program header and its LLVM bitcode.

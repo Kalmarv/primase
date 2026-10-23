@@ -70,7 +70,7 @@ fn the_text_form_names_what_the_lift_decided() {
         "{text}"
     );
     assert!(
-        text.contains("// source Dxbc ps_5_0 lifted by primase-dxbc 1"),
+        text.contains("// source Dxbc ps_5_0 lifted by primase-dxbc 2"),
         "{text}"
     );
 }

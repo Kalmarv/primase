@@ -944,7 +944,7 @@ impl PixelShader for Shader {
             .map(|(e, _)| e)
             .map_err(|e| primase_shader::Error {
                 bytecode: "DXIL",
-                at: e.bit,
+                at: e.at,
                 detail: e.detail,
             })
     }

@@ -35,7 +35,7 @@ fn census(game: Game) {
             Ok(p) => p,
             Err(e) => {
                 c.refused
-                    .entry(primase_dxbc::refusal_reason(&e))
+                    .entry(e.group())
                     .or_insert((0, path.display().to_string()))
                     .0 += 1;
                 continue;
