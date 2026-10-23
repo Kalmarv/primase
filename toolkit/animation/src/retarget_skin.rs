@@ -219,6 +219,15 @@ impl Pass for RetargetSkin {
             .filter_map(|(e, _)| w.get::<primase_core::Instance>(e).map(|i| i.prototype))
             .collect();
         for (map_entity, map) in maps {
+            let prototypes: Vec<Entity> = w
+                .iter::<Skin>()
+                .filter(|(_, s)| s.bindings.iter().any(|b| b.skeleton == map.from))
+                .map(|(e, _)| e)
+                .collect();
+            // a map no skin binds to (the correspondence of a clip's rig, say) is not this pass's: it has no mesh to place
+            if prototypes.is_empty() {
+                continue;
+            }
             let placements: Vec<JointPlacement> = w
                 .iter::<JointPlacement>()
                 .filter(|(_, p)| p.map == map_entity)
@@ -254,11 +263,6 @@ impl Pass for RetargetSkin {
             if !placed.is_empty() {
                 log.count("source joints moved by a stated placement", placed.len() as u64);
             }
-            let prototypes: Vec<Entity> = w
-                .iter::<Skin>()
-                .filter(|(_, s)| s.bindings.iter().any(|b| b.skeleton == map.from))
-                .map(|(e, _)| e)
-                .collect();
             for p in prototypes {
                 if drawn.contains(&p) {
                     return Err(format!(
@@ -956,5 +960,36 @@ mod tests {
         let err = run(&mut w, "retarget-skin{unmapped=ancestor,placement=stated}").unwrap_err();
         // the pass's own requirement refuses a world with no placement at all
         assert!(err.contains("requires `core.joint_placement`"), "{err}");
+    }
+
+    /// A map no skin binds to (a clip rig's correspondence to the same target, say) is not this pass's: `stated` asks no
+    /// placement of it and `automatic` finds none to refuse, whatever the world's other maps say.
+    #[test]
+    fn a_map_with_no_skin_to_retarget_is_left_out_of_the_placement_choice() {
+        let (mut w, _, target) = world();
+        state(&mut w, &[(30, up(0.1))]);
+        let rig = w.spawn();
+        w.insert(
+            rig,
+            Skeleton {
+                joints: vec![joint(100, None, trs([0.0; 3], [0.0, 0.0, 0.0, 1.0]))],
+            },
+        );
+        let other = w.spawn();
+        w.insert(
+            other,
+            JointMap {
+                from: rig,
+                to: target,
+                pairs: vec![(JointId(100), JointId(10))],
+            },
+        );
+        assert_eq!(w.verify_components(), vec![]);
+        let report = run(&mut w, "retarget-skin{unmapped=ancestor,placement=stated}").unwrap();
+        assert_eq!(
+            report.steps[0].log.counts["source joints moved by a stated placement"], 1,
+            "the hand alone: nothing the map leaves out hangs under it"
+        );
+        assert_eq!(report.steps[0].log.counts["skinned prototypes retargeted"], 1);
     }
 }
