@@ -16,9 +16,10 @@ use super::entry::spawn_entity;
 use super::folder::Source;
 use super::listing::{Bundle, Listed};
 use crate::components::{
-    FrostbiteBindings, FrostbiteBytecode, FrostbiteMaterial, FrostbiteMeshSet, FrostbitePermutation,
-    FrostbiteProgram, FrostbitePrograms, MaterialDepot,
+    FrostbiteBindings, FrostbiteBytecode, FrostbiteInputLayout, FrostbiteMaterial, FrostbiteMeshSet,
+    FrostbitePermutation, FrostbiteProgram, FrostbitePrograms, MaterialDepot,
 };
+use crate::inputlayout::{self, InputLayout};
 use crate::permutation::{self, Permutation};
 use crate::{Error, Result, binding, bytecode, depot, lookup};
 
@@ -44,6 +45,7 @@ impl<'a> Scope<'a> {
                     | permutation::SHARED_COMPUTE
                     | binding::BINDING_SET
                     | binding::PASS_BINDING
+                    | crate::inputlayout::RTYPE
                     | lookup::STREAMABLE_TEXTURE_SET => {
                         permutations
                             .entry((a.rtype, permutation::resource_id(&a.rmeta)))
@@ -82,7 +84,7 @@ impl<'a> Scope<'a> {
     }
 
     /// The bundle and entry of the permutation with `id`, a raster one first.
-    fn permutation(&self, id: u64) -> Option<(&'a Bundle, Listed)> {
+    pub fn permutation(&self, id: u64) -> Option<(&'a Bundle, Listed)> {
         let &(b, i) = [permutation::RASTER, permutation::COMPUTE]
             .iter()
             .find_map(|t| self.permutations.get(&(*t, id)))?;
@@ -90,7 +92,7 @@ impl<'a> Scope<'a> {
     }
 
     /// The bundle and entry of the CompiledBytecode resource named `name`.
-    fn bytecode(&self, name: &str) -> Option<(&'a Bundle, Listed)> {
+    pub fn bytecode(&self, name: &str) -> Option<(&'a Bundle, Listed)> {
         let &(b, i) = self.bytecode.get(name)?;
         Some((&self.bundles[b], self.bundles[b].resource(i)))
     }
@@ -108,6 +110,7 @@ pub(super) struct PermutationRead {
     entry: Listed,
     permutation: Permutation,
     bindings: FrostbiteBindings,
+    layout: Option<InputLayout>,
     /// Each program's CompiledBytecode entry and its shader.
     programs: Vec<(Listed, Shader, FrostbiteBytecode)>,
 }
@@ -132,6 +135,9 @@ impl PermutationRead {
             },
         );
         w.insert(e, self.bindings);
+        if let Some(l) = self.layout {
+            w.insert(e, FrostbiteInputLayout(l));
+        }
         e
     }
 }
@@ -167,12 +173,30 @@ impl Source<'_> {
             programs.push((listed, shader, c));
         }
         let bindings = self.read_bindings(scope, &permutation, entry)?;
+        let layout = permutation
+            .input_layout
+            .map(|id| self.read_input_layout(scope, id, entry))
+            .transpose()?;
         Ok(PermutationRead {
             entry: entry.clone(),
             permutation,
             bindings,
+            layout,
             programs,
         })
+    }
+
+    /// The input layout `id` of a raster permutation, looked up in `scope`.
+    fn read_input_layout(&self, scope: &Scope<'_>, id: u64, entry: &Listed) -> Result<InputLayout> {
+        let (home, e) = scope.resource_with_home(inputlayout::RTYPE, id).ok_or_else(|| {
+            Error::Missing(format!(
+                "{}: input layout {id} is in no bundle of the scope",
+                entry.name
+            ))
+        })?;
+        let payload = self.payload(e.file, e.size as usize)?;
+        inputlayout::read(&payload, &home.manifest.res[e.index].rmeta)
+            .map_err(|err| Error::Unsupported(format!("{}: {err}", entry.name)))
     }
 
     /// The binding sets of `permutation`: its shared data, then the pass binding and sets the data names, looked up in
@@ -311,11 +335,11 @@ impl Source<'_> {
                 })?;
                 permutations.push(self.read_permutation(scope, bundle, &entry)?);
             }
-            programs.push((index, record.key, permutations));
+            programs.push((index, record.key, record.raw, permutations));
         }
         Ok(programs
             .into_iter()
-            .map(|(index, record_key, permutations)| {
+            .map(|(index, record_key, record, permutations)| {
                 let permutations: Vec<Entity> = permutations.into_iter().map(|p| p.spawn(w)).collect();
                 let e = spawn_entity(w, database, format!("{}#{index}", database.name));
                 w.insert(
@@ -324,6 +348,7 @@ impl Source<'_> {
                         material,
                         index,
                         record_key,
+                        record,
                         permutations,
                     },
                 );

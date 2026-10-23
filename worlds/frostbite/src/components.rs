@@ -293,6 +293,8 @@ pub struct FrostbiteProgram {
     pub material: u64,
     pub index: u32,
     pub record_key: u64,
+    /// The program's 168-byte record as stored.
+    pub record: [u8; crate::lookup::RECORD_LEN],
     pub permutations: Vec<Entity>,
 }
 
@@ -583,5 +585,27 @@ impl Component for FrostbiteBindings {
         (self.pass.iter().chain(self.sets.iter().flatten()))
             .map(size)
             .sum()
+    }
+}
+
+/// A raster permutation's input layout ([`crate::inputlayout`]): the vertex elements its vertex program reads. On the
+/// permutation's entity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrostbiteInputLayout(pub crate::inputlayout::InputLayout);
+
+impl Component for FrostbiteInputLayout {
+    const NAME: &'static str = "frostbite.input_layout";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
+        let l = &self.0;
+        Ok(Some(json!({
+            "id": l.id.to_string(),
+            "elements": l.elements.iter().zip(&l.usages).map(|(e, &usage)| json!({
+                "usage": usage,
+                "dxgi_format": e.dxgi(),
+                "first": e.first,
+                "last": e.last,
+            })).collect::<Vec<_>>(),
+        })))
     }
 }

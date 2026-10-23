@@ -19,6 +19,7 @@ pub mod depot;
 pub mod ebx;
 pub mod fbmod;
 pub mod geometry;
+pub mod inputlayout;
 pub mod lookup;
 pub mod meshset;
 pub mod permutation;
