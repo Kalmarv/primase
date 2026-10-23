@@ -8,6 +8,7 @@ Reads a staging folder that the corpus_* example programs filled with the games'
                       eight-byte block header (decoded size in bytes 1 to 3, stored size in byte 5's low nibble and
                       bytes 6 and 7)
   lz4/*.lz4           Riders Republic's raw LZ4 terrain blocks (corpus_riders_lz4)
+  deflate/*.deflate   GTA V's compressed archive files as stored, decrypted (corpus_gta_deflate): raw deflate
 and writes, under the output folder, codecs/<codec>/<name>.in (the stream) and .out (Python's zlib or the lz4
 package's decoding of it) and codecs.tsv, one `codec<TAB>input<TAB>reference` row per stream with paths relative to
 the TSV. A stream a decoder refuses, or whose decoding is not the size its header states, stops the script.
@@ -53,13 +54,20 @@ def main() -> None:
         ("zlib", "zlib-dcx", "*.dcx", dcx_stream),
         ("zlib", "zlib-cas", "*.casblock", cas_stream),
         ("lz4", "lz4", "*.lz4", None),
+        ("deflate", "deflate", "*.deflate", None),
     ]
     for codec, folder, pattern, cut in sources:
         for path in sorted((staging / folder).glob(pattern)):
             data = path.read_bytes()
-            if cut is None:
+            if codec == "lz4":
                 stream, expected = data, None
                 decoded = lz4.block.decompress(stream, uncompressed_size=LZ4_BOUND)
+            elif codec == "deflate":
+                stream, expected = data, None
+                inflater = zlib.decompressobj(-15)
+                decoded = inflater.decompress(stream) + inflater.flush()
+                if not inflater.eof:
+                    raise SystemExit(f"{path}: a deflate stream that does not end")
             else:
                 stream, expected = cut(data, path.name)
                 decoded = zlib.decompress(stream)

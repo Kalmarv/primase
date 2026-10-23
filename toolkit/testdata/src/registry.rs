@@ -557,7 +557,7 @@ pub const DECLARED: &[Declared] = &[
         status: Status::Live,
         gate: true,
         about: r#"TSV: codec, compressed path, oracle decoded path (tab-separated)"#,
-        source: r#"independent: the games' own streams (Sekiro's DFLT DCX envelopes, skate.'s zlib CAS blocks, Riders Republic's terrain LZ4 blocks, cut by the corpus_* example programs) decoded by Python's zlib and the lz4 package 4.4.5, toolkit/compress/tests/oracles/codecs.py"#,
+        source: r#"independent: the games' own streams (Sekiro's DFLT DCX envelopes, skate.'s zlib CAS blocks, Riders Republic's terrain LZ4 blocks, GTA V's raw deflate archive files, cut by the corpus_* example programs) decoded by Python's zlib and the lz4 package 4.4.5, toolkit/compress/tests/oracles/codecs.py"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::General, "dxbc"),
