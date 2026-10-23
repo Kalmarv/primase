@@ -257,7 +257,8 @@ pub(super) enum St {
     },
     Break,
     Continue,
-    Return,
+    /// Leave, with these members as the result (slot and lanes each, in the order of the interface's outputs).
+    Return(Vec<(u32, u8)>),
     Kill,
 }
 
@@ -289,8 +290,6 @@ pub struct Executable {
     pub(super) args: Vec<(u32, u8)>,
     pub(super) local_words: usize,
     pub(super) globals: Vec<GlobalDesc>,
-    /// The returned members: slot and lanes, in the order of the interface's outputs.
-    pub(super) ret: Vec<(u32, u8)>,
     /// Whether 32-bit denormals are flushed to zero (the program's D3D modes).
     pub(super) flush_denormals: bool,
 }

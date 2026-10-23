@@ -687,7 +687,6 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
         image: &'a dyn Fn(Handle<E>) -> Result<ImageRef, String>,
         ops: Vec<(u32, Op)>,
         uses: Vec<u32>,
-        ret: Vec<(u32, u8)>,
     }
     fn block(cx: &mut Ctx, b: &naga::Block) -> Result<Vec<St>, String> {
         let mut out: Vec<St> = Vec::new();
@@ -759,6 +758,7 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                 Statement::Continue => out.push(St::Continue),
                 Statement::Kill => out.push(St::Kill),
                 Statement::Return { value } => {
+                    let mut members = Vec::new();
                     if let Some(v) = value {
                         // a structure of members, or one vector or scalar
                         let agg = match cx.agg_of[v.index()].clone() {
@@ -771,9 +771,9 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                         for (s, _) in &agg {
                             cx.uses[*s as usize] += 1;
                         }
-                        cx.ret = agg;
+                        members = agg;
                     }
-                    out.push(St::Return);
+                    out.push(St::Return(members));
                 }
                 Statement::Store { pointer, value } => {
                     let p = cx.ptr_of[pointer.index()].ok_or("store through a non-pointer")?;
@@ -910,10 +910,8 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
         image: &image,
         ops: Vec::new(),
         uses: vec![0; n_expr],
-        ret: Vec::new(),
     };
     let mut body = block(&mut cx, &f.body)?;
-    let ret = std::mem::take(&mut cx.ret);
     let mut ops = std::mem::take(&mut cx.ops);
     let mut uses = std::mem::take(&mut cx.uses);
 
@@ -990,7 +988,6 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
         args,
         local_words: local_words as usize,
         globals,
-        ret,
         flush_denormals: p.modes.flush_denormals,
     })
 }

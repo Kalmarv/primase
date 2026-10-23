@@ -393,3 +393,89 @@ fn a_volume_sample_reaches_a_sampler_that_answers_it_and_is_refused_by_one_that_
     let e = shader.execute(&inputs, &[], &mut Unused).unwrap_err();
     assert!(e.detail.contains("plain 2D samples only"), "{e}");
 }
+
+/// `if (uv.x > 0.5) { return red; } return green;`: two returns with results of their own.
+fn branch_program() -> Program {
+    let mut b = Builder::new();
+    let f2 = b.ty_of(Kind::F, 2);
+    let uv = b.app(naga::Expression::FunctionArgument(0));
+    let uv = val(uv, Kind::F, 2);
+    let x = b.lane(uv, 0);
+    let half = b.lit_f(0.5);
+    let above = b.binary(naga::BinaryOperator::Greater, x, half);
+    let (one, zero) = (b.lit_f(1.0), b.lit_f(0.0));
+    let red = b.compose(&[one, zero, zero, one]);
+    let green = b.compose(&[zero, one, zero, one]);
+    let out_ty = result_type(&mut b);
+    let red_out = b.app(naga::Expression::Compose {
+        ty: out_ty,
+        components: vec![red.expr],
+    });
+    let green_out = b.app(naga::Expression::Compose {
+        ty: out_ty,
+        components: vec![green.expr],
+    });
+    let mut early = naga::Block::new();
+    early.push(
+        naga::Statement::Return { value: Some(red_out) },
+        naga::Span::UNDEFINED,
+    );
+    b.push(naga::Statement::If {
+        condition: above.expr,
+        accept: early,
+        reject: naga::Block::new(),
+    });
+    b.push(naga::Statement::Return {
+        value: Some(green_out),
+    });
+    let module = b.finish(
+        "main",
+        naga::ShaderStage::Fragment,
+        vec![argument("TEXCOORD0", f2)],
+        Some(out_ty),
+        false,
+    );
+    Program {
+        module,
+        stage: Stage::Pixel,
+        entry: "main".into(),
+        interface: Interface {
+            stage: Stage::Pixel,
+            inputs: vec![varying("TEXCOORD", 2, 0x3)],
+            outputs: vec![target()],
+            resources: Vec::new(),
+        },
+        bindings: Vec::new(),
+        conventions: Conventions::D3D,
+        modes: D3dModes::ALL,
+        provenance: provenance(),
+        notes: Vec::new(),
+    }
+}
+
+#[test]
+fn each_return_leaves_with_its_own_result() {
+    let shader = ProgramShader::new(branch_program()).unwrap();
+    let run = |x: f32| {
+        let inputs = [bits([x, 0.0, 0.0, 0.0])];
+        lanes(shader.execute(&inputs, &[], &mut Unused).unwrap().outputs[0])
+    };
+    assert_eq!(run(0.75), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(run(0.25), [0.0, 1.0, 0.0, 1.0]);
+    // a quad whose lanes leave at different returns
+    let lane = |x: f32| vec![bits([x, 0.0, 0.0, 0.0])];
+    let inputs = [lane(0.25), lane(0.75), lane(0.25), lane(0.75)];
+    let e = shader
+        .execute_quad([&inputs[0], &inputs[1], &inputs[2], &inputs[3]], &[], &mut Unused)
+        .unwrap();
+    let colours: Vec<[f32; 4]> = e.iter().map(|e| lanes(e.outputs[0])).collect();
+    assert_eq!(
+        colours,
+        [
+            [0.0, 1.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, 1.0]
+        ]
+    );
+}

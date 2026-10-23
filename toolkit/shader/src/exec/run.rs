@@ -739,11 +739,11 @@ impl<'a, const N: usize> Runner<'a, N> {
                     ex.cont |= active;
                     active = 0;
                 }
-                St::Return => {
+                St::Return(result) => {
                     for l in 0..N {
                         if active >> l & 1 != 0 {
-                            let mut members = Vec::with_capacity(self.c.ret.len());
-                            for (s, n) in &self.c.ret {
+                            let mut members = Vec::with_capacity(result.len());
+                            for (s, n) in result {
                                 let mut r = [0u32; 4];
                                 r[..*n as usize]
                                     .copy_from_slice(&self.regs[*s as usize * N + l][..*n as usize]);
