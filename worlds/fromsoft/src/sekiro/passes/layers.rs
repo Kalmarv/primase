@@ -137,10 +137,17 @@ pub struct PartGroups {
 
 // This is the static bake-input equivalence relation, not source-material
 // identity. Raw GX is retained on per-source output materials; the current
-// interpreter consumes the definition/bindings and does not interpret GX.
+// interpreter consumes the definition/bindings and does not interpret GX. A binding that states no addressing is
+// sampled with wrap, so it is the same bake input as one that states wrap.
 pub(super) fn bake_identity(material: &Material) -> Result<String> {
     let mut projected = material.clone();
     projected.gx.clear();
+    let layered = projected.layered.iter_mut().flat_map(|l| l.bindings.values_mut());
+    for binding in projected.bindings.values_mut().chain(layered) {
+        binding.address = binding
+            .address
+            .map(|a| a.or(Some(primase_core::shader::AddressMode::Repeat)));
+    }
     primase_core::json::to_value(&projected)
         .map(|v| v.to_string())
         .map_err(|e| invalid("layer groups", 0, e))
