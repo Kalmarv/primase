@@ -201,10 +201,13 @@ impl Source<'_> {
     }
 
     /// The bundle's manifest and the index of its first asset file, read the way ReSkate's merge reads it: inline
-    /// in the region, else the region file that is a manifest (raw or CAS-framed) whose asset count matches.
+    /// in the region (its assets then no more than the region's files: [`fits`]), else the region file that is a
+    /// manifest (raw or CAS-framed) whose asset count matches.
     pub fn manifest(&self, files: &[FileRef], inline: &[u8]) -> Result<Option<(Manifest, usize, Vec<u8>)>> {
         if !inline.is_empty() {
-            return Ok(Some((bundle::read_manifest(inline)?, 0, inline.to_vec())));
+            let m = bundle::read_manifest(inline)?;
+            fits(&m, files.len())?;
+            return Ok(Some((m, 0, inline.to_vec())));
         }
         let expected = files.len().saturating_sub(1);
         for &f in files {
@@ -326,4 +329,48 @@ pub struct EbxEntry {
     pub file: FileRef,
     /// Its payload's size.
     pub size: usize,
+}
+
+/// An inline manifest's assets are the region's files from the first: an error, naming both counts, when it lists more
+/// than the region holds (the entries' file references would lie past the table).
+fn fits(m: &Manifest, files: usize) -> Result<()> {
+    if m.count() > files {
+        return Err(crate::bad(
+            "bundle manifest",
+            0,
+            format!("{} assets for a region of {files} files", m.count()),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+
+    #[test]
+    fn an_inline_manifest_with_more_assets_than_files_is_refused() {
+        let asset = |kind| bundle::Asset {
+            kind,
+            name: String::new(),
+            sha1: [0; 20],
+            size: 0,
+            rtype: 0,
+            rmeta: [0; 16],
+            rid: 0,
+            guid: [0; 16],
+            loff: 0,
+            lsize: 0,
+        };
+        let m = Manifest {
+            ebx: vec![asset(bundle::Kind::Ebx), asset(bundle::Kind::Ebx)],
+            res: vec![asset(bundle::Kind::Res)],
+            chunks: Vec::new(),
+            meta: Vec::new(),
+            big_endian: false,
+        };
+        assert!(fits(&m, 3).is_ok());
+        let e = fits(&m, 2).unwrap_err().to_string();
+        assert!(e.contains("3 assets for a region of 2 files"), "{e}");
+    }
 }
