@@ -3,14 +3,14 @@
 //! Sekiro's naming (tests/fixtures/layered.hlsl, compiled with fxc): the constants, texture slots and outputs a
 //! layered material's binding holds, worked out from the HLSL, fxc's listing of its buffers and the material.
 use primase_core::shader::{
-    AddressMode, ConstantRole, FrameParameter, InputRole, LaneStream, NormalEncoding, NormalSpace,
-    ObjectParameter, OutputRole, ResourceId, SamplerState, Shader, ShaderBinding, ShaderFormat, Stage,
-    TextureSource, ViewParameter,
+    AddressMode, BlendFactor, BlendOp, Compare, ConstantRole, FrameParameter, InputRole, LaneStream,
+    NormalEncoding, NormalSpace, ObjectParameter, OutputRole, ResourceId, SamplerState, Shader,
+    ShaderBinding, ShaderFormat, Stage, TextureSource, ViewParameter,
 };
 use primase_core::{
     ColorSpace, Entity, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology, World,
 };
-use primase_fromsoft::layer_bake::resolve::{SECOND_COLOUR, Unbound, resolve};
+use primase_fromsoft::layer_bake::resolve::{SECOND_COLOUR, Unbound, render_state, resolve};
 use primase_fromsoft::materials::{Binding, LayeredMaterial, Material};
 use primase_fromsoft::mtd::{self, MaterialDefinition, Parameter, Value};
 use primase_fromsoft::sekiro::source::{
@@ -1166,5 +1166,44 @@ fn a_fixed_function_materials_textures_are_bound_by_their_kind_names() {
     assert_eq!(
         tiling,
         [(0, bits(&[2., 3., 0., 0.])), (48, bits(&[4., 5., 0., 0.]))]
+    );
+}
+
+/// The render state is what the capture of the running game settled: depth test `GreaterEqual` (reversed depth) with a write
+/// unless `g_GX_bDisableDepthWrite`, and for `g_BlendMode` 2 the SrcAlpha/InvSrcAlpha blend on render target 0; the alpha
+/// test, the cull, the stencil and the bias are not stated (the program discards, the face set culls).
+#[test]
+fn the_render_state_is_what_the_capture_settled() {
+    let opaque = render_state(&with_params(&[
+        ("g_BlendMode", Value::Int(vec![0])),
+        ("g_AlphaRef", Value::Int(vec![128, 0])),
+    ]));
+    assert_eq!(opaque.verify(), Ok(()));
+    let depth = opaque.depth.unwrap();
+    assert_eq!((depth.test, depth.write), (Compare::GreaterEqual, true));
+    assert!(opaque.blend.is_none() && opaque.targets.iter().all(Option::is_none));
+    assert!(opaque.alpha_test.is_none() && opaque.cull.is_none() && opaque.stencil.is_none());
+    assert!(opaque.depth_bias.is_none() && opaque.front_counter_clockwise.is_none());
+    let blended = render_state(&with_params(&[
+        ("g_BlendMode", Value::Int(vec![2])),
+        ("g_GX_bDisableDepthWrite", Value::Bool(true)),
+    ]));
+    assert_eq!(blended.verify(), Ok(()));
+    assert!(!blended.depth.unwrap().write);
+    let blend = blended.blend.unwrap();
+    assert_eq!(
+        (blend.colour.source, blend.colour.destination, blend.colour.op),
+        (BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha, BlendOp::Add)
+    );
+    assert_eq!(
+        (blend.alpha.source, blend.alpha.destination),
+        (BlendFactor::One, BlendFactor::Zero)
+    );
+    assert_eq!(blended.targets[0].unwrap().write_mask, 0xf);
+    // a mode the capture matched to no draw states no blend
+    assert!(
+        render_state(&with_params(&[("g_BlendMode", Value::Int(vec![4]))]))
+            .blend
+            .is_none()
     );
 }

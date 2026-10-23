@@ -9,9 +9,10 @@ use crate::mtd::Value;
 use crate::{Result, invalid};
 use primase_core::Entity;
 use primase_core::shader::{
-    ConstantBinding, ConstantRole, FrameParameter, InputBinding, InputRole, LaneStream, NormalEncoding,
-    NormalSpace, ObjectParameter, OutputBinding, OutputRole, ResourceId, ResourceKind, SamplerState, Stage,
-    StageBinding, TextureBinding, TextureSource, ViewParameter,
+    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, DepthState,
+    FrameParameter, InputBinding, InputRole, LaneStream, NormalEncoding, NormalSpace, ObjectParameter,
+    OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Stage, StageBinding,
+    TargetState, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_dxbc::Shader;
 use primase_shader::{D3dClass, Interface, Layout, Resource, SystemValue};
@@ -176,6 +177,53 @@ pub struct Resolution {
     pub stage: StageBinding,
     /// Counted approximations (a preview colour for a slot with no texture), by name.
     pub policies: BTreeMap<String, u64>,
+}
+
+/// The fixed-function state Sekiro draws a material with, as far as a capture of the running game settles it (one session of
+/// 222,552 draws of 180 pixel programs in a castle interior, with each draw's blend, depth-stencil and rasterizer state read
+/// back from the D3D11 context and matched to the MTDs by program and material buffer):
+///
+/// - depth test `GreaterEqual` in every pass (the engine's depth is reversed); depth write on, except where the material states
+///   `g_GX_bDisableDepthWrite` (every blended draw matched to a material that states it wrote none, and every one matched to
+///   one that does not wrote depth);
+/// - blend `SrcAlpha`/`InvSrcAlpha` (add) on colour and `One`/`Zero` on alpha for `g_BlendMode` 2, render target 0, all
+///   channels written (the forward passes of the materials with that mode: cloud and ground fog, the moon, GXFlver `_al`); the
+///   G-buffer pass has no blending.
+///
+/// Not stated here, each for a reason the capture gives: the alpha test is the program's own (`discard` against
+/// `FC_AlphaRef`: kept where alpha is at least the reference, bound as a constant), so no fixed-function test is stated; the
+/// cull follows the face set (`fromsoft.face_cull`: the same material drew with both), not the material; the winding
+/// convention is the lowering's (it repairs windings from the stored normals); the stencil is the engine's per pass (a
+/// reference per model class, depth-equal passes after a prepass), the depth bias was set on some alpha-tested programs'
+/// draws (3 slope-scaled) with no matched field that predicts it, and blend modes 3, 4 and 5 were matched to no draw.
+pub fn render_state(material: &LayeredMaterial) -> RenderState {
+    let mut state = RenderState {
+        depth: Some(DepthState {
+            test: Compare::GreaterEqual,
+            write: !material.depth_write_disabled(),
+        }),
+        ..RenderState::default()
+    };
+    if material.blend_mode() == 2 {
+        let blend = Blend {
+            colour: BlendEquation {
+                source: BlendFactor::SrcAlpha,
+                destination: BlendFactor::OneMinusSrcAlpha,
+                op: BlendOp::Add,
+            },
+            alpha: BlendEquation {
+                source: BlendFactor::One,
+                destination: BlendFactor::Zero,
+                op: BlendOp::Add,
+            },
+        };
+        state.blend = Some(blend);
+        state.targets[0] = Some(TargetState {
+            blend: Some(blend),
+            write_mask: 0xf,
+        });
+    }
+    state
 }
 
 /// Bind the pixel program `shader` (entity `entity`) of a layered `material`. `metaparam` is the parameter definition of

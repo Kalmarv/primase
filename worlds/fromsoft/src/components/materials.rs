@@ -147,6 +147,30 @@ impl LayeredMaterial {
             })
             .unwrap_or(0)
     }
+    /// The first integer of parameter `name` (an int vector), where the definition states it.
+    fn int_parameter(&self, name: &str) -> Option<i32> {
+        self.definition
+            .parameters
+            .iter()
+            .find(|p| p.name == name)
+            .and_then(|p| match &p.value {
+                Value::Int(v) => v.first().copied(),
+                _ => None,
+            })
+    }
+    /// `g_BlendMode`: 0 opaque, 2 alpha blended (the two the captured game's draws tell apart: the others, 3, 4 and 5,
+    /// are stated by a handful of materials and no draw of one was matched); 0 where the material states none.
+    pub fn blend_mode(&self) -> i32 {
+        self.int_parameter("g_BlendMode").unwrap_or(0)
+    }
+    /// `g_GX_bDisableDepthWrite`: whether the material is drawn without writing depth (false where it states none).
+    pub fn depth_write_disabled(&self) -> bool {
+        self.definition
+            .parameters
+            .iter()
+            .find(|p| p.name == "g_GX_bDisableDepthWrite")
+            .is_some_and(|p| matches!(p.value, Value::Bool(true)))
+    }
     /// The G-buffer program file its shader and static switch select (`<shader>_<switch>_Gbuf.ppo`), the alpha-tested
     /// permutation (`<shader>_<switch>_Gbuf_[A].ppo`, the plain program with a discard against `FC_AlphaRef`) when the
     /// material has an alpha reference. Read from the bundles: all 34 switches of each of the three layered shaders have both

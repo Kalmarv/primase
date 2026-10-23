@@ -1,6 +1,6 @@
 //! `resolve-fromsoft-shaders`: the layered materials' G-buffer programs as `core.shader` entities and each material's
 //! `core.shader_binding`.
-use crate::layer_bake::resolve::{Unbound, resolve, resolve_vertex};
+use crate::layer_bake::resolve::{Unbound, render_state, resolve, resolve_vertex};
 use crate::materials::Material;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
 use primase_core::pass::{Options, Pass, PassLog};
@@ -25,6 +25,9 @@ use std::collections::BTreeMap;
 /// indices and weights (the geometry lowering keeps them for a skinned model), the shader's skinned permutation
 /// (`<shader>_Gbuf_Skin.vpo`); otherwise the unskinned one (`<shader>_Gbuf.vpo`). Run it after the geometry lowering, so
 /// the primitives exist.
+///
+/// The binding's render state is [`render_state`]'s: what a capture of the running game settles from the material's MTD
+/// (depth test and write, the alpha blend of `g_BlendMode` 2), and nothing it does not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolveFromSoftShaders {
     unbound: Unbound,
@@ -179,6 +182,9 @@ fn run(
         skinned: u64,
         mixed: u64,
         without_skin: u64,
+        blended: u64,
+        blend_unstated: u64,
+        without_depth_write: u64,
     }
     let mut tally = [Tally::default(); 2];
     let mut policies: BTreeMap<String, u64> = BTreeMap::new();
@@ -296,13 +302,16 @@ fn run(
             None => t.without_vertex += 1,
         }
         stages.push(resolution.stage);
-        world.insert(
-            material_entity,
-            ShaderBinding {
-                stages,
-                state: Default::default(),
-            },
-        );
+        let state = render_state(&material);
+        match material.blend_mode() {
+            0 => {}
+            2 => t.blended += 1,
+            _ => t.blend_unstated += 1,
+        }
+        if state.depth.is_some_and(|d| !d.write) {
+            t.without_depth_write += 1;
+        }
+        world.insert(material_entity, ShaderBinding { stages, state });
         tally[usize::from(!is_layered)].bound += 1;
     }
     for (t, which) in tally.into_iter().zip(["layered", "other"]) {
@@ -337,6 +346,26 @@ fn run(
                     "{which} materials drawn by skinned and unskinned primitives (bound to the unskinned vertex program)"
                 ),
                 t.mixed,
+            );
+        }
+        if t.blended > 0 {
+            log.count(
+                &format!(
+                    "{which} materials alpha blended (g_BlendMode 2: SrcAlpha/InvSrcAlpha in the state)"
+                ),
+                t.blended,
+            );
+        }
+        if t.blend_unstated > 0 {
+            log.count(
+                &format!("{which} materials of a blend mode other than 0 and 2 (no blend stated: no draw of one was matched)"),
+                t.blend_unstated,
+            );
+        }
+        if t.without_depth_write > 0 {
+            log.count(
+                &format!("{which} materials that disable depth write (g_GX_bDisableDepthWrite)"),
+                t.without_depth_write,
             );
         }
         if t.without_skin > 0 {
