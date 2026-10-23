@@ -1,9 +1,9 @@
-//! `resolve-gta-shaders` on a region of the map (Vespucci Beach by default, `PRIMASE_GTA_REGION` `x0,y0,x1,y1`): the
-//! materials bound to the G-buffer programs of their effects, unskinned and skinned, and the ones left unbound with the
-//! reason. Every binding is verified (`Component::verify`: its programs, resources, offsets and lanes are the
+//! `resolve-gta-shaders` on a region of the map (Vespucci Beach by default, the debug key `gta.region` `x0,y0,x1,y1`):
+//! the materials bound to the G-buffer programs of their effects, unskinned and skinned, and the ones left unbound with
+//! the reason. Every binding is verified (`Component::verify`: its programs, resources, offsets and lanes are the
 //! programs' own). The counts are printed.
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
+//! Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::ShaderBinding;
@@ -11,7 +11,7 @@ use primase_core::{Component, World};
 use primase_gta::components::GtaShader;
 use primase_gta::passes::resolve_shaders::ResolveGtaShaders;
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{real_data, real_data_value};
+use primase_testdata::{Game, debug, install, keys};
 
 fn run(world: &World, skinned: &str) -> (World, PassLog) {
     let options = Options::from([
@@ -30,11 +30,10 @@ fn run(world: &World, skinned: &str) -> (World, PassLog) {
 
 #[test]
 fn a_regions_materials_are_bound_or_left_with_a_reason() {
-    let (Some(dir), Some(keys)) = (real_data("PRIMASE_GTA_DIR"), real_data("PRIMASE_GTA_KEYS")) else {
+    let (Some(dir), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
-    let region: Vec<f32> = real_data_value("PRIMASE_GTA_REGION")
-        .and_then(|v| v.into_string().ok())
+    let region: Vec<f32> = debug("gta.region")
         .unwrap_or_else(|| "-1500,-1650,-1150,-1330".into())
         .split(',')
         .map(|v| v.trim().parse().unwrap())
