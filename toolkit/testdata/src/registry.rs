@@ -562,6 +562,13 @@ pub const DECLARED: &[Declared] = &[
         source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
     },
     Declared {
+        query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "ycd"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder holding `dictionaries.jsonl`: an independent reader's decoding of every clip dictionary (`.ycd`) of that install, the CodeWalker harness's `batch` mode over the install's `.ycd` list (`DumpYcd`: per animation its frames, duration, bone ids, and per sequence block and bone track the channel types and SHA-256 of the channel values and of the evaluated vectors); the channel decoder's values are checked against it (needs `installs.gta`, `keys.gta`); `worlds/gta/tests/ycd_channels.rs`"#,
+        source: r#"independent: CodeWalker.Core 485d56b (GPL-licensed: run as a tool, no code taken), through a thin dump harness kept with the private oracle tools (`batch` mode)"#,
+    },
+    Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Elden, "shaders"),
         status: Status::Live,
         gate: false,

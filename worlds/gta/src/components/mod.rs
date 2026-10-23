@@ -9,6 +9,7 @@
 //! | material | [`GtaShader`] (one per drawable and shader) |
 //! | texture | `core.texture`, `core.name`, `core.source` |
 //! | ped part | a prototype of a component ped's drawable dictionary entry: [`GtaPedPart`], [`GtaSkeletonRef`], `core.condition` on its slot's `gta.ped.<slot>` axis |
+//! | animation | [`GtaAnimation`] (an animation of a clip dictionary, its bone tracks sampled a frame), `core.name` |
 //! | effect | [`GtaEffect`] (the programs a drawable's shader name selects), [`GtaMaterialEffect`] (a material's effect) |
 //! | shader program | `core.shader`, `core.name` |
 
@@ -639,6 +640,100 @@ impl Component for GtaPedPart {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
+    }
+}
+
+/// One animation of a clip dictionary ([`crate::rage::ycd`]) with its bone tracks decoded
+/// ([`crate::rage::ycd_channels`]) and sampled at every frame, as stored: a track's bone is the bone's tag (the tags of
+/// `skeleton`'s [`GtaSkeleton`]) and its kind a track number (0 translation, 1 rotation, 2 scale, 5 and 6 the mover's
+/// translation and rotation; the others are known only by their number). `lower-gta-clips` makes the `core.clip`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GtaAnimation {
+    /// The entity holding the [`GtaSkeleton`] whose bones the tracks animate.
+    pub skeleton: Entity,
+    /// The animation's hash in its dictionary.
+    pub hash: u32,
+    pub frames: u32,
+    /// Seconds from the first frame to the last.
+    pub duration: f32,
+    /// The animation's flag bytes (0x10 and 0x11), as stored (their meaning is not known).
+    pub flags: [u8; 2],
+    pub tracks: Vec<GtaAnimationTrack>,
+    /// The clips of the dictionary that play this animation.
+    pub clips: Vec<GtaClipUse>,
+}
+
+/// One bone track of a [`GtaAnimation`]: `width` values a frame (`samples` is `frames * width` floats; a quaternion
+/// x, y, z, w).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GtaAnimationTrack {
+    pub bone: u16,
+    pub track: u8,
+    /// The byte beside the track number in the bone id, as stored (its meaning is not known).
+    pub unknown: u8,
+    pub width: u8,
+    pub samples: Vec<f32>,
+}
+
+/// A clip of the dictionary playing an animation: its name hash and name, and the window of the animation it plays
+/// (seconds) at a rate.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GtaClipUse {
+    pub hash: u32,
+    pub name: String,
+    pub start: f32,
+    pub end: f32,
+    pub rate: f32,
+}
+
+impl Component for GtaAnimation {
+    const NAME: &'static str = "gta.animation";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    /// Everything but the samples.
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "skeleton": self.skeleton,
+            "hash": self.hash,
+            "frames": self.frames,
+            "duration": primase_core::json::to_value(&self.duration)?,
+            "flags": self.flags,
+            "tracks": self.tracks.iter().map(|t| serde_json::json!({
+                "bone": t.bone, "track": t.track, "unknown": t.unknown, "width": t.width,
+            })).collect::<Vec<_>>(),
+            "clips": to_json(&self.clips)?,
+        })))
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.skeleton);
+    }
+    /// The skeleton holds a [`GtaSkeleton`]; a track's samples are `frames * width` finite floats; a duration that is
+    /// finite and not negative.
+    fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
+        if !w.has::<GtaSkeleton>(self.skeleton) {
+            return Err(format!("{:?} holds no gta.skeleton", self.skeleton));
+        }
+        if !self.duration.is_finite() || self.duration < 0.0 {
+            return Err(format!("duration {} not finite and non-negative", self.duration));
+        }
+        let frames = usize::try_from(self.frames).map_err(|e| e.to_string())?;
+        for t in &self.tracks {
+            if t.samples.len() != frames.saturating_mul(usize::from(t.width)) {
+                return Err(format!(
+                    "track {} of bone {:#06x}: {} samples for {frames} frames of {}",
+                    t.track,
+                    t.bone,
+                    t.samples.len(),
+                    t.width
+                ));
+            }
+            if !t.samples.iter().all(|x| x.is_finite()) {
+                return Err(format!(
+                    "track {} of bone {:#06x}: a sample not finite",
+                    t.track, t.bone
+                ));
+            }
+        }
+        Ok(())
     }
 }
 

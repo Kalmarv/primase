@@ -1,5 +1,6 @@
 //! The GTA passes and the tables only they use: lowerings to core's meanings, the export's selections and the shader
 //! tables. No I/O: each takes the world and its settings.
+pub mod clips;
 pub mod collision;
 pub mod gbuffer;
 pub mod interiors;

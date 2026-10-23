@@ -15,3 +15,4 @@ pub mod sgd2_effect;
 pub mod sgd2_table;
 pub mod texture;
 pub mod ycd;
+pub mod ycd_channels;
