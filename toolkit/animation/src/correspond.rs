@@ -92,7 +92,7 @@ impl Pass for CorrespondSkeletons {
         &[Skeleton::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[JointMap::NAME]
+        &[JointMap::NAME, Name::NAME]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let (a, b) = (find(w, &self.from)?, find(w, &self.to)?);
