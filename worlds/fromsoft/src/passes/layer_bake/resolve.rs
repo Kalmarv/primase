@@ -212,15 +212,22 @@ pub fn resolve(
             ));
         }
         let register = register(resource)?;
-        // the engine's own texture the alpha-tested permutations declare: dither noise, read only by the dithered fade
-        // (`FC_isDitherAlpha`), which the bake leaves off; the material binds nothing to it
-        if resource.provenance.name == ENGINE_DITHER_TEXTURE {
-            let why = "engine dither texture: read only by the dithered alpha fade, which is off".to_owned();
+        // a texture that is not a material slot (no `Texture2D_<n>` in its name) is the engine's own: the dither noise the
+        // alpha-tested permutations read for the dithered fade (a neutral grey: the fade is off), a depth or scene texture
+        // of a program that reads one (zero). The material binds nothing to it; each is counted by name.
+        if texture_slot(resource).is_err() {
+            let name = &resource.provenance.name;
+            let (value, what) = if name == ENGINE_DITHER_TEXTURE {
+                ([0.5; 4], "read only by the dithered alpha fade, which is off")
+            } else {
+                ([0.; 4], "not a material slot, left at zero")
+            };
+            let why = format!("engine texture {name}: {what}");
             *policies.entry(why.clone()).or_default() += 1;
             bindings.push(TextureBinding {
                 resource: resource.id,
                 sampler: None,
-                source: TextureSource::Default { value: [0.5; 4], why },
+                source: TextureSource::Default { value, why },
             });
             continue;
         }
@@ -399,18 +406,35 @@ pub fn resolve(
         let field = layout.fields[name];
         let Some(param) = material.definition.parameters.iter().find(|p| p.name == *name) else {
             // the shader bundle's metaparam states a default for every parameter it declares: the value of one the
-            // material does not state (a plain value; a colour's intensity is a second parameter of the material)
-            let default = metaparam
-                .and_then(|m| m.mtd_params.iter().find(|p| p.name == *name))
-                .filter(|p| p.value_type != 12);
+            // material does not state. A colour's default is its four lanes and its intensity (the fifth), folded as
+            // a stated colour's is: the first three times the intensity
+            let default = metaparam.and_then(|m| m.mtd_params.iter().find(|p| p.name == *name));
             if let Some(p) = default {
-                let n = (field.words as usize).min(p.default.len());
+                let mut value = p.default;
+                if p.value_type == 12 {
+                    for v in &mut value[..3] {
+                        *v *= p.default[4];
+                    }
+                }
+                let lanes = if p.value_type == 12 { 4 } else { value.len() };
+                let n = (field.words as usize).min(lanes);
                 *policies
                     .entry(
                         "missing SAT parameter taken from the shader bundle's metaparam default".to_owned(),
                     )
                     .or_default() += 1;
-                constant(name, 0, field.words * 4, words(&p.default[..n]))?;
+                constant(name, 0, field.words * 4, words(&value[..n]))?;
+            } else if let Some(p) = metaparam
+                .and_then(|m| m.ca_params.iter().find(|p| p.name == *name))
+                .filter(|_| field.words == 1)
+            {
+                // a bundle that declares CAParams (the other SAT shaders: their flags say 0x10) names each component of a
+                // parameter the engine sets per draw by the program's own field name, with the value it has when none
+                // is set
+                *policies
+                    .entry("missing SAT parameter taken from the shader bundle's CAParam default".to_owned())
+                    .or_default() += 1;
+                constant(name, 0, 4, words(&[p.default]))?;
             } else {
                 constant(
                     name,
@@ -558,6 +582,8 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
                 ("POSITION", 0, _) => InputRole::Stream(Semantic::Position),
                 ("NORMAL", 0, _) => InputRole::Stream(Semantic::Normal),
                 ("TANGENT", 0, _) => InputRole::Stream(Semantic::Tangent),
+                // a program that reads one coordinate set takes its two lanes alone
+                ("TEXCOORD", 0, _) if v.value.width <= 2 => InputRole::Stream(Semantic::TexCoord(0)),
                 // the packed pair of texture coordinate sets: uv0 in `xy`, uv1 in `zw`
                 ("TEXCOORD", 0, _) => InputRole::Lanes(vec![
                     LaneStream {

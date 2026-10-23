@@ -140,9 +140,28 @@ fn run(
     unbound: Unbound,
     log: &mut PassLog,
 ) -> Result<(), String> {
-    let layered: Vec<(Entity, crate::materials::LayeredMaterial)> = world
+    // every material an MTD defines, as the definition and bindings the binding reads: a layered material's own, the
+    // others' (the SAT shaders without a static switch) as the same record, with whether it is layered
+    let candidates: Vec<(Entity, crate::materials::LayeredMaterial, bool)> = world
         .iter::<Material>()
-        .filter_map(|(e, m)| m.layered.clone().map(|l| (e, l)))
+        .filter_map(|(e, m)| {
+            match (
+                &m.layered,
+                m.definition.as_ref().and_then(crate::materials::Definition::mtd),
+            ) {
+                (Some(l), _) => Some((e, l.clone(), true)),
+                (None, Some(d)) => Some((
+                    e,
+                    crate::materials::LayeredMaterial {
+                        mtd: m.mtd.clone(),
+                        definition: d.clone(),
+                        bindings: m.bindings.clone(),
+                    },
+                    false,
+                )),
+                (None, None) => None,
+            }
+        })
         .collect();
     // the programs read once, each its own entity
     let mut shaders: BTreeMap<String, (Entity, primase_dxbc::Shader)> = BTreeMap::new();
@@ -151,15 +170,34 @@ fn run(
     // the vertex programs, each its own entity, by file name
     let mut vertex_shaders: BTreeMap<String, Entity> = BTreeMap::new();
     let draws = draws(world);
-    let (mut bound, mut without_program, mut without_vertex) = (0u64, 0u64, 0u64);
-    let (mut skinned_materials, mut mixed_materials, mut without_skin) = (0u64, 0u64, 0u64);
+    // counted apart for the layered materials and the others: [layered, other]
+    #[derive(Default, Clone, Copy)]
+    struct Tally {
+        bound: u64,
+        without_program: u64,
+        without_vertex: u64,
+        skinned: u64,
+        mixed: u64,
+        without_skin: u64,
+    }
+    let mut tally = [Tally::default(); 2];
     let mut policies: BTreeMap<String, u64> = BTreeMap::new();
-    for (material_entity, material) in layered {
-        let name = material.program_name().map_err(|e| e.to_string())?;
-        let Some(bytes) = programs.get(&name) else {
-            without_program += 1;
+    for (material_entity, material, is_layered) in candidates {
+        let t = &mut tally[usize::from(!is_layered)];
+        let name = material.gbuffer_program();
+        // the layered programs the reader kept, else the one the shader's bundle holds under that name
+        let bytes = programs.get(&name).cloned().or_else(|| {
+            world
+                .get::<MaterialShader>(material_entity)
+                .and_then(|m| world.get::<ShaderBundle>(m.0))
+                .and_then(|b| b.program(&name))
+                .map(|p| p.code.clone())
+        });
+        let Some(bytes) = bytes else {
+            t.without_program += 1;
             continue;
         };
+        let bytes = &bytes;
         if !shaders.contains_key(&name) {
             let parsed = primase_dxbc::Shader::parse(bytes).map_err(|e| format!("{name}: {e}"))?;
             let entity = world.spawn();
@@ -217,7 +255,7 @@ fn run(
         let (unskinned_draws, skinned_draws) = draws.get(&material_entity).copied().unwrap_or((0, 0));
         let skin = skinned_draws > 0 && unskinned_draws == 0;
         if skinned_draws > 0 && unskinned_draws > 0 {
-            mixed_materials += 1;
+            t.mixed += 1;
         }
         let bundle = world
             .get::<MaterialShader>(material_entity)
@@ -226,9 +264,9 @@ fn run(
             .and_then(|b| b.program(&format!("{}_Gbuf{}.vpo", b.name, if skin { "_Skin" } else { "" })))
             .map(|p| (p.name.clone(), p.code.clone()));
         if skin {
-            skinned_materials += 1;
+            t.skinned += 1;
             if vertex.is_none() && bundle.is_some() {
-                without_skin += 1;
+                t.without_skin += 1;
             }
         }
         let mut stages = Vec::new();
@@ -250,7 +288,7 @@ fn run(
                 });
                 stages.push(resolve_vertex(&interface, entity).map_err(|e| format!("{vertex_name}: {e}"))?);
             }
-            None => without_vertex += 1,
+            None => t.without_vertex += 1,
         }
         stages.push(resolution.stage);
         world.insert(
@@ -260,38 +298,50 @@ fn run(
                 state: Default::default(),
             },
         );
-        bound += 1;
+        tally[usize::from(!is_layered)].bound += 1;
     }
-    log.count("layered materials bound", bound);
-    if without_program > 0 {
-        log.count(
-            "layered materials whose program the reader does not hold",
-            without_program,
-        );
-    }
-    if without_vertex > 0 {
-        log.count(
-            "layered materials without a vertex program (no bundle, or no <shader>_Gbuf.vpo in it)",
-            without_vertex,
-        );
-    }
-    if skinned_materials > 0 {
-        log.count(
-            "layered materials drawn only by skinned primitives (the skinned vertex program)",
-            skinned_materials,
-        );
-    }
-    if mixed_materials > 0 {
-        log.count(
-            "layered materials drawn by skinned and unskinned primitives (bound to the unskinned vertex program)",
-            mixed_materials,
-        );
-    }
-    if without_skin > 0 {
-        log.count(
-            "skinned layered materials whose bundle has no <shader>_Gbuf_Skin.vpo (no vertex program bound)",
-            without_skin,
-        );
+    for (t, which) in tally.into_iter().zip(["layered", "other"]) {
+        // the other SAT materials' keys are counted only where there are some, the layered keys as ever
+        if which == "other" && t.bound + t.without_program == 0 {
+            continue;
+        }
+        log.count(&format!("{which} materials bound"), t.bound);
+        if t.without_program > 0 {
+            log.count(
+                &format!("{which} materials whose program the reader or the shader's bundle does not hold"),
+                t.without_program,
+            );
+        }
+        if t.without_vertex > 0 {
+            log.count(
+                &format!(
+                    "{which} materials without a vertex program (no bundle, or no <shader>_Gbuf.vpo in it)"
+                ),
+                t.without_vertex,
+            );
+        }
+        if t.skinned > 0 {
+            log.count(
+                &format!("{which} materials drawn only by skinned primitives (the skinned vertex program)"),
+                t.skinned,
+            );
+        }
+        if t.mixed > 0 {
+            log.count(
+                &format!(
+                    "{which} materials drawn by skinned and unskinned primitives (bound to the unskinned vertex program)"
+                ),
+                t.mixed,
+            );
+        }
+        if t.without_skin > 0 {
+            log.count(
+                &format!(
+                    "skinned {which} materials whose bundle has no <shader>_Gbuf_Skin.vpo (no vertex program bound)"
+                ),
+                t.without_skin,
+            );
+        }
     }
     log.count("shader programs", (shaders.len() + vertex_shaders.len()) as u64);
     log.count("bound texture files", textures.len() as u64);

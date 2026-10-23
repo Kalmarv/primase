@@ -485,8 +485,8 @@ impl Prepared {
                 .resource(bound.resource)
                 .ok_or_else(|| invalid("layer binding", 0, "a texture the shader lacks"))?;
             let register = resolve::register(resource)?;
-            // the engine's dither texture is a constant (the binding states it Default), not a material slot
-            if resource.provenance.name == resolve::ENGINE_DITHER_TEXTURE {
+            // an engine texture (no material slot in its name) is a constant, as the binding states it Default
+            if resolve::texture_slot(resource).is_err() {
                 match &bound.source {
                     TextureSource::Default { value, why } => {
                         *policies.entry(why.clone()).or_default() += 1;
@@ -497,7 +497,7 @@ impl Prepared {
                         return Err(invalid(
                             "layer binding",
                             0,
-                            "the engine's dither texture is bound to a texture",
+                            "an engine texture is bound to a texture",
                         ));
                     }
                 }

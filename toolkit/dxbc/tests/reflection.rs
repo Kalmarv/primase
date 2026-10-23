@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-use primase_shader::{ConstantType, ResourceKind, ScalarType, Value};
+use primase_shader::{BufferKind, ConstantType, D3dClass, ResourceKind, ScalarType, Value};
 mod common;
 use std::collections::BTreeMap;
 
@@ -85,9 +85,8 @@ fn checked_reflection_ranges_and_cycles() {
             })
         )
     );
-    // what the mapping does not know is refused by name: a tbuffer, a resource type with a counter, flags and counts
+    // what the mapping does not know is refused by name: a resource type with a counter, flags and counts
     for (at, value, named) in [
-        (180, 1, "D3D_SIT_TBUFFER"),
         (180, 9, "D3D_SIT_UAV_APPEND_STRUCTURED"),
         (180, 99, "an unknown resource type"),
         (204, 0x40, "flags 0x40"),
@@ -98,10 +97,26 @@ fn checked_reflection_ranges_and_cycles() {
         let message = primase_dxbc::reflection(&fixture(&bad)).unwrap_err().to_string();
         assert!(message.contains(named), "{named}: {message}");
     }
+    // a tbuffer (a layout of type 1 and its binding of type 1: constants read through a shader-resource register) is a
+    // typed buffer of four-lane rows, its layout not kept, as a structured buffer's is not
+    let mut tbuffer = valid.clone();
+    set(&mut tbuffer, 80, 1);
+    set(&mut tbuffer, 180, 1);
+    let r = primase_dxbc::reflection(&fixture(&tbuffer)).unwrap();
+    assert_eq!(
+        r.resources[0].kind,
+        ResourceKind::Buffer(BufferKind::Typed(Value {
+            scalar: ScalarType::Float,
+            width: 4
+        }))
+    );
+    let binding = r.resources[0].provenance.d3d.unwrap();
+    assert_eq!((binding.class, binding.register), (D3dClass::ShaderResource, 0));
+    // a tbuffer layout whose binding is a constant buffer has no layout to bind
     let mut bad = valid.clone();
     set(&mut bad, 80, 1);
     let message = primase_dxbc::reflection(&fixture(&bad)).unwrap_err().to_string();
-    assert!(message.contains("tbuffer"), "{message}");
+    assert!(message.contains("without its layout"), "{message}");
     let mut bad = valid.clone();
     set(&mut bad, 92, 17);
     assert!(

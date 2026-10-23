@@ -368,7 +368,7 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
     let log = &run.steps[0].log;
     assert_eq!(log.counts["layered materials bound"], 2);
     assert_eq!(
-        log.counts["layered materials whose program the reader does not hold"],
+        log.counts["layered materials whose program the reader or the shader's bundle does not hold"],
         1
     );
     assert_eq!(
@@ -907,7 +907,7 @@ fn the_bake_freezes_the_alpha_test_off() {
 /// metaparam does not declare is still Unknown.
 #[test]
 fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
-    use primase_fromsoft::metaparam::{Metaparam, MtdParam};
+    use primase_fromsoft::metaparam::{CaParam, Metaparam, MtdParam};
     let shader = primase_dxbc::Shader::parse(PROGRAM).unwrap();
     let program = World::default().spawn();
     let metaparam = Metaparam {
@@ -955,4 +955,122 @@ fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
             .get("missing SAT parameter taken from the shader bundle's metaparam default"),
         Some(&1)
     );
+    // a bundle that declares it as a CAParam (one component per record, by the program's own field name) gives its default
+    let by_ca = Metaparam {
+        mtd_params: Vec::new(),
+        ca_params: vec![CaParam {
+            name: "M_Multiple__snp_missing".into(),
+            sequence_index: 0,
+            param_id: 0,
+            component: 0,
+            default: 0.25,
+            unknown_40: 0,
+            key: 0,
+        }],
+        ..metaparam
+    };
+    let resolution = resolve(
+        &shader,
+        program,
+        &material(),
+        Some(&by_ca),
+        Unbound::Preview,
+        &mut |_, _| Ok(None),
+    )
+    .unwrap();
+    let missing = constants(&resolution.stage, &shader)
+        .into_iter()
+        .find(|c| c.1 == "M_Multiple__snp_missing")
+        .unwrap();
+    assert_eq!(missing.4, bits(&[0.25]));
+    assert_eq!(
+        resolution
+            .policies
+            .get("missing SAT parameter taken from the shader bundle's CAParam default"),
+        Some(&1)
+    );
+}
+
+/// The SAT shaders that are not layered (no static switch: one `<shader>_Gbuf.ppo`) are bound the same way, their program
+/// taken from the shader's bundle; counted apart from the layered materials.
+#[test]
+fn the_pass_binds_the_other_sat_materials_through_their_bundle() {
+    let mut world = World::default();
+    let mut definition = material().definition.clone();
+    definition.shader = "N:\\NTC\\data\\Material\\sat\\OutputData\\SPX\\MetallicValue.spx".into();
+    definition.parameters.retain(|p| p.name != "GXFT_SATStaticSwitch");
+    let plain = world.spawn();
+    world.insert(
+        plain,
+        Material {
+            mtd: "M[AMSN_light]".into(),
+            definition: Some(primase_fromsoft::materials::Definition::Mtd(definition.clone())),
+            gx: Vec::new(),
+            shader: "MetallicValue".into(),
+            class: "opaque".into(),
+            skip: None,
+            cutoff: 0.5,
+            bindings: material().bindings,
+            layered: None,
+        },
+    );
+    // a second one whose bundle holds no such program
+    let lacking = world.spawn();
+    let mut other = world.get::<Material>(plain).unwrap().clone();
+    other.shader = "MetallicTex".into();
+    if let Some(primase_fromsoft::materials::Definition::Mtd(d)) = &mut other.definition {
+        d.shader = "N:\\NTC\\data\\Material\\sat\\OutputData\\SPX\\MetallicTex.spx".into();
+    }
+    world.insert(lacking, other);
+    world.insert_resource(ShaderPrograms(BTreeMap::new()));
+    world.insert_resource(TexturePayloads(BTreeMap::from([(
+        "grass_a".to_owned(),
+        dds(4, 4),
+    )])));
+    let bundle = |name: &str, program: &str| ShaderBundle {
+        name: name.into(),
+        programs: vec![ShaderProgram {
+            name: program.into(),
+            stage: ShaderStage::Pixel,
+            format: primase_core::shader::ShaderFormat::Dxbc,
+            code: Arc::from(PROGRAM),
+        }],
+        parameters: None,
+    };
+    let (a, b) = (world.spawn(), world.spawn());
+    world.insert(a, bundle("MetallicValue", "MetallicValue_Gbuf.ppo"));
+    world.insert(b, bundle("MetallicTex", "MetallicTex_Gbuf_[A].ppo"));
+    world.insert(plain, MaterialShader(a));
+    world.insert(lacking, MaterialShader(b));
+    let run = common::run(&mut world, "resolve-fromsoft-shaders{unbound-textures=preview}").unwrap();
+    let counts = &run.steps[0].log.counts;
+    assert_eq!(counts["other materials bound"], 1);
+    assert_eq!(
+        counts["other materials whose program the reader or the shader's bundle does not hold"],
+        1
+    );
+    assert!(!counts.contains_key("layered materials bound") || counts["layered materials bound"] == 0);
+    let binding = world.get::<ShaderBinding>(plain).unwrap();
+    let pixel = binding.stage(Stage::Pixel).unwrap();
+    assert_eq!(
+        world.get::<Name>(pixel.shader).unwrap().0,
+        "MetallicValue_Gbuf.ppo"
+    );
+    assert!(world.get::<ShaderBinding>(lacking).is_none());
+}
+
+/// A vertex program that takes one coordinate set binds it alone, not as the layered programs' packed pair.
+#[test]
+fn a_one_set_vertex_program_binds_its_coordinates_as_the_first_set() {
+    const SINGLE: &[u8] = include_bytes!("fixtures/single_uv_vs.dxbc");
+    let interface = primase_dxbc::reflection(SINGLE).unwrap();
+    let entity = World::default().spawn();
+    let stage = primase_fromsoft::layer_bake::resolve::resolve_vertex(&interface, entity).unwrap();
+    let uv = stage
+        .inputs
+        .iter()
+        .find(|i| i.label.name == "TEXCOORD")
+        .map(|i| i.role.clone())
+        .unwrap();
+    assert_eq!(uv, InputRole::Stream(Semantic::TexCoord(0)));
 }

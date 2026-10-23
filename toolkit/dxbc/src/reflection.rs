@@ -365,6 +365,14 @@ impl Binding {
             access: Access::ReadWrite,
         };
         Ok(match self.kind {
+            // a tbuffer is read as a typed buffer of four-lane rows (float where the record states no return type)
+            1 => (
+                ResourceKind::Buffer(BufferKind::Typed(self.element().unwrap_or(Value {
+                    scalar: ScalarType::Float,
+                    width: 4,
+                }))),
+                D3dClass::ShaderResource,
+            ),
             2 if self.dimension == 1 => (
                 ResourceKind::Buffer(BufferKind::Typed(self.element()?)),
                 D3dClass::ShaderResource,
@@ -472,7 +480,8 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
         bindings.push((p, binding));
     }
     // the constant-buffer table: the layouts of cbuffers (type 0) by name; a structured buffer's element layout
-    // (type 3) is not retained, the vocabulary names a structured buffer by its stride
+    // (type 3) and a tbuffer's (type 1: constants the program reads through a shader-resource register, as a typed
+    // buffer) are not retained, the vocabulary names them by their view
     let mut layouts: Vec<(String, BufferLayout, bool)> = Vec::new();
     let offset = v.u32(4)? as usize;
     let mut budget = 65536;
@@ -481,14 +490,13 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
         let name = v.string(v.u32(p)? as usize)?;
         match v.u32(p + 20)? {
             0 => {}
-            3 => continue,
+            1 | 3 => continue,
             kind => {
                 return Err(error(
                     p / 4,
                     format!(
                         "{name}: buffer type {kind} ({}) is not mapped",
                         match kind {
-                            1 => "tbuffer",
                             2 => "interface pointers",
                             _ => "unknown",
                         }

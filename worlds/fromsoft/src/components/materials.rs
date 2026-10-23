@@ -144,6 +144,20 @@ impl LayeredMaterial {
     /// (no plain program discards); in a capture of the running game the contents of the pixel stage's material buffer
     /// for a plain program have `FC_AlphaRef.x` = -100 and the alpha-tested one's 0.502 = 128 / 255 of `g_AlphaRef`.
     pub fn program_name(&self) -> crate::Result<String> {
+        if !self
+            .definition
+            .parameters
+            .iter()
+            .any(|p| p.name == "GXFT_SATStaticSwitch")
+        {
+            return Err(crate::invalid("layer shader", 0, "missing static switch"));
+        }
+        Ok(self.gbuffer_program())
+    }
+    /// The G-buffer pixel program file the material's shader, its static switch where it states one and its alpha
+    /// reference select: `<shader>[_<switch>]_Gbuf[_[A]].ppo`. A layered shader has a switch (all 34 of each of the three
+    /// have their programs); the other SAT shaders of Sekiro state none and have one program (`<shader>_Gbuf.ppo`).
+    pub fn gbuffer_program(&self) -> String {
         let leaf = self.definition.shader.rsplit(['/', '\\']).next().unwrap_or("");
         let shader = leaf.rsplit_once('.').map_or(leaf, |x| x.0);
         let switch = self
@@ -155,9 +169,9 @@ impl LayeredMaterial {
                 Value::Int(v) => v.first().copied(),
                 _ => None,
             })
-            .ok_or_else(|| crate::invalid("layer shader", 0, "missing static switch"))?;
+            .map_or(String::new(), |s| format!("_{s}"));
         let alpha = if self.alpha_reference() > 0 { "_[A]" } else { "" };
-        Ok(format!("{shader}_{switch}_Gbuf{alpha}.ppo"))
+        format!("{shader}{switch}_Gbuf{alpha}.ppo")
     }
 }
 impl Component for LayeredMaterial {
