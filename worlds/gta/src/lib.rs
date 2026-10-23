@@ -75,9 +75,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register("gta-pose-fragments", |o| none(o, passes::pose::PoseFragments));
     reg.register("lower-gta-skin", |o| none(o, passes::skin::LowerGtaSkin));
     reg.register("lower-gta-clips", |o| none(o, passes::clips::LowerGtaClips));
-    reg.register("lower-gta-pbr", |o| {
-        Ok(Box::new(passes::lower::LowerGtaPbr::from_options(o)?))
-    });
+    // day or night lighting is the caller's choice: no default
+    reg.register_requiring(
+        "lower-gta-pbr",
+        |o| Ok(Box::new(passes::lower::LowerGtaPbr::from_options(o)?)),
+        &[("night", "false")],
+    );
     reg.register("gta-winding", |o| none(o, passes::winding::GtaWinding));
     reg.register("gta-tint", |o| none(o, passes::tint::GtaTintVariants));
     reg.register("gta-terrain-layers", |o| {
@@ -120,9 +123,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register("lower-gta-surfaces", |o| {
         none(o, passes::surfaces::LowerGtaSurfaces)
     });
-    reg.register("gta-select-water", |o| {
-        Ok(Box::new(passes::water::SelectGtaWater::from_options(o)?))
-    });
+    // how the water is clipped is the caller's choice: no default
+    reg.register_requiring(
+        "gta-select-water",
+        |o| Ok(Box::new(passes::water::SelectGtaWater::from_options(o)?)),
+        &[("clip", "region")],
+    );
     reg.register("lower-gta-water", |o| none(o, passes::water::LowerGtaWater));
     // which technique of an effect a draw uses (pass, vertex format, alpha mode) is the draw's choice: no default
     reg.register_requiring(
@@ -134,9 +140,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         },
         &[("technique", "deferred_draw"), ("unset-textures", "white")],
     );
-    reg.register("lower-gta-lights", |o| {
-        Ok(Box::new(passes::lights::LowerGtaLights::from_options(o)?))
-    });
+    // which hour's lights are drawn is the caller's choice: no default
+    reg.register_requiring(
+        "lower-gta-lights",
+        |o| Ok(Box::new(passes::lights::LowerGtaLights::from_options(o)?)),
+        &[("hour", "every")],
+    );
     reg.register("gta-leave-out-interiors", |o| {
         Ok(Box::new(passes::interiors::LeaveOutInteriors::from_options(o)?))
     });
@@ -201,6 +210,16 @@ mod tests {
                         .map(|(k, v)| (k.to_owned(), v.to_owned()))
                         .collect(),
                 )
+            } else if let Some(o) = [
+                ("lower-gta-pbr", ("night", "false")),
+                ("gta-select-water", ("clip", "region")),
+                ("lower-gta-lights", ("hour", "every")),
+            ]
+            .into_iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, (k, v))| [(k.to_owned(), v.to_owned())].into_iter().collect())
+            {
+                Some(o)
             } else {
                 None
             };
