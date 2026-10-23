@@ -1,4 +1,5 @@
-//! A Shader's compiled programs, as a player stores them: per pass, the fragment program's variants (each a keyword
+//! A Shader's compiled programs, as a player stores them: per pass, each stage's program (vertex, fragment, geometry,
+//! hull, domain: the stages the pass has) with its variants (each a keyword
 //! set, a GPU program type and an entry of the compressed blob) and their parameters (constant buffers with each
 //! field's name and byte offset, texture and sampler bind slots), read from `m_ParsedForm`; and a variant's code from
 //! the platform's LZ4-compressed blob. What the bindings mean for a material is the caller's.
@@ -36,7 +37,7 @@ pub struct Variant {
     pub parameters: Option<Parameters>,
 }
 
-/// One pass's fragment program: its variants and the parameters common to them (empty where each variant has its
+/// One pass's program of one stage: its variants and the parameters common to them (empty where each variant has its
 /// own).
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct PassProgram {
@@ -51,11 +52,65 @@ impl PassProgram {
     }
 }
 
-/// A Shader's compiled fragment programs: `passes[subshader][pass]`, and its per-platform blobs.
+/// The stages Unity stores a pass's programs for (`progVertex`, `progFragment`, `progGeometry`, `progHull`,
+/// `progDomain`), in that order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+pub enum Stage {
+    Vertex,
+    Fragment,
+    Geometry,
+    Hull,
+    Domain,
+}
+
+impl Stage {
+    pub const ALL: [Stage; 5] = [
+        Stage::Vertex,
+        Stage::Fragment,
+        Stage::Geometry,
+        Stage::Hull,
+        Stage::Domain,
+    ];
+
+    /// The pass field Unity stores the stage's program under.
+    fn field(self) -> &'static str {
+        match self {
+            Stage::Vertex => "progVertex",
+            Stage::Fragment => "progFragment",
+            Stage::Geometry => "progGeometry",
+            Stage::Hull => "progHull",
+            Stage::Domain => "progDomain",
+        }
+    }
+}
+
+/// One pass's programs, a [`PassProgram`] per stage (empty where the pass stores none for it).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PassStages {
+    pub vertex: PassProgram,
+    pub fragment: PassProgram,
+    pub geometry: PassProgram,
+    pub hull: PassProgram,
+    pub domain: PassProgram,
+}
+
+impl PassStages {
+    pub fn stage(&self, stage: Stage) -> &PassProgram {
+        match stage {
+            Stage::Vertex => &self.vertex,
+            Stage::Fragment => &self.fragment,
+            Stage::Geometry => &self.geometry,
+            Stage::Hull => &self.hull,
+            Stage::Domain => &self.domain,
+        }
+    }
+}
+
+/// A Shader's compiled programs: `passes[subshader][pass]`, and its per-platform blobs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShaderPrograms {
     pub name: String,
-    pub passes: Vec<Vec<PassProgram>>,
+    pub passes: Vec<Vec<PassStages>>,
     /// Unity's `ShaderCompilerPlatform` of each blob (4: D3D11).
     pub platforms: Vec<i64>,
     /// Per platform, per segment: offset, compressed and decompressed length.
@@ -213,6 +268,74 @@ fn parameters(v: &Value, names: &std::collections::BTreeMap<i64, String>) -> Res
     })
 }
 
+/// One stage's program of a pass as stored (`program` is its `prog*` value): its variants and common parameters, names
+/// resolved through the pass's name table `names` and the form's `keyword_names`; `shader` names the shader in errors.
+fn stage_program(
+    program: &Value,
+    names: &std::collections::BTreeMap<i64, String>,
+    keyword_names: &[String],
+    name: &str,
+) -> Result<PassProgram> {
+    let mut variants = Vec::new();
+    // before 2021.2: one list, each variant with its tier, keywords by name index and own parameters
+    for v in items(program, "m_SubPrograms")? {
+        let mut keywords = Vec::new();
+        for k in ["m_GlobalKeywordIndices", "m_LocalKeywordIndices"] {
+            if let Some(k) = v.get(k) {
+                for i in ints(k)? {
+                    keywords.push(names.get(&i).cloned().ok_or_else(|| {
+                        invalid(format!("shader {name}: keyword index {i} past the pass's names"))
+                    })?);
+                }
+            }
+        }
+        variants.push(Variant {
+            group: usize::try_from(int(v, "m_ShaderHardwareTier")?)
+                .map_err(|_| invalid("shader program: a negative hardware tier"))?,
+            blob_index: u32_of(int(v, "m_BlobIndex")?, "blob index")?,
+            keywords,
+            gpu_program_type: int(v, "m_GpuProgramType")?,
+            requirements: v.get("m_ShaderRequirements").and_then(Value::as_i64).unwrap_or(0),
+            parameters: Some(parameters(v, names)?),
+        });
+    }
+    for (group, list) in items(program, "m_PlayerSubPrograms")?.iter().enumerate() {
+        let list: &[Value] = match list {
+            Value::Array(Array::Values(x)) => x,
+            Value::Array(a) if a.is_empty() => &[],
+            _ => return Err(invalid("shader pass: a player sub-program list")),
+        };
+        for v in list {
+            let keywords = match v.get("m_KeywordIndices") {
+                Some(k) => ints(k)?
+                    .into_iter()
+                    .map(|i| {
+                        usize::try_from(i)
+                            .ok()
+                            .and_then(|i| keyword_names.get(i))
+                            .cloned()
+                            .ok_or_else(|| invalid(format!("shader {name}: keyword index {i}")))
+                    })
+                    .collect::<Result<_>>()?,
+                None => Vec::new(),
+            };
+            variants.push(Variant {
+                group,
+                blob_index: u32_of(int(v, "m_BlobIndex")?, "blob index")?,
+                keywords,
+                gpu_program_type: int(v, "m_GpuProgramType")?,
+                requirements: v.get("m_ShaderRequirements").and_then(Value::as_i64).unwrap_or(0),
+                parameters: None,
+            });
+        }
+    }
+    let parameters = match program.get("m_CommonParameters") {
+        Some(c) => parameters(c, names)?,
+        None => Parameters::default(),
+    };
+    Ok(PassProgram { variants, parameters })
+}
+
 impl ShaderPrograms {
     /// Read the Shader `r` of `player`.
     pub fn read(player: &Player, r: &ObjRef) -> Result<Self> {
@@ -249,68 +372,17 @@ impl ShaderPrograms {
                             .ok_or_else(|| invalid("shader pass: a name index"))?;
                     names.insert(index, key.to_owned());
                 }
-                let Some(fragment) = p.get("progFragment") else {
-                    out.push(PassProgram::default());
-                    continue;
+                let stage = |stage: Stage| match p.get(stage.field()) {
+                    Some(program) => stage_program(program, &names, &keyword_names, &name),
+                    None => Ok(PassProgram::default()),
                 };
-                let mut variants = Vec::new();
-                // before 2021.2: one list, each variant with its tier, keywords by name index and own parameters
-                for v in items(fragment, "m_SubPrograms")? {
-                    let mut keywords = Vec::new();
-                    for k in ["m_GlobalKeywordIndices", "m_LocalKeywordIndices"] {
-                        if let Some(k) = v.get(k) {
-                            for i in ints(k)? {
-                                keywords.push(names.get(&i).cloned().ok_or_else(|| {
-                                    invalid(format!("shader {name}: keyword index {i} past the pass's names"))
-                                })?);
-                            }
-                        }
-                    }
-                    variants.push(Variant {
-                        group: usize::try_from(int(v, "m_ShaderHardwareTier")?)
-                            .map_err(|_| invalid("shader program: a negative hardware tier"))?,
-                        blob_index: u32_of(int(v, "m_BlobIndex")?, "blob index")?,
-                        keywords,
-                        gpu_program_type: int(v, "m_GpuProgramType")?,
-                        requirements: v.get("m_ShaderRequirements").and_then(Value::as_i64).unwrap_or(0),
-                        parameters: Some(parameters(v, &names)?),
-                    });
-                }
-                for (group, list) in items(fragment, "m_PlayerSubPrograms")?.iter().enumerate() {
-                    let list: &[Value] = match list {
-                        Value::Array(Array::Values(x)) => x,
-                        Value::Array(a) if a.is_empty() => &[],
-                        _ => return Err(invalid("shader pass: a player sub-program list")),
-                    };
-                    for v in list {
-                        let keywords = match v.get("m_KeywordIndices") {
-                            Some(k) => ints(k)?
-                                .into_iter()
-                                .map(|i| {
-                                    usize::try_from(i)
-                                        .ok()
-                                        .and_then(|i| keyword_names.get(i))
-                                        .cloned()
-                                        .ok_or_else(|| invalid(format!("shader {name}: keyword index {i}")))
-                                })
-                                .collect::<Result<_>>()?,
-                            None => Vec::new(),
-                        };
-                        variants.push(Variant {
-                            group,
-                            blob_index: u32_of(int(v, "m_BlobIndex")?, "blob index")?,
-                            keywords,
-                            gpu_program_type: int(v, "m_GpuProgramType")?,
-                            requirements: v.get("m_ShaderRequirements").and_then(Value::as_i64).unwrap_or(0),
-                            parameters: None,
-                        });
-                    }
-                }
-                let parameters = match fragment.get("m_CommonParameters") {
-                    Some(c) => parameters(c, &names)?,
-                    None => Parameters::default(),
-                };
-                out.push(PassProgram { variants, parameters });
+                out.push(PassStages {
+                    vertex: stage(Stage::Vertex)?,
+                    fragment: stage(Stage::Fragment)?,
+                    geometry: stage(Stage::Geometry)?,
+                    hull: stage(Stage::Hull)?,
+                    domain: stage(Stage::Domain)?,
+                });
             }
             passes.push(out);
         }
@@ -449,6 +521,10 @@ impl ShaderPrograms {
     }
 }
 
+/// Unity's `ShaderGpuProgramType` of the D3D11 programs: vertex SM 4.0 and 5.0 (15, 16), pixel (17, 18), geometry (19,
+/// 20), hull (21), domain (22).
+pub const D3D11_PROGRAM_TYPES: std::ops::RangeInclusive<i64> = 15..=22;
+
 /// The DXBC container in a D3D11 program record's code: Unity stores a short header before it. `None` when the code
 /// holds no container (the first `DXBC` within its first 64 bytes, whole as its own header sizes it).
 pub fn dxbc(code: &[u8]) -> Option<&[u8]> {
@@ -498,11 +574,11 @@ pub struct ProgramsReport {
     pub left_out: std::collections::BTreeMap<String, usize>,
 }
 
-/// For every `unity.material` of `w` whose shader is one of `shaders`, the fragment programs of its draw pass under
-/// `pipeline` ([`UnityMaterial::draw_pass`]) as stored: every variant with its D3D11 code, and the shader's declared
-/// texture defaults, as `unity.programs` on the material's entity (choosing a variant is the caller's,
-/// [`UnityPrograms::variant`]). A material without a shader object, draw pass or D3D11 code is left out, counted by
-/// reason; so are variants whose code holds no DXBC container.
+/// For every `unity.material` of `w` whose shader is one of `shaders`, the programs of its draw pass under
+/// `pipeline` ([`UnityMaterial::draw_pass`]) as stored, each stage's (vertex, fragment, geometry, hull, domain): every
+/// variant with its D3D11 code, and the shader's declared texture defaults, as `unity.programs` on the material's
+/// entity (choosing a variant is the caller's, [`UnityPrograms::variant`]). A material without a shader object, draw
+/// pass or D3D11 code is left out, counted by reason; so are variants whose code holds no DXBC container.
 pub fn read_programs(
     player: &Player,
     w: &mut primase_core::World,
@@ -555,23 +631,45 @@ pub fn read_programs(
             leave("no D3D11 code");
             continue;
         }
-        let mut variants = Vec::new();
-        for v in &pass.variants {
-            let code = programs.code(4, v.blob_index)?;
-            let Some(code) = dxbc(&code) else {
-                *report
-                    .left_out
-                    .entry("variants whose D3D11 code holds no DXBC container".to_owned())
-                    .or_default() += 1;
-                continue;
-            };
-            variants.push(UnityProgramVariant {
-                tier: v.group,
-                keywords: v.keywords.clone(),
-                parameters: pass.parameters_of(v).clone(),
-                code: code.to_vec(),
-            });
-        }
+        let mut stored = |stage: Stage, program: &PassProgram| -> Result<Vec<UnityProgramVariant>> {
+            let mut variants = Vec::new();
+            for v in &program.variants {
+                // a pass stores the variants of every graphics API its shader was compiled for; this blob is D3D11's
+                if !D3D11_PROGRAM_TYPES.contains(&v.gpu_program_type) {
+                    *report
+                        .left_out
+                        .entry("variants of another graphics API than D3D11".to_owned())
+                        .or_default() += 1;
+                    continue;
+                }
+                let code = programs.code(4, v.blob_index)?;
+                let Some(code) = dxbc(&code) else {
+                    *report
+                        .left_out
+                        .entry(match stage {
+                            Stage::Fragment => "variants whose D3D11 code holds no DXBC container".to_owned(),
+                            _ => format!(
+                                "{} variants whose D3D11 code holds no DXBC container",
+                                format!("{stage:?}").to_lowercase()
+                            ),
+                        })
+                        .or_default() += 1;
+                    continue;
+                };
+                variants.push(UnityProgramVariant {
+                    tier: v.group,
+                    keywords: v.keywords.clone(),
+                    parameters: program.parameters_of(v).clone(),
+                    code: code.to_vec(),
+                });
+            }
+            Ok(variants)
+        };
+        let variants = stored(Stage::Fragment, &pass.fragment)?;
+        let vertex = stored(Stage::Vertex, &pass.vertex)?;
+        let geometry = stored(Stage::Geometry, &pass.geometry)?;
+        let hull = stored(Stage::Hull, &pass.hull)?;
+        let domain = stored(Stage::Domain, &pass.domain)?;
         let texture_defaults = texture_defaults(player, &shader)?;
         w.insert(
             e,
@@ -581,6 +679,10 @@ pub fn read_programs(
                 pass: j,
                 texture_defaults,
                 variants,
+                vertex,
+                geometry,
+                hull,
+                domain,
             },
         );
         report.attached += 1;
@@ -622,6 +724,10 @@ mod tests {
             subshader: 0,
             pass: 0,
             texture_defaults: Vec::new(),
+            vertex: Vec::new(),
+            geometry: Vec::new(),
+            hull: Vec::new(),
+            domain: Vec::new(),
             variants: vec![
                 variant(1, &["DIRECTIONAL"]),
                 variant(0, &["DIRECTIONAL"]),

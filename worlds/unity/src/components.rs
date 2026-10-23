@@ -172,7 +172,7 @@ pub struct Parameters {
     pub samplers: Vec<(u32, u32)>,
 }
 
-/// One stored variant of a fragment program: its hardware tier (the player's group), its keywords, its parameters
+/// One stored variant of a stage's program: its hardware tier (the player's group), its keywords, its parameters
 /// (constant-buffer fields with their offsets, texture and sampler slots) and its D3D11 code, a DXBC container
 /// (Unity's record header before it removed).
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -184,18 +184,26 @@ pub struct UnityProgramVariant {
     pub code: Vec<u8>,
 }
 
-/// The compiled fragment programs of the pass a material draws with, as the player stores them
+/// The compiled programs of the pass a material draws with, as the player stores them
 /// ([`crate::program::read_programs`]): its shader's name, the pass (subshader and pass index in the shader's parsed
-/// form, the draw pass under the player's pipeline), every stored variant with D3D11 code, and the default the shader
-/// declares for each texture property (`m_PropInfo`: Unity's built-in texture name, "white", "bump" and so on). Which
-/// variant a lowering evaluates is its caller's choice ([`UnityPrograms::variant`]).
+/// form, the draw pass under the player's pipeline), every stored variant with D3D11 code of each stage the pass has
+/// (`variants`: the fragment stage's; `vertex`, `geometry`, `hull`, `domain`: empty where the pass has none), and the
+/// default the shader declares for each texture property (`m_PropInfo`: Unity's built-in texture name, "white", "bump"
+/// and so on). A stage's variants carry only the keywords that stage's code uses, so a vertex variant pairs with a
+/// fragment variant of the same tier by the keywords they share. Which variant a lowering evaluates is its caller's
+/// choice ([`UnityPrograms::variant`]).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityPrograms {
     pub shader: String,
     pub subshader: usize,
     pub pass: usize,
     pub texture_defaults: Vec<(String, String)>,
+    /// The fragment stage's variants.
     pub variants: Vec<UnityProgramVariant>,
+    pub vertex: Vec<UnityProgramVariant>,
+    pub geometry: Vec<UnityProgramVariant>,
+    pub hull: Vec<UnityProgramVariant>,
+    pub domain: Vec<UnityProgramVariant>,
 }
 
 impl UnityPrograms {
@@ -223,12 +231,24 @@ impl UnityPrograms {
 
 impl Component for UnityPrograms {
     const NAME: &'static str = "unity.programs";
+    /// 2: the vertex, geometry, hull and domain stages beside the fragment's.
+    const VERSION: u32 = 2;
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
     fn payload_bytes(&self) -> u64 {
-        self.variants.iter().map(|v| v.code.len() as u64).sum()
+        [
+            &self.variants,
+            &self.vertex,
+            &self.geometry,
+            &self.hull,
+            &self.domain,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|v| v.code.len() as u64)
+        .sum()
     }
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
         primase_core::Linearity::Invariant
