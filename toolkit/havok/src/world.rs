@@ -18,7 +18,7 @@
 //! SDK's axis and angle and which the census of the install does not settle (see [`RootMotionUse`]).
 
 use primase_core::frame::SourceFrame;
-use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassRegistry, PassSpec};
 use primase_core::{
     Channel, Clip, ClipTarget, Component, Entity, Extrapolation, Interpolation, Joint, JointId, Name,
     Property, Rest, RootMotion, RootSpace, Skeleton as CoreSkeleton, World,
@@ -262,53 +262,68 @@ pub struct LowerHavokClips {
     pub root_motion: RootMotionUse,
 }
 
-/// The pass factory.
-pub fn lower_havok_clips(o: &Options) -> std::result::Result<Box<dyn Pass>, String> {
-    let (mut absent, mut rate, mut clips, mut root_motion) = (None, None, None, None);
-    for (k, v) in o {
-        match k.as_str() {
-            "root-motion" => {
-                root_motion = Some(match v.as_str() {
-                    "leave" => RootMotionUse::Leave,
-                    "translation" => RootMotionUse::Translation,
-                    "full" => RootMotionUse::Full,
-                    _ => return Err(format!("root-motion={v}: leave, translation or full")),
-                });
-            }
-            "absent" => {
-                absent = Some(match v.as_str() {
-                    "neutral" => Fallback::Neutral,
-                    "reference" => Fallback::Reference,
-                    _ => return Err(format!("absent={v}: neutral or reference")),
-                });
-            }
-            "rate" => {
-                rate = Some(
-                    v.parse::<u32>()
-                        .ok()
-                        .filter(|r| (1..=16).contains(r))
-                        .ok_or_else(|| format!("rate={v}: a whole number of keys a frame, 1 to 16"))?,
-                );
-            }
-            "clips" => {
-                clips = Some(if v == "all" {
-                    Clips::All
-                } else {
-                    let names: Vec<String> = v.split(';').map(str::trim).map(str::to_owned).collect();
-                    if names.iter().any(String::is_empty) {
-                        return Err(format!("clips={v}: an empty name"));
-                    }
-                    Clips::Named(names)
-                });
-            }
-            _ => return Err(format!("unknown option {k}")),
+impl Choice for Fallback {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("neutral", Fallback::Neutral), ("reference", Fallback::Reference)];
+}
+
+impl Choice for RootMotionUse {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("leave", RootMotionUse::Leave),
+        ("translation", RootMotionUse::Translation),
+        ("full", RootMotionUse::Full),
+    ];
+}
+
+/// `lower-havok-clips`' declaration ([`PassRegistry::add`]): every option required (see [`LowerHavokClips`]).
+pub const LOWER_HAVOK_CLIPS: PassSpec = PassSpec {
+    name: "lower-havok-clips",
+    options: &[
+        OptionSpec::choice::<Fallback>(
+            "absent",
+            "what stands in for a component a track does not state: zero, the identity and one, or the bone's \
+             reference transform",
+        ),
+        OptionSpec::required(
+            "rate",
+            "1",
+            "keys for each frame the animation was authored at, 1 to 16",
+        ),
+        OptionSpec::required(
+            "clips",
+            "all",
+            "all, or the animations' core.names, `;` between, each of which must exist",
+        ),
+        OptionSpec::choice::<RootMotionUse>(
+            "root-motion",
+            "what of an animation's extracted motion is lowered: none (counted), its path, or its path and turn",
+        ),
+    ],
+    make: lower_havok_clips,
+};
+
+fn lower_havok_clips(g: &Given) -> std::result::Result<Box<dyn Pass>, String> {
+    let v = g.required("rate");
+    let rate = v
+        .parse::<u32>()
+        .ok()
+        .filter(|r| (1..=16).contains(r))
+        .ok_or_else(|| format!("rate={v}: a whole number of keys a frame, 1 to 16"))?;
+    let v = g.required("clips");
+    let clips = if v == "all" {
+        Clips::All
+    } else {
+        let names: Vec<String> = v.split(';').map(str::trim).map(str::to_owned).collect();
+        if names.iter().any(String::is_empty) {
+            return Err(format!("clips={v}: an empty name"));
         }
-    }
+        Clips::Named(names)
+    };
     Ok(Box::new(LowerHavokClips {
-        absent: absent.ok_or("absent=neutral|reference is required")?,
-        rate: rate.ok_or("rate=N (keys for each authored frame) is required")?,
-        clips: clips.ok_or("clips=all|NAME;NAME is required")?,
-        root_motion: root_motion.ok_or("root-motion=leave|translation|full is required")?,
+        absent: g.choice::<Fallback>("absent"),
+        rate,
+        clips,
+        root_motion: g.choice::<RootMotionUse>("root-motion"),
     }))
 }
 
@@ -531,24 +546,9 @@ impl Pass for LowerHavokClips {
     }
     fn options(&self) -> Options {
         Options::from([
-            (
-                "absent".to_owned(),
-                match self.absent {
-                    Fallback::Neutral => "neutral",
-                    Fallback::Reference => "reference",
-                }
-                .to_owned(),
-            ),
+            ("absent".to_owned(), self.absent.text().to_owned()),
             ("rate".to_owned(), self.rate.to_string()),
-            (
-                "root-motion".to_owned(),
-                match self.root_motion {
-                    RootMotionUse::Leave => "leave",
-                    RootMotionUse::Translation => "translation",
-                    RootMotionUse::Full => "full",
-                }
-                .to_owned(),
-            ),
+            ("root-motion".to_owned(), self.root_motion.text().to_owned()),
             (
                 "clips".to_owned(),
                 match &self.clips {
@@ -648,18 +648,9 @@ impl Pass for LowerHavokClips {
     }
 }
 
-/// Register this crate's passes.
+/// Register this crate's passes by their declarations: [`LOWER_HAVOK_CLIPS`].
 pub fn register(reg: &mut PassRegistry) {
-    reg.register_requiring(
-        "lower-havok-clips",
-        lower_havok_clips,
-        &[
-            ("absent", "neutral"),
-            ("rate", "1"),
-            ("clips", "all"),
-            ("root-motion", "leave"),
-        ],
-    );
+    reg.add(&LOWER_HAVOK_CLIPS);
 }
 
 #[cfg(test)]
@@ -695,7 +686,7 @@ mod tests {
                     .map(|i| Joint {
                         id: JointId(i),
                         name: format!("b{i}"),
-                        parent: (i > 0).then_some(JointId(i - 1)),
+                        parent: (i > 0).then(|| JointId(i - 1)),
                         rest: Rest::Trs {
                             translation: [0.0; 3],
                             rotation: [0.0, 0.0, 0.0, 1.0],
@@ -760,7 +751,7 @@ mod tests {
         options
             .entry("root-motion".into())
             .or_insert_with(|| "leave".into());
-        let pass = lower_havok_clips(&options)?;
+        let pass = LOWER_HAVOK_CLIPS.instance(&options)?;
         let mut log = PassLog::default();
         pass.run(w, &mut log)?;
         Ok(log)
@@ -870,7 +861,7 @@ mod tests {
             ],
         ] {
             let options: Options = bad.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect();
-            assert!(lower_havok_clips(&options).is_err(), "{bad:?}");
+            assert!(LOWER_HAVOK_CLIPS.instance(&options).is_err(), "{bad:?}");
         }
         let (mut w, e, _) = world(SourceFrame::new([Axis::PosX, Axis::PosY, Axis::PosZ], 1.0), 2);
         let log = run(&mut w, &[("absent", "neutral"), ("rate", "1"), ("clips", "all")]).unwrap();

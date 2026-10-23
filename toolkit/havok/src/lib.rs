@@ -16,7 +16,7 @@ pub use mesh::{
     extern_shapes, mesh_sections,
 };
 /// Register this crate's passes (`lower-havok-clips`).
-pub use world::register;
+pub use world::{LOWER_HAVOK_CLIPS, register};
 mod tagfile;
 mod types;
 mod value;
