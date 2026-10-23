@@ -168,14 +168,6 @@ fn all_stages(label: &str, data: &std::path::Path, tpk: &std::path::Path, oracle
                 .enumerate()
                 {
                     let p = pass.stage(stage);
-                    // a dump made before the oracle emitted `parameter_blob` (the stage dumps are separate files from
-                    // `shader-programs.json`, which does) has no such key: ours is dropped from the comparison there,
-                    // and compared as soon as the dump carries it
-                    let blobs = expected[key]["variants"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|v| v.get("parameter_blob").is_some());
                     let vs: Vec<Json> = p
                         .variants
                         .iter()
@@ -195,9 +187,6 @@ fn all_stages(label: &str, data: &std::path::Path, tpk: &std::path::Path, oracle
                                 }
                             });
                             j["code"] = json!(hash);
-                            if !blobs {
-                                j.as_object_mut().unwrap().remove("parameter_blob");
-                            }
                             j
                         })
                         .collect();
