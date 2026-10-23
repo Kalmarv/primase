@@ -441,8 +441,14 @@ pub fn controller_clips(player: &Player, controller: &ObjRef) -> Result<Vec<ObjR
     Ok(out)
 }
 
+/// A humanoid avatar with the way to find the joint of a bone by the hash of its path below the avatar's root.
+pub type HumanoidRig<'a> = (
+    &'a crate::animator::UnityAvatar,
+    &'a dyn Fn(u32) -> Option<(Entity, JointId)>,
+);
+
 /// What lowering a clip did: channels made, bindings left out by reason.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct ClipLowering {
     pub channels: usize,
     pub keys: usize,
@@ -452,6 +458,9 @@ pub struct ClipLowering {
     pub unresolved: std::collections::BTreeMap<&'static str, usize>,
     /// Bindings with no joint channel in core, by what they are.
     pub not_lowered: std::collections::BTreeMap<&'static str, usize>,
+    /// What the humanoid muscle curves made of a humanoid avatar's bones ([`crate::humanoid`]); `None` for a clip lowered
+    /// without a humanoid avatar.
+    pub humanoid: Option<crate::humanoid::HumanoidLowering>,
 }
 
 /// A joint-channel value or tangent of `property` in the world's frame.
@@ -571,7 +580,12 @@ impl ClipData {
     /// The clip as a `core.clip` for a rig: the position, rotation and scale curves of the Transforms `resolve` finds
     /// (a path hash to the skeleton and joint it is), in the world's frame; the rest counted in the returned
     /// [`ClipLowering`] by reason.
-    pub fn lower(&self, resolve: &dyn Fn(u32) -> Option<(Entity, JointId)>) -> Result<(Clip, ClipLowering)> {
+    pub fn lower(
+        &self,
+        resolve: &dyn Fn(u32) -> Option<(Entity, JointId)>,
+        humanoid: Option<HumanoidRig>,
+    ) -> Result<(Clip, ClipLowering)> {
+        let humanoid = humanoid.filter(|(a, _)| a.human.is_some());
         let mut report = ClipLowering::default();
         let mut channels = Vec::new();
         let mut seen = BTreeSet::new();
@@ -588,6 +602,8 @@ impl ClipData {
                         .or_default() += 1;
                     continue;
                 }
+                // a humanoid avatar's muscle curves are evaluated below
+                (95, _) if humanoid.is_some() => continue,
                 (95, _) => {
                     *report
                         .not_lowered
@@ -626,6 +642,22 @@ impl ClipData {
             }
             report.keys += channel.times.len();
             channels.push(channel);
+        }
+        if let Some((avatar, bone_resolve)) = humanoid {
+            let (bones, lowering) = self.humanoid_channels(avatar, bone_resolve);
+            for channel in bones {
+                if let ClipTarget::Joint { joint, .. } = channel.target
+                    && !seen.insert((joint, channel.property))
+                {
+                    return Err(invalid(format!(
+                        "{}: a humanoid bone's rotation and a Transform rotation curve for one joint ({joint:?})",
+                        self.name
+                    )));
+                }
+                report.keys += channel.times.len();
+                channels.push(channel);
+            }
+            report.humanoid = Some(lowering);
         }
         report.channels = channels.len();
         Ok((

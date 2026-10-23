@@ -150,6 +150,10 @@ pub struct LevelReport {
     /// Animators of the rigs read (`unity.animator` on the rig).
     pub avatars: usize,
     pub controllers: usize,
+    /// Clips lowered with a humanoid avatar (their muscle curves evaluated as bone rotations,
+    /// [`crate::humanoid`]), and the largest angle between the muscles' rotation and the lowered channel's between keys.
+    pub humanoid_clips: usize,
+    pub humanoid_worst_between_keys_degrees: f64,
     /// RenderSettings names a sun (`unity.render_settings` holds it when it is a light read).
     pub sun_named: bool,
     /// Colliders read: those that collide, and those that do not by reason (inactive or disabled, trigger,
@@ -413,6 +417,10 @@ fn build_rigs(
     })
 }
 
+/// A rig's skeleton, its joints by the hash of their path below the Animator's GameObject, and, for a humanoid avatar,
+/// by the hash of their path below the avatar's root.
+type Rig = (Entity, BTreeMap<u32, JointId>, BTreeMap<u32, JointId>);
+
 /// What a renderer is in its scene's LODGroups.
 #[derive(Clone, Debug, Default)]
 struct Role {
@@ -634,8 +642,10 @@ pub(crate) struct Builder<'a> {
     /// The off flags' state axes, and LOD axes by group (and tree instance).
     axes: OffAxes,
     lod_axes: BTreeMap<(ObjRef, Option<(Entity, usize)>), Entity>,
-    /// The entities of the avatars and controllers read, `None` for one that could not be.
+    /// The entities of the avatars and controllers read, `None` for one that could not be, and the humanoid avatars' data
+    /// the clips are lowered with.
     avatars: BTreeMap<ObjRef, Option<Entity>>,
+    humanoids: BTreeMap<ObjRef, UnityAvatar>,
     controller_entities: BTreeMap<ObjRef, Option<Entity>>,
     pub(crate) report: LevelReport,
 }
@@ -654,6 +664,7 @@ impl<'a> Builder<'a> {
             axes: OffAxes::default(),
             lod_axes: BTreeMap::new(),
             avatars: BTreeMap::new(),
+            humanoids: BTreeMap::new(),
             controller_entities: BTreeMap::new(),
             report,
         }
@@ -739,7 +750,7 @@ impl Builder<'_> {
         root: Option<i64>,
     ) -> Result<()> {
         let mut data: BTreeMap<ObjRef, Option<ClipData>> = BTreeMap::new();
-        let mut made: BTreeMap<(ObjRef, Entity), Option<Entity>> = BTreeMap::new();
+        let mut made: BTreeMap<(ObjRef, Entity, Option<ObjRef>), Option<Entity>> = BTreeMap::new();
         let mut bound: BTreeSet<(Entity, Entity)> = BTreeSet::new();
         let mut controllers: BTreeMap<ObjRef, Vec<ObjRef>> = BTreeMap::new();
         for animator in scene.animators_under(self.player, root)? {
@@ -747,13 +758,16 @@ impl Builder<'_> {
                 continue;
             };
             // the joints below the Animator's GameObject, by skeleton, each by the hash of its path
-            let mut rigs: BTreeMap<Entity, (Entity, BTreeMap<u32, JointId>)> = BTreeMap::new();
+            let mut rigs: BTreeMap<Entity, Rig> = BTreeMap::new();
             // by rig: the rig's skeleton (rigs of one skeleton share its clips) and its joints by path hash
             for (&t, &(skeleton, rig, joint)) in joint_of {
                 let Some(path) = scene.path_below(t, tp) else {
                     continue;
                 };
-                let hashes = &mut rigs.entry(rig).or_insert_with(|| (skeleton, BTreeMap::new())).1;
+                let hashes = &mut rigs
+                    .entry(rig)
+                    .or_insert_with(|| (skeleton, BTreeMap::new(), BTreeMap::new()))
+                    .1;
                 if hashes.insert(path_hash(&path), joint).is_some() {
                     self.notice(
                         "joints of an Animator's rig sharing a path (the clips drive the last)",
@@ -770,6 +784,64 @@ impl Builder<'_> {
                 Some(a) => self.typed_avatar(w, a)?,
                 None => None,
             };
+            let humanoid = animator
+                .avatar
+                .as_ref()
+                .and_then(|a| self.humanoids.get(a))
+                .cloned();
+            if let Some(human) = humanoid.as_ref().and_then(|a| a.human.as_ref()) {
+                // a humanoid avatar names its bones from its own root, which is the Animator's GameObject or a
+                // descendant of it (a model under a wrapper): the root under which most of the avatar's bone paths
+                // are the rig's joints, the shallowest on a tie
+                let wanted: BTreeSet<u32> = human.skeleton.ids.iter().copied().collect();
+                for (&rig, (_, _, bones)) in &mut rigs {
+                    let joints: Vec<(i64, JointId)> = joint_of
+                        .iter()
+                        .filter(|(_, (_, r, _))| *r == rig)
+                        .map(|(&t, &(_, _, j))| (t, j))
+                        .collect();
+                    let mut candidates: BTreeSet<i64> = BTreeSet::new();
+                    for &(t, _) in &joints {
+                        let mut at = Some(t);
+                        while let Some(x) = at {
+                            candidates.insert(x);
+                            if x == tp {
+                                break;
+                            }
+                            at = scene.joint(x)?.and_then(|j| j.father);
+                        }
+                    }
+                    let mut best: Option<(usize, usize, i64)> = None;
+                    for &d in &candidates {
+                        let depth = scene
+                            .path_below(d, tp)
+                            .map_or(usize::MAX, |p| p.matches('/').count());
+                        let score = joints
+                            .iter()
+                            .filter_map(|&(t, _)| scene.path_below(t, d))
+                            .filter(|p| wanted.contains(&path_hash(p)))
+                            .count();
+                        if score > 0 && best.is_none_or(|(s, de, _)| score > s || (score == s && depth < de))
+                        {
+                            best = Some((score, depth, d));
+                        }
+                    }
+                    if let Some((_, depth, d)) = best {
+                        if d != tp {
+                            self.notice(
+                                "humanoid avatars rooted at a descendant of the Animator's GameObject (found by its bone paths)",
+                                1,
+                            );
+                        }
+                        let _ = depth;
+                        for &(t, joint) in &joints {
+                            if let Some(path) = scene.path_below(t, d) {
+                                bones.insert(path_hash(&path), joint);
+                            }
+                        }
+                    }
+                }
+            }
             let controller_entity = match &animator.controller {
                 Some(c) if self.player.class_name(c) == Some("AnimatorController") => {
                     self.typed_controller(w, c)?
@@ -821,13 +893,58 @@ impl Builder<'_> {
                     data.insert(clip.clone(), read);
                 }
                 let Some(d) = &data[clip] else { continue };
-                for (&rig, (skeleton, hashes)) in &rigs {
+                for (&rig, (skeleton, hashes, bones)) in &rigs {
                     let skeleton = *skeleton;
-                    let entity = match made.get(&(clip.clone(), skeleton)) {
+                    let key = (
+                        clip.clone(),
+                        skeleton,
+                        animator.avatar.clone().filter(|_| humanoid.is_some()),
+                    );
+                    let entity = match made.get(&key) {
                         Some(e) => *e,
                         None => {
-                            let (lowered, report) =
-                                d.lower(&|hash| hashes.get(&hash).map(|j| (skeleton, *j)))?;
+                            let bone_joint = |hash: u32| bones.get(&hash).map(|j| (skeleton, *j));
+                            let (lowered, report) = d.lower(
+                                &|hash| hashes.get(&hash).map(|j| (skeleton, *j)),
+                                humanoid
+                                    .as_ref()
+                                    .map(|a| (a, &bone_joint as &dyn Fn(u32) -> Option<(Entity, JointId)>)),
+                            )?;
+                            if let Some(h) = &report.humanoid {
+                                self.report.humanoid_clips += 1;
+                                self.report.humanoid_worst_between_keys_degrees = self
+                                    .report
+                                    .humanoid_worst_between_keys_degrees
+                                    .max(h.worst_between_keys_degrees);
+                                for (what, n) in [
+                                    (
+                                        "humanoid clip root curves (RootT, RootQ: the body's centre of mass and orientation that place the hips) not applied",
+                                        h.root_curves,
+                                    ),
+                                    (
+                                        "humanoid clip IK goal curves not applied (used only by a layer with IK)",
+                                        h.goal_curves,
+                                    ),
+                                    (
+                                        "humanoid clip finger muscle curves not applied (no avatar read here has fingers to check the formula on)",
+                                        h.finger_curves,
+                                    ),
+                                    (
+                                        "humanoid clips lacking a body muscle curve (the muscle taken as 0)",
+                                        h.missing_muscles,
+                                    ),
+                                ] {
+                                    self.notice(what, n as u64);
+                                }
+                                for bone in &h.unresolved_bones {
+                                    self.notice(
+                                        &format!(
+                                            "humanoid bones with no joint in the rig, left unrotated: {bone}"
+                                        ),
+                                        1,
+                                    );
+                                }
+                            }
                             for (kind, n) in &report.unresolved {
                                 self.notice(
                                     &format!("animation clip {kind} curves of Transforms that are no joint of the rig"),
@@ -853,7 +970,7 @@ impl Builder<'_> {
                                 w.insert(e, lowered);
                                 Some(e)
                             };
-                            made.insert((clip.clone(), skeleton), entity);
+                            made.insert(key, entity);
                             entity
                         }
                     };
@@ -888,6 +1005,9 @@ impl Builder<'_> {
                 let e = w.spawn();
                 w.insert(e, Name(avatar.name.clone()));
                 w.insert(e, Source(format!("unity avatar {}/{}", r.file, r.path_id)));
+                if avatar.human.is_some() {
+                    self.humanoids.insert(r.clone(), avatar.clone());
+                }
                 w.insert(e, avatar);
                 self.report.avatars += 1;
                 Some(e)
@@ -2237,7 +2357,7 @@ mod tests {
         assert_eq!(json["colliders_not_colliding"]["trigger"], 5);
         assert_eq!(json["skipped"]["no mesh"], 1);
         // every field of the struct is there
-        assert_eq!(json.as_object().map(serde_json::Map::len), Some(30));
+        assert_eq!(json.as_object().map(serde_json::Map::len), Some(32));
     }
 
     #[test]

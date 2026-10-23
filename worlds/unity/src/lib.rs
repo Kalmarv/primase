@@ -43,6 +43,7 @@
 pub mod animator;
 pub mod bind;
 pub mod components;
+pub mod humanoid;
 pub mod passes;
 mod read;
 pub mod shader;
