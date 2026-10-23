@@ -760,6 +760,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "",
     },
     Variable {
+        name: "PRIMASE_GTA_SHADERS",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"a folder (searched recursively) of GTA V's compiled effects (`.fxc`, RAGE `rgxe`) as extracted from the install, Enhanced or Legacy; every one is read, its programs' containers checked and lifted; worlds/gta/tests/fxc_census.rs"#,
+        status: Status::Live,
+        source: "the user's own install: the effect files extracted from its archives",
+    },
+    Variable {
         name: "PRIMASE_SKATE_MASK_ORACLE",
         kind: Kind::Input,
         gate: true,

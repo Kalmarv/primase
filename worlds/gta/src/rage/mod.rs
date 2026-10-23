@@ -3,6 +3,7 @@
 //! them bytes, and the components and passes use the types.
 pub mod bounds;
 pub mod drawable;
+pub mod fxc;
 pub(crate) mod le;
 pub mod map;
 pub mod meta;
