@@ -8,6 +8,7 @@ mod mesh;
 pub use convex::{ConvexCore, MAX_PLANES, MAX_VERTICES};
 mod section;
 pub mod spline;
+mod spline_sample;
 pub mod world;
 
 pub use mesh::{

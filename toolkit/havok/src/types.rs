@@ -1,3 +1,8 @@
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use crate::{Error, Result, Section, invalid, sections};
 
 #[derive(Debug, Clone, Default)]
@@ -44,11 +49,11 @@ impl<'a> Cursor<'a> {
         Self {
             bytes: section.payload,
             position: 0,
-            base: section.offset + 8,
+            base: section.offset.saturating_add(8),
         }
     }
     pub fn error(&self, detail: impl Into<String>) -> Error {
-        invalid(self.base + self.position, detail)
+        invalid(self.base.saturating_add(self.position), detail)
     }
     pub fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self
@@ -62,8 +67,16 @@ impl<'a> Cursor<'a> {
         self.position = end;
         Ok(b)
     }
+    /// The next `N` bytes.
+    pub fn array<const N: usize>(&mut self) -> Result<[u8; N]> {
+        let b = self.take(N)?;
+        b.try_into().map_err(|_| self.error("short input"))
+    }
+    pub fn u32_le(&mut self) -> Result<u32> {
+        self.array().map(u32::from_le_bytes)
+    }
     pub fn packed(&mut self) -> Result<u64> {
-        let first = self.take(1)?[0];
+        let [first] = self.array()?;
         let (remaining, mask) = match first {
             0..=0x7f => (0, 0x7f),
             0x80..=0xbf => (1, 0x3f),
@@ -85,7 +98,11 @@ impl<'a> Cursor<'a> {
         usize::try_from(self.packed()?).map_err(|_| self.error("index exceeds address space"))
     }
     pub fn padding(&mut self) -> Result<()> {
-        if self.bytes[self.position..].iter().any(|&b| b != 0) {
+        let rest = self
+            .bytes
+            .get(self.position..)
+            .ok_or_else(|| self.error("position past the end"))?;
+        if rest.iter().any(|&b| b != 0) {
             return Err(self.error("nonzero trailing bytes"));
         }
         self.position = self.bytes.len();
@@ -104,12 +121,11 @@ pub(crate) fn required<'a>(children: &[Section<'a>], names: &[[u8; 4]]) -> Resul
     Ok(result)
 }
 fn strings(section: Section<'_>) -> Result<Vec<String>> {
-    if section.payload.last() != Some(&0) {
-        return Err(invalid(section.offset, "unterminated string table"));
-    }
     // the table's strings are the NUL-terminated runs: the empty run after the last NUL is no string, so an index
     // equal to the table's length is out of bounds, not an empty name
-    let strings = &section.payload[..section.payload.len() - 1];
+    let Some((0, strings)) = section.payload.split_last() else {
+        return Err(invalid(section.offset, "unterminated string table"));
+    };
     strings
         .split(|&b| b == 0)
         .map(|b| {
@@ -128,10 +144,13 @@ fn string(table: &[String], c: &mut Cursor<'_>) -> Result<String> {
 impl Compendium {
     pub fn read(bytes: &[u8]) -> Result<Self> {
         let roots = sections(bytes)?;
-        if roots.len() != 1 || roots[0].signature != *b"TCM0" {
+        let &[root] = roots.as_slice() else {
+            return Err(invalid(0, "expected one TCM0 root"));
+        };
+        if root.signature != *b"TCM0" {
             return Err(invalid(0, "expected one TCM0 root"));
         }
-        let children = roots[0].children()?;
+        let children = root.children()?;
         for s in &children {
             if ![*b"TCID", *b"TYPE"].contains(&s.signature) {
                 return Err(invalid(s.offset, "unknown compendium section"));
@@ -188,11 +207,12 @@ pub(crate) fn read_types(section: Section<'_>) -> Result<Vec<Type>> {
         if index == 0 {
             continue;
         }
-        if index >= count || seen[index] {
+        let (Some(seen), Some(t)) = (seen.get_mut(index), types.get_mut(index)) else {
+            return Err(c.error("invalid or duplicate type body"));
+        };
+        if std::mem::replace(seen, true) {
             return Err(c.error("invalid or duplicate type body"));
         }
-        seen[index] = true;
-        let t = &mut types[index];
         t.parent = c.index()?;
         t.flags = c.packed()?;
         if t.flags & !127 != 0 {
@@ -247,11 +267,11 @@ pub(crate) fn read_types(section: Section<'_>) -> Result<Vec<Type>> {
         let n = c.index()?;
         for _ in 0..n {
             let i = c.index()?;
-            let hash = u32::from_le_bytes(c.take(4)?.try_into().expect("four bytes"));
-            if i == 0 || i >= count || types[i].hash.is_some() {
-                return Err(c.error("invalid type hash index"));
+            let hash = c.u32_le()?;
+            match types.get_mut(i) {
+                Some(t) if i != 0 && t.hash.is_none() => t.hash = Some(hash),
+                _ => return Err(c.error("invalid type hash index")),
             }
-            types[i].hash = Some(hash);
         }
         c.padding()?;
     }
@@ -280,26 +300,38 @@ pub(crate) fn read_types(section: Section<'_>) -> Result<Vec<Type>> {
 fn parent_cycle(types: &[Type]) -> Option<usize> {
     // 0: not visited, 1: on the chain being followed, 2: known to end at the null type
     let mut state = vec![0u8; types.len()];
-    state[0] = 2;
+    if let Some(null) = state.first_mut() {
+        *null = 2;
+    }
     for start in 1..types.len() {
         let mut chain = Vec::new();
         let mut at = start;
-        while state[at] == 0 {
-            state[at] = 1;
+        // the state the chain ends on (a parent past the types, which the caller excludes, ends it as the null type)
+        let end = loop {
+            let (Some(s), Some(t)) = (state.get_mut(at), types.get(at)) else {
+                break 2;
+            };
+            if *s != 0 {
+                break *s;
+            }
+            *s = 1;
             chain.push(at);
-            at = types[at].parent;
-        }
-        if state[at] == 1 {
+            at = t.parent;
+        };
+        if end == 1 {
             return Some(at);
         }
         for t in chain {
-            state[t] = 2;
+            if let Some(s) = state.get_mut(t) {
+                *s = 2;
+            }
         }
     }
     None
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing, reason = "test fixtures built by hand")]
 mod tests {
     use super::*;
     #[test]

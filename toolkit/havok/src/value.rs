@@ -1,3 +1,8 @@
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use crate::{Result, Tagfile, invalid};
 
 /// A typed view into DATA. References remain indices, so cyclic object graphs
@@ -65,8 +70,13 @@ impl<'t, 'a> Array<'t, 'a> {
     }
 }
 impl<'t, 'a> Value<'t, 'a> {
+    /// The name of the value's type (a value's type index is one the tagfile checked: its items', fields' and
+    /// array elements').
     pub fn type_name(self) -> &'t str {
-        &self.tag.types[self.type_index].name
+        self.tag
+            .types
+            .get(self.type_index)
+            .map_or("", |t| t.name.as_str())
     }
     pub fn format(self) -> Result<usize> {
         self.tag.format(self.type_index)
@@ -74,8 +84,7 @@ impl<'t, 'a> Value<'t, 'a> {
     /// Whether the value's class (or a class it derives from) declares a field `name`.
     pub fn has_field(self, name: &str) -> bool {
         let mut index = self.type_index;
-        while index != 0 {
-            let t = &self.tag.types[index];
+        while let Some(t) = self.tag.types.get(index).filter(|_| index != 0) {
             if t.fields.iter().any(|f| f.name == name) {
                 return true;
             }
@@ -88,8 +97,7 @@ impl<'t, 'a> Value<'t, 'a> {
             return Err(invalid(self.offset, "field access requires a class"));
         }
         let mut index = self.type_index;
-        while index != 0 {
-            let t = &self.tag.types[index];
+        while let Some(t) = self.tag.types.get(index).filter(|_| index != 0) {
             if let Some(f) = t.fields.iter().find(|f| f.name == name) {
                 let offset = self
                     .offset
@@ -115,7 +123,7 @@ impl<'t, 'a> Value<'t, 'a> {
         ))
     }
     fn reference_index(self) -> Result<usize> {
-        Ok(u32::from_le_bytes(self.tag.bytes(self.offset, 4)?.try_into().expect("four bytes")) as usize)
+        Ok(u32::from_le_bytes(self.tag.array(self.offset)?) as usize)
     }
     pub fn pointer(self) -> Result<Option<Self>> {
         if self.format()? & 15 != 6 {
@@ -199,7 +207,14 @@ impl<'t, 'a> Value<'t, 'a> {
         if format & 512 == 0 {
             return i64::try_from(value).map_err(|_| invalid(self.offset, "unsigned value exceeds i64"));
         }
-        Ok(((value << (64 - bits)) as i64) >> (64 - bits))
+        // sign-extended from its width: 8, 16, 32 or 64 bits, the widths `unsigned` reads
+        let shift = match bits {
+            8 => 56,
+            16 => 48,
+            32 => 32,
+            _ => 0,
+        };
+        Ok((value.wrapping_shl(shift) as i64).wrapping_shr(shift))
     }
     /// Stored float32, including nonfinite values in unused SIMD lanes.
     /// Geometry consumers must validate the components they actually use.
@@ -207,7 +222,7 @@ impl<'t, 'a> Value<'t, 'a> {
         if self.format()? != 0x174605 {
             return Err(invalid(self.offset, "expected float32"));
         }
-        let value = f32::from_le_bytes(self.tag.bytes(self.offset, 4)?.try_into().expect("four bytes"));
+        let value = f32::from_le_bytes(self.tag.array(self.offset)?);
         Ok(value)
     }
     pub fn vector<const N: usize>(self) -> Result<[f32; N]> {

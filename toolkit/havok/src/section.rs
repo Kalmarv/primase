@@ -1,3 +1,8 @@
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 use crate::{Result, invalid};
 
 /// A section's absolute location, flags and borrowed payload. Container sections
@@ -15,7 +20,7 @@ impl<'a> Section<'a> {
         if self.flags != 0 {
             return Err(invalid(self.offset, "leaf section has no children"));
         }
-        sections_at(self.payload, self.offset + 8)
+        sections_at(self.payload, self.offset.saturating_add(8))
     }
 }
 
@@ -27,33 +32,37 @@ pub fn sections(bytes: &[u8]) -> Result<Vec<Section<'_>>> {
 
 fn sections_at(bytes: &[u8], base: usize) -> Result<Vec<Section<'_>>> {
     let mut result = Vec::new();
-    let mut position = 0;
-    while position < bytes.len() {
-        let offset = base + position;
-        let header = bytes
-            .get(position..position + 8)
-            .ok_or_else(|| invalid(offset, "truncated section header"))?;
-        let size_flags = u32::from_be_bytes(header[..4].try_into().expect("four bytes"));
-        let size = (size_flags & 0x3fff_ffff) as usize;
-        if size < 8 {
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        // `rest` is the tail of `bytes`, which starts at `base` in the file
+        let offset = base.saturating_add(bytes.len().saturating_sub(rest.len()));
+        let Some((&[s0, s1, s2, s3, g0, g1, g2, g3], body)) = rest.split_first_chunk::<8>() else {
+            return Err(invalid(offset, "truncated section header"));
+        };
+        // a big-endian word: the flags in the top two bits, the section's length (its header's 8 bytes with it) below
+        let size = u32::from_be_bytes([s0 & 0x3f, s1, s2, s3]);
+        let Some(length) = size.checked_sub(8) else {
             return Err(invalid(offset, "section length is less than its header"));
-        }
-        let end = position
-            .checked_add(size)
-            .filter(|&end| end <= bytes.len())
-            .ok_or_else(|| invalid(offset, "section exceeds its parent"))?;
+        };
+        let Some((payload, after)) = usize::try_from(length)
+            .ok()
+            .and_then(|n| body.split_at_checked(n))
+        else {
+            return Err(invalid(offset, "section exceeds its parent"));
+        };
         result.push(Section {
             offset,
-            signature: header[4..8].try_into().expect("four bytes"),
-            flags: (size_flags >> 30) as u8,
-            payload: &bytes[position + 8..end],
+            signature: [g0, g1, g2, g3],
+            flags: s0 >> 6,
+            payload,
         });
-        position = end;
+        rest = after;
     }
     Ok(result)
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing, reason = "test fixtures built by hand")]
 mod tests {
     use super::*;
 

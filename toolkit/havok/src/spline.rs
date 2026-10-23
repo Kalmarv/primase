@@ -37,8 +37,13 @@
 //! 47.2% of all tracks, so the encoder drops what is neutral, not what equals the reference (which would leave the two shares alike).
 //! Float tracks are not read: an animation with some is refused. A track bound to a negative bone
 //! index drives no bone.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 
-use crate::animation::{Animation, Binding, QsTransform, Skeleton, SplineData, Tracks};
+use crate::animation::{Animation, Tracks};
 use crate::{Error, Result, invalid};
 
 /// The knots and degree a spline track's control points are evaluated with.
@@ -279,8 +284,13 @@ fn knots(r: &mut Reader) -> Result<(usize, Knots)> {
             format!("a spline track of degree {degree} with {points} control points"),
         ));
     }
-    let values = r.take(points + usize::from(degree) + 1)?.to_vec();
-    if values.windows(2).any(|w| w[0] > w[1]) {
+    // points + degree + 1 knots
+    let count = points
+        .checked_add(usize::from(degree))
+        .and_then(|n| n.checked_add(1))
+        .ok_or_else(|| invalid(at, "the knot count overflows"))?;
+    let values = r.take(count)?.to_vec();
+    if values.windows(2).any(|w| matches!(*w, [a, b] if a > b)) {
         return Err(invalid(at, "spline knots decrease"));
     }
     Ok((points, Knots { degree, values }))
@@ -291,15 +301,27 @@ fn quantized(r: &mut Reader, scalar: Scalar, min: f32, max: f32) -> Result<f32> 
         Scalar::Bits8 => f64::from(r.u8()?) / 255.0,
         Scalar::Bits16 => f64::from(r.u16()?) / 65535.0,
     };
-    Ok((f64::from(min) + (f64::from(max) - f64::from(min)) * ratio) as f32)
+    Ok(round_f32(
+        f64::from(min) + (f64::from(max) - f64::from(min)) * ratio,
+    ))
+}
+
+/// `v` rounded to the nearest f32: a value computed in f64 rounded once.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "rounding to f32 is the stated conversion"
+)]
+fn round_f32(v: f64) -> f32 {
+    v as f32
 }
 
 fn vector(r: &mut Reader, flags: u8, scalar: Scalar, unreadable: &mut Vec<usize>) -> Result<Vector> {
-    let spline = SPLINE[..3].iter().any(|f| flags & f != 0);
+    // x, y and z: the first three of the flags (w is a rotation's)
+    let spline = SPLINE.iter().take(3).any(|f| flags & f != 0);
     let state = |i: usize| {
-        if flags & SPLINE[i] != 0 {
+        if SPLINE.get(i).is_some_and(|f| flags & f != 0) {
             1
-        } else if flags & STATIC[i] != 0 {
+        } else if STATIC.get(i).is_some_and(|f| flags & f != 0) {
             2
         } else {
             0
@@ -396,18 +418,23 @@ fn quaternion(r: &mut Reader, how: RotationQuantization) -> Result<[f32; 4]> {
         RotationQuantization::ThreeComp48 => {
             // 15 bits each, the top bit of each a part of the index and the sign
             let (x, y, z) = (r.i16()?, r.i16()?, r.i16()?);
-            let shift = usize::from((((y as u16) >> 15) << 1) | ((x as u16) >> 15));
+            // the index: y's top bit, then x's
+            let shift = match (y < 0, x < 0) {
+                (false, false) => 0,
+                (false, true) => 1,
+                (true, false) => 2,
+                (true, true) => 3,
+            };
             let negative = (z as u16) >> 15 != 0;
-            let value = |v: i16| f32::from((v & 0x7FFF) - 0x3FFF) * 0.000_043_161;
+            // a 15-bit value less 16383 is exact in f32
+            let value = |v: i16| (f32::from(v & 0x7FFF) - 16383.0) * 0.000_043_161;
             three_components([value(x), value(y), value(z)], shift, negative)
         }
         RotationQuantization::ThreeComp40 => {
-            let mut b = [0u8; 8];
-            b[..5].copy_from_slice(&r.array::<5>()?);
-            let c = u64::from_le_bytes(b);
-            // 12 bits each, then the index in bits 36-37 and the sign in bit 38
-            let value = |shift: u32| ((c >> shift) & 0xFFF) as i32 - 0x7FF;
-            let v = |shift: u32| value(shift) as f32 * 0.000_345_436;
+            let [b0, b1, b2, b3, b4] = r.array::<5>()?;
+            let c = u64::from_le_bytes([b0, b1, b2, b3, b4, 0, 0, 0]);
+            // 12 bits each, then the index in bits 36-37 and the sign in bit 38; a 12-bit value less 2047 is exact in f32
+            let v = |shift: u32| (((c >> shift) & 0xFFF) as f32 - 2047.0) * 0.000_345_436;
             three_components([v(0), v(12), v(24)], ((c >> 36) & 3) as usize, (c >> 38) & 1 != 0)
         }
         RotationQuantization::Polar32 => {
@@ -428,12 +455,12 @@ fn quaternion(r: &mut Reader, how: RotationQuantization) -> Result<[f32; 4]> {
                 phi.cos() * magnitude,
                 w,
             ];
-            for (i, bit) in [28, 29, 30, 31].into_iter().enumerate() {
+            for (v, bit) in q.iter_mut().zip([28, 29, 30, 31]) {
                 if (c >> bit) & 1 != 0 {
-                    q[i] = -q[i];
+                    *v = -*v;
                 }
             }
-            [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
+            q.map(round_f32)
         }
     })
 }
@@ -515,16 +542,35 @@ impl SplineAnimation {
         }
         let mut out = Vec::with_capacity(blocks);
         let mut unreadable = Vec::new();
-        for b in 0..blocks {
-            let start = s.block_offsets[b] as usize;
+        // each block's start and float data offset, and where the next begins (the end of the data after the last)
+        let nexts = s
+            .block_offsets
+            .iter()
+            .skip(1)
+            .map(|&o| o as usize)
+            .chain([s.data.len()]);
+        let blocks = s.block_offsets.iter().zip(&s.float_block_offsets).zip(nexts);
+        for (b, ((&start, &float), next)) in blocks.enumerate() {
+            let start = start as usize;
             if !start.is_multiple_of(16) {
                 return Err(invalid(start, "a block is not 16-byte aligned"));
             }
+            // `floatBlockOffsets` count from the block's own start
+            let float_start = start
+                .checked_add(float as usize)
+                .ok_or_else(|| invalid(start, format!("block {b}'s float data offset overflows")))?;
             let mut r = Reader {
                 bytes: &s.data,
                 at: start,
             };
-            out.push(block(&mut r, animation.transform_tracks, s, b, &mut unreadable)?);
+            let ends = Ends { float_start, next };
+            out.push(block(
+                &mut r,
+                animation.transform_tracks,
+                b,
+                ends,
+                &mut unreadable,
+            )?);
         }
         Ok(SplineAnimation {
             blocks: out,
@@ -535,127 +581,30 @@ impl SplineAnimation {
             frame_duration: s.frame_duration,
         })
     }
-
-    /// The block and the frame within it that `time` seconds is: frames count from 0 at `frameDuration` apart, a block
-    /// covering `maxFramesPerBlock - 1` of them; a time outside the animation is its nearest end.
-    pub fn locate(&self, time: f32) -> (usize, f32) {
-        let last = (self.num_frames - 1) as f64;
-        let frame = (f64::from(time) / f64::from(self.frame_duration)).clamp(0.0, last);
-        let per_block = f64::from(self.max_frames_per_block - 1);
-        let block = ((frame / per_block).floor() as usize).min(self.blocks.len() - 1);
-        (block, (frame - block as f64 * per_block) as f32)
-    }
-
-    /// A track at `time` seconds; what the track does not state is `absent`'s fallback: `reference` (the bone's
-    /// reference transform) or the neutral value.
-    pub fn sample(
-        &self,
-        track: usize,
-        time: f32,
-        reference: &QsTransform,
-        absent: Absent,
-    ) -> Result<QsTransform> {
-        let (block, frame) = self.locate(time);
-        let t = self
-            .blocks
-            .get(block)
-            .and_then(|b| b.get(track))
-            .ok_or_else(|| invalid(0, format!("no track {track}")))?;
-        let position = sample_vector(
-            &t.position,
-            frame,
-            match absent.position {
-                Fallback::Reference => reference.translation,
-                Fallback::Neutral => [0.0; 4],
-            },
-        )?;
-        let scale = sample_vector(
-            &t.scale,
-            frame,
-            match absent.scale {
-                Fallback::Reference => reference.scale,
-                Fallback::Neutral => [1.0, 1.0, 1.0, 0.0],
-            },
-        )?;
-        let rotation = match &t.rotation {
-            Rotation::Absent => match absent.rotation {
-                Fallback::Reference => reference.rotation,
-                Fallback::Neutral => [0.0, 0.0, 0.0, 1.0],
-            },
-            Rotation::Static(q) => *q,
-            Rotation::Spline { knots, points } => {
-                let at = evaluate(knots, frame, points.len())?;
-                let mut q = [0.0f64; 4];
-                for (p, w) in &at {
-                    let c = points
-                        .get(*p)
-                        .ok_or_else(|| invalid(0, "a control point is missing"))?;
-                    for (sum, component) in q.iter_mut().zip(c) {
-                        *sum += f64::from(*component) * w;
-                    }
-                }
-                let norm = q.iter().map(|v| v * v).sum::<f64>().sqrt();
-                if norm == 0.0 || !norm.is_finite() {
-                    return Err(invalid(0, "a rotation spline blends to no rotation"));
-                }
-                [
-                    (q[0] / norm) as f32,
-                    (q[1] / norm) as f32,
-                    (q[2] / norm) as f32,
-                    (q[3] / norm) as f32,
-                ]
-            }
-        };
-        Ok(QsTransform {
-            translation: position,
-            rotation,
-            scale,
-        })
-    }
-
-    /// Every bone of `skeleton` at `time` seconds: the bones a track of `binding` drives sampled (a track bound to a
-    /// negative bone index drives none), the others at their reference transform. `binding` must be the one that binds this animation to `skeleton`.
-    pub fn pose_at(
-        &self,
-        time: f32,
-        binding: &Binding,
-        skeleton: &Skeleton,
-        absent: Absent,
-    ) -> Result<Vec<QsTransform>> {
-        let tracks = self.blocks.first().map_or(0, Vec::len);
-        if binding.transform_track_to_bone.len() != tracks {
-            return Err(invalid(
-                0,
-                "the binding has another number of tracks than the animation",
-            ));
-        }
-        let mut pose = skeleton.reference_pose.clone();
-        for (track, &bone) in binding.transform_track_to_bone.iter().enumerate() {
-            // a negative bone index is a track that drives no bone
-            if bone < 0 {
-                continue;
-            }
-            let bone = usize::try_from(bone)
-                .ok()
-                .filter(|&b| b < pose.len())
-                .ok_or_else(|| {
-                    invalid(
-                        0,
-                        format!("track {track} drives bone {bone}, outside the skeleton"),
-                    )
-                })?;
-            pose[bone] = self.sample(track, time, &skeleton.reference_pose[bone], absent)?;
-        }
-        Ok(pose)
-    }
 }
 
-/// One block: its tracks, ending where the float data begins.
+/// Where a block's tracks end: where its float data begins; and where, after padding to 16, the next block begins
+/// (the end of the data after the last).
+#[derive(Clone, Copy)]
+struct Ends {
+    float_start: usize,
+    next: usize,
+}
+
+/// Part `axis` (0, 1 or 2: x, y, z) of a vector, from its three `names`.
+fn axis_part(names: [&'static str; 3], axis: usize) -> Result<&'static str> {
+    names
+        .get(axis)
+        .copied()
+        .ok_or_else(|| invalid(0, format!("axis {axis} of a vector")))
+}
+
+/// One block, number `index`: its tracks, ending where `ends` says.
 fn block(
     r: &mut Reader,
     tracks: usize,
-    s: &SplineData,
     index: usize,
+    ends: Ends,
     unreadable: &mut Vec<Unreadable>,
 ) -> Result<Vec<Track>> {
     let masks = (0..tracks).map(|_| mask(r)).collect::<Result<Vec<_>>>()?;
@@ -673,20 +622,24 @@ fn block(
         };
         let mut bad = Vec::new();
         let position = vector(r, m.position_flags, m.position, &mut bad).map_err(at("position"))?;
-        unreadable.extend(bad.drain(..).map(|axis| Unreadable {
-            block: index,
-            track,
-            part: ["position x", "position y", "position z"][axis],
-        }));
+        for axis in bad.drain(..) {
+            unreadable.push(Unreadable {
+                block: index,
+                track,
+                part: axis_part(["position x", "position y", "position z"], axis)?,
+            });
+        }
         r.pad(4)?;
         let rotation = rotation(r, m.rotation_flags, m.rotation).map_err(at("rotation"))?;
         r.pad(4)?;
         let scale = vector(r, m.scale_flags, m.scale, &mut bad).map_err(at("scale"))?;
-        unreadable.extend(bad.drain(..).map(|axis| Unreadable {
-            block: index,
-            track,
-            part: ["scale x", "scale y", "scale z"][axis],
-        }));
+        for axis in bad.drain(..) {
+            unreadable.push(Unreadable {
+                block: index,
+                track,
+                part: axis_part(["scale x", "scale y", "scale z"], axis)?,
+            });
+        }
         r.pad(4)?;
         out.push(Track {
             position,
@@ -694,8 +647,7 @@ fn block(
             scale,
         });
     }
-    // `floatBlockOffsets` count from the block's own start
-    let float_start = (s.block_offsets[index] as usize) + (s.float_block_offsets[index] as usize);
+    let Ends { float_start, next } = ends;
     if r.at != float_start {
         return Err(invalid(
             r.at,
@@ -707,18 +659,14 @@ fn block(
     }
     let on_boundary = r.at.is_multiple_of(16);
     r.pad(16)?;
-    let next = s
-        .block_offsets
-        .get(index + 1)
-        .map_or(s.data.len(), |&o| o as usize);
     if r.at != next {
         // The 2018.1 files the install holds pad a block whose float data begins on a 16-byte boundary by 16 more
         // zero bytes in some cases (711 of 1,568 such blocks; the other 857 and every block of the 2016.2 files have
         // none, with the same trailing bytes: the encoder's rule is its own, not the data's). Those 16 zero bytes are
         // accepted, nothing else.
         let extra = on_boundary
-            && next == r.at + 16
-            && s.data
+            && r.at.checked_add(16) == Some(next)
+            && r.bytes
                 .get(r.at..next)
                 .is_some_and(|pad| pad.iter().all(|&b| b == 0));
         if !extra {
@@ -731,83 +679,16 @@ fn block(
     Ok(out)
 }
 
-/// The control points and weights a B-spline of `knots` over `points` control points has at `frame`
-/// (algorithms A2.1 and A2.2 of The NURBS Book): the `degree + 1` points of the knot span the frame lies in. A frame
-/// outside the knots is the nearest end.
-#[allow(
-    clippy::needless_range_loop,
-    reason = "the textbook's index algebra, as written"
-)]
-fn evaluate(knots: &Knots, frame: f32, points: usize) -> Result<Vec<(usize, f64)>> {
-    let p = usize::from(knots.degree);
-    let k = |i: usize| -> Result<f64> {
-        knots
-            .values
-            .get(i)
-            .map(|&v| f64::from(v))
-            .ok_or_else(|| invalid(0, "knot index outside the knots"))
-    };
-    let u = f64::from(frame).clamp(k(p)?, k(points)?);
-    // the span: the last i in p..points with knots[i] <= u (the last span holds the end)
-    let mut span = p;
-    while span + 1 < points && k(span + 1)? <= u {
-        span += 1;
-    }
-    let mut n = vec![0.0f64; p + 1];
-    let mut left = vec![0.0f64; p + 1];
-    let mut right = vec![0.0f64; p + 1];
-    n[0] = 1.0;
-    for j in 1..=p {
-        left[j] = u - k(span + 1 - j)?;
-        right[j] = k(span + j)? - u;
-        let mut saved = 0.0;
-        for r in 0..j {
-            let denominator = right[r + 1] + left[j - r];
-            let temp = if denominator == 0.0 {
-                0.0
-            } else {
-                n[r] / denominator
-            };
-            n[r] = saved + right[r + 1] * temp;
-            saved = left[j - r] * temp;
-        }
-        n[j] = saved;
-    }
-    Ok((0..=p).map(|i| (span - p + i, n[i])).collect())
-}
-
-fn sample_component(c: &Component, knots: Option<&Knots>, frame: f32, default: f32) -> Result<f32> {
-    Ok(match c {
-        Component::Absent => default,
-        Component::Static(v) => *v,
-        Component::Spline(points) => {
-            let knots = knots.ok_or_else(|| invalid(0, "a spline component without knots"))?;
-            let mut value = 0.0;
-            for (p, w) in evaluate(knots, frame, points.len())? {
-                value += f64::from(
-                    *points
-                        .get(p)
-                        .ok_or_else(|| invalid(0, "a control point is missing"))?,
-                ) * w;
-            }
-            value as f32
-        }
-    })
-}
-
-fn sample_vector(v: &Vector, frame: f32, default: [f32; 4]) -> Result<[f32; 4]> {
-    Ok([
-        sample_component(&v.x, v.knots.as_ref(), frame, default[0])?,
-        sample_component(&v.y, v.knots.as_ref(), frame, default[1])?,
-        sample_component(&v.z, v.knots.as_ref(), frame, default[2])?,
-        default[3],
-    ])
-}
-
 #[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    reason = "test fixtures built by hand"
+)]
 mod tests {
     use super::*;
-    use crate::animation::AnimationType;
+    use crate::animation::{AnimationType, QsTransform, SplineData};
 
     /// Positions and scales fall back to the reference, rotations to the identity.
     const MIXED: Absent = Absent {
