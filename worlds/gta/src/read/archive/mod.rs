@@ -3,5 +3,6 @@
 pub mod archive_set;
 mod key_hashes;
 pub mod keys;
+pub mod listing;
 pub mod ng;
 pub mod rpf;

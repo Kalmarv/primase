@@ -39,6 +39,12 @@ pub struct GtaSource {
     online: ArchiveSet,
     story_parents: TextureParents,
     online_parents: TextureParents,
+    /// Each state's archetypes by asset, read from its map types files the first time an entry needs them
+    /// ([`GtaSource::read_entry`]).
+    pub(crate) story_archetypes:
+        std::sync::OnceLock<std::result::Result<crate::read::entry::Archetypes, String>>,
+    pub(crate) online_archetypes:
+        std::sync::OnceLock<std::result::Result<crate::read::entry::Archetypes, String>>,
 }
 
 impl std::fmt::Debug for GtaSource {
@@ -63,17 +69,28 @@ impl GtaSource {
             online,
             story_parents,
             online_parents,
+            story_archetypes: std::sync::OnceLock::new(),
+            online_archetypes: std::sync::OnceLock::new(),
         })
     }
 
-    fn story(&self) -> Lookup<'_> {
+    /// The opened install: its archives and their files ([`Install::listing`]).
+    pub fn install(&self) -> &Install {
+        &self.story.install
+    }
+
+    pub(crate) fn keys(&self) -> &Keys {
+        &self.keys
+    }
+
+    pub(crate) fn story(&self) -> Lookup<'_> {
         Lookup {
             set: &self.story,
             parents: &self.story_parents,
         }
     }
 
-    fn online(&self) -> Lookup<'_> {
+    pub(crate) fn online(&self) -> Lookup<'_> {
         Lookup {
             set: &self.online,
             parents: &self.online_parents,

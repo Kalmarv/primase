@@ -273,3 +273,84 @@ fn key_material_is_checked() {
         .to_string();
     assert!(e.contains("NG key 0 does not match"), "{e}");
 }
+
+/// The install's listing over archives written here: a nested archive is an archive of its own and a file of its
+/// parent, directories are not files, and every file carries the sizes and extension its table of contents gives.
+/// Oracle: the layout written here, and the inputs it was written from.
+#[test]
+fn the_listing_names_every_archive_and_file_with_its_storage() {
+    use primase_gta::read::archive::archive_set::Install;
+    use primase_gta::read::archive::listing::Storage;
+    let sys = PageFlags(4 | 1 << 27);
+    let inner = write_rpf(vec![Item::Stored("Inner.TXT", b"inside".to_vec())]);
+    let text: Vec<u8> = b"the quick brown fox ".repeat(100);
+    let bytes = write_rpf(vec![
+        Item::Dir(
+            "Data",
+            vec![
+                Item::Deflated("long.xml", text.clone()),
+                Item::Resource("a.YDR", sys, vec![7; 0x2000]),
+            ],
+        ),
+        Item::Stored("readme", b"hello".to_vec()),
+        Item::Archive("nested.rpf", inner),
+    ]);
+    let dir = std::env::temp_dir().join(format!("primase-gta-listing-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temporary folder");
+    std::fs::File::create(dir.join("Test.rpf"))
+        .and_then(|mut f| f.write_all(&bytes))
+        .expect("temporary archive");
+    let install = Install::open(&dir, &Keys::none()).unwrap();
+
+    let archives: Vec<_> = install
+        .archive_listing()
+        .map(|a| (a.path, a.files, a.archives))
+        .collect();
+    assert_eq!(archives, [("test.rpf", 4, 1), (r"test.rpf\nested.rpf", 1, 0)]);
+    let files: Vec<_> = install
+        .listing()
+        .map(|f| (f.archive, f.path, f.name, f.extension, f.size()))
+        .collect();
+    assert_eq!(
+        files,
+        [
+            ("test.rpf", r"test.rpf\readme", "readme", "", 5),
+            (
+                "test.rpf",
+                r"test.rpf\nested.rpf",
+                "nested.rpf",
+                "rpf",
+                files[1].4
+            ),
+            (
+                "test.rpf",
+                r"test.rpf\data\long.xml",
+                "long.xml",
+                "xml",
+                text.len() as u64
+            ),
+            ("test.rpf", r"test.rpf\data\a.ydr", "a.YDR", "ydr", 0x2000),
+            (
+                r"test.rpf\nested.rpf",
+                r"test.rpf\nested.rpf\inner.txt",
+                "Inner.TXT",
+                "txt",
+                6
+            ),
+        ]
+    );
+    let listed: Vec<_> = install.listing().collect();
+    assert!(listed[1].is_archive() && !listed[0].is_archive());
+    assert_eq!(
+        listed[3].storage,
+        Storage::Resource {
+            system: 0x2000,
+            graphics: 0
+        }
+    );
+    assert!(matches!(listed[2].storage, Storage::Binary { stored, size, .. } if stored > 0 && stored < size));
+    // every listed file is the install's file at its path
+    for f in &listed {
+        assert_eq!(install.file(f.path), Some(f.file));
+    }
+}

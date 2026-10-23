@@ -37,6 +37,15 @@ pub fn material_names(text: &str) -> Result<Vec<String>> {
         .collect())
 }
 
+/// The material names of the archive set's live `materials.dat`; `None` when it has none.
+pub fn install_material_names(set: &ArchiveSet, keys: &Keys) -> Result<Option<Vec<String>>> {
+    let Some(f) = set.live("dat", "materials") else {
+        return Ok(None);
+    };
+    let bytes = set.install.binary(f, keys)?;
+    material_names(&String::from_utf8_lossy(&bytes)).map(Some)
+}
+
 /// What [`attach_map_bounds`] did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BoundsReport {
@@ -131,16 +140,9 @@ pub fn attach_map_bounds(
         .map(|(k, bound)| (story.path(files[k]).to_string(), bound, live[&files[k]]))
         .collect();
     place_map_bounds(w, bounds, axis, &mut report);
-    let materials = |set: &ArchiveSet| -> Result<Option<Vec<String>>> {
-        let Some(f) = set.live("dat", "materials") else {
-            return Ok(None);
-        };
-        let bytes = set.install.binary(f, keys)?;
-        material_names(&String::from_utf8_lossy(&bytes)).map(Some)
-    };
-    let names = materials(story)?;
+    let names = install_material_names(story, keys)?;
     if let Some(o) = online
-        && materials(o)? != names
+        && install_material_names(o, keys)? != names
     {
         // one material list per world: bounds index it
         return Err(invalid(

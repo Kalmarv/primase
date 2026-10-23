@@ -230,7 +230,8 @@ pub struct AssetReport {
     pub blend_streams: usize,
 }
 
-struct Ctx<'a> {
+/// What loading drawables and textures keeps between prototypes: the files read once and the textures made once.
+pub(crate) struct Ctx<'a> {
     install: &'a Install,
     keys: &'a Keys,
     /// Texture dictionaries read, by file, with their paths.
@@ -239,7 +240,20 @@ struct Ctx<'a> {
     textures: BTreeMap<(String, u32), Entity>,
     /// Drawable dictionaries read, by file.
     ydds: BTreeMap<FileRef, DrawableDictionary>,
-    report: AssetReport,
+    pub(crate) report: AssetReport,
+}
+
+impl<'a> Ctx<'a> {
+    pub(crate) fn new(install: &'a Install, keys: &'a Keys) -> Ctx<'a> {
+        Ctx {
+            install,
+            keys,
+            dicts: BTreeMap::new(),
+            textures: BTreeMap::new(),
+            ydds: BTreeMap::new(),
+            report: AssetReport::default(),
+        }
+    }
 }
 
 /// Where a vertex element goes.
@@ -395,7 +409,7 @@ fn mesh(
 }
 
 /// A resource file of the install, decoded.
-fn decode(install: &Install, keys: &Keys, f: FileRef) -> Result<crate::rage::resource::Resource> {
+pub(crate) fn decode(install: &Install, keys: &Keys, f: FileRef) -> Result<crate::rage::resource::Resource> {
     let a = install.archives.get(f.archive).ok_or_else(|| {
         invalid(
             "archive set",
@@ -423,7 +437,7 @@ impl Ctx<'_> {
         Ok(self.dicts.get(&f))
     }
 
-    fn texture_entity(&mut self, w: &mut World, source: &str, t: &Texture) -> Result<Entity> {
+    pub(crate) fn texture_entity(&mut self, w: &mut World, source: &str, t: &Texture) -> Result<Entity> {
         let key = (source.to_string(), primase_hash::joaat(t.name.as_bytes()));
         if let Some(&e) = self.textures.get(&key) {
             return Ok(e);
@@ -632,18 +646,28 @@ pub fn attach_lights(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> Result
     }
     all.sort_by_key(|(e, _)| *e);
     for (proto, lights) in all {
-        bump(&mut report.prototypes_read);
-        if !lights.0.is_empty() {
-            bump(&mut report.prototypes_with_lights);
-            report.lights = report.lights.saturating_add(lights.0.len());
-            let (records, bones) = lights;
-            w.insert(proto, GtaLights { records });
-            if !bones.is_empty() {
-                w.insert(proto, GtaSkeleton(bones));
-            }
-        }
+        put_lights(w, &mut report, proto, lights);
     }
     Ok(report)
+}
+
+/// A prototype's light records as read, with their bones: into the world when it has any, counted into `report`.
+pub(crate) fn put_lights(
+    w: &mut World,
+    report: &mut LightsReport,
+    proto: Entity,
+    lights: (Vec<crate::rage::drawable::LightAttr>, Bones),
+) {
+    bump(&mut report.prototypes_read);
+    if !lights.0.is_empty() {
+        bump(&mut report.prototypes_with_lights);
+        report.lights = report.lights.saturating_add(lights.0.len());
+        let (records, bones) = lights;
+        w.insert(proto, GtaLights { records });
+        if !bones.is_empty() {
+            w.insert(proto, GtaSkeleton(bones));
+        }
+    }
 }
 
 /// A prototype and the light records read for it.
@@ -663,14 +687,7 @@ pub fn attach_assets_with(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> R
 }
 
 fn attach(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> Result<AssetReport> {
-    let mut ctx = Ctx {
-        install: lookups.install(),
-        keys,
-        dicts: BTreeMap::new(),
-        textures: BTreeMap::new(),
-        ydds: BTreeMap::new(),
-        report: AssetReport::default(),
-    };
+    let mut ctx = Ctx::new(lookups.install(), keys);
     let used: BTreeSet<Entity> = w.iter::<Instance>().map(|(_, i)| i.prototype).collect();
     for proto in used {
         let Some(a) = w.get::<GtaArchetype>(proto).cloned() else {
@@ -684,6 +701,22 @@ fn attach(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> Result<AssetRepor
             bump(&mut ctx.report.asset_missing);
             continue;
         };
+        load_prototype(&mut ctx, w, proto, &a, lookup, f)?;
+    }
+    Ok(ctx.report)
+}
+
+/// One file's drawable, a prototype's own: `f` is the file `a` (the prototype's archetype, asset type 1 to 3) resolves
+/// to in `lookup`, or any file of that kind the caller means ([`attach_file`]).
+pub(crate) fn load_prototype(
+    ctx: &mut Ctx<'_>,
+    w: &mut World,
+    proto: Entity,
+    a: &GtaArchetype,
+    lookup: Lookup<'_>,
+    f: FileRef,
+) -> Result<()> {
+    {
         let set = lookup.set;
         let mut fragment_pose = Vec::new();
         // a fragment's physics bound (what it collides with); a drawable's own otherwise
@@ -697,7 +730,7 @@ fn attach(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> Result<AssetRepor
                 bound = frag.physics.take();
                 let Some(d) = frag.drawable else {
                     bump(&mut ctx.report.asset_missing);
-                    continue;
+                    return Ok(());
                 };
                 fragment_pose = frag.pose;
                 bump(&mut ctx.report.fragments);
@@ -711,12 +744,12 @@ fn attach(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> Result<AssetRepor
                 }
                 let Some(d) = ctx.ydds.get(&f).and_then(|dict| dict.get(a.asset_name)).cloned() else {
                     bump(&mut ctx.report.asset_missing);
-                    continue;
+                    return Ok(());
                 };
                 bump(&mut ctx.report.dictionary_entries);
                 (format!("{}#{:#010x}", set.path(f), a.asset_name), d)
             }
-            _ => continue,
+            _ => return Ok(()),
         };
         if let Some(bound) = bound.or_else(|| d.bound.clone()) {
             w.insert(
@@ -861,7 +894,7 @@ fn attach(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> Result<AssetRepor
         );
         bump(&mut ctx.report.drawables);
     }
-    Ok(ctx.report)
+    Ok(())
 }
 
 #[cfg(test)]

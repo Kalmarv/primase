@@ -4,6 +4,7 @@ pub mod archive;
 pub mod assets;
 pub mod collision;
 pub mod convert;
+pub mod entry;
 pub mod gtxd;
 pub mod mount;
 pub(crate) mod rbf;
