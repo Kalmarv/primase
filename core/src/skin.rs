@@ -96,7 +96,7 @@ pub struct Skin {
 
 impl WeightRule {
     /// The divisor the engine applies to a vertex whose weights sum to `sum`; `None` for the rules that apply none
-    /// (the weights are used as stored).
+    /// (the weights are used as stored). The floor is the engine's `f32` constant, widened exactly.
     pub fn divisor(self, sum: f64) -> Option<f64> {
         match self {
             WeightRule::EngineNormalizes { floor } => Some(sum.max(f64::from(floor))),
@@ -538,7 +538,10 @@ mod tests {
         // the divisor is max(sum, floor)
         let rule = WeightRule::EngineNormalizes { floor: 0.001 };
         assert_eq!(rule.divisor(0.996), Some(0.996));
-        assert_eq!(rule.divisor(0.0), Some(0.001));
+        // the floor is an f32 (the programs' constant 0x3F50624DE0000000 is 0.001f32 written as a double): widened
+        // exactly, not equal to the f64 literal 0.001
+        assert_eq!(rule.divisor(0.0), Some(f64::from(0.001f32)));
+        assert_ne!(rule.divisor(0.0), Some(0.001f64));
         assert_eq!(WeightRule::AsStored.divisor(0.5), None);
         // a negative float weight
         fails(
