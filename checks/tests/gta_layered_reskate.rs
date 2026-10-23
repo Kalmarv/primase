@@ -91,6 +91,7 @@ fn vespucci(m: &PassManager, passes: &str) -> Result<Option<World>> {
         keys,
         region: REGION,
         reach: 600.0,
+        shaders: false,
     })?;
     let select = m.registry.parse(&format!(
         "resolve-state{{assign=gta.map:online;gta.hour:12}}, gta-select-region{{{RECT},min_size=0.5,max_priority=3}}, \

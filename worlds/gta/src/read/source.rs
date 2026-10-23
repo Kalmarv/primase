@@ -21,7 +21,9 @@ use crate::read::assets::{AssetReport, LightsReport, Lookup, Lookups, attach_ass
 use crate::read::collision::{BoundsReport, attach_map_bounds};
 use crate::read::gtxd::TextureParents;
 use crate::read::region::{Region, RegionReport, States, archive_sets, read_region};
-use crate::read::shaders::{EffectJoin, ShaderTable, add_shader_database, join_materials};
+use crate::read::shaders::{
+    EffectJoin, ShaderTable, add_shader_database, add_used_shader_effects, join_materials,
+};
 
 /// The file name of the Enhanced shader database.
 const SHADER_DATABASE: &str = "sga_win32_60_final.awc";
@@ -108,6 +110,21 @@ impl GtaSource {
         let bytes = self.shader_database_bytes()?;
         let db = crate::rage::sgd2::parse(&bytes)?;
         let table = add_shader_database(w, &db);
+        let join = join_materials(w, &table.effects);
+        Ok((table, join))
+    }
+
+    /// The effects `w`'s materials name, with the programs they list, added to `w` and every material linked to its
+    /// effect, from the database bytes ([`GtaSource::shader_database_bytes`], which a caller that does this for several
+    /// worlds reads once): what [`GtaSource::add_shader_database`] makes, for the part of the database a part of the map
+    /// uses.
+    pub fn add_used_shader_effects(
+        &self,
+        w: &mut World,
+        database: &[u8],
+    ) -> Result<(ShaderTable, EffectJoin)> {
+        let db = crate::rage::sgd2::parse(database)?;
+        let table = add_used_shader_effects(w, &db);
         let join = join_materials(w, &table.effects);
         Ok((table, join))
     }

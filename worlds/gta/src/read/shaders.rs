@@ -9,7 +9,7 @@
 //! (every one of the 119 names of Vespucci's 31,821 materials is one of the database's 388 effects). The word after an
 //! effect's name in the database is not that hash (it is the offset of something inside the record). [`join_materials`]
 //! links each material to its effect.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::shader::{Shader, ShaderFormat};
 use primase_core::{Entity, Name, World};
@@ -72,14 +72,43 @@ fn stage_of(stage: ProgramStage) -> GtaStage {
 
 /// Add the database's vertex and pixel programs and its effects to `w`.
 pub fn add_shader_database(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
+    add_shader_effects(w, db, None)
+}
+
+/// The effects of the database `w`'s materials name ([`GtaShader::name`]), with only the programs those effects list,
+/// added to `w`: the same entities and components as [`add_shader_database`] makes for them, for a world that holds a
+/// part of a map and not the whole database's 11,000 programs.
+pub fn add_used_shader_effects(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
+    let used: BTreeSet<u32> = w.iter::<GtaShader>().map(|(_, s)| s.name).collect();
+    add_shader_effects(w, db, Some(&used))
+}
+
+/// The database's effects whose name hashes ([`GtaShader::name`]) are in `only` (all of them for `None`) and the
+/// programs they list, added to `w`.
+pub fn add_shader_effects(w: &mut World, db: &Sgd2<'_>, only: Option<&BTreeSet<u32>>) -> ShaderTable {
     let mut table = ShaderTable::default();
-    // per group, the entity of each program (None for a stage with no `core.shader`, or an interface not read)
+    let wanted = |effect: &sgd2::Effect<'_>| {
+        only.is_none_or(|hashes| hashes.contains(&primase_hash::joaat(effect.name.as_bytes())))
+    };
+    // the programs the wanted effects list, by group
+    let mut needed: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); sgd2::GROUP_STAGES.len()];
+    for effect in db.effects.iter().filter(|e| wanted(e)) {
+        for (list, group) in effect.programs.iter().zip(sgd2::EFFECT_LISTS) {
+            if let Some(set) = needed.get_mut(group) {
+                set.extend(list.iter().map(|&i| i as usize));
+            }
+        }
+    }
+    // per group, the entity of each program (None for a stage with no `core.shader`, or an interface not read, or a
+    // program no wanted effect lists)
     let mut entities: Vec<Vec<Option<Entity>>> = Vec::new();
     for (group, stage) in sgd2::GROUP_STAGES.iter().enumerate() {
         let programs = db.groups.get(group).map_or(&[][..], Vec::as_slice);
         let mut made = Vec::with_capacity(programs.len());
-        for program in programs {
+        for (index, program) in programs.iter().enumerate() {
+            let listed = only.is_none() || needed.get(group).is_some_and(|s| s.contains(&index));
             let entity = match stage {
+                _ if !listed => None,
                 Some(
                     ProgramStage::Vertex
                     | ProgramStage::Pixel
@@ -121,7 +150,7 @@ pub fn add_shader_database(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
         }
         entities.push(made);
     }
-    for effect in &db.effects {
+    for effect in db.effects.iter().filter(|e| wanted(e)) {
         let mut named = Vec::new();
         // the programs of each of the effect's lists, in the list's order
         let mut listed: Vec<Vec<GtaEffectProgram>> = Vec::new();

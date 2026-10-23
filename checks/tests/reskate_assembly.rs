@@ -59,6 +59,7 @@ fn legion_materials_are_the_same_encoded_or_identified() -> Result<()> {
         keys,
         region: [95.0, -1034.0, 295.0, -834.0],
         reach: 600.0,
+        shaders: false,
     })?;
     let registry = registry();
     let rect = "x0=95,y0=-1034,x1=295,y1=-834";

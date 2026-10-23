@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use primase_core::convert::{Notice, NoticeKind, Reader, Report, Result};
 use primase_core::{Entity, World};
 
+use crate::read::shaders::{EffectJoin, ShaderTable};
 use crate::read::source::{GtaSource, prototype_box};
 
 /// Every component and resource a region's read and load put in a world, by name (the names in the namespaces
@@ -38,6 +39,17 @@ pub const EMITTED_NAMES: &[&str] = &[
     "gta.water",
     "gta.water_surface",
 ];
+
+/// The names a load adds when it reads the shader database ([`GtaOptions::shaders`]), beyond [`EMITTED_NAMES`]: the
+/// effects the loaded materials name, their programs and the link from each material to its effect.
+pub const SHADER_NAMES: &[&str] = &[
+    "core.shader",
+    "gta.effect",
+    "gta.effect_parameters",
+    "gta.effect_techniques",
+    "gta.material_effect",
+    "gta.shader_table",
+];
 /// What to read: the install and its key folder, the region, and how far beyond it entities are read. Both maps'
 /// entities are read, with `gta.map` conditions, each prototype's drawables and textures from the state it is resolved
 /// in.
@@ -49,6 +61,11 @@ pub struct GtaOptions {
     pub region: [f32; 4],
     /// Metres outside the region entities are read, so large pieces of the world that reach in are seen.
     pub reach: f32,
+    /// Whether a load also reads the shader database: the effects the loaded materials name, with the programs they
+    /// list (`core.shader`, `gta.shader_table`) and each material linked to its effect (`gta.material_effect`), so that
+    /// `resolve-gta-shaders` runs on the loaded world with no second reading of the install. The database is read from
+    /// the install once, at the first load; a part holds a copy of the effects its materials name.
+    pub shaders: bool,
 }
 
 /// The GTA reader (see the module documentation).
@@ -56,6 +73,9 @@ pub struct GtaReader {
     source: GtaSource,
     region: [f32; 4],
     reach: f32,
+    shaders: bool,
+    /// The shader database file, read at the first load that asks for it.
+    shader_database: Option<Vec<u8>>,
     /// What the last read or load couldn't find, until [`Reader::notices`] takes it.
     pending: Vec<Notice>,
 }
@@ -131,6 +151,42 @@ fn load_notices(
     out
 }
 
+/// What the shader database could not give: materials whose effect is not in it (or is named by two effects), programs
+/// whose interface could not be read.
+fn shader_notices(table: &ShaderTable, join: &EffectJoin) -> Vec<Notice> {
+    let mut out = Vec::new();
+    let unjoined: usize = join.unjoined.values().sum();
+    if unjoined > 0 {
+        out.push(Notice::new(
+            STAGE,
+            NoticeKind::Unsupported,
+            "materials whose effect the shader database does not hold, left without a gta.material_effect",
+            unjoined as u64,
+        ));
+    }
+    if !join.ambiguous.is_empty() {
+        let mut n = Notice::new(
+            STAGE,
+            NoticeKind::Unsupported,
+            "shader names that two effects of the database hash to, their materials left without a gta.material_effect",
+            join.ambiguous.len() as u64,
+        );
+        for (_, names) in &join.ambiguous {
+            n = n.example(names.join(" / "));
+        }
+        out.push(n);
+    }
+    if !table.unread.is_empty() {
+        out.push(Notice::new(
+            STAGE,
+            NoticeKind::Unsupported,
+            "shader programs whose interface could not be read, left without a core.shader",
+            table.unread.len() as u64,
+        ));
+    }
+    out
+}
+
 impl std::fmt::Debug for GtaReader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GtaReader")
@@ -147,6 +203,8 @@ impl GtaReader {
             source: GtaSource::open(&o.install, &o.keys)?,
             region: o.region,
             reach: o.reach,
+            shaders: o.shaders,
+            shader_database: None,
             pending: Vec::new(),
         })
     }
@@ -170,7 +228,16 @@ impl Reader for GtaReader {
         ))
     }
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)> {
-        let (w, r) = self.source.load(world, roots)?;
+        let (mut w, r) = self.source.load(world, roots)?;
+        if self.shaders {
+            if self.shader_database.is_none() {
+                self.shader_database = Some(self.source.shader_database_bytes()?);
+            }
+            if let Some(bytes) = &self.shader_database {
+                let (table, join) = self.source.add_used_shader_effects(&mut w, bytes)?;
+                self.pending.extend(shader_notices(&table, &join));
+            }
+        }
         self.pending.extend(load_notices(
             r.asset_missing,
             &r.textures_not_found,
