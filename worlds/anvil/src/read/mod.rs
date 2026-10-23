@@ -1,6 +1,7 @@
 //! The reader: forge archives on disk and the data blocks of their entries.
 
 pub mod archive;
+pub mod component_types;
 pub mod convert;
 pub mod data;
 pub mod ddecal;

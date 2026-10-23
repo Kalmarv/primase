@@ -249,6 +249,9 @@ pub struct Placed {
     /// Collision placements of owners that place no visual, each marked [`AnvilCollisionOnly`] (on Riders Republic the
     /// `MAD_COL_*` blockers); `select-anvil-entities collision-only=` keeps, drops or tests them.
     pub collision_only: u64,
+    /// The components kept as stored bytes ([`ComponentBody::Unread`]), by type, once per owner placed: gameplay, UI,
+    /// sound and trigger components nothing here reads. A Visual or RigidBodyComponent among them is not placed.
+    pub unread_components: BTreeMap<u32, u64>,
 }
 
 /// The column-major 4x4 `m` as a transform, its linear part times `s`.
@@ -1122,6 +1125,11 @@ impl<'a> Placer<'a> {
         });
         if state.is_some() {
             placed.hidden_or_phantom = placed.hidden_or_phantom.saturating_add(1);
+        }
+        for c in &e.components {
+            if matches!(c.body, ComponentBody::Unread(_)) {
+                *placed.unread_components.entry(c.kind).or_default() += 1;
+            }
         }
         let name = self.name(at).unwrap_or_default();
         let bounds = self.owner_bounds(&e);

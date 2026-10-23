@@ -1,19 +1,21 @@
 //! An Entity resource's body read in order from its first byte to its last: its matrix, its components (each stepped
 //! over by its type's length rule, a Visual read through to its mesh instances), its scale and bounds, and its tail.
-//! What the fields mean beyond that grammar is not read; a component of a type without a length rule is refused,
-//! naming it (the reader can't step over it without searching).
+//! What the fields mean beyond that grammar is not read. A component of a type without a length rule is kept as its
+//! stored bytes ([`ComponentBody::Unread`]): the components are delimited by their headers instead (see
+//! [`StoredEntity::parse`]), so no body is refused for a component type it doesn't know.
 //!
-//! The body (little-endian): `01 03`; 16 f32 (a column-major matrix: on every Entity measured its last row is 0 0 0 1
-//! and its upper 3x3 has determinant 1); a u32 count and that many components, each `04`, a u64, a u32 type and a
-//! body by the type's rule ([`Component`]); 43 bytes; a u32; an f32 (the uniform scale); a bounding volume (a u64, its
-//! type 0x4AEC3476, 6 f32 min and max, a u32); an EntityDescriptor (a u64, 0x60121A9E, 13 bytes); a DataLayerFilter
-//! (a u64, 0xDB1D406E, a u32 count k, k actions each a u64, 0xE31593E1, `00`, a DataLayer ClassID and a u32, then a
-//! u32); then `03` ending the body, or `00`, a u64, GameStateData 0x7313743E, a u32, and two length-prefixed byte runs
-//! ending the body.
+//! The body (little-endian): `01`, then `03`, or `00` and an inline Hierarchy (a u64, 0x788BAA0D, 64 bytes, and a
+//! HierarchyHandle: a u64, 0x709FB9D4, a u32 and 9 bytes); 16 f32 (a column-major matrix: on every Entity measured its
+//! last row is 0 0 0 1 and its upper 3x3 has determinant 1); a u32 count and that many components, each a tag (`04`, or
+//! `00`), a u64 id, a u32 type and a body by the type's rule ([`Component`]); 43 bytes; a u32; an f32 (the uniform
+//! scale); a bounding volume (a u64, its type 0x4AEC3476, 6 f32 min and max, a u32); an EntityDescriptor (a u64,
+//! 0x60121A9E, 13 bytes); a DataLayerFilter (a u64, 0xDB1D406E, a u32 count k, k actions each a u64, 0xE31593E1, `00`,
+//! a DataLayer ClassID and a u32, then a u32 count m and m links, each a tag `00` or `01` and a u64); then `03` ending
+//! the body, or `00`, a u64, GameStateData 0x7313743E, a u32, and two length-prefixed byte runs ending the body.
 //!
-//! An EntityGroup's body is an Entity's, then a u32 count c, c references to its members, a u32 0 and a u32 (the
-//! Riders Republic notes: docs/world.md §7, from the end on 48,755 of 48,803 USNAT groups; the census measures it
-//! read from the start). What a member is to its group is not read.
+//! An EntityGroup's body is an Entity's, then a u32 count c, c references to its members, a u32 count m, m links (as
+//! the DataLayerFilter's) and a u32 (the Riders Republic notes: docs/world.md §7, from the end on 48,755 of 48,803
+//! USNAT groups; the census measures it read from the start). What a member or a link is to its group is not read.
 //!
 //! The grammar is from the Riders Republic placement notes (docs/entity-grammar.md, consumed to the last byte on 8 of
 //! 8 fixtures and 97% of 5,200 sampled USNAT Entities); the census (worlds/anvil/tests/census.rs) measures it on every
@@ -25,6 +27,7 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::component_types::is_component_type;
 use crate::read::reference::{self, Reference};
 
 /// A record type: equals the CRC-32 of the ASCII string `Entity` (the name a label).
@@ -73,6 +76,19 @@ pub enum Error {
     },
     #[error("Entity component {index}: type {kind:08X} has no length rule")]
     Component { index: usize, kind: u32 },
+    #[error(
+        "Entity component {index}: type {kind:08X} has no length rule and the tail is not found after it"
+    )]
+    NoTail { index: usize, kind: u32 },
+    #[error(
+        "Entity component {index}: type {kind:08X} has no length rule and {found} component headers follow, the count says {want}"
+    )]
+    Headers {
+        index: usize,
+        kind: u32,
+        found: usize,
+        want: usize,
+    },
     #[error("Entity Visual: instance data type {0:08X} isn't read")]
     Instance(u32),
     #[error("Entity reference at {at}: {source}")]
@@ -202,6 +218,11 @@ pub enum ComponentBody {
     },
     /// A type stepped over by its length rule, its bytes kept as stored.
     Raw(Vec<u8>),
+    /// A component whose bytes no rule here reads, kept as stored: its type has no length rule, or a rule of a type
+    /// read here did not end where the headers of the components around it say it does. Where its type has no rule
+    /// its extent is the headers' (an Entity's components are delimited by their tag, id and type headers: see
+    /// [`StoredEntity::parse`]).
+    Unread(Vec<u8>),
 }
 
 pub use crate::components::{layer, query};
@@ -321,9 +342,15 @@ pub struct StoredEntity {
     pub descriptor: [u8; 13],
     /// The DataLayerFilter's actions: (the DataLayer's ClassID, the u32 after it).
     pub data_layers: Vec<(u64, u32)>,
-    /// The u32 ending the DataLayerFilter.
-    pub filter_word: u32,
+    /// The ids of the links after the DataLayerFilter's actions (a u32 count, then each a `00` and a u64): the UI
+    /// Entities' children or targets on the bodies measured that have any, none on the others.
+    pub links: Vec<u64>,
     pub tail: Tail,
+    /// The inline Hierarchy object that follows the first byte where the second is `00` (a pointer: `03` is none), as
+    /// stored from its id: its id, type `0x788BAA0D`, 64 bytes and a HierarchyHandle (id, `0x709FB9D4`, a u32 and a
+    /// 9-byte link). On 830 bodies of Riders Republic (605 Entities, 225 groups): sequence and checkpoint groups and
+    /// some props. What it means to the Entity's placement isn't read.
+    pub hierarchy: Option<Vec<u8>>,
 }
 
 /// Little-endian fields read in order, each bounded.
@@ -495,12 +522,12 @@ impl Cursor<'_> {
             self.expect("material info", 0, 1)?;
             let source = self.u64("material info")?;
             let at = self.at;
-            if self.array::<2>("material info")? != [1, 1] {
+            if !matches!(self.array::<2>("material info")?, [1, 1 | 4]) {
                 return Err(Error::Value {
                     what: "material info replacement tag",
                     at,
                     found: 0,
-                    read: "01 01",
+                    read: "01 01 or 01 04",
                 });
             }
             let replacement = self.u64("material info")?;
@@ -1053,10 +1080,19 @@ impl Cursor<'_> {
 }
 
 impl StoredEntity {
-    /// The body parsed.
+    /// The body parsed. Its components are read by their types' rules where every type has one and the tail then ends
+    /// the body. Otherwise they are delimited by their headers: the tail is found from the first component (the
+    /// bounding volume's and descriptor's types where it puts them, then the rest of the body as the tail), and the
+    /// headers between are the components' (a tag, an id and the type of a component class, [`COMPONENT_TYPES`]; where
+    /// more than the count say, those with the first component's tag, or an id near the first's, as embedded objects
+    /// begin alike), exactly as many as the count. A component of a type with a rule is then read by it over its
+    /// extent; the others, and any whose rule ends elsewhere, are [`ComponentBody::Unread`]. On the six forges of
+    /// Riders Republic every one of the 615,110 Entities and 56,837 EntityGroups reads so.
+    ///
+    /// [`COMPONENT_TYPES`]: crate::read::component_types::COMPONENT_TYPES
     pub fn parse(body: &[u8]) -> Result<StoredEntity, Error> {
         let mut c = Cursor { b: body, at: 0 };
-        let e = entity(&mut c)?;
+        let e = entity(&mut c, false)?;
         c.end()?;
         Ok(e)
     }
@@ -1073,7 +1109,10 @@ impl StoredEntity {
     pub fn visuals(&self) -> impl Iterator<Item = &Visual> {
         self.components.iter().filter_map(|c| match &c.body {
             ComponentBody::Visual(v) => Some(v),
-            ComponentBody::StaticDecal(_) | ComponentBody::RigidBody { .. } | ComponentBody::Raw(_) => None,
+            ComponentBody::StaticDecal(_)
+            | ComponentBody::RigidBody { .. }
+            | ComponentBody::Raw(_)
+            | ComponentBody::Unread(_) => None,
         })
     }
 
@@ -1103,47 +1142,73 @@ pub struct StoredEntityGroup {
     pub entity: StoredEntity,
     /// Its member references, in stored order.
     pub members: Vec<Reference>,
+    /// The ids of the links after the members (each a `00` and a u64), in stored order: the members' own ids in
+    /// another order on the groups measured that have any (the UI and sequence groups).
+    pub links: Vec<u64>,
     /// The u32 ending the body, as stored.
     pub word: u32,
 }
 
 impl StoredEntityGroup {
-    /// The body parsed: the Entity grammar, a u32 count c, c references (none of them `03`), a u32 0 and a u32.
+    /// The body parsed: the Entity grammar, a u32 count c, c references (none of them `03`), a u32 count m, m links
+    /// (`00` and a u64) and a u32.
     pub fn parse(body: &[u8]) -> Result<StoredEntityGroup, Error> {
         let mut c = Cursor { b: body, at: 0 };
-        let entity = entity(&mut c)?;
-        let n = c.count("member count", reference::LENGTH)?;
-        let mut members = Vec::with_capacity(n);
-        for _ in 0..n {
-            let at = c.at;
-            members.push(c.reference()?.ok_or(Error::Value {
-                what: "member reference",
-                at,
-                found: 3,
-                read: "a reference (tag 1)",
-            })?);
-        }
-        c.expect("word after the members", 0, 4)?;
-        let word = c.u32("last word")?;
+        let entity = entity(&mut c, true)?;
+        let (members, links, word) = c.members()?;
         c.end()?;
         Ok(StoredEntityGroup {
             entity,
             members,
+            links,
             word,
         })
     }
 }
 
-/// An Entity's grammar from its first byte through its tail.
-fn entity(c: &mut Cursor<'_>) -> Result<StoredEntity, Error> {
-    c.expect("first byte", 1, 1)?;
-    c.expect("second byte", 3, 1)?;
-    let matrix = c.matrix()?;
-    let n = c.count("component count", 13)?;
-    let mut components = Vec::with_capacity(n);
-    for index in 0..n {
-        let at = c.at;
-        let tag = c.u8("component tag")?;
+/// An Entity's tail: what follows its components.
+struct EntityTail {
+    run: [u8; 43],
+    word: u32,
+    scale: f32,
+    bounds: BoundingVolume,
+    descriptor: [u8; 13],
+    data_layers: Vec<(u64, u32)>,
+    links: Vec<u64>,
+    tail: Tail,
+}
+
+/// The components and the tail read by the types' rules, or the index and type of the first component with no rule.
+type ByRules = Result<(Vec<Component>, EntityTail), (usize, u32)>;
+
+/// The bytes of a component's header: a tag, a u64 id and a u32 type.
+const COMPONENT_HEADER: usize = 13;
+/// Where an Entity's bounding volume's type lies after its components (the 43-byte run, a u32 and the scale, then the
+/// volume's id), and where its EntityDescriptor's (the volume's type, six f32 and a u32, then the descriptor's id).
+const TAIL_BOUNDS_TYPE: usize = 43 + 4 + 4 + 8;
+const TAIL_DESCRIPTOR_TYPE: usize = TAIL_BOUNDS_TYPE + 4 + 24 + 4 + 8;
+/// An EntityDescriptor's type.
+const ENTITY_DESCRIPTOR: u32 = 0x6012_1A9E;
+
+impl Cursor<'_> {
+    /// A link's tag byte, `00` or `01`.
+    fn link_tag(&mut self, what: &'static str) -> Result<(), Error> {
+        let at = self.at;
+        match self.u8(what)? {
+            0 | 1 => Ok(()),
+            found => Err(Error::Value {
+                what,
+                at,
+                found: u64::from(found),
+                read: "0 or 1",
+            }),
+        }
+    }
+
+    /// A component's header: its tag (4, or 0), id and type.
+    fn component_header(&mut self) -> Result<(u8, u64, u32), Error> {
+        let at = self.at;
+        let tag = self.u8("component tag")?;
         if !matches!(tag, 0 | 4) {
             return Err(Error::Value {
                 what: "component tag",
@@ -1152,14 +1217,19 @@ fn entity(c: &mut Cursor<'_>) -> Result<StoredEntity, Error> {
                 read: "4 or 0",
             });
         }
-        let id = c.u64("component")?;
-        let kind = c.u32("component type")?;
-        let start = c.at;
-        let body = match kind {
-            VISUAL => ComponentBody::Visual(c.visual()?),
-            STATIC_DECAL => ComponentBody::StaticDecal(c.visual()?),
+        Ok((tag, self.u64("component")?, self.u32("component type")?))
+    }
+
+    /// A component's body by its type's rule, from the cursor (`start`); `None` where the type has no rule (the
+    /// cursor then is wherever the rule stopped).
+    fn component_body(&mut self, kind: u32, start: usize) -> Result<Option<ComponentBody>, Error> {
+        Ok(Some(match kind {
+            VISUAL => ComponentBody::Visual(self.visual()?),
+            STATIC_DECAL => ComponentBody::StaticDecal(self.visual()?),
             RIGID_BODY => {
-                let bytes = c.raw_component(kind)?.ok_or(Error::Component { index, kind })?;
+                let Some(bytes) = self.raw_component(kind)? else {
+                    return Ok(None);
+                };
                 let at = start.saturating_add(SHAPE_AT);
                 let shape: [u8; reference::LENGTH] = bytes
                     .get(SHAPE_AT..SHAPE_AT.saturating_add(reference::LENGTH))
@@ -1172,60 +1242,323 @@ fn entity(c: &mut Cursor<'_>) -> Result<StoredEntity, Error> {
                 let shape = reference::parse(shape).map_err(|source| Error::Reference { at, source })?;
                 ComponentBody::RigidBody { shape, bytes }
             }
-            _ => ComponentBody::Raw(c.raw_component(kind)?.ok_or(Error::Component { index, kind })?),
-        };
-        components.push(Component { tag, id, kind, body });
+            _ => match self.raw_component(kind)? {
+                Some(bytes) => ComponentBody::Raw(bytes),
+                None => return Ok(None),
+            },
+        }))
     }
-    let run = c.array::<43>("run")?;
-    let word = c.u32("word before the scale")?;
-    let scale = c.f32("scale")?;
-    let bounds = c.bounds()?;
-    c.object("EntityDescriptor", 0x6012_1A9E)?;
-    let descriptor = c.array::<13>("EntityDescriptor")?;
-    c.object("DataLayerFilter", 0xDB1D_406E)?;
-    let k = c.count("DataLayerAction count", 25)?;
-    let mut data_layers = Vec::with_capacity(k);
-    for _ in 0..k {
-        c.object("DataLayerAction", 0xE315_93E1)?;
-        c.expect("DataLayerAction", 0, 1)?;
-        data_layers.push((c.u64("DataLayerAction")?, c.u32("DataLayerAction")?));
+
+    /// The u32 at `at`, if the body holds it.
+    fn word_at(&self, at: usize) -> Option<u32> {
+        self.b
+            .get(at..at.checked_add(4)?)
+            .and_then(|w| <[u8; 4]>::try_from(w).ok())
+            .map(u32::from_le_bytes)
     }
-    let filter_word = c.u32("DataLayerFilter")?;
-    let tail = match c.u8("tail")? {
-        3 => Tail::End,
-        0 => {
-            let id = c.object("GameStateData", 0x7313_743E)?;
-            let word = c.u32("GameStateData")?;
-            let l1 = c.count("GameStateData first run", 1)?;
-            let first = c.take(l1, "GameStateData first run")?.to_vec();
-            let l2 = c.count("GameStateData second run", 1)?;
-            let second = c.take(l2, "GameStateData second run")?.to_vec();
-            Tail::GameState {
-                id,
-                word,
-                first,
-                second,
+
+    /// Whether a component's header lies at `at`: a tag 4 or 0 and the type of a component class.
+    fn is_component_header(&self, at: usize) -> bool {
+        self.b.get(at).is_some_and(|&t| matches!(t, 0 | 4))
+            && at
+                .checked_add(9)
+                .and_then(|w| self.word_at(w))
+                .is_some_and(is_component_type)
+    }
+
+    /// An Entity's tail from the cursor.
+    fn entity_tail(&mut self) -> Result<EntityTail, Error> {
+        let run = self.array::<43>("run")?;
+        let word = self.u32("word before the scale")?;
+        let scale = self.f32("scale")?;
+        let bounds = self.bounds()?;
+        self.object("EntityDescriptor", ENTITY_DESCRIPTOR)?;
+        let descriptor = self.array::<13>("EntityDescriptor")?;
+        self.object("DataLayerFilter", 0xDB1D_406E)?;
+        let k = self.count("DataLayerAction count", 25)?;
+        let mut data_layers = Vec::with_capacity(k);
+        for _ in 0..k {
+            self.object("DataLayerAction", 0xE315_93E1)?;
+            self.expect("DataLayerAction", 0, 1)?;
+            data_layers.push((self.u64("DataLayerAction")?, self.u32("DataLayerAction")?));
+        }
+        let m = self.count("DataLayerFilter link count", 9)?;
+        let mut links = Vec::with_capacity(m);
+        for _ in 0..m {
+            self.link_tag("DataLayerFilter link")?;
+            links.push(self.u64("DataLayerFilter link")?);
+        }
+        let tail = match self.u8("tail")? {
+            3 => Tail::End,
+            0 => {
+                let id = self.object("GameStateData", 0x7313_743E)?;
+                let word = self.u32("GameStateData")?;
+                let l1 = self.count("GameStateData first run", 1)?;
+                let first = self.take(l1, "GameStateData first run")?.to_vec();
+                let l2 = self.count("GameStateData second run", 1)?;
+                let second = self.take(l2, "GameStateData second run")?.to_vec();
+                Tail::GameState {
+                    id,
+                    word,
+                    first,
+                    second,
+                }
             }
+            found => {
+                return Err(Error::Value {
+                    what: "tail",
+                    at: self.at.saturating_sub(1),
+                    found: u64::from(found),
+                    read: "3 or 0",
+                });
+            }
+        };
+        Ok(EntityTail {
+            run,
+            word,
+            scale,
+            bounds,
+            descriptor,
+            data_layers,
+            links,
+            tail,
+        })
+    }
+
+    /// An EntityGroup's members from the cursor: a count c, c references (none of them `03`), a count m, m links (`00`
+    /// and a u64) and a u32.
+    fn members(&mut self) -> Result<(Vec<Reference>, Vec<u64>, u32), Error> {
+        let n = self.count("member count", reference::LENGTH)?;
+        let mut members = Vec::with_capacity(n);
+        for _ in 0..n {
+            let at = self.at;
+            members.push(self.reference()?.ok_or(Error::Value {
+                what: "member reference",
+                at,
+                found: 3,
+                read: "a reference (tag 1)",
+            })?);
+        }
+        let m = self.count("member link count", 9)?;
+        let mut links = Vec::with_capacity(m);
+        for _ in 0..m {
+            self.link_tag("member link")?;
+            links.push(self.u64("member link")?);
+        }
+        let word = self.u32("last word")?;
+        Ok((members, links, word))
+    }
+
+    /// Where an Entity's tail begins, searching from `from`: the first place where the bounding volume's and the
+    /// descriptor's types lie where the tail puts them and the tail, then a group's members, end the body.
+    fn tail_start(&self, from: usize, group: bool) -> Option<usize> {
+        let last = self.b.len().checked_sub(TAIL_DESCRIPTOR_TYPE.saturating_add(4))?;
+        (from..=last).find(|&at| {
+            self.word_at(at.saturating_add(TAIL_BOUNDS_TYPE)) == Some(BOUNDING_VOLUME)
+                && self.word_at(at.saturating_add(TAIL_DESCRIPTOR_TYPE)) == Some(ENTITY_DESCRIPTOR)
+                && {
+                    let mut tail = Cursor { b: self.b, at };
+                    tail.entity_tail().is_ok() && (!group || tail.members().is_ok()) && tail.end().is_ok()
+                }
+        })
+    }
+
+    /// The u64 at `at`, if the body holds it.
+    fn u64_at(&self, at: usize) -> Option<u64> {
+        self.b
+            .get(at..at.checked_add(8)?)
+            .and_then(|w| <[u8; 8]>::try_from(w).ok())
+            .map(u64::from_le_bytes)
+    }
+
+    /// The Entity's `count` components, from the cursor (just after the count), delimited by their headers instead
+    /// of read by their types' rules: the tail is found from the cursor, and the components' headers (the first one's tag, an
+    /// number (see [`component_number`]) near the first component's and the type of a component class) between are taken,
+    /// and there must be exactly `count`. Each component of a type with a rule is read by
+    /// it over its extent and kept where the rule ends at the extent's end; any other, and any one whose rule ends
+    /// elsewhere, keeps its bytes as stored ([`ComponentBody::Unread`]). The cursor ends at the tail. `blocked` is
+    /// what stopped the reading by rules (the index of the component and its type), for the refusal.
+    fn delimited_components(
+        &mut self,
+        count: usize,
+        group: bool,
+        blocked: (usize, u32),
+    ) -> Result<Vec<Component>, Error> {
+        let (index, kind) = blocked;
+        let first = self.component_header()?;
+        let first_end = self.at;
+        let end = self
+            .tail_start(first_end, group)
+            .ok_or(Error::NoTail { index, kind })?;
+        let mut heads: Vec<usize> = (first_end..end)
+            .filter(|&at| {
+                at.saturating_add(COMPONENT_HEADER) <= end
+                    && self.is_component_header(at)
+                    && self
+                        .u64_at(at.saturating_add(1))
+                        .and_then(component_number)
+                        .is_some_and(|n| n > COMPONENT_NUMBER_LOW)
+            })
+            .collect();
+        // more than the count says: embedded objects begin like components. Each of the first component's tag (embedded
+        // objects have `00`) and of an id near the first's (a payload's bytes have another) narrows them, alone or
+        // together, to the count where they can
+        if heads.len().saturating_add(1) > count {
+            let tag = |at: &usize| self.b.get(*at) == Some(&first.0);
+            let near = |at: &usize| {
+                let number = |id| component_number(id);
+                self.u64_at(at.saturating_add(1))
+                    .and_then(number)
+                    .zip(number(first.1))
+                    .is_some_and(|(n, f)| n.abs_diff(f) < COMPONENT_NUMBER_SPAN)
+            };
+            let want = count.saturating_sub(1);
+            let by_tag: Vec<usize> = heads.iter().copied().filter(tag).collect();
+            let by_near: Vec<usize> = heads.iter().copied().filter(near).collect();
+            let both: Vec<usize> = by_tag.iter().copied().filter(near).collect();
+            heads = [by_tag, by_near, both]
+                .into_iter()
+                .find(|narrowed| narrowed.len() == want)
+                .unwrap_or(heads);
+        }
+        if heads.len().saturating_add(1) != count {
+            return Err(Error::Headers {
+                index,
+                kind,
+                found: heads.len(),
+                want: count.saturating_sub(1),
+            });
+        }
+        let mut out = Vec::with_capacity(count);
+        let mut header = first;
+        let mut body_start = first_end;
+        for next in heads.iter().map(|&h| Some(h)).chain([None]) {
+            let body_end = next.unwrap_or(end);
+            let (tag, id, kind) = header;
+            let bytes = self.b.get(body_start..body_end).ok_or(Error::Short {
+                what: "component",
+                at: body_start,
+                have: self.b.len(),
+            })?;
+            let mut part = Cursor {
+                b: self.b.get(..body_end).unwrap_or(self.b),
+                at: body_start,
+            };
+            let body = match part.component_body(kind, body_start) {
+                Ok(Some(body)) if part.at == body_end => body,
+                _ => ComponentBody::Unread(bytes.to_vec()),
+            };
+            out.push(Component { tag, id, kind, body });
+            if let Some(h) = next {
+                let mut head = Cursor { b: self.b, at: h };
+                header = head.component_header()?;
+                body_start = head.at;
+            }
+        }
+        self.at = end;
+        Ok(out)
+    }
+
+    /// The Entity's `count` components read by their types' rules, from the cursor, and its tail: the inner `Err` has
+    /// the index and type of the first component whose type has no rule. Where a rule reads wrongly, the tail after
+    /// it doesn't end the body (or the group's members after the tail don't), which is refused as no rule is.
+    fn by_rules(&mut self, count: usize, group: bool) -> Result<ByRules, Error> {
+        let mut components = Vec::with_capacity(count);
+        while components.len() < count {
+            let (tag, id, kind) = self.component_header()?;
+            let start = self.at;
+            match self.component_body(kind, start)? {
+                Some(body) => components.push(Component { tag, id, kind, body }),
+                None => return Ok(Err((components.len(), kind))),
+            }
+        }
+        let tail = self.entity_tail()?;
+        let mut rest = Cursor {
+            b: self.b,
+            at: self.at,
+        };
+        if group {
+            rest.members()?;
+        }
+        rest.end()?;
+        Ok(Ok((components, tail)))
+    }
+}
+
+/// A component id as the 41-bit number it carries, where it is one: below 2^48 as it is, or with bit 63 set over the
+/// number shifted left 20 bits and a small index below it (`0x9D5F4526B210000D` for `0x1D5F4526B21`, the 14th), as a
+/// few components store it.
+fn component_number(id: u64) -> Option<u64> {
+    if id >> 48 == 0 {
+        Some(id)
+    } else if id >> 63 == 1 {
+        Some((id & (u64::MAX >> 1)) >> 20)
+    } else {
+        None
+    }
+}
+/// The least a component's number exceeds, and how far from its Entity's first component's it lies where there are more
+/// headers than components: measured on every body read by rules (the least is above 2^33; a few components' numbers
+/// differ from the first's by more than 2^40, which is why this narrows and never refuses). Bytes that look like a
+/// header and lie outside them are a payload's (a field naming a component class after a zero tag and a small value).
+const COMPONENT_NUMBER_LOW: u64 = 1 << 32;
+const COMPONENT_NUMBER_SPAN: u64 = 1 << 40;
+/// A Hierarchy's type (the inline object after an Entity's first byte), and a HierarchyHandle's.
+const HIERARCHY: u32 = 0x788B_AA0D;
+const HIERARCHY_HANDLE: u32 = 0x709F_B9D4;
+
+/// An Entity's grammar from its first byte through its tail; `group` where the Entity is an EntityGroup's (its
+/// members follow the tail).
+fn entity(c: &mut Cursor<'_>, group: bool) -> Result<StoredEntity, Error> {
+    c.expect("first byte", 1, 1)?;
+    let at = c.at;
+    let hierarchy = match c.u8("second byte")? {
+        3 => None,
+        0 => {
+            let start = c.at;
+            c.object("Hierarchy", HIERARCHY)?;
+            c.take(64, "Hierarchy")?;
+            c.object("HierarchyHandle", HIERARCHY_HANDLE)?;
+            c.take(4 + 9, "HierarchyHandle")?;
+            Some(c.b.get(start..c.at).unwrap_or_default().to_vec())
         }
         found => {
             return Err(Error::Value {
-                what: "tail",
-                at: c.at.saturating_sub(1),
+                what: "second byte",
+                at,
                 found: u64::from(found),
                 read: "3 or 0",
             });
         }
     };
+    let matrix = c.matrix()?;
+    let n = c.count("component count", 13)?;
+    let start = c.at;
+    // the types' rules where they all read and the tail then ends the body, else the components' own headers delimit
+    // them
+    let (components, t) = match c.by_rules(n, group) {
+        Ok(Ok(read)) => read,
+        stopped => {
+            let blocked = match &stopped {
+                Ok(Err(blocked)) => *blocked,
+                _ => (0, 0),
+            };
+            c.at = start;
+            let components = c.delimited_components(n, group, blocked)?;
+            (components, c.entity_tail()?)
+        }
+    };
     Ok(StoredEntity {
         matrix,
         components,
-        run,
-        word,
-        scale,
-        bounds,
-        descriptor,
-        data_layers,
-        filter_word,
-        tail,
+        run: t.run,
+        word: t.word,
+        scale: t.scale,
+        bounds: t.bounds,
+        descriptor: t.descriptor,
+        data_layers: t.data_layers,
+        links: t.links,
+        tail: t.tail,
+        hierarchy,
     })
 }

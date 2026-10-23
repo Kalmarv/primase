@@ -22,6 +22,7 @@ use primase_core::{Entity, World};
 
 use crate::components::{AnvilListed, AnvilMesh, AnvilTerrain, ListedBy};
 use crate::read::archive::{Archive, At};
+use crate::read::component_types::component_name;
 use crate::read::entity::{ENTITY, ENTITY_GROUP, StoredEntityGroup};
 use crate::read::grid::{
     GridDescription, GridLayout, StoredGridCellDataBlock, StoredGridPartition, grid_descriptions,
@@ -731,6 +732,19 @@ fn read_notices(
         "rigid bodies of scaled owners, whose placement isn't established",
         placed.scaled_collision,
         Vec::new(),
+    );
+    push(
+        NoticeKind::Unsupported,
+        "components of types with no length rule here, kept as stored bytes and not read",
+        placed.unread_components.values().sum(),
+        placed
+            .unread_components
+            .iter()
+            .map(|(&kind, n)| {
+                let name = component_name(kind).unwrap_or("a type outside the registry's components");
+                format!("{name} ({kind:#010x}) x {n}")
+            })
+            .collect(),
     );
     out
 }
