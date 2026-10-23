@@ -22,8 +22,8 @@ serializes role or normal annotations.
 
 Run `cargo test -p primase-dds -- --nocapture`. Tests include synthetic headers,
 format mappings, malformed inputs and encoded-level roundtrips. The real-data
-census reads Sekiro's own DDS files (`oracles.scripts.sekiro/pbr/census/dds`, the
-real-data configuration in CONTRIBUTING.md). The legacy payload-identity gate
+census reads Sekiro's own DDS files (`census/dds` of `oracles.scripts.sekiro/pbr`,
+the real-data configuration in CONTRIBUTING.md). The legacy payload-identity gate
 selects DXT sources only, measuring header field differences separately; other
 formats participate in read and DX10 roundtrip gates.
 

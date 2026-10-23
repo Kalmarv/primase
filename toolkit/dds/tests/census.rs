@@ -1,6 +1,6 @@
-//! Distinct-content DDS census over the game's own files (Sekiro's DDS as its install stores them,
-//! `oracles.scripts.sekiro/pbr/census/dds`): every file reads, round-trips through the DX10 writer to the same texture,
-//! and a legacy DXT file's payload is written back byte for byte by the legacy writer, header differences measured.
+//! Distinct-content DDS census over the game's own files (Sekiro's DDS as its install stores them, `census/dds` of
+//! `oracles.scripts.sekiro/pbr`): every file reads, round-trips through the DX10 writer to the same texture, and a
+//! legacy DXT file's payload is written back byte for byte by the legacy writer, header differences measured.
 #![allow(clippy::unwrap_used)]
 use primase_core::gate::{GateReport, Tolerance};
 use primase_dds::{read, write_dx10, write_legacy};
@@ -25,8 +25,9 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 #[test]
 fn sekiro_dds_read_round_trip_and_keep_their_legacy_payload() {
-    let query = Query::Oracle(OracleSet::Scripts, Game::Sekiro, "pbr/census/dds");
-    let Some(root) = resolve(query) else { return };
+    let query = Query::Oracle(OracleSet::Scripts, Game::Sekiro, "pbr");
+    let Some(pbr) = resolve(query) else { return };
+    let root = pbr.join("census").join("dds");
     let name = query.key();
     let mut files = Vec::new();
     collect(&root, &mut files);
