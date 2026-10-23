@@ -84,6 +84,15 @@ pub(crate) const MATERIAL_BINDERS: &[&str] = &[
     "/material/speedtree.matbinbnd.dcx",
 ];
 
+/// The binders holding Elden Ring's shader bundles: the base game's, its two later additions', SpeedTree's. Each
+/// bundle name is in one of them. (The `_[rt]` binders beside them hold the ray-traced variants.)
+pub(crate) const SHADER_BINDERS: &[&str] = &[
+    "/shader/shaderbdle.shaderbdlebnd.dcx",
+    "/shader/shaderbdle_dlc01.shaderbdlebnd.dcx",
+    "/shader/shaderbdle_dlc02.shaderbdlebnd.dcx",
+    "/shader/speedtree.shaderbdlebnd.dcx",
+];
+
 /// The texture packages every map can bind: the system and decal textures.
 pub(crate) const COMMON_TEXTURES: &[&str] = &["/other/systex.tpf.dcx", "/other/decaltex.tpf.dcx"];
 

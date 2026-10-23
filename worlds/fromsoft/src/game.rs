@@ -83,6 +83,24 @@ impl Game {
         }
     }
 
+    /// The binders holding the game's shader bundles (`<shader>.shaderbdle` members), in the order a shader is looked up:
+    /// Sekiro's one; Elden Ring's base game's, its two later additions' and SpeedTree's (a shader is in one of them).
+    pub fn shader_binders(self) -> &'static [&'static str] {
+        match self {
+            Game::Sekiro => &["/shader/shaderbdle.shaderbdlebnd.dcx"],
+            Game::EldenRing => crate::elden::SHADER_BINDERS,
+        }
+    }
+
+    /// The container format of the game's compiled shader programs: Shader Model 5 DXBC (Sekiro), Shader Model 6 DXIL
+    /// (Elden Ring).
+    pub fn shader_format(self) -> primase_core::shader::ShaderFormat {
+        match self {
+            Game::Sekiro => primase_core::shader::ShaderFormat::Dxbc,
+            Game::EldenRing => primase_core::shader::ShaderFormat::Dxil,
+        }
+    }
+
     /// Texture packages every map of the game binds, read whole (Elden Ring's system and decal textures; Sekiro's are
     /// part of its area texture discovery).
     pub fn common_textures(self) -> &'static [&'static str] {

@@ -344,6 +344,7 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
             programs: vec![ShaderProgram {
                 name: "M[Multiple]_Gbuf.vpo".into(),
                 stage: ShaderStage::Vertex,
+                format: primase_core::shader::ShaderFormat::Dxbc,
                 code: Arc::from(VERTEX_PROGRAM),
             }],
             parameters: None,

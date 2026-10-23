@@ -25,6 +25,9 @@ pub struct Texture {
     pub unknown_08: u8,
     /// The i32 at 12 of the record (-1 on most).
     pub unknown_0c: i32,
+    /// The u32 at 0x20 of the record: zero in Sekiro's files, a hash-like word in some of Elden Ring's (the reader of
+    /// the format skips the sixteen bytes there; the other twelve are zero).
+    pub unknown_20: u32,
 }
 
 /// A render pass's sampler bindings: bit n of a mask is sampler slot n.
@@ -84,6 +87,8 @@ pub struct Metaparam {
     /// The key the material's GX records are matched by.
     pub gxmd_key: u32,
     pub ca_param_block_size: u32,
+    /// The word at 0x54 (the reader of the format calls it the CAParam count).
+    pub ca_param_components: u32,
     pub unknown_30: u32,
     pub unknown_40: u32,
     pub unknown_50: u32,
@@ -177,7 +182,7 @@ impl Metaparam {
         for i in 0..texture_count {
             let at = 0x98 + i * 48;
             r.zero(at + 10, 1)?;
-            r.zero(at + 0x20, 0x10)?;
+            r.zero(at + 0x24, 0xc)?;
             textures.push(Texture {
                 name: r.string(at)?,
                 default_texture: r.string(at + 0x10)?,
@@ -186,6 +191,7 @@ impl Metaparam {
                 kind: r.v.u8(at + 11)?,
                 unknown_08: r.v.u8(at + 8)?,
                 unknown_0c: r.v.u32(at + 12)? as i32,
+                unknown_20: r.v.u32(at + 0x20)?,
             });
         }
         let passes_at = 0x98 + texture_count * 48;
@@ -265,6 +271,7 @@ impl Metaparam {
             flags: r.v.u32(0x38)?,
             gxmd_key: r.v.u32(0x48)?,
             ca_param_block_size: r.v.u32(0x4c)?,
+            ca_param_components: r.v.u32(0x54)?,
             unknown_30: r.v.u32(0x30)?,
             unknown_40: r.v.u32(0x40)?,
             unknown_50: r.v.u32(0x50)?,
@@ -373,6 +380,7 @@ mod tests {
             (0x40, 0x1234, 0x10, 0xabcd, 8)
         );
         assert_eq!((m.unknown_30, m.unknown_40, m.unknown_50), (0x401, 2, 7));
+        assert_eq!(m.ca_param_components, 1);
         assert_eq!(
             m.textures,
             [Texture {
@@ -383,6 +391,7 @@ mod tests {
                 kind: 4,
                 unknown_08: 9,
                 unknown_0c: -1,
+                unknown_20: 0,
             }]
         );
         assert_eq!(
@@ -439,6 +448,16 @@ mod tests {
         let mut bad = good.clone();
         bad[0x5c] = 1; // padding
         assert!(Metaparam::read(&bad).unwrap_err().to_string().contains("0x5c"));
+        // the texture record's word at 0x20 is kept (Elden Ring stores one), the twelve bytes after it are padding
+        let mut kept = good.clone();
+        kept[0xb8..0xbc].copy_from_slice(&0x64b5_1176u32.to_le_bytes());
+        assert_eq!(
+            Metaparam::read(&kept).unwrap().textures[0].unknown_20,
+            0x64b5_1176
+        );
+        let mut bad = good.clone();
+        bad[0xbc] = 1;
+        assert!(Metaparam::read(&bad).unwrap_err().to_string().contains("0xbc"));
         let mut bad = good.clone();
         bad[0xc] = 0xff; // a texture count the file cannot hold
         assert!(Metaparam::read(&bad).is_err());

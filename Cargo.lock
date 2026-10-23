@@ -1008,6 +1008,7 @@ dependencies = [
  "primase-core",
  "primase-dds",
  "primase-dxbc",
+ "primase-dxil",
  "primase-havok",
  "primase-image",
  "primase-meshops",

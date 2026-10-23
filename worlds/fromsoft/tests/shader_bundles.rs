@@ -59,3 +59,77 @@ fn slice_a_keeps_the_bundle_of_every_shader_its_materials_name() {
         report.missing_shader_bundles, report.unread_metaparams
     );
 }
+
+/// Elden Ring's Academy of Raya Lucaria (m14_00_00_00): every material whose material binary names a shader the
+/// install bundles is linked to its bundle, read from the game's bundle binders; every program of every bundle is a
+/// Shader Model 6 (DXIL) container whose shader kind is its file's stage, and every bundle's metaparam reads. The
+/// shaders no binder holds are the report's `missing_shader_bundles`.
+///
+/// Needs `installs.elden`, `keys.elden` and `tools.oodle6`.
+#[test]
+fn elden_ring_materials_link_their_shader_model_6_bundles() {
+    use primase_core::shader::ShaderFormat;
+    use primase_fromsoft::{Game as FromSoft, Install, Keys};
+    let (Some(root), Some(keys), Some(dll)) = (
+        install(Game::Elden),
+        primase_testdata::keys(Game::Elden),
+        tool(Tool::Oodle6),
+    ) else {
+        return;
+    };
+    let install = Install::new(
+        root,
+        FromSoft::EldenRing,
+        Keys::from_folder(keys, FromSoft::EldenRing).unwrap(),
+    );
+    let dll = common::oodle(dll).unwrap();
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: u32::MAX as usize,
+    };
+    let mut world = World::new();
+    let report = sekiro::read_game_area(
+        &install,
+        "m14_00_00_00",
+        &decoder,
+        &sekiro::Options::default(),
+        &mut world,
+    )
+    .unwrap();
+    let mut failures = Vec::new();
+    let mut by_stage: BTreeMap<ShaderStage, usize> = BTreeMap::new();
+    for (e, b) in world.iter::<ShaderBundle>() {
+        assert_eq!(world.get::<Name>(e).unwrap().0, b.name);
+        if b.parameters.is_none() {
+            failures.push(format!("{}: metaparam not read", b.name));
+        }
+        for p in &b.programs {
+            *by_stage.entry(p.stage).or_default() += 1;
+            if p.format != ShaderFormat::Dxil {
+                failures.push(format!("{}: {:?}", p.name, p.format));
+            }
+        }
+    }
+    let mut linked = 0;
+    for (e, m) in world.iter::<Material>() {
+        if m.definition.is_none() {
+            continue;
+        }
+        match world.get::<MaterialShader>(e) {
+            Some(MaterialShader(b)) => {
+                linked += 1;
+                assert_eq!(world.get::<ShaderBundle>(*b).unwrap().name, m.shader);
+            }
+            None if report.missing_shader_bundles.contains(&m.shader) => {}
+            None => failures.push(format!("{} ({}): not linked", m.mtd, m.shader)),
+        }
+    }
+    println!(
+        "{} bundles {by_stage:?}, {linked} materials linked, missing {:?}",
+        report.shader_bundles, report.missing_shader_bundles
+    );
+    for f in failures.iter().take(20) {
+        println!("FAILED {f}");
+    }
+    assert!(report.shader_bundles > 0 && linked > 0 && failures.is_empty());
+}

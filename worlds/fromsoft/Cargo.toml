@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 primase-bytes.workspace = true
 primase-dxbc.workspace = true
+primase-dxil.workspace = true
 primase-shader.workspace = true
 primase-havok.workspace = true
 primase-texcodec.workspace = true

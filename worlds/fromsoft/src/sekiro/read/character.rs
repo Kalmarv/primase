@@ -433,7 +433,8 @@ impl<'a> Reading<'a> {
             .filter(|m| m.definition.is_some())
             .map(|m| m.shader.clone())
             .collect();
-        self.bundles.read(archive, decoder, &wanted_shaders)?;
+        self.bundles
+            .read(archive, decoder, crate::Game::Sekiro, &wanted_shaders)?;
         let programs = self
             .bundles
             .layered_programs(resolved.iter().filter_map(|m| m.layered.as_ref()))?;

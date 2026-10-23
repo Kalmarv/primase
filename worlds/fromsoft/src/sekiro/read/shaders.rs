@@ -1,12 +1,15 @@
 //! Shader bundles of the materials a read keeps: every program of the bundle of each shader a material's definition
-//! names (`/shader/shaderbdle.shaderbdlebnd.dcx`, one `<shader>.shaderbdle` binder per shader), as
-//! [`source::ShaderBundle`] on an entity of its own, linked from the materials by `fromsoft.material_shader`.
+//! names (one `<shader>.shaderbdle` binder per shader, in one of the game's bundle binders:
+//! [`crate::Game::shader_binders`]), as [`source::ShaderBundle`] on an entity of its own, linked from the materials by
+//! `fromsoft.material_shader`. Each program's container is of the game's format ([`crate::Game::shader_format`]:
+//! DXBC or DXIL) and its shader kind agrees with its file's extension.
 //! The `fromsoft.shader_programs` resource, the layered materials' G-buffer pixel programs the layer bake reads, is
 //! taken from the same bundles.
 use super::super::source::{self, ShaderBundle, ShaderProgram, ShaderStage};
 use crate::materials::LayeredMaterial;
 use crate::metaparam::Metaparam;
-use crate::{Archive, Binder, Result, dcx::Decoder, invalid};
+use crate::{Archive, Binder, Game, Result, dcx::Decoder, invalid};
+use primase_core::shader::ShaderFormat;
 use primase_core::{Entity, World};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,41 +29,40 @@ pub(super) struct Bundles {
 }
 
 impl Bundles {
-    /// Read the bundles of `shaders` that are not already in `self`.
+    /// Read the bundles of `shaders` that are not already in `self`, from the game's bundle binders in order: a later
+    /// binder is read only while a wanted shader is still not found.
     pub fn read(
         &mut self,
         archive: &Archive,
         decoder: &Decoder<'_>,
+        game: Game,
         shaders: &BTreeSet<String>,
     ) -> Result<()> {
-        let wanted: BTreeSet<&String> = shaders
+        let mut wanted: BTreeSet<&String> = shaders
             .iter()
             .filter(|s| !self.bundles.contains_key(*s) && !self.missing.contains(*s))
             .collect();
-        if wanted.is_empty() {
-            return Ok(());
-        }
-        let outer = Binder::read(
-            &archive.read("/shader/shaderbdle.shaderbdlebnd.dcx", decoder)?,
-            decoder,
-        )?;
-        for file in outer.files {
-            let name = leaf(file.name.as_deref());
-            let Some(shader) = name.strip_suffix(".shaderbdle") else {
-                continue;
-            };
-            if !wanted.contains(&shader.to_owned()) {
+        for path in game.shader_binders() {
+            if wanted.is_empty() {
+                break;
+            }
+            if !archive.contains(path) {
                 continue;
             }
-            let bundle = bundle(shader, &file.bytes, decoder, &mut self.unread_metaparams)?;
-            self.bundles.insert(shader.to_owned(), bundle);
+            for file in Binder::read(&archive.read(path, decoder)?, decoder)?.files {
+                let name = leaf(file.name.as_deref());
+                let Some(shader) = name.strip_suffix(".shaderbdle") else {
+                    continue;
+                };
+                let Some(&key) = wanted.iter().find(|w| w.as_str() == shader) else {
+                    continue;
+                };
+                let bundle = bundle(game, shader, &file.bytes, decoder, &mut self.unread_metaparams)?;
+                self.bundles.insert(shader.to_owned(), bundle);
+                wanted.remove(key);
+            }
         }
-        self.missing.extend(
-            wanted
-                .into_iter()
-                .filter(|s| !self.bundles.contains_key(*s))
-                .cloned(),
-        );
+        self.missing.extend(wanted.into_iter().cloned());
         Ok(())
     }
 
@@ -102,14 +104,34 @@ impl Bundles {
     }
 }
 
+/// The shader kind (0 pixel, 1 vertex, 3 hull, 4 domain) a program's container states, read as the game's `format`.
+fn shader_kind(format: ShaderFormat, code: &[u8]) -> std::result::Result<Option<u32>, String> {
+    match format {
+        ShaderFormat::Dxbc => Ok(primase_dxbc::chunks(code)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|c| &c.kind == b"SHEX" || &c.kind == b"SHDR")
+            .and_then(|c| Some(u32::from_le_bytes(c.data.get(..4)?.try_into().ok()?) >> 16))),
+        ShaderFormat::Dxil => Ok(Some(
+            primase_dxil::part(code)
+                .map_err(|e| e.to_string())?
+                .program_version
+                >> 16,
+        )),
+        other => Err(format!("no shader bundle stores {other:?} programs")),
+    }
+}
+
 /// One shader's bundle from its binder's bytes.
 fn bundle(
+    game: Game,
     shader: &str,
     bytes: &[u8],
     decoder: &Decoder<'_>,
     unread_metaparams: &mut BTreeSet<String>,
 ) -> Result<ShaderBundle> {
-    let what = |why: String| invalid("Sekiro shader bundle", 0, format!("{shader}: {why}"));
+    let what = |why: String| invalid("shader bundle", 0, format!("{shader}: {why}"));
+    let format = game.shader_format();
     let mut programs = Vec::new();
     let mut parameters = None;
     let mut metaparams = 0;
@@ -131,11 +153,7 @@ fn bundle(
                 "{name}: a file that is neither a program nor a metaparam"
             ))
         })?;
-        let shader_type = primase_dxbc::chunks(&file.bytes)
-            .map_err(|e| what(format!("{name}: {e}")))?
-            .into_iter()
-            .find(|c| &c.kind == b"SHEX" || &c.kind == b"SHDR")
-            .and_then(|c| Some(u32::from_le_bytes(c.data.get(..4)?.try_into().ok()?) >> 16));
+        let shader_type = shader_kind(format, &file.bytes).map_err(|e| what(format!("{name}: {e}")))?;
         let expected = match stage {
             ShaderStage::Pixel => 0,
             ShaderStage::Vertex => 1,
@@ -150,6 +168,7 @@ fn bundle(
         programs.push(ShaderProgram {
             name,
             stage,
+            format,
             code: file.bytes.into(),
         });
     }

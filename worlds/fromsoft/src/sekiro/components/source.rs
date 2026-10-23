@@ -636,19 +636,20 @@ impl ShaderStage {
     }
 }
 
-/// One compiled program of a shader bundle: its file name as the bundle stores it, its stage and its DXBC container as
-/// stored. The name says which draw it serves, in the game's own words (`M[Multiple]_3_Gbuf.ppo`: the shader, its
+/// One compiled program of a shader bundle: its file name as the bundle stores it, its stage, its container's format
+/// (Shader Model 5 DXBC in Sekiro, Shader Model 6 DXIL in Elden Ring) and its container as stored. The name says which draw it serves, in the game's own words (`M[Multiple]_3_Gbuf.ppo`: the shader, its
 /// static switch, the G-buffer pass; `M[Multiple]_Gbuf_Skin@[cl].vpo`: the pass, skinned, cloth; `_[A]` an
 /// alpha-tested pixel program, `_FT` a tessellated vertex program). Nothing here chooses a program for a draw.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShaderProgram {
     pub name: String,
     pub stage: ShaderStage,
+    pub format: primase_core::shader::ShaderFormat,
     pub code: std::sync::Arc<[u8]>,
 }
 
-/// A shader's bundle (`<shader>.shaderbdle` of `/shader/shaderbdle.shaderbdlebnd.dcx`) on an entity of its own, named as
-/// the shader (`M[Multiple]`): every program it stores, in its order, for every pass the game draws the shader with
+/// A shader's bundle (`<shader>.shaderbdle` of one of the game's bundle binders, [`crate::Game::shader_binders`]) on an
+/// entity of its own, named as the shader (`M[Multiple]`): every program it stores, in its order, for every pass the game draws the shader with
 /// (forward, depth, shadow, velocity, G-buffer...), and the shader's parameter definition (`parameters`, `None` where
 /// the bundle's metaparam is of a version the reader does not read: `Report::unread_metaparams` names them). A
 /// material's `fromsoft.material_shader` names its bundle. Not serialised.

@@ -333,6 +333,20 @@ a float3) and `samplers` (`type`, `path`, `key`, `unknown`); `tests/matbin_censu
 value's declared size past the next item; the gate compares the stored prefix and counts such values. The area read
 does not resolve materials against them yet.
 
+## Shader bundles (Elden Ring)
+
+Elden Ring's shader bundles are in four binders (`/shader/shaderbdle.shaderbdlebnd.dcx`, `shaderbdle_dlc01`,
+`shaderbdle_dlc02`, `speedtree`; `Game::shader_binders`), 1,063 bundles, each name in one binder only. A bundle is laid
+out as Sekiro's: `.vpo`, `.ppo`, `.hpo` and `.dpo` programs named by pass (`_Fwd`, `_FwdSdw`, `_Gbuf`, `_[A]` alpha
+tested, `_<n>_` a static switch) and one `.metaparam`; the programs are Shader Model 6.0 DXIL containers that keep their
+reflection names. `metaparam::Metaparam` reads Elden Ring's (SMD version 6, as Sekiro's) with the header word at 0x54
+and a texture record's word at 0x20 kept as stored (nonzero in some of Elden Ring's files; the twelve bytes after it
+are zero). Checked against SoulsFormatsNEXT ee1dd61's `METAPARAM` over every bundle of the four binders
+(`metaparam.jsonl` of `oracles.soulsformats.elden/format`: one record per bundle, `binder`, `bundle`, `name`, the header
+words `unk30`, `cbuffer_size`, `flags`, `unk40`, `gxmd_key`, `ca_block_size`, `unk50`, `ca_param_components`,
+`shader_id`, then `textures`, `render_passes`, `ca_params` and `mtd_params` with floats as bit patterns;
+`tests/metaparam_census.rs`). Elden Ring stores colour MtdParams as type 13 where Sekiro stores 12.
+
 ## Area reading and its passes
 
 `sekiro::read_game_area(&Install, map, ...)` reads any game's map through the same read (`read_area` is Sekiro's,
@@ -369,8 +383,13 @@ converts frames; it does not lower:
   (`fromsoft.texture_payloads`), the bundle of every shader a kept material's
   definition names as an entity of its own (`fromsoft.shader_bundle`, named as
   the shader: every vertex, hull, domain and pixel program the install's
-  `.shaderbdle` stores for it, for every pass the game draws it with, as DXBC
-  and under the file name that says the pass, plus the shader's `.metaparam`:
+  `.shaderbdle` stores for it (in one of the game's bundle binders,
+  `Game::shader_binders`: Sekiro's one, Elden Ring's base, two additions and
+  SpeedTree, read in order while a wanted shader is missing), for every pass the
+  game draws it with, as stored in the game's container format (`Game::shader_format`:
+  Shader Model 5 DXBC in Sekiro, Shader Model 6 DXIL in Elden Ring; each
+  container's shader kind is its extension's stage) and under the file name that
+  says the pass, plus the shader's `.metaparam`:
   texture slots, the samplers each render pass binds per stage, the parameters
   and their constant-buffer offsets) linked from the material by
   `fromsoft.material_shader` (absent where the install holds no bundle of the

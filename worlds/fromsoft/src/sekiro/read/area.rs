@@ -93,8 +93,6 @@ pub struct Report {
     /// Materials whose definitions the read does not resolve yet (Elden Ring's material binaries): they keep their
     /// FLVER bindings only, and no texture is read for them.
     pub undefined_materials: usize,
-    /// Materials defined by material binaries whose shader bundles (Shader Model 6 programs) the read does not read yet.
-    pub shader_bundles_not_read: usize,
     /// Texture packages read whole because a material names one of their textures (Elden Ring's asset packages).
     pub texture_packages: usize,
     /// With `states: Event`: the rules read and the parts decided or left at their default.
@@ -196,11 +194,6 @@ impl Report {
                 self.undefined_materials,
                 NoticeKind::Unsupported,
                 "materials whose definition (material binary) is not read yet: FLVER bindings only, no textures",
-            ),
-            (
-                self.shader_bundles_not_read,
-                NoticeKind::Unsupported,
-                "materials defined by material binaries whose shader bundles are not read yet",
             ),
             (
                 self.collision.unread_custom_primitives + self.object_collision.unread_custom_primitives,
@@ -703,19 +696,15 @@ pub fn read_game_area(
                 }
             }
             layered.extend(m.layered.as_ref());
-            // the shader bundles of MTD-defined materials (Shader Model 5); a material binary's are Shader Model 6
-            match &m.definition {
-                Some(materials::Definition::Mtd(_)) => {
-                    wanted_shaders.insert(m.shader.clone());
-                }
-                Some(materials::Definition::Matbin(_)) => report.shader_bundles_not_read += 1,
-                None => {}
+            // the bundle of the shader the material's definition (MTD or material binary) names
+            if m.definition.is_some() {
+                wanted_shaders.insert(m.shader.clone());
             }
         }
     }
     let payloads = catalog.load(&archive, decoder, &wanted)?;
     let mut bundles = shaders::Bundles::default();
-    bundles.read(&archive, decoder, &wanted_shaders)?;
+    bundles.read(&archive, decoder, game, &wanted_shaders)?;
     let programs = bundles.layered_programs(layered.into_iter())?;
     report.textures = payloads.len();
     report.shader_programs = programs.len();
