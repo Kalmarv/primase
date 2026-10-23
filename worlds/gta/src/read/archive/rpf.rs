@@ -413,6 +413,15 @@ impl Archive {
 
     /// A binary entry's contents: decrypted and inflated as its entry says, exactly its recorded size.
     pub fn binary(&self, f: &mut File, index: usize, keys: &Keys) -> Result<Vec<u8>> {
+        match self.stored(f, index, keys)? {
+            (data, None) => Ok(data),
+            (data, Some(size)) => Ok(Deflate.decompress(&data, size)?),
+        }
+    }
+
+    /// A binary entry's bytes as the archive stores them, decrypted: a compressed entry's raw deflate stream with the
+    /// size it inflates to, or an uncompressed entry's contents with `None`.
+    pub fn stored(&self, f: &mut File, index: usize, keys: &Keys) -> Result<(Vec<u8>, Option<usize>)> {
         let e = self.entry(index)?;
         let EntryKind::Binary {
             block,
@@ -436,11 +445,11 @@ impl Archive {
             }
         }
         if stored == 0 {
-            return Ok(data);
+            return Ok((data, None));
         }
         let size =
             usize::try_from(size).map_err(|_| invalid("RPF7", self.start, "entry larger than memory"))?;
-        Ok(Deflate.decompress(&data, size)?)
+        Ok((data, Some(size)))
     }
 
     /// A resource entry inflated by the entry's page flags (the 16 bytes before the body are no header here).

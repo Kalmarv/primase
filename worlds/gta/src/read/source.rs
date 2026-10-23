@@ -92,6 +92,13 @@ impl GtaSource {
         &self.story.install
     }
 
+    /// A binary file of the install as its archive stores it, decrypted with the install's keys: a compressed file's
+    /// raw deflate stream with the size it inflates to, or an uncompressed file's contents with `None`
+    /// ([`Install::stored`]).
+    pub fn stored(&self, f: crate::read::archive::archive_set::FileRef) -> Result<(Vec<u8>, Option<usize>)> {
+        self.install().stored(f, &self.keys)
+    }
+
     /// The Enhanced shader database of the install ([`crate::read::shaders`]: its programs as `core.shader` entities and
     /// its effects as `gta.effect`) added to `w`, and every material of `w` linked to its effect
     /// ([`crate::read::shaders::join_materials`]). The database is the install's `sga_win32_60_final.awc` of the

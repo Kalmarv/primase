@@ -152,6 +152,13 @@ impl Install {
         a.binary(&mut File::open(&a.file)?, f.entry, keys)
     }
 
+    /// A binary file as its archive stores it, decrypted: a compressed file's raw deflate stream with the size it
+    /// inflates to, or an uncompressed file's contents with `None` ([`Archive::stored`](crate::read::archive::rpf::Archive::stored)).
+    pub fn stored(&self, f: FileRef, keys: &Keys) -> Result<(Vec<u8>, Option<usize>)> {
+        let a = &self.archives[f.archive];
+        a.stored(&mut File::open(&a.file)?, f.entry, keys)
+    }
+
     /// A resource file (RSC7), decoded.
     pub fn resource(&self, f: FileRef, keys: &Keys) -> Result<crate::rage::resource::Resource> {
         let a = &self.archives[f.archive];
