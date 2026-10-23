@@ -23,6 +23,8 @@ pub const DECL_SIZE: usize = 100;
 pub const DECL_AT: usize = 0x70;
 pub const DECL2_AT: usize = 0xd4;
 pub const KEY_AT: usize = 0x138;
+/// The LOD record pointers (u64) lie from 0x30 up to the LOD count at 0xb4.
+pub const MAX_LODS: usize = (0xb4 - 0x30) / 8;
 
 /// Element usages seen in skate.'s declarations (Frostbite's VertexElementUsage).
 pub mod usage {
@@ -204,6 +206,13 @@ fn ptr(r: &Rd, at: usize) -> Result<usize> {
 pub fn read(d: &[u8]) -> Result<MeshSet> {
     let r = Rd::new(d, W);
     let n = r.u16le(0xb4)? as usize;
+    if n > MAX_LODS {
+        return Err(bad(
+            W,
+            0xb4,
+            format!("{n} LODs, but only {MAX_LODS} record pointers fit between 0x30 and the count"),
+        ));
+    }
     let mut lods = Vec::with_capacity(n);
     for l in 0..n {
         let at = ptr(&r, 0x30 + 8 * l)?;

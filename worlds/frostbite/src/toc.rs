@@ -8,6 +8,8 @@ pub const ENVELOPE: usize = 0x22C;
 pub const MAGIC: [u8; 4] = [0x00, 0xd1, 0xce, 0x01];
 const FNV_SEED: u32 = 0x811C_9DC5;
 const W: &str = "toc";
+/// A Huffman table entry with this bit set is a leaf (`!char`); one without it names an internal node by its counter.
+const LEAF: u32 = 0x8000_0000;
 
 /// Where a file lives: (patch folder or base game, install chunk, archive number).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -48,7 +50,7 @@ pub struct Toc {
     pub chunk_hash: Vec<i32>,
 }
 
-/// Huffman-coded names: leaves are `!char` values, internal nodes counters, read in pairs (left, right).
+/// Huffman-coded names: leaves are `!char` values (top bit set), internal nodes counters, read in pairs (left, right).
 struct Huffman {
     words: Vec<u32>,
     nodes: Vec<(u32, Option<(usize, usize)>)>,
@@ -62,21 +64,38 @@ impl Huffman {
             .map(|i| r.u32be(names_at + 4 * i))
             .collect::<Result<Vec<_>>>()?;
         let mut nodes: Vec<(u32, Option<(usize, usize)>)> = Vec::new();
-        let mut by_value = std::collections::BTreeMap::new();
+        // A table entry is a leaf (`!char`: the top bit set) or the counter of an internal node built before it, so the two
+        // kinds of value are disjoint and each has its own map: a stray small value cannot become a leaf that shadows an
+        // internal node of the same number.
+        let mut leaves = std::collections::BTreeMap::new();
+        let mut internal = std::collections::BTreeMap::new();
         let (mut left, mut counter, mut root) = (None, 0u32, None);
         for i in 0..table_n {
-            let v = r.u32be(table_at + 4 * i)?;
-            let node = *by_value.entry(v).or_insert_with(|| {
-                nodes.push((v, None));
-                nodes.len() - 1
-            });
+            let at = table_at + 4 * i;
+            let v = r.u32be(at)?;
+            let node = if v & LEAF != 0 {
+                *leaves.entry(v).or_insert_with(|| {
+                    nodes.push((v, None));
+                    nodes.len() - 1
+                })
+            } else {
+                *internal.get(&v).ok_or_else(|| {
+                    bad(
+                        W,
+                        at,
+                        format!(
+                            "Huffman entry {v:#x} is neither a character nor an internal node built before it"
+                        ),
+                    )
+                })?
+            };
             let Some(l) = left.take() else {
                 left = Some(node);
                 continue;
             };
             nodes.push((counter, Some((l, node))));
             let parent = nodes.len() - 1;
-            by_value.entry(counter).or_insert(parent);
+            internal.insert(counter, parent);
             root = Some(parent);
             counter += 1;
         }
@@ -405,5 +424,49 @@ mod tests {
     fn toc_hash_reference_values() {
         assert_eq!(super::hash_with(&[0, 127, 128, 255], 0x811c9dc5), 0x529916);
         assert_eq!(super::hash_with(b"levels/test", 0x811c9dc5), 0xb97702);
+    }
+}
+
+#[cfg(test)]
+mod huffman_tests {
+    use super::*;
+
+    /// The table `entries` (big-endian words) and the code `bits` (bit 0 first, in one word) as a Huffman reader's input.
+    fn huffman(entries: &[u32], bits: u32) -> Result<Huffman> {
+        let mut data = bits.to_be_bytes().to_vec();
+        for e in entries {
+            data.extend(e.to_be_bytes());
+        }
+        let r = Rd::new(&data, W);
+        Huffman::read(&r, 0, 1, 4, entries.len())
+    }
+
+    /// One internal node: bit 0 is the character 'a', bit 1 the terminator; "a" is the bits 0 then 1.
+    #[test]
+    fn a_name_decodes_through_its_table() {
+        let h = huffman(&[!u32::from(b'a'), !0], 0b10).unwrap();
+        assert_eq!(h.decode(0).unwrap(), "a");
+    }
+
+    /// Two levels: the first pair is internal node 0, the second pair (node 0, 'b') is node 1, the root.
+    #[test]
+    fn an_internal_node_is_named_by_its_counter() {
+        let table = [!u32::from(b'a'), !0, 0, !u32::from(b'b')];
+        // root: bit 0 -> node 0 ('a' on 0, end on 1), bit 1 -> 'b'. "b" then the end: 1, then 0, 1.
+        let h = huffman(&table, 0b101).unwrap();
+        assert_eq!(h.decode(0).unwrap(), "b");
+    }
+
+    /// A small value is no character: it used to become a leaf of that number, shadowing the internal node the same number
+    /// would name once built (one map held both). It is refused where it stands, and so is a counter not built yet.
+    #[test]
+    fn a_value_that_is_neither_a_character_nor_a_built_node_is_refused() {
+        let e = huffman(&[0, !0], 0).err().unwrap().to_string();
+        assert!(e.contains("neither a character nor an internal node"), "{e}");
+        let e = huffman(&[!u32::from(b'a'), !0, 1, !0], 0)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(e.contains("0x1"), "{e}");
     }
 }

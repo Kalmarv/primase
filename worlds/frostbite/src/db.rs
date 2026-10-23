@@ -59,8 +59,16 @@ fn varint(r: &Rd, mut pos: usize) -> Result<(usize, usize)> {
     }
 }
 
+/// How deep containers may nest: the game's files nest a handful of levels, and the reader recurses once per level, so a
+/// file of nested lists must be refused, not left to overflow the stack.
+pub const MAX_DEPTH: usize = 64;
+
 /// One node at `pos`; the position after it.
 pub fn read_node(data: &[u8], pos: usize) -> Result<(Node, usize)> {
+    read_at(data, pos, 0)
+}
+
+fn read_at(data: &[u8], pos: usize, depth: usize) -> Result<(Node, usize)> {
     let r = Rd::new(data, W);
     let tag = r.u8(pos)?;
     let mut pos = pos + 1;
@@ -74,15 +82,23 @@ pub fn read_node(data: &[u8], pos: usize) -> Result<(Node, usize)> {
     n.named = tag & 128 == 0;
     if n.named {
         n.name = r.cstr(pos)?;
-        pos += n.name.len() + 1;
+        // one byte a character (Latin-1): the bytes read, not the UTF-8 length of the String they became
+        pos += n.name.chars().count() + 1;
     }
     match n.ty {
         1 | 2 => {
+            if depth >= MAX_DEPTH {
+                return Err(bad(
+                    W,
+                    pos,
+                    format!("containers nest deeper than {MAX_DEPTH} levels"),
+                ));
+            }
             let (size, p) = varint(&r, pos)?;
             let end = p + size;
             pos = p;
             while pos < end {
-                let (child, p) = read_node(data, pos)?;
+                let (child, p) = read_at(data, pos, depth + 1)?;
                 pos = p;
                 if child.ty == 0 {
                     n.terminated = true;
