@@ -285,11 +285,16 @@ impl Setup {
                 }
             }
         }
-        // the signature varyings that cover a used cell, and the system outputs the program writes
-        let keeps = |v: &primase_shader::Varying, cells: &BTreeSet<(u32, u8)>, system: &BTreeSet<u8>| {
+        // the signature's varyings, every one with a register, as the container declares them (input layouts and stage
+        // linking are matched against the signature): `used` where the program reads or writes a cell of it. A built-in
+        // output without a register (depth, coverage) is kept only if the program writes it: it has no local otherwise.
+        let settle = |v: &mut primase_shader::Varying, cells: &BTreeSet<(u32, u8)>, system: &BTreeSet<u8>| {
             match v.provenance.d3d {
                 Some(d3d) if d3d.register != u32::MAX => {
-                    (0..4u8).any(|lane| d3d.mask >> lane & 1 != 0 && cells.contains(&(d3d.register, lane)))
+                    // the program's own reading, not the signature's mask: the compiler's masks are not what is stored
+                    v.used = (0..4u8)
+                        .any(|lane| d3d.mask >> lane & 1 != 0 && cells.contains(&(d3d.register, lane)));
+                    true
                 }
                 _ => match v.system {
                     // DXIL semantic kinds: 17 depth, 18 depth less-equal, 19 depth greater-equal, 14 coverage
@@ -302,11 +307,13 @@ impl Setup {
             }
         };
         let none = BTreeSet::new();
-        interface.inputs.retain(|v| keeps(v, &cells_in, &none));
-        interface.outputs.retain(|v| keeps(v, &cells_out, &system_out));
+        interface.inputs.retain_mut(|v| settle(v, &cells_in, &none));
+        interface
+            .outputs
+            .retain_mut(|v| settle(v, &cells_out, &system_out));
         match &mut interface.facts {
-            StageFacts::Hull(h) => h.patch_constants.retain(|v| keeps(v, &cells_patch, &none)),
-            StageFacts::Domain(d) => d.patch_constants.retain(|v| keeps(v, &cells_patch, &none)),
+            StageFacts::Hull(h) => h.patch_constants.retain_mut(|v| settle(v, &cells_patch, &none)),
+            StageFacts::Domain(d) => d.patch_constants.retain_mut(|v| settle(v, &cells_patch, &none)),
             _ => {}
         }
         // a vertex program that writes no position feeds a tessellator (or a stream-output stage): it is functions
@@ -314,7 +321,7 @@ impl Setup {
             && !interface
                 .outputs
                 .iter()
-                .any(|v| v.system == Some(SystemValue::ClipPosition))
+                .any(|v| v.used && v.system == Some(SystemValue::ClipPosition))
         {
             interface.facts = StageFacts::VertexWithoutPosition;
         }

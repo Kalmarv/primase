@@ -113,7 +113,7 @@ fn run_with(
     colour: [f64; 4],
     engine: &[(u32, usize, [f64; 4])],
 ) -> Vec<[f64; 4]> {
-    // by register: the lift's interface holds the signature elements the program reads
+    // by register: the interface lists the whole signature
     let mut inputs = vec![[0u32; 4]; s.input_count()];
     for i in &s.interface().inputs {
         let register = i.provenance.d3d.expect("a D3D register").register;

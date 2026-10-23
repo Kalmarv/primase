@@ -40,8 +40,8 @@ fn inputs(front: bool) -> Vec<[u32; 4]> {
 fn reflection_names_bindings_and_packing() {
     let s = shader(BLEND);
     let r = s.interface();
-    // (semantic, index, system value, register, lanes, interpolation): the signature's cells the program reads; the
-    // fixture's SV_Position is declared and never read, so the lift leaves it out
+    // (semantic, index, system value, register, lanes, interpolation, used): every element of the signature; the
+    // fixture's SV_Position is declared and never read
     let inputs: Vec<_> = r
         .inputs
         .iter()
@@ -54,6 +54,7 @@ fn reflection_names_bindings_and_packing() {
                 d3d.register,
                 d3d.mask,
                 e.interp.map(|i| (i.mode, i.sampling)),
+                e.used,
             )
         })
         .collect();
@@ -61,16 +62,42 @@ fn reflection_names_bindings_and_packing() {
     assert_eq!(
         inputs,
         [
-            ("TEXCOORD", 0, None, 1, 0b0011, center(InterpMode::Perspective)),
-            ("TEXCOORD", 1, None, 1, 0b0100, center(InterpMode::Perspective)),
-            ("TEXCOORD", 2, None, 2, 0b0001, center(InterpMode::Flat)),
+            (
+                "SV_Position",
+                0,
+                Some(SystemValue::FragCoord),
+                0,
+                0b1111,
+                center(InterpMode::Linear),
+                false
+            ),
+            (
+                "TEXCOORD",
+                0,
+                None,
+                1,
+                0b0011,
+                center(InterpMode::Perspective),
+                true
+            ),
+            (
+                "TEXCOORD",
+                1,
+                None,
+                1,
+                0b0100,
+                center(InterpMode::Perspective),
+                true
+            ),
+            ("TEXCOORD", 2, None, 2, 0b0001, center(InterpMode::Flat), true),
             (
                 "SV_IsFrontFace",
                 0,
                 Some(SystemValue::FrontFacing),
                 2,
                 0b0010,
-                center(InterpMode::Flat)
+                center(InterpMode::Flat),
+                true
             ),
         ]
     );

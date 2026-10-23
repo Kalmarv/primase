@@ -65,8 +65,9 @@ fn program(op: u32, inputs: &[[u32; 4]]) -> Vec<u32> {
     v
 }
 
-/// A signature chunk of these elements: (semantic name, index, system value, register, mask).
-fn signature(elements: &[(&str, u32, u32, u32, u8)]) -> Vec<u8> {
+/// A signature chunk of these elements: (semantic name, index, system value, register, mask). An input is read in the
+/// lanes of its mask; an output is written in them (the second mask is the lanes the program never reads or writes).
+fn signature(elements: &[(&str, u32, u32, u32, u8)], output: bool) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend((elements.len() as u32).to_le_bytes());
     out.extend(8u32.to_le_bytes());
@@ -81,7 +82,7 @@ fn signature(elements: &[(&str, u32, u32, u32, u8)]) -> Vec<u8> {
         // D3D_REGISTER_COMPONENT_FLOAT32
         out.extend(3u32.to_le_bytes());
         out.extend(register.to_le_bytes());
-        out.extend([mask, mask, 0, 0]);
+        out.extend([mask, if output { 0 } else { mask }, 0, 0]);
     }
     out.extend(names);
     out
@@ -90,6 +91,16 @@ fn signature(elements: &[(&str, u32, u32, u32, u8)]) -> Vec<u8> {
 /// The container of a program: its SHEX, and the signatures its input and output declarations state (inputs are texture
 /// coordinates, outputs render targets).
 fn container(words: &[u32]) -> Vec<u8> {
+    container_with(words, &[], &[])
+}
+
+/// [`container`] with signature elements the program does not declare: `(semantic name, index, system value, register,
+/// mask)`, as [`signature`] takes them.
+fn container_with(
+    words: &[u32],
+    undeclared_inputs: &[(&str, u32, u32, u32, u8)],
+    undeclared_outputs: &[(&str, u32, u32, u32, u8)],
+) -> Vec<u8> {
     let decoded = decode(words).unwrap();
     let (mut inputs, mut outputs) = (Vec::new(), Vec::new());
     for d in &decoded.declarations {
@@ -111,10 +122,12 @@ fn container(words: &[u32]) -> Vec<u8> {
             _ => {}
         }
     }
+    inputs.extend_from_slice(undeclared_inputs);
+    outputs.extend_from_slice(undeclared_outputs);
     let shex: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     let chunks: [(&[u8; 4], Vec<u8>); 3] = [
-        (b"ISGN", signature(&inputs)),
-        (b"OSGN", signature(&outputs)),
+        (b"ISGN", signature(&inputs, false)),
+        (b"OSGN", signature(&outputs, true)),
         (b"SHEX", shex),
     ];
     let directory = 32 + 4 * chunks.len();
@@ -699,4 +712,53 @@ fn an_instruction_with_the_wrong_operand_count_is_refused_by_name() {
         let error = lift(&container(&program(op, &[]))).unwrap_err().to_string();
         assert!(error.contains(&format!("{name}: ")), "{error}");
     }
+}
+
+/// The signature is the container's fact: an element the program never declares is listed, `used` false, and the
+/// program runs without being given it (its input) or writing it (its output).
+#[test]
+fn signature_elements_the_program_does_not_declare_are_listed_unused() {
+    // o0 = (1, 1, 1, 1); the container also lists TEXCOORD3.xy as an input and SV_Target1 as an output
+    let bytes = container_with(
+        &program(54, &[[1f32.to_bits(); 4]]),
+        // a pixel program has no clip distance to read: the signature lists it, the entry point does not carry it
+        &[
+            ("TEXCOORD", 3, 0, 3, 0b0011),
+            ("SV_ClipDistance", 0, 2, 4, 0b0001),
+        ],
+        &[("SV_Target", 1, 64, 1, 0b1111)],
+    );
+    let program = lift(&bytes).unwrap();
+    program.validate().unwrap_or_else(|p| panic!("{p:?}"));
+    let listed = |list: &[primase_shader::Varying]| {
+        list.iter()
+            .map(|v| (v.label.name.clone(), v.label.index, v.used))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        listed(&program.interface.inputs),
+        [
+            ("TEXCOORD".to_owned(), 3, false),
+            ("SV_ClipDistance".to_owned(), 0, false)
+        ]
+    );
+    assert_eq!(
+        listed(&program.interface.outputs),
+        [
+            ("SV_Target".to_owned(), 0, true),
+            ("SV_Target".to_owned(), 1, false)
+        ]
+    );
+    let e = ProgramShader::new(program)
+        .unwrap()
+        .execute(&[], &[], &mut no_sample)
+        .unwrap();
+    assert_eq!(e.outputs[0], [1f32.to_bits(); 4]);
+    assert_eq!(e.output_masks[0], 0b1111);
+    assert_eq!(
+        e.output_masks.get(1).copied().unwrap_or(0),
+        0,
+        "{:?}",
+        e.output_masks
+    );
 }

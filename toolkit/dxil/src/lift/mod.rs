@@ -37,7 +37,7 @@ use crate::{Result, error};
 
 /// The version of the lifter: bumped when what it produces for the same bytecode changes, so a cache keyed by the
 /// bytecode's hash knows what is stale; gated by `tests/versions.rs` (the lifted fixtures hashed under it, `primase_shader::gate`).
-pub const LIFTER_VERSION: u32 = 2;
+pub const LIFTER_VERSION: u32 = 3;
 
 /// Lift a DXIL container's entry function. A pixel or vertex program is the scope; every construct the lifter does not
 /// carry (a wide integer, a resource array, an irreducible loop, an operation it has no meaning for) is an `Err` naming

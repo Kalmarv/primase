@@ -30,7 +30,26 @@ fn lifted(name: &str) -> (Program, Executable) {
     (program, exe)
 }
 
-/// Run `name` on one invocation: its entry arguments in order (one register each) and its constant buffers by register.
+/// The entry arguments of an invocation: `read` are those of the inputs the program reads, in order (arguments past
+/// them are ignored); the signature's other elements (`used` false) are listed too and take zeros.
+fn arguments(program: &Program, read: &[[u32; 4]]) -> Vec<[u32; 4]> {
+    let mut read = read.iter();
+    program
+        .interface
+        .inputs
+        .iter()
+        .map(|v| {
+            if v.used {
+                *read.next().expect("an argument for each input the program reads")
+            } else {
+                [0; 4]
+            }
+        })
+        .collect()
+}
+
+/// Run `name` on one invocation: the arguments of the inputs it reads in order (one register each) and its constant
+/// buffers by register.
 fn run(name: &str, args: &[[u32; 4]], constants: &[(u32, Vec<[u32; 4]>)]) -> Output {
     let (program, exe) = lifted(name);
     let mut resources = Resources::default();
@@ -50,7 +69,8 @@ fn run(name: &str, args: &[[u32; 4]], constants: &[(u32, Vec<[u32; 4]>)]) -> Out
     let bound = exe.bind_resources(&resources).unwrap();
     let mut backend = NoBackend;
     let mut runner = primase_shader::exec::Runner::<1>::new(&exe, &bound, &mut backend, None);
-    let [out] = runner.run([args]).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let args = arguments(&program, args);
+    let [out] = runner.run([&args]).unwrap_or_else(|e| panic!("{name}: {e}"));
     out
 }
 
@@ -337,6 +357,7 @@ mod textures {
             // a quad of four equal lanes: every screen derivative is zero. The argument is uvw = (0.25, 0.5, 0.75).
             let uvw = [[f(0.25), f(0.5), f(0.75), 0]];
             let mut runner = Runner::<4>::new(&exe, &bound, &mut backend, None);
+            let uvw = arguments(&program, &uvw);
             let out = runner
                 .run([&uvw, &uvw, &uvw, &uvw])
                 .unwrap_or_else(|e| panic!("{v}: {e}"));
@@ -540,7 +561,8 @@ mod resource_arrays {
         let bound = exe.bind_resources(&resources).unwrap();
         let mut backend = Elements { array: tex.id };
         let mut runner = Runner::<1>::new(&exe, &bound, &mut backend, None);
-        let [out] = runner.run([&[[f(0.5), f(0.5), 0, f(1.0)]]])?;
+        let args = arguments(&program, &[[f(0.5), f(0.5), 0, f(1.0)]]);
+        let [out] = runner.run([&args])?;
         Ok(out)
     }
 
@@ -601,14 +623,18 @@ mod pixel_ops {
     fn run(variant: &str, sample: u32, h: f32, packed: u32) -> Output {
         let (program, exe) = lifted(&fixture("pixel_ops", variant));
         program.validate().unwrap();
-        // the sample index is an input the signature does not list (the position is not read, so it is not kept)
+        // the sample index is an input the signature does not list; the position is listed and not read
         let names: Vec<_> = program
             .interface
             .inputs
             .iter()
-            .map(|i| i.label.name.as_str())
+            .map(|i| (i.label.name.as_str(), i.used))
             .collect();
-        assert_eq!(names, ["SV_SampleIndex"], "{variant}");
+        assert_eq!(
+            names,
+            [("SV_Position", false), ("SV_SampleIndex", true)],
+            "{variant}"
+        );
         let cb = program
             .interface
             .resources
@@ -622,9 +648,8 @@ mod pixel_ops {
         let bound = exe.bind_resources(&resources).unwrap();
         let mut backend = Texels;
         let mut runner = Runner::<1>::new(&exe, &bound, &mut backend, None);
-        let [out] = runner
-            .run([&[[sample, 0, 0, 0]]])
-            .unwrap_or_else(|e| panic!("{variant}: {e}"));
+        let args = arguments(&program, &[[sample, 0, 0, 0]]);
+        let [out] = runner.run([&args]).unwrap_or_else(|e| panic!("{variant}: {e}"));
         out
     }
 

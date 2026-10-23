@@ -15,9 +15,15 @@ fn the_fixture_lifts_validates_and_writes_wgsl() {
     assert!(program.modes.divide_by_zero && program.modes.float_to_int && program.modes.min_max_nan);
     program.validate().unwrap_or_else(|p| panic!("{p:?}"));
 
-    // five colour targets out: a float4, three uint4 and a float4 (HLSL: struct O). The program takes SV_Position as
-    // a parameter but never reads it, so it declares no input and exposes none.
-    assert!(program.interface.inputs.is_empty());
+    // the program takes SV_Position as a parameter but never reads it: the signature lists it, and it is unused
+    let inputs: Vec<_> = program
+        .interface
+        .inputs
+        .iter()
+        .map(|v| (v.system, v.used))
+        .collect();
+    assert_eq!(inputs, [(Some(SystemValue::FragCoord), false)]);
+    // five colour targets out: a float4, three uint4 and a float4 (HLSL: struct O)
     let targets: Vec<_> = program
         .interface
         .outputs
@@ -70,7 +76,10 @@ fn the_text_form_names_what_the_lift_decided() {
         "{text}"
     );
     assert!(
-        text.contains("// source Dxbc ps_5_0 lifted by primase-dxbc 2"),
+        text.contains(&format!(
+            "// source Dxbc ps_5_0 lifted by primase-dxbc {}",
+            primase_dxbc::LIFTER_VERSION
+        )),
         "{text}"
     );
 }

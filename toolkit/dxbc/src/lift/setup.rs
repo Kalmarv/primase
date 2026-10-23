@@ -795,9 +795,8 @@ impl Setup {
             }
         }
 
-        // the signature elements the program uses: a register the program declares, or a special input or output it
-        // declares by name; an element it never declares is not part of what it exposes (and may be one no stage
-        // binding exists for: some engines' pixel programs list SV_InstanceID)
+        // the signature's elements, every one, as the container declares them (input layouts and stage linking are
+        // matched against the signature): `used` is false for an element the program does not declare
         let mut interface = Interface {
             stage,
             inputs: Vec::new(),
@@ -811,23 +810,25 @@ impl Setup {
                 .get(&e.register)
                 .is_some_and(|m| m & e.mask != 0);
             // D3D_NAME_PRIMITIVE_ID and _COVERAGE are read as special operands, not through a register
-            if declared || (e.system_value == 7 && primitive_id) || (e.system_value == 66 && input_coverage) {
-                interface.inputs.push(e.varying(stage, false)?);
-            }
+            let special = (e.system_value == 7 && primitive_id) || (e.system_value == 66 && input_coverage);
+            let mut v = e.varying(stage, false)?;
+            v.used &= declared || special;
+            interface.inputs.push(v);
         }
         for e in &output_elements {
             let declared = declared_outputs.get(&e.register).is_some_and(|m| m & e.mask != 0);
-            if !declared && !e.name.get(..3).is_some_and(|p| p.eq_ignore_ascii_case("SV_")) {
-                continue;
-            }
-            let v = e.varying(stage, true)?;
+            let mut v = e.varying(stage, true)?;
             let keep = match v.system {
+                // a built-in output has a local only when the program declares it
                 Some(SystemValue::Depth | SystemValue::DepthGreaterEqual | SystemValue::DepthLessEqual) => {
                     depth.is_some()
                 }
                 Some(SystemValue::Coverage) => coverage,
                 Some(SystemValue::StencilRef) => stencil,
-                _ => declared,
+                _ => {
+                    v.used &= declared;
+                    true
+                }
             };
             if keep {
                 interface.outputs.push(v);
@@ -921,18 +922,18 @@ impl Setup {
             ));
         }
         // the patch of a hull program (its patch constants are written by the fork and join phases) or a domain program
-        // (it reads them): the patch-constant signature's elements the program declares
+        // (it reads them): the patch-constant signature's elements, `used` where the program declares them
         if matches!(stage, Stage::Hull | Stage::Domain) {
             let output = stage == Stage::Hull;
             let mut patch_constants = Vec::new();
             for e in crate::patch_signature_elements(bytes)? {
-                if setup
+                let declared = setup
                     .declared_patch
                     .get(&e.register)
-                    .is_some_and(|m| m & e.mask != 0)
-                {
-                    patch_constants.push(e.varying(stage, output)?);
-                }
+                    .is_some_and(|m| m & e.mask != 0);
+                let mut v = e.varying(stage, output)?;
+                v.used &= declared;
+                patch_constants.push(v);
             }
             let code = |name: &str, value: u32, limit: u32| -> Result<u32> {
                 if (1..=limit).contains(&value) {

@@ -34,7 +34,8 @@ pub struct IoItem {
 }
 
 /// The entry point's arguments (one per input varying) and result members (one per output varying, the clip distances
-/// being one together), in interface order.
+/// being one together), in interface order. A varying nothing reads or writes (`used` false) that no binding exists
+/// for is left out: the interface lists every element of the container's signature, the module carries what it can.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EntryIo {
     pub arguments: Vec<IoItem>,
@@ -374,6 +375,11 @@ pub fn entry_io(interface: &Interface) -> Result<EntryIo, String> {
             let direction = if output { "output" } else { "input" };
             if v.system == Some(SystemValue::ClipDistance) {
                 if stage != Stage::Vertex || !output {
+                    // the interface lists what the container declares; an element nothing reads or writes, and the
+                    // module cannot bind, is not carried
+                    if !v.used {
+                        continue;
+                    }
                     return Err(format!(
                         "{name}: clip distances as a {stage:?} {direction} have no built-in binding"
                     ));
@@ -420,9 +426,16 @@ pub fn entry_io(interface: &Interface) -> Result<EntryIo, String> {
                     next_location += 1;
                     location(stage, output, v, next_location - 1)
                 }
-                Some(system) => Binding::BuiltIn(builtin(stage, output, system).ok_or_else(|| {
-                    format!("{name}: {system:?} as a {stage:?} {direction} has no built-in binding")
-                })?),
+                Some(system) => match builtin(stage, output, system) {
+                    Some(built_in) => Binding::BuiltIn(built_in),
+                    // not carried, as above
+                    None if !v.used => continue,
+                    None => {
+                        return Err(format!(
+                            "{name}: {system:?} as a {stage:?} {direction} has no built-in binding"
+                        ));
+                    }
+                },
                 None => {
                     next_location += 1;
                     location(stage, output, v, next_location - 1)

@@ -160,8 +160,8 @@ declarations, instructions with their controls and extended tokens; `Program::fr
 subset checks) and the container's signatures and, where there is one, its RDEF (names and constant layouts).
 
 A register is four raw lanes (`vec4<u32>` locals); each instruction bitcasts to the type it implies. Varyings are
-unpacked from D3D registers (the register and lanes stay in provenance); only signature elements the program declares
-are in the interface. Resources are `cb<n>` uniform `array<vec4<u32>, rows>` (group 0), `t<n>` textures and buffer
+unpacked from D3D registers (the register and lanes stay in provenance); every element of the container's signatures is in the interface
+(input layouts and stage linking are matched against the signature), `used` false for one the program does not declare. Resources are `cb<n>` uniform `array<vec4<u32>, rows>` (group 0), `t<n>` textures and buffer
 views (group 1), `s<n>` samplers (group 2), typed texture views `u<n>` as storage images of four 32-bit lanes (group 3; the
 view's real format is the binding's, a note on the program says so), binding = slot. Reads out of range of a dynamically indexed buffer are
 zero, as in D3D. D3D's results are written out (`D3dModes::ALL`). Refused by name, with the instruction word: compute,

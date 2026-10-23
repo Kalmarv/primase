@@ -88,7 +88,10 @@ impl ProgramShader {
         let interface = &program.interface;
         let mut arguments = Vec::new();
         let mut input_count = 0;
-        for v in &interface.inputs {
+        // the module's arguments: the interface's inputs the entry point carries, in order
+        let io = crate::entry_io(interface).map_err(error)?;
+        for item in &io.arguments {
+            let v = &interface.inputs[item.varyings[0]];
             let name = Program::varying_name(&v.label);
             // the primitive and coverage inputs have no register in the signature: the register view cannot carry
             // them, they read as 0
@@ -150,7 +153,12 @@ impl ProgramShader {
             members.push(Member {
                 register: sig.register as usize,
                 lanes: lanes_of(sig.mask),
-                written: sig.mask & !sig.read_write_mask,
+                // an element the program does not write (the signature lists it, `used` is false) has no lane written
+                written: if v.used {
+                    sig.mask & !sig.read_write_mask
+                } else {
+                    0
+                },
             });
         }
         let mut constants = Vec::new();

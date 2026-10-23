@@ -360,4 +360,13 @@ fn a_vertex_programs_cull_distance_travels_as_a_varying_with_a_note() {
     pixel.outputs = Vec::new();
     let refused = primase_shader::entry_io(&pixel).unwrap_err();
     assert!(refused.contains("no built-in binding"), "{refused}");
+    // ... unless nothing reads it: the interface lists the container's whole signature, the entry point carries the
+    // elements it can bind
+    pixel.inputs[0].used = false;
+    assert!(primase_shader::entry_io(&pixel).unwrap().arguments.is_empty());
+    pixel.inputs[0].system = Some(SystemValue::ClipDistance);
+    assert!(primase_shader::entry_io(&pixel).unwrap().arguments.is_empty());
+    pixel.inputs[0].used = true;
+    let refused = primase_shader::entry_io(&pixel).unwrap_err();
+    assert!(refused.contains("clip distances"), "{refused}");
 }

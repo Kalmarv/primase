@@ -57,7 +57,7 @@ running it on a rasterizer.
 ## Gates
 
 - `tests/fixtures.rs`: our own HLSL (`tests/fixtures/*.hlsl`, compiled with the dxc command in each file):
-  the lifted interface (signature packing of the cells the program reads, resource names and slots, buffer field names
+  the lifted interface (signature packing of every signature element, `used` where the program reads or writes a cell of it, resource names and slots, buffer field names
   and offsets), execution (`primase_shader::exec::ProgramShader`) against outputs worked out from the HLSL, missing
   bindings refused, every truncation of a fixture refused, and a seeded mutation run (the debug key `dxil.fuzz_runs`,
   default 3000).
