@@ -27,11 +27,12 @@
 //! - **Textures.** A texture parameter binds the texture the material's property of that name holds; a property the
 //!   material leaves unset takes the shader's declared default, valued from the editor oracle
 //!   (`primase-oracles/unity/default-textures`: [`default_colour`], whose doc states the version and colour-space gap;
-//!   a player holds no default texture of the engine), counted by name; a default it does not value is `Missing`. A
-//!   texture of Unity's own that the material has no property of is the frame's ([`frame_texture`]: the camera's depth and colour, the main light's
-//!   shadow map or screen-space shadows, the occlusion, the nearest reflection probe, the light-probe volume), counted
-//!   by name; the other engine textures the parameters name are `Missing` with the reason, and a slot the parameters do
-//!   not name is `Missing` (a 2021.2 player stores a variant's textures in its parameter blob, which
+//!   a player holds no default texture of the engine), counted by name (an empty or unknown name is the engine's
+//!   fallback grey); a default it does not value is `Missing`. A texture of Unity's own that the material has no
+//!   property of is the frame's ([`frame_texture`]: the camera's depth and colour, the main light's shadow map or
+//!   screen-space shadows, the occlusion, the nearest reflection probe, the light-probe volume), counted by name; the
+//!   other engine textures the parameters name are `Missing` with the reason, and a slot the parameters do not name is
+//!   `Missing` (a 2021.2 player stores a variant's textures in its parameter blob, which
 //!   [`crate::program::parameter_blob`] reads: the pass's common parameters name none). The sampler state is Unity's
 //!   packed value ([`crate::components::Parameters::samplers`]): not decoded.
 //! - **Outputs.** The fragment stage's first target is the finished colour of a forward pass; the others `Unknown`.
@@ -444,12 +445,14 @@ pub fn buffer_constants(
 /// one this pass values: the editor oracle's (`primase-oracles/unity/default-textures`, Unity 6000.6.4f1 in a Gamma
 /// colour space project; a player does not hold the engine's default textures). `white` is 1 in every channel, `black`
 /// and `red` have alpha 0, `gray`, `grey`, `linearGray` and `linearGrey` are 127/255 in every channel (alpha too) and
-/// `bump` is (127/255, 127/255, 1, 1). Those are the editor's, not verified for the players' versions
-/// (SkateBIRD 2019.4, Sledding Game 6000.3), and for a Linear colour space (`linear`) only the colours whose channels
-/// are all 0 or 1 (`white`, `black`, `red`) are valued: a grey sampled through an sRGB decode is another number, which
-/// the oracle did not observe.
+/// `bump` is (127/255, 127/255, 1, 1). An empty name (`2D) = "" {}`) or one that is no default is the engine's fallback,
+/// 128/255 in every channel (not `gray`'s 127/255: the oracle's `none` and `notadefault` properties). Those are the
+/// editor's, not verified for the players' versions (SkateBIRD 2019.4, Sledding Game 6000.3), and for a Linear colour
+/// space (`linear`) only the colours whose channels are all 0 or 1 (`white`, `black`, `red`) are valued: a grey sampled
+/// through an sRGB decode is another number, which the oracle did not observe.
 fn default_colour(name: &str, linear: bool) -> Option<[f32; 4]> {
     const GREY: f32 = 127.0 / 255.0;
+    const FALLBACK: f32 = 128.0 / 255.0;
     Some(match name {
         "white" => [1.0; 4],
         "black" => [0.0; 4],
@@ -457,7 +460,7 @@ fn default_colour(name: &str, linear: bool) -> Option<[f32; 4]> {
         _ if linear => return None,
         "gray" | "grey" | "linearGray" | "linearGrey" => [GREY; 4],
         "bump" => [GREY, GREY, 1.0, 1.0],
-        _ => return None,
+        _ => [FALLBACK; 4],
     })
 }
 
@@ -1119,8 +1122,13 @@ fn resolve_texture(
         (false, _) => match defaults.iter().find(|(p, _)| p == name) {
             Some((_, d)) => match default_colour(d, linear) {
                 Some(value) => {
+                    let named = if d.is_empty() {
+                        "empty name, the engine's fallback"
+                    } else {
+                        d
+                    };
                     bump(format!(
-                        "unset texture properties, bound the shader's default ({d})"
+                        "unset texture properties, bound the shader's default ({named})"
                     ));
                     TextureSource::Default {
                         value,
@@ -1498,9 +1506,12 @@ mod tests {
         assert_eq!(default_colour("black", true), Some([0.0; 4]));
         assert_eq!(default_colour("gray", true), None);
         assert_eq!(default_colour("bump", true), None);
-        // a name that is no default, or none
-        assert_eq!(default_colour("", false), None);
-        assert_eq!(default_colour("notadefault", false), None);
+        // an empty name or one that is no default: the engine's fallback, in a gamma project; unobserved in a linear one
+        let fallback = 128.0 / 255.0;
+        assert_eq!(default_colour("", false), Some([fallback; 4]));
+        assert_eq!(default_colour("notadefault", false), Some([fallback; 4]));
+        assert_eq!(default_colour("", true), None);
+        assert_eq!(default_colour("notadefault", true), None);
         // an unset property takes the default, counted by its name
         let mut counts = BTreeMap::new();
         let defaults = vec![("_Other".to_owned(), "black".to_owned())];
