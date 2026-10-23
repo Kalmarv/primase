@@ -42,16 +42,25 @@ fn scene_folders(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The reference validator's verdict: Ok(summary, warnings) or Err(message).
-fn validate(validator: &Path, dir: &Path) -> Result<(String, Vec<String>), String> {
-    let mut cmd = if validator.extension().is_some_and(|e| e == "dll") {
-        let mut c = Command::new("dotnet");
-        c.arg(validator);
-        c
+/// The configured reference validator (`tools.scene_skate`), run through `tools.dotnet` when it is an assembly: its
+/// program, then its arguments; `None` when either is not configured.
+fn validator() -> Option<Vec<PathBuf>> {
+    let v = tool(Tool::SceneSkate)?;
+    if v.extension().is_some_and(|e| e == "dll") {
+        Some(vec![tool(Tool::Dotnet)?, v])
     } else {
-        Command::new(validator)
-    };
-    let out = cmd.arg("validate").arg(dir).output().expect("run the validator");
+        Some(vec![v])
+    }
+}
+
+/// The reference validator's verdict: Ok(summary, warnings) or Err(message).
+fn validate(validator: &[PathBuf], dir: &Path) -> Result<(String, Vec<String>), String> {
+    let out = Command::new(&validator[0])
+        .args(&validator[1..])
+        .arg("validate")
+        .arg(dir)
+        .output()
+        .expect("run the validator");
     let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     let warnings: Vec<String> = text
         .lines()
@@ -262,7 +271,7 @@ impl Gates {
 }
 
 /// One folder through every gate. Returns the gates and whether the output folder may be removed.
-fn check_folder(dir: &Path, out: &Path, validator: Option<&Path>) -> (Gates, bool) {
+fn check_folder(dir: &Path, out: &Path, validator: Option<&[PathBuf]>) -> (Gates, bool) {
     let mut g = Gates::new();
     let item = dir.display().to_string();
     let reference = validator.map(|v| validate(v, dir));
@@ -378,7 +387,7 @@ fn scene_folders_round_trip() {
     let Some(mut folders) = real_scene_folders() else {
         return;
     };
-    let validator = tool(Tool::SceneSkate);
+    let validator = validator();
     let filter = debug("scene.filter").unwrap_or_default();
     let allow_live = debug("allow_live").is_some_and(|v| v == "1");
     let out_root = scratch().join("skate-scene-gate");

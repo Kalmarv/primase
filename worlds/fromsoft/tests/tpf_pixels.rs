@@ -3,7 +3,7 @@ use primase_core::{
     TexFormat,
     gate::{GateReport, Tolerance},
 };
-use primase_testdata::{Game, OracleSet, oracle};
+use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 use std::{
     collections::BTreeMap,
@@ -40,14 +40,20 @@ fn area_pixels() -> Result<()> {
     let Some(csharp) = oracle(OracleSet::Scripts, Game::Sekiro, "dds") else {
         return Ok(());
     };
-    let mut cs = Command::new("dotnet")
+    let Some(dotnet) = tool(Tool::Dotnet) else {
+        return Ok(());
+    };
+    let Some(python) = tool(Tool::PythonPillow) else {
+        return Ok(());
+    };
+    let mut cs = Command::new(dotnet)
         .arg(csharp.join("DdsWorker.dll"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
     let mut csin = cs.stdin.take().ok_or("stdin")?;
     let mut csout = BufReader::new(cs.stdout.take().ok_or("stdout")?);
-    let mut py = Command::new("python")
+    let mut py = Command::new(python)
         .args([
             "-I",
             "-c",

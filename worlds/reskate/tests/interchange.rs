@@ -1187,7 +1187,7 @@ fn invalid_input_fails_with_its_reason() {
             "tables/grind.bin: curve 0 indexes points 1+2 of 2",
         ),
     ];
-    let validator = primase_testdata::tool(primase_testdata::Tool::SceneSkate);
+    let validator = validator();
     let mut differ = Vec::new();
     for (name, m, edit, want) in cases {
         let d = fixture_with(&format!("bad_{}", name.replace(' ', "_")), &m, edit);
@@ -1229,16 +1229,21 @@ fn norm(msg: &str) -> String {
     }
 }
 
-/// The reference validator on a folder: Ok, or its error message.
-fn reference(v: &Path, dir: &Path) -> Result<(), String> {
-    let mut cmd = if v.extension().is_some_and(|e| e == "dll") {
-        let mut c = std::process::Command::new("dotnet");
-        c.arg(v);
-        c
+/// The configured reference validator (`tools.scene_skate`), run through `tools.dotnet` when it is an assembly; `None`
+/// when either is not configured.
+fn validator() -> Option<Vec<std::path::PathBuf>> {
+    let v = primase_testdata::tool(primase_testdata::Tool::SceneSkate)?;
+    if v.extension().is_some_and(|e| e == "dll") {
+        Some(vec![primase_testdata::tool(primase_testdata::Tool::Dotnet)?, v])
     } else {
-        std::process::Command::new(v)
-    };
-    let out = cmd.arg("validate").arg(dir).output().unwrap();
+        Some(vec![v])
+    }
+}
+
+/// The reference validator (its program, then its arguments) on a folder: Ok, or its error message.
+fn reference(v: &[std::path::PathBuf], dir: &Path) -> Result<(), String> {
+    let mut cmd = std::process::Command::new(&v[0]);
+    let out = cmd.args(&v[1..]).arg("validate").arg(dir).output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     if out.status.success() {
         Ok(())
@@ -1249,7 +1254,7 @@ fn reference(v: &Path, dir: &Path) -> Result<(), String> {
 
 #[test]
 fn the_reference_validator_accepts_the_fixture_and_our_output() {
-    let Some(v) = primase_testdata::tool(primase_testdata::Tool::SceneSkate) else {
+    let Some(v) = validator() else {
         return;
     };
     let src = fixture("oracle_src");

@@ -52,6 +52,8 @@ pub enum Tool {
     Oodle9,
     SceneSkate,
     UnityTpk,
+    Dotnet,
+    PythonPillow,
 }
 
 impl Tool {
@@ -68,6 +70,8 @@ impl Tool {
             Tool::Oodle9 => "oodle9",
             Tool::SceneSkate => "scene_skate",
             Tool::UnityTpk => "unity_tpk",
+            Tool::Dotnet => "dotnet",
+            Tool::PythonPillow => "python_pillow",
         }
     }
 }
@@ -261,7 +265,7 @@ pub const TOOLS: &[Entry] = &[
     },
     Entry {
         key: "tools.scene_skate",
-        about: "our own skate-scene validator (`scene-skate.dll`, run with `dotnet`, or its executable)",
+        about: "our own skate-scene validator (`scene-skate.dll`, run through `tools.dotnet`, or its executable)",
         source: "our own C# validator, rebuilt from its last source (commit d78228a): it refuses what its checks refuse, it is not an oracle",
         gate: true,
     },
@@ -269,6 +273,18 @@ pub const TOOLS: &[Entry] = &[
         key: "tools.unity_tpk",
         about: "a type tree package (TPK, uncompressed or LZ4) with the class layouts for the Unity players read",
         source: "input data: class layouts for the player's Unity version (repacked with a script kept with the private oracle tools)",
+        gate: true,
+    },
+    Entry {
+        key: "tools.dotnet",
+        about: "the .NET host (`dotnet`, with the .NET 8 runtime) that runs the C# programs given as assemblies: `scripts.sekiro/dds`'s DdsWorker.dll and a `tools.scene_skate` that is a .dll",
+        source: "third-party: Microsoft's .NET 8 runtime",
+        gate: true,
+    },
+    Entry {
+        key: "tools.python_pillow",
+        about: "a Python 3 interpreter with Pillow 11.0.0, which runs the Pillow oracle worker (toolkit/texcodec/tests/oracles/worker.py)",
+        source: "third-party: Pillow 11.0.0",
         gate: true,
     },
 ];

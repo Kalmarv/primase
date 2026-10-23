@@ -352,8 +352,10 @@ produced by something other than the code it checks.
 | `tools.oodle5` | yes | an Oodle version-5 DLL (`oo2core_5_win64.dll`) | the game's own DLL from the user's install |
 | `tools.oodle6` | yes | an Oodle version-6 DLL (`oo2core_6_win64.dll`) | the game's own DLL from the user's install |
 | `tools.oodle9` | yes | an Oodle version-9 DLL (`oo2core_9_win64.dll`) | the game's own DLL from the user's install |
-| `tools.scene_skate` | yes | our own skate-scene validator (`scene-skate.dll`, run with `dotnet`, or its executable) | our own C# validator, rebuilt from its last source (commit d78228a): it refuses what its checks refuse, it is not an oracle |
+| `tools.scene_skate` | yes | our own skate-scene validator (`scene-skate.dll`, run through `tools.dotnet`, or its executable) | our own C# validator, rebuilt from its last source (commit d78228a): it refuses what its checks refuse, it is not an oracle |
 | `tools.unity_tpk` | yes | a type tree package (TPK, uncompressed or LZ4) with the class layouts for the Unity players read | input data: class layouts for the player's Unity version (repacked with a script kept with the private oracle tools) |
+| `tools.dotnet` | yes | the .NET host (`dotnet`, with the .NET 8 runtime) that runs the C# programs given as assemblies: `scripts.sekiro/dds`'s DdsWorker.dll and a `tools.scene_skate` that is a .dll | third-party: Microsoft's .NET 8 runtime |
+| `tools.python_pillow` | yes | a Python 3 interpreter with Pillow 11.0.0, which runs the Pillow oracle worker (toolkit/texcodec/tests/oracles/worker.py) | third-party: Pillow 11.0.0 |
 | `scratch.root` | - | where real-data tests write their outputs (the OS temporary folder when unset) | - |
 
 #### Oracle sets (`<oracles.root>/<set>/<game>/`)
