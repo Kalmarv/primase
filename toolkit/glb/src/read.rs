@@ -22,6 +22,11 @@
 //! home for them (a mesh, primitive, node, skin or animation, and the default scene, [`Gltf::scene_extras`]) and an
 //! error anywhere else (an accessor, buffer view, sampler...): never dropped without a word. Extensions a document only uses
 //! (`extensionsUsed`, on materials or textures) are the caller's to read from [`Gltf::json`].
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -287,11 +292,11 @@ impl Gltf {
         {
             return Err(invalid(&path, &format!("byteStride {s} outside 4-252")));
         }
-        let end = off
+        let bytes = off
             .checked_add(len)
-            .filter(|&e| e <= bin.len())
+            .and_then(|end| bin.get(off..end))
             .ok_or_else(|| invalid(&path, "runs past the buffer"))?;
-        Ok((&bin[off..end], stride))
+        Ok((bytes, stride))
     }
 
     /// Read mesh `index` into core primitives.
@@ -312,13 +317,17 @@ impl Gltf {
             .enumerate()
             .map(|(i, p)| self.read_primitive(p, &format!("{path}.primitives()[{i}]")))
             .collect::<Result<Vec<_>>>()?;
-        let targets = primitives[0].targets.len();
-        if let Some(i) = primitives.iter().position(|p| p.targets.len() != targets) {
+        let targets = primitives.first().map_or(0, |p| p.targets.len());
+        if let Some((i, p)) = primitives
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p.targets.len() != targets)
+        {
             return Err(invalid(
                 &path,
                 &format!(
                     "primitive {i} has {} morph targets, primitive 0 has {targets}",
-                    primitives[i].targets.len()
+                    p.targets.len()
                 ),
             ));
         }
@@ -520,14 +529,14 @@ impl Gltf {
         match (acc.component, acc.normalized) {
             (FLOAT, false) => acc.floats(),
             (BYTE, true) => Ok(acc
-                .elements::<i8, 3>()
+                .elements::<i8, 3>()?
                 .into_iter()
-                .map(|e| e.map(|c| (f64::from(c) / 127.0).max(-1.0) as f32))
+                .map(|e| e.map(|c| round_f32((f64::from(c) / 127.0).max(-1.0))))
                 .collect()),
             (SHORT, true) => Ok(acc
-                .elements::<i16, 3>()
+                .elements::<i16, 3>()?
                 .into_iter()
-                .map(|e| e.map(|c| (f64::from(c) / 32767.0).max(-1.0) as f32))
+                .map(|e| e.map(|c| round_f32((f64::from(c) / 32767.0).max(-1.0))))
                 .collect()),
             _ => Err(bad()),
         }
@@ -546,27 +555,31 @@ impl Gltf {
         let n = element.components();
         let v: Vec<f32> = match (component, acc.normalized) {
             (ComponentType::F32, false) => {
-                let v: Vec<f32> = acc.scalars::<f32>(n).collect();
+                let v: Vec<f32> = acc.scalars::<f32>(n)?;
                 if let Some(k) = v.iter().position(|x| !x.is_finite()) {
                     return Err(invalid(&acc.path, &format!("component {k} is not finite")));
                 }
                 v
             }
             (ComponentType::U8, true) => acc
-                .scalars::<u8>(n)
-                .map(|c| (f64::from(c) / 255.0) as f32)
+                .scalars::<u8>(n)?
+                .into_iter()
+                .map(|c| round_f32(f64::from(c) / 255.0))
                 .collect(),
             (ComponentType::U16, true) => acc
-                .scalars::<u16>(n)
-                .map(|c| (f64::from(c) / 65535.0) as f32)
+                .scalars::<u16>(n)?
+                .into_iter()
+                .map(|c| round_f32(f64::from(c) / 65535.0))
                 .collect(),
             (ComponentType::I8, true) => acc
-                .scalars::<i8>(n)
-                .map(|c| (f64::from(c) / 127.0).max(-1.0) as f32)
+                .scalars::<i8>(n)?
+                .into_iter()
+                .map(|c| round_f32((f64::from(c) / 127.0).max(-1.0)))
                 .collect(),
             (ComponentType::I16, true) => acc
-                .scalars::<i16>(n)
-                .map(|c| (f64::from(c) / 32767.0).max(-1.0) as f32)
+                .scalars::<i16>(n)?
+                .into_iter()
+                .map(|c| round_f32((f64::from(c) / 32767.0).max(-1.0)))
                 .collect(),
             (c, normalized) => {
                 return Err(invalid(
@@ -583,12 +596,10 @@ impl Gltf {
         let acc = self.accessor(index)?;
         let component = acc.component_type()?;
         let element = acc.element_type();
-        let elem = element.components() * component.size();
-        // the accessor checked that its last element ends inside its view
-        let bytes = (0..acc.count)
-            .flat_map(|k| &acc.bytes[k * acc.stride..k * acc.stride + elem])
-            .copied()
-            .collect();
+        let mut bytes = Vec::new();
+        for e in acc.element_bytes() {
+            bytes.extend_from_slice(e?);
+        }
         Ok(AccessorData {
             component,
             normalized: acc.normalized,
@@ -692,7 +703,7 @@ impl Gltf {
             "name",
         ])?;
         let component = a.u64("componentType")?;
-        let csize = match component {
+        let csize: usize = match component {
             BYTE | UNSIGNED_BYTE => 1,
             SHORT | UNSIGNED_SHORT => 2,
             UNSIGNED_INT | FLOAT => 4,
@@ -706,7 +717,7 @@ impl Gltf {
             Some("MAT4") => "MAT4",
             other => return Err(invalid(&path, &format!("type {other:?}"))),
         };
-        let n = match kind {
+        let n: usize = match kind {
             "SCALAR" => 1,
             "VEC2" => 2,
             "VEC3" => 3,
@@ -715,7 +726,9 @@ impl Gltf {
         };
         let count = a.usize("count")?;
         let offset = a.usize_opt("byteOffset")?.unwrap_or(0);
-        let elem = csize * n;
+        let elem = csize
+            .checked_mul(n)
+            .ok_or_else(|| invalid(&path, "size overflows"))?;
         let normalized = a.bool_opt("normalized")?.unwrap_or(false);
         let (min, max) = (a.f32s_opt("min")?, a.f32s_opt("max")?);
         let sparse = a.get("sparse");
@@ -730,21 +743,21 @@ impl Gltf {
             Some(view) => {
                 let (bytes, declared_stride) = self.view(view).map_err(|e| e.context(&path))?;
                 let stride = declared_stride.unwrap_or(elem);
-                if stride < elem || stride % csize != 0 || offset % csize != 0 {
+                if stride < elem || !stride.is_multiple_of(csize) || !offset.is_multiple_of(csize) {
                     return Err(invalid(&path, "misaligned offset or stride"));
                 }
-                let need = if count == 0 {
-                    0
-                } else {
-                    (count - 1)
+                let need = match count.checked_sub(1) {
+                    None => 0,
+                    Some(last) => last
                         .checked_mul(stride)
                         .and_then(|x| x.checked_add(offset.checked_add(elem)?))
-                        .ok_or_else(|| invalid(&path, "size overflows"))?
+                        .ok_or_else(|| invalid(&path, "size overflows"))?,
                 };
                 if need > bytes.len() {
                     return Err(invalid(&path, "runs past its buffer view"));
                 }
-                Some((&bytes[offset.min(bytes.len())..], stride, declared_stride))
+                // no element (count 0) reads nothing, wherever the offset is
+                Some((bytes.get(offset..).unwrap_or_default(), stride, declared_stride))
             }
         };
         let (bytes, stride, declared_stride) = match (dense, sparse) {
@@ -769,8 +782,8 @@ impl Gltf {
                     .map_err(|_| invalid(&path, &format!("{total} bytes of elements cannot be allocated")))?;
                 match dense {
                     Some((bytes, stride, _)) => {
-                        for k in 0..count {
-                            out.extend_from_slice(&bytes[k * stride..k * stride + elem]);
+                        for e in strided(bytes, stride, count, elem, &path) {
+                            out.extend_from_slice(e?);
                         }
                     }
                     None => out.resize(total, 0),
@@ -788,6 +801,7 @@ impl Gltf {
             kind,
             count,
             bytes,
+            elem,
             stride,
             declared_stride,
             min,
@@ -834,18 +848,16 @@ impl Gltf {
                 return Err(invalid(o.path, "a sparse buffer view must not have a byteStride"));
             }
             let offset = o.usize_opt("byteOffset")?.unwrap_or(0);
-            if offset % size.min(4) != 0 {
+            if !offset.is_multiple_of(size.min(4)) {
                 return Err(invalid(
                     o.path,
                     &format!("byteOffset {offset} is not a multiple of {size}"),
                 ));
             }
-            let end = n
-                .checked_mul(size)
+            n.checked_mul(size)
                 .and_then(|x| x.checked_add(offset))
-                .filter(|&e| e <= bytes.len())
-                .ok_or_else(|| invalid(o.path, "runs past its buffer view"))?;
-            Ok(&bytes[offset..end])
+                .and_then(|end| bytes.get(offset..end))
+                .ok_or_else(|| invalid(o.path, "runs past its buffer view"))
         };
         let isize = match indices.u64("componentType")? {
             UNSIGNED_BYTE => 1,
@@ -855,20 +867,21 @@ impl Gltf {
         };
         let idx = view(&indices, isize)?;
         let vals = view(&values, elem)?;
-        if values.usize_opt("byteOffset")?.unwrap_or(0) % csize != 0 {
+        if !values.usize_opt("byteOffset")?.unwrap_or(0).is_multiple_of(csize) {
             return Err(invalid(
                 &vpath,
                 &format!("byteOffset is not a multiple of {csize}"),
             ));
         }
         let mut previous = None;
-        for k in 0..n {
-            let at = &idx[k * isize..(k + 1) * isize];
-            let i = match isize {
-                1 => usize::from(at[0]),
-                2 => usize::from(u16::from_le_bytes([at[0], at[1]])),
-                _ => usize::try_from(u32::from_le_bytes([at[0], at[1], at[2], at[3]]))
+        // n indices of isize bytes and n values of elem bytes, the views' lengths exactly
+        for (k, (at, value)) in idx.chunks_exact(isize).zip(vals.chunks_exact(elem)).enumerate() {
+            let i = match *at {
+                [a] => usize::from(a),
+                [a, b] => usize::from(u16::from_le_bytes([a, b])),
+                [a, b, c, d] => usize::try_from(u32::from_le_bytes([a, b, c, d]))
                     .map_err(|_| invalid(&ipath, "index too large"))?,
+                _ => return Err(invalid(&ipath, &format!("index {k} is not {isize} bytes"))),
             };
             if i >= count {
                 return Err(invalid(&ipath, &format!("index {k} is {i}, {count} elements")));
@@ -877,7 +890,12 @@ impl Gltf {
                 return Err(invalid(&ipath, &format!("index {k} ({i}) does not increase")));
             }
             previous = Some(i);
-            out[i * elem..(i + 1) * elem].copy_from_slice(&vals[k * elem..(k + 1) * elem]);
+            // i < count, and `out` is count elements
+            let slot = i
+                .checked_mul(elem)
+                .and_then(|start| out.get_mut(start..start.checked_add(elem)?))
+                .ok_or_else(|| invalid(&ipath, &format!("index {k} ({i}) is past the elements")))?;
+            slot.copy_from_slice(value);
         }
         Ok(())
     }
@@ -934,52 +952,80 @@ struct Accessor<'a> {
     /// From the accessor's first element to the end of its view; or, sparse or without a view, its elements
     /// materialised tightly packed.
     bytes: Cow<'a, [u8]>,
+    /// An element's size in bytes, at most `stride`.
+    elem: usize,
     stride: usize,
     declared_stride: Option<usize>,
     min: Option<Vec<f32>>,
     max: Option<Vec<f32>>,
 }
 
-/// A little-endian scalar the accessors hold.
+/// A little-endian scalar the accessors hold: read from the start of `b`, `None` when `b` is shorter.
 trait Scalar: Copy + Default {
     const SIZE: usize;
-    fn from_le(b: &[u8]) -> Self;
+    fn from_le(b: &[u8]) -> Option<Self>;
 }
 impl Scalar for u8 {
     const SIZE: usize = 1;
-    fn from_le(b: &[u8]) -> Self {
-        b[0]
+    fn from_le(b: &[u8]) -> Option<Self> {
+        b.first().copied()
     }
 }
 impl Scalar for i8 {
     const SIZE: usize = 1;
-    fn from_le(b: &[u8]) -> Self {
-        i8::from_le_bytes([b[0]])
+    fn from_le(b: &[u8]) -> Option<Self> {
+        b.first_chunk().map(|&a| i8::from_le_bytes(a))
     }
 }
 impl Scalar for i16 {
     const SIZE: usize = 2;
-    fn from_le(b: &[u8]) -> Self {
-        i16::from_le_bytes([b[0], b[1]])
+    fn from_le(b: &[u8]) -> Option<Self> {
+        b.first_chunk().map(|&a| i16::from_le_bytes(a))
     }
 }
 impl Scalar for u16 {
     const SIZE: usize = 2;
-    fn from_le(b: &[u8]) -> Self {
-        u16::from_le_bytes([b[0], b[1]])
+    fn from_le(b: &[u8]) -> Option<Self> {
+        b.first_chunk().map(|&a| u16::from_le_bytes(a))
     }
 }
 impl Scalar for u32 {
     const SIZE: usize = 4;
-    fn from_le(b: &[u8]) -> Self {
-        u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+    fn from_le(b: &[u8]) -> Option<Self> {
+        b.first_chunk().map(|&a| u32::from_le_bytes(a))
     }
 }
 impl Scalar for f32 {
     const SIZE: usize = 4;
-    fn from_le(b: &[u8]) -> Self {
-        f32::from_le_bytes([b[0], b[1], b[2], b[3]])
+    fn from_le(b: &[u8]) -> Option<Self> {
+        b.first_chunk().map(|&a| f32::from_le_bytes(a))
     }
+}
+
+/// `count` elements of `size` bytes, `stride` apart from the start of `bytes` (`size` at most `stride`, which is not
+/// 0): each element's bytes, or an error naming `path` for one that does not end inside `bytes`.
+fn strided<'a>(
+    bytes: &'a [u8],
+    stride: usize,
+    count: usize,
+    size: usize,
+    path: &'a str,
+) -> impl Iterator<Item = Result<&'a [u8]>> + 'a {
+    let mut at = bytes.chunks(stride);
+    (0..count).map(move |k| {
+        at.next()
+            .and_then(|c| c.get(..size))
+            .ok_or_else(|| invalid(path, &format!("element {k} runs past its bytes")))
+    })
+}
+
+/// `v` rounded to the nearest f32: the one rounding of a value dequantized in f64 (glTF 3.11).
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "rounding to f32 is the stated conversion"
+)]
+fn round_f32(v: f64) -> f32 {
+    v as f32
 }
 
 impl Accessor<'_> {
@@ -1010,24 +1056,44 @@ impl Accessor<'_> {
         }
     }
 
+    /// Each element's bytes in order (the accessor checked that the last ends inside its bytes).
+    fn element_bytes(&self) -> impl Iterator<Item = Result<&[u8]>> {
+        strided(&self.bytes, self.stride, self.count, self.elem, &self.path)
+    }
+
+    /// An element holds fewer scalars than its type says: `T` is not the component type (callers check it).
+    fn short(&self) -> Error {
+        invalid(&self.path, "an element holds fewer components than its type")
+    }
+
     /// Every component of every element in order, `n` per element; `T` must match the component type.
-    fn scalars<T: Scalar>(&self, n: usize) -> impl Iterator<Item = T> {
-        (0..self.count)
-            .flat_map(move |k| (0..n).map(move |c| T::from_le(&self.bytes[k * self.stride + c * T::SIZE..])))
+    fn scalars<T: Scalar>(&self, n: usize) -> Result<Vec<T>> {
+        let mut out = Vec::with_capacity(self.count.saturating_mul(n));
+        for e in self.element_bytes() {
+            let mut components = e?.chunks_exact(T::SIZE).map(T::from_le);
+            for _ in 0..n {
+                out.push(components.next().flatten().ok_or_else(|| self.short())?);
+            }
+        }
+        Ok(out)
     }
 
     /// Elements of `N` scalars of `T`; `T` must match the component type (callers check it).
-    fn elements<T: Scalar, const N: usize>(&self) -> Vec<[T; N]> {
-        (0..self.count)
-            .map(|k| {
-                let at = k * self.stride;
-                std::array::from_fn(|c| T::from_le(&self.bytes[at + c * T::SIZE..]))
+    fn elements<T: Scalar, const N: usize>(&self) -> Result<Vec<[T; N]>> {
+        self.element_bytes()
+            .map(|e| {
+                let mut components = e?.chunks_exact(T::SIZE).map(T::from_le);
+                let mut v = [T::default(); N];
+                for c in &mut v {
+                    *c = components.next().flatten().ok_or_else(|| self.short())?;
+                }
+                Ok(v)
             })
             .collect()
     }
 
     fn floats<const N: usize>(&self) -> Result<Vec<[f32; N]>> {
-        let v = self.elements::<f32, N>();
+        let v = self.elements::<f32, N>()?;
         if let Some(k) = v.iter().position(|e| e.iter().any(|x| !x.is_finite())) {
             return Err(invalid(&self.path, &format!("element {k} is not finite")));
         }
@@ -1043,21 +1109,21 @@ impl Accessor<'_> {
         if self.component != expect {
             return Err(invalid(&self.path, &format!("componentType {}", self.component)));
         }
-        Ok(self.elements::<T, N>())
+        self.elements::<T, N>()
     }
 
     /// Normalized unsigned integers dequantized to f32 (`c / max`, glTF §3.11), rounded once from f64.
     fn unorm_as_f32<const N: usize>(&self) -> Result<Vec<[f32; N]>> {
         Ok(match self.component {
             UNSIGNED_BYTE => self
-                .elements::<u8, N>()
+                .elements::<u8, N>()?
                 .into_iter()
-                .map(|e| e.map(|c| (f64::from(c) / 255.0) as f32))
+                .map(|e| e.map(|c| round_f32(f64::from(c) / 255.0)))
                 .collect(),
             _ => self
-                .elements::<u16, N>()
+                .elements::<u16, N>()?
                 .into_iter()
-                .map(|e| e.map(|c| (f64::from(c) / 65535.0) as f32))
+                .map(|e| e.map(|c| round_f32(f64::from(c) / 65535.0)))
                 .collect(),
         })
     }
@@ -1084,12 +1150,15 @@ impl Accessor<'_> {
 /// Component-wise bounds of points; `None` for none.
 pub fn bounds(p: &[[f32; 3]]) -> Option<([f32; 3], [f32; 3])> {
     let first = *p.first()?;
-    Some(p.iter().fold((first, first), |(lo, hi), v| {
-        (
-            std::array::from_fn(|i| lo[i].min(v[i])),
-            std::array::from_fn(|i| hi[i].max(v[i])),
-        )
-    }))
+    Some(
+        p.iter()
+            .fold((first, first), |([l0, l1, l2], [h0, h1, h2]), &[x, y, z]| {
+                (
+                    [l0.min(x), l1.min(y), l2.min(z)],
+                    [h0.max(x), h1.max(y), h2.max(z)],
+                )
+            }),
+    )
 }
 
 impl Error {

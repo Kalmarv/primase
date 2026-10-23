@@ -39,3 +39,7 @@ reason = "the forge reader reads untrusted archive headers and tables"
 [[parse_crate]]
 path = "toolkit/dxcontainer"
 reason = "the DXBC container reader reads the part directory of untrusted shader containers"
+
+[[parse_crate]]
+path = "toolkit/glb"
+reason = "the GLB reader reads untrusted containers, buffer views and accessors"

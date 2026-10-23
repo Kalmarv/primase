@@ -34,14 +34,8 @@ pub fn mesh_file_box(base_dir: &Path, file: &MeshFile) -> Result<Option<[[f64; 3
             detail: detail.into(),
         })
     };
-    if &head[..4] != b"glTF" {
-        return Err(glb(0, "not a GLB"));
-    }
-    if &head[16..20] != b"JSON" {
-        return Err(glb(16, "the first chunk is not JSON"));
-    }
-    let json_len = u64::from(u32::from_le_bytes([head[12], head[13], head[14], head[15]]));
-    if json_len > len.saturating_sub(20) {
+    let json_len = crate::container::json_chunk_length(&head).map_err(in_file)?;
+    if u64::from(json_len) > len.saturating_sub(20) {
         return Err(glb(12, "the JSON chunk runs past the end of the file"));
     }
     let mut json = vec![0u8; json_len as usize];
