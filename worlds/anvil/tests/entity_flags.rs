@@ -10,11 +10,11 @@ use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::entity::{
     CollisionFilter, ComponentBody, ENTITY, ENTITY_GROUP, Instance, StoredEntity, StoredEntityGroup, query,
 };
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 #[test]
 fn rigid_body_filters_and_entity_flags_count_as_the_registry_census() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let forges = [

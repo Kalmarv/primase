@@ -8,7 +8,7 @@ use primase_anvil::read::floor::{FLOOR_HEIGHT_DATA, StoredFloorHeight};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Instance, Mesh, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 /// The FloorHeightData of the forge at `path`, as stored.
 fn floor(path: &std::path::Path) -> StoredFloorHeight {
@@ -31,7 +31,7 @@ fn word(g: &AnvilFloorHeight, (c, r): (u32, u32), (ic, ir): (u32, u32)) -> f64 {
 
 #[test]
 fn usnat_grid_reads_and_its_block_borders_are_continuous() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let empty = floor(&dir.join("DataPC_MAD_WhiteRoom.forge"));
@@ -66,7 +66,7 @@ fn usnat_grid_reads_and_its_block_borders_are_continuous() {
 
 #[test]
 fn a_square_of_ground_lowers() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let g = floor(&dir.join("DataPC_MAD_USNAT.forge")).component(SourceFrame::WORLD);

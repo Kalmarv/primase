@@ -4,17 +4,17 @@
 //! 8,040 distinct pixel and 5,750 distinct vertex programs. All 13,790 programs were disassembled by Microsoft's
 //! `D3DDisassemble` (d3dcompiler_47): 8,040 `ps_5_0` and 5,750 `vs_5_0`, the stage each was kept under.
 //!
-//! The game's shader pack (`ShaderDataDX11.bin`, the `PRIMASE_DXBC_PACK_DISASSEMBLY` folder) is another population:
-//! of these 13,790 programs one is byte-identical to a container in it.
+//! The game's shader pack (`ShaderDataDX11.bin`, the `oracles.d3d-disassembler.riders/shader-pack` folder) is another
+//! population: of these 13,790 programs one is byte-identical to a container in it.
 use std::collections::BTreeSet;
 
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::template::{self, MATERIAL_TEMPLATE, Stage};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 #[test]
 fn both_stages_are_kept() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut records = [0usize; 2];

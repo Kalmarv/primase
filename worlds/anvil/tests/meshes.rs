@@ -14,7 +14,7 @@ use primase_anvil::read::shapes::MAX_RECORD;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Instance, Mesh, Semantic, Stream, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install_file};
 
 /// The entry's buffers as read in the diagnostic frame (the stored numbers unconverted, not a claim that they are
 /// metres): the world, the prototype's buffers.
@@ -82,7 +82,7 @@ fn facing(m: &AnvilMesh) -> (usize, usize) {
 
 #[test]
 fn black_box_and_reversed_sphere_read_and_lower() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_WhiteRoom.forge") else {
         return;
     };
     for (entry, vertices, triangles) in [(161, 56, 46), (318, 559, 960)] {
@@ -149,7 +149,7 @@ fn black_box_and_reversed_sphere_read_and_lower() {
 
 #[test]
 fn stand_reads_its_two_ranges() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_WhiteRoom_patch_01.forge") else {
         return;
     };
     let (mut w, m) = read(&path, 2);
@@ -196,7 +196,7 @@ fn ranges_tile(m: &AnvilMesh) {
 
 #[test]
 fn prada_barrier_reads_three_ranges() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT_PATCH") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_USNAT_patch_01.forge") else {
         return;
     };
     let (_, m) = read(&path, 136_194);
@@ -216,7 +216,7 @@ fn prada_barrier_reads_three_ranges() {
 /// record's base (the bowls' middle ranges were drawn across the whole mesh).
 #[test]
 fn bowls_read_every_range() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_USNAT.forge") else {
         return;
     };
     let mut w = World::new();
@@ -313,21 +313,26 @@ fn stored(path: &Path, entry: usize) -> StoredMesh {
 /// numbers per mesh, evidence for the position decode's scale and sign; it says nothing of any one vertex between them.
 #[test]
 fn decoded_extrema_meet_the_stored_bounds() {
+    let base = || install_file(Game::Riders, "DataPC_MAD_WhiteRoom.forge");
+    let patch = || install_file(Game::Riders, "DataPC_MAD_WhiteRoom_patch_01.forge");
+    let usnat = || install_file(Game::Riders, "DataPC_MAD_USNAT.forge");
+    let usnat_patch = || install_file(Game::Riders, "DataPC_MAD_USNAT_patch_01.forge");
     let fixtures = [
-        ("PRIMASE_ANVIL_FORGE_BASE", 161),
-        ("PRIMASE_ANVIL_FORGE_BASE", 318),
-        ("PRIMASE_ANVIL_FORGE", 2),
-        ("PRIMASE_ANVIL_FORGE_USNAT_PATCH", 136_194),
-        ("PRIMASE_ANVIL_FORGE_USNAT", 652_571),
-        ("PRIMASE_ANVIL_FORGE_USNAT", 644_520),
-        ("PRIMASE_ANVIL_FORGE_USNAT", 313_892),
-        ("PRIMASE_ANVIL_FORGE_USNAT", 651_945),
-        ("PRIMASE_ANVIL_FORGE_USNAT", 651_944),
+        (base(), 161),
+        (base(), 318),
+        (patch(), 2),
+        (usnat_patch(), 136_194),
+        (usnat(), 652_571),
+        (usnat(), 644_520),
+        (usnat(), 313_892),
+        (usnat(), 651_945),
+        (usnat(), 651_944),
     ];
-    for (input, entry) in fixtures {
-        let Some(path) = real_data(input) else {
+    for (forge, entry) in fixtures {
+        let Some(path) = forge else {
             continue;
         };
+        let input = path.file_name().unwrap().to_string_lossy();
         let mesh = stored(&path, entry);
         let positions: Vec<[f32; 3]> = mesh.vertices.positions().collect();
         let found = extrema(&positions);
@@ -351,7 +356,7 @@ fn decoded_extrema_meet_the_stored_bounds() {
 /// low 16 bits.
 #[test]
 fn inline_meshes_read_their_u32_indices() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_USNAT.forge") else {
         return;
     };
     let mut w = World::new();
@@ -376,7 +381,7 @@ fn inline_meshes_read_their_u32_indices() {
 /// record's type (read from the record, not the name) is Material's.
 #[test]
 fn the_bowls_materials_resolve_to_materials() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_USNAT.forge") else {
         return;
     };
     let mut w = World::new();

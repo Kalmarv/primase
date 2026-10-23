@@ -12,7 +12,7 @@ use primase_anvil::read::shape::{BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE,
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Instance, Lods, Mesh, Name, Transform, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 /// The cube root of a transform's determinant: its uniform scale where it is one.
 fn scale(t: &Transform) -> f64 {
@@ -21,7 +21,7 @@ fn scale(t: &Transform) -> f64 {
 
 #[test]
 fn fixtures_place_and_lower() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let order = [
@@ -158,7 +158,7 @@ fn named(archive: &Archive, forge: usize, name: &str) -> At {
 
 #[test]
 fn groups_place_their_own_visuals_and_report_members() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     // a USNAT group of instanced signs: Sign_NoEntry x 2 and Sign_Parkingtime_B x 1, no members (docs/world.md §7)
@@ -203,7 +203,7 @@ fn apply(t: &Transform, p: [f32; 3]) -> [f64; 3] {
 /// reference list the Riders Republic notes find stored with a box that ignores its children's matrices.
 #[test]
 fn collision_lies_within_its_owners_bounds() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let order = [
@@ -312,7 +312,7 @@ fn collision_lies_within_its_owners_bounds() {
 /// matrix, beside the dish's Visual.
 #[test]
 fn a_static_decal_is_placed_with_its_owner() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let order = ["DataPC_MAD_USNAT.forge", "DataPC.forge"];
@@ -352,10 +352,10 @@ fn a_static_decal_is_placed_with_its_owner() {
 /// instance places from level 2 on (its `_LOD2`, 204 triangles), the two filled levels counted unplaced; under
 /// [`InstancedLevels::Every`] from level 0 (its `_LOD0`, 1,288 triangles), the others its forms. The meshes' ClassIDs
 /// are the forge index's for `_LOD0` and `_LOD2`, and their triangle counts RRAssetStudio v3's (the
-/// PRIMASE_ANVIL_RRAS_MESHES summary rows of those ClassIDs).
+/// `oracles.rrassetstudio.riders/meshes` summary rows of those ClassIDs).
 #[test]
 fn instances_place_the_levels_dependencies_fill_under_every() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     const SELECTOR: u64 = 0x1E2_1A3D_63DF;

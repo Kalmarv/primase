@@ -4,7 +4,7 @@ use std::fs::File;
 
 use primase_anvil::read::data::{BLOCK_MAGIC, Error, Resource, read_entry};
 use primase_anvil::read::forge::Forge;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install_file};
 
 const BOUND: usize = 1 << 20;
 
@@ -206,7 +206,7 @@ fn a_block_of_chunks_decodes_in_order() {
 fn two_real_mesh_resources_decode() {
     let cases = [
         (
-            "PRIMASE_ANVIL_FORGE_BASE",
+            install_file(Game::Riders, "DataPC_MAD_WhiteRoom.forge"),
             161usize,
             (2_512_403i64, 1_280i32),
             (2_058u32, 1_202u32, 0x9633_63DDu32),
@@ -215,7 +215,7 @@ fn two_real_mesh_resources_decode() {
             2_011usize,
         ),
         (
-            "PRIMASE_ANVIL_FORGE",
+            install_file(Game::Riders, "DataPC_MAD_WhiteRoom_patch_01.forge"),
             2,
             (139_773, 14_047),
             (33_462, 13_969, 0x6026_4258),
@@ -224,10 +224,11 @@ fn two_real_mesh_resources_decode() {
             33_422,
         ),
     ];
-    for (var, k, (offset, size), (decoded, stored, checksum), name, class_id, payload) in cases {
-        let Some(path) = real_data(var) else {
+    for (forge, k, (offset, size), (decoded, stored, checksum), name, class_id, payload) in cases {
+        let Some(path) = forge else {
             continue;
         };
+        let var = path.file_name().unwrap().to_string_lossy();
         let f = Forge::open(&path).unwrap();
         assert_eq!(
             (f.index[k].offset, f.index[k].size),
@@ -265,7 +266,7 @@ fn two_real_mesh_resources_decode() {
 /// chunk's sizes and checksum, the total, and the resource's type and name (its name record's).
 #[test]
 fn a_real_three_chunk_mip_decodes() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_WhiteRoom.forge") else {
         return;
     };
     let f = Forge::open(&path).unwrap();
@@ -300,7 +301,7 @@ fn a_real_three_chunk_mip_decodes() {
 /// Material's or TextureSet's field layout.
 #[test]
 fn class_ids_are_index_ids_and_resolve() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_WhiteRoom.forge") else {
         return;
     };
     let f = Forge::open(&path).unwrap();

@@ -6,11 +6,11 @@ use primase_anvil::read::data::{Resource, read_entry};
 use primase_anvil::read::forge::Forge;
 use primase_anvil::read::mip::{COMPILED_MIP, StoredMip};
 use primase_anvil::read::shapes::MAX_RECORD;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install_file};
 
 #[test]
 fn four_mips_read_their_envelopes() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_WhiteRoom.forge") else {
         return;
     };
     let forge = Forge::open(&path).expect("forge");

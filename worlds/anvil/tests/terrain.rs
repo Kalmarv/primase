@@ -15,11 +15,11 @@ use primase_anvil::read::tnl::TERRAIN_NODE_LAYER;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{ColorSpace, Mesh, Transform, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 #[test]
 fn the_campus_ground_reads_and_lowers() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut archive = Archive::open(&[dir.join("DataPC_MAD_USNAT.forge")]).expect("archive");
@@ -147,7 +147,7 @@ fn ground_at(t: &AnvilTerrain, x: f64, y: f64) -> Option<f64> {
 /// (+7.1 m and up) is the notes' event objects standing 8 m above the plaza.
 #[test]
 fn the_campus_placements_stand_on_the_ground() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let order = [

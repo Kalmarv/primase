@@ -12,12 +12,12 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{PbrMaterial, UvTransform};
 use primase_core::{Instance, Mesh, NormalGreen, Primitive, Semantic, Stream, Topology, Transform, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 use std::collections::BTreeMap;
 
 #[test]
 fn outskirt_maps_each_placement_by_its_world_position() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let order = [

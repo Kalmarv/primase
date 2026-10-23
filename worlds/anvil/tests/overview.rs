@@ -1,4 +1,4 @@
-//! The grid overview ([`primase_anvil::read::overview`]) on Riders Republic's forges (`PRIMASE_ANVIL_DIR`): every
+//! The grid overview ([`primase_anvil::read::overview`]) on Riders Republic's forges (`installs.riders`): every
 //! grid's layout and cells from the tables, the block counts as the notes and the reader's own listings give them.
 use primase_anvil::read::convert::{
     AnvilOptions, AnvilReader, CellSelection, Edition, ForgeFile, GridSelection,
@@ -6,7 +6,7 @@ use primase_anvil::read::convert::{
 use primase_anvil::read::overview::{Counts, grids_of};
 use primase_anvil::read::placements::{InstancedCollision, InstancedLevels};
 use primase_core::frame::SourceFrame;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 fn forges(dir: &std::path::Path, files: [(&str, Edition); 2]) -> Vec<ForgeFile> {
     files
@@ -30,7 +30,7 @@ fn usnat(dir: &std::path::Path) -> Vec<ForgeFile> {
 
 #[test]
 fn white_room_grids_have_the_notes_cells_and_counts() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let forges = forges(
@@ -80,7 +80,7 @@ fn white_room_grids_have_the_notes_cells_and_counts() {
 
 #[test]
 fn usnat_grids_agree_with_the_readers_listing() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let forges = usnat(&dir);

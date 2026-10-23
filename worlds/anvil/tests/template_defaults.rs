@@ -11,11 +11,11 @@ use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::template::{
     self, BindingKind, MATERIAL_TEMPLATE, OperatorDefault, texture_parameter,
 };
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 #[test]
 fn every_texture_binding_has_its_parameter() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let (mut templates, mut bindings, mut defaults) = (0u64, 0u64, 0u64);
@@ -134,7 +134,7 @@ fn searched(body: &[u8], b: &template::Binding) -> Option<usize> {
 /// TextureSelector by the link where the notes' search finds it; the registry's worked examples (DataPC bodies).
 #[test]
 fn every_binding_links_its_operator() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut classes: std::collections::BTreeMap<(u32, u32), u64> = Default::default();

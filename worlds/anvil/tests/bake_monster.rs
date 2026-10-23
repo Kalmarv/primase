@@ -15,7 +15,7 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 const SIZE: u32 = 64;
 
@@ -73,7 +73,7 @@ fn tiling(m: &AnvilMaterial, at: u32) -> [f64; 4] {
 
 #[test]
 fn graffiti_monster_bakes_as_the_notes_formulas() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let order = [

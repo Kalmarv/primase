@@ -7,7 +7,7 @@ use primase_anvil::read::forge::Forge;
 use primase_anvil::read::mesh_shape::{
     COUNTS, EDGE_FACES, Error, FACE_EDGES, FACES, MESH_SHAPE, MeshShape, NO_FACE, POSITIONS,
 };
-use primase_testdata::real_data;
+use primase_testdata::{Game, install_file};
 
 /// A body: the prefix (a u32 holding its first four bytes, a byte, run length), the sections (type, marker, payload; size = 8 + payload), a tail.
 fn body(version: u32, flag: u8, run: Option<u32>, sections: &[(u16, u16, &[u8])], tail: &[u8]) -> Vec<u8> {
@@ -112,7 +112,7 @@ fn what_is_not_established_is_refused() {
 /// section types in the same order, sizes as hand-checked, the tails' lengths.
 #[test]
 fn two_real_mesh_shapes_read_as_their_sections() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_USNAT.forge") else {
         return;
     };
     let f = Forge::open(&path).unwrap();
@@ -236,7 +236,7 @@ fn inconsistent_geometry_is_refused() {
 /// read-only decode, games/riders-republic docs/recon/collision-geometry.md, 39c645b).
 #[test]
 fn two_real_shapes_read_their_geometry() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_USNAT.forge") else {
         return;
     };
     let f = Forge::open(&path).unwrap();

@@ -5,7 +5,7 @@ use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::grid::{
     self, Cell, GRID_CELL_DATA_BLOCK, GRID_PARTITION, StoredGridCellDataBlock, StoredGridPartition, WORLD,
 };
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 /// The first entry of type `kind` in the archive's forge `forge`.
 fn first(archive: &Archive, forge: usize, kind: u32) -> At {
@@ -19,7 +19,7 @@ fn first(archive: &Archive, forge: usize, kind: u32) -> At {
 
 #[test]
 fn white_room_world_partition_and_blocks() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut archive = Archive::open(&[
@@ -80,7 +80,7 @@ fn white_room_world_partition_and_blocks() {
 
 #[test]
 fn usnat_layouts_and_first_cell() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut archive = Archive::open(&[dir.join("DataPC_MAD_USNAT.forge")]).expect("archive");

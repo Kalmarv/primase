@@ -1,4 +1,4 @@
-//! The Anvil section reader ([`AnvilReader`]) on Riders Republic's forges (`PRIMASE_ANVIL_DIR`): the cells a rectangle
+//! The Anvil section reader ([`AnvilReader`]) on Riders Republic's forges (`installs.riders`): the cells a rectangle
 //! or a list selects, the objects they list (each cell's `GridCellDataBlock` count, as hand-counted in the notes:
 //! docs/placement.md §5 for WhiteRoom, docs/skate-plan.md §0 for the CITYSCHOOL campus), the marks of where each was
 //! listed, the reader's namespaces and the load step. `select-anvil-listed` is tested on a world laid out by hand.
@@ -16,7 +16,7 @@ use primase_core::convert::{Reader, check_emits};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Entity, Instance, Name, Transform, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 fn whiteroom(dir: &std::path::Path) -> AnvilOptions {
     AnvilOptions {
@@ -53,7 +53,7 @@ fn report<'a>(r: &'a [(String, String)], label: &str) -> &'a str {
 /// mark's owner is an id the listing reached and the world holds only the reader's namespaces.
 #[test]
 fn a_numbered_selection_reads_the_cells_the_notes_count() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut reader = AnvilReader::open(&whiteroom(&dir)).unwrap();
@@ -105,7 +105,7 @@ fn a_numbered_selection_reads_the_cells_the_notes_count() {
 /// A reader with no forge, no grid or no World is refused by name.
 #[test]
 fn a_selection_that_cannot_be_read_is_refused() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut o = whiteroom(&dir);
@@ -142,7 +142,7 @@ fn a_selection_that_cannot_be_read_is_refused() {
 /// terrain under the square is read. The cityschool read as a whole is slow, so one test covers it.
 #[test]
 fn a_rectangle_selects_its_cells_at_the_levels_stated() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let rect = [-3584.0, 1152.0, -3456.0, 1280.0];

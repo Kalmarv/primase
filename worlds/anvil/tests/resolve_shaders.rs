@@ -13,7 +13,7 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::ShaderBinding;
 use primase_core::{Component, Entity, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 const PER_TEMPLATE: usize = 4;
 
@@ -26,7 +26,7 @@ fn options(layout: &str) -> Options {
 
 #[test]
 fn a_sample_of_every_template_is_bound_or_left_with_a_reason() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let order = [

@@ -9,7 +9,7 @@ use primase_anvil::read::mip::{COMPILED_MIP, StoredMip};
 use primase_anvil::read::shapes::MAX_RECORD;
 use primase_anvil::read::texture::{self, StoredTextureMap, TEXTURE_MAP};
 use primase_core::TexFormat;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install, install_file};
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 use sha2::{Digest, Sha256};
 
@@ -45,7 +45,7 @@ const LEVELS_218: [&str; 9] = [
 
 #[test]
 fn texture_maps_read_their_levels_and_decode() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_WhiteRoom.forge") else {
         return;
     };
     let forge = Forge::open(&path).expect("forge");
@@ -126,7 +126,7 @@ fn texture_maps_read_their_levels_and_decode() {
 /// 7: 487,547 of 3,145,728 RGB, red and green only; Pillow's hash equal to RRAssetStudio's in each).
 #[test]
 fn agreed_format_codes_decode_as_a_third_party_decoder_does() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     // forge, entry, code, format, width, height, external levels, top level's SHA-256, RGBA8 decode's SHA-256

@@ -15,7 +15,7 @@ use primase_core::frame::SourceFrame;
 use primase_core::layered::LayeredMaterial;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Name, NormalGreen, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 const ORDER: [&str; 4] = [
     "DataPC_MAD_USNAT_patch_01.forge",
@@ -35,7 +35,7 @@ const AREA_52: [&str; 3] = [
 /// ([`template::custom_texture`]), with its template's name and forge.
 #[test]
 fn all_36_operators_decode_and_waterfalls_selects_slot_3() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let class = SHADER_CUSTOM_TEXTURE_OPERATOR.to_le_bytes();
@@ -121,7 +121,7 @@ fn material(archive: &mut Archive, name: &str) -> u64 {
 /// stated `unset=white` the blend lowers, the masks counted.
 #[test]
 fn the_area_52_tex2_blends_lower_with_their_unset_masks_white() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut archive = Archive::open(&ORDER.map(|f| dir.join(f))).expect("archive");
@@ -189,7 +189,7 @@ fn the_area_52_tex2_blends_lower_with_their_unset_masks_white() {
 /// HeightMap; Grass_AO's t76 names channel 0, slot 1, the cactus Material's NormalMap.
 #[test]
 fn custom_operator_bindings_name_the_set_slot_their_materials_texture_comes_from() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut archive = Archive::open(&ORDER.map(|f| dir.join(f))).expect("archive");

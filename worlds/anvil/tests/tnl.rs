@@ -8,7 +8,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::tnl::{StoredNodeLayer, StoredTnlChunk, TERRAIN_NODE_LAYER, node};
 use primase_anvil::read::tnl_code::{SIDE, heights, hilbert, raster, tile};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 /// A strip's digest: the samples at x in `xs` and y in `ys`.
 fn strip<T: Hash + Copy>(samples: &[T], xs: std::ops::Range<usize>, ys: std::ops::Range<usize>) -> u64 {
@@ -34,7 +34,7 @@ fn strips<T: Hash + Copy>(samples: &[T]) -> [u64; 4] {
 #[test]
 #[ignore = "decodes every terrain node of the game; run by hand"]
 fn every_terrain_node_decodes_and_agrees() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut archive = Archive::open(&[dir.join("DataPC_MAD_USNAT.forge")]).expect("archive");

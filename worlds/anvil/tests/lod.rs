@@ -9,11 +9,11 @@ use primase_anvil::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use primase_anvil::read::mesh::MESH;
 use primase_anvil::read::reference::Reference;
 use primase_anvil::read::shapes::MAX_RECORD;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install_file};
 
 #[test]
 fn lod_selectors_read_their_levels_and_dependencies() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_WhiteRoom.forge") else {
         return;
     };
     let forge = Forge::open(&path).expect("forge");

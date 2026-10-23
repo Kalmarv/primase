@@ -13,7 +13,7 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 const SIZE: u32 = 64;
 
@@ -171,7 +171,7 @@ fn lerp3(a: [f64; 4], b: [f64; 4], t: f64) -> [f64; 3] {
 
 #[test]
 fn hero_ice_bakes_as_the_notes_formulas() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut archive = Archive::open(&ORDER.map(|f| dir.join(f))).expect("archive");
@@ -244,7 +244,7 @@ fn hero_ice_bakes_as_the_notes_formulas() {
 
 #[test]
 fn ice_brick_bakes_as_the_notes_formulas() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut archive = Archive::open(&ORDER.map(|f| dir.join(f))).expect("archive");

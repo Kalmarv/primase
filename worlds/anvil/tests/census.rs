@@ -2,19 +2,19 @@
 //! type is one the readers read, decoded and read, and every refusal counted by its reason with examples. A count, not
 //! an oracle: it says what the readers accept and refuse across the whole game, not that what they accept is right.
 //!
-//! Run by hand (about 24 GB read for Riders Republic): `PRIMASE_ANVIL_DIR=<folder> cargo test -p primase-anvil --test
+//! Run by hand (about 24 GB read for Riders Republic): configure `installs.riders`, then `cargo test -p primase-anvil --test
 //! census -- --ignored --nocapture`.
 //!
-//! With `PRIMASE_ANVIL_RRAS_MESHES` (RRAssetStudio's read of every Mesh), every Mesh primase reads is also compared
-//! with the third-party tool's: vertex and triangle counts, the submesh partition and material ids, and the
-//! SHA-256s of its positions (f32 little-endian, in stored order, no frame) and absolute indices (u32
-//! little-endian, in stored order and winding). Each difference is counted with examples, under `vs RRAssetStudio`.
+//! With `oracles.rrassetstudio.riders/meshes` (RRAssetStudio's read of every Mesh), every Mesh primase reads is also
+//! compared with the third-party tool's: vertex and triangle counts, the submesh partition and material ids, and the
+//! SHA-256s of its positions (f32 little-endian, in stored order, no frame) and absolute indices (u32 little-endian, in
+//! stored order and winding). Each difference is counted with examples, under `vs RRAssetStudio`.
 
 /// RRAssetStudio's row for a mesh, by forge file name and entry.
 type Oracle = std::collections::HashMap<(String, usize), Value>;
 
 fn oracle() -> Option<Oracle> {
-    let dir = real_data("PRIMASE_ANVIL_RRAS_MESHES")?;
+    let dir = primase_testdata::oracle(OracleSet::RrAssetStudio, Game::Riders, "meshes")?;
     let text = std::fs::read_to_string(dir.join("summary.jsonl")).expect("summary.jsonl");
     Some(
         text.lines()
@@ -133,7 +133,7 @@ use primase_anvil::read::terrain_material::{
 };
 use primase_anvil::read::texture::{self, StoredTextureMap};
 use primase_core::TexFormat;
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -1112,7 +1112,7 @@ fn census_forge(
 #[test]
 #[ignore = "reads every forge of a game's folder (about 24 GB for Riders Republic); run by hand"]
 fn every_entry_of_the_kinds_read() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut forges: Vec<_> = std::fs::read_dir(&dir)

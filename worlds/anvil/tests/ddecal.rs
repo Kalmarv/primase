@@ -7,11 +7,11 @@ use primase_anvil::read::ddecal::{
     DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, StoredDecalModel, StoredDeferredDecals,
 };
 use primase_anvil::read::entity::{ComponentBody, ENTITY, StoredEntity};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 #[test]
 fn every_deferred_decal_of_the_base_forge_reads() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut archive = Archive::open(&[dir.join("DataPC_MAD_USNAT.forge")]).expect("archive");

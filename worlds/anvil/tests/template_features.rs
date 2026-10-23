@@ -11,11 +11,11 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::template::{self, MATERIAL_TEMPLATE};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 #[test]
 fn feature_flags_are_set_where_the_template_stores_the_key_bit_they_gate() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut templates = 0;

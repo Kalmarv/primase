@@ -11,7 +11,7 @@ use primase_anvil::read::template;
 use primase_core::layered::height_blend;
 use primase_dxbc::Shader;
 use primase_shader::{Load, PixelShader, Sample, Sampler, Store};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 /// A small deterministic generator (xorshift64*), so every run checks the same cases.
 struct Random(u64);
@@ -38,7 +38,7 @@ impl Random {
 
 /// The pixel shader at body offset `offset` of the MaterialTemplate at entry `entry` of the forge file `forge`.
 fn shader(forge: &str, entry: usize, offset: usize) -> Option<Shader> {
-    let dir = real_data("PRIMASE_ANVIL_DIR")?;
+    let dir = install(Game::Riders)?;
     let mut archive = Archive::open(&[dir.join(forge)]).expect("archive");
     let body = archive.resource(At { forge: 0, entry }).expect("template").body;
     let all = template::shaders(&body);
@@ -643,7 +643,7 @@ fn mad_tex1_graffiti_mode() {
 /// The G-buffer pixel program (key 0x400000, docs/shaders.md §6.2) of the MaterialTemplate named `template` in the
 /// forge file `forge`, found through its permutation table.
 fn gbuffer(forge: &str, template: &str) -> Option<Shader> {
-    let dir = real_data("PRIMASE_ANVIL_DIR")?;
+    let dir = install(Game::Riders)?;
     let mut archive = Archive::open(&[dir.join(forge)]).expect("archive");
     let names = &archive.forge(0).expect("forge").names;
     let entry = names
@@ -851,7 +851,7 @@ fn mad_tex1_graffiti_mode_decal_fx() {
 
 /// The pixel program of key `key` of the MaterialTemplate named `template` in the forge file `forge`.
 fn gbuffer_key(forge: &str, template: &str, key: u32) -> Option<Shader> {
-    let dir = real_data("PRIMASE_ANVIL_DIR")?;
+    let dir = install(Game::Riders)?;
     let mut archive = Archive::open(&[dir.join(forge)]).expect("archive");
     let names = &archive.forge(0).expect("forge").names;
     let entry = names
@@ -870,7 +870,7 @@ fn gbuffer_key(forge: &str, template: &str, key: u32) -> Option<Shader> {
 /// The pixel program of key `key` of the MaterialTemplate named `template`, in the first of Riders Republic's forges
 /// (patch first) that holds it.
 fn template_key(template: &str, key: u32) -> Option<Shader> {
-    let dir = real_data("PRIMASE_ANVIL_DIR")?;
+    let dir = install(Game::Riders)?;
     for forge in [
         "DataPC_MAD_USNAT_patch_01.forge",
         "DataPC_MAD_USNAT.forge",

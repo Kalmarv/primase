@@ -22,7 +22,7 @@ use primase_core::{
     ColorSpace, Entity, Instance, Mesh, NormalGreen, Semantic, Stream, TexFormat, TexRole, Texture,
     Transform, World,
 };
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 const FRAME: SourceFrame = SourceFrame::ENU;
 /// A height value's metres: range 2^23 at level 1 (2^23 x 2^(1 - 28)).
@@ -477,7 +477,7 @@ fn decals_lie_on_the_ground_lower_anvil_terrain_draws() {
 
 #[test]
 fn every_decal_model_of_the_game_lowers_or_is_left_out_by_its_family() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     // the box family alone

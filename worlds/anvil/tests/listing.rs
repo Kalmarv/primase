@@ -1,7 +1,7 @@
 //! The forge listing (kinds and names from the tables alone) and the placing of a bare Mesh or LODSelector with its
-//! Materials, on Riders Republic's WhiteRoom forges (`PRIMASE_ANVIL_DIR`). The oracle for the placed mesh is
-//! RRAssetStudio's read of it (`PRIMASE_ANVIL_RRAS_MESHES`, optional): its vertex and triangle counts. The listing's
-//! rows are the hand-checked rows of `PRIMASE_ANVIL_FORGE` (tests/forge.rs).
+//! Materials, on Riders Republic's WhiteRoom forges (`installs.riders`). The oracle for the placed mesh is
+//! RRAssetStudio's read of it (`oracles.rrassetstudio.riders/meshes`, optional): its vertex and triangle counts. The
+//! listing's rows are the hand-checked rows of `installs.riders/DataPC_MAD_WhiteRoom_patch_01.forge` (tests/forge.rs).
 use primase_anvil::components::{AnvilLods, AnvilMesh};
 use primase_anvil::read::archive::{Archive, At, Error as ArchiveError};
 use primase_anvil::read::forge::Forge;
@@ -9,7 +9,7 @@ use primase_anvil::read::listing::{KINDS, Kind};
 use primase_anvil::read::placements::{Error, InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::{Instance, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, install, install_file, oracle};
 use serde_json::Value;
 
 /// The patch's listing is its tables' rows, in order, each with the kind its type id names: the hand-checked rows 0
@@ -17,7 +17,7 @@ use serde_json::Value;
 /// the tables'.
 #[test]
 fn a_forge_lists_its_entries_by_kind_and_name() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_WhiteRoom_patch_01.forge") else {
         return;
     };
     let f = Forge::open(&path).unwrap();
@@ -73,7 +73,7 @@ fn a_forge_lists_its_entries_by_kind_and_name() {
 /// An archive's listing runs forge by forge in the order given.
 #[test]
 fn an_archive_lists_its_forges_in_order() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let paths = [
@@ -95,7 +95,7 @@ fn an_archive_lists_its_forges_in_order() {
 /// mesh equal the placed buffers'.
 #[test]
 fn a_bare_object_is_placed_with_its_materials() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let paths = [
@@ -147,7 +147,7 @@ fn a_bare_object_is_placed_with_its_materials() {
     assert_eq!(m.material_entities.len(), m.materials.len());
     assert!(m.material_entities.iter().any(Option::is_some));
     // the oracle's counts
-    let Some(oracle) = real_data("PRIMASE_ANVIL_RRAS_MESHES") else {
+    let Some(oracle) = oracle(OracleSet::RrAssetStudio, Game::Riders, "meshes") else {
         return;
     };
     let text = std::fs::read_to_string(oracle.join("summary.jsonl")).expect("summary.jsonl");

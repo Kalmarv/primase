@@ -7,11 +7,11 @@ use primase_core::frame::{Axis, SourceFrame};
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Collision, Instance, Mesh, Name, Surfaces, Transform, World};
 use primase_meshops::DrawCollision;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install_file};
 
 #[test]
 fn real_shapes_read_lower_and_draw() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_USNAT") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_USNAT.forge") else {
         return;
     };
     // the diagnostic frame: the stored numbers unconverted (not a claim that the units are metres)

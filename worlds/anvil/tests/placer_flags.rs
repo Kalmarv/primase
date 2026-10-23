@@ -16,7 +16,7 @@ use primase_anvil::read::placements::{InstancedCollision, InstancedLevels, Place
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Instance, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 const ORDER: [&str; 4] = [
     "DataPC_MAD_USNAT_patch_01.forge",
@@ -44,7 +44,7 @@ fn first(archive: &mut Archive, forge: usize, pick: impl Fn(&str, &StoredEntity)
 
 #[test]
 fn the_placer_reads_the_entity_flags() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut archive = Archive::open(&ORDER.map(|f| dir.join(f))).expect("archive");

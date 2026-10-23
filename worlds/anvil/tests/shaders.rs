@@ -1,4 +1,4 @@
-//! The shader pack's census: every container of `ShaderDataDX11.bin` (in the folder `PRIMASE_ANVIL_DIR` names),
+//! The shader pack's census: every container of `ShaderDataDX11.bin` (in the folder `installs.riders` names),
 //! checked by its own checksum and the pack by its trailing MD5 ([`containers`]); each container's stage counted; each
 //! pixel program parsed by primase-dxbc (its program, then the program with the container's signatures), the failures
 //! counted by their message (numbers taken out), most first: what the evaluator lacks, by how many pixel shaders it
@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use primase_anvil::read::shader_pack::containers;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 /// A message with its digits taken out, so one feature counts once.
 fn kind(message: &str) -> String {
@@ -20,7 +20,7 @@ fn kind(message: &str) -> String {
 #[test]
 #[ignore = "reads the game's 18 MB shader pack; run by hand"]
 fn every_container_of_the_shader_pack() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let pack = std::fs::read(dir.join("ShaderDataDX11.bin")).expect("pack");

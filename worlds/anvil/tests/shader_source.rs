@@ -5,11 +5,11 @@
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::shader_source::{ShaderName, ShaderSource};
 use primase_anvil::read::template::{self, Stage};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 #[test]
 fn a_shader_by_name_is_the_permutations_container() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let forge = "DataPC_MAD_USNAT.forge";

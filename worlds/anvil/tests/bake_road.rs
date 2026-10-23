@@ -13,7 +13,7 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{PbrMaterial, UvTransform};
 use primase_core::{Entity, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 const SIZE: u32 = 128;
 
@@ -40,7 +40,7 @@ fn row(m: &AnvilMaterial, row: u32) -> Vec<f32> {
 
 #[test]
 fn road_bakes_its_lane_lines_over_a_period() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let order = [

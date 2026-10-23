@@ -1,10 +1,10 @@
 //! The forge index reader: a two-entry version 27 file laid out here by hand, its refusals, and the hand-checked rows
-//! of a real forge (`PRIMASE_ANVIL_FORGE`).
+//! of a real forge (`installs.riders/DataPC_MAD_WhiteRoom_patch_01.forge`).
 use std::collections::BTreeSet;
 use std::io::Cursor;
 
 use primase_anvil::read::forge::{Error, Forge};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install_file};
 
 /// One entry of a hand-laid forge: payload offset, index id, size, name id, type id, name.
 struct Row {
@@ -195,7 +195,7 @@ fn a_forge_out_of_its_layout_is_refused_by_name() {
 /// table's ids unique, rows 0, 1, 2 and 5 as checked, the tables where its headers put them.
 #[test]
 fn a_real_forge_s_rows_are_the_hand_checked_ones() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_WhiteRoom_patch_01.forge") else {
         return;
     };
     let f = Forge::open(&path).unwrap();

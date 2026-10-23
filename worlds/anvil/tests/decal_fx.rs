@@ -10,7 +10,7 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform};
 use primase_core::{Name, NormalGreen, Texture, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 /// The value at `cb3` row `row` of `m`: a scalar's (in `.x`) or a vector's.
 fn row(m: &AnvilMaterial, row: u32) -> [f64; 4] {
@@ -31,7 +31,7 @@ fn row(m: &AnvilMaterial, row: u32) -> [f64; 4] {
 
 #[test]
 fn decal_fx_is_its_team_colour_cut_out_at_its_cell() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let order = [

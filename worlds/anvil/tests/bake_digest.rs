@@ -1,8 +1,8 @@
-//! `bake-anvil-material` on every Material of the USNAT forge and its patch (Riders Republic; `PRIMASE_ANVIL_DIR`), with
+//! `bake-anvil-material` on every Material of the USNAT forge and its patch (Riders Republic; `installs.riders`), with
 //! the options the other bake tests use at 64 texels, and a SHA-256 of every baked Material's colour, roughness and
 //! normal texels, by Material, and of the lot. The digest is the evidence that a change under the bake (the program
 //! executor behind the shader) leaves its output byte for byte as it was: run before and after and compare, or give the
-//! earlier total in `PRIMASE_ANVIL_BAKE_DIGEST`.
+//! earlier total as the debug key `anvil.bake_digest`.
 
 #![allow(clippy::unwrap_used)]
 
@@ -16,7 +16,7 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Texture, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 use sha2::{Digest, Sha256};
 
 const ORDER: [&str; 4] = [
@@ -32,7 +32,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[test]
 fn the_baked_materials_of_the_usnat_forge() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let mut archive = Archive::open(&ORDER.map(|f| dir.join(f))).unwrap();
@@ -121,7 +121,7 @@ fn the_baked_materials_of_the_usnat_forge() {
     }
     let total = hex(&total.finalize());
     println!("{} Materials baked, digest {total}", digests.len());
-    if let Ok(expected) = std::env::var("PRIMASE_ANVIL_BAKE_DIGEST") {
+    if let Some(expected) = primase_testdata::debug("anvil.bake_digest") {
         assert_eq!(
             total, expected,
             "the baked Materials differ from the digest given"

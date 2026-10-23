@@ -9,11 +9,11 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{Instance, Mesh, Semantic, Stream, Texture, Transform, World};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 #[test]
 fn a_lake_becomes_its_patches() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let order = ["DataPC_MAD_USNAT_patch_01.forge", "DataPC_MAD_USNAT.forge"];

@@ -5,11 +5,11 @@
 //! program at 0x25A2D, its roughness the detail normal's alpha.
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::template::{self, MATERIAL_TEMPLATE, Stage};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 #[test]
 fn every_permutation_names_one_program() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     let (mut templates, mut records) = (0, 0);

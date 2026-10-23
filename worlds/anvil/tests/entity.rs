@@ -6,7 +6,7 @@ use primase_anvil::read::data::{Resource, read_entry};
 use primase_anvil::read::entity::{ENTITY, Instance, Slot, StoredEntity};
 use primase_anvil::read::forge::Forge;
 use primase_anvil::read::shapes::MAX_RECORD;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install};
 
 /// Each LODSelectorInstance slot as a letter: M a MeshInstanceData, I an ImpostorInstanceData, - none.
 fn slots(e: &StoredEntity) -> String {
@@ -40,7 +40,7 @@ fn first_mesh(e: &StoredEntity) -> (usize, usize) {
 
 #[test]
 fn placement_fixtures_read_whole() {
-    let Some(dir) = real_data("PRIMASE_ANVIL_DIR") else {
+    let Some(dir) = install(Game::Riders) else {
         return;
     };
     // forge, entry, body bytes, scale, slots, (instances, material infos) of the first mesh slot

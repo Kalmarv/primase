@@ -8,11 +8,11 @@ use primase_anvil::read::material::{
     MATERIAL, MATERIAL_TEMPLATE, StoredReferences, TEXTURE_MAP, TEXTURE_SET,
 };
 use primase_anvil::read::shapes::MAX_RECORD;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install_file};
 
 #[test]
 fn materials_and_a_texture_set_read_their_references() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_WhiteRoom.forge") else {
         return;
     };
     let forge = Forge::open(&path).expect("forge");
@@ -77,7 +77,7 @@ fn materials_and_a_texture_set_read_their_references() {
 /// references read above; the census reads every TextureSet of the game the same way.
 #[test]
 fn a_texture_set_reads_all_19_references() {
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_WhiteRoom.forge") else {
         return;
     };
     let forge = Forge::open(&path).expect("forge");
@@ -97,7 +97,7 @@ fn a_texture_set_reads_all_19_references() {
 #[test]
 fn a_material_reads_its_property_records() {
     use primase_anvil::read::material::{Payload, StoredMaterial};
-    let Some(path) = real_data("PRIMASE_ANVIL_FORGE_BASE") else {
+    let Some(path) = install_file(Game::Riders, "DataPC_MAD_WhiteRoom.forge") else {
         return;
     };
     let forge = Forge::open(&path).expect("forge");
