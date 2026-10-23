@@ -104,6 +104,7 @@ pub struct RegionReport {
 }
 
 /// One live map's entities near the region.
+#[derive(Clone)]
 struct MapRead {
     path: String,
     /// The live LOD parent map's path, when it has one.
@@ -134,6 +135,37 @@ fn header(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<MapHeader> {
     MapHeader::from_root(&meta(set, keys, f)?.root_scalars()?)
 }
 
+/// A map's script-managed map: itself, or the nearest of its LOD parent chain that is (its name). `chain` holds what is
+/// known of every map by its name hash (whether it is script-managed, its LOD parent's hash, its name), with `map`'s own
+/// entry in it; a parent not seen yet is read from its file.
+fn ipl_of(
+    set: &ArchiveSet,
+    keys: &Keys,
+    chain: &mut BTreeMap<u32, (bool, u32, String)>,
+    map: &MapHeader,
+) -> Option<String> {
+    let (mut at, mut found, mut guard) = (map.name, None, 0);
+    while let Some((scripted, parent, name)) = chain.get(&at).cloned().or_else(|| {
+        // a parent not seen yet: read its header from its file
+        let &pf = set.tables.get("ymap")?.get(&at)?;
+        let pm = header(set, keys, pf).ok()?;
+        let e = (pm.flags & 1 != 0, pm.parent, map_name(set.path(pf)));
+        chain.insert(at, e.clone());
+        Some(e)
+    }) {
+        if scripted {
+            found = Some(name);
+            break;
+        }
+        guard += 1;
+        if parent == 0 || guard > 16 {
+            break;
+        }
+        at = parent;
+    }
+    found
+}
+
 /// The live maps' entities whose pivot lies within the region and its reach. Every live map's header is read (every
 /// file walked and checked), its entities only where its entities' extents touch the region and its reach.
 fn region_maps(set: &ArchiveSet, keys: &Keys, region: &Region) -> Result<Vec<MapRead>> {
@@ -143,28 +175,7 @@ fn region_maps(set: &ArchiveSet, keys: &Keys, region: &Region) -> Result<Vec<Map
     for &f in set.tables.get("ymap").into_iter().flat_map(|t| t.values()) {
         let map = header(set, keys, f)?;
         chain.insert(map.name, (map.flags & 1 != 0, map.parent, map_name(set.path(f))));
-        let ipl = {
-            let (mut at, mut found, mut guard) = (map.name, None, 0);
-            while let Some((scripted, parent, name)) = chain.get(&at).cloned().or_else(|| {
-                // a parent not seen yet: read its header from its file
-                let &pf = set.tables.get("ymap")?.get(&at)?;
-                let pm = header(set, keys, pf).ok()?;
-                let e = (pm.flags & 1 != 0, pm.parent, map_name(set.path(pf)));
-                chain.insert(at, e.clone());
-                Some(e)
-            }) {
-                if scripted {
-                    found = Some(name);
-                    break;
-                }
-                guard += 1;
-                if parent == 0 || guard > 16 {
-                    break;
-                }
-                at = parent;
-            }
-            found
-        };
+        let ipl = ipl_of(set, keys, &mut chain, &map);
         let [lo, hi] = map.entities_extents;
         if !region.touches(lo, hi) {
             continue;
@@ -375,36 +386,53 @@ pub fn read_region(
     for (set, is_story) in std::iter::once((story.set, true)).chain(online.map(|s| (s.set, false))) {
         for m in region_maps(set, keys, region)? {
             report.maps += 1;
-            for (i, e) in m.entities {
-                // the LOD parent: by index in this map, or in the parent map when flags bit 3 says so
-                let lod_parent = u32::try_from(e.parent_index).ok().and_then(|pi| {
-                    let map = if e.flags & 8 != 0 {
-                        m.parent.clone()?
-                    } else {
-                        m.path.clone()
-                    };
-                    Some((map, pi))
-                });
-                let entry = placed.entry((m.path.clone(), i)).or_insert_with(|| Placed {
-                    ymap: m.path.clone(),
-                    ipl: m.ipl.clone(),
-                    index: i,
-                    child: None,
-                    lod_parent,
-                    transform: entity_transform(&e),
-                    def: e,
-                    story: false,
-                    online: false,
-                });
-                if is_story {
-                    entry.story = true;
-                } else {
-                    entry.online = true;
-                }
-            }
+            add_placements(&mut placed, m, is_story);
         }
     }
-    // each state's archetypes, from its own map types files
+    let w = place_read(placed, story, online, keys, &mut report)?;
+    Ok((w, report))
+}
+
+/// The entities of a map read in a state, into the placements being collected: one per (map, index), live in every
+/// state that read it.
+fn add_placements(placed: &mut BTreeMap<(String, u32), Placed>, m: MapRead, is_story: bool) {
+    for (i, e) in m.entities {
+        // the LOD parent: by index in this map, or in the parent map when flags bit 3 says so
+        let lod_parent = u32::try_from(e.parent_index).ok().and_then(|pi| {
+            let map = if e.flags & 8 != 0 {
+                m.parent.clone()?
+            } else {
+                m.path.clone()
+            };
+            Some((map, pi))
+        });
+        let entry = placed.entry((m.path.clone(), i)).or_insert_with(|| Placed {
+            ymap: m.path.clone(),
+            ipl: m.ipl.clone(),
+            index: i,
+            child: None,
+            lod_parent,
+            transform: entity_transform(&e),
+            def: e,
+            story: false,
+            online: false,
+        });
+        if is_story {
+            entry.story = true;
+        } else {
+            entry.online = true;
+        }
+    }
+}
+
+/// The placements collected, with each state's archetypes from its own map types files, into a new world.
+fn place_read(
+    placed: BTreeMap<(String, u32), Placed>,
+    story: Lookup<'_>,
+    online: Option<Lookup<'_>>,
+    keys: &Keys,
+    report: &mut RegionReport,
+) -> Result<World> {
     let (story_types, story_duplicates) = archetypes(story.set, keys)?;
     let online_types = online.map(|s| archetypes(s.set, keys)).transpose()?;
     report.duplicate_archetypes = story_duplicates + online_types.as_ref().map_or(0, |(_, d)| *d);
@@ -412,12 +440,72 @@ pub fn read_region(
         .as_ref()
         .zip(online_types.as_ref())
         .map(|(set, (t, _))| (t, set));
-    let w = place(
+    place(
         placed.into_values().collect(),
         (&story_types, &story),
         online_tables,
-        &mut report,
-    )?;
+        report,
+    )
+}
+
+/// One map file read whole into a new world as [`read_region`] reads a region: every entity of the file (no region,
+/// no reach), placed with the definitions of the states the file is live in, each prototype's payload resolved through
+/// that state's lookup, and the script-managed map that governs it (`gta.ipl.<name>`). A file live in both states is
+/// placed as a placement live in both is (`gta.map` conditions where the states define it differently); a file only
+/// GTA Online has live is placed in Online; a file neither has live (an older copy of a name) is read as Story's. The
+/// geometry and textures come with [`crate::read::assets::attach_assets_with`].
+pub fn read_map_file(
+    story: Lookup<'_>,
+    online: Option<Lookup<'_>>,
+    keys: &Keys,
+    file: FileRef,
+) -> Result<(World, RegionReport)> {
+    let live = |l: Lookup<'_>, name: u32| l.set.tables.get("ymap").and_then(|t| t.get(&name)) == Some(&file);
+    let head = header(story.set, keys, file)?;
+    let live_story = live(story, head.name);
+    let live_online = online.is_some_and(|o| live(o, head.name));
+    let (in_story, in_online) = if live_story || !live_online {
+        (true, live_online)
+    } else {
+        (false, true)
+    };
+    let set = if in_story {
+        story.set
+    } else {
+        online.map_or(story.set, |o| o.set)
+    };
+    let mut chain = BTreeMap::new();
+    chain.insert(
+        head.name,
+        (head.flags & 1 != 0, head.parent, map_name(set.path(file))),
+    );
+    let ipl = ipl_of(set, keys, &mut chain, &head);
+    let map = MapData::from_root(&decode(set, keys, file)?)?;
+    let m = MapRead {
+        path: set.path(file).to_string(),
+        parent: (map.parent != 0)
+            .then(|| {
+                set.tables
+                    .get("ymap")
+                    .and_then(|t| t.get(&map.parent))
+                    .map(|&p| set.path(p).to_string())
+            })
+            .flatten(),
+        ipl,
+        entities: (0..).zip(map.entities).collect(),
+    };
+    let mut placed = BTreeMap::new();
+    for (read, is_story) in [(in_story, true), (in_online, false)] {
+        if read {
+            add_placements(&mut placed, m.clone(), is_story);
+        }
+    }
+    let mut report = RegionReport {
+        maps: 1,
+        ..RegionReport::default()
+    };
+    // Online's tables only when the file is live there: a file of one state carries no state of its own
+    let w = place_read(placed, story, online.filter(|_| in_online), keys, &mut report)?;
     Ok((w, report))
 }
 

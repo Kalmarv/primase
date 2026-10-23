@@ -97,7 +97,7 @@ impl GtaSource {
         }
     }
 
-    fn lookups(&self) -> Result<Lookups<'_>> {
+    pub(crate) fn lookups(&self) -> Result<Lookups<'_>> {
         Lookups::new(self.story(), Some(self.online()))
     }
 

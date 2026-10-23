@@ -10,6 +10,10 @@
 //!   placement's prototype has it); when none does, the prototype gets an archetype made of the file's name alone and
 //!   no texture dictionary (counted in [`EntryReport::archetypes_made`]). The prototypes are the parts of an asset
 //!   (`core.asset`), unplaced: `place-assets` places them at the origin, a dictionary's entries on top of each other.
+//! - A map (`ymap`): every entity of the file as a placement of its archetype's prototype, read as a region is
+//!   ([`crate::read::region::read_map_file`]: the map states the file is live in, the script-managed map that governs
+//!   it) and the light records of the prototypes, with no geometry or textures yet: [`GtaSource::load`] loads them,
+//!   as it loads a region's.
 //! - A texture dictionary (`ytd`): its textures, each a `core.texture` as the reader makes them for materials.
 //! - Static collision (`ybn`): the bound as a [`GtaBounds`] entity at the origin, and the install's material names.
 use std::collections::BTreeMap;
@@ -27,9 +31,10 @@ use crate::read::archive::archive_set::{ArchiveSet, FileRef};
 use crate::read::archive::keys::Keys;
 use crate::read::archive::rpf::EntryKind;
 use crate::read::assets::{
-    AssetReport, Ctx, LightsReport, Lookup, decode, load_prototype, origin, put_lights,
+    AssetReport, Ctx, LightsReport, Lookup, attach_lights, decode, load_prototype, origin, put_lights,
 };
 use crate::read::collision::{BoundsReport, install_material_names, place_map_bounds};
+use crate::read::region::{RegionReport, read_map_file};
 use crate::read::source::GtaSource;
 use crate::{Result, invalid};
 
@@ -71,6 +76,8 @@ pub struct EntryReport {
     pub entries_without_texture: usize,
     pub textures: usize,
     pub bounds: BoundsReport,
+    /// What reading a map's placements counted (a `ymap`).
+    pub region: RegionReport,
 }
 
 /// The lowercase name of an entry without its extension, and the extension.
@@ -111,8 +118,8 @@ impl GtaSource {
             .map_err(|e| invalid("archetypes", 0, e.clone()))
     }
 
-    /// The file `file` read into a world as itself (see the module documentation): `ydr`, `yft`, `ydd`, `ytd` and
-    /// `ybn` files; any other kind is an error. Reads from the install only, and chooses nothing: a drawable's
+    /// The file `file` read into a world as itself (see the module documentation): `ydr`, `yft`, `ydd`, `ytd`, `ybn` and
+    /// `ymap` files; any other kind is an error. Reads from the install only, and chooses nothing: a drawable's
     /// prototypes stay unplaced, at their authored levels of detail.
     pub fn read_entry(&self, file: FileRef) -> Result<(World, EntryReport)> {
         let entry = self
@@ -140,6 +147,7 @@ impl GtaSource {
             "ydr" | "yft" | "ydd" => self.drawables(file, &stem, &ext, &mut report)?,
             "ytd" => self.textures(file, &mut report)?,
             "ybn" => self.bounds(file, &stem, &mut report)?,
+            "ymap" => self.map(file, &mut report)?,
             _ => {
                 return Err(invalid(
                     "entry",
@@ -216,6 +224,13 @@ impl GtaSource {
         w.insert(root, Asset { members: parts });
         w.insert(root, Name(stem.to_owned()));
         w.insert(root, Source(report.path.clone()));
+        Ok(w)
+    }
+
+    fn map(&self, file: FileRef, report: &mut EntryReport) -> Result<World> {
+        let (mut w, region) = read_map_file(self.story(), Some(self.online()), self.keys(), file)?;
+        report.lights = attach_lights(&mut w, self.lookups()?, self.keys())?;
+        report.region = region;
         Ok(w)
     }
 

@@ -159,3 +159,69 @@ fn drawables_textures_and_the_rest_read_as_themselves() {
         .expect("an xml file");
     assert!(source.read_entry(readme.file).is_err());
 }
+
+/// A map file read as itself holds the placements a region read puts for that map: for every entity of the map the
+/// region read kept, the file read has the same entity (path, index, archetype, flags, tint and transform) with the
+/// same prototype (archetype name and map types file), and its LOD parent. The file read is the whole map: no
+/// geometry yet (the loading is the region's), the script-managed map that governs it, no entity out of the file's
+/// own list. (Both reads decode the file the way `placements.rs` checks against CodeWalker; this checks that the file
+/// read places what a region does.)
+#[test]
+fn a_map_file_places_what_a_region_read_places_of_it() {
+    use primase_core::{Instance, Transform};
+    use primase_gta::components::GtaEntity;
+    let (Some(dir), Some(keys)) = (real_data("PRIMASE_GTA_DIR"), real_data("PRIMASE_GTA_KEYS")) else {
+        return;
+    };
+    let source = GtaSource::open(&dir, &keys).expect("install");
+    let (region, _) = source.read([95.0, -1034.0, 295.0, -834.0], 0.0).expect("region");
+    // the first map the region read placed from, and what it placed
+    let (_, first) = region.iter::<GtaEntity>().next().expect("an entity");
+    let path = first.ymap.clone();
+    let from_region: std::collections::BTreeMap<u32, _> = region
+        .iter::<GtaEntity>()
+        .filter(|(_, g)| g.ymap == path && g.interior.is_none())
+        .map(|(e, g)| {
+            let proto = region.get::<Instance>(e).expect("a placement").prototype;
+            (
+                g.index,
+                (
+                    g.clone(),
+                    region.get::<Transform>(e).copied().expect("a transform"),
+                    region
+                        .get::<GtaArchetype>(proto)
+                        .map(|a| (a.name, a.ytyp.clone())),
+                ),
+            )
+        })
+        .collect();
+    assert!(!from_region.is_empty());
+
+    let file = source.file(&path).expect("the map in the install");
+    let (w, report) = source.read_entry(file).expect("the map");
+    assert_eq!(report.extension, "ymap");
+    assert_eq!(report.region.maps, 1);
+    let mut compared = 0;
+    for (e, g) in w.iter::<GtaEntity>().filter(|(_, g)| g.interior.is_none()) {
+        let Some((want, transform, proto)) = from_region.get(&g.index) else {
+            continue;
+        };
+        let p = w.get::<Instance>(e).expect("a placement").prototype;
+        assert_eq!(g, want, "{path}#{}", g.index);
+        assert_eq!(w.get::<Transform>(e), Some(transform), "{path}#{}", g.index);
+        assert_eq!(
+            &w.get::<GtaArchetype>(p).map(|a| (a.name, a.ytyp.clone())),
+            proto,
+            "{path}#{}",
+            g.index
+        );
+        compared += 1;
+    }
+    assert_eq!(
+        compared,
+        from_region.len(),
+        "every placement of the region read is in the file read"
+    );
+    // nothing loaded: no mesh on any prototype
+    assert_eq!(w.iter::<Mesh>().count(), 0);
+}
