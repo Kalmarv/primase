@@ -125,23 +125,30 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
                 mx[k] = mx[k].max(v);
             }
         }
-        let a_pos = buffers.float_accessor(&pos, ElementType::Vec3, Some((mn.to_vec(), mx.to_vec())), true);
-        let a_nrm = p.nrm.as_ref().map(|n| {
-            let mut c = vec![0f32; nv * 3];
-            for i in 0..nv {
-                c[i * 3] = n[i * 3];
-                c[i * 3 + 1] = n[i * 3 + 2];
-                c[i * 3 + 2] = -n[i * 3 + 1];
-            }
-            buffers.float_accessor(&c, ElementType::Vec3, None, true)
-        });
+        let a_pos =
+            buffers.float_accessor(&pos, ElementType::Vec3, Some((mn.to_vec(), mx.to_vec())), true)?;
+        let a_nrm = p
+            .nrm
+            .as_ref()
+            .map(|n| {
+                let mut c = vec![0f32; nv * 3];
+                for i in 0..nv {
+                    c[i * 3] = n[i * 3];
+                    c[i * 3 + 1] = n[i * 3 + 2];
+                    c[i * 3 + 2] = -n[i * 3 + 1];
+                }
+                buffers.float_accessor(&c, ElementType::Vec3, None, true)
+            })
+            .transpose()?;
         let a_uv =
             p.uv.as_ref()
-                .map(|uv| buffers.float_accessor(uv, ElementType::Vec2, None, true));
+                .map(|uv| buffers.float_accessor(uv, ElementType::Vec2, None, true))
+                .transpose()?;
         let a_blend = p
             .blend
             .as_ref()
-            .map(|w| buffers.float_accessor(w, ElementType::Scalar, None, true));
+            .map(|w| buffers.float_accessor(w, ElementType::Scalar, None, true))
+            .transpose()?;
         // unsigned int indices always (Studio's writer does not narrow them)
         let idx_bytes: Vec<u8> = p.idx.iter().flat_map(|i| i.to_le_bytes()).collect();
         let v_idx = buffers.view(&idx_bytes, Some(34963));
