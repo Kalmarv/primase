@@ -19,7 +19,9 @@ use std::collections::HashSet;
 use crate::components::StoredBuildTable;
 use crate::read::archive::{self, Archive};
 use crate::read::build_table::{self, BUILD_TABLE};
+use crate::read::material::TEXTURE_MAP;
 use crate::read::mesh::MESH;
+use crate::read::textures::read_texture_map;
 
 /// The table listing a character's slot tables.
 pub const SLOTS_DEFAULT: &str = "MAD_CHR_SLOTS_DEFAULT";
@@ -37,6 +39,12 @@ pub enum Error {
     NoTable(&'static str),
     #[error("{0:#x} is not a BuildTable")]
     NotATable(u64),
+    #[error(transparent)]
+    Texture(#[from] crate::read::textures::Error),
+    #[error("no TextureMap named {0} in the forges, or it holds no image")]
+    NoTexture(&'static str),
+    #[error("the skin palette is {width} x {height}, not 8 x 4")]
+    Palette { width: u32, height: u32 },
 }
 
 /// A variant a part's materials table lists: the variant table, and the row's weight and condition as stored (the
@@ -307,4 +315,39 @@ pub fn rider_catalog(archive: &mut Archive) -> Result<RiderCatalog, Error> {
         });
     }
     Ok(RiderCatalog { slots })
+}
+
+/// The texture of the crowd's skin palette (`MAD_CHR_BULK`'s: the one skin palette the forges hold).
+pub const SKIN_PALETTE: &str = "MAD_CHR_SkinColors_DiffuseMap_PC_Scarlett_Prospero";
+
+/// The colours of the skin palette's four tones, R, G, B: the palette is 8 x 4 texels of 2 x 2 cells (four cells across
+/// and two down, the cell of tone `n` at x = 2 n); the bottom row's cells are the tones (the top row's role is not
+/// established, so it is not given). `MAD_CHR_SkinColors_DiffuseMap` is referenced by the crowd templates `MAD_CHR_BULK`
+/// and `MAD_CHR_Bulk_Test` only; no rider table links it.
+pub fn skin_palette(archive: &mut Archive) -> Result<Vec<[u8; 3]>, Error> {
+    let id = (0..)
+        .map_while(|forge| archive.forge(forge))
+        .find_map(|f| {
+            f.entries()
+                .find(|(_, n)| n.type_id == TEXTURE_MAP && n.name == SKIN_PALETTE)
+                .map(|(i, _)| i.id)
+        })
+        .ok_or(Error::NoTexture(SKIN_PALETTE))?;
+    let mut world = primase_core::World::new();
+    let e = read_texture_map(archive, &mut world, id)?.ok_or(Error::NoTexture(SKIN_PALETTE))?;
+    let texture = world
+        .get::<primase_core::Texture>(e)
+        .ok_or(Error::NoTexture(SKIN_PALETTE))?;
+    let levels = primase_image::sampling::Levels::of(texture).map_err(|_| Error::NoTexture(SKIN_PALETTE))?;
+    if (levels.width, levels.height) != (8, 4) {
+        return Err(Error::Palette {
+            width: levels.width,
+            height: levels.height,
+        });
+    }
+    let at = |x: i64, y: i64| {
+        let t = levels.texel(0, x, y, [primase_image::sampling::Address::Clamp; 2]);
+        [t[0], t[1], t[2]]
+    };
+    Ok((0..4).map(|n| at(2 * n, 2)).collect())
 }
