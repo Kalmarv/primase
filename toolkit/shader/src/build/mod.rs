@@ -74,6 +74,10 @@ pub struct Builder {
     pub blocks: Vec<Block>,
     /// A compute entry point's thread group size (set before [`Builder::finish`]; 0 for the other stages).
     pub workgroup_size: [u32; 3],
+    /// The first operation a lifter asked for that the values it was given cannot be (a vector of 2 lanes added to one
+    /// of 3, a lane that is not there): the lifter's input is at fault, not the builder, so the operation hands back a
+    /// value of the shape it was asked for and the fault waits here until the lifter asks ([`Builder::check`]).
+    error: Option<String>,
 }
 impl Default for Builder {
     fn default() -> Self {
@@ -87,7 +91,27 @@ impl Builder {
             function: Function::default(),
             blocks: vec![Block::new()],
             workgroup_size: [0; 3],
+            error: None,
         }
+    }
+
+    /// Record that an operation was asked of values that cannot do it; the first is kept.
+    fn fail(&mut self, detail: impl Into<String>) {
+        self.error.get_or_insert_with(|| detail.into());
+    }
+
+    /// The first fault of the operations since the last check, which a lifter turns into a refusal of the program at the
+    /// place it is reading. A builder with a fault unchecked cannot be finished: that is the lifter's bug.
+    pub fn check(&mut self) -> Result<(), String> {
+        self.error.take().map_or(Ok(()), Err)
+    }
+
+    fn assert_checked(&self) {
+        assert!(
+            self.error.is_none(),
+            "a lifter finished a builder without checking it: {}",
+            self.error.as_deref().unwrap_or_default()
+        );
     }
 
     pub fn ty(&mut self, inner: TypeInner) -> Handle<Type> {
@@ -257,7 +281,10 @@ impl Builder {
         if v.width == width {
             return v;
         }
-        assert!(v.width == 1 && width > 1, "splat of width {} to {width}", v.width);
+        if v.width != 1 || !(2..=4).contains(&width) {
+            self.fail(format!("a value of {} lanes where {width} are needed", v.width));
+            return v;
+        }
         Val {
             expr: self.app(Expression::Splat {
                 size: vector_size(width),
@@ -272,7 +299,18 @@ impl Builder {
         if let [only] = parts {
             return *only;
         }
-        let kind = parts[0].kind;
+        let Some(first) = parts.first() else {
+            self.fail("a vector of no lanes");
+            return self.lit_u(0);
+        };
+        if parts.len() > 4 || parts.iter().any(|p| p.width != 1 || p.kind != first.kind) {
+            self.fail(format!(
+                "a vector of {} parts that are not scalars of one kind",
+                parts.len()
+            ));
+            return *first;
+        }
+        let kind = first.kind;
         let width = parts.len() as u8;
         let ty = self.ty_of(kind, width);
         Val {
@@ -286,8 +324,11 @@ impl Builder {
     }
     /// Lane `i` of a vector.
     pub fn lane(&mut self, v: Val, i: u8) -> Val {
+        if i >= v.width {
+            self.fail(format!("lane {i} of a value of {} lanes", v.width));
+            return v;
+        }
         if v.width == 1 {
-            assert!(i == 0, "lane {i} of a scalar");
             return v;
         }
         Val {
@@ -303,6 +344,10 @@ impl Builder {
     pub fn swizzle(&mut self, v: Val, lanes: &[u8]) -> Val {
         if let [one] = lanes {
             return self.lane(v, *one);
+        }
+        if lanes.is_empty() || lanes.len() > 4 || lanes.iter().any(|l| *l >= v.width) {
+            self.fail(format!("lanes {lanes:?} of a value of {} lanes", v.width));
+            return v;
         }
         if v.width == 1 {
             return self.splat(v, lanes.len() as u8);
@@ -399,11 +444,10 @@ impl Builder {
         }
     }
     pub fn math(&mut self, fun: MathFunction, args: &[Val]) -> Val {
-        let width = args
-            .iter()
-            .map(|a| a.width)
-            .max()
-            .expect("a math function has an argument");
+        let Some(width) = args.iter().map(|a| a.width).max() else {
+            self.fail("a math function of no arguments");
+            return self.lit_u(0);
+        };
         let args: Vec<Val> = args.iter().map(|a| self.splat(*a, width)).collect();
         let kind = args[0].kind;
         let arg = |i: usize| args.get(i).map(|a| a.expr);
@@ -454,6 +498,7 @@ impl Builder {
     /// empty one: a program of a stage with no entry point is several of them (see [`crate::stage_functions`]).
     pub fn end_function(&mut self, name: &str, decl: FunctionDecl) -> Handle<naga::Function> {
         assert_eq!(self.blocks.len(), 1, "unclosed control flow (a lifter bug)");
+        self.assert_checked();
         let mut function = std::mem::take(&mut self.function);
         function.name = Some(name.to_owned());
         function.arguments = decl.arguments;
@@ -491,6 +536,7 @@ impl Builder {
     /// Finish a module that has functions and no entry point.
     pub fn finish_functions(self) -> Module {
         assert_eq!(self.blocks.len(), 1, "unclosed control flow (a lifter bug)");
+        self.assert_checked();
         self.module
     }
 
@@ -503,6 +549,7 @@ impl Builder {
         early_depth_test: bool,
     ) -> Module {
         assert_eq!(self.blocks.len(), 1, "unclosed control flow (a lifter bug)");
+        self.assert_checked();
         let mut function = self.function;
         function.name = Some(name.to_owned());
         function.arguments = arguments;

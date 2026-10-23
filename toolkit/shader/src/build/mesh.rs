@@ -166,6 +166,7 @@ impl Builder {
         output: &MeshOutput,
     ) -> naga::Module {
         assert_eq!(self.blocks.len(), 1, "unclosed control flow (a lifter bug)");
+        self.assert_checked();
         let mut function = self.function;
         function.name = Some("main".to_owned());
         function.arguments = arguments;

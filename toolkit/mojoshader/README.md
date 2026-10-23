@@ -21,6 +21,13 @@ MojoShader ends every vertex program with three statements that fix the clip spa
 the API's, not the program's: they are dropped when they are exactly those three, the program keeps Direct3D's clip
 space (`Conventions::D3D`), and the program's notes say so. `posFixup` anywhere else is refused.
 
+## What is refused
+
+A name declared twice, a number that is not finite, an operation on vectors of different widths (`vec2 + vec3`, the
+branches of `?:`, the arguments of a function) and any other thing the dialect does not have are refused by name with
+the line. The caller's constants that lie past the uniform rows the program declares are left out and the ones that
+reach past them are cut; the program's notes count both.
+
 ## What the caller states
 
 `Hints` names what the text does not say: the constants' layout, each sampler's slot and the name of what is bound to

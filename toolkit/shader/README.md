@@ -101,7 +101,11 @@ primitive index, cube array textures, half-float packing and forced early depth,
 one refuses) and then ours: interface against entry point, resources against globals (kind, space, binding, layout
 size). `text()` is the stable text form (a header of everything above, then the module as WGSL) and `emit::wgsl`
 writes WGSL by naga's backend; a writer that cannot express a program refuses it, never approximates. `build::Builder`
-is the typed builder lifters share.
+is the typed builder lifters share. An operation asked of values that cannot do it (a vector of 2 lanes added to one of 3, a
+lane that is not there) does not panic: the builder records the first such fault and hands back a value of the shape it
+was asked for, and the lifter asks (`Builder::check`) where it is reading, to refuse the program naming the line or
+instruction; a builder with a fault nobody asked for cannot be finished. The builder's assertions are for what a lifter
+got wrong itself, such as control flow left open.
 
 ## Support ledger
 

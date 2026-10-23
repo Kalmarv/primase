@@ -352,6 +352,11 @@ impl Lift<'_> {
     }
 
     pub(crate) fn instruction(&mut self, inst: &Instruction) -> Result<()> {
+        self.lift_instruction(inst)?;
+        self.b.check().map_err(|detail| crate::error(inst.at, detail))
+    }
+
+    fn lift_instruction(&mut self, inst: &Instruction) -> Result<()> {
         self.at = inst.at;
         let result = inst.result;
         match &inst.op {

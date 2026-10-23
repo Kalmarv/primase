@@ -31,6 +31,9 @@ impl Lift<'_> {
                 }
                 e
             })?;
+            self.b
+                .check()
+                .map_err(|detail| crate::error(ins.word, format!("{name}: {detail}")))?;
         }
         Ok(())
     }

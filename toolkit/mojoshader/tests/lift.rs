@@ -204,3 +204,88 @@ fn what_the_dialect_does_not_have_is_refused_by_name() {
     );
     assert!(refused(&vs, Stage::Vertex).contains("posFixup"));
 }
+
+/// Programs a damaged effect could hold, made from the test programs by one change each: refused by name, not a panic.
+#[test]
+fn what_a_damaged_program_says_is_refused_by_name() {
+    let refused = |source: String, stage| lift(&source, stage, &hints()).unwrap_err().detail;
+    let gamma = |from: &str, to: &str| {
+        assert!(GAMMA.contains(from), "{from}");
+        GAMMA.replacen(from, to, 1)
+    };
+    // vectors of different widths: added, as the branches of ?:, as the arguments of a function
+    let widths = refused(
+        gamma("ps_r0 = ps_r0 * ps_v0;", "ps_r0 = ps_r0.xy * ps_v0;"),
+        Stage::Pixel,
+    );
+    assert!(
+        widths.contains("arithmetic on vectors of 2 and 4 lanes"),
+        "{widths}"
+    );
+    let branches = CONTROL.replacen("? ps_r1 : ps_c8", "? ps_r1 : ps_c8.xyz", 1);
+    assert_ne!(branches, CONTROL);
+    assert!(refused(branches, Stage::Pixel).contains("differ in type or width"));
+    let function = refused(
+        gamma("ps_r1.x = log2(ps_r0.x);", "ps_r1.x = dot(ps_r0, ps_r0.xyz);"),
+        Stage::Pixel,
+    );
+    assert!(
+        function.contains("dot of vectors of different widths"),
+        "{function}"
+    );
+    // a name declared twice
+    let twice = refused(gamma("vec4 ps_r1;\n", "vec4 ps_r1;\nvec4 ps_r1;\n"), Stage::Pixel);
+    assert!(twice.contains("ps_r1 declared twice"), "{twice}");
+    let varying = refused(
+        VERTEX.replacen(
+            "varying vec4 vFrontColor;\n",
+            "varying vec4 vFrontColor;\nvarying vec4 vFrontColor;\n",
+            1,
+        ),
+        Stage::Vertex,
+    );
+    assert!(varying.contains("vFrontColor declared twice"), "{varying}");
+    // a literal that is not a finite number
+    let infinite = refused(
+        gamma("ps_r1.x = log2(ps_r0.x);", "ps_r1.x = 1e999;"),
+        Stage::Pixel,
+    );
+    assert!(infinite.contains("1e999, which is not finite"), "{infinite}");
+}
+
+#[test]
+fn constants_the_program_cannot_hold_are_said_in_its_notes() {
+    let mut hints = hints();
+    // GAMMA declares one uniform row (16 bytes): a constant at row 1 is left out, one of two rows is cut
+    hints.constants.push(Constant {
+        name: "Beyond".into(),
+        offset: 16,
+        bytes: 16,
+        width: 4,
+    });
+    hints.constants.push(Constant {
+        name: "Long".into(),
+        offset: 0,
+        bytes: 32,
+        width: 4,
+    });
+    let p = lift(GAMMA, Stage::Pixel, &hints).unwrap();
+    assert!(
+        p.notes
+            .iter()
+            .any(|n| n.starts_with("1 constants the effect names lie past")),
+        "{:?}",
+        p.notes
+    );
+    assert!(
+        p.notes
+            .iter()
+            .any(|n| n.starts_with("1 constants the effect names reach past")),
+        "{:?}",
+        p.notes
+    );
+    let mut sorted = p.notes.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(p.notes, sorted);
+}

@@ -444,7 +444,8 @@ impl<'m> Lift<'m> {
         }
     }
 
-    fn finish_functions(self, target: String) -> Result<Program> {
+    fn finish_functions(mut self, target: String) -> Result<Program> {
+        self.b.check().map_err(|detail| error(self.at, detail))?;
         let stage = self.setup.interface.stage;
         let module = self.b.finish_functions();
         let mut limit_notes = primase_shader::compute_limit_notes(&module);
@@ -469,7 +470,8 @@ impl<'m> Lift<'m> {
         })
     }
 
-    fn finish(self, target: String) -> Result<Program> {
+    fn finish(mut self, target: String) -> Result<Program> {
+        self.b.check().map_err(|detail| error(self.at, detail))?;
         let stage = self.setup.interface.stage;
         let early = false;
         let module = if let Some((output, facts)) = &self.mesh {

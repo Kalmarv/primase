@@ -301,6 +301,15 @@ impl Lower<'_> {
         Ok(())
     }
 
+    /// Name `name` as `sym`; a name the program already declared (or the entry point's own outputs) is not declared again.
+    fn declare_symbol(&mut self, name: &str, sym: Sym) -> Result<()> {
+        if self.symbols.contains_key(name) {
+            return self.fail(format!("{name} declared twice"));
+        }
+        self.symbols.insert(name.to_owned(), sym);
+        Ok(())
+    }
+
     fn has_ident(&self, word: &str) -> bool {
         self.tokens
             .iter()
@@ -331,11 +340,11 @@ impl Lower<'_> {
                             let rows = u32::try_from(rows).ok().filter(|r| *r > 0).ok_or_else(|| {
                                 error(self.line(), format!("a uniform array of {rows} rows"))
                             })?;
-                            self.declare_constants(&name, rows);
+                            self.declare_constants(&name, rows)?;
                         }
                         "vec4" if name == "posFixup" => {
                             self.expect(";")?;
-                            self.symbols.insert(name, Sym::PosFixup);
+                            self.declare_symbol(&name, Sym::PosFixup)?;
                         }
                         "sampler2D" => {
                             self.expect(";")?;
@@ -371,14 +380,14 @@ impl Lower<'_> {
                         (Kind::I, self.b.ty_of(Kind::I, 4))
                     };
                     let local = self.b.local(&name, ty);
-                    self.symbols.insert(name, Sym::Local(local, kind, 4));
+                    self.declare_symbol(&name, Sym::Local(local, kind, 4))?;
                 }
                 other => return self.fail(format!("a declaration beginning {other}")),
             }
         }
     }
 
-    fn declare_constants(&mut self, name: &str, rows: u32) {
+    fn declare_constants(&mut self, name: &str, rows: u32) -> Result<()> {
         let u4 = self.b.ty_of(Kind::U, 4);
         let ty = self.b.ty(TypeInner::Array {
             base: u4,
@@ -394,7 +403,7 @@ impl Lower<'_> {
             memory_decorations: Default::default(),
         });
         self.constants = Some((g, rows));
-        self.symbols.insert(name.to_owned(), Sym::Constants(rows));
+        self.declare_symbol(name, Sym::Constants(rows))
     }
 
     fn declare_sampler(&mut self, name: &str) -> Result<()> {
@@ -441,8 +450,7 @@ impl Lower<'_> {
             texture,
             sampler,
         });
-        self.symbols.insert(name.to_owned(), Sym::Sampler(index));
-        Ok(())
+        self.declare_symbol(name, Sym::Sampler(index))
     }
 
     fn declare_attribute(&mut self, name: &str) -> Result<()> {
@@ -471,8 +479,7 @@ impl Lower<'_> {
             used: true,
             provenance: VaryingProvenance { d3d: register },
         });
-        self.symbols.insert(name.to_owned(), Sym::Argument(index));
-        Ok(())
+        self.declare_symbol(name, Sym::Argument(index))
     }
 
     fn declare_varying(&mut self, name: &str) -> Result<()> {
@@ -496,7 +503,7 @@ impl Lower<'_> {
                 used: true,
                 provenance: VaryingProvenance::default(),
             });
-            self.symbols.insert(name.to_owned(), Sym::Argument(argument));
+            self.declare_symbol(name, Sym::Argument(argument))?;
         } else {
             let v4 = self.b.ty_of(Kind::F, 4);
             let local = self.b.local(name, v4);
@@ -511,8 +518,7 @@ impl Lower<'_> {
                 },
                 local,
             ));
-            self.symbols
-                .insert(name.to_owned(), Sym::Local(local, Kind::F, 4));
+            self.declare_symbol(name, Sym::Local(local, Kind::F, 4))?;
         }
         Ok(())
     }
@@ -538,12 +544,12 @@ impl Lower<'_> {
                 self.expect(")")?;
                 self.expect(";")?;
                 let v = self.b.compose(&parts);
-                self.symbols.insert(name.to_owned(), Sym::Const(v, Some(lanes)));
+                self.declare_symbol(name, Sym::Const(v, Some(lanes)))?;
             }
             "vec4" => {
                 let v = self.expression()?;
                 self.expect(";")?;
-                self.symbols.insert(name.to_owned(), Sym::Const(v.v, None));
+                self.declare_symbol(name, Sym::Const(v.v, None))?;
             }
             other => return self.fail(format!("a constant of type {other}")),
         }
@@ -757,6 +763,7 @@ impl Lower<'_> {
             ));
         }
         let pointer = self.b.local_ptr(local);
+        self.checked()?;
         if lanes.len() == usize::from(width) && lanes.iter().enumerate().all(|(k, l)| usize::from(*l) == k) {
             self.b.store(pointer, value);
         } else {
@@ -769,13 +776,21 @@ impl Lower<'_> {
                 self.b.store(target, part);
             }
         }
-        Ok(())
+        self.checked()
     }
 
     // ---- expressions ----
 
     fn expression(&mut self) -> Result<V> {
-        self.ternary()
+        let value = self.ternary()?;
+        self.checked()?;
+        Ok(value)
+    }
+
+    /// The builder's first fault since the last check, as a refusal of the line being read.
+    fn checked(&mut self) -> Result<()> {
+        let line = self.line();
+        self.b.check().map_err(|detail| error(line, detail))
     }
 
     fn ternary(&mut self) -> Result<V> {
@@ -789,8 +804,8 @@ impl Lower<'_> {
         if c.v.kind != Kind::B || c.v.width != 1 {
             return self.fail("a condition that is not one boolean");
         }
-        if a.v.kind != b.v.kind {
-            return self.fail("the two sides of ?: differ in type");
+        if a.v.kind != b.v.kind || a.v.width != b.v.width {
+            return self.fail("the two sides of ?: differ in type or width");
         }
         Ok(self.b.select(c.v, a.v, b.v).into())
     }
@@ -901,6 +916,12 @@ impl Lower<'_> {
         }
         if a.v.kind == Kind::I && op == Bo::Divide {
             return self.fail("integer division");
+        }
+        if a.v.width != b.v.width && a.v.width != 1 && b.v.width != 1 {
+            return self.fail(format!(
+                "arithmetic on vectors of {} and {} lanes",
+                a.v.width, b.v.width
+            ));
         }
         let literal = match (a.literal, b.literal, op) {
             (Some(x), Some(y), Bo::Add) => x.checked_add(y),
@@ -1198,6 +1219,10 @@ impl Lower<'_> {
                 if args.iter().any(|a| a.v.kind != Kind::F) {
                     return self.fail(format!("{name} of something that is not a float"));
                 }
+                let widest = args.iter().map(|a| a.v.width).max().unwrap_or(1);
+                if args.iter().any(|a| a.v.width != 1 && a.v.width != widest) {
+                    return self.fail(format!("{name} of vectors of different widths"));
+                }
                 let vals: Vec<Val> = args.iter().map(|a| a.v).collect();
                 Ok(self.b.math(fun, &vals).into())
             }
@@ -1240,6 +1265,7 @@ impl Lower<'_> {
     // ---- the program ----
 
     fn finish(mut self, notes: Vec<String>) -> Result<Program> {
+        self.checked()?;
         let interface = Interface {
             stage: self.stage,
             inputs: self.inputs.clone(),
@@ -1250,15 +1276,19 @@ impl Lower<'_> {
         // the resources: the constants, then each sampler's texture and sampler
         let mut resources = Vec::new();
         let mut bindings = Vec::new();
+        let mut constant_notes = Vec::new();
         if let Some((global, rows)) = self.constants {
             let size = rows.saturating_mul(16);
             let mut constants = Vec::new();
+            let (mut left_out, mut cut) = (0usize, 0usize);
             for c in &self.hints.constants {
                 // the program declares the rows it reads: a constant beyond them is not its, one that reaches past them
                 // is cut to the rows it has
                 if c.offset >= size {
+                    left_out += 1;
                     continue;
                 }
+                cut += usize::from(c.offset.saturating_add(c.bytes) > size);
                 let bytes = c.bytes.min(size.saturating_sub(c.offset));
                 let ty = if bytes == 16 {
                     if c.width <= 1 {
@@ -1279,6 +1309,16 @@ impl Lower<'_> {
                     ty,
                     default: None,
                 });
+            }
+            if left_out > 0 {
+                constant_notes.push(format!(
+                    "{left_out} constants the effect names lie past the program's {rows} uniform rows and are left out"
+                ));
+            }
+            if cut > 0 {
+                constant_notes.push(format!(
+                    "{cut} constants the effect names reach past the program's {rows} uniform rows and are cut to them"
+                ));
             }
             let id = ResourceId(resources.len() as u32);
             resources.push(Resource {
@@ -1375,7 +1415,10 @@ impl Lower<'_> {
             false,
         );
         let mut notes = notes;
+        notes.extend(constant_notes);
         notes.extend(primase_shader::interface_notes(&interface));
+        notes.sort();
+        notes.dedup();
         Ok(Program {
             module,
             stage: self.stage,

@@ -186,11 +186,13 @@ fn tokenize(text: &str, line: usize) -> Result<Vec<Spanned>> {
                 i = i.saturating_add(1);
             }
             let token = if float {
-                Token::Float(
-                    literal
-                        .parse::<f32>()
-                        .map_err(|_| error(line, format!("the number {literal}")))?,
-                )
+                let value = literal
+                    .parse::<f32>()
+                    .map_err(|_| error(line, format!("the number {literal}")))?;
+                if !value.is_finite() {
+                    return Err(error(line, format!("the number {literal}, which is not finite")));
+                }
+                Token::Float(value)
             } else {
                 Token::Int(
                     literal

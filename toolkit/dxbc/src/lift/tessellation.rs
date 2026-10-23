@@ -529,7 +529,8 @@ impl Lift<'_> {
         Ok(())
     }
 
-    pub(super) fn finish_functions(self, target: String) -> Result<Program> {
+    pub(super) fn finish_functions(mut self, target: String) -> Result<Program> {
+        self.b.check().map_err(|detail| crate::error(self.word, detail))?;
         let stage = self.setup.interface.stage;
         let module = self.b.finish_functions();
         let mut limit_notes = primase_shader::compute_limit_notes(&module);

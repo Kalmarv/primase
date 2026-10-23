@@ -167,6 +167,7 @@ impl<'a> Lift<'a> {
         if !self.returned {
             self.epilogue()?;
         }
+        self.b.check().map_err(|detail| error(self.word, detail))?;
         let stage = match self.stage {
             Stage::Vertex => naga::ShaderStage::Vertex,
             Stage::Compute => naga::ShaderStage::Compute,
