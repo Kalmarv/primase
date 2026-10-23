@@ -65,12 +65,12 @@ pub struct LevelReport {
 /// A glTF texture: its image's entity and its sampler's filters and wrap.
 type GltfTexture = (Entity, Filters, [Wrap; 2]);
 
-fn format(file: &str, detail: impl std::fmt::Display) -> Error {
+pub(super) fn format(file: &str, detail: impl std::fmt::Display) -> Error {
     Error::Format(format!("{file}: {detail}"))
 }
 
 /// A file's bytes.
-fn content(path: &Path) -> Result<Vec<u8>> {
+pub(super) fn content(path: &Path) -> Result<Vec<u8>> {
     std::fs::read(path).map_err(|source| Error::Io {
         path: path.to_path_buf(),
         source,
@@ -78,7 +78,7 @@ fn content(path: &Path) -> Result<Vec<u8>> {
 }
 
 /// The folder the levels' files are in.
-fn export_dir(install: &Path) -> PathBuf {
+pub(super) fn export_dir(install: &Path) -> PathBuf {
     install.join("Content").join("Models").join("Export")
 }
 
@@ -136,7 +136,7 @@ pub fn levels(install: &Path) -> Result<Vec<LevelEntry>> {
 
 /// The text of a file whose one object a string-shaped reader stores (7-bit length and UTF-8): XNA's
 /// `StringReader` (`reader` `None`) or the game's reader of that type name.
-fn string_of(path: &Path, reader: Option<&str>) -> Result<String> {
+pub(super) fn string_of(path: &Path, reader: Option<&str>) -> Result<String> {
     let bytes = content(path)?;
     let xnb = Xnb::parse(&bytes)?;
     let (r, mut c) = xnb.primary()?;
@@ -158,7 +158,7 @@ fn string_of(path: &Path, reader: Option<&str>) -> Result<String> {
 
 /// The bytes of a file whose one object a byte-array-shaped reader stores (an i32 count and the bytes): XNA's
 /// `ArrayReader<Byte>` (`reader` `None`) or the game's reader of that type name.
-fn bytes_of(path: &Path, reader: Option<&str>) -> Result<Vec<u8>> {
+pub(super) fn bytes_of(path: &Path, reader: Option<&str>) -> Result<Vec<u8>> {
     let bytes = content(path)?;
     let xnb = Xnb::parse(&bytes)?;
     let (r, mut c) = xnb.primary()?;
@@ -180,7 +180,7 @@ fn bytes_of(path: &Path, reader: Option<&str>) -> Result<Vec<u8>> {
 
 /// An image file of the install's content as RGBA8 mip levels, largest first: a QOI image (`BytingPipeline.QoiReader`:
 /// an i32 byte count and a QOI file) or XNA's `Texture2D` (raw `Color` pixels).
-fn image_levels(path: &Path) -> Result<(u32, u32, Vec<Vec<u8>>)> {
+pub(super) fn image_levels(path: &Path) -> Result<(u32, u32, Vec<Vec<u8>>)> {
     let bytes = content(path)?;
     let xnb = Xnb::parse(&bytes)?;
     let (reader, mut c) = xnb.primary()?;

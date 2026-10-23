@@ -1198,6 +1198,7 @@ version = "0.1.0"
 dependencies = [
  "primase-core",
  "primase-glb",
+ "primase-gltf",
  "primase-image",
  "primase-monogame",
  "primase-testdata",
