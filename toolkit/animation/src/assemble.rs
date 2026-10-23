@@ -1624,10 +1624,8 @@ mod tests {
         let skins: Vec<(Entity, Skin)> = w.iter::<Skin>().map(|(e, s)| (e, s.clone())).collect();
         let report = run(&mut w, report_own).unwrap();
         let log = &report.steps[0].log;
-        assert_eq!(
-            log.approximations["joint Neck: the rest in body differs from the assembled rest (taken from head) by 3.000e-3 (beyond tolerance 0.001; the part weights the joint and stays bound to its own rest and inverse binds)"],
-            1
-        );
+        let line = "joint Neck: the rest in body differs from the assembled rest (taken from head) by 3.000e-3 (beyond tolerance 0.001; the part weights the joint and keeps its own inverse binds)";
+        assert_eq!(log.approximations.get(line), Some(&1), "{:?}", log.approximations);
         assert_eq!(
             log.counts["weighted joint rests beyond the tolerance, accepted by weighted-rests=report"],
             1
@@ -1646,19 +1644,19 @@ mod tests {
         // refuse refuses the same world
         let mut refused = build();
         let err = run(&mut refused, OWN).unwrap_err();
-        assert!(err.contains("joint Neck: the rest in head differs"), "{err}");
-        // rebinding to the assembled skeleton with weighted-rests=report keeps the head's own inverse bind for the Neck
-        // it weights (the game poses a part through its own inverse binds) and rebinds what is within the tolerance
+        assert!(err.contains("joint Neck: the rest in body differs"), "{err}");
+        // rebinding to the assembled skeleton with weighted-rests=report keeps the body's own inverse bind for the Neck
+        // it weights (the assembled rest is the head's, the first weighting part's) (the game poses a part through its own inverse binds) and rebinds what is within the tolerance
         let mut w = build();
-        let head_proto = w
+        let body_proto = w
             .iter::<Skin>()
             .find(|(_, s)| {
                 w.get::<Skeleton>(s.bindings[0].skeleton)
-                    .is_some_and(|k| k.joints.len() == 4 && k.joints[3].name == "Head")
+                    .is_some_and(|k| k.joints.len() == 4 && k.joints[3].name == "L_Arm")
             })
             .map(|(e, _)| e)
             .unwrap();
-        let own_neck = w.get::<Skin>(head_proto).unwrap().bindings[0].palettes[0]
+        let own_neck = w.get::<Skin>(body_proto).unwrap().bindings[0].palettes[0]
             .as_ref()
             .unwrap()[2]
             .inverse_bind;
@@ -1670,7 +1668,7 @@ mod tests {
         let log = &report.steps[0].log;
         assert!(
             log.approximations.keys().any(|k| k.starts_with(
-                "joint Neck: the inverse binds of head kept as the part's own, its rest differs from the assembled by up to 3.000e-3"
+                "joint Neck: the inverse binds of body kept as the part's own, its rest differs from the assembled by up to 3.000e-3"
             )),
             "{:?}",
             log.approximations
@@ -1678,27 +1676,27 @@ mod tests {
         assert!(
             log.approximations
                 .keys()
-                .any(|k| k.starts_with("vertices of head sit up to ")
+                .any(|k| k.starts_with("vertices of body sit up to ")
                     && k.ends_with("where the part's own inverse binds are kept")),
             "{:?}",
             log.approximations
         );
         let (_, rig) = assembled(&w);
-        let slot = &w.get::<Skin>(head_proto).unwrap().bindings[0].palettes[0]
+        let slot = &w.get::<Skin>(body_proto).unwrap().bindings[0].palettes[0]
             .as_ref()
             .unwrap()[2];
         assert_eq!(
             slot.inverse_bind, own_neck,
-            "the weighted Neck keeps the head's own inverse bind"
+            "the weighted Neck keeps the body's own inverse bind"
         );
         assert_eq!(
             rig.joints[slot.joint.0 as usize].name, "Neck",
             "and names the assembled joint"
         );
         assert_eq!(w.verify_components(), vec![]);
-        // the body, whose Neck is the assembled one, is rebound as before: nothing of it is reported kept
+        // the head, whose Neck is the assembled one, is rebound as before: nothing of it is reported kept
         assert!(
-            !log.approximations.keys().any(|k| k.contains("of body kept")),
+            !log.approximations.keys().any(|k| k.contains("of head kept")),
             "{:?}",
             log.approximations
         );

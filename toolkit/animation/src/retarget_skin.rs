@@ -718,7 +718,8 @@ mod tests {
     }
 
     /// Joints equally near go to the first in the source skeleton's joint list, whatever their ids. Hand-worked: a cloth
-    /// joint 9 at (0, 1, 0) is sqrt 2 from both mapped joints, 7 at (1, 0, 0) and 5 at (-1, 0, 0), exactly; the list
+    /// joint 9 at (0, 1, 0) is sqrt 2 from both mapped joints, 7 at (1, 0, 0) and 5 at (-1, 0, 0), exactly (the mapped root,
+    /// which would be nearer, stands 10 below them); the list
     /// has 7 first (id order would pick 5), so its weight goes to 7's target, 70.
     #[test]
     fn nearest_takes_the_first_of_equals_in_joint_order() {
@@ -729,10 +730,10 @@ mod tests {
             source,
             Skeleton {
                 joints: vec![
-                    joint(1, None, trs([0.0; 3], id)),
-                    joint(7, Some(1), trs([1.0, 0.0, 0.0], id)),
-                    joint(5, Some(1), trs([-1.0, 0.0, 0.0], id)),
-                    joint(9, Some(1), trs([0.0, 1.0, 0.0], id)),
+                    joint(1, None, trs([0.0, -10.0, 0.0], id)),
+                    joint(7, Some(1), trs([1.0, 10.0, 0.0], id)),
+                    joint(5, Some(1), trs([-1.0, 10.0, 0.0], id)),
+                    joint(9, Some(1), trs([0.0, 11.0, 0.0], id)),
                 ],
             },
         );
@@ -829,7 +830,7 @@ mod tests {
             err.contains("unmapped=refuse|ancestor|nearest is required"),
             "{err}"
         );
-        let err = run(&mut w, "retarget-skin{unmapped=ancestor,placement=automatic}").unwrap_err();
+        let err = run(&mut w, "retarget-skin{unmapped=ancestor}").unwrap_err();
         assert!(err.contains("placement=automatic|stated is required"), "{err}");
         // nearest: the cloth point goes to the mapped joint nearest the cloth joint at rest (the hand, 0.14 away; the arm is 0.41)
         let (mut w, proto, _) = world();
@@ -954,6 +955,6 @@ mod tests {
         let (mut w, ..) = world();
         let err = run(&mut w, "retarget-skin{unmapped=ancestor,placement=stated}").unwrap_err();
         // the pass's own requirement refuses a world with no placement at all
-        assert!(err.contains("requires core.joint_placement"), "{err}");
+        assert!(err.contains("requires `core.joint_placement`"), "{err}");
     }
 }
