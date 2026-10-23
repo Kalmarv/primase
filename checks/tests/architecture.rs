@@ -1803,11 +1803,13 @@ fn query_calls(text: &str) -> Vec<(&'static str, Vec<String>)> {
         .map(|l| if l.trim_start().starts_with("//") { "" } else { l })
         .collect::<Vec<_>>()
         .join("\n");
+    // the names a `use primase_testdata::...;` brings in, however many lines its braces take
     let imported = |name: &str| {
-        code.lines().any(|l| {
-            l.trim_start().starts_with("use primase_testdata::")
-                && l.split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                    .any(|w| w == name)
+        code.match_indices("use primase_testdata::").any(|(at, _)| {
+            let statement = code[at..].split(';').next().unwrap_or_default();
+            statement
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .any(|w| w == name)
         })
     };
     let mut calls = Vec::new();
@@ -1871,6 +1873,11 @@ fn query_calls_see_typed_queries() {
          let d = ImageQuery::Size(x); fn oracle(x: u8) {{}}\n"
     );
     let calls = query_calls(&src);
+    // an import rustfmt split over lines brings its names in all the same
+    let split = format!(
+        "use primase_testdata::{{\n    Game,\n    OracleSet,\n    oracle,\n}};\nlet a = oracle(OracleSet::Corpus, Game::Sekiro, {q}dcx{q});\n"
+    );
+    assert_eq!(query_calls(&split).len(), 1, "{split}");
     assert_eq!(
         calls,
         [
