@@ -71,3 +71,32 @@ fn an_elden_ring_character_reads_through_the_one_character_reader() -> Result<()
     );
     Ok(())
 }
+
+/// `c8002` (a creature) has two helper joints at its root scaled to nothing (`MoveSampling_...`,
+/// `MasterRig_MoveSampling_UpperLimit`): their rests have no inverse. No vertex weights them, so the geometry lowers
+/// with the identity held as their inverse bind, counted.
+#[test]
+fn joints_scaled_to_nothing_hold_the_identity_when_no_vertex_weights_them() -> Result<()> {
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let mut w = World::new();
+    read_character_with(&install, "c8002", &decoder, CharacterOptions::default(), &mut w)?;
+    let report = common::run(
+        &mut w,
+        "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}",
+    )?;
+    let counts = &report.steps[0].log.counts;
+    assert_eq!(
+        counts["joints whose rest has no inverse (a bone scaled to nothing), holding the identity as inverse bind: no vertex weights them"],
+        2
+    );
+    Ok(())
+}

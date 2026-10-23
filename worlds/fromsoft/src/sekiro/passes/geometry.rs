@@ -272,11 +272,20 @@ struct Lowered {
     cards: Vec<super::blockers::Card>,
     /// The skeleton its skin binds to and every joint's slot, when it keeps one.
     palette: Option<(Entity, Vec<Slot>)>,
+    /// The joints (by index) whose rest has no inverse, which hold the identity as their inverse bind: no vertex may
+    /// weight them.
+    unbound: Vec<usize>,
 }
 
 /// Every joint of the skeleton held by `skeleton` as a palette slot, its inverse bind the inverse of the joint's rest
-/// in the skeleton's space.
-fn skeleton_palette(world: &World, skeleton: Entity) -> Result<(Entity, Vec<Slot>), String> {
+/// in the skeleton's space; the joints whose rest has no inverse (a bone scaled to nothing: the movement-sampling
+/// helpers at the root of Elden Ring's `c8000`) hold the identity, and are listed by index in `unbound`: nothing may
+/// weight them.
+fn skeleton_palette(
+    world: &World,
+    skeleton: Entity,
+    unbound: &mut Vec<usize>,
+) -> Result<(Entity, Vec<Slot>), String> {
     let s = world
         .get::<Skeleton>(skeleton)
         .ok_or_else(|| format!("{skeleton:?} holds no core.skeleton"))?;
@@ -285,15 +294,18 @@ fn skeleton_palette(world: &World, skeleton: Entity) -> Result<(Entity, Vec<Slot
     let slots = s
         .joints
         .iter()
-        .map(|j| {
-            let inverse = primase_animation::pose::inverse(&rests[&j.id])
-                .ok_or_else(|| format!("joint {:?}'s rest has no inverse", j.id))?;
-            Ok(Slot {
+        .enumerate()
+        .map(|(i, j)| {
+            let inverse = primase_animation::pose::inverse(&rests[&j.id]).unwrap_or_else(|| {
+                unbound.push(i);
+                primase_animation::pose::affine(&Transform::IDENTITY)
+            });
+            Slot {
                 joint: j.id,
                 inverse_bind: primase_animation::pose::transform(&inverse),
-            })
+            }
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Vec<_>>();
     Ok((skeleton, slots))
 }
 
@@ -409,7 +421,13 @@ impl LowerFromSoftGeometry {
         if self.pose == Pose::Stored
             && let Some(s) = world.get::<SkeletonOf>(prototype)
         {
-            out.palette = Some(skeleton_palette(world, s.0)?);
+            out.palette = Some(skeleton_palette(world, s.0, &mut out.unbound)?);
+            if !out.unbound.is_empty() {
+                log.count(
+                    "joints whose rest has no inverse (a bone scaled to nothing), holding the identity as inverse bind: no vertex weights them",
+                    out.unbound.len() as u64,
+                );
+            }
         }
         let wide = model.bones.len() > 256;
         let mut mesh_levels = Vec::new();
@@ -498,6 +516,18 @@ impl LowerFromSoftGeometry {
                 let skinned = out.palette.is_some();
                 if skinned {
                     let vertex = |k: &u32| &mesh.vertices[*k as usize];
+                    if let Some(bad) = part.source_vertices.iter().find_map(|k| {
+                        let v = vertex(k);
+                        v.bone_indices
+                            .iter()
+                            .zip(v.bone_weights)
+                            .find(|&(&j, w)| w > 0.0 && out.unbound.contains(&(j as usize)))
+                            .map(|(&j, _)| j)
+                    }) {
+                        return Err(format!(
+                            "{prototype:?}: a vertex of mesh {index} is weighted to joint {bad}, whose rest has no inverse"
+                        ));
+                    }
                     let joints = part.source_vertices.iter().map(|k| vertex(k).bone_indices);
                     streams.insert(
                         Semantic::Joints(0),
