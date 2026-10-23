@@ -45,6 +45,16 @@
 //!   constant at the medium albedo, the notes' reading, §27.3), counted per Material; its micro detail, tens to
 //!   hundreds of tiles across the UV square, is sampled at the bake texel's footprint like every texture.
 //!
+//! - **The character zones** (`MAD_CHR_5Zones_*`, 17 templates; docs/material-spec.md §18.2, §19): no albedo texture;
+//!   a pixel is one of five zones chosen by `Mask1`'s thresholds, each a Material colour mixed with its variance colour
+//!   by `Mask1.a`, over the decal; roughness, normal and metalness from `Mask2` and the Material's zone constants. The
+//!   recipe takes the rows the template binds and the textures the program samples (`t75` and up: the permutations
+//!   differ in their order), and states what the engine supplies and a static bake cannot: the mud layer (`FX-MUD`, a
+//!   runtime dirt state whose mask is sampled as 0: `HideDirt` taken as 1, the notes' choice for a static export), the
+//!   detail array (`Texture`, engine-bound: sampled as a flat detail normal, which leaves the normal as it was) and,
+//!   where the Material binds none, the decal pair as no decal. The exposure `t23` is 1. A Material that isn't covered
+//!   (`MAD_CHR_Skin` reads the character's customisation from a per-instance buffer) is left to `lower-anvil-material`.
+//!
 //! A recipe whose paint is a pattern its shader computes (Road's lane lines) is baked over one period of the pattern in
 //! the shader's own UV, its Material's UV transform set to the identity, and that transform scaled by the period put
 //! on the texture references instead (`lower-anvil-material`'s reading of a UV transform, so `shader-uv` there too):
@@ -197,6 +207,9 @@ struct Recipe {
     camera: bool,
     /// Whether its program divides by the object's screen origin's w (`cb2[11].w`, its team stripes): run with it 1.
     object_origin: bool,
+    /// The character zones' family (`template` a prefix): its slots are the textures the program samples, its rows the
+    /// ones the template binds, its mud, detail array and absent decals as the module documentation states.
+    zones: bool,
 }
 
 /// MAD_Tex1_Rocks (docs/material-spec.md §14.6; its G-buffer program 0x25A2D read): dirt colours at rows 1 to 3,
@@ -220,6 +233,7 @@ const ROCKS: Recipe = Recipe {
     }),
     camera: false,
     object_origin: false,
+    zones: false,
 };
 
 /// MAD_Tex1_UniqueNormalGradient (§27.3; its G-buffer program read): `Dirt tiling` 1, `Base tiling` 2, the zones'
@@ -241,6 +255,7 @@ const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
     terrain: None,
     camera: true,
     object_origin: false,
+    zones: false,
 };
 
 /// MAD_Road (§27.4; its G-buffer program read): `2.Metalness` 1, `4.Emissive Scale` 2, `Hue` 3, `Saturate` 4,
@@ -264,6 +279,7 @@ const ROAD: Recipe = Recipe {
     terrain: None,
     camera: false,
     object_origin: false,
+    zones: false,
 };
 
 /// MAD_Tex1_UniqueNormal_DiffuseBlend (§27.8; its G-buffer program read): `Use AO` 1, `3 - DETAILS -Tiling` 2 and
@@ -282,6 +298,7 @@ const UNIQUE_NORMAL_DIFFUSE_BLEND: Recipe = Recipe {
     terrain: None,
     camera: false,
     object_origin: false,
+    zones: false,
 };
 
 /// MAD_Tex1_Graffiti_Monster (§27.14.2; its G-buffer program read): `Use AO` 1, `EmissivePower` 2, `FresnelOffset` 3,
@@ -301,6 +318,7 @@ const GRAFFITI_MONSTER: Recipe = Recipe {
     terrain: None,
     camera: false,
     object_origin: true,
+    zones: false,
 };
 
 /// MAD_Hero_Ice (§27.2; its G-buffer program read): `TilingGlobal` 1, `FresnelFalloff` 2, `LightDirectionFalloff` 3,
@@ -324,6 +342,7 @@ const HERO_ICE: Recipe = Recipe {
     terrain: None,
     camera: false,
     object_origin: false,
+    zones: false,
 };
 
 /// MAD_IceBrick (§27.6; its G-buffer program read): Hero_Ice's albedo without its object normal or parallax, rows 1
@@ -341,7 +360,41 @@ const ICE_BRICK: Recipe = Recipe {
     terrain: None,
     camera: false,
     object_origin: false,
+    zones: false,
 };
+
+/// MAD_CHR_5Zones_* (§18.2, §19; the G-buffer programs of the 17 templates read): its interpolants after the UV are the
+/// tangent, the normal with its bitangent sign and the clip position; the rest is derived from the program and the
+/// template ([`Recipe::zones`]).
+const FIVE_ZONES: Recipe = Recipe {
+    template: "MAD_CHR_5Zones_",
+    interpolants: TANGENT_NORMAL,
+    light: Light::None,
+    pattern: None,
+    rows: &[],
+    slots: &[],
+    unkept: &[],
+    engine: &[(23, 1.0)],
+    terrain: None,
+    camera: false,
+    object_origin: false,
+    zones: true,
+};
+
+/// The properties of the zones' templates the bake states instead of reading a texture: the mud layer's mask
+/// (`FX-MUD_NormalMask`), the generic `Texture` (the engine-bound detail array), the decal and its normal.
+const HIDE_DIRT: u32 = 0xB3F7_3583;
+const MUD_MASK: u32 = 0xA017_A952;
+const DETAIL_ARRAY: u32 = 0x4DDB_34EE;
+const DECAL: u32 = 0x7309_AE2D;
+const DECAL_NORMAL: u32 = 0x5D0B_0E92;
+
+/// The recipe of a template: an exact name, or a zones family's prefix.
+fn recipe_of(template: &str) -> Option<&'static Recipe> {
+    RECIPES
+        .iter()
+        .find(|r| r.template == template || (r.zones && template.starts_with(r.template)))
+}
 
 const RECIPES: &[Recipe] = &[
     ROCKS,
@@ -351,6 +404,7 @@ const RECIPES: &[Recipe] = &[
     HERO_ICE,
     ICE_BRICK,
     GRAFFITI_MONSTER,
+    FIVE_ZONES,
 ];
 
 /// The pass (see the module documentation). Each shader evaluation runs on the world's stated threads (`core.threads`,
@@ -581,7 +635,17 @@ impl BakeAnvilMaterial {
         let shader =
             primase_shader_exec::ProgramShader::new(primase_dxbc::lift(program).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
-        let rows = material_rows(m)?;
+        let mut rows = material_rows(m)?;
+        if recipe.zones {
+            // the mud's switch: HideDirt taken as 1 (a static export has no dirt state)
+            for (key, binding) in &m.bindings {
+                if *key == HIDE_DIRT
+                    && let MaterialBinding::Scalar { vec4 } = binding
+                {
+                    rows.insert(*vec4, [1.0, 0.0, 0.0, 0.0]);
+                }
+            }
+        }
         if let Some(r) = recipe.rows.iter().find(|r| !rows.contains_key(r)) {
             return Err(format!(
                 "its template binds nothing at row {r}, which the program reads"
@@ -692,15 +756,38 @@ impl BakeAnvilMaterial {
             let value = if ao { self.terrain_ao } else { value };
             textures.insert(slot, primase_shader_exec::Texture::Constant([value; 4]));
         }
-        for &slot in recipe.slots {
+        let slots: Vec<u32> = if recipe.zones {
+            PixelShader::textures(&shader)
+                .iter()
+                .filter_map(|t| t.checked_sub(75))
+                .collect()
+        } else {
+            recipe.slots.to_vec()
+        };
+        for slot in slots {
             // the texture the binding resolves to (the Material's record, its TextureSet's slot, or the template's
             // default)
-            let set = m
+            let bound = m
                 .textures
                 .iter()
                 .find(|t| t.shader_slot == slot)
-                .ok_or_else(|| format!("its template binds no texture at t{}", 75 + slot))?
-                .texture;
+                .ok_or_else(|| format!("its template binds no texture at t{}", 75 + slot))?;
+            let set = bound.texture;
+            if recipe.zones {
+                // what the engine supplies and a static bake can't: the mud's mask 0 (no dirt), the detail array a
+                // flat detail normal, an absent decal none (alpha 0) and an absent decal normal the flat normal
+                let fixed = match (bound.key, set) {
+                    (MUD_MASK, _) => Some([0.0; 4]),
+                    (DETAIL_ARRAY, None) => Some([0.5, 0.5, 1.0, 1.0]),
+                    (DECAL, None) => Some([0.0; 4]),
+                    (DECAL_NORMAL, None) => Some([0.5, 0.5, 1.0, 1.0]),
+                    _ => None,
+                };
+                if let Some(v) = fixed {
+                    textures.insert(75 + slot, primase_shader_exec::Texture::Constant(v));
+                    continue;
+                }
+            }
             let e = match set {
                 Some(e) => e,
                 None if recipe.unkept.iter().any(|&(s, row)| {
@@ -895,11 +982,7 @@ impl Pass for BakeAnvilMaterial {
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let materials: Vec<Entity> = w
             .iter::<AnvilMaterial>()
-            .filter(|(_, m)| {
-                m.template_name
-                    .as_deref()
-                    .is_some_and(|t| RECIPES.iter().any(|r| r.template == t))
-            })
+            .filter(|(_, m)| m.template_name.as_deref().is_some_and(|t| recipe_of(t).is_some()))
             .map(|(e, _)| e)
             .collect();
         let normal = NormalConvention {
@@ -910,10 +993,12 @@ impl Pass for BakeAnvilMaterial {
         };
         for e in materials {
             let m = w.get::<AnvilMaterial>(e).ok_or("listed above")?;
-            let recipe = RECIPES
-                .iter()
-                .find(|r| m.template_name.as_deref() == Some(r.template))
+            let recipe = m
+                .template_name
+                .as_deref()
+                .and_then(recipe_of)
                 .ok_or("listed above")?;
+            let template = m.template_name.clone().unwrap_or_default();
             let program = match (gbuffer_pixel_key(&m.flags), m.shaders) {
                 (Err(why), _) => Err(why.to_owned()),
                 (Ok(_), None) => Err("its template's shaders weren't read (Placer::with_shaders)".to_owned()),
@@ -930,7 +1015,7 @@ impl Pass for BakeAnvilMaterial {
                     log.omit(
                         &format!(
                             "{} Materials not baked (left to lower-anvil-material): {why}",
-                            recipe.template
+                            template
                         ),
                         1,
                     );
@@ -960,7 +1045,7 @@ impl Pass for BakeAnvilMaterial {
                 log.approximate(
                     &format!(
                         "{} Materials mixing in the terrain's ambient occlusion: the stated terrain-ao",
-                        recipe.template
+                        template
                     ),
                     1,
                 );
@@ -969,7 +1054,7 @@ impl Pass for BakeAnvilMaterial {
                 log.approximate(
                     &format!(
                         "{} Materials mixing in the terrain's sediments: none (sediment layer 0)",
-                        recipe.template
+                        template
                     ),
                     1,
                 );
@@ -978,7 +1063,7 @@ impl Pass for BakeAnvilMaterial {
                 log.omit(
                     &format!(
                         "{} Materials' specular occlusion, translucency or emission (no place here): left out",
-                        recipe.template
+                        template
                     ),
                     1,
                 );
@@ -1004,7 +1089,7 @@ impl Pass for BakeAnvilMaterial {
                 },
             );
             w.insert(e, VertexColor::Ignored);
-            log.count(&format!("{} Materials baked", recipe.template), 1);
+            log.count(&format!("{} Materials baked", template), 1);
             if recipe.camera {
                 log.approximate(
                     &format!(
