@@ -1934,7 +1934,8 @@ fn real_data_queries_are_declared() {
     for m in members() {
         for file in rust_files(&root().join(&m.path))
             .into_iter()
-            .filter(|f| !f.starts_with("toolkit/testdata/"))
+            // primase-testdata asks itself; this file holds query_calls' fixtures, in strings
+            .filter(|f| !f.starts_with("toolkit/testdata/") && f != "checks/tests/architecture.rs")
         {
             let text = read(&root().join(&file));
             if !text.contains("primase_testdata") {
