@@ -75,6 +75,11 @@ pub(super) fn compile(
     function: Option<&str>,
 ) -> Result<Executable, String> {
     let m = &p.module;
+    for (_, g) in m.global_variables.iter() {
+        if matches!(m.types[g.ty].inner, TypeInner::AccelerationStructure { .. }) {
+            return Err(ray_queries());
+        }
+    }
     let ep = match function {
         None => Some(m.entry_points.first().ok_or("no entry point")?),
         Some(_) => None,
@@ -113,6 +118,9 @@ pub(super) fn compile(
     let mut local_off: Vec<u32> = Vec::new();
     let mut local_words = 0u32;
     for (_, l) in f.local_variables.iter() {
+        if matches!(m.types[l.ty].inner, TypeInner::RayQuery { .. }) {
+            return Err(ray_queries());
+        }
         local_off.push(local_words);
         local_words += words(m, l.ty)?;
     }
@@ -160,9 +168,13 @@ pub(super) fn compile(
                 let init = g.init.ok_or("private global without initialiser")?;
                 Some(GlobalKind::Private(const_words(m, init)?))
             }
-            naga::AddressSpace::Storage { .. } => Some(GlobalKind::Storage(
-                resource_of.get(&h.index()).ok_or("unbound storage")?.0,
-            )),
+            naga::AddressSpace::Storage { .. } => {
+                let &(id, count) = resource_of.get(&h.index()).ok_or("unbound storage")?;
+                Some(match &m.types[g.ty].inner {
+                    TypeInner::BindingArray { .. } => GlobalKind::StorageArray(id, count),
+                    _ => GlobalKind::Storage(id),
+                })
+            }
             naga::AddressSpace::WorkGroup => Some(GlobalKind::Workgroup(words(m, g.ty)?)),
             naga::AddressSpace::Handle => None,
             s => return Err(format!("address space {s:?}")),
@@ -170,6 +182,15 @@ pub(super) fn compile(
         if let Some(kind) = kind {
             let elem_words = match &m.types[g.ty].inner {
                 TypeInner::Array { base, .. } => words(m, *base)?,
+                // an array of buffers: the words of one element of the array each holds
+                TypeInner::BindingArray { base, .. } => match &m.types[*base].inner {
+                    TypeInner::Struct { members, .. } => match members.last().map(|x| &m.types[x.ty].inner) {
+                        Some(TypeInner::Array { base, .. }) => words(m, *base)?,
+                        _ => return Err("an array of buffers whose elements are not a runtime array".into()),
+                    },
+                    TypeInner::Array { base, .. } => words(m, *base)?,
+                    _ => return Err("an array of buffers of anything but structures".into()),
+                },
                 _ => 1,
             };
             gid_of.insert(h.index(), globals.len() as u32);
@@ -203,6 +224,7 @@ pub(super) fn compile(
     let add_loc = |loc: Loc, d: u32| match loc {
         Loc::Local(o) => Loc::Local(o + d),
         Loc::Global(g, o) => Loc::Global(g, o + d),
+        Loc::Elem(g, o, p) => Loc::Elem(g, o + d, p),
     };
     // provenance: each value lane's source (argument index, lane)
     type Prov = [Option<(u32, u8)>; 4];
@@ -352,6 +374,25 @@ pub(super) fn compile(
                         n: *size as u8,
                     });
                 }
+            }
+            // an element of an array of buffers: where its words are
+            E::Access { base, index } if is_buffer_array(f, &gid_of, &globals, *base) => {
+                let E::GlobalVariable(g) = f.expressions[*base] else {
+                    unreachable!("checked")
+                };
+                ptr_of[i] = Some(Ptr {
+                    loc: Loc::Elem(gid_of[&g.index()], 0, Pick::Slot(slot[index.index()])),
+                    dynamic: None,
+                });
+            }
+            E::AccessIndex { base, index } if is_buffer_array(f, &gid_of, &globals, *base) => {
+                let E::GlobalVariable(g) = f.expressions[*base] else {
+                    unreachable!("checked")
+                };
+                ptr_of[i] = Some(Ptr {
+                    loc: Loc::Elem(gid_of[&g.index()], 0, Pick::Fixed(*index)),
+                    dynamic: None,
+                });
             }
             // an element of a resource array is named by the operation that reads it
             E::Access { base, .. } | E::AccessIndex { base, .. } if is_binding_array(m, f, *base) => {}
@@ -680,12 +721,15 @@ pub(super) fn compile(
             }
             E::ArrayLength(p) => {
                 let pp = ptr_of[p.index()].ok_or("arrayLength of a non-pointer")?;
-                let Loc::Global(g, _) = pp.loc else {
-                    return Err("arrayLength of a local".into());
+                let (g, pick) = match pp.loc {
+                    Loc::Global(g, _) => (g, None),
+                    Loc::Elem(g, _, pick) => (g, Some(pick)),
+                    Loc::Local(_) => return Err("arrayLength of a local".into()),
                 };
                 op_of[i] = Some(Op::ArrLen {
                     gid: g,
                     elem_words: globals[g as usize].elem_words,
+                    pick,
                 });
             }
             E::ImageSample {
@@ -793,6 +837,11 @@ pub(super) fn compile(
                     agg_of[i] = Some(vec![(slot[i], 1), (extra as u32, 1)]);
                 }
             }
+            E::RayQueryProceedResult
+            | E::RayQueryGetIntersection { .. }
+            | E::RayQueryVertexPositions { .. } => {
+                return Err(ray_queries());
+            }
             e => return Err(format!("expression {:?}", std::mem::discriminant(e))),
         }
     }
@@ -808,7 +857,17 @@ pub(super) fn compile(
             | Op::Cvt { src, .. }
             | Op::Deriv { src, .. } => vec![*src],
             Op::Compose { parts, np } => parts[..*np as usize].iter().map(|p| p.0).collect(),
-            Op::LoadDyn { ptr, .. } => vec![ptr.dynamic.map_or(0, |d| d.0)],
+            Op::LoadDyn { ptr, .. } => ptr
+                .dynamic
+                .map(|d| d.0)
+                .into_iter()
+                .chain(ptr.loc.slot())
+                .collect(),
+            Op::Load { loc, .. } | Op::LoadLanes { loc, .. } => loc.slot().into_iter().collect(),
+            Op::ArrLen {
+                pick: Some(Pick::Slot(s)),
+                ..
+            } => vec![*s],
             Op::Bin { a, b, .. } => vec![*a, *b],
             Op::Select { c, a, b, .. } => vec![*c, *a, *b],
             Op::Math { a, b, c, .. } => vec![*a, *b, *c],
@@ -954,6 +1013,9 @@ pub(super) fn compile(
                 }
                 Statement::Store { pointer, value } => {
                     let p = cx.ptr_of[pointer.index()].ok_or("store through a non-pointer")?;
+                    if let Some(s) = p.loc.slot() {
+                        cx.uses[s as usize] += 1;
+                    }
                     let Shape::V(_, n) = (cx.shape)(*value)? else {
                         return Err("store of an aggregate".into());
                     };
@@ -1075,6 +1137,9 @@ pub(super) fn compile(
                         }
                     };
                     let p = cx.ptr_of[pointer.index()].ok_or("atomic through a non-pointer")?;
+                    if let Some(s) = p.loc.slot() {
+                        cx.uses[s as usize] += 1;
+                    }
                     let v = cx.slot[value.index()];
                     let signed = matches!((cx.shape)(*value)?, Shape::V(Kind::I, _));
                     cx.uses[v as usize] += 1;
@@ -1191,6 +1256,7 @@ pub(super) fn compile(
                 }
                 // one sequential schedule: every write is visible at once
                 Statement::MemoryBarrier(_) => {}
+                Statement::RayQuery { .. } => return Err(ray_queries()),
                 s => return Err(format!("statement {:?}", std::mem::discriminant(s))),
             }
         }
@@ -1369,6 +1435,28 @@ fn array_of(
         E::FunctionArgument(a) => array_arg[a as usize],
         _ => None,
     }
+}
+
+/// Whether the expression is a global that is an array of storage buffers.
+fn is_buffer_array(
+    f: &naga::Function,
+    gid_of: &BTreeMap<usize, u32>,
+    globals: &[GlobalDesc],
+    h: Handle<E>,
+) -> bool {
+    match f.expressions[h] {
+        E::GlobalVariable(g) => gid_of
+            .get(&g.index())
+            .is_some_and(|&gid| matches!(globals[gid as usize].kind, GlobalKind::StorageArray(..))),
+        _ => false,
+    }
+}
+
+/// Why a program that traces rays is refused.
+fn ray_queries() -> String {
+    "ray queries: the executor has no acceleration structure to traverse (they are GPU-only, and a CPU run would \
+     need the scene's triangles supplied)"
+        .into()
 }
 
 /// An image global as an expression names it: the resource, its class, its dimension and whether it is arrayed.

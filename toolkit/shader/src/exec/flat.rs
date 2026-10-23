@@ -102,6 +102,18 @@ pub(super) enum MathOp {
 pub(super) enum Loc {
     Local(u32),
     Global(u32, u32),
+    /// Words from the offset of one element of an array of buffers (a global that is a binding array): the element
+    /// is fixed, or read from the first lane of a register.
+    Elem(u32, u32, Pick),
+}
+impl Loc {
+    /// The register an element index of this location is read from.
+    pub(super) fn slot(&self) -> Option<u32> {
+        match self {
+            Loc::Elem(_, _, Pick::Slot(s)) => Some(*s),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Ptr {
@@ -213,6 +225,8 @@ pub(super) enum Op {
     ArrLen {
         gid: u32,
         elem_words: u32,
+        /// The element of an array of buffers.
+        pick: Option<Pick>,
     },
 }
 /// Which element of a resource array an operation reads.
@@ -404,6 +418,8 @@ pub(super) enum GlobalKind {
     Private(Vec<u32>),
     /// A buffer of the interface read through the storage address space.
     Storage(ResourceId),
+    /// An array of that many such buffers.
+    StorageArray(ResourceId, u32),
     /// Thread-group memory of this many words, zero at the start of every group.
     Workgroup(u32),
 }
