@@ -710,10 +710,10 @@ pub const DECLARED: &[Declared] = &[
     },
     Declared {
         query: Query::Oracle(OracleSet::Scripts, Game::Sekiro, "dds"),
-        status: Status::Blocked,
+        status: Status::Live,
         gate: true,
-        about: r#"trusted C# DDS oracle assembly; protocol in worlds/fromsoft/README.md"#,
-        source: r#"the C# oracle's decoder source is gone; replacement: a third-party DDS decoder"#,
+        about: r#"a folder holding the DDS decoding worker `DdsWorker.dll` and the libraries it loads; protocol in worlds/fromsoft/README.md; worlds/fromsoft/tests/tpf_pixels.rs"#,
+        source: r#"independent: BCnEncoder.Net 2.2.1 (MIT OR Unlicense), through a thin decoding worker kept with the private oracle tools"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Scripts, Game::Sekiro, "normal-curl.json"),
@@ -822,10 +822,10 @@ pub const DECLARED: &[Declared] = &[
     },
     Declared {
         query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "tpf"),
-        status: Status::Blocked,
+        status: Status::Live,
         gate: true,
         about: r#"independent texture-package census (packages.jsonl, area-dds/, errors.tsv); schema in worlds/fromsoft/README.md; worlds/fromsoft/tests/tpf_census.rs, tpf_pixels.rs"#,
-        source: r#"not built (a stated coverage gap): SoulsFormats' TPF reader in the dump harness's census mode; build it when a step 20 or in-game difference points at textures"#,
+        source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`tpf` mode); area-dds/ holds every distinct DDS under `/map/`"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Studio, Game::Gta, "legion/patch"),
