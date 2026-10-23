@@ -50,6 +50,8 @@ fn pipeline(variant: &str) -> Pipeline {
         },
     )
     .unwrap()
+    // the fixtures' libraries state no pipeline config; the oracle's state object declares 2
+    .with_max_recursion(2)
     .with_hit_groups([
         group("triangles", HitGroupKind::Triangles, None),
         group(

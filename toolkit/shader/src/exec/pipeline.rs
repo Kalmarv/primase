@@ -27,6 +27,9 @@ use crate::{
     StageFacts, StorageTarget, Subobject, SystemValue, stage_functions,
 };
 
+/// The deepest maximum recursion a pipeline may declare.
+const MAX_DECLARABLE_RECURSION: u32 = 31;
+
 /// The application's shader table: the program each index selects, by the export name the library gives it.
 #[derive(Clone, Debug, Default)]
 pub struct ShaderTable {
@@ -72,12 +75,17 @@ pub struct Pipeline {
     programs: BTreeMap<String, Entry>,
     groups: BTreeMap<String, HitGroup>,
     table: ShaderTable,
-    max_recursion: u32,
+    /// The deepest `TraceRay` recursion the pipeline declares; none until a library's subobjects or
+    /// [`Pipeline::with_max_recursion`] state it.
+    max_recursion: Option<u32>,
 }
 
 impl Pipeline {
     /// A pipeline of `programs` (each a ray tracing program, named by its export), the hit groups the programs'
-    /// libraries state, and `table`. The recursion depth is the one the libraries state, else DXR's limit of 31.
+    /// libraries state, and `table`. The pipeline's maximum recursion depth is the one a library's pipeline config
+    /// subobject states; libraries that state none leave it to [`Pipeline::with_max_recursion`], and a dispatch
+    /// without one is refused (the DXR specification: "A raytracing pipeline needs one raytracing pipeline
+    /// configuration", section "D3D12_RAYTRACING_PIPELINE_CONFIG").
     pub fn new(programs: Vec<Program>, table: ShaderTable) -> Result<Self, String> {
         let mut entries = BTreeMap::new();
         let mut groups = BTreeMap::new();
@@ -96,7 +104,16 @@ impl Pipeline {
                     }
                     Subobject::PipelineConfig {
                         max_recursion_depth, ..
-                    } => max_recursion = Some(*max_recursion_depth),
+                    } => {
+                        // "If multiple [...] configurations are present [...] they must all match"
+                        if max_recursion.is_some_and(|d| d != *max_recursion_depth) {
+                            return Err(format!(
+                                "the libraries state different maximum recursion depths ({} and {max_recursion_depth})",
+                                max_recursion.unwrap_or_default()
+                            ));
+                        }
+                        max_recursion = Some(*max_recursion_depth);
+                    }
                     _ => {}
                 }
             }
@@ -136,8 +153,15 @@ impl Pipeline {
             programs: entries,
             groups,
             table,
-            max_recursion: max_recursion.unwrap_or(31),
+            max_recursion,
         })
+    }
+
+    /// State the maximum recursion depth, the pipeline config an application gives when its libraries do not (the
+    /// depth the application declares in `D3D12_RAYTRACING_PIPELINE_CONFIG`): replaces the libraries' own.
+    pub fn with_max_recursion(mut self, depth: u32) -> Self {
+        self.max_recursion = Some(depth);
+        self
     }
 
     /// Add or replace hit groups the libraries do not state.
@@ -157,6 +181,17 @@ impl Pipeline {
         resources: &PipelineResources,
         sampler: &mut dyn Sampler,
     ) -> Result<DispatchStats, String> {
+        let Some(depth) = self.max_recursion else {
+            return Err(
+                "the pipeline has no maximum recursion depth: a raytracing pipeline needs one raytracing pipeline                  configuration (DXR specification, D3D12_RAYTRACING_PIPELINE_CONFIG); state it in a library's                  subobjects or with Pipeline::with_max_recursion"
+                    .into(),
+            );
+        };
+        if depth > MAX_DECLARABLE_RECURSION {
+            return Err(format!(
+                "the pipeline declares a maximum recursion depth of {depth}, past the {MAX_DECLARABLE_RECURSION}                  DXR allows (\"Ray recursion limit\": a depth in the range [0..31])"
+            ));
+        }
         let entry = self
             .programs
             .get(raygen)
@@ -298,7 +333,13 @@ impl<'p> Host<'p, '_> {
             .programs
             .get_key_value(name)
             .ok_or_else(|| format!("the shader table names {name}, which the library does not export"))?;
-        if self.stack.len() as u32 > pipe.max_recursion.saturating_mul(4).saturating_add(8) {
+        if self.stack.len() as u32
+            > pipe
+                .max_recursion
+                .unwrap_or(0)
+                .saturating_mul(4)
+                .saturating_add(8)
+        {
             return Err("the programs call each other too deeply".into());
         }
         let interface = &entry.program.interface;
@@ -405,10 +446,10 @@ impl<'p> Host<'p, '_> {
     }
 
     fn trace(&mut self, r: TraceRay<'_>) -> Result<(), String> {
-        if self.active.len() as u32 >= self.pipe.max_recursion {
+        if self.active.len() as u32 >= self.pipe.max_recursion.unwrap_or(0) {
             return Err(format!(
                 "TraceRay recurses deeper than the pipeline's maximum of {}",
-                self.pipe.max_recursion
+                self.pipe.max_recursion.unwrap_or(0)
             ));
         }
         self.stats.rays += 1;

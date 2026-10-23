@@ -49,6 +49,8 @@ fn pipeline(variant: &str) -> Pipeline {
         },
     )
     .unwrap()
+    // the fixtures' libraries state no pipeline config; the oracle's state object declares 2
+    .with_max_recursion(2)
     .with_hit_groups([
         group("triangles", HitGroupKind::Triangles, None),
         group(
@@ -237,4 +239,49 @@ fn an_intersection_program_reports_a_procedural_hit_that_is_offered_to_the_any_h
             v,
         );
     }
+}
+
+/// A pipeline needs a maximum recursion depth, and DXR allows 0 to 31: neither a missing nor a larger one is silently
+/// replaced.
+#[test]
+fn a_pipeline_without_a_declared_recursion_depth_is_refused() {
+    let resources = PipelineResources {
+        constants: BTreeMap::new(),
+        scene: Scene {
+            bottoms: vec![vec![triangle(
+                [[0.0, 0.0, 5.0], [1.0, 0.0, 5.0], [0.0, 1.0, 5.0]],
+                true,
+            )]],
+            instances: vec![instance(IDENTITY, 0)],
+        },
+    };
+    let programs = || {
+        [
+            "raygen",
+            "miss",
+            "closest_hit",
+            "any_hit",
+            "intersection",
+            "callable",
+        ]
+        .map(|n| program(n, ""))
+        .to_vec()
+    };
+    let table = || ShaderTable {
+        miss: vec!["miss".to_owned()],
+        hit_groups: Vec::new(),
+        callable: vec!["callable".to_owned()],
+    };
+    let mut image = Image::default();
+    let e = Pipeline::new(programs(), table())
+        .unwrap()
+        .dispatch_rays("raygen", [1, 1, 1], &resources, &mut image)
+        .unwrap_err();
+    assert!(e.contains("no maximum recursion depth"), "{e}");
+    let e = Pipeline::new(programs(), table())
+        .unwrap()
+        .with_max_recursion(32)
+        .dispatch_rays("raygen", [1, 1, 1], &resources, &mut image)
+        .unwrap_err();
+    assert!(e.contains("past the 31"), "{e}");
 }
