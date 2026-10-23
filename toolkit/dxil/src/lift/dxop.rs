@@ -3,10 +3,12 @@
 //! and callee disagree is not a DXIL program, and the lifter reads an operation's arguments by position, so the count is
 //! checked once, before the operation is dispatched.
 //!
-//! The counts are those the 69,826 modules of the oracle corpora and the committed fixtures call the operations with
-//! (every opcode was called with one count only). The operations none of them calls (the integer multiplies, divide and
-//! carry operations 41 to 45, `Fma`, `LoadOutputControlPoint`, some of the mesh and ray query operations, `IsNormal` and
-//! the hyperbolic functions) have the parameter list the DXIL specification gives them; no program checks those.
+//! The counts are DXC's own: `utils/hct/hctdb.py` of DirectXShaderCompiler (revision 55a61aa, 2026-09-29) defines each
+//! operation's parameter list, the return value first and the opcode second, so an operation's arguments are its
+//! parameters less the return value. The table below is those counts for the operations the lifter dispatches; every one
+//! also equals the count the 69,826 modules of the oracle corpora and the committed fixtures call it with (those that call
+//! it: 150 of the 177), and the operations none of them calls (41 to 45, `Fma`, `LoadOutputControlPoint`, some of the mesh
+//! and ray query operations, `IsNormal` and the hyperbolic functions) are only DXC's word.
 
 /// The number of arguments (the opcode included) of the `dx.op` with this opcode, if the lifter carries it.
 pub(crate) fn arguments(code: u64) -> Option<usize> {
