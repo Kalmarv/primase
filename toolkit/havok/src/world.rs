@@ -9,12 +9,19 @@
 //! keys a clip has for each frame the animation was authored at (`rate`), and which animations (`clips`). The spline an
 //! animation is evaluated as continuously is sampled into keys, and between keys `core.clip` interpolates, not the
 //! spline: the pass reports that as an approximation. A channel whose values are one value all along is one key.
+//!
+//! An animation's extracted motion (`hkaDefaultAnimatedReferenceFrame`: one sample a frame, `x y z` and an angle about
+//! the stored `up` axis, each the frame's whole motion from the start) is the clip's root motion when the program
+//! says so (`root-motion`). Its samples are the clip's keys as stored, and the clip's linear interpolation between
+//! them is the animation's own (a lerp of the sample, an angle about one axis), so nothing of it is approximated; what
+//! is a convention is the sign of the angle, which the program's choice (`full`, not `translation`) takes from the
+//! SDK's axis and angle and which the census of the install does not settle (see [`RootMotionUse`]).
 
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
 use primase_core::{
     Channel, Clip, ClipTarget, Component, Entity, Extrapolation, Interpolation, Joint, JointId, Name,
-    Property, Rest, Skeleton as CoreSkeleton, World,
+    Property, Rest, RootMotion, RootSpace, Skeleton as CoreSkeleton, World,
 };
 
 use crate::animation::{Container, QsTransform, ReferenceFrame, Skeleton, Tracks};
@@ -202,27 +209,52 @@ pub enum Clips {
     Named(Vec<String>),
 }
 
-/// `lower-havok-clips{absent=neutral|reference,rate=N,clips=all|NAME;NAME}` (all required): each selected
+/// What `lower-havok-clips` makes of an animation's extracted motion (root motion).
+///
+/// `translation` lowers the path (`x y z` of every sample, in the world's frame) and no turn; `full` also lowers the
+/// rotation, taking a sample's fourth value as an angle in radians about the stored `up` axis, a right-handed turn as
+/// the SDK's axis and angle quaternion is. The data's own sign tests do not decide that convention (the heading of a
+/// step against the angle: 222 steps follow +angle and 380 follow -angle of 602, and 9 of 41 animations with a turning
+/// frame have a slope of +1, 3 of -1, the rest none), so `full` is a choice the program states, not a default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RootMotionUse {
+    /// The extracted motion is left out of the clip and counted.
+    Leave,
+    Translation,
+    Full,
+}
+
+/// `lower-havok-clips{absent=neutral|reference,rate=N,clips=all|NAME;NAME,root-motion=leave|translation|full}` (all
+/// required): each selected
 /// `havok.animation` also gets a `core.clip` (its name, its duration, hold at the ends) with a joint channel for each
 /// property of each track bound to a bone: translation, rotation and scale of the bone's joint, in the world's frame.
 /// `absent` is what stands in for a component a track does not state (zero, the identity and one, or the bone's
 /// reference transform); `rate` is the keys for each frame the animation was authored at (1 to 16): each key is the
 /// spline sampled at its time, and a channel whose values do not change is a single key. Approximation: between keys
 /// the clip interpolates (linearly, rotations by slerp), the spline is evaluated at the keys only. An animation whose
-/// blend hint is not 0 (additive) is left out, counted, as its values are not absolute transforms; its extracted motion
-/// is not lowered, counted.
+/// blend hint is not 0 (additive) is left out, counted, as its values are not absolute transforms. `root-motion` is
+/// [`RootMotionUse`]: what is not lowered of an animation's extracted motion is counted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LowerHavokClips {
     pub absent: Fallback,
     pub rate: u32,
     pub clips: Clips,
+    pub root_motion: RootMotionUse,
 }
 
 /// The pass factory.
 pub fn lower_havok_clips(o: &Options) -> std::result::Result<Box<dyn Pass>, String> {
-    let (mut absent, mut rate, mut clips) = (None, None, None);
+    let (mut absent, mut rate, mut clips, mut root_motion) = (None, None, None, None);
     for (k, v) in o {
         match k.as_str() {
+            "root-motion" => {
+                root_motion = Some(match v.as_str() {
+                    "leave" => RootMotionUse::Leave,
+                    "translation" => RootMotionUse::Translation,
+                    "full" => RootMotionUse::Full,
+                    _ => return Err(format!("root-motion={v}: leave, translation or full")),
+                });
+            }
             "absent" => {
                 absent = Some(match v.as_str() {
                     "neutral" => Fallback::Neutral,
@@ -256,6 +288,7 @@ pub fn lower_havok_clips(o: &Options) -> std::result::Result<Box<dyn Pass>, Stri
         absent: absent.ok_or("absent=neutral|reference is required")?,
         rate: rate.ok_or("rate=N (keys for each authored frame) is required")?,
         clips: clips.ok_or("clips=all|NAME;NAME is required")?,
+        root_motion: root_motion.ok_or("root-motion=leave|translation|full is required")?,
     }))
 }
 
@@ -329,6 +362,80 @@ fn channel(target: ClipTarget, property: Property, times: &[f32], values: Vec<f3
     }
 }
 
+/// The clip's root motion from the animation's extracted motion: one key a stored sample, at `i * duration / (n - 1)`.
+fn root_motion(
+    r: &ReferenceFrame,
+    frame: &SourceFrame,
+    clip_duration: f32,
+    full: bool,
+    name: &str,
+) -> std::result::Result<RootMotion, String> {
+    let n = r.samples.len();
+    if n == 0 {
+        return Err(format!("{name}: the extracted motion has no samples"));
+    }
+    if r.duration > clip_duration * (1.0 + 1e-4) || r.duration < 0.0 || !r.duration.is_finite() {
+        return Err(format!(
+            "{name}: the extracted motion lasts {} s, the animation {clip_duration} s",
+            r.duration
+        ));
+    }
+    let up = [r.up[0], r.up[1], r.up[2]];
+    let length = up.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if full && (length < 1e-6 || (length - 1.0).abs() > 1e-3) {
+        return Err(format!(
+            "{name}: the extracted motion's up axis {up:?} is not a unit vector"
+        ));
+    }
+    let times: Vec<f32> = if n == 1 {
+        vec![0.0]
+    } else {
+        (0..n)
+            .map(|i| {
+                let t = ((i as f64 * f64::from(r.duration)) / (n - 1) as f64) as f32;
+                t.min(clip_duration)
+            })
+            .collect()
+    };
+    let (mut translation, mut rotation) = (Vec::with_capacity(3 * n), Vec::<f32>::with_capacity(4 * n));
+    for sample in &r.samples {
+        let angle = f64::from(sample[3]);
+        let (s, c) = ((angle / 2.0).sin() as f32, (angle / 2.0).cos() as f32);
+        let q = if full {
+            [up[0] * s, up[1] * s, up[2] * s, c]
+        } else {
+            [0.0, 0.0, 0.0, 1.0]
+        };
+        let mut key = convert(
+            &QsTransform {
+                translation: [sample[0], sample[1], sample[2], 0.0],
+                rotation: q,
+                scale: [1.0, 1.0, 1.0, 0.0],
+            },
+            frame,
+        );
+        if rotation.len() >= 4 {
+            let previous = &rotation[rotation.len() - 4..];
+            if previous
+                .iter()
+                .zip(&key.rotation)
+                .map(|(p, q)| p * q)
+                .sum::<f32>()
+                < 0.0
+            {
+                key.rotation = key.rotation.map(|v| -v);
+            }
+        }
+        translation.extend(key.translation);
+        rotation.extend(key.rotation);
+    }
+    Ok(RootMotion {
+        space: RootSpace::Rig,
+        translation: Some((Interpolation::Linear, times.clone(), translation)),
+        rotation: full.then_some((Interpolation::Linear, times, rotation)),
+    })
+}
+
 fn lower(a: &HavokAnimation, name: &str, pass: &LowerHavokClips) -> std::result::Result<Clip, String> {
     let s = &a.spline;
     let times = key_times(s.num_frames, s.frame_duration, pass.rate, s.duration);
@@ -384,7 +491,16 @@ fn lower(a: &HavokAnimation, name: &str, pass: &LowerHavokClips) -> std::result:
         duration: s.duration,
         extrapolation: Extrapolation::Hold,
         channels,
-        root_motion: None,
+        root_motion: match (&a.extracted_motion, pass.root_motion) {
+            (Some(r), RootMotionUse::Translation | RootMotionUse::Full) => Some(root_motion(
+                r,
+                &a.frame,
+                s.duration,
+                pass.root_motion == RootMotionUse::Full,
+                name,
+            )?),
+            _ => None,
+        },
         additive: None,
     })
 }
@@ -404,6 +520,15 @@ impl Pass for LowerHavokClips {
                 .to_owned(),
             ),
             ("rate".to_owned(), self.rate.to_string()),
+            (
+                "root-motion".to_owned(),
+                match self.root_motion {
+                    RootMotionUse::Leave => "leave",
+                    RootMotionUse::Translation => "translation",
+                    RootMotionUse::Full => "full",
+                }
+                .to_owned(),
+            ),
             (
                 "clips".to_owned(),
                 match &self.clips {
@@ -456,7 +581,20 @@ impl Pass for LowerHavokClips {
             }
             let clip = lower(&a, name, self)?;
             if a.extracted_motion.is_some() {
-                log.count("clips whose extracted motion (root motion) is not lowered", 1);
+                match self.root_motion {
+                    RootMotionUse::Leave => {
+                        log.count("clips whose extracted motion (root motion) is left out", 1);
+                    }
+                    RootMotionUse::Translation => {
+                        log.count("clips with root motion lowered as a path (its turn left out)", 1);
+                    }
+                    RootMotionUse::Full => {
+                        log.count(
+                            "clips with root motion lowered with its turn (angle about up as the SDK's axis and angle; the sign is not settled by the data)",
+                            1,
+                        );
+                    }
+                }
             }
             w.insert(*e, clip);
             lowered += 1;
@@ -480,7 +618,12 @@ pub fn register(reg: &mut PassRegistry) {
     reg.register_requiring(
         "lower-havok-clips",
         lower_havok_clips,
-        &[("absent", "neutral"), ("rate", "1"), ("clips", "all")],
+        &[
+            ("absent", "neutral"),
+            ("rate", "1"),
+            ("clips", "all"),
+            ("root-motion", "leave"),
+        ],
     );
 }
 
@@ -576,7 +719,11 @@ mod tests {
     }
 
     fn run(w: &mut World, options: &[(&str, &str)]) -> std::result::Result<PassLog, String> {
-        let options: Options = options.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect();
+        let mut options: Options = options.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect();
+        // the tests that are not about root motion leave it out
+        options
+            .entry("root-motion".into())
+            .or_insert_with(|| "leave".into());
         let pass = lower_havok_clips(&options)?;
         let mut log = PassLog::default();
         pass.run(w, &mut log)?;
@@ -678,6 +825,13 @@ mod tests {
             vec![("absent", "neutral"), ("rate", "0"), ("clips", "all")],
             vec![("absent", "neutral"), ("rate", "17"), ("clips", "all")],
             vec![("absent", "neutral"), ("rate", "1"), ("clips", "a;;b")],
+            vec![("absent", "neutral"), ("rate", "1"), ("clips", "all")],
+            vec![
+                ("absent", "neutral"),
+                ("rate", "1"),
+                ("clips", "all"),
+                ("root-motion", "some"),
+            ],
         ] {
             let options: Options = bad.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect();
             assert!(lower_havok_clips(&options).is_err(), "{bad:?}");
@@ -699,6 +853,107 @@ mod tests {
         assert!(e.contains("missing"), "{e}");
     }
 
+    /// Three samples (frames a second apart) of a path along z that turns a quarter turn about up at the end.
+    fn with_motion(w: &mut World, e: Entity) {
+        let mut a = w.get::<HavokAnimation>(e).unwrap().clone();
+        a.extracted_motion = Some(ReferenceFrame {
+            frame_type: 0,
+            up: [0.0, 1.0, 0.0, 0.0],
+            forward: [0.0, 0.0, 1.0, 0.0],
+            duration: 2.0,
+            samples: vec![
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [1.0, 0.0, 2.0, std::f32::consts::FRAC_PI_2],
+            ],
+        });
+        w.insert(e, a);
+    }
+
+    #[test]
+    fn root_motion_is_the_samples_in_the_worlds_frame_when_the_program_says_so() {
+        let mirror = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.0);
+        for (choice, turn) in [("leave", false), ("translation", false), ("full", true)] {
+            let (mut w, e, _) = world(mirror, 0);
+            with_motion(&mut w, e);
+            let log = run(
+                &mut w,
+                &[
+                    ("absent", "neutral"),
+                    ("rate", "4"),
+                    ("clips", "all"),
+                    ("root-motion", choice),
+                ],
+            )
+            .unwrap();
+            let clip = w.get::<Clip>(e).unwrap();
+            let Some(root) = &clip.root_motion else {
+                assert_eq!(choice, "leave");
+                assert_eq!(
+                    log.counts["clips whose extracted motion (root motion) is left out"],
+                    1
+                );
+                continue;
+            };
+            // one key a stored sample whatever the rate, at i * duration / (n - 1)
+            let (_, times, values) = root.translation.as_ref().unwrap();
+            assert_eq!(times, &[0.0, 1.0, 2.0]);
+            // the mirror flips z
+            assert_eq!(values, &[0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 1.0, 0.0, -2.0]);
+            assert_eq!(root.rotation.is_some(), turn, "{choice}");
+            if let Some((_, rt, rv)) = &root.rotation {
+                assert_eq!(rt, times);
+                // a quarter turn about up in the file's frame: a rotation of 90 degrees about y, here mirrored
+                let (s, c) = (
+                    std::f32::consts::FRAC_PI_4.sin(),
+                    std::f32::consts::FRAC_PI_4.cos(),
+                );
+                assert!(
+                    rv[8..]
+                        .iter()
+                        .zip([0.0, -s, 0.0, c])
+                        .all(|(a, b)| (a - b).abs() < 1e-6),
+                    "{rv:?}"
+                );
+                assert_eq!(&rv[..4], &[0.0, 0.0, 0.0, 1.0]);
+            }
+        }
+    }
+
+    #[test]
+    fn root_motion_that_cannot_be_the_clips_is_refused_by_name() {
+        let (mut w, e, _) = world(SourceFrame::new([Axis::PosX, Axis::PosY, Axis::PosZ], 1.0), 0);
+        with_motion(&mut w, e);
+        let mut a = w.get::<HavokAnimation>(e).unwrap().clone();
+        a.extracted_motion.as_mut().unwrap().duration = 9.0;
+        w.insert(e, a.clone());
+        let err = run(
+            &mut w,
+            &[
+                ("absent", "neutral"),
+                ("rate", "1"),
+                ("clips", "all"),
+                ("root-motion", "translation"),
+            ],
+        )
+        .unwrap_err();
+        assert!(err.contains("extracted motion lasts 9"), "{err}");
+        a.extracted_motion.as_mut().unwrap().duration = 2.0;
+        a.extracted_motion.as_mut().unwrap().up = [0.0, 2.0, 0.0, 0.0];
+        w.insert(e, a);
+        let err = run(
+            &mut w,
+            &[
+                ("absent", "neutral"),
+                ("rate", "1"),
+                ("clips", "all"),
+                ("root-motion", "full"),
+            ],
+        )
+        .unwrap_err();
+        assert!(err.contains("not a unit vector"), "{err}");
+    }
+
     #[test]
     fn the_registered_pass_declares_what_it_does() {
         let mut reg = PassRegistry::new();
@@ -707,7 +962,7 @@ mod tests {
         let manager = PassManager::new(reg).with_pass_checks(true);
         let pipeline = manager
             .registry
-            .parse("lower-havok-clips{absent=neutral,rate=1,clips=all}")
+            .parse("lower-havok-clips{absent=neutral,rate=1,clips=all,root-motion=leave}")
             .unwrap();
         let mut report = RunReport::default();
         manager.run(&mut w, &pipeline, &mut report).unwrap();

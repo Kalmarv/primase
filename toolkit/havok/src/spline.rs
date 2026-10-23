@@ -29,7 +29,9 @@
 //! rotation is on a bone whose reference rotation is not the identity in 34% of the cases against 77% of all tracks,
 //! and an absent position component on a bone whose reference component is not zero in 41%, 4% and 9% of the cases
 //! (x, y, z) against 93%, 36% and 44% of all, so an encoder that left them out was leaving out zero and the identity,
-//! not the reference. Float tracks are not read: an animation with some is refused. A track bound to a negative bone
+//! not the reference. The game agrees: its live pose of the idle animation (read from the running game's memory) equals
+//! the neutral decoding on the bones where the two fallbacks differ (12 of 12 closer to neutral, 0 to the reference,
+//! 1e-6 to 1e-5 against 5e-5 to 3e-4; knowledge base note 447729a8). Float tracks are not read: an animation with some is refused. A track bound to a negative bone
 //! index drives no bone.
 
 use crate::animation::{Animation, Binding, QsTransform, Skeleton, SplineData, Tracks};

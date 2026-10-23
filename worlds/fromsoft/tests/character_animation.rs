@@ -12,9 +12,11 @@
 
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
-use primase_core::{Asset, Clip, ClipTarget, JointMap, Name, Property, Rest, Role, Skeleton, World};
+use primase_core::{
+    Asset, Clip, ClipTarget, JointMap, Name, Property, Rest, Role, RootSpace, Skeleton, World,
+};
 use primase_fromsoft::dcx::Decoder;
-use primase_fromsoft::sekiro::{CharacterOptions, read_character_with};
+use primase_fromsoft::sekiro::{CharacterOptions, read_character_with, read_parts_with};
 use primase_havok::spline::{Absent, Fallback};
 use primase_havok::world::HavokAnimation;
 use primase_testdata::{Game, Tool, install, tool};
@@ -40,7 +42,9 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
         &install,
         "c1010",
         &decoder,
-        CharacterOptions { animations: true },
+        CharacterOptions {
+            animations: Some("c1010".into()),
+        },
         &mut w,
     )?;
     let animations = report.animations.clone().expect("the animation binder was read");
@@ -78,7 +82,7 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
     primase_animation::register(&mut registry);
     let manager = PassManager::new(registry).with_pass_checks(true);
     let pipeline = manager.registry.parse(&format!(
-        "lower-havok-clips{{absent=neutral,rate=1,clips={}}}, \
+        "lower-havok-clips{{absent=neutral,rate=1,clips={},root-motion=full}}, \
          correspond-skeletons{{from=c1010 havok skeleton,to=c1010 skeleton,tolerance=0.0001}}, \
          map-clip{{unmapped=drop,rests=target}}",
         CLIPS.join(";")
@@ -191,5 +195,102 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
     println!("{keys_compared} keys compared");
     let model: &Skeleton = w.get(model_skeleton).unwrap();
     assert_eq!(model.joints.len(), 400);
+    Ok(())
+}
+
+/// The player: `c0000` has no model of its own, its animations are in the binders its markers name, and they drive the
+/// parts worn together. The read lists those binders from the data, one asset holds the clips, and the root motion of
+/// an animation that has some is the clip's when the program says so.
+#[allow(unsafe_code)]
+#[test]
+fn the_players_animations_come_from_the_binders_its_markers_name() -> Result<()> {
+    let (Some(install), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
+        return Ok(());
+    };
+    // SAFETY: explicitly supplied trusted native decoder.
+    let dll = unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V6) }?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let mut w = World::new();
+    let (reports, animations) = read_parts_with(
+        &install,
+        &["am_m_9120_l", "bd_m_9120_l", "hd_m_9120_l", "lg_m_9120_l"],
+        &decoder,
+        &CharacterOptions {
+            animations: Some("c0000".into()),
+        },
+        &mut w,
+    )?;
+    let animations = animations.expect("the animations were asked for");
+    println!(
+        "{} parts; {} animations, {} bones, companions {:?}, refused {:?}, unread {}",
+        reports.len(),
+        animations.animations,
+        animations.bones,
+        animations.companions,
+        animations.refused,
+        animations.unread.len()
+    );
+    // the markers of the player's own binder name these seven (the other markers name other characters' sets)
+    assert_eq!(
+        animations.companions,
+        [
+            "c0000_a000_hi",
+            "c0000_a000_lo",
+            "c0000_a000_md",
+            "c0000_a00x",
+            "c0000_a05x",
+            "c0000_a07x",
+            "c0000_a2xx"
+        ]
+    );
+    assert_eq!(animations.bones, 146);
+    assert_eq!(animations.animations, 1248);
+    let (asset, clips) = w
+        .iter::<Asset>()
+        .filter(|(e, _)| w.get::<Name>(*e).is_some_and(|n| n.0 == "c0000 animations"))
+        .map(|(e, a)| (e, a.members.clone()))
+        .next()
+        .unwrap();
+    let _ = asset;
+    assert_eq!(clips.len(), 1248);
+    assert!(clips.iter().all(|(_, role)| *role == Role::Clip));
+
+    // root motion: 671 of the 1248 have some; the program chooses what becomes of it
+    let mut registry = PassRegistry::new();
+    primase_havok::register(&mut registry);
+    let manager = PassManager::new(registry).with_pass_checks(true);
+    let pipeline = manager
+        .registry
+        .parse("lower-havok-clips{absent=neutral,rate=1,root-motion=full,clips=a000_201045}")?;
+    let mut run = RunReport::default();
+    manager.run(&mut w, &pipeline, &mut run)?;
+    let (e, _) = w
+        .iter::<HavokAnimation>()
+        .find(|(e, _)| w.get::<Name>(*e).is_some_and(|n| n.0 == "a000_201045"))
+        .unwrap();
+    let clip: &Clip = w.get(e).unwrap();
+    let root = clip
+        .root_motion
+        .as_ref()
+        .expect("a000_201045 has extracted motion");
+    assert_eq!(root.space, RootSpace::Rig);
+    // 21 samples of a 20 frame (2/3 s) animation, one key a sample; it ends 0.5 m along the file's -z, the world's +z
+    let (_, times, values) = root.translation.as_ref().unwrap();
+    assert_eq!(times.len(), 21);
+    assert!((times[20] - clip.duration).abs() < 1e-6);
+    assert_eq!(&values[..3], &[0.0, 0.0, 0.0]);
+    assert!(
+        (values[60..63]
+            .iter()
+            .zip([0.0, 0.0, 0.5])
+            .all(|(a, b)| (a - b).abs() < 1e-5)),
+        "{:?}",
+        &values[60..63]
+    );
+    assert!(root.rotation.is_some());
+    println!("{:?}", run.steps[0].log.counts);
     Ok(())
 }

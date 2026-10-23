@@ -89,39 +89,48 @@ impl CharacterReport {
             }
         }
         if let Some(a) = &self.animations {
-            for (why, files) in &a.refused {
-                out.push(files.iter().take(3).fold(
-                    Notice::new(
-                        "sekiro animations",
-                        NoticeKind::Unsupported,
-                        format!("animation files not read: {why}"),
-                        files.len() as u64,
-                    ),
-                    |n, f| n.example(f.clone()),
-                ));
-            }
-            if !a.unread.is_empty() {
-                out.push(a.unread.iter().take(3).fold(
-                    Notice::new(
-                        "sekiro animations",
-                        NoticeKind::Unsupported,
-                        "animation binder members not read (event files, ...)",
-                        a.unread.len() as u64,
-                    ),
-                    |n, f| n.example(f.clone()),
-                ));
-            }
+            out.extend(animation_notices(a));
         }
         out
     }
 }
 
-/// What a character read asks for beyond its model.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The notices of an animation read: the files and members it did not read, by reason.
+pub fn animation_notices(a: &AnimationReport) -> Vec<Notice> {
+    let mut out = Vec::new();
+    for (why, files) in &a.refused {
+        out.push(files.iter().take(3).fold(
+            Notice::new(
+                "sekiro animations",
+                NoticeKind::Unsupported,
+                format!("animation files not read: {why}"),
+                files.len() as u64,
+            ),
+            |n, f| n.example(f.clone()),
+        ));
+    }
+    if !a.unread.is_empty() {
+        out.push(a.unread.iter().take(3).fold(
+            Notice::new(
+                "sekiro animations",
+                NoticeKind::Unsupported,
+                "animation binder members not read (event files, markers of other characters, ...)",
+                a.unread.len() as u64,
+            ),
+            |n, f| n.example(f.clone()),
+        ));
+    }
+    out
+}
+
+/// What a character or parts read asks for beyond the models.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CharacterOptions {
-    /// Read the character's animation binder too (`chr/<id>.anibnd`): its Havok skeleton as a skeleton of its own and
-    /// each animation as `havok.animation` (see [`super::animation`]), the animations members of the asset.
-    pub animations: bool,
+    /// Read the animation binders of this character (`c1010`: `chr/c1010.anibnd` and the binders its markers name,
+    /// see [`super::animation`]): the Havok skeleton as a skeleton of its own and each animation as `havok.animation`.
+    /// For a character read the animations are members of its asset; for parts (the player is `c0000`'s animations on
+    /// parts worn together) they are the members of an asset of their own, `<id> animations`.
+    pub animations: Option<String>,
 }
 
 /// A character id as the game names its files: `c` and four digits.
@@ -308,7 +317,7 @@ impl<'a> Reading<'a> {
     }
 
     /// Read `item` into `w` as an asset of its own (see the module documentation).
-    fn read(&mut self, item: Item<'_>, animations: bool, w: &mut World) -> Result<CharacterReport> {
+    fn read(&mut self, item: Item<'_>, animations: Option<&str>, w: &mut World) -> Result<CharacterReport> {
         let (archive, decoder) = (&self.archive, self.decoder);
         let binder_path = item.binder_path();
         if !textures::has(archive, &binder_path) {
@@ -408,7 +417,7 @@ impl<'a> Reading<'a> {
             }
         }
         if let Item::Character(id) = item
-            && !animations
+            && animations.is_none()
             && textures::has(archive, &format!("/chr/{id}.anibnd.dcx"))
         {
             report.unread.push(format!("{id}.anibnd"));
@@ -492,19 +501,26 @@ impl<'a> Reading<'a> {
         );
         w.insert(prototype, SkeletonOf(skeleton));
         let mut members = vec![(skeleton, Role::Rig), (prototype, Role::Part)];
-        if let (true, Item::Character(id)) = (animations, item) {
-            if let Some(read) = animation::read(archive, decoder, id, w)? {
-                members.extend(read.animations.iter().map(|&e| (e, Role::Clip)));
-                report.animations = Some(read.report);
-            } else {
-                report.animations = Some(AnimationReport::default());
-            }
+        if let (Some(of), Item::Character(_)) = (animations, item) {
+            let (clips, read) = self.read_animations(of, w)?;
+            members.extend(clips.into_iter().map(|e| (e, Role::Clip)));
+            report.animations = Some(read);
         }
         let root = w.spawn();
         w.insert(root, Name(name.to_owned()));
         w.insert(root, Source(key));
         w.insert(root, Asset { members });
         Ok(report)
+    }
+
+    /// The animations of character `of` (`c0000`) into `w`: their entities, and what the read found (an empty report for
+    /// a character without an animation binder).
+    fn read_animations(&self, of: &str, w: &mut World) -> Result<(Vec<Entity>, AnimationReport)> {
+        let of = character_id(of)?;
+        Ok(match animation::read(&self.archive, self.decoder, of, w)? {
+            Some(read) => (read.animations, read.report),
+            None => (Vec::new(), AnimationReport::default()),
+        })
     }
 
     /// Put the payloads read so far into `w` as its resources.
@@ -539,7 +555,7 @@ pub fn read_character_with(
     }
     let id = character_id(id)?;
     let mut reading = Reading::open(install.as_ref(), decoder)?;
-    let report = reading.read(Item::Character(id), options.animations, destination)?;
+    let report = reading.read(Item::Character(id), options.animations.as_deref(), destination)?;
     reading.finish(destination);
     Ok(report)
 }
@@ -557,6 +573,19 @@ pub fn read_parts(
     decoder: &Decoder<'_>,
     destination: &mut World,
 ) -> Result<Vec<CharacterReport>> {
+    Ok(read_parts_with(install, parts, decoder, &CharacterOptions::default(), destination)?.0)
+}
+
+/// [`read_parts`] with what else to read ([`CharacterOptions`]): with `animations` the animation binders of that
+/// character too, as the members (clips) of an asset of their own named `<id> animations`, whose read is the second
+/// value (the player's `c0000` has no model of its own: its animations drive the parts worn together).
+pub fn read_parts_with(
+    install: impl AsRef<Path>,
+    parts: &[&str],
+    decoder: &Decoder<'_>,
+    options: &CharacterOptions,
+    destination: &mut World,
+) -> Result<(Vec<CharacterReport>, Option<AnimationReport>)> {
     if destination.entities().next().is_some() {
         return Err(invalid("Sekiro part", 0, "destination must be empty"));
     }
@@ -572,10 +601,25 @@ pub fn read_parts(
     let mut reading = Reading::open(install.as_ref(), decoder)?;
     let reports = parts
         .iter()
-        .map(|p| reading.read(Item::Part(p), false, destination))
+        .map(|p| reading.read(Item::Part(p), None, destination))
         .collect::<Result<Vec<_>>>()?;
+    let animations = match options.animations.as_deref() {
+        Some(of) => {
+            let (clips, read) = reading.read_animations(of, destination)?;
+            let root = destination.spawn();
+            destination.insert(root, Name(format!("{of} animations")));
+            destination.insert(
+                root,
+                Asset {
+                    members: clips.into_iter().map(|e| (e, Role::Clip)).collect(),
+                },
+            );
+            Some(read)
+        }
+        None => None,
+    };
     reading.finish(destination);
-    Ok(reports)
+    Ok((reports, animations))
 }
 
 /// The assets [`read_character`] and [`read_parts`] read as a [`Reader`] for [`primase_core::convert`]: the read world
@@ -609,9 +653,9 @@ impl<'a> CharacterReader<'a> {
         }
     }
 
-    /// Also read the character's animation binder ([`CharacterOptions::animations`]).
-    pub fn with_animations(mut self) -> Self {
-        self.options.animations = true;
+    /// Also read the animation binders of character `of` ([`CharacterOptions::animations`]).
+    pub fn with_animations(mut self, of: &str) -> Self {
+        self.options.animations = Some(of.to_owned());
         self
     }
 
@@ -630,17 +674,29 @@ impl<'a> CharacterReader<'a> {
 impl Reader for CharacterReader<'_> {
     fn read(&mut self) -> ConvertResult<(World, ConvertReport)> {
         let mut world = World::new();
+        let mut animation_line = None;
         let reports = match &self.request {
             Request::Character(id) => vec![read_character_with(
                 &self.install,
                 id,
                 &self.decoder,
-                self.options,
+                self.options.clone(),
                 &mut world,
             )?],
             Request::Parts(parts) => {
                 let names: Vec<&str> = parts.iter().map(String::as_str).collect();
-                read_parts(&self.install, &names, &self.decoder, &mut world)?
+                let (reports, animations) =
+                    read_parts_with(&self.install, &names, &self.decoder, &self.options, &mut world)?;
+                if let Some(a) = &animations {
+                    self.pending.extend(animation_notices(a));
+                    animation_line = Some(format!(
+                        "{} animations ({} bones in the Havok skeleton, {} companion binders)",
+                        a.animations,
+                        a.bones,
+                        a.companions.len()
+                    ));
+                }
+                reports
             }
         };
         let mut report = ConvertReport::new();
@@ -661,6 +717,9 @@ impl Reader for CharacterReader<'_> {
                     ))
                 ),
             ));
+        }
+        if let (Some(line), Some(of)) = (animation_line, &self.options.animations) {
+            report.push(("sekiro character".into(), format!("{of}: {line}")));
         }
         Ok((world, report))
     }
