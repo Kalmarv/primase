@@ -20,8 +20,9 @@ use crate::{
 /// A form is an entity of its own that holds everything the prototype holds for its mesh: `core.mesh_file` or
 /// `core.mesh`, `core.material_variants` when it has variants, and every dialect component that goes with that mesh
 /// (a reader that attaches per-primitive data to a prototype attaches it to each form too). A form with neither mesh
-/// component draws nothing. Forms are not placed and have no forms of their own; what stays with the prototype
-/// whichever form is drawn (its name, collision, identity) is on the prototype only.
+/// component draws nothing. Forms are not placed and have no forms of their own. What stays with the prototype
+/// whichever form is drawn (its name, collision, identity) is the prototype's: a reader may give a form its own name
+/// or source too, and [`SelectLod`] leaves those behind.
 ///
 /// `default` is the form the source itself takes: 0 the prototype's own mesh, `k` `forms[k - 1]`; `None` when the
 /// source authors none (GTA switches between its levels by distance).
@@ -78,8 +79,7 @@ impl Component for Lods {
         out.extend(self.forms.iter().map(|f| f.form));
     }
     /// `default`, when there is one, one of the forms; with other forms, on an entity with a mesh; each form another
-    /// alive entity, listed once, not placed, without forms of its own, and without what stays with the prototype
-    /// whichever form is drawn (`core.name`, `core.source`, `core.collision`). [`SelectLod`] checks it before it changes
+    /// alive entity, listed once, not placed and without forms of its own. [`SelectLod`] checks it before it changes
     /// anything, so it checks liveness itself, beside the world's check of every reference.
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
         if let Some(d) = self.default
@@ -100,19 +100,6 @@ impl Component for Lods {
             }
             if w.has::<Instance>(f.form) || w.has::<Transform>(f.form) || w.has::<Lods>(f.form) {
                 return Err(format!("form {:?} is placed or has forms of its own", f.form));
-            }
-            if let Some(name) = [
-                (w.has::<Name>(f.form), Name::NAME),
-                (w.has::<Source>(f.form), Source::NAME),
-                (w.has::<Collision>(f.form), Collision::NAME),
-            ]
-            .into_iter()
-            .find_map(|(has, name)| has.then_some(name))
-            {
-                return Err(format!(
-                    "form {:?} holds {name}, which stays with the prototype whichever form is drawn",
-                    f.form
-                ));
             }
         }
         Ok(())
@@ -136,8 +123,9 @@ pub enum LodChoice {
 /// it ([`World::remove_mesh`]: `core.mesh`, `core.mesh_file` and every per-primitive component, dialect data
 /// included, so nothing describing the discarded form stays behind when the chosen form lacks it), then every
 /// component the form holds replaces the prototype's of that name ([`World::move_components`]), so the form's
-/// dialect data travels with it without the pass knowing it; a form that draws nothing leaves the prototype without a
-/// mesh. The other forms are despawned and `core.lods` removed. The whole selection is checked before anything
+/// dialect data travels with it without the pass knowing it, except what stays with the prototype (`core.name`,
+/// `core.source`, `core.collision`: the form's own are left behind, counted); a form that draws nothing leaves the
+/// prototype without a mesh. The other forms are despawned and `core.lods` removed. The whole selection is checked before anything
 /// changes: an invalid one (a prototype drawn with another form while it holds an opaque component, which can't be
 /// told to follow, among them) is an error and leaves the world as it was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -250,6 +238,23 @@ impl Pass for SelectLod {
                     }
                     for name in w.remove_mesh(proto)? {
                         log.record_removed(name);
+                    }
+                    // what stays with the prototype whichever form is drawn is its own: a form's own name, identity or
+                    // collision (a reader that names each form) is left behind
+                    for (left, name) in [
+                        (w.remove::<Name>(f.form).is_some(), Name::NAME),
+                        (w.remove::<Source>(f.form).is_some(), Source::NAME),
+                        (w.remove::<Collision>(f.form).is_some(), Collision::NAME),
+                    ] {
+                        if left {
+                            log.record_removed(name);
+                            log.count(
+                                &format!(
+                                    "{name} of the chosen form left behind: the prototype keeps its own"
+                                ),
+                                1,
+                            );
+                        }
                     }
                     let moved = w.move_components(f.form, proto)?;
                     debug_assert!(moved, "checked alive above");
@@ -373,21 +378,30 @@ mod tests {
         assert_eq!(w.subset(&keep).verify_components(), vec![]);
     }
 
-    /// What stays with the prototype (its name, identity, collision) is refused on a form.
+    /// A reader may name each form and give it its own source; the form drawn leaves them behind and the prototype keeps
+    /// its own, counted.
     #[test]
-    fn a_form_holds_nothing_that_stays_with_the_prototype() {
+    fn the_prototype_keeps_its_name_and_source_whichever_form_is_drawn() {
         let (mut w, proto, forms) = world();
-        w.insert(forms[1], Name("nothing".into()));
-        let err = w.get::<Lods>(proto).unwrap().verify(proto, &w).unwrap_err();
-        assert!(err.contains("core.name"), "{err}");
-        w.remove::<Name>(forms[1]);
-        w.insert(forms[1], Source("lod/1".into()));
-        assert!(
-            w.get::<Lods>(proto)
-                .unwrap()
-                .verify(proto, &w)
-                .unwrap_err()
-                .contains("core.source")
+        w.insert(proto, Source("proto".into()));
+        w.insert(forms[0], Name("proto#lod1".into()));
+        w.insert(forms[0], Source("proto/lod1".into()));
+        assert_eq!(w.verify_components(), vec![]);
+        let m = manager().with_pass_checks(true);
+        let mut report = RunReport::default();
+        m.run(&mut w, &m.registry.parse("select-lod").unwrap(), &mut report)
+            .unwrap();
+        assert_eq!(w.get::<Tag>(proto).unwrap().0, "coarse");
+        assert_eq!(w.get::<Name>(proto).unwrap().0, "the prototype");
+        assert_eq!(w.get::<Source>(proto).unwrap().0, "proto");
+        let counts = &report.steps[0].log.counts;
+        assert_eq!(
+            counts["core.name of the chosen form left behind: the prototype keeps its own"],
+            1
+        );
+        assert_eq!(
+            counts["core.source of the chosen form left behind: the prototype keeps its own"],
+            1
         );
     }
 

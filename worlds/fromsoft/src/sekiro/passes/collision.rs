@@ -504,10 +504,10 @@ mod tests {
         };
         pass.run(&mut w, &mut PassLog::default()).unwrap();
         assert_eq!(w.iter::<Condition>().count(), 0);
-        assert_eq!(
-            soups(&w).keys().cloned().collect::<Vec<_>>(),
-            ["game".to_owned(), "water".to_owned()]
-        );
+        // no water class chosen: one unconditioned ground soup, of the two files present (no empty water soup is made)
+        assert_eq!(soups(&w).keys().cloned().collect::<Vec<_>>(), ["game".to_owned()]);
+        let (_, game) = w.iter::<Collision>().next().unwrap();
+        assert_eq!(game.triangles.len(), 2);
     }
 
     #[test]

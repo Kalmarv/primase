@@ -262,15 +262,16 @@ fn fixture_with(name: &str, manifest: &str, edit: impl FnOnce(&Path)) -> PathBuf
         "tables/grind.bin",
         &tables::write_curves(&CurveTable {
             curves: vec![
+                // a closed polyline: three points, a triangle
                 CurveRec {
                     first: 0,
-                    count: 2,
+                    count: 3,
                     flags: flags::CLOSED | (2 << 4),
                     radius: 0.05,
                     surface: 3,
                 },
                 CurveRec {
-                    first: 2,
+                    first: 3,
                     count: 3,
                     flags: 0,
                     radius: 0.0,
@@ -280,6 +281,7 @@ fn fixture_with(name: &str, manifest: &str, edit: impl FnOnce(&Path)) -> PathBuf
             points: vec![
                 [0., 1., 0.],
                 [1., 1., 0.],
+                [0., 1., 1.],
                 [2., 1., 0.],
                 [3., 1., 1.],
                 [4., 1., 2.],
@@ -607,7 +609,7 @@ fn markers_and_curves_are_core_facts_too() {
         [
             Curve {
                 kind: "coping".into(),
-                points: vec![[0., 1., 0.], [1., 1., 0.]],
+                points: vec![[0., 1., 0.], [1., 1., 0.], [0., 1., 1.]],
                 closed: true,
                 tangents: None,
                 up: None,
