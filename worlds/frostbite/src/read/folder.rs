@@ -11,7 +11,7 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::cas::Cas;
+use crate::Cas;
 use primase_compress::Decompressor;
 use primase_compress::oodle::Oodle;
 

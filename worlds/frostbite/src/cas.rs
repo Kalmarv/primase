@@ -1,20 +1,20 @@
 //! Frostbite CAS: sequence of eight-byte headers and exactly sized payloads.
-use primase_compress::{Compressor, Decompressor, Error, Result, Zlib, oodle::Oodle};
+use primase_compress::{Compressor, Error, Result};
 
-fn invalid(offset: usize, detail: impl ToString) -> Error {
+pub(crate) fn invalid(offset: usize, detail: impl ToString) -> Error {
     Error::Invalid {
         codec: "cas",
         offset,
         detail: detail.to_string(),
     }
 }
-fn buffer(size: usize) -> Result<Vec<u8>> {
+pub(crate) fn buffer(size: usize) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     out.try_reserve_exact(size).map_err(|_| Error::Limit)?;
     out.resize(size, 0);
     Ok(out)
 }
-fn check_size(actual: usize, expected: usize) -> Result<()> {
+pub(crate) fn check_size(actual: usize, expected: usize) -> Result<()> {
     if actual == expected {
         Ok(())
     } else {
@@ -61,53 +61,7 @@ pub fn blocks(input: &[u8]) -> Result<Vec<Block<'_>>> {
     }
     Ok(out)
 }
-/// CAS codec, optional explicit Oodle implementation. Decode supports raw, zlib,
-/// and kinds 0x11/0x15/0x19. Unknown kinds are errors with physical offsets.
-#[derive(Debug, Default)]
-pub struct Cas<'a> {
-    pub oodle: Option<&'a Oodle>,
-}
-impl Decompressor for Cas<'_> {
-    fn decompress(&self, input: &[u8], expected: usize) -> Result<Vec<u8>> {
-        let blocks = blocks(input)?;
-        let total = blocks
-            .iter()
-            .try_fold(0usize, |s, b| s.checked_add(b.decoded_size).ok_or(Error::Limit))?;
-        check_size(total, expected)?;
-        let mut out = buffer(expected)?;
-        let mut pos = 0;
-        for b in blocks {
-            let dst = &mut out[pos..pos + b.decoded_size];
-            match b.kind {
-                0 => {
-                    check_size(b.payload.len(), b.decoded_size)?;
-                    dst.copy_from_slice(b.payload);
-                }
-                2 => dst.copy_from_slice(
-                    &Zlib
-                        .decompress(b.payload, b.decoded_size)
-                        .map_err(|e| invalid(b.offset, e))?,
-                ),
-                0x11 | 0x15 | 0x19 => {
-                    let oodle = self
-                        .oodle
-                        .ok_or_else(|| invalid(b.offset, "Oodle library required"))?;
-                    dst.copy_from_slice(
-                        &oodle
-                            .decompress(b.payload, b.decoded_size)
-                            .map_err(|e| invalid(b.offset, e))?,
-                    );
-                }
-                _ => {
-                    return Err(invalid(b.offset, format!("unsupported kind {:#x}", b.kind)));
-                }
-            }
-            pos += b.decoded_size;
-        }
-        Ok(out)
-    }
-}
-fn append(out: &mut Vec<u8>, decoded: usize, kind: u8, payload: &[u8]) {
+pub(crate) fn append(out: &mut Vec<u8>, decoded: usize, kind: u8, payload: &[u8]) {
     out.extend_from_slice(&(decoded as u32).to_be_bytes());
     out.extend_from_slice(&[kind, 0x70 | ((payload.len() >> 16) as u8)]);
     out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
@@ -124,29 +78,6 @@ impl Compressor for CasRaw {
         }
         for part in input.chunks(65536) {
             append(&mut out, part.len(), 0, part);
-        }
-        Ok(out)
-    }
-}
-impl Compressor for Cas<'_> {
-    /// Kraken level 4 in independent 64 KiB blocks; uses stored blocks when
-    /// compression is no smaller (the reference CAS writer policy).
-    /// Requires an Oodle handle explicitly; absent DLL is not a silent fallback.
-    fn compress(&self, input: &[u8]) -> Result<Vec<u8>> {
-        let oodle = self
-            .oodle
-            .ok_or_else(|| invalid(0, "Oodle library required for encoding"))?;
-        let mut out = Vec::new();
-        if input.is_empty() {
-            append(&mut out, 0, 0, &[]);
-        }
-        for part in input.chunks(65536) {
-            let payload = oodle.compress(part)?;
-            if payload.len() < part.len() {
-                append(&mut out, part.len(), 0x11, &payload);
-            } else {
-                append(&mut out, part.len(), 0, part);
-            }
         }
         Ok(out)
     }

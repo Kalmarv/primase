@@ -25,6 +25,7 @@ mod read;
 pub mod texture;
 pub mod toc;
 
+pub use read::cas_codec::Cas;
 pub use read::{entry, folder, listing, program};
 
 /// Resource type of a MeshSet.

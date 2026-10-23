@@ -11,7 +11,8 @@
 use primase_compress::oodle::{Oodle, Version};
 use primase_compress::{Compressor, Decompressor, reference};
 use primase_core::gate::{GateReport, Tolerance};
-use primase_frostbite::cas::{Cas, CasRaw, blocks};
+use primase_frostbite::Cas;
+use primase_frostbite::cas::{CasRaw, blocks};
 use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
