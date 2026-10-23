@@ -40,12 +40,12 @@ use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{
-    AnvilBounds, AnvilClip, AnvilClipBinding, AnvilCollisionFilter, AnvilCollisionOnly, AnvilCollisionShape,
-    AnvilDataLayers, AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake, AnvilGrass,
-    AnvilGrassModel, AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh,
-    AnvilRig, AnvilRigOccurrence, AnvilSkeleton, AnvilSkinned, AnvilWater, BoundTexture,
-    CollisionMaterialRef, DataLayerAction, DeferredDecal, GrassSystemSetup, MaterialBinding, MaterialValue,
-    ShapeGeometry, TextureFrom,
+    AnvilBounds, AnvilClip, AnvilClipBinding, AnvilClipCandidates, AnvilCollisionFilter, AnvilCollisionOnly,
+    AnvilCollisionShape, AnvilDataLayers, AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake,
+    AnvilGrass, AnvilGrassModel, AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides,
+    AnvilMesh, AnvilRig, AnvilRigOccurrence, AnvilSkeleton, AnvilSkinned, AnvilWater, BoundTexture,
+    ClipCandidate, CollisionMaterialRef, DataLayerAction, DeferredDecal, GrassSystemSetup, LibraryClip,
+    MaterialBinding, MaterialValue, ShapeGeometry, TextureFrom,
 };
 use crate::read::animation::{ANIMATION, StoredAnimation};
 use crate::read::archive::{Archive, At};
@@ -384,6 +384,10 @@ pub struct Placer<'a> {
     skeletons: HashMap<u64, Option<Entity>>,
     /// Per (Animation id, rig entity), the entity holding the clip (`None`: not an Animation, or can't be read).
     clips: HashMap<(u64, Entity), Option<Entity>>,
+    /// Whether each rig gets the library's clips that fit it ([`Placer::with_clip_candidates`]).
+    clip_candidates: bool,
+    /// The Animations of the forges, read once for the first rig that asks.
+    library: Option<Vec<std::sync::Arc<LibraryClip>>>,
     /// Per SkeletonComponent's Skeletons (the main one's id, then its addons'), the entity holding their rig (`None`:
     /// one of them isn't a Skeleton or can't be read).
     rigs: HashMap<Vec<u64>, Option<Entity>>,
@@ -428,6 +432,14 @@ impl<'a> Placer<'a> {
         self
     }
 
+    /// The placer giving each rig it reads every Animation of the forges that fits it ([`AnvilClipCandidates`], on the
+    /// rig's entity): the Animations are read once for the first rig, which takes the time and memory of the whole
+    /// library. Which of them play is the program's to choose (`select-anvil-clips`).
+    pub fn with_clip_candidates(mut self) -> Placer<'a> {
+        self.clip_candidates = true;
+        self
+    }
+
     pub fn with_instanced_collision(mut self, choice: InstancedCollision) -> Placer<'a> {
         self.instanced_collision = choice;
         self
@@ -453,6 +465,8 @@ impl<'a> Placer<'a> {
             skeletons: HashMap::new(),
             rigs: HashMap::new(),
             clips: HashMap::new(),
+            clip_candidates: false,
+            library: None,
             textures: HashMap::new(),
             decal_models: HashMap::new(),
             objects: HashMap::new(),
@@ -639,7 +653,12 @@ impl<'a> Placer<'a> {
             return e;
         }
         let e = match self.read_rig(&key) {
-            Ok(e) => Some(e),
+            Ok(e) => {
+                if self.clip_candidates {
+                    self.fit_clips(e, placed);
+                }
+                Some(e)
+            }
             Err(why) => {
                 placed.refused.push((main.id, format!("rig: {why}")));
                 None
@@ -683,11 +702,80 @@ impl<'a> Placer<'a> {
             e,
             AnvilClip {
                 frame: self.frame,
+                id,
                 animation,
                 rig,
             },
         );
         Ok(Some(e))
+    }
+
+    /// Every Animation of the forges, in the order of the forges' entries, the entry that an id resolves to read once
+    /// each (`placed` records one that can't be read).
+    fn clip_library(&mut self, placed: &mut Placed) -> Vec<std::sync::Arc<LibraryClip>> {
+        if let Some(l) = &self.library {
+            return l.clone();
+        }
+        let mut found: Vec<(At, u64, String)> = Vec::new();
+        let mut forge = 0;
+        while let Some(f) = self.archive.forge(forge) {
+            for (entry, (index, name)) in f.entries().enumerate() {
+                let at = At { forge, entry };
+                if name.type_id == ANIMATION && self.archive.find(index.id) == Some(at) {
+                    found.push((at, index.id, name.name.clone()));
+                }
+            }
+            forge += 1;
+        }
+        let mut library = Vec::with_capacity(found.len());
+        for (at, id, name) in found {
+            let animation = self
+                .archive
+                .resource(at)
+                .map_err(|e| e.to_string())
+                .and_then(|r| StoredAnimation::parse(&r.body).map_err(|e| e.to_string()));
+            match animation {
+                Ok(animation) => {
+                    let joint_tracks = animation.joint_tracks();
+                    library.push(std::sync::Arc::new(LibraryClip {
+                        id,
+                        name,
+                        animation,
+                        joint_tracks,
+                    }));
+                }
+                Err(why) => placed.refused.push((id, format!("clip: {why}"))),
+            }
+        }
+        self.library = Some(library.clone());
+        library
+    }
+
+    /// The rig entity `rig` given the library's clips that fit it: those with a joint-driving track on one of its
+    /// joints.
+    fn fit_clips(&mut self, rig: Entity, placed: &mut Placed) {
+        let library = self.clip_library(placed);
+        let Some(stored) = self.world.get::<AnvilRig>(rig) else {
+            return;
+        };
+        let joints: HashSet<u32> = stored.rig.bones.iter().map(|b| b.name_hash).collect();
+        let candidates: Vec<ClipCandidate> = library
+            .iter()
+            .filter_map(|clip| {
+                let covered = clip.joint_tracks.iter().filter(|h| joints.contains(h)).count();
+                (covered > 0).then(|| ClipCandidate {
+                    clip: clip.clone(),
+                    covered: u32::try_from(covered).unwrap_or(u32::MAX),
+                })
+            })
+            .collect();
+        self.world.insert(
+            rig,
+            AnvilClipCandidates {
+                frame: self.frame,
+                candidates,
+            },
+        );
     }
 
     fn read_rig(&mut self, key: &[u64]) -> Result<Entity, String> {

@@ -12,6 +12,7 @@ mod listed;
 mod material;
 mod resolve_shaders;
 mod select;
+mod select_clips;
 mod skeleton;
 mod skin;
 mod splat;
@@ -30,6 +31,7 @@ pub use resolve_shaders::{
     shading_class,
 };
 pub use select::{CollisionOnly, Keep, Overlap, SelectAnvilEntities};
+pub use select_clips::SelectAnvilClips;
 pub use skeleton::{LowerAnvilRig, LowerAnvilSkeleton, OwnTransform};
 pub use skin::LowerAnvilSkin;
 pub use splat::{Splat, SplatUv};
@@ -2945,6 +2947,11 @@ pub fn register(reg: &mut PassRegistry) {
         "lower-anvil-clips",
         |o| Ok(Box::new(LowerAnvilClips::from_options(o)?)),
         &[("interpolation", "linear"), ("extrapolation", "hold")],
+    );
+    reg.register_requiring(
+        "select-anvil-clips",
+        |o| Ok(Box::new(SelectAnvilClips::from_options(o)?)),
+        &[("min-coverage", "0.9"), ("max-clips", "16")],
     );
     reg.register_requiring("lower-anvil-skin", |_| Ok(Box::new(LowerAnvilSkin)), &[]);
     reg.register_requiring(

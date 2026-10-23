@@ -426,7 +426,26 @@ impl<'a> Cursor<'a> {
     }
 }
 
+/// Whether a track of `kind` drives a joint: kind 9 a translation, kinds 3, 4, 5, 7 and 8 a rotation (kind 5's values
+/// are decoded on their own; its first keys equal the mapped bones' rest rotations like the other rotation kinds').
+/// The other kinds (16, 17, 18, 21, 22, 25) are not known to drive one (their values are 1 to 4 bytes, and kind 25's
+/// are unverified), so they are not counted.
+pub fn drives_a_joint(kind: u8) -> bool {
+    matches!(kind, 3 | 4 | 5 | 7 | 8 | 9)
+}
+
 impl StoredAnimation {
+    /// The bone hash of each track that drives a joint ([`drives_a_joint`]) of a bone (not the root's motion, hash 0),
+    /// in the tracks' order.
+    pub fn joint_tracks(&self) -> Vec<u32> {
+        self.tracks
+            .iter()
+            .zip(&self.mappings)
+            .filter(|(t, h)| **h != 0 && drives_a_joint(t.kind()))
+            .map(|(_, &h)| h)
+            .collect()
+    }
+
     /// The body parsed, consumed to its last byte.
     pub fn parse(body: &[u8]) -> Result<StoredAnimation, Error> {
         let mut c = Cursor { b: body, at: 0 };

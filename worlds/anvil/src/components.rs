@@ -1368,6 +1368,8 @@ pub struct StoredAnimation {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilClip {
     pub frame: primase_core::frame::SourceFrame,
+    /// The Animation's resource id.
+    pub id: u64,
     pub animation: StoredAnimation,
     pub rig: Entity,
 }
@@ -1378,6 +1380,39 @@ impl Component for AnvilClip {
     fn references(&self, out: &mut Vec<Entity>) {
         out.push(self.rig);
     }
+}
+
+/// An Animation of the forges read once for the whole library (shared by every rig it fits, [`AnvilClipCandidates`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryClip {
+    /// The Animation's resource id and its entry's name.
+    pub id: u64,
+    pub name: String,
+    pub animation: StoredAnimation,
+    /// The bone hash of each track that drives a joint (a translation or rotation track of a bone, not the root's
+    /// motion, hash 0), in the tracks' order.
+    pub joint_tracks: Vec<u32>,
+}
+
+/// One clip of the library that fits a rig: `covered` of its `clip.joint_tracks` name a joint of the rig.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClipCandidate {
+    pub clip: std::sync::Arc<LibraryClip>,
+    pub covered: u32,
+}
+
+/// The library's clips that fit a rig (`anvil.clip_candidates`, on the rig's entity): every Animation with at least
+/// one joint-driving track on one of the rig's joints, with how many of its tracks that is. Which of them play is not
+/// read: `select-anvil-clips` chooses by this coverage.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilClipCandidates {
+    pub frame: primase_core::frame::SourceFrame,
+    pub candidates: Vec<ClipCandidate>,
+}
+
+impl Component for AnvilClipCandidates {
+    const NAME: &'static str = "anvil.clip_candidates";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
 /// An Animation an Entity plays, bound to the Entity's placed rig (`anvil.clip_binding`, on an entity of its own): the

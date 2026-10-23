@@ -104,6 +104,7 @@ fn built(frame: SourceFrame) -> Built {
         clip,
         AnvilClip {
             frame,
+            id: 0x1234,
             animation: animation(),
             rig,
         },
