@@ -133,14 +133,47 @@ pub const SHARED_COMPUTE: u32 = 0x879B_A711;
 /// What a permutation's shared-data resource names ([`SHARED_RASTER`], [`SHARED_COMPUTE`]; both lay out the same way):
 /// the ids of the pass binding, the binding signature, up to three binding sets and the root slot initial data, as
 /// the first 0x40 bytes of the payload state them (an absent one is 0), and the bytes after them as stored. The sets'
-/// slots are the ones [`crate::binding::Bindings`] maps registers through; what the words at 0x10 and 0x30 and the
-/// bytes from 0x40 hold is not established here.
+/// slots are the ones [`crate::binding::Bindings`] maps registers through.
 ///
 /// ```text
 /// 0x00 u64 pass binding id    0x08 u64 binding signature id   0x10 two u32 (kept)
 /// 0x18 u64 set 0 id           0x20 u64 set 1 id               0x28 u64 set 2 id
 /// 0x30 u64 (kept)             0x38 u64 root slot initial data id
 /// ```
+///
+/// **The bytes from 0x40 are fixed-function pipeline state, not decoded.** Measured on the 513 distinct raster
+/// permutations of the drawing programs of a sample of 15 bundles: they take 13 distinct values, of 148, 168, 184,
+/// 188, 204, 284 or 300 bytes (the payload is the metadata's size plus its relocation size, 0x40 bytes more), and
+/// the two words at 0x10 and 0x30 take 4. The root slot initial data (12 distinct, 160 bytes each) and the binding
+/// signature (one, 272 bytes) are other resources of the family, not read. The state's layout, in payload offsets,
+/// as every one of the 13 shows it:
+///
+/// ```text
+/// 0x40 u64 an id or hash   0x48 u32 4   0x4c u32 1, 10 or 11   0x50 u32 0xc0   0x54 20 zero bytes
+///      (the 148-byte value has zero from 0x40 to 0x67)
+/// 0x68 four bytes 00 00 08 01 or 00 04 08 01, then u32 0 or 1     0x70 u64 (three values)
+/// 0x78 seven zero bytes and 0x1c or 0x18     0x80 four bytes, then 32 00 32 04, 38 00 38 04 or 38 00 38 44,
+///      then ff 00 00 00
+/// 0x8c eight 5-byte records, one for each render target: 02 00 01 00 0f in all of them but the first record of the
+///      two 284- and 300-byte values (03 05 01 05 0f), which are the 16 permutations of the second pass binding
+/// 0xb4 u32 1, 2 or 4   0xb8 u32 offset (0xc0 to 0x130) of a tail of 16-byte entries and the relocations
+/// ```
+///
+/// What the game's own enum tables settle (the `Skate.exe` of build sha256 `fbce74d5e28ef525` names them in value
+/// order, at file offset 0x64d7cb8 on: `RenderCullMode` None, Front, Back; `RenderBlendMode` Zero, One, SourceColor,
+/// InvSourceColor, SourceAlpha, InvSourceAlpha, DestColor, InvDestColor, DestAlpha, InvDestAlpha, SourceAlphaSaturate,
+/// Constant, InvConstant and the four Source1 modes; `RenderBlendOp` Add, Subtract, RevSubtract, Min, Max;
+/// `RenderWriteMask` Red, Green, Blue, Alpha, None, Color, All; `RenderDepthMode` Disabled, ReadOnly, ReadAndWrite,
+/// WriteOnly, ReadOnlyInverted, ReadAndWriteInverted, ReadOnlyEqual; `DepthStencilCompareFunc` Never, Less, Equal,
+/// LessEqual, Greater, NotEqual, GreaterEqual, Always): the last byte of a record, 0x0f in all 8 records of all 13
+/// values, is the write mask All, and eight records are the game's render target count. **Not settled:** which byte
+/// of a record is the blend enable, the factors and the operation (a reading that fits the two kinds of record: byte
+/// 0 a flags byte whose bit 0 is the blend enable, bytes 1 and 3 the destination factors, byte 2 the source factor;
+/// the blended record would then be premultiplied alpha, source One, destination InvSourceAlpha), where the depth
+/// mode, the cull mode, the fill mode and the stencil lie, and what the u64s and the tail hold. None of it is mapped
+/// onto [`primase_core::shader::RenderState`]: a target stated without a blend would claim it is not blended, so
+/// the binding leaves the state as it was until an anchor (a material known to blend, or the game's code that turns
+/// these bytes into its pipeline state) confirms the fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SharedData {
     pub id: u64,
