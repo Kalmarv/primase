@@ -121,7 +121,7 @@ pub enum ImageAtomicOp {
 }
 
 /// An atomic operation on one texel of a single-channel 32-bit unordered-access texture. Its result is the word as it was
-/// before; the program reads it only when it asked through an image atomic function (see [`crate::ops`]).
+/// before; the program reads it when its `Statement::ImageAtomic` has a result.
 #[derive(Clone, Copy, Debug)]
 pub struct ImageAtomic<R> {
     pub view: R,

@@ -191,8 +191,7 @@ impl Lift<'_> {
         self.f.instructions.iter().any(|i| i.op.operands().contains(&v))
     }
 
-    /// `AtomicBinOp` on an unordered-access texture: naga's image atomic, which returns no old value; where the program
-    /// reads the old value, a call of the module's image atomic function that has it (see `primase_shader::ops`).
+    /// `AtomicBinOp` on an unordered-access texture: naga's image atomic, with the old value where the program reads it.
     fn image_atomic(&mut self, inst: &Instruction, args: &[ValueId], resource: usize) -> Result<()> {
         let wants_old = inst.result.is_some_and(|(v, _)| self.value_is_read(v));
         let fun = match const_int(self.m, self.f, args[2]) {
@@ -224,41 +223,20 @@ impl Lift<'_> {
             .unwrap_or(naga::Scalar::U32);
         let value = self.scalar(args[6])?;
         let value = self.b.bitcast_to(value, kind_of_atomic(scalar));
-        // naga's image atomic statement has no exchange, and none has an old value: both are the function's
-        if wants_old || matches!(fun, AtomicFunction::Exchange { .. }) {
-            let op = match fun {
-                AtomicFunction::Add => "add",
-                AtomicFunction::And => "and",
-                AtomicFunction::InclusiveOr => "or",
-                AtomicFunction::ExclusiveOr => "xor",
-                AtomicFunction::Max => "max",
-                AtomicFunction::Min => "min",
-                AtomicFunction::Exchange { compare: None } => "exchange",
-                _ => return self.refuse("an image atomic operation the module's functions do not name"),
-            };
-            if matches!(self.get(args[1])?, Lv::Handle { element: Some(_), .. }) {
-                return self.refuse(
-                    "the old value of an atomic operation on an element of an array of texture views",
-                );
-            }
-            let global = self.global_of(resource);
-            let old = self
-                .b
-                .image_atomic_fetch(global, op, coordinate, array_index, value);
-            if !wants_old {
-                return Ok(());
-            }
-            return self.define_result(inst.result, Lv::Scalar(old));
-        }
         let (_, image) = self.handle_expr(args[1], 1)?;
+        let old = wants_old.then(|| self.b.image_atomic_result(kind_of_atomic(scalar)));
         self.b.push(Statement::ImageAtomic {
             image,
             coordinate: coordinate.expr,
             array_index,
             fun,
             value: value.expr,
+            result: old.map(|o| o.expr),
         });
-        Ok(())
+        match old {
+            Some(old) => self.define_result(inst.result, Lv::Scalar(old)),
+            None => Ok(()),
+        }
     }
 
     /// Whether word (or, for a typed buffer, element) `word` is inside the buffer `g`.

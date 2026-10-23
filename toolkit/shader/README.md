@@ -86,7 +86,7 @@ rules.
 ## The program representation
 
 `Program` is what every bytecode lifts into (`primase-dxbc`'s `lift` today): a `naga::Module` (typed body, structured
-control flow, resources as globals; naga 30.0.1 is the IR) with what the module cannot say:
+control flow, resources as globals; naga 30.0.1 is the IR: the release plus three changes it lacks, from the `naga-30.0.1-primase` branch of `github.com/Kalmarv/wgpu`, pinned in the workspace `[patch.crates-io]`: the WGSL writer writes ray queries, and `Statement::ImageAtomic` has an optional result (the texel's previous value) and accepts `Exchange`) with what the module cannot say:
 
 - `interface` (the vocabulary above) and `bindings` (which global each `ResourceId` is). `entry_io(&Interface)` is the
   one statement of how the entry point carries the interface: one argument per input varying, one result member per
@@ -124,33 +124,30 @@ program a lifter makes carries `source_hash`, the SHA-256 of the bytes it was gi
 
 ## Support ledger
 
-What the lifters make of every program of every corpus the project holds, counted by the census tests (`toolkit/dxbc/tests/lift_corpus.rs`, `toolkit/dxil/tests/lift_corpus.rs`, `worlds/gta/tests/fxc_census.rs`, `worlds/stuntboost/tests/effects.rs`) in one release run on main `be73ed82` plus the commit that adds the mesh executor (the STUNTBOOST row was not re-run: it is as first measured). The corpora are from the oracle tree (`oracles.corpus.<game>/shaders`; the Elden Ring folder holds 50,283 containers today, the row it replaces counted 44,450) and the STUNTBOOST install's `Content/Effects`; the numbers are the tests' own output. Lifted is `lift` returning a program; validated is `Program::validate`; written is `emit::wgsl` (or `wgsl_functions` for a stage with no entry point) succeeding. A lifted program is executable in one of two forms: as an entry point (`Executable::new`: pixel, vertex, compute and mesh programs) or as its functions (`Executable::functions`, which compiles each with `Executable::function`: hull, domain and geometry programs, vertex programs that feed a tessellator, and the ray tracing pipeline's programs, which `exec::Pipeline` runs). No lifted program of any corpus is refused by the executor.
+What the lifters make of every program of every corpus the project holds, counted by the census tests (`toolkit/dxbc/tests/lift_corpus.rs`, `toolkit/dxil/tests/lift_corpus.rs`, `worlds/gta/tests/fxc_census.rs`, `worlds/stuntboost/tests/effects.rs`) in one release run on main `11fe408a` plus the commit that switches naga to the fork (the STUNTBOOST row was not re-run: it is as first measured, and the fork changes nothing it uses). The corpora are from the oracle tree (`oracles.corpus.<game>/shaders`; the Elden Ring folder holds 50,283 containers today, the row it replaces counted 44,450) and the STUNTBOOST install's `Content/Effects`; the numbers are the tests' own output. Lifted is `lift` returning a program; validated is `Program::validate`; written is `emit::wgsl` (or `wgsl_functions` for a stage with no entry point) succeeding. A lifted program is executable in one of two forms: as an entry point (`Executable::new`: pixel, vertex, compute and mesh programs) or as its functions (`Executable::functions`, which compiles each with `Executable::function`: hull, domain and geometry programs, vertex programs that feed a tessellator, and the ray tracing pipeline's programs, which `exec::Pipeline` runs). No lifted program of any corpus is refused by the executor.
 
 | corpus (test) | programs | lifted | validated | written as WGSL | refused by the lift | executable as an entry point | executable as functions |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| GTA V Enhanced shader database (SGD2; `fxc_census`) | 12,405 | 12,405 | 12,405 | 12,375 | 0 | 11,130 | 1,275 |
-| Riders Republic (DXBC; `lift_corpus`) | 2,443 | 2,442 | 2,442 | 2,442 | 1 | 2,416 | 26 |
+| GTA V Enhanced shader database (SGD2; `fxc_census`) | 12,405 | 12,405 | 12,405 | 12,405 | 0 | 11,130 | 1,275 |
+| Riders Republic (DXBC; `lift_corpus`) | 2,443 | 2,443 | 2,443 | 2,442 | 0 | 2,417 | 26 |
 | Unity player (DXBC, `sledding`) | 4,854 | 4,854 | 4,854 | 4,854 | 0 | 4,854 | 0 |
 | Sekiro (DXBC) | 432 | 432 | 432 | 432 | 0 | 432 | 0 |
 | Elden Ring (DXIL) | 50,283 | 50,283 | 50,283 | 46,002 | 0 | 45,546 | 4,737 |
-| skate. (DXIL) | 19,445 | 19,443 | 19,443 | 19,138 | 2 | 19,238 | 205 |
+| skate. (DXIL) | 19,445 | 19,445 | 19,445 | 19,238 | 0 | 19,240 | 205 |
 | STUNTBOOST (MojoShader GLSL in 18 effects) | 47 | 47 | 47 | 47 | 0 | 47 | 0 |
 
 Not measured: GTA V Legacy's `.fxc` effects (`oracles.corpus.gta/legacy-effects`; the folder is not on the machine that ran this).
 
 ### Refused by the lift
 
-| count | corpus | reason | example (corpus-relative) |
-|---:|---|---|---|
-| 2 | skate. | the old value of an atomic operation on a texture view (naga's image atomic returns none) | `235911bb-c5c8-bef5-9998-f3e2ea6597fb.dxil` |
-| 1 | Riders Republic | the same (`imm_atomic_umin`) | `1378.dxbc` |
+None: no program of any corpus is refused by a lifter.
 
 ### Lifted and validated but not written as WGSL
 
 | count | corpus | reason | example |
 |---:|---|---|---|
-| 100 | skate. | naga's WGSL writer does not write ray queries (`unreachable!()` on `Statement::RayQuery`; naga 30.0.1 is the newest release, so only a writer of our own or a change to naga lifts it) | `01f9f54b-846f-2a4b-c576-9e1e6f1d8077.dxil` |
-| 30 | GTA Enhanced | the same | (the census prints none) |
+| 2 | skate. | a texture atomic whose old value the program reads (one of them an exchange): WGSL's texture atomics return nothing and have no exchange (naga's writer: "Unsupported texture atomic result") | `235911bb-c5c8-bef5-9998-f3e2ea6597fb.dxil`, `6f244d9d-58a9-1d4a-0a22-6f2ea461df18.dxil` |
+| 1 | Riders Republic | the same (`imm_atomic_umin` with its old value) | `1378.dxbc` |
 | 205 | skate. | a ray tracing pipeline program (172 ray generation, 16 closest-hit, 8 miss, 6 intersection, 3 any-hit) has no WGSL form: WebGPU has no ray tracing pipeline | `000e14b5-25b8-967b-532c-1b7f6c7e62cb.dxil` |
 | 4,281 | Elden Ring | the same (3 ray generation, 2,138 any-hit, 2,138 closest-hit, 2 miss) | `gxraytracing/GXRayGen.cpo` |
 

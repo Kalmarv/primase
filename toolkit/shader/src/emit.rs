@@ -37,21 +37,6 @@ pub fn wgsl(program: &Program) -> Result<String, Error> {
 
 /// The module as WGSL whatever its stage: for a program of a stage with no entry point, its functions, to be read.
 pub fn wgsl_functions(program: &Program) -> Result<String, Error> {
-    // naga's image atomic returns no old word: a program that reads it asks for it by calling a function with no body,
-    // which is not the operation in WGSL
-    if let Some(name) = program
-        .module
-        .functions
-        .iter()
-        .find_map(|(_, f)| f.name.as_deref().filter(|n| crate::ops::is_image_atomic(n)))
-    {
-        return Err(Error::Unsupported {
-            writer: "wgsl",
-            detail: format!(
-                "the program reads the old value of an image atomic operation ({name}): WGSL's image atomics return no value"
-            ),
-        });
-    }
     if program.stage.is_ray_tracing() {
         return Err(Error::Unsupported {
             writer: "wgsl",
@@ -69,18 +54,6 @@ pub fn wgsl_functions(program: &Program) -> Result<String, Error> {
 /// The module as WGSL text whatever its stage, for a program's text form: a ray tracing program too, which no consumer
 /// is offered as WGSL ([`wgsl_functions`] refuses it).
 pub(crate) fn module_text(program: &Program) -> Result<String, Error> {
-    // naga's WGSL writer does not write ray queries (it stops on one), so a program that has one is refused here
-    if program
-        .module
-        .types
-        .iter()
-        .any(|(_, t)| matches!(t.inner, naga::TypeInner::RayQuery { .. }))
-    {
-        return Err(Error::Unsupported {
-            writer: "wgsl",
-            detail: "naga's WGSL writer does not write ray queries".into(),
-        });
-    }
     let info = program.validate().map_err(|problems| {
         Error::Invalid(
             problems

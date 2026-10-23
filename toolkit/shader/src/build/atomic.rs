@@ -38,6 +38,17 @@ impl Builder {
         }
     }
 
+    /// The result expression of an image atomic operation on texels of `kind`: the texel's previous value, which the
+    /// `Statement::ImageAtomic` that names it writes.
+    pub fn image_atomic_result(&mut self, kind: Kind) -> Val {
+        let ty = self.ty_of(kind, 1);
+        let expr = self.result_expr(Expression::AtomicResult {
+            ty,
+            comparison: false,
+        });
+        Val { expr, kind, width: 1 }
+    }
+
     /// A compare-and-swap on the atomic word `pointer` names: the old value and whether the swap happened.
     pub fn compare_exchange(
         &mut self,

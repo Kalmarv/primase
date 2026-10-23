@@ -56,7 +56,7 @@ fn the_old_word_of_an_atomic_on_a_texture_reaches_the_program() {
             primase_shader::emit::wgsl(&program)
                 .unwrap_err()
                 .to_string()
-                .contains("old value of an image atomic"),
+                .contains("texture atomic result"),
             "{name}"
         );
         let exe = Executable::new(&program).unwrap_or_else(|e| panic!("{name}: {e}"));

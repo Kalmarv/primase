@@ -68,8 +68,7 @@ impl Lift<'_> {
         }
     }
 
-    /// An atomic operation on a typed texture view: naga's image atomic, which returns no old value; where the program
-    /// reads the old value, a call of the module's image atomic function that has it (see `primase_shader::ops`).
+    /// An atomic operation on a typed texture view: naga's image atomic, with the old value where the instruction writes it.
     fn view_atomic(&mut self, ins: &Instruction, slot: u32) -> Result<()> {
         let name = ins.name();
         let immediate = name.starts_with("imm_");
@@ -104,35 +103,20 @@ impl Lift<'_> {
             };
             self.b.bitcast_to(layer, Kind::I).expr
         });
-        // naga's image atomic statement has no exchange, and none has an old value: both are the function's
-        if wants_old || matches!(fun, AtomicFunction::Exchange { .. }) {
-            let op = match fun {
-                AtomicFunction::Add => "add",
-                AtomicFunction::And => "and",
-                AtomicFunction::InclusiveOr => "or",
-                AtomicFunction::ExclusiveOr => "xor",
-                AtomicFunction::Max => "max",
-                AtomicFunction::Min => "min",
-                AtomicFunction::Exchange { compare: None } => "exchange",
-                _ => return self.refuse("an image atomic operation the module's functions do not name"),
-            };
-            let old = self
-                .b
-                .image_atomic_fetch(global, op, coordinate, array_index, value);
-            if !wants_old {
-                return Ok(());
-            }
-            let bits = self.b.bitcast_to(old, Kind::U);
-            return self.write(&ops[0], bits, false);
-        }
         let image = self.b.global_ptr(global);
+        let old = wants_old.then(|| self.b.image_atomic_result(kind));
         self.b.push(Statement::ImageAtomic {
             image,
             coordinate: coordinate.expr,
             array_index,
             fun,
             value: value.expr,
+            result: old.map(|o| o.expr),
         });
+        if let Some(old) = old {
+            let bits = self.b.bitcast_to(old, Kind::U);
+            self.write(&ops[0], bits, false)?;
+        }
         Ok(())
     }
 

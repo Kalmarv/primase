@@ -106,6 +106,12 @@ png = { version = "=0.18.1", default-features = false }
 bcdec_rs = { version = "=0.2.0", default-features = false }
 block_compression = { version = "=0.10.1", default-features = false, features = ["bc7"] }
 
+# naga 30.0.1 plus three changes it lacks (branch naga-30.0.1-primase of github.com/Kalmarv/wgpu, from the v30.0.1 tag, nothing
+# else): the WGSL writer writes ray queries, `Statement::ImageAtomic` has an optional result (the texel's previous value), and
+# accepts `Exchange` on 32-bit images. Not yet proposed upstream.
+[patch.crates-io]
+naga = { git = "https://github.com/Kalmarv/wgpu", rev = "546ce02f49d9da8f7118b0a8257e210f3b7b1d02" }
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_debug_implementations = "warn"

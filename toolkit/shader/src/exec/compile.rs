@@ -15,7 +15,6 @@ use super::flat::{
 };
 use super::request::{Dim, ImageAtomicOp, QueryKind};
 use super::run::Decision;
-use crate::ops as primase_ops;
 use crate::rt as primase_rt;
 use crate::{Program, ResourceId};
 
@@ -1174,48 +1173,6 @@ pub(super) fn compile(
                             let parameter = (cx.rt_pointer)(arguments[1])?;
                             out.push(St::RtCall { index, parameter });
                         }
-                        image if primase_ops::is_image_atomic(image) => {
-                            // the operands: the image, the coordinate, a layer of an arrayed texture, the value
-                            let (tex, _, dim, arrayed) = (cx.image)(arguments[0])?;
-                            if let Some(s) = tex.slot() {
-                                cx.uses[s as usize] += 1;
-                            }
-                            let op = match primase_ops::image_atomic_op(image) {
-                                Some("add") => ImageAtomicOp::Add,
-                                Some("sub") => ImageAtomicOp::Sub,
-                                Some("and") => ImageAtomicOp::And,
-                                Some("or") => ImageAtomicOp::Or,
-                                Some("xor") => ImageAtomicOp::Xor,
-                                Some("min") => ImageAtomicOp::Min,
-                                Some("max") => ImageAtomicOp::Max,
-                                Some("exchange") => ImageAtomicOp::Exchange,
-                                _ => return Err(format!("the image atomic function {image}")),
-                            };
-                            let expected = 3 + usize::from(arrayed);
-                            if arguments.len() != expected {
-                                return Err(format!(
-                                    "{image} with {} arguments, not {expected}",
-                                    arguments.len()
-                                ));
-                            }
-                            let Shape::V(_, cn) = (cx.shape)(arguments[1])? else {
-                                return Err("atomic coordinate".into());
-                            };
-                            let signed = image.ends_with("_i32");
-                            let layer = arrayed.then(|| take(cx, &arguments[2]));
-                            let (c, v) = (take(cx, &arguments[1]), take(cx, &arguments[expected - 1]));
-                            out.push(St::ImageAtomic {
-                                tex,
-                                dim: dim_of(dim),
-                                coord: c,
-                                cn,
-                                layer,
-                                op,
-                                signed,
-                                value: v,
-                                result: result.map(|r| cx.slot[r.index()]),
-                            });
-                        }
                         primase_rt::IGNORE_HIT => out.push(St::RtDecide(Decision::Ignore)),
                         primase_rt::ACCEPT_HIT_AND_END_SEARCH => {
                             out.push(St::RtDecide(Decision::AcceptAndEnd))
@@ -1355,6 +1312,7 @@ pub(super) fn compile(
                     array_index,
                     fun,
                     value,
+                    result,
                 } => {
                     let (tex, _, dim, arrayed) = (cx.image)(*image)?;
                     if let Some(s) = tex.slot() {
@@ -1397,7 +1355,7 @@ pub(super) fn compile(
                         op,
                         signed,
                         value: v,
-                        result: None,
+                        result: result.map(|r| cx.slot[r.index()]),
                     });
                 }
                 Statement::Atomic {

@@ -20,7 +20,6 @@ mod evaluate;
 pub mod exec;
 pub mod gate;
 mod limits;
-pub mod ops;
 mod program;
 pub mod rt;
 pub use evaluate::{

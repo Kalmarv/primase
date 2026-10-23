@@ -6,7 +6,6 @@ mod atomic;
 pub mod behaviour;
 mod entry;
 mod mesh;
-mod operations;
 pub mod structure;
 
 pub use entry::{EntryDecl, FunctionDecl};

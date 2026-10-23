@@ -61,15 +61,13 @@ fn every_fixture_lifts() {
                     };
                     match written {
                         Ok(_) => {}
-                        // naga's WGSL writer does not write ray queries: the lifted program is what is checked
-                        Err(primase_shader::ProgramError::Unsupported { detail, .. })
-                            if detail.contains("ray queries") => {}
                         // WebGPU has no ray tracing pipeline: those programs are refused by name
                         Err(primase_shader::ProgramError::Unsupported { detail, .. })
                             if detail.contains("ray tracing pipeline") => {}
-                        // naga's image atomics return no old value: a program that reads it is refused by name
+                        // WGSL's texture atomics return no old value and have no exchange: naga's writer refuses those by name
                         Err(primase_shader::ProgramError::Unsupported { detail, .. })
-                            if detail.contains("reads the old value of an image atomic operation") => {}
+                            if detail.contains("texture atomic result")
+                                || detail.contains("texture atomic exchange") => {}
                         Err(e) => failures.push(format!("{name}: wgsl: {e}")),
                     }
                 }

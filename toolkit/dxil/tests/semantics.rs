@@ -1118,7 +1118,7 @@ mod image_atomics {
                 primase_shader::emit::wgsl(&program)
                     .unwrap_err()
                     .to_string()
-                    .contains("old value of an image atomic"),
+                    .contains("texture atomic result"),
                 "{v}"
             );
             program.validate().unwrap_or_else(|p| panic!("{v}: {p:?}"));
