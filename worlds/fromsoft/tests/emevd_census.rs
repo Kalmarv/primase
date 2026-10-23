@@ -33,11 +33,7 @@ fn scripts(archive: &Archive) -> Vec<String> {
     names
         .into_iter()
         .map(|n| format!("/event/{n}.emevd.dcx"))
-        .filter(|p| {
-            archive
-                .entries
-                .contains_key(&primase_fromsoft::archive::path_hash(p))
-        })
+        .filter(|p| archive.contains(p))
         .collect()
 }
 

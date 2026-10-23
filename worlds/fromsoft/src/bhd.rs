@@ -1,4 +1,5 @@
-//! BHD5 index dialect used by Sekiro. All integer fields are checked before use.
+//! BHD5 archive indexes. The games share the header, buckets and the hash and AES tables; each lays out its 40-byte
+//! file record its own way ([`RecordLayout`]). All integer fields are checked before use.
 use crate::{
     Result,
     bytes::{View, coverage},
@@ -25,9 +26,83 @@ pub struct HashInfo {
     pub digest: [u8; 32],
     pub ranges: Vec<Range>,
 }
+/// How a game's archive paths hash to the keys its BHD5 tables store. Both run over the UTF-16 units of the lowercase
+/// path, backslashes replaced by slashes and a leading slash added, with wrapping arithmetic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathHash {
+    /// Base 37 in a u32 (Sekiro; [`path_hash`]), zero-extended.
+    Base37,
+    /// Base 133 in a u64 (Elden Ring; [`path_hash64`]).
+    Base133,
+}
+impl PathHash {
+    pub fn hash(self, path: &str) -> u64 {
+        match self {
+            Self::Base37 => u64::from(path_hash(path)),
+            Self::Base133 => path_hash64(path),
+        }
+    }
+}
+/// The UTF-16 units of `path` as the hashes read it: lowercase, slashes, a leading slash.
+fn hashed_units(path: &str) -> impl Iterator<Item = u16> {
+    let path = path.to_lowercase().replace('\\', "/");
+    let lead = (!path.starts_with('/')).then_some(u16::from(b'/'));
+    lead.into_iter().chain(path.encode_utf16().collect::<Vec<_>>())
+}
+/// An archive path's hash as Sekiro's BHD5 tables key files: base 37, wrapping u32. Game dictionary paths are ASCII.
+pub fn path_hash(path: &str) -> u32 {
+    hashed_units(path).fold(0u32, |h, c| h.wrapping_mul(37).wrapping_add(u32::from(c)))
+}
+/// An archive path's hash as Elden Ring's BHD5 tables key files: base 133, wrapping u64.
+pub fn path_hash64(path: &str) -> u64 {
+    hashed_units(path).fold(0u64, |h, c| h.wrapping_mul(133).wrapping_add(u64::from(c)))
+}
+/// Where a game's BHD5 file record keeps its fields, as byte offsets into the 40-byte record. The path hash and the
+/// logical size are 4 or 8 bytes wide, the padded size 4, the offset and the table offsets 8.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecordLayout {
+    /// Path hash offset and width in bytes.
+    pub hash: (usize, usize),
+    pub padded_size: usize,
+    /// Logical (unpadded) size offset and width in bytes.
+    pub logical_size: (usize, usize),
+    pub offset: usize,
+    pub sha: usize,
+    pub aes: usize,
+}
+impl RecordLayout {
+    /// Sekiro's (and Dark Souls III's): u32 hash, u32 padded size, u64 offset, SHA and AES table offsets, u64 logical
+    /// size.
+    pub const SEKIRO: Self = Self {
+        hash: (0, 4),
+        padded_size: 4,
+        logical_size: (32, 8),
+        offset: 8,
+        sha: 16,
+        aes: 24,
+    };
+    /// Elden Ring's: u64 hash, u32 padded and u32 logical size, u64 offset, SHA and AES table offsets.
+    pub const ELDEN_RING: Self = Self {
+        hash: (0, 8),
+        padded_size: 8,
+        logical_size: (12, 4),
+        offset: 16,
+        sha: 24,
+        aes: 32,
+    };
+}
+/// A 4- or 8-byte unsigned field.
+fn sized(v: &View<'_>, (o, width): (usize, usize)) -> Result<u64> {
+    match width {
+        4 => Ok(u64::from(v.u32(o)?)),
+        8 => v.u64(o),
+        _ => Err(invalid("BHD5", o, "unsupported field width")),
+    }
+}
 #[derive(Debug, Clone)]
 pub struct Entry {
-    pub hash: u32,
+    /// The archive path hash, in the width the game's records store it (Sekiro's u32 zero-extended).
+    pub hash: u64,
     pub offset: u64,
     pub padded_size: usize,
     pub logical_size: usize,
@@ -97,7 +172,8 @@ fn ranges(v: &View<'_>, o: usize, size: usize, encrypted: bool) -> Result<Vec<Ra
     Ok(out)
 }
 impl Header {
-    pub fn read(data: &[u8]) -> Result<Self> {
+    /// Read an RSA-unwrapped index whose file records are laid out as `record` says.
+    pub fn read(data: &[u8], record: &RecordLayout) -> Result<Self> {
         let mut v = View {
             data,
             format: "BHD5",
@@ -147,12 +223,14 @@ impl Header {
             }
             for i in 0..n {
                 let p = ptr + i * 40;
-                let hash = v.u32(p)?;
-                let padded_size = v.u32(p + 4)? as usize;
-                let offset = v.u64(p + 8)?;
-                let sh = v.size(p + 16)?;
-                let ae = v.size(p + 24)?;
-                let logical_size = v.size(p + 32)?;
+                let hash = sized(&v, (p + record.hash.0, record.hash.1))?;
+                let padded_size = v.u32(p + record.padded_size)? as usize;
+                let offset = v.u64(p + record.offset)?;
+                let sh = v.size(p + record.sha)?;
+                let ae = v.size(p + record.aes)?;
+                let logical_size =
+                    usize::try_from(sized(&v, (p + record.logical_size.0, record.logical_size.1))?)
+                        .map_err(|_| invalid("BHD5", p, "logical size overflow"))?;
                 if logical_size > padded_size || !hashes.insert(hash) {
                     return Err(invalid("BHD5", p, "size mismatch or duplicate hash"));
                 }

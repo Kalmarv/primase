@@ -20,3 +20,18 @@ pub use read::collision::Report as CollisionReport;
 pub use read::extras::{Report as ExtrasReport, light_record};
 pub use read::objects::Report as ObjectCollisionReport;
 pub use read::{convert, states};
+
+/// Data1 to Data5 with base-37 u32 path hashes and Sekiro's (Dark Souls III's) file records; the keys the community
+/// unpackers publish.
+pub(crate) const ARCHIVES: crate::game::ArchiveSet = crate::game::ArchiveSet {
+    pairs: &[
+        crate::game::ArchivePair::required(1, "Data1"),
+        crate::game::ArchivePair::required(2, "Data2"),
+        crate::game::ArchivePair::required(3, "Data3"),
+        crate::game::ArchivePair::required(4, "Data4"),
+        crate::game::ArchivePair::required(5, "Data5"),
+    ],
+    hash: crate::bhd::PathHash::Base37,
+    record: crate::bhd::RecordLayout::SEKIRO,
+    keys: crate::game::KeySource::Published(&crate::keys::SEKIRO),
+};

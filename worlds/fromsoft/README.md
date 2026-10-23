@@ -1,13 +1,26 @@
 # primase-fromsoft
 
-Read-only Sekiro archive access: raw RSA BHD5 envelopes, bucket indexes,
-AES-128-ECB entry ranges, DCX DFLT/KRAK envelopes, and BND4 file tables.
+Read-only FromSoftware archive access (Sekiro, Elden Ring): raw RSA BHD5 envelopes, bucket indexes, AES-128-ECB
+entry ranges, DCX DFLT/KRAK envelopes, and BND4 file tables.
 
-`Archive::open(root)` indexes the five archive pairs. `read_hash(hash, decoder)`
-and `read(path, decoder)` return decrypted, decoded bytes. `read_stored(hash)`
-returns decrypted stored bytes including padding. `Header::read` and
-`unwrap_rsa` expose the lower-level index operations; `Entry::decrypt` applies
-only its listed ranges. SHA metadata is parsed and retained, not authenticated.
+What differs between the games and is not stated by their files is data in one descriptor, `Game` (`game.rs`), with
+each game's table in its own module (`sekiro`, `elden`): its archive set (`ArchiveSet`: the BHD5/BDT pairs, whether
+each is required, the path hash, the BHD5 file-record layout and where its keys come from). Formats are read by what
+their bytes state.
+
+| | Sekiro | Elden Ring |
+|---|---|---|
+| pairs (shard) | Data1..Data5 (1..5) | Data0..Data3 (0..3), DLC (4, optional), sd/sd (5), sd/sd_dlc02 (6, optional): UXM's archive list order |
+| path hash | base 37, u32 (`path_hash`) | base 133, u64 (`path_hash64`) |
+| file record | u32 hash, u32 padded size, u64 offset, SHA and AES offsets, u64 logical size | u64 hash, u32 padded and u32 logical size, u64 offset, SHA and AES offsets |
+| keys | published, built in | supplied by the caller (`Keys::from_folder`: one PKCS#1 PEM per pair, `Data0.pem`, `sd.pem`, ...) |
+
+`Archive::open(root)` indexes Sekiro's five pairs with the built-in keys; `Archive::open_game(root, game, &keys)`
+indexes any game's (an optional pair the install lacks is listed in `absent`). Entry hashes are u64 throughout
+(Sekiro's zero-extended). `read_hash(hash, decoder)` and `read(path, decoder)` return decrypted, decoded bytes.
+`read_stored(hash)` returns decrypted stored bytes including padding. `Header::read(plain, &record)` and
+`unwrap_rsa` expose the lower-level index operations; `Entry::decrypt` applies only its listed ranges. SHA metadata
+is parsed and retained, not authenticated.
 
 `Decoder { oodle, max_output }` takes an optional borrowed, caller-loaded Oodle
 library and an explicit decompressed-byte ceiling. KRAK needs the native decoder;
@@ -17,9 +30,9 @@ legacy Shift-JIS names are rejected. Unsupported layouts and unaccounted bytes
 are errors. BDT padding for non-DCX entries is retained for reference-reader
 parity: a zero BHD logical size does not imply an empty entry.
 
-`NameDictionary::read(path)` reads a caller-supplied UTF-8 path list. Hash
-collisions retain all distinct normalized candidates. No dictionary, native
-library, or game assets are distributed with this crate.
+`NameDictionary::read(path)` reads a caller-supplied UTF-8 Sekiro path list, `read_for(path, game)` any game's,
+keyed by its path hash. Hash collisions retain all distinct normalized candidates. No dictionary, native library,
+key or game asset is distributed with this crate.
 
 ## Gates
 
@@ -31,9 +44,10 @@ are unset. Use `cargo test -p primase-fromsoft -- --nocapture`.
 - `PRIMASE_SEKIRO_DIR`: directory containing the five BHD/BDT pairs.
 - `PRIMASE_OODLE6`: explicitly trusted version-6 native library.
 - `PRIMASE_FROMSOFT_NAMES`: optional path dictionary for the named-count gate.
-- `PRIMASE_FROMSOFT_BHD_ORACLE`: directory of independent reference C# decoder
-  output, generated from the same installation. Its files are:
-  - `Data1.plain` through `Data5.plain`: complete RSA-unwrapped headers.
+- `PRIMASE_FROMSOFT_BHD_ORACLE`: directory of independent reference decoder
+  output (SoulsFormats 9c0da6b with UXM), generated from the same installation. Its files are:
+  - `<name>.plain` per archive (`Data1.plain` ... ; named after the stem's last
+    component): complete RSA-unwrapped headers.
   - `entries.tsv`: shard, eight-digit hex hash, dictionary path (empty when the
     dictionary has none), decoded length, uppercase SHA-256, tab-separated.
   - `binders.tsv`: shard, hash, zero-based member index, signed ID, member name,
@@ -43,6 +57,11 @@ are unset. Use `cargo test -p primase-fromsoft -- --nocapture`.
   - `samples.tsv`: hash and archive path, tab-separated; corresponding exact
     decoded bytes in `samples/<hash>.bin`. Include varied entries and every
     indexed path for a selected map area.
+
+- `PRIMASE_ELDEN_DIR`, `PRIMASE_ELDEN_KEYS`, `PRIMASE_ELDEN_NAMES`, `PRIMASE_ELDEN_BHD_ORACLE`: the same for
+  Elden Ring (its `Game` folder, its key folder, UXM's dictionary, and a census in the same schema written by
+  SoulsFormatsNEXT ee1dd61 with UXM's keys, RSA and 64-bit hash; hashes are 16 hex digits). `tests/census.rs` runs
+  one body for each game configured. The dictionary must name exactly the entries the reference names.
 
 The census attempts every indexed entry. Accepted results must match reference
 lengths and digests; samples compare actual bytes. A rejection counts as

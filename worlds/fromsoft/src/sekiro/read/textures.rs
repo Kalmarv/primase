@@ -13,7 +13,7 @@ pub(super) struct Catalog {
     pub entries: BTreeMap<String, Location>,
 }
 pub(super) fn has(archive: &Archive, path: &str) -> bool {
-    archive.entries.contains_key(&crate::archive::path_hash(path))
+    archive.contains(path)
 }
 impl Catalog {
     pub fn discover(archive: &Archive, decoder: &Decoder<'_>, area: &str) -> Result<Self> {

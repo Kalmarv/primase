@@ -1,48 +1,142 @@
-//! Private corpus paths are caller-supplied; no game data is bundled.
+//! The archives of each game read against an independent census of the same install (SoulsFormats for Sekiro,
+//! SoulsFormatsNEXT for Elden Ring, each with UXM's keys and path hash): the decrypted indexes, every entry's decoded
+//! bytes and every top-level binder member. Private corpus paths are caller-supplied; no game data is bundled.
 use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::{
-    NameDictionary,
-    archive::{Archive, public_key},
+    Game, Keys, NameDictionary,
+    archive::Archive,
     bhd::{Header, unwrap_rsa},
 };
 use primase_testdata::real_data;
+use std::path::PathBuf;
+
+/// One game's install, its keys and the independent census of it, when the configuration names them.
+struct Install {
+    game: Game,
+    root: PathBuf,
+    keys: Keys,
+    oracle: PathBuf,
+    names: Option<PathBuf>,
+}
+
+fn install(game: Game) -> Result<Option<Install>, Box<dyn std::error::Error>> {
+    let (dir, oracle, names) = match game {
+        Game::Sekiro => (
+            "PRIMASE_SEKIRO_DIR",
+            "PRIMASE_FROMSOFT_BHD_ORACLE",
+            "PRIMASE_FROMSOFT_NAMES",
+        ),
+        Game::EldenRing => (
+            "PRIMASE_ELDEN_DIR",
+            "PRIMASE_ELDEN_BHD_ORACLE",
+            "PRIMASE_ELDEN_NAMES",
+        ),
+    };
+    let (Some(root), Some(oracle)) = (real_data(dir), real_data(oracle)) else {
+        return Ok(None);
+    };
+    let keys = match Keys::published(game) {
+        Some(keys) => keys,
+        None => {
+            let Some(folder) = real_data("PRIMASE_ELDEN_KEYS") else {
+                return Ok(None);
+            };
+            Keys::from_folder(folder, game)?
+        }
+    };
+    Ok(Some(Install {
+        game,
+        root,
+        keys,
+        oracle,
+        names: real_data(names),
+    }))
+}
+
+/// Each archive's index unwrapped as the reference unwraps it, the archive's entries, and the dictionary naming
+/// exactly the entries the reference names.
 #[test]
 fn headers() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
-        return Ok(());
-    };
-    let Some(oracle) = real_data("PRIMASE_FROMSOFT_BHD_ORACLE") else {
-        return Ok(());
-    };
-    let mut report = GateReport::new("RSA BHD C# oracle", Tolerance::Exact);
-    for shard in 1..=5 {
-        let (n, e) = public_key(shard)?;
-        let enc = std::fs::read(root.join(format!("Data{shard}.bhd")))?;
-        let plain = unwrap_rsa(&enc, n, e)?;
-        let want = std::fs::read(oracle.join(format!("Data{shard}.plain")))?;
-        report.compare_bytes(format!("Data{shard}"), &plain, &want);
-        let header = Header::read(&plain)?;
-        println!("Data{shard}: {} entries", header.entries.len());
+    for game in Game::ALL {
+        if let Some(install) = install(game)? {
+            headers_of(&install)?;
+        }
     }
+    Ok(())
+}
+
+fn headers_of(install: &Install) -> Result<(), Box<dyn std::error::Error>> {
+    let set = install.game.archives();
+    let archive = Archive::open_game(&install.root, install.game, &install.keys)?;
+    let mut report = GateReport::new(
+        format!("{} RSA BHD oracle", install.game.name()),
+        Tolerance::Exact,
+    );
+    for (pair, header) in set
+        .pairs
+        .iter()
+        .filter(|p| !archive.absent.contains(&p.stem))
+        .zip(&archive.headers)
+    {
+        let enc = std::fs::read(install.root.join(format!("{}.bhd", pair.stem)))?;
+        let (n, e) = install.keys.get(pair.stem).ok_or("no key")?;
+        let plain = unwrap_rsa(&enc, n, e)?;
+        let want = std::fs::read(install.oracle.join(format!("{}.plain", pair.name())))?;
+        report.compare_bytes(pair.stem, &plain, &want);
+        assert_eq!(
+            Header::read(&plain, &set.record)?.entries.len(),
+            header.entries.len()
+        );
+        println!("{}: {} entries", pair.stem, header.entries.len());
+    }
+    println!("absent: {:?}", archive.absent);
     println!("{report}");
     report.assert_passed();
-    let archive = Archive::open(root)?;
-    assert_eq!(archive.entries.len(), 8765);
-    assert_eq!(archive.headers[0].entries.len(), 1183);
-    assert_eq!(archive.headers[4].entries.len(), 5449);
-    if let Some(names) = real_data("PRIMASE_FROMSOFT_NAMES") {
-        let dict = NameDictionary::read(names)?;
+    if install.game == Game::Sekiro {
+        assert_eq!(archive.entries.len(), 8765);
+        assert_eq!(archive.headers[0].entries.len(), 1183);
+        assert_eq!(archive.headers[4].entries.len(), 5449);
+    }
+    if let Some(names) = &install.names {
+        let dict = NameDictionary::read_for(names, install.game)?;
         let named = archive
             .entries
             .keys()
             .filter(|h| dict.names.contains_key(h))
             .count();
-        println!("named {named}");
-        assert_eq!(named, 8752);
+        println!("named {named} of {}", archive.entries.len());
+        if install.game == Game::Sekiro {
+            assert_eq!(named, 8752);
+        }
+        // the reference's names: every entry it decoded, named by its own hash of the same dictionary
+        let mut disagree = Vec::new();
+        for line in std::fs::read_to_string(install.oracle.join("entries.tsv"))?.lines() {
+            let f: Vec<_> = line.split('\t').collect();
+            let hash = u64::from_str_radix(f[1], 16)?;
+            let ours = dict.names.get(&hash);
+            let agrees = match (f[2], ours) {
+                ("", None) => true,
+                (path, Some(candidates)) if !path.is_empty() => {
+                    let path = path.replace('\\', "/").to_ascii_lowercase();
+                    candidates.contains(&format!("/{}", path.trim_start_matches('/')))
+                }
+                _ => false,
+            };
+            if !agrees {
+                disagree.push(format!("{hash:x}: reference {:?}, ours {ours:?}", f[2]));
+            }
+        }
+        for d in disagree.iter().take(20) {
+            println!("NAME {d}");
+        }
+        assert!(
+            disagree.is_empty(),
+            "{} entries named differently",
+            disagree.len()
+        );
     }
     Ok(())
 }
-
 #[allow(unsafe_code)]
 mod native {
     use primase_compress::oodle::{Oodle, Version};
@@ -51,35 +145,44 @@ mod native {
         unsafe { Oodle::load(path, Version::V6) }
     }
 }
-/// Whole-install differential against the reference C# archive/binder decoder.
+/// Whole-install differential against the reference archive/binder decoder, for each game configured.
 /// Every indexed entry is attempted; corrupt entries remain explicit failures.
 #[test]
 fn whole_install() -> Result<(), Box<dyn std::error::Error>> {
-    use primase_fromsoft::{Binder, dcx::Decoder};
-    use sha2::{Digest, Sha256};
-    use std::collections::BTreeMap;
-    let Some(root) = real_data("PRIMASE_SEKIRO_DIR") else {
-        return Ok(());
-    };
-    let Some(oracle) = real_data("PRIMASE_FROMSOFT_BHD_ORACLE") else {
-        return Ok(());
-    };
     let Some(dll) = real_data("PRIMASE_OODLE6") else {
         return Ok(());
     };
     let oodle = native::load(dll)?;
-    let decoder = Decoder {
+    let decoder = primase_fromsoft::dcx::Decoder {
         oodle: Some(&oodle),
-        max_output: 512 * 1024 * 1024,
+        max_output: 1 << 30,
     };
-    let archive = Archive::open(root)?;
+    for game in Game::ALL {
+        if let Some(install) = install(game)? {
+            whole_install_of(&install, &decoder)?;
+        }
+    }
+    Ok(())
+}
+
+fn whole_install_of(
+    install: &Install,
+    decoder: &primase_fromsoft::dcx::Decoder<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use primase_fromsoft::Binder;
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
+    let decoder = *decoder;
+    let oracle = &install.oracle;
+    let archive = Archive::open_game(&install.root, install.game, &install.keys)?;
+    let stem = |shard: u8| archive.pair(shard).map_or("?", |p| p.stem);
     let entry_text = std::fs::read_to_string(oracle.join("entries.tsv"))?;
     let member_text = std::fs::read_to_string(oracle.join("binders.tsv"))?;
     let mut expected = BTreeMap::new();
     for line in entry_text.lines() {
         let f: Vec<_> = line.split('\t').collect();
         expected.insert(
-            (f[0].parse::<u8>()?, u32::from_str_radix(f[1], 16)?),
+            (f[0].parse::<u8>()?, u64::from_str_radix(f[1], 16)?),
             (f[3].parse::<usize>()?, f[4].to_owned()),
         );
     }
@@ -89,7 +192,7 @@ fn whole_install() -> Result<(), Box<dyn std::error::Error>> {
         members.insert(
             (
                 f[0].parse::<u8>()?,
-                u32::from_str_radix(f[1], 16)?,
+                u64::from_str_radix(f[1], 16)?,
                 f[2].parse::<usize>()?,
             ),
             (
@@ -109,7 +212,7 @@ fn whole_install() -> Result<(), Box<dyn std::error::Error>> {
             return Err(format!("errors.tsv row: {line}").into());
         };
         rejected.insert(
-            (shard.parse::<u8>()?, u32::from_str_radix(hash, 16)?),
+            (shard.parse::<u8>()?, u64::from_str_radix(hash, 16)?),
             message.to_owned(),
         );
     }
@@ -172,11 +275,11 @@ fn whole_install() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(theirs) = rejected.get(&(entry.shard, hash)) {
                     agreed_rejections += 1;
                     println!(
-                        "AGREED REJECTION Data{} {hash:08x}: ours {e}; reference {theirs}",
-                        entry.shard
+                        "AGREED REJECTION {} {hash:08x}: ours {e}; reference {theirs}",
+                        stem(entry.shard)
                     );
                 } else {
-                    failures.push(format!("Data{} {hash:08x}: {e}", entry.shard));
+                    failures.push(format!("{} {hash:08x}: {e}", stem(entry.shard)));
                 }
             }
             Ok(()) => {
@@ -186,7 +289,10 @@ fn whole_install() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    let mut samples = GateReport::new("C# decoded entry bytes", Tolerance::Exact);
+    let mut samples = GateReport::new(
+        format!("{} reference decoded entry bytes", install.game.name()),
+        Tolerance::Exact,
+    );
     for line in std::fs::read_to_string(oracle.join("samples.tsv"))?.lines() {
         let (hash, path) = line.split_once('\t').ok_or("sample manifest row")?;
         let bytes = archive.read(path, &decoder)?;
@@ -202,7 +308,7 @@ fn whole_install() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(agreed_rejections, rejected.len());
     assert_eq!(checked + agreed_rejections, archive.entries.len());
     for ((shard, kind), count) in counts {
-        println!("Data{shard} {kind:?}: {count}");
+        println!("{} {kind:?}: {count}", stem(shard));
     }
     println!(
         "entries matched {checked}/{}; members matched {checked_members}/{}; failures {}",

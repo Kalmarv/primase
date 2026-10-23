@@ -1,7 +1,7 @@
 use primase_compress::{Compressor, Zlib};
 use primase_fromsoft::{
     Binder, NameDictionary,
-    bhd::{AesKey, Entry, Header, Range, unwrap_rsa},
+    bhd::{AesKey, Entry, Header, Range, RecordLayout, unwrap_rsa},
     dcx::Decoder,
 };
 fn u32le(b: &mut [u8], p: usize, x: u32) {
@@ -81,23 +81,54 @@ fn binder() -> Vec<u8> {
     b[96..].copy_from_slice(b"twenty payload bytes");
     b
 }
+/// [`bhd`]'s entry in Elden Ring's file record: a hash wider than 32 bits, u32 padded and logical sizes first, then
+/// the offset and the table offsets.
+fn bhd_elden() -> Vec<u8> {
+    let mut b = bhd();
+    b[36..76].fill(0);
+    u64le(&mut b, 36, 0x1_0000_007b);
+    u32le(&mut b, 44, 32);
+    u32le(&mut b, 48, 17);
+    u64le(&mut b, 52, 128);
+    b
+}
+#[test]
+fn bhd_elden_ring_records() {
+    let h = Header::read(&bhd_elden(), &RecordLayout::ELDEN_RING).expect("synthetic fixture");
+    let e = &h.entries[0];
+    assert_eq!(
+        (e.hash, e.padded_size, e.logical_size, e.offset),
+        (0x1_0000_007b, 32, 17, 128)
+    );
+    // a logical size beyond the padded one, read at its own offset
+    let mut b = bhd_elden();
+    u32le(&mut b, 48, 33);
+    assert!(Header::read(&b, &RecordLayout::ELDEN_RING).is_err());
+    // read as Sekiro's record, the offset field lands on a SHA table offset outside the index
+    assert!(Header::read(&bhd_elden(), &RecordLayout::SEKIRO).is_err());
+}
 #[test]
 fn bhd_fields_padding_and_bounds() {
     let mut b = bhd();
-    let h = Header::read(&b).expect("synthetic fixture");
+    let h = Header::read(&b, &RecordLayout::SEKIRO).expect("synthetic fixture");
     assert_eq!(h.entries[0].hash, 123);
     assert_eq!(h.entries[0].offset, 128);
     assert_eq!(h.entries[0].logical_size, 17);
     b.extend([0; 13]);
-    assert_eq!(Header::read(&b).expect("synthetic fixture").rsa_padding, 13);
+    assert_eq!(
+        Header::read(&b, &RecordLayout::SEKIRO)
+            .expect("synthetic fixture")
+            .rsa_padding,
+        13
+    );
     *b.last_mut().expect("synthetic fixture") = 1;
-    assert!(Header::read(&b).is_err());
+    assert!(Header::read(&b, &RecordLayout::SEKIRO).is_err());
     let mut b = bhd();
     u64le(&mut b, 68, 33);
-    assert!(Header::read(&b).is_err());
+    assert!(Header::read(&b, &RecordLayout::SEKIRO).is_err());
     let mut b = bhd();
     u64le(&mut b, 60, u64::MAX);
-    assert!(Header::read(&b).is_err());
+    assert!(Header::read(&b, &RecordLayout::SEKIRO).is_err());
 }
 #[test]
 fn rsa_block_geometry() {
@@ -189,7 +220,7 @@ fn binder_files_and_strict_coverage() {
 #[test]
 fn every_truncation_is_an_error() {
     for n in 0..76 {
-        assert!(Header::read(&bhd()[..n]).is_err());
+        assert!(Header::read(&bhd()[..n], &RecordLayout::SEKIRO).is_err());
     }
     let d = dcx();
     for n in 0..d.len() {
@@ -205,7 +236,7 @@ fn dictionary_normalizes_and_deduplicates() {
     let d = NameDictionary::parse("# comment\nA\\B\n/a/b\n").expect("synthetic fixture");
     assert_eq!(d.names.len(), 1);
     assert_eq!(
-        d.names[&primase_fromsoft::archive::path_hash("/a/b")],
+        d.names[&u64::from(primase_fromsoft::archive::path_hash("/a/b"))],
         vec!["/a/b"]
     );
     assert!(NameDictionary::parse("é").is_err());
@@ -220,7 +251,9 @@ fn bhd_encryption_ranges_are_structurally_checked() {
     u64le(&mut b, 96, 0);
     u64le(&mut b, 104, 16);
     assert_eq!(
-        Header::read(&b).expect("valid AES table").entries[0]
+        Header::read(&b, &RecordLayout::SEKIRO)
+            .expect("valid AES table")
+            .entries[0]
             .aes
             .as_ref()
             .expect("AES")
@@ -232,11 +265,11 @@ fn bhd_encryption_ranges_are_structurally_checked() {
         let mut bad = b.clone();
         u64le(&mut bad, 96, start);
         u64le(&mut bad, 104, end);
-        assert!(Header::read(&bad).is_err());
+        assert!(Header::read(&bad, &RecordLayout::SEKIRO).is_err());
     }
     u64le(&mut b, 96, u64::MAX);
     u64le(&mut b, 104, u64::MAX);
-    assert!(Header::read(&b).is_ok());
+    assert!(Header::read(&b, &RecordLayout::SEKIRO).is_ok());
 }
 #[test]
 fn binder_hash_table_and_nested_dcx() {
@@ -276,7 +309,7 @@ fn arbitrary_single_byte_mutations_never_panic() {
             let old = b[i];
             for val in [0, 1, 127, 128, 255] {
                 b[i] = val;
-                let _ = Header::read(&b);
+                let _ = Header::read(&b, &RecordLayout::SEKIRO);
                 let _ = Binder::read(&b, &decoder());
                 let _ = decoder().decode(&b);
             }
@@ -410,4 +443,19 @@ fn path_hash_reference_values() {
     use primase_fromsoft::archive::path_hash;
     assert_eq!(path_hash(r"map\MapStudio\m11_01_00_00.msb"), 0xfbbb5962);
     assert_eq!(path_hash("/map/mapstudio/m11_01_00_00.msb"), 0xfbbb5962);
+}
+
+/// Elden Ring's 64-bit path hash: two paths of UXM's dictionary as UXM hashes them, both keys of the installed
+/// index (SoulsFormatsNEXT's census of it, `PRIMASE_ELDEN_BHD_ORACLE`).
+#[test]
+fn path_hash64_reference_values() {
+    use primase_fromsoft::archive::path_hash64;
+    assert_eq!(
+        path_hash64("/material/allmaterial.matbinbnd.dcx"),
+        0x37411a0f9b62fc73
+    );
+    assert_eq!(
+        path_hash64(r"shader\ShaderBdle.shaderbdlebnd.dcx"),
+        0x5e16158460a94460
+    );
 }
