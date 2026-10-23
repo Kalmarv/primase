@@ -16,11 +16,11 @@ use super::entry::spawn_entity;
 use super::folder::Source;
 use super::listing::{Bundle, Listed};
 use crate::components::{
-    FrostbiteBytecode, FrostbiteMaterial, FrostbiteMeshSet, FrostbitePermutation, FrostbiteProgram,
-    FrostbitePrograms, MaterialDepot,
+    FrostbiteBindings, FrostbiteBytecode, FrostbiteMaterial, FrostbiteMeshSet, FrostbitePermutation,
+    FrostbiteProgram, FrostbitePrograms, MaterialDepot,
 };
 use crate::permutation::{self, Permutation};
-use crate::{Error, Result, bytecode, depot, lookup};
+use crate::{Error, Result, binding, bytecode, depot, lookup};
 
 /// Bundles that ids and names are looked up in, with the index of what they hold built once: the permutations by type
 /// and id, the CompiledBytecode resources by name. Where two bundles hold the same id or name, the earlier wins.
@@ -38,7 +38,13 @@ impl<'a> Scope<'a> {
         for (b, bundle) in bundles.iter().enumerate() {
             for (i, a) in bundle.manifest.res.iter().enumerate() {
                 match a.rtype {
-                    permutation::RASTER | permutation::COMPUTE | lookup::STREAMABLE_TEXTURE_SET => {
+                    permutation::RASTER
+                    | permutation::COMPUTE
+                    | permutation::SHARED_RASTER
+                    | permutation::SHARED_COMPUTE
+                    | binding::BINDING_SET
+                    | binding::PASS_BINDING
+                    | lookup::STREAMABLE_TEXTURE_SET => {
                         permutations
                             .entry((a.rtype, permutation::resource_id(&a.rmeta)))
                             .or_insert((b, i));
@@ -69,6 +75,12 @@ impl<'a> Scope<'a> {
         Some(self.bundles[b].resource(i))
     }
 
+    /// The bundle and entry of the resource of type `rtype` with `id`.
+    pub(super) fn resource_with_home(&self, rtype: u32, id: u64) -> Option<(&'a Bundle, Listed)> {
+        let &(b, i) = self.permutations.get(&(rtype, id))?;
+        Some((&self.bundles[b], self.bundles[b].resource(i)))
+    }
+
     /// The bundle and entry of the permutation with `id`, a raster one first.
     fn permutation(&self, id: u64) -> Option<(&'a Bundle, Listed)> {
         let &(b, i) = [permutation::RASTER, permutation::COMPUTE]
@@ -95,6 +107,7 @@ impl<'a> Scope<'a> {
 pub(super) struct PermutationRead {
     entry: Listed,
     permutation: Permutation,
+    bindings: FrostbiteBindings,
     /// Each program's CompiledBytecode entry and its shader.
     programs: Vec<(Listed, Shader, FrostbiteBytecode)>,
 }
@@ -118,6 +131,7 @@ impl PermutationRead {
                 shaders,
             },
         );
+        w.insert(e, self.bindings);
         e
     }
 }
@@ -152,11 +166,57 @@ impl Source<'_> {
             let (shader, c) = one.remove(0);
             programs.push((listed, shader, c));
         }
+        let bindings = self.read_bindings(scope, &permutation, entry)?;
         Ok(PermutationRead {
             entry: entry.clone(),
             permutation,
+            bindings,
             programs,
         })
+    }
+
+    /// The binding sets of `permutation`: its shared data, then the pass binding and sets the data names, looked up in
+    /// `scope`. One the scope does not hold is an error naming it.
+    fn read_bindings(
+        &self,
+        scope: &Scope<'_>,
+        permutation: &Permutation,
+        entry: &Listed,
+    ) -> Result<FrostbiteBindings> {
+        let missing = |what: &str, id: u64| {
+            Error::Missing(format!(
+                "{}: {what} {id} is in no bundle of the scope",
+                entry.name
+            ))
+        };
+        let unsupported = |e: Error| Error::Unsupported(format!("{}: {e}", entry.name));
+        let (home, shared_entry) = [permutation::SHARED_RASTER, permutation::SHARED_COMPUTE]
+            .iter()
+            .find_map(|&t| scope.resource_with_home(t, permutation.shared_data))
+            .ok_or_else(|| missing("shared data", permutation.shared_data))?;
+        let payload = self.payload(shared_entry.file, shared_entry.size as usize)?;
+        let shared = permutation::read_shared(
+            shared_entry.resource_type.unwrap_or(0),
+            &payload,
+            &home.manifest.res[shared_entry.index].rmeta,
+        )
+        .map_err(unsupported)?;
+        let read_set = |rtype: u32, id: u64| -> Result<binding::Set> {
+            let (home, e) = scope
+                .resource_with_home(rtype, id)
+                .ok_or_else(|| missing("binding set", id))?;
+            let payload = self.payload(e.file, e.size as usize)?;
+            binding::read(rtype, &payload, &home.manifest.res[e.index].rmeta).map_err(unsupported)
+        };
+        let pass = shared
+            .pass_binding
+            .map(|id| read_set(binding::PASS_BINDING, id))
+            .transpose()?;
+        let mut sets = [None, None, None];
+        for (slot, id) in sets.iter_mut().zip(shared.sets) {
+            *slot = id.map(|id| read_set(binding::BINDING_SET, id)).transpose()?;
+        }
+        Ok(FrostbiteBindings { shared, pass, sets })
     }
 
     /// A permutation entry as its entities: its own, then those of the programs it names (looked up in the bundle

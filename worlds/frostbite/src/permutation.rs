@@ -124,3 +124,74 @@ pub fn read(rtype: u32, d: &[u8], meta: &[u8; 16]) -> Result<Permutation> {
             .collect::<Result<_>>()?,
     })
 }
+
+/// ExpressionShaderRasterPermutationSharedData.
+pub const SHARED_RASTER: u32 = 0x2500_47B2;
+/// ExpressionShaderPermutationSharedData (a compute permutation's).
+pub const SHARED_COMPUTE: u32 = 0x879B_A711;
+
+/// What a permutation's shared-data resource names ([`SHARED_RASTER`], [`SHARED_COMPUTE`]; both lay out the same way):
+/// the ids of the pass binding, the binding signature, up to three binding sets and the root slot initial data, as
+/// the first 0x40 bytes of the payload state them (an absent one is 0), and the bytes after them as stored. The sets'
+/// slots are the ones [`crate::binding::Bindings`] maps registers through; what the words at 0x10 and 0x30 and the
+/// bytes from 0x40 hold is not established here.
+///
+/// ```text
+/// 0x00 u64 pass binding id    0x08 u64 binding signature id   0x10 two u32 (kept)
+/// 0x18 u64 set 0 id           0x20 u64 set 1 id               0x28 u64 set 2 id
+/// 0x30 u64 (kept)             0x38 u64 root slot initial data id
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedData {
+    pub id: u64,
+    pub pass_binding: Option<u64>,
+    pub signature: u64,
+    pub sets: [Option<u64>; 3],
+    pub root_slots: u64,
+    /// The words at 0x10 and 0x30.
+    pub words: [u64; 2],
+    /// The payload from 0x40.
+    pub rest: Vec<u8>,
+}
+
+/// Read a shared-data resource of type `rtype` ([`SHARED_RASTER`] or [`SHARED_COMPUTE`]). Refused: another type, a
+/// payload that is not the metadata's size and relocation size, one shorter than 0x40 bytes, a signature or root slot
+/// id of 0.
+pub fn read_shared(rtype: u32, d: &[u8], meta: &[u8; 16]) -> Result<SharedData> {
+    if rtype != SHARED_RASTER && rtype != SHARED_COMPUTE {
+        return Err(bad(
+            "shared data",
+            0,
+            format!("type {rtype:#010x} is not shared data"),
+        ));
+    }
+    let m = Rd::new(meta, "shared data");
+    let (size, reloc) = (m.u32le(0)? as usize, m.u32le(4)? as usize);
+    if size.checked_add(reloc) != Some(d.len()) {
+        return Err(bad(
+            "shared data",
+            0,
+            format!("size {size} + relocations {reloc} != {}", d.len()),
+        ));
+    }
+    let r = Rd::new(d, "shared data");
+    let some = |at: usize| -> Result<Option<u64>> { Ok(Some(r.u64le(at)?).filter(|&v| v != 0)) };
+    let signature = r.u64le(8)?;
+    let root_slots = r.u64le(0x38)?;
+    if signature == 0 || root_slots == 0 {
+        return Err(bad(
+            "shared data",
+            8,
+            "a shared data without a signature or root slots",
+        ));
+    }
+    Ok(SharedData {
+        id: resource_id(meta),
+        pass_binding: some(0)?,
+        signature,
+        sets: [some(0x18)?, some(0x20)?, some(0x28)?],
+        root_slots,
+        words: [r.u64le(0x10)?, r.u64le(0x30)?],
+        rest: r.bytes(0x40, d.len() - 0x40)?.to_vec(),
+    })
+}

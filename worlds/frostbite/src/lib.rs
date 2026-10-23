@@ -9,6 +9,7 @@
 //! every writer is the counterpart of the reader: an unmodified Patch read and written again is byte-identical.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod binding;
 pub mod bundle;
 pub mod bytecode;
 pub mod cas;

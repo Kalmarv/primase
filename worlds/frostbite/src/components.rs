@@ -529,3 +529,59 @@ impl Component for FrostbiteVertexElements {
             .sum()
     }
 }
+
+/// A permutation's binding sets as its shared data names them ([`crate::permutation::SharedData`]): the pass binding and
+/// the three sets read, so a shader's registers resolve to parameters ([`crate::binding::Bindings`]). On the
+/// permutation's entity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrostbiteBindings {
+    pub shared: crate::permutation::SharedData,
+    pub pass: Option<crate::binding::Set>,
+    pub sets: [Option<crate::binding::Set>; 3],
+}
+
+impl FrostbiteBindings {
+    /// The register rule's view of the sets ([`crate::binding::Bindings`]).
+    pub fn bindings(&self) -> crate::binding::Bindings<'_> {
+        crate::binding::Bindings {
+            pass: self.pass.as_ref(),
+            sets: [
+                self.sets[0].as_ref(),
+                self.sets[1].as_ref(),
+                self.sets[2].as_ref(),
+            ],
+        }
+    }
+}
+
+impl Component for FrostbiteBindings {
+    const NAME: &'static str = "frostbite.bindings";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
+        let set = |s: &Option<crate::binding::Set>| {
+            s.as_ref().map(|s| {
+                json!({
+                    "id": s.id.to_string(),
+                    "groups": s.groups.iter().map(|g| json!({
+                        "name": format!("{:#018x}", g.name),
+                        "flags": hex(&g.flags),
+                        "parameters": g.params.len(),
+                        "buffer_bytes": g.buffer_end(),
+                    })).collect::<Vec<_>>(),
+                })
+            })
+        };
+        Ok(Some(json!({
+            "pass_binding": set(&self.pass),
+            "sets": self.sets.iter().map(set).collect::<Vec<_>>(),
+            "signature": self.shared.signature.to_string(),
+            "root_slots": self.shared.root_slots.to_string(),
+        })))
+    }
+    fn payload_bytes(&self) -> u64 {
+        let size = |s: &crate::binding::Set| s.groups.iter().map(|g| 24 * g.params.len() as u64).sum::<u64>();
+        (self.pass.iter().chain(self.sets.iter().flatten()))
+            .map(size)
+            .sum()
+    }
+}
