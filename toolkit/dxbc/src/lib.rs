@@ -1,5 +1,7 @@
-//! Checked, bounded Shader Model 4 and 5 pixel-program evaluation.
-//! Sampling belongs to the caller: a scalar interpreter cannot infer derivatives, so the caller states its inputs'.
+//! Shader Model 4 and 5 programs: the container and token reader (`decode`, `chunks`, `reflection`), the lifter to
+//! `primase_shader::Program` (`lift`, any stage), and the older bounded pixel-program evaluator (`Shader`,
+//! `Program::execute`). Sampling belongs to the caller of the evaluator: a scalar interpreter cannot infer derivatives, so
+//! the caller states its inputs'.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 mod arity;

@@ -1,7 +1,7 @@
 //! Cases rendered by Microsoft's WARP rasterizer (Direct3D 12) through the WARP oracle program and evaluated by
 //! `primase-dxil` on the same inputs; every written output lane must agree bit for bit. Textures are uniform, so the
 //! sampler state the oracle binds cannot change a sample. The oracle's vertex shader comes from
-//! `Shader::passthrough_vertex_shader`, compiled with dxc. Shared by the fixture gate and the Elden Ring gate.
+//! `passthrough_vertex_shader` below, compiled with dxc. Shared by the fixture gate and the Elden Ring gate.
 use primase_dxil::Shader;
 use primase_shader::{PixelShader, Sample};
 use std::collections::BTreeMap;
@@ -24,6 +24,81 @@ fn hex(words: &[u32]) -> String {
         .map(|w| format!("{w:08x}"))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// HLSL of a vertex shader that feeds this pixel shader, for checking it on a rasterizer: one clockwise
+/// triangle covering the pixel at the origin of a one-pixel viewport (SV_Position (0.5, 0.5, 0.5, 1)), and
+/// every other input read from `cbuffer Case : register(<case_register>) { uint4 r[32]; }`, row by input
+/// register, lanes from the element's first column. Elements are declared in signature order with the pixel
+/// shader's types and interpolation modes so the compiler packs them alike; system values the rasterizer
+/// generates (front face, sample index, ...) are left out.
+pub fn passthrough_vertex_shader(shader: &Shader, case_register: &str) -> String {
+    let scalar = |t: u8| match t {
+        5 | 3 | 7 => "uint",
+        4 | 2 | 6 => "int",
+        _ => "float",
+    };
+    let cast = |t: u8| match t {
+        5 | 3 | 7 => "",
+        4 | 2 | 6 => "asint",
+        _ => "asfloat",
+    };
+    let interpolation = |i: u8| match i {
+        1 => "nointerpolation ",
+        3 => "centroid ",
+        4 => "noperspective ",
+        5 => "noperspective centroid ",
+        6 => "sample ",
+        7 => "noperspective sample ",
+        _ => "",
+    };
+    let lanes = ["x", "y", "z", "w"];
+    let mut fields = String::new();
+    let mut body = String::new();
+    for e in shader.input_elements() {
+        if e.system_value != 0 && e.system_value != 3 {
+            continue;
+        }
+        let width = if e.columns > 1 {
+            e.columns.to_string()
+        } else {
+            String::new()
+        };
+        let field = format!("e{}", e.id);
+        fields.push_str(&format!(
+            "    {}{}{} {} : {}{};\n",
+            if e.system_value == 3 {
+                ""
+            } else {
+                interpolation(e.interpolation)
+            },
+            scalar(e.component_type),
+            width,
+            field,
+            e.name,
+            if e.system_value == 3 {
+                String::new()
+            } else {
+                e.index.to_string()
+            }
+        ));
+        if e.system_value == 3 {
+            body.push_str(&format!("    o.{field} = float4(p, 0.5, 1.0);\n"));
+        } else {
+            let swizzle: String = (0..e.columns).map(|c| lanes[usize::from(e.column + c)]).collect();
+            body.push_str(&format!(
+                "    o.{field} = {}(r[{}].{swizzle});\n",
+                cast(e.component_type),
+                e.row
+            ));
+        }
+    }
+    format!(
+        "cbuffer Case : register({case_register}) {{ uint4 r[32]; }};\n\
+         struct Out\n{{\n{fields}}};\n\
+         Out main(uint id : SV_VertexID)\n{{\n    Out o;\n    \
+         float2 p = float2(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0);\n{body}    return o;\n}}\n"
+    )
 }
 
 /// What a comparison found: written lanes compared, of them lanes that depend on an implementation-defined
@@ -52,7 +127,7 @@ pub fn compare(container: &Path, cases: &[Case], dxc: &Path, warp: &Path, scratc
         .replace(['[', ']'], "_");
     let hlsl = scratch.join(format!("{stem}.vs.hlsl"));
     let vs = scratch.join(format!("{stem}.vs.dxil"));
-    std::fs::write(&hlsl, shader.passthrough_vertex_shader("b0, space1"))?;
+    std::fs::write(&hlsl, passthrough_vertex_shader(&shader, "b0, space1"))?;
     let out = std::process::Command::new(dxc)
         .args(["-T", "vs_6_0", "-E", "main", "-Fo"])
         .arg(&vs)

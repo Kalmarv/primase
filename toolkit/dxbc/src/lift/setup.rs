@@ -797,7 +797,7 @@ impl Setup {
 
         // the signature elements the program uses: a register the program declares, or a special input or output it
         // declares by name; an element it never declares is not part of what it exposes (and may be one no stage
-        // binding exists for: Unity's pixel programs list SV_InstanceID)
+        // binding exists for: some engines' pixel programs list SV_InstanceID)
         let mut interface = Interface {
             stage,
             inputs: Vec::new(),

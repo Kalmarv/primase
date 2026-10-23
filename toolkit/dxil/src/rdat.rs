@@ -24,6 +24,11 @@
 //!
 //! A string reference of all ones, or to an empty string, is none. A library without a subobject table has no
 //! subobjects. Anything outside this (another version, a kind not listed, a reference outside its part) is refused.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 
 use primase_shader::{HitGroup, HitGroupKind, Subobject};
 

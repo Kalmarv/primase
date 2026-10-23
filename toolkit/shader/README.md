@@ -1,4 +1,9 @@
-# One pixel-shader evaluation interface
+# Shader programs and the pixel-shader evaluation interface
+
+This crate holds what the lifters share: the program representation (`Program`: a naga module with the interface in
+primase's vocabulary, `validate`, `text`, `emit`), the typed `build::Builder` they lift with, the D3D mapping tables
+(`d3d`), the executor (`exec`), the refusal type and the version gate (`Refusal`, `gate`), and the older pixel-shader
+evaluation interface described first. The program representation, the versions and the support ledger follow it.
 
 `PixelShader` is what a bake evaluates, whatever the bytecode: `interface()` (the program's varyings and resources in
 primase's own vocabulary, below), `input_count()`, `constant_buffers()` (bind slot and rows of four lanes),
@@ -48,8 +53,7 @@ What the readers keep and drop, so nobody looks for it:
 - A structured buffer is its stride; the element layout of D3D's "resource bind info" is read past, not kept.
 - A DXIL `half` and a DXBC-side min-precision type are read as 32-bit; DXIL min-precision signature annotations are not
   read.
-- Not mapped, refused by name: tbuffers, append/consume/counter UAVs, acceleration structures, feedback textures,
-  tessellation and compute stages, scalar types other than bool, int, uint, float and double.
+- What is not mapped is refused by name; the support ledger below counts each lifter's refusals by reason.
 
 ## Evaluating over a grid
 

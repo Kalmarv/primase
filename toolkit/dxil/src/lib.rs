@@ -1,6 +1,7 @@
-//! Checked, bounded Shader Model 6 (DXIL) pixel-program evaluation, implementing [`primase_shader::PixelShader`].
-//! The container is the DXBC format ([`chunks`]); the program is LLVM bitcode in its `DXIL` part, read by
-//! a bounded bitstream reader of our own. Sampling belongs to the caller.
+//! Shader Model 6 (DXIL) programs: the container ([`chunks`]), the LLVM bitcode in its `DXIL` part read by a bounded
+//! bitstream reader of our own (`bitstream`, `module`), the reflection (`reflection`, `rdat`), the lifter to
+//! `primase_shader::Program` (`lift`, every stage a DXIL container holds) and the older bounded pixel-program evaluator
+//! implementing [`primase_shader::PixelShader`] (`Shader`). Sampling belongs to the caller of the evaluator.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 pub mod bitstream;
 mod evaluate;

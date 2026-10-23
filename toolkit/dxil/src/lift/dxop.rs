@@ -9,6 +9,11 @@
 //! also equals the count the 69,826 modules of the oracle corpora and the committed fixtures call it with (those that call
 //! it: 150 of the 177), and the operations none of them calls (41 to 45, `Fma`, `LoadOutputControlPoint`, some of the mesh
 //! and ray query operations, `IsNormal` and the hyperbolic functions) are only DXC's word.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 
 /// The number of arguments (the opcode included) of the `dx.op` with this opcode, if the lifter carries it.
 pub(crate) fn arguments(code: u64) -> Option<usize> {

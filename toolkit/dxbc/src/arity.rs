@@ -1,6 +1,11 @@
 //! How many operands each instruction the lifter carries has. The token format fixes the count per opcode (a destination
 //! or two, then the sources, a resource and a sampler among them), so a program whose instruction has another count is
 //! not a program of this format; the lifter checks it once, before it reads an operand by position.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 
 /// The operand count of the instruction `name` (as [`crate::decode::opcode_name`] spells it), for the instructions the
 /// lifter carries; `None` for any other.

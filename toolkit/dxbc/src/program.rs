@@ -242,9 +242,6 @@ pub(crate) fn derivative(opcode: u16) -> bool {
     matches!(opcode, 11 | 12 | 122..=125)
 }
 impl Program {
-    pub fn temp_count(&self) -> usize {
-        self.temps
-    }
     pub fn input_count(&self) -> usize {
         self.inputs
     }

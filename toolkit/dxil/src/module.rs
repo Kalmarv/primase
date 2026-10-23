@@ -1,6 +1,7 @@
 //! LLVM 3.7 IR as DXIL stores it, read from the bitstream tree: the type table, module values (globals, functions,
-//! constants), metadata, value names and function bodies. Only what DXIL pixel shaders use is decoded; any other
-//! record in a function body is refused by name, never skipped.
+//! constants), metadata, value names and function bodies. Only what DXIL programs use is decoded; any other record in a
+//! function body is refused by name. The blocks of a function body that say nothing a lifter uses (its metadata, the
+//! metadata attached to its instructions and its use-list order) are the only things skipped.
 use crate::bitstream::{Block, Record};
 use crate::{Result, error};
 
@@ -369,9 +370,6 @@ impl Module {
         } else {
             Err(error(at, format!("type {id} undefined")))
         }
-    }
-    pub fn type_of(&self, value: ValueId) -> Option<&Type> {
-        self.value_types.get(value).and_then(|&t| self.types.get(t))
     }
     pub fn name(&self, value: ValueId) -> Option<&str> {
         self.names

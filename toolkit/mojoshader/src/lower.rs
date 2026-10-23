@@ -330,9 +330,13 @@ impl Lower<'_> {
                             if name != format!("{prefix}uniforms_vec4") {
                                 return self.fail(format!("the uniform array {name}"));
                             }
-                            let rows = u32::try_from(rows).ok().filter(|r| *r > 0).ok_or_else(|| {
-                                error(self.line(), format!("a uniform array of {rows} rows"))
-                            })?;
+                            let rows =
+                                u32::try_from(rows)
+                                    .ok()
+                                    .and_then(NonZeroU32::new)
+                                    .ok_or_else(|| {
+                                        error(self.line(), format!("a uniform array of {rows} rows"))
+                                    })?;
                             self.declare_constants(&name, rows)?;
                         }
                         "vec4" if name == "posFixup" => {
@@ -380,11 +384,11 @@ impl Lower<'_> {
         }
     }
 
-    fn declare_constants(&mut self, name: &str, rows: u32) -> Result<()> {
+    fn declare_constants(&mut self, name: &str, rows: NonZeroU32) -> Result<()> {
         let u4 = self.b.ty_of(Kind::U, 4);
         let ty = self.b.ty(TypeInner::Array {
             base: u4,
-            size: ArraySize::Constant(NonZeroU32::new(rows).unwrap_or(NonZeroU32::MIN)),
+            size: ArraySize::Constant(rows),
             stride: 16,
         });
         let g = self.b.global(GlobalVariable {
@@ -395,8 +399,8 @@ impl Lower<'_> {
             init: None,
             memory_decorations: Default::default(),
         });
-        self.constants = Some((g, rows));
-        self.declare_symbol(name, Sym::Constants(rows))
+        self.constants = Some((g, rows.get()));
+        self.declare_symbol(name, Sym::Constants(rows.get()))
     }
 
     fn declare_sampler(&mut self, name: &str) -> Result<()> {
@@ -1012,10 +1016,7 @@ impl Lower<'_> {
                 let p = self.b.local_ptr(local);
                 Ok(self.b.load(p, kind, width).into())
             }
-            Sym::Const(v, lanes) => {
-                let _ = lanes;
-                Ok(v.into())
-            }
+            Sym::Const(v, _) => Ok(v.into()),
             Sym::Argument(index) => {
                 let expr = self.b.app(E::FunctionArgument(index as u32));
                 Ok(Val {

@@ -3,6 +3,11 @@
 //! MojoShader writes `#ifdef GL_ES` blocks of precision statements (skipped: `GL_ES` is not defined), `#extension`
 //! lines (noted), and `#define NAME tokens` aliases for registers, which are expanded here. No other directive is in the
 //! dialect, and one is refused by name.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 
 use std::collections::BTreeMap;
 

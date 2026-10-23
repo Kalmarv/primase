@@ -183,7 +183,7 @@ pub fn varying(stage: Stage, output: bool, e: &Element<'_>) -> Result<Varying, S
         // the compiler states some system values (SV_Target, SV_Depth) by name alone, with D3D_NAME undefined. A name
         // that is no graphics system value (SV_GroupID) is refused. A name that is one, but none this stage takes in
         // this direction, is refused for an output and is a plain varying for an input: the compiler did not make
-        // it a system value, and Unity's pixel programs carry an `SV_InstanceID` that way.
+        // it a system value, and some engines' pixel programs carry an `SV_InstanceID` that way.
         None if named => {
             let number = number_of_name(e.name)
                 .ok_or_else(|| at(format!("system-value semantic {} is not mapped", e.name)))?;
@@ -348,7 +348,7 @@ mod tests {
     }
 
     /// An input whose D3D_NAME is undefined and whose semantic is a graphics system value that stage's inputs do not
-    /// have is a plain varying (Unity's pixel programs carry `SV_InstanceID` so); one a stage does take by name keeps
+    /// have is a plain varying (some engines' pixel programs carry `SV_InstanceID` so); one a stage does take by name keeps
     /// its system value.
     #[test]
     fn an_undefined_name_with_a_foreign_semantic_is_a_plain_input() {

@@ -1,4 +1,9 @@
 // Opcode names indexed by their token value; Microsoft tokenized-program format.
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 pub(crate) const NAMES: &[&str] = &[
     "add",
     "and",
