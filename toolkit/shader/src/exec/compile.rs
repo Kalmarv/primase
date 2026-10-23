@@ -239,7 +239,9 @@ pub(super) fn compile(
         let mut prov: Vec<Option<Prov>> = vec![None; n_expr];
         for (h, e) in f.expressions.iter() {
             let i = h.index();
-            let get = |x: Handle<E>| -> Option<Prov> { prov[slot[x.index()] as usize] };
+            // a register past the expressions' own (an aggregate's member) carries no provenance
+            let get =
+                |x: Handle<E>| -> Option<Prov> { prov.get(slot[x.index()] as usize).copied().flatten() };
             prov[i] = match e {
                 E::FunctionArgument(a) => {
                     let n = match shape(h) {
@@ -1461,7 +1463,7 @@ pub(super) fn compile(
         let Op::Deriv { src, prov: p, n, .. } = op else {
             continue;
         };
-        let Some(pr) = prov[*src as usize] else {
+        let Some(pr) = prov.get(*src as usize).copied().flatten() else {
             continue;
         };
         let mut a = [(0u32, 0u8); 4];

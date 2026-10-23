@@ -11,6 +11,11 @@
 //! `ACCEPT_FIRST_HIT_AND_END_SEARCH` ends the search); a non-opaque one is a candidate the program commits or lets go.
 //! The triangle test is the watertight one of DXR: a ray through an edge or a vertex shared by triangles hits one of
 //! them.
+//!
+//! Checked against WARP's DXR 1.1 (`toolkit/dxil/tests/exec_warp_rq.rs`): 768 rays through random scenes with instance
+//! transforms, masks and flags, every committed hit equal in its integer fields, facing included, and in distance and
+//! barycentrics to 1e-4 relative. Not checked: rays that hit an edge or a vertex exactly (the scenes are random), and
+//! `ACCEPT_FIRST_HIT_AND_END_SEARCH`, whose hit depends on the order a traversal visits triangles in.
 
 use std::collections::BTreeMap;
 
