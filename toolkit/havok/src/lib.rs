@@ -7,6 +7,7 @@ mod convex;
 mod mesh;
 pub use convex::ConvexCore;
 mod section;
+pub mod spline;
 pub use mesh::{CompressedMesh, MeshSection, Triangle, compressed_mesh, mesh_sections};
 mod tagfile;
 mod types;
