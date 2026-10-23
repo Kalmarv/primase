@@ -1,9 +1,19 @@
 //! What an evaluation asks of its caller, and the trait that answers it.
 //!
-//! A request names its resources by `R`: [`ResourceId`] where the program's own interface is the vocabulary
+//! A request names its resources by `R`: [`Element`] where the program's own interface is the vocabulary
 //! ([`Backend`]), the D3D bind slot where [`crate::Sampler`] answers for a bytecode that counts slots.
 
 use crate::ResourceId;
+
+/// A resource of the program's interface and, for an array of them (`binding_array`), the element the program's index
+/// picked (0 for a resource that is not an array). An index past a bounded array's length is an error that stops the
+/// evaluation (D3D12 leaves it undefined, so there is no answer to compare); the length of an unbounded array is the
+/// caller's to check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Element {
+    pub id: ResourceId,
+    pub index: u32,
+}
 
 /// A texture's shape as a request states it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,13 +109,13 @@ pub struct ImageStore<R> {
 /// writes. A request the caller cannot answer is an error that stops the evaluation. Reads of buffers need no call:
 /// the buffers are bound before the run.
 pub trait Backend {
-    fn sample(&mut self, request: ImageSample<ResourceId>) -> Result<[f32; 4], String>;
+    fn sample(&mut self, request: ImageSample<Element>) -> Result<[f32; 4], String>;
     /// The texel's four lanes as its view returns them: f32 bits for a float view, the integers otherwise.
-    fn load(&mut self, request: ImageLoad<ResourceId>) -> Result<[u32; 4], String> {
-        Err(format!("resource {}: no loads given", request.texture.0))
+    fn load(&mut self, request: ImageLoad<Element>) -> Result<[u32; 4], String> {
+        Err(format!("resource {}: no loads given", request.texture.id.0))
     }
-    fn query(&mut self, request: ImageQuery<ResourceId>) -> Result<[u32; 4], String> {
-        Err(format!("resource {}: no queries given", request.texture.0))
+    fn query(&mut self, request: ImageQuery<Element>) -> Result<[u32; 4], String> {
+        Err(format!("resource {}: no queries given", request.texture.id.0))
     }
     fn store_image(&mut self, request: ImageStore<ResourceId>) -> Result<(), String> {
         Err(format!("resource {}: no stores given", request.view.0))

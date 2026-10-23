@@ -3,7 +3,7 @@
 //! both the default and the -Od build of each (different instruction streams of one source). The evaluator cannot run
 //! them (loops, switches, memory); the values below are the arithmetic of the source, not of the lifter.
 use primase_dxil::lift;
-use primase_shader::exec::{Backend, Executable, ImageSample, Output, Resources};
+use primase_shader::exec::{Backend, Element, Executable, ImageSample, Output, Resources};
 use primase_shader::{Program, ResourceId, ResourceKind};
 use std::path::Path;
 
@@ -13,7 +13,7 @@ fn f(x: f32) -> u32 {
 
 struct NoBackend;
 impl Backend for NoBackend {
-    fn sample(&mut self, _: ImageSample<ResourceId>) -> Result<[f32; 4], String> {
+    fn sample(&mut self, _: ImageSample<Element>) -> Result<[f32; 4], String> {
         Err("no sampling in this fixture".into())
     }
 }
@@ -257,10 +257,10 @@ mod textures {
         }
     }
     impl Backend for Recording {
-        fn sample(&mut self, r: ImageSample<ResourceId>) -> Result<[f32; 4], String> {
+        fn sample(&mut self, r: ImageSample<Element>) -> Result<[f32; 4], String> {
             self.requests.insert(format!(
                 "t{} {:?} coord={:?} layer={:?} lod={:?} offset={:?} gather={:?} ref={:?} depth={}",
-                self.register(r.texture),
+                self.register(r.texture.id),
                 r.dim,
                 r.coord,
                 r.layer,
@@ -278,24 +278,24 @@ mod textures {
                 [0.25, 0.5, 0.75, 1.0]
             })
         }
-        fn load(&mut self, r: ImageLoad<ResourceId>) -> Result<[u32; 4], String> {
+        fn load(&mut self, r: ImageLoad<Element>) -> Result<[u32; 4], String> {
             self.requests.insert(format!(
                 "load t{} {:?} texel={:?} mip={:?} storage={}",
-                self.register(r.texture),
+                self.register(r.texture.id),
                 r.dim,
                 r.texel,
                 r.mip,
                 r.storage
             ));
-            Ok(match self.register(r.texture) {
+            Ok(match self.register(r.texture.id) {
                 5 => [10, 20, 30, 40],
                 _ => [0.5f32.to_bits(); 4],
             })
         }
-        fn query(&mut self, r: ImageQuery<ResourceId>) -> Result<[u32; 4], String> {
+        fn query(&mut self, r: ImageQuery<Element>) -> Result<[u32; 4], String> {
             self.requests.insert(format!(
                 "query t{} {:?} level={:?}",
-                self.register(r.texture),
+                self.register(r.texture.id),
                 r.kind,
                 r.level
             ));
@@ -405,10 +405,10 @@ mod resources {
         stores: Vec<ImageStore<ResourceId>>,
     }
     impl Backend for Views {
-        fn sample(&mut self, _: ImageSample<ResourceId>) -> Result<[f32; 4], String> {
+        fn sample(&mut self, _: ImageSample<Element>) -> Result<[f32; 4], String> {
             Err("no sampling".into())
         }
-        fn load(&mut self, r: ImageLoad<ResourceId>) -> Result<[u32; 4], String> {
+        fn load(&mut self, r: ImageLoad<Element>) -> Result<[u32; 4], String> {
             self.loads
                 .push(format!("{:?} storage={} texel={:?}", r.dim, r.storage, r.texel));
             Ok([0.5f32.to_bits(); 4])

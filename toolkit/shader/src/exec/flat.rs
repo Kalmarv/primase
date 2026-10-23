@@ -172,8 +172,8 @@ pub(super) enum Op {
         prov: Option<[(u32, u8); 4]>,
     },
     Sample {
-        tex: ResourceId,
-        smp: ResourceId,
+        tex: Res,
+        smp: Res,
         coord: u32,
         cn: u8,
         layer: Option<u32>,
@@ -185,7 +185,7 @@ pub(super) enum Op {
         depth: bool,
     },
     Texel {
-        tex: ResourceId,
+        tex: Res,
         coord: u32,
         cn: u8,
         dim: Dim,
@@ -195,7 +195,7 @@ pub(super) enum Op {
         mip: Option<u32>,
     },
     Query {
-        tex: ResourceId,
+        tex: Res,
         dim: Dim,
         kind: QueryKind,
         level: Option<u32>,
@@ -204,6 +204,31 @@ pub(super) enum Op {
         gid: u32,
         elem_words: u32,
     },
+}
+/// Which element of a resource array an operation reads.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Pick {
+    /// The resource is not an array.
+    One,
+    Fixed(u32),
+    /// The first lane of a register, per invocation.
+    Slot(u32),
+}
+/// A resource an operation names, and for an array the element it picks and how many there are.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Res {
+    pub id: ResourceId,
+    pub pick: Pick,
+    pub count: u32,
+}
+impl Res {
+    /// The register an element index is read from.
+    pub(super) fn slot(&self) -> Option<u32> {
+        match self.pick {
+            Pick::Slot(s) => Some(s),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) enum LevelOp {

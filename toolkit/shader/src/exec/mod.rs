@@ -21,7 +21,9 @@ mod run;
 
 pub use flat::Executable;
 pub use pixel::ProgramShader;
-pub use request::{Backend, Dim, ImageLoad, ImageLod, ImageQuery, ImageSample, ImageStore, QueryKind};
+pub use request::{
+    Backend, Dim, Element, ImageLoad, ImageLod, ImageQuery, ImageSample, ImageStore, QueryKind,
+};
 pub use run::{Bound, Output, Resources, Runner, STEP_LIMIT, Scratch};
 
 use crate::{Error, Program};
@@ -66,14 +68,14 @@ impl Executable {
         for (_, op) in &self.ops {
             match op {
                 flat::Op::Sample { tex, smp, .. } => {
-                    textures.insert(*tex);
-                    samplers.insert(*smp);
+                    textures.insert(tex.id);
+                    samplers.insert(smp.id);
                 }
                 flat::Op::Texel {
                     tex, storage: false, ..
                 }
                 | flat::Op::Query { tex, .. } => {
-                    textures.insert(*tex);
+                    textures.insert(tex.id);
                 }
                 _ => {}
             }

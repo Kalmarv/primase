@@ -82,11 +82,13 @@ pub(crate) enum Lv {
     Scalar(Val),
     /// A struct result (`ResRet`, a `dx.op` pair): its elements.
     Agg(Vec<Lv>),
-    /// A resource handle: its class (0 shader resource, 1 unordered access, 2 constant buffer, 3 sampler) and the
-    /// index of the interface resource it names.
+    /// A resource handle: its class (0 shader resource, 1 unordered access, 2 constant buffer, 3 sampler), the index
+    /// of the interface resource it names and, for a resource array, the element (from the array's first) the
+    /// program picked.
     Handle {
         class: u8,
         resource: usize,
+        element: Option<Val>,
     },
     Pointer(memory::Ptr),
 }
@@ -108,6 +110,12 @@ enum Stored {
     Agg(Vec<Stored>),
     /// Not stored: handles and the like, which are the same wherever they are read.
     Plain(Lv),
+    /// A handle to an element of a resource array: the element index is a value, kept in a local.
+    Handle {
+        class: u8,
+        resource: usize,
+        element: Box<Stored>,
+    },
 }
 
 /// The state of one lift.

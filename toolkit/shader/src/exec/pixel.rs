@@ -3,7 +3,9 @@
 
 use std::collections::BTreeMap;
 
-use super::{Backend, Executable, ImageLoad, ImageQuery, ImageSample, ImageStore, Runner, Scratch, error};
+use super::{
+    Backend, Element, Executable, ImageLoad, ImageQuery, ImageSample, ImageStore, Runner, Scratch, error,
+};
 use crate::{
     AtomicAdd, BufferKind, D3dClass, Error, Execution, Interface, PixelShader, Program, ResourceId,
     ResourceKind, Sampler, Stage, StorageTarget, Store, SystemValue, TextureDim,
@@ -363,6 +365,16 @@ impl SlotBackend<'_> {
             .copied()
             .ok_or_else(|| format!("resource {} has no bind slot", id.0))
     }
+    /// The bind slot of an element: a slot answers one binding, not an array's.
+    fn slot_of(&self, e: Element) -> Result<u32, String> {
+        if e.index != 0 {
+            return Err(format!(
+                "resource {}: element {} of an array, which a bind-slot sampler does not answer",
+                e.id.0, e.index
+            ));
+        }
+        self.slot(e.id)
+    }
     /// A buffer view's address of word `word`: (element, byte offset in the element).
     fn address(&self, id: ResourceId, word: u32) -> [u32; 3] {
         match self.buffers.get(&id) {
@@ -376,8 +388,8 @@ impl SlotBackend<'_> {
     }
 }
 impl Backend for SlotBackend<'_> {
-    fn sample(&mut self, r: ImageSample<ResourceId>) -> Result<[f32; 4], String> {
-        let (texture, sampler) = (self.slot(r.texture)?, self.slot(r.sampler)?);
+    fn sample(&mut self, r: ImageSample<Element>) -> Result<[f32; 4], String> {
+        let (texture, sampler) = (self.slot_of(r.texture)?, self.slot_of(r.sampler)?);
         self.sampler.sample_image(ImageSample {
             texture,
             sampler,
@@ -391,8 +403,8 @@ impl Backend for SlotBackend<'_> {
             depth: r.depth,
         })
     }
-    fn load(&mut self, r: ImageLoad<ResourceId>) -> Result<[u32; 4], String> {
-        let texture = self.slot(r.texture)?;
+    fn load(&mut self, r: ImageLoad<Element>) -> Result<[u32; 4], String> {
+        let texture = self.slot_of(r.texture)?;
         self.sampler.load_image(ImageLoad {
             texture,
             dim: r.dim,
@@ -403,8 +415,8 @@ impl Backend for SlotBackend<'_> {
             mip: r.mip,
         })
     }
-    fn query(&mut self, r: ImageQuery<ResourceId>) -> Result<[u32; 4], String> {
-        let texture = self.slot(r.texture)?;
+    fn query(&mut self, r: ImageQuery<Element>) -> Result<[u32; 4], String> {
+        let texture = self.slot_of(r.texture)?;
         self.sampler.query_image(ImageQuery {
             texture,
             dim: r.dim,

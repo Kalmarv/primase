@@ -10,7 +10,7 @@ use naga::{
 };
 
 use super::flat::{
-    BinOp, CvtOp, Executable, GlobalDesc, GlobalKind, LevelOp, Loc, MathOp, Op, Ptr, Reg, St, UnOp,
+    BinOp, CvtOp, Executable, GlobalDesc, GlobalKind, LevelOp, Loc, MathOp, Op, Pick, Ptr, Reg, Res, St, UnOp,
 };
 use super::request::{Dim, QueryKind};
 use crate::{Program, ResourceId};
@@ -70,8 +70,20 @@ fn shape_of(inner: &TypeInner) -> Result<Shape, String> {
 pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Executable, String> {
     let m = &p.module;
     let ep = m.entry_points.first().ok_or("no entry point")?;
-    let resource_of: BTreeMap<usize, ResourceId> =
-        p.bindings.iter().map(|(id, h)| (h.index(), *id)).collect();
+    // each global that is a resource: its id and, for an array, how many elements the interface says it has
+    let resource_of: BTreeMap<usize, (ResourceId, u32)> = p
+        .bindings
+        .iter()
+        .map(|(id, h)| {
+            let count = p
+                .interface
+                .resources
+                .iter()
+                .find(|r| r.id == *id)
+                .map_or(1, |r| r.count);
+            (h.index(), (*id, count))
+        })
+        .collect();
     let f = &ep.function;
     let finfo = info.get_entry_point(0);
     let n_expr = f.expressions.len();
@@ -91,14 +103,14 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
     for (h, g) in m.global_variables.iter() {
         let kind = match g.space {
             naga::AddressSpace::Uniform => Some(GlobalKind::Constants(
-                *resource_of.get(&h.index()).ok_or("unbound uniform")?,
+                resource_of.get(&h.index()).ok_or("unbound uniform")?.0,
             )),
             naga::AddressSpace::Private => {
                 let init = g.init.ok_or("private global without initialiser")?;
                 Some(GlobalKind::Private(const_words(m, init)?))
             }
             naga::AddressSpace::Storage { .. } => Some(GlobalKind::Storage(
-                *resource_of.get(&h.index()).ok_or("unbound storage")?,
+                resource_of.get(&h.index()).ok_or("unbound storage")?.0,
             )),
             naga::AddressSpace::Handle => None,
             s => return Err(format!("address space {s:?}")),
@@ -269,6 +281,8 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                     });
                 }
             }
+            // an element of a resource array is named by the operation that reads it
+            E::Access { base, .. } | E::AccessIndex { base, .. } if is_binding_array(m, f, *base) => {}
             E::AccessIndex { base, index } => {
                 if let Some(p) = ptr_of[base.index()] {
                     // pointer arithmetic: the pointee decides the step
@@ -553,7 +567,7 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                 depth_ref,
                 clamp_to_edge: _,
             } => {
-                let (tex, class, dim, arrayed) = image_of(m, f, &resource_of, *image)?;
+                let (tex, class, dim, arrayed) = image_of(m, f, &resource_of, &slot, *image)?;
                 if matches!(
                     class,
                     ImageClass::Sampled { multi: true, .. }
@@ -562,7 +576,7 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                 ) {
                     return Err("sample of a multisampled or storage image".into());
                 }
-                let smp = binding_of(m, f, &resource_of, *sampler)?;
+                let smp = binding_of(m, f, &resource_of, &slot, *sampler)?;
                 let lv = match level {
                     SampleLevel::Auto => LevelOp::Auto,
                     SampleLevel::Zero => LevelOp::Zero,
@@ -606,7 +620,7 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                 sample,
                 level,
             } => {
-                let (tex, class, dim, arrayed) = image_of(m, f, &resource_of, *image)?;
+                let (tex, class, dim, arrayed) = image_of(m, f, &resource_of, &slot, *image)?;
                 op_of[i] = Some(Op::Texel {
                     tex,
                     coord: slot[coordinate.index()],
@@ -623,7 +637,7 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                 });
             }
             E::ImageQuery { image, query } => {
-                let (tex, _, dim, _) = image_of(m, f, &resource_of, *image)?;
+                let (tex, _, dim, _) = image_of(m, f, &resource_of, &slot, *image)?;
                 let (kind, level) = match query {
                     ImageQuery::Size { level } => (QueryKind::Size, level.map(|x| slot[x.index()])),
                     ImageQuery::NumLevels => (QueryKind::Levels, None),
@@ -659,6 +673,8 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
             Op::Select { c, a, b, .. } => vec![*c, *a, *b],
             Op::Math { a, b, c, .. } => vec![*a, *b, *c],
             Op::Sample {
+                tex,
+                smp,
                 coord,
                 layer,
                 level,
@@ -666,6 +682,8 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                 ..
             } => {
                 let mut v = vec![*coord];
+                v.extend(tex.slot());
+                v.extend(smp.slot());
                 v.extend(*layer);
                 v.extend(*depth_ref);
                 match level {
@@ -676,6 +694,7 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                 v
             }
             Op::Texel {
+                tex,
                 coord,
                 mip,
                 layer,
@@ -683,12 +702,13 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                 ..
             } => {
                 let mut v = vec![*coord];
+                v.extend(tex.slot());
                 v.extend(*mip);
                 v.extend(*layer);
                 v.extend(*sample);
                 v
             }
-            Op::Query { level, .. } => level.iter().copied().collect(),
+            Op::Query { tex, level, .. } => tex.slot().into_iter().chain(level.iter().copied()).collect(),
             _ => vec![],
         }
     }
@@ -811,6 +831,10 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                     value,
                 } => {
                     let (tex, _, dim, arrayed) = (cx.image)(*image)?;
+                    if !matches!(tex.pick, Pick::One) {
+                        return Err("a store into an element of an array of images".into());
+                    }
+                    let tex = tex.id;
                     let Shape::V(_, cn) = (cx.shape)(*coordinate)? else {
                         return Err("store coordinate".into());
                     };
@@ -914,7 +938,7 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
     local_src.retain(|w, _| stored.get(w) == Some(&1));
     let prov = compute_prov(&local_src, &slot, &static_load);
 
-    let image = |h: Handle<E>| image_of(m, f, &resource_of, h);
+    let image = |h: Handle<E>| image_of(m, f, &resource_of, &slot, h);
     let mut cx = Ctx {
         slot: &slot,
         op_of: &op_of,
@@ -1007,24 +1031,57 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
 }
 
 /// An image global as an expression names it: the resource, its class, its dimension and whether it is arrayed.
-type ImageRef = (ResourceId, ImageClass, naga::ImageDimension, bool);
+type ImageRef = (Res, ImageClass, naga::ImageDimension, bool);
 
+/// Whether a global of the expression is a binding array.
+fn is_binding_array(m: &Module, f: &naga::Function, h: Handle<E>) -> bool {
+    matches!(f.expressions[h], E::GlobalVariable(g)
+        if matches!(m.types[m.global_variables[g].ty].inner, TypeInner::BindingArray { .. }))
+}
+
+/// The resource a handle expression names, and its type: a global, or one element of a binding array picked by a
+/// literal or a computed index.
+fn resource_ref<'a>(
+    m: &'a Module,
+    f: &naga::Function,
+    resource_of: &BTreeMap<usize, (ResourceId, u32)>,
+    slot: &[u32],
+    h: Handle<E>,
+    what: &str,
+) -> Result<(Res, &'a TypeInner), String> {
+    let (g, pick) = match f.expressions[h] {
+        E::GlobalVariable(g) => (g, Pick::One),
+        E::Access { base, index } => match f.expressions[base] {
+            E::GlobalVariable(g) => (g, Pick::Slot(slot[index.index()])),
+            _ => return Err(format!("{what} expression")),
+        },
+        E::AccessIndex { base, index } => match f.expressions[base] {
+            E::GlobalVariable(g) => (g, Pick::Fixed(index)),
+            _ => return Err(format!("{what} expression")),
+        },
+        _ => return Err(format!("{what} expression")),
+    };
+    let &(id, count) = resource_of
+        .get(&g.index())
+        .ok_or_else(|| format!("unbound {what}"))?;
+    let inner = match (&m.types[m.global_variables[g].ty].inner, pick) {
+        (TypeInner::BindingArray { base, .. }, Pick::Fixed(_) | Pick::Slot(_)) => &m.types[*base].inner,
+        (TypeInner::BindingArray { .. }, Pick::One) => return Err(format!("a whole array of {what}s")),
+        (t, Pick::One) => t,
+        (_, _) => return Err(format!("{what} indexed but not an array")),
+    };
+    Ok((Res { id, pick, count }, inner))
+}
 fn image_of(
     m: &Module,
     f: &naga::Function,
-    resource_of: &BTreeMap<usize, ResourceId>,
+    resource_of: &BTreeMap<usize, (ResourceId, u32)>,
+    slot: &[u32],
     h: Handle<E>,
 ) -> Result<ImageRef, String> {
-    match f.expressions[h] {
-        E::GlobalVariable(g) => {
-            let gv = &m.global_variables[g];
-            let id = *resource_of.get(&g.index()).ok_or("unbound image")?;
-            match &m.types[gv.ty].inner {
-                TypeInner::Image { dim, arrayed, class } => Ok((id, *class, *dim, *arrayed)),
-                _ => Err("not an image".into()),
-            }
-        }
-        _ => Err("image expression".into()),
+    match resource_ref(m, f, resource_of, slot, h, "image")? {
+        (res, TypeInner::Image { dim, arrayed, class }) => Ok((res, *class, *dim, *arrayed)),
+        _ => Err("not an image".into()),
     }
 }
 fn dim_of(d: naga::ImageDimension) -> Dim {
@@ -1056,17 +1113,15 @@ fn const_ints(f: &naga::Function, h: Handle<E>) -> Result<[i32; 3], String> {
     Ok(r)
 }
 fn binding_of(
-    _m: &Module,
+    m: &Module,
     f: &naga::Function,
-    resource_of: &BTreeMap<usize, ResourceId>,
+    resource_of: &BTreeMap<usize, (ResourceId, u32)>,
+    slot: &[u32],
     h: Handle<E>,
-) -> Result<ResourceId, String> {
-    match f.expressions[h] {
-        E::GlobalVariable(g) => resource_of
-            .get(&g.index())
-            .copied()
-            .ok_or_else(|| "unbound sampler".to_owned()),
-        _ => Err("sampler expression".into()),
+) -> Result<Res, String> {
+    match resource_ref(m, f, resource_of, slot, h, "sampler")? {
+        (res, TypeInner::Sampler { .. }) => Ok(res),
+        _ => Err("not a sampler".into()),
     }
 }
 fn const_words(m: &Module, h: Handle<E>) -> Result<Vec<u32>, String> {

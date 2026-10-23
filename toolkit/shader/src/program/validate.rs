@@ -29,14 +29,16 @@ impl fmt::Display for Problem {
 
 /// The capabilities programs may use: WGSL's baseline and what a D3D program can need beyond it (clip distances,
 /// per-sample shading, the primitive index, cube array textures, half-float packing for `f16tof32`/`f32tof16`, forced
-/// early depth tests). A consumer that cannot provide one refuses the program that needs it; nothing outside this list
+/// early depth tests, arrays of textures and samplers indexed by a computed, possibly divergent, index). A consumer that cannot provide one refuses the program that needs it; nothing outside this list
 /// is ever produced.
 pub const CAPABILITIES: naga::valid::Capabilities = naga::valid::Capabilities::CLIP_DISTANCES
     .union(naga::valid::Capabilities::MULTISAMPLED_SHADING)
     .union(naga::valid::Capabilities::PRIMITIVE_INDEX)
     .union(naga::valid::Capabilities::CUBE_ARRAY_TEXTURES)
     .union(naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32)
-    .union(naga::valid::Capabilities::EARLY_DEPTH_TEST);
+    .union(naga::valid::Capabilities::EARLY_DEPTH_TEST)
+    .union(naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY)
+    .union(naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING);
 
 /// Check `program`: naga's validation of its module, then the program rules. Every problem found is returned.
 pub fn validate(program: &Program) -> Result<naga::valid::ModuleInfo, Vec<Problem>> {
@@ -240,13 +242,45 @@ fn resources(p: &Program, problems: &mut Vec<Problem>) {
             }
             None => fail(format!("resource {id}: its global has no binding")),
         }
-        if r.count != 1 {
+        let array = r.is_array();
+        if r.count == 0 {
+            fail(format!("resource {id}: a range of no bindings"));
+        }
+        if array
+            && !matches!(
+                r.kind,
+                ResourceKind::Texture { .. } | ResourceKind::Sampler { .. }
+            )
+        {
             fail(format!(
-                "resource {id}: arrays of resources (count {}) are not carried",
+                "resource {id}: only textures and samplers are carried as arrays (count {})",
                 r.count
             ));
         }
-        let inner = &p.module.types[global.ty].inner;
+        // an array is a `binding_array` of the resource's own type, of the count (unbounded: dynamically sized)
+        let mut inner = &p.module.types[global.ty].inner;
+        if array {
+            match inner {
+                TypeInner::BindingArray { base, size } => {
+                    let sized = match size {
+                        naga::ArraySize::Constant(n) => !r.is_unbounded() && n.get() == r.count,
+                        naga::ArraySize::Pending(_) => false,
+                        naga::ArraySize::Dynamic => r.is_unbounded(),
+                    };
+                    if !sized {
+                        fail(format!(
+                            "resource {id}: the global's array size {size:?} is not the interface's count {}",
+                            r.count
+                        ));
+                    }
+                    inner = &p.module.types[*base].inner;
+                }
+                _ => fail(format!(
+                    "resource {id}: an array of {} bindings is not a binding array",
+                    r.count
+                )),
+            }
+        }
         let space = global.space;
         let ok = match &r.kind {
             ResourceKind::ConstantBuffer { layout } => {

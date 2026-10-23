@@ -98,6 +98,21 @@ impl Lift<'_> {
             }
             Stored::Agg(items) => Lv::Agg(items.iter().map(|s| self.load_stored(s)).collect()),
             Stored::Plain(lv) => lv.clone(),
+            Stored::Handle {
+                class,
+                resource,
+                element,
+            } => {
+                let element = self.load_stored(element);
+                let Lv::Scalar(element) = element else {
+                    unreachable!("a handle's element is stored as a scalar")
+                };
+                Lv::Handle {
+                    class: *class,
+                    resource: *resource,
+                    element: Some(element),
+                }
+            }
         }
     }
 
@@ -120,7 +135,16 @@ impl Lift<'_> {
                     .map(|i| self.store_new(i, hint))
                     .collect::<Result<Vec<_>>>()?,
             ),
-            Lv::Handle { .. } => Stored::Plain(lv.clone()),
+            Lv::Handle {
+                class,
+                resource,
+                element: Some(element),
+            } => Stored::Handle {
+                class: *class,
+                resource: *resource,
+                element: Box::new(self.store_new(&Lv::Scalar(*element), hint)?),
+            },
+            Lv::Handle { element: None, .. } => Stored::Plain(lv.clone()),
             Lv::Pointer(p) => {
                 let p = self.spill_pointer(p)?;
                 Stored::Plain(Lv::Pointer(p))

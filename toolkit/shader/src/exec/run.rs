@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
-use super::flat::{BinOp, CvtOp, Executable, GlobalKind, LevelOp, Loc, MathOp, Op, Ptr, Reg, St, UnOp};
-use super::request::{Backend, ImageLoad, ImageLod, ImageQuery, ImageSample, ImageStore};
+use super::flat::{
+    BinOp, CvtOp, Executable, GlobalKind, LevelOp, Loc, MathOp, Op, Pick, Ptr, Reg, Res, St, UnOp,
+};
+use super::request::{Backend, Element, ImageLoad, ImageLod, ImageQuery, ImageSample, ImageStore};
 use crate::ResourceId;
 
 /// The most operations and loop turns one invocation may execute: a program that does not end is refused.
@@ -553,8 +555,8 @@ impl<'a, const N: usize> Runner<'a, N> {
                             }
                         };
                         let req = ImageSample {
-                            texture: *tex,
-                            sampler: *smp,
+                            texture: self.element(tex, l)?,
+                            sampler: self.element(smp, l)?,
                             dim: *dim,
                             coord: c3(self, l, *coord),
                             layer: layer.map(|s| rd(s, self)[0] as f32),
@@ -586,7 +588,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                         let cd = self.regs[*coord as usize * N + l];
                         let one = |s: &Option<u32>| s.map(|s| self.regs[s as usize * N + l][0] as i32);
                         let req = ImageLoad {
-                            texture: *tex,
+                            texture: self.element(tex, l)?,
                             dim: *dim,
                             storage: *storage,
                             texel: std::array::from_fn(|i| if i < *cn as usize { cd[i] as i32 } else { 0 }),
@@ -608,8 +610,9 @@ impl<'a, const N: usize> Runner<'a, N> {
                             continue;
                         }
                         let level = level.map(|s| self.regs[s as usize * N + l][0]);
+                        let texture = self.element(tex, l)?;
                         self.regs[dst + l] = self.sampler.query(ImageQuery {
-                            texture: *tex,
+                            texture,
                             dim: *dim,
                             kind: *kind,
                             level,
@@ -619,6 +622,22 @@ impl<'a, const N: usize> Runner<'a, N> {
             }
         }
         Ok(())
+    }
+
+    /// The resource an operation names for lane `l`: for an array, the element its index picks in that lane.
+    fn element(&self, res: &Res, l: usize) -> Result<Element, String> {
+        let index = match res.pick {
+            Pick::One => 0,
+            Pick::Fixed(i) => i,
+            Pick::Slot(s) => self.regs[s as usize * N + l][0],
+        };
+        if !matches!(res.pick, Pick::One) && res.count != crate::Resource::UNBOUNDED && index >= res.count {
+            return Err(format!(
+                "resource {}: element {index} of an array of {} (D3D12 leaves it undefined)",
+                res.id.0, res.count
+            ));
+        }
+        Ok(Element { id: res.id, index })
     }
 
     fn block(&mut self, b: &'a [St], active: u8) -> Result<Exits, String> {

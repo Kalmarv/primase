@@ -234,9 +234,26 @@ pub struct ResourceProvenance {
 pub struct Resource {
     pub id: ResourceId,
     pub kind: ResourceKind,
-    /// How many consecutive bindings it spans: 1, or the length of a resource array.
+    /// How many consecutive bindings it spans: 1, or the length of a resource array. [`Resource::UNBOUNDED`] is an
+    /// array whose length is the bound data's, not the program's (D3D's `-1`): nothing in the program says how far
+    /// an index may go.
     pub count: u32,
     pub provenance: ResourceProvenance,
+}
+
+impl Resource {
+    /// The `count` of an array the program does not size.
+    pub const UNBOUNDED: u32 = u32::MAX;
+
+    /// Whether the program sizes this array no further than the bound data does.
+    pub fn is_unbounded(&self) -> bool {
+        self.count == Self::UNBOUNDED
+    }
+
+    /// Whether it is an array of bindings, read by an index the program computes, rather than one binding.
+    pub fn is_array(&self) -> bool {
+        self.count != 1
+    }
 }
 
 #[cfg(test)]

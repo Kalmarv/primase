@@ -63,7 +63,7 @@ impl Lift<'_> {
                 self.setup.resource(class as u8, id as u32)
             }
             217 => {
-                let (class, lower, space, _) = binding_of(self.m, self.f, args[1], args[2])?;
+                let (class, lower, space) = binding_of(self.m, self.f, args[1])?;
                 self.setup.resource_by_binding(class, lower, space)
             }
             // a handle annotated with its properties is the same handle
@@ -223,6 +223,21 @@ impl Lift<'_> {
                     ));
                 }
             };
+            // a resource array is a binding array of the resource's own type, dynamically sized when unbounded
+            let ty = if resource.is_array() {
+                self.notes.insert(
+                    "a resource array is a binding array: it needs TEXTURE_AND_SAMPLER_BINDING_ARRAY (with non-uniform \
+                     indexing), and an unbounded one is sized by the bound data"
+                        .into(),
+                );
+                let size = match NonZeroU32::new(resource.count) {
+                    Some(n) if !resource.is_unbounded() => ArraySize::Constant(n),
+                    _ => ArraySize::Dynamic,
+                };
+                self.b.ty(TypeInner::BindingArray { base: ty, size })
+            } else {
+                ty
+            };
             let binding = if range.space == 0 {
                 range.lower
             } else {
@@ -264,47 +279,112 @@ impl Lift<'_> {
         }
     }
 
+    /// The interface resource a handle of `class` names, where the resource is one binding.
     fn handle(&mut self, v: ValueId, class: u8) -> Result<usize> {
         match self.get(v)? {
-            Lv::Handle { class: c, resource } if c == class => Ok(resource),
+            Lv::Handle {
+                class: c,
+                resource,
+                element: None,
+            } if c == class => Ok(resource),
+            Lv::Handle { element: Some(_), .. } => {
+                self.refuse("an element of a resource array where only a texture or a sampler is read")
+            }
             _ => self.refuse(format!("a handle of class {class} was expected")),
         }
     }
 
-    /// `CreateHandle(class, range id, index, non-uniform)`: the interface resource of a constant range.
+    /// The interface resource a handle of `class` names and the expression of the image or sampler it reads: the
+    /// global, or the element of its binding array the program's index picks.
+    fn handle_expr(&mut self, v: ValueId, class: u8) -> Result<(usize, Handle<E>)> {
+        let Lv::Handle {
+            class: c,
+            resource,
+            element,
+        } = self.get(v)?
+        else {
+            return self.refuse(format!("a handle of class {class} was expected"));
+        };
+        if c != class {
+            return self.refuse(format!("a handle of class {class} was expected"));
+        }
+        let global = self.b.global_ptr(self.global_of(resource));
+        let expr = match element {
+            None => global,
+            Some(index) => self.b.app(E::Access {
+                base: global,
+                index: index.expr,
+            }),
+        };
+        Ok((resource, expr))
+    }
+
+    /// The element of an array a handle's index picks: the index less the range's first register.
+    fn element_of(&mut self, resource: usize, index: ValueId, constant: Option<i64>) -> Result<Option<Val>> {
+        let count = self.setup.interface.resources[resource].count;
+        let lower = self.setup.ranges[resource].lower;
+        if count == 1 {
+            return match constant {
+                Some(i) if i == i64::from(lower) => Ok(None),
+                Some(_) => self.refuse("a handle at an index other than its range's register"),
+                None => self.refuse("a handle of a computed index into a range of one"),
+            };
+        }
+        let element = match constant {
+            Some(i) => match u32::try_from(i).ok().and_then(|i| i.checked_sub(lower)) {
+                Some(e) => self.b.lit_u(e),
+                None => return self.refuse("a handle at an index below its range"),
+            },
+            None => {
+                let at = self.uint(index)?;
+                let lower = self.b.lit_u(lower);
+                self.b.binary(Bo::Subtract, at, lower)
+            }
+        };
+        Ok(Some(element))
+    }
+
+    /// `CreateHandle(class, range id, index, non-uniform)`: the interface resource of a constant range, at an element
+    /// when the range is an array.
     pub(super) fn create_handle(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
         let konst = |lift: &Self, n: usize| const_int(lift.m, lift.f, args[n]);
-        let (Some(class), Some(id), Some(index)) = (konst(self, 1), konst(self, 2), konst(self, 3)) else {
-            return self.refuse("a handle of a computed range or index");
+        let (Some(class), Some(id)) = (konst(self, 1), konst(self, 2)) else {
+            return self.refuse("a handle of a computed range");
         };
         let Some(resource) = self.setup.resource(class as u8, id as u32) else {
             return self.refuse("a handle of an undeclared range");
         };
-        let range = self.setup.ranges[resource];
-        if index != i64::from(range.lower) {
-            return self.refuse("a handle at an index other than its range's register");
-        }
+        let constant = konst(self, 3);
+        let element = self.element_of(resource, args[3], constant)?;
         self.define_result(
             inst.result,
             Lv::Handle {
                 class: class as u8,
                 resource,
+                element,
             },
         )
     }
 
-    /// `CreateHandleFromBinding(binding, index, non-uniform)` (Shader Model 6.6): the resource of a constant binding.
+    /// `CreateHandleFromBinding(binding, index, non-uniform)` (Shader Model 6.6): the resource of a constant binding,
+    /// at an element when the binding is an array.
     pub(super) fn create_handle_from_binding(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
-        let Some((class, lower, space, index)) = binding_of(self.m, self.f, args[1], args[2]) else {
+        let Some((class, lower, space)) = binding_of(self.m, self.f, args[1]) else {
             return self.refuse("a handle of a binding that is not constant");
         };
-        if index != 0 {
-            return self.refuse("a handle at an index into a resource array");
-        }
         let Some(resource) = self.setup.resource_by_binding(class, lower, space) else {
             return self.refuse("a handle of an undeclared binding");
         };
-        self.define_result(inst.result, Lv::Handle { class, resource })
+        let constant = const_int(self.m, self.f, args[2]);
+        let element = self.element_of(resource, args[2], constant)?;
+        self.define_result(
+            inst.result,
+            Lv::Handle {
+                class,
+                resource,
+                element,
+            },
+        )
     }
 
     /// `AnnotateHandle(handle, properties)`: the handle itself; the properties repeat what the resource declares.
@@ -472,8 +552,8 @@ impl Lift<'_> {
     /// The sample operations: `Sample`, `SampleBias`, `SampleLevel`, `SampleGrad`, `SampleCmp`,
     /// `SampleCmpLevelZero`, `TextureGather`, `TextureGatherCmp`.
     pub(super) fn sample(&mut self, inst: &Instruction, code: u64, args: &[ValueId]) -> Result<()> {
-        let resource = self.handle(args[1], 0)?;
-        let sampler = self.handle(args[2], 3)?;
+        let (resource, image) = self.handle_expr(args[1], 0)?;
+        let (_, smp) = self.handle_expr(args[2], 3)?;
         let (dim, arrayed, multi, _, depth) = self.texture_shape(resource)?;
         if multi {
             return self.refuse("a sample of a multisampled texture");
@@ -542,8 +622,6 @@ impl Lift<'_> {
             }
             other => return self.refuse(format!("sample operation {other}")),
         };
-        let image = self.b.global_ptr(self.global_of(resource));
-        let smp = self.b.global_ptr(self.global_of(sampler));
         let expr = self.b.app(E::ImageSample {
             image,
             sampler: smp,
@@ -590,7 +668,7 @@ impl Lift<'_> {
             Lv::Handle { class, .. } => class,
             _ => return self.refuse("a load through something that is not a handle"),
         };
-        let resource = self.handle(args[1], class)?;
+        let (resource, image) = self.handle_expr(args[1], class)?;
         let (dim, arrayed, multi, kind, depth) = self.texture_shape(resource)?;
         let (coordinate, array_index) = self.coordinates(args, 3, dim, arrayed, Kind::I)?;
         let mut coordinate = coordinate;
@@ -616,7 +694,6 @@ impl Lift<'_> {
             };
             self.b.bitcast(v, Kind::I).expr
         });
-        let image = self.b.global_ptr(self.global_of(resource));
         if storage {
             // a view takes unsigned addresses
             coordinate = self.b.bitcast(coordinate, Kind::U);
@@ -685,10 +762,9 @@ impl Lift<'_> {
             Lv::Handle { class, .. } => class,
             _ => return self.refuse("dimensions of something that is not a handle"),
         };
-        let resource = self.handle(args[1], class)?;
+        let (resource, g) = self.handle_expr(args[1], class)?;
         let (dim, arrayed, multi, _, _) = self.texture_shape(resource)?;
         let mip = self.uint(args[2])?;
-        let g = self.b.global_ptr(self.global_of(resource));
         let dims = match dim {
             TextureDim::D1 => 1,
             TextureDim::D2 | TextureDim::Cube => 2,
@@ -707,7 +783,6 @@ impl Lift<'_> {
         let levels = if multi || class != 0 {
             self.b.lit_u(1)
         } else {
-            let g = self.b.global_ptr(self.global_of(resource));
             Val {
                 expr: self.b.app(E::ImageQuery {
                     image: g,
@@ -720,7 +795,6 @@ impl Lift<'_> {
         let zero = self.b.lit_u(0);
         let mut parts: Vec<Val> = (0..dims).map(|i| self.b.lane(size, i)).collect();
         if arrayed {
-            let g = self.b.global_ptr(self.global_of(resource));
             parts.push(Val {
                 expr: self.b.app(E::ImageQuery {
                     image: g,

@@ -25,12 +25,7 @@ pub(super) fn const_int(m: &Module, f: &Function, v: ValueId) -> Option<i64> {
 
 /// The range a `CreateHandleFromBinding` names: its class, lower bound and register space (the binding constant
 /// `{ lower, upper, space, class }`), and the offset into the range (the call's index is the register itself).
-pub(super) fn binding_of(
-    m: &Module,
-    f: &Function,
-    bind: ValueId,
-    index: ValueId,
-) -> Option<(u8, u32, u32, u32)> {
+pub(super) fn binding_of(m: &Module, f: &Function, bind: ValueId) -> Option<(u8, u32, u32)> {
     let value = if bind < f.first {
         m.values.get(bind)?
     } else {
@@ -46,9 +41,6 @@ pub(super) fn binding_of(
         u8::try_from(field(3)?).ok()?,
         u32::try_from(field(0)?).ok()?,
         u32::try_from(field(2)?).ok()?,
-        u32::try_from(const_int(m, f, index)?)
-            .ok()?
-            .checked_sub(u32::try_from(field(0)?).ok()?)?,
     ))
 }
 
@@ -146,12 +138,9 @@ impl Setup {
                     }
                 }
                 217 => {
-                    let Some((class, lower, space, index)) = binding_of(m, entry, args[1], args[2]) else {
+                    let Some((class, lower, space)) = binding_of(m, entry, args[1]) else {
                         return Err(error(inst.at, "a handle of a binding that is not constant"));
                     };
-                    if index != 0 {
-                        return Err(error(inst.at, "a handle at an index into a resource array"));
-                    }
                     used_bindings.insert((class, lower, space));
                 }
                 _ => {}
@@ -185,11 +174,16 @@ impl Setup {
             {
                 continue;
             }
-            if original.count != 1 {
+            if original.is_array()
+                && !matches!(
+                    original.kind,
+                    ResourceKind::Texture { .. } | ResourceKind::Sampler { .. }
+                )
+            {
                 return Err(error(
                     0,
                     format!(
-                        "{}: arrays of resources (a range of {}) are not lifted",
+                        "{}: arrays of resources other than textures and samplers (a range of {}) are not lifted",
                         original.provenance.name, original.count
                     ),
                 ));
