@@ -13,7 +13,7 @@ use primase_dxbc::Shader;
 use primase_image::sampling::Address;
 use primase_shader::exec::ProgramShader;
 use primase_shader::{
-    Constants, Grid, Input, Interface, Invocation, Lane, Layout, PixelShader, evaluate_raw_with,
+    Constants, Grid, Input, Interface, Invocation, Lane, Layout, PixelShader, Raw, evaluate_raw_with,
 };
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -757,139 +757,191 @@ impl Prepared {
             Invocation::Scalar,
         )
         .map_err(evaluation)?;
-        let [normals, seconds, colours, reflected, emitted] = &raw.pixels[..] else {
-            unreachable!("five targets requested");
-        };
-        let mut albedo = Vec::with_capacity(size as usize * size as usize * 4);
-        let mut normal = Vec::with_capacity(albedo.capacity());
-        let mut gloss = None;
-        let mut writes_gloss = None;
-        let mut emissive = None;
-        let mut writes_emissive = None;
-        let mut reflectance = capture_reflectance.then(|| Vec::with_capacity(size as usize * size as usize));
-        let byte = |f: f32| -> u8 { (f.clamp(0., 1.) * 255.).round_ties_even() as u8 };
-        for pixel in 0..size as usize * size as usize {
-            let (x, y) = (pixel % size as usize, pixel / size as usize);
-            let uv = [
-                (x as f32 + 0.5) / size as f32 * period[0],
-                (y as f32 + 0.5) / size as f32 * period[1],
-            ];
-            let (n, n_mask) = normals[pixel];
-            let (color, color_mask) = colours[pixel];
-            if n_mask != 7 || color_mask != 7 {
-                return Err(invalid("layer bake", 0, "missing G-buffer normal or albedo"));
-            }
-            if let Some(pixels) = &mut reflectance {
-                let (bits, mask) = reflected[pixel];
-                pixels.push(OutputRgb {
-                    bits: [bits[0], bits[1], bits[2]],
-                    mask,
-                });
-            }
-            let (second, second_mask) = seconds[pixel];
-            let writes = second_mask & 1 != 0;
-            if writes_gloss.is_some_and(|previous| previous != writes) {
-                return Err(invalid("layer bake", 0, "inconsistent second-output x coverage"));
-            }
-            writes_gloss = Some(writes);
-            if writes {
-                let value = f32::from_bits(second[0]);
-                if !value.is_finite() {
-                    return Err(invalid("layer bake", 0, "nonfinite second-output x"));
-                }
-                gloss
-                    .get_or_insert_with(|| Vec::with_capacity(size as usize * size as usize))
-                    .push(value);
-            }
-            let (emission, rgb_mask) = emitted[pixel];
-            if rgb_mask != 0 && rgb_mask != 7 {
-                return Err(invalid("layer bake", 0, "partial emission RGB output"));
-            }
-            let writes = rgb_mask == 7;
-            if writes_emissive.is_some_and(|previous| previous != writes) {
-                return Err(invalid("layer bake", 0, "inconsistent emission RGB coverage"));
-            }
-            writes_emissive = Some(writes);
-            if writes {
-                let rgb = std::array::from_fn(|c| f32::from_bits(emission[c]));
-                if !rgb.iter().all(|v| v.is_finite()) {
-                    return Err(invalid("layer bake", 0, "nonfinite emission RGB"));
-                }
-                emissive
-                    .get_or_insert_with(|| Vec::with_capacity(size as usize * size as usize))
-                    .push(rgb);
-            }
-            let color = color.map(f32::from_bits);
-            let n = n.map(f32::from_bits);
-            if !color[..3].iter().chain(&n[..3]).all(|v| v.is_finite()) {
-                return Err(invalid("layer bake", 0, "nonfinite shader output"));
-            }
-            for &c in &color[..3] {
-                albedo.push(
-                    (primase_image::linear_to_srgb((c as f64).clamp(0., 1.)) * 255.).round_ties_even() as u8,
-                );
-            }
-            albedo.push(if let Some(AlphaState { image, scale }) = &state.alpha {
-                byte(image.sample([uv[0] * scale[0], uv[1] * scale[1]])?[3])
-            } else {
-                255
-            });
-            // Invert the observed G-buffer bias from the binary operand,
-            // not its rounded decimal rendering in a disassembly.
-            let bias = f32::from_bits(0x3f002008);
-            let n = primase_meshops::vector::Vec3::from([
-                (n[0] - bias) * 2.,
-                (n[1] - bias) * 2.,
-                (n[2] - bias) * 2.,
-            ])
-            .normalize_or([0., 1., 0.].into());
-            normal.extend([
-                byte(-n.z * 0.5 + 0.5),
-                byte(n.x * 0.5 + 0.5),
-                byte(n.y * 0.5 + 0.5),
-                255,
-            ]);
+        channels(&state, &raw, self.policies.clone(), capture_reflectance)
+    }
+}
+
+/// A bake's channels from its state and what the pixel program wrote over the state's grid (`raw`, the targets
+/// [`TARGETS`] in order): the albedo in sRGB bytes with the main albedo's alpha beside it, the G-buffer normal unbiased
+/// into bytes, the second output's x and the emission as written, and the reflectance where asked; `base` the policies
+/// the bake already counts.
+fn channels(
+    state: &PipelineState,
+    raw: &Raw,
+    base: BTreeMap<String, u64>,
+    capture_reflectance: bool,
+) -> Result<BakedChannels> {
+    let (size, period) = (state.size, state.period);
+    if raw.pixels.len() != TARGETS.len()
+        || raw
+            .pixels
+            .iter()
+            .any(|t| t.len() != size as usize * size as usize)
+    {
+        return Err(invalid(
+            "layer bake",
+            0,
+            "outputs that are not the state's targets over its grid",
+        ));
+    }
+    let [normals, seconds, colours, reflected, emitted] = &raw.pixels[..] else {
+        unreachable!("five targets requested");
+    };
+    let mut albedo = Vec::with_capacity(size as usize * size as usize * 4);
+    let mut normal = Vec::with_capacity(albedo.capacity());
+    let mut gloss = None;
+    let mut writes_gloss = None;
+    let mut emissive = None;
+    let mut writes_emissive = None;
+    let mut reflectance = capture_reflectance.then(|| Vec::with_capacity(size as usize * size as usize));
+    let byte = |f: f32| -> u8 { (f.clamp(0., 1.) * 255.).round_ties_even() as u8 };
+    for pixel in 0..size as usize * size as usize {
+        let (x, y) = (pixel % size as usize, pixel / size as usize);
+        let uv = [
+            (x as f32 + 0.5) / size as f32 * period[0],
+            (y as f32 + 0.5) / size as f32 * period[1],
+        ];
+        let (n, n_mask) = normals[pixel];
+        let (color, color_mask) = colours[pixel];
+        if n_mask != 7 || color_mask != 7 {
+            return Err(invalid("layer bake", 0, "missing G-buffer normal or albedo"));
         }
-        let (instructions, samples) = (raw.instructions, raw.samples);
-        let mut policies = self.policies.clone();
-        policies.extend(state.differences);
-        // A per-material decision for this bake; area censuses deduplicate
-        // weight variants by their source material before summing this count.
-        policies.insert(
-            if gloss.is_some() {
-                "material writes second-output x"
-            } else {
-                "material omits second-output x"
+        if let Some(pixels) = &mut reflectance {
+            let (bits, mask) = reflected[pixel];
+            pixels.push(OutputRgb {
+                bits: [bits[0], bits[1], bits[2]],
+                mask,
+            });
+        }
+        let (second, second_mask) = seconds[pixel];
+        let writes = second_mask & 1 != 0;
+        if writes_gloss.is_some_and(|previous| previous != writes) {
+            return Err(invalid("layer bake", 0, "inconsistent second-output x coverage"));
+        }
+        writes_gloss = Some(writes);
+        if writes {
+            let value = f32::from_bits(second[0]);
+            if !value.is_finite() {
+                return Err(invalid("layer bake", 0, "nonfinite second-output x"));
             }
-            .into(),
-            1,
-        );
-        policies.insert(
-            if emissive.is_some() {
-                "material writes emission RGB"
-            } else {
-                "material omits emission RGB"
+            gloss
+                .get_or_insert_with(|| Vec::with_capacity(size as usize * size as usize))
+                .push(value);
+        }
+        let (emission, rgb_mask) = emitted[pixel];
+        if rgb_mask != 0 && rgb_mask != 7 {
+            return Err(invalid("layer bake", 0, "partial emission RGB output"));
+        }
+        let writes = rgb_mask == 7;
+        if writes_emissive.is_some_and(|previous| previous != writes) {
+            return Err(invalid("layer bake", 0, "inconsistent emission RGB coverage"));
+        }
+        writes_emissive = Some(writes);
+        if writes {
+            let rgb = std::array::from_fn(|c| f32::from_bits(emission[c]));
+            if !rgb.iter().all(|v| v.is_finite()) {
+                return Err(invalid("layer bake", 0, "nonfinite emission RGB"));
             }
-            .into(),
-            1,
-        );
-        policies.insert(
-            "constant layer weights, tint and detail".into(),
-            size as u64 * size as u64,
-        );
-        Ok(BakedChannels {
-            image: Bake {
-                size,
-                albedo,
-                normal,
-                gloss,
-                emissive,
-                instructions,
-                samples,
-                policies,
+            emissive
+                .get_or_insert_with(|| Vec::with_capacity(size as usize * size as usize))
+                .push(rgb);
+        }
+        let color = color.map(f32::from_bits);
+        let n = n.map(f32::from_bits);
+        if !color[..3].iter().chain(&n[..3]).all(|v| v.is_finite()) {
+            return Err(invalid("layer bake", 0, "nonfinite shader output"));
+        }
+        for &c in &color[..3] {
+            albedo.push(
+                (primase_image::linear_to_srgb((c as f64).clamp(0., 1.)) * 255.).round_ties_even() as u8,
+            );
+        }
+        albedo.push(if let Some(AlphaState { image, scale }) = &state.alpha {
+            byte(image.sample([uv[0] * scale[0], uv[1] * scale[1]])?[3])
+        } else {
+            255
+        });
+        // Invert the observed G-buffer bias from the binary operand,
+        // not its rounded decimal rendering in a disassembly.
+        let bias = f32::from_bits(0x3f002008);
+        let n =
+            primase_meshops::vector::Vec3::from([(n[0] - bias) * 2., (n[1] - bias) * 2., (n[2] - bias) * 2.])
+                .normalize_or([0., 1., 0.].into());
+        normal.extend([
+            byte(-n.z * 0.5 + 0.5),
+            byte(n.x * 0.5 + 0.5),
+            byte(n.y * 0.5 + 0.5),
+            255,
+        ]);
+    }
+    let (instructions, samples) = (raw.instructions, raw.samples);
+    let mut policies = base;
+    policies.extend(state.differences.clone());
+    // A per-material decision for this bake; area censuses deduplicate
+    // weight variants by their source material before summing this count.
+    policies.insert(
+        if gloss.is_some() {
+            "material writes second-output x"
+        } else {
+            "material omits second-output x"
+        }
+        .into(),
+        1,
+    );
+    policies.insert(
+        if emissive.is_some() {
+            "material writes emission RGB"
+        } else {
+            "material omits emission RGB"
+        }
+        .into(),
+        1,
+    );
+    policies.insert(
+        "constant layer weights, tint and detail".into(),
+        size as u64 * size as u64,
+    );
+    Ok(BakedChannels {
+        image: Bake {
+            size,
+            albedo,
+            normal,
+            gloss,
+            emissive,
+            instructions,
+            samples,
+            policies,
+        },
+        reflectance,
+    })
+}
+
+impl PipelineState {
+    /// The pixel program run over the state's grid (lifted from the state's container): what [`PipelineState::bake`]
+    /// reads.
+    pub fn evaluate(&self, threads: Threads) -> Result<Raw> {
+        let shader = ProgramShader::new(primase_dxbc::lift(&self.pixel.bytecode).map_err(lifting)?)
+            .map_err(evaluation)?;
+        evaluate_raw_with(
+            threads,
+            &shader,
+            &self.pixel.constants,
+            &self.pixel.evaluated_textures(),
+            &self.pixel.evaluated_inputs(),
+            Grid {
+                size: self.size,
+                period: self.period,
             },
-            reflectance,
-        })
+            &TARGETS,
+            Invocation::Scalar,
+        )
+        .map_err(evaluation)
+    }
+
+    /// The bake of what a pixel program wrote over this state's grid (`raw`: [`PipelineState::evaluate`], or another
+    /// executor's outputs in its shape), by the bake's own rules: what [`Prepared::bake`] makes of its state.
+    pub fn bake(&self, raw: &Raw) -> Result<Bake> {
+        Ok(channels(self, raw, BTreeMap::new(), false)?.image)
     }
 }
 

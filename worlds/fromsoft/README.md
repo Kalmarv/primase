@@ -674,30 +674,36 @@ Another executor given the same state can therefore check the execution: the
 vertex runs, the pixel program over the grid, the interpolation and the
 sampling. The values in the state stay this bake's stated policy.
 
-The optional `oracles.baseline.sekiro/layer-pilot` fixture directory contains:
+`oracles.baseline.sekiro/layer-pilot` holds bake states and what Microsoft's
+WARP rasterizer makes of them (`tests/layer_pilot.rs`):
+- `cases.json`, written by the example `layer_pilot_states`: the first bake
+  group of each kind in an area (shader family, with or without a vertex
+  program, alpha-tested or not). Each case is written at two size caps and in
+  three layer-weight variants: the defaults; mixed weights and a tint; every
+  weight one with detail zero.
+- Per case, cap and variant, a folder with the state as `PipelineState::encode`
+  writes it. Beside it, `warp/` holds what the private WARP host's quad mode
+  made of it. That mode runs the vertex program on the corners through stream
+  output, and draws the pixel program over a quad fed with the state's input
+  lanes. Textures are the state's own texels, sRGB views for the colour
+  layers, with base-mip bilinear samplers. It writes:
+  - `warp.json`: each stage's status;
+  - `target<r>.f32`: each target's lanes;
+  - `alpha.f32`;
+  - `vertex-outputs.json`.
 
-- `cases.json`: array of `{id, model, mtd, shader, switch}`.
-- `<id>.mtd` and `<id>.ppo`: original material and pixel-shader bytes.
-- `<id>.json`: `bindings` entries `{kind,path,scale:[u,v]}` and `images`
-  keyed by texture stem, each `{width,height,file,dds}`. `file` is RGBA8
-  decoded by the independent value oracle; `dds` is the original texture.
-- `reference.json`: array `{id,cap,variant,size,period:[u,v]}` with optional
-  timing metadata. Variants are identity, mixed weights/tint, and all weights
-  one with detail zero (defined in `tests/layer_pilot.rs`).
-- `<id>-<cap>-<variant>-{albedo,normal}.rgba`: independent bake output.
+The test bakes our executor's outputs and WARP's through the same rules
+(`PipelineState::bake`) and compares them:
+- albedo and normal bytes within one level;
+- the second output's x and the emission within one level of 1/255 or a
+  thousandth;
+- the albedo alpha within one level;
+- the vertex outputs within four units in the last place.
 
-The pilot reports max/p99 per channel, time, decoded image bytes, and executed
-instructions/samples per pixel. It compares identical decoded inputs separately
-from D3D-decoded inputs. Arithmetic with identical inputs has a one-level bound.
-
-The pilot also requires `d3d-control/<id>-<cap>-<variant>-{albedo,normal}.rgba`:
-run the same independent producer with only its decoded texture pixels replaced
-by the D3D decoder's RGBA8 images. This control isolates input convention effects
-from shader arithmetic. For D3D inputs this control is the gate oracle: the GPU
-uses the D3D BC convention. The original decoder differs from that convention;
-the shader amplifies its input differences to measured albedo maxima [2,3,4,0]
-and normal maxima [2,2,1,0]. Those original-oracle differences remain reported
-diagnostics. The same-input arithmetic bound remains one level.
+The state's values are this bake's policy, so the gate checks execution,
+interpolation and sampling, not runtime fidelity. The texels are D3D-convention
+decodes (gated exactly against bcdec by the TPF pixel gate), so a native-BC
+control would only repeat that gate.
 
 Area grouping is an explicit static approximation: triangle-mean layer inputs,
 snow weighted by the upward-facing normal, triangle area times placement count,
@@ -709,9 +715,9 @@ The bounded common-period policy searches up to sixteen UV units and records
 when it falls back to the main texture's repeat. These policies are not runtime
 shader behavior or format requirements.
 
-The layer bake's area grouping, UV periods and images have no independent reference: the earlier inventory and
-its control came from our earlier exporter's layer bake. An open coverage gap (build one when a step 20 or in-game Sekiro difference points at this area; the reference
-would be the game's layer shaders run on WARP, `oracles.baseline.sekiro/layer-pilot`).
+The layer bake's images are checked against WARP running the game's layer shaders on the same states
+(`oracles.baseline.sekiro/layer-pilot`, above). The area grouping and UV periods are policy and have no independent
+reference: the earlier inventory and its control came from our earlier exporter's layer bake.
 
 The opt-in `layer_area_pixels` tests additionally require
 `<scope>-d3d-control/<record-index>-{albedo,normal}.rgba`, with indices in the

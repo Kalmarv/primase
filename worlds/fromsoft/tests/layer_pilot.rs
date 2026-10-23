@@ -1,229 +1,251 @@
-//! Bounded layered-material pilot. Same decoded inputs isolate shader arithmetic;
-//! D3D-decoded inputs separately expose codec convention differences.
-//! The GPU uses the D3D BC convention. For that path the independent producer
-//! receives the same D3D-decoded pixels; its arithmetic still has a one-level
-//! bound. The original producer's decoder changes inputs, amplified to measured
-//! albedo [2,3,4,0] and normal [2,2,1,0] maxima. Those remain diagnostics, not
-//! an increased arithmetic tolerance or a reason to copy its decoding convention.
-use primase_fromsoft::{
-    layer_bake::{BaseMipBilinearWrap, Inputs, Prepared},
-    materials::{Binding, LayeredMaterial, stem},
-    mtd::MaterialDefinition,
-};
+//! The layer bake against Microsoft's WARP rasterizer running the same programs on the same state. The bake's policy (the
+//! frozen frame, the vertex feeds, the layer weights) is ours and stated; what WARP checks is the execution: the vertex
+//! program at the cell's corners, the pixel program over the grid with the rasterizer's interpolation, and base-mip
+//! bilinear sampling with the sRGB albedo linearized before filtering.
+//!
+//! `oracles.baseline.sekiro/layer-pilot` holds `cases.json` and, per case, size cap and layer-weight variant, a folder
+//! with the bake's pipeline state as `layer_pilot_states` writes it (`state.json` and its files:
+//! [`primase_fromsoft::layer_bake::PipelineState::encode`]) and `warp/`, what the private WARP host's quad mode made of
+//! it: `warp.json` (its status by stage), `target<r>.f32` (each target register's four f32 lanes per pixel, row-major),
+//! `alpha.f32` (the albedo alpha sampled beside the program) and `vertex-outputs.json` (the vertex program's output
+//! registers at the four corners, as the state's `outputs`).
+//!
+//! Our executor's and WARP's outputs each go through the bake's own rules ([`PipelineState::bake`]): the albedo and
+//! normal bytes must agree within one level, the second output's x and the emission within one level of 1/255 or a
+//! thousandth of the value, the albedo alpha within one level, and the vertex outputs within four units in the last
+//! place. Float differences are reported per target.
+use primase_core::parallel::Threads;
+use primase_fromsoft::layer_bake::{Encoded, PipelineState, TARGETS};
+use primase_shader::Raw;
 use primase_testdata::{Game, OracleSet, oracle};
-use primase_texcodec::{Decoder, TexDecoder};
 use serde_json::Value;
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::collections::BTreeMap;
+use std::path::Path;
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-fn decode_error(e: impl std::fmt::Display) -> primase_fromsoft::Error {
-    primase_fromsoft::Error::Invalid {
-        format: "pilot texture",
-        offset: 0,
-        detail: e.to_string(),
+
+/// A state folder's encoding: `state.json` and every other file beside it.
+fn encoded(folder: &Path) -> Result<Encoded> {
+    let mut files = BTreeMap::new();
+    for entry in std::fs::read_dir(folder)? {
+        let path = entry?.path();
+        if path.is_file() && path.file_name().is_some_and(|n| n != "state.json") {
+            let name = path.file_name().ok_or("name")?.to_string_lossy().into_owned();
+            files.insert(name, std::fs::read(&path)?);
+        }
     }
+    Ok(Encoded {
+        description: serde_json::from_slice(&std::fs::read(folder.join("state.json"))?)?,
+        files,
+    })
+}
+
+/// Little-endian f32 words.
+fn words(bytes: &[u8]) -> Result<Vec<u32>> {
+    if !bytes.len().is_multiple_of(4) {
+        return Err("a .f32 file of other than whole words".into());
+    }
+    Ok(bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|w| u32::from_le_bytes(*w))
+        .collect())
+}
+
+/// How far apart two floats are in units in the last place (`u64::MAX` across a sign or for a non-finite value).
+fn ulps(a: f32, b: f32) -> u64 {
+    if a == b {
+        return 0;
+    }
+    if !a.is_finite() || !b.is_finite() || a.is_sign_negative() != b.is_sign_negative() {
+        return u64::MAX;
+    }
+    u64::from(a.to_bits().abs_diff(b.to_bits()))
+}
+
+/// The largest per-lane difference of two byte images.
+fn byte_max(a: &[u8], b: &[u8]) -> Result<[u8; 4]> {
+    if a.len() != b.len() {
+        return Err("images of different sizes".into());
+    }
+    let mut max = [0u8; 4];
+    for (i, (x, y)) in a.iter().zip(b).enumerate() {
+        max[i % 4] = max[i % 4].max(x.abs_diff(*y));
+    }
+    Ok(max)
+}
+
+#[derive(Default)]
+struct Census {
+    states: usize,
+    vertex_runs: usize,
+    alpha_images: usize,
+    pixels: usize,
+    worst_bytes: [u8; 4],
+    worst_normal: [u8; 4],
+    worst_vertex_ulps: u64,
+    worst_float: [f64; 5],
 }
 
 #[test]
-fn five_permutation_pilot() -> Result<()> {
+fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
     let Some(root) = oracle(OracleSet::Baseline, Game::Sekiro, "layer-pilot") else {
         return Ok(());
     };
     let cases: Value = serde_json::from_slice(&std::fs::read(root.join("cases.json"))?)?;
-    let references: Value = serde_json::from_slice(&std::fs::read(root.join("reference.json"))?)?;
+    let mut c = Census::default();
     let mut failures = Vec::new();
-    let mut checked = 0;
-    assert_eq!(cases.as_array().ok_or("cases")?.len(), 5);
-    assert_eq!(references.as_array().ok_or("reference")?.len(), 30);
     for case in cases.as_array().ok_or("cases")? {
-        let id = case["id"].as_u64().ok_or("id")?;
-        let metadata: Value = serde_json::from_slice(&std::fs::read(root.join(format!("{id}.json")))?)?;
-        let definition = MaterialDefinition::read(&std::fs::read(root.join(format!("{id}.mtd")))?)?;
-        let mut bindings = BTreeMap::new();
-        for t in &definition.textures {
-            if !t.path.is_empty() {
-                bindings.insert(
-                    t.kind.clone(),
-                    Binding {
-                        texture: stem(&t.path),
-                        scale: [1.; 2],
-                        uv_number: t.uv_number,
-                        address: [None; 2],
-                        available: true,
-                    },
-                );
-            }
-        }
-        for t in metadata["bindings"].as_array().ok_or("bindings")? {
-            let path = t["path"].as_str().ok_or("path")?;
-            if path.is_empty() {
+        let kind = format!(
+            "{} vertex program {} alpha test {}",
+            case["family"], case["vertex_program"], case["alpha_test"]
+        );
+        for s in case["states"].as_array().ok_or("states")? {
+            let name = s["folder"].as_str().ok_or("folder")?;
+            let folder = root.join(name);
+            let at = format!("{name} ({kind})");
+            let state = PipelineState::decode(&encoded(&folder)?)?;
+            let warp = folder.join("warp");
+            let status: Value = serde_json::from_slice(&std::fs::read(warp.join("warp.json"))?)?;
+            let refused: Vec<String> = ["vertex", "pixel", "alpha"]
+                .iter()
+                .filter(|stage| status[**stage]["status"] == "refused")
+                .map(|stage| format!("{stage}: {}", status[*stage]["reason"]))
+                .collect();
+            if !refused.is_empty() {
+                failures.push(format!("{at}: WARP refused {refused:?}"));
                 continue;
             }
-            bindings.insert(
-                t["kind"].as_str().ok_or("kind")?.into(),
-                Binding {
-                    texture: stem(path),
-                    scale: [
-                        t["scale"][0].as_f64().ok_or("scale")? as f32,
-                        t["scale"][1].as_f64().ok_or("scale")? as f32,
-                    ],
-                    uv_number: 1,
-                    address: [None; 2],
-                    available: true,
-                },
-            );
-        }
-        let material = LayeredMaterial {
-            mtd: case["mtd"].as_str().ok_or("mtd")?.into(),
-            definition,
-            bindings,
-        };
-        for mode in ["same-input", "D3D"] {
-            let prepared = Prepared::new(
-                &std::fs::read(root.join(format!("{id}.ppo")))?,
-                &material,
-                0.,
-                |name, srgb| {
-                    let Some(m) = metadata["images"].get(name) else {
-                        return Ok(None);
-                    };
-                    let (w, h, rgba) = if mode == "D3D" {
-                        let t = primase_dds::read(&std::fs::read(root.join(m["dds"].as_str().unwrap()))?)
-                            .map_err(decode_error)?;
-                        let rgba = Decoder::default()
-                            .decode_rgba8(t.format, t.width, t.height, &t.levels[0])
-                            .map_err(decode_error)?;
-                        let oracle = std::fs::read(root.join(m["file"].as_str().unwrap()))?;
-                        assert_eq!(rgba.len(), oracle.len());
-                        let mut max = [0u8; 4];
-                        let mut changed = [0u64; 4];
-                        for (i, (&a, &b)) in rgba.iter().zip(&oracle).enumerate() {
-                            max[i % 4] = max[i % 4].max(a.abs_diff(b));
-                            changed[i % 4] += u64::from(a != b);
-                        }
-                        println!(
-                            "input {name} {:?}: max {max:?}, changed components {changed:?}",
-                            t.format
-                        );
-                        (t.width, t.height, rgba)
-                    } else {
+            c.states += 1;
+            let n = state.size as usize * state.size as usize;
+            c.pixels += n;
+            // the pixel program: ours and WARP's targets through the bake's rules
+            let ours = state.evaluate(Threads::ONE)?;
+            let mut targets = Vec::with_capacity(TARGETS.len());
+            for (t, &(register, _)) in TARGETS.iter().enumerate() {
+                let theirs = words(&std::fs::read(warp.join(format!("target{register}.f32")))?)?;
+                if theirs.len() != n * 4 {
+                    return Err(format!("{at}: target{register}.f32 is not the grid").into());
+                }
+                // the lanes our program writes, with WARP's values in them
+                let pixels: Vec<([u32; 4], u8)> = ours.pixels[t]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, mask))| {
                         (
-                            m["width"].as_u64().unwrap() as u32,
-                            m["height"].as_u64().unwrap() as u32,
-                            std::fs::read(root.join(m["file"].as_str().unwrap()))?,
+                            [
+                                theirs[i * 4],
+                                theirs[i * 4 + 1],
+                                theirs[i * 4 + 2],
+                                theirs[i * 4 + 3],
+                            ],
+                            *mask,
                         )
-                    };
-                    Ok(Some(Arc::new(BaseMipBilinearWrap::new(w, h, &rgba, srgb)?)))
-                },
-            )?;
-            println!(
-                "case {id}/{mode}: decoded bytes {}, policies {:?}",
-                prepared.decoded_bytes, prepared.policies
-            );
-            if case["shader"] == "M[Multiple]" && case["switch"] == 27 {
-                assert_eq!(
-                    prepared
-                        .policies
-                        .get("preview default for missing NormalMap binding"),
-                    Some(&1)
-                );
-                assert!(
-                    !prepared
-                        .policies
-                        .contains_key("preview default for missing ? binding")
-                );
+                    })
+                    .collect();
+                for (i, (bits, mask)) in ours.pixels[t].iter().enumerate() {
+                    for lane in (0..4).filter(|l| mask >> l & 1 != 0) {
+                        let d = (f64::from(f32::from_bits(bits[lane]))
+                            - f64::from(f32::from_bits(pixels[i].0[lane])))
+                        .abs();
+                        c.worst_float[t] = c.worst_float[t].max(d);
+                    }
+                }
+                targets.push(pixels);
             }
-            for r in references
-                .as_array()
-                .ok_or("reference")?
-                .iter()
-                .filter(|r| r["id"] == id)
-            {
-                let variant = r["variant"].as_u64().ok_or("variant")?;
-                let params = match variant {
-                    0 => Inputs::default(),
-                    1 => Inputs {
-                        weights_snow: [0.25, 0.5, 0.75, 0.25],
-                        tint_color: [0.8, 0.7, 0.6, 1.],
-                        detail: 1.,
-                    },
-                    2 => Inputs {
-                        weights_snow: [1.; 4],
-                        tint_color: [1.; 4],
-                        detail: 0.,
-                    },
-                    _ => return Err("unknown variant".into()),
-                };
-                let size = r["size"].as_u64().ok_or("size")? as u32;
-                let period = [
-                    r["period"][0].as_f64().ok_or("period")? as f32,
-                    r["period"][1].as_f64().ok_or("period")? as f32,
-                ];
-                let timer = Instant::now();
-                let bake = prepared.bake(size, period, params)?;
-                let seconds = timer.elapsed().as_secs_f64();
-                println!(
-                    "case {id}/{mode}/{} variant {variant}: {seconds:.6}s, {} instructions/pixel, {} samples/pixel",
-                    r["cap"],
-                    bake.instructions / (size as u64 * size as u64),
-                    bake.samples / (size as u64 * size as u64)
-                );
-                for (kind, pixels) in [("albedo", &bake.albedo), ("normal", &bake.normal)] {
-                    for reference_kind in ["original", "d3d-control"] {
-                        if reference_kind == "d3d-control" && mode != "D3D" {
-                            continue;
-                        }
-                        let reference_root = if reference_kind == "original" {
-                            root.clone()
-                        } else {
-                            root.join("d3d-control")
-                        };
-                        let reference = std::fs::read(
-                            reference_root.join(format!("{id}-{}-{variant}-{kind}.rgba", r["cap"])),
-                        )?;
-                        assert_eq!(pixels.len(), reference.len());
-                        let mut hist = [[0u64; 256]; 4];
-                        for (i, (a, b)) in pixels.iter().zip(&reference).enumerate() {
-                            hist[i % 4][a.abs_diff(*b) as usize] += 1;
-                        }
-                        let max: [usize; 4] =
-                            std::array::from_fn(|c| hist[c].iter().rposition(|&n| n != 0).unwrap());
-                        let p99: [usize; 4] = std::array::from_fn(|c| {
-                            let target = (size as u64 * size as u64 * 99).div_ceil(100);
-                            let mut sum = 0;
-                            hist[c]
-                                .iter()
-                                .position(|n| {
-                                    sum += n;
-                                    sum >= target
-                                })
-                                .unwrap()
-                        });
-                        println!("{kind}/{reference_kind}: max {max:?}, p99 {p99:?}");
-                        let gate = mode == "same-input" || reference_kind == "d3d-control";
-                        if gate {
-                            checked += 1;
-                        }
-                        // Keep arithmetic at one level with identical decoded
-                        // inputs. Cross-decoder output remains reported above.
-                        if gate && max.iter().any(|&v| v > 1) {
-                            failures.push(format!(
-                                "{id}/{mode}/{}/{variant}/{kind}/{reference_kind}: {max:?}",
-                                r["cap"]
-                            ));
+            let theirs = Raw {
+                pixels: targets,
+                instructions: 0,
+                samples: 0,
+            };
+            let (a, b) = (state.bake(&ours)?, state.bake(&theirs)?);
+            let albedo = byte_max(&a.albedo, &b.albedo)?;
+            let normal = byte_max(&a.normal, &b.normal)?;
+            for k in 0..4 {
+                c.worst_bytes[k] = c.worst_bytes[k].max(albedo[k]);
+                c.worst_normal[k] = c.worst_normal[k].max(normal[k]);
+            }
+            if albedo.iter().chain(&normal).any(|&d| d > 1) {
+                failures.push(format!("{at}: albedo {albedo:?}, normal {normal:?} levels apart"));
+            }
+            let near = |x: f32, y: f32| (x - y).abs() <= (1. / 255f32).max(x.abs().max(y.abs()) * 1e-3);
+            match (&a.gloss, &b.gloss) {
+                (Some(x), Some(y)) if x.iter().zip(y).all(|(x, y)| near(*x, *y)) => {}
+                (None, None) => {}
+                _ => failures.push(format!("{at}: the second output's x differs")),
+            }
+            match (&a.emissive, &b.emissive) {
+                (Some(x), Some(y))
+                    if x.iter()
+                        .flatten()
+                        .zip(y.iter().flatten())
+                        .all(|(x, y)| near(*x, *y)) => {}
+                (None, None) => {}
+                _ => failures.push(format!("{at}: the emission differs")),
+            }
+            // the albedo alpha, sampled beside the program
+            if state.alpha.is_some() {
+                c.alpha_images += 1;
+                let theirs = words(&std::fs::read(warp.join("alpha.f32"))?)?;
+                if theirs.len() != n {
+                    return Err(format!("{at}: alpha.f32 is not the grid").into());
+                }
+                let worst = a
+                    .albedo
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(&theirs)
+                    .map(|(ours, &w)| {
+                        ours[3].abs_diff((f32::from_bits(w).clamp(0., 1.) * 255.).round_ties_even() as u8)
+                    })
+                    .max()
+                    .unwrap_or(0);
+                if worst > 1 {
+                    failures.push(format!("{at}: albedo alpha {worst} levels apart"));
+                }
+            }
+            // the vertex program at the corners
+            if let Some(vertex) = &state.vertex {
+                c.vertex_runs += 1;
+                let theirs: Value =
+                    serde_json::from_slice(&std::fs::read(warp.join("vertex-outputs.json"))?)?;
+                for (corner, registers) in vertex.outputs.iter().enumerate() {
+                    for (r, lanes) in registers.iter().enumerate() {
+                        for (lane, &bits) in lanes.iter().enumerate() {
+                            let Some(w) = theirs[corner][r][lane].as_str() else {
+                                failures.push(format!("{at}: WARP wrote no o{r}.{lane} at corner {corner}"));
+                                continue;
+                            };
+                            let d = ulps(f32::from_bits(bits), f32::from_bits(u32::from_str_radix(w, 16)?));
+                            c.worst_vertex_ulps = c.worst_vertex_ulps.max(d);
+                            if d > 4 {
+                                failures
+                                    .push(format!("{at}: o{r}.{lane} at corner {corner} is {d} ulps apart"));
+                            }
                         }
                     }
                 }
             }
         }
     }
-    assert_eq!(
-        checked, 120,
-        "complete five-permutation, two-size, three-weight coverage"
-    );
+    assert!(c.states > 0, "no state checked");
     println!(
-        "pilot arithmetic gates: {checked} image comparisons, {} failed",
-        failures.len()
+        "layer pilot against WARP: {} states, {} pixels; vertex runs {}, alpha images {}; worst albedo levels {:?}, \
+         normal levels {:?}, vertex ulps {}, float difference by target {:?}",
+        c.states,
+        c.pixels,
+        c.vertex_runs,
+        c.alpha_images,
+        c.worst_bytes,
+        c.worst_normal,
+        c.worst_vertex_ulps,
+        c.worst_float
     );
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    for f in &failures {
+        println!("FAIL {f}");
+    }
+    assert!(failures.is_empty(), "{} failures", failures.len());
     Ok(())
 }
