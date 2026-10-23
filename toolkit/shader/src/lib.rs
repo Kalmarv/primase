@@ -21,7 +21,7 @@ pub mod exec;
 mod program;
 pub use evaluate::{
     Constants, Evaluation, Field, Grid, Image, Input, Invocation, Lane, Layout, Raw, Texture, evaluate,
-    evaluate_raw, evaluate_raw_with,
+    evaluate_raw, evaluate_raw_with, evaluate_with,
 };
 pub use primase_core::shader::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, D3dSignature, Interface,
@@ -30,7 +30,7 @@ pub use primase_core::shader::{
     Value, Varying, VaryingProvenance,
 };
 mod periodic;
-pub use periodic::evaluate_periodic;
+pub use periodic::{evaluate_periodic, evaluate_periodic_with};
 pub use program::{
     ClipDepth, Conventions, D3dModes, EntryIo, Error as ProgramError, IoItem, IoType, Origin, Problem,
     Program, Provenance, VERSION as PROGRAM_VERSION, entry_io,

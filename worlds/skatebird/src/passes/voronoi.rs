@@ -37,6 +37,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use primase_core::parallel::Threads;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World};
@@ -134,9 +135,10 @@ struct Block {
 }
 
 /// Bake `shader` with `constants` (material set, `_Color` white) and `textures` over `cells` x `cells` at `texels`
-/// each, the map coordinate (TEXCOORD0's both pairs) the grid's: the five lit evaluations in parallel, then
-/// [`recover`].
+/// each, the map coordinate (TEXCOORD0's both pairs) the grid's: the five lit evaluations, each on `threads` threads
+/// (a row of the grid each at a time), then [`recover`].
 fn bake(
+    threads: Threads,
     shader: &(dyn PixelShader + Sync),
     constants: &primase_shader::Constants,
     textures: &BTreeMap<u32, primase_shader::Texture>,
@@ -156,41 +158,29 @@ fn bake(
     {
         inputs.insert(("TEXCOORD".to_owned(), i as u32 + 1), Input::Constant(row));
     }
-    let lit: Vec<std::result::Result<Vec<[f32; 4]>, String>> = std::thread::scope(|s| {
-        let handles: Vec<_> = LIGHTS
-            .iter()
-            .map(|&towards| {
-                let inputs = &inputs;
-                s.spawn(move || {
-                    let mut c = constants.clone();
-                    directional_light(&mut c, towards, [1.0; 3]).map_err(|e| e.to_string())?;
-                    let e = primase_shader::evaluate_periodic(
-                        shader,
-                        &c,
-                        textures,
-                        inputs,
-                        cells,
-                        texels,
-                        &[(0, 0b0111)],
-                    )
-                    .map_err(|e| e.to_string())?;
-                    e.targets
-                        .into_iter()
-                        .next()
-                        .flatten()
-                        .ok_or_else(|| "the program does not write o0.rgb".to_owned())
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| {
-                h.join()
-                    .unwrap_or_else(|_| Err("a bake thread panicked".to_owned()))
-            })
-            .collect()
-    });
-    let lit = lit.into_iter().collect::<std::result::Result<Vec<_>, _>>()?;
+    let lit = LIGHTS
+        .iter()
+        .map(|&towards| {
+            let mut c = constants.clone();
+            directional_light(&mut c, towards, [1.0; 3]).map_err(|e| e.to_string())?;
+            let e = primase_shader::evaluate_periodic_with(
+                threads,
+                shader,
+                &c,
+                textures,
+                &inputs,
+                cells,
+                texels,
+                &[(0, 0b0111)],
+            )
+            .map_err(|e| e.to_string())?;
+            e.targets
+                .into_iter()
+                .next()
+                .flatten()
+                .ok_or_else(|| "the program does not write o0.rgb".to_owned())
+        })
+        .collect::<std::result::Result<Vec<_>, String>>()?;
     let size = cells * texels;
     let (albedo, normal) = (0..(size * size) as usize)
         .map(|p| {
@@ -455,12 +445,13 @@ impl LowerSkatebirdVoronoi {
             n.clamp(1, self.max_texels)
         };
         let shared = colour.is_some() && colour == bump && tiling(m, "_MainTex") == tiling(m, "_BumpMap");
+        let threads = Threads::of(w);
         let mut baked = BTreeMap::new();
         if let Some(n) = colour {
             let t = texels(n);
             baked.insert(
                 "_MainTex",
-                bake(&bound.shader, &mc.constants, &textures, self.cells, t)?,
+                bake(threads, &bound.shader, &mc.constants, &textures, self.cells, t)?,
             );
         }
         if let Some(n) = bump
@@ -469,7 +460,7 @@ impl LowerSkatebirdVoronoi {
             let t = texels(n);
             baked.insert(
                 "_BumpMap",
-                bake(&bound.shader, &mc.constants, &textures, self.cells, t)?,
+                bake(threads, &bound.shader, &mc.constants, &textures, self.cells, t)?,
             );
         }
         let mut pbr = w

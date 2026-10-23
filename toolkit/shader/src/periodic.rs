@@ -12,7 +12,8 @@
 //! The cross-fade is the one approximation: a program that is already periodic with period K (E(x + K * texels) =
 //! E(x)) bakes exactly; any other is changed in the first cell of each axis only, to the blend above.
 
-use crate::{Constants, Error, Evaluation, Grid, Input, PixelShader, Texture, evaluate};
+use crate::{Constants, Error, Evaluation, Grid, Input, PixelShader, Texture, evaluate_with};
+use primase_core::parallel::Threads;
 use std::collections::BTreeMap;
 
 fn error(detail: impl Into<String>) -> Error {
@@ -29,6 +30,31 @@ fn error(detail: impl Into<String>) -> Error {
 /// `inputs` and `targets` are as [`evaluate`] takes them; the grid's U and V ([`crate::Lane::U`], `V`) run one per
 /// cell. The instruction and sample counts are the grid's.
 pub fn evaluate_periodic(
+    shader: &dyn PixelShader,
+    constants: &Constants,
+    textures: &BTreeMap<u32, Texture>,
+    inputs: &BTreeMap<(String, u32), Input>,
+    cells: u32,
+    texels: u32,
+    targets: &[(u32, u8)],
+) -> Result<Evaluation, Error> {
+    evaluate_periodic_with(
+        Threads::ONE,
+        shader,
+        constants,
+        textures,
+        inputs,
+        cells,
+        texels,
+        targets,
+    )
+}
+
+/// [`evaluate_periodic`] with the grid evaluated on `threads` threads ([`crate::evaluate_with`]): the same bake on any
+/// count.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_periodic_with(
+    threads: Threads,
     shader: &dyn PixelShader,
     constants: &Constants,
     textures: &BTreeMap<u32, Texture>,
@@ -55,7 +81,8 @@ pub fn evaluate_periodic(
             ))
         })?;
     let period = (size / texels) as f32;
-    let grid = evaluate(
+    let grid = evaluate_with(
+        threads,
         shader,
         constants,
         textures,

@@ -502,7 +502,22 @@ pub fn evaluate(
     grid: Grid,
     targets: &[(u32, u8)],
 ) -> Result<Evaluation, Error> {
-    let raw = evaluate_raw(
+    evaluate_with(Threads::ONE, shader, constants, textures, inputs, grid, targets)
+}
+
+/// [`evaluate`] on `threads` threads ([`evaluate_raw_with`], a row of the grid each at a time): the same evaluation on
+/// any count.
+pub fn evaluate_with(
+    threads: Threads,
+    shader: &dyn PixelShader,
+    constants: &Constants,
+    textures: &BTreeMap<u32, Texture>,
+    inputs: &BTreeMap<(String, u32), Input>,
+    grid: Grid,
+    targets: &[(u32, u8)],
+) -> Result<Evaluation, Error> {
+    let raw = evaluate_raw_with(
+        threads,
         shader,
         constants,
         textures,

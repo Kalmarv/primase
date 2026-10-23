@@ -190,3 +190,37 @@ fn sizes_are_checked_and_unwritten_targets_are_none() {
     assert_eq!(e.targets[0].as_ref().unwrap().len(), 6 * 6);
     assert!(e.targets[1].is_none());
 }
+
+/// On several threads ([`evaluate_periodic_with`]) the bake is the one-thread bake, bit for bit, with the same counts.
+#[test]
+fn on_any_thread_count_the_bake_is_the_serial_one() {
+    fn f(u: f32, v: f32) -> f32 {
+        (u * 1.7).sin() * (v * 0.3).cos() + u * v
+    }
+    let s = shader(f);
+    let inputs = BTreeMap::from([(("TEXCOORD".to_owned(), 0), Input::GridUv)]);
+    let run = |n: usize| {
+        let e = primase_shader::evaluate_periodic_with(
+            primase_core::parallel::Threads::new(n).unwrap(),
+            &s,
+            &Constants::new(&Layout::default()),
+            &BTreeMap::<u32, Texture>::new(),
+            &inputs,
+            3,
+            5,
+            &[(0, 1)],
+        )
+        .unwrap();
+        let bits: Vec<u32> = e.targets[0]
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|v| v[0].to_bits())
+            .collect();
+        (bits, e.instructions, e.samples)
+    };
+    let one = run(1);
+    for n in [2, 7] {
+        assert_eq!(run(n), one, "{n} threads");
+    }
+}
