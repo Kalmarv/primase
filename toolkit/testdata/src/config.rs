@@ -104,8 +104,10 @@ impl Config {
                     });
                     continue;
                 }
+                // a name this build does not declare belongs to work not merged yet: the older format read only the
+                // names asked for, so it is passed over, not refused
                 let Some(declared) = crate::declared(name) else {
-                    return Err(invalid(format!("{name} is not a declared name")));
+                    continue;
                 };
                 self.legacy_name(declared.name, OsString::from(value));
             }

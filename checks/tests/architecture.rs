@@ -1757,9 +1757,11 @@ fn real_data_variables_are_declared() {
         undeclared.is_empty(),
         "PRIMASE_* names read but not declared in toolkit/testdata/src/inputs.rs: {undeclared:?}"
     );
+    // an older name the structured configuration stands in for stays declared, read or not, while its translation
+    // does (primase_testdata::legacy): configurations and tests still name it for one release
     let stale: Vec<&str> = declared
         .iter()
-        .filter(|n| !found.contains_key(**n))
+        .filter(|n| !found.contains_key(**n) && primase_testdata::legacy::translate(n).is_none())
         .copied()
         .collect();
     assert!(

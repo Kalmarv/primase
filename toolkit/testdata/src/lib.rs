@@ -114,6 +114,13 @@ pub fn install(game: Game) -> Option<PathBuf> {
     resolve(Query::Install(game, None))
 }
 
+/// A file or folder inside a game's install (`rel` relative, `/`-separated): the install's own files are not
+/// configuration, a test names them.
+#[track_caller]
+pub fn install_file(game: Game, rel: &'static str) -> Option<PathBuf> {
+    resolve(Query::Install(game, Some(rel)))
+}
+
 /// A game's archive key material.
 #[track_caller]
 pub fn keys(game: Game) -> Option<PathBuf> {
@@ -263,7 +270,7 @@ mod tests {
             "[run]\nrequire = 'yes'",
             "[oracles]\nsoulsformats = 'x'",
             "not valid = [",
-            "PRIMASE_NOT_DECLARED_ANYWHERE = 'x'",
+            "[installs]\nsekiro = 'x'\nPRIMASE_SEKIRO_DIR = 'y'",
         ] {
             let e = config(&[], Some(text))
                 .err()
@@ -307,6 +314,16 @@ mod tests {
             Some(PathBuf::from("rr/usnat.forge"))
         );
         assert_eq!(c.debug(&|_| None, "shader.diff_limit").as_deref(), Some("7"));
+        // a name this build does not declare (work not merged yet) is passed over in the older format
+        let other = config(
+            &[],
+            Some("PRIMASE_NOT_MERGED_YET = 'x'\nPRIMASE_SEKIRO_DIR = 's'\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            configured(&other, Query::Install(Game::Sekiro, None)),
+            Some(PathBuf::from("s"))
+        );
         // PRIMASE_DEBUG wins over an older switch
         let env = |n: &str| {
             (n == "PRIMASE_DEBUG").then(|| OsString::from("shader.diff_limit=9; gta.region=legion"))
