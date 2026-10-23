@@ -13,9 +13,9 @@ struct GltfJson<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     materials: Vec<Named<'a>>,
     meshes: [MeshJson<'a>; 1],
-    accessors: Vec<AccessorJson>,
+    accessors: Vec<serde_json::Value>,
     #[serde(rename = "bufferViews")]
-    buffer_views: Vec<ViewJson>,
+    buffer_views: Vec<serde_json::Value>,
     buffers: [Buffer; 1],
 }
 
@@ -70,31 +70,6 @@ struct Attributes {
 }
 
 #[derive(Serialize)]
-struct AccessorJson {
-    #[serde(rename = "bufferView")]
-    buffer_view: usize,
-    #[serde(rename = "componentType")]
-    component_type: u32,
-    count: usize,
-    #[serde(rename = "type")]
-    kind: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    min: Option<[f32; 3]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max: Option<[f32; 3]>,
-}
-
-#[derive(Serialize)]
-struct ViewJson {
-    buffer: u32,
-    #[serde(rename = "byteOffset")]
-    byte_offset: usize,
-    #[serde(rename = "byteLength")]
-    byte_length: usize,
-    target: u32,
-}
-
-#[derive(Serialize)]
 struct Buffer {
     #[serde(rename = "byteLength")]
     byte_length: usize,
@@ -112,26 +87,13 @@ pub struct GlbPrim {
     pub blend: Option<Vec<f32>>,
 }
 
-fn f32_bytes(v: &[f32], out: &mut Vec<u8>) {
-    for x in v {
-        out.extend_from_slice(&x.to_le_bytes());
-    }
-}
-
-/// The GLB of `prims`, its node and mesh named `name`. A non-finite position is an error (its bounds would not be
-/// JSON numbers).
+/// The GLB of `prims`, its node and mesh named `name`: the container, the buffer views and the float accessors are
+/// `primase_glb`'s ([`primase_glb::assemble`], [`primase_glb::Buffers`]); the frame (Studio's y-up from the writer's
+/// z-up), the one-primitive-per-material layout and the `_RESKATE_BLEND` attribute are this writer's. A non-finite
+/// position is an error (its bounds would not be JSON numbers).
 pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
-    let mut bin: Vec<u8> = Vec::new();
-    let mut views: Vec<(usize, usize, u32)> = Vec::new();
-    // accessors: (view, component type, count, type, bounds)
-    struct Acc {
-        view: usize,
-        comp: u32,
-        count: usize,
-        kind: &'static str,
-        bounds: Option<([f32; 3], [f32; 3])>,
-    }
-    let mut accs: Vec<Acc> = Vec::new();
+    use primase_glb::{Buffers, ElementType};
+    use serde_json::json;
     /// Accessor indices of one primitive and its material index.
     struct PrimJson {
         pos: usize,
@@ -141,18 +103,16 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
         idx: usize,
         mat: Option<usize>,
     }
+    let mut buffers = Buffers::default();
     let mut prim_json: Vec<PrimJson> = Vec::new();
     let mut mat_names: Vec<String> = Vec::new();
-    let mut view = |bin: &mut Vec<u8>, data: Vec<u8>, target: u32| -> usize {
-        while !bin.len().is_multiple_of(4) {
-            bin.push(0);
-        }
-        views.push((bin.len(), data.len(), target));
-        bin.extend_from_slice(&data);
-        views.len() - 1
-    };
     for p in prims {
         let nv = p.pos.len() / 3;
+        if let Some(k) = p.pos[..nv * 3].iter().position(|x| !x.is_finite()) {
+            return Err(crate::Error::Scene(format!(
+                "{name}: position value {k} is not finite, so the bounds are not JSON numbers"
+            )));
+        }
         let mut pos = vec![0f32; nv * 3];
         let (mut mn, mut mx) = ([f32::MAX; 3], [f32::MIN; 3]);
         for i in 0..nv {
@@ -161,25 +121,11 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
             pos[i * 3 + 1] = y;
             pos[i * 3 + 2] = z;
             for (k, v) in [x, y, z].into_iter().enumerate() {
-                if v < mn[k] {
-                    mn[k] = v;
-                }
-                if v > mx[k] {
-                    mx[k] = v;
-                }
+                mn[k] = mn[k].min(v);
+                mx[k] = mx[k].max(v);
             }
         }
-        let mut b = Vec::with_capacity(pos.len() * 4);
-        f32_bytes(&pos, &mut b);
-        let v_pos = view(&mut bin, b, 34962);
-        let a_pos = accs.len();
-        accs.push(Acc {
-            view: v_pos,
-            comp: 5126,
-            count: nv,
-            kind: "VEC3",
-            bounds: Some((mn, mx)),
-        });
+        let a_pos = buffers.float_accessor(&pos, ElementType::Vec3, Some((mn.to_vec(), mx.to_vec())), true);
         let a_nrm = p.nrm.as_ref().map(|n| {
             let mut c = vec![0f32; nv * 3];
             for i in 0..nv {
@@ -187,57 +133,22 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
                 c[i * 3 + 1] = n[i * 3 + 2];
                 c[i * 3 + 2] = -n[i * 3 + 1];
             }
-            let mut b = Vec::with_capacity(c.len() * 4);
-            f32_bytes(&c, &mut b);
-            let v = view(&mut bin, b, 34962);
-            accs.push(Acc {
-                view: v,
-                comp: 5126,
-                count: nv,
-                kind: "VEC3",
-                bounds: None,
-            });
-            accs.len() - 1
+            buffers.float_accessor(&c, ElementType::Vec3, None, true)
         });
-        let a_uv = p.uv.as_ref().map(|uv| {
-            let mut b = Vec::with_capacity(uv.len() * 4);
-            f32_bytes(uv, &mut b);
-            let v = view(&mut bin, b, 34962);
-            accs.push(Acc {
-                view: v,
-                comp: 5126,
-                count: nv,
-                kind: "VEC2",
-                bounds: None,
-            });
-            accs.len() - 1
-        });
-        let a_blend = p.blend.as_ref().map(|w| {
-            let mut b = Vec::with_capacity(w.len() * 4);
-            f32_bytes(w, &mut b);
-            let v = view(&mut bin, b, 34962);
-            accs.push(Acc {
-                view: v,
-                comp: 5126,
-                count: nv,
-                kind: "SCALAR",
-                bounds: None,
-            });
-            accs.len() - 1
-        });
-        let mut b = Vec::with_capacity(p.idx.len() * 4);
-        for i in &p.idx {
-            b.extend_from_slice(&i.to_le_bytes());
-        }
-        let v_idx = view(&mut bin, b, 34963);
-        let a_idx = accs.len();
-        accs.push(Acc {
-            view: v_idx,
-            comp: 5125,
-            count: p.idx.len(),
-            kind: "SCALAR",
-            bounds: None,
-        });
+        let a_uv =
+            p.uv.as_ref()
+                .map(|uv| buffers.float_accessor(uv, ElementType::Vec2, None, true));
+        let a_blend = p
+            .blend
+            .as_ref()
+            .map(|w| buffers.float_accessor(w, ElementType::Scalar, None, true));
+        // unsigned int indices always (Studio's writer does not narrow them)
+        let idx_bytes: Vec<u8> = p.idx.iter().flat_map(|i| i.to_le_bytes()).collect();
+        let v_idx = buffers.view(&idx_bytes, Some(34963));
+        buffers.accessors.push(json!({
+            "bufferView": v_idx, "componentType": 5125, "count": p.idx.len(), "type": "SCALAR",
+        }));
+        let a_idx = buffers.accessors.len() - 1;
         let mat = p
             .material
             .as_ref()
@@ -257,10 +168,7 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
             mat,
         });
     }
-    while !bin.len().is_multiple_of(4) {
-        bin.push(0);
-    }
-
+    let byte_length = buffers.bin.len().next_multiple_of(4);
     let gltf = GltfJson {
         asset: Asset {
             version: "2.0",
@@ -287,44 +195,10 @@ pub fn write(name: &str, prims: &[GlbPrim]) -> crate::Result<Vec<u8>> {
                 })
                 .collect(),
         }],
-        accessors: accs
-            .iter()
-            .map(|a| AccessorJson {
-                buffer_view: a.view,
-                component_type: a.comp,
-                count: a.count,
-                kind: a.kind,
-                min: a.bounds.map(|b| b.0),
-                max: a.bounds.map(|b| b.1),
-            })
-            .collect(),
-        buffer_views: views
-            .iter()
-            .map(|&(off, len, target)| ViewJson {
-                buffer: 0,
-                byte_offset: off,
-                byte_length: len,
-                target,
-            })
-            .collect(),
-        buffers: [Buffer {
-            byte_length: bin.len(),
-        }],
+        accessors: buffers.accessors,
+        buffer_views: buffers.views,
+        buffers: [Buffer { byte_length }],
     };
-    let mut js = crate::json_bytes(&format!("{name}.glb"), &gltf, false)?;
-    while !js.len().is_multiple_of(4) {
-        js.push(b' ');
-    }
-
-    let mut out = Vec::with_capacity(28 + js.len() + bin.len());
-    out.extend_from_slice(&0x4654_6C67u32.to_le_bytes());
-    out.extend_from_slice(&2u32.to_le_bytes());
-    out.extend_from_slice(&((12 + 8 + js.len() + 8 + bin.len()) as u32).to_le_bytes());
-    out.extend_from_slice(&(js.len() as u32).to_le_bytes());
-    out.extend_from_slice(&0x4E4F_534Au32.to_le_bytes());
-    out.extend_from_slice(&js);
-    out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
-    out.extend_from_slice(&0x004E_4942u32.to_le_bytes());
-    out.extend_from_slice(&bin);
-    Ok(out)
+    let js = crate::json_bytes(&format!("{name}.glb"), &gltf, false)?;
+    Ok(primase_glb::assemble(&js, &buffers.bin)?)
 }

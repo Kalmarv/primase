@@ -84,7 +84,6 @@ enum Kind {
     Dxt,
     Bc5,
     Rgba,
-    Rgbx,
     Bgra,
     Bgrx,
     /// A world texture of another format, decoded to RGBA8 level by level as a level is read.
@@ -94,8 +93,10 @@ enum Kind {
 /// Where a [`TexSource`]'s stored levels are.
 #[derive(Debug)]
 enum Origin<'a> {
-    /// A texture file's bytes (its levels from `data_offset` on), labelled by `name`.
-    File { name: String, bytes: Vec<u8> },
+    /// A PNG file's bytes (decoded when its level is read), labelled by `name`.
+    Png { name: String, bytes: Vec<u8> },
+    /// A DDS file's levels as `primase_dds` read them (owned), labelled by `name`.
+    Owned { name: String, levels: Vec<Vec<u8>> },
     /// A texture of the world: its levels as the world stores them, borrowed (never copied whole), labelled by `name`.
     Memory { name: String, levels: &'a [Vec<u8>] },
 }
@@ -117,15 +118,26 @@ pub struct TexSource<'a> {
     pub source_height: u32,
     kind: Kind,
     file_levels: u32,
-    data_offset: usize,
-}
-
-fn u32le(b: &[u8], o: usize) -> u32 {
-    u32::from_le_bytes(b[o..o + 4].try_into().expect("4 bytes"))
 }
 
 fn level_bytes(w: u32, h: u32, block: u64) -> u64 {
-    u64::from(w.div_ceil(4).max(1)) * u64::from(h.div_ceil(4).max(1)) * block
+    u64::from(w.div_ceil(4).max(1))
+        .saturating_mul(u64::from(h.div_ceil(4).max(1)))
+        .saturating_mul(block)
+}
+
+/// How a texture of `format` is read: its kind, the DXT name when its blocks pass through, and the format's name in messages.
+fn classify(format: TexFormat) -> (Kind, Option<&'static str>, String) {
+    match format {
+        TexFormat::Bc1 => (Kind::Dxt, Some("DXT1"), "D3DFMT_DXT1".to_owned()),
+        TexFormat::Bc2 => (Kind::Dxt, Some("DXT3"), "D3DFMT_DXT3".to_owned()),
+        TexFormat::Bc3 => (Kind::Dxt, Some("DXT5"), "D3DFMT_DXT5".to_owned()),
+        TexFormat::Bc5Unorm => (Kind::Bc5, None, "D3DFMT_ATI2".to_owned()),
+        TexFormat::Rgba8Unorm => (Kind::Rgba, None, "R8G8B8A8".to_owned()),
+        TexFormat::Bgra8Unorm => (Kind::Bgra, None, "B8G8R8A8".to_owned()),
+        TexFormat::Bgrx8Unorm => (Kind::Bgrx, None, "X8R8G8B8".to_owned()),
+        other => (Kind::Coded(other), None, format!("{other:?}")),
+    }
 }
 
 impl<'a> TexSource<'a> {
@@ -137,127 +149,55 @@ impl<'a> TexSource<'a> {
         source_size: Option<[i32; 2]>,
     ) -> Result<TexSource<'a>> {
         let bad = |m: String| Error::Texture(format!("{name}: {m}"));
-        let h = &bytes[..bytes.len().min(148)];
-        let (width, height, kind, fourcc, file_levels, data_offset);
-        let format_name: &str;
-        if h.len() >= 8 && h[..4] == [0x89, b'P', b'N', b'G'] {
+        if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+            let h = &bytes[..bytes.len().min(148)];
             if h.len() < 33 {
                 return Err(bad("truncated PNG".into()));
             }
-            width = u32::from_be_bytes(h[16..20].try_into().expect("4"));
-            height = u32::from_be_bytes(h[20..24].try_into().expect("4"));
+            let width = u32::from_be_bytes([h[16], h[17], h[18], h[19]]);
+            let height = u32::from_be_bytes([h[20], h[21], h[22], h[23]]);
             let (depth, ty, interlace) = (h[24], h[25], h[28]);
             if depth != 8 || !matches!(ty, 0 | 2 | 3 | 4 | 6) || interlace != 0 {
                 return Err(bad(format!(
                     "PNG of bit depth {depth}, colour type {ty}, interlace {interlace} (8-bit grey, RGB, palette, grey+alpha or RGBA, not interlaced)"
                 )));
             }
-            (kind, fourcc, format_name, file_levels, data_offset) = (Kind::Png, None, "PNG", 1, 0);
-        } else {
-            if h.len() < 128 || &h[..4] != b"DDS " {
-                return Err(bad("neither a PNG nor a DDS".into()));
+            if width == 0 || height == 0 {
+                return Err(bad(format!("PNG of {width} x {height} pixels")));
             }
-            height = u32le(h, 12);
-            width = u32le(h, 16);
-            let flags = u32le(h, 8);
-            let mips = u32le(h, 28);
-            file_levels = if flags & 0x20000 != 0 || mips > 1 {
-                mips.max(1)
-            } else {
-                1
-            };
-            let pf = u32le(h, 80);
-            let four = &h[84..88];
-            let bits = u32le(h, 88);
-            let rmask = u32le(h, 92);
-            let caps2 = u32le(h, 112);
-            if caps2 & 0x200 != 0 || caps2 & 0x200000 != 0 {
-                return Err(bad("a cube map or volume (2D only)".into()));
-            }
-            if pf & 4 != 0 && four == b"DX10" {
-                if h.len() < 148 {
-                    return Err(bad("truncated DX10 header".into()));
-                }
-                let dxgi = u32le(h, 128);
-                let (dim, array) = (u32le(h, 132), u32le(h, 140));
-                if dim != 3 || array > 1 {
-                    return Err(bad(format!(
-                        "not one 2D texture (dimension {dim}, array {array})"
-                    )));
-                }
-                data_offset = 148;
-                (kind, fourcc, format_name) = match dxgi {
-                    70..=72 => (Kind::Dxt, Some("DXT1"), "D3DFMT_DXT1"),
-                    73..=75 => (Kind::Dxt, Some("DXT3"), "D3DFMT_DXT3"),
-                    76..=78 => (Kind::Dxt, Some("DXT5"), "D3DFMT_DXT5"),
-                    82 | 83 => (Kind::Bc5, None, "D3DFMT_ATI2"),
-                    28 | 29 => (Kind::Rgba, None, "R8G8B8A8"),
-                    87 | 91 => (Kind::Bgra, None, "B8G8R8A8"),
-                    _ => return Err(bad(format!("DXGI format {dxgi} is not read (decode it to PNG)"))),
-                };
-            } else if pf & 4 != 0 {
-                data_offset = 128;
-                (kind, fourcc, format_name) = match four {
-                    b"DXT1" => (Kind::Dxt, Some("DXT1"), "D3DFMT_DXT1"),
-                    b"DXT3" => (Kind::Dxt, Some("DXT3"), "D3DFMT_DXT3"),
-                    b"DXT5" => (Kind::Dxt, Some("DXT5"), "D3DFMT_DXT5"),
-                    b"ATI2" | b"BC5U" => (Kind::Bc5, None, "D3DFMT_ATI2"),
-                    _ => {
-                        return Err(bad(format!(
-                            "DDS FourCC {} is not read (decode it to PNG)",
-                            String::from_utf8_lossy(four)
-                        )));
-                    }
-                };
-            } else if pf & 0x40 != 0 && bits == 32 {
-                data_offset = 128;
-                fourcc = None;
-                let alpha = pf & 1 != 0;
-                (kind, format_name) = match rmask {
-                    0x0000_00FF => (
-                        if alpha { Kind::Rgba } else { Kind::Rgbx },
-                        if alpha { "A8B8G8R8" } else { "X8B8G8R8" },
-                    ),
-                    0x00FF_0000 => (
-                        if alpha { Kind::Bgra } else { Kind::Bgrx },
-                        if alpha { "A8R8G8B8" } else { "X8R8G8B8" },
-                    ),
-                    _ => return Err(bad(format!("32-bit DDS with red mask {rmask:08x}"))),
-                };
-            } else {
-                return Err(bad(format!(
-                    "DDS pixel format not read (flags {pf:x}, {bits} bits)"
-                )));
-            }
-            let format_name = format_name.to_owned();
             return Ok(Self::finish(
-                Origin::File {
+                Origin::Png {
                     name: name.to_owned(),
                     bytes,
                 },
                 width,
                 height,
-                kind,
-                fourcc,
-                format_name,
-                file_levels,
-                data_offset,
+                Kind::Png,
+                None,
+                "PNG".to_owned(),
+                1,
                 source_format,
                 source_size,
             ));
         }
+        if !bytes.starts_with(b"DDS ") {
+            return Err(bad("neither a PNG nor a DDS".into()));
+        }
+        // the DDS container is the toolkit's: a strict read of one 2D texture (sizes checked, levels exact)
+        let t = primase_dds::read(&bytes).map_err(|e| bad(e.to_string()))?;
+        let (kind, fourcc, format_name) = classify(t.format);
+        let file_levels = t.levels.len() as u32;
         Ok(Self::finish(
-            Origin::File {
+            Origin::Owned {
                 name: name.to_owned(),
-                bytes,
+                levels: t.levels,
             },
-            width,
-            height,
+            t.width,
+            t.height,
             kind,
             fourcc,
-            format_name.to_owned(),
+            format_name,
             file_levels,
-            data_offset,
             source_format,
             source_size,
         ))
@@ -272,17 +212,8 @@ impl<'a> TexSource<'a> {
         source_format: Option<&str>,
         source_size: Option<[i32; 2]>,
     ) -> Result<TexSource<'a>> {
-        let stored = |kind, fourcc, format_name: &str| (kind, fourcc, format_name.to_owned(), &t.levels[..]);
-        let (kind, fourcc, format_name, levels) = match t.format {
-            TexFormat::Bc1 => stored(Kind::Dxt, Some("DXT1"), "D3DFMT_DXT1"),
-            TexFormat::Bc2 => stored(Kind::Dxt, Some("DXT3"), "D3DFMT_DXT3"),
-            TexFormat::Bc3 => stored(Kind::Dxt, Some("DXT5"), "D3DFMT_DXT5"),
-            TexFormat::Bc5Unorm => stored(Kind::Bc5, None, "D3DFMT_ATI2"),
-            TexFormat::Rgba8Unorm => stored(Kind::Rgba, None, "R8G8B8A8"),
-            TexFormat::Bgra8Unorm => stored(Kind::Bgra, None, "B8G8R8A8"),
-            TexFormat::Bgrx8Unorm => stored(Kind::Bgrx, None, "X8R8G8B8"),
-            other => (Kind::Coded(other), None, format!("{other:?}"), &t.levels[..]),
-        };
+        let (kind, fourcc, format_name) = classify(t.format);
+        let levels = &t.levels[..];
         let file_levels = levels.len() as u32;
         Ok(Self::finish(
             Origin::Memory {
@@ -295,7 +226,6 @@ impl<'a> TexSource<'a> {
             fourcc,
             format_name,
             file_levels,
-            0,
             source_format,
             source_size,
         ))
@@ -306,14 +236,16 @@ impl<'a> TexSource<'a> {
     pub(crate) fn world_levels(&self) -> Option<&'a [Vec<u8>]> {
         match &self.origin {
             Origin::Memory { levels, .. } => Some(levels),
-            Origin::File { .. } => None,
+            Origin::Png { .. } | Origin::Owned { .. } => None,
         }
     }
 
     /// The source's name in messages: its file, or its name in the world.
     pub fn label(&self) -> String {
         match &self.origin {
-            Origin::File { name, .. } | Origin::Memory { name, .. } => name.clone(),
+            Origin::Png { name, .. } | Origin::Owned { name, .. } | Origin::Memory { name, .. } => {
+                name.clone()
+            }
         }
     }
 
@@ -326,7 +258,6 @@ impl<'a> TexSource<'a> {
         fourcc: Option<&'static str>,
         format_name: String,
         file_levels: u32,
-        data_offset: usize,
         source_format: Option<&str>,
         source_size: Option<[i32; 2]>,
     ) -> TexSource<'a> {
@@ -348,7 +279,6 @@ impl<'a> TexSource<'a> {
             source_height: source_size.map_or(height, |s| s[1] as u32),
             kind,
             file_levels,
-            data_offset,
         }
     }
 
@@ -367,7 +297,8 @@ impl<'a> TexSource<'a> {
             return Ok(None);
         }
         match &self.origin {
-            Origin::File { bytes, .. } => Ok(Some(bytes[self.data_offset.min(bytes.len())..].to_vec())),
+            Origin::Png { .. } => Ok(None),
+            Origin::Owned { levels, .. } => Ok(Some(levels.concat())),
             Origin::Memory { levels, .. } => Ok(Some(levels.concat())),
         }
     }
@@ -376,7 +307,7 @@ impl<'a> TexSource<'a> {
         match self.kind {
             Kind::Dxt => level_bytes(w, h, if self.fourcc == Some("DXT1") { 8 } else { 16 }),
             Kind::Bc5 => level_bytes(w, h, 16),
-            _ => u64::from(w) * u64::from(h) * 4,
+            _ => u64::from(w).saturating_mul(u64::from(h)).saturating_mul(4),
         }
     }
 
@@ -386,37 +317,37 @@ impl<'a> TexSource<'a> {
             return Ok(None);
         }
         let len = self.level_size(w, h);
-        let (name, b) = match &self.origin {
+        let (name, bytes) = match &self.origin {
             // a coded level is the decoder's to check
+            Origin::Owned { levels, .. } if matches!(self.kind, Kind::Coded(_)) => {
+                return Ok(levels.get(mip as usize).cloned());
+            }
             Origin::Memory { levels, .. } if matches!(self.kind, Kind::Coded(_)) => {
                 return Ok(levels.get(mip as usize).cloned());
             }
-            Origin::Memory { levels, .. } => {
-                return Ok(levels
-                    .get(mip as usize)
-                    .filter(|l| l.len() as u64 >= len)
-                    .map(|l| l[..len as usize].to_vec()));
-            }
-            Origin::File { name, bytes } => (name, bytes),
+            Origin::Owned { levels, .. } => return Ok(Self::held(levels, mip, len)),
+            Origin::Memory { levels, .. } => return Ok(Self::held(levels, mip, len)),
+            Origin::Png { name, bytes } => (name, bytes),
         };
-        if self.kind == Kind::Png {
-            let png = primase_image::read_png(b).map_err(|e| Error::Texture(format!("{name}: {e}")))?;
-            return match png.image.samples {
-                primase_image::Samples::U8(v) => Ok(Some(v)),
-                primase_image::Samples::U16(_) => Err(Error::Texture(format!("{name}: 16-bit PNG"))),
-            };
+        let png = primase_image::read_png(bytes).map_err(|e| Error::Texture(format!("{name}: {e}")))?;
+        if (png.image.width, png.image.height) != (self.width, self.height) {
+            return Err(Error::Texture(format!(
+                "{name}: the PNG header says {} x {}, its pixels are {} x {}",
+                self.width, self.height, png.image.width, png.image.height
+            )));
         }
-        let mut off = self.data_offset as u64;
-        let (mut lw, mut lh) = (self.width, self.height);
-        for _ in 0..mip {
-            off += self.level_size(lw, lh);
-            lw = (lw >> 1).max(1);
-            lh = (lh >> 1).max(1);
+        match png.image.samples {
+            primase_image::Samples::U8(v) => Ok(Some(v)),
+            primase_image::Samples::U16(_) => Err(Error::Texture(format!("{name}: 16-bit PNG"))),
         }
-        if off + len > b.len() as u64 {
-            return Ok(None);
-        }
-        Ok(Some(b[off as usize..(off + len) as usize].to_vec()))
+    }
+
+    /// The first `len` bytes of level `mip` when the level holds that many.
+    fn held(levels: &[Vec<u8>], mip: u32, len: u64) -> Option<Vec<u8>> {
+        levels
+            .get(mip as usize)
+            .filter(|l| l.len() as u64 >= len)
+            .map(|l| l[..len as usize].to_vec())
     }
 
     /// A level the source holds, decoded; `None` when it is not in the data.
@@ -448,12 +379,6 @@ impl<'a> TexSource<'a> {
             }
             Kind::Rgba => d,
             Kind::Coded(f) => dec.decode_rgba8(f, w, h, &d).map_err(err)?,
-            Kind::Rgbx => {
-                for p in d.as_chunks_mut::<4>().0 {
-                    p[3] = 255;
-                }
-                d
-            }
             Kind::Bgra | Kind::Bgrx => {
                 for p in d.as_chunks_mut::<4>().0 {
                     p.swap(0, 2);
@@ -463,7 +388,7 @@ impl<'a> TexSource<'a> {
                 }
                 d
             }
-            Kind::Png => unreachable!(),
+            Kind::Png => return Ok(Some(d)),
         }))
     }
 
@@ -484,7 +409,25 @@ impl<'a> TexSource<'a> {
         let Some(prev) = self.decode(mip - 1, pw, ph)? else {
             return Ok(None);
         };
-        Ok(Some(half(pw, ph, prev)))
+        let img = primase_image::Image {
+            width: pw,
+            height: ph,
+            samples: primase_image::Samples::U8(prev),
+        };
+        let half = primase_image::half(&img).map_err(|e| {
+            Error::Texture(format!(
+                "{}: level {} is not {pw} x {ph}: {e}",
+                self.label(),
+                mip - 1
+            ))
+        })?;
+        match half.samples {
+            primase_image::Samples::U8(v) => Ok(Some(v)),
+            primase_image::Samples::U16(_) => Err(Error::Texture(format!(
+                "{}: a halved level lost its 8 bits",
+                self.label()
+            ))),
+        }
     }
 }
 
