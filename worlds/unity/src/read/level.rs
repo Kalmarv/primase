@@ -239,12 +239,19 @@ fn chain_of(scene: &Scene, joints: &mut BTreeMap<i64, SceneJoint>, t: i64) -> Re
 }
 
 /// The skeletons of skinned renderers' bones. A renderer's joints are its bones and its root bone with the Transforms
-/// between them and their lowest common ancestor (`None` for a renderer whose bones hang from different scene roots);
-/// renderers whose joints share a Transform share a skeleton, so a character's renderers are one skeleton and
-/// characters under one parent are not. Joints are in path id order (`JointId` their position), each with its local
+/// between them and their lowest common ancestor (`None` for a renderer whose bones hang from different scene roots),
+/// and on up to the nearest Animator's GameObject, whose clips name them all (`animators`: the Transforms of the
+/// Animators that have a controller); renderers whose joints share a Transform share a rig, so a character's renderers
+/// are one rig and characters under one parent are not. Rigs of the same joints (names, parents, rests) share one
+/// skeleton definition. Joints are in path id order (`JointId` their position), each with its local
 /// position, rotation and scale as stored, in the world frame; the rig sits where its top joint's parent does (the
 /// identity for a scene root). One entry per renderer, and the number of skeletons and joints made.
-fn build_rigs(w: &mut World, scene: &Scene, skins: &[&RendererSkin]) -> Result<Rigs> {
+fn build_rigs(
+    w: &mut World,
+    scene: &Scene,
+    skins: &[&RendererSkin],
+    animators: &BTreeSet<i64>,
+) -> Result<Rigs> {
     let mut joints: BTreeMap<i64, SceneJoint> = BTreeMap::new();
     // each renderer's joint set
     let mut sets: Vec<Option<BTreeSet<i64>>> = Vec::with_capacity(skins.len());
@@ -258,24 +265,31 @@ fn build_rigs(w: &mut World, scene: &Scene, skins: &[&RendererSkin]) -> Result<R
             .map(|&t| chain_of(scene, &mut joints, t))
             .collect::<Result<Vec<_>>>()?;
         let others: Vec<BTreeSet<i64>> = chains[1..].iter().map(|c| c.iter().copied().collect()).collect();
-        sets.push(
-            chains[0]
-                .iter()
-                .copied()
-                .find(|t| others.iter().all(|o| o.contains(t)))
-                .map(|lca| {
-                    chains
-                        .iter()
-                        .flat_map(|c| {
-                            let end = c
-                                .iter()
-                                .position(|t| *t == lca)
-                                .expect("the common ancestor is in every chain");
-                            c[..=end].iter().copied()
-                        })
-                        .collect()
-                }),
-        );
+        let lca = chains[0]
+            .iter()
+            .copied()
+            .find(|t| others.iter().all(|o| o.contains(t)));
+        sets.push(match lca {
+            None => None,
+            Some(lca) => {
+                let mut set: BTreeSet<i64> = chains
+                    .iter()
+                    .flat_map(|c| {
+                        let end = c
+                            .iter()
+                            .position(|t| *t == lca)
+                            .expect("the common ancestor is in every chain");
+                        c[..=end].iter().copied()
+                    })
+                    .collect();
+                // up to the nearest Animator at or above it: its clips name every Transform on the way
+                let above = chain_of(scene, &mut joints, lca)?;
+                if let Some(end) = above.iter().position(|t| animators.contains(t)) {
+                    set.extend(above[..=end].iter().copied());
+                }
+                Some(set)
+            }
+        });
     }
     // renderers sharing a joint are one skeleton: union-find over the renderers
     let mut group: Vec<usize> = (0..skins.len()).collect();
@@ -302,6 +316,7 @@ fn build_rigs(w: &mut World, scene: &Scene, skins: &[&RendererSkin]) -> Result<R
         }
     }
     let mut made: BTreeMap<usize, (Entity, Entity, BTreeMap<i64, JointId>)> = BTreeMap::new();
+    let mut shared: BTreeMap<String, Entity> = BTreeMap::new();
     let mut joint_count = 0;
     for (g, set) in &members {
         let id: BTreeMap<i64, JointId> = set
@@ -339,14 +354,22 @@ fn build_rigs(w: &mut World, scene: &Scene, skins: &[&RendererSkin]) -> Result<R
                 }
             })
             .collect();
-        joint_count += list.len();
         let at = match joints[&top].father {
             Some(parent) => UNITY.transform(&transform_of(&scene.world_of(parent)?)),
             None => Transform::IDENTITY,
         };
-        let skeleton = w.spawn();
-        w.insert(skeleton, Name(format!("skeleton {}", joints[&top].name)));
-        w.insert(skeleton, Skeleton { joints: list });
+        let skeleton = match shared.get(&format!("{list:?}")) {
+            Some(&skeleton) => skeleton,
+            None => {
+                joint_count += list.len();
+                let key = format!("{list:?}");
+                let skeleton = w.spawn();
+                w.insert(skeleton, Name(format!("skeleton {}", joints[&top].name)));
+                w.insert(skeleton, Skeleton { joints: list });
+                shared.insert(key, skeleton);
+                skeleton
+            }
+        };
         let rig = w.spawn();
         w.insert(rig, Name(format!("rig {}", joints[&top].name)));
         w.insert(rig, RigInstance { skeleton });
@@ -374,7 +397,7 @@ fn build_rigs(w: &mut World, scene: &Scene, skins: &[&RendererSkin]) -> Result<R
     Ok(Rigs {
         renderers: out,
         of_joint,
-        skeletons: made.len(),
+        skeletons: shared.len(),
         joints: joint_count,
     })
 }
@@ -711,11 +734,12 @@ impl Builder<'_> {
             };
             // the joints below the Animator's GameObject, by skeleton, each by the hash of its path
             let mut rigs: BTreeMap<Entity, (Entity, BTreeMap<u32, JointId>)> = BTreeMap::new();
+            // by rig: the rig's skeleton (rigs of one skeleton share its clips) and its joints by path hash
             for (&t, &(skeleton, rig, joint)) in joint_of {
                 let Some(path) = scene.path_below(t, tp) else {
                     continue;
                 };
-                let hashes = &mut rigs.entry(skeleton).or_insert_with(|| (rig, BTreeMap::new())).1;
+                let hashes = &mut rigs.entry(rig).or_insert_with(|| (skeleton, BTreeMap::new())).1;
                 if hashes.insert(path_hash(&path), joint).is_some() {
                     self.notice(
                         "joints of an Animator's rig sharing a path (the clips drive the last)",
@@ -754,7 +778,8 @@ impl Builder<'_> {
                     data.insert(clip.clone(), read);
                 }
                 let Some(d) = &data[clip] else { continue };
-                for (&skeleton, (rig, hashes)) in &rigs {
+                for (&rig, (skeleton, hashes)) in &rigs {
+                    let skeleton = *skeleton;
                     let entity = match made.get(&(clip.clone(), skeleton)) {
                         Some(e) => *e,
                         None => {
@@ -790,7 +815,7 @@ impl Builder<'_> {
                         }
                     };
                     if let Some(clip_entity) = entity
-                        && bound.insert((clip_entity, *rig))
+                        && bound.insert((clip_entity, rig))
                     {
                         let e = w.spawn();
                         w.insert(e, Name(format!("{} on {}", d.name, animator.path)));
@@ -798,7 +823,7 @@ impl Builder<'_> {
                             e,
                             ClipBinding {
                                 clip: clip_entity,
-                                rig: Some(*rig),
+                                rig: Some(rig),
                                 meshes: Vec::new(),
                             },
                         );
@@ -1411,7 +1436,13 @@ pub fn read_level_with(
     let mut joint_of: BTreeMap<i64, (Entity, Entity, JointId)> = BTreeMap::new();
     if !candidates.is_empty() {
         let skins: Vec<&RendererSkin> = candidates.iter().map(|(_, s)| *s).collect();
-        let made = build_rigs(w, &scene, &skins)?;
+        let animators: BTreeSet<i64> = scene
+            .animators(player)?
+            .iter()
+            .filter(|a| a.controller.is_some())
+            .filter_map(|a| scene.transform_of(a.game_object))
+            .collect();
+        let made = build_rigs(w, &scene, &skins, &animators)?;
         b.report.skeletons = made.skeletons;
         b.report.joints = made.joints;
         joint_of = made.of_joint;
@@ -2058,7 +2089,7 @@ mod tests {
         assert_eq!(json["colliders_not_colliding"]["trigger"], 5);
         assert_eq!(json["skipped"]["no mesh"], 1);
         // every field of the struct is there
-        assert_eq!(json.as_object().map(serde_json::Map::len), Some(24));
+        assert_eq!(json.as_object().map(serde_json::Map::len), Some(28));
     }
 
     #[test]

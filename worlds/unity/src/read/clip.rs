@@ -148,8 +148,8 @@ pub struct ClipData {
     pub tracks: Vec<Track>,
     /// Animation events (`m_Events`): not read.
     pub events: usize,
-    /// How far a streamed segment's end was from the next key's value, the worst over the clip: the decode's own
-    /// consistency (the segment is the cubic the next key continues).
+    /// How far a streamed segment's end was from the next key's value (relative), the worst over the segments of a
+    /// millisecond or more: the decode's own consistency (the segment is the cubic the next key continues).
     pub worst_continuity_error: f32,
 }
 
@@ -250,9 +250,10 @@ fn read_streamed(name: &str, words: &[u32], curve_count: usize) -> Result<(Vec<C
             let in_slope = match previous {
                 Some((t0, p)) => {
                     let dt = time - t0;
-                    // the cubic of the previous key at this key
+                    // the cubic of the previous key at this key; a segment under a millisecond (a step made of two
+                    // keys) is not checked, its large coefficients cancel past f32 (17 of 135,385 in SkateBIRD's clips)
                     let end = ((p[0] * dt + p[1]) * dt + p[2]) * dt + p[3];
-                    if end.is_finite() && c[3].is_finite() {
+                    if dt >= 1e-3 && end.is_finite() && c[3].is_finite() {
                         worst = worst.max((end - c[3]).abs() / (1.0 + c[3].abs()));
                     }
                     (3.0 * p[0] * dt + 2.0 * p[1]) * dt + p[2]
