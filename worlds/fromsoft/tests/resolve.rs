@@ -8,7 +8,9 @@ use primase_core::shader::{
     ScalarEncoding, Shader, ShaderBinding, ShaderFormat, Stage, TextureSource, ViewParameter,
 };
 use primase_core::{
-    ColorSpace, Entity, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology, World,
+    BindingId, ColorSpace, Deformation, Entity, Influences, Joint, JointId, Mesh, Name, Primitive, Rest,
+    Semantic, Skeleton, Skin, Slot, Stream, TexFormat, TexRole, Texture, Topology, Transform, WeightRule,
+    World,
 };
 use primase_fromsoft::layer_bake::resolve::{SECOND_COLOUR, Unbound, render_state, resolve};
 use primase_fromsoft::materials::{Binding, LayeredMaterial, Material};
@@ -768,6 +770,41 @@ fn the_pass_chooses_the_vertex_permutation_by_the_primitives_streams() {
         world.insert(a, MaterialShader(bundle));
         let mesh = world.spawn();
         world.insert(mesh, Mesh::new(skins.iter().map(|&s| primitive(a, s)).collect()));
+        // joint and weight streams come with a skin: the skinned primitives bound wholly to one joint
+        if skins.contains(&true) {
+            let skeleton = world.spawn();
+            world.insert(
+                skeleton,
+                Skeleton {
+                    joints: vec![Joint {
+                        id: JointId(0),
+                        name: "root".into(),
+                        parent: None,
+                        rest: Rest::Affine(Transform::IDENTITY),
+                    }],
+                },
+            );
+            let slot = Slot {
+                joint: JointId(0),
+                inverse_bind: Transform::IDENTITY,
+            };
+            world.insert(
+                mesh,
+                Skin {
+                    influences: skins
+                        .iter()
+                        .map(|&s| s.then_some(Influences::Streams { sets: 1 }))
+                        .collect(),
+                    weights: WeightRule::SumsToOne,
+                    bindings: vec![primase_core::Binding {
+                        id: BindingId(0),
+                        skeleton,
+                        palettes: skins.iter().map(|&s| s.then(|| vec![slot])).collect(),
+                        deformation: Deformation::Linear,
+                    }],
+                },
+            );
+        }
         let run = common::run(&mut world, "resolve-fromsoft-shaders{unbound-textures=preview}").unwrap();
         let counts = run.steps[0].log.counts.clone();
         let vertex = world
