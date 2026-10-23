@@ -132,6 +132,10 @@ float_cmp = "allow"
 dbg_macro = "warn"
 todo = "warn"
 unwrap_used = "warn"
+# CONTRIBUTING.md, Determinism: no HashMap/HashSet iteration on a path that reaches output. The lint sees `for` loops
+# over a hash container or its `.iter()`, `.keys()`, `.values()`; not iterator chains (`.map(..)`, `.collect()`,
+# `.extend(..)`), which review still has to catch.
+iter_over_hash_type = "deny"
 # Denied in each library crate's lib.rs, so tests and examples keep file access (clippy.toml lists them).
 disallowed_methods = "allow"
 disallowed_types = "allow"

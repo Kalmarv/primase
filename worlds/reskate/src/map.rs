@@ -1789,7 +1789,7 @@ impl MapWriter {
         let row_max = sels.iter().map(|s| s.ty).max().unwrap_or(0);
         let n_bands = ((row_max - row_min) / o.band_rows + 1) as usize;
         let mut per_band: Vec<Vec<Placement>> = vec![Vec::new(); n_bands];
-        let mut arch_last: HashMap<u32, usize> = HashMap::new();
+        let mut arch_last: BTreeMap<u32, usize> = BTreeMap::new();
         for s in sels {
             let b = ((s.ty - row_min) / o.band_rows) as usize;
             per_band[b].push(s.clone());
@@ -1797,6 +1797,11 @@ impl MapWriter {
             if *e < b {
                 *e = b;
             }
+        }
+        // the meshes each band is the last to use
+        let mut retire: Vec<Vec<u32>> = vec![Vec::new(); n_bands];
+        for (&k, &last) in &arch_last {
+            retire[last].push(k);
         }
         let mut meshes: HashMap<u32, SrcMesh> = HashMap::new();
         let mut tiles: Vec<TileOut> = Vec::new();
@@ -2191,10 +2196,8 @@ impl MapWriter {
                 }
             }
             // drop the meshes no later band uses
-            for (k, last) in &arch_last {
-                if *last == band {
-                    meshes.remove(k);
-                }
+            for k in &retire[band] {
+                meshes.remove(k);
             }
         }
         self.r.tiles.extend(tiles);

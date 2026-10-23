@@ -1408,7 +1408,8 @@ mod tests {
         let w = textured();
         let s = crate::scene::Scene::from_world(&w, std::path::Path::new("")).unwrap();
         assert_eq!(s.textures.len(), 3);
-        for (e, key) in &s.texture_keys_by_entity {
+        let keys: std::collections::BTreeMap<_, _> = s.texture_keys_by_entity.iter().collect();
+        for (e, key) in keys {
             let held = s.textures[key].src.world_levels().unwrap();
             let world = &w.get::<primase_core::Texture>(*e).unwrap().levels;
             assert!(

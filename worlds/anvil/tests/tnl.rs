@@ -2,7 +2,7 @@
 //! what it doesn't use: each B's length against the raw bits read, each raster's values against its palette and (block
 //! 2) the node's mask, each node's decoded height range against its stored a and b, and the 4 samples each node shares
 //! with its +x and +y neighbours. Ignored: it decodes 611,667 blocks; run by hand.
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use primase_anvil::read::archive::{Archive, At};
@@ -55,7 +55,7 @@ fn every_terrain_node_decodes_and_agrees() {
     let mut failures: Vec<String> = Vec::new();
     let mut worst_quanta = 0.0f64;
     // per node: for slot 0 and 2..=7, the four strips
-    let mut edges: HashMap<(u32, u32, u32), [[u64; 4]; 7]> = HashMap::new();
+    let mut edges: BTreeMap<(u32, u32, u32), [[u64; 4]; 7]> = BTreeMap::new();
     for item in &layer.items {
         let (level, row, col) = node(item.position).expect("node");
         let Some(e) = archive.find(item.chunk) else {

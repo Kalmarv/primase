@@ -341,7 +341,7 @@ struct Levels {
     selectors: std::collections::HashMap<u64, Vec<u64>>,
     /// Each LODSelector's levels' references (none or a ClassID) and its dependencies, by ClassID (later forges
     /// replacing).
-    lod_shapes: std::collections::HashMap<u64, (Vec<Option<u64>>, Vec<u64>)>,
+    lod_shapes: BTreeMap<u64, (Vec<Option<u64>>, Vec<u64>)>,
     /// Each instanced Visual's object and its slots' kinds (`m` a MeshInstanceData with instance matrices, `M`
     /// without, `i` an Impostor, `.` none).
     slot_kinds: Vec<(u64, String)>,

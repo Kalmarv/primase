@@ -230,8 +230,9 @@ review.
 - **Errors**: each crate has its own `Error` enum (`thiserror`) and `Result<T>` alias; bad input is an `Err` with the
   offset/item that broke, never a panic. Panics are for bugs (broken invariants).
 - **Determinism**: same inputs, same bytes. No `HashMap`/`HashSet` iteration on any path that reaches output (use
-  `BTreeMap`, `IndexMap`, or sort); no thread-timing-dependent order; output names come from content. Parallel code
-  must produce the same bytes as serial code (a test proves it).
+  `BTreeMap`, `IndexMap`, or sort; `clippy::iter_over_hash_type` refuses a `for` loop over one, not an iterator
+  chain); no thread-timing-dependent order; output names come from content. Parallel code must produce the same
+  bytes as serial code (a test proves it).
 - **Numbers**: geometry and transforms are f32 where the formats are f32 (lossless round trips); compute in f64
   where precision matters and say where results are rounded. Non-finite values are errors, never silently written.
 - **Frame**: the world is metres, right-handed, +Y up, -Z north (glTF). Readers convert in, writers convert out, with
