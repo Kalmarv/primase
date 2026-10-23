@@ -494,13 +494,25 @@ impl ShaderPrograms {
         let table = cache.get(self, p, 0)?;
         let mut r = super::Reader::new(&table, false);
         let count = usize::try_from(r.i32()?).map_err(|_| invalid("shader blob: a negative entry count"))?;
-        let at = 4 + usize::try_from(index).map_err(|_| invalid("shader blob: an entry index"))? * 12;
         if index as usize >= count {
             return Err(invalid(format!(
                 "shader {}: blob entry {index} of {count}",
                 self.name
             )));
         }
+        // the table's count is its own word: the entry has to be in the bytes there are
+        let at = usize::try_from(index)
+            .ok()
+            .and_then(|i| i.checked_mul(12))
+            .and_then(|o| o.checked_add(4))
+            .filter(|at| at.saturating_add(12) <= table.len())
+            .ok_or_else(|| {
+                invalid(format!(
+                    "shader {}: blob entry {index} of {count} in a table of {} bytes",
+                    self.name,
+                    table.len()
+                ))
+            })?;
         r.pos = at;
         let (offset, length, segment) = (r.i32()?, r.i32()?, r.i32()?);
         let span = |n: i32| usize::try_from(n).map_err(|_| invalid("shader blob: a negative entry span"));
@@ -745,6 +757,22 @@ pub fn read_programs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A blob table that states more entries than it holds: the entry is refused, not indexed past the table.
+    #[test]
+    fn a_blob_entry_past_the_table_is_refused() {
+        // one LZ4 literal run of the four bytes of a count of 1000
+        let table = vec![0x40u8, 0xE8, 0x03, 0, 0];
+        let programs = ShaderPrograms {
+            name: "s".into(),
+            passes: vec![],
+            platforms: vec![4],
+            segments: vec![vec![(0, table.len(), 4)]],
+            blob: table,
+        };
+        let e = programs.code(4, 999).unwrap_err().to_string();
+        assert!(e.contains("blob entry 999 of 1000 in a table of 4 bytes"), "{e}");
+    }
     use std::sync::Arc;
 
     #[test]

@@ -42,6 +42,12 @@ pub struct UnityTexture {
     pub data: Vec<u8>,
 }
 
+/// A non-negative 32-bit integer of the texture (a negative one is no size).
+fn dimension(v: &Value, k: &str) -> Result<u32> {
+    let n = int(v, k)?;
+    u32::try_from(n).map_err(|_| invalid(format!("texture: {k} of {n}")))
+}
+
 fn int(v: &Value, k: &str) -> Result<i64> {
     v.get(k)
         .and_then(Value::as_i64)
@@ -106,10 +112,10 @@ impl UnityTexture {
         };
         Ok(UnityTexture {
             name: t.get("m_Name").and_then(Value::as_str).unwrap_or("").to_owned(),
-            width: int(&t, "m_Width")? as u32,
-            height: int(&t, "m_Height")? as u32,
+            width: dimension(&t, "m_Width")?,
+            height: dimension(&t, "m_Height")?,
             format: int(&t, "m_TextureFormat")?,
-            mips: int(&t, "m_MipCount")? as u32,
+            mips: dimension(&t, "m_MipCount")?,
             srgb: int(&t, "m_ColorSpace")? == 1,
             usage: int(&t, "m_LightmapFormat")?,
             wrap: [int(settings, "m_WrapU")?, int(settings, "m_WrapV")?],
@@ -148,21 +154,36 @@ impl UnityTexture {
             Stored::As(f) => f,
             Stored::Rgb24 => TexFormat::Rgba8Unorm,
         };
+        // no more levels than halvings of a 32-bit side
+        if self.mips > 32 {
+            return Err(invalid(format!("{}: {} mip levels", self.name, self.mips)));
+        }
         let mut levels = Vec::with_capacity(self.mips as usize);
         let mut at = 0usize;
         for i in 0..self.mips {
             let (w, h) = ((self.width >> i).max(1), (self.height >> i).max(1));
             let size = match stored {
-                Stored::As(f) => f.level_size(w, h),
-                Stored::Rgb24 => 3 * w as usize * h as usize,
-            };
-            let bytes = self.data.get(at..at + size).ok_or_else(|| {
+                Stored::As(f) => f.checked_level_size(w, h),
+                Stored::Rgb24 => (w as usize)
+                    .checked_mul(h as usize)
+                    .and_then(|n| n.checked_mul(3)),
+            }
+            .ok_or_else(|| {
                 invalid(format!(
-                    "{}: level {i} past the {} bytes of pixels",
-                    self.name,
-                    self.data.len()
+                    "{}: level {i} of {w}x{h} does not fit in memory",
+                    self.name
                 ))
             })?;
+            let bytes = at
+                .checked_add(size)
+                .and_then(|end| self.data.get(at..end))
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "{}: level {i} past the {} bytes of pixels",
+                        self.name,
+                        self.data.len()
+                    ))
+                })?;
             levels.push(match stored {
                 Stored::As(_) => bytes.to_vec(),
                 Stored::Rgb24 => bytes
@@ -172,7 +193,7 @@ impl UnityTexture {
                     .flat_map(|&[r, g, b]| [r, g, b, 255])
                     .collect(),
             });
-            at += size;
+            at = at.saturating_add(size);
         }
         if at != self.data.len() {
             return Err(invalid(format!(
@@ -201,5 +222,54 @@ impl UnityTexture {
             normal,
         };
         flip_vertical(&bottom_first, &Decoder::default()).map_err(|e| invalid(format!("{}: {e}", self.name)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn texture(width: u32, height: u32, mips: u32, format: i64, data: Vec<u8>) -> UnityTexture {
+        UnityTexture {
+            name: "t".into(),
+            width,
+            height,
+            format,
+            mips,
+            srgb: false,
+            usage: 0,
+            wrap: [0, 0],
+            filter: 1,
+            data,
+        }
+    }
+
+    /// Sizes the file states are held to its pixels: levels past 32, sizes that overflow and levels that cannot fit the
+    /// data are errors naming them, not a panic or an allocation.
+    #[test]
+    fn stated_sizes_are_held_to_the_pixels() {
+        let rgba = 4;
+        assert!(texture(2, 2, 1, rgba, vec![0; 16]).texture().is_ok());
+        assert!(texture(2, 2, 2, rgba, vec![0; 20]).texture().is_ok());
+        let e = texture(2, 2, 33, rgba, vec![0; 16])
+            .texture()
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("33 mip levels"), "{e}");
+        let e = texture(u32::MAX, u32::MAX, 1, rgba, vec![0; 16])
+            .texture()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("past the 16 bytes of pixels") || e.contains("does not fit"),
+            "{e}"
+        );
+        // a block format with huge sides: the level size is checked, not expected
+        assert!(
+            texture(u32::MAX, u32::MAX, 32, 12, vec![0; 16])
+                .texture()
+                .is_err()
+        );
+        assert!(texture(0, 4, 1, rgba, vec![]).texture().is_err());
     }
 }

@@ -51,7 +51,7 @@ impl<'a> Reader<'a> {
     }
 
     pub fn remaining(&self) -> usize {
-        self.data.len() - self.pos
+        self.data.len().saturating_sub(self.pos)
     }
 
     pub fn take(&mut self, n: usize) -> Result<&'a [u8]> {

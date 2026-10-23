@@ -56,6 +56,10 @@ pub trait Compressor {
     fn compress(&self, input: &[u8]) -> Result<Vec<u8>>;
 }
 
+/// The most bytes an LZ4 block can produce for one byte of input (a match length is extended by bytes of 255, each
+/// adding 255 to it), rounded up: a claimed output size above this times the input is false.
+pub const LZ4_MAX_RATIO: usize = 255;
+
 /// Raw LZ4 block, no size prefix. All input bytes belong to the block; a final
 /// literal sequence terminates it. Output size comes from the enclosing archive.
 #[derive(Debug, Clone, Copy)]

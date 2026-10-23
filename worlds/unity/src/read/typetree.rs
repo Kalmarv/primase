@@ -91,7 +91,14 @@ enum Kind {
 pub struct TypeTree {
     pub nodes: Vec<Node>,
     kinds: Vec<Kind>,
+    /// Per node, the fewest bytes a value of it takes (alignment left out): what bounds a vector's count by the bytes
+    /// left.
+    min_sizes: Vec<usize>,
 }
+
+/// The most elements a vector of a type that takes no bytes (a struct without fields) may state: its elements cost
+/// nothing to the bytes, so the bytes cannot bound its count.
+const MAX_EMPTY_ELEMENTS: usize = 1 << 16;
 
 impl TypeTree {
     pub fn new(nodes: Vec<Node>) -> Result<Self> {
@@ -137,7 +144,25 @@ impl TypeTree {
             };
             kinds.push(kind);
         }
-        Ok(TypeTree { nodes, kinds })
+        // children come after their parent, so the sizes are summed from the last node up
+        let mut min_sizes = vec![0usize; nodes.len()];
+        for i in (0..nodes.len()).rev() {
+            min_sizes[i] = match &kinds[i] {
+                Kind::Prim(p) => p.size(),
+                Kind::String | Kind::Typeless | Kind::Vector { .. } => 4,
+                Kind::Pair | Kind::Struct => nodes[i]
+                    .children
+                    .iter()
+                    .map(|&c| min_sizes[c])
+                    .fold(0, usize::saturating_add),
+                Kind::Referenced => 0,
+            };
+        }
+        Ok(TypeTree {
+            nodes,
+            kinds,
+            min_sizes,
+        })
     }
 
     pub fn root(&self) -> &Node {
@@ -230,12 +255,13 @@ impl TypeTree {
             return Ok(Value::Array(prim_array(p, n, r)?));
         }
         // the shortest an element can be, to bound the count by the bytes left
-        let min = match self.kinds[e] {
-            Kind::Prim(p) => p.size(),
-            Kind::String | Kind::Typeless | Kind::Vector { .. } => 4,
-            _ => 0,
-        };
+        let min = self.min_sizes[e];
         let n = length(r, min)?;
+        if min == 0 && n > MAX_EMPTY_ELEMENTS {
+            return Err(invalid(format!(
+                "a vector of {n} elements that take no bytes (at most {MAX_EMPTY_ELEMENTS})"
+            )));
+        }
         let mut out = Vec::with_capacity(n.min(1 << 16));
         for _ in 0..n {
             out.push(self.read(e, r, depth + 1)?);
@@ -308,6 +334,50 @@ mod tests {
             meta_flag: meta,
             children,
         }
+    }
+
+    /// A vector's count is bounded by the bytes left at the fewest bytes an element takes: a struct of fields takes the
+    /// sum of theirs, and elements that take none (a struct without fields) are capped by a constant.
+    #[test]
+    fn a_vectors_count_is_bounded_by_what_its_elements_take() {
+        let vector_of = |element: Vec<Node>| {
+            let mut nodes = vec![
+                node("Thing", "Base", 0, vec![1]),
+                node("vector", "m_V", 0, vec![2]),
+                node("Array", "Array", 0, vec![3, 4]),
+                node("int", "size", 0, vec![]),
+            ];
+            let first = nodes.len();
+            for (k, mut n) in element.into_iter().enumerate() {
+                n.children = n.children.iter().map(|c| c + first).collect();
+                if k == 0 {
+                    n.name = "data".into();
+                }
+                nodes.push(n);
+            }
+            TypeTree::new(nodes).unwrap()
+        };
+        let count = |n: i32| n.to_le_bytes();
+        // elements of a struct of two ints take 8 bytes: a count the bytes cannot hold is refused before anything is
+        // made of it
+        let pairs = vector_of(vec![
+            node("Two", "data", 0, vec![1, 2]),
+            node("int", "a", 0, vec![]),
+            node("int", "b", 0, vec![]),
+        ]);
+        let e = pairs
+            .decode(&count(1_000_000_000), false)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("runs past the object"), "{e}");
+        let mut two = count(2).to_vec();
+        two.extend([0u8; 16]);
+        assert!(pairs.decode(&two, false).is_ok());
+        // elements of no bytes: some are fine, billions are not
+        let empty = vector_of(vec![node("Empty", "data", 0, vec![])]);
+        assert!(empty.decode(&count(3), false).is_ok());
+        let e = empty.decode(&count(i32::MAX), false).unwrap_err().to_string();
+        assert!(e.contains("take no bytes"), "{e}");
     }
 
     /// A struct of a bool, an aligned string, a vector of floats and a pair, decoded and aligned as the rules say.

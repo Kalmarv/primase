@@ -2,7 +2,7 @@
 //! player build strips from its files. Format versions 1 and 2, type tree data, uncompressed or LZ4 (LZMA and
 //! Brotli packages are refused: re-pack them uncompressed).
 
-use primase_compress::{Decompressor, Lz4};
+use primase_compress::{Decompressor, LZ4_MAX_RATIO, Lz4};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -63,6 +63,9 @@ fn count(r: &mut Reader, what: &str) -> Result<usize> {
     usize::try_from(n).map_err(|_| invalid(format!("TPK: negative {what} count {n}")))
 }
 
+/// The most nodes one class's type tree may expand to (the trees seen have a few thousand).
+const MAX_TREE_NODES: usize = 1 << 20;
+
 impl TypeTreePackage {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let mut r = Reader::new(bytes, false);
@@ -87,9 +90,18 @@ impl TypeTreePackage {
         let packed = r.take(compressed)?;
         let blob: Vec<u8> = match compression {
             0 => packed.to_vec(),
-            1 => Lz4
-                .decompress(packed, uncompressed)
-                .map_err(|e| invalid(format!("TPK LZ4: {e}")))?,
+            1 => {
+                // the header's size is the file's word: what the packed bytes cannot inflate to is not allocated
+                if uncompressed > packed.len().saturating_mul(LZ4_MAX_RATIO) {
+                    return Err(invalid(format!(
+                        "TPK: {uncompressed} bytes claimed of {} bytes of LZ4, which inflate to at most {}",
+                        packed.len(),
+                        packed.len().saturating_mul(LZ4_MAX_RATIO)
+                    )));
+                }
+                Lz4.decompress(packed, uncompressed)
+                    .map_err(|e| invalid(format!("TPK LZ4: {e}")))?
+            }
             2 => {
                 return Err(Error::Unsupported(
                     "LZMA-compressed TPK: use an uncompressed or LZ4 package".into(),
@@ -253,6 +265,13 @@ impl TypeTreePackage {
             if depth > 64 {
                 return Err(invalid("TPK: type tree deeper than 64"));
             }
+            // nodes shared by several parents are copied under each: a package whose nodes name each other twice over
+            // would copy 2^depth of them
+            if nodes.len() >= MAX_TREE_NODES {
+                return Err(invalid(format!(
+                    "TPK: a type tree of more than {MAX_TREE_NODES} nodes"
+                )));
+            }
             let p = &pkg.nodes[usize::from(id)];
             let at = nodes.len();
             nodes.push(Node {
@@ -359,5 +378,43 @@ mod tests {
         }
         assert!(TypeTreePackage::parse(&package(1, &packed[..packed.len() - 1], n)).is_err());
         assert!(TypeTreePackage::parse(&package(1, &[], 0)).is_err());
+        // a size the packed bytes cannot inflate to is refused before anything is allocated for it
+        let e = TypeTreePackage::parse(&package(1, &packed, u32::MAX))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("inflate to at most"), "{e}");
+    }
+
+    /// Nodes that name each other twice over are copied under each parent: thirty levels would be 2^30 nodes. The copy
+    /// stops at a count.
+    #[test]
+    fn a_type_tree_that_expands_past_a_million_nodes_is_refused() {
+        let levels = 30u16;
+        let nodes = (0..levels)
+            .map(|i| PackedNode {
+                type_name: 0,
+                name: 0,
+                byte_size: -1,
+                version: 1,
+                meta_flag: 0,
+                children: if i + 1 < levels {
+                    vec![i + 1, i + 1]
+                } else {
+                    vec![]
+                },
+            })
+            .collect();
+        let class = Class {
+            name: 0,
+            flags: HAS_RELEASE_ROOT,
+            release_root: Some(0),
+        };
+        let pkg = TypeTreePackage {
+            classes: BTreeMap::from([(1, vec![(UnityVersion(0), Some(class))])]),
+            nodes,
+            strings: vec![std::sync::Arc::from("Base")],
+        };
+        let e = pkg.type_tree(1, UnityVersion(1)).unwrap_err().to_string();
+        assert!(e.contains("more than 1048576 nodes"), "{e}");
     }
 }

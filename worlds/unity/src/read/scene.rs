@@ -222,6 +222,9 @@ pub struct LodGroup {
     pub levels: Vec<Vec<i64>>,
 }
 
+/// The deepest chain of parents a scene may have. A Unity hierarchy is a few dozen deep.
+const MAX_DEPTH: usize = 1024;
+
 /// What the scene reading skipped, by reason.
 pub type Skipped = std::collections::BTreeMap<&'static str, u64>;
 
@@ -233,6 +236,42 @@ pub struct Scene {
     /// GameObject -> its Transform.
     transform_of: BTreeMap<i64, i64>,
     world: std::sync::Mutex<BTreeMap<i64, Matrix>>,
+}
+
+/// The chains of parents are at most [`MAX_DEPTH`] long (a loop is a chain that does not end): a path, a world matrix
+/// and the off flags are walked up the chain for each node, so a chain of d transforms costs d^2 of them and d paths
+/// of d names.
+fn check_depth(nodes: &BTreeMap<i64, Node>) -> Result<()> {
+    let mut depths: BTreeMap<i64, usize> = BTreeMap::new();
+    for &start in nodes.keys() {
+        let mut chain = Vec::new();
+        let mut t = start;
+        let base = loop {
+            if let Some(&d) = depths.get(&t) {
+                break d;
+            }
+            let Some(n) = nodes.get(&t) else { break 0 };
+            chain.push(t);
+            if chain.len() > MAX_DEPTH {
+                return Err(invalid(format!(
+                    "transform {start}: its parents are deeper than {MAX_DEPTH} (or loop)"
+                )));
+            }
+            if n.father == 0 {
+                break 0;
+            }
+            t = n.father;
+        };
+        if base.saturating_add(chain.len()) > MAX_DEPTH {
+            return Err(invalid(format!(
+                "transform {start}: its parents are deeper than {MAX_DEPTH}"
+            )));
+        }
+        for (k, &t) in chain.iter().rev().enumerate() {
+            depths.insert(t, base + k + 1);
+        }
+    }
+    Ok(())
 }
 
 impl Scene {
@@ -290,6 +329,7 @@ impl Scene {
                 _ => {}
             }
         }
+        check_depth(&nodes)?;
         // RectTransforms: local x, y from the anchors
         let mut sizes: BTreeMap<i64, ([f64; 2], [f64; 2])> = BTreeMap::new();
         fn rect_size(
@@ -1299,4 +1339,39 @@ pub struct TerrainComponent {
 pub struct SceneRenderSettings {
     pub sun: Option<ObjRef>,
     pub ambient: Option<UnityAmbient>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chain(len: i64) -> BTreeMap<i64, Node> {
+        (1..=len)
+            .map(|id| {
+                let node = Node {
+                    game_object: id,
+                    father: if id == 1 { 0 } else { id - 1 },
+                    local: IDENTITY,
+                    trs: ([0.0; 3], [0.0, 0.0, 0.0, 1.0], [1.0; 3]),
+                };
+                (id, node)
+            })
+            .collect()
+    }
+
+    /// A chain of parents is as deep as it is long, and a loop or a chain past the limit is refused at the read, not
+    /// walked by every node's path.
+    #[test]
+    fn deep_and_looping_parents_are_refused() {
+        assert!(check_depth(&chain(MAX_DEPTH as i64)).is_ok());
+        let e = check_depth(&chain(MAX_DEPTH as i64 + 1)).unwrap_err().to_string();
+        assert!(e.contains("deeper than 1024"), "{e}");
+        let mut looped = chain(3);
+        looped.get_mut(&1).unwrap().father = 3;
+        assert!(check_depth(&looped).is_err());
+        // a father the scene does not hold ends the chain
+        let mut orphan = chain(3);
+        orphan.get_mut(&1).unwrap().father = 99;
+        assert!(check_depth(&orphan).is_ok());
+    }
 }

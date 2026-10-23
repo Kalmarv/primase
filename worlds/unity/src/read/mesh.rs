@@ -499,15 +499,24 @@ fn vertex_format(format: i64, dim: usize) -> Option<Format> {
 
 /// A PackedBitVector's items as integers.
 fn unpack_ints(v: &Value, start: usize, count: usize) -> Result<Vec<u32>> {
-    let bits = int(v, "m_BitSize")? as usize;
+    let bits = int(v, "m_BitSize")?;
+    let bits = usize::try_from(bits)
+        .ok()
+        .filter(|&b| b <= 32)
+        .ok_or_else(|| invalid(format!("packed bit size {bits}")))?;
     let data = bytes(v, "m_Data")?;
-    if bits > 32 {
-        return Err(invalid(format!("packed bit size {bits}")));
-    }
     if bits == 0 {
+        if count > MAX_PACKED_ITEMS {
+            return Err(invalid(format!(
+                "{count} packed items of no bits (at most {MAX_PACKED_ITEMS})"
+            )));
+        }
         return Ok(vec![0; count]);
     }
-    let end_bit = (start + count) * bits;
+    let end_bit = start
+        .checked_add(count)
+        .and_then(|n| n.checked_mul(bits))
+        .ok_or_else(|| invalid(format!("packed items {start}+{count} of {bits} bits")))?;
     if end_bit.div_ceil(8) > data.len() {
         return Err(invalid(format!(
             "packed items {start}+{count} of {bits} bits past {} bytes",
@@ -534,7 +543,11 @@ fn unpack_ints(v: &Value, start: usize, count: usize) -> Result<Vec<u32>> {
 
 /// A PackedBitVector's items as floats: `start + item * (range / (2^bits - 1))`, in f32.
 fn unpack_floats(v: &Value, start: usize, count: usize) -> Result<Vec<f32>> {
-    let bits = int(v, "m_BitSize")? as u32;
+    let bits = int(v, "m_BitSize")?;
+    let bits = u32::try_from(bits)
+        .ok()
+        .filter(|&b| b <= 32)
+        .ok_or_else(|| invalid(format!("packed bit size {bits}")))?;
     let range = v
         .get("m_Range")
         .and_then(Value::as_f32)
@@ -544,6 +557,11 @@ fn unpack_floats(v: &Value, start: usize, count: usize) -> Result<Vec<f32>> {
         .and_then(Value::as_f32)
         .ok_or_else(|| invalid("packed floats: no m_Start"))?;
     if bits == 0 {
+        if count > MAX_PACKED_ITEMS {
+            return Err(invalid(format!(
+                "{count} packed items of no bits (at most {MAX_PACKED_ITEMS})"
+            )));
+        }
         return Ok(vec![first; count]);
     }
     let scale = range / ((1u64 << bits) - 1) as f32;
@@ -554,8 +572,26 @@ fn unpack_floats(v: &Value, start: usize, count: usize) -> Result<Vec<f32>> {
 }
 
 fn items(v: &Value) -> Result<usize> {
-    Ok(int(v, "m_NumItems")? as usize)
+    let n = int(v, "m_NumItems")?;
+    usize::try_from(n).map_err(|_| invalid(format!("mesh: m_NumItems of {n}")))
 }
+
+/// The most items one packed vector may state when it needs no bytes (a bit size of 0 stores none): 2^26, which is 4
+/// floats of each of 16 million vertices. The counts of vectors that do store bits are bounded by their bytes.
+const MAX_PACKED_ITEMS: usize = 1 << 26;
+
+fn check_vertices(name: &str, n: usize) -> Result<()> {
+    if n > MAX_VERTICES {
+        return Err(Error::Unsupported(format!(
+            "{name}: {n} vertices (at most {MAX_VERTICES})"
+        )));
+    }
+    Ok(())
+}
+
+/// The most vertices a mesh may state. A mesh of this many vertices has 16 million positions at least 12 bytes each;
+/// the bound keeps a state of 2^31 from allocating a vertex-sized array before any data is looked at.
+const MAX_VERTICES: usize = 1 << 24;
 
 /// x, y and a stored z sign to a unit vector: z = sqrt(1 - x^2 - y^2), or (x, y, 0) normalised when that is
 /// negative.
@@ -753,6 +789,7 @@ impl UnityMeshData {
             };
             let pv = get("m_Vertices")?;
             vertex_count = items(pv)? / 3;
+            check_vertices(&name, vertex_count)?;
             channels[0] = Some(Channel {
                 dim: 3,
                 values: unpack_floats(pv, 0, vertex_count * 3)?,
@@ -805,7 +842,10 @@ impl UnityMeshData {
                 });
             }
         } else {
-            vertex_count = int(vd, "m_VertexCount")? as usize;
+            let stated = int(vd, "m_VertexCount")?;
+            vertex_count =
+                usize::try_from(stated).map_err(|_| invalid(format!("{name}: {stated} vertices")))?;
+            check_vertices(&name, vertex_count)?;
             let chans = match vd.get("m_Channels") {
                 Some(Value::Array(Array::Values(c))) => c,
                 _ => return Err(invalid("mesh: no m_Channels")),
@@ -814,9 +854,18 @@ impl UnityMeshData {
             let info: Vec<(usize, usize, i64, usize)> = chans
                 .iter()
                 .map(|c| {
+                    let non_negative = |k: &str| {
+                        let n = int(c, k)?;
+                        usize::try_from(n).map_err(|_| invalid(format!("{name}: channel {k} of {n}")))
+                    };
+                    let stream = non_negative("stream")?;
+                    // Unity's vertex data has at most four streams
+                    if stream >= 4 {
+                        return Err(invalid(format!("{name}: a channel in stream {stream}")));
+                    }
                     Ok((
-                        int(c, "stream")? as usize,
-                        int(c, "offset")? as usize,
+                        stream,
+                        non_negative("offset")?,
                         int(c, "format")?,
                         (int(c, "dimension")? & 0xF) as usize,
                     ))
@@ -833,6 +882,7 @@ impl UnityMeshData {
                     }
                 }
                 stream_at.push((offset, stride));
+                // vertex_count is at most 2^24 and a stride 15 x 4 x 16 channels: no overflow
                 offset += vertex_count * stride;
                 offset = offset.next_multiple_of(16);
             }
@@ -851,6 +901,15 @@ impl UnityMeshData {
                 }
                 None => bytes(vd, "m_DataSize")?.to_vec(),
             };
+            // every stream holds its vertices, so what is allocated per vertex below is backed by the data
+            for (s, &(base, stride)) in stream_at.iter().enumerate() {
+                if stride > 0 && base + vertex_count * stride > data.len() {
+                    return Err(invalid(format!(
+                        "{name}: stream {s} of {vertex_count} vertices of {stride} bytes past the {} bytes of vertex data",
+                        data.len()
+                    )));
+                }
+            }
             skin_channels = read_skin_channels(&name, &info, &stream_at, &data, vertex_count)?;
             for (ch, &(s, off, f, d)) in info.iter().enumerate().take(12) {
                 if d == 0 {
@@ -1289,6 +1348,13 @@ impl UnityMeshData {
                     t.swap(1, 2);
                 }
             }
+            if let Some(&i) = indices.iter().find(|&&i| i as usize >= self.vertex_count) {
+                return Err(invalid(format!(
+                    "{}: index {i} past the mesh's {} vertices",
+                    what(),
+                    self.vertex_count
+                )));
+            }
             let used: BTreeSet<u32> = indices.iter().copied().collect();
             let mut part = Primitive {
                 indices: Some(indices),
@@ -1473,6 +1539,49 @@ mod tests {
             Stream::F32x2(vec![[0.0, 1.0], [0.0, 0.0], [1.0, 0.75]])
         );
         assert!(m.primitives(1..3).is_err(), "submeshes past the mesh");
+    }
+
+    /// An index past the mesh's vertices is an error naming it, not a panic in the finite pass.
+    #[test]
+    fn an_index_past_the_vertices_is_refused() {
+        let mut channels: [Option<Channel>; 12] = Default::default();
+        channels[0] = channel(3, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]);
+        let ok = mesh(channels.clone(), vec![0, 1, 2], 0);
+        assert!(ok.primitives(0..1).is_ok());
+        let bad = mesh(channels, vec![0, 1, 7], 0);
+        let e = bad.primitives(0..1).unwrap_err().to_string();
+        assert!(e.contains("index 7 past the mesh's 4 vertices"), "{e}");
+    }
+
+    /// A packed vector states its own item count: negative or enormous counts of no-bit items are refused before the
+    /// vector is made, and counts of stored bits are held to the bytes.
+    #[test]
+    fn packed_vectors_are_bounded_by_their_bytes_or_a_constant() {
+        let packed = |items: i64, bits: i64, data: Vec<u8>| {
+            Value::Struct(vec![
+                ("m_NumItems".into(), Value::Int(items)),
+                ("m_Range".into(), Value::Float(1.0)),
+                ("m_Start".into(), Value::Float(0.5)),
+                ("m_Data".into(), Value::Array(Array::U8(data))),
+                ("m_BitSize".into(), Value::Int(bits)),
+            ])
+        };
+        assert!(
+            items(&packed(-1, 0, vec![]))
+                .unwrap_err()
+                .to_string()
+                .contains("m_NumItems of -1")
+        );
+        assert_eq!(unpack_floats(&packed(3, 0, vec![]), 0, 3).unwrap(), [0.5; 3]);
+        let huge = MAX_PACKED_ITEMS + 1;
+        assert!(unpack_ints(&packed(0, 0, vec![]), 0, huge).is_err());
+        assert!(unpack_floats(&packed(0, 0, vec![]), 0, huge).is_err());
+        // bits stored: the bytes bound the count, even when start + count wraps
+        assert!(unpack_ints(&packed(0, 8, vec![1, 2]), 0, 3).is_err());
+        assert!(unpack_ints(&packed(0, 8, vec![1, 2]), usize::MAX, 2).is_err());
+        assert_eq!(unpack_ints(&packed(0, 8, vec![1, 2]), 0, 2).unwrap(), [1, 2]);
+        assert!(unpack_ints(&packed(0, -1, vec![]), 0, 1).is_err());
+        assert!(unpack_floats(&packed(0, 33, vec![]), 0, 1).is_err());
     }
 
     fn mesh(channels: [Option<Channel>; 12], indices: Vec<u32>, topology: i64) -> UnityMeshData {
