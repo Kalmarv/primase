@@ -1002,7 +1002,21 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
     for (i, (range, name, ty)) in ranges(source)?.into_iter().enumerate() {
         resources.push(resource_of(ResourceId(i as u32), &range, name, ty, source)?);
     }
-    let mut inputs = part(b"ISG1")
+    // every program of a stage states its signatures (an empty one is a part with no elements); only a library, whose
+    // entry points have none, has no such part
+    let signature_part = |kind: &[u8; 4]| -> Result<Option<&[u8]>> {
+        match part(kind) {
+            None if !stage.is_ray_tracing() => Err(error(
+                0,
+                format!(
+                    "a {stage:?} program without its {} part",
+                    String::from_utf8_lossy(kind)
+                ),
+            )),
+            found => Ok(found),
+        }
+    };
+    let mut inputs = signature_part(b"ISG1")?
         .map(|p| signature(p, stage, false))
         .transpose()?
         .unwrap_or_default();
@@ -1027,7 +1041,7 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
         }
     }
     let patch = |output: bool| -> Result<Vec<Varying>> {
-        Ok(part(b"PSG1")
+        Ok(signature_part(b"PSG1")?
             .map(|p| signature(p, stage, output))
             .transpose()?
             .unwrap_or_default())
@@ -1095,7 +1109,7 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
         stage,
         inputs,
         facts,
-        outputs: part(b"OSG1")
+        outputs: signature_part(b"OSG1")?
             .map(|p| signature(p, stage, true))
             .transpose()?
             .unwrap_or_default(),

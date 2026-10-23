@@ -21,6 +21,15 @@ impl Lift<'_> {
             }
             return self.refuse(format!("a call of {name}"));
         };
+        // the operations read their arguments by position: the count is the operation's, checked once here
+        if let Some(n) = super::dxop::arguments(code)
+            && args.len() != n
+        {
+            return self.refuse(format!(
+                "dx.op {code} called with {} arguments, where it takes {n}",
+                args.len()
+            ));
+        }
         let result = inst.result;
         macro_rules! scalar {
             ($v:expr) => {

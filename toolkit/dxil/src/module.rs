@@ -250,6 +250,55 @@ pub enum Op {
     Fence,
 }
 
+impl Op {
+    /// The values the operation reads (a call's arguments, not its callee; a phi's incoming values).
+    pub fn operands(&self) -> Vec<ValueId> {
+        match self {
+            Op::Binary { lhs, rhs, .. } | Op::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
+            Op::Cast { value, .. } => vec![*value],
+            Op::Select {
+                condition,
+                then,
+                otherwise,
+            } => vec![*condition, *then, *otherwise],
+            Op::ExtractValue { aggregate, .. } => vec![*aggregate],
+            Op::InsertValue { aggregate, value, .. } => vec![*aggregate, *value],
+            Op::ExtractElement { vector, index } => vec![*vector, *index],
+            Op::InsertElement { vector, value, index } => vec![*vector, *value, *index],
+            Op::ShuffleVector { first, second, mask } => vec![*first, *second, *mask],
+            Op::Call { args, .. } => args.clone(),
+            Op::Phi { incoming } => incoming.iter().map(|(v, _)| *v).collect(),
+            Op::Return(value) => value.iter().copied().collect(),
+            Op::CondBranch { condition, .. } => vec![*condition],
+            Op::Switch { value, cases, .. } => std::iter::once(*value)
+                .chain(cases.iter().map(|(c, _)| *c))
+                .collect(),
+            Op::Load { pointer } => vec![*pointer],
+            Op::Store { pointer, value } | Op::AtomicRmw { pointer, value, .. } => vec![*pointer, *value],
+            Op::Gep { base, indices } => std::iter::once(*base).chain(indices.iter().copied()).collect(),
+            Op::CmpXchg {
+                pointer,
+                compare,
+                value,
+            } => vec![*pointer, *compare, *value],
+            Op::Branch { .. } | Op::Unreachable | Op::Alloca { .. } | Op::Fence => Vec::new(),
+        }
+    }
+
+    /// The basic blocks the operation names (a branch's targets, a phi's predecessors).
+    pub fn blocks(&self) -> Vec<usize> {
+        match self {
+            Op::Branch { target } => vec![*target],
+            Op::CondBranch { then, otherwise, .. } => vec![*then, *otherwise],
+            Op::Switch { default, cases, .. } => std::iter::once(*default)
+                .chain(cases.iter().map(|(_, b)| *b))
+                .collect(),
+            Op::Phi { incoming } => incoming.iter().map(|(_, b)| *b).collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Instruction {
     pub op: Op,
@@ -1014,15 +1063,42 @@ impl Module {
             return Err(error(block.at, "basic blocks without terminators"));
         }
         let end = body.next();
+        let blocks = body.blocks;
+        // everything an instruction names is something the function has: a value (an earlier one, or a later one a phi
+        // or a loop reads), a basic block, and a callee taking the arguments it is given
         for inst in &instructions {
-            match &inst.op {
-                Op::Phi { incoming } if incoming.iter().any(|(v, _)| *v >= end) => {
-                    return Err(error(inst.at, "phi names an undefined value"));
+            if inst.block >= blocks {
+                return Err(error(inst.at, "an instruction after the last terminator"));
+            }
+            if let Some(v) = inst.op.operands().into_iter().find(|v| *v >= end) {
+                return Err(error(inst.at, format!("value {v} of {end} values")));
+            }
+            if let Some(b) = inst.op.blocks().into_iter().find(|b| *b >= blocks) {
+                return Err(error(inst.at, format!("basic block {b} of {blocks}")));
+            }
+            if let Op::Call { function, args } = &inst.op {
+                if *function >= end {
+                    return Err(error(inst.at, format!("callee {function} of {end} values")));
                 }
-                _ => {}
+                if let Some(Value::Function { ty, .. }) = self.values.get(*function)
+                    && let Some(Type::Function {
+                        vararg: false,
+                        params,
+                        ..
+                    }) = self.types.get(*ty)
+                    && params.len() != args.len()
+                {
+                    return Err(error(
+                        inst.at,
+                        format!(
+                            "a call of {} arguments to a function of {} parameters",
+                            args.len(),
+                            params.len()
+                        ),
+                    ));
+                }
             }
         }
-        let blocks = body.blocks;
         let locals = self.values.split_off(base);
         let local_types = self.value_types.split_off(base);
         Ok(Function {

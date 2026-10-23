@@ -20,6 +20,11 @@
   function bodies. Instructions: binary operators, casts, comparisons, select, extractvalue, insertvalue, call,
   phi, ret and forward-only branches; any other record is refused by name (`getelementptr`, `alloca`, `load`,
   `store`, `switch`, backward branches as loops, ...).
+- A function body names only what the function has: every value an instruction reads is one of the function's (an
+  earlier one, or a later one a phi or a loop reads), every branch target and phi predecessor a block of it, every
+  instruction in a block, and a call has as many arguments as its callee has parameters. The lifter then reads an
+  operation's arguments by position after one check of their count (`src/lift/dxop.rs`, the count of each `dx.op` as
+  69,826 modules of the corpora call it). `tests/malformed.rs` makes the cases from committed fixtures.
 - Reflection (`reflection`, `interface`): input and output signatures from `ISG1`/`OSG1`, their packing (element id,
   first register and column, size) and interpolation from `dx.entryPoints`, resources from `dx.resources` (kind,
   element type and stride tags, space), and constant-buffer layouts (field names, offsets, component types and

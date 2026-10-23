@@ -9,7 +9,7 @@ use primase_shader::{
 
 use crate::module::{Constant, Function, Module, Op, Value, ValueId};
 use crate::reflection::{self, Element, Range};
-use crate::{Chunk, Error, Result, error};
+use crate::{Chunk, Result, error};
 
 /// The constant integer a value is, if it is one.
 pub(super) fn const_int(m: &Module, f: &Function, v: ValueId) -> Option<i64> {
@@ -601,9 +601,7 @@ fn heap_resources(
 fn cell(list: &[primase_shader::Varying], register: u32, lane: u8) -> Option<(usize, u8)> {
     list.iter().enumerate().find_map(|(i, v)| {
         let d3d = v.provenance.d3d?;
-        (d3d.register == register && d3d.mask >> lane & 1 != 0)
+        (lane < 8 && d3d.register == register && d3d.mask >> lane & 1 != 0)
             .then(|| (i, (d3d.mask & ((1u8 << lane) - 1)).count_ones() as u8))
     })
 }
-
-pub(super) fn _unused(_: BTreeMap<u8, u8>, _: Error) {}

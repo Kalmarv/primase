@@ -13,6 +13,7 @@
 //! and constant tables.
 
 mod compute;
+mod dxop;
 mod flow;
 mod memory;
 mod mesh;
@@ -260,81 +261,18 @@ impl<'m> Lift<'m> {
         let mut cross = vec![false; f.locals.len()];
         for inst in &f.instructions {
             let at = inst.block;
-            match &inst.op {
-                Op::Binary { lhs, rhs, .. } | Op::Compare { lhs, rhs, .. } => {
-                    mark(*lhs, at, &mut cross);
-                    mark(*rhs, at, &mut cross);
+            if let Op::Phi { incoming } = &inst.op {
+                // a phi's value is always a local; its incoming value is read at the end of its predecessor
+                if let Some((v, _)) = inst.result {
+                    cross[v - f.first] = true;
                 }
-                Op::Cast { value, .. } => mark(*value, at, &mut cross),
-                Op::Select {
-                    condition,
-                    then,
-                    otherwise,
-                } => {
-                    for v in [condition, then, otherwise] {
-                        mark(*v, at, &mut cross);
-                    }
+                for (v, pred) in incoming {
+                    mark(*v, *pred, &mut cross);
                 }
-                Op::ExtractValue { aggregate, .. } => mark(*aggregate, at, &mut cross),
-                Op::ExtractElement { vector, index } => {
-                    mark(*vector, at, &mut cross);
-                    mark(*index, at, &mut cross);
-                }
-                Op::InsertElement { vector, value, index } => {
-                    for v in [vector, value, index] {
-                        mark(*v, at, &mut cross);
-                    }
-                }
-                Op::ShuffleVector { first, second, mask } => {
-                    for v in [first, second, mask] {
-                        mark(*v, at, &mut cross);
-                    }
-                }
-                Op::InsertValue { aggregate, value, .. } => {
-                    mark(*aggregate, at, &mut cross);
-                    mark(*value, at, &mut cross);
-                }
-                Op::Call { args, .. } => {
-                    for a in args {
-                        mark(*a, at, &mut cross);
-                    }
-                }
-                Op::Phi { incoming } => {
-                    if let Some((v, _)) = inst.result {
-                        cross[v - f.first] = true;
-                    }
-                    for (v, pred) in incoming {
-                        mark(*v, *pred, &mut cross);
-                    }
-                }
-                Op::Return(Some(v)) => mark(*v, at, &mut cross),
-                Op::CondBranch { condition, .. } => mark(*condition, at, &mut cross),
-                Op::Switch { value, .. } => mark(*value, at, &mut cross),
-                Op::Load { pointer } => mark(*pointer, at, &mut cross),
-                Op::Store { pointer, value } => {
-                    mark(*pointer, at, &mut cross);
-                    mark(*value, at, &mut cross);
-                }
-                Op::Gep { base, indices } => {
-                    mark(*base, at, &mut cross);
-                    for i in indices {
-                        mark(*i, at, &mut cross);
-                    }
-                }
-                Op::AtomicRmw { pointer, value, .. } => {
-                    mark(*pointer, at, &mut cross);
-                    mark(*value, at, &mut cross);
-                }
-                Op::CmpXchg {
-                    pointer,
-                    compare,
-                    value,
-                } => {
-                    for v in [pointer, compare, value] {
-                        mark(*v, at, &mut cross);
-                    }
-                }
-                Op::Return(None) | Op::Branch { .. } | Op::Unreachable | Op::Alloca { .. } | Op::Fence => {}
+                continue;
+            }
+            for v in inst.op.operands() {
+                mark(v, at, &mut cross);
             }
         }
         // a pointer is symbolic and is read wherever it is used: its index values are read there too

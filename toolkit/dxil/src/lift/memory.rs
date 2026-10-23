@@ -305,13 +305,13 @@ impl Lift<'_> {
                 steps: Vec::new(),
             }));
         }
-        let Value::Global {
+        let Some(Value::Global {
             value_ty,
             init,
             constant,
             address_space,
             ..
-        } = self.m.values[v].clone()
+        }) = self.m.values.get(v).cloned()
         else {
             return self.refuse("a global that is not a global");
         };

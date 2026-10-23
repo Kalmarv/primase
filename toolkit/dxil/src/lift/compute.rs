@@ -188,40 +188,7 @@ impl Lift<'_> {
 
     /// Whether a value is read by any instruction of the function.
     fn value_is_read(&self, v: ValueId) -> bool {
-        self.f.instructions.iter().any(|i| match &i.op {
-            crate::module::Op::Binary { lhs, rhs, .. } | crate::module::Op::Compare { lhs, rhs, .. } => {
-                *lhs == v || *rhs == v
-            }
-            crate::module::Op::Cast { value, .. } | crate::module::Op::Load { pointer: value } => *value == v,
-            crate::module::Op::Select {
-                condition,
-                then,
-                otherwise,
-            } => [*condition, *then, *otherwise].contains(&v),
-            crate::module::Op::ExtractValue { aggregate, .. } => *aggregate == v,
-            crate::module::Op::ExtractElement { vector, index } => *vector == v || *index == v,
-            crate::module::Op::InsertElement { vector, value, index } => {
-                *vector == v || *value == v || *index == v
-            }
-            crate::module::Op::ShuffleVector { first, second, mask } => {
-                *first == v || *second == v || *mask == v
-            }
-            crate::module::Op::InsertValue { aggregate, value, .. } => *aggregate == v || *value == v,
-            crate::module::Op::Call { args, .. } => args.contains(&v),
-            crate::module::Op::Phi { incoming } => incoming.iter().any(|(x, _)| *x == v),
-            crate::module::Op::Return(x) => *x == Some(v),
-            crate::module::Op::CondBranch { condition, .. } => *condition == v,
-            crate::module::Op::Switch { value, .. } => *value == v,
-            crate::module::Op::Store { pointer, value } => *pointer == v || *value == v,
-            crate::module::Op::Gep { base, indices } => *base == v || indices.contains(&v),
-            crate::module::Op::AtomicRmw { pointer, value, .. } => *pointer == v || *value == v,
-            crate::module::Op::CmpXchg {
-                pointer,
-                compare,
-                value,
-            } => [*pointer, *compare, *value].contains(&v),
-            _ => false,
-        })
+        self.f.instructions.iter().any(|i| i.op.operands().contains(&v))
     }
 
     /// `AtomicBinOp` on an unordered-access texture: naga's image atomic, which returns no old value; refused where
