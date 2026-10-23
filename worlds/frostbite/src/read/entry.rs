@@ -171,11 +171,12 @@ impl Source<'_> {
         Ok(entities)
     }
 
-    /// The core texture of a texture resource: the levels its chunk holds, cut from it. A streamed texture's header
-    /// describes the whole chain (`mip_sizes`, `chunk_size` their sum) while its chunk holds the levels from
-    /// `first_mip` on (the smaller ones; the chunk's logical offset in the bundle's manifest is the bytes of the levels
-    /// before it): the core texture is those levels, as large as level `first_mip` of the full size, which the
-    /// header's `width` and `height` still state. Colour space linear and role other until a lowering states them.
+    /// The core texture of a texture resource: its levels, cut from the chunk the header names. A streamed texture
+    /// (`first_mip` above 0) has the whole chain in its TOC's chunk table (`chunk_size` bytes, the levels one after
+    /// another from the largest) and only the levels from `first_mip` on in its bundle's manifest (a tail of that
+    /// chunk, at the logical offset of the bytes of the levels before them): the whole chain is read, from the TOC, and
+    /// refused by name when the TOC does not hold a chunk of that size. Colour space linear and role other until a
+    /// lowering states them.
     fn texture(&self, bundle: &Bundle, entry: &Listed, h: &texture::TextureHeader) -> Result<Texture> {
         if h.kind != 0 || h.depth > 1 || h.slices > 1 {
             return Err(unsupported(
@@ -189,24 +190,38 @@ impl Source<'_> {
         let (Some(format), Some(storage)) = (tex_format(h.format), texture::block(h.format)) else {
             return Err(unsupported(entry, format_args!("texture format {}", h.format)));
         };
-        let (file, decoded) = bundle.chunk(self, &h.chunk)?;
-        let chunk = self.payload(file, decoded)?;
-        let all = &h.mip_sizes[..usize::from(h.mip_count)];
-        let first = usize::from(h.first_mip);
-        let Some(held) = all.get(first..).filter(|h| !h.is_empty()) else {
-            return Err(unsupported(
-                entry,
-                format_args!("first level {first} of a texture of {} levels", all.len()),
-            ));
+        let sizes = &h.mip_sizes[..usize::from(h.mip_count)];
+        let total: usize = sizes.iter().map(|&s| s as usize).sum();
+        let (file, decoded) = if h.first_mip == 0 {
+            bundle.chunk(self, &h.chunk)?
+        } else {
+            match bundle.toc_chunk(self, &h.chunk)? {
+                Some(whole) if whole.1 == total => whole,
+                found => {
+                    return Err(unsupported(
+                        entry,
+                        format_args!(
+                            "streamed from level {}: the whole chain of {total} bytes is in no chunk of the TOC {} ({})",
+                            h.first_mip,
+                            bundle.toc_path,
+                            found.map_or_else(
+                                || "the TOC has no such chunk".to_owned(),
+                                |(_, n)| format!("its chunk is {n} bytes")
+                            )
+                        ),
+                    ));
+                }
+            }
         };
-        if chunk.len() != held.iter().map(|&s| s as usize).sum::<usize>() {
+        let chunk = self.payload(file, decoded)?;
+        if chunk.len() != total {
             return Err(unsupported(
                 entry,
-                format_args!("chunk of {} bytes for levels {first}.. of {all:?}", chunk.len()),
+                format_args!("chunk of {} bytes for levels of {sizes:?}", chunk.len()),
             ));
         }
-        let (mut at, mut levels) = (0, Vec::with_capacity(held.len()));
-        for (i, &size) in all.iter().enumerate().skip(first) {
+        let (mut at, mut levels) = (0, Vec::with_capacity(sizes.len()));
+        for (i, &size) in sizes.iter().enumerate() {
             let (lw, lh) = (
                 (u32::from(h.width) >> i).max(1),
                 (u32::from(h.height) >> i).max(1),
@@ -225,8 +240,8 @@ impl Source<'_> {
         }
         let _: Storage = storage;
         Ok(Texture {
-            width: (u32::from(h.width) >> first).max(1),
-            height: (u32::from(h.height) >> first).max(1),
+            width: u32::from(h.width),
+            height: u32::from(h.height),
             format,
             levels,
             color_space: ColorSpace::Linear,

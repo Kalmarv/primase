@@ -95,6 +95,20 @@ impl Bundle {
         self.listed(Kind::Res, i, &m.res[i], self.first + m.ebx.len() + i)
     }
 
+    /// The chunk with GUID `guid` in this bundle's TOC chunk table: its bytes' place and decoded size (the whole chunk:
+    /// a bundle's manifest may hold a tail of it, as for a streamed texture), `None` when the table has none; an
+    /// error when the table lists it as removed.
+    pub fn toc_chunk(&self, src: &Source<'_>, guid: &[u8; 16]) -> Result<Option<(FileRef, usize)>> {
+        let Some(TocChunk { file, .. }) = self.toc.chunks.iter().find(|c| &c.guid == guid) else {
+            return Ok(None);
+        };
+        let file =
+            file.ok_or_else(|| Error::Missing(format!("{}: chunk {} is removed", self.name, hex(guid))))?;
+        let raw = src.raw(file)?;
+        let blocks = crate::cas::blocks(&raw)?;
+        Ok(Some((file, blocks.iter().map(|b| b.decoded_size).sum())))
+    }
+
     /// The chunk with GUID `guid` (as stored): its bytes' place and decoded size, from this bundle or else from the
     /// TOC's chunk table (content copied from the base game lies there).
     pub fn chunk(&self, src: &Source<'_>, guid: &[u8; 16]) -> Result<(FileRef, usize)> {

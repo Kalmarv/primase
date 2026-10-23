@@ -211,22 +211,15 @@ fn the_stock_items_toc_lists_and_reads() -> R {
     let t = src.read_entry(b, e, &mut w)?[0];
     let pixels = w.get::<Texture>(t).unwrap();
     let header = &w.get::<FrostbiteTexture>(t).unwrap().header;
-    let first = u32::from(header.first_mip);
     assert_eq!(
         (pixels.width, pixels.height),
-        (
-            (u32::from(header.width) >> first).max(1),
-            (u32::from(header.height) >> first).max(1)
-        )
+        (u32::from(header.width), u32::from(header.height))
     );
+    assert_eq!(pixels.levels.len(), usize::from(header.mip_count));
     assert_eq!(
-        pixels.levels.len(),
-        usize::from(header.mip_count) - usize::from(header.first_mip)
+        pixels.levels.iter().map(Vec::len).sum::<usize>(),
+        header.chunk_size as usize
     );
-    let held: u32 = header.mip_sizes[usize::from(header.first_mip)..usize::from(header.mip_count)]
-        .iter()
-        .sum();
-    assert_eq!(pixels.levels.iter().map(Vec::len).sum::<usize>(), held as usize);
 
     let (b, e) = all
         .iter()
@@ -248,12 +241,12 @@ fn the_stock_items_toc_lists_and_reads() -> R {
     Ok(())
 }
 
-/// A streamed texture: its header describes the whole chain while its chunk holds the levels from `first_mip` on (the
-/// chunk's logical offset in the bundle's manifest is the bytes of the levels before them). `steel_02_2x2m_c` of the
-/// build kit's rails is 1024x1024 BC7 with 11 levels of which 8 are held (21,872 bytes): it reads as a 128x128 core
-/// texture of those 8 levels, and its chunk starts where the three larger levels (1,376,256 bytes) end.
+/// A streamed texture: its header describes the whole chain; its bundle's manifest holds only the levels from `first_mip`
+/// on (a tail of the chunk, at the logical offset of the bytes of the levels before them) and its TOC's chunk table
+/// the whole chain. `steel_02_2x2m_c` of the build kit's rails is 1024x1024 BC7 with 11 levels, the first three of
+/// 1,376,256 bytes, and reads in full from the TOC; the manifest's 21,872-byte tail is the end of that chain.
 #[test]
-fn a_streamed_texture_reads_the_levels_its_chunk_holds() -> R {
+fn a_streamed_texture_reads_its_whole_chain_from_the_toc() -> R {
     let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
         return Ok(());
     };
@@ -283,10 +276,12 @@ fn a_streamed_texture_reads_the_levels_its_chunk_holds() -> R {
         (1024, 1024, 11, 3)
     );
     let pixels = w.get::<Texture>(t).unwrap();
-    assert_eq!((pixels.width, pixels.height, pixels.levels.len()), (128, 128, 8));
-    assert_eq!(pixels.levels.iter().map(Vec::len).sum::<usize>(), 21_872);
-    assert_eq!(pixels.levels[0].len(), header.mip_sizes[3] as usize);
-    // the chunk's logical offset in the manifest is the three larger levels
+    assert_eq!(
+        (pixels.width, pixels.height, pixels.levels.len()),
+        (1024, 1024, 11)
+    );
+    assert_eq!(pixels.levels.iter().map(Vec::len).sum::<usize>(), 1_398_128);
+    // the manifest's chunk is the tail of the chain: the same bytes, from the logical offset of the three larger levels
     let skipped: u32 = header.mip_sizes[..3].iter().sum();
     let held = bundle
         .manifest
@@ -295,7 +290,11 @@ fn a_streamed_texture_reads_the_levels_its_chunk_holds() -> R {
         .find(|c| c.guid == header.chunk)
         .unwrap();
     assert_eq!((held.loff, held.lsize), (skipped, 21_872));
-    // every streamed 2D texture of the TOC reads, and a texture whose header says a first level past its chain does not
+    let (file, size) = bundle.chunk(&src, &header.chunk)?;
+    let tail = src.payload(file, size)?;
+    let rest: Vec<u8> = pixels.levels[3..].concat();
+    assert_eq!(tail, rest);
+    // every streamed and whole 2D texture of a sample of the TOC reads
     let (mut streamed, mut whole) = (0usize, 0usize);
     for (b, e) in listing
         .bundles
@@ -309,15 +308,22 @@ fn a_streamed_texture_reads_the_levels_its_chunk_holds() -> R {
             continue;
         }
         let mut w = World::new();
-        src.read_entry(b, &e, &mut w)
-            .map_err(|err| format!("{}: {err}", e.name))?;
+        let t = src
+            .read_entry(b, &e, &mut w)
+            .map_err(|err| format!("{}: {err}", e.name))?[0];
+        assert_eq!(
+            w.get::<Texture>(t).unwrap().levels.len(),
+            usize::from(h.mip_count),
+            "{}",
+            e.name
+        );
         if h.first_mip > 0 {
             streamed += 1;
         } else {
             whole += 1;
         }
     }
-    println!("{streamed} streamed and {whole} whole textures read");
+    println!("{streamed} streamed and {whole} whole textures read in full");
     assert!(streamed > 0 && whole > 0);
     Ok(())
 }
