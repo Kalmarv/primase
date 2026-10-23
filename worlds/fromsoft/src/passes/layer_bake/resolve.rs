@@ -14,8 +14,8 @@ use primase_core::shader::{
     OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Stage, StageBinding,
     TargetState, TextureBinding, TextureSource, ViewParameter,
 };
-use primase_dxbc::Shader;
-use primase_shader::{D3dClass, Interface, Layout, Resource, SystemValue};
+use primase_shader::exec::ProgramShader;
+use primase_shader::{D3dClass, Interface, Layout, PixelShader, Resource, SystemValue};
 use std::collections::BTreeMap;
 
 /// The stream that carries a layered mesh's second stored vertex colour (the element the FLVER indexes 1, which the
@@ -230,14 +230,14 @@ pub fn render_state(material: &LayeredMaterial) -> RenderState {
 /// its shader's bundle, which states the default of a parameter the material does not. `texture` finds the entity of a
 /// texture by stem and colour space (`true`: sRGB, the albedo maps), or `None` when the reader holds no such file.
 pub fn resolve(
-    shader: &Shader,
+    shader: &ProgramShader,
     entity: Entity,
     material: &LayeredMaterial,
     metaparam: Option<&Metaparam>,
     unbound: Unbound,
     texture: &mut dyn FnMut(&str, bool) -> Result<Option<Entity>>,
 ) -> Result<Resolution> {
-    let interface = &shader.interface;
+    let interface = PixelShader::interface(shader);
     let leaf = material
         .definition
         .shader
@@ -373,7 +373,7 @@ pub fn resolve(
             source,
         });
     }
-    for &slot in shader.program.textures() {
+    for &slot in PixelShader::textures(shader) {
         if !textures_of(interface).any(|r| register(r).is_ok_and(|reg| reg == slot)) {
             return Err(invalid(
                 "layer binding",
@@ -597,6 +597,10 @@ fn output_bindings(interface: &Interface) -> Vec<OutputBinding> {
         let Some(SystemValue::Target(n)) = v.system else {
             continue;
         };
+        // the interface lists the whole signature: a target the program does not declare is not bound
+        if !v.used {
+            continue;
+        }
         let (lanes, role) = match n {
             0 => (0b0111, normal),
             1 => (0b0001, OutputRole::Gloss),

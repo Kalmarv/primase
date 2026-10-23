@@ -17,6 +17,8 @@ use primase_fromsoft::sekiro::source::{
     MaterialShader, ShaderBundle, ShaderProgram, ShaderPrograms, ShaderStage, TexturePayloads,
 };
 use primase_image::sampling::Address;
+use primase_shader::PixelShader;
+use primase_shader::exec::ProgramShader;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 mod common;
@@ -95,18 +97,22 @@ fn bits(values: &[f32]) -> ConstantRole {
     ConstantRole::Material(values.iter().map(|v| v.to_bits()).collect())
 }
 
+/// A program's container lifted and ready to run.
+fn executor(bytes: &[u8]) -> ProgramShader {
+    ProgramShader::new(primase_dxbc::lift(bytes).unwrap()).unwrap()
+}
+
 /// Every constant of the resolved stage as (buffer, name, byte offset, bytes, role), in buffer and offset order.
 fn constants(
     stage: &primase_core::shader::StageBinding,
-    shader: &primase_dxbc::Shader,
+    shader: &ProgramShader,
 ) -> Vec<(String, String, u32, u32, ConstantRole)> {
     let mut out: Vec<_> = stage
         .constants
         .iter()
         .map(|c| {
             (
-                shader
-                    .interface
+                PixelShader::interface(shader)
                     .resource(c.resource)
                     .unwrap()
                     .provenance
@@ -125,7 +131,7 @@ fn constants(
 
 #[test]
 fn a_layered_program_is_bound_by_sekiros_rules() {
-    let shader = primase_dxbc::Shader::parse(PROGRAM).unwrap();
+    let shader = executor(PROGRAM);
     let mut world = World::default();
     let (program, grass) = (world.spawn(), world.spawn());
     let mut asked = Vec::new();
@@ -195,8 +201,7 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
         .iter()
         .map(|t| {
             (
-                shader
-                    .interface
+                PixelShader::interface(&shader)
                     .resource(t.resource)
                     .unwrap()
                     .provenance
@@ -266,7 +271,7 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
 
 #[test]
 fn leaving_unbound_slots_invents_nothing() {
-    let shader = primase_dxbc::Shader::parse(PROGRAM).unwrap();
+    let shader = executor(PROGRAM);
     let mut world = World::default();
     let program = world.spawn();
     let resolution = resolve(
@@ -466,7 +471,7 @@ fn the_unbound_textures_option_is_required_and_named() {
 #[test]
 fn the_bake_binds_a_frozen_frame_to_the_roles() {
     use primase_fromsoft::layer_bake::{BaseMipBilinearWrap, FrozenFrame, Inputs, Prepared, Programs};
-    let shader = primase_dxbc::Shader::parse(PROGRAM).unwrap();
+    let shader = executor(PROGRAM);
     let mut world = World::default();
     let (program, grass) = (world.spawn(), world.spawn());
     let layered = material();
@@ -792,7 +797,7 @@ fn with_params(params: &[(&str, Value)]) -> LayeredMaterial {
 /// flag beside it, whose source is not established, is Unknown.
 #[test]
 fn the_material_buffers_engine_named_fields_come_from_the_definition() {
-    let shader = primase_dxbc::Shader::parse(MTD_PROGRAM).unwrap();
+    let shader = executor(MTD_PROGRAM);
     let program = World::default().spawn();
     let at = |layered: &LayeredMaterial| {
         let stage = resolve(&shader, program, layered, None, Unbound::Preview, &mut |_, _| {
@@ -855,7 +860,7 @@ fn the_material_buffers_engine_named_fields_come_from_the_definition() {
 #[test]
 fn the_bake_freezes_the_alpha_test_off() {
     use primase_fromsoft::layer_bake::{ALPHA_TEST_POLICY, FrozenFrame, Prepared, Programs};
-    let shader = primase_dxbc::Shader::parse(MTD_PROGRAM).unwrap();
+    let shader = executor(MTD_PROGRAM);
     let program = World::default().spawn();
     let tested = with_params(&[
         ("g_DiffuseMapColor", Value::Float(vec![1., 1., 1.])),
@@ -908,7 +913,7 @@ fn the_bake_freezes_the_alpha_test_off() {
 #[test]
 fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
     use primase_fromsoft::metaparam::{CaParam, Metaparam, MtdParam};
-    let shader = primase_dxbc::Shader::parse(PROGRAM).unwrap();
+    let shader = executor(PROGRAM);
     let program = World::default().spawn();
     let metaparam = Metaparam {
         constant_buffer_size: 0,
@@ -1081,7 +1086,7 @@ fn a_one_set_vertex_program_binds_its_coordinates_as_the_first_set() {
 #[test]
 fn a_fixed_function_materials_textures_are_bound_by_their_kind_names() {
     const FIXED: &[u8] = include_bytes!("fixtures/fixed_function.dxbc");
-    let shader = primase_dxbc::Shader::parse(FIXED).unwrap();
+    let shader = executor(FIXED);
     let mut world = World::default();
     let (program, albedo, normal) = (world.spawn(), world.spawn(), world.spawn());
     let layered = LayeredMaterial {
@@ -1133,7 +1138,7 @@ fn a_fixed_function_materials_textures_are_bound_by_their_kind_names() {
     );
     let source = |name: &str| {
         let resource = shader
-            .interface
+            .interface()
             .resources
             .iter()
             .find(|r| r.provenance.name == name)

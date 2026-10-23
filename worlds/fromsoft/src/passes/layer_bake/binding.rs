@@ -9,7 +9,6 @@ use primase_core::parallel::Threads;
 use primase_core::shader::{
     AddressMode, ConstantRole, FrameParameter, ObjectParameter, StageBinding, TextureSource, ViewParameter,
 };
-use primase_dxbc::Shader;
 use primase_image::sampling::Address;
 use primase_shader::exec::ProgramShader;
 use primase_shader::{
@@ -34,12 +33,12 @@ impl Default for Inputs {
         }
     }
 }
-/// The programs a layered material's bake runs, as resolved against: the pixel program parsed (the interface its
+/// The programs a layered material's bake runs, as resolved against: the pixel program lifted (the interface its
 /// binding names), its container's bytes, its pixel stage binding and, where the material has one, the vertex program
 /// (`core.shader`) with its binding.
 #[derive(Debug)]
 pub struct Programs<'a> {
-    pub shader: &'a Shader,
+    pub shader: &'a ProgramShader,
     pub bytecode: &'a [u8],
     pub stage: &'a StageBinding,
     pub vertex: Option<(&'a primase_core::shader::Shader, &'a StageBinding)>,
@@ -114,14 +113,15 @@ pub(crate) struct OutputRgb {
     pub bits: [u32; 3],
     pub mask: u8,
 }
-fn dxbc(e: primase_dxbc::Error) -> crate::Error {
-    invalid("layer DXBC", e.at * 4, e.detail)
-}
 fn lifting(e: primase_dxbc::Error) -> crate::Error {
     invalid("layer lift", e.at * 4, e.detail)
 }
 fn evaluation(e: primase_shader::Error) -> crate::Error {
     invalid("layer bake", e.at, e.detail)
+}
+/// A DXBC pixel program's container lifted and ready to run.
+pub(crate) fn executor(bytecode: &[u8]) -> Result<ProgramShader> {
+    ProgramShader::new(primase_dxbc::lift(bytecode).map_err(lifting)?).map_err(evaluation)
 }
 
 const IDENTITY: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
@@ -320,7 +320,7 @@ impl Prepared {
         sample_time: f32,
         mut image: impl FnMut(&str, bool) -> Result<Option<Arc<BaseMipBilinearWrap>>>,
     ) -> Result<Self> {
-        let shader = Shader::parse(bytes).map_err(dxbc)?;
+        let shader = executor(bytes)?;
         // the textures stand as entities of a scratch world, each with the view the caller decoded
         let mut scratch = primase_core::World::default();
         let program = scratch.spawn();
@@ -386,7 +386,7 @@ impl Prepared {
             stage,
             vertex,
         } = programs;
-        let (program, interface) = (&shader.program, &shader.interface);
+        let interface = PixelShader::interface(shader);
         let leaf = material
             .definition
             .shader
@@ -410,7 +410,7 @@ impl Prepared {
             ),
             (
                 "base-mip bilinear wrap overrides runtime sampler state".into(),
-                program.samplers().len() as u64,
+                PixelShader::samplers(shader).len() as u64,
             ),
         ]);
         let reads_second_uv = interface
@@ -436,8 +436,7 @@ impl Prepared {
                 );
             }
         }
-        let lifted =
-            ProgramShader::new(primase_dxbc::lift(bytecode).map_err(lifting)?).map_err(evaluation)?;
+        let lifted = executor(bytecode)?;
         let layout = Layout::of(&lifted).map_err(evaluation)?;
         // the buffers the program reads, by slot: their words
         let words: BTreeMap<u32, usize> = lifted
@@ -920,8 +919,7 @@ impl PipelineState {
     /// The pixel program run over the state's grid (lifted from the state's container): what [`PipelineState::bake`]
     /// reads.
     pub fn evaluate(&self, threads: Threads) -> Result<Raw> {
-        let shader = ProgramShader::new(primase_dxbc::lift(&self.pixel.bytecode).map_err(lifting)?)
-            .map_err(evaluation)?;
+        let shader = executor(&self.pixel.bytecode)?;
         evaluate_raw_with(
             threads,
             &shader,

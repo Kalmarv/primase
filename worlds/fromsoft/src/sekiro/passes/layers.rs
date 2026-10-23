@@ -6,6 +6,8 @@ use crate::{Result, invalid, materials::Material};
 use primase_core::shader::{Shader as ShaderProgram, ShaderBinding, Stage, StageBinding};
 use primase_core::{Entity, Instance, Mesh, Semantic, Stream, World};
 use primase_meshops::vector::Vec3;
+use primase_shader::PixelShader;
+use primase_shader::exec::ProgramShader;
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Prepared bake inventory over the texture files it borrows; each worker may prepare one material at a time, keeping
@@ -31,7 +33,7 @@ impl<'a> AreaBake<'a> {
             let material = group.material.layered.as_ref().expect("layered group");
             let (shader, ..) = Self::bound(world, group)?;
             (group.period, group.period_exact) =
-                crate::layer_bake::sampled_period(&shader.interface, material)?;
+                crate::layer_bake::sampled_period(PixelShader::interface(&shader), material)?;
         }
         Ok(Self { groups, payloads })
     }
@@ -42,7 +44,7 @@ impl<'a> AreaBake<'a> {
         world: &'w World,
         group: &MaterialGroups,
     ) -> Result<(
-        primase_dxbc::Shader,
+        ProgramShader,
         &'w [u8],
         StageBinding,
         Option<(&'w ShaderProgram, StageBinding)>,
@@ -64,11 +66,7 @@ impl<'a> AreaBake<'a> {
                 "a pixel stage whose shader entity has no core.shader",
             )
         })?;
-        let shader = primase_dxbc::Shader {
-            program: primase_dxbc::Program::parse(&program.bytecode)
-                .map_err(|e| invalid("layer DXBC", e.at * 4, e.detail))?,
-            interface: program.interface.clone(),
-        };
+        let shader = crate::layer_bake::executor(&program.bytecode)?;
         let vertex = binding
             .stage(Stage::Vertex)
             .map(|vertex| {

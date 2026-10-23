@@ -45,8 +45,8 @@ it, never a guess.
 
 What the readers keep and drop, so nobody looks for it:
 
-- DXBC's interpolation is declared by the program, not the signature: `primase_dxbc::Shader::parse` (and
-  `parse_stripped`) fill `interp` from the `dcl_input_ps` declarations covering an input's lanes; the standalone
+- DXBC's interpolation is declared by the program, not the signature: `primase_dxbc::lift` fills `interp` from the
+  `dcl_input_ps` declarations covering an input's lanes; the standalone
   `reflection` and `signatures` leave it `None`. An input the program never declares has none. DXIL states it in the
   entry point's signature metadata and `primase_dxil::interface` fills it.
 - A UAV's `access` is `ReadWrite`: neither reflection says more.

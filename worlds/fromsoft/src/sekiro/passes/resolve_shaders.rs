@@ -6,6 +6,8 @@ use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderProgra
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{Shader, ShaderBinding, ShaderFormat};
 use primase_core::{ColorSpace, Component, Entity, Mesh, Name, Semantic, TexRole, Texture, World};
+use primase_shader::PixelShader;
+use primase_shader::exec::ProgramShader;
 use std::collections::BTreeMap;
 
 /// `resolve-fromsoft-shaders{unbound-textures=preview|leave}`: for each material with a layered definition, bind its
@@ -167,7 +169,7 @@ fn run(
         })
         .collect();
     // the programs read once, each its own entity
-    let mut shaders: BTreeMap<String, (Entity, primase_dxbc::Shader)> = BTreeMap::new();
+    let mut shaders: BTreeMap<String, (Entity, ProgramShader)> = BTreeMap::new();
     // the textures spawned, by stem and colour space
     let mut textures: BTreeMap<(String, bool), Entity> = BTreeMap::new();
     // the vertex programs, each its own entity, by file name
@@ -205,7 +207,7 @@ fn run(
         };
         let bytes = &bytes;
         if !shaders.contains_key(&name) {
-            let parsed = primase_dxbc::Shader::parse(bytes).map_err(|e| format!("{name}: {e}"))?;
+            let parsed = crate::layer_bake::executor(bytes).map_err(|e| format!("{name}: {e}"))?;
             let entity = world.spawn();
             world.insert(entity, Name(name.clone()));
             world.insert(
@@ -213,7 +215,7 @@ fn run(
                 Shader {
                     format: ShaderFormat::Dxbc,
                     bytecode: bytes.to_vec(),
-                    interface: parsed.interface.clone(),
+                    interface: PixelShader::interface(&parsed).clone(),
                 },
             );
             shaders.insert(name.clone(), (entity, parsed));
