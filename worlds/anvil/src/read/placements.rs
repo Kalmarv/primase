@@ -63,6 +63,8 @@ use crate::read::material::{Payload, StoredMaterial, StoredTextureSet};
 use crate::read::mesh::{MATERIAL, MESH, StoredMesh, max_culling_distance};
 use crate::read::mesh_shape::{MESH_SHAPE, MeshShape};
 use crate::read::meshes::anvil_mesh;
+pub use crate::read::rider::VariantRow;
+use crate::read::rider::{part_variants, stated};
 use crate::read::rig::StoredRig;
 use crate::read::shape::{
     BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE, StoredBox, StoredCapsule,
@@ -467,16 +469,6 @@ pub struct RiderSpec {
     pub gender: Gender,
     /// The parts: BuildTables whose rows name meshes, an addon Skeleton and the tables of their materials and addons.
     pub parts: Vec<RiderPartChoice>,
-}
-
-/// A variant a part's materials table lists: the variant table, and the row's weight and condition as stored (the
-/// weights are population odds except where a row states 1.0 among 0.0s: [`Variant::Stated`]).
-#[derive(Clone, Debug, PartialEq)]
-pub struct VariantRow {
-    pub table: u64,
-    pub name: String,
-    pub weight: f32,
-    pub condition: u32,
 }
 
 /// The Material replacements a variant table states for a gender: pairs of the generic Material (named by a column's
@@ -1651,58 +1643,9 @@ impl<'a> Placer<'a> {
         Ok(Some(AppliedVariant { table, pairs }))
     }
 
-    /// The part's materials table: the one of its tables whose rows link variant tables (BuildTables with a column
-    /// naming a generic Material), with its entry's name; `None` where it has none or several.
-    fn materials_table(&mut self, part: &RiderPart) -> Result<Option<(StoredBuildTable, String)>, String> {
-        let mut found: Vec<(StoredBuildTable, String)> = Vec::new();
-        for &id in &part.tables {
-            let (t, name) = self.build_table(id)?;
-            let mut variants = false;
-            for row in &t.rows {
-                for (_, target) in row.links().map_err(|e| e.to_string())? {
-                    if self.type_of(target) != Some(BUILD_TABLE) {
-                        continue;
-                    }
-                    let (v, _) = self.build_table(target)?;
-                    variants |= v
-                        .columns
-                        .iter()
-                        .any(|c| c.generic_material().ok().flatten().is_some());
-                }
-            }
-            if variants {
-                found.push((t, name));
-            }
-        }
-        Ok(match <[_; 1]>::try_from(found) {
-            Ok([one]) => Some(one),
-            Err(_) => None,
-        })
-    }
-
-    /// The variants the part's materials table lists, one per variant table a row links.
+    /// The variants the part's materials table lists ([`part_variants`] of the tables its row links).
     fn variants_of(&mut self, part: &RiderPart) -> Result<Vec<VariantRow>, String> {
-        let Some((t, _)) = self.materials_table(part)? else {
-            return Ok(Vec::new());
-        };
-        let mut out = Vec::new();
-        for row in &t.rows {
-            for (_, id) in row.links().map_err(|e| e.to_string())? {
-                if self.type_of(id) == Some(BUILD_TABLE) {
-                    out.push(VariantRow {
-                        table: id,
-                        name: self
-                            .archive
-                            .find(id)
-                            .and_then(|at| self.name(at))
-                            .unwrap_or_default(),
-                        weight: row.weight,
-                        condition: row.condition,
-                    });
-                }
-            }
-        }
-        Ok(out)
+        part_variants(self.archive, &part.tables).map_err(|e| e.to_string())
     }
 
     /// The variant table the part's materials table states: the one row of weight exactly 1.0.
@@ -1710,11 +1653,9 @@ impl<'a> Placer<'a> {
         if part.variants.is_empty() {
             return Err("the part has no single materials table listing variant tables".to_owned());
         }
-        let mut stated = part.variants.iter().filter(|v| v.weight == 1.0);
-        match (stated.next(), stated.next()) {
-            (Some(v), None) => Ok(v.table),
-            _ => Err("its materials table states no single variant of weight 1.0".to_owned()),
-        }
+        stated(&part.variants)
+            .map(|v| v.table)
+            .ok_or_else(|| "its materials table states no single variant of weight 1.0".to_owned())
     }
 
     /// The placement of the mesh `mesh` following `occurrence`, once every bone a vertex weights is a joint of the

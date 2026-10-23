@@ -1,0 +1,279 @@
+//! What a rider can be put together from, as the game's customization BuildTables list it ([`rider_catalog`]):
+//! the slots, each slot's part tables, and each part's variants. Nothing is picked: a slot's weights are kept
+//! as stored, and a default is named only where a table states one ([`stated`]).
+//!
+//! - **Slots.** `MAD_CHR_SLOTS_DEFAULT` lists the slot tables of a character (`MAD_CHR_SLOT_UBODY`, ...: one row with
+//!   weight 1.0 that holds the upper body, lower body, footwear, headwear, neckwear, eyewear and backpack slots, and
+//!   one with weight 0.0 that holds the outfits instead of the two body slots); `MAD_CHR_BODY_U` lists the body's own
+//!   tables (`MAD_CHR_BODY_HEADS` and the eyes, hairs, skin and inner mouth). A slot is a table those list whose rows
+//!   link part tables.
+//! - **Parts.** A slot table's rows link part tables (a BuildTable one of whose rows links a Mesh) and others (the
+//!   accessories tables). Each part's name is its entry's name.
+//! - **Variants.** A part's materials table (the one of the tables its row links whose rows link variant tables, the
+//!   BuildTables with a column naming a generic Material) lists the part's variants, one per variant table, with the
+//!   row's weight and condition as stored. [`stated`] names the one row of a list whose weight is exactly 1.0, the
+//!   data's own default: the heads' table states `MAD_CHR_HEAD_000_U` so, a part's materials table its first variant;
+//!   the slot tables' weights (0.048, ...) are population odds and state none.
+use std::collections::HashSet;
+
+use crate::components::StoredBuildTable;
+use crate::read::archive::{self, Archive};
+use crate::read::build_table::{self, BUILD_TABLE};
+use crate::read::mesh::MESH;
+
+/// The table listing a character's slot tables.
+pub const SLOTS_DEFAULT: &str = "MAD_CHR_SLOTS_DEFAULT";
+/// The table listing a character's body tables (the heads among them).
+pub const BODY: &str = "MAD_CHR_BODY_U";
+
+/// Why the rider's tables can't be listed.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Archive(#[from] archive::Error),
+    #[error(transparent)]
+    Table(#[from] build_table::Error),
+    #[error("no BuildTable named {0} in the forges")]
+    NoTable(&'static str),
+    #[error("{0:#x} is not a BuildTable")]
+    NotATable(u64),
+}
+
+/// A variant a part's materials table lists: the variant table, and the row's weight and condition as stored (the
+/// weights are population odds except where a row states 1.0 among 0.0s: [`stated`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct VariantRow {
+    pub table: u64,
+    pub name: String,
+    pub weight: f32,
+    pub condition: u32,
+}
+
+/// A part table a slot lists, and the variants its materials table lists.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CatalogPart {
+    pub table: u64,
+    pub name: String,
+    pub variants: Vec<VariantRow>,
+}
+
+/// A slot of a rider: its table, and the parts it lists.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RiderSlot {
+    /// The table's entry name, and the key it gives: the name without its `MAD_CHR_SLOT_` or `MAD_CHR_BODY_`
+    /// prefix, in lower case (`ubody`, `heads`).
+    pub table_name: String,
+    pub key: String,
+    pub table: u64,
+    /// The table is listed by the weight-1.0 row of [`SLOTS_DEFAULT`] or [`BODY`] (the default composition).
+    pub in_default: bool,
+    pub parts: Vec<CatalogPart>,
+    /// The one part whose row has weight exactly 1.0 among the slot's rows, where the table states one.
+    pub stated: Option<u64>,
+}
+
+/// Every slot with the parts and variants it lists.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RiderCatalog {
+    pub slots: Vec<RiderSlot>,
+}
+
+/// The ClassID of the first BuildTable named `name`, the forges searched in their order.
+pub fn find_table(archive: &Archive, name: &str) -> Option<u64> {
+    (0..).map_while(|forge| archive.forge(forge)).find_map(|f| {
+        f.entries()
+            .find(|(_, n)| n.type_id == BUILD_TABLE && n.name == name)
+            .map(|(i, _)| i.id)
+    })
+}
+
+fn table(archive: &mut Archive, id: u64) -> Result<(StoredBuildTable, String), Error> {
+    let at = archive.find(id).ok_or(Error::NotATable(id))?;
+    let name = archive
+        .forge(at.forge)
+        .and_then(|f| f.names.get(at.entry))
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+    let r = archive.resource(at)?;
+    if r.type_id != BUILD_TABLE {
+        return Err(Error::NotATable(id));
+    }
+    Ok((StoredBuildTable::parse(&r.body)?, name))
+}
+
+fn type_of(archive: &Archive, id: u64) -> Option<u32> {
+    let at = archive.find(id)?;
+    archive
+        .forge(at.forge)
+        .and_then(|f| f.names.get(at.entry))
+        .map(|n| n.type_id)
+}
+
+/// The BuildTables a table's rows link, once each, in stored order, with the weight of the first row that links each.
+fn linked_tables(archive: &Archive, t: &StoredBuildTable) -> Result<Vec<(u64, f32)>, Error> {
+    let mut out: Vec<(u64, f32)> = Vec::new();
+    for row in &t.rows {
+        for (_, id) in row.links()? {
+            if type_of(archive, id) == Some(BUILD_TABLE) && !out.iter().any(|(t, _)| *t == id) {
+                out.push((id, row.weight));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Whether one of the table's rows links a Mesh: a part table.
+fn is_part(archive: &Archive, t: &StoredBuildTable) -> Result<bool, Error> {
+    for row in &t.rows {
+        for (_, id) in row.links()? {
+            if type_of(archive, id) == Some(MESH) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// The variants listed by the one of `tables` (the BuildTables a part's row links) whose rows link variant tables, in
+/// stored order, one per variant table; none where no table, or more than one, does.
+pub fn part_variants(archive: &mut Archive, tables: &[u64]) -> Result<Vec<VariantRow>, Error> {
+    let mut found: Vec<Vec<VariantRow>> = Vec::new();
+    for &id in tables {
+        let (t, _) = table(archive, id)?;
+        let mut variants = Vec::new();
+        let mut names_variants = false;
+        for row in &t.rows {
+            for (_, target) in row.links()? {
+                if type_of(archive, target) != Some(BUILD_TABLE) {
+                    continue;
+                }
+                if !names_variants {
+                    let (v, _) = table(archive, target)?;
+                    names_variants = v
+                        .columns
+                        .iter()
+                        .any(|c| c.generic_material().ok().flatten().is_some());
+                    if !names_variants {
+                        continue;
+                    }
+                }
+                let name = archive
+                    .find(target)
+                    .and_then(|at| archive.forge(at.forge).and_then(|f| f.names.get(at.entry)))
+                    .map(|n| n.name.clone())
+                    .unwrap_or_default();
+                variants.push(VariantRow {
+                    table: target,
+                    name,
+                    weight: row.weight,
+                    condition: row.condition,
+                });
+            }
+        }
+        if names_variants {
+            found.push(variants);
+        }
+    }
+    Ok(match <[_; 1]>::try_from(found) {
+        Ok([one]) => one,
+        Err(_) => Vec::new(),
+    })
+}
+
+/// The one variant of `variants` whose weight is exactly 1.0, where the list states one.
+pub fn stated(variants: &[VariantRow]) -> Option<&VariantRow> {
+    let mut one = variants.iter().filter(|v| v.weight == 1.0);
+    match (one.next(), one.next()) {
+        (Some(v), None) => Some(v),
+        _ => None,
+    }
+}
+
+/// The slot key of a table's name.
+fn key_of(name: &str) -> String {
+    let rest = name
+        .strip_prefix("MAD_CHR_SLOT_")
+        .or_else(|| name.strip_prefix("MAD_CHR_BODY_"))
+        .unwrap_or(name);
+    rest.to_ascii_lowercase()
+}
+
+/// The slots [`SLOTS_DEFAULT`] and [`BODY`] list, each with the parts it lists and their variants. A table those list
+/// that lists no part table (the hairs, whose rows nest further tables) is left out.
+pub fn rider_catalog(archive: &mut Archive) -> Result<RiderCatalog, Error> {
+    let mut listed: Vec<(u64, bool)> = Vec::new();
+    for name in [SLOTS_DEFAULT, BODY] {
+        let id = find_table(archive, name).ok_or(Error::NoTable(name))?;
+        let (t, _) = table(archive, id)?;
+        for row in &t.rows {
+            for (_, link) in row.links()? {
+                if type_of(archive, link) != Some(BUILD_TABLE) {
+                    continue;
+                }
+                let default = row.weight == 1.0;
+                match listed.iter_mut().find(|(t, _)| *t == link) {
+                    Some((_, d)) => *d |= default,
+                    None => listed.push((link, default)),
+                }
+            }
+        }
+    }
+    let mut slots = Vec::new();
+    let mut seen: HashSet<u64> = HashSet::new();
+    for (id, in_default) in listed {
+        if !seen.insert(id) {
+            continue;
+        }
+        let (t, table_name) = table(archive, id)?;
+        let mut parts = Vec::new();
+        for (part, _) in linked_tables(archive, &t)? {
+            let (pt, name) = table(archive, part)?;
+            if !is_part(archive, &pt)? {
+                continue;
+            }
+            let mut links: Vec<u64> = Vec::new();
+            for row in &pt.rows {
+                for (_, l) in row.links()? {
+                    if type_of(archive, l) == Some(BUILD_TABLE) && !links.contains(&l) {
+                        links.push(l);
+                    }
+                }
+            }
+            let variants = part_variants(archive, &links)?;
+            parts.push(CatalogPart {
+                table: part,
+                name,
+                variants,
+            });
+        }
+        if parts.is_empty() {
+            continue;
+        }
+        // the one part linked by the slot's one row of weight 1.0
+        let mut weighted = t.rows.iter().filter(|r| r.weight == 1.0);
+        let stated_part = match (weighted.next(), weighted.next()) {
+            (Some(row), None) => {
+                let mut mine = Vec::new();
+                for (_, l) in row.links()? {
+                    if parts.iter().any(|p| p.table == l) {
+                        mine.push(l);
+                    }
+                }
+                match mine.as_slice() {
+                    [one] => Some(*one),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        slots.push(RiderSlot {
+            key: key_of(&table_name),
+            table_name,
+            table: id,
+            in_default,
+            parts,
+            stated: stated_part,
+        });
+    }
+    Ok(RiderCatalog { slots })
+}

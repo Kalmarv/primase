@@ -22,6 +22,7 @@ pub mod mip;
 pub mod overview;
 pub mod placements;
 pub mod reference;
+pub mod rider;
 pub mod rig;
 pub mod shader_pack;
 pub mod shader_source;
