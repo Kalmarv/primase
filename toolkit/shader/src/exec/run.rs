@@ -5,7 +5,9 @@ use super::flat::{
     WaveGather, WaveKind, WaveOp, WaveScan,
 };
 use super::mask::{Mask, Wide};
-use super::request::{Backend, Element, ImageLoad, ImageLod, ImageQuery, ImageSample, ImageStore};
+use super::request::{
+    Backend, Element, ImageAtomic, ImageLoad, ImageLod, ImageQuery, ImageSample, ImageStore,
+};
 use crate::ResourceId;
 
 /// The most operations and loop turns one invocation may execute: a program that does not end is refused.
@@ -740,6 +742,31 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                                 layer: layer.map(|s| self.regs[s as usize * N + l][0]),
                                 value: self.regs[*value as usize * N + l],
                                 lanes: *vn,
+                            })?;
+                        }
+                    }
+                }
+                St::ImageAtomic {
+                    tex,
+                    dim,
+                    coord,
+                    cn,
+                    layer,
+                    op,
+                    signed,
+                    value,
+                } => {
+                    for l in 0..N {
+                        if active.has(l) {
+                            let cd = self.regs[*coord as usize * N + l];
+                            self.sampler.atomic_image(ImageAtomic {
+                                view: *tex,
+                                dim: *dim,
+                                texel: std::array::from_fn(|i| if i < *cn as usize { cd[i] } else { 0 }),
+                                layer: layer.map(|s| self.regs[s as usize * N + l][0]),
+                                op: *op,
+                                signed: *signed,
+                                value: self.regs[*value as usize * N + l][0],
                             })?;
                         }
                     }

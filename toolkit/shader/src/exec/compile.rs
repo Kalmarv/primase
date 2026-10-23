@@ -13,7 +13,7 @@ use super::flat::{
     AtomOp, BinOp, CvtOp, Executable, GlobalDesc, GlobalKind, LevelOp, Loc, MathOp, Op, Pick, Ptr, Reg, Res,
     St, UnOp, WaveGather, WaveKind, WaveOp, WaveScan,
 };
-use super::request::{Dim, QueryKind};
+use super::request::{Dim, ImageAtomicOp, QueryKind};
 use crate::{Program, ResourceId};
 
 /// The scalar kind of a typed value.
@@ -880,6 +880,56 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                         layer,
                         value: v,
                         vn,
+                    });
+                }
+                Statement::ImageAtomic {
+                    image,
+                    coordinate,
+                    array_index,
+                    fun,
+                    value,
+                } => {
+                    let (tex, _, dim, arrayed) = (cx.image)(*image)?;
+                    if !matches!(tex.pick, Pick::One) {
+                        return Err("an atomic on an element of an array of images".into());
+                    }
+                    let op = match fun {
+                        naga::AtomicFunction::Add => ImageAtomicOp::Add,
+                        naga::AtomicFunction::Subtract => ImageAtomicOp::Sub,
+                        naga::AtomicFunction::And => ImageAtomicOp::And,
+                        naga::AtomicFunction::InclusiveOr => ImageAtomicOp::Or,
+                        naga::AtomicFunction::ExclusiveOr => ImageAtomicOp::Xor,
+                        naga::AtomicFunction::Min => ImageAtomicOp::Min,
+                        naga::AtomicFunction::Max => ImageAtomicOp::Max,
+                        naga::AtomicFunction::Exchange { compare: None } => ImageAtomicOp::Exchange,
+                        naga::AtomicFunction::Exchange { compare: Some(_) } => {
+                            return Err("a compare-exchange on an image".into());
+                        }
+                    };
+                    let Shape::V(_, cn) = (cx.shape)(*coordinate)? else {
+                        return Err("atomic coordinate".into());
+                    };
+                    let signed = matches!((cx.shape)(*value)?, Shape::V(Kind::I, _));
+                    let (c, v) = (cx.slot[coordinate.index()], cx.slot[value.index()]);
+                    let layer = if arrayed {
+                        array_index.map(|x| cx.slot[x.index()])
+                    } else {
+                        None
+                    };
+                    cx.uses[c as usize] += 1;
+                    cx.uses[v as usize] += 1;
+                    if let Some(l) = layer {
+                        cx.uses[l as usize] += 1;
+                    }
+                    out.push(St::ImageAtomic {
+                        tex: tex.id,
+                        dim: dim_of(dim),
+                        coord: c,
+                        cn,
+                        layer,
+                        op,
+                        signed,
+                        value: v,
                     });
                 }
                 Statement::Atomic {

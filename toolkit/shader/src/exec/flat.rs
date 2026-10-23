@@ -1,7 +1,7 @@
 //! The flat form of a program: operations on registers of four 32-bit words, and the structured statements around
 //! them.
 
-use super::request::{Dim, QueryKind};
+use super::request::{Dim, ImageAtomicOp, QueryKind};
 use crate::ResourceId;
 
 pub(super) type Reg = [u32; 4];
@@ -269,6 +269,16 @@ pub(super) enum St {
         layer: Option<u32>,
         value: u32,
         vn: u8,
+    },
+    ImageAtomic {
+        tex: ResourceId,
+        dim: Dim,
+        coord: u32,
+        cn: u8,
+        layer: Option<u32>,
+        op: ImageAtomicOp,
+        signed: bool,
+        value: u32,
     },
     Atomic {
         ptr: Ptr,

@@ -105,6 +105,32 @@ pub struct ImageStore<R> {
     pub lanes: u8,
 }
 
+/// What an atomic operation on a texel does with the word it holds and the program's value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageAtomicOp {
+    Add,
+    Sub,
+    And,
+    Or,
+    Xor,
+    Min,
+    Max,
+    Exchange,
+}
+
+/// An atomic operation on one texel of a single-channel 32-bit unordered-access texture; the program reads no result.
+#[derive(Clone, Copy, Debug)]
+pub struct ImageAtomic<R> {
+    pub view: R,
+    pub dim: Dim,
+    pub texel: [u32; 3],
+    pub layer: Option<u32>,
+    pub op: ImageAtomicOp,
+    /// Whether `Min` and `Max` compare the words as signed integers.
+    pub signed: bool,
+    pub value: u32,
+}
+
 /// Everything an evaluation asks of its caller: texture sampling, loads, queries, and the effects of unordered-access
 /// writes. A request the caller cannot answer is an error that stops the evaluation. Reads of buffers need no call:
 /// the buffers are bound before the run.
@@ -119,6 +145,9 @@ pub trait Backend {
     }
     fn store_image(&mut self, request: ImageStore<ResourceId>) -> Result<(), String> {
         Err(format!("resource {}: no stores given", request.view.0))
+    }
+    fn atomic_image(&mut self, request: ImageAtomic<ResourceId>) -> Result<(), String> {
+        Err(format!("resource {}: no image atomics given", request.view.0))
     }
     /// Words written to a buffer: the lanes `mask` marks of `value`, to the consecutive 32-bit words from word `word`
     /// of the buffer. The effect is the caller's: it reaches none of this evaluation's reads.

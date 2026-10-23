@@ -191,6 +191,10 @@ pub trait Sampler {
     fn query_image(&mut self, request: exec::ImageQuery<u32>) -> std::result::Result<[u32; 4], String> {
         Err(format!("t{}: no queries given", request.texture))
     }
+    /// An atomic operation on a texel of a single-channel 32-bit unordered-access texture.
+    fn atomic_image(&mut self, request: exec::ImageAtomic<u32>) -> std::result::Result<(), String> {
+        Err(format!("u{}: no image atomics given", request.view))
+    }
     /// A write to an unordered-access texture; the plain form is [`Sampler::store`].
     fn store_image(&mut self, request: exec::ImageStore<u32>) -> std::result::Result<(), String> {
         self.store(Store {

@@ -24,7 +24,8 @@ pub use flat::Executable;
 pub use mask::{Mask, Wide};
 pub use pixel::ProgramShader;
 pub use request::{
-    Backend, Dim, Element, ImageLoad, ImageLod, ImageQuery, ImageSample, ImageStore, QueryKind,
+    Backend, Dim, Element, ImageAtomic, ImageAtomicOp, ImageLoad, ImageLod, ImageQuery, ImageSample,
+    ImageStore, QueryKind,
 };
 pub use run::{Bound, Dispatched, Output, Resources, Runner, STEP_LIMIT, Scratch};
 

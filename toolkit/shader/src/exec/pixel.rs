@@ -4,7 +4,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-    Backend, Element, Executable, ImageLoad, ImageQuery, ImageSample, ImageStore, Runner, Scratch, error,
+    Backend, Element, Executable, ImageAtomic, ImageLoad, ImageQuery, ImageSample, ImageStore, Runner,
+    Scratch, error,
 };
 use crate::{
     AtomicAdd, BufferKind, D3dClass, Error, Execution, Interface, PixelShader, Program, ResourceId,
@@ -433,6 +434,18 @@ impl Backend for SlotBackend<'_> {
             layer: r.layer,
             value: r.value,
             lanes: r.lanes,
+        })
+    }
+    fn atomic_image(&mut self, r: ImageAtomic<ResourceId>) -> Result<(), String> {
+        let view = self.slot(r.view)?;
+        self.sampler.atomic_image(ImageAtomic {
+            view,
+            dim: r.dim,
+            texel: r.texel,
+            layer: r.layer,
+            op: r.op,
+            signed: r.signed,
+            value: r.value,
         })
     }
     fn store_buffer(&mut self, view: ResourceId, word: u32, value: [u32; 4], mask: u8) -> Result<(), String> {
