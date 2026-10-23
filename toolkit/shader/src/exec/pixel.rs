@@ -426,9 +426,13 @@ impl Backend for SlotBackend<'_> {
         })
     }
     fn store_image(&mut self, r: ImageStore<ResourceId>) -> Result<(), String> {
-        let view = self.slot(r.view)?;
+        let view = self.slot_of(Element {
+            id: r.view,
+            index: r.index,
+        })?;
         self.sampler.store_image(ImageStore {
             view,
+            index: 0,
             dim: r.dim,
             texel: r.texel,
             layer: r.layer,
@@ -437,9 +441,13 @@ impl Backend for SlotBackend<'_> {
         })
     }
     fn atomic_image(&mut self, r: ImageAtomic<ResourceId>) -> Result<(), String> {
-        let view = self.slot(r.view)?;
+        let view = self.slot_of(Element {
+            id: r.view,
+            index: r.index,
+        })?;
         self.sampler.atomic_image(ImageAtomic {
             view,
+            index: 0,
             dim: r.dim,
             texel: r.texel,
             layer: r.layer,

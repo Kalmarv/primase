@@ -297,7 +297,7 @@ pub(super) enum St {
         n: u8,
     },
     ImageStore {
-        tex: ResourceId,
+        tex: Res,
         dim: Dim,
         coord: u32,
         cn: u8,
@@ -306,7 +306,7 @@ pub(super) enum St {
         vn: u8,
     },
     ImageAtomic {
-        tex: ResourceId,
+        tex: Res,
         dim: Dim,
         coord: u32,
         cn: u8,

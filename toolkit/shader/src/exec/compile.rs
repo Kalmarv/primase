@@ -1052,10 +1052,9 @@ pub(super) fn compile(
                     value,
                 } => {
                     let (tex, _, dim, arrayed) = (cx.image)(*image)?;
-                    if !matches!(tex.pick, Pick::One) {
-                        return Err("a store into an element of an array of images".into());
+                    if let Some(s) = tex.slot() {
+                        cx.uses[s as usize] += 1;
                     }
-                    let tex = tex.id;
                     let Shape::V(_, cn) = (cx.shape)(*coordinate)? else {
                         return Err("store coordinate".into());
                     };
@@ -1091,8 +1090,8 @@ pub(super) fn compile(
                     value,
                 } => {
                     let (tex, _, dim, arrayed) = (cx.image)(*image)?;
-                    if !matches!(tex.pick, Pick::One) {
-                        return Err("an atomic on an element of an array of images".into());
+                    if let Some(s) = tex.slot() {
+                        cx.uses[s as usize] += 1;
                     }
                     let op = match fun {
                         naga::AtomicFunction::Add => ImageAtomicOp::Add,
@@ -1123,7 +1122,7 @@ pub(super) fn compile(
                         cx.uses[l as usize] += 1;
                     }
                     out.push(St::ImageAtomic {
-                        tex: tex.id,
+                        tex,
                         dim: dim_of(dim),
                         coord: c,
                         cn,
@@ -1569,16 +1568,30 @@ fn binding_of(
         _ => Err("not a sampler".into()),
     }
 }
+/// The words of a constant expression: literals, composites, splats, zero values and named constants. Anything
+/// else (an operation naga did not fold, an override) is refused naming what it is.
 fn const_words(m: &Module, h: Handle<E>) -> Result<Vec<u32>, String> {
     Ok(match &m.global_expressions[h] {
         E::Literal(Literal::U32(x)) => vec![*x],
         E::Literal(Literal::F32(x)) => vec![x.to_bits()],
         E::Literal(Literal::I32(x)) => vec![*x as u32],
+        E::Literal(Literal::Bool(x)) => vec![u32::from(*x)],
         E::Compose { components, .. } => components
             .iter()
             .map(|c| const_words(m, *c))
             .collect::<Result<Vec<_>, _>>()?
             .concat(),
-        _ => return Err("constant expression".into()),
+        E::Splat { size, value } => {
+            let one = const_words(m, *value)?;
+            (0..*size as usize).flat_map(|_| one.iter().copied()).collect()
+        }
+        E::ZeroValue(ty) => vec![0; words(m, *ty)? as usize],
+        E::Constant(c) => const_words(m, m.constants[*c].init)?,
+        e => {
+            return Err(format!(
+                "constant expression {:?} (the executor reads literals, composites, splats, zero values and named constants)",
+                std::mem::discriminant(e)
+            ));
+        }
     })
 }

@@ -841,8 +841,10 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                     for l in 0..N {
                         if active.has(l) {
                             let cd = self.regs[*coord as usize * N + l];
+                            let element = self.element(tex, l)?;
                             self.sampler.store_image(ImageStore {
-                                view: *tex,
+                                view: element.id,
+                                index: element.index,
                                 dim: *dim,
                                 texel: std::array::from_fn(|i| if i < *cn as usize { cd[i] } else { 0 }),
                                 layer: layer.map(|s| self.regs[s as usize * N + l][0]),
@@ -865,8 +867,10 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                     for l in 0..N {
                         if active.has(l) {
                             let cd = self.regs[*coord as usize * N + l];
+                            let element = self.element(tex, l)?;
                             self.sampler.atomic_image(ImageAtomic {
-                                view: *tex,
+                                view: element.id,
+                                index: element.index,
                                 dim: *dim,
                                 texel: std::array::from_fn(|i| if i < *cn as usize { cd[i] } else { 0 }),
                                 layer: layer.map(|s| self.regs[s as usize * N + l][0]),

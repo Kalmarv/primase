@@ -97,6 +97,8 @@ pub struct ImageQuery<R> {
 #[derive(Clone, Copy, Debug)]
 pub struct ImageStore<R> {
     pub view: R,
+    /// Which view of an array of views (0 for a view that is not in an array).
+    pub index: u32,
     pub dim: Dim,
     pub texel: [u32; 3],
     pub layer: Option<u32>,
@@ -122,6 +124,8 @@ pub enum ImageAtomicOp {
 #[derive(Clone, Copy, Debug)]
 pub struct ImageAtomic<R> {
     pub view: R,
+    /// Which view of an array of views (0 for a view that is not in an array).
+    pub index: u32,
     pub dim: Dim,
     pub texel: [u32; 3],
     pub layer: Option<u32>,
