@@ -18,6 +18,7 @@ pub mod normals;
 pub mod object_collision;
 pub mod pbr;
 pub(super) mod reflectance;
+pub mod resolve_shaders;
 pub mod settings;
 use crate::rigid::ApplyRigidSkinning;
 pub use crate::sekiro::components::lowered::UvTiling;
@@ -26,6 +27,7 @@ pub use far::DropFromSoftFar;
 pub use geometry::{Cards, Degenerates, LowerFromSoftGeometry, Pose, Tiling, Winding};
 pub use materials::{DropFromSoftTextureTransforms, LowerFromSoftMaterials};
 use primase_core::pass::{Options, Pass, PassRegistry};
+pub use resolve_shaders::ResolveFromSoftShaders;
 
 /// A condition holding when any of the clauses holds; None (always present) when any input is None.
 pub(crate) fn any_of(
@@ -82,6 +84,11 @@ pub fn register(registry: &mut PassRegistry) {
         ],
     );
     registry.register("drop-fromsoft-far", |o| without_options(o, DropFromSoftFar));
+    registry.register_requiring(
+        "resolve-fromsoft-shaders",
+        |o| Ok(Box::new(ResolveFromSoftShaders::from_options(o)?)),
+        &[("unbound-textures", "preview")],
+    );
     registry.register_requiring(
         "bake-fromsoft-layers",
         |o| Ok(Box::new(BakeFromSoftLayers::from_options(o)?)),

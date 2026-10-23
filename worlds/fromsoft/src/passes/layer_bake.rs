@@ -6,3 +6,4 @@ pub(crate) use binding::OutputRgb;
 pub use binding::{Bake, Inputs, Prepared};
 pub mod grouping;
 pub mod period;
+pub mod resolve;

@@ -1,0 +1,385 @@
+#![allow(clippy::unwrap_used)]
+//! Sekiro's binding rules (`resolve`) and the `resolve-fromsoft-shaders` pass, on one layered program built to
+//! Sekiro's naming (tests/fixtures/layered.hlsl, compiled with fxc): the constants, texture slots and outputs a
+//! layered material's binding holds, worked out from the HLSL, fxc's listing of its buffers and the material.
+use primase_core::shader::{
+    ConstantRole, FrameParameter, InputRole, NormalEncoding, NormalSpace, ObjectParameter, OutputRole,
+    ResourceId, SamplerState, Shader, ShaderBinding, ShaderFormat, Stage, TextureSource, ViewParameter,
+};
+use primase_core::{ColorSpace, Entity, Name, TexFormat, TexRole, Texture, World};
+use primase_fromsoft::layer_bake::resolve::{Unbound, resolve};
+use primase_fromsoft::materials::{Binding, LayeredMaterial, Material};
+use primase_fromsoft::mtd::{self, MaterialDefinition, Parameter, Value};
+use primase_fromsoft::sekiro::source::{ShaderPrograms, TexturePayloads};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+mod common;
+
+const PROGRAM: &[u8] = include_bytes!("fixtures/layered.dxbc");
+
+fn texture_kind(kind: &str) -> mtd::Texture {
+    mtd::Texture {
+        kind: kind.into(),
+        uv_number: 0,
+        shader_data_index: 0,
+        path: String::new(),
+        extra: Vec::new(),
+    }
+}
+fn bound(stem: &str, scale: [f32; 2]) -> Binding {
+    Binding {
+        texture: stem.into(),
+        scale,
+        uv_number: 0,
+        available: true,
+    }
+}
+/// M[Multiple] with an albedo declared at slot 8 and a normal at slot 2 (unbound); slot 8 is also named by an
+/// undeclared kind, which the declared one beats. SAT parameters: a scale, a colour with an intensity, no value for
+/// the third.
+fn material() -> LayeredMaterial {
+    let float = |name: &str, v: &[f32]| Parameter {
+        name: name.into(),
+        value: Value::Float(v.to_vec()),
+    };
+    LayeredMaterial {
+        mtd: "layered.mtd".into(),
+        definition: MaterialDefinition {
+            shader: "N:\\FDP\\data\\Material\\mtd\\M[Multiple].mtd".into(),
+            description: String::new(),
+            parameters: vec![
+                float("M_Multiple__snp_scale", &[0.5, 0.25]),
+                float("M_Multiple__snp_tint_color_0", &[0.2, 0.4, 0.6]),
+                float("M_Multiple__snp_tint_color_0-Intensity", &[2.]),
+                Parameter {
+                    name: "GXFT_SATStaticSwitch".into(),
+                    value: Value::Int(vec![27]),
+                },
+            ],
+            textures: vec![
+                texture_kind("A_Texture2D_8_AlbedoMap"),
+                texture_kind("A_Texture2D_2_NormalMap"),
+            ],
+            block_lengths: Vec::new(),
+        },
+        bindings: BTreeMap::from([
+            ("A_Texture2D_8_AlbedoMap".into(), bound("grass_a", [2., 3.])),
+            ("B_Texture2D_8_AlbedoMap".into(), bound("other", [9., 9.])),
+        ]),
+    }
+}
+
+fn bits(values: &[f32]) -> ConstantRole {
+    ConstantRole::Material(values.iter().map(|v| v.to_bits()).collect())
+}
+
+/// Every constant of the resolved stage as (buffer, name, byte offset, bytes, role), in buffer and offset order.
+fn constants(
+    stage: &primase_core::shader::StageBinding,
+    shader: &primase_dxbc::Shader,
+) -> Vec<(String, String, u32, u32, ConstantRole)> {
+    let mut out: Vec<_> = stage
+        .constants
+        .iter()
+        .map(|c| {
+            (
+                shader
+                    .interface
+                    .resource(c.resource)
+                    .unwrap()
+                    .provenance
+                    .name
+                    .clone(),
+                c.name.clone().unwrap(),
+                c.offset,
+                c.size,
+                c.role.clone(),
+            )
+        })
+        .collect();
+    out.sort_by(|a, b| (&a.0, a.2).cmp(&(&b.0, b.2)));
+    out
+}
+
+#[test]
+fn a_layered_program_is_bound_by_sekiros_rules() {
+    let shader = primase_dxbc::Shader::parse(PROGRAM).unwrap();
+    let mut world = World::default();
+    let (program, grass) = (world.spawn(), world.spawn());
+    let mut asked = Vec::new();
+    let resolution = resolve(
+        &shader,
+        program,
+        &material(),
+        Unbound::Preview,
+        &mut |stem, srgb| {
+            asked.push((stem.to_owned(), srgb));
+            Ok((stem == "grass_a").then_some(grass))
+        },
+    )
+    .unwrap();
+    let stage = &resolution.stage;
+    assert_eq!((stage.stage, stage.shader), (Stage::Pixel, program));
+    // only the declared kind's texture is asked for, as a colour image
+    assert_eq!(asked, [("grass_a".to_owned(), true)]);
+
+    use ConstantRole::{Frame, Object, Unknown, View};
+    let engine = |name: &str, offset, size, role| ("Engine".to_owned(), name.to_owned(), offset, size, role);
+    let material =
+        |name: &str, offset, size, role| ("Material".to_owned(), name.to_owned(), offset, size, role);
+    let expected = vec![
+        engine("FC_DifMapMulCol", 0, 16, Frame(FrameParameter::AlbedoTint)),
+        engine("mWorld", 16, 48, Object(ObjectParameter::World)),
+        engine("aColor", 64, 16, Object(ObjectParameter::InstanceColour)),
+        engine("FC_ColorSlotNo", 80, 4, Frame(FrameParameter::ColourSlot)),
+        engine("FC_GlobalTime", 84, 4, Frame(FrameParameter::Time)),
+        engine("FC_TimeOfDay", 88, 4, Frame(FrameParameter::TimeOfDay)),
+        engine("SC_PreExposure", 92, 4, Frame(FrameParameter::Exposure)),
+        engine("SC_RenderCameraPos", 96, 16, View(ViewParameter::CameraPosition)),
+        engine(
+            "FC_MatrixInvViewProj",
+            112,
+            64,
+            View(ViewParameter::InverseViewProjection),
+        ),
+        // the tiling of t2 (unbound: 1 by 1) and t8 (the declared binding's scale), a register's four words each
+        material("FC_TextureTilingScale", 32, 16, bits(&[1., 1., 0., 0.])),
+        material("FC_TextureTilingScale", 128, 16, bits(&[2., 3., 0., 0.])),
+        material("M_Multiple__snp_scale", 160, 8, bits(&[0.5, 0.25])),
+        // the colour times its intensity, with the fourth lane one: it fills the padding after it
+        material(
+            "M_Multiple__snp_tint_color_0",
+            176,
+            16,
+            bits(&[0.2 * 2., 0.4 * 2., 0.6 * 2., 1.]),
+        ),
+        material(
+            "M_Multiple__snp_missing",
+            192,
+            4,
+            Unknown {
+                why: "missing SAT parameter left at frozen zero".into(),
+            },
+        ),
+    ];
+    assert_eq!(constants(stage, &shader), expected);
+
+    // t2: no binding, the preview normal, counted; t8: the texture, the source states no sampler
+    let slots: Vec<_> = stage
+        .textures
+        .iter()
+        .map(|t| {
+            (
+                shader
+                    .interface
+                    .resource(t.resource)
+                    .unwrap()
+                    .provenance
+                    .name
+                    .clone(),
+                t.source.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        slots,
+        [
+            (
+                "Texture2D_2".to_owned(),
+                TextureSource::Default {
+                    value: [0.5, 0.5, 1., 1.],
+                    why: "preview default for missing NormalMap binding".into()
+                }
+            ),
+            (
+                "Texture2D_8".to_owned(),
+                TextureSource::Texture {
+                    texture: grass,
+                    sampler: SamplerState::default()
+                }
+            ),
+        ]
+    );
+    assert_eq!(
+        resolution.policies,
+        BTreeMap::from([("preview default for missing NormalMap binding".to_owned(), 1)])
+    );
+
+    // the G-buffer: normal, gloss in x, albedo, reflectance, emission
+    let outputs: Vec<_> = stage
+        .outputs
+        .iter()
+        .map(|o| (o.label.index, o.lanes, o.role))
+        .collect();
+    assert_eq!(
+        outputs,
+        [
+            (
+                0,
+                0b0111,
+                OutputRole::Normal {
+                    encoding: NormalEncoding::XyzBiased {
+                        bias_bits: 0x3f00_2008
+                    },
+                    space: NormalSpace::World
+                }
+            ),
+            (1, 0b0001, OutputRole::Gloss),
+            (2, 0b0111, OutputRole::Albedo),
+            (3, 0b0111, OutputRole::Reflectance),
+            (4, 0b0111, OutputRole::Emission),
+        ]
+    );
+    // every input comes from the vertex stage
+    assert_eq!(stage.inputs.len(), 3);
+    assert!(stage.inputs.iter().all(|i| i.role == InputRole::Previous));
+}
+
+#[test]
+fn leaving_unbound_slots_invents_nothing() {
+    let shader = primase_dxbc::Shader::parse(PROGRAM).unwrap();
+    let mut world = World::default();
+    let program = world.spawn();
+    let resolution = resolve(&shader, program, &material(), Unbound::Leave, &mut |_, _| {
+        Ok(None)
+    })
+    .unwrap();
+    assert!(resolution.policies.is_empty());
+    assert!(
+        resolution
+            .stage
+            .textures
+            .iter()
+            .all(|t| t.source == TextureSource::Missing)
+    );
+    // the bound slot keeps its tiling (the binding states it); the unbound slot has none
+    let tiling: Vec<_> = constants(&resolution.stage, &shader)
+        .into_iter()
+        .filter(|c| c.1 == "FC_TextureTilingScale")
+        .collect();
+    assert_eq!(tiling.len(), 1);
+    assert_eq!((tiling[0].2, &tiling[0].4), (128, &bits(&[2., 3., 0., 0.])));
+}
+
+fn dds(width: u32, height: u32) -> Arc<[u8]> {
+    let t = Texture {
+        width,
+        height,
+        format: TexFormat::Rgba8Unorm,
+        levels: vec![vec![200; (width * height * 4) as usize]],
+        color_space: ColorSpace::Linear,
+        role: TexRole::Other,
+        normal: None,
+    };
+    primase_dds::write_dx10(&t).unwrap().into()
+}
+
+#[test]
+fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities() {
+    let mut world = World::default();
+    let mut spawn_material = |layered: Option<LayeredMaterial>| {
+        let e = world.spawn();
+        world.insert(
+            e,
+            Material {
+                mtd: "layered.mtd".into(),
+                definition: layered.as_ref().map(|l| l.definition.clone()),
+                gx: Vec::new(),
+                shader: "M[Multiple]".into(),
+                class: "opaque".into(),
+                skip: None,
+                cutoff: 0.5,
+                bindings: BTreeMap::new(),
+                layered,
+            },
+        );
+        e
+    };
+    let a = spawn_material(Some(material()));
+    // a second material with the same program and texture, and one with a program the reader does not hold
+    let mut other = material();
+    other.definition.parameters[0].value = Value::Float(vec![1., 1.]);
+    let b = spawn_material(Some(other));
+    let mut absent = material();
+    absent.definition.parameters[3].value = Value::Int(vec![99]);
+    let c = spawn_material(Some(absent));
+    let plain = spawn_material(None);
+    world.insert_resource(ShaderPrograms(BTreeMap::from([(
+        "M[Multiple]_27_Gbuf.ppo".to_owned(),
+        Arc::from(PROGRAM),
+    )])));
+    world.insert_resource(TexturePayloads(BTreeMap::from([(
+        "grass_a".to_owned(),
+        dds(4, 4),
+    )])));
+    let run = common::run(&mut world, "resolve-fromsoft-shaders{unbound-textures=preview}").unwrap();
+    let log = &run.steps[0].log;
+    assert_eq!(log.counts["layered materials bound"], 2);
+    assert_eq!(
+        log.counts["layered materials whose program the reader does not hold"],
+        1
+    );
+    assert_eq!(
+        (log.counts["shader programs"], log.counts["bound texture files"]),
+        (1, 1)
+    );
+    assert_eq!(
+        log.approximations["preview default for missing NormalMap binding"],
+        2
+    );
+
+    // one shader entity: the bytecode as stored, its format and interface; one texture: the DDS as stored in the
+    // slot's colour space
+    let shaders: Vec<_> = world.iter::<Shader>().collect();
+    assert_eq!(shaders.len(), 1);
+    let (shader, program) = shaders[0];
+    assert_eq!(
+        (program.format, &program.bytecode[..]),
+        (ShaderFormat::Dxbc, PROGRAM)
+    );
+    assert_eq!(world.get::<Name>(shader).unwrap().0, "M[Multiple]_27_Gbuf.ppo");
+    assert_eq!(program.interface.stage, Stage::Pixel);
+    let textures: Vec<(Entity, &Texture)> = world.iter::<Texture>().collect();
+    assert_eq!(textures.len(), 1);
+    let (texture, t) = textures[0];
+    assert_eq!(world.get::<Name>(texture).unwrap().0, "grass_a.dds@srgb");
+    assert_eq!(
+        (t.width, t.format, t.color_space, t.role),
+        (4, TexFormat::Rgba8Unorm, ColorSpace::Srgb, TexRole::Color)
+    );
+
+    for e in [a, b] {
+        let binding = world.get::<ShaderBinding>(e).unwrap();
+        assert_eq!(binding.stages.len(), 1);
+        assert_eq!(binding.stages[0].shader, shader);
+        let mut refs = Vec::new();
+        primase_core::Component::references(binding, &mut refs);
+        assert!(refs.contains(&shader) && refs.contains(&texture));
+    }
+    assert!(!world.has::<ShaderBinding>(c) && !world.has::<ShaderBinding>(plain));
+    // the second material's own parameter value, not the first's
+    let words = |e: Entity| {
+        let b = world.get::<ShaderBinding>(e).unwrap();
+        b.stages[0]
+            .constants
+            .iter()
+            .find(|c| c.name.as_deref() == Some("M_Multiple__snp_scale"))
+            .map(|c| c.role.clone())
+    };
+    assert_eq!(words(a), Some(bits(&[0.5, 0.25])));
+    assert_eq!(words(b), Some(bits(&[1., 1.])));
+    let _ = ResourceId(0);
+}
+
+#[test]
+fn the_unbound_textures_option_is_required_and_named() {
+    let mut world = World::default();
+    let e = common::run(&mut world, "resolve-fromsoft-shaders")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("unbound-textures is required"), "{e}");
+    let e = common::run(&mut world, "resolve-fromsoft-shaders{unbound-textures=grey}")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("not preview or leave"), "{e}");
+}

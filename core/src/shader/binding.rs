@@ -62,6 +62,10 @@ pub enum FrameParameter {
     TimeOfDay,
     /// The exposure the frame's output is scaled by.
     Exposure,
+    /// A colour the frame multiplies albedo by (white is neutral).
+    AlbedoTint,
+    /// An index into a palette of colours a draw selects from.
+    ColourSlot,
 }
 
 /// What a constant of a buffer stands for.
@@ -93,11 +97,11 @@ pub struct ConstantBinding {
     pub role: ConstantRole,
 }
 
-/// A sampler's state as the source stores it, for a texture slot.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+/// A sampler's state as the source stores it, for a texture slot: each part `None` where the source states none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct SamplerState {
     /// Wrap along u, v and w.
-    pub wrap: [Wrap; 3],
+    pub wrap: [Option<Wrap>; 3],
     pub filters: Filters,
 }
 
@@ -143,6 +147,8 @@ pub enum NormalEncoding {
     Xy,
     /// x and y mapped to 0-1, z from the unit length.
     XyUnorm,
+    /// x, y, z stored as `n * 0.5 + bias` (the bias given by its f32 bits): decoded `(v - bias) * 2`.
+    XyzBiased { bias_bits: u32 },
     /// Octahedral mapping in two lanes, 0-1.
     Octahedral,
 }
@@ -535,7 +541,7 @@ mod tests {
                     source: TextureSource::Texture {
                         texture,
                         sampler: SamplerState {
-                            wrap: [Wrap::Repeat; 3],
+                            wrap: [Some(Wrap::Repeat); 3],
                             filters: Filters::default(),
                         },
                     },
