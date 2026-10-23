@@ -901,15 +901,17 @@ impl AnvilShaders {
         self.programs.get(program).map(Vec::as_slice)
     }
 
-    /// Whether the template has feature `n` (bit `n` of the engine's feature word `T`, which gates bits of the
-    /// ShaderKey: docs/shaders.md §6.2): byte `n + 1` of its shader-state node, 0 or 1. `None` where the node has no
-    /// such byte or it is neither.
+    /// The stored byte of feature `n` (bit `n` of the engine's feature word `T`, which gates bits of the ShaderKey:
+    /// docs/shaders.md §6.2): byte `n + 1` of the template's shader-state node, `None` where the node has no such byte.
+    /// It is 0 or 1 for every feature but 15, which is also 2 on 82 of the 432 templates (see `tests/template_features.rs`).
+    pub fn feature_byte(&self, n: usize) -> Option<u8> {
+        self.feature_node.get(n.checked_add(1)?).copied()
+    }
+
+    /// Whether the template has feature `n`: its byte is not 0. The census (`tests/template_features.rs`) holds this to
+    /// the key bit the feature gates on all 432 templates, for the byte 2 of feature 15 as for the byte 1 of the rest.
     pub fn feature(&self, n: usize) -> Option<bool> {
-        match self.feature_node.get(n.checked_add(1)?)? {
-            0 => Some(false),
-            1 => Some(true),
-            _ => None,
-        }
+        self.feature_byte(n).map(|b| b != 0)
     }
 
     /// The program the pixel key `key` names.

@@ -783,7 +783,7 @@ pub enum FeatureError {
 /// engine's feature word `T` of the key composer (docs/shaders.md §6.2) has feature n at byte n + 1. Established by
 /// the census of `tests/template_features.rs`: on all 432 templates the bytes for T bits 3 and 4 (key bits 0x400,
 /// 0x800 and 0x200), 9 (0x1000), 10 (LayerMaterial's 0x4 and 0x20), 11 (the forward pass's 0x8), 12 (0x40), 13 (0x2)
-/// and 15 (0x80) are set exactly where the template stores a permutation key with the bit they gate.
+/// and 15 (0x80; its byte is 1 or 2) are set exactly where the template stores a permutation key with the bit they gate.
 pub fn feature_node(body: &[u8]) -> Result<&[u8], FeatureError> {
     let class = SHADER_STATE.to_le_bytes();
     let mut nodes = body
@@ -886,6 +886,12 @@ mod tests {
         assert_eq!(
             (t.feature(0), t.feature(1), t.feature(2), t.feature(3)),
             (Some(true), Some(false), Some(true), None)
+        );
+        // a byte of 2 (feature 15 on some templates) is set too
+        let t = shader_tables(&read, &[0, 0, 2]);
+        assert_eq!(
+            (t.feature_byte(1), t.feature(1), t.feature(0)),
+            (Some(2), Some(true), Some(false))
         );
         assert_eq!(t.programs, [a.to_vec(), b.to_vec(), c.to_vec()]);
         assert_eq!(

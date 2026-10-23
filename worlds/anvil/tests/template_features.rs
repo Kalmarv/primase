@@ -7,7 +7,10 @@
 //! - feature 9 and `0x1000`, feature 10 and `0x4` and `0x20` (pass 1), feature 11 and `0x8` (pass 2);
 //! - feature 12 and `0x40`, feature 13 and `0x2`, feature 15 and `0x80` (pass 1).
 //!
-//! The census agreed on every template that has the pass; the test holds the templates to it and prints the counts.
+//! A feature is set where its byte is not 0. The bytes are 0 or 1 but for feature 15, whose byte is 2 on 82 of the
+//! templates (on those with the pass, 22 have 1, 82 have 2 and 228 have 0, and key bit `0x80` is stored exactly where
+//! it is 1 or 2). The test holds the byte of every feature a key rule asks for to 0 or 1 (feature 15: 0, 1 or 2) and
+//! the templates to the gates, and prints the counts.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::template::{self, MATERIAL_TEMPLATE};
@@ -20,6 +23,7 @@ fn feature_flags_are_set_where_the_template_stores_the_key_bit_they_gate() {
     };
     let mut templates = 0;
     let mut checked = 0usize;
+    let mut level_two = 0usize;
     for forge in [
         "DataPC.forge",
         "DataPC_patch_01.forge",
@@ -69,12 +73,21 @@ fn feature_flags_are_set_where_the_template_stores_the_key_bit_they_gate() {
                 );
                 checked += 1;
             }
-            // every flag a key rule asks for is 0 or 1
+            // every flag a key rule asks for is 0 or 1 (feature 15 also 2)
             for n in 0..16 {
-                assert!(tables.feature(n).is_some(), "{forge} entry {entry}: feature {n}");
+                let byte = tables.feature_byte(n);
+                assert!(
+                    byte.is_some_and(|b| b <= if n == 15 { 2 } else { 1 }),
+                    "{forge} entry {entry}: feature {n} is {byte:?}"
+                );
+                if byte == Some(2) {
+                    level_two += 1;
+                }
             }
         }
     }
-    println!("{templates} templates, {checked} (template, feature, key bit) pairs agree");
+    println!(
+        "{templates} templates, {checked} (template, feature, key bit) pairs agree; feature 15 is 2 on {level_two}"
+    );
     assert_eq!(templates, 432);
 }
