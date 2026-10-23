@@ -9,7 +9,8 @@ use primase_core::Interpolation;
 use crate::quat;
 use crate::{Error, Result};
 
-/// The value of a channel of `width` values a key (4 for a rotation, `rotation` true) at time `t` seconds.
+/// The value of a channel of `width` values a key (4 for a rotation, `rotation` true) at time `t` seconds. A time that
+/// is NaN, or a rotation whose width is not 4, is an error.
 pub fn sample(
     interpolation: Interpolation,
     times: &[f32],
@@ -18,6 +19,12 @@ pub fn sample(
     rotation: bool,
     t: f64,
 ) -> Result<Vec<f64>> {
+    if t.is_nan() {
+        return Err(Error("the time is NaN".into()));
+    }
+    if rotation && width != 4 {
+        return Err(Error(format!("a rotation has 4 values a key, not {width}")));
+    }
     let per_key = if interpolation == Interpolation::Hermite {
         3 * width
     } else {
@@ -145,6 +152,21 @@ mod tests {
 
     #[test]
     fn malformed_channels_are_errors() {
+        // a NaN time would pass both end comparisons and index key -1; a rotation of another width would index past it
+        let err = sample(
+            Interpolation::Linear,
+            &[0.0, 1.0],
+            &[0.0, 1.0],
+            1,
+            false,
+            f64::NAN,
+        )
+        .unwrap_err();
+        assert!(err.0.contains("NaN"), "{}", err.0);
+        for interpolation in [Interpolation::Step, Interpolation::Linear, Interpolation::Hermite] {
+            let err = sample(interpolation, &[0.0], &[0.0; 9], 3, true, 0.0).unwrap_err();
+            assert!(err.0.contains("4 values a key, not 3"), "{}", err.0);
+        }
         assert!(sample(Interpolation::Linear, &[0.0, 1.0], &[0.0], 1, false, 0.5).is_err());
         assert!(sample(Interpolation::Hermite, &[0.0], &[0.0], 1, false, 0.5).is_err());
         assert!(sample(Interpolation::Linear, &[], &[], 1, false, 0.5).is_err());

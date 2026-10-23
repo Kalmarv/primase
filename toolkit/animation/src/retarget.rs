@@ -313,17 +313,43 @@ impl Pass for RetargetClip {
                 model_transforms(target, &rests).map_err(|e| e.0)?
             };
             let order = parents_first(target)?;
-            // the root-most mapped joint, and its reference heights
-            let root = order
+            let target_parent: BTreeMap<JointId, Option<JointId>> =
+                target.joints.iter().map(|j| (j.id, j.parent)).collect();
+            // the root: the mapped joint every other mapped joint is below (the first in parents-first order, checked)
+            let first = order
                 .iter()
                 .map(|&i| target.joints[i].id)
                 .find(|j| pairs.values().any(|t| t == j));
+            let below = |mut at: JointId, top: JointId| loop {
+                if at == top {
+                    break true;
+                }
+                match target_parent[&at] {
+                    Some(p) => at = p,
+                    None => break false,
+                }
+            };
+            let root = match first {
+                Some(r) if pairs.values().all(|&t| below(t, r)) => Some(r),
+                Some(r) if self.translation == Translation::Root => {
+                    return Err(format!(
+                        "clip {c:?}: the mapped joints have no common root (joint {r:?} is not above all of them): \
+                         translation=none moves none"
+                    ));
+                }
+                _ => None,
+            };
             let back: BTreeMap<JointId, JointId> = pairs.iter().map(|(a, b)| (*b, *a)).collect();
             let scale = match (self.translation, root) {
                 (Translation::Root, Some(r)) => {
                     let (s, t) = (source_ref[&back[&r]][3][1], target_ref[&r][3][1]);
                     if s.abs() < 1e-9 {
                         return Err("the source root's reference height is 0: no scale for its motion".into());
+                    }
+                    if t.abs() < 1e-9 {
+                        return Err(format!(
+                            "the target root {r:?}'s reference height is 0: its motion would scale to nothing"
+                        ));
                     }
                     t / s
                 }
@@ -370,11 +396,18 @@ impl Pass for RetargetClip {
                         ),
                         None => m,
                     };
-                    let trs = Trs::of(&Rest::Affine(crate::pose::transform(&l))).map_err(|e| e.0)?;
-                    rotations
-                        .entry(j.id)
-                        .or_default()
-                        .extend(trs.rotation.map(|x| x as f32));
+                    let trs = Trs::of(&Rest::Affine(crate::pose::transform(&l)))
+                        .map_err(|e| format!("joint {:?} ({}): {}", j.id, j.name, e.0))?;
+                    let keys = rotations.entry(j.id).or_default();
+                    // q and -q turn alike: keep each key on the side of the one before, for a reader that does not
+                    // take the shorter arc between keys
+                    let mut q = trs.rotation.map(|x| x as f32);
+                    if let Some(p) = keys.last_chunk::<4>()
+                        && p.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>() < 0.0
+                    {
+                        q = q.map(|x| -x);
+                    }
+                    keys.extend(q);
                     if Some(j.id) == root && self.translation == Translation::Root {
                         root_translation.extend(trs.translation.map(|x| x as f32));
                     }
@@ -608,6 +641,85 @@ mod tests {
         assert!(near(arm0, [h, -h, 0.0]), "{arm0:?}");
         assert!(near(arm1, [h, h, 0.0]), "{arm1:?}");
         assert!(near(root0, [0.0, 2.0, 0.0]) && near(root1, [0.0, 2.0, 0.0]));
+    }
+
+    /// A target whose root stands at the ground (height 0) has no ratio to scale the source's root motion by: refused
+    /// by name, not retargeted to a root that never moves.
+    #[test]
+    fn a_target_root_at_height_zero_is_refused() {
+        let (mut w, target, _) = world();
+        w.get_mut::<Skeleton>(target).unwrap().joints[0].rest = trs([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        let err = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap_err();
+        assert!(
+            err.contains("target root") && err.contains("height is 0"),
+            "{err}"
+        );
+        run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap();
+    }
+
+    /// Two mapped limbs under an unmapped root have no mapped joint above both: translation=root has nothing to move
+    /// and is refused; translation=none retargets their rotations.
+    #[test]
+    fn mapped_joints_without_a_common_root_are_refused_for_root_translation() {
+        let (mut w, target, clip) = world();
+        w.get_mut::<Skeleton>(target).unwrap().joints[2].parent = Some(JointId(10));
+        let (map, _) = w.iter::<JointMap>().next().unwrap();
+        w.get_mut::<JointMap>(map).unwrap().pairs.remove(0);
+        let err = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap_err();
+        assert!(
+            err.contains("no common root") && err.contains("translation=none"),
+            "{err}"
+        );
+        run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap();
+        assert!(w.get::<Clip>(clip).unwrap().channels.iter().any(
+            |ch| matches!(ch.target, ClipTarget::Joint { skeleton, joint } if skeleton == target && joint == JointId(30))
+        ));
+    }
+
+    /// Hand-worked: with the target arm rest turned -45 degrees about z, source angles 0, 145 and 305 become target
+    /// angles -45, 100 and 260, whose canonical quaternions (0, 0, -0.38, 0.92), (0, 0, 0.77, 0.64) and (0, 0, -0.77,
+    /// 0.64) flip at the last key (dot -0.17): the keys are stored on one side, every neighbour's dot positive.
+    #[test]
+    fn retargeted_rotation_keys_keep_one_sign() {
+        let (mut w, target, clip) = world();
+        let q = |deg: f32| {
+            let h = deg.to_radians() / 2.0;
+            [0.0, 0.0, h.sin(), h.cos()]
+        };
+        let c = w.get_mut::<Clip>(clip).unwrap();
+        c.channels[0].times = vec![0.0, 1.0, 2.0];
+        c.channels[0].values = [0.0, 145.0, 305.0].into_iter().flat_map(q).collect();
+        c.duration = 2.0;
+        run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap();
+        let ch = w
+            .get::<Clip>(clip)
+            .unwrap()
+            .channels
+            .iter()
+            .find(|ch| {
+                matches!(ch.target, ClipTarget::Joint { skeleton, joint } if skeleton == target && joint == JointId(20))
+                    && ch.property == Property::Rotation
+            })
+            .unwrap()
+            .clone();
+        assert_eq!(ch.values.len(), 12);
+        for k in ch.values.chunks(4).collect::<Vec<_>>().windows(2) {
+            let dot: f32 = k[0].iter().zip(k[1]).map(|(a, b)| a * b).sum();
+            assert!(dot > 0.0, "{:?} then {:?}", k[0], k[1]);
+        }
+    }
+
+    /// A mapped target joint whose rest has no translation-rotation-scale form is refused naming the joint.
+    #[test]
+    fn a_joint_without_a_trs_form_is_named() {
+        let (mut w, target, _) = world();
+        w.get_mut::<Skeleton>(target).unwrap().joints[1].rest = Rest::Trs {
+            translation: [0.3, 0.6, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [0.0, 1.0, 1.0],
+        };
+        let err = run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap_err();
+        assert!(err.contains("JointId(20)") && err.contains("j20"), "{err}");
     }
 
     #[test]

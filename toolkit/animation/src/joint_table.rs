@@ -14,8 +14,9 @@
 //! ```
 //!
 //! `from` and `to` describe the skeletons for people (they are not checked); `pairs` are (source joint name, target joint
-//! name); `notes` (optional) say why a pair was chosen, by source name. Names are matched exactly; a skeleton with two
-//! joints of one name cannot be resolved by name (refused, naming it). Every listed name must be a joint of its
+//! name); `notes` (optional) say why a pair was chosen, by source name. Names are matched exactly; a listed name that
+//! two joints of its skeleton hold cannot be resolved by name (refused, naming it); names the table does not list may
+//! repeat. Every listed name must be a joint of its
 //! skeleton and every joint appears at most once on its side; nothing is inferred or completed. What a pass does with
 //! the joints the table leaves out is that pass's stated choice.
 
@@ -69,7 +70,12 @@ impl JointTable {
 
     /// The pairs as joint ids of `from` and `to` (a `core.joint_map`'s pairs), in the table's order.
     pub fn resolve(&self, from: &Skeleton, to: &Skeleton) -> Result<Vec<(JointId, JointId)>> {
-        let (a, b) = (by_name(from, "source")?, by_name(to, "target")?);
+        let listed =
+            |side: fn(&(String, String)) -> &str| self.pairs.iter().map(side).collect::<BTreeSet<&str>>();
+        let (a, b) = (
+            by_name(from, "source", &listed(|p| &p.0))?,
+            by_name(to, "target", &listed(|p| &p.1))?,
+        );
         self.pairs
             .iter()
             .map(|(s, d)| {
@@ -84,10 +90,10 @@ impl JointTable {
     }
 }
 
-/// A skeleton's joints by name, refused when two share one.
-fn by_name<'a>(s: &'a Skeleton, side: &str) -> Result<BTreeMap<&'a str, JointId>> {
+/// A skeleton's joints by name among the `listed` names, refused when two joints share a listed name.
+fn by_name<'a>(s: &'a Skeleton, side: &str, listed: &BTreeSet<&str>) -> Result<BTreeMap<&'a str, JointId>> {
     let mut out = BTreeMap::new();
-    for j in &s.joints {
+    for j in s.joints.iter().filter(|j| listed.contains(j.name.as_str())) {
         if out.insert(j.name.as_str(), j.id).is_some() {
             return Err(Error(format!(
                 "joint table: the {side} skeleton has two joints named {}: not resolvable by name",
@@ -164,5 +170,24 @@ mod tests {
             .unwrap_err()
             .0;
         assert!(err.contains("two joints named a"), "{err}");
+    }
+
+    /// Only a name the table lists must be unique: two unlisted joints named alike do not stop the listed pairs from
+    /// resolving, and a listed name held twice on the target side is refused as on the source side.
+    #[test]
+    fn duplicate_names_matter_only_when_listed() {
+        let t = JointTable::parse(r#"{"version": 1, "from": "", "to": "", "pairs": [["a", "X"]]}"#).unwrap();
+        let pairs = t
+            .resolve(
+                &skeleton(&["a", "twin", "twin"]),
+                &skeleton(&["spare", "X", "spare"]),
+            )
+            .unwrap();
+        assert_eq!(pairs, [(JointId(10), JointId(11))]);
+        let err = t
+            .resolve(&skeleton(&["a"]), &skeleton(&["X", "X"]))
+            .unwrap_err()
+            .0;
+        assert!(err.contains("target skeleton has two joints named X"), "{err}");
     }
 }

@@ -20,8 +20,8 @@ pub enum UnmappedJoints {
     Refuse,
     /// To its nearest mapped ancestor; refused for a joint with none.
     Ancestor,
-    /// To the mapped joint nearest it at rest (in the source's model space; of equally near ones, the first in joint
-    /// order).
+    /// To the mapped joint nearest it at rest (in the source's model space; of equally near ones, the first in the
+    /// source skeleton's joint list).
     Nearest,
 }
 
@@ -41,8 +41,10 @@ pub enum UnmappedJoints {
 ///    joint's rest in the target's model space; influences as `Streams` of as many sets of four as the most influences
 ///    a vertex has, weights as floats (`quantize-skin-weights` and `limit-skin-influences` make them a destination's).
 ///
-/// Both skeletons must share a model space (metres, the same up and facing): the program turns one first. A prototype
-/// already placed with a skin instance is refused (retarget, then place), as is one with morph targets (their deltas
+/// Both skeletons must share a model space (metres, the same up and facing): the program turns one first. The mesh must
+/// be in the source skeleton's model space: every joint that carries weight has an inverse bind that is the inverse of
+/// its rest there (to within [`BIND_TOLERANCE`]), else the prototype is refused naming the joint. Two joint maps from
+/// one skeleton are refused (which is meant is not stated). A prototype already placed with a skin instance is refused (retarget, then place), as is one with morph targets (their deltas
 /// are not carried yet) or more than one binding. An asset listing the source skeleton as the prototype's rig lists the
 /// target instead.
 ///
@@ -73,6 +75,10 @@ pub fn retarget_skin(o: &Options) -> Result<Box<dyn Pass>, String> {
         unmapped: unmapped.ok_or("unmapped=refuse|ancestor|nearest is required")?,
     }))
 }
+
+/// The most an entry of a weighted joint's rest times its inverse bind may differ from the identity (the mesh is in the
+/// skeleton's model space when it is zero): single-precision noise of values stored as f32.
+const BIND_TOLERANCE: f64 = 1e-4;
 
 /// The source skeleton posed onto the target's proportions (see [`RetargetSkin`], step 1): each source joint's model
 /// transform.
@@ -176,8 +182,12 @@ fn resolve(
             }
             UnmappedJoints::Nearest => {
                 let p = source_rest[&j][3];
-                *pairs
-                    .keys()
+                // in the source skeleton's joint order, so that equally near joints go to the first listed
+                source
+                    .joints
+                    .iter()
+                    .map(|k| k.id)
+                    .filter(|k| pairs.contains_key(k))
                     .min_by(|a, b| {
                         let d =
                             |k: &JointId| (0..3).map(|i| (source_rest[k][3][i] - p[i]).powi(2)).sum::<f64>();
@@ -215,6 +225,15 @@ impl Pass for RetargetSkin {
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let maps: Vec<JointMap> = w.iter::<JointMap>().map(|(_, m)| m.clone()).collect();
+        let mut from = BTreeSet::new();
+        for m in &maps {
+            if !from.insert(m.from) {
+                return Err(format!(
+                    "two joint maps from skeleton {:?}: which is meant is not stated",
+                    m.from
+                ));
+            }
+        }
         let drawn: BTreeSet<Entity> = w
             .iter::<SkinInstance>()
             .filter_map(|(e, _)| w.get::<primase_core::Instance>(e).map(|i| i.prototype))
@@ -279,6 +298,30 @@ impl Pass for RetargetSkin {
                         .collect();
                     used.extend(named.iter().flatten().map(|(j, _)| *j));
                     per_prim.push(Some(named));
+                }
+                // the mesh is in the skeleton's model space when each weighted joint's rest times its inverse bind
+                // is the identity: the fit and the new binding both take that for granted
+                let identity = affine(&primase_core::Transform::IDENTITY);
+                for s in binding.palettes.iter().flatten().flatten() {
+                    let Some(rest) = source_rest.get(&s.joint).filter(|_| used.contains(&s.joint)) else {
+                        continue;
+                    };
+                    let off = compose(rest, &affine(&s.inverse_bind))
+                        .iter()
+                        .zip(&identity)
+                        .flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs()))
+                        .fold(0.0, f64::max);
+                    if off > BIND_TOLERANCE {
+                        let name = source
+                            .joints
+                            .iter()
+                            .find(|x| x.id == s.joint)
+                            .map_or_else(|| format!("{:?}", s.joint), |x| x.name.clone());
+                        return Err(format!(
+                            "prototype {p:?}: joint {name}'s inverse bind is not the inverse of its rest in the skeleton's \
+                             model space (off by {off:.3e}): the mesh is not in that space, and fitting it would move it"
+                        ));
+                    }
                 }
                 let (to, moved) = resolve(self.unmapped, &source, &source_rest, &pairs, &used)?;
                 // the target joints used, as one palette in joint order
@@ -640,6 +683,133 @@ mod tests {
         for (a, b) in posed.positions.iter().zip(p) {
             assert!(near(*a, b.map(f64::from)));
         }
+    }
+
+    /// A mesh bound with an inverse bind that is not the inverse of the joint's rest (its bind pose is another pose,
+    /// or the mesh sits in its own space) is refused naming the joint, not fitted as if it stood in the skeleton's
+    /// space. Here joint 3's inverse bind is moved 0.5 along x.
+    #[test]
+    fn a_mesh_outside_the_skeletons_model_space_is_refused() {
+        let (mut w, proto, _) = world();
+        let mut skin_c = w.get::<Skin>(proto).unwrap().clone();
+        skin_c.bindings[0].palettes[0].as_mut().unwrap()[2]
+            .inverse_bind
+            .cols[3][0] -= 0.5;
+        w.insert(proto, skin_c);
+        let err = run(&mut w, "retarget-skin{unmapped=ancestor}").unwrap_err();
+        assert!(
+            err.contains("joint j3's inverse bind") && err.contains("not in that space"),
+            "{err}"
+        );
+    }
+
+    /// Two maps from one skeleton are refused (the second would find the first's result already moved).
+    #[test]
+    fn a_second_map_from_one_skeleton_is_refused() {
+        let (mut w, ..) = world();
+        let first = w.iter::<JointMap>().next().map(|(_, m)| m.clone()).unwrap();
+        let again = w.spawn();
+        w.insert(again, first);
+        let err = run(&mut w, "retarget-skin{unmapped=ancestor}").unwrap_err();
+        assert!(err.contains("two joint maps from skeleton"), "{err}");
+    }
+
+    /// Joints equally near go to the first in the source skeleton's joint list, whatever their ids. Hand-worked: a cloth
+    /// joint 9 at (0, 1, 0) is sqrt 2 from both mapped joints, 7 at (1, 0, 0) and 5 at (-1, 0, 0), exactly; the list
+    /// has 7 first (id order would pick 5), so its weight goes to 7's target, 70.
+    #[test]
+    fn nearest_takes_the_first_of_equals_in_joint_order() {
+        let id = [0.0, 0.0, 0.0, 1.0];
+        let mut w = World::new();
+        let source = w.spawn();
+        w.insert(
+            source,
+            Skeleton {
+                joints: vec![
+                    joint(1, None, trs([0.0; 3], id)),
+                    joint(7, Some(1), trs([1.0, 0.0, 0.0], id)),
+                    joint(5, Some(1), trs([-1.0, 0.0, 0.0], id)),
+                    joint(9, Some(1), trs([0.0, 1.0, 0.0], id)),
+                ],
+            },
+        );
+        let target = w.spawn();
+        w.insert(
+            target,
+            Skeleton {
+                joints: vec![
+                    joint(10, None, trs([0.0; 3], id)),
+                    joint(70, Some(10), trs([1.0, 0.0, 0.0], id)),
+                    joint(50, Some(10), trs([-1.0, 0.0, 0.0], id)),
+                ],
+            },
+        );
+        let map = w.spawn();
+        w.insert(
+            map,
+            JointMap {
+                from: source,
+                to: target,
+                pairs: vec![
+                    (JointId(1), JointId(10)),
+                    (JointId(5), JointId(50)),
+                    (JointId(7), JointId(70)),
+                ],
+            },
+        );
+        let slot = |j: u32, t: [f32; 3]| Slot {
+            joint: JointId(j),
+            inverse_bind: {
+                let mut m = primase_core::Transform::IDENTITY;
+                m.cols[3] = t.map(|x| -x);
+                m
+            },
+        };
+        let proto = w.spawn();
+        w.insert(
+            proto,
+            Mesh::new(vec![Primitive {
+                topology: Topology::Points,
+                streams: [
+                    (Semantic::Position, Stream::F32x3(vec![[0.0, 1.0, 0.0]])),
+                    (Semantic::Joints(0), Stream::U8x4(vec![[3, 0, 0, 0]])),
+                    (Semantic::Weights(0), Stream::F32x4(vec![[1.0, 0.0, 0.0, 0.0]])),
+                ]
+                .into(),
+                indices: None,
+                material: None,
+            }]),
+        );
+        w.insert(
+            proto,
+            Skin {
+                influences: vec![Some(Influences::Streams { sets: 1 })],
+                weights: WeightRule::SumsToOne,
+                bindings: vec![Binding {
+                    id: BindingId(0),
+                    skeleton: source,
+                    palettes: vec![Some(vec![
+                        slot(1, [0.0; 3]),
+                        slot(7, [1.0, 0.0, 0.0]),
+                        slot(5, [-1.0, 0.0, 0.0]),
+                        slot(9, [0.0, 1.0, 0.0]),
+                    ])],
+                    deformation: Deformation::Linear,
+                }],
+            },
+        );
+        assert_eq!(w.verify_components(), vec![]);
+        let report = run(&mut w, "retarget-skin{unmapped=nearest}").unwrap();
+        let moved: Vec<&String> = report.steps[0]
+            .log
+            .approximations
+            .keys()
+            .filter(|k| k.starts_with("vertex weight of unmapped joint"))
+            .collect();
+        assert_eq!(
+            moved,
+            ["vertex weight of unmapped joint j9 moved to j70 (the mapped joint nearest it)"]
+        );
     }
 
     #[test]

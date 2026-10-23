@@ -16,7 +16,8 @@
 //!   refused when another part holds the name too, and otherwise its joints stay distinct (nothing to correspond).
 //! - `table`: the `core.joint_map` entities of the world whose two ends are skeletons of the parts (a person's reviewed
 //!   table resolved by [`crate::joint_table::JointTable::resolve`]); pairs join their joints, transitively, and joints
-//!   no pair names stay distinct even where their names are equal.
+//!   no pair names stay distinct even where their names are equal. A map with one end on a part's skeleton and the other
+//!   outside the parts is refused; maps between skeletons that are no part's are left alone.
 //!
 //! One joint holds at most one joint of each part. An assembled joint takes the name of its first joint in part order
 //! (the order of the assets in the world).
@@ -217,6 +218,17 @@ fn gather(w: &World) -> Result<Vec<Part>, String> {
             .get::<Skeleton>(rig)
             .ok_or_else(|| format!("asset {label}: its rig holds no core.skeleton"))?
             .clone();
+        // a NaN rest would read as no difference anywhere (`f64::max` skips it): refused where it is read
+        if let Some(j) = skeleton
+            .joints
+            .iter()
+            .find(|j| j.rest.matrix().cols.iter().flatten().any(|x| !x.is_finite()))
+        {
+            return Err(format!(
+                "asset {label}: joint {} has a rest that is not finite",
+                j.name
+            ));
+        }
         let rests =
             model_transforms(&skeleton, &locals(&skeleton, None)).map_err(|e| format!("{label}: {}", e.0))?;
         parts.push(Part {
@@ -305,8 +317,17 @@ fn by_table(parts: &[Part], w: &World) -> Result<Vec<Vec<usize>>, String> {
         x
     }
     let mut used = 0;
-    for (_, m) in w.iter::<JointMap>() {
+    for (e, m) in w.iter::<JointMap>() {
         let (Some(&a), Some(&b)) = (part_of.get(&m.from), part_of.get(&m.to)) else {
+            // a map of two skeletons that are no part's is not the table's; one end on a part is
+            if let Some(end) = [m.from, m.to].into_iter().find(|s| !part_of.contains_key(s))
+                && part_of.contains_key(&m.from) != part_of.contains_key(&m.to)
+            {
+                return Err(format!(
+                    "joint map {e:?} has one end on a part's skeleton and the other ({end:?}) outside the parts: \
+                     its pairs would be lost"
+                ));
+            }
             continue;
         };
         used += 1;
@@ -957,6 +978,80 @@ mod tests {
     }
 
     const OWN: &str = "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.001,unweighted-rests=refuse,name=hero}";
+
+    /// The pass reads the rests itself: a NaN in a part's rest would make every difference involving it compare as no
+    /// difference (`f64::max` skips a NaN), so it is refused naming the joint and the part, before any comparison.
+    #[test]
+    fn a_rest_that_is_not_finite_is_refused() {
+        let (mut w, body, _) = world(None, [0.0, 0.5, 0.0]);
+        let rig = w.get::<Skin>(body).unwrap().bindings[0].skeleton;
+        w.get_mut::<Skeleton>(rig).unwrap().joints[2].rest = at([f32::NAN, 0.5, 0.0]);
+        let options: Options = [
+            ("correspondence", "by-name"),
+            ("reference-pose", "own"),
+            ("tolerance", "0.001"),
+            ("unweighted-rests", "refuse"),
+            ("name", "hero"),
+        ]
+        .iter()
+        .map(|&(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        let err = assemble_character(&options)
+            .unwrap()
+            .run(&mut w, &mut PassLog::default())
+            .unwrap_err();
+        assert!(
+            err.contains("joint Neck") && err.contains("body") && err.contains("not finite"),
+            "{err}"
+        );
+    }
+
+    /// A table whose joint map has one end on a part's skeleton and the other outside the parts is refused naming the
+    /// map (it would be skipped, and the correspondence it states lost); a map between two outside skeletons is not
+    /// the table's business.
+    #[test]
+    fn a_table_map_with_an_end_outside_the_parts_is_refused() {
+        let (mut w, body, head) = world(None, [0.0, 0.5, 0.0]);
+        let body_rig = w.get::<Skin>(body).unwrap().bindings[0].skeleton;
+        let head_rig = w.get::<Skin>(head).unwrap().bindings[0].skeleton;
+        let outside = w.spawn();
+        w.insert(
+            outside,
+            Skeleton {
+                joints: vec![Joint {
+                    id: JointId(0),
+                    name: "Master".into(),
+                    parent: None,
+                    rest: at([0.0; 3]),
+                }],
+            },
+        );
+        let between = |w: &mut World, a, b, pairs: Vec<(JointId, JointId)>| {
+            let m = w.spawn();
+            w.insert(
+                m,
+                JointMap {
+                    from: a,
+                    to: b,
+                    pairs,
+                },
+            );
+            m
+        };
+        between(&mut w, outside, outside, vec![]);
+        let table = between(&mut w, body_rig, head_rig, vec![(JointId(0), JointId(0))]);
+        let stray = between(&mut w, head_rig, outside, vec![(JointId(0), JointId(0))]);
+        let err = run(
+            &mut w,
+            "assemble-character{correspondence=table,reference-pose=own,tolerance=0.001,unweighted-rests=refuse,name=hero}",
+        )
+        .unwrap_err();
+        assert!(
+            err.contains(&format!("{stray:?}")) && err.contains("outside the parts"),
+            "{err}"
+        );
+        assert!(!err.contains(&format!("{table:?}")), "{err}");
+    }
 
     /// The parts join into five joints: Master, Spine, Neck and the arm and head once each; the head part's Spine is a
     /// detached root, so it takes its parent and rest from the body's and is not compared. Every part keeps its

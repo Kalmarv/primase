@@ -3,7 +3,8 @@
 //!
 //! A map built by name states what else it checked ([`primase_core::JointMap`]): a joint is paired with the joint of the
 //! other skeleton that has its name only where that joint is the only one of the name on each side, the two rests agree
-//! (translation and scale parts within the tolerance, rotations within it in radians), and the parents correspond (the
+//! (translations in metres and scales as ratios within `tolerance`, rotations within `rotation-tolerance` in radians,
+//! which is `tolerance` where not given), and the parents correspond (the
 //! parent of one is paired with the parent of the other; roots with roots). Anything else is left out, counted by reason:
 //! a skeleton with extra joints between two it shares breaks the chain there, and a clip's channels on the joints below
 //! are then dropped or refused by `map-clip`, as its option says.
@@ -11,7 +12,8 @@
 //! `parents=any` pairs by the unique name alone, for two skeletons of one character whose hierarchies and rests are
 //! not alike (Elden Ring's Havok skeletons parent their IK targets under the root and a creature's chains otherwise
 //! than its model does, and the model's bind pose is not the Havok reference pose): nothing but the name is checked,
-//! and the pairs whose model-space rests differ by more than the tolerance are counted, not refused, since the game
+//! and the pairs whose model-space rests differ by more than the tolerances (the translation in metres, the rotation and
+//! scale entries against `rotation-tolerance`) are counted, not refused, since the game
 //! poses the model by the Havok joint's model-space pose whatever the two rests are. A clip of the first skeleton then
 //! moves to the second by `map-clip`'s `reparented=model-space`.
 
@@ -31,20 +33,29 @@ pub enum Parents {
     Any,
 }
 
-/// `correspond-skeletons{from=NAME,to=NAME,tolerance=T,parents=same|any}` (all required): the one skeleton
-/// (`core.skeleton`) whose `core.name` is `from` and the one named `to` get a `core.joint_map` from the first to the
-/// second (see the module documentation for `parents`).
+/// `correspond-skeletons{from=NAME,to=NAME,tolerance=T,parents=same|any}` (all required; `rotation-tolerance=R`
+/// optional): the one skeleton (`core.skeleton`) whose `core.name` is `from` and the one named `to` get a
+/// `core.joint_map` from the first to the second (see the module documentation for `parents`). `tolerance` is in
+/// metres (and a ratio for scale), `rotation-tolerance` in radians (`tolerance` when not given).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CorrespondSkeletons {
     pub from: String,
     pub to: String,
     pub tolerance: f64,
+    pub rotation_tolerance: f64,
     pub parents: Parents,
 }
 
 /// The pass factory.
 pub fn correspond_skeletons(o: &Options) -> Result<Box<dyn Pass>, String> {
-    let (mut from, mut to, mut tolerance, mut parents) = (None, None, None, None);
+    let (mut from, mut to, mut tolerance, mut rotation_tolerance, mut parents) =
+        (None, None, None, None, None);
+    let positive = |name: &str, v: &str| {
+        v.parse::<f64>()
+            .ok()
+            .filter(|t| t.is_finite() && *t > 0.0)
+            .ok_or_else(|| format!("{name}={v}: a positive number"))
+    };
     for (k, v) in o {
         match k.as_str() {
             "parents" => {
@@ -56,14 +67,8 @@ pub fn correspond_skeletons(o: &Options) -> Result<Box<dyn Pass>, String> {
             }
             "from" => from = Some(v.clone()),
             "to" => to = Some(v.clone()),
-            "tolerance" => {
-                tolerance = Some(
-                    v.parse::<f64>()
-                        .ok()
-                        .filter(|t| t.is_finite() && *t > 0.0)
-                        .ok_or_else(|| format!("tolerance={v}: a positive number"))?,
-                );
-            }
+            "tolerance" => tolerance = Some(positive("tolerance", v)?),
+            "rotation-tolerance" => rotation_tolerance = Some(positive("rotation-tolerance", v)?),
             _ => return Err(format!("unknown option {k}")),
         }
     }
@@ -72,10 +77,12 @@ pub fn correspond_skeletons(o: &Options) -> Result<Box<dyn Pass>, String> {
     if from == to {
         return Err("from and to name the same skeleton".into());
     }
+    let tolerance = tolerance.ok_or("tolerance=T is required")?;
     Ok(Box::new(CorrespondSkeletons {
         from,
         to,
-        tolerance: tolerance.ok_or("tolerance=T is required")?,
+        tolerance,
+        rotation_tolerance: rotation_tolerance.unwrap_or(tolerance),
         parents: parents.ok_or("parents=same|any is required")?,
     }))
 }
@@ -94,13 +101,13 @@ fn find(w: &World, name: &str) -> Result<Entity, String> {
     }
 }
 
-/// Whether two rests agree within `tolerance`.
-fn agree(a: &Trs, b: &Trs, tolerance: f64) -> bool {
+/// Whether two rests agree: translations and scales within `tolerance`, rotations within `rotation_tolerance` radians.
+fn agree(a: &Trs, b: &Trs, tolerance: f64, rotation_tolerance: f64) -> bool {
     let near = |x: &[f64], y: &[f64]| x.iter().zip(y).all(|(p, q)| (p - q).abs() <= tolerance);
     let dot: f64 = a.rotation.iter().zip(&b.rotation).map(|(p, q)| p * q).sum();
     near(&a.translation, &b.translation)
         && near(&a.scale, &b.scale)
-        && 2.0 * dot.abs().min(1.0).acos() <= tolerance
+        && 2.0 * dot.abs().min(1.0).acos() <= rotation_tolerance
 }
 
 impl Pass for CorrespondSkeletons {
@@ -112,6 +119,10 @@ impl Pass for CorrespondSkeletons {
             ("from".to_owned(), self.from.clone()),
             ("to".to_owned(), self.to.clone()),
             ("tolerance".to_owned(), self.tolerance.to_string()),
+            (
+                "rotation-tolerance".to_owned(),
+                self.rotation_tolerance.to_string(),
+            ),
             (
                 "parents".to_owned(),
                 match self.parents {
@@ -154,7 +165,7 @@ impl Pass for CorrespondSkeletons {
                 [t] if from_names[j.name.as_str()] == 1 => {
                     let t = &to.joints[*t];
                     match (Trs::of(&j.rest), Trs::of(&t.rest)) {
-                        (Ok(x), Ok(y)) if agree(&x, &y, self.tolerance) => {
+                        (Ok(x), Ok(y)) if agree(&x, &y, self.tolerance, self.rotation_tolerance) => {
                             candidate.insert(j.id, t.id);
                         }
                         _ => log.count("joints left out: the rests differ", 1),
@@ -211,14 +222,15 @@ impl Pass for CorrespondSkeletons {
                 model_transforms(&from, &rest_of(&from)).map_err(|e| format!("{}: {e}", self.from))?,
                 model_transforms(&to, &rest_of(&to)).map_err(|e| format!("{}: {e}", self.to))?,
             );
+            // the three columns of the linear part (rotation and scale, unitless: judged as radians) and the
+            // translation column (metres)
             let apart = candidate
                 .iter()
                 .filter(|(f, t)| {
                     let (a, b) = (fm[f], tm[t]);
-                    a.iter()
-                        .flatten()
-                        .zip(b.iter().flatten())
-                        .any(|(x, y)| (x - y).abs() > self.tolerance)
+                    let off =
+                        |k: usize, limit: f64| a[k].iter().zip(&b[k]).any(|(x, y)| (x - y).abs() > limit);
+                    (0..3).any(|k| off(k, self.rotation_tolerance)) || off(3, self.tolerance)
                 })
                 .count();
             if apart > 0 {
@@ -344,6 +356,95 @@ mod tests {
         assert_eq!(log.counts["joints paired"], 4);
         assert_eq!(log.counts["joints left out: the rests differ"], 1);
         assert_eq!(log.counts["joints left out: the parents do not correspond"], 1);
+    }
+
+    fn turned(id: u32, name: &str, parent: Option<u32>, x: f32, angle: f32) -> Joint {
+        let mut j = joint(id, name, parent, x);
+        let h = angle / 2.0;
+        j.rest = Rest::Trs {
+            translation: [x, 0.0, 0.0],
+            rotation: [0.0, 0.0, h.sin(), h.cos()],
+            scale: [1.0; 3],
+        };
+        j
+    }
+
+    /// A rotation is compared in radians and a translation in metres, each against its own tolerance: two rests 0.01
+    /// radians apart are the same joint under `rotation-tolerance=0.05` however small `tolerance` is, and two rests
+    /// 0.01 m apart are not, however large the rotation tolerance is.
+    #[test]
+    fn rotations_and_translations_have_their_own_tolerances() {
+        let build = |angle: f32, x: f32| {
+            let mut w = World::new();
+            skeleton(
+                &mut w,
+                "a",
+                vec![joint(0, "Root", None, 0.0), turned(1, "Arm", Some(0), 1.0, 0.0)],
+            );
+            skeleton(
+                &mut w,
+                "b",
+                vec![
+                    joint(10, "Root", None, 0.0),
+                    turned(11, "Arm", Some(10), x, angle),
+                ],
+            );
+            w
+        };
+        let opts = "correspond-skeletons{from=a,to=b,tolerance=0.001,rotation-tolerance=0.05,parents=same}";
+        let mut w = build(0.01, 1.0);
+        run(&mut w, opts).unwrap();
+        assert_eq!(pairs(&w), [(0, 10), (1, 11)]);
+        // the same angle against the default rotation tolerance (the tolerance, 0.001 rad): left out
+        let mut w = build(0.01, 1.0);
+        run(
+            &mut w,
+            "correspond-skeletons{from=a,to=b,tolerance=0.001,parents=same}",
+        )
+        .unwrap();
+        assert_eq!(pairs(&w), [(0, 10)]);
+        // 0.01 m apart: left out whatever the rotation tolerance
+        let mut w = build(0.0, 1.01);
+        run(&mut w, opts).unwrap();
+        assert_eq!(pairs(&w), [(0, 10)]);
+        assert!(
+            correspond_skeletons(&Options::from([
+                ("from".to_owned(), "a".to_owned()),
+                ("to".to_owned(), "b".to_owned()),
+                ("tolerance".to_owned(), "1".to_owned()),
+                ("parents".to_owned(), "same".to_owned()),
+                ("rotation-tolerance".to_owned(), "0".to_owned()),
+            ]))
+            .err()
+            .unwrap_or_default()
+            .contains("rotation-tolerance=0: a positive number")
+        );
+    }
+
+    /// With parents=any the count of pairs whose model-space rests differ uses the same two tolerances: a 0.01 rad turn
+    /// is within `rotation-tolerance=0.05` and not within the default, and a translation entry is never judged by it.
+    #[test]
+    fn the_model_space_count_uses_each_kind_s_tolerance() {
+        let apart = "joints paired whose model-space rests differ by more than the tolerance (the target's bind pose is not the source's reference pose)";
+        let count = |options: &str| {
+            let mut w = World::new();
+            skeleton(&mut w, "a", vec![joint(0, "Root", None, 0.0)]);
+            skeleton(&mut w, "b", vec![turned(10, "Root", None, 0.0, 0.01)]);
+            run(&mut w, options).unwrap().steps[0]
+                .log
+                .counts
+                .get(apart)
+                .copied()
+                .unwrap_or(0)
+        };
+        assert_eq!(
+            count("correspond-skeletons{from=a,to=b,tolerance=0.001,rotation-tolerance=0.05,parents=any}"),
+            0
+        );
+        assert_eq!(
+            count("correspond-skeletons{from=a,to=b,tolerance=0.001,parents=any}"),
+            1
+        );
     }
 
     #[test]
