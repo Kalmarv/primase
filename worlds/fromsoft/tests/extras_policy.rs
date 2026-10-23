@@ -118,7 +118,7 @@ fn source_light_records_and_their_lowering() {
 
 #[test]
 fn spawn_region_values_are_read_without_map_offset_or_rounding() {
-    use primase_fromsoft::msb::{MapLayout, Section};
+    use primase_fromsoft::msb::{Generation, MapLayout, Section};
     let mut bytes = vec![0u8; 100];
     bytes[..8].copy_from_slice(&96u64.to_le_bytes());
     bytes[8..12].copy_from_slice(&8u32.to_le_bytes());
@@ -126,7 +126,8 @@ fn spawn_region_values_are_read_without_map_offset_or_rounding() {
     for (i, v) in [1f32, 2., 3., 4., 5., 6.].into_iter().enumerate() {
         bytes[20 + i * 4..24 + i * 4].copy_from_slice(&v.to_le_bytes());
     }
-    let layout = MapLayout {
+    let mut layout = MapLayout {
+        generation: &Generation::SEKIRO,
         models: vec![],
         parts: vec![],
         map_offsets: vec![],
@@ -138,6 +139,9 @@ fn spawn_region_values_are_read_without_map_offset_or_rounding() {
     };
     let p = layout.spawn_points().unwrap();
     assert_eq!(p[0].name, "A");
+    // a generation whose spawn region code is not known refuses rather than finding none
+    layout.generation = &Generation::ELDEN_RING;
+    assert!(layout.spawn_points().is_err());
     assert_eq!(p[0].position, [1., 2., 3.]);
     assert_eq!(p[0].rotation_degrees, [4., 5., 6.]);
 }

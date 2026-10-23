@@ -1,22 +1,165 @@
-//! Sekiro map models, part placements and map-local offsets.
+//! Map models, part placements and map-local offsets of Sekiro (MSBS) and Elden Ring (MSBE).
 //!
-//! Part coordinates are already in the common world frame. The MapOffset event
+//! Part coordinates are already in the map's frame. Sekiro's MapOffset event
 //! instead places map-local resources (for example collision); never apply it a
 //! second time to parts. Euler angles are degrees, applied X, then Z, then Y.
+//! The generations share the section chain and the record envelopes; the [`Generation`] the file's section chain
+//! names supplies what differs.
 use crate::{Result, bytes::View, invalid};
 use primase_core::components::Transform;
 
 use crate::pose::FRAME;
-const SECTIONS: [&str; 8] = [
-    "MODEL_PARAM_ST",
-    "EVENT_PARAM_ST",
-    "POINT_PARAM_ST",
-    "ROUTE_PARAM_ST",
-    "LAYER_PARAM_ST",
-    "PARTS_PARAM_ST",
-    "MAPSTUDIO_PARTS_POSE_ST",
-    "MAPSTUDIO_BONE_NAME_STRING",
-];
+
+/// How a part's point-light shadow byte is stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlagByte {
+    /// 0 or 1.
+    Bool,
+    /// 0 (off) or 0xff (-1, on).
+    ZeroOrMinusOne,
+}
+/// One MSB generation: its section chain, record layouts and kind codes. The section chain (its names, in order)
+/// identifies the generation. The number each section stores is a revision (Elden Ring's maps store several with
+/// one layout; Sekiro's sections within one file differ): it is kept in [`Section::version`] and does not choose a
+/// layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Generation {
+    /// The generation's common name (`MSBS`, `MSBE`).
+    pub name: &'static str,
+    /// Section names in file order.
+    pub sections: &'static [&'static str],
+    /// Indices of sections that must have no records.
+    pub empty: &'static [usize],
+    /// Accepted model kind codes.
+    pub model_kinds: &'static [u32],
+    /// Part kind codes.
+    pub part_kinds: &'static [(u32, PartKind)],
+    /// Part record header size in bytes, and where it keeps the kind and the model index (u32 each).
+    pub part_header: usize,
+    pub part_kind: usize,
+    pub part_model: usize,
+    /// Header bytes with fixed contents: (offset, bytes).
+    pub part_fixed: &'static [(usize, &'static [u8])],
+    /// The header's payload offset slots: offset of the first u64 slot and the slot count. The entity block (96) and
+    /// type data (104) slots are among them in every generation and must be set.
+    pub part_payloads: (usize, usize),
+    /// Entity block size, and a range of it that must be zero.
+    pub entity_block: usize,
+    pub entity_zero: Option<(usize, usize)>,
+    pub point_light_shadow: FlagByte,
+    /// Event type code of MapOffset records, in generations that have them.
+    pub map_offset_event: Option<u32>,
+    /// Region type code of checkpoint/warp spawn points, where known.
+    pub spawn_region: Option<u32>,
+}
+impl Generation {
+    /// Sekiro (MSBS): eight sections, ending with part poses and bone names.
+    pub const SEKIRO: Self = Self {
+        name: "MSBS",
+        sections: &[
+            "MODEL_PARAM_ST",
+            "EVENT_PARAM_ST",
+            "POINT_PARAM_ST",
+            "ROUTE_PARAM_ST",
+            "LAYER_PARAM_ST",
+            "PARTS_PARAM_ST",
+            "MAPSTUDIO_PARTS_POSE_ST",
+            "MAPSTUDIO_BONE_NAME_STRING",
+        ],
+        empty: &[4, 6, 7],
+        model_kinds: &[0, 1, 2, 4, 5],
+        part_kinds: &[
+            (0, PartKind::MapPiece),
+            (1, PartKind::Object),
+            (2, PartKind::Enemy),
+            (4, PartKind::Player),
+            (5, PartKind::Collision),
+            (9, PartKind::DummyObject),
+            (10, PartKind::DummyEnemy),
+            (11, PartKind::ConnectCollision),
+        ],
+        part_header: 160,
+        part_kind: 8,
+        part_model: 16,
+        part_fixed: &[(20, &[0; 4]), (68, &[255; 8]), (76, &[0; 4]), (136, &[0; 24])],
+        part_payloads: (80, 7),
+        entity_block: 0x54,
+        entity_zero: Some((0x44, 16)),
+        point_light_shadow: FlagByte::Bool,
+        map_offset_event: Some(9),
+        spawn_region: Some(8),
+    };
+    /// Elden Ring (MSBE): six sections ending with parts; assets take the place of objects. It has no MapOffset
+    /// events; its spawn-point region code is not read yet.
+    pub const ELDEN_RING: Self = Self {
+        name: "MSBE",
+        sections: &[
+            "MODEL_PARAM_ST",
+            "EVENT_PARAM_ST",
+            "POINT_PARAM_ST",
+            "ROUTE_PARAM_ST",
+            "LAYER_PARAM_ST",
+            "PARTS_PARAM_ST",
+        ],
+        empty: &[4],
+        model_kinds: &[0, 2, 4, 5, 10],
+        part_kinds: &[
+            (0, PartKind::MapPiece),
+            (2, PartKind::Enemy),
+            (4, PartKind::Player),
+            (5, PartKind::Collision),
+            (9, PartKind::DummyAsset),
+            (10, PartKind::DummyEnemy),
+            (11, PartKind::ConnectCollision),
+            (13, PartKind::Asset),
+        ],
+        part_header: 192,
+        part_kind: 12,
+        part_model: 20,
+        part_fixed: &[(76, &[0; 4]), (168, &[0; 24])],
+        part_payloads: (80, 11),
+        entity_block: 0x40,
+        entity_zero: None,
+        point_light_shadow: FlagByte::ZeroOrMinusOne,
+        map_offset_event: None,
+        spawn_region: None,
+    };
+    pub const ALL: [&'static Self; 2] = [&Self::SEKIRO, &Self::ELDEN_RING];
+    /// The generation whose section chain is `names`.
+    pub fn find<S: AsRef<str>>(names: &[S]) -> Option<&'static Self> {
+        Self::ALL.into_iter().find(|g| {
+            g.sections.len() == names.len() && g.sections.iter().zip(names).all(|(a, b)| *a == b.as_ref())
+        })
+    }
+}
+/// The section names, read before choosing a generation: each section's name pointer sits at +8 and its last
+/// offset points at the next section (zero after the last). At most 16 sections.
+fn section_chain(v: &View<'_>) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    let mut start = 16;
+    loop {
+        if names.len() == 16 {
+            return Err(invalid(v.format, start, "section chain too long"));
+        }
+        let n = v.u32(start + 4)? as usize;
+        if n == 0 {
+            return Err(invalid(v.format, start + 4, "section has no next pointer"));
+        }
+        let table = n
+            .checked_mul(8)
+            .ok_or_else(|| invalid(v.format, start, "section size overflow"))?;
+        v.slice(start + 16, table)?;
+        names.push(text(v, v.size(start + 8)?)?);
+        let next = v.size(start + 16 + (n - 1) * 8)?;
+        if next == 0 {
+            return Ok(names);
+        }
+        if next <= start {
+            return Err(invalid(v.format, start, "section chain goes backwards"));
+        }
+        start = next;
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Model {
@@ -33,21 +176,9 @@ pub enum PartKind {
     DummyObject,
     DummyEnemy,
     ConnectCollision,
-}
-impl PartKind {
-    fn read(n: u32) -> Result<Self> {
-        Ok(match n {
-            0 => Self::MapPiece,
-            1 => Self::Object,
-            2 => Self::Enemy,
-            4 => Self::Player,
-            5 => Self::Collision,
-            9 => Self::DummyObject,
-            10 => Self::DummyEnemy,
-            11 => Self::ConnectCollision,
-            _ => return Err(invalid("MSB", 0, "unknown part kind")),
-        })
-    }
+    /// Elden Ring's placed asset geometry (its counterpart of Sekiro's objects).
+    Asset,
+    DummyAsset,
 }
 #[derive(Clone, Debug)]
 pub struct Part {
@@ -69,7 +200,7 @@ pub struct Part {
     /// Source shadow controls, independent of material and placement state.
     pub shadows: ShadowFlags,
 }
-/// Raw MSBS entity-block shadow controls. Renderer-specific bytes are retained
+/// Raw entity-block shadow controls. Renderer-specific bytes are retained
 /// uninterpreted. `only && !cast` is contradictory: retain and count it rather
 /// than guessing a consumer's shadow mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -80,7 +211,7 @@ pub struct ShadowFlags {
     pub receive: bool,
     /// Boolean byte at entity-block offset 0x12, retained independently of `cast`.
     pub only: bool,
-    /// Boolean byte at entity-block offset 0x0a for point-light shadow casting.
+    /// Byte at entity-block offset 0x0a for point-light shadow casting (0/1 in MSBS, 0/0xff in MSBE).
     pub point_light_cast: bool,
     /// Uninterpreted byte at entity-block offset 0x0d; all byte values are retained.
     pub static_cast: u8,
@@ -109,6 +240,8 @@ pub struct Section {
 }
 #[derive(Clone, Debug)]
 pub struct MapLayout {
+    /// The generation the section chain names.
+    pub generation: &'static Generation,
     pub models: Vec<Model>,
     pub parts: Vec<Part>,
     pub map_offsets: Vec<MapOffset>,
@@ -147,8 +280,8 @@ fn pointer(v: &View<'_>, o: usize, min: usize) -> Result<usize> {
 }
 
 impl MapLayout {
-    /// Parse section envelopes and the fields used by placement import. Other
-    /// gameplay records are retained, without claiming to validate their schemas.
+    /// Parse section envelopes and the fields used by placement import, in the generation the section chain names.
+    /// Other gameplay records are retained, without claiming to validate their schemas.
     pub fn read(data: &[u8]) -> Result<Self> {
         let v = View {
             data,
@@ -156,9 +289,13 @@ impl MapLayout {
             be: false,
         };
         v.expect(0, b"MSB \x01\0\0\0\x10\0\0\0\0\0\x01\xff")?;
+        let names = section_chain(&v)?;
+        let generation = Generation::find(&names)
+            .ok_or_else(|| invalid(v.format, 16, format!("unknown section chain {names:?}")))?;
+        let last = generation.sections.len() - 1;
         let mut next = 16;
         let mut sections = Vec::new();
-        for (section_index, &name) in SECTIONS.iter().enumerate() {
+        for (section_index, &name) in generation.sections.iter().enumerate() {
             let start = next;
             let version = v.u32(start)?;
             let n = v.u32(start + 4)? as usize;
@@ -171,7 +308,7 @@ impl MapLayout {
             v.slice(start + 16, bytes)?;
             next = v.size(start + 16 + (n - 1) * 8)?;
             let end = if next == 0 { data.len() } else { next };
-            if (section_index == 7) != (next == 0) || end <= start || end > data.len() {
+            if (section_index == last) != (next == 0) || end <= start || end > data.len() {
                 return Err(invalid(v.format, start, "invalid section chain"));
             }
             let header_end = start + 16 + bytes;
@@ -203,7 +340,7 @@ impl MapLayout {
                 records,
             });
         }
-        for &i in &[4, 6, 7] {
+        for &i in generation.empty {
             if !sections[i].records.is_empty() {
                 return Err(invalid("MSB", 0, "nonempty unsupported section"));
             }
@@ -223,48 +360,57 @@ impl MapLayout {
                 r.slice(type_offset, 1)?;
             }
             let kind = r.u32(8)?;
-            if !matches!(kind, 0 | 1 | 2 | 4 | 5) {
+            if !generation.model_kinds.contains(&kind) {
                 return Err(invalid(r.format, 8, "model kind"));
             }
             models.push(Model { name, kind });
         }
         let mut parts = Vec::new();
+        let header = generation.part_header;
         for (index, data) in sections[5].records.iter().enumerate() {
             let r = View {
                 data,
                 format: "MSB part",
                 be: false,
             };
-            r.slice(0, 160)?;
-            let name = text(&r, pointer(&r, 0, 160)?)?;
-            text(&r, pointer(&r, 24, 160)?)?;
-            let kind = PartKind::read(r.u32(8)?)?;
-            r.expect(20, &[0; 4])?;
-            r.expect(68, &[255; 8])?;
-            r.expect(76, &[0; 4])?;
-            r.expect(136, &[0; 24])?;
-            let model = r.u32(16)?;
+            r.slice(0, header)?;
+            let name = text(&r, pointer(&r, 0, header)?)?;
+            text(&r, pointer(&r, 24, header)?)?;
+            let code = r.u32(generation.part_kind)?;
+            let kind = generation
+                .part_kinds
+                .iter()
+                .find(|(c, _)| *c == code)
+                .map(|(_, k)| *k)
+                .ok_or_else(|| invalid(r.format, generation.part_kind, "unknown part kind"))?;
+            for &(offset, bytes) in generation.part_fixed {
+                r.expect(offset, bytes)?;
+            }
+            let model = r.u32(generation.part_model)?;
             let model = if model == u32::MAX {
                 None
             } else if (model as usize) < models.len() {
                 Some(model as usize)
             } else {
-                return Err(invalid(r.format, 16, "model index"));
+                return Err(invalid(r.format, generation.part_model, "model index"));
             };
-            for field in [80, 88, 96, 104, 112, 120, 128] {
+            let (first, count) = generation.part_payloads;
+            for field in (0..count).map(|i| first + i * 8) {
                 let p = r.size(field)?;
                 if p == 0 {
                     if matches!(field, 96 | 104) {
                         return Err(invalid(r.format, field, "missing part payload"));
                     }
                 } else {
-                    pointer(&r, field, 160)?;
+                    pointer(&r, field, header)?;
                 }
             }
-            // entity block: ID at +0, eight group IDs at +0x1c, then 16 zero bytes to +0x54
+            // entity block: ID at +0, shadow controls from +0x0a, eight group IDs at +0x1c
             let entity = r.size(96)?;
-            r.slice(entity, 0x54)?;
-            r.expect(entity + 0x44, &[0; 16])?;
+            r.slice(entity, generation.entity_block)?;
+            if let Some((offset, len)) = generation.entity_zero {
+                r.expect(entity + offset, &vec![0; len])?;
+            }
             let i32_at = |o: usize| r.u32(o).map(|v| v as i32);
             let entity_id = i32_at(entity)?;
             let mut entity_group_ids = [0i32; 8];
@@ -282,7 +428,14 @@ impl MapLayout {
                     cast: r.boolean(entity + 0x0c)?,
                     receive: r.boolean(entity + 0x11)?,
                     only: r.boolean(entity + 0x12)?,
-                    point_light_cast: r.boolean(entity + 0x0a)?,
+                    point_light_cast: match generation.point_light_shadow {
+                        FlagByte::Bool => r.boolean(entity + 0x0a)?,
+                        FlagByte::ZeroOrMinusOne => match r.u8(entity + 0x0a)? {
+                            0 => false,
+                            0xff => true,
+                            _ => return Err(invalid(r.format, entity + 0x0a, "point-light shadow byte")),
+                        },
+                    },
                     static_cast: r.u8(entity + 0x0d)?,
                     cascade3_cast: r.u8(entity + 0x0e)?,
                 },
@@ -304,7 +457,7 @@ impl MapLayout {
                 be: false,
             };
             r.slice(0, 40)?;
-            if r.u32(12)? == 9 {
+            if Some(r.u32(12)?) == generation.map_offset_event {
                 let name = text(&r, pointer(&r, 0, 40)?)?;
                 let base = pointer(&r, 24, 40)?;
                 r.slice(base, 16)?;
@@ -317,6 +470,7 @@ impl MapLayout {
             }
         }
         Ok(Self {
+            generation,
             models,
             parts,
             map_offsets,
@@ -392,7 +546,15 @@ pub struct SpawnPoint {
     pub rotation_degrees: [f32; 3],
 }
 impl MapLayout {
+    /// The checkpoint/warp spawn regions, in generations whose region code is known; an error otherwise.
     pub fn spawn_points(&self) -> Result<Vec<SpawnPoint>> {
+        let code = self.generation.spawn_region.ok_or_else(|| {
+            invalid(
+                "MSB",
+                0,
+                format!("{}: spawn region code not known", self.generation.name),
+            )
+        })?;
         let section = self
             .sections
             .iter()
@@ -405,7 +567,7 @@ impl MapLayout {
                 format: "MSB region",
                 be: false,
             };
-            if v.u32(8)? != 8 {
+            if v.u32(8)? != code {
                 continue;
             }
             v.slice(0, 96)?;

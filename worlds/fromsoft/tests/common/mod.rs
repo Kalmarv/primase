@@ -99,3 +99,53 @@ pub fn image_passes(world: &mut primase_core::World, pipeline: &str) -> primase_
         .expect("passes run");
     report
 }
+
+/// A configured game's archives (`PRIMASE_SEKIRO_DIR`, or `PRIMASE_ELDEN_DIR` with `PRIMASE_ELDEN_KEYS`), or `None`
+/// when the configuration lacks them.
+pub fn archive(
+    game: primase_fromsoft::Game,
+) -> Result<Option<primase_fromsoft::Archive>, Box<dyn std::error::Error>> {
+    use primase_fromsoft::{Archive, Game, Keys};
+    use primase_testdata::real_data;
+    Ok(match game {
+        Game::Sekiro => real_data("PRIMASE_SEKIRO_DIR").map(Archive::open).transpose()?,
+        Game::EldenRing => match (real_data("PRIMASE_ELDEN_DIR"), real_data("PRIMASE_ELDEN_KEYS")) {
+            (Some(dir), Some(keys)) => Some(Archive::open_game(dir, game, &Keys::from_folder(keys, game)?)?),
+            _ => None,
+        },
+    })
+}
+
+/// The reference readers (SoulsFormats) rename repeated entries in file order: the second and later uses of a name (and every blank
+/// name) become `"<name> {n}"`, repeating until no name is ambiguous.
+pub fn disambiguate(names: &mut [String]) {
+    loop {
+        let mut counts: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::from([(String::new(), 0)]);
+        let mut ambiguous = false;
+        for name in names.iter_mut() {
+            if !counts.contains_key(name.as_str()) && !name.is_empty() {
+                counts.insert(name.clone(), 1);
+            } else {
+                ambiguous = true;
+                let n = counts.entry(name.clone()).or_default();
+                *n += 1;
+                *name = format!("{name} {{{n}}}");
+            }
+        }
+        if !ambiguous {
+            break;
+        }
+    }
+}
+
+/// A float a reference dump writes as its u32 bit pattern in hex.
+pub fn bits(v: &serde_json::Value) -> Result<u32, Box<dyn std::error::Error>> {
+    Ok(u32::from_str_radix(v.as_str().ok_or("float bits")?, 16)?)
+}
+
+/// Three floats a reference dump writes as bit patterns.
+pub fn bits3(v: &serde_json::Value) -> Result<[u32; 3], Box<dyn std::error::Error>> {
+    let a = v.as_array().ok_or("vector")?;
+    Ok([bits(&a[0])?, bits(&a[1])?, bits(&a[2])?])
+}

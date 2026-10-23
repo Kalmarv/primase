@@ -2,13 +2,15 @@
 //! (`PRIMASE_FROMSOFT_RIGID_ORACLE`'s parts.jsonl, every map piece and object part). Each part by name: its kind and
 //! model, and its position, rotation (degrees) and scale bit for bit. The matrices derived from them are checked
 //! against the same dump by sekiro_scene.rs. Not covered here: other part kinds (enemies, collisions, dummies) and
-//! map offsets, which the dump doesn't hold (an open coverage gap, CONTRIBUTING's real-data table).
+//! map offsets, which the dump doesn't hold (an open coverage gap, CONTRIBUTING's real-data table). Elden Ring's
+//! layouts are checked whole, every part of every kind, against SoulsFormatsNEXT's reading of them.
 use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::msb::PartKind;
 use primase_fromsoft::{Archive, dcx::Decoder, msb::MapLayout};
 use primase_testdata::real_data;
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+mod common;
 #[allow(unsafe_code)]
 mod native {
     pub fn load(path: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
@@ -101,5 +103,145 @@ fn stored_parts_match_an_independent_reading() -> Result<()> {
     println!("{seen} parts of {AREA}\n{stored}");
     assert!(seen > 0);
     stored.assert_passed();
+    Ok(())
+}
+
+/// Every map layout of a game against an independent reader's reading of the same files (`msb.jsonl` of the game's
+/// format oracle: SoulsFormatsNEXT ee1dd61's MSBE for Elden Ring, `PRIMASE_ELDEN_FORMAT_ORACLE`): the models' names,
+/// and every part of every kind by name: its kind, model, position, rotation and scale (f32 bit patterns), entity ID
+/// and groups, the six shadow controls and a collision part's hit filter.
+#[test]
+fn every_layout_matches_an_independent_reading() -> Result<()> {
+    use primase_fromsoft::Game;
+    for (game, var) in [(Game::EldenRing, "PRIMASE_ELDEN_FORMAT_ORACLE")] {
+        let (Some(archive), Some(oracle), Some(dll)) = (
+            common::archive(game)?,
+            real_data(var),
+            real_data("PRIMASE_OODLE6"),
+        ) else {
+            continue;
+        };
+        let dll = native::load(dll)?;
+        let decoder = Decoder {
+            oodle: Some(&dll),
+            max_output: 1 << 30,
+        };
+        let (mut maps, mut parts, mut fields) = (0usize, 0usize, 0usize);
+        let mut failures = Vec::new();
+        for line in std::fs::read_to_string(oracle.join("msb.jsonl"))?.lines() {
+            let record: serde_json::Value = serde_json::from_str(line)?;
+            let path = record["path"].as_str().ok_or("path")?;
+            let layout =
+                MapLayout::read(&archive.read(path, &decoder)?).map_err(|e| format!("{path}: {e}"))?;
+            maps += 1;
+            let mut model_names: Vec<String> = layout.models.iter().map(|m| m.name.clone()).collect();
+            common::disambiguate(&mut model_names);
+            let mut want_models: Vec<&str> = record["models"]
+                .as_array()
+                .ok_or("models")?
+                .iter()
+                .map(|m| m["name"].as_str().unwrap_or_default())
+                .collect();
+            let mut have_models: Vec<&str> = model_names.iter().map(String::as_str).collect();
+            want_models.sort_unstable();
+            have_models.sort_unstable();
+            if want_models != have_models {
+                failures.push(format!("{path}: model names differ"));
+            }
+            let mut names: Vec<String> = layout.parts.iter().map(|p| p.name.clone()).collect();
+            common::disambiguate(&mut names);
+            let ours: BTreeMap<&str, usize> =
+                names.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+            let theirs = record["parts"].as_array().ok_or("parts")?;
+            if theirs.len() != layout.parts.len() || ours.len() != layout.parts.len() {
+                failures.push(format!(
+                    "{path}: part count {} vs {}",
+                    layout.parts.len(),
+                    theirs.len()
+                ));
+                continue;
+            }
+            for want in theirs {
+                let name = want["name"].as_str().ok_or("part name")?;
+                let Some(&i) = ours.get(name) else {
+                    failures.push(format!("{path}: no part {name}"));
+                    continue;
+                };
+                let p = &layout.parts[i];
+                parts += 1;
+                let groups: Vec<i64> = p.entity_group_ids.iter().map(|&g| i64::from(g)).collect();
+                let want_groups: Vec<i64> = want["entity_group_ids"]
+                    .as_array()
+                    .ok_or("groups")?
+                    .iter()
+                    .filter_map(serde_json::Value::as_i64)
+                    .collect();
+                // the reference reads the point-light byte as a signed byte: 0 or -1
+                let point_light = match want["point_light"].as_i64() {
+                    Some(0) => false,
+                    Some(-1) => true,
+                    other => return Err(format!("{path} {name}: point light {other:?}").into()),
+                };
+                let checks = [
+                    (
+                        "kind",
+                        format!("{:?}", p.kind) == want["kind"].as_str().unwrap_or_default(),
+                    ),
+                    (
+                        "model",
+                        p.model.map(|m| model_names[m].as_str()) == want["model"].as_str(),
+                    ),
+                    (
+                        "position",
+                        p.position.map(f32::to_bits) == common::bits3(&want["position"])?,
+                    ),
+                    (
+                        "rotation",
+                        p.rotation_degrees.map(f32::to_bits) == common::bits3(&want["rotation"])?,
+                    ),
+                    (
+                        "scale",
+                        p.scale.map(f32::to_bits) == common::bits3(&want["scale"])?,
+                    ),
+                    (
+                        "entity id",
+                        Some(i64::from(p.entity_id)) == want["entity_id"].as_i64(),
+                    ),
+                    ("entity groups", groups == want_groups),
+                    ("cast", Some(p.shadows.cast) == want["cast"].as_bool()),
+                    ("receive", Some(p.shadows.receive) == want["receive"].as_bool()),
+                    ("only", Some(p.shadows.only) == want["only"].as_bool()),
+                    ("point light", p.shadows.point_light_cast == point_light),
+                    (
+                        "static",
+                        Some(i64::from(p.shadows.static_cast)) == want["static_cast"].as_i64(),
+                    ),
+                    (
+                        "cascade3",
+                        Some(i64::from(p.shadows.cascade3_cast)) == want["cascade3_cast"].as_i64(),
+                    ),
+                    (
+                        "hit filter",
+                        p.hit_filter.map(i64::from) == want["hit_filter"].as_i64(),
+                    ),
+                ];
+                for (field, same) in checks {
+                    fields += 1;
+                    if !same {
+                        failures.push(format!("{path} {name}: {field}"));
+                    }
+                }
+            }
+        }
+        println!(
+            "{}: maps {maps}, parts {parts}, fields compared {fields}, mismatches {}",
+            game.name(),
+            failures.len()
+        );
+        for f in failures.iter().take(40) {
+            println!("MISMATCH {f}");
+        }
+        assert!(maps > 0 && failures.is_empty());
+    }
     Ok(())
 }

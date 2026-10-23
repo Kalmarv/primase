@@ -488,6 +488,14 @@ pub const VARIABLES: &[Variable] = &[
         source: r#"independent: SoulsFormatsNEXT ee1dd61 with UXM 9501be8's keys, RSA and path hash, the Elden Ring harness's `census` mode (kept with the private oracle tools)"#,
     },
     Variable {
+        name: "PRIMASE_ELDEN_FORMAT_ORACLE",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"an independent reader's field-by-field reading of Elden Ring files read from PRIMASE_ELDEN_DIR (JSON lines, floats as hex bit patterns): `msb.jsonl` (every map layout: its models, and every part with kind, model, transform, entity IDs, shadow controls and hit filter); schema in worlds/fromsoft/README.md; worlds/fromsoft/tests/msb_census.rs"#,
+        status: Status::Live,
+        source: r#"independent: SoulsFormatsNEXT ee1dd61 with UXM 9501be8's keys and path hash, the Elden Ring harness's format modes (kept with the private oracle tools)"#,
+    },
+    Variable {
         name: "PRIMASE_FROMSOFT_RIGID_ORACLE",
         kind: Kind::Input,
         gate: true,

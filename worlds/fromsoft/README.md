@@ -151,10 +151,25 @@ four ULP and report component histograms separately from exact topology.
 
 ## MSB placements
 
-`msb::MapLayout::read(bytes)` reads Sekiro's section chain, models, part names,
+`msb::MapLayout::read(bytes)` reads the section chain, models, part names,
 model references, stored transforms and MapOffset events. Unrelated gameplay
 records remain opaque; their envelopes, rather than their schemas, are checked.
 Names remain as stored, with part indices distinguishing repeated names.
+
+The generations share the section chain and the record envelopes; what differs is a
+`msb::Generation`, chosen by the file's section chain (its names in order), never by
+the game a caller names. The number each section stores is a revision, kept in
+`Section::version`, not a layout choice.
+
+| | MSBS (Sekiro) | MSBE (Elden Ring) |
+|---|---|---|
+| sections | 8, ending with part poses and bone names (both empty) | 6, ending with parts |
+| part header | 160 bytes, kind at 8, model at 16 | 192 bytes, kind at 12, model at 20 |
+| placed geometry kinds | map piece 0, object 1 | map piece 0, asset 13 (and dummy asset 9) |
+| entity block | 0x54 bytes, 16 zero at 0x44 | 0x40 bytes |
+| point-light shadow byte | 0/1 | 0/0xff |
+| MapOffset event | type 9 | none |
+| spawn-point region | type 8 | not read yet (`spawn_points` refuses) |
 
 Parts already occupy the common world frame. Their local scale is followed by
 Euler rotations X, Z, Y, then translation. `Part::transform` uses ordinary f64
@@ -167,6 +182,15 @@ The MSB reading is checked against an independent one: SoulsFormats' parts of th
 `position`, `rotation` in degrees and `scale`). Each part's stored values must match bit for bit (`msb_census.rs`); the
 matrices derived from them are checked against the same dump by `sekiro_scene.rs`. Other part kinds and map offsets
 have no independent reference yet: an open coverage gap (build one when a step 20 or in-game Sekiro difference points at this area).
+
+Elden Ring's layouts are checked whole against SoulsFormatsNEXT ee1dd61's MSBE
+(`PRIMASE_ELDEN_FORMAT_ORACLE`'s `msb.jsonl`, `tests/msb_census.rs`): one record per
+layout the install holds, `path` (the archive path), `models` (`name`, `kind`) and
+`parts`: `name`, `kind` (the reference's class name), `model`, `position`/`rotation`/
+`scale` (three f32 bit patterns as hex strings), `entity_id`, `entity_group_ids`,
+`cast`, `receive`, `only`, `point_light` (0 or -1), `static_cast`, `cascade3_cast` and
+`hit_filter` (collision parts, else null). Repeated names follow the reference's
+convention: later uses become `"<name> {n}"`, in file order.
 
 Parts also carry their entity ID and eight entity group IDs as stored (sentinels -1 and 0 included); event scripts
 address a part by any positive one of them (`Part::entity_ids`). `PRIMASE_FROMSOFT_STATE_ORACLE` is a folder from an
