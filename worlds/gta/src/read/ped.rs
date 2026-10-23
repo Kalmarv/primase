@@ -1,8 +1,11 @@
 //! A component ped read as a whole ([`GtaSource::read_ped`]): the files a ped is made of, found by its name beside
 //! its variation info, and what they hold put in one world with every choice left open.
 //!
-//! - **The skeleton**: the ped's fragment (`.yft`) read as [`GtaSource::read_entry`] reads one: a prototype holding the
-//!   [`GtaSkeleton`] (each bone's local transform and inverse bind). It is the asset's rig.
+//! - **The skeleton**: the ped's fragment (`.yft`) read as [`GtaSource::read_entry`] reads one, but for its model: a
+//!   prototype holding the [`GtaSkeleton`] (each bone's local transform and inverse bind). It is the asset's rig, and
+//!   nothing else (`Content::SkeletonOnly`): every component ped's fragment holds the same 25-vertex placeholder solid
+//!   (562 of 562 peds read), which is no part of the ped, and a member that is a rig and a mesh is neither
+//!   (`core.asset` refuses it).
 //! - **The parts**: each drawable the variation info offers ([`PedVariations::entries`]) as a prototype of the ped's
 //!   drawable dictionary (`.ydd`) entry, loaded as a drawable is loaded for a placement, its textures found in the ped's
 //!   own texture dictionary (`.ytd`) first. A part has [`GtaPedPart`] (what the info says of it, including its texture
@@ -27,7 +30,7 @@ use crate::rage::meta::Meta;
 use crate::rage::ped::{COMPONENT_SLOTS, PedVariations, entry_name};
 use crate::read::archive::archive_set::FileRef;
 use crate::read::archive::rpf::EntryKind;
-use crate::read::assets::{AssetReport, Ctx, decode, load_prototype};
+use crate::read::assets::{AssetReport, Content, Ctx, decode, load_prototype};
 use crate::read::entry::made_archetype;
 use crate::read::source::GtaSource;
 use crate::{Result, invalid};
@@ -113,7 +116,15 @@ impl GtaSource {
         w.insert(skeleton, resolved);
         w.insert(skeleton, Name(format!("{stem} skeleton")));
         w.insert(skeleton, fragment.clone());
-        load_prototype(&mut ctx, &mut w, skeleton, &fragment, lookup, yft)?;
+        load_prototype(
+            &mut ctx,
+            &mut w,
+            skeleton,
+            &fragment,
+            lookup,
+            yft,
+            Content::SkeletonOnly,
+        )?;
         if !w.has::<GtaSkeleton>(skeleton) {
             return Err(invalid(
                 "ped",
@@ -193,7 +204,7 @@ impl GtaSource {
                 Name(entry_name(e.slot, e.drawable, e.suffix).unwrap_or_default()),
             );
             w.insert(part, archetype.clone());
-            load_prototype(&mut ctx, &mut w, part, &archetype, lookup, ydd)?;
+            load_prototype(&mut ctx, &mut w, part, &archetype, lookup, ydd, Content::Whole)?;
             w.insert(
                 part,
                 GtaPedPart {

@@ -31,7 +31,8 @@ use crate::read::archive::archive_set::{ArchiveSet, FileRef};
 use crate::read::archive::keys::Keys;
 use crate::read::archive::rpf::EntryKind;
 use crate::read::assets::{
-    AssetReport, Ctx, LightsReport, Lookup, attach_lights, decode, load_prototype, origin, put_lights,
+    AssetReport, Content, Ctx, LightsReport, Lookup, attach_lights, decode, load_prototype, origin,
+    put_lights,
 };
 use crate::read::collision::{BoundsReport, install_material_names, place_map_bounds};
 use crate::read::region::{RegionReport, read_map_file};
@@ -209,7 +210,7 @@ impl GtaSource {
             };
             w.insert(proto, Name(name));
             w.insert(proto, a.clone());
-            load_prototype(&mut ctx, &mut w, proto, &a, lookup, file)?;
+            load_prototype(&mut ctx, &mut w, proto, &a, lookup, file, Content::Whole)?;
             let entry = if ext == "ydd" { asset_name } else { 0 };
             put_lights(
                 &mut w,

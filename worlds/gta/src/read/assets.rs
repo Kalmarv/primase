@@ -720,13 +720,24 @@ fn attach(w: &mut World, lookups: Lookups<'_>, keys: &Keys) -> Result<AssetRepor
             bump(&mut ctx.report.asset_missing);
             continue;
         };
-        load_prototype(&mut ctx, w, proto, &a, lookup, f)?;
+        load_prototype(&mut ctx, w, proto, &a, lookup, f, Content::Whole)?;
     }
     Ok(ctx.report)
 }
 
+/// What [`load_prototype`] reads of a file's drawable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Content {
+    /// The drawable whole: its physics bound, materials, skeleton and models (the high LOD is the prototype's mesh).
+    Whole,
+    /// Its skeleton and physics bound only: for a prototype that is a rig and nothing drawn. A component ped's
+    /// fragment holds a placeholder model of its own (the same 25-vertex solid in every ped), which is no part of the
+    /// ped: the ped's parts are the drawables of its dictionary.
+    SkeletonOnly,
+}
+
 /// One file's drawable, a prototype's own: `f` is the file `a` (the prototype's archetype, asset type 1 to 3) resolves
-/// to in `lookup`, or any file of that kind the caller means ([`attach_file`]).
+/// to in `lookup`, or any file of that kind the caller means ([`attach_file`]); `content` says how much of it is read.
 pub(crate) fn load_prototype(
     ctx: &mut Ctx<'_>,
     w: &mut World,
@@ -734,6 +745,7 @@ pub(crate) fn load_prototype(
     a: &GtaArchetype,
     lookup: Lookup<'_>,
     f: FileRef,
+    content: Content,
 ) -> Result<()> {
     {
         let set = lookup.set;
@@ -780,8 +792,13 @@ pub(crate) fn load_prototype(
             );
             bump(&mut ctx.report.embedded_bounds);
         }
-        let mut materials = Vec::with_capacity(d.shaders.len());
-        for (i, s) in d.shaders.iter().enumerate() {
+        let shaders = if content == Content::Whole {
+            d.shaders.as_slice()
+        } else {
+            &[]
+        };
+        let mut materials = Vec::with_capacity(shaders.len());
+        for (i, s) in shaders.iter().enumerate() {
             let mut params = Vec::with_capacity(s.params.len());
             for p in &s.params {
                 let v = match &p.value {
@@ -824,6 +841,9 @@ pub(crate) fn load_prototype(
         };
         if !bones.is_empty() {
             w.insert(proto, GtaSkeleton(bones));
+        }
+        if content == Content::SkeletonOnly {
+            return Ok(());
         }
         let on_bones: [Vec<Option<u16>>; 4] = d.lods.each_ref().map(|l| model_bones(&d, l));
         // per LOD that has models: its mesh and its primitives' sources; the high LOD is the prototype's own, the
