@@ -27,10 +27,12 @@
 //! - `passes_registered`: every pass is registered by name, and every public lowering returning a `PassLog` is run
 //!   by a pass.
 //! - `writers_read_only`: a writer's entry points take the world read-only.
-//! - `real_data_variables_are_declared`: every `PRIMASE_*` name in the workspace's sources is declared in the
-//!   real-data registry (`toolkit/testdata/src/inputs.rs`), every declared name is read somewhere, and
-//!   CONTRIBUTING.md's table and `primase-data.example.toml` agree with the registry. Names are whole string
-//!   literals, so the scan sees every one: a name a format string builds (`PRIMASE_{x}`) fails.
+//! - `real_data_variables_are_declared`: a `PRIMASE_*` name in the workspace's sources is the configuration's (read by
+//!   `toolkit/testdata` only: `PRIMASE_DATA`, `PRIMASE_DEBUG` and, for this release, the older names) or a test's
+//!   handoff to its own child process; CONTRIBUTING.md's real-data tables and `primase-data.example.toml` agree with
+//!   the registry. Names are whole string literals, so the scan sees every one: a name a format string builds
+//!   (`PRIMASE_{x}`) fails. `real_data_queries_are_declared`: every typed query names a declared file by a literal
+//!   path.
 //! - `component_geometry_hooks`: every component's stated geometry (`const GEOMETRY`) matches the remap hooks it
 //!   implements, in every crate, tests included.
 //! - `parse_modules_are_checked`: in the crates `architecture.toml` opts in as `parse_crate`, every module that
@@ -1724,49 +1726,54 @@ fn variable_literals_see_built_names() {
     assert_eq!(built, ["PRIMASE_"]);
 }
 
+/// The `PRIMASE_*` variables a test hands its own child process (set on the child, read by it): not configuration.
+const CHILD_HANDOFFS: &[&str] = &[
+    "PRIMASE_KTX2_TEST_OUTPUT",
+    "PRIMASE_PRINT_CHILD_FILE",
+    "PRIMASE_CACHE_CHILD_DIR",
+];
+
 #[test]
 fn real_data_variables_are_declared() {
-    use primase_testdata::VARIABLES;
-    let declared: BTreeSet<&str> = VARIABLES.iter().map(|v| v.name).collect();
-    // names read by sources: every member crate's .rs files
-    let mut found: BTreeMap<String, String> = BTreeMap::new();
+    // primase-testdata reads the configuration's variables and, for this release, the older names
+    // (primase_testdata::legacy::OLDER); anywhere else a PRIMASE_* name is a child process's handoff
+    let configuration: BTreeSet<&str> = ["PRIMASE_DATA", "PRIMASE_DEBUG", primase_testdata::config::REQUIRE]
+        .into_iter()
+        .chain(primase_testdata::legacy::OLDER.iter().map(|(n, _)| *n))
+        .collect();
+    let mut unknown = Vec::new();
     let mut built = Vec::new();
     for m in members() {
-        // the registry itself names every variable: it declares, it does not read
+        // this file names the handoffs, as the check's own table
         for file in rust_files(&root().join(&m.path))
             .into_iter()
-            .filter(|f| f != "toolkit/testdata/src/inputs.rs")
+            .filter(|f| f != "checks/tests/architecture.rs")
         {
             let (names, templates) = variable_literals(&read(&root().join(&file)));
-            for name in names {
-                found.entry(name).or_insert_with(|| file.clone());
-            }
+            let known = |n: &str| {
+                if file.starts_with("toolkit/testdata/") {
+                    configuration.contains(n)
+                } else {
+                    CHILD_HANDOFFS.contains(&n)
+                }
+            };
+            unknown.extend(
+                names
+                    .into_iter()
+                    .filter(|n| !known(n))
+                    .map(|n| format!("{n} ({file})")),
+            );
             built.extend(templates.into_iter().map(|t| format!("{t} ({file})")));
         }
     }
     assert!(
         built.is_empty(),
-        "PRIMASE_* names a format string completes, which the registry check cannot see (write each name as a literal): {built:?}"
+        "PRIMASE_* names a format string completes, which this check cannot see (write each name as a literal): {built:?}"
     );
-    let undeclared: Vec<String> = found
-        .iter()
-        .filter(|(n, _)| !declared.contains(n.as_str()))
-        .map(|(n, f)| format!("{n} ({f})"))
-        .collect();
     assert!(
-        undeclared.is_empty(),
-        "PRIMASE_* names read but not declared in toolkit/testdata/src/inputs.rs: {undeclared:?}"
-    );
-    // an older name the structured configuration stands in for stays declared, read or not, while its translation
-    // does (primase_testdata::legacy): configurations and tests still name it for one release
-    let stale: Vec<&str> = declared
-        .iter()
-        .filter(|n| !found.contains_key(**n) && primase_testdata::legacy::translate(n).is_none())
-        .copied()
-        .collect();
-    assert!(
-        stale.is_empty(),
-        "declared but read nowhere (remove them): {stale:?}"
+        unknown.is_empty(),
+        "PRIMASE_* names outside the configuration (tests ask primase-testdata by query, CONTRIBUTING.md; a child \
+         process's handoff is listed in CHILD_HANDOFFS): {unknown:?}"
     );
 
     // CONTRIBUTING.md's real-data tables are the registry's, as primase_testdata::doc makes them

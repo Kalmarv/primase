@@ -65,7 +65,7 @@ fn section_keys(section: &str) -> Option<Vec<&'static str>> {
 }
 
 /// The older switch `[run] require` stands for, in the environment or the flat file.
-pub(crate) const REQUIRE: &str = "PRIMASE_REQUIRE_REAL_DATA";
+pub const REQUIRE: &str = "PRIMASE_REQUIRE_REAL_DATA";
 
 /// `[run] require` from the older switch's value: `1` was every input, `gate` the landing gate's.
 fn older_require(value: &str) -> String {
@@ -108,19 +108,19 @@ impl Config {
         let table: toml::Table = toml::from_str(text).map_err(|e| invalid(e.to_string()))?;
         let flat = table.values().all(|v| v.is_str());
         if flat && !table.is_empty() {
-            // the older flat map: every name a declared PRIMASE_* name, every value a string
+            // the older flat map of PRIMASE_* names to strings (crate::legacy::OLDER)
             for (name, value) in &table {
                 let value = value.as_str().unwrap_or_default();
                 if name == REQUIRE {
                     self.require = Some(older_require(value));
                     continue;
                 }
-                // a name this build does not declare belongs to work not merged yet: the older format read only the
-                // names asked for, so it is passed over, not refused
-                let Some(declared) = crate::declared(name) else {
+                // a name the table does not hold (a child process's handoff, work not merged) is passed over: the
+                // older format read only the names asked for
+                let Some(&(older, _)) = crate::legacy::OLDER.iter().find(|(n, _)| n == name) else {
                     continue;
                 };
-                self.legacy_name(declared.name, OsString::from(value));
+                self.legacy_name(older, OsString::from(value));
             }
             return Ok(());
         }

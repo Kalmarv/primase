@@ -6,8 +6,9 @@
 //! whose path is gone always fails, and so does a file the registry does not declare. CONTRIBUTING.md's tables are
 //! made from the registry ([`doc`]).
 //!
-//! For one release the older `PRIMASE_*` names still work ([`legacy`]): asked through [`real_data`], set in the
-//! environment or in the older flat file. Add this crate only in dev-dependencies. It has no dependency on core.
+//! For this release the older `PRIMASE_*` names still configure ([`legacy`]): set in the environment or in the older
+//! flat file, each stands for its key and says once that it is deprecated; the next release removes them. Add this
+//! crate only in dev-dependencies. It has no dependency on core.
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -15,23 +16,14 @@ use std::sync::Mutex;
 
 pub mod config;
 pub mod doc;
-mod inputs;
 pub mod legacy;
 mod query;
 pub mod registry;
-pub use inputs::{Kind, Status, VARIABLES, Variable, declared};
 pub use query::Query;
+pub use registry::Status;
 pub use registry::{Game, OracleSet, Tool};
 
 use config::Config;
-
-/// Refuse a name the registry ([`VARIABLES`]) does not declare: a typo must not skip quietly.
-#[track_caller]
-fn checked(name: &str) -> &'static Variable {
-    declared(name).unwrap_or_else(|| {
-        panic!("{name} is not declared in toolkit/testdata/src/inputs.rs: declare it there (and in CONTRIBUTING.md)")
-    })
-}
 
 fn environment(name: &str) -> Option<OsString> {
     std::env::var_os(name)
@@ -168,63 +160,10 @@ pub fn debug(key: &str) -> Option<String> {
     load().debug(&environment, key)
 }
 
-/// Resolve an older name to a raw value: a switch's or filter's value, an output folder, a configured path (not
-/// checked to exist), or a child process's handoff from the environment. Fails on a broken configuration.
-#[track_caller]
-pub fn real_data_value(name: &str) -> Option<OsString> {
-    let variable = checked(name);
-    match legacy::translate(variable.name) {
-        Some(Query::Debug(key)) => debug(key).map(OsString::from),
-        Some(Query::Retired) => None,
-        Some(query) => configured(&load(), query).map(PathBuf::into_os_string),
-        None => environment(variable.name),
-    }
-}
-
-/// [`real_data_value`], the configuration's errors returned instead of failing.
-#[track_caller]
-pub fn try_real_data_value(name: &str) -> Result<Option<OsString>, config::ConfigError> {
-    let variable = checked(name);
-    let config = Config::load(&environment, |path| std::fs::read_to_string(path))?;
-    Ok(match legacy::translate(variable.name) {
-        Some(Query::Debug(key)) => config.debug(&environment, key).map(OsString::from),
-        Some(Query::Retired) => None,
-        Some(query) => configured(&config, query).map(PathBuf::into_os_string),
-        None => environment(variable.name),
-    })
-}
-
-/// Resolve an older name to an existing path ([`resolve`] of what it stands for; a debug key naming a file is
-/// checked to exist the same way). See CONTRIBUTING.md for the configuration.
-#[track_caller]
-pub fn real_data(name: &str) -> Option<PathBuf> {
-    let variable = checked(name);
-    match legacy::translate(variable.name) {
-        Some(Query::Debug(key)) => debug(key).map(PathBuf::from).inspect(|p| {
-            assert!(p.exists(), "debug {key} = {} does not exist", p.display());
-        }),
-        Some(query) => resolve(query),
-        None => environment(variable.name).map(PathBuf::from),
-    }
-}
-
 /// The bytes of a real-data input file, for a unit test inside a library crate, which has no file access of its own:
-/// the file `real_data` resolved, or one its input names.
+/// the file a query resolved, or one its input names.
 pub fn read_input(path: impl AsRef<Path>) -> std::io::Result<Vec<u8>> {
     std::fs::read(path)
-}
-
-/// A configured input that yields nothing is a failure, not a pass: call it after enumerating what `name` gave
-/// (`what`: "scene folders", "drawables"), with how many were found.
-#[track_caller]
-pub fn expect_items(name: &str, what: &str, n: usize) {
-    let variable = checked(name);
-    if n == 0 {
-        panic!(
-            "{name} is set but yielded 0 {what} (expected: {})",
-            variable.about
-        );
-    }
 }
 
 /// What the registry says `query` names: a declared file's description, else its configuration key's.
@@ -381,27 +320,27 @@ mod tests {
 
     #[test]
     fn every_older_name_stands_for_a_declared_entry() {
-        for v in VARIABLES {
-            match (v.kind, legacy::translate(v.name)) {
-                (Kind::Config | Kind::Child | Kind::Test, None) => {}
-                // the older switch is the configuration's [run] require (config::REQUIRE)
-                (Kind::Switch, None) if v.name == config::REQUIRE => {}
-                (Kind::Config | Kind::Child | Kind::Test, Some(q)) => {
-                    panic!("{}: not configuration, but translated to {q:?}", v.name)
-                }
-                (_, None) => panic!("{}: no translation", v.name),
-                (_, Some(Query::Retired)) => assert_eq!(v.status, Status::Retired, "{}", v.name),
-                (_, Some(Query::Debug(key))) => assert!(
+        let mut names: Vec<&str> = legacy::OLDER.iter().map(|(n, _)| *n).collect();
+        let n = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), n, "an older name twice");
+        for (name, q) in legacy::OLDER {
+            assert!(name.starts_with("PRIMASE_") && *name != config::REQUIRE, "{name}");
+            match *q {
+                Query::Retired => {}
+                Query::Debug(key) => assert!(
                     registry::DEBUG.iter().any(|(k, _)| *k == key),
-                    "{}: debug key {key} undeclared",
-                    v.name
+                    "{name}: debug key {key} undeclared"
                 ),
-                (_, Some(q @ (Query::Install(_, Some(_)) | Query::Oracle(..)))) => {
-                    let d = registry::declaration(q)
-                        .unwrap_or_else(|| panic!("{}: {} is not declared", v.name, q.key()));
-                    assert_eq!((d.status, d.gate), (v.status, v.gate), "{}", v.name);
+                Query::Install(_, Some(_)) | Query::Oracle(..) => {
+                    assert!(
+                        registry::declaration(*q).is_some(),
+                        "{name}: {} is not declared",
+                        q.key()
+                    );
                 }
-                (_, Some(q)) => assert!(!about_of(q).is_empty(), "{}: {q:?} has no registry entry", v.name),
+                q => assert!(!about_of(q).is_empty(), "{name}: {q:?} has no registry entry"),
             }
         }
         // the registry's own rules: unique keys, something to say for each
@@ -473,45 +412,10 @@ mod tests {
     }
 
     #[test]
-    fn undeclared_names_and_empty_inputs_fail() {
-        let undeclared = std::panic::catch_unwind(|| real_data_value(concat!("PRIMASE", "_NOT_DECLARED")));
-        assert!(undeclared.is_err());
-        let empty = std::panic::catch_unwind(|| expect_items("PRIMASE_GTA_DIR", "archives", 0));
-        assert!(empty.is_err());
-        expect_items("PRIMASE_GTA_DIR", "archives", 1);
+    fn an_empty_configured_input_fails() {
         let gta = Query::Install(Game::Gta, None);
         let empty = std::panic::catch_unwind(|| expect_found(gta, "archives", 0));
         assert!(empty.is_err());
         expect_found(gta, "archives", 1);
-        let mut names: Vec<&str> = VARIABLES.iter().map(|v| v.name).collect();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), VARIABLES.len());
-        assert!(
-            VARIABLES
-                .iter()
-                .all(|v| v.name.starts_with("PRIMASE_") && !v.about.is_empty())
-        );
-        assert!(VARIABLES.iter().all(|v| !v.gate || v.kind == Kind::Input));
-    }
-
-    #[test]
-    fn every_input_states_its_source_and_retired_ones_leave_the_gate() {
-        for v in VARIABLES {
-            if v.kind == Kind::Input {
-                assert!(!v.source.is_empty(), "{}: say where its data comes from", v.name);
-            } else {
-                assert!(
-                    v.source.is_empty() && v.status == Status::Live,
-                    "{}: only inputs have a source and a status",
-                    v.name
-                );
-            }
-            assert!(
-                !(v.status == Status::Retired && v.gate),
-                "{}: a retired obligation is not a landing-gate input",
-                v.name
-            );
-        }
     }
 }

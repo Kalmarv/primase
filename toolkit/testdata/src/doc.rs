@@ -2,7 +2,7 @@
 //! document's block with them, so the two cannot drift.
 use crate::query::Query;
 use crate::registry::{self, Status};
-use crate::{VARIABLES, legacy};
+use crate::{config, legacy};
 
 /// The line before the tables in CONTRIBUTING.md.
 pub const BEGIN: &str =
@@ -91,14 +91,20 @@ pub fn tables() -> String {
         &mut out,
         "Older names (this release only)",
         &["name", "stands for"],
-        VARIABLES.iter().filter_map(|v| {
-            let stands = match legacy::translate(v.name)? {
-                Query::Retired => "retired".to_owned(),
-                Query::Debug(k) => format!("debug key `{k}`"),
-                q => format!("`{}`", q.key()),
-            };
-            Some(vec![format!("`{}`", v.name), stands])
-        }),
+        legacy::OLDER
+            .iter()
+            .map(|(name, q)| {
+                let stands = match q {
+                    Query::Retired => "retired".to_owned(),
+                    Query::Debug(k) => format!("debug key `{k}`"),
+                    q => format!("`{}`", q.key()),
+                };
+                vec![format!("`{name}`"), stands]
+            })
+            .chain([vec![
+                format!("`{}`", config::REQUIRE),
+                "`[run] require` (`1`: `all`)".to_owned(),
+            ]]),
     );
     out.push_str(END);
     out.push('\n');
