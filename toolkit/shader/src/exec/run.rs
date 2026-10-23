@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use super::flat::{
     AtomOp, BinOp, CvtOp, Executable, GlobalKind, LevelOp, Loc, MathOp, Op, Pick, Ptr, Reg, Res, St, UnOp,
+    WaveGather, WaveKind, WaveOp, WaveScan,
 };
 use super::mask::{Mask, Wide};
 use super::request::{Backend, Element, ImageLoad, ImageLod, ImageQuery, ImageSample, ImageStore};
@@ -121,6 +122,9 @@ pub struct Runner<'a, const N: usize, M: Mask = u8> {
     /// The lanes of a thread group, and those of them that have left the program.
     group: M,
     retired: M,
+    /// The lanes in use and the width of a wave of them (0 outside a compute run).
+    lanes: usize,
+    wave: usize,
     /// The derivatives of the arguments (scalar mode): per argument, d/dx then d/dy lanes.
     derivs: Option<&'a [[Reg; 2]]>,
 }
@@ -200,6 +204,8 @@ impl<'a, const N: usize> Runner<'a, N, u8> {
             store: Vec::new(),
             group: 0,
             retired: 0,
+            lanes: 0,
+            wave: 0,
             derivs,
         }
     }
@@ -665,6 +671,14 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
         Ok(())
     }
 
+    /// The wave width and the lane count of a compute run; wave operations outside one are errors.
+    fn wave_shape(&self) -> Result<(usize, usize), String> {
+        if self.wave == 0 || self.wave > 128 {
+            return Err("a wave operation outside a compute run (or of a wave wider than 128 lanes)".into());
+        }
+        Ok((self.wave, self.lanes))
+    }
+
     /// The resource an operation names for lane `l`: for an array, the element its index picks in that lane.
     fn element(&self, res: &Res, l: usize) -> Result<Element, String> {
         let index = match res.pick {
@@ -769,6 +783,115 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                             }
                             if let Some(x) = exchanged {
                                 self.regs[*x as usize * N + l] = [u32::from(swapped); 4];
+                            }
+                        }
+                    }
+                }
+                St::WaveBallot { predicate, result } => {
+                    let (w, lanes) = self.wave_shape()?;
+                    for base in (0..lanes).step_by(w) {
+                        let end = (base + w).min(lanes);
+                        let mut bits = [0u32; 4];
+                        for l in base..end {
+                            let on = predicate.is_none_or(|p| self.regs[p as usize * N + l][0] != 0);
+                            if active.has(l) && on {
+                                bits[(l - base) / 32] |= 1 << ((l - base) % 32);
+                            }
+                        }
+                        for l in base..end {
+                            if active.has(l) {
+                                self.regs[*result as usize * N + l] = bits;
+                            }
+                        }
+                    }
+                }
+                St::WaveGather {
+                    mode,
+                    value,
+                    n,
+                    result,
+                } => {
+                    let (w, lanes) = self.wave_shape()?;
+                    for base in (0..lanes).step_by(w) {
+                        let end = (base + w).min(lanes);
+                        let first = (base..end).find(|&l| active.has(l));
+                        let mut taken: Vec<(usize, Reg)> = Vec::new();
+                        for l in base..end {
+                            if !active.has(l) {
+                                continue;
+                            }
+                            let at = l - base;
+                            let arg = |s: u32| self.regs[s as usize * N + l][0] as usize;
+                            let from = match mode {
+                                WaveGather::First => first.unwrap_or(l),
+                                WaveGather::Lane(s) => base + arg(*s),
+                                WaveGather::Shuffle(s) => base + arg(*s),
+                                WaveGather::Down(s) => base + at + arg(*s),
+                                WaveGather::Up(s) if arg(*s) <= at => base + at - arg(*s),
+                                WaveGather::Up(_) => base + at,
+                                WaveGather::Xor(s) => base + (at ^ arg(*s)),
+                                WaveGather::QuadLane(s) => base + (at & !3) + (arg(*s) & 3),
+                                WaveGather::QuadSwap(x) => base + (at ^ *x as usize),
+                            };
+                            // a lane outside the wave is undefined in D3D: the lane's own value
+                            let from = if from < end { from } else { l };
+                            let mut r = self.regs[*value as usize * N + from];
+                            for w in r.iter_mut().skip(*n as usize) {
+                                *w = 0;
+                            }
+                            taken.push((l, r));
+                        }
+                        for (l, r) in taken {
+                            self.regs[*result as usize * N + l] = r;
+                        }
+                    }
+                }
+                St::WaveOp {
+                    op,
+                    scan,
+                    value,
+                    n,
+                    kind,
+                    result,
+                } => {
+                    let (w, lanes) = self.wave_shape()?;
+                    let ftz = self.ftz;
+                    for base in (0..lanes).step_by(w) {
+                        let end = (base + w).min(lanes);
+                        let members: Vec<usize> = (base..end).filter(|&l| active.has(l)).collect();
+                        for i in 0..*n as usize {
+                            let values: Vec<u32> = members
+                                .iter()
+                                .map(|&l| self.regs[*value as usize * N + l][i])
+                                .collect();
+                            let total = values
+                                .iter()
+                                .copied()
+                                .reduce(|a, b| wave_combine(*op, *kind, a, b, ftz))
+                                .unwrap_or(0);
+                            let mut running = wave_identity(*op, *kind);
+                            for (k, &l) in members.iter().enumerate() {
+                                let out = match scan {
+                                    WaveScan::Reduce => total,
+                                    WaveScan::Inclusive => {
+                                        running = if k == 0 {
+                                            values[0]
+                                        } else {
+                                            wave_combine(*op, *kind, running, values[k], ftz)
+                                        };
+                                        running
+                                    }
+                                    WaveScan::Exclusive => {
+                                        let before = running;
+                                        running = if k == 0 {
+                                            values[0]
+                                        } else {
+                                            wave_combine(*op, *kind, running, values[k], ftz)
+                                        };
+                                        before
+                                    }
+                                };
+                                self.regs[*result as usize * N + l][i] = out;
                             }
                         }
                     }
@@ -931,6 +1054,46 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
             steps,
             samples: samples[l],
         }))
+    }
+}
+
+/// Two words combined by a wave operation (booleans are 0 and 1).
+fn wave_combine(op: WaveOp, kind: WaveKind, a: u32, b: u32, ftz: bool) -> u32 {
+    let g = |v: u32| fl(f(v), ftz);
+    match (op, kind) {
+        (WaveOp::All, _) => u32::from(a != 0 && b != 0),
+        (WaveOp::Any, _) => u32::from(a != 0 || b != 0),
+        (WaveOp::And, _) => a & b,
+        (WaveOp::Or, _) => a | b,
+        (WaveOp::Xor, _) => a ^ b,
+        (WaveOp::Add, WaveKind::F) => fl(g(a) + g(b), ftz).to_bits(),
+        (WaveOp::Mul, WaveKind::F) => fl(g(a) * g(b), ftz).to_bits(),
+        (WaveOp::Min, WaveKind::F) => g(a).min(g(b)).to_bits(),
+        (WaveOp::Max, WaveKind::F) => g(a).max(g(b)).to_bits(),
+        (WaveOp::Add, _) => a.wrapping_add(b),
+        (WaveOp::Mul, _) => a.wrapping_mul(b),
+        (WaveOp::Min, WaveKind::I) => (a as i32).min(b as i32) as u32,
+        (WaveOp::Max, WaveKind::I) => (a as i32).max(b as i32) as u32,
+        (WaveOp::Min, WaveKind::U) => a.min(b),
+        (WaveOp::Max, WaveKind::U) => a.max(b),
+    }
+}
+/// What a wave operation over no lanes gives, and an exclusive scan's first lane.
+fn wave_identity(op: WaveOp, kind: WaveKind) -> u32 {
+    match (op, kind) {
+        (WaveOp::All, _) => 1,
+        (WaveOp::Any | WaveOp::Or | WaveOp::Xor, _) => 0,
+        (WaveOp::And, _) => u32::MAX,
+        (WaveOp::Add, WaveKind::F) => 0,
+        (WaveOp::Add, _) => 0,
+        (WaveOp::Mul, WaveKind::F) => 1.0f32.to_bits(),
+        (WaveOp::Mul, _) => 1,
+        (WaveOp::Min, WaveKind::F) => f32::INFINITY.to_bits(),
+        (WaveOp::Max, WaveKind::F) => f32::NEG_INFINITY.to_bits(),
+        (WaveOp::Min, WaveKind::I) => i32::MAX as u32,
+        (WaveOp::Max, WaveKind::I) => i32::MIN as u32,
+        (WaveOp::Min, WaveKind::U) => u32::MAX,
+        (WaveOp::Max, WaveKind::U) => 0,
     }
 }
 
@@ -1151,6 +1314,8 @@ impl Executable {
             store,
             group: Wide::first(lanes),
             retired: Wide::none(),
+            lanes,
+            wave: wave as usize,
             derivs: None,
         };
         let mut done = Dispatched::default();

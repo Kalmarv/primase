@@ -284,6 +284,27 @@ pub(super) enum St {
     },
     /// A group barrier: every live invocation of the group must reach it together.
     Barrier,
+    /// A bitmask of the wave's active lanes whose predicate holds (four words), for each lane of the wave.
+    WaveBallot {
+        predicate: Option<u32>,
+        result: u32,
+    },
+    /// A value taken from another lane of the wave.
+    WaveGather {
+        mode: WaveGather,
+        value: u32,
+        n: u8,
+        result: u32,
+    },
+    /// A reduction or scan of a value over the wave's active lanes.
+    WaveOp {
+        op: WaveOp,
+        scan: WaveScan,
+        value: u32,
+        n: u8,
+        kind: WaveKind,
+        result: u32,
+    },
     If {
         c: u32,
         a: Vec<St>,
@@ -303,6 +324,44 @@ pub(super) enum St {
     /// Leave, with these members as the result (slot and lanes each, in the order of the interface's outputs).
     Return(Vec<(u32, u8)>),
     Kill,
+}
+
+/// Where a wave gather reads from; a slot names the register holding the lane, delta or mask (first lane of it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum WaveGather {
+    First,
+    Lane(u32),
+    Shuffle(u32),
+    Down(u32),
+    Up(u32),
+    Xor(u32),
+    QuadLane(u32),
+    /// The quad neighbour along x (1), y (2) or the diagonal (3): the lane xor this.
+    QuadSwap(u32),
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum WaveOp {
+    All,
+    Any,
+    Add,
+    Mul,
+    Min,
+    Max,
+    And,
+    Or,
+    Xor,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum WaveScan {
+    Reduce,
+    Inclusive,
+    Exclusive,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum WaveKind {
+    F,
+    U,
+    I,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

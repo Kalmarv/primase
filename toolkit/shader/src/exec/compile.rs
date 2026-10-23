@@ -11,7 +11,7 @@ use naga::{
 
 use super::flat::{
     AtomOp, BinOp, CvtOp, Executable, GlobalDesc, GlobalKind, LevelOp, Loc, MathOp, Op, Pick, Ptr, Reg, Res,
-    St, UnOp,
+    St, UnOp, WaveGather, WaveKind, WaveOp, WaveScan,
 };
 use super::request::{Dim, QueryKind};
 use crate::{Program, ResourceId};
@@ -665,6 +665,7 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
             }
             // written by the atomic statement that names it; a compare-exchange's is the old value and whether it
             // was exchanged
+            E::SubgroupBallotResult | E::SubgroupOperationResult { .. } => {}
             E::AtomicResult { comparison, .. } => {
                 if *comparison {
                     let extra = n_slots;
@@ -928,6 +929,93 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                     });
                 }
                 Statement::ControlBarrier(_) => out.push(St::Barrier),
+                Statement::SubgroupBallot { result, predicate } => {
+                    let predicate = predicate.map(|p| cx.slot[p.index()]);
+                    if let Some(p) = predicate {
+                        cx.uses[p as usize] += 1;
+                    }
+                    out.push(St::WaveBallot {
+                        predicate,
+                        result: cx.slot[result.index()],
+                    });
+                }
+                Statement::SubgroupGather {
+                    mode,
+                    argument,
+                    result,
+                } => {
+                    use naga::GatherMode as G;
+                    let mut slot_of = |h: &Handle<E>| {
+                        let s = cx.slot[h.index()];
+                        cx.uses[s as usize] += 1;
+                        s
+                    };
+                    let mode = match mode {
+                        G::BroadcastFirst => WaveGather::First,
+                        G::Broadcast(i) => WaveGather::Lane(slot_of(i)),
+                        G::Shuffle(i) => WaveGather::Shuffle(slot_of(i)),
+                        G::ShuffleDown(i) => WaveGather::Down(slot_of(i)),
+                        G::ShuffleUp(i) => WaveGather::Up(slot_of(i)),
+                        G::ShuffleXor(i) => WaveGather::Xor(slot_of(i)),
+                        G::QuadBroadcast(i) => WaveGather::QuadLane(slot_of(i)),
+                        G::QuadSwap(naga::Direction::X) => WaveGather::QuadSwap(1),
+                        G::QuadSwap(naga::Direction::Y) => WaveGather::QuadSwap(2),
+                        G::QuadSwap(naga::Direction::Diagonal) => WaveGather::QuadSwap(3),
+                    };
+                    let Shape::V(_, n) = (cx.shape)(*argument)? else {
+                        return Err("wave gather of an aggregate".into());
+                    };
+                    let value = cx.slot[argument.index()];
+                    cx.uses[value as usize] += 1;
+                    out.push(St::WaveGather {
+                        mode,
+                        value,
+                        n,
+                        result: cx.slot[result.index()],
+                    });
+                }
+                Statement::SubgroupCollectiveOperation {
+                    op,
+                    collective_op,
+                    argument,
+                    result,
+                } => {
+                    use naga::SubgroupOperation as S;
+                    let op = match op {
+                        S::All => WaveOp::All,
+                        S::Any => WaveOp::Any,
+                        S::Add => WaveOp::Add,
+                        S::Mul => WaveOp::Mul,
+                        S::Min => WaveOp::Min,
+                        S::Max => WaveOp::Max,
+                        S::And => WaveOp::And,
+                        S::Or => WaveOp::Or,
+                        S::Xor => WaveOp::Xor,
+                    };
+                    let scan = match collective_op {
+                        naga::CollectiveOperation::Reduce => WaveScan::Reduce,
+                        naga::CollectiveOperation::InclusiveScan => WaveScan::Inclusive,
+                        naga::CollectiveOperation::ExclusiveScan => WaveScan::Exclusive,
+                    };
+                    let Shape::V(k, n) = (cx.shape)(*argument)? else {
+                        return Err("wave operation on an aggregate".into());
+                    };
+                    let kind = match k {
+                        Kind::F => WaveKind::F,
+                        Kind::I => WaveKind::I,
+                        _ => WaveKind::U,
+                    };
+                    let value = cx.slot[argument.index()];
+                    cx.uses[value as usize] += 1;
+                    out.push(St::WaveOp {
+                        op,
+                        scan,
+                        value,
+                        n,
+                        kind,
+                        result: cx.slot[result.index()],
+                    });
+                }
                 // one sequential schedule: every write is visible at once
                 Statement::MemoryBarrier(_) => {}
                 s => return Err(format!("statement {:?}", std::mem::discriminant(s))),
