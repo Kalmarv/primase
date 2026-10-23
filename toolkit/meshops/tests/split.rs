@@ -318,20 +318,28 @@ fn a_selection_that_selects_nothing_is_refused() {
 #[test]
 fn the_options_are_required_and_round_trip() {
     let p = pass(&[("Floor_", "park"), ("Wall_<=x", "room")], 0.05);
-    assert_eq!(SplitByCollision::from_options(&p.options()).unwrap(), p);
-    assert_eq!(p.groups()["Wall_<=x"], "room", "the group follows the last '='");
+    let make = |o: &Options| primase_meshops::SPLIT_BY_COLLISION.instance(o);
+    assert_eq!(make(&p.options()).unwrap().options(), p.options());
+    assert_eq!(p.groups()["Wall_<=x"], "room");
+    // the group follows the last '='
+    let mut o = p.options();
+    o.insert("groups".into(), "Floor_=park;Wall_<=x=room;Roof_=x=room".into());
+    assert_eq!(
+        make(&o).unwrap().options()["groups"],
+        "Floor_=park;Roof_=x=room;Wall_<=x=room"
+    );
     let full = p.options();
     for k in ["placements", "groups", "tolerance", "rest"] {
         let mut o: Options = full.clone();
         o.remove(k);
-        assert!(SplitByCollision::from_options(&o).is_err(), "{k}");
+        assert!(make(&o).is_err(), "{k}");
     }
     let mut o = full.clone();
     o.insert("tolerance".into(), "0".into());
-    assert!(SplitByCollision::from_options(&o).is_err());
+    assert!(make(&o).is_err());
     let mut o = full;
     o.insert("rest".into(), "a=b".into());
-    assert!(SplitByCollision::from_options(&o).is_err());
+    assert!(make(&o).is_err());
 }
 
 /// A dialect's value per vertex of each primitive, following both remaps (as a reader's per-vertex attributes do).

@@ -38,7 +38,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::ledger::Measure;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Component, Entity, Influences, MaterialVariants, Mesh, MeshFile, Primitive, Semantic, Skin, Slot, Stream,
     Topology, World,
@@ -78,26 +78,31 @@ impl GroupPrimitives {
         self.max_vertices
     }
 
-    /// From its options: `max-groups` and `max-vertices`, both required.
-    pub fn from_options(o: &Options) -> Result<GroupPrimitives, String> {
-        let (mut groups, mut vertices) = (None, None);
-        for (k, v) in o {
-            let n = || {
-                v.parse::<usize>()
-                    .map_err(|_| format!("{k}={v} is not a whole number"))
-            };
-            match k.as_str() {
-                "max-groups" => groups = Some(n()?),
-                "max-vertices" => vertices = Some(n()?),
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        GroupPrimitives::new(
-            groups.ok_or("max-groups is required (primitives a mesh may have)")?,
-            vertices.ok_or("max-vertices is required (vertices a primitive may have)")?,
-        )
+    /// From its declared options, through [`GroupPrimitives::new`].
+    fn from_given(g: &Given) -> Result<GroupPrimitives, String> {
+        let n = |k: &str| {
+            let v = g.required(k);
+            v.parse::<usize>()
+                .map_err(|_| format!("{k}={v} is not a whole number"))
+        };
+        GroupPrimitives::new(n("max-groups")?, n("max-vertices")?)
     }
 }
+
+/// `group-primitives`' declaration ([`primase_core::pass::PassRegistry::add`]): the limits are the destination's, no
+/// default.
+pub const GROUP_PRIMITIVES: PassSpec = PassSpec {
+    name: "group-primitives",
+    options: &[
+        OptionSpec::required("max-groups", "7", "the primitives a mesh may have, at least 1"),
+        OptionSpec::required(
+            "max-vertices",
+            "60000",
+            "the vertices a primitive may have, at least 3 and within 32-bit indices",
+        ),
+    ],
+    make: |g| Ok(Box::new(GroupPrimitives::from_given(g)?)),
+};
 
 /// The stream's type, for comparing streams and naming them.
 fn kind(s: &Stream) -> &'static str {

@@ -3,7 +3,7 @@
 
 mod back_faces;
 pub mod collision_query;
-pub use back_faces::AddBackFaces;
+pub use back_faces::{ADD_BACK_FACES, AddBackFaces};
 mod curves;
 mod distance;
 pub mod frames;
@@ -18,92 +18,57 @@ pub use layered_plan::{
     LayeredMeshSource, LayeredPartSource, LayeredPbrPlan, lower_layered_pbr, plan_layered_pbr,
 };
 mod draw_collision;
-pub use draw_collision::DrawCollision;
+pub use draw_collision::{DRAW_COLLISION, DrawCollision};
 mod group_primitives;
-pub use group_primitives::GroupPrimitives;
+pub use group_primitives::{GROUP_PRIMITIVES, GroupPrimitives};
 mod hull;
 mod omit_placements;
-pub use omit_placements::{OmitPlacements, PlacementCollision};
+pub use omit_placements::{OMIT_PLACEMENTS, OmitPlacements, PlacementCollision};
 mod nonrigid;
-pub use nonrigid::{BakeNonrigid, Mirrors, bake_nonrigid};
+pub use nonrigid::{BAKE_NONRIGID, BakeNonrigid, Mirrors, bake_nonrigid};
 mod parametric;
-pub use parametric::{FlattenCurves, TessellateColliders};
+pub use parametric::{FLATTEN_CURVES, FlattenCurves, TESSELLATE_COLLIDERS, TessellateColliders};
 
-/// Register this crate's passes.
+/// Register this crate's passes by their declarations.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    nonrigid::register(reg);
-    parametric::register(reg);
-    uv_tiles::register(reg);
-    back_faces::register(reg);
-    // a diagnostic with no choices: what collides drawn, to inspect it
-    reg.register("draw-collision", |o| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(DrawCollision)),
-    });
-    // the limits are the destination's: no default
-    reg.register_requiring(
-        "group-primitives",
-        |o| Ok(Box::new(GroupPrimitives::from_options(o)?)),
-        &[("max-groups", "7"), ("max-vertices", "60000")],
-    );
-    reg.register("omit-materialless-primitives", |o| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(OmitMateriallessPrimitives)),
-    });
-    // which placements stop drawing and whether they keep colliding are the program's: no default
-    reg.register_requiring(
-        "omit-placements",
-        |o| Ok(Box::new(OmitPlacements::from_options(o)?)),
-        &[("prefixes", "Level/Ceiling"), ("collision", "keep")],
-    );
-    reg.register_requiring(
-        "partition-grid",
-        |o| Ok(Box::new(PartitionGrid::from_options(o)?)),
-        &[("cell", "100")],
-    );
-    // what becomes of the variants nobody places is the program's: no default
-    // which entities cast is the program's choice: both options required
-    reg.register_requiring(
-        "set-shadow-casting",
-        shadow_casting::set_shadow_casting,
-        &[("placements", "level"), ("cast", "off")],
-    );
-    // the grouping is the program's: every option required
-    reg.register_requiring(
-        "split-by-collision",
-        split::split_by_collision,
-        &[
-            ("placements", "level"),
-            ("groups", "floor=ground"),
-            ("tolerance", "0.05"),
-            ("rest", "other"),
-        ],
-    );
-    reg.register_requiring(
-        "specialize-material-variants",
-        variants::specialize_material_variants,
-        &[("unused", "keep")],
-    );
+    for spec in [
+        &BAKE_NONRIGID,
+        &BAKE_TEXTURE_TRANSFORMS,
+        &TESSELLATE_COLLIDERS,
+        &FLATTEN_CURVES,
+        &SPLIT_UV_TILES,
+        &ADD_BACK_FACES,
+        &DRAW_COLLISION,
+        &GROUP_PRIMITIVES,
+        &OMIT_MATERIALLESS_PRIMITIVES,
+        &OMIT_PLACEMENTS,
+        &PARTITION_GRID,
+        &SET_SHADOW_CASTING,
+        &SPLIT_BY_COLLISION,
+        &SPECIALIZE_MATERIAL_VARIANTS,
+    ] {
+        reg.add(spec);
+    }
 }
 mod materialless;
-pub use materialless::OmitMateriallessPrimitives;
+pub use materialless::{OMIT_MATERIALLESS_PRIMITIVES, OmitMateriallessPrimitives};
 mod partition;
-pub use partition::PartitionGrid;
+pub use partition::{PARTITION_GRID, PartitionGrid};
 mod primitive;
 mod shadow_casting;
-pub use shadow_casting::{SetShadowCasting, set_shadow_casting};
+pub use shadow_casting::{SET_SHADOW_CASTING, SetShadowCasting};
 mod split;
-pub use split::{SplitByCollision, split_by_collision};
+pub use split::{SPLIT_BY_COLLISION, SplitByCollision};
 mod texcoords;
 mod uv_tiles;
-pub use uv_tiles::{MAX_TILES_PER_TRIANGLE, SplitUvTiles, split_uv_tiles};
+pub use uv_tiles::{MAX_TILES_PER_TRIANGLE, SPLIT_UV_TILES, SplitUvTiles};
 mod variants;
-pub use variants::{SpecializeMaterialVariants, UnusedVariants, specialize_material_variants};
+pub use variants::{SPECIALIZE_MATERIAL_VARIANTS, SpecializeMaterialVariants, UnusedVariants};
 pub mod vector;
 pub use hull::{convex_hull, hull_step};
 pub use primitive::{CompactedPrimitive, compact_primitive, subset_primitive, subset_primitive_gathered};
 use std::collections::BTreeMap;
-pub use texcoords::{BakeTextureTransforms, bake_texture_transforms};
+pub use texcoords::{BAKE_TEXTURE_TRANSFORMS, BakeTextureTransforms, bake_texture_transforms};
 #[derive(Debug, thiserror::Error)]
 #[error("invalid mesh: {0}")]
 pub struct Error(pub String);
@@ -454,3 +419,55 @@ pub fn split_long(mesh: &Mesh, max: f32, split_limit: usize) -> Result<(Mesh, us
 }
 mod primitives;
 pub use primitives::{box_mesh, capsule, cylinder, disc, sphere};
+
+#[cfg(test)]
+mod tests {
+    use primase_core::pass::{Options, PassRegistry};
+
+    /// The crate registers exactly these passes by their declarations: those with required options are made only with
+    /// them, and every one says what it takes.
+    #[test]
+    fn the_meshops_passes_register_by_name() {
+        let mut reg = PassRegistry::new();
+        super::register(&mut reg);
+        let names = [
+            "add-back-faces",
+            "bake-nonrigid",
+            "bake-texture-transforms",
+            "draw-collision",
+            "flatten-curves",
+            "group-primitives",
+            "omit-materialless-primitives",
+            "omit-placements",
+            "partition-grid",
+            "set-shadow-casting",
+            "specialize-material-variants",
+            "split-by-collision",
+            "split-uv-tiles",
+            "tessellate-colliders",
+        ];
+        assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        let free = [
+            "add-back-faces",
+            "bake-nonrigid",
+            "bake-texture-transforms",
+            "draw-collision",
+            "omit-materialless-primitives",
+            "tessellate-colliders",
+        ];
+        for name in names {
+            assert_eq!(reg.requires_options(name), !free.contains(&name), "{name}");
+            assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");
+            assert_eq!(
+                reg.make(name, &Options::new()).is_err(),
+                !free.contains(&name),
+                "{name}"
+            );
+        }
+        assert!(
+            reg.describe("partition-grid")
+                .unwrap()
+                .starts_with("partition-grid{cell*,origin,halo,region,tile}\n")
+        );
+    }
+}

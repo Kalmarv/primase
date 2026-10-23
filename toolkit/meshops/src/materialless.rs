@@ -8,7 +8,7 @@
 //! primitive without a material; a program that would rather draw them gives them a material instead.
 
 use primase_core::ledger::Measure;
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, MaterialVariants, Mesh, MeshFile, Topology, World};
 
 /// Why its drops are made.
@@ -17,6 +17,13 @@ const WHY: &str = "primitives without a material, of their own or a variant's";
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OmitMateriallessPrimitives;
+
+/// `omit-materialless-primitives`' declaration ([`primase_core::pass::PassRegistry::add`]): no options.
+pub const OMIT_MATERIALLESS_PRIMITIVES: PassSpec = PassSpec {
+    name: "omit-materialless-primitives",
+    options: &[],
+    make: |_| Ok(Box::new(OmitMateriallessPrimitives)),
+};
 
 /// Primitive `i` of `mesh` has no material, of its own or for any variant.
 fn materialless(mesh: &Mesh, variants: Option<&MaterialVariants>, i: usize) -> bool {

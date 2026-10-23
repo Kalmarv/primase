@@ -39,7 +39,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
 use primase_core::skin::Skin;
 use primase_core::{
@@ -50,7 +50,7 @@ use primase_core::{
 /// The most tiles one triangle may cross; a triangle crossing more is refused (its pieces would number about that).
 pub const MAX_TILES_PER_TRIANGLE: usize = 1024;
 
-/// See the module documentation. Made by [`SplitUvTiles::new`]; from options by [`SplitUvTiles::from_options`].
+/// See the module documentation. Made by [`SplitUvTiles::new`]; from options by [`SPLIT_UV_TILES`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SplitUvTiles {
     set: u8,
@@ -66,24 +66,26 @@ impl SplitUvTiles {
         self.set
     }
 
-    /// From its options: `set`, required (the texture-coordinate set, a number).
-    pub fn from_options(o: &Options) -> Result<SplitUvTiles, String> {
-        if let Some(k) = o.keys().find(|k| k.as_str() != "set") {
-            return Err(format!("unknown option {k}"));
-        }
-        let v = o
-            .get("set")
-            .ok_or("split-uv-tiles needs set=<texture coordinate set>")?;
+    /// From its declared options.
+    fn from_given(g: &Given) -> Result<SplitUvTiles, String> {
+        let v = g.required("set");
         Ok(SplitUvTiles::new(v.parse().map_err(|_| {
             format!("set={v} is not a texture coordinate set")
         })?))
     }
 }
 
-/// [`SplitUvTiles::from_options`] as a pass factory.
-pub fn split_uv_tiles(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(SplitUvTiles::from_options(o)?))
-}
+/// `split-uv-tiles`' declaration ([`primase_core::pass::PassRegistry::add`]): which coordinate set is cut is the
+/// program's, no default.
+pub const SPLIT_UV_TILES: PassSpec = PassSpec {
+    name: "split-uv-tiles",
+    options: &[OptionSpec::required(
+        "set",
+        "0",
+        "the texture-coordinate set whose tiles are cut apart, a number",
+    )],
+    make: |g| Ok(Box::new(SplitUvTiles::from_given(g)?)),
+};
 
 /// A point of a source triangle as a combination of its corners, in a canonical form (sources ascending, none with
 /// weight 0 but padding) so equal points are equal values: the weld key, and what makes the cut of a shared edge the
@@ -800,9 +802,4 @@ impl Pass for SplitUvTiles {
         }
         Ok(())
     }
-}
-
-pub(crate) fn register(reg: &mut primase_core::pass::PassRegistry) {
-    // which coordinate set is cut is the program's: no default
-    reg.register_requiring("split-uv-tiles", split_uv_tiles, &[("set", "0")]);
 }

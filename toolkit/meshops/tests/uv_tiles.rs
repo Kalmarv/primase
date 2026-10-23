@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use primase_core::ledger::Conservation;
 use primase_core::morphs::{Deltas, Frame, MorphId, Morphs, Target};
-use primase_core::pass::{Options, PassManager, PassRegistry, Pipeline, RunReport};
+use primase_core::pass::{Options, Pass, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::skeleton::{Joint, Rest, Skeleton};
 use primase_core::skin::{Binding, BindingId, Deformation, Skin, Slot, WeightRule};
@@ -657,10 +657,18 @@ fn the_set_is_required_and_a_number() {
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect();
-        SplitUvTiles::from_options(&o)
+        primase_meshops::SPLIT_UV_TILES.instance(&o)
     };
-    assert_eq!(make(&[("set", "2")]).unwrap().set(), 2);
-    assert!(make(&[]).unwrap_err().contains("set"));
-    assert!(make(&[("set", "x")]).unwrap_err().contains("set=x"));
-    assert!(make(&[("set", "0"), ("size", "1")]).unwrap_err().contains("size"));
+    assert_eq!(
+        make(&[("set", "2")]).unwrap().options(),
+        SplitUvTiles::new(2).options()
+    );
+    assert!(make(&[]).err().unwrap().contains("set"));
+    assert!(make(&[("set", "x")]).err().unwrap().contains("set=x"));
+    assert!(
+        make(&[("set", "0"), ("size", "1")])
+            .err()
+            .unwrap()
+            .contains("size")
+    );
 }

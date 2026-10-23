@@ -54,7 +54,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::morphs::Morphs;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
     Entity, MaterialVariants, Mesh, MeshFile, Name, Primitive, Semantic, Stream, Topology, World,
@@ -63,6 +63,14 @@ use primase_core::{
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AddBackFaces;
+
+/// `add-back-faces`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, which primitives get back
+/// faces is their materials' double-sidedness and the rest is fixed.
+pub const ADD_BACK_FACES: PassSpec = PassSpec {
+    name: "add-back-faces",
+    options: &[],
+    make: |_| Ok(Box::new(AddBackFaces)),
+};
 
 /// A primitive's triangles, `indices` as stored: its indices, else its vertices in order.
 fn corners(p: &Primitive) -> Vec<u32> {
@@ -381,12 +389,4 @@ fn negate_morph_directions(morphs: &mut Morphs, primitive: usize, first: u32) {
             }
         }
     }
-}
-
-pub(crate) fn register(reg: &mut primase_core::pass::PassRegistry) {
-    // no choices: which primitives is the materials' double-sidedness, the rest is fixed
-    reg.register("add-back-faces", |o: &Options| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(AddBackFaces)),
-    });
 }

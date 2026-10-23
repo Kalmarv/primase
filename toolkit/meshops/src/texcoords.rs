@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, UvTransform};
 use primase_core::{Entity, MaterialVariants, Mesh, MeshFile, Semantic, Stream, World};
 
@@ -180,6 +180,13 @@ pub fn bake_texture_transforms(world: &mut World) -> PassLog {
 /// [`bake_texture_transforms`] as a pass.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BakeTextureTransforms;
+
+/// `bake-texture-transforms`' declaration ([`primase_core::pass::PassRegistry::add`]): no options.
+pub const BAKE_TEXTURE_TRANSFORMS: PassSpec = PassSpec {
+    name: "bake-texture-transforms",
+    options: &[],
+    make: |_| Ok(Box::new(BakeTextureTransforms)),
+};
 
 impl Pass for BakeTextureTransforms {
     fn name(&self) -> &'static str {

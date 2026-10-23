@@ -297,12 +297,13 @@ fn a_world_without_variants_is_unchanged() {
 /// The choice has no default, and the options it prints make it again.
 #[test]
 fn the_choice_is_required_and_printed() {
-    assert!(SpecializeMaterialVariants::from_options(&Options::new()).is_err());
-    assert!(
-        SpecializeMaterialVariants::from_options(&Options::from([("unused".into(), "some".into())])).is_err()
+    let make = |o: &Options| primase_meshops::SPECIALIZE_MATERIAL_VARIANTS.instance(o);
+    assert!(make(&Options::new()).is_err());
+    assert!(make(&Options::from([("unused".into(), "some".into())])).is_err());
+    let o = Options::from([("unused".into(), "discard".into())]);
+    assert_eq!(make(&o).unwrap().options(), o);
+    assert_eq!(
+        SpecializeMaterialVariants::new(UnusedVariants::Discard).options(),
+        o
     );
-    let p = SpecializeMaterialVariants::from_options(&Options::from([("unused".into(), "discard".into())]))
-        .unwrap();
-    assert_eq!(p.unused(), UnusedVariants::Discard);
-    assert_eq!(SpecializeMaterialVariants::from_options(&p.options()).unwrap(), p);
 }

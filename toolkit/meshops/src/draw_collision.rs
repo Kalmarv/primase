@@ -4,12 +4,20 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, Pass, PassLog, PassSpec};
 use primase_core::{Collision, Component, Entity, Mesh, Primitive, Semantic, Stream, Topology, World};
 
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DrawCollision;
+
+/// `draw-collision`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, a diagnostic that draws
+/// what collides to inspect it.
+pub const DRAW_COLLISION: PassSpec = PassSpec {
+    name: "draw-collision",
+    options: &[],
+    make: |_| Ok(Box::new(DrawCollision)),
+};
 
 impl Pass for DrawCollision {
     fn name(&self) -> &'static str {

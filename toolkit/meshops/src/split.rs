@@ -38,14 +38,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Collision, Component, Entity, Instance, Lods, Mesh, MeshFile, Name, Primitive, Topology, Transform, World,
 };
 
 use crate::{Triangle, TriangleGrid, subset_primitive_gathered};
 
-/// See the module documentation. Made by [`SplitByCollision::new`]; from options by the same call.
+/// See the module documentation. Made by [`SplitByCollision::new`]; from options ([`SPLIT_BY_COLLISION`]) by the same
+/// call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SplitByCollision {
     placements: BTreeSet<String>,
@@ -112,25 +113,10 @@ impl SplitByCollision {
         &self.rest
     }
 
-    /// From its options (all required), through [`SplitByCollision::new`]: `placements` (prefixes separated by `;`),
-    /// `groups` (`<prefix>=<group>` separated by `;`, the group after the last `=`), `tolerance` (metres), `rest`.
-    pub fn from_options(o: &Options) -> Result<SplitByCollision, String> {
-        if let Some(k) = o
-            .keys()
-            .find(|k| !matches!(k.as_str(), "placements" | "groups" | "tolerance" | "rest"))
-        {
-            return Err(format!("unknown option {k}"));
-        }
-        let get = |k: &str, what: &str| {
-            o.get(k)
-                .ok_or_else(|| format!("split-by-collision needs {k}={what}"))
-        };
-        let placements = get("placements", "<prefix>;...")?
-            .split(';')
-            .map(str::to_owned)
-            .collect();
+    /// From its declared options, through [`SplitByCollision::new`]: `groups`' group follows its last `=`.
+    fn from_given(g: &Given) -> Result<SplitByCollision, String> {
         let mut groups = BTreeMap::new();
-        for pair in get("groups", "<collision prefix>=<group>;...")?.split(';') {
+        for pair in g.required("groups").split(';') {
             let (prefix, group) = pair
                 .rsplit_once('=')
                 .ok_or_else(|| format!("groups: {pair} is not <collision prefix>=<group>"))?;
@@ -138,18 +124,47 @@ impl SplitByCollision {
                 return Err(format!("groups: prefix {prefix} given twice"));
             }
         }
-        let t = get("tolerance", "<metres>")?;
+        let t = g.required("tolerance");
         let tolerance = t
             .parse::<f64>()
             .map_err(|_| format!("tolerance={t} is not metres"))?;
-        SplitByCollision::new(placements, groups, tolerance, get("rest", "<group>")?.clone())
+        SplitByCollision::new(
+            g.required("placements").split(';').map(str::to_owned).collect(),
+            groups,
+            tolerance,
+            g.required("rest").to_owned(),
+        )
     }
 }
 
-/// [`SplitByCollision::from_options`] as a pass factory.
-pub fn split_by_collision(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(SplitByCollision::from_options(o)?))
-}
+/// `split-by-collision`'s declaration ([`primase_core::pass::PassRegistry::add`]): the grouping is the program's,
+/// every option required.
+pub const SPLIT_BY_COLLISION: PassSpec = PassSpec {
+    name: "split-by-collision",
+    options: &[
+        OptionSpec::required(
+            "placements",
+            "level",
+            "name prefixes of the placements to split, joined by ;",
+        ),
+        OptionSpec::required(
+            "groups",
+            "floor=ground",
+            "<collision prefix>=<group>, joined by ;: the group of each collision placement's prefix",
+        ),
+        OptionSpec::required(
+            "tolerance",
+            "0.05",
+            "metres, finite and above 0: how near a triangle's corners lie to a group's collision",
+        ),
+        OptionSpec::required(
+            "rest",
+            "other",
+            "the group of the triangles near no group's collision",
+        ),
+    ],
+    make: |g| Ok(Box::new(SplitByCollision::from_given(g)?)),
+};
 
 fn place(t: &Transform, p: [f32; 3]) -> [f64; 3] {
     std::array::from_fn(|r| {

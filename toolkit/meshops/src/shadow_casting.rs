@@ -12,10 +12,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Instance, Mesh, Name, ShadowCast, Shadows, Transform, World};
 
-/// See the module documentation. Made by [`SetShadowCasting::new`]; from options by the same call.
+/// See the module documentation. Made by [`SetShadowCasting::new`]; from options ([`SET_SHADOW_CASTING`]) by the same call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetShadowCasting {
     placements: BTreeSet<String>,
@@ -43,32 +43,40 @@ impl SetShadowCasting {
         self.cast
     }
 
-    /// From its options (both required), through [`SetShadowCasting::new`]: `placements` (prefixes separated by
-    /// `;`) and `cast=on|off`.
-    pub fn from_options(o: &Options) -> Result<SetShadowCasting, String> {
-        if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "placements" | "cast")) {
-            return Err(format!("unknown option {k}"));
-        }
-        let placements = o
-            .get("placements")
-            .ok_or("set-shadow-casting needs placements=<prefix>;...")?
-            .split(';')
-            .map(str::to_owned)
-            .collect();
-        let cast = match o.get("cast").map(String::as_str) {
-            Some("on") => true,
-            Some("off") => false,
-            Some(v) => return Err(format!("cast={v}: on or off")),
-            None => return Err("set-shadow-casting needs cast=on|off".into()),
-        };
-        SetShadowCasting::new(placements, cast)
+    /// From its declared options, through [`SetShadowCasting::new`].
+    fn from_given(g: &Given) -> Result<SetShadowCasting, String> {
+        SetShadowCasting::new(
+            g.required("placements").split(';').map(str::to_owned).collect(),
+            g.choice::<Cast>("cast") == Cast::On,
+        )
     }
 }
 
-/// [`SetShadowCasting::from_options`] as a pass factory.
-pub fn set_shadow_casting(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(SetShadowCasting::from_options(o)?))
+/// Option `cast`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Cast {
+    On,
+    Off,
 }
+
+impl Choice for Cast {
+    const VALUES: &'static [(&'static str, Self)] = &[("on", Cast::On), ("off", Cast::Off)];
+}
+
+/// `set-shadow-casting`'s declaration ([`primase_core::pass::PassRegistry::add`]): which entities cast is the
+/// program's, both options required.
+pub const SET_SHADOW_CASTING: PassSpec = PassSpec {
+    name: "set-shadow-casting",
+    options: &[
+        OptionSpec::required(
+            "placements",
+            "level",
+            "name prefixes of the drawn entities whose casting is set, joined by ;",
+        ),
+        OptionSpec::choice::<Cast>("cast", "whether they cast shadows"),
+    ],
+    make: |g| Ok(Box::new(SetShadowCasting::from_given(g)?)),
+};
 
 impl Pass for SetShadowCasting {
     fn name(&self) -> &'static str {
@@ -80,7 +88,10 @@ impl Pass for SetShadowCasting {
                 "placements".to_owned(),
                 self.placements.iter().cloned().collect::<Vec<_>>().join(";"),
             ),
-            ("cast".to_owned(), if self.cast { "on" } else { "off" }.to_owned()),
+            (
+                "cast".to_owned(),
+                if self.cast { Cast::On } else { Cast::Off }.text().to_owned(),
+            ),
         ])
     }
     fn provides(&self) -> &[&'static str] {
@@ -237,13 +248,21 @@ mod tests {
     #[test]
     fn options_are_required_and_round_trip() {
         let p = SetShadowCasting::new(BTreeSet::from(["a".to_owned(), "b/".to_owned()]), false).unwrap();
-        assert_eq!(SetShadowCasting::from_options(&p.options()), Ok(p));
-        assert!(SetShadowCasting::from_options(&Options::from([("placements".into(), "a".into())])).is_err());
-        assert!(SetShadowCasting::from_options(&Options::from([("cast".into(), "on".into())])).is_err());
+        let make = |o: &Options| SET_SHADOW_CASTING.instance(o);
+        assert_eq!(make(&p.options()).unwrap().options(), p.options());
+        assert!(make(&Options::from([("placements".into(), "a".into())])).is_err());
+        assert!(make(&Options::from([("cast".into(), "on".into())])).is_err());
         assert!(
-            SetShadowCasting::from_options(&Options::from([
+            make(&Options::from([
                 ("placements".into(), "a".into()),
                 ("cast".into(), "only".into())
+            ]))
+            .is_err()
+        );
+        assert!(
+            make(&Options::from([
+                ("placements".into(), "a;".into()),
+                ("cast".into(), "on".into())
             ]))
             .is_err()
         );

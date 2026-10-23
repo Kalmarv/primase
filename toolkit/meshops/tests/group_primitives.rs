@@ -460,25 +460,21 @@ fn options_are_required_and_checked() {
         ("max-groups".to_owned(), "7".to_owned()),
         ("max-vertices".to_owned(), "60000".to_owned()),
     ]);
-    let pass = GroupPrimitives::from_options(&ok).unwrap();
-    assert_eq!((pass.max_groups(), pass.max_vertices()), (7, 60000));
+    let make = |o: &Options| primase_meshops::GROUP_PRIMITIVES.instance(o);
+    assert_eq!(make(&ok).unwrap().options(), ok);
     for k in ["max-groups", "max-vertices"] {
         let mut o = ok.clone();
         o.remove(k);
-        assert!(GroupPrimitives::from_options(&o).unwrap_err().contains(k));
+        assert!(make(&o).err().unwrap().contains(k));
     }
     for (k, v) in [("max-groups", "0"), ("max-vertices", "2"), ("max-groups", "x")] {
         let mut o = ok.clone();
         o.insert(k.to_owned(), v.to_owned());
-        assert!(GroupPrimitives::from_options(&o).is_err(), "{k}={v}");
+        assert!(make(&o).is_err(), "{k}={v}");
     }
     let mut o = ok;
     o.insert("max".to_owned(), "1".to_owned());
-    assert!(
-        GroupPrimitives::from_options(&o)
-            .unwrap_err()
-            .contains("unknown option max")
-    );
+    assert!(make(&o).err().unwrap().contains("unknown option max"));
     // registered with its required options as the example
     let mut registry = PassRegistry::new();
     primase_meshops::register(&mut registry);

@@ -2,35 +2,28 @@
 //! (`core.collider` to `core.collision`) and `flatten-curves` (Bezier `core.curve`s to polylines). A writer that
 //! needs them says so in its target, so the planner runs them only for it.
 
-use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Collider, Collision, Component, Curve, Diagonal, Heightfield, Shape, World};
 
 use crate::{Mesh, V, box_mesh, capsule, convex_hull, cylinder, sphere};
 
-/// Register this crate's passes.
-pub(crate) fn register(reg: &mut PassRegistry) {
-    reg.register("bake-texture-transforms", |o: &Options| {
-        no_options(o)?;
-        Ok(Box::new(crate::BakeTextureTransforms))
-    });
-    reg.register("tessellate-colliders", |o: &Options| {
-        no_options(o)?;
-        Ok(Box::new(TessellateColliders))
-    });
-    // how closely the polyline follows the curve is the program's: no default
-    reg.register_requiring(
-        "flatten-curves",
-        |o: &Options| Ok(Box::new(FlattenCurves::from_options(o)?)),
-        &[("tolerance", "0.005")],
-    );
-}
+/// `tessellate-colliders`' declaration ([`primase_core::pass::PassRegistry::add`]): no options.
+pub const TESSELLATE_COLLIDERS: PassSpec = PassSpec {
+    name: "tessellate-colliders",
+    options: &[],
+    make: |_| Ok(Box::new(TessellateColliders)),
+};
 
-fn no_options(o: &Options) -> Result<(), String> {
-    match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(()),
-    }
-}
+/// `flatten-curves`' declaration: how closely the polyline follows the curve is the program's, no default.
+pub const FLATTEN_CURVES: PassSpec = PassSpec {
+    name: "flatten-curves",
+    options: &[OptionSpec::required(
+        "tolerance",
+        "0.005",
+        "metres: the farthest a polyline may lie from its curve, finite and above 0",
+    )],
+    make: |g| Ok(Box::new(FlattenCurves::from_given(g)?)),
+};
 
 /// `tessellate-colliders`: every `core.collider` as triangles appended to its entity's `core.collision`, in the same
 /// space, with the collider's surface (a heightfield's per-cell surfaces where it has them). Boxes, convex hulls and
@@ -204,23 +197,12 @@ impl FlattenCurves {
         self.tolerance
     }
 
-    /// From its options (`tolerance`, required: how closely the polyline follows the curve is the program's choice),
-    /// through [`FlattenCurves::new`].
-    pub fn from_options(o: &Options) -> Result<FlattenCurves, String> {
-        let mut tolerance = None;
-        for (k, v) in o {
-            match k.as_str() {
-                "tolerance" => {
-                    tolerance = Some(
-                        v.parse()
-                            .map_err(|_| format!("tolerance {v} is not a positive number of metres"))?,
-                    );
-                }
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
+    /// From its declared options, through [`FlattenCurves::new`].
+    fn from_given(g: &Given) -> Result<FlattenCurves, String> {
+        let v = g.required("tolerance");
         FlattenCurves::new(
-            tolerance.ok_or("tolerance is required: the metres a polyline may lie from its curve")?,
+            v.parse()
+                .map_err(|_| format!("tolerance {v} is not a positive number of metres"))?,
         )
     }
 }

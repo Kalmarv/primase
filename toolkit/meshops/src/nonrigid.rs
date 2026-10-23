@@ -24,7 +24,7 @@
 //! or a prototype's geometry is still in a file, the placement is left as it was and counted by what stopped it.
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Collision, Entity, Instance, Light, Linear, Lods, Marker, Mesh, MeshFile, Name, Transform, TransformKind,
     World,
@@ -46,21 +46,28 @@ pub struct BakeNonrigid {
     pub mirrors: Mirrors,
 }
 
+impl Choice for Mirrors {
+    const VALUES: &'static [(&'static str, Self)] = &[("bake", Mirrors::Bake), ("keep", Mirrors::Keep)];
+}
+
 impl BakeNonrigid {
-    /// From its options (`mirrors=bake|keep`).
-    pub fn from_options(o: &Options) -> Result<BakeNonrigid, String> {
-        let mut pass = BakeNonrigid::default();
-        for (k, v) in o {
-            match (k.as_str(), v.as_str()) {
-                ("mirrors", "keep") => pass.mirrors = Mirrors::Keep,
-                ("mirrors", "bake") => pass.mirrors = Mirrors::Bake,
-                ("mirrors", v) => return Err(format!("bake-nonrigid: mirrors={v} is not keep or bake")),
-                _ => return Err(format!("bake-nonrigid: unknown option {k}")),
-            }
+    /// From its declared options: `mirrors`, else baked.
+    fn from_given(g: &Given) -> BakeNonrigid {
+        BakeNonrigid {
+            mirrors: g.optional_choice("mirrors").unwrap_or_default(),
         }
-        Ok(pass)
     }
 }
+
+/// `bake-nonrigid`'s declaration ([`primase_core::pass::PassRegistry::add`]).
+pub const BAKE_NONRIGID: PassSpec = PassSpec {
+    name: "bake-nonrigid",
+    options: &[OptionSpec::optional_choice::<Mirrors>(
+        "mirrors",
+        "mirrored transforms baked into geometry like sheared ones (the default), or kept for a writer that carries them",
+    )],
+    make: |g| Ok(Box::new(BakeNonrigid::from_given(g))),
+};
 
 impl Pass for BakeNonrigid {
     fn name(&self) -> &'static str {
@@ -68,7 +75,7 @@ impl Pass for BakeNonrigid {
     }
     fn options(&self) -> Options {
         match self.mirrors {
-            Mirrors::Keep => Options::from([("mirrors".to_owned(), "keep".to_owned())]),
+            Mirrors::Keep => Options::from([("mirrors".to_owned(), Mirrors::Keep.text().to_owned())]),
             Mirrors::Bake => Options::new(),
         }
     }
@@ -94,11 +101,6 @@ impl Pass for BakeNonrigid {
         log.absorb(bake_nonrigid(w, self));
         Ok(())
     }
-}
-
-/// Register `bake-nonrigid` (option `mirrors=keep|bake`, default `bake`).
-pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    reg.register("bake-nonrigid", |o| Ok(Box::new(BakeNonrigid::from_options(o)?)));
 }
 
 /// `M F`: the transform with its local x negated (exact: negation only).

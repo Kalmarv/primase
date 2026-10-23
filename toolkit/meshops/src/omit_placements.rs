@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 
 use primase_core::convert::PartScope;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Asset, Collision, Component, Entity, Instance, Name, Source, World};
 
 /// What becomes of a selected placement's collision.
@@ -35,30 +35,40 @@ pub struct OmitPlacements {
     pub collision: PlacementCollision,
 }
 
+impl Choice for PlacementCollision {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("keep", PlacementCollision::Keep),
+        ("omit", PlacementCollision::Omit),
+    ];
+}
+
 impl OmitPlacements {
-    /// From its options, both required: `prefixes` (joined by `;`), `collision` (`keep` or `omit`).
-    pub fn from_options(o: &Options) -> Result<OmitPlacements, String> {
-        if let Some(k) = o
-            .keys()
-            .find(|k| !["prefixes", "collision"].contains(&k.as_str()))
-        {
-            return Err(format!("unknown option {k}"));
+    /// From its declared options.
+    fn from_given(g: &Given) -> OmitPlacements {
+        OmitPlacements {
+            prefixes: g.required("prefixes").split(';').map(str::to_owned).collect(),
+            collision: g.choice("collision"),
         }
-        let get = |k: &str| {
-            o.get(k).map(String::as_str).ok_or_else(|| {
-                format!("{k} is required: prefixes=<name prefix>;<name prefix>..., collision=keep|omit")
-            })
-        };
-        Ok(OmitPlacements {
-            prefixes: get("prefixes")?.split(';').map(str::to_owned).collect(),
-            collision: match get("collision")? {
-                "keep" => PlacementCollision::Keep,
-                "omit" => PlacementCollision::Omit,
-                v => return Err(format!("collision={v}: keep or omit")),
-            },
-        })
     }
 }
+
+/// `omit-placements`' declaration ([`primase_core::pass::PassRegistry::add`]): which placements stop drawing and
+/// whether they keep colliding are the program's, both options required.
+pub const OMIT_PLACEMENTS: PassSpec = PassSpec {
+    name: "omit-placements",
+    options: &[
+        OptionSpec::required(
+            "prefixes",
+            "Level/Ceiling",
+            "name prefixes of the placements that stop drawing, joined by ;",
+        ),
+        OptionSpec::choice::<PlacementCollision>(
+            "collision",
+            "whether the placements keep colliding, or are despawned",
+        ),
+    ],
+    make: |g| Ok(Box::new(OmitPlacements::from_given(g))),
+};
 
 impl Pass for OmitPlacements {
     fn name(&self) -> &'static str {
@@ -67,14 +77,7 @@ impl Pass for OmitPlacements {
     fn options(&self) -> Options {
         Options::from([
             ("prefixes".to_owned(), self.prefixes.join(";")),
-            (
-                "collision".to_owned(),
-                match self.collision {
-                    PlacementCollision::Keep => "keep",
-                    PlacementCollision::Omit => "omit",
-                }
-                .to_owned(),
-            ),
+            ("collision".to_owned(), self.collision.text().to_owned()),
         ])
     }
     /// The collision-only copies of prototypes: their collision, name and source.
@@ -236,8 +239,12 @@ mod tests {
             ("prefixes".to_owned(), "Level/Ceiling".to_owned()),
             ("collision".to_owned(), "keep".to_owned()),
         ]);
-        let pass = OmitPlacements::from_options(&o).unwrap();
+        let pass = OmitPlacements {
+            prefixes: vec!["Level/Ceiling".into()],
+            collision: PlacementCollision::Keep,
+        };
         assert_eq!(pass.options(), o);
+        assert_eq!(OMIT_PLACEMENTS.instance(&o).unwrap().options(), o);
         run(&mut w, pass).unwrap();
         let copy = w.get::<Instance>(a).unwrap().prototype;
         assert_ne!(copy, prototype);

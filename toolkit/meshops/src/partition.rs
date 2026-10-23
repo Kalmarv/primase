@@ -18,13 +18,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::convert::{PartitionGroup, PartitionPlan};
 use primase_core::frame::ground;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Curve, Entity, Marker, Resource, Tile, Transform, World};
 
 /// `partition-grid{cell=C[,origin=E;N][,halo=H][,region=E0;N0;E1;N1][,tile=T]}`: see the module documentation. `cell`
 /// has no default: how big a part is is the program's choice. `region` keeps only what stands in it (half-open), the rest
 /// left out and counted. Built by [`PartitionGrid::new`] and its setters, which check every value; the pipeline text
-/// goes through the same constructor ([`PartitionGrid::from_options`]).
+/// goes through the same constructor ([`PARTITION_GRID`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartitionGrid {
     cell: f64,
@@ -134,8 +134,8 @@ impl PartitionGrid {
         self.tile
     }
 
-    /// From the pipeline text's options, through [`PartitionGrid::new`] and the setters.
-    pub fn from_options(o: &Options) -> Result<PartitionGrid, String> {
+    /// From its declared options, through [`PartitionGrid::new`] and the setters.
+    fn from_given(g: &Given) -> Result<PartitionGrid, String> {
         let numbers = |k: &str, v: &str, n: usize| -> Result<Vec<f64>, String> {
             let xs: Vec<f64> = v
                 .split(';')
@@ -151,25 +151,18 @@ impl PartitionGrid {
                 Err(format!("{k}={v}: {n} numbers expected"))
             }
         };
-        if let Some(k) = o
-            .keys()
-            .find(|k| !matches!(k.as_str(), "cell" | "origin" | "halo" | "region" | "tile"))
-        {
-            return Err(format!("unknown option {k}"));
-        }
-        let cell = o.get("cell").ok_or("cell=C (metres, above 0) is required")?;
-        let mut grid = PartitionGrid::new(numbers("cell", cell, 1)?[0])?;
-        if let Some(v) = o.get("tile") {
+        let mut grid = PartitionGrid::new(numbers("cell", g.required("cell"), 1)?[0])?;
+        if let Some(v) = g.optional("tile") {
             grid = grid.with_tile(numbers("tile", v, 1)?[0])?;
         }
-        if let Some(v) = o.get("origin") {
+        if let Some(v) = g.optional("origin") {
             let xs = numbers("origin", v, 2)?;
             grid = grid.with_origin([xs[0], xs[1]])?;
         }
-        if let Some(v) = o.get("halo") {
+        if let Some(v) = g.optional("halo") {
             grid = grid.with_halo(numbers("halo", v, 1)?[0])?;
         }
-        if let Some(v) = o.get("region") {
+        if let Some(v) = g.optional("region") {
             let xs = numbers("region", v, 4)?;
             grid = grid.with_region([xs[0], xs[1], xs[2], xs[3]])?;
         }
@@ -370,6 +363,36 @@ impl Tarjan {
     }
 }
 
+/// `partition-grid`'s declaration ([`primase_core::pass::PassRegistry::add`]): how big a part is is the program's,
+/// `cell` has no default.
+pub const PARTITION_GRID: PassSpec = PassSpec {
+    name: "partition-grid",
+    options: &[
+        OptionSpec::required("cell", "100", "metres: a cell's side, above 0"),
+        OptionSpec::optional(
+            "origin",
+            "0;0",
+            "metres: the cells' origin, east;north (default 0;0)",
+        ),
+        OptionSpec::optional(
+            "halo",
+            "5",
+            "metres, not negative: other cells' content within it is a part's context (default 0)",
+        ),
+        OptionSpec::optional(
+            "region",
+            "0;0;100;100",
+            "metres: west;south;east;north, only what stands in it kept (default everything)",
+        ),
+        OptionSpec::optional(
+            "tile",
+            "100",
+            "metres: cells aligned to a writer's tiles of this side, content filed by its tile",
+        ),
+    ],
+    make: |g| Ok(Box::new(PartitionGrid::from_given(g)?)),
+};
+
 impl Pass for PartitionGrid {
     fn name(&self) -> &'static str {
         "partition-grid"
@@ -533,13 +556,14 @@ mod tests {
         e
     }
 
-    fn grid(o: &[(&str, &str)]) -> PartitionGrid {
-        PartitionGrid::from_options(
-            &o.iter()
-                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                .collect(),
-        )
-        .unwrap()
+    fn grid(o: &[(&str, &str)]) -> Box<dyn Pass> {
+        PARTITION_GRID.instance(&options(o)).unwrap()
+    }
+
+    fn options(o: &[(&str, &str)]) -> Options {
+        o.iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
     }
 
     /// Half-open cells: a placement on a border is the cell above's; the halo loads a neighbour's placement as
@@ -675,19 +699,14 @@ mod tests {
         let g = PartitionGrid::new(100.0).unwrap();
         assert!(g.clone().with_halo(-1.0).is_err());
         assert!(g.clone().with_region([10.0, 0.0, 10.0, 5.0]).is_err());
-        assert_eq!(
-            PartitionGrid::from_options(&Options::from([("cell".to_owned(), "100".to_owned())])).unwrap(),
-            g
-        );
-        assert!(
-            PartitionGrid::from_options(&Options::from([("cell".to_owned(), "NaN".to_owned())])).is_err()
-        );
+        assert_eq!(grid(&[("cell", "100")]).options(), g.options());
+        assert!(PARTITION_GRID.instance(&options(&[("cell", "NaN")])).is_err());
     }
 
     #[test]
     fn the_cell_size_is_required() {
-        assert!(PartitionGrid::from_options(&Options::new()).is_err());
-        assert!(PartitionGrid::from_options(&Options::from([("cell".to_owned(), "0".to_owned())])).is_err());
+        assert!(PARTITION_GRID.instance(&Options::new()).is_err());
+        assert!(PARTITION_GRID.instance(&options(&[("cell", "0")])).is_err());
     }
 
     /// Standalone content (a collision soup nothing places, with or without a transform) is in exactly one part, as
@@ -839,10 +858,6 @@ mod tests {
         let parsed = reg.parse(&text).unwrap();
         assert_eq!(parsed.passes.len(), 1);
         assert_eq!(parsed.passes[0].options(), g.options());
-        assert_eq!(
-            PartitionGrid::from_options(&parsed.passes[0].options()).unwrap(),
-            g
-        );
     }
 
     /// Aligned to a writer's 200 m tiles: a cell or origin that is not a whole multiple of the tile is refused; content
@@ -856,11 +871,7 @@ mod tests {
             &[("cell", "400"), ("tile", "0.1")],
             &[("cell", "400"), ("tile", "0")],
         ] {
-            let o: Options = bad
-                .iter()
-                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                .collect();
-            assert!(PartitionGrid::from_options(&o).is_err(), "{bad:?}");
+            assert!(PARTITION_GRID.instance(&options(bad)).is_err(), "{bad:?}");
         }
         assert!(PartitionGrid::new(300.0).unwrap().with_tile(200.0).is_err());
         assert!(
@@ -871,9 +882,16 @@ mod tests {
                 .with_origin([100.0, 0.0])
                 .is_err()
         );
-        let g = grid(&[("cell", "400"), ("tile", "200"), ("origin", "-200;200")]);
-        assert_eq!(g.tile(), Some(200.0));
-        assert_eq!(PartitionGrid::from_options(&g.options()).unwrap(), g);
+        let g = PartitionGrid::new(400.0)
+            .unwrap()
+            .with_tile(200.0)
+            .unwrap()
+            .with_origin([-200.0, 200.0])
+            .unwrap();
+        assert_eq!(
+            grid(&[("cell", "400"), ("tile", "200"), ("origin", "-200;200")]).options(),
+            g.options()
+        );
         // every f32 position within a few steps of a tile border, both sides, both signs
         let mut w = World::new();
         let proto = w.spawn();

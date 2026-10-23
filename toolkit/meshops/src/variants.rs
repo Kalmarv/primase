@@ -19,7 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Entity, Instance, Lods, MaterialVariants, Mesh, MeshFile, Name, World};
 
 /// What becomes of the material variants nobody places.
@@ -31,7 +31,15 @@ pub enum UnusedVariants {
     Discard,
 }
 
-/// See the module documentation. Made by [`SpecializeMaterialVariants::new`]; from options by the same call.
+impl Choice for UnusedVariants {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("keep", UnusedVariants::Keep),
+        ("discard", UnusedVariants::Discard),
+    ];
+}
+
+/// See the module documentation. Made by [`SpecializeMaterialVariants::new`]; from options
+/// ([`SPECIALIZE_MATERIAL_VARIANTS`]) by the same call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpecializeMaterialVariants {
     unused: UnusedVariants,
@@ -45,30 +53,18 @@ impl SpecializeMaterialVariants {
     pub fn unused(&self) -> UnusedVariants {
         self.unused
     }
-
-    /// From its options: `unused=keep|discard`, required.
-    pub fn from_options(o: &Options) -> Result<SpecializeMaterialVariants, String> {
-        if let Some(k) = o.keys().find(|k| k.as_str() != "unused") {
-            return Err(format!("unknown option {k}"));
-        }
-        let unused = match o.get("unused").map(String::as_str) {
-            Some("keep") => UnusedVariants::Keep,
-            Some("discard") => UnusedVariants::Discard,
-            Some(v) => return Err(format!("unused={v}: keep or discard")),
-            None => {
-                return Err(
-                    "unused is required: keep or discard (what becomes of variants nobody places)".into(),
-                );
-            }
-        };
-        Ok(SpecializeMaterialVariants::new(unused))
-    }
 }
 
-/// [`SpecializeMaterialVariants::from_options`] as a pass factory.
-pub fn specialize_material_variants(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(SpecializeMaterialVariants::from_options(o)?))
-}
+/// `specialize-material-variants`' declaration ([`primase_core::pass::PassRegistry::add`]): what becomes of the
+/// variants nobody places is the program's, no default.
+pub const SPECIALIZE_MATERIAL_VARIANTS: PassSpec = PassSpec {
+    name: "specialize-material-variants",
+    options: &[OptionSpec::choice::<UnusedVariants>(
+        "unused",
+        "the variants nobody places kept as they are, or removed and counted",
+    )],
+    make: |g| Ok(Box::new(SpecializeMaterialVariants::new(g.choice("unused")))),
+};
 
 /// The materials prototype `mesh`'s primitives draw for `variant`: each primitive's override, else its own.
 fn resolved(mesh: &Mesh, variants: &MaterialVariants, variant: u32) -> Vec<Option<Entity>> {
@@ -93,14 +89,7 @@ impl Pass for SpecializeMaterialVariants {
         "specialize-material-variants"
     }
     fn options(&self) -> Options {
-        Options::from([(
-            "unused".to_owned(),
-            match self.unused {
-                UnusedVariants::Keep => "keep",
-                UnusedVariants::Discard => "discard",
-            }
-            .to_owned(),
-        )])
+        Options::from([("unused".to_owned(), self.unused.text().to_owned())])
     }
     fn modifies(&self) -> &[&'static str] {
         &["core.instance", "core.mesh", "core.name"]
