@@ -10,6 +10,8 @@ publish.workspace = true
 
 [dependencies]
 primase-bytes.workspace = true
+primase-mojoshader.workspace = true
+primase-shader.workspace = true
 thiserror.workspace = true
 
 [lints]

@@ -106,3 +106,71 @@ fn e1_every_effect_reads_to_its_shaders_and_passes() {
     );
     assert_eq!(files.len(), 18);
 }
+
+/// - E2: every shader of every effect lifts to a program that validates and is written as WGSL; the refusals are counted
+///   by reason (each a name for what the dialect lacks), and none is expected. The vertex programs' clip-space fix
+///   (`posFixup`) is dropped and says so; the pixel programs sample through the textures the effect names.
+#[test]
+fn e2_every_shader_lifts() {
+    let Some(root) = install_file(Game::Stuntboost, "Content/Effects") else {
+        return;
+    };
+    let mut files = Vec::new();
+    effects(&root, &mut files);
+    let (mut programs, mut refused, mut invalid) = (
+        0usize,
+        std::collections::BTreeMap::<String, usize>::new(),
+        Vec::new(),
+    );
+    for path in &files {
+        let name = path.strip_prefix(&root).unwrap().display().to_string();
+        let bytes = std::fs::read(path).unwrap();
+        let xnb = Xnb::parse(&bytes).unwrap();
+        let effect = Effect::parse(xnb.effect().unwrap()).unwrap();
+        for index in 0..effect.shaders.len() {
+            match primase_monogame::programs::program(&effect, index) {
+                Err(primase_monogame::programs::Error::Lift(e)) => {
+                    *refused.entry(e.detail.clone()).or_default() += 1;
+                }
+                Err(e) => invalid.push(format!("{name} shader {index}: {e}")),
+                Ok(program) => {
+                    programs += 1;
+                    if let Err(problems) = program.validate() {
+                        invalid.push(format!(
+                            "{name} shader {index}: {}",
+                            problems
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        ));
+                    } else if let Err(e) = primase_shader::emit::wgsl(&program) {
+                        invalid.push(format!("{name} shader {index}: {e}"));
+                    }
+                    if program.stage == primase_shader::Stage::Vertex {
+                        assert!(
+                            program.notes.iter().any(|n| n.contains("posFixup")),
+                            "{name} shader {index}: the clip-space fix is not noted"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    println!(
+        "{programs} programs lifted, {} refused",
+        refused.values().sum::<usize>()
+    );
+    for (reason, n) in &refused {
+        println!("  refused {n:3}  {reason}");
+    }
+    for line in invalid.iter().take(20) {
+        println!("  INVALID {line}");
+    }
+    assert!(
+        invalid.is_empty(),
+        "{} lifted programs failed validation or writing",
+        invalid.len()
+    );
+    assert_eq!(programs, 47);
+}

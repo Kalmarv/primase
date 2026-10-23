@@ -53,7 +53,8 @@ pub struct Hints {
 }
 
 /// A named constant at a byte offset of the uniform array, `bytes` long (a whole number of registers), `width` lanes
-/// wide when it is a scalar or a vector.
+/// wide when it is a scalar or a vector. A program declares the rows of the array it reads: a constant past them is
+/// left out, one that reaches past them is cut.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Constant {
     pub name: String,

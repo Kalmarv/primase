@@ -1149,6 +1149,8 @@ name = "primase-monogame"
 version = "0.1.0"
 dependencies = [
  "primase-bytes",
+ "primase-mojoshader",
+ "primase-shader",
  "thiserror",
 ]
 
@@ -1214,6 +1216,7 @@ dependencies = [
  "primase-glb",
  "primase-image",
  "primase-monogame",
+ "primase-shader",
  "primase-testdata",
  "serde",
  "serde_json",

@@ -1254,7 +1254,13 @@ impl Lower<'_> {
             let size = rows.saturating_mul(16);
             let mut constants = Vec::new();
             for c in &self.hints.constants {
-                let ty = if c.bytes == 16 {
+                // the program declares the rows it reads: a constant beyond them is not its, one that reaches past them
+                // is cut to the rows it has
+                if c.offset >= size {
+                    continue;
+                }
+                let bytes = c.bytes.min(size.saturating_sub(c.offset));
+                let ty = if bytes == 16 {
                     if c.width <= 1 {
                         ConstantType::Scalar(ScalarType::Float)
                     } else {
@@ -1263,16 +1269,10 @@ impl Lower<'_> {
                 } else {
                     ConstantType::Array {
                         element: Box::new(ConstantType::Vector(float_value(4))),
-                        count: c.bytes / 16,
+                        count: (bytes / 16).max(1),
                         stride: 16,
                     }
                 };
-                if c.offset.saturating_add(c.bytes) > size {
-                    return Err(error(
-                        0,
-                        format!("the constant {} reaches past the uniform array", c.name),
-                    ));
-                }
                 constants.push(LayoutConstant {
                     name: c.name.clone(),
                     offset: c.offset,
