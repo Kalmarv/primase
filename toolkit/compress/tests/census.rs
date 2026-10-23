@@ -3,10 +3,10 @@
 //! lz4, deflate, zlib, zlib-unterminated. Oodle uses the DLL module's gate instead.
 use primase_compress::{Decompressor, Deflate, Lz4, Zlib, ZlibUnterminated};
 use primase_core::gate::{GateReport, Tolerance};
-use primase_testdata::real_data;
+use primase_testdata::{Game, OracleSet, oracle};
 #[test]
 fn corpus() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(path) = real_data("PRIMASE_CODEC_CORPUS") else {
+    let Some(path) = oracle(OracleSet::Corpus, Game::General, "codecs.tsv") else {
         return Ok(());
     };
     let mut report = GateReport::new("independent real codec corpus", Tolerance::Exact);

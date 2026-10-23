@@ -21,9 +21,10 @@ length but does not report consumed input; container framing must supply the
 exact compressed slice.
 
 Synthetic tests cover empty input, short/trailing/corrupt input, size mismatches,
-and block boundaries. Optional real-data gates use the `PRIMASE_*` variables
-listed in CONTRIBUTING.md. `PRIMASE_CODEC_CORPUS` supports `lz4`, `deflate`,
-`zlib`, and `zlib-unterminated` rows. Oodle cross-checks use oozextract only as
+and block boundaries. Optional real-data gates read the real-data configuration
+(CONTRIBUTING.md): the `tools.oodle5`/`oodle6`/`oodle9` DLLs and the corpus
+oracle set. Its `general/codecs.tsv` supports `lz4`, `deflate`, `zlib`, and
+`zlib-unterminated` rows. Oodle cross-checks use oozextract only as
 a development dependency. Its 0.5.5 Kraken restart defect has a synthetic
 regression test; DCX checks report blocked whole-stream comparisons separately
 from per-quantum comparisons and native round trips.

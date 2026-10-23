@@ -180,22 +180,22 @@ impl Compressor for Oodle {
 mod tests {
     use super::*;
     use primase_core::gate::{GateReport, Tolerance};
-    use primase_testdata::real_data;
+    use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
     /// Installed DLL oracle versus independently implemented oozextract; tests
     /// synthetic Kraken compression for all three ABI versions when configured.
     #[test]
     fn dll_cross_checks() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        for (var, version) in [
-            ("PRIMASE_OODLE5", Version::V5),
-            ("PRIMASE_OODLE6", Version::V6),
-            ("PRIMASE_OODLE9", Version::V9),
+        for (oodle, version) in [
+            (Tool::Oodle5, Version::V5),
+            (Tool::Oodle6, Version::V6),
+            (Tool::Oodle9, Version::V9),
         ] {
-            let Some(path) = real_data(var) else {
+            let Some(path) = tool(oodle) else {
                 continue;
             };
             // SAFETY: gate configuration explicitly identifies the user's trusted game DLL.
             let dll = unsafe { Oodle::load(path, version)? };
-            let mut report = GateReport::new(var, Tolerance::Exact);
+            let mut report = GateReport::new(oodle.key(), Tolerance::Exact);
             for n in [0, 1, 65535, 65536, 65537, 131072, 262143, 262144, 262145, 524288] {
                 let src: Vec<u8> = (0..n).map(|i| ((i * 17 + i / 256) % 251) as u8).collect();
                 let compressed = dll.compress(&src)?;
@@ -210,8 +210,8 @@ mod tests {
                 let framed = cas.compress(&src)?;
                 report.compare_bytes(format!("cas/{n}"), &cas.decompress(&framed, n)?, &src);
             }
-            if var == "PRIMASE_OODLE9"
-                && let Some(folder) = real_data("PRIMASE_CAS_SAMPLES")
+            if oodle == Tool::Oodle9
+                && let Some(folder) = oracle(OracleSet::Corpus, Game::Skate, "cas")
             {
                 let mut files = std::fs::read_dir(folder)?.collect::<std::result::Result<Vec<_>, _>>()?;
                 files.sort_by_key(|f| f.path());
@@ -253,15 +253,15 @@ mod tests {
 mod dcx_gate {
     use super::*;
     use primase_core::gate::{GateReport, Tolerance};
-    use primase_testdata::real_data;
+    use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
     /// Test-only container adapter following SoulsFormats DCX.DecompressDCXKRAK.
     /// Production container parsing belongs in the future FromSoft world crate.
     #[test]
     fn loose_krak_dcx() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let Some(root) = real_data("PRIMASE_DCX") else {
+        let Some(root) = oracle(OracleSet::Corpus, Game::Sekiro, "dcx") else {
             return Ok(());
         };
-        let Some(path) = real_data("PRIMASE_OODLE6") else {
+        let Some(path) = tool(Tool::Oodle6) else {
             return Ok(());
         };
         // SAFETY: explicit trusted installed game's version-6 library.
@@ -400,7 +400,7 @@ mod upstream_defect {
     #[test]
     fn oozextract_055_kraken_restart_keeps_global_output_base()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let Some(path) = primase_testdata::real_data("PRIMASE_OODLE6") else {
+        let Some(path) = primase_testdata::tool(primase_testdata::Tool::Oodle6) else {
             return Ok(());
         };
         // SAFETY: explicitly configured trusted version-6 game library.
