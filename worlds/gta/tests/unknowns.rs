@@ -220,6 +220,7 @@ fn what_is_left_unknown_on_a_region() {
                     TextureSource::Texture { .. } => continue,
                     TextureSource::Default { .. } => "default (white)",
                     TextureSource::Missing => "missing",
+                    TextureSource::Frame(_) => "frame (the consumer's)",
                 };
                 let d3d = space_of(t.resource);
                 let name = d3d
