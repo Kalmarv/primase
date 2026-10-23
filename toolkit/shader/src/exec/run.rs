@@ -74,6 +74,28 @@ pub struct Output {
     pub samples: u64,
 }
 
+/// The registers and local memory of a [`Runner`], kept from one run of a program to the next so that the literals are
+/// written once and nothing is allocated per pixel.
+#[derive(Debug)]
+pub struct Scratch<const N: usize> {
+    regs: Vec<Reg>,
+    mem: Vec<u32>,
+}
+impl<const N: usize> Scratch<N> {
+    pub fn new(exe: &Executable) -> Self {
+        let mut regs = vec![[0u32; 4]; exe.slots * N];
+        for (s, v) in &exe.inits {
+            for l in 0..N {
+                regs[*s as usize * N + l] = *v;
+            }
+        }
+        Self {
+            regs,
+            mem: vec![0; exe.local_words * N],
+        }
+    }
+}
+
 /// Runs an [`Executable`] for one invocation (`N` = 1) or a 2 x 2 quad in lockstep (`N` = 4: lanes 0 and 1 the top row,
 /// 2 and 3 the bottom), as a GPU does: lanes that diverge are masked, a screen derivative is a difference inside the
 /// quad, a lane that is discarded goes on as a helper. A runner is reused for any number of runs.
@@ -130,19 +152,25 @@ impl<'a, const N: usize> Runner<'a, N> {
         backend: &'a mut dyn Backend,
         derivatives: Option<&'a [[[u32; 4]; 2]]>,
     ) -> Self {
+        Self::with_scratch(exe, bound, backend, derivatives, Scratch::new(exe))
+    }
+
+    /// [`Runner::new`] on registers kept from an earlier runner of the same program ([`Runner::into_scratch`]): the
+    /// literals are already in them.
+    pub fn with_scratch(
+        exe: &'a Executable,
+        bound: &'a Bound<'a>,
+        backend: &'a mut dyn Backend,
+        derivatives: Option<&'a [[[u32; 4]; 2]]>,
+        scratch: Scratch<N>,
+    ) -> Self {
         let c = exe;
         let (b, sampler, ftz, derivs) = (bound, backend, exe.flush_denormals, derivatives);
-        let mut regs = vec![[0u32; 4]; c.slots * N];
-        for (s, v) in &c.inits {
-            for l in 0..N {
-                regs[*s as usize * N + l] = *v;
-            }
-        }
         Self {
             c,
             b,
-            regs,
-            mem: vec![0; c.local_words * N],
+            regs: scratch.regs,
+            mem: scratch.mem,
             sampler,
             ftz,
             steps: 0,
@@ -150,6 +178,14 @@ impl<'a, const N: usize> Runner<'a, N> {
             outs: std::array::from_fn(|_| Vec::new()),
             killed: 0,
             derivs,
+        }
+    }
+
+    /// Give the registers back, to start the next runner of this program with.
+    pub fn into_scratch(self) -> Scratch<N> {
+        Scratch {
+            regs: self.regs,
+            mem: self.mem,
         }
     }
 

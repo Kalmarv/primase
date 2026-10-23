@@ -22,7 +22,7 @@ mod run;
 pub use flat::Executable;
 pub use pixel::ProgramShader;
 pub use request::{Backend, Dim, ImageLoad, ImageLod, ImageQuery, ImageSample, ImageStore, QueryKind};
-pub use run::{Bound, Output, Resources, Runner, STEP_LIMIT};
+pub use run::{Bound, Output, Resources, Runner, STEP_LIMIT, Scratch};
 
 use crate::{Error, Program};
 

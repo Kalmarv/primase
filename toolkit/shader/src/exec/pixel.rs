@@ -3,11 +3,12 @@
 
 use std::collections::BTreeMap;
 
-use super::{Backend, Executable, ImageLoad, ImageQuery, ImageSample, ImageStore, Runner, error};
+use super::{Backend, Executable, ImageLoad, ImageQuery, ImageSample, ImageStore, Runner, Scratch, error};
 use crate::{
     AtomicAdd, BufferKind, D3dClass, Error, Execution, Interface, PixelShader, Program, ResourceId,
     ResourceKind, Sampler, Stage, StorageTarget, Store, SystemValue,
 };
+use std::sync::Mutex;
 
 /// One entry argument and where its lanes come from in the register file.
 #[derive(Debug)]
@@ -46,6 +47,9 @@ pub struct ProgramShader {
     /// The bind slot of every resource that has one.
     slots: BTreeMap<ResourceId, u32>,
     buffers: BTreeMap<ResourceId, BufferKind>,
+    /// Registers kept between runs, one set per concurrent run.
+    scalar_scratch: Mutex<Vec<Scratch<1>>>,
+    quad_scratch: Mutex<Vec<Scratch<4>>>,
 }
 
 fn lanes_of(mask: u8) -> Vec<u8> {
@@ -196,6 +200,8 @@ impl ProgramShader {
             samplers,
             slots,
             buffers,
+            scalar_scratch: Mutex::new(Vec::new()),
+            quad_scratch: Mutex::new(Vec::new()),
         })
     }
 
@@ -274,8 +280,7 @@ impl ProgramShader {
     }
 
     fn bound<'a>(&self, buffers: &[(u32, &'a [[u32; 4]])]) -> Result<super::Bound<'a>, Error> {
-        let mut found: BTreeMap<ResourceId, &'a [[u32; 4]]> = BTreeMap::new();
-        for &(slot, id, rows) in &self.constants {
+        for &(slot, _, rows) in &self.constants {
             let given = buffers
                 .iter()
                 .find(|(s, _)| *s == slot)
@@ -287,10 +292,16 @@ impl ProgramShader {
                     given.len()
                 )));
             }
-            found.insert(id, given);
         }
+        // the buffers were all found above, by slot
         self.executable
-            .bind(|id| found.get(&id).copied(), |_| None)
+            .bind(
+                |id| {
+                    let (slot, _, _) = self.constants.iter().find(|(_, c, _)| *c == id)?;
+                    buffers.iter().find(|(s, _)| s == slot).map(|(_, v)| *v)
+                },
+                |_| None,
+            )
             .map_err(error)
     }
 
@@ -300,6 +311,17 @@ impl ProgramShader {
             slots: &self.slots,
             buffers: &self.buffers,
         }
+    }
+}
+
+/// A set of registers from the pool, if one is free.
+fn take<const N: usize>(pool: &Mutex<Vec<Scratch<N>>>) -> Option<Scratch<N>> {
+    pool.lock().ok()?.pop()
+}
+
+fn give_back<const N: usize>(pool: &Mutex<Vec<Scratch<N>>>, scratch: Scratch<N>) {
+    if let Ok(mut pool) = pool.lock() {
+        pool.push(scratch);
     }
 }
 
@@ -502,11 +524,11 @@ impl PixelShader for ProgramShader {
             self.arguments_of(inputs[3])?,
         ];
         let mut backend = self.backend(sampler);
-        let mut runner = Runner::<4>::new(&self.executable, &bound, &mut backend, None);
-        let outputs = runner
-            .run([&arguments[0], &arguments[1], &arguments[2], &arguments[3]])
-            .map_err(error)?;
-        Ok(outputs.map(|o| self.execution(o)))
+        let scratch = take(&self.quad_scratch).unwrap_or_else(|| Scratch::new(&self.executable));
+        let mut runner = Runner::<4>::with_scratch(&self.executable, &bound, &mut backend, None, scratch);
+        let outputs = runner.run([&arguments[0], &arguments[1], &arguments[2], &arguments[3]]);
+        give_back(&self.quad_scratch, runner.into_scratch());
+        Ok(outputs.map_err(error)?.map(|o| self.execution(o)))
     }
 }
 
@@ -522,8 +544,17 @@ impl ProgramShader {
         let arguments = self.arguments_of(inputs)?;
         let derivatives = derivatives.map(|d| self.derivatives_of(d));
         let mut backend = self.backend(sampler);
-        let mut runner = Runner::<1>::new(&self.executable, &bound, &mut backend, derivatives.as_deref());
-        let [output] = runner.run([&arguments]).map_err(error)?;
+        let scratch = take(&self.scalar_scratch).unwrap_or_else(|| Scratch::new(&self.executable));
+        let mut runner = Runner::<1>::with_scratch(
+            &self.executable,
+            &bound,
+            &mut backend,
+            derivatives.as_deref(),
+            scratch,
+        );
+        let output = runner.run([&arguments]);
+        give_back(&self.scalar_scratch, runner.into_scratch());
+        let [output] = output.map_err(error)?;
         Ok(self.execution(output))
     }
 }
