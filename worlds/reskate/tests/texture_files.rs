@@ -47,10 +47,11 @@ fn a_dds_of_no_size_is_refused() {
     assert!(e.contains("t.dds") && e.contains("zero dimensions"), "{e}");
 }
 
-/// 2^32-1 square overflowed a u64 level size (`w * h * 4`): a panic with overflow checks, a wrapped slice without.
+/// 2^32-1 square overflowed a u64 level size (`w * h * 4`): a panic with overflow checks, a wrapped slice without. (A
+/// format the legacy writer writes: it has no uncompressed RGBA8 header.)
 #[test]
 fn a_dds_of_absurd_size_is_refused() {
-    let mut file = dds(4, 4, TexFormat::Rgba8Unorm, vec![vec![0; 64]]);
+    let mut file = dds(4, 4, TexFormat::Bc1, vec![vec![0; 8]]);
     file[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
     file[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
     assert!(read(file).is_err());

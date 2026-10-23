@@ -208,8 +208,9 @@ fn the_text_form_is_stable_and_states_what_the_module_cannot() {
     let p = program();
     let text = p.text().unwrap();
     assert_eq!(text, p.text().unwrap());
+    let header = format!("// primase shader program v{}", primase_shader::PROGRAM_VERSION);
     for line in [
-        "// primase shader program v1",
+        header.as_str(),
         "// stage pixel entry main",
         "// source Dxbc ps_5_0 lifted by test 0",
         "// conventions clip_depth=0..1 fragment_origin=top_left texture_origin=top_left",
