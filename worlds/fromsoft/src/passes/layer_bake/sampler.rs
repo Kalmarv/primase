@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use primase_image::sampling::{Address, Decoded, Levels, Transfer};
 
 use crate::{Result, invalid};
@@ -6,8 +8,16 @@ use crate::{Result, invalid};
 /// addressing along each axis the binding states (wrap where it states none). Albedo RGB is linearized with the shared
 /// sRGB transfer before filtering; alpha and data textures remain linear. Runtime derivatives are not inferred from the
 /// shader resource names.
+///
+/// It keeps the stored texels it was made from ([`BaseMipBilinearWrap::rgba`]), so a bake's pipeline state
+/// ([`super::PipelineState`]) carries the very pixels it samples.
 #[derive(Clone, Debug)]
-pub struct BaseMipBilinearWrap(Decoded, [Address; 2]);
+pub struct BaseMipBilinearWrap {
+    decoded: Decoded,
+    address: [Address; 2],
+    rgba: Arc<[u8]>,
+    srgb: bool,
+}
 
 impl BaseMipBilinearWrap {
     /// Wrapping along both axes.
@@ -29,17 +39,35 @@ impl BaseMipBilinearWrap {
         } else {
             Transfer::Stored
         };
-        Ok(Self(levels.decoded(0, transfer), address))
+        Ok(Self {
+            decoded: levels.decoded(0, transfer),
+            address,
+            rgba: rgba.into(),
+            srgb: albedo_srgb,
+        })
     }
     pub fn dimensions(&self) -> [usize; 2] {
-        self.0.dimensions()
+        self.decoded.dimensions()
     }
+    /// The bytes it holds: the decoded texels and the stored ones.
     pub fn decoded_bytes(&self) -> usize {
-        self.0.decoded_bytes()
+        self.decoded.decoded_bytes() + self.rgba.len()
+    }
+    /// The stored texels, RGBA8 in rows, as given.
+    pub fn rgba(&self) -> &[u8] {
+        &self.rgba
+    }
+    /// Whether the colour lanes are sRGB-encoded (linearized before filtering); alpha is linear either way.
+    pub fn srgb(&self) -> bool {
+        self.srgb
+    }
+    /// The addressing along u and v.
+    pub fn address(&self) -> [Address; 2] {
+        self.address
     }
     pub fn sample(&self, uv: [f32; 2]) -> Result<[f32; 4]> {
-        self.0
-            .bilinear(uv, self.1)
+        self.decoded
+            .bilinear(uv, self.address)
             .map_err(|e| invalid("layer sampler", 0, e.to_string()))
     }
 }

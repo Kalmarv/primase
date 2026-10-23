@@ -16,6 +16,7 @@ use primase_core::shader::{ConstantRole, InputRole, Shader as CoreShader, StageB
 use primase_shader::exec::ProgramShader;
 use primase_shader::{Input, Interface, Lane, PixelShader, Sampler, Varying};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// The policy for the second vertex colour of a mesh: the layered vertex program hands `COLOR1.x` on as the tint's alpha,
 /// and the bake does not group by it.
@@ -56,6 +57,8 @@ struct Attribute {
 /// The lifted vertex program with its frozen constants and the plan to feed it.
 #[derive(Debug)]
 pub(crate) struct VertexStage {
+    /// The program's container as stored, which `shader` is lifted from.
+    bytecode: Arc<[u8]>,
     shader: ProgramShader,
     constants: Vec<(u32, Vec<[u32; 4]>)>,
     attributes: Vec<Attribute>,
@@ -76,6 +79,9 @@ impl Sampler for Instances {
         Ok(0)
     }
 }
+
+/// The texture coordinates of the four runs, in this order: the cell's corners (0, 0), (1, 0), (0, 1) and (1, 1).
+pub(super) const CORNERS: [[u32; 2]; 4] = [[0, 0], [1, 0], [0, 1], [1, 1]];
 
 fn lanes_of(mask: u8) -> Vec<usize> {
     (0..4).filter(|l| mask >> l & 1 != 0).collect()
@@ -190,12 +196,23 @@ impl VertexStage {
             });
         }
         Ok(Self {
+            bytecode: vertex.bytecode.as_slice().into(),
             shader: lifted,
             constants,
             attributes,
             ground,
             policies,
         })
+    }
+
+    /// The program's container as stored.
+    pub(super) fn bytecode(&self) -> &Arc<[u8]> {
+        &self.bytecode
+    }
+
+    /// Every buffer the program reads, by slot, as its rows of four words.
+    pub(super) fn constants(&self) -> &[(u32, Vec<[u32; 4]>)] {
+        &self.constants
     }
 
     /// The input registers of one run at texture coordinate `uv` (0 or 1 on each axis) and the level's `params`.
@@ -243,25 +260,43 @@ impl VertexStage {
         registers
     }
 
-    fn run(&self, uv: [u32; 2], params: &Inputs) -> Result<Vec<[u32; 4]>> {
-        let registers = self.registers(uv, params);
+    /// The input registers of the four runs, at the cell's corners [`CORNERS`], for the level's `params`.
+    pub(super) fn corners(&self, params: &Inputs) -> [Vec<[u32; 4]>; 4] {
+        CORNERS.map(|uv| self.registers(uv, params))
+    }
+
+    /// The output registers the program writes from each of `corners`' input registers. Every structured buffer it
+    /// reads (the per-instance indices) gives zero: one instance, index zero.
+    pub(super) fn outputs(&self, corners: &[Vec<[u32; 4]>; 4]) -> Result<[Vec<[u32; 4]>; 4]> {
         let buffers: Vec<(u32, &[[u32; 4]])> =
             self.constants.iter().map(|(s, r)| (*s, r.as_slice())).collect();
-        let run = self
-            .shader
-            .execute(&registers, &buffers, &mut Instances)
-            .map_err(|e| invalid("vertex program", e.at, e.detail))?;
-        Ok(run.outputs)
+        let mut runs = corners.iter().map(|registers| {
+            self.shader
+                .execute(registers, &buffers, &mut Instances)
+                .map(|run| run.outputs)
+                .map_err(|e| invalid("vertex program", e.at, e.detail))
+        });
+        Ok([
+            runs.next().expect("four corners")?,
+            runs.next().expect("four corners")?,
+            runs.next().expect("four corners")?,
+            runs.next().expect("four corners")?,
+        ])
     }
 
     /// What the pixel program `pixel` is given by the vertex program, per pixel input the program writes (the label, the
     /// lanes): from four runs at the cell's corners, each lane a constant, the grid's U or V, or an error.
-    pub fn pixel_inputs(&self, pixel: &Interface, params: &Inputs) -> Result<BTreeMap<(String, u32), Input>> {
-        let probes = [[0, 0], [1, 0], [0, 1], [1, 1]];
-        let runs = probes
-            .iter()
-            .map(|&uv| self.run(uv, params))
-            .collect::<Result<Vec<_>>>()?;
+    #[cfg(test)]
+    fn pixel_inputs(&self, pixel: &Interface, params: &Inputs) -> Result<BTreeMap<(String, u32), Input>> {
+        self.pixel_inputs_from(pixel, &self.outputs(&self.corners(params))?)
+    }
+
+    /// [`VertexStage::pixel_inputs`] from the program's outputs at the corners ([`VertexStage::outputs`]).
+    pub(super) fn pixel_inputs_from(
+        &self,
+        pixel: &Interface,
+        runs: &[Vec<[u32; 4]>; 4],
+    ) -> Result<BTreeMap<(String, u32), Input>> {
         let mut found = BTreeMap::new();
         for input in pixel.inputs.iter().filter(|i| i.used) {
             let label = label_of(input);
@@ -407,6 +442,28 @@ mod tests {
             skinned.pixel_inputs(&pixel, &params).unwrap(),
             plain.pixel_inputs(&pixel, &params).unwrap()
         );
+    }
+
+    /// The corners a bake's state carries are the cell's, in [`CORNERS`] order, and the outputs it carries, run from them,
+    /// give the pixel inputs the bake reads.
+    #[test]
+    fn the_corner_runs_are_the_pixel_inputs_source() {
+        let vertex = stage(&FrozenFrame::static_bake(0.)).unwrap();
+        let pixel = primase_dxbc::reflection(PIXEL).unwrap();
+        let params = Inputs {
+            weights_snow: [0.125, 0.25, 0.5, 0.75],
+            ..Inputs::default()
+        };
+        let corners = vertex.corners(&params);
+        for (registers, uv) in corners.iter().zip(CORNERS) {
+            assert_eq!(registers, &vertex.registers(uv, &params));
+        }
+        let outputs = vertex.outputs(&corners).unwrap();
+        assert_eq!(
+            vertex.pixel_inputs_from(&pixel, &outputs).unwrap(),
+            vertex.pixel_inputs(&pixel, &params).unwrap()
+        );
+        assert_eq!(&**vertex.bytecode(), VERTEX);
     }
 
     /// A scroll that is not the identity is not a grid lane: refused, by input and lane, not baked as the identity.

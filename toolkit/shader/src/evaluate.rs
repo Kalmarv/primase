@@ -190,6 +190,10 @@ impl Constants {
         self.buffers[b].1[word / 4][word % 4] = bits;
         self.written[b][word] = true;
     }
+    /// Every buffer the program reads, by slot, as its rows of four words (zero where nothing was written).
+    pub fn buffers(&self) -> &[(u32, Vec<[u32; 4]>)] {
+        &self.buffers
+    }
     /// Words never written, padding included: what the caller leaves at zero.
     pub fn unset_words(&self) -> u64 {
         self.written.iter().flatten().filter(|w| !**w).count() as u64

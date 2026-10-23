@@ -660,6 +660,20 @@ bindings, zero-initialized buffer words, and frozen policies are counted.
 Normal output inverts the binary G-buffer bias and retains the source tangent
 basis; consumer lowering remains separate. The main albedo supplies alpha.
 
+A bake first builds its `PipelineState` (`Prepared::pipeline_state`) and then
+evaluates that state alone. The state holds:
+- the grid, as size and period;
+- the pixel program's container, constant-buffer words and texture slots (each
+  a base mip's stored RGBA8 with its addressing and sRGB flag, or a constant);
+- each pixel input's lanes (bits, or the grid's U or V);
+- for a material with a vertex program, that program, its words, and the input
+  and output registers of its four runs at the cell's corners;
+- the albedo-alpha image with its scale.
+
+Another executor given the same state can therefore check the execution: the
+vertex runs, the pixel program over the grid, the interpolation and the
+sampling. The values in the state stay this bake's stated policy.
+
 The optional `oracles.baseline.sekiro/layer-pilot` fixture directory contains:
 
 - `cases.json`: array of `{id, model, mtd, shader, switch}`.

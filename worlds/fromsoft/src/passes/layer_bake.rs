@@ -12,4 +12,6 @@ pub use vertex::COLOUR1_POLICY;
 pub mod grouping;
 pub mod period;
 pub mod resolve;
+mod state;
+pub use state::{AlphaState, PipelineState, PixelState, SlotTexture, TARGETS, VertexState};
 mod vertex;

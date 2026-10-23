@@ -1,6 +1,7 @@
 use super::BaseMipBilinearWrap;
 use super::resolve::{self, Unbound, resolve, textures_of};
 use super::sampler::address;
+use super::state::{AlphaState, PipelineState, PixelState, SlotTexture, TARGETS, VertexState};
 use super::vertex::VertexStage;
 use crate::{Result, invalid, materials::LayeredMaterial};
 use primase_core::Entity;
@@ -12,7 +13,7 @@ use primase_dxbc::Shader;
 use primase_image::sampling::Address;
 use primase_shader::exec::ProgramShader;
 use primase_shader::{
-    Constants, Grid, Input, Interface, Invocation, Lane, Layout, PixelShader, Texture, evaluate_raw_with,
+    Constants, Grid, Input, Interface, Invocation, Lane, Layout, PixelShader, evaluate_raw_with,
 };
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -49,9 +50,11 @@ pub struct Programs<'a> {
 /// own scale.
 #[derive(Debug)]
 pub struct Prepared {
+    /// The pixel program's container as stored, which `shader` is lifted from.
+    bytecode: Arc<[u8]>,
     shader: ProgramShader,
     constants: Constants,
-    textures: BTreeMap<u32, Texture>,
+    textures: BTreeMap<u32, SlotTexture>,
     alpha: Option<(Arc<BaseMipBilinearWrap>, [f32; 2])>,
     /// The material's vertex program, which gives the pixel program what it reads of a vertex; `None` where the
     /// material has none, and a fixed table does.
@@ -487,7 +490,7 @@ impl Prepared {
                 match &bound.source {
                     TextureSource::Default { value, why } => {
                         *policies.entry(why.clone()).or_default() += 1;
-                        textures.insert(register, Texture::Constant(*value));
+                        textures.insert(register, SlotTexture::Constant(*value));
                         continue;
                     }
                     _ => {
@@ -525,11 +528,11 @@ impl Prepared {
                         largest_colour_dimension = largest_colour_dimension
                             .max(*image.dimensions().iter().max().expect("two axes") as u32);
                     }
-                    Texture::Image(image.clone() as Arc<dyn primase_shader::Image>)
+                    SlotTexture::Image(image.clone())
                 }
                 TextureSource::Default { value, why } => {
                     *policies.entry(why.clone()).or_default() += 1;
-                    Texture::Constant(*value)
+                    SlotTexture::Constant(*value)
                 }
                 TextureSource::Missing => continue,
             };
@@ -576,6 +579,7 @@ impl Prepared {
         }
         let decoded_bytes = cache.values().map(|t| t.decoded_bytes()).sum::<usize>() + alpha_bytes;
         Ok(Self {
+            bytecode: bytecode.into(),
             shader: lifted,
             constants,
             textures,
@@ -617,14 +621,9 @@ impl Prepared {
     ) -> Result<BakedChannels> {
         self.bake_channels(threads, size, period, params, true)
     }
-    fn bake_channels(
-        &self,
-        threads: Threads,
-        size: u32,
-        period: [f32; 2],
-        params: Inputs,
-        capture_reflectance: bool,
-    ) -> Result<BakedChannels> {
+    /// What a bake of `size` x `size` pixels over `period`, the level's vertex inputs `params`, evaluates
+    /// ([`PipelineState`]): the bake builds it and then evaluates it alone ([`Prepared::bake`]).
+    pub fn pipeline_state(&self, size: u32, period: [f32; 2], params: Inputs) -> Result<PipelineState> {
         if !params
             .weights_snow
             .iter()
@@ -665,8 +664,18 @@ impl Prepared {
         }
         // what the material's own vertex program writes replaces the table's value, and where they differ is counted by input
         let mut differences = BTreeMap::new();
+        let mut vertex_state = None;
         if let Some(vertex) = &self.vertex {
-            for (key, derived) in vertex.pixel_inputs(self.shader.interface(), &params)? {
+            let corners = vertex.corners(&params);
+            let outputs = vertex.outputs(&corners)?;
+            let derived_inputs = vertex.pixel_inputs_from(self.shader.interface(), &outputs)?;
+            vertex_state = Some(VertexState {
+                bytecode: vertex.bytecode().clone(),
+                constants: vertex.constants().to_vec(),
+                corners,
+                outputs,
+            });
+            for (key, derived) in derived_inputs {
                 let width = self
                     .shader
                     .interface()
@@ -708,15 +717,44 @@ impl Prepared {
         {
             return Err(invalid("layer binding", 0, "missing TEXCOORD0"));
         }
-        // the G-buffer normal, the second output's x, the albedo, the reflectance and the emission
+        Ok(PipelineState {
+            size,
+            period,
+            pixel: PixelState {
+                bytecode: self.bytecode.clone(),
+                constants: self.constants.clone(),
+                textures: self.textures.clone(),
+                inputs: inputs
+                    .into_iter()
+                    .map(|(key, input)| (key, lanes_of_input(&input)))
+                    .collect(),
+            },
+            vertex: vertex_state,
+            alpha: self.alpha.as_ref().map(|(image, scale)| AlphaState {
+                image: image.clone(),
+                scale: *scale,
+            }),
+            differences,
+        })
+    }
+    fn bake_channels(
+        &self,
+        threads: Threads,
+        size: u32,
+        period: [f32; 2],
+        params: Inputs,
+        capture_reflectance: bool,
+    ) -> Result<BakedChannels> {
+        let state = self.pipeline_state(size, period, params)?;
+        let (size, period) = (state.size, state.period);
         let raw = evaluate_raw_with(
             threads,
             &self.shader,
-            &self.constants,
-            &self.textures,
-            &inputs,
+            &state.pixel.constants,
+            &state.pixel.evaluated_textures(),
+            &state.pixel.evaluated_inputs(),
             Grid { size, period },
-            &[(0, 7), (1, 1), (2, 7), (3, 7), (4, 7)],
+            &TARGETS,
             Invocation::Scalar,
         )
         .map_err(evaluation)?;
@@ -792,7 +830,7 @@ impl Prepared {
                     (primase_image::linear_to_srgb((c as f64).clamp(0., 1.)) * 255.).round_ties_even() as u8,
                 );
             }
-            albedo.push(if let Some((image, scale)) = &self.alpha {
+            albedo.push(if let Some(AlphaState { image, scale }) = &state.alpha {
                 byte(image.sample([uv[0] * scale[0], uv[1] * scale[1]])?[3])
             } else {
                 255
@@ -815,7 +853,7 @@ impl Prepared {
         }
         let (instructions, samples) = (raw.instructions, raw.samples);
         let mut policies = self.policies.clone();
-        policies.extend(differences);
+        policies.extend(state.differences);
         // A per-material decision for this bake; area censuses deduplicate
         // weight variants by their source material before summing this count.
         policies.insert(
@@ -927,6 +965,7 @@ mod tests {
             ),
         );
         Prepared {
+            bytecode: bytes.as_slice().into(),
             shader: ProgramShader::new(primase_dxbc::lift(&bytes).unwrap()).unwrap(),
             constants: Constants::new(&Layout::default()),
             textures: BTreeMap::new(),
@@ -1065,6 +1104,46 @@ mod tests {
                 assert_eq!(many.image.instructions, one.image.instructions, "{n} threads");
                 assert_eq!(many.image.samples, one.image.samples, "{n} threads");
                 assert_eq!(many.reflectance, one.reflectance, "{n} threads");
+            }
+        }
+    }
+
+    /// The pipeline state is what the bake evaluates: its pixel stage, run alone over its grid, gives the bake's colours.
+    #[test]
+    fn the_bake_is_its_pipeline_state_evaluated() {
+        let prepared = prepared(true);
+        let state = prepared.pipeline_state(5, [4., 2.], Inputs::default()).unwrap();
+        assert_eq!((state.size, state.period), (5, [4., 2.]));
+        assert_eq!(&*state.pixel.bytecode, &*prepared.bytecode);
+        assert!(state.vertex.is_none() && state.alpha.is_none() && state.differences.is_empty());
+        let texcoord = state
+            .pixel
+            .inputs
+            .iter()
+            .find(|((name, index), _)| name.eq_ignore_ascii_case("TEXCOORD") && *index == 0)
+            .map(|(_, lanes)| *lanes)
+            .unwrap();
+        assert_eq!(texcoord, [Lane::U, Lane::V, Lane::U, Lane::V]);
+        let raw = evaluate_raw_with(
+            Threads::ONE,
+            &ProgramShader::new(primase_dxbc::lift(&state.pixel.bytecode).unwrap()).unwrap(),
+            &state.pixel.constants,
+            &state.pixel.evaluated_textures(),
+            &state.pixel.evaluated_inputs(),
+            Grid {
+                size: state.size,
+                period: state.period,
+            },
+            &TARGETS,
+            Invocation::Scalar,
+        )
+        .unwrap();
+        let bake = prepared.bake(5, [4., 2.], Inputs::default()).unwrap();
+        for (pixel, (colour, _)) in raw.pixels[2].iter().enumerate() {
+            for (c, &bits) in colour[..3].iter().enumerate() {
+                let linear = f64::from(f32::from_bits(bits)).clamp(0., 1.);
+                let byte = (primase_image::linear_to_srgb(linear) * 255.).round_ties_even() as u8;
+                assert_eq!(bake.albedo[pixel * 4 + c], byte, "pixel {pixel} lane {c}");
             }
         }
     }
