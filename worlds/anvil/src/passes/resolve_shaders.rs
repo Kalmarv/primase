@@ -129,7 +129,7 @@ pub fn gbuffer_key(f: &MaterialFlags, tables: &AnvilShaders) -> Result<u32, Stri
     let feature = |n: usize| {
         tables
             .feature(n)
-            .ok_or_else(|| format!("the template's feature {n} is neither 0 nor 1"))
+            .ok_or_else(|| format!("the template's shader-state node has no byte for feature {n}"))
     };
     let mut key = GBUFFER << 22;
     if set[MaterialFlags::TWO_SIDED] && set[MaterialFlags::FLIP_NORMAL_ON_BACK_FACE] && feature(12)? {
@@ -1007,9 +1007,9 @@ mod key_tests {
         let mut f = flags(&[], 0, 0);
         f.booleans[7] = 2;
         assert!(gbuffer_key(&f, &template(&[])).is_err());
-        // a feature byte that is neither 0 nor 1, where a flag asks for it
+        // a feature the node has no byte for, where a flag asks for it
         let mut t = template(&[]);
-        t.feature_node[13] = 5;
+        t.feature_node.truncate(10);
         let both = flags(
             &[MaterialFlags::TWO_SIDED, MaterialFlags::FLIP_NORMAL_ON_BACK_FACE],
             0,
@@ -1018,6 +1018,10 @@ mod key_tests {
         assert!(gbuffer_key(&both, &t).unwrap_err().contains("feature 12"));
         // and one it does not ask for is not read
         assert_eq!(gbuffer_key(&flags(&[], 0, 0), &t), Ok(1 << 22));
+        // a feature byte of 2 or 5 is a set feature (feature 15's byte is 2 on 82 templates), as 1 is
+        let mut t = template(&[]);
+        t.feature_node[13] = 5;
+        assert_eq!(gbuffer_key(&both, &t), Ok((1 << 22) | 0x40));
     }
 
     /// The vertex stage's key keeps the shared bits (pass, 0x40, the feature flags) and takes the layout number, and
