@@ -656,6 +656,7 @@ pub(super) fn compile(
                     (Mf::Log2, _) => MathOp::Log2,
                     (Mf::Sin, _) => MathOp::Sin,
                     (Mf::Cos, _) => MathOp::Cos,
+                    (Mf::QuantizeToF16, _) => MathOp::QuantizeF16,
                     (Mf::Tan, _) => MathOp::Tan,
                     (Mf::Asin, _) => MathOp::Asin,
                     (Mf::Acos, _) => MathOp::Acos,

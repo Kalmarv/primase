@@ -78,6 +78,7 @@ pub(super) enum MathOp {
     Log2,
     Sin,
     Cos,
+    QuantizeF16,
     Tan,
     Asin,
     Acos,

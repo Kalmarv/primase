@@ -924,3 +924,120 @@ mod stage_functions {
         }
     }
 }
+
+
+mod half_ops {
+    use super::*;
+
+    /// 1 + 2^-10, a half, and 0.333251953125, the half nearest a third, as f32 bits.
+    const ONE_AND_A_BIT: u32 = 0x3f80_2000;
+    const THIRD_AS_HALF: u32 = 0x3eaa_a000;
+
+    /// `half_ops.hlsl` with a = 1 + 2^-10 and b = 1: x + y = 2.0009765625 is half-way between the halves 2 and
+    /// 2.001953125 and rounds to the even one; x * y is exact; 1 - 2 in 16 bits wraps to 65535; 1/3 as a half is
+    /// 0.333251953125.
+    #[test]
+    fn halves_round_to_nearest_even_and_sixteen_bit_integers_wrap() {
+        for v in ["", ".od"] {
+            let o = run(
+                &fixture("half_ops", v),
+                &[[f(0.5), f(0.5), f(0.5), f(1.0)]],
+                &[(0, vec![[ONE_AND_A_BIT, f(1.0), 0, 0]])],
+            );
+            assert_eq!(
+                o.values[0],
+                [f(2.0), ONE_AND_A_BIT, f(65535.0), THIRD_AS_HALF],
+                "{v}"
+            );
+        }
+    }
+}
+
+mod image_atomics {
+    use super::*;
+    use primase_shader::D3dClass;
+    use primase_shader::exec::{ImageAtomic, ImageAtomicOp};
+    use std::collections::BTreeMap;
+
+    /// Two textures that apply the atomic operations they are asked for: the words of each by texel, absent ones 0
+    /// except where the test presets them.
+    struct Textures {
+        words: BTreeMap<(ResourceId, [u32; 3]), u32>,
+        requests: usize,
+    }
+    impl Backend for Textures {
+        fn sample(&mut self, _: ImageSample<Element>) -> Result<[f32; 4], String> {
+            Err("no sampling in this fixture".into())
+        }
+        fn atomic_image(&mut self, r: ImageAtomic<ResourceId>) -> Result<(), String> {
+            self.requests += 1;
+            let word = self.words.entry((r.view, r.texel)).or_insert(0);
+            *word = match (r.op, r.signed) {
+                (ImageAtomicOp::Add, _) => word.wrapping_add(r.value),
+                (ImageAtomicOp::Sub, _) => word.wrapping_sub(r.value),
+                (ImageAtomicOp::And, _) => *word & r.value,
+                (ImageAtomicOp::Or, _) => *word | r.value,
+                (ImageAtomicOp::Xor, _) => *word ^ r.value,
+                (ImageAtomicOp::Min, true) => (*word as i32).min(r.value as i32) as u32,
+                (ImageAtomicOp::Max, true) => (*word as i32).max(r.value as i32) as u32,
+                (ImageAtomicOp::Min, false) => (*word).min(r.value),
+                (ImageAtomicOp::Max, false) => (*word).max(r.value),
+                (ImageAtomicOp::Exchange, _) => r.value,
+            };
+            Ok(())
+        }
+    }
+
+    /// `image_atomics.hlsl`: thread (x, y) of an 8 by 8 group, at = (x % 4, y % 4), adds x + 1 to counts[at], maxes
+    /// x * 10 + y into counts[at + (0, 4)], mins it into counts[at + (4, 0)] (preset to all ones) and signed-maxes
+    /// x - 4 into signed_counts[at]. Per cell, the two threads of each coordinate pair that map to it give:
+    /// the sum 4 cx + 12, the maximum (cx + 4) * 10 + cy + 4, the minimum cx * 10 + cy and the signed maximum cx.
+    #[test]
+    fn atomics_on_textures_reach_the_backend_in_every_build() {
+        for v in BOTH {
+            let (program, exe) = lifted(&fixture("image_atomics", v));
+            let uav = |register: u32| {
+                program
+                    .interface
+                    .resources
+                    .iter()
+                    .find(|r| {
+                        r.provenance
+                            .d3d
+                            .is_some_and(|d| d.class == D3dClass::UnorderedAccess && d.register == register)
+                    })
+                    .unwrap_or_else(|| panic!("{v}: no u{register}"))
+                    .id
+            };
+            let (counts, signed) = (uav(0), uav(1));
+            let mut backend = Textures {
+                words: BTreeMap::new(),
+                requests: 0,
+            };
+            for cx in 0..4 {
+                for cy in 0..4 {
+                    backend.words.insert((counts, [cx + 4, cy, 0]), u32::MAX);
+                    backend.words.insert((signed, [cx, cy, 0]), i32::MIN as u32);
+                }
+            }
+            let resources = Resources::default();
+            let bound = exe.bind_resources(&resources).unwrap();
+            exe.dispatch(&bound, &mut backend, &mut BTreeMap::new(), [1, 1, 1], 32)
+                .unwrap_or_else(|e| panic!("{v}: {e}"));
+            assert_eq!(backend.requests, 64 * 4, "{v}");
+            for cx in 0..4u32 {
+                for cy in 0..4u32 {
+                    let at = |view, x, y| backend.words[&(view, [x, y, 0])];
+                    assert_eq!(at(counts, cx, cy), 4 * cx + 12, "{v} add {cx} {cy}");
+                    assert_eq!(
+                        at(counts, cx, cy + 4),
+                        (cx + 4) * 10 + cy + 4,
+                        "{v} max {cx} {cy}"
+                    );
+                    assert_eq!(at(counts, cx + 4, cy), cx * 10 + cy, "{v} min {cx} {cy}");
+                    assert_eq!(at(signed, cx, cy), cx, "{v} signed max {cx} {cy}");
+                }
+            }
+        }
+    }
+}

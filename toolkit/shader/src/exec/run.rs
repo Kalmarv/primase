@@ -1255,6 +1255,8 @@ fn math(mf: MathOp, a: Reg, b: Reg, c: Reg, n: u8, z: bool) -> Reg {
             MathOp::Log2 => one(&|v| (v as f64).log2() as f32),
             MathOp::Sin => one(&|v| (v as f64).sin() as f32),
             MathOp::Cos => one(&|v| (v as f64).cos() as f32),
+            // to the nearest half, ties to even, and back
+            MathOp::QuantizeF16 => one(&|v| half::f16::from_f32(v).to_f32()),
             MathOp::Tan => one(&|v| (v as f64).tan() as f32),
             MathOp::Asin => one(&|v| (v as f64).asin() as f32),
             MathOp::Acos => one(&|v| (v as f64).acos() as f32),
