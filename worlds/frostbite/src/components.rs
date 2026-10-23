@@ -452,3 +452,80 @@ impl Component for FrostbiteMaterial {
         self.depot.as_ref().map_or(0, |d| d.block.data.len() as u64)
     }
 }
+
+/// The vertex elements of a mesh's sections that [`crate::geometry`] does not decode, as stored, one list per primitive
+/// (a section) in the mesh's order, on the entity that holds the mesh. What they mean is not established: blend weights
+/// and indices, a sub-material index, the tangent space, radiosity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrostbiteVertexElements {
+    pub primitives: Vec<Vec<crate::geometry::Raw>>,
+}
+
+impl Component for FrostbiteVertexElements {
+    const NAME: &'static str = "frostbite.vertex_elements";
+    const GEOMETRY: Geometry = Geometry::PerVertex;
+    fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
+        let Some(mesh) = w.get::<primase_core::Mesh>(e) else {
+            return Err("no mesh on the entity".to_owned());
+        };
+        let prims = mesh.primitives();
+        if prims.len() != self.primitives.len() {
+            return Err(format!(
+                "{} lists for {} primitives",
+                self.primitives.len(),
+                prims.len()
+            ));
+        }
+        for (i, (p, elements)) in prims.iter().zip(&self.primitives).enumerate() {
+            let n = p.vertex_count();
+            if let Some(r) = elements.iter().find(|r| r.data.len() != r.size * n) {
+                return Err(format!(
+                    "primitive {i}: usage {} holds {} bytes for {n} vertices of {}",
+                    r.usage,
+                    r.data.len(),
+                    r.size
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(
+            primase_core::remap_list(&self.primitives, from)
+                .map(|primitives| FrostbiteVertexElements { primitives }),
+        )
+    }
+    fn remap_vertices(&self, primitive: usize, from: &[u32]) -> Option<Result<Self, String>> {
+        let Some(elements) = self.primitives.get(primitive) else {
+            return Some(Err(format!("primitive {primitive} of {}", self.primitives.len())));
+        };
+        let gathered: Result<Vec<_>, String> = elements.iter().map(|r| r.gather(from)).collect();
+        Some(gathered.map(|g| {
+            let mut out = self.clone();
+            out.primitives[primitive] = g;
+            out
+        }))
+    }
+    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
+        let primitives: Vec<Vec<Value>> = (self.primitives.iter())
+            .map(|p| {
+                p.iter()
+                    .map(|r| {
+                        json!({
+                            "usage": r.usage,
+                            "format": r.format,
+                            "bytes_per_vertex": r.size,
+                            "vertices": r.data.len().checked_div(r.size).unwrap_or(0),
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
+        Ok(Some(json!(primitives)))
+    }
+    fn payload_bytes(&self) -> u64 {
+        (self.primitives.iter().flatten())
+            .map(|r| r.data.len() as u64)
+            .sum()
+    }
+}

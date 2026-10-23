@@ -3,5 +3,6 @@
 pub mod entry;
 pub mod fbmod;
 pub mod folder;
+mod geometry;
 pub mod listing;
 pub mod program;

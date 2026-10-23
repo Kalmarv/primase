@@ -1025,6 +1025,7 @@ dependencies = [
 name = "primase-frostbite"
 version = "0.1.0"
 dependencies = [
+ "half",
  "primase-bytes",
  "primase-compress",
  "primase-core",
