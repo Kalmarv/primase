@@ -16,6 +16,7 @@
 mod compile;
 mod flat;
 mod mask;
+mod pipeline;
 mod pixel;
 mod rayquery;
 mod request;
@@ -23,13 +24,14 @@ mod run;
 
 pub use flat::Executable;
 pub use mask::{Mask, Wide};
+pub use pipeline::{DispatchStats, Pipeline, PipelineResources, ShaderTable};
 pub use pixel::ProgramShader;
 pub use rayquery::{Built, Geometry, Instance, InstanceFlags, Scene, flags as ray_flags};
 pub use request::{
-    Backend, Dim, Element, ImageAtomic, ImageAtomicOp, ImageLoad, ImageLod, ImageQuery, ImageSample,
-    ImageStore, QueryKind,
+    Backend, CallShader, Dim, Element, ImageAtomic, ImageAtomicOp, ImageLoad, ImageLod, ImageQuery,
+    ImageSample, ImageStore, QueryKind, ReportHit, TraceRay,
 };
-pub use run::{Bound, Dispatched, Output, Resources, Runner, STEP_LIMIT, Scratch};
+pub use run::{Bound, Decision, Dispatched, Output, Resources, Runner, STEP_LIMIT, Scratch};
 
 use crate::{Error, Program};
 
@@ -59,13 +61,13 @@ impl Executable {
             return Err(error(if program.stage.is_ray_tracing() {
                 format!(
                     "a {:?} program does the ray tracing pipeline's work through operations only the pipeline has \
-                     ({}): the executor has no pipeline to run it in",
+                     ({}): run it with Executable::function inside a pipeline (exec::Pipeline)",
                     program.stage,
                     crate::rt::OPERATIONS.join(", ")
                 )
             } else {
                 format!(
-                    "a {:?} program is functions, not an entry point: the executor does not run it yet",
+                    "a {:?} program is functions, not an entry point: run one with Executable::function",
                     program.stage
                 )
             }));
@@ -87,14 +89,6 @@ impl Executable {
     /// invocation. The registers it takes are its arguments in order, an array argument (the control points) as one
     /// register per element; the members of its result are the members of [`crate::FunctionSig::result`].
     pub fn function(program: &Program, name: &str) -> Result<Self, Error> {
-        if program.stage.is_ray_tracing() {
-            return Err(error(format!(
-                "a {:?} program does the ray tracing pipeline's work through operations only the pipeline has \
-                 ({}): the executor has no pipeline to run it in",
-                program.stage,
-                crate::rt::OPERATIONS.join(", ")
-            )));
-        }
         let info = program.validate().map_err(|problems| {
             error(
                 problems
@@ -105,6 +99,11 @@ impl Executable {
             )
         })?;
         compile::compile(program, &info, Some(name)).map_err(error)
+    }
+
+    /// The words of pointer argument `k` (a ray tracing program's payload, attributes or parameter).
+    pub(super) fn pointer_words(&self, k: usize) -> Option<u32> {
+        self.pointer_args.get(k).map(|a| a.2)
     }
 
     /// The textures and the samplers the program's compiled code samples, loads from or asks the size of (an operation

@@ -272,7 +272,7 @@ fn a_payload_that_is_not_a_pointer_is_a_problem() {
 }
 
 #[test]
-fn a_ray_tracing_program_is_refused_by_name_by_the_writer_and_the_executor() {
+fn a_ray_tracing_program_is_refused_by_name_by_the_writer_and_as_an_entry_point_by_the_executor() {
     for p in [closest_hit(), ray_generation()] {
         let wgsl = emit::wgsl(&p).unwrap_err().to_string();
         assert!(wgsl.contains("no WGSL stage"), "{wgsl}");
@@ -283,10 +283,7 @@ fn a_ray_tracing_program_is_refused_by_name_by_the_writer_and_the_executor() {
             .unwrap()
             .to_string();
         assert!(exec.contains("ray tracing pipeline"), "{exec}");
-        let exec = primase_shader::exec::Executable::function(&p, "main")
-            .err()
-            .unwrap()
-            .to_string();
-        assert!(exec.contains("ray tracing pipeline"), "{exec}");
+        // its function compiles: the pipeline runs it (the hand-built programs here have no real body to run)
+        let _ = primase_shader::exec::Executable::function(&p, "main");
     }
 }

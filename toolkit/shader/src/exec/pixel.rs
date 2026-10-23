@@ -356,10 +356,10 @@ fn rows_of(program: &Program, id: ResourceId) -> Option<u32> {
 
 /// The program's requests in the sampler's vocabulary: bind slots instead of resource ids, and a buffer's words as the
 /// element and byte offset its view addresses.
-struct SlotBackend<'a> {
-    sampler: &'a mut dyn Sampler,
-    slots: &'a BTreeMap<ResourceId, u32>,
-    buffers: &'a BTreeMap<ResourceId, BufferKind>,
+pub(super) struct SlotBackend<'a> {
+    pub(super) sampler: &'a mut dyn Sampler,
+    pub(super) slots: &'a BTreeMap<ResourceId, u32>,
+    pub(super) buffers: &'a BTreeMap<ResourceId, BufferKind>,
 }
 impl SlotBackend<'_> {
     fn slot(&self, id: ResourceId) -> Result<u32, String> {

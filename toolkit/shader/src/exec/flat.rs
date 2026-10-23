@@ -360,6 +360,28 @@ pub(super) enum St {
     RqConfirm {
         q: u32,
     },
+    /// `TraceRay`: the ray's registers (flags, mask, hit group offset and stride, miss index, origin, t min, direction,
+    /// t max) and the payload's words in local memory.
+    RtTrace {
+        scene: ResourceId,
+        operands: [u32; 9],
+        payload: (u32, u32),
+    },
+    /// `ReportHit`: t, hit kind, the attributes' words in local memory, and the register that takes whether it was
+    /// accepted.
+    RtReport {
+        t: u32,
+        kind: u32,
+        attributes: (u32, u32),
+        result: Option<u32>,
+    },
+    /// `CallShader`: the shader index and the parameter's words in local memory.
+    RtCall {
+        index: u32,
+        parameter: (u32, u32),
+    },
+    /// `IgnoreHit` and `AcceptHitAndEndSearch`: what the any-hit program decided.
+    RtDecide(super::run::Decision),
     /// Commit the procedural candidate at the distance in this register.
     RqGenerate {
         q: u32,
@@ -495,6 +517,9 @@ pub struct Executable {
     /// element), and how many there are in all.
     pub(super) arg_at: Vec<usize>,
     pub(super) arg_len: usize,
+    /// The pointer arguments (a ray tracing program's payload and attributes): where their words start among the passed
+    /// registers (four words to a register), their words in local memory and how many there are.
+    pub(super) pointer_args: Vec<(usize, u32, u32)>,
     /// The array arguments: where they start among the passed registers, their words in local memory, their element
     /// count and element width.
     pub(super) array_args: Vec<(usize, u32, u32, u8)>,

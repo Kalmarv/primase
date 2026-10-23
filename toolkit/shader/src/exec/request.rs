@@ -135,6 +135,38 @@ pub struct ImageAtomic<R> {
     pub value: u32,
 }
 
+/// `TraceRay`: a ray shot into an acceleration structure. The payload is the words of the program's payload structure,
+/// which the programs the ray runs read and write; the caller leaves it as the ray's last program did.
+#[derive(Debug)]
+pub struct TraceRay<'a> {
+    pub scene: ResourceId,
+    pub flags: u32,
+    pub mask: u32,
+    pub hit_group_offset: u32,
+    pub hit_group_stride: u32,
+    pub miss_index: u32,
+    pub origin: [f32; 3],
+    pub t_min: f32,
+    pub direction: [f32; 3],
+    pub t_max: f32,
+    pub payload: &'a mut [u32],
+}
+
+/// `ReportHit`: an intersection program reports a hit at `t` of kind `hit_kind`, with the words of its attributes.
+#[derive(Debug)]
+pub struct ReportHit<'a> {
+    pub t: f32,
+    pub hit_kind: u32,
+    pub attributes: &'a mut [u32],
+}
+
+/// `CallShader`: run the callable program `index` of the shader table on the words of a parameter structure.
+#[derive(Debug)]
+pub struct CallShader<'a> {
+    pub index: u32,
+    pub parameter: &'a mut [u32],
+}
+
 /// Everything an evaluation asks of its caller: texture sampling, loads, queries, and the effects of unordered-access
 /// writes. A request the caller cannot answer is an error that stops the evaluation. Reads of buffers need no call:
 /// the buffers are bound before the run.
@@ -149,6 +181,21 @@ pub trait Backend {
     }
     fn store_image(&mut self, request: ImageStore<ResourceId>) -> Result<(), String> {
         Err(format!("resource {}: no stores given", request.view.0))
+    }
+    /// `TraceRay`, for a ray tracing pipeline's program: run what the ray hits and misses.
+    fn trace_ray(&mut self, request: TraceRay<'_>) -> Result<(), String> {
+        let _ = request;
+        Err("no ray tracing pipeline given".into())
+    }
+    /// `ReportHit`, for an intersection program: whether the hit was accepted.
+    fn report_hit(&mut self, request: ReportHit<'_>) -> Result<bool, String> {
+        let _ = request;
+        Err("no ray tracing pipeline given".into())
+    }
+    /// `CallShader`, for a ray tracing pipeline's program.
+    fn call_shader(&mut self, request: CallShader<'_>) -> Result<(), String> {
+        let _ = request;
+        Err("no ray tracing pipeline given".into())
     }
     fn atomic_image(&mut self, request: ImageAtomic<ResourceId>) -> Result<(), String> {
         Err(format!("resource {}: no image atomics given", request.view.0))

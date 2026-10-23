@@ -252,10 +252,10 @@ pub struct Built {
     top: Bvh,
 }
 
-fn transform_point(m: &[[f32; 4]; 3], p: Vec3) -> Vec3 {
+pub(super) fn transform_point(m: &[[f32; 4]; 3], p: Vec3) -> Vec3 {
     std::array::from_fn(|r| m[r][0] * p[0] + m[r][1] * p[1] + m[r][2] * p[2] + m[r][3])
 }
-fn transform_vector(m: &[[f32; 4]; 3], v: Vec3) -> Vec3 {
+pub(super) fn transform_vector(m: &[[f32; 4]; 3], v: Vec3) -> Vec3 {
     std::array::from_fn(|r| m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2])
 }
 
@@ -297,6 +297,15 @@ fn invert(m: &[[f32; 4]; 3]) -> Option<[[f32; 4]; 3]> {
 }
 
 impl Built {
+    /// Instance `i`: what its hit-group index, id and transform come from.
+    pub(super) fn instance(&self, i: u32) -> &Instance {
+        &self.instances[i as usize].instance
+    }
+    /// Instance `i`'s world-to-object transform, three rows of four.
+    pub(super) fn inverse(&self, i: u32) -> &[[f32; 4]; 3] {
+        &self.instances[i as usize].inverse
+    }
+
     /// Build the hierarchies of a scene. An instance of a bottom level that does not exist, or with a singular
     /// transform, is an error.
     pub fn new(scene: &Scene) -> Result<Built, String> {
@@ -376,6 +385,8 @@ pub(super) struct Hit {
     pub instance: u32,
     pub geometry: u32,
     pub primitive: u32,
+    /// Whether the geometry's primitives are opaque to this ray (a program offered a non-opaque hit may reject it).
+    pub opaque: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -440,6 +451,11 @@ impl Query {
         self.scene
     }
 
+    /// The far end of the ray's current range: the ray's t max, then the nearest hit committed so far.
+    pub(super) fn tmax(&self) -> f32 {
+        self.tmax
+    }
+
     /// End the search.
     pub(super) fn terminate(&mut self) {
         self.done = true;
@@ -501,7 +517,7 @@ impl Query {
         }
         hit.kind = 2;
         hit.t = t;
-        self.candidate = None;
+        // the candidate stays: a program may commit more than one hit for it, each within the range the last left
         self.tmax = t;
         self.committed = Some(hit);
         if self.flags & flags::ACCEPT_FIRST_HIT != 0 {
@@ -606,6 +622,7 @@ impl Query {
                             instance: i,
                             geometry: g,
                             primitive: k,
+                            opaque,
                         });
                         return true;
                     }
@@ -645,6 +662,7 @@ impl Query {
                         instance: i,
                         geometry: g,
                         primitive: k,
+                        opaque,
                     };
                     if opaque {
                         self.committed = Some(hit);
@@ -781,4 +799,4 @@ impl Reported {
 }
 
 /// The scenes a run was bound with.
-pub(super) type Scenes = BTreeMap<crate::ResourceId, Built>;
+pub(super) type Scenes = BTreeMap<crate::ResourceId, std::sync::Arc<Built>>;

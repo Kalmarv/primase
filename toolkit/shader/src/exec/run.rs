@@ -36,7 +36,7 @@ pub struct Bound<'a> {
 
 impl Bound<'_> {
     /// Give the acceleration structure of resource `id`: what the program's ray queries search.
-    pub fn with_scene(mut self, id: ResourceId, scene: Built) -> Self {
+    pub fn with_scene(mut self, id: ResourceId, scene: std::sync::Arc<Built>) -> Self {
         self.scenes.insert(id, scene);
         self
     }
@@ -102,15 +102,31 @@ impl Executable {
             |id, k| resources.elements.get(&(id, k)).map(Vec::as_slice),
         )?;
         for (id, scene) in &resources.scenes {
-            bound.scenes.insert(*id, Built::new(scene)?);
+            bound.scenes.insert(*id, std::sync::Arc::new(Built::new(scene)?));
         }
         Ok(bound)
     }
 }
 
+/// What a ray tracing program decided about the hit it was offered, besides its payload.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Decision {
+    /// Nothing: the hit stands.
+    #[default]
+    None,
+    /// `IgnoreHit`: an any-hit program rejects the candidate.
+    Ignore,
+    /// `AcceptHitAndEndSearch`: an any-hit program accepts it and ends the search.
+    AcceptAndEnd,
+}
+
 /// What one invocation produced.
 #[derive(Clone, Debug)]
 pub struct Output {
+    /// The words of each pointer argument (a ray tracing program's payload, attributes or parameter) as the program
+    /// left them, in argument order.
+    pub pointees: Vec<Vec<u32>>,
+    pub decision: Decision,
     /// One entry per member of the result, lanes beyond the member's width 0.
     pub values: Vec<[u32; 4]>,
     pub discarded: bool,
@@ -155,6 +171,8 @@ pub struct Runner<'a, const N: usize, M: Mask = u8> {
     steps: u64,
     samples: [u64; N],
     outs: [Vec<Reg>; N],
+    /// What an any-hit program decided, per lane.
+    decisions: [Decision; N],
     killed: M,
     /// The memory a run changes, by global: thread-group memory and the buffers a compute run writes (empty for a
     /// pixel run, which hands its writes to the backend).
@@ -244,6 +262,7 @@ impl<'a, const N: usize> Runner<'a, N, u8> {
             steps: 0,
             samples: [0; N],
             outs: std::array::from_fn(|_| Vec::new()),
+            decisions: [Decision::None; N],
             killed: 0,
             store: Vec::new(),
             elem_store: Vec::new(),
@@ -1202,6 +1221,86 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                         }
                     }
                 }
+                St::RtDecide(decision) => {
+                    for l in 0..N {
+                        if active.has(l) {
+                            self.decisions[l] = *decision;
+                        }
+                    }
+                }
+                St::RtTrace {
+                    scene,
+                    operands,
+                    payload,
+                } => {
+                    for l in 0..N {
+                        if !active.has(l) {
+                            continue;
+                        }
+                        let word = |k: usize| self.regs[operands[k] as usize * N + l][0];
+                        let vec3 = |k: usize| -> [f32; 3] {
+                            let r = self.regs[operands[k] as usize * N + l];
+                            [f(r[0]), f(r[1]), f(r[2])]
+                        };
+                        let (flags, mask, offset, stride, miss) =
+                            (word(0), word(1), word(2), word(3), word(4));
+                        let (origin, direction) = (vec3(5), vec3(7));
+                        let (t_min, t_max) = (f(word(6)), f(word(8)));
+                        let at = l * self.c.local_words + payload.0 as usize;
+                        let mut words = self.mem[at..at + payload.1 as usize].to_vec();
+                        self.sampler.trace_ray(super::request::TraceRay {
+                            scene: *scene,
+                            flags,
+                            mask,
+                            hit_group_offset: offset,
+                            hit_group_stride: stride,
+                            miss_index: miss,
+                            origin,
+                            t_min,
+                            direction,
+                            t_max,
+                            payload: &mut words,
+                        })?;
+                        self.mem[at..at + payload.1 as usize].copy_from_slice(&words);
+                    }
+                }
+                St::RtReport {
+                    t,
+                    kind,
+                    attributes,
+                    result,
+                } => {
+                    for l in 0..N {
+                        if !active.has(l) {
+                            continue;
+                        }
+                        let at = l * self.c.local_words + attributes.0 as usize;
+                        let mut words = self.mem[at..at + attributes.1 as usize].to_vec();
+                        let accepted = self.sampler.report_hit(super::request::ReportHit {
+                            t: f(self.regs[*t as usize * N + l][0]),
+                            hit_kind: self.regs[*kind as usize * N + l][0],
+                            attributes: &mut words,
+                        })?;
+                        self.mem[at..at + attributes.1 as usize].copy_from_slice(&words);
+                        if let Some(r) = result {
+                            self.regs[*r as usize * N + l] = [u32::from(accepted); 4];
+                        }
+                    }
+                }
+                St::RtCall { index, parameter } => {
+                    for l in 0..N {
+                        if !active.has(l) {
+                            continue;
+                        }
+                        let at = l * self.c.local_words + parameter.0 as usize;
+                        let mut words = self.mem[at..at + parameter.1 as usize].to_vec();
+                        self.sampler.call_shader(super::request::CallShader {
+                            index: self.regs[*index as usize * N + l][0],
+                            parameter: &mut words,
+                        })?;
+                        self.mem[at..at + parameter.1 as usize].copy_from_slice(&words);
+                    }
+                }
                 St::RqGenerate { q, t } => {
                     for l in 0..N {
                         if active.has(l) {
@@ -1371,6 +1470,7 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
         self.samples = [0; N];
         self.killed = M::none();
         self.queries.clear();
+        self.decisions = [Decision::None; N];
         for o in self.outs.iter_mut() {
             o.clear();
         }
@@ -1396,11 +1496,25 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                     self.mem[base..base + width as usize].copy_from_slice(&args[l][at + k][..width as usize]);
                 }
             }
+            for &(at, off, words) in &self.c.pointer_args {
+                for w in 0..words as usize {
+                    self.mem[l * self.c.local_words + off as usize + w] = args[l][at + w / 4][w % 4];
+                }
+            }
         }
         let c: &'a Executable = self.c;
         self.block(&c.body, M::first(N))?;
         let (steps, samples) = (self.steps, self.samples);
         Ok(std::array::from_fn(|l| Output {
+            pointees: c
+                .pointer_args
+                .iter()
+                .map(|&(_, off, words)| {
+                    let at = l * c.local_words + off as usize;
+                    self.mem[at..at + words as usize].to_vec()
+                })
+                .collect(),
+            decision: self.decisions[l],
             values: std::mem::take(&mut self.outs[l]),
             discarded: self.killed.has(l),
             steps,
@@ -1690,6 +1804,7 @@ impl Executable {
             steps: 0,
             samples: [0; N],
             outs: std::array::from_fn(|_| Vec::new()),
+            decisions: [Decision::None; N],
             killed: Wide::none(),
             store,
             elem_store,

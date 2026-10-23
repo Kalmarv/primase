@@ -21,6 +21,9 @@ fn every_fixture_lifts() {
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .filter(|n| n.ends_with(".dxil"))
+        // a whole library (every program of it, with its subobjects) is not one program: the lifter takes a library of
+        // one, and the per-export containers of it are lifted instead
+        .filter(|n| n != "ray_subobjects.dxil")
         .collect();
     names.sort();
     let mut failures = Vec::new();

@@ -14,6 +14,8 @@ use super::flat::{
     Reg, Res, St, UnOp, WaveGather, WaveKind, WaveOp, WaveScan,
 };
 use super::request::{Dim, ImageAtomicOp, QueryKind};
+use super::run::Decision;
+use crate::rt as primase_rt;
 use crate::{Program, ResourceId};
 
 /// The scalar kind of a typed value.
@@ -125,6 +127,8 @@ pub(super) fn compile(
     // arguments that are arrays (a stage function's control points) live in local memory, one element after another;
     // the caller passes each element as a register of its own
     let mut array_arg: Vec<Option<(u32, u32, u8)>> = Vec::new();
+    // pointers to structures of function memory (a ray tracing program's payload and attributes): local words, count
+    let mut ptr_arg: Vec<Option<(u32, u32)>> = Vec::new();
     let mut arg_at: Vec<usize> = Vec::new();
     let mut arg_len = 0usize;
     for a in f.arguments.iter() {
@@ -144,11 +148,23 @@ pub(super) fn compile(
                 {
                     return Err("an array argument of anything but scalars and vectors".into());
                 }
+                ptr_arg.push(None);
                 array_arg.push(Some((local_words, n.get(), width as u8)));
                 local_words += n.get() * width;
                 arg_len += n.get() as usize;
             }
+            TypeInner::Pointer {
+                base,
+                space: naga::AddressSpace::Function,
+            } => {
+                let w = words(m, *base)?;
+                ptr_arg.push(Some((local_words, w)));
+                array_arg.push(None);
+                local_words += w;
+                arg_len += w.div_ceil(4) as usize;
+            }
             _ => {
+                ptr_arg.push(None);
                 array_arg.push(None);
                 arg_len += 1;
             }
@@ -490,7 +506,16 @@ pub(super) fn compile(
                 });
             }
             // read by index, or returned whole
+            E::FunctionArgument(a) if ptr_arg[*a as usize].is_some() => {
+                let (off, _) = ptr_arg[*a as usize].expect("checked");
+                ptr_of[i] = Some(Ptr {
+                    loc: Loc::Local(off),
+                    dynamic: None,
+                });
+            }
             E::FunctionArgument(a) if array_arg[*a as usize].is_some() => mem_agg[i] = array_arg[*a as usize],
+            // written by the call that makes it
+            E::CallResult(_) => {}
             E::FunctionArgument(a) => {
                 let Shape::V(_, n) = sh else {
                     return Err("aggregate argument".into());
@@ -971,6 +996,8 @@ pub(super) fn compile(
         agg_of: &'a Vec<Option<Vec<(u32, u8)>>>,
         members_of: &'a Vec<Option<Vec<Member>>>,
         rq_of: &'a Vec<Option<u32>>,
+        functions: &'a naga::Arena<naga::Function>,
+        rt_pointer: &'a dyn Fn(Handle<E>) -> Result<(u32, u32), String>,
         exprs: &'a naga::Arena<E>,
         resource_of: &'a BTreeMap<usize, (ResourceId, u32)>,
         shape: &'a dyn Fn(Handle<E>) -> Result<Shape, String>,
@@ -1072,6 +1099,62 @@ pub(super) fn compile(
                         }
                     }
                     out.push(St::Return(members));
+                }
+                Statement::Call {
+                    function,
+                    arguments,
+                    result,
+                } => {
+                    let name = cx.functions[*function].name.clone().unwrap_or_default();
+                    fn take(cx: &mut Ctx, h: &Handle<E>) -> u32 {
+                        let s = cx.slot[h.index()];
+                        cx.uses[s as usize] += 1;
+                        s
+                    }
+                    match name.as_str() {
+                        primase_rt::TRACE_RAY if arguments.len() == 11 => {
+                            let naga::Expression::GlobalVariable(g) = cx.exprs[arguments[0]] else {
+                                return Err(
+                                    "a ray traced into an acceleration structure that is not a global".into(),
+                                );
+                            };
+                            let scene = cx
+                                .resource_of
+                                .get(&g.index())
+                                .ok_or("an unbound acceleration structure")?
+                                .0;
+                            let mut operands = [0u32; 9];
+                            for (k, a) in arguments[1..10].iter().enumerate() {
+                                operands[k] = take(cx, a);
+                            }
+                            let payload = (cx.rt_pointer)(arguments[10])?;
+                            out.push(St::RtTrace {
+                                scene,
+                                operands,
+                                payload,
+                            });
+                        }
+                        primase_rt::REPORT_HIT if arguments.len() == 3 => {
+                            let (t, kind) = (take(cx, &arguments[0]), take(cx, &arguments[1]));
+                            let attributes = (cx.rt_pointer)(arguments[2])?;
+                            out.push(St::RtReport {
+                                t,
+                                kind,
+                                attributes,
+                                result: result.map(|r| cx.slot[r.index()]),
+                            });
+                        }
+                        primase_rt::CALL_SHADER if arguments.len() == 2 => {
+                            let index = take(cx, &arguments[0]);
+                            let parameter = (cx.rt_pointer)(arguments[1])?;
+                            out.push(St::RtCall { index, parameter });
+                        }
+                        primase_rt::IGNORE_HIT => out.push(St::RtDecide(Decision::Ignore)),
+                        primase_rt::ACCEPT_HIT_AND_END_SEARCH => {
+                            out.push(St::RtDecide(Decision::AcceptAndEnd))
+                        }
+                        other => return Err(format!("a call of the function {other}")),
+                    }
                 }
                 Statement::Store { pointer, value } if cx.agg_of[value.index()].is_some() => {
                     let p = cx.ptr_of[pointer.index()].ok_or("store through a non-pointer")?;
@@ -1449,6 +1532,17 @@ pub(super) fn compile(
     local_src.retain(|w, _| stored.get(w) == Some(&1));
     let prov = compute_prov(&local_src, &slot, &static_load);
 
+    // a pointer to a structure the pipeline's operations read and write: its words in local memory, and how many
+    let rt_pointer = |h: Handle<E>| -> Result<(u32, u32), String> {
+        let p = ptr_of[h.index()].ok_or("a pipeline operation on something that is not a pointer")?;
+        let (Loc::Local(off), None) = (p.loc, p.dynamic) else {
+            return Err("a pipeline operation on a pointer that is not a whole local structure".into());
+        };
+        let TypeInner::Pointer { base, .. } = inner(h) else {
+            return Err("a pipeline operation on a pointer of an unexpected type".into());
+        };
+        Ok((off, words(m, *base)?))
+    };
     let image = |h: Handle<E>| image_of(m, f, &resource_of, &slot, h);
     let mut cx = Ctx {
         slot: &slot,
@@ -1457,6 +1551,8 @@ pub(super) fn compile(
         agg_of: &agg_of,
         members_of: &members_of,
         rq_of: &rq_of,
+        functions: &m.functions,
+        rt_pointer: &rt_pointer,
         exprs: &f.expressions,
         resource_of: &resource_of,
         shape: &shape,
@@ -1534,6 +1630,11 @@ pub(super) fn compile(
     }
     fix(&mut body, &remap);
     args.resize(f.arguments.len(), (0, 0));
+    let pointer_args: Vec<(usize, u32, u32)> = ptr_arg
+        .iter()
+        .zip(&arg_at)
+        .filter_map(|(a, at)| a.map(|(off, words)| (*at, off, words)))
+        .collect();
     let array_args: Vec<(usize, u32, u32, u8)> = array_arg
         .iter()
         .zip(&arg_at)
@@ -1548,6 +1649,7 @@ pub(super) fn compile(
         arg_at,
         arg_len,
         array_args,
+        pointer_args,
         local_words: local_words as usize,
         globals,
         flush_denormals: p.modes.flush_denormals,
