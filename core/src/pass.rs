@@ -22,8 +22,9 @@
 //!   rollback: the plan is an explicit textual pipeline (`load-meshes, lower-skate-pbr{normals=rebuild}`), made with
 //!   the caller's [`PassOptions`], recorded in the [`RunReport`], and runs as written.
 //! - The verifier ([`Component::verify`] on every component, [`crate::Resource::verify`] on every resource, plus the
-//!   manager's world [`Validator`]s) runs after the
-//!   reader, after every pass and before the writer; its errors name the step and the entity.
+//!   manager's world [`Validator`]s) runs on a conversion's reader output and before its writer in every build, and
+//!   after every pass only with the pass checks ([`PassManager::with_pass_checks`]): on in debug builds, off by
+//!   default in release builds for speed (a program opts in); its errors name the step and the entity.
 //! - An [`Instrument`] sees the world before and after every pass and when one fails (`print-world-after`, see
 //!   [`crate::print`]). [`PassManager::run`] and [`PassManager::convert`] are [`PassManager::run_instrumented`] and
 //!   [`PassManager::convert_instrumented`] with an instrument that does nothing.
@@ -1144,13 +1145,14 @@ impl PassManager {
         }
     }
 
-    /// Check every pass's effects entity by entity against its declarations as it runs: what it adds to or takes from
-    /// an entity, what it despawns, the resources it writes ([`Pass::provides`], [`Pass::removes`],
-    /// [`Pass::modifies`]). On in debug builds (the test suites) and off in release builds unless asked for, like the
-    /// conservation diagnostics: it checks the passes' code, not the data, and costs a scan of the world per name per
-    /// pass (measured on a Unity level of 16,000 placements: 0.46 s over 12 passes, on top of the verifier's 0.26 s).
-    /// What a pass's names do across the whole world is checked either way, and the verifier ([`Component::verify`],
-    /// [`crate::Resource::verify`], the validators) runs after every pass in every build.
+    /// The pass checks, after every pass: its effects entity by entity against its declarations (what it adds to or
+    /// takes from an entity, what it despawns, the resources it writes: [`Pass::provides`], [`Pass::removes`],
+    /// [`Pass::modifies`]), then the verifier ([`Component::verify`], [`crate::Resource::verify`], the validators) on
+    /// what it leaves. On in debug builds (the test suites); off by default in release builds, for speed, so a pass
+    /// that leaves an invalid component is not named there unless the program opts in with `true`. Measured on a
+    /// Unity level (16,000 placements, 12 passes, release): the verifier 0.26 s and the declaration diff another
+    /// 0.46 s, against 1.6 s of passes. What a pass's names do across the whole world is checked either way, and a
+    /// conversion ([`PassManager::convert`]) verifies the reader's output and the world before its writer either way.
     pub fn with_pass_checks(mut self, on: bool) -> Self {
         self.pass_checks = on;
         self
@@ -1486,9 +1488,8 @@ impl PassManager {
         removed.sort();
         if self.pass_checks {
             self.check_entity_effects(w, p, text, log, &held_before, &effects)?;
+            self.verify(w, text)?;
         }
-        // the documented contract: the verifier runs after every pass, in every build
-        self.verify(w, text)?;
         Ok(StepReport {
             pass: text.to_owned(),
             approximates: p.approximates(),
@@ -3836,10 +3837,10 @@ mod tests {
         );
     }
 
-    /// The verifier runs after every pass whatever the pass checks say: with them off (a release build's default),
-    /// a world the pass left invalid is still refused, naming the pass.
+    /// The verifier runs after a pass with the pass checks (a world the pass left invalid is refused, naming the
+    /// pass), not without them; they are on by default in debug builds only.
     #[test]
-    fn the_verifier_runs_with_the_pass_checks_off() {
+    fn the_verifier_runs_after_passes_with_the_pass_checks() {
         struct NoPbr;
         impl Validator for NoPbr {
             fn name(&self) -> &'static str {
@@ -3851,15 +3852,23 @@ mod tests {
                     .collect()
             }
         }
-        let mut m = PassManager::new(registry(false)).with_pass_checks(false);
-        m.add_validator(Box::new(NoPbr));
-        let pipeline = m.registry.parse("load, bake").unwrap();
-        let err = m
-            .run(&mut world(), &pipeline, &mut RunReport::default())
-            .unwrap_err();
         assert_eq!(
-            err.to_string(),
-            "verify after bake: no-pbr on e0: pbr is banned here"
+            PassManager::new(registry(false)).pass_checks(),
+            cfg!(debug_assertions)
         );
+        for checks in [true, false] {
+            let mut m = PassManager::new(registry(false)).with_pass_checks(checks);
+            m.add_validator(Box::new(NoPbr));
+            let pipeline = m.registry.parse("load, bake").unwrap();
+            let ran = m.run(&mut world(), &pipeline, &mut RunReport::default());
+            if checks {
+                assert_eq!(
+                    ran.unwrap_err().to_string(),
+                    "verify after bake: no-pbr on e0: pbr is banned here"
+                );
+            } else {
+                assert!(ran.is_ok());
+            }
+        }
     }
 }

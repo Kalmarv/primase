@@ -99,8 +99,9 @@ GLB meshes) that existing front ends already write; `primase_reskate::interchang
 
 A pass has a stable name, options with a text form, and declares the component names it **requires**, **provides**,
 **removes** and **modifies** (changes in place), plus what it approximates. After each pass the manager checks that the
-names that appeared are within `provides` and those that vanished within `removes`, and runs the **verifier** (on the
-reader's output, after every pass, before the writer; always on). A pass that declares it **despawns entities**
+names that appeared are within `provides` and those that vanished within `removes`, and runs the **verifier** (on a
+conversion's reader output and before its writer in every build; after every pass in debug builds, and in release
+builds only when the program opts in with `PassManager::with_pass_checks(true)`: off there by default for speed). A pass that declares it **despawns entities**
 (`drop-optional`, `select-lod`) may also make a name vanish that only the entities it despawned held, so it need not
 list every component a dropped placement or a discarded form may carry; a name a surviving entity lost must still be in
 `removes`, and the planner counts on `removes` alone. A writer declares a **target** (MLIR's conversion
