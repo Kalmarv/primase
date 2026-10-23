@@ -33,6 +33,10 @@ pub struct Variant {
     pub keywords: Vec<String>,
     pub gpu_program_type: i64,
     pub requirements: i64,
+    /// The blob entry holding this variant's own parameters, where the player stores them there (from 2021.2:
+    /// `m_ParameterBlobIndices`, parallel to the sub-program lists).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameter_blob: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters: Option<Parameters>,
 }
@@ -268,6 +272,180 @@ fn parameters(v: &Value, names: &std::collections::BTreeMap<i64, String>) -> Res
     })
 }
 
+/// The first word of a parameter blob entry in a 2021.2 player.
+const PARAMETER_BLOB_MAGIC: u32 = 0x0C0A_75BA;
+
+/// A length-prefixed string of a parameter blob: its length, its bytes, padding to four.
+fn blob_string(r: &mut super::Reader<'_>) -> Result<String> {
+    let n = usize::try_from(r.u32()?).map_err(|_| invalid("parameter blob: a string length"))?;
+    let bytes = r.take(n)?;
+    r.align(4)?;
+    String::from_utf8(bytes.to_vec()).map_err(|_| invalid("parameter blob: a name that is not UTF-8"))
+}
+
+/// A field of a constant buffer or struct: its name, then type, rows, columns, whether it is a matrix, array size and
+/// byte offset (each a word).
+fn blob_field(r: &mut super::Reader<'_>) -> Result<Field> {
+    let name = blob_string(r)?;
+    let kind = i64::from(r.u32()?);
+    let (rows, columns, matrix) = (r.u32()?, r.u32()?, r.u32()?);
+    let array_size = r.u32()?;
+    let offset = r.u32()?;
+    let shape = match matrix {
+        0 => Shape::Vector { columns },
+        1 => Shape::Matrix { rows },
+        n => {
+            return Err(invalid(format!(
+                "parameter blob: field {name} has matrix flag {n}"
+            )));
+        }
+    };
+    Ok(Field {
+        name,
+        offset,
+        kind,
+        shape,
+        array_size,
+    })
+}
+
+/// A variant's own parameters as a 2021.2 player stores them in the blob entry `m_ParameterBlobIndices` names:
+/// the magic word, a count of the constant buffers plus one, four zero words, then each constant buffer (name, size,
+/// its fields, its structs: name, offset, array size, size and fields) and a list of entries, each a name, a kind and
+/// a slot: kind 0 a texture (the sampler slot, `u32::MAX` for none, and a dimension word), kind 1 a constant buffer's
+/// binding (a word, 0), kind 4 a sampler (its packed state; the name is empty). The layout was held to every one of
+/// the 3,280 entries of Sledding Game's `level1` shaders (3,272 read to the last byte; the 8 refused hold a kind 2,
+/// a structured buffer of the DOTS instancing, whose payload is not read).
+pub fn parameter_blob(entry: &[u8]) -> Result<Parameters> {
+    let mut r = super::Reader::new(entry, false);
+    if r.u32()? != PARAMETER_BLOB_MAGIC {
+        return Err(invalid("parameter blob: not the 2021.2 format"));
+    }
+    let buffers = r.u32()?;
+    if (0..4).any(|_| r.u32().map_or(true, |w| w != 0)) {
+        return Err(invalid(
+            "parameter blob: words before the buffers that are not zero",
+        ));
+    }
+    let mut constant_buffers = Vec::new();
+    // the buffers are the entries up to the list's count word: a buffer's name is a string, the count is not one
+    for _ in 1..buffers {
+        let name = blob_string(&mut r)?;
+        let size = r.u32()?;
+        let fields = (0..r.u32()?)
+            .map(|_| blob_field(&mut r))
+            .collect::<Result<Vec<_>>>()?;
+        let mut structs = Vec::new();
+        for _ in 0..r.u32()? {
+            structs.push(StructField {
+                name: blob_string(&mut r)?,
+                offset: r.u32()?,
+                array_size: r.u32()?,
+                size: r.u32()?,
+                members: (0..r.u32()?)
+                    .map(|_| blob_field(&mut r))
+                    .collect::<Result<Vec<_>>>()?,
+            });
+        }
+        constant_buffers.push(ConstantBuffer {
+            name,
+            slot: None,
+            size,
+            fields,
+            structs,
+        });
+    }
+    let (mut textures, mut samplers) = (Vec::new(), Vec::new());
+    for _ in 0..r.u32()? {
+        let name = blob_string(&mut r)?;
+        let (kind, slot) = (r.u32()?, r.u32()?);
+        match kind {
+            0 => {
+                let sampler = r.u32()?;
+                textures.push(TextureParam {
+                    name,
+                    slot,
+                    sampler: (sampler != u32::MAX).then_some(sampler),
+                    dim: i64::from(r.u32()?),
+                });
+            }
+            1 => {
+                r.u32()?;
+                // a buffer the blob binds and holds none of is the pass's common one: an empty buffer carries the slot
+                match constant_buffers.iter_mut().find(|cb| cb.name == name) {
+                    Some(cb) => cb.slot = Some(slot),
+                    None => constant_buffers.push(ConstantBuffer {
+                        name,
+                        slot: Some(slot),
+                        size: 0,
+                        fields: Vec::new(),
+                        structs: Vec::new(),
+                    }),
+                }
+            }
+            4 => samplers.push((r.u32()?, slot)),
+            n => return Err(invalid(format!("parameter blob: an entry of kind {n}"))),
+        }
+    }
+    if r.remaining() != 0 {
+        return Err(invalid("parameter blob: bytes after the entries"));
+    }
+    Ok(Parameters {
+        constant_buffers,
+        textures,
+        samplers,
+    })
+}
+
+/// A variant's parameters from the pass's common ones and its own blob: the buffers by name (fields and structs of
+/// both, the blob's taking precedence; the larger size; the blob's slot, else the common one), then the textures and
+/// samplers of both.
+pub fn merge_parameters(common: &Parameters, own: &Parameters) -> Parameters {
+    let mut buffers = own.constant_buffers.clone();
+    for c in &common.constant_buffers {
+        match buffers.iter_mut().find(|b| b.name == c.name) {
+            Some(b) => {
+                for f in &c.fields {
+                    if !b.fields.iter().any(|g| g.name == f.name && g.offset == f.offset) {
+                        b.fields.push(f.clone());
+                    }
+                }
+                b.fields.sort_by_key(|f| f.offset);
+                for s in &c.structs {
+                    if !b.structs.iter().any(|g| g.name == s.name) {
+                        b.structs.push(s.clone());
+                    }
+                }
+                b.structs.sort_by_key(|s| s.offset);
+                b.size = b.size.max(c.size);
+                b.slot = b.slot.or(c.slot);
+            }
+            None => buffers.push(c.clone()),
+        }
+    }
+    let mut textures = own.textures.clone();
+    textures.extend(
+        common
+            .textures
+            .iter()
+            .filter(|t| !own.textures.iter().any(|o| o.slot == t.slot))
+            .cloned(),
+    );
+    let mut samplers = own.samplers.clone();
+    samplers.extend(
+        common
+            .samplers
+            .iter()
+            .filter(|s| !own.samplers.contains(s))
+            .copied(),
+    );
+    Parameters {
+        constant_buffers: buffers,
+        textures,
+        samplers,
+    }
+}
+
 /// One stage's program of a pass as stored (`program` is its `prog*` value): its variants and common parameters, names
 /// resolved through the pass's name table `names` and the form's `keyword_names`; `shader` names the shader in errors.
 fn stage_program(
@@ -296,16 +474,27 @@ fn stage_program(
             keywords,
             gpu_program_type: int(v, "m_GpuProgramType")?,
             requirements: v.get("m_ShaderRequirements").and_then(Value::as_i64).unwrap_or(0),
+            parameter_blob: None,
             parameters: Some(parameters(v, names)?),
         });
     }
+    // the blob entry of each variant's own parameters, by group and place in the group's list
+    let parameter_blobs: Vec<Vec<i64>> = match program.get("m_ParameterBlobIndices") {
+        Some(Value::Array(Array::Values(groups))) => groups.iter().map(ints).collect::<Result<_>>()?,
+        _ => Vec::new(),
+    };
     for (group, list) in items(program, "m_PlayerSubPrograms")?.iter().enumerate() {
         let list: &[Value] = match list {
             Value::Array(Array::Values(x)) => x,
             Value::Array(a) if a.is_empty() => &[],
             _ => return Err(invalid("shader pass: a player sub-program list")),
         };
-        for v in list {
+        for (place, v) in list.iter().enumerate() {
+            let parameter_blob = parameter_blobs
+                .get(group)
+                .and_then(|g| g.get(place))
+                .map(|i| u32_of(*i, "parameter blob index"))
+                .transpose()?;
             let keywords = match v.get("m_KeywordIndices") {
                 Some(k) => ints(k)?
                     .into_iter()
@@ -325,6 +514,7 @@ fn stage_program(
                 keywords,
                 gpu_program_type: int(v, "m_GpuProgramType")?,
                 requirements: v.get("m_ShaderRequirements").and_then(Value::as_i64).unwrap_or(0),
+                parameter_blob,
                 parameters: None,
             });
         }
@@ -486,6 +676,12 @@ impl ShaderPrograms {
     /// [`ShaderPrograms::code`] keeping the segments it decompresses in `cache`, which reads many entries of one
     /// shader without decompressing a segment for each.
     pub fn code_with(&self, cache: &mut Segments, platform: i64, index: u32) -> Result<Vec<u8>> {
+        let entry = self.entry_with(cache, platform, index)?;
+        Self::code_of(&entry)
+    }
+
+    /// The bytes of blob entry `index` of the blob for `platform`, as stored.
+    pub fn entry_with(&self, cache: &mut Segments, platform: i64, index: u32) -> Result<Vec<u8>> {
         let p = self
             .platforms
             .iter()
@@ -531,7 +727,12 @@ impl ShaderPrograms {
                     self.name
                 ))
             })?;
-        // Unity's program record: version, program type, a 12-byte header, (2016.2+) 4 more, keywords, code
+        Ok(entry.to_vec())
+    }
+
+    /// The code of a program record (`entry`): the record's version, program type, a 12-byte header, (2016.2+) 4
+    /// more, keywords, code.
+    fn code_of(entry: &[u8]) -> Result<Vec<u8>> {
         let mut r = super::Reader::new(entry, false);
         let version = r.i32()?;
         let _program_type = r.i32()?;
@@ -713,11 +914,33 @@ pub fn read_programs(
                             .or_default() += 1;
                         continue;
                     };
+                    // a 2021.2 player stores a variant's own parameters in a blob entry beside the pass's common ones
+                    let parameters = match v.parameter_blob {
+                        Some(blob) => {
+                            match programs
+                                .entry_with(segments, 4, blob)
+                                .and_then(|entry| parameter_blob(&entry))
+                            {
+                                Ok(own) => merge_parameters(&program.parameters, &own),
+                                Err(_) => {
+                                    *report
+                                        .left_out
+                                        .entry(
+                                            "variants whose parameter blob is not read (a structured buffer of DOTS instancing): the pass's common parameters only"
+                                                .to_owned(),
+                                        )
+                                        .or_default() += 1;
+                                    program.parameters_of(v).clone()
+                                }
+                            }
+                        }
+                        None => program.parameters_of(v).clone(),
+                    };
                     variants.push(UnityProgramVariant {
                         tier: v.group,
                         gpu_program_type: v.gpu_program_type,
                         keywords: v.keywords.clone(),
-                        parameters: program.parameters_of(v).clone(),
+                        parameters,
                         code: std::sync::Arc::from(code),
                     });
                 }
@@ -757,6 +980,179 @@ pub fn read_programs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn word(out: &mut Vec<u8>, w: u32) {
+        out.extend_from_slice(&w.to_le_bytes());
+    }
+
+    fn text(out: &mut Vec<u8>, s: &str) {
+        word(out, s.len() as u32);
+        out.extend_from_slice(s.as_bytes());
+        while !out.len().is_multiple_of(4) {
+            out.push(0);
+        }
+    }
+
+    /// A blob entry as a 2021.2 player lays it out: two buffers (`$Globals` with a vector and a matrix, and
+    /// `UnityPerMaterial` with none), two textures, the binding of `UnityPerMaterial` to slot 6, and a sampler.
+    fn blob() -> Vec<u8> {
+        let mut b = Vec::new();
+        for w in [PARAMETER_BLOB_MAGIC, 3, 0, 0, 0, 0] {
+            word(&mut b, w);
+        }
+        text(&mut b, "$Globals");
+        word(&mut b, 128);
+        word(&mut b, 2);
+        text(&mut b, "_Color");
+        for w in [0, 1, 4, 0, 0, 16] {
+            word(&mut b, w);
+        }
+        text(&mut b, "unity_MatrixV");
+        for w in [0, 4, 4, 1, 0, 64] {
+            word(&mut b, w);
+        }
+        word(&mut b, 0);
+        text(&mut b, "UnityPerMaterial");
+        for w in [208, 0, 0] {
+            word(&mut b, w);
+        }
+        word(&mut b, 4);
+        text(&mut b, "_IceTex");
+        for w in [0, 0, 4, 4] {
+            word(&mut b, w);
+        }
+        text(&mut b, "_Roughness");
+        for w in [0, 7, u32::MAX, 4] {
+            word(&mut b, w);
+        }
+        text(&mut b, "UnityPerMaterial");
+        for w in [1, 6, 0] {
+            word(&mut b, w);
+        }
+        text(&mut b, "");
+        for w in [4, 3, 341] {
+            word(&mut b, w);
+        }
+        b
+    }
+
+    fn four_wide(name: &str, offset: u32) -> Field {
+        Field {
+            name: name.into(),
+            offset,
+            kind: 0,
+            shape: Shape::Vector { columns: 4 },
+            array_size: 0,
+        }
+    }
+
+    #[test]
+    fn a_parameter_blob_gives_buffers_slots_textures_and_samplers() {
+        let p = parameter_blob(&blob()).unwrap();
+        assert_eq!(p.constant_buffers.len(), 2);
+        let globals = &p.constant_buffers[0];
+        assert_eq!(
+            (globals.name.as_str(), globals.size, globals.slot),
+            ("$Globals", 128, None)
+        );
+        assert_eq!(
+            globals.fields,
+            [
+                four_wide("_Color", 16),
+                Field {
+                    name: "unity_MatrixV".into(),
+                    offset: 64,
+                    kind: 0,
+                    shape: Shape::Matrix { rows: 4 },
+                    array_size: 0
+                },
+            ]
+        );
+        assert_eq!(p.constant_buffers[1].slot, Some(6));
+        assert_eq!(
+            p.textures,
+            [
+                TextureParam {
+                    name: "_IceTex".into(),
+                    slot: 0,
+                    sampler: Some(4),
+                    dim: 4
+                },
+                TextureParam {
+                    name: "_Roughness".into(),
+                    slot: 7,
+                    sampler: None,
+                    dim: 4
+                },
+            ]
+        );
+        assert_eq!(p.samplers, [(341, 3)]);
+    }
+
+    #[test]
+    fn a_parameter_blob_that_is_not_the_format_or_holds_what_is_not_read_is_refused() {
+        let mut other = blob();
+        other[0] ^= 1;
+        assert!(parameter_blob(&other).is_err());
+        // bytes after the last entry
+        let mut long = blob();
+        long.extend_from_slice(&[0; 4]);
+        assert!(parameter_blob(&long).is_err());
+        // a kind 2 entry (a structured buffer) is not read: the sampler entry's last three words become kind 2
+        let mut structured = blob();
+        let at = structured.len() - 12;
+        structured[at..at + 4].copy_from_slice(&2u32.to_le_bytes());
+        assert!(parameter_blob(&structured).is_err());
+        // cut short
+        assert!(parameter_blob(&blob()[..40]).is_err());
+    }
+
+    #[test]
+    fn a_variants_parameters_are_its_blobs_with_the_pass_common_ones_added() {
+        let own = parameter_blob(&blob()).unwrap();
+        let common = Parameters {
+            constant_buffers: vec![
+                ConstantBuffer {
+                    name: "$Globals".into(),
+                    slot: Some(0),
+                    size: 256,
+                    fields: vec![four_wide("_Color", 16), four_wide("_Other", 32)],
+                    structs: Vec::new(),
+                },
+                ConstantBuffer {
+                    name: "AdditionalLights".into(),
+                    slot: Some(1),
+                    size: 24_576,
+                    fields: vec![four_wide("_Lights", 0)],
+                    structs: Vec::new(),
+                },
+            ],
+            textures: vec![TextureParam {
+                name: "_Common".into(),
+                slot: 0,
+                sampler: None,
+                dim: 4,
+            }],
+            samplers: vec![(1, 0), (341, 3)],
+        };
+        let merged = merge_parameters(&common, &own);
+        let names: Vec<&str> = merged.constant_buffers.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["$Globals", "UnityPerMaterial", "AdditionalLights"]);
+        let globals = &merged.constant_buffers[0];
+        // the blob's fields and the common one it lacks, in offset order; the larger size; the common slot
+        let fields: Vec<(&str, u32)> = globals
+            .fields
+            .iter()
+            .map(|f| (f.name.as_str(), f.offset))
+            .collect();
+        assert_eq!(fields, [("_Color", 16), ("_Other", 32), ("unity_MatrixV", 64)]);
+        assert_eq!((globals.size, globals.slot), (256, Some(0)));
+        assert_eq!(merged.constant_buffers[1].slot, Some(6));
+        // a common texture in the slot the blob names is the blob's: it is not kept twice
+        assert_eq!(merged.textures.len(), 2);
+        assert_eq!(merged.textures[0].name, "_IceTex");
+        assert_eq!(merged.samplers, [(341, 3), (1, 0)]);
+    }
 
     /// A blob table that states more entries than it holds: the entry is refused, not indexed past the table.
     #[test]
