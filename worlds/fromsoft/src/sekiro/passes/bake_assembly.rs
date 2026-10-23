@@ -473,10 +473,12 @@ mod tests {
             |_| true,
         );
         // the oracle predates Binding::available (the area's catalog holding the texture): the catalog above holds
-        // every texture, so each binding is available
+        // every texture, so each binding is available; and Binding::address (the addressing the FLVER texture record
+        // stores): the records built above state none, so each is unstated on both axes
         let mut expected = src["layered"].clone();
         for binding in expected["bindings"].as_object_mut().unwrap().values_mut() {
             binding["available"] = serde_json::Value::Bool(true);
+            binding["address"] = serde_json::json!([null, null]);
         }
         assert_eq!(serde_json::to_value(&source.layered)?, expected);
         assert_eq!(source.mtd, "M[m11_01]_OBJ_Pot1");
