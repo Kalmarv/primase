@@ -122,6 +122,40 @@ fn linked_tables(archive: &Archive, t: &StoredBuildTable) -> Result<Vec<(u64, f3
     Ok(out)
 }
 
+/// The part tables a slot table lists: the BuildTables its rows link that are parts, or, where it links none, those of
+/// the tables it links in turn (the footwear slot lists activities tables, each listing parts), down to `NESTING`
+/// levels. Once each, in stored order.
+fn part_tables(archive: &mut Archive, slot: &StoredBuildTable) -> Result<Vec<u64>, Error> {
+    let mut seen: Vec<u64> = Vec::new();
+    let mut level = vec![slot.clone()];
+    for _ in 0..NESTING {
+        let mut parts: Vec<u64> = Vec::new();
+        let mut next: Vec<StoredBuildTable> = Vec::new();
+        for t in &level {
+            for (id, _) in linked_tables(archive, t)? {
+                if seen.contains(&id) {
+                    continue;
+                }
+                seen.push(id);
+                let (pt, _) = table(archive, id)?;
+                if is_part(archive, &pt)? {
+                    parts.push(id);
+                } else {
+                    next.push(pt);
+                }
+            }
+        }
+        if !parts.is_empty() {
+            return Ok(parts);
+        }
+        level = next;
+    }
+    Ok(Vec::new())
+}
+
+/// How many levels of tables below a slot table are searched for its parts.
+const NESTING: usize = 3;
+
 /// Whether one of the table's rows links a Mesh: a part table.
 fn is_part(archive: &Archive, t: &StoredBuildTable) -> Result<bool, Error> {
     for row in &t.rows {
@@ -226,11 +260,8 @@ pub fn rider_catalog(archive: &mut Archive) -> Result<RiderCatalog, Error> {
         }
         let (t, table_name) = table(archive, id)?;
         let mut parts = Vec::new();
-        for (part, _) in linked_tables(archive, &t)? {
+        for part in part_tables(archive, &t)? {
             let (pt, name) = table(archive, part)?;
-            if !is_part(archive, &pt)? {
-                continue;
-            }
             let mut links: Vec<u64> = Vec::new();
             for row in &pt.rows {
                 for (_, l) in row.links()? {

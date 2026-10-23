@@ -36,6 +36,7 @@ fn the_slot_tables_list_parts_and_their_variants_and_state_a_default_where_they_
     let expected = [
         ("ubody", 150, 149, 144),
         ("lbody", 91, 89, 87),
+        ("footw", 17, 16, 16),
         ("headw", 123, 122, 119),
         ("neckw", 2, 2, 2),
         ("eyew", 20, 20, 17),
