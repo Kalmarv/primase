@@ -1418,3 +1418,85 @@ mod ray_queries {
         }
     }
 }
+
+
+mod uav_counter {
+    use super::*;
+    use primase_shader::D3dClass;
+    use std::collections::BTreeMap;
+
+    /// `uav_counter.hlsl`: 8 threads. Thread i appends i * 10 to `appended` (u0), consumes one value of `consumed` (u1) into
+    /// results[i], takes the old count of `counted` (u2) into results[8 + i] and the new count of `drained` (u3) after a
+    /// decrement into results[16 + i]. The counters are resources of their own (`counter_of` names the view): started at
+    /// 0, 8, 5 and 20, they end at 8, 0, 13 and 12, and the values each thread got are the distinct ones in between
+    /// whatever order the threads' atomic operations took.
+    #[test]
+    fn append_consume_increment_and_decrement_move_the_counters() {
+        for v in BOTH {
+            let (program, exe) = lifted(&fixture("uav_counter", v));
+            let view = |register: u32| {
+                program
+                    .interface
+                    .resources
+                    .iter()
+                    .find(|r| {
+                        r.provenance
+                            .d3d
+                            .is_some_and(|d| d.class == D3dClass::UnorderedAccess && d.register == register)
+                    })
+                    .unwrap_or_else(|| panic!("{v}: no u{register}"))
+                    .id
+            };
+            let counter = |of: ResourceId| {
+                program
+                    .interface
+                    .resources
+                    .iter()
+                    .find(|r| r.provenance.counter_of == Some(of))
+                    .unwrap_or_else(|| panic!("{v}: no counter of {of:?}"))
+                    .id
+            };
+            let (appended, consumed, counted, drained, results) =
+                (view(0), view(1), view(2), view(3), view(4));
+            let counters = [appended, consumed, counted, drained].map(counter);
+            let consumed_values: Vec<u32> = (0..8).map(|k| 100 + k).collect();
+            let mut buffers = BTreeMap::from([
+                (appended, vec![0u32; 8]),
+                (consumed, consumed_values.clone()),
+                (counted, vec![0u32; 1]),
+                (drained, vec![0u32; 1]),
+                (results, vec![0u32; 24]),
+                (counters[0], vec![0]),
+                (counters[1], vec![8]),
+                (counters[2], vec![5]),
+                (counters[3], vec![20]),
+            ]);
+            let resources = Resources::default();
+            let bound = exe.bind_resources(&resources).unwrap();
+            exe.dispatch(&bound, &mut NoBackend, &mut buffers, [1, 1, 1], 32)
+                .unwrap_or_else(|e| panic!("{v}: {e}"));
+            let sorted = |words: &[u32]| {
+                let mut w = words.to_vec();
+                w.sort_unstable();
+                w
+            };
+            assert_eq!(
+                sorted(&buffers[&appended]),
+                (0..8).map(|k| k * 10).collect::<Vec<_>>(),
+                "{v} appended"
+            );
+            assert_eq!(sorted(&buffers[&results][0..8]), consumed_values, "{v} consumed");
+            assert_eq!(
+                sorted(&buffers[&results][8..16]),
+                (5..13).collect::<Vec<_>>(),
+                "{v} incremented"
+            );
+            assert_eq!(
+                sorted(&buffers[&results][16..24]),
+                (12..20).collect::<Vec<_>>(),
+                "{v} decremented"
+            );
+            assert_eq!(counters.map(|c| buffers[&c][0]), [8, 0, 13, 12], "{v} counters");
+        }
+    }
+}
