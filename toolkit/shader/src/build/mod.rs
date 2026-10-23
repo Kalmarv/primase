@@ -4,6 +4,7 @@
 
 pub mod behaviour;
 mod entry;
+pub mod structure;
 
 pub use entry::EntryDecl;
 
