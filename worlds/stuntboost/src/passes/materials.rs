@@ -57,7 +57,7 @@ pub struct LowerStuntboostMaterials {
 }
 
 impl LowerStuntboostMaterials {
-    /// From its options, both required: `baked` (`base-colour` or `emission`), `transparent` (`blend` or `opaque`).
+    /// From its options, both required: `baked` (`base-colour`, `emission` or `unlit`), `transparent` (`blend` or `opaque`).
     pub fn from_options(o: &Options) -> Result<LowerStuntboostMaterials, String> {
         if let Some(k) = o.keys().find(|k| !["baked", "transparent"].contains(&k.as_str())) {
             return Err(format!("unknown option {k}"));

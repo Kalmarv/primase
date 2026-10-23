@@ -1488,10 +1488,11 @@ fn skin_limit(
     mesh: &str,
     skin: &MeshSkin,
 ) -> Result<SkinWeights> {
+    // each level as the option takes it (its name, quoted), and what it draws of a skin beside it
     let names = || {
         levels
             .iter()
-            .map(|l| format!("{} ({})", l.name, l.skin_weights))
+            .map(|l| format!("{:?} (skin weights {})", l.name, l.skin_weights))
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -2379,6 +2380,42 @@ fn read_physic_material(v: &Value, object: &str) -> Result<UnityPhysicMaterial> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::read::mesh::Blend;
+
+    /// A quality level the player lacks is refused listing the levels as the option takes them: each name quoted,
+    /// what it draws of a skin beside it.
+    #[test]
+    fn an_unknown_quality_level_lists_the_names_the_option_takes() {
+        let level = |name: &str, skin_weights| QualityLevel {
+            name: name.into(),
+            skin_weights,
+            shadows: 0,
+            shadow_distance: 0.,
+            shadow_cascades: 0,
+        };
+        let levels = [
+            level("PC High", SkinWeights::Unlimited),
+            level("PC Low", SkinWeights::Bones(2)),
+        ];
+        let skin = MeshSkin {
+            channel: Blend::default(),
+            unlimited: None,
+            bind_poses: Vec::new(),
+        };
+        let error = skin_limit(&levels, Some("PC High (unlimited)"), "body", &skin)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                r#"is not one of the player's: "PC High" (skin weights unlimited), "PC Low" (skin weights 2 bones)"#
+            ),
+            "{error}"
+        );
+        assert_eq!(
+            skin_limit(&levels, Some("PC Low"), "body", &skin).unwrap(),
+            SkinWeights::Bones(2)
+        );
+    }
 
     fn fields(names: &[&str]) -> Value {
         let value = |k: &str| match k {
