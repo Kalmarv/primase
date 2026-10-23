@@ -139,8 +139,23 @@ fn spawn_region_values_are_read_without_map_offset_or_rounding() {
     };
     let p = layout.spawn_points().unwrap();
     assert_eq!(p[0].name, "A");
-    // a generation whose spawn region code is not known refuses rather than finding none
+    // Elden Ring's spawn points are the same region type in the same header
     layout.generation = &Generation::ELDEN_RING;
+    let elden = layout.spawn_points().unwrap();
+    assert_eq!(
+        (
+            elden[0].name.as_str(),
+            elden[0].position,
+            elden[0].rotation_degrees
+        ),
+        ("A", p[0].position, p[0].rotation_degrees)
+    );
+    // a generation whose spawn region code is not known refuses rather than finding none
+    static UNKNOWN: Generation = Generation {
+        spawn_region: None,
+        ..Generation::SEKIRO
+    };
+    layout.generation = &UNKNOWN;
     assert!(layout.spawn_points().is_err());
     assert_eq!(p[0].position, [1., 2., 3.]);
     assert_eq!(p[0].rotation_degrees, [4., 5., 6.]);

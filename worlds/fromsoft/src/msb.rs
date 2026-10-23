@@ -90,7 +90,8 @@ impl Generation {
         spawn_region: Some(8),
     };
     /// Elden Ring (MSBE): six sections ending with parts; assets take the place of objects. It has no MapOffset
-    /// events; its spawn-point region code is not read yet.
+    /// events; its spawn points are region type 8, as Sekiro's (the region header is laid out alike: name offset,
+    /// type at 8, position at 20, rotation at 32).
     pub const ELDEN_RING: Self = Self {
         name: "MSBE",
         sections: &[
@@ -122,7 +123,7 @@ impl Generation {
         entity_zero: None,
         point_light_shadow: FlagByte::ZeroOrMinusOne,
         map_offset_event: None,
-        spawn_region: None,
+        spawn_region: Some(8),
     };
     pub const ALL: [&'static Self; 2] = [&Self::SEKIRO, &Self::ELDEN_RING];
     /// The generation whose section chain is `names`.

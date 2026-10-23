@@ -113,7 +113,8 @@ fn stored_parts_match_an_independent_reading() -> Result<()> {
 /// Every map layout of a game against an independent reader's reading of the same files (`msb.jsonl` of the game's
 /// format oracle: SoulsFormatsNEXT ee1dd61's MSBE for Elden Ring, `oracles.soulsformats.elden/format`): the models'
 /// names, and every part of every kind by name: its kind, model, position, rotation and scale (f32 bit patterns),
-/// entity ID and groups, the six shadow controls and a collision part's hit filter.
+/// entity ID and groups, the six shadow controls and a collision part's hit filter; and every spawn point region in
+/// file order (name, position and rotation).
 #[test]
 fn every_layout_matches_an_independent_reading() -> Result<()> {
     use primase_fromsoft::Game;
@@ -137,7 +138,7 @@ fn every_layout_matches_an_independent_reading() -> Result<()> {
             oodle: Some(&dll),
             max_output: 1 << 30,
         };
-        let (mut maps, mut parts, mut fields) = (0usize, 0usize, 0usize);
+        let (mut maps, mut parts, mut fields, mut spawn_points) = (0usize, 0usize, 0usize, 0usize);
         let mut failures = Vec::new();
         for line in std::fs::read_to_string(oracle.join("msb.jsonl"))?.lines() {
             let record: serde_json::Value = serde_json::from_str(line)?;
@@ -158,6 +159,26 @@ fn every_layout_matches_an_independent_reading() -> Result<()> {
             have_models.sort_unstable();
             if want_models != have_models {
                 failures.push(format!("{path}: model names differ"));
+            }
+            // the spawn point regions, in file order: name, position and rotation as stored
+            let points = layout.spawn_points().map_err(|e| format!("{path}: {e}"))?;
+            let want_points = record["spawn_points"].as_array().ok_or("spawn_points")?;
+            if points.len() != want_points.len() {
+                failures.push(format!(
+                    "{path}: {} spawn points, the reference {}",
+                    points.len(),
+                    want_points.len()
+                ));
+            } else {
+                for (p, want) in points.iter().zip(want_points) {
+                    spawn_points += 1;
+                    if Some(p.name.as_str()) != want["name"].as_str()
+                        || p.position.map(f32::to_bits) != common::bits3(&want["position"])?
+                        || p.rotation_degrees.map(f32::to_bits) != common::bits3(&want["rotation"])?
+                    {
+                        failures.push(format!("{path} spawn point {}: differs", p.name));
+                    }
+                }
             }
             let mut names: Vec<String> = layout.parts.iter().map(|p| p.name.clone()).collect();
             common::disambiguate(&mut names);
@@ -245,7 +266,7 @@ fn every_layout_matches_an_independent_reading() -> Result<()> {
             }
         }
         println!(
-            "{}: maps {maps}, parts {parts}, fields compared {fields}, mismatches {}",
+            "{}: maps {maps}, parts {parts}, fields compared {fields}, spawn points {spawn_points}, mismatches {}",
             game.name(),
             failures.len()
         );

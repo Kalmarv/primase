@@ -182,7 +182,7 @@ the game a caller names. The number each section stores is a revision, kept in
 | entity block | 0x54 bytes, 16 zero at 0x44 | 0x40 bytes |
 | point-light shadow byte | 0/1 | 0/0xff |
 | MapOffset event | type 9 | none |
-| spawn-point region | type 8 | not read yet (`spawn_points` refuses) |
+| spawn-point region | type 8 | type 8 (SoulsFormatsNEXT's `SpawnPoint`; the region header laid out alike) |
 
 Parts already occupy the common world frame. Their local scale is followed by
 Euler rotations X, Z, Y, then translation. `Part::transform` uses ordinary f64
@@ -202,8 +202,10 @@ layout the install holds, `path` (the archive path), `models` (`name`, `kind`) a
 `parts`: `name`, `kind` (the reference's class name), `model`, `position`/`rotation`/
 `scale` (three f32 bit patterns as hex strings), `entity_id`, `entity_group_ids`,
 `cast`, `receive`, `only`, `point_light` (0 or -1), `static_cast`, `cascade3_cast` and
-`hit_filter` (collision parts, else null). Repeated names follow the reference's
-convention: later uses become `"<name> {n}"`, in file order.
+`hit_filter` (collision parts, else null), and `spawn_points` (every region of the
+reference's `SpawnPoint` class in file order: `name`, `position` and `rotation` as f32 bit
+patterns). Repeated names follow the reference's convention: later uses become
+`"<name> {n}"`, in file order.
 
 `btl::LightBank::read` reads versions 16 (Sekiro) and 18 (Elden Ring), which share the 232-byte light record, and
 keeps the stored version; other versions are refused. Elden Ring's banks are checked against SoulsFormatsNEXT's BTL
@@ -362,9 +364,8 @@ whose layouts place the small tile's big assets as `<tile>-<part>` in their own 
 set to `Include` also reads those parts, moved into the map's frame by that offset. The map layout's generation says
 the rest (part kinds: Sekiro's objects, Elden Ring's assets; spawn regions).
 
-Elden Ring's read does not yet resolve material binaries (its materials keep their FLVER bindings, no texture is read),
-read asset collision binders, world states (`states: event` is refused) or spawn points, or decode SpeedTree models
-(their placements are left out, by model): each is in `Report::notices`. `tests/elden_area.rs` accounts for every map
+Elden Ring's read does not yet read world states (`states: event` is refused) or decode SpeedTree models (their
+placements are left out, by model): each is in `Report::notices`. `tests/elden_area.rs` accounts for every map
 piece and asset part of the Academy of Raya Lucaria (m14_00_00_00) and of the Shaded Castle tile with its parents
 against SoulsFormatsNEXT's layouts, translations exact.
 
