@@ -104,6 +104,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools",
     },
     Variable {
+        name: "PRIMASE_GTA_SHADER_CONVERSION",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"optional: CodeWalker's `ShadersGen9Conversion.xml`, which names every effect's texture and constant parameters (current and previous name, constant-buffer offset); `worlds/gta/tests/program_tables.rs` holds the shader database's parameter records to it"#,
+        status: Status::Live,
+        source: "independent: CodeWalker.Core 485d56b, a data file of its repository (CodeWalker.Core/ShadersGen9Conversion.xml)",
+    },
+    Variable {
         name: "PRIMASE_GTA_PARITY",
         kind: Kind::Input,
         gate: false,

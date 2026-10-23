@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 use primase_core::shader::{Shader, ShaderFormat};
 use primase_core::{Entity, Name, World};
 
-use crate::components::{GtaEffect, GtaEffectProgram, GtaMaterialEffect, GtaShader, GtaStage};
+use crate::components::{
+    GtaEffect, GtaEffectParameters, GtaEffectProgram, GtaMaterialEffect, GtaShader, GtaShaderTable, GtaStage,
+};
 use crate::rage::fxc::ProgramStage;
 use crate::rage::sgd2::{self, Sgd2};
 
@@ -25,6 +27,12 @@ pub struct ShaderTable {
     pub effects: Vec<Entity>,
     /// The programs made into `core.shader` entities.
     pub shaders: usize,
+    /// Of them, those whose binding table was read (`gta.shader_table`); the others are in `unread_tables`, by the
+    /// reason.
+    pub tables: usize,
+    pub unread_tables: Vec<(String, String)>,
+    /// Parameter records found in the effects' records (`gta.effect_parameters`).
+    pub parameters: usize,
     /// The programs whose interface could not be read, by the reason: left without an entity.
     pub unread: Vec<(String, String)>,
 }
@@ -82,6 +90,15 @@ pub fn add_shader_database(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
                             },
                         );
                         table.shaders += 1;
+                        match crate::rage::sgd2_table::parse(program.tables) {
+                            Ok(t) => {
+                                w.insert(e, GtaShaderTable(t));
+                                table.tables += 1;
+                            }
+                            Err(reason) => table
+                                .unread_tables
+                                .push((program.name.to_owned(), reason.to_string())),
+                        }
                         Some(e)
                     }
                     Err(reason) => {
@@ -116,6 +133,17 @@ pub fn add_shader_database(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
                 });
             }
         }
+        // what its programs' tables read: each constant's name hash with its type bytes
+        let mut known: BTreeMap<u32, std::collections::BTreeSet<u8>> = BTreeMap::new();
+        for p in &named {
+            if let Some(GtaShaderTable(t)) = p.shader.and_then(|s| w.get::<GtaShaderTable>(s)) {
+                for c in &t.constants {
+                    known.entry(c.name).or_default().insert(c.kind());
+                }
+            }
+        }
+        let parameters = crate::rage::sgd2_table::effect_parameters(effect.rest, &known);
+        table.parameters += parameters.len();
         let e = w.spawn();
         w.insert(e, Name(effect.name.to_owned()));
         w.insert(
@@ -125,6 +153,7 @@ pub fn add_shader_database(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
                 programs: named,
             },
         );
+        w.insert(e, GtaEffectParameters(parameters));
         table.effects.push(e);
     }
     table

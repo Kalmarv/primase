@@ -10,4 +10,5 @@ pub mod meta;
 pub mod resource;
 pub mod sga;
 pub mod sgd2;
+pub mod sgd2_table;
 pub mod texture;

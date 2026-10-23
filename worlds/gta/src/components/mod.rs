@@ -265,6 +265,40 @@ impl Component for GtaEffect {
     }
 }
 
+/// A shader program's binding table, as the shader database stores it ([`crate::rage::sgd2_table`]), on the program's
+/// `core.shader` entity: its constant buffers, textures and samplers with their registers and spaces, and each constant
+/// with its byte offset in its buffer, named by hashes of the names in `names`. Not serialised.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GtaShaderTable(pub crate::rage::sgd2_table::ProgramTable);
+
+impl Component for GtaShaderTable {
+    const NAME: &'static str = "gta.shader_table";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn payload_bytes(&self) -> u64 {
+        let t = &self.0;
+        let names: usize = t.names.iter().map(String::len).sum();
+        u64::try_from(
+            t.resources
+                .len()
+                .saturating_mul(28)
+                .saturating_add(t.constants.len().saturating_mul(24))
+                .saturating_add(names),
+        )
+        .unwrap_or(u64::MAX)
+    }
+}
+
+/// The material parameters an effect renames, on the `gta.effect` entity: for each constant of its programs that a
+/// drawable's material stores under another name, the program's name hash and the stored key
+/// ([`crate::rage::sgd2_table::effect_parameters`]). Not serialised.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GtaEffectParameters(pub Vec<crate::rage::sgd2_table::EffectParameter>);
+
+impl Component for GtaEffectParameters {
+    const NAME: &'static str = "gta.effect_parameters";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
 /// The effect of the shader database a drawable's shader selects, on the material entity that holds the
 /// [`GtaShader`]: the effect whose name hashes (joaat, lowercase) to the shader's `name`. The effect's programs are the
 /// ones its [`GtaEffect`] names.
