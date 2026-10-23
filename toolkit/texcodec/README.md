@@ -28,13 +28,12 @@ Compile `native.c` with that header on the include path, run `pillow.py`, then
 `modes.py <native-executable>`; all generated data is synthetic.
 The C# golden outputs are independent reference-decoder fixtures.
 
-Real-data gates use `PRIMASE_SCENES_GTA` and `PRIMASE_SCENES_SEKIRO` only,
-recursively finding DDS beneath `textures` directories and comparing level zero.
-Pillow's grayscale presentation of BC4 is normalized to red-only; sRGB DXGI tags
-are relabeled for Pillow 11 without altering payloads or applying gamma.
-
-Censuses deduplicate input files by SHA256 within each configured root, reporting
-path counts separately from checked distinct contents. All paths are read and hashed.
+The decoders meet real data in the readers' gates: `worlds/unity/tests/texture.rs`
+decodes a Unity player's textures against bcdec (bit for bit) and UnityPy's
+images, and `worlds/anvil/tests/texture.rs` against RRAssetStudio's decodes.
+`worlds/fromsoft/tests/tpf_pixels.rs` compares Sekiro's texture packages with
+bcdec, C# and Pillow 11 once its oracle is built (it normalizes Pillow's
+grayscale BC4 to red-only).
 
 `Encoder` (behind `TexEncoder::encode_rgba8`) encodes BC7 only and refuses every other format; it encodes straight RGBA8 as BC7 through `block_compression` (pure-Rust CPU port of Intel's
 ISPC kernels, all modes; slow settings, alpha fitted only when some texel has alpha < 255). Partial edge blocks are
