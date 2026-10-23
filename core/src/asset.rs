@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::convert::{PartitionGroup, PartitionPlan};
-use crate::pass::{Options, Pass, PassLog};
+use crate::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use crate::{
     Component, Entity, Instance, JsonError, Mesh, MeshFile, Name, Resource, RigInstance, Skeleton, Skin,
     SkinInstance, Source, Transform, World,
@@ -98,13 +98,12 @@ impl Component for Asset {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlaceAssets;
 
-/// The pass factory (`PassRegistry::register("place-assets", place_assets)`).
-pub fn place_assets(o: &Options) -> Result<Box<dyn Pass>, String> {
-    match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(PlaceAssets)),
-    }
-}
+/// `place-assets`' declaration ([`crate::pass::PassRegistry::add`]): no options.
+pub const PLACE_ASSETS: PassSpec = PassSpec {
+    name: "place-assets",
+    options: &[],
+    make: |_| Ok(Box::new(PlaceAssets)),
+};
 
 impl Pass for PlaceAssets {
     fn name(&self) -> &'static str {
@@ -230,33 +229,43 @@ pub struct SelectAssets {
     pub values: Vec<String>,
 }
 
-/// The pass factory (`PassRegistry::register_requiring("select-assets", select_assets, ...)`).
-pub fn select_assets(o: &Options) -> Result<Box<dyn Pass>, String> {
-    let mut chosen = None;
-    for (k, v) in o {
-        let field = match k.as_str() {
-            "keys" => AssetField::Key,
-            "names" => AssetField::Name,
-            _ => return Err(format!("unknown option {k}")),
-        };
-        if chosen.is_some() {
-            return Err("give keys or names, not both".into());
+/// `select-assets`' declaration ([`crate::pass::PassRegistry::add`]): `keys` or `names`, one of them.
+pub const SELECT_ASSETS: PassSpec = PassSpec {
+    name: "select-assets",
+    options: &[
+        OptionSpec::one_of(
+            "assets",
+            "keys",
+            "example",
+            "the assets' keys, `;` between, each once",
+        ),
+        OptionSpec::one_of(
+            "assets",
+            "names",
+            "example",
+            "the assets' names, `;` between, each once",
+        ),
+    ],
+    make: select_assets,
+};
+
+fn select_assets(g: &Given) -> Result<Box<dyn Pass>, String> {
+    let (k, field, v) = match (g.optional("keys"), g.optional("names")) {
+        (Some(v), _) => ("keys", AssetField::Key, v),
+        (None, Some(v)) => ("names", AssetField::Name, v),
+        (None, None) => unreachable!("the declaration's check gives one of keys and names"),
+    };
+    let mut values: Vec<String> = Vec::new();
+    for value in v.split(';').map(str::trim) {
+        if value.is_empty() {
+            return Err(format!("{k}={v}: an empty value"));
         }
-        let mut values: Vec<String> = Vec::new();
-        for value in v.split(';').map(str::trim) {
-            if value.is_empty() {
-                return Err(format!("{k}={v}: an empty value"));
-            }
-            if values.iter().any(|x| x == value) {
-                return Err(format!("{k}={v}: {value} twice"));
-            }
-            values.push(value.to_owned());
+        if values.iter().any(|x| x == value) {
+            return Err(format!("{k}={v}: {value} twice"));
         }
-        chosen = Some(SelectAssets { field, values });
+        values.push(value.to_owned());
     }
-    chosen
-        .map(|p| Box::new(p) as Box<dyn Pass>)
-        .ok_or_else(|| "keys or names is required".into())
+    Ok(Box::new(SelectAssets { field, values }))
 }
 
 impl Pass for SelectAssets {
@@ -323,13 +332,12 @@ impl Pass for SelectAssets {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PartitionByAsset;
 
-/// The pass factory (`PassRegistry::register("partition-by-asset", partition_by_asset)`).
-pub fn partition_by_asset(o: &Options) -> Result<Box<dyn Pass>, String> {
-    match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(PartitionByAsset)),
-    }
-}
+/// `partition-by-asset`'s declaration ([`crate::pass::PassRegistry::add`]): no options.
+pub const PARTITION_BY_ASSET: PassSpec = PassSpec {
+    name: "partition-by-asset",
+    options: &[],
+    make: |_| Ok(Box::new(PartitionByAsset)),
+};
 
 impl Pass for PartitionByAsset {
     fn name(&self) -> &'static str {
@@ -643,11 +651,17 @@ mod tests {
             "{err}"
         );
         for (bad, why) in [
-            ("select-assets", "keys or names is required"),
-            ("select-assets{keys=a,names=A}", "not both"),
+            ("select-assets", "one of keys or names is required"),
+            (
+                "select-assets{keys=a,names=A}",
+                "only one of keys or names may be given",
+            ),
             ("select-assets{keys=a;;b}", "an empty value"),
             ("select-assets{keys=a;a}", "a twice"),
-            ("select-assets{key=a}", "unknown option key"),
+            (
+                "select-assets{key=a}",
+                "unknown option key (select-assets takes keys, names)",
+            ),
         ] {
             let err = m.registry.parse(bad).unwrap_err().to_string();
             assert!(err.contains(why), "{bad}: {err}");
@@ -718,7 +732,7 @@ mod tests {
     fn place_assets_places_rigs_and_parts() {
         let (mut w, _, parts, skeleton) = world();
         let mut r = PassRegistry::new();
-        r.register("place-assets", place_assets);
+        r.add(&PLACE_ASSETS);
         let m = PassManager::new(r).with_pass_checks(true);
         let mut report = RunReport::default();
         m.run(&mut w, &m.registry.parse("place-assets").unwrap(), &mut report)

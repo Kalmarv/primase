@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::pass::{Options, Pass, PassLog};
+use crate::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use crate::{
     Collision, Component, Entity, Instance, JsonError, MaterialVariants, Mesh, MeshFile, Name, Source,
     Transform, World,
@@ -141,22 +141,27 @@ impl Default for SelectLod {
     }
 }
 
-/// The pass factory (`PassRegistry::register("select-lod", select_lod)`).
-pub fn select_lod(o: &Options) -> Result<Box<dyn Pass>, String> {
+/// `select-lod`'s declaration ([`crate::pass::PassRegistry::add`]).
+pub const SELECT_LOD: PassSpec = PassSpec {
+    name: "select-lod",
+    options: &[OptionSpec::optional(
+        "form",
+        "finest",
+        "finest, default or a level 0-255: the form each prototype keeps (LodChoice); without it, default",
+    )],
+    make: select_lod,
+};
+
+fn select_lod(g: &Given) -> Result<Box<dyn Pass>, String> {
     let mut pass = SelectLod::default();
-    for (k, v) in o {
-        match k.as_str() {
-            "form" => {
-                pass.choice = match v.as_str() {
-                    "finest" => LodChoice::Finest,
-                    "default" => LodChoice::Default,
-                    n => LodChoice::AtMost(
-                        n.parse()
-                            .map_err(|_| format!("form={n} is not finest, default or a level 0-255"))?,
-                    ),
-                }
-            }
-            _ => return Err(format!("unknown option {k}")),
+    if let Some(v) = g.optional("form") {
+        pass.choice = match v {
+            "finest" => LodChoice::Finest,
+            "default" => LodChoice::Default,
+            n => LodChoice::AtMost(
+                n.parse()
+                    .map_err(|_| format!("form={n} is not finest, default or a level 0-255"))?,
+            ),
         }
     }
     Ok(Box::new(pass))
@@ -347,7 +352,7 @@ mod tests {
 
     fn manager() -> PassManager {
         let mut r = PassRegistry::new();
-        r.register("select-lod", select_lod);
+        r.add(&SELECT_LOD);
         PassManager::new(r)
     }
 
@@ -511,14 +516,23 @@ mod tests {
             assert_eq!(step.removed, removed, "{pipeline}");
         }
         assert_eq!(
-            select_lod(&Options::from([("form".into(), "2".into())]))
+            SELECT_LOD
+                .instance(&Options::from([("form".into(), "2".into())]))
                 .unwrap()
                 .options()["form"],
             "2"
         );
-        assert!(select_lod(&Options::new()).unwrap().options().is_empty());
-        assert!(select_lod(&Options::from([("form".into(), "high".into())])).is_err());
-        assert!(select_lod(&Options::from([("lod".into(), "1".into())])).is_err());
+        assert!(SELECT_LOD.instance(&Options::new()).unwrap().options().is_empty());
+        assert!(
+            SELECT_LOD
+                .instance(&Options::from([("form".into(), "high".into())]))
+                .is_err()
+        );
+        assert!(
+            SELECT_LOD
+                .instance(&Options::from([("lod".into(), "1".into())]))
+                .is_err()
+        );
     }
 
     /// Dialect data per primitive of its entity's mesh, as a reader attaches it.

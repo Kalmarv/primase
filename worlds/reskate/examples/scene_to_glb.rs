@@ -29,9 +29,9 @@ fn registry() -> PassRegistry {
     let mut reg = PassRegistry::new();
     primase_gltf::register(&mut reg);
     primase_reskate::register(&mut reg);
-    reg.register("select-lod", primase_core::select_lod);
+    reg.add(&primase_core::SELECT_LOD);
     primase_meshops::register(&mut reg);
-    reg.register("drop-optional", primase_core::drop_optional);
+    reg.add(&primase_core::DROP_OPTIONAL);
     reg.register("normalize-normals", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),
         None => Ok(Box::new(NormalizeNormals)),

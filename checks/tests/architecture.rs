@@ -1418,6 +1418,53 @@ fn pass_impls(t: &[Tok]) -> Vec<(std::ops::Range<usize>, Option<String>)> {
     out
 }
 
+/// The pass declarations of a file (`const X: PassSpec = PassSpec { name: "...", ... }`): each constant's name and its
+/// pass's.
+fn declarations(t: &[Tok]) -> Vec<(String, String)> {
+    t.windows(10)
+        .filter_map(|w| match w {
+            [
+                Tok::Ident(k),
+                Tok::Ident(c),
+                Tok::Punct(':'),
+                Tok::Ident(ty),
+                Tok::Punct('='),
+                Tok::Ident(ty2),
+                Tok::Punct('{'),
+                Tok::Ident(n),
+                Tok::Punct(':'),
+                Tok::Str(s),
+            ] if k == "const" && ty == "PassSpec" && ty2 == "PassSpec" && n == "name" => {
+                Some((c.clone(), s.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The names a file takes by reference (`&X`, `&path::X`: the last segment), as a registration hands a declaration to
+/// `PassRegistry::add`.
+fn referenced(t: &[Tok]) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for i in 0..t.len() {
+        if !punct(&t[i], '&') {
+            continue;
+        }
+        let mut last = None;
+        let mut j = i + 1;
+        while let Some(x) = t.get(j) {
+            match x {
+                Tok::Ident(s) => last = Some(s.clone()),
+                Tok::Punct(':') => {}
+                _ => break,
+            }
+            j += 1;
+        }
+        out.extend(last);
+    }
+    out
+}
+
 /// The names given to `register("...", ...)` and `register_requiring("...", ...)` calls.
 fn registered(t: &[Tok]) -> BTreeSet<String> {
     t.windows(3)
@@ -1553,6 +1600,7 @@ fn component_geometry_hooks() {
 fn passes_registered() {
     let members = members();
     let mut registry = BTreeSet::new();
+    let (mut declared, mut taken) = (Vec::new(), BTreeSet::new());
     let mut crates = Vec::new();
     for m in &members {
         let files: Vec<(String, Vec<Tok>)> = rust_files(&root().join(&m.path).join("src"))
@@ -1564,9 +1612,19 @@ fn passes_registered() {
             .collect();
         for (_, t) in &files {
             registry.extend(registered(t));
+            declared.extend(declarations(t));
+            taken.extend(referenced(t));
         }
         crates.push((m.clone(), files));
     }
+    // a declared pass counts as registered when library code takes its declaration by reference (`reg.add(&X)`, or a
+    // list of `&X` a registration adds)
+    registry.extend(
+        declared
+            .into_iter()
+            .filter(|(constant, _)| taken.contains(constant))
+            .map(|(_, name)| name),
+    );
     let mut found = BTreeSet::new();
     for (m, files) in &crates {
         let mut run_by_passes = BTreeSet::new();

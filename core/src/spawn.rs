@@ -1,6 +1,6 @@
 //! `place-spawn`: a spawn marker the caller asks for, placed on the read world before a writer plans.
 
-use crate::pass::{Options, Pass, PassLog};
+use crate::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use crate::{Instance, Marker, Name, Transform, World};
 
 /// Where [`PlaceSpawn`] puts the spawn.
@@ -63,19 +63,18 @@ impl PlaceSpawn {
     }
 
     /// From its options (`at=centre`, or `east` and `north`; `yaw`), through the same constructors.
-    pub fn from_options(o: &Options) -> Result<PlaceSpawn, String> {
-        let number = |k: &str, v: &str| v.parse::<f32>().map_err(|_| format!("{k}={v} is not a number"));
-        let (mut centre, mut east, mut north, mut yaw) = (false, None, None, None);
-        for (k, v) in o {
-            match k.as_str() {
-                "at" if v == "centre" => centre = true,
-                "at" => return Err(format!("at={v}: only at=centre (or east, north)")),
-                "east" => east = Some(number(k, v)?),
-                "north" => north = Some(number(k, v)?),
-                "yaw" => yaw = Some(number(k, v)?),
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
+    fn from_given(g: &Given) -> Result<PlaceSpawn, String> {
+        let number = |k: &str| {
+            g.optional(k)
+                .map(|v| v.parse::<f32>().map_err(|_| format!("{k}={v} is not a number")))
+                .transpose()
+        };
+        let centre = match g.optional("at") {
+            Some("centre") => true,
+            Some(v) => return Err(format!("at={v}: only at=centre (or east, north)")),
+            None => false,
+        };
+        let (east, north, yaw) = (number("east")?, number("north")?, number("yaw")?);
         let pass = match (centre, east, north) {
             (_, None, None) => PlaceSpawn::centre(),
             (false, Some(e), Some(n)) => PlaceSpawn::at_ground(e, n)?,
@@ -89,10 +88,29 @@ impl PlaceSpawn {
     }
 }
 
-/// [`PlaceSpawn::from_options`] as a pass factory.
-pub fn place_spawn(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PlaceSpawn::from_options(o)?))
-}
+/// `place-spawn`'s declaration ([`crate::pass::PassRegistry::add`]).
+pub const PLACE_SPAWN: PassSpec = PassSpec {
+    name: "place-spawn",
+    options: &[
+        OptionSpec::optional(
+            "at",
+            "centre",
+            "centre, the median of the placements' ground positions; also what no at, east or north means",
+        ),
+        OptionSpec::optional(
+            "east",
+            "0",
+            "metres, with north: the spawn's ground position, in place of at",
+        ),
+        OptionSpec::optional(
+            "north",
+            "0",
+            "metres, with east: the spawn's ground position, in place of at",
+        ),
+        OptionSpec::optional("yaw", "90", "degrees: the spawn's heading; without it, none"),
+    ],
+    make: |g| Ok(Box::new(PlaceSpawn::from_given(g)?)),
+};
 
 impl Pass for PlaceSpawn {
     fn name(&self) -> &'static str {
@@ -193,7 +211,7 @@ mod tests {
 
     fn run(w: &mut World, text: &str) -> Result<RunReport, String> {
         let mut reg = PassRegistry::new();
-        reg.register("place-spawn", place_spawn);
+        reg.add(&PLACE_SPAWN);
         let pipeline: Pipeline = reg.parse(text).map_err(|e| e.to_string())?;
         let mut report = RunReport::default();
         PassManager::new(reg)

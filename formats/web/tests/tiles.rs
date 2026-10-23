@@ -2115,7 +2115,7 @@ fn state_conditions_are_resolved_before_tiles_are_written() {
     let err = write(&w, &plain()).unwrap_err().to_string();
     assert!(err.contains("resolve-state"), "{err}");
     let mut reg = primase_core::pass::PassRegistry::new();
-    reg.register("resolve-state", primase_core::state::resolve_state);
+    reg.add(&primase_core::state::RESOLVE_STATE);
     let pipeline = reg.parse("resolve-state").unwrap();
     primase_core::pass::PassManager::new(reg)
         .run(&mut w, &pipeline, &mut primase_core::pass::RunReport::default())

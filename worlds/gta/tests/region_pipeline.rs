@@ -47,8 +47,8 @@ fn every_named_region_through_the_gta_passes() {
     let only = primase_testdata::debug("gta.region");
     let source = GtaSource::open(&dir, &keys).expect("install");
     let mut registry = PassRegistry::new();
-    registry.register("select-lod", primase_core::select_lod);
-    registry.register("resolve-state", primase_core::state::resolve_state);
+    registry.add(&primase_core::SELECT_LOD);
+    registry.add(&primase_core::state::RESOLVE_STATE);
     registry.register("normalize-normals", |_| {
         Ok(Box::new(primase_image::NormalizeNormals))
     });

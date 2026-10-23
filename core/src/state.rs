@@ -30,7 +30,7 @@ use crate::clip::ClipBinding;
 use crate::components::{Instance, Mesh, Transform};
 use crate::json::JsonError;
 use crate::ledger::Measure;
-use crate::pass::{Options, Pass, PassLog};
+use crate::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use crate::world::{Component, Entity, Resource, World};
 
 /// The values an axis can take.
@@ -493,12 +493,30 @@ pub struct ResolveState {
     pub keep: BTreeSet<String>,
 }
 
-/// The pass factory (`PassRegistry::register("resolve-state", resolve_state)`).
-pub fn resolve_state(o: &Options) -> Result<Box<dyn Pass>, String> {
+/// `resolve-state`'s declaration ([`crate::pass::PassRegistry::add`]).
+pub const RESOLVE_STATE: PassSpec = PassSpec {
+    name: "resolve-state",
+    options: &[
+        OptionSpec::optional(
+            "assign",
+            "time:noon",
+            "key:value items, `;` between: each axis's value; an axis neither assigned nor kept resolves by its default",
+        ),
+        OptionSpec::optional(
+            "assign-class",
+            "event:off",
+            "class:value items, `;` between: the value of every axis of that class nothing else gives one",
+        ),
+        OptionSpec::optional("keep", "time", "axis keys, `;` between: the axes left unresolved"),
+    ],
+    make: resolve_state,
+};
+
+fn resolve_state(g: &Given) -> Result<Box<dyn Pass>, String> {
     let mut assign = BTreeMap::new();
     let mut assign_class = BTreeMap::new();
     let mut keep = BTreeSet::new();
-    for (k, v) in o {
+    for (k, v) in g.options() {
         match k.as_str() {
             "assign-class" => {
                 for item in v.split(';').map(str::trim).filter(|s| !s.is_empty()) {
@@ -533,7 +551,7 @@ pub fn resolve_state(o: &Options) -> Result<Box<dyn Pass>, String> {
                     }
                 }
             }
-            _ => return Err(format!("unknown option {k}")),
+            _ => unreachable!("the declaration's check lets no other option through"),
         }
     }
     if let Some(k) = keep.iter().find(|k| assign.contains_key(*k)) {
@@ -934,27 +952,37 @@ pub struct SelectOutfit {
     pub choices: BTreeMap<String, String>,
 }
 
-/// The pass factory (`PassRegistry::register_requiring("select-outfit", select_outfit, ...)`).
-pub fn select_outfit(o: &Options) -> Result<Box<dyn Pass>, String> {
+/// `select-outfit`'s declaration ([`crate::pass::PassRegistry::add`]).
+pub const SELECT_OUTFIT: PassSpec = PassSpec {
+    name: "select-outfit",
+    options: &[OptionSpec::required(
+        "choices",
+        "axis:value",
+        "key:value items, `;` between, at least one: the outfit axes' values",
+    )],
+    make: select_outfit,
+};
+
+fn select_outfit(g: &Given) -> Result<Box<dyn Pass>, String> {
     let mut choices = BTreeMap::new();
-    for (k, v) in o {
-        if k != "choices" {
-            return Err(format!("unknown option {k}"));
-        }
-        for item in v.split(';').map(str::trim).filter(|s| !s.is_empty()) {
-            let (key, value) = item
-                .split_once(':')
-                .ok_or_else(|| format!("choices item {item:?} is not key:value"))?;
-            if choices
-                .insert(key.trim().to_owned(), value.trim().to_owned())
-                .is_some()
-            {
-                return Err(format!("choices: {key} twice"));
-            }
+    for item in g
+        .required("choices")
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let (key, value) = item
+            .split_once(':')
+            .ok_or_else(|| format!("choices item {item:?} is not key:value"))?;
+        if choices
+            .insert(key.trim().to_owned(), value.trim().to_owned())
+            .is_some()
+        {
+            return Err(format!("choices: {key} twice"));
         }
     }
     if choices.is_empty() {
-        return Err("choices is required: key:value;key:value".into());
+        return Err("choices: no key:value item".into());
     }
     Ok(Box::new(SelectOutfit { choices }))
 }
@@ -1113,7 +1141,7 @@ mod tests {
             Options::from([("assign".to_owned(), assign.to_owned())])
         };
         let mut log = PassLog::default();
-        resolve_state(&opts).unwrap().run(w, &mut log).unwrap();
+        RESOLVE_STATE.instance(&opts).unwrap().run(w, &mut log).unwrap();
         log
     }
 
@@ -1129,7 +1157,7 @@ mod tests {
             opts.insert("assign".to_owned(), assign.to_owned());
         }
         let mut log = PassLog::default();
-        resolve_state(&opts)?.run(w, &mut log)?;
+        RESOLVE_STATE.instance(&opts)?.run(w, &mut log)?;
         Ok(log)
     }
 
@@ -1330,7 +1358,7 @@ mod tests {
             ("keep".to_owned(), "fromsoft.flag.8302".to_owned()),
             ("assign".to_owned(), "fromsoft.flag.8302:on".to_owned()),
         ]);
-        assert!(resolve_state(&both).is_err());
+        assert!(RESOLVE_STATE.instance(&both).is_err());
     }
 
     /// An item the pipeline text cannot carry is refused by name; what is accepted prints as text that parses back to
@@ -1344,12 +1372,14 @@ mod tests {
             ("assign", "a:1,;b=c:2", "a:1,"),
             ("keep", "a;z,", "z,"),
         ] {
-            let error = resolve_state(&opts(option, value)).err().expect(value);
+            let error = RESOLVE_STATE.instance(&opts(option, value)).err().expect(value);
             assert!(error.contains(&format!("{item:?}")), "{value}: {error}");
         }
         // a ',' with a part after it that holds no '=' is carried
-        assert!(resolve_state(&opts("keep", "k,;x")).is_ok());
-        let accepted = resolve_state(&opts("assign", "fromsoft.flag.8302:on;gta.ipl.x:off")).unwrap();
+        assert!(RESOLVE_STATE.instance(&opts("keep", "k,;x")).is_ok());
+        let accepted = RESOLVE_STATE
+            .instance(&opts("assign", "fromsoft.flag.8302:on;gta.ipl.x:off"))
+            .unwrap();
         let text = crate::pass::pass_text(accepted.as_ref());
         let mut r = PassRegistry::new();
         crate::register(&mut r);
@@ -1480,7 +1510,8 @@ mod tests {
                 values: 1,
             }])]),
         );
-        let err = resolve_state(&Options::new())
+        let err = RESOLVE_STATE
+            .instance(&Options::new())
             .unwrap()
             .run(&mut w, &mut PassLog::default())
             .unwrap_err();
@@ -1498,7 +1529,8 @@ mod tests {
             )]),
         );
         assert!(
-            resolve_state(&Options::new())
+            RESOLVE_STATE
+                .instance(&Options::new())
                 .unwrap()
                 .run(&mut w, &mut PassLog::default())
                 .is_err()
@@ -1561,7 +1593,8 @@ mod tests {
         let e = unknown(&mut c);
         let door = c.intact;
         c.w.get_mut::<StateAxis>(e).unwrap().scope = Scope::Local(door);
-        let err = resolve_state(&Options::new())
+        let err = RESOLVE_STATE
+            .instance(&Options::new())
             .unwrap()
             .run(&mut c.w, &mut PassLog::default())
             .unwrap_err();
@@ -1574,7 +1607,8 @@ mod tests {
             let mut c = castle();
             let opts = Options::from([("assign".to_owned(), bad.to_owned())]);
             assert!(
-                resolve_state(&opts)
+                RESOLVE_STATE
+                    .instance(&opts)
                     .unwrap()
                     .run(&mut c.w, &mut PassLog::default())
                     .is_err(),
@@ -1588,13 +1622,22 @@ mod tests {
             2,
         )])));
         assert!(
-            resolve_state(&Options::new())
+            RESOLVE_STATE
+                .instance(&Options::new())
                 .unwrap()
                 .run(&mut c.w, &mut PassLog::default())
                 .is_err()
         );
-        assert!(resolve_state(&Options::from([("assign".to_owned(), "x".to_owned())])).is_err());
-        assert!(resolve_state(&Options::from([("colour".to_owned(), "red".to_owned())])).is_err());
+        assert!(
+            RESOLVE_STATE
+                .instance(&Options::from([("assign".to_owned(), "x".to_owned())]))
+                .is_err()
+        );
+        assert!(
+            RESOLVE_STATE
+                .instance(&Options::from([("colour".to_owned(), "red".to_owned())]))
+                .is_err()
+        );
     }
 
     #[test]
@@ -1920,7 +1963,7 @@ mod tests {
 
     fn registry() -> PassRegistry {
         let mut r = PassRegistry::new();
-        r.register("resolve-state", resolve_state);
+        r.add(&RESOLVE_STATE);
         r
     }
 

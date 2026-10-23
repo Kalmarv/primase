@@ -8,7 +8,7 @@
 
 use crate::convert::PartitionPlan;
 use crate::marker::{Curve, Marker};
-use crate::pass::{Options, Pass, PassLog};
+use crate::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use crate::state::{Override, StateOverride};
 use crate::{Component, Entity, Resource, Transform, World};
 
@@ -18,14 +18,19 @@ pub struct TranslateWorld {
     pub by: [f64; 3],
 }
 
-/// The pass factory (`PassRegistry::register("translate-world", translate_world)`): `by=X,Y,Z`, required.
-pub fn translate_world(o: &Options) -> Result<Box<dyn Pass>, String> {
-    if let Some(k) = o.keys().find(|k| k.as_str() != "by") {
-        return Err(format!("unknown option {k}"));
-    }
-    let by = o
-        .get("by")
-        .ok_or("by=X,Y,Z is required: the offset is the program's choice")?;
+/// `translate-world`'s declaration ([`crate::pass::PassRegistry::add`]).
+pub const TRANSLATE_WORLD: PassSpec = PassSpec {
+    name: "translate-world",
+    options: &[OptionSpec::required(
+        "by",
+        "0,0,0",
+        "X,Y,Z, metres in core's frame: the offset is the program's choice",
+    )],
+    make: translate_world,
+};
+
+fn translate_world(g: &Given) -> Result<Box<dyn Pass>, String> {
+    let by = g.required("by");
     let v: Vec<f64> = by
         .split(',')
         .map(|x| {

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::pass::{Options, Pass, PassLog};
+use crate::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use crate::{Component, Entity, Instance, JsonError, Mesh, MeshFile, Transform, World};
 use serde::Serialize;
 use serde_json::Value;
@@ -55,18 +55,23 @@ impl Default for DropOptional {
     }
 }
 
-/// The pass factory (`PassRegistry::register("drop-optional", drop_optional)`).
-pub fn drop_optional(o: &Options) -> Result<Box<dyn Pass>, String> {
+/// `drop-optional`'s declaration ([`crate::pass::PassRegistry::add`]).
+pub const DROP_OPTIONAL: PassSpec = PassSpec {
+    name: "drop-optional",
+    options: &[OptionSpec::optional(
+        "max",
+        "3",
+        "a priority 0-255: placements above it are dropped; without it 255, nothing is dropped",
+    )],
+    make: drop_optional,
+};
+
+fn drop_optional(g: &Given) -> Result<Box<dyn Pass>, String> {
     let mut pass = DropOptional::default();
-    for (k, v) in o {
-        match k.as_str() {
-            "max" => {
-                pass.max = v
-                    .parse()
-                    .map_err(|_| format!("max={v} is not a priority 0-255"))?
-            }
-            _ => return Err(format!("unknown option {k}")),
-        }
+    if let Some(v) = g.optional("max") {
+        pass.max = v
+            .parse()
+            .map_err(|_| format!("max={v} is not a priority 0-255"))?;
     }
     Ok(Box::new(pass))
 }
@@ -161,7 +166,7 @@ mod tests {
     fn drop_optional_leaves_out_placements_above_the_maximum_through_the_manager() {
         let (mut w, _, placed) = placed_world();
         let mut registry = PassRegistry::new();
-        registry.register("drop-optional", drop_optional);
+        registry.add(&DROP_OPTIONAL);
         let m = PassManager::new(registry);
         let pipeline = m.registry.parse("drop-optional{max=2}").unwrap();
         let mut report = RunReport::default();
@@ -195,8 +200,16 @@ mod tests {
         let pipeline = m.registry.parse("drop-optional").unwrap();
         m.run(&mut w, &pipeline, &mut RunReport::default()).unwrap();
         assert_eq!(w.entity_count(), all);
-        assert!(drop_optional(&Options::from([("max".into(), "256".into())])).is_err());
-        assert!(drop_optional(&Options::from([("level".into(), "2".into())])).is_err());
+        assert!(
+            DROP_OPTIONAL
+                .instance(&Options::from([("max".into(), "256".into())]))
+                .is_err()
+        );
+        assert!(
+            DROP_OPTIONAL
+                .instance(&Options::from([("level".into(), "2".into())]))
+                .is_err()
+        );
     }
 
     #[test]

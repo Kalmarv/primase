@@ -16,11 +16,11 @@ pub mod layered;
 pub mod ledger;
 mod lod;
 pub mod names;
-pub use lod::{LodChoice, LodForm, Lods, SelectLod, select_lod};
+pub use lod::{LodChoice, LodForm, Lods, SELECT_LOD, SelectLod};
 mod marker;
 pub use marker::{Curve, Marker, kind_is_valid};
 mod spawn;
-pub use spawn::{PlaceSpawn, SpawnAt, place_spawn};
+pub use spawn::{PLACE_SPAWN, PlaceSpawn, SpawnAt};
 mod collider;
 pub use collider::{Collider, Diagonal, Heightfield, Shape};
 mod draw_order;
@@ -32,6 +32,7 @@ pub use vertex_color::{VertexColor, color0_drawn, uses_color0};
 pub mod morphs;
 pub mod parallel;
 pub mod pass;
+mod pass_options;
 pub mod pbr;
 pub mod print;
 pub mod provenance;
@@ -40,8 +41,8 @@ pub mod shader;
 pub mod skeleton;
 pub mod skin;
 pub use asset::{
-    Asset, AssetField, PartitionByAsset, PlaceAssets, Role, SelectAssets, partition_by_asset, place_assets,
-    select_assets,
+    Asset, AssetField, PARTITION_BY_ASSET, PLACE_ASSETS, PartitionByAsset, PlaceAssets, Role, SELECT_ASSETS,
+    SelectAssets,
 };
 pub use clip::{
     AdditiveReference, Channel, Clip, ClipBinding, ClipTarget, Extrapolation, Interpolation, Property,
@@ -56,7 +57,7 @@ pub use rig::{
 pub use skeleton::{Joint, JointId, Rest, Skeleton};
 pub use skin::{Binding, BindingId, Deformation, Influences, Skin, Slot, WeightRule};
 mod priority;
-pub use priority::{DropOptional, Priority, drop_optional};
+pub use priority::{DROP_OPTIONAL, DropOptional, Priority};
 pub mod state;
 pub mod summary;
 pub mod texformat;
@@ -72,21 +73,74 @@ pub use world::{
     NameClash, Opaque, OpaqueData, Resource, VertexBlend, World, remap_list,
 };
 
-/// Register core's generic passes by name (`select-lod`, `drop-optional`, `place-spawn`, `place-assets`, `select-assets`,
-/// `partition-by-asset`, `resolve-state`, `select-outfit`, `translate-world`), as every crate registers its own: a program builds its
-/// registry from these.
+/// Register core's generic passes by their declarations, as every crate registers its own: a program builds its
+/// registry from these. What each takes: [`pass::PassRegistry::describe`], or the declaration ([`SELECT_LOD`],
+/// [`DROP_OPTIONAL`], [`PLACE_SPAWN`], [`PLACE_ASSETS`], [`SELECT_ASSETS`], [`PARTITION_BY_ASSET`],
+/// [`state::RESOLVE_STATE`], [`state::SELECT_OUTFIT`], [`translate::TRANSLATE_WORLD`]).
 pub fn register(reg: &mut pass::PassRegistry) {
-    reg.register("select-lod", select_lod);
-    reg.register("drop-optional", drop_optional);
-    reg.register("place-spawn", place_spawn);
-    reg.register("place-assets", place_assets);
-    reg.register_requiring("select-assets", select_assets, &[("keys", "example")]);
-    reg.register("partition-by-asset", partition_by_asset);
-    reg.register("resolve-state", state::resolve_state);
-    reg.register_requiring(
-        "select-outfit",
-        state::select_outfit,
-        &[("choices", "axis:value")],
-    );
-    reg.register_requiring("translate-world", translate::translate_world, &[("by", "0,0,0")]);
+    for spec in [
+        &SELECT_LOD,
+        &DROP_OPTIONAL,
+        &PLACE_SPAWN,
+        &PLACE_ASSETS,
+        &SELECT_ASSETS,
+        &PARTITION_BY_ASSET,
+        &state::RESOLVE_STATE,
+        &state::SELECT_OUTFIT,
+        &translate::TRANSLATE_WORLD,
+    ] {
+        reg.add(spec);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Core registers exactly these passes by their declarations: the ones with a required option or group are made
+    /// only with their options, every one says what it takes, and a pipeline without a required option is refused in
+    /// the declaration's words.
+    #[test]
+    fn the_core_passes_register_by_name() {
+        let mut reg = crate::pass::PassRegistry::new();
+        super::register(&mut reg);
+        let names = [
+            "drop-optional",
+            "partition-by-asset",
+            "place-assets",
+            "place-spawn",
+            "resolve-state",
+            "select-assets",
+            "select-lod",
+            "select-outfit",
+            "translate-world",
+        ];
+        assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        let requiring = ["select-assets", "select-outfit", "translate-world"];
+        for name in names {
+            assert_eq!(reg.requires_options(name), requiring.contains(&name), "{name}");
+            let described = reg
+                .describe(name)
+                .unwrap_or_else(|| panic!("{name} has no declaration"));
+            assert!(described.starts_with(name), "{described}");
+            let bare = reg.make(name, &crate::pass::Options::new());
+            assert_eq!(bare.is_err(), requiring.contains(&name), "{name}");
+        }
+        let refused = |name: &str| {
+            reg.make(name, &crate::pass::Options::new())
+                .err()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            refused("translate-world"),
+            "pass translate-world: by is required: X,Y,Z, metres in core's frame: the offset is the program's choice"
+        );
+        assert!(
+            refused("select-assets").starts_with("pass select-assets: one of keys or names is required (")
+        );
+        assert!(
+            reg.describe("select-assets")
+                .unwrap()
+                .starts_with("select-assets{(keys|names)*}\n")
+        );
+    }
 }

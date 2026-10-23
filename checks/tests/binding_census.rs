@@ -350,7 +350,7 @@ const LEGACY_GEOMETRY: &str = "drop-fromsoft-far, fromsoft-apply-rigid-skinning,
 fn fromsoft_run(world: &mut World) -> RunReport {
     let mut registry = PassRegistry::new();
     primase_fromsoft::sekiro::passes::register(&mut registry);
-    registry.register("select-lod", primase_core::select_lod);
+    registry.add(&primase_core::SELECT_LOD);
     let m = PassManager::new(registry).with_conservation(primase_core::ledger::Conservation::Enforce);
     let mut report = RunReport::default();
     let text = format!("{LEGACY_GEOMETRY}, resolve-fromsoft-shaders{{unbound-textures=preview}}");

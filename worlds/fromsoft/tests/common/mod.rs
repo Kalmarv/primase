@@ -22,7 +22,7 @@ pub const LEGACY_COLLISION: &str = "lower-fromsoft-collision{hit-filters=8+27,wa
 pub fn manager() -> PassManager {
     let mut registry = PassRegistry::new();
     primase_fromsoft::sekiro::passes::register(&mut registry);
-    registry.register("select-lod", primase_core::select_lod);
+    registry.add(&primase_core::SELECT_LOD);
     PassManager::new(registry)
 }
 

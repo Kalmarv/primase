@@ -270,8 +270,8 @@ mod tests {
     fn the_gta_passes_in_conversion_order_are_not_refused() {
         use primase_core::pass::{Error, PassManager, PassRegistry, RunReport};
         let mut r = PassRegistry::new();
-        r.register("select-lod", primase_core::select_lod);
-        r.register("resolve-state", primase_core::state::resolve_state);
+        r.add(&primase_core::SELECT_LOD);
+        r.add(&primase_core::state::RESOLVE_STATE);
         r.register("normalize-normals", |_| {
             Ok(Box::new(primase_image::NormalizeNormals))
         });

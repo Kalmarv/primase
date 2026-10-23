@@ -37,6 +37,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub use crate::ledger::{Conservation, Gap, Measure};
+pub use crate::pass_options::{Choice, Given, OptionSpec, PassSpec};
 use crate::world::{Component, Entity, Resource, World};
 
 /// A pass's text options (`name{key=value,...}`), sorted by key.
@@ -237,13 +238,22 @@ pub trait Pass: Send + Sync {
 /// Makes a pass from its options; unknown or bad options are an error.
 pub type PassFactory = fn(&Options) -> Result<Box<dyn Pass>, String>;
 
+/// How the registry makes a pass: a factory that checks its own options, or a declaration ([`PassSpec`]) whose options
+/// the registry checks first.
+#[derive(Clone, Copy)]
+enum Maker {
+    Factory(PassFactory),
+    Spec(&'static PassSpec),
+}
+
 /// The passes a manager knows, by name.
 #[derive(Default)]
 pub struct PassRegistry {
-    /// Each pass's factory and the options it is made with when nobody gives any (none, or the example of a pass
-    /// whose options have no defaults: [`PassRegistry::register_requiring`]).
-    factories: BTreeMap<&'static str, (PassFactory, Options)>,
-    /// The passes registered with required options ([`PassRegistry::register_requiring`]).
+    /// Each pass's maker and the options it is made with when nobody gives any (none, or the example of a pass whose
+    /// options have no defaults: [`PassRegistry::register_requiring`], [`PassSpec::example`]).
+    factories: BTreeMap<&'static str, (Maker, Options)>,
+    /// The passes registered with required options ([`PassRegistry::register_requiring`], or a declaration with a
+    /// required option or group: [`PassSpec::requires_options`]).
     requiring: BTreeSet<&'static str>,
 }
 
@@ -274,25 +284,64 @@ impl PassRegistry {
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect();
         let made = factory(&options).unwrap_or_else(|e| panic!("pass {name} with options {options:?}: {e}"));
-        assert_eq!(
-            made.name(),
-            name,
-            "factory registered as {name} makes {}",
-            made.name()
-        );
-        for n in made.legalizes() {
-            assert!(
-                made.requires().contains(n) || made.removes().contains(n) || made.modifies().contains(n),
-                "pass {name} legalizes {n}, which it neither requires, removes nor modifies"
-            );
-        }
+        declarations_hold(name, &*made);
         if !options.is_empty() {
             self.requiring.insert(name);
         }
         assert!(
-            self.factories.insert(name, (factory, options)).is_none(),
+            self.factories
+                .insert(name, (Maker::Factory(factory), options))
+                .is_none(),
             "pass {name} registered twice"
         );
+    }
+
+    /// Register a pass by its declaration: the registry checks every pipeline's options against it before the pass is
+    /// made ([`PassSpec::check`]), makes it from the examples to read its declarations ([`PassSpec::example`]; a pass
+    /// with a required option is never run so, as [`PassRegistry::register_requiring`]), and says what it takes
+    /// ([`PassRegistry::describe`]). Panics, as [`PassRegistry::register`] does, when the name is taken or the pass's
+    /// declarations disagree, and when the declaration is wrong ([`PassSpec`]: a key twice, a group of one, a choice
+    /// with no values), the pass is not made from its examples, or what it prints back
+    /// ([`Pass::options`]) holds an undeclared key, leaves out a required option or a group, or does not make a pass
+    /// that prints the same.
+    pub fn add(&mut self, spec: &'static PassSpec) {
+        let name = spec.name;
+        spec.validate();
+        let example = spec.example();
+        let made = spec
+            .instance(&example)
+            .unwrap_or_else(|e| panic!("pass {name} with its example options {example:?}: {e}"));
+        declarations_hold(name, &*made);
+        let printed = made.options();
+        if let Err(e) = spec.check(&printed) {
+            panic!("pass {name} prints {printed:?}, which its declaration refuses: {e}");
+        }
+        let again = spec
+            .instance(&printed)
+            .unwrap_or_else(|e| panic!("pass {name}: what it prints, {printed:?}, does not make it: {e}"));
+        assert_eq!(
+            again.options(),
+            printed,
+            "pass {name}: made from what it prints, it prints otherwise"
+        );
+        if spec.requires_options() {
+            self.requiring.insert(name);
+        }
+        assert!(
+            self.factories
+                .insert(name, (Maker::Spec(spec), example))
+                .is_none(),
+            "pass {name} registered twice"
+        );
+    }
+
+    /// What pass `name` takes, from its declaration ([`PassSpec::describe`]); `None` for a pass registered with a
+    /// factory, whose options only it knows.
+    pub fn describe(&self, name: &str) -> Option<String> {
+        match self.factories.get(name)?.0 {
+            Maker::Spec(spec) => Some(spec.describe()),
+            Maker::Factory(_) => None,
+        }
     }
 
     /// Whether `name` was registered with required options: made with its example only to read its declarations,
@@ -316,11 +365,15 @@ impl PassRegistry {
     }
 
     pub fn make(&self, name: &str, options: &Options) -> Result<Box<dyn Pass>, Error> {
-        let (f, _) = self
+        let (maker, _) = self
             .factories
             .get(name)
             .ok_or_else(|| Error::UnknownPass(name.to_owned()))?;
-        f(options).map_err(|message| Error::Options {
+        match maker {
+            Maker::Factory(f) => f(options),
+            Maker::Spec(spec) => spec.instance(options),
+        }
+        .map_err(|message| Error::Options {
             pass: name.to_owned(),
             message,
         })
@@ -345,6 +398,23 @@ impl PassRegistry {
             .iter()
             .map(|(name, (_, example))| self.make(name, options.get(*name).unwrap_or(example)))
             .collect()
+    }
+}
+
+/// The registration checks of a pass made under `name`: it is that pass, and it legalizes only names it requires,
+/// removes or modifies.
+fn declarations_hold(name: &str, made: &dyn Pass) {
+    assert_eq!(
+        made.name(),
+        name,
+        "factory registered as {name} makes {}",
+        made.name()
+    );
+    for n in made.legalizes() {
+        assert!(
+            made.requires().contains(n) || made.removes().contains(n) || made.modifies().contains(n),
+            "pass {name} legalizes {n}, which it neither requires, removes nor modifies"
+        );
     }
 }
 
