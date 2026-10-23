@@ -86,7 +86,7 @@ impl LowerStuntboostMaterials {
 fn texture(t: &Option<StuntboostTextureRef>) -> Option<TextureRef> {
     let t = t.as_ref()?;
     Some(TextureRef {
-        texcoord: u8::try_from(t.texcoord).unwrap_or(0),
+        texcoord: t.texcoord,
         wrap: t.wrap,
         filters: t.filters,
         ..TextureRef::new(t.texture)

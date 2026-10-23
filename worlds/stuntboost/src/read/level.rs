@@ -65,6 +65,17 @@ pub struct LevelReport {
 /// A glTF texture: its image's entity and its sampler's filters and wrap.
 type GltfTexture = (Entity, Filters, [Wrap; 2]);
 
+/// A texture info's texture coordinate set: absent is set 0 (glTF's default); present it is an integer a `u8` holds.
+fn texcoord_set(info: &Value) -> std::result::Result<u8, String> {
+    match info.get("texCoord") {
+        None => Ok(0),
+        Some(v) => v
+            .as_u64()
+            .and_then(|n| u8::try_from(n).ok())
+            .ok_or_else(|| format!("texCoord {v} is not a texture coordinate set")),
+    }
+}
+
 pub(super) fn format(file: &str, detail: impl std::fmt::Display) -> Error {
     Error::Format(format!("{file}: {detail}"))
 }
@@ -412,16 +423,25 @@ fn read_part(
         };
         texture_refs.push(entity.map(|e| (e, filters, wrap)));
     }
-    let texture_ref = |info: Option<&Value>| -> Option<StuntboostTextureRef> {
-        let info = info?;
-        let (texture, filters, wrap) = (*texture_refs.get(info.get("index")?.as_u64()? as usize)?)?;
-        Some(StuntboostTextureRef {
-            texture,
-            filters,
-            wrap,
-            texcoord: info.get("texCoord").and_then(Value::as_u64).unwrap_or(0) as u32,
-        })
-    };
+    let texture_ref =
+        |info: Option<&Value>, material: &str, slot: &str| -> Result<Option<StuntboostTextureRef>> {
+            let Some(info) = info else { return Ok(None) };
+            let texcoord = texcoord_set(info)
+                .map_err(|detail| format(file, format!("material {material:?} {slot}: {detail}")))?;
+            let bound = info
+                .get("index")
+                .and_then(Value::as_u64)
+                .and_then(|i| texture_refs.get(i as usize));
+            Ok(bound
+                .copied()
+                .flatten()
+                .map(|(texture, filters, wrap)| StuntboostTextureRef {
+                    texture,
+                    filters,
+                    wrap,
+                    texcoord,
+                }))
+        };
 
     // materials
     let mut materials = Vec::new();
@@ -461,11 +481,17 @@ fn read_part(
             .and_then(|s| s.get("specularColorTexture"));
         let name = m.get("name").and_then(Value::as_str).unwrap_or("").to_owned();
         let shading = primase_glb::material_shading(&m)?;
+        let base_color_texture = texture_ref(
+            pbr.and_then(|p| p.get("baseColorTexture")),
+            &name,
+            "baseColorTexture",
+        )?;
+        let direct_light = texture_ref(specular, &name, "specularColorTexture")?;
         let material = StuntboostMaterial {
             shading,
             name: name.clone(),
             base_color: [bc[0], bc[1], bc[2], bc[3]],
-            base_color_texture: texture_ref(pbr.and_then(|p| p.get("baseColorTexture"))),
+            base_color_texture,
             metallic: pbr
                 .and_then(|p| p.get("metallicFactor"))
                 .and_then(Value::as_f64)
@@ -486,7 +512,7 @@ fn read_part(
         };
         let e = w.spawn();
         w.insert(e, material);
-        if let Some(texture) = texture_ref(specular) {
+        if let Some(texture) = direct_light {
             w.insert(e, StuntboostDirectLight { texture });
         }
         w.insert(e, Name(name));
@@ -821,12 +847,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A level of one part as the game ships it: the sidecar, the glTF (a floor mesh placed under a parent moved 2
-    /// units up, a spawn, a material naming an image the install does not ship) and its buffer; read into parts,
-    /// nodes with world transforms and parsed names, a prototype, a material and the missing image counted.
-    #[test]
-    fn a_shipped_level_reads_into_parts_nodes_and_prototypes() {
-        let dir = std::env::temp_dir().join(format!("primase-stuntboost-{}", std::process::id()));
+    /// A level `T` of one part as the game ships it, in a fresh directory named for `test`: the sidecar, the glTF (a
+    /// floor mesh placed under a parent moved 2 units up, a spawn, `material` naming an image the install does not
+    /// ship) and its buffer.
+    fn ship_level(test: &str, material: serde_json::Value) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("primase-stuntboost-{test}-{}", std::process::id()));
         let export = dir.join("Content").join("Models").join("Export");
         std::fs::create_dir_all(&export).unwrap();
         let string_reader = "Microsoft.Xna.Framework.Content.StringReader, MonoGame.Framework";
@@ -855,7 +880,7 @@ mod tests {
                 {"name": "=Spawn(start)", "translation": [100.0, 0.0, 0.0]}
             ],
             "meshes": [{"name": "floor", "primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "material": 0}]}],
-            "materials": [{"name": "C_Default_Wood", "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
+            "materials": [material],
             "textures": [{"source": 0}],
             "images": [{"uri": "../Resources/T.export/Bake0_Denoised.png"}],
             "accessors": [
@@ -882,7 +907,16 @@ mod tests {
         let byte_array =
             "Microsoft.Xna.Framework.Content.ArrayReader`1[[System.Byte, System.Private.CoreLib]]";
         std::fs::write(export.join("Level_T_0.bin.xnb"), xnb(byte_array, &array)).unwrap();
+        dir
+    }
 
+    /// A level of one part as the game ships it: the sidecar, the glTF (a floor mesh placed under a parent moved 2
+    /// units up, a spawn, a material naming an image the install does not ship) and its buffer; read into parts,
+    /// nodes with world transforms and parsed names, a prototype, a material and the missing image counted.
+    #[test]
+    fn a_shipped_level_reads_into_parts_nodes_and_prototypes() {
+        let material = serde_json::json!({"name": "C_Default_Wood", "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}});
+        let dir = ship_level("shipped", material);
         let mut w = World::new();
         // a unit as a centimetre
         let r = read_level(&dir, "T", 0.01, &mut w).unwrap();
@@ -919,5 +953,45 @@ mod tests {
         assert_eq!(m.name, "C_Default_Wood");
         assert!(m.base_color_texture.is_none(), "the image is not shipped");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A texture info's `texCoord` is absent (set 0) or an integer a `u8` holds; anything else is an error naming the
+    /// material and the slot, not set 0.
+    #[test]
+    fn a_malformed_texcoord_is_an_error_naming_the_material_and_slot() {
+        let set = |info: serde_json::Value| texcoord_set(&info);
+        assert_eq!(set(serde_json::json!({"index": 0})), Ok(0));
+        assert_eq!(set(serde_json::json!({"index": 0, "texCoord": 1})), Ok(1));
+        assert_eq!(set(serde_json::json!({"texCoord": 255})), Ok(255));
+        for bad in [
+            serde_json::json!(256),
+            serde_json::json!(4294967296u64),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("1"),
+            serde_json::json!(null),
+        ] {
+            assert!(set(serde_json::json!({"texCoord": bad})).is_err(), "{bad}");
+        }
+        for (material, slot) in [
+            (
+                serde_json::json!({"name": "M_Bad", "pbrMetallicRoughness": {"baseColorTexture": {"index": 0, "texCoord": 256}}}),
+                "baseColorTexture",
+            ),
+            (
+                serde_json::json!({"name": "M_Bad", "extensions": {"KHR_materials_specular": {"specularColorTexture": {"index": 0, "texCoord": 1.5}}}}),
+                "specularColorTexture",
+            ),
+        ] {
+            let dir = ship_level(slot, material);
+            let error = read_level(&dir, "T", 0.01, &mut World::new())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("M_Bad") && error.contains(slot) && error.contains("texCoord"),
+                "{error}"
+            );
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 }

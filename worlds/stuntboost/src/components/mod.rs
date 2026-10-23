@@ -167,7 +167,7 @@ pub struct StuntboostTextureRef {
     pub texture: Entity,
     pub filters: Filters,
     pub wrap: [Wrap; 2],
-    pub texcoord: u32,
+    pub texcoord: u8,
 }
 
 /// A glTF material as stored: its name, the PBR factors and textures, whether it is double-sided and its alpha mode.
