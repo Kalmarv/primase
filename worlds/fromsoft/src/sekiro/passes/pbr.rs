@@ -222,9 +222,16 @@ pub fn required_textures(world: &World) -> Result<BTreeSet<String>> {
         if m.skip.is_some() || m.layered.is_some() {
             continue;
         }
-        let base = coverage::base(world, e, m).ok().flatten();
-        let preview = preview_with(m, base.as_ref().map(|b| b.slot.binding.as_str()));
-        names.extend(preview.albedo);
+        let base = coverage::base(world, e, m);
+        let key = base
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .map(|b| b.slot.binding.as_str());
+        let preview = preview_with(m, key);
+        if base_unread(&base, &preview).is_none() {
+            names.extend(preview.albedo);
+        }
         names.extend(preview.normal);
         if simple(&m.shader)
             && let Some(b) = binding(m, "MetallicMap")
@@ -233,6 +240,26 @@ pub fn required_textures(world: &World) -> Result<BTreeSet<String>> {
         }
     }
     Ok(names)
+}
+
+/// A material binary drawn without a base texture, and why: its program names no base albedo, or names one the source
+/// does not hold. The preview's slot would be a guess (an overlay's stencil, a detail map), so none is bound; the
+/// count names the program. `None`: the base is the read one, or the material is no material binary's.
+fn base_unread(
+    base: &std::result::Result<Option<coverage::Base>, coverage::Unread>,
+    preview: &Preview,
+) -> Option<String> {
+    match base {
+        Err(u) => Some(format!(
+            "material binary whose program's base albedo could not be read, drawn without a base texture: {}",
+            u.program
+        )),
+        Ok(Some(b)) if preview.albedo_binding.as_deref() != Some(b.slot.binding.as_str()) => Some(format!(
+            "material binary whose base albedo is not held, drawn without a base texture: {}",
+            b.program
+        )),
+        _ => None,
+    }
 }
 
 fn read(payloads: &BTreeMap<String, impl AsRef<[u8]>>, name: &str) -> Result<Texture> {
@@ -440,6 +467,7 @@ fn lower_materials(
                 .and_then(Option::as_ref)
                 .map(|b| b.slot.binding.as_str()),
         );
+        let unread = base_unread(&base, &pv);
         let previewed = unbaked;
         if previewed {
             previews.insert(e);
@@ -500,20 +528,27 @@ fn lower_materials(
                         }
                     } else {
                         log.approximate(
-                            "alpha-tested material whose coverage texture is not held: preview slot",
+                            "alpha-tested material whose coverage texture is not held: the base albedo's alpha tested",
                             1,
                         );
                     }
                 }
                 Ok(None) => {}
                 Err(_) => log.approximate(
-                    "alpha-tested material whose programs' alpha test could not be read: preview slot",
+                    "alpha-tested material whose programs' alpha test could not be read: the base albedo's alpha tested",
                     1,
                 ),
             }
         }
         if !baked {
             if p.base_color_texture.is_none()
+                && let Some(why) = &unread
+            {
+                if fresh {
+                    p.base_color = fallback_base_color(&m);
+                }
+                log.approximate(why, 1);
+            } else if p.base_color_texture.is_none()
                 && let Some(name) = &pv.albedo
             {
                 let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, false)?);
@@ -534,14 +569,8 @@ fn lower_materials(
                             );
                         }
                     }
-                    Ok(Some(_)) => {
-                        log.approximate("material binary whose base albedo is not held: preview slot", 1)
-                    }
-                    Ok(None) => {}
-                    Err(_) => log.approximate(
-                        "material binary whose program's base albedo could not be read: preview slot",
-                        1,
-                    ),
+                    // the other cases are `unread`, drawn without a base texture above
+                    _ => {}
                 }
                 p.base_color_texture = Some(r);
             } else if fresh && pv.albedo.is_none() && p.base_color_texture.is_none() {

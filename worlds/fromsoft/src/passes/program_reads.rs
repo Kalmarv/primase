@@ -105,6 +105,13 @@ struct Sample {
     v: Option<Interpolant>,
 }
 
+/// The two layers of a blend `a + (b - a) * t` as sums of signed terms, and its weight ([`Analysis::lerp`]).
+struct Layers {
+    under: Vec<(ValueId, bool)>,
+    over: Vec<(ValueId, bool)>,
+    weight: ValueId,
+}
+
 /// One step of what a value is made of ([`Analysis::step`]).
 enum Step {
     /// A texture component: the sample's register and lane.
@@ -409,55 +416,115 @@ impl<'a> Analysis<'a> {
         }
     }
 
-    /// The layers of a blend `a + (b - a) * t`: `a`, `b` and the weight `t`.
-    fn lerp(&self, id: ValueId) -> Option<(ValueId, ValueId, ValueId)> {
-        let Some(Op::Binary {
-            op: BinaryOp::Add,
-            lhs,
-            rhs,
-        }) = self.op(id)
-        else {
-            return None;
-        };
-        for (a, blend) in [(*lhs, *rhs), (*rhs, *lhs)] {
+    /// A sum's terms with their signs (`true` added, `false` subtracted): the operands of its additions and
+    /// subtractions, and theirs where they are sums. A value that is no sum is its one term.
+    fn terms(&self, id: ValueId, positive: bool, out: &mut Vec<(ValueId, bool)>) {
+        match self.op(id) {
+            Some(Op::Binary {
+                op: BinaryOp::Add,
+                lhs,
+                rhs,
+            }) => {
+                self.terms(*lhs, positive, out);
+                self.terms(*rhs, positive, out);
+            }
+            Some(Op::Binary {
+                op: BinaryOp::Sub,
+                lhs,
+                rhs,
+            }) => {
+                self.terms(*lhs, positive, out);
+                self.terms(*rhs, !positive, out);
+            }
+            _ => out.push((id, positive)),
+        }
+    }
+
+    /// The layers of a blend `a + (b - a) * t` written as a sum of terms, however the compiler arranged it (a blend of
+    /// blends is folded: `C[DetailBlend][S2]_2` writes `((P - L) + (c * t8 - P) * t8.a) * w + L`): one term is a product
+    /// one of whose factors, `D`, is a sum holding the negation of each of the other terms (`a`); `b` is the rest of `D`
+    /// (`D + a`). Returns `a`'s terms, `b`'s and the weight `t`.
+    fn lerp(&self, terms: &[(ValueId, bool)]) -> Option<Layers> {
+        for (i, &(product, positive)) in terms.iter().enumerate() {
             let Some(Op::Binary {
                 op: BinaryOp::Mul,
-                lhs: m0,
-                rhs: m1,
-            }) = self.op(blend)
+                lhs,
+                rhs,
+            }) = self.op(product)
             else {
                 continue;
             };
-            for (difference, t) in [(*m0, *m1), (*m1, *m0)] {
-                if let Some(Op::Binary {
-                    op: BinaryOp::Sub,
-                    lhs: b,
-                    rhs: from,
-                }) = self.op(difference)
-                    && *from == a
-                {
-                    return Some((a, *b, t));
+            let under: Vec<(ValueId, bool)> = terms
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, t)| *t)
+                .collect();
+            if under.is_empty() {
+                continue;
+            }
+            for (difference, weight) in [(*lhs, *rhs), (*rhs, *lhs)] {
+                let mut over = Vec::new();
+                self.terms(difference, positive, &mut over);
+                // each term of `a` cancels one negated term of `D`
+                let mut matched = true;
+                for &(term, sign) in &under {
+                    match over.iter().position(|&(o, s)| o == term && s != sign) {
+                        Some(k) => {
+                            over.remove(k);
+                        }
+                        None => {
+                            matched = false;
+                            break;
+                        }
+                    }
+                }
+                if matched && !over.is_empty() {
+                    return Some(Layers { under, over, weight });
                 }
             }
         }
         None
     }
 
+    /// The material slots a sum of terms is made of.
+    fn slots_of(&self, terms: &[(ValueId, bool)], slots: &BTreeMap<u32, &Texture>) -> BTreeSet<u32> {
+        terms.iter().flat_map(|(t, _)| self.slots_in(*t, slots)).collect()
+    }
+
+    /// The base of a sum of terms: of one added term, that term's ([`Self::base`]); of a blend, the blend's.
+    fn terms_base(&self, terms: &[(ValueId, bool)], slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
+        match terms {
+            [(one, true)] => self.base(*one, slots),
+            _ => self.layers_base(terms, slots),
+        }
+    }
+
+    /// The base of a value that is a blend of two layers ([`Self::lerp`]).
+    fn blend_base(&self, id: ValueId, slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
+        let mut terms = Vec::new();
+        self.terms(id, true, &mut terms);
+        if terms.len() < 2 {
+            return None;
+        }
+        self.layers_base(&terms, slots)
+    }
+
     /// The base of a blend of two layers `a + (b - a) * t`: where the weight is made of `b`'s own slots and `b` of none
     /// of `a`'s, `b` is an overlay drawn by its own alpha (`C[DetailBlend][S2]`'s `Texture2D_8`) and the base is `a`'s;
     /// otherwise, of the two layers' bases, the one in the shader's main texture set ([`main_set`]: `C[DetailBlend]_14`
     /// blends `Texture2D_10`, a detail albedo, over its `Texture2D_1 * Texture2D_7` layer by the normal map's alpha).
-    fn blend_base(&self, id: ValueId, slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
-        let (a, b, t) = self.lerp(id)?;
-        let (under, over, weight) = (
-            self.slots_in(a, slots),
-            self.slots_in(b, slots),
-            self.slots_in(t, slots),
+    fn layers_base(&self, terms: &[(ValueId, bool)], slots: &BTreeMap<u32, &Texture>) -> Option<u32> {
+        let Layers { under, over, weight } = self.lerp(terms)?;
+        let (a, b, t) = (
+            self.slots_of(&under, slots),
+            self.slots_of(&over, slots),
+            self.slots_in(weight, slots),
         );
-        if !weight.is_empty() && weight.is_subset(&over) && over.is_disjoint(&under) {
-            return self.base(a, slots);
+        if !t.is_empty() && t.is_subset(&b) && b.is_disjoint(&a) {
+            return self.terms_base(&under, slots);
         }
-        let bases: BTreeSet<u32> = [self.base(a, slots), self.base(b, slots)]
+        let bases: BTreeSet<u32> = [self.terms_base(&under, slots), self.terms_base(&over, slots)]
             .into_iter()
             .flatten()
             .filter(|r| main_set(*r, slots))

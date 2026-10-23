@@ -33,6 +33,16 @@ pub(super) struct Base {
     pub slot: Sampled,
     /// Other material slots reach the albedo too (detail maps, masks): the preview leaves them out.
     pub blended: bool,
+    /// The pixel program it was read from.
+    pub program: String,
+}
+
+/// Why a material binary's programs could not say what they read: the pixel program the material draws with (the
+/// bundle's name where the material names none) and the reason.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Unread {
+    pub program: String,
+    pub why: String,
 }
 
 /// What a material's G-buffer programs read.
@@ -48,7 +58,7 @@ struct Programs {
 /// static switch and alpha reference select it) and the shader's G-buffer vertex program read, with the vertex
 /// program's UV inputs and the pixel program's name. `Ok(None)`: not a material binary's, or the material has no bundle;
 /// `Err`: the programs could not be read (counted by the caller).
-fn read(world: &World, entity: Entity, material: &Material) -> Result<Option<Programs>, String> {
+fn read(world: &World, entity: Entity, material: &Material) -> Result<Option<Programs>, Unread> {
     if !matches!(material.definition, Some(Definition::Matbin(_))) {
         return Ok(None);
     }
@@ -61,20 +71,24 @@ fn read(world: &World, entity: Entity, material: &Material) -> Result<Option<Pro
     let Some(bundle) = world.get::<ShaderBundle>(bundle) else {
         return Ok(None);
     };
-    let Some(meta) = &bundle.parameters else {
-        return Err(format!("{}: no metaparam read", bundle.name));
-    };
     let name = view.gbuffer_program();
+    let unread = |why: String| Unread {
+        program: name.clone(),
+        why,
+    };
+    let Some(meta) = &bundle.parameters else {
+        return Err(unread(format!("{}: no metaparam read", bundle.name)));
+    };
     let pixel = bundle
         .program(&name)
-        .ok_or_else(|| format!("{name}: not in the bundle"))?;
+        .ok_or_else(|| unread("not in the bundle".into()))?;
     let vertex = bundle
         .program(&format!("{}_Gbuf.vpo", bundle.name))
         .or_else(|| bundle.program(&format!("{}_Gbuf_Skin.vpo", bundle.name)))
         .filter(|p| p.stage == ShaderStage::Vertex)
-        .ok_or_else(|| format!("{}: no G-buffer vertex program", bundle.name))?;
-    let reads = program_reads::read(&pixel.code, &vertex.code, meta).map_err(|e| format!("{name}: {e}"))?;
-    let uv_inputs = program_reads::vertex_uv_inputs(&vertex.code)?;
+        .ok_or_else(|| unread(format!("{}: no G-buffer vertex program", bundle.name)))?;
+    let reads = program_reads::read(&pixel.code, &vertex.code, meta).map_err(unread)?;
+    let uv_inputs = program_reads::vertex_uv_inputs(&vertex.code).map_err(unread)?;
     Ok(Some(Programs {
         name,
         reads,
@@ -83,19 +97,23 @@ fn read(world: &World, entity: Entity, material: &Material) -> Result<Option<Pro
 }
 
 /// The UV set a slot is sampled with: its `u` and `v` made of one vertex input's pair.
-fn sampled(name: &str, slot: &SlotRead, uv_inputs: &[(u32, u8)], what: &str) -> Result<Sampled, String> {
+fn sampled(name: &str, slot: &SlotRead, uv_inputs: &[(u32, u8)], what: &str) -> Result<Sampled, Unread> {
+    let unread = |why: String| Unread {
+        program: name.to_owned(),
+        why,
+    };
     let (Some(u), Some(v)) = (&slot.u, &slot.v) else {
-        return Err(format!(
-            "{name}: the {what} slot's coordinates are not made of one vertex input"
-        ));
+        return Err(unread(format!(
+            "the {what} slot's coordinates are not made of one vertex input"
+        )));
     };
     if (u.name.as_str(), u.index, u.component / 2) != (v.name.as_str(), v.index, v.component / 2) {
-        return Err(format!(
-            "{name}: the {what} slot's u and v come from different UV pairs"
-        ));
+        return Err(unread(format!(
+            "the {what} slot's u and v come from different UV pairs"
+        )));
     }
     let texcoord = program_reads::uv_set(uv_inputs, u)
-        .ok_or_else(|| format!("{name}: the {what} slot is not sampled with a UV set"))?;
+        .ok_or_else(|| unread(format!("the {what} slot is not sampled with a UV set")))?;
     Ok(Sampled {
         binding: slot.texture.clone(),
         texcoord,
@@ -108,7 +126,7 @@ pub(super) fn coverage(
     world: &World,
     entity: Entity,
     material: &Material,
-) -> Result<Option<Coverage>, String> {
+) -> Result<Option<Coverage>, Unread> {
     let Some(Programs {
         name,
         reads,
@@ -121,10 +139,10 @@ pub(super) fn coverage(
         return Ok(None);
     }
     let [slot] = &reads.coverage[..] else {
-        return Err(format!(
-            "{name}: {} slots reach the alpha test, not one",
-            reads.coverage.len()
-        ));
+        return Err(Unread {
+            why: format!("{} slots reach the alpha test, not one", reads.coverage.len()),
+            program: name,
+        });
     };
     Ok(Some(Coverage {
         slot: sampled(&name, slot, &uv_inputs, "coverage")?,
@@ -135,7 +153,7 @@ pub(super) fn coverage(
 
 /// What a material's G-buffer program says its albedo is made of: the base slot and how it is sampled, or why it could
 /// not say (`Err`, counted by the caller). `Ok(None)`: not a material binary's.
-pub(super) fn base(world: &World, entity: Entity, material: &Material) -> Result<Option<Base>, String> {
+pub(super) fn base(world: &World, entity: Entity, material: &Material) -> Result<Option<Base>, Unread> {
     let Some(Programs {
         name,
         reads,
@@ -144,12 +162,15 @@ pub(super) fn base(world: &World, entity: Entity, material: &Material) -> Result
     else {
         return Ok(None);
     };
-    let slot = reads
-        .base
-        .as_ref()
-        .ok_or_else(|| format!("{name}: no one slot is the albedo's base"))?;
+    let Some(slot) = reads.base.as_ref() else {
+        return Err(Unread {
+            program: name,
+            why: "no one slot is the albedo's base".into(),
+        });
+    };
     Ok(Some(Base {
         slot: sampled(&name, slot, &uv_inputs, "base")?,
         blended: reads.colour.len() > 1,
+        program: name,
     }))
 }
