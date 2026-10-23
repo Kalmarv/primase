@@ -10,6 +10,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod bundle;
+pub mod components;
 pub mod db;
 pub mod depot;
 pub mod ebx;
@@ -19,7 +20,7 @@ mod read;
 pub mod texture;
 pub mod toc;
 
-pub use read::folder;
+pub use read::{entry, folder, listing};
 
 /// Resource type of a MeshSet.
 pub const MESHSET: u32 = 0x49B1_56D4;
@@ -44,9 +45,23 @@ pub enum Error {
     Cas(#[from] primase_compress::Error),
     #[error("{0}")]
     Missing(String),
+    /// An entry of a kind or form no reader here reads, named.
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Lowercase hexadecimal of `bytes`, in the order given.
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}
 
 /// A format error: what was being read, where, and what broke.
 pub fn bad(what: &'static str, offset: usize, detail: impl Into<String>) -> Error {
