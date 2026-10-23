@@ -19,6 +19,8 @@ pub enum InputRole {
     Stream(Semantic),
     /// The value the previous stage wrote under the same label.
     Previous,
+    /// The pipeline supplies it (the varying's system value says which).
+    System,
     /// Nothing known: the source's own meaning is not resolved, and why.
     Unknown { why: String },
 }

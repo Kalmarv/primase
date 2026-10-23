@@ -407,3 +407,80 @@ fn output_bindings(interface: &Interface) -> Vec<OutputBinding> {
     }
     out
 }
+
+/// Bind a layered shader's vertex program (`<shader>_Gbuf.vpo`: the G-buffer pass of an unskinned, uncloth draw) from its
+/// interface (`primase_dxbc::reflection`) as `core.shader_binding` states it:
+/// - its inputs as streams of the lowered geometry: `POSITION0`, `NORMAL0`, `TANGENT0` and the packed `TEXCOORD0` as
+///   the position, normal, tangent and first UV set, `TEXCOORD1` to `TEXCOORD6` as the FLVER Byte4C members the
+///   layered programs read as layer weights, tint and detail (the geometry lowering's `Color(n)` streams); the pipeline's
+///   instance index as itself; anything else `Unknown` with the reason;
+/// - the engine's scene and object constants it names as roles (a named table of the shader family's own constant names
+///   to the vocabulary: the view, projection and their inverses, the camera position and the screen size, and the
+///   object matrices); constants the table does not name are not bound;
+/// - no output roles: its outputs reach the pixel stage by label.
+pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBinding> {
+    use primase_core::Semantic;
+    let inputs = interface
+        .inputs
+        .iter()
+        .map(|v| {
+            let role = match (
+                v.label.name.to_ascii_uppercase().as_str(),
+                v.label.index,
+                v.system,
+            ) {
+                (_, _, Some(SystemValue::InstanceIndex)) => InputRole::System,
+                ("POSITION", 0, _) => InputRole::Stream(Semantic::Position),
+                ("NORMAL", 0, _) => InputRole::Stream(Semantic::Normal),
+                ("TANGENT", 0, _) => InputRole::Stream(Semantic::Tangent),
+                ("TEXCOORD", 0, _) => InputRole::Stream(Semantic::TexCoord(0)),
+                ("TEXCOORD", n @ 1..=6, _) => InputRole::Stream(Semantic::Color(n as u8)),
+                _ => InputRole::Unknown {
+                    why: "no stream of the lowered geometry carries it".into(),
+                },
+            };
+            InputBinding {
+                label: v.label.clone(),
+                role,
+            }
+        })
+        .collect();
+    let mut constants = Vec::new();
+    for resource in &interface.resources {
+        let ResourceKind::ConstantBuffer { layout } = &resource.kind else {
+            continue;
+        };
+        for c in &layout.constants {
+            let role = match c.name.as_str() {
+                "FC_MatrixView" => ConstantRole::View(ViewParameter::View),
+                "FC_MatrixProj" => ConstantRole::View(ViewParameter::Projection),
+                "VC_MatrixViewProj" => ConstantRole::View(ViewParameter::ViewProjection),
+                "FC_MatrixInvView" => ConstantRole::View(ViewParameter::InverseView),
+                "FC_MatrixInvProj" => ConstantRole::View(ViewParameter::InverseProjection),
+                "FC_MatrixInvViewProj" => ConstantRole::View(ViewParameter::InverseViewProjection),
+                "SC_CameraPos" => ConstantRole::View(ViewParameter::CameraPosition),
+                "FC_ScreenSize" => ConstantRole::View(ViewParameter::ViewportSize),
+                "VC_aObjMatrix" => ConstantRole::Object(ObjectParameter::World),
+                _ => continue,
+            };
+            let size =
+                c.ty.size()
+                    .ok_or_else(|| invalid("layer binding", 0, format!("{} overflows", c.name)))?;
+            constants.push(ConstantBinding {
+                resource: resource.id,
+                offset: c.offset,
+                size,
+                name: Some(c.name.clone()),
+                role,
+            });
+        }
+    }
+    Ok(StageBinding {
+        stage: Stage::Vertex,
+        shader: entity,
+        inputs,
+        constants,
+        textures: Vec::new(),
+        outputs: Vec::new(),
+    })
+}

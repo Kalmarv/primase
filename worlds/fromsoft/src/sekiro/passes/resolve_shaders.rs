@@ -1,8 +1,8 @@
 //! `resolve-fromsoft-shaders`: the layered materials' G-buffer programs as `core.shader` entities and each material's
 //! `core.shader_binding`.
-use crate::layer_bake::resolve::{Unbound, resolve};
+use crate::layer_bake::resolve::{Unbound, resolve, resolve_vertex};
 use crate::materials::Material;
-use crate::sekiro::source::{Payloads, ShaderPrograms, TexturePayloads};
+use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{Shader, ShaderBinding, ShaderFormat};
 use primase_core::{ColorSpace, Component, Entity, Name, TexRole, Texture, World};
@@ -121,7 +121,9 @@ fn run(
     let mut shaders: BTreeMap<String, (Entity, primase_dxbc::Shader)> = BTreeMap::new();
     // the textures spawned, by stem and colour space
     let mut textures: BTreeMap<(String, bool), Entity> = BTreeMap::new();
-    let (mut bound, mut without_program) = (0u64, 0u64);
+    // the vertex programs, each its own entity, by file name
+    let mut vertex_shaders: BTreeMap<String, Entity> = BTreeMap::new();
+    let (mut bound, mut without_program, mut without_vertex) = (0u64, 0u64, 0u64);
     let mut policies: BTreeMap<String, u64> = BTreeMap::new();
     for (material_entity, material) in layered {
         let name = material.program_name().map_err(|e| e.to_string())?;
@@ -169,10 +171,38 @@ fn run(
         for (policy, count) in resolution.policies {
             *policies.entry(policy).or_default() += count;
         }
+        // the vertex program of an unskinned, uncloth G-buffer draw, from the shader's bundle
+        let vertex = world
+            .get::<MaterialShader>(material_entity)
+            .and_then(|m| world.get::<ShaderBundle>(m.0))
+            .and_then(|b| b.program(&format!("{}_Gbuf.vpo", b.name)))
+            .map(|p| (p.name.clone(), p.code.clone()));
+        let mut stages = Vec::new();
+        match vertex {
+            Some((vertex_name, code)) => {
+                let interface = primase_dxbc::reflection(&code).map_err(|e| format!("{vertex_name}: {e}"))?;
+                let entity = *vertex_shaders.entry(vertex_name.clone()).or_insert_with(|| {
+                    let entity = world.spawn();
+                    world.insert(entity, Name(vertex_name.clone()));
+                    world.insert(
+                        entity,
+                        Shader {
+                            format: ShaderFormat::Dxbc,
+                            bytecode: code.to_vec(),
+                            interface: interface.clone(),
+                        },
+                    );
+                    entity
+                });
+                stages.push(resolve_vertex(&interface, entity).map_err(|e| format!("{vertex_name}: {e}"))?);
+            }
+            None => without_vertex += 1,
+        }
+        stages.push(resolution.stage);
         world.insert(
             material_entity,
             ShaderBinding {
-                stages: vec![resolution.stage],
+                stages,
                 state: Default::default(),
             },
         );
@@ -185,7 +215,13 @@ fn run(
             without_program,
         );
     }
-    log.count("shader programs", shaders.len() as u64);
+    if without_vertex > 0 {
+        log.count(
+            "layered materials without a vertex program (no bundle, or no <shader>_Gbuf.vpo in it)",
+            without_vertex,
+        );
+    }
+    log.count("shader programs", (shaders.len() + vertex_shaders.len()) as u64);
     log.count("bound texture files", textures.len() as u64);
     for (policy, count) in policies {
         log.approximate(&policy, count);

@@ -11,7 +11,9 @@ use primase_core::{ColorSpace, Entity, Name, TexFormat, TexRole, Texture, World}
 use primase_fromsoft::layer_bake::resolve::{Unbound, resolve};
 use primase_fromsoft::materials::{Binding, LayeredMaterial, Material};
 use primase_fromsoft::mtd::{self, MaterialDefinition, Parameter, Value};
-use primase_fromsoft::sekiro::source::{ShaderPrograms, TexturePayloads};
+use primase_fromsoft::sekiro::source::{
+    MaterialShader, ShaderBundle, ShaderProgram, ShaderPrograms, ShaderStage, TexturePayloads,
+};
 use primase_image::sampling::Address;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -20,6 +22,7 @@ mod common;
 /// The addressing the albedo's FLVER record stores: repeat along u, mirrored repeat along v.
 const GRASS_ADDRESS: [Option<AddressMode>; 2] = [Some(AddressMode::Repeat), Some(AddressMode::Mirror)];
 const PROGRAM: &[u8] = include_bytes!("fixtures/layered.dxbc");
+const VERTEX_PROGRAM: &[u8] = include_bytes!("fixtures/layered_vs.dxbc");
 
 fn texture_kind(kind: &str) -> mtd::Texture {
     mtd::Texture {
@@ -327,6 +330,21 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
         "grass_a".to_owned(),
         dds(4, 4),
     )])));
+    // the first material's shader has a bundle holding the G-buffer vertex program
+    let bundle = world.spawn();
+    world.insert(
+        bundle,
+        ShaderBundle {
+            name: "M[Multiple]".into(),
+            programs: vec![ShaderProgram {
+                name: "M[Multiple]_Gbuf.vpo".into(),
+                stage: ShaderStage::Vertex,
+                code: Arc::from(VERTEX_PROGRAM),
+            }],
+            parameters: None,
+        },
+    );
+    world.insert(a, MaterialShader(bundle));
     let run = common::run(&mut world, "resolve-fromsoft-shaders{unbound-textures=preview}").unwrap();
     let log = &run.steps[0].log;
     assert_eq!(log.counts["layered materials bound"], 2);
@@ -336,7 +354,11 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
     );
     assert_eq!(
         (log.counts["shader programs"], log.counts["bound texture files"]),
-        (1, 1)
+        (2, 1)
+    );
+    assert_eq!(
+        log.counts["layered materials without a vertex program (no bundle, or no <shader>_Gbuf.vpo in it)"],
+        1
     );
     assert_eq!(
         log.approximations["preview default for missing NormalMap binding"],
@@ -346,8 +368,17 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
     // one shader entity: the bytecode as stored, its format and interface; one texture: the DDS as stored in the
     // slot's colour space
     let shaders: Vec<_> = world.iter::<Shader>().collect();
-    assert_eq!(shaders.len(), 1);
-    let (shader, program) = shaders[0];
+    assert_eq!(shaders.len(), 2);
+    let (shader, program) = *shaders
+        .iter()
+        .find(|(_, s)| s.interface.stage == Stage::Pixel)
+        .unwrap();
+    let (vertex, vertex_program) = *shaders
+        .iter()
+        .find(|(_, s)| s.interface.stage == Stage::Vertex)
+        .unwrap();
+    assert_eq!(&vertex_program.bytecode[..], VERTEX_PROGRAM);
+    assert_eq!(world.get::<Name>(vertex).unwrap().0, "M[Multiple]_Gbuf.vpo");
     assert_eq!(
         (program.format, &program.bytecode[..]),
         (ShaderFormat::Dxbc, PROGRAM)
@@ -363,10 +394,19 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
         (4, TexFormat::Rgba8Unorm, ColorSpace::Srgb, TexRole::Color)
     );
 
+    // the material with a bundle is bound in both stages, the other in the pixel stage alone
+    let both = world.get::<ShaderBinding>(a).unwrap();
+    assert_eq!(
+        both.stages
+            .iter()
+            .map(|s| (s.stage, s.shader))
+            .collect::<Vec<_>>(),
+        [(Stage::Vertex, vertex), (Stage::Pixel, shader)]
+    );
+    assert_eq!(world.get::<ShaderBinding>(b).unwrap().stages.len(), 1);
     for e in [a, b] {
         let binding = world.get::<ShaderBinding>(e).unwrap();
-        assert_eq!(binding.stages.len(), 1);
-        assert_eq!(binding.stages[0].shader, shader);
+        assert_eq!(binding.stage(Stage::Pixel).unwrap().shader, shader);
         let mut refs = Vec::new();
         primase_core::Component::references(binding, &mut refs);
         assert!(refs.contains(&shader) && refs.contains(&texture));
@@ -375,7 +415,8 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
     // the second material's own parameter value, not the first's
     let words = |e: Entity| {
         let b = world.get::<ShaderBinding>(e).unwrap();
-        b.stages[0]
+        b.stage(Stage::Pixel)
+            .unwrap()
             .constants
             .iter()
             .find(|c| c.name.as_deref() == Some("M_Multiple__snp_scale"))
@@ -451,4 +492,76 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
     }
     let bake = prepared.bake(2, [1.; 2], Inputs::default()).unwrap();
     assert_eq!(bake.gloss, Some(vec![2.5; 4]));
+}
+
+/// The vertex program's binding: its inputs as streams of the lowered geometry, the engine's constants it names as
+/// roles with the offsets of the program's own layout, and no output roles.
+#[test]
+fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
+    use ConstantRole::{Object, View};
+    use primase_core::Semantic;
+    let interface = primase_dxbc::reflection(VERTEX_PROGRAM).unwrap();
+    assert_eq!(interface.stage, Stage::Vertex);
+    let mut world = World::default();
+    let program = world.spawn();
+    let stage = primase_fromsoft::layer_bake::resolve::resolve_vertex(&interface, program).unwrap();
+    assert_eq!((stage.stage, stage.shader), (Stage::Vertex, program));
+    let inputs: Vec<_> = stage
+        .inputs
+        .iter()
+        .map(|i| (format!("{}{}", i.label.name, i.label.index), i.role.clone()))
+        .collect();
+    let stream = |name: &str, semantic| (name.to_owned(), InputRole::Stream(semantic));
+    assert_eq!(
+        inputs,
+        [
+            stream("POSITION0", Semantic::Position),
+            stream("NORMAL0", Semantic::Normal),
+            stream("TANGENT0", Semantic::Tangent),
+            (
+                "COLOR1".to_owned(),
+                InputRole::Unknown {
+                    why: "no stream of the lowered geometry carries it".into()
+                }
+            ),
+            stream("TEXCOORD0", Semantic::TexCoord(0)),
+            stream("TEXCOORD1", Semantic::Color(1)),
+            stream("TEXCOORD2", Semantic::Color(2)),
+            stream("TEXCOORD3", Semantic::Color(3)),
+            stream("TEXCOORD4", Semantic::Color(4)),
+            stream("TEXCOORD5", Semantic::Color(5)),
+            stream("TEXCOORD6", Semantic::Color(6)),
+            ("SV_InstanceID0".to_owned(), InputRole::System),
+        ]
+    );
+    // constants of the scene and object buffers the table names; the instance data and the shadow colour it does not
+    let named = |name: &str| {
+        let c = stage
+            .constants
+            .iter()
+            .find(|c| c.name.as_deref() == Some(name))
+            .unwrap();
+        let buffer = interface.resource(c.resource).unwrap().provenance.name.clone();
+        (buffer, c.offset, c.size, c.role.clone())
+    };
+    let scene = |offset, size, role| ("cbSceneParam".to_owned(), offset, size, role);
+    assert_eq!(
+        named("SC_CameraPos"),
+        scene(0, 16, View(ViewParameter::CameraPosition))
+    );
+    assert_eq!(
+        named("FC_ScreenSize"),
+        scene(16, 16, View(ViewParameter::ViewportSize))
+    );
+    assert_eq!(named("FC_MatrixView"), scene(32, 64, View(ViewParameter::View)));
+    assert_eq!(
+        named("VC_MatrixViewProj"),
+        scene(96, 64, View(ViewParameter::ViewProjection))
+    );
+    assert_eq!(
+        named("VC_aObjMatrix"),
+        ("cbObjMatrix".to_owned(), 0, 192, Object(ObjectParameter::World))
+    );
+    assert_eq!(stage.constants.len(), 5);
+    assert!(stage.outputs.is_empty() && stage.textures.is_empty());
 }
