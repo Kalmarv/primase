@@ -64,7 +64,8 @@ pub const BAKE_NONRIGID: PassSpec = PassSpec {
     name: "bake-nonrigid",
     options: &[OptionSpec::optional_choice::<Mirrors>(
         "mirrors",
-        "mirrored transforms baked into geometry like sheared ones (the default), or kept for a writer that carries them",
+        "mirrored transforms baked into geometry like sheared ones, or kept for a writer that carries them",
+        "bake",
     )],
     make: |g| Ok(Box::new(BakeNonrigid::from_given(g))),
 };

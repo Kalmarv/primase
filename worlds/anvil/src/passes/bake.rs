@@ -619,7 +619,8 @@ pub const BAKE_ANVIL_MATERIAL: PassSpec = PassSpec {
         OptionSpec::optional(
             "skin-tone",
             "200,160,130",
-            "R,G,B bytes: the skin colour; without it MAD_CHR_Skin Materials are not baked",
+            "R,G,B bytes: the skin colour",
+            "MAD_CHR_Skin Materials are not baked",
         ),
     ],
     make: |g| Ok(Box::new(BakeAnvilMaterial::from_given(g)?)),

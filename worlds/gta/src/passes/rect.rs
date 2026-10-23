@@ -68,25 +68,29 @@ impl GroundRect {
 pub const X0: OptionSpec = OptionSpec::optional(
     "x0",
     "0",
-    "metres east: the rectangle's west edge, with y0, x1 and y1 (without the four: the whole map)",
+    "metres east: the rectangle's west edge, with y0, x1 and y1",
+    "the whole map, unless all four are given",
 );
 /// The rectangle's south edge, `y0`.
 pub const Y0: OptionSpec = OptionSpec::optional(
     "y0",
     "0",
-    "metres north: the rectangle's south edge, with x0, x1 and y1 (without the four: the whole map)",
+    "metres north: the rectangle's south edge, with x0, x1 and y1",
+    "the whole map, unless all four are given",
 );
 /// The rectangle's east edge, `x1`.
 pub const X1: OptionSpec = OptionSpec::optional(
     "x1",
     "1",
-    "metres east: the rectangle's east edge, with x0, y0 and y1 (without the four: the whole map)",
+    "metres east: the rectangle's east edge, with x0, y0 and y1",
+    "the whole map, unless all four are given",
 );
 /// The rectangle's north edge, `y1`.
 pub const Y1: OptionSpec = OptionSpec::optional(
     "y1",
     "1",
-    "metres north: the rectangle's north edge, with x0, y0 and x1 (without the four: the whole map)",
+    "metres north: the rectangle's north edge, with x0, y0 and x1",
+    "the whole map, unless all four are given",
 );
 /// [`X0`], required: a pass whose region is the caller's choice.
 pub const X0_REQUIRED: OptionSpec = OptionSpec::required("x0", "0", "metres east: the region's west edge");

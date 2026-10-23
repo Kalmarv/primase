@@ -94,7 +94,8 @@ pub const LOWER_TEXTURES_RGBA8: PassSpec = PassSpec {
     name: "lower-textures-rgba8",
     options: &[OptionSpec::optional_choice::<SignedData>(
         "signed-data",
-        "a signed texture that is not a normal map: refused, or remapped as a normal map is; without it, refuse",
+        "a signed texture that is not a normal map: refused, or remapped as a normal map is",
+        "refuse",
     )],
     make: |g| Ok(Box::new(LowerTexturesRgba8::from_given(g))),
 };

@@ -1586,8 +1586,8 @@ pub const LOWER_ANVIL_TERRAIN: PassSpec = PassSpec {
         OptionSpec::optional(
             "surface",
             "rr-diagnostic-unknown",
-            "the surface where no CollisionMaterial names one (or of every square, collision=one); required with \
-             collision",
+            "the surface where no CollisionMaterial names one (or of every square, collision=one)",
+            "required with collision other than none",
         ),
         OptionSpec::choice::<GroundKind>(
             "ground",
@@ -1597,33 +1597,40 @@ pub const LOWER_ANVIL_TERRAIN: PassSpec = PassSpec {
             "splat-k",
             "0.5",
             "the near colour blend's k, above 0 (ground=splat or layers)",
+            "required with ground=splat or layers, not taken with tile",
         ),
         OptionSpec::optional(
             "splat-px",
             "1",
             "source units a baked pixel, above 0 (ground=splat, or layers with layers-base=bake)",
+            "required with ground=splat or layers-base=bake, not taken otherwise",
         ),
         OptionSpec::optional(
             "splat-uv",
             "1",
             "the detail uv: a factor above 0, or over-tile-size (ground=splat or layers)",
+            "required with ground=splat or layers, not taken with tile",
         ),
         OptionSpec::optional_choice::<SplatNoise>(
             "splat-noise",
             "the noise decoded as stored or as sRGB (ground=splat or layers)",
+            "required with ground=splat or layers, not taken with tile",
         ),
         OptionSpec::optional_choice::<SplatOcclusion>(
             "splat-occlusion",
             "the colour times 0.5 + block 8, or not (ground=splat or layers)",
+            "required with ground=splat or layers, not taken with tile",
         ),
         OptionSpec::optional_choice::<LayersBaseKind>(
             "layers-base",
             "what the details lie over: the far colour tiles, or the near colour baked (ground=layers)",
+            "required with ground=layers, not taken otherwise",
         ),
         OptionSpec::optional(
             "layers-detail",
             "1",
             "each detail layer's weight times this, in (0, 1] (ground=layers)",
+            "required with ground=layers, not taken otherwise",
         ),
         OptionSpec::choice::<Pieces>(
             "pieces",
@@ -1642,11 +1649,13 @@ pub const LOWER_ANVIL_TERRAIN: PassSpec = PassSpec {
             "steep-threshold",
             "45",
             "degrees from the horizontal, 0 < T < 90: what is steep (steep=chart)",
+            "required with steep=chart, not taken with none",
         ),
         OptionSpec::optional(
             "steep-max-atlas",
             "4096",
             "pixels a side, 16 to 65536: an atlas's greatest side (steep=chart)",
+            "required with steep=chart, not taken with none",
         ),
     ],
     make: |g| Ok(Box::new(LowerAnvilTerrain::from_given(g)?)),

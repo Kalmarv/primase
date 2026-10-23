@@ -278,27 +278,25 @@ pub const CAP_TEXTURES: PassSpec = PassSpec {
     name: "cap-textures",
     options: &[
         OptionSpec::required("max", "256", "pixels: the largest side a texture keeps"),
-        OptionSpec::optional(
-            "color",
-            "512",
-            "pixels: the cap of colour textures; without it, max",
-        ),
-        OptionSpec::optional("normal", "512", "pixels: the cap of normal maps; without it, max"),
-        OptionSpec::optional("mask", "512", "pixels: the cap of mask textures; without it, max"),
+        OptionSpec::optional("color", "512", "pixels: the cap of colour textures", "max"),
+        OptionSpec::optional("normal", "512", "pixels: the cap of normal maps", "max"),
+        OptionSpec::optional("mask", "512", "pixels: the cap of mask textures", "max"),
         OptionSpec::optional(
             "names",
             "sky:1024",
             "NAME:N entries, `;` between: the cap of the textures so named (lower case), before their role's",
+            "no texture capped by its name",
         ),
         OptionSpec::optional_choice::<Beyond>(
             "beyond",
             "a texture whose smallest stored level is over its cap: that level box-filtered down to the cap, or \
-             kept; without it, filter",
+             kept",
+            "filter",
         ),
         OptionSpec::optional_choice::<NormalDownscale>(
             "normals",
-            "how a normal map is filtered down: each vector renormalized, or the stored values boxed; without it, \
-             renormalize",
+            "how a normal map is filtered down: each vector renormalized, or the stored values boxed",
+            "renormalize",
         ),
     ],
     make: |g| Ok(Box::new(CapTextures::from_given(g)?)),

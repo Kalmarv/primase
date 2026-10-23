@@ -122,12 +122,14 @@ pub const RETARGET_SKIN: PassSpec = PassSpec {
         OptionSpec::optional(
             "ik",
             "none",
-            "with fit=lengths, required: none, or the limbs solved by IK as root:mid:end joint names, `;` between",
+            "with fit=lengths: none, or the limbs solved by IK as root:mid:end joint names, `;` between",
+            "required with fit=lengths, not taken with fit=positions",
         ),
         OptionSpec::optional(
             "scale",
             "1",
-            "with fit=lengths, above 0: the target's size over the source's; without it 1",
+            "with fit=lengths, above 0: the target's size over the source's",
+            "1 with fit=lengths; not taken with fit=positions",
         ),
         OptionSpec::choice::<UnmappedJoints>(
             "unmapped",

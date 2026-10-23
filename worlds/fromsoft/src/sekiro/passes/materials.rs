@@ -42,7 +42,8 @@ pub const LOWER_FROMSOFT_MATERIALS: PassSpec = PassSpec {
     options: &[OptionSpec::optional_choice::<super::pbr::Layers>(
         "layers",
         "a layered material no pass baked left as source data for a later bake, or lowered from its main layer's \
-         preview textures; without it, such a material is refused",
+         preview textures",
+        "a layered material no pass baked is refused",
     )],
     make: |g| Ok(Box::new(LowerFromSoftMaterials::new(g.optional_choice("layers")))),
 };

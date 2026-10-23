@@ -203,6 +203,7 @@ pub const LOWER_ANVIL_DECALS: PassSpec = PassSpec {
             "terrain-steps",
             "255",
             "1 to 65535: the blended factors quantised to 1 / steps (terrain-family=blend)",
+            "required with terrain-family=blend, not taken with out",
         ),
     ],
     make: |g| Ok(Box::new(LowerAnvilDecals::from_given(g)?)),

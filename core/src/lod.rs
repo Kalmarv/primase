@@ -147,7 +147,8 @@ pub const SELECT_LOD: PassSpec = PassSpec {
     options: &[OptionSpec::optional(
         "form",
         "finest",
-        "finest, default or a level 0-255: the form each prototype keeps (LodChoice); without it, default",
+        "finest, default or a level 0-255: the form each prototype keeps (LodChoice)",
+        "default: the form the source names, else the finest",
     )],
     make: select_lod,
 };

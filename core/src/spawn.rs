@@ -95,19 +95,22 @@ pub const PLACE_SPAWN: PassSpec = PassSpec {
         OptionSpec::optional(
             "at",
             "centre",
-            "centre, the median of the placements' ground positions; also what no at, east or north means",
+            "centre, the median of the placements' ground positions",
+            "east and north where given, else centre",
         ),
         OptionSpec::optional(
             "east",
             "0",
             "metres, with north: the spawn's ground position, in place of at",
+            "the position at gives",
         ),
         OptionSpec::optional(
             "north",
             "0",
             "metres, with east: the spawn's ground position, in place of at",
+            "the position at gives",
         ),
-        OptionSpec::optional("yaw", "90", "degrees: the spawn's heading; without it, none"),
+        OptionSpec::optional("yaw", "90", "degrees: the spawn's heading", "no heading"),
     ],
     make: |g| Ok(Box::new(PlaceSpawn::from_given(g)?)),
 };

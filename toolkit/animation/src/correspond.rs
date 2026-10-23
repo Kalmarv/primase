@@ -64,7 +64,8 @@ pub const CORRESPOND_SKELETONS: PassSpec = PassSpec {
         OptionSpec::optional(
             "rotation-tolerance",
             "0.01",
-            "radians, above 0: how far rest rotations may differ for a pair; without it, the tolerance",
+            "radians, above 0: how far rest rotations may differ for a pair",
+            "tolerance's value",
         ),
         OptionSpec::choice::<Parents>(
             "parents",

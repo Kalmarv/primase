@@ -61,7 +61,8 @@ pub const DROP_OPTIONAL: PassSpec = PassSpec {
     options: &[OptionSpec::optional(
         "max",
         "3",
-        "a priority 0-255: placements above it are dropped; without it 255, nothing is dropped",
+        "a priority 0-255: placements above it are dropped",
+        "255: nothing is dropped",
     )],
     make: drop_optional,
 };

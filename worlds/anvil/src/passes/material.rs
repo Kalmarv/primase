@@ -370,6 +370,7 @@ pub const LOWER_ANVIL_MATERIAL: PassSpec = PassSpec {
             "alpha-cutoff",
             "0.5",
             "within 0 and 1: the mask's cutoff (alpha=mask)",
+            "required with alpha=mask, unused with opaque or prelude",
         ),
         UNSET,
         SHADER_UV,

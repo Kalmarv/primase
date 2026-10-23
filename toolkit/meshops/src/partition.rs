@@ -369,25 +369,24 @@ pub const PARTITION_GRID: PassSpec = PassSpec {
     name: "partition-grid",
     options: &[
         OptionSpec::required("cell", "100", "metres: a cell's side, above 0"),
-        OptionSpec::optional(
-            "origin",
-            "0;0",
-            "metres: the cells' origin, east;north (default 0;0)",
-        ),
+        OptionSpec::optional("origin", "0;0", "metres: the cells' origin, east;north", "0;0"),
         OptionSpec::optional(
             "halo",
             "5",
-            "metres, not negative: other cells' content within it is a part's context (default 0)",
+            "metres, not negative: other cells' content within it is a part's context",
+            "0: no context from other cells",
         ),
         OptionSpec::optional(
             "region",
             "0;0;100;100",
-            "metres: west;south;east;north, only what stands in it kept (default everything)",
+            "metres: west;south;east;north, only what stands in it kept",
+            "everything kept",
         ),
         OptionSpec::optional(
             "tile",
             "100",
             "metres: cells aligned to a writer's tiles of this side, content filed by its tile",
+            "cells not aligned to tiles, content filed by its position",
         ),
     ],
     make: |g| Ok(Box::new(PartitionGrid::from_given(g)?)),

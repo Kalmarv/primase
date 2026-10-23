@@ -207,12 +207,14 @@ pub const GTA_SELECT_REGION: PassSpec = PassSpec {
         OptionSpec::optional(
             "max_priority",
             "3",
-            "0-3: the least important priority level kept (default every level)",
+            "0-3: the least important priority level kept",
+            "3: every priority level kept",
         ),
         OptionSpec::optional(
             "min_size",
             "0",
-            "metres, finite and not negative: placements of a smaller bounding radius dropped (default 0)",
+            "metres, finite and not negative: placements of a smaller bounding radius dropped",
+            "0: no placement dropped by its size",
         ),
     ],
     make: |g| Ok(Box::new(SelectRegion::from_given(g)?)),

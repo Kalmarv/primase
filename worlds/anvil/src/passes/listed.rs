@@ -104,6 +104,7 @@ pub const SELECT_ANVIL_LISTED: PassSpec = PassSpec {
             "rect",
             "-64,-64,64,64",
             "x0,y0,x1,y1 on the game's ground axes (metres), finite, x0 < x1 and y0 < y1 (coarse=overlap)",
+            "required with coarse=overlap, not taken with keep or drop",
         ),
     ],
     make: |g| Ok(Box::new(SelectAnvilListed::from_given(g)?)),

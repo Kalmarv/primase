@@ -500,14 +500,21 @@ pub const RESOLVE_STATE: PassSpec = PassSpec {
         OptionSpec::optional(
             "assign",
             "time:noon",
-            "key:value items, `;` between: each axis's value; an axis neither assigned nor kept resolves by its default",
+            "key:value items, `;` between: each axis's value",
+            "no axis assigned by its key: each takes its class's assignment, else is kept, else resolves by its default",
         ),
         OptionSpec::optional(
             "assign-class",
             "event:off",
             "class:value items, `;` between: the value of every axis of that class nothing else gives one",
+            "no class assigned",
         ),
-        OptionSpec::optional("keep", "time", "axis keys, `;` between: the axes left unresolved"),
+        OptionSpec::optional(
+            "keep",
+            "time",
+            "axis keys, `;` between: the axes left unresolved",
+            "every axis resolved",
+        ),
     ],
     make: resolve_state,
 };

@@ -80,7 +80,8 @@ pub const LOWER_FROMSOFT_LIGHTS: PassSpec = PassSpec {
         OptionSpec::optional(
             "min-range",
             "0",
-            "metres, at least 0: the least range a light gets (default 0)",
+            "metres, at least 0: the least range a light gets",
+            "0: no least range",
         ),
     ],
     make: |g| Ok(Box::new(LowerFromSoftLights::from_given(g)?)),

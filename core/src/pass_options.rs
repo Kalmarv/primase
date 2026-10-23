@@ -36,18 +36,21 @@ enum Need {
     Required,
     /// Exactly one of the options sharing this group name must be given.
     OneOf(&'static str),
-    /// It may: its absence has the meaning its doc states (never a choice made for the caller: CONTRIBUTING "Drift").
+    /// It may: its absence has the meaning its declaration states ([`OptionSpec::absent`]; never a choice made for the
+    /// caller: CONTRIBUTING "Drift").
     Optional,
 }
 
 /// One option a pass takes: its key, whether it is needed, an example value and what it means. Built only by its
-/// constructors, so a required option always has its example.
+/// constructors, so a required option always has its example and an optional one always says what its absence means.
 #[derive(Clone, Copy, Debug)]
 pub struct OptionSpec {
     key: &'static str,
     need: Need,
     example: &'static str,
     doc: &'static str,
+    /// What no value means, for an optional option (empty for the others).
+    absent: &'static str,
     /// The texts of a [`Choice`]'s values, for a choice option.
     values: Option<fn() -> Vec<&'static str>>,
 }
@@ -64,18 +67,26 @@ impl OptionSpec {
             need: Need::Required,
             example,
             doc,
+            absent: "",
             values: None,
         }
     }
 
-    /// An option a pipeline may give; `doc` says what its absence means. Its example only documents it: optional
-    /// options may exclude each other (`at=centre` or `east` and `north`), so the registry makes no pass from them.
-    pub const fn optional(key: &'static str, example: &'static str, doc: &'static str) -> Self {
+    /// An option a pipeline may give; `absent` says what no value means (the registry refuses an empty one). Its
+    /// example only documents it: optional options may exclude each other (`at=centre` or `east` and `north`), so the
+    /// registry makes no pass from them.
+    pub const fn optional(
+        key: &'static str,
+        example: &'static str,
+        doc: &'static str,
+        absent: &'static str,
+    ) -> Self {
         OptionSpec {
             key,
             need: Need::Optional,
             example,
             doc,
+            absent,
             values: None,
         }
     }
@@ -92,6 +103,7 @@ impl OptionSpec {
             need: Need::OneOf(group),
             example,
             doc,
+            absent: "",
             values: None,
         }
     }
@@ -103,17 +115,23 @@ impl OptionSpec {
             need: Need::Required,
             example: T::VALUES[0].0,
             doc,
+            absent: "",
             values: Some(texts::<T>),
         }
     }
 
-    /// An optional option whose value, when given, is one of `T`'s; `doc` says what its absence means.
-    pub const fn optional_choice<T: Choice>(key: &'static str, doc: &'static str) -> Self {
+    /// An optional option whose value, when given, is one of `T`'s; `absent` says what no value means.
+    pub const fn optional_choice<T: Choice>(
+        key: &'static str,
+        doc: &'static str,
+        absent: &'static str,
+    ) -> Self {
         OptionSpec {
             key,
             need: Need::Optional,
             example: T::VALUES[0].0,
             doc,
+            absent,
             values: Some(texts::<T>),
         }
     }
@@ -128,6 +146,11 @@ impl OptionSpec {
 
     pub fn doc(&self) -> &'static str {
         self.doc
+    }
+
+    /// What no value means, for an optional option.
+    pub fn absent(&self) -> Option<&'static str> {
+        (self.need == Need::Optional).then_some(self.absent)
     }
 
     /// Whether a pipeline must give it (alone, or as one of its group).
@@ -264,7 +287,7 @@ impl PassSpec {
     }
 
     /// Its text form and what each option means: `translate-world{by*}` (`*` a required option, `|` between the
-    /// options of a group), then a line per option.
+    /// options of a group), then a line per option, an optional one's ending with what its absence means.
     pub fn describe(&self) -> String {
         let mut out = String::from(self.name);
         if !self.options.is_empty() {
@@ -306,18 +329,27 @@ impl PassSpec {
                 "\n  {} ({need}{values}; e.g. {}): {}",
                 o.key, o.example, o.doc
             ));
+            if let Some(absent) = o.absent() {
+                out.push_str(&format!("; without it: {absent}"));
+            }
         }
         out
     }
 
     /// Panics where the declaration itself is wrong: a key twice, a group of one, a choice with no values or a value
-    /// twice.
+    /// twice, an optional option that says nothing of its absence.
     pub(crate) fn validate(&self) {
         let mut keys = BTreeSet::new();
         for o in self.options {
             assert!(
                 keys.insert(o.key),
                 "pass {}: option {} declared twice",
+                self.name,
+                o.key
+            );
+            assert!(
+                o.absent().is_none_or(|a| !a.trim().is_empty()),
+                "pass {}: optional option {} says nothing of what its absence means",
                 self.name,
                 o.key
             );
@@ -443,8 +475,12 @@ mod tests {
             OptionSpec::choice::<Detail>("detail", "which collision is written"),
             OptionSpec::one_of("by", "factor", "2", "the enlargement"),
             OptionSpec::one_of("by", "size", "64", "the larger side to reach"),
-            OptionSpec::optional("halo", "1", "metres around each cell; none without it"),
-            OptionSpec::optional_choice::<Detail>("fallback", "no fallback without it"),
+            OptionSpec::optional("halo", "1", "metres around each cell", "no halo"),
+            OptionSpec::optional_choice::<Detail>(
+                "fallback",
+                "the detail used where one is missing",
+                "no fallback",
+            ),
         ],
         make: |g| {
             // every way of reading what the declaration let through
@@ -559,6 +595,10 @@ mod tests {
             text.contains("\n  size (one of by; e.g. 64): the larger side to reach"),
             "{text}"
         );
+        assert!(
+            text.contains("\n  halo (optional; e.g. 1): metres around each cell; without it: no halo"),
+            "{text}"
+        );
     }
 
     /// Reading an option the declaration does not have is a bug in the pass.
@@ -567,13 +607,26 @@ mod tests {
     fn reading_an_undeclared_option_panics() {
         const BAD: PassSpec = PassSpec {
             name: "bad",
-            options: &[OptionSpec::optional("one", "1", "nothing")],
+            options: &[OptionSpec::optional("one", "1", "nothing", "nothing either")],
             make: |g| {
                 let _ = g.optional("other");
                 Ok(Box::new(Toy(Options::new())))
             },
         };
         let _ = BAD.instance(&Options::new());
+    }
+
+    /// An optional option that says nothing of its absence is a wrong declaration: what no value means is part of
+    /// declaring it, as a required option's example is.
+    #[test]
+    #[should_panic(expected = "pass silent: optional option halo says nothing of what its absence means")]
+    fn an_optional_option_states_its_absence() {
+        const SILENT: PassSpec = PassSpec {
+            name: "silent",
+            options: &[OptionSpec::optional("halo", "1", "metres around each cell", " ")],
+            make: |_| Ok(Box::new(Toy(Options::new()))),
+        };
+        SILENT.validate();
     }
 
     /// A group of one is a wrong declaration.

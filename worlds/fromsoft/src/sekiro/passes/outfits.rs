@@ -266,7 +266,8 @@ pub const SELECT_FROMSOFT_OUTFIT: PassSpec = PassSpec {
         OptionSpec::optional(
             "drop-masks",
             "14+9",
-            "mask numbers, `+` between: masks hidden whatever the row says; without it, the row decides every mask",
+            "mask numbers, `+` between: masks hidden whatever the row says",
+            "the row decides every mask",
         ),
     ],
     make: |g| Ok(Box::new(SelectFromSoftOutfit::from_given(g)?)),
