@@ -15,6 +15,7 @@ use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{
     Asset, Clip, ClipTarget, JointMap, Name, Property, Rest, Role, RootSpace, Skeleton, World,
 };
+use primase_fromsoft::Install;
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::sekiro::{CharacterOptions, read_character_with, read_parts_with};
 use primase_havok::spline::{Absent, Fallback};
@@ -39,7 +40,7 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
     };
     let mut w = World::new();
     let report = read_character_with(
-        &install,
+        &Install::sekiro(&install),
         "c1010",
         &decoder,
         CharacterOptions {
@@ -215,7 +216,7 @@ fn the_players_animations_come_from_the_binders_its_markers_name() -> Result<()>
     };
     let mut w = World::new();
     let (reports, animations) = read_parts_with(
-        &install,
+        &Install::sekiro(&install),
         &["am_m_9120_l", "bd_m_9120_l", "hd_m_9120_l", "lg_m_9120_l"],
         &decoder,
         &CharacterOptions {

@@ -203,7 +203,7 @@ fn a_character_converts_as_one_part_per_asset() -> Result<()> {
     let manager = primase_core::pass::PassManager::new(reg).with_pass_checks(true);
     let kept = std::rc::Rc::default();
     primase_core::convert::convert_parts(
-        &mut primase_fromsoft::sekiro::CharacterReader::new(install, "c1010", decoder),
+        &mut primase_fromsoft::sekiro::CharacterReader::new(primase_fromsoft::Install::sekiro(install), "c1010", decoder),
         &mut primase_core::convert::PlannedParts::default(),
         Box::new(Kept(std::rc::Rc::clone(&kept))),
         &manager,

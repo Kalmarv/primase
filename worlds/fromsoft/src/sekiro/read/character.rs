@@ -1,12 +1,14 @@
-//! Sekiro characters read by themselves, each into a world as an asset ([`primase_core::Asset`]): a character,
-//! `chr/<id>.chrbnd` (its FLVER and the textures it embeds) and, when the install has one, `chr/<id>.texbnd` (more of
-//! its textures) ([`read_character`]); or the parts a request names, `parts/<name>.partsbnd` each ([`read_parts`]: the
-//! player `c1000` is an empty stub, the Wolf the game draws is parts worn together, each part with a FLVER and a
-//! skeleton of its own). The materials of an asset also bind textures it does not hold, which it reads from where
-//! the game keeps them: the texbnd of each other character a material names (in its definition's name or a texture
-//! path: c1010's bodies use `c1019_body_merge`, whose textures are in `chr/c1019.texbnd`, a character with no model),
-//! `parts/common_body.tpf` (the textures every character shares: hair, fabric, metal, seams, `FC_A_0000_*`) and
-//! `other/systex.tpf` (the system textures materials fall back to). A part's materials also bind the full-resolution
+//! FromSoftware characters read by themselves, each into a world as an asset ([`primase_core::Asset`]), whichever the
+//! game ([`crate::Game`] states what differs: where the textures are, what the materials resolve against, the shader
+//! bundles): a character, `chr/<id>.chrbnd` (its FLVER and the textures it embeds) and, when the install has them, its
+//! texture binders ([`crate::Game::character_texture_binders`]: Sekiro's `chr/<id>.texbnd`, Elden Ring's high and low
+//! resolution pair) ([`read_character`]); or the parts a request names, `parts/<name>.partsbnd` each ([`read_parts`]:
+//! Sekiro's player `c1000` is an empty stub, the Wolf the game draws is parts worn together, each part with a FLVER and
+//! a skeleton of its own). The materials of an asset also bind textures it does not hold, which it reads from where
+//! the game keeps them: the texture binders of each other character a material names (in its definition's name or a
+//! texture path: Sekiro's c1010's bodies use `c1019_body_merge`, whose textures are in `chr/c1019.texbnd`, a character
+//! with no model), the packages every character shares ([`crate::Game::character_shared_textures`]: Sekiro's
+//! `parts/common_body.tpf` (hair, fabric, metal, seams, `FC_A_0000_*`) and `other/systex.tpf`). A part's materials also bind the full-resolution
 //! textures of the parts they were authored for (a `_l` part holds `_l` copies): the part's full sibling
 //! (`parts/bd_m_9120.partsbnd` for `bd_m_9120_l`) and the other parts its texture paths name (`fc_m_0200` for the face
 //! `fc_m_0220_l`). Each asset is:
@@ -27,18 +29,17 @@
 //! bone whose parent the part does not hold is a root there. What the files hold that it does not read is a notice: the
 //! FLVER's dummies (attach points), the Havok skeleton and cloth beside the FLVER, and the animation binder.
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use primase_core::convert::{Notice, NoticeKind, Reader, Report as ConvertReport, Result as ConvertResult};
 use primase_core::{Asset, Entity, Name, Role, Source, World};
 
 use super::animation::{self, AnimationReport};
-use super::area::material_definitions;
+use super::area::game_material_definitions;
 use super::{shaders, textures};
 use crate::components::models::{SkeletonOf, SourceModel};
-use crate::mtd::MaterialDefinition;
 use crate::sekiro::source;
-use crate::{Archive, Binder, Result, dcx::Decoder, flver::Model, invalid, materials};
+use crate::{Archive, Binder, Game, Install, Result, dcx::Decoder, flver::Model, invalid, materials};
 
 /// What reading a character or part found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -79,7 +80,7 @@ impl CharacterReport {
             if !items.is_empty() {
                 out.push(items.iter().fold(
                     Notice::new(
-                        "sekiro character",
+                        "fromsoft character",
                         NoticeKind::Unsupported,
                         reason,
                         items.len() as u64,
@@ -101,7 +102,7 @@ pub fn animation_notices(a: &AnimationReport) -> Vec<Notice> {
     for (why, files) in &a.refused {
         out.push(files.iter().take(3).fold(
             Notice::new(
-                "sekiro animations",
+                "fromsoft animations",
                 NoticeKind::Unsupported,
                 format!("animation files not read: {why}"),
                 files.len() as u64,
@@ -112,7 +113,7 @@ pub fn animation_notices(a: &AnimationReport) -> Vec<Notice> {
     if !a.unread.is_empty() {
         out.push(a.unread.iter().take(3).fold(
             Notice::new(
-                "sekiro animations",
+                "fromsoft animations",
                 NoticeKind::Unsupported,
                 "animation binder members not read (event files, markers of other characters, ...)",
                 a.unread.len() as u64,
@@ -140,7 +141,7 @@ fn character_id(id: &str) -> Result<&str> {
         Ok(id)
     } else {
         Err(invalid(
-            "Sekiro character",
+            "FromSoftware character",
             0,
             format!("{id:?} is not a character id (c and four digits)"),
         ))
@@ -158,7 +159,7 @@ fn part_name(name: &str) -> Result<&str> {
         Ok(name)
     } else {
         Err(invalid(
-            "Sekiro part",
+            "FromSoftware part",
             0,
             format!("{name:?} is not a part name (lowercase letters, digits and underscores)"),
         ))
@@ -249,7 +250,7 @@ impl Item<'_> {
         let path = self.binder_path();
         match self {
             Item::Character(id) => member(binder, &format!("{id}.flver"))
-                .ok_or_else(|| invalid("Sekiro character", 0, format!("{path} holds no {id}.flver"))),
+                .ok_or_else(|| invalid("FromSoftware character", 0, format!("{path} holds no {id}.flver"))),
             Item::Part(_) => {
                 let mut flvers = binder.files.iter().filter(|f| {
                     f.name
@@ -258,8 +259,12 @@ impl Item<'_> {
                 });
                 match (flvers.next(), flvers.next()) {
                     (Some(f), None) => Ok(f),
-                    (None, _) => Err(invalid("Sekiro part", 0, format!("{path} holds no FLVER"))),
-                    _ => Err(invalid("Sekiro part", 0, format!("{path} holds several FLVERs"))),
+                    (None, _) => Err(invalid("FromSoftware part", 0, format!("{path} holds no FLVER"))),
+                    _ => Err(invalid(
+                        "FromSoftware part",
+                        0,
+                        format!("{path} holds several FLVERs"),
+                    )),
                 }
             }
         }
@@ -270,8 +275,9 @@ impl Item<'_> {
 /// far (one entity per distinct resolved material, whichever asset binds it) and the texture and shader payloads.
 struct Reading<'a> {
     archive: Archive,
+    game: Game,
     decoder: &'a Decoder<'a>,
-    definitions: BTreeMap<String, MaterialDefinition>,
+    definitions: BTreeMap<String, materials::Definition>,
     materials: BTreeMap<String, Entity>,
     textures: source::Payloads,
     programs: source::Payloads,
@@ -281,11 +287,12 @@ struct Reading<'a> {
 }
 
 impl<'a> Reading<'a> {
-    fn open(install: &Path, decoder: &'a Decoder<'a>) -> Result<Self> {
-        let archive = Archive::open(install)?;
-        let definitions = material_definitions(&archive, decoder)?;
+    fn open(install: &Install, decoder: &'a Decoder<'a>) -> Result<Self> {
+        let archive = install.open()?;
+        let definitions = game_material_definitions(&archive, decoder, install.game)?;
         Ok(Reading {
             archive,
+            game: install.game,
             decoder,
             definitions,
             materials: BTreeMap::new(),
@@ -302,7 +309,7 @@ impl<'a> Reading<'a> {
             match into.get(&name) {
                 Some(have) if have[..] != bytes[..] => {
                     return Err(invalid(
-                        "Sekiro character",
+                        "FromSoftware character",
                         0,
                         format!("{what} {name} differs between the assets that bind it"),
                     ));
@@ -322,7 +329,7 @@ impl<'a> Reading<'a> {
         let binder_path = item.binder_path();
         if !textures::has(archive, &binder_path) {
             return Err(invalid(
-                "Sekiro character",
+                "FromSoftware character",
                 0,
                 format!("{binder_path} is not in the archives"),
             ));
@@ -345,7 +352,11 @@ impl<'a> Reading<'a> {
             named.extend(named_characters(&m.mtd));
             named.extend(m.textures.iter().flat_map(|t| named_characters(&t.path)));
             if let Some(d) = definitions.get(&materials::stem(&m.mtd)) {
-                named.extend(d.textures.iter().flat_map(|t| named_characters(&t.path)));
+                named.extend(
+                    d.textures()
+                        .into_iter()
+                        .flat_map(|(_, path, _)| named_characters(path)),
+                );
             }
         }
         let own = match item {
@@ -367,12 +378,13 @@ impl<'a> Reading<'a> {
         };
         add_packages(&binder, &mut catalog)?;
         for owner in own.into_iter().chain(named.iter().map(String::as_str)) {
-            let texbnd_path = format!("/chr/{owner}.texbnd.dcx");
-            if textures::has(archive, &texbnd_path) {
-                add_packages(
-                    &Binder::read(&archive.read(&texbnd_path, decoder)?, decoder)?,
-                    &mut catalog,
-                )?;
+            for texbnd_path in self.game.character_texture_binders(owner) {
+                if textures::has(archive, &texbnd_path) {
+                    add_packages(
+                        &Binder::read(&archive.read(&texbnd_path, decoder)?, decoder)?,
+                        &mut catalog,
+                    )?;
+                }
             }
         }
         // a part's materials name the full-resolution textures (`bd_m_9120_a`) of the parts they were authored for,
@@ -384,7 +396,11 @@ impl<'a> Reading<'a> {
                 owners.extend(named_parts(&m.mtd));
                 owners.extend(m.textures.iter().flat_map(|t| named_parts(&t.path)));
                 if let Some(d) = definitions.get(&materials::stem(&m.mtd)) {
-                    owners.extend(d.textures.iter().flat_map(|t| named_parts(&t.path)));
+                    owners.extend(
+                        d.textures()
+                            .into_iter()
+                            .flat_map(|(_, path, _)| named_parts(path)),
+                    );
                 }
             }
             owners.remove(part);
@@ -398,7 +414,7 @@ impl<'a> Reading<'a> {
                 }
             }
         }
-        for shared in ["/parts/common_body.tpf.dcx", "/other/systex.tpf.dcx"] {
+        for shared in self.game.character_shared_textures() {
             if textures::has(archive, shared) {
                 catalog.add(&archive.read(shared, decoder)?)?;
             }
@@ -426,7 +442,7 @@ impl<'a> Reading<'a> {
             .materials
             .iter()
             .map(|m| {
-                materials::resolve(m, definitions.get(&materials::stem(&m.mtd)), |n| {
+                materials::resolve_definition(m, definitions.get(&materials::stem(&m.mtd)), self.game, |n| {
                     catalog.entries.contains_key(n)
                 })
             })
@@ -442,8 +458,7 @@ impl<'a> Reading<'a> {
             .filter(|m| m.definition.is_some())
             .map(|m| m.shader.clone())
             .collect();
-        self.bundles
-            .read(archive, decoder, crate::Game::Sekiro, &wanted_shaders)?;
+        self.bundles.read(archive, decoder, self.game, &wanted_shaders)?;
         let programs = self
             .bundles
             .layered_programs(resolved.iter().filter_map(|m| m.layered.as_ref()))?;
@@ -539,22 +554,29 @@ pub fn read_character(
     decoder: &Decoder<'_>,
     destination: &mut World,
 ) -> Result<CharacterReport> {
-    read_character_with(install, id, decoder, CharacterOptions::default(), destination)
+    read_character_with(
+        &Install::sekiro(install.as_ref()),
+        id,
+        decoder,
+        CharacterOptions::default(),
+        destination,
+    )
 }
 
-/// [`read_character`] with what else to read ([`CharacterOptions`]).
+/// [`read_character`] for any install (the game is the install's: [`crate::Game`] states what differs) with what else to
+/// read ([`CharacterOptions`]).
 pub fn read_character_with(
-    install: impl AsRef<Path>,
+    install: &Install,
     id: &str,
     decoder: &Decoder<'_>,
     options: CharacterOptions,
     destination: &mut World,
 ) -> Result<CharacterReport> {
     if destination.entities().next().is_some() {
-        return Err(invalid("Sekiro character", 0, "destination must be empty"));
+        return Err(invalid("FromSoftware character", 0, "destination must be empty"));
     }
     let id = character_id(id)?;
-    let mut reading = Reading::open(install.as_ref(), decoder)?;
+    let mut reading = Reading::open(install, decoder)?;
     let report = reading.read(Item::Character(id), options.animations.as_deref(), destination)?;
     reading.finish(destination);
     Ok(report)
@@ -573,32 +595,39 @@ pub fn read_parts(
     decoder: &Decoder<'_>,
     destination: &mut World,
 ) -> Result<Vec<CharacterReport>> {
-    Ok(read_parts_with(install, parts, decoder, &CharacterOptions::default(), destination)?.0)
+    Ok(read_parts_with(
+        &Install::sekiro(install.as_ref()),
+        parts,
+        decoder,
+        &CharacterOptions::default(),
+        destination,
+    )?
+    .0)
 }
 
 /// [`read_parts`] with what else to read ([`CharacterOptions`]): with `animations` the animation binders of that
 /// character too, as the members (clips) of an asset of their own named `<id> animations`, whose read is the second
 /// value (the player's `c0000` has no model of its own: its animations drive the parts worn together).
 pub fn read_parts_with(
-    install: impl AsRef<Path>,
+    install: &Install,
     parts: &[&str],
     decoder: &Decoder<'_>,
     options: &CharacterOptions,
     destination: &mut World,
 ) -> Result<(Vec<CharacterReport>, Option<AnimationReport>)> {
     if destination.entities().next().is_some() {
-        return Err(invalid("Sekiro part", 0, "destination must be empty"));
+        return Err(invalid("FromSoftware part", 0, "destination must be empty"));
     }
     if parts.is_empty() {
-        return Err(invalid("Sekiro part", 0, "no part named"));
+        return Err(invalid("FromSoftware part", 0, "no part named"));
     }
     let mut seen = BTreeSet::new();
     for p in parts {
         if !seen.insert(part_name(p)?) {
-            return Err(invalid("Sekiro part", 0, format!("{p} is named twice")));
+            return Err(invalid("FromSoftware part", 0, format!("{p} is named twice")));
         }
     }
-    let mut reading = Reading::open(install.as_ref(), decoder)?;
+    let mut reading = Reading::open(install, decoder)?;
     let reports = parts
         .iter()
         .map(|p| reading.read(Item::Part(p), None, destination))
@@ -627,7 +656,7 @@ pub fn read_parts_with(
 /// ([`super::convert`]'s rule).
 #[derive(Debug)]
 pub struct CharacterReader<'a> {
-    install: PathBuf,
+    install: Install,
     request: Request,
     decoder: Decoder<'a>,
     options: CharacterOptions,
@@ -643,9 +672,9 @@ enum Request {
 
 impl<'a> CharacterReader<'a> {
     /// Character `id` (`c1010`) of the install at `install`, archives decoded with `decoder`.
-    pub fn new(install: impl Into<PathBuf>, id: &str, decoder: Decoder<'a>) -> CharacterReader<'a> {
+    pub fn new(install: Install, id: &str, decoder: Decoder<'a>) -> CharacterReader<'a> {
         CharacterReader {
-            install: install.into(),
+            install,
             request: Request::Character(id.to_owned()),
             decoder,
             options: CharacterOptions::default(),
@@ -660,9 +689,9 @@ impl<'a> CharacterReader<'a> {
     }
 
     /// The parts `parts` (`bd_m_9120_l`) of the install at `install`, each an asset of its own ([`read_parts`]).
-    pub fn parts(install: impl Into<PathBuf>, parts: &[&str], decoder: Decoder<'a>) -> CharacterReader<'a> {
+    pub fn parts(install: Install, parts: &[&str], decoder: Decoder<'a>) -> CharacterReader<'a> {
         CharacterReader {
-            install: install.into(),
+            install,
             request: Request::Parts(parts.iter().map(|p| (*p).to_owned()).collect()),
             decoder,
             options: CharacterOptions::default(),
@@ -703,7 +732,7 @@ impl Reader for CharacterReader<'_> {
         for r in reports {
             self.pending.extend(r.notices());
             report.push((
-                "sekiro character".into(),
+                "fromsoft character".into(),
                 format!(
                     "{}: {} bones, {} meshes, {} materials, {} textures{}",
                     r.id,
@@ -719,7 +748,7 @@ impl Reader for CharacterReader<'_> {
             ));
         }
         if let (Some(line), Some(of)) = (animation_line, &self.options.animations) {
-            report.push(("sekiro character".into(), format!("{of}: {line}")));
+            report.push(("fromsoft character".into(), format!("{of}: {line}")));
         }
         Ok((world, report))
     }

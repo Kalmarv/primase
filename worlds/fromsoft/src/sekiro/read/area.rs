@@ -378,6 +378,22 @@ pub(super) fn material_definitions(
     Ok(definitions)
 }
 
+/// The definitions `game`'s materials resolve against, by stem: Sekiro's MTDs, or the game's material binaries.
+pub(super) fn game_material_definitions(
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    game: Game,
+) -> Result<BTreeMap<String, materials::Definition>> {
+    if game.material_binders().is_empty() {
+        Ok(material_definitions(archive, decoder)?
+            .into_iter()
+            .map(|(stem, d)| (stem, materials::Definition::Mtd(d)))
+            .collect())
+    } else {
+        material_binaries(archive, decoder, game)
+    }
+}
+
 /// Every material binary of `game`'s material binders, by the stem of its name (the `.matxml` stem its FLVER
 /// materials name): the first binder holding a name gives it.
 fn material_binaries(
@@ -465,15 +481,9 @@ pub fn read_game_area(
     let mut report = Report::default();
     // the definitions materials resolve against (Sekiro's MTDs, or the game's material binaries), and the texture
     // catalog: Sekiro's area discovery, or the game's common packages, then the packages its materials name
-    let (mut catalog, definitions) = if game.material_binders().is_empty() {
-        let definitions = material_definitions(&archive, decoder)?
-            .into_iter()
-            .map(|(stem, d)| (stem, materials::Definition::Mtd(d)))
-            .collect::<BTreeMap<_, _>>();
-        (
-            textures::Catalog::discover(&archive, decoder, &area[..3])?,
-            definitions,
-        )
+    let definitions = game_material_definitions(&archive, decoder, game)?;
+    let mut catalog = if game.material_binders().is_empty() {
+        textures::Catalog::discover(&archive, decoder, &area[..3])?
     } else {
         let mut catalog = textures::Catalog::default();
         for path in game.common_textures() {
@@ -481,7 +491,7 @@ pub fn read_game_area(
                 catalog.add(&archive.read(path, decoder)?)?;
             }
         }
-        (catalog, material_binaries(&archive, decoder, game)?)
+        catalog
     };
     let mut texture_packages = BTreeSet::new();
     let object = game.object_prefix();

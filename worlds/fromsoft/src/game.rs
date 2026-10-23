@@ -111,6 +111,30 @@ impl Game {
         }
     }
 
+    /// The binders holding the textures of the character `owner` (`c2010`), in the order a texture name is looked up (the
+    /// first holding it gives it): Sekiro keeps them in `chr/<id>.texbnd`, Elden Ring in a high resolution
+    /// `chr/<id>_h.texbnd` and a low resolution `chr/<id>_l.texbnd` (4.6 MB and 0.3 MB for `c2010`), the low one only
+    /// for what the high one lacks. A character may have none (the binder is not in the archives).
+    pub fn character_texture_binders(self, owner: &str) -> Vec<String> {
+        match self {
+            Game::Sekiro => vec![format!("/chr/{owner}.texbnd.dcx")],
+            Game::EldenRing => vec![
+                format!("/chr/{owner}_h.texbnd.dcx"),
+                format!("/chr/{owner}_l.texbnd.dcx"),
+            ],
+        }
+    }
+
+    /// The texture packages every character of the game binds besides its own, read whole: Sekiro's textures every
+    /// character shares (hair, fabric, metal, seams) and its system textures; Elden Ring's system and decal textures
+    /// (the packages its maps bind too).
+    pub fn character_shared_textures(self) -> &'static [&'static str] {
+        match self {
+            Game::Sekiro => &["/parts/common_body.tpf.dcx", "/other/systex.tpf.dcx"],
+            Game::EldenRing => crate::elden::COMMON_TEXTURES,
+        }
+    }
+
     /// Texture packages every map of the game binds, read whole (Elden Ring's system and decal textures; Sekiro's are
     /// part of its area texture discovery).
     pub fn common_textures(self) -> &'static [&'static str] {
