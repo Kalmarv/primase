@@ -6,8 +6,9 @@
 use naga::{AddressSpace, Expression, FunctionArgument, Handle, Statement, StructMember, Type, TypeInner};
 use primase_shader::build::{Builder, Kind};
 use primase_shader::{
-    Conventions, D3dModes, Interface, Label, Program, Provenance, ScalarType, ShaderFormat, Stage,
-    StageFacts, SystemValue, Value, Varying, VaryingProvenance, emit, rt,
+    Conventions, D3dBinding, D3dClass, D3dModes, Interface, Label, Program, Provenance, Resource, ResourceId,
+    ResourceKind, ResourceProvenance, ScalarType, ShaderFormat, Stage, StageFacts, SystemValue, Value,
+    Varying, VaryingProvenance, emit, rt,
 };
 
 fn system_input(name: &str, system: SystemValue, scalar: ScalarType, width: u8) -> Varying {
@@ -114,7 +115,21 @@ fn ray_generation() -> Program {
         stage: Stage::RayGeneration,
         inputs: Vec::new(),
         outputs: Vec::new(),
-        resources: Vec::new(),
+        // the acceleration structure the program traces into, t0
+        resources: vec![Resource {
+            id: ResourceId(0),
+            kind: ResourceKind::AccelerationStructure,
+            count: 1,
+            provenance: ResourceProvenance {
+                name: "scene".into(),
+                d3d: Some(D3dBinding {
+                    class: D3dClass::ShaderResource,
+                    register: 0,
+                    space: 0,
+                }),
+                counter_of: None,
+            },
+        }],
         facts: StageFacts::None,
     };
     let sigs = primase_shader::stage_functions(&interface).unwrap().unwrap();
@@ -190,7 +205,7 @@ fn ray_generation() -> Program {
         stage: Stage::RayGeneration,
         entry: "main".into(),
         interface,
-        bindings: Vec::new(),
+        bindings: vec![(ResourceId(0), global)],
         conventions: Conventions::D3D,
         modes: D3dModes::ALL,
         provenance: provenance(),
