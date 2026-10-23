@@ -106,6 +106,17 @@ enum Decision {
 /// set is not configured here, as an unset key is. What is not configured skips, or fails where `[run] require` needs it (`all`, or `gate`
 /// and `gate` says the landing gate must have it).
 fn decide(config: &Config, query: Query, gate: bool) -> Decision {
+    // an input no machine here holds: used where it is there, else skipped naming why, whatever require says
+    if let Some(registry::Declared {
+        status: Status::Unheld { why },
+        ..
+    }) = registry::declaration(query)
+    {
+        return match configured(config, query).filter(|p| p.exists()) {
+            Some(path) => Decision::Found(path),
+            None => Decision::Skip(format!("{} is held by no machine here: {why}", query.key())),
+        };
+    }
     let require = match config.require.as_deref() {
         Some("all") => true,
         Some("gate") => gate,
@@ -286,6 +297,23 @@ mod tests {
 
     /// An oracle set this machine does not hold skips (or fails where required); a file missing inside a set that is
     /// there fails; a file that is there is found.
+    /// An input no machine here holds skips, naming why, even where every input is required; one that is there is
+    /// found.
+    #[test]
+    fn an_unheld_input_skips_naming_why_whatever_require_says() {
+        let legacy = Query::Oracle(OracleSet::Corpus, Game::Gta, "legacy-effects");
+        let c = config(&[], Some("[oracles]\nroot = 'nowhere'\n[run]\nrequire = 'all'\n")).unwrap();
+        assert!(matches!(decide(&c, legacy, false), Decision::Skip(why) if why.contains("GTA V Legacy")));
+        let root = std::env::temp_dir().join(format!("primase-testdata-unheld-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("corpus/gta/legacy-effects")).unwrap();
+        let held = config(&[], Some(&format!("[oracles]\nroot = '{}'\n", root.display()))).unwrap();
+        assert_eq!(
+            decide(&held, legacy, false),
+            Decision::Found(root.join("corpus/gta/legacy-effects"))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn an_absent_oracle_set_skips_and_a_missing_file_in_a_present_one_fails() {
         let root = std::env::temp_dir().join(format!("primase-testdata-sets-{}", std::process::id()));
@@ -496,6 +524,12 @@ mod tests {
                 d.status != Status::Blocked || d.gate,
                 "{key}: blocked, so a landing-gate input"
             );
+            if let Status::Unheld { why } = d.status {
+                assert!(
+                    !d.gate && !why.is_empty(),
+                    "{key}: unheld, so never a gate input, and why"
+                );
+            }
             let rel = match d.query {
                 Query::Install(_, Some(rel)) | Query::Oracle(_, _, rel) => rel,
                 _ => unreachable!(),

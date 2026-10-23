@@ -66,13 +66,14 @@ pub fn tables() -> String {
         &["key", "status", "gate", "about", "source"],
         registry::DECLARED.iter().map(|d| {
             let status = match d.status {
-                Status::Live => "live",
-                Status::Blocked => "blocked",
-                Status::Retired => "retired",
+                Status::Live => "live".to_owned(),
+                Status::Blocked => "blocked".to_owned(),
+                Status::Retired => "retired".to_owned(),
+                Status::Unheld { why } => format!("unheld: {}", cell(why)),
             };
             vec![
                 format!("`{}`", d.query.key()),
-                status.to_owned(),
+                status,
                 gate(d.gate),
                 cell(d.about),
                 cell(d.source),

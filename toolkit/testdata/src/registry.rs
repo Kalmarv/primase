@@ -363,6 +363,10 @@ pub enum Status {
     Blocked,
     /// Its owner retired the obligation: an older name only ([`crate::legacy`]), never declared here.
     Retired,
+    /// The obligation stands and the input is acceptable, but no machine here holds it (`why`: an install the owner
+    /// does not have). Never a landing-gate input: where it is not there, its tests skip naming `why`, whatever
+    /// `[run] require` says; a machine that comes to hold it configures it as any other.
+    Unheld { why: &'static str },
 }
 
 /// A file or folder a test asks for inside an install ([`Query::Install`] with a path) or an oracle set
@@ -564,7 +568,9 @@ pub const DECLARED: &[Declared] = &[
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Gta, "legacy-effects"),
-        status: Status::Live,
+        status: Status::Unheld {
+            why: "it needs GTA V Legacy's install, which no machine holds (the Enhanced edition has no effect files)",
+        },
         gate: false,
         about: r#"a folder (searched recursively) of GTA V Legacy's compiled effects (`.fxc`, RAGE `rgxe`) as extracted from the install (the Enhanced edition has none); every one is read, its programs' containers checked and lifted; worlds/gta/tests/fxc_census.rs"#,
         source: r#"the user's own install: the effect files extracted from its archives"#,
