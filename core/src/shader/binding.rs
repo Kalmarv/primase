@@ -251,6 +251,21 @@ pub enum FrameTexture {
     LightProbeVolume,
 }
 
+impl FrameTexture {
+    /// The dimension of the image: a probe's is a cube, the light probes' a volume, every other a plane.
+    pub fn dim(self) -> super::TextureDim {
+        match self {
+            Self::ReflectionProbe => super::TextureDim::Cube,
+            Self::LightProbeVolume => super::TextureDim::D3,
+            Self::SceneDepth
+            | Self::SceneColour
+            | Self::ShadowMap
+            | Self::ScreenSpaceShadows
+            | Self::AmbientOcclusion => super::TextureDim::D2,
+        }
+    }
+}
+
 /// What a texture slot samples.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -686,8 +701,8 @@ pub struct RenderState {
 }
 
 impl RenderState {
-    /// The state is consistent: the write masks fit four channels, the bias is finite and the first target's blend
-    /// is `blend`.
+    /// The state is consistent: the write masks fit four channels, the bias is finite, and `blend` is the first
+    /// target's blend (a state with a blend has a first target, and the other way round).
     pub fn verify(&self) -> Result<(), String> {
         if let Some(a) = self.alpha_test
             && !a.reference.is_finite()
@@ -704,10 +719,14 @@ impl RenderState {
                 ));
             }
         }
-        if let Some(first) = self.targets[0]
-            && first.blend != self.blend
-        {
-            return Err("render target 0's blend is not the state's blend".into());
+        match self.targets[0] {
+            Some(first) if first.blend != self.blend => {
+                return Err("render target 0's blend is not the state's blend".into());
+            }
+            None if self.blend.is_some() => {
+                return Err("the state has a blend and render target 0 has no state to hold it".into());
+            }
+            _ => {}
         }
         if let Some(b) = self.depth_bias
             && !(b.constant.is_finite() && b.slope_scaled.is_finite() && b.clamp.is_finite())
@@ -759,15 +778,21 @@ impl StageBinding {
         if interface.stage != self.stage {
             return Err(at(format!("its shader is a {:?} program", interface.stage)));
         }
-        for i in &self.inputs {
+        for (n, i) in self.inputs.iter().enumerate() {
             if !interface.inputs.iter().any(|v| v.label == i.label) {
                 return Err(at(format!(
                     "input {}{} is not in the shader",
                     i.label.name, i.label.index
                 )));
             }
+            if self.inputs[..n].iter().any(|before| before.label == i.label) {
+                return Err(at(format!(
+                    "input {}{} is bound twice",
+                    i.label.name, i.label.index
+                )));
+            }
         }
-        for o in &self.outputs {
+        for (n, o) in self.outputs.iter().enumerate() {
             let Some(v) = interface.outputs.iter().find(|v| v.label == o.label) else {
                 return Err(at(format!(
                     "output {}{} is not in the shader",
@@ -778,6 +803,18 @@ impl StageBinding {
                 return Err(at(format!(
                     "output {}{} has {} lanes, not the mask {:#x}",
                     o.label.name, o.label.index, v.value.width, o.lanes
+                )));
+            }
+            // one label may carry several roles, each on its own lanes
+            if let Some(before) = self.outputs[..n]
+                .iter()
+                .find(|before| before.label == o.label && before.lanes & o.lanes != 0)
+            {
+                return Err(at(format!(
+                    "output {}{} has two roles on lanes {:#x}",
+                    o.label.name,
+                    o.label.index,
+                    before.lanes & o.lanes
                 )));
             }
         }
@@ -807,12 +844,38 @@ impl StageBinding {
                 )));
             }
         }
-        for t in &self.textures {
-            if !matches!(
-                interface.resource(t.resource).map(|r| &r.kind),
-                Some(ResourceKind::Texture { .. })
-            ) {
+        // the bytes of a constant buffer belong to one constant
+        let mut spans: Vec<(u32, u32, u32)> = self
+            .constants
+            .iter()
+            .map(|c| (c.resource.0, c.offset, c.offset + c.size))
+            .collect();
+        spans.sort_unstable();
+        if let Some(pair) = spans.windows(2).find(|p| p[0].0 == p[1].0 && p[1].1 < p[0].2) {
+            return Err(at(format!(
+                "constants overlap in buffer {}: bytes {}..{} and {}..{}",
+                pair[0].0, pair[0].1, pair[0].2, pair[1].1, pair[1].2
+            )));
+        }
+        for (n, t) in self.textures.iter().enumerate() {
+            let Some(ResourceKind::Texture { dim, .. }) = interface.resource(t.resource).map(|r| &r.kind)
+            else {
                 return Err(at(format!("resource {} is not a texture", t.resource.0)));
+            };
+            if self.textures[..n]
+                .iter()
+                .any(|before| before.resource == t.resource)
+            {
+                return Err(at(format!("texture slot {} is bound twice", t.resource.0)));
+            }
+            if let TextureSource::Frame(frame) = &t.source
+                && *dim != frame.dim()
+            {
+                return Err(at(format!(
+                    "texture slot {} is a {dim:?} texture and binds the frame's {frame:?}, a {:?} image",
+                    t.resource.0,
+                    frame.dim()
+                )));
             }
             if let Some(s) = t.sampler
                 && !matches!(
@@ -843,6 +906,33 @@ impl Component for ShaderBinding {
     }
     fn verify(&self, _e: Entity, w: &crate::World) -> Result<(), String> {
         for (i, s) in self.stages.iter().enumerate() {
+            if let Some(k) = &s.variant {
+                if k.field.is_empty() {
+                    return Err(format!("the {:?} stage's variant key names no field", s.stage));
+                }
+                if let Some(p) = k.parts.iter().enumerate().find_map(|(n, p)| {
+                    k.parts[..n]
+                        .iter()
+                        .any(|before| before.name == p.name)
+                        .then_some(&p.name)
+                }) {
+                    return Err(format!(
+                        "the variant key {} = {} describes {p:?} twice",
+                        k.field, k.value
+                    ));
+                }
+                // the stages of one variant describe it the same way
+                if let Some(other) = self.stages[..i].iter().find(|o| {
+                    o.variant
+                        .as_ref()
+                        .is_some_and(|b| b.field == k.field && b.value == k.value && b.parts != k.parts)
+                }) {
+                    return Err(format!(
+                        "the {:?} and {:?} stages of {} = {} describe it differently",
+                        other.stage, s.stage, k.field, k.value
+                    ));
+                }
+            }
             // a stage kind may repeat only under distinct values of one key
             for other in self.stages[..i].iter().filter(|o| o.stage == s.stage) {
                 let distinct = match (&other.variant, &s.variant) {
@@ -978,6 +1068,17 @@ mod tests {
         assert!(state.verify().unwrap_err().contains("target 0's blend"));
         state.blend = Some(blend);
         assert_eq!(state.verify(), Ok(()));
+        // a blend with no state for the first target to hold it is not the same as no blend
+        let mut lone = RenderState {
+            blend: Some(blend),
+            ..RenderState::default()
+        };
+        assert!(lone.verify().unwrap_err().contains("no state to hold it"));
+        lone.targets[0] = Some(TargetState {
+            blend: Some(blend),
+            write_mask: 0xf,
+        });
+        assert_eq!(lone.verify(), Ok(()));
         // other targets are free; a mask is four channels
         state.targets[3] = Some(TargetState {
             blend: None,
@@ -1201,6 +1302,35 @@ mod tests {
                 Box::new(|b| b.stages[0].textures[0].sampler = Some(ResourceId(1))),
                 "not a sampler",
             ),
+            (
+                Box::new(|b| {
+                    let first = b.stages[0].inputs[0].clone();
+                    b.stages[0].inputs.push(first);
+                }),
+                "input TEXCOORD0 is bound twice",
+            ),
+            (
+                // the fixture's two roles on SV_Target0 are lanes 0b0111 and 0b1000: widening the second overlaps
+                Box::new(|b| b.stages[0].outputs[1].lanes = 0b1100),
+                "two roles on lanes 0x4",
+            ),
+            (
+                Box::new(|b| b.stages[0].constants[1].offset = 8),
+                "constants overlap in buffer 0: bytes 0..16 and 8..24",
+            ),
+            (
+                Box::new(|b| {
+                    let first = b.stages[0].textures[0].clone();
+                    b.stages[0].textures.push(first);
+                }),
+                "texture slot 1 is bound twice",
+            ),
+            (
+                Box::new(|b| {
+                    b.stages[0].textures[0].source = TextureSource::Frame(FrameTexture::ReflectionProbe)
+                }),
+                "binds the frame's ReflectionProbe, a Cube image",
+            ),
         ];
         for (break_it, expect) in cases {
             let mut b = good.clone();
@@ -1220,6 +1350,64 @@ mod tests {
             *texture = m;
         }
         assert!(b.verify(m, &w).unwrap_err().contains("neither core.texture"));
+    }
+
+    /// A frame image on a slot of its own dimension, and a constant colour on any, verify.
+    #[test]
+    fn a_frame_image_fits_the_slot_it_is_bound_to() {
+        let (w, _, _, m) = world();
+        let mut b = w.get::<ShaderBinding>(m).unwrap().clone();
+        b.stages[0].textures[0].source = TextureSource::Frame(FrameTexture::SceneColour);
+        assert_eq!(b.verify(m, &w), Ok(()));
+        b.stages[0].textures[0].source = TextureSource::Default {
+            value: [0.5; 4],
+            why: "a constant".into(),
+        };
+        assert_eq!(b.verify(m, &w), Ok(()));
+        assert_eq!(FrameTexture::LightProbeVolume.dim(), TextureDim::D3);
+        assert_eq!(FrameTexture::ShadowMap.dim(), TextureDim::D2);
+    }
+
+    /// A variant key names a field, describes each part once, and describes one variant the same way on all its stages.
+    #[test]
+    fn a_variant_keys_description_is_consistent() {
+        let (w, _, _, m) = world();
+        let part = |name: &str, value: u64| KeyPart {
+            name: name.into(),
+            value,
+        };
+        let key = |field: &str, value: u32, parts: Vec<KeyPart>| {
+            Some(VariantKey {
+                field: field.into(),
+                value,
+                parts,
+            })
+        };
+        let good = w.get::<ShaderBinding>(m).unwrap().clone();
+        let with = |a: Option<VariantKey>| {
+            let mut b = good.clone();
+            b.stages[0].variant = a;
+            b
+        };
+        assert_eq!(
+            with(key("f.variant", 0, vec![part("program", 1), part("outputs", 5)])).verify(m, &w),
+            Ok(())
+        );
+        let message = with(key("", 0, Vec::new())).verify(m, &w).unwrap_err();
+        assert!(message.contains("names no field"), "{message}");
+        let message = with(key("f.variant", 0, vec![part("program", 1), part("program", 2)]))
+            .verify(m, &w)
+            .unwrap_err();
+        assert!(message.contains("describes \"program\" twice"), "{message}");
+        // two stages of one variant (a vertex and a pixel stage share the key) must describe it alike; the pixel
+        // fixture stands for both, a second stage of another kind is built from it
+        let mut b = with(key("f.variant", 3, vec![part("program", 1)]));
+        let mut other = b.stages[0].clone();
+        other.stage = Stage::Vertex;
+        other.variant = key("f.variant", 3, vec![part("program", 2)]);
+        b.stages.push(other);
+        let message = b.verify(m, &w).unwrap_err();
+        assert!(message.contains("describe it differently"), "{message}");
     }
 
     /// A stage kind repeats only under distinct values of one key: two pixel stages with keys `k = 1` and `k = 2` verify,

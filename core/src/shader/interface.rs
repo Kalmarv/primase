@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use super::{BufferKind, Resource, ResourceId, ResourceKind, Stage, StorageTarget};
+use super::{BufferKind, BufferLayout, D3dClass, Resource, ResourceId, ResourceKind, Stage, StorageTarget};
 
 /// The scalar type of a value or constant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -475,13 +475,30 @@ impl Interface {
         self.resources.iter().find(|r| r.id == id)
     }
 
-    /// The interface's own invariants: one varying per label in each direction, values of 1 to 4 lanes, resource ids
-    /// unique, every resource spanning at least one binding with a buffer stride or element width that means
-    /// something, and every constant of a buffer inside it (with a layout that does not overflow).
+    /// The interface's own invariants: one varying per label in each direction, values of 1 to 4 lanes, a colour
+    /// output `Target(n)` of a pixel stage with `n` of 0 to 7 and no such input, resource ids unique, every resource
+    /// spanning at least one binding with a buffer stride (a multiple of 4, up to 2048) or element width that means
+    /// something, every constant of a buffer (or of a `tbuffer` view's layout) inside it with a layout that does not
+    /// overflow, a hidden counter that belongs to a storage resource and has no binding of its own, a D3D register
+    /// class that fits the resource's kind, and no two resources on one register of one class and space.
     pub fn verify(&self) -> Result<(), String> {
         self.verify_facts()?;
         for (direction, varyings) in [("input", &self.inputs), ("output", &self.outputs)] {
             for (i, v) in varyings.iter().enumerate() {
+                if let Some(SystemValue::Target(n)) = v.system {
+                    if direction == "input" || self.stage != Stage::Pixel {
+                        return Err(format!(
+                            "{direction} {}{} is colour output {n} of a {:?} stage: only a pixel stage's outputs are",
+                            v.label.name, v.label.index, self.stage
+                        ));
+                    }
+                    if n > 7 {
+                        return Err(format!(
+                            "output {}{} is colour output {n}, not 0 to 7",
+                            v.label.name, v.label.index
+                        ));
+                    }
+                }
                 if !(1..=4).contains(&v.value.width) {
                     return Err(format!(
                         "{direction} {}{} has a width of {}, not 1 to 4",
@@ -510,6 +527,9 @@ impl Interface {
                     Err(format!("buffer {name} has elements of {} lanes", v.width))
                 }
                 BufferKind::Structured { stride: 0 } => Err(format!("buffer {name} has a stride of 0")),
+                BufferKind::Structured { stride } if !stride.is_multiple_of(4) || *stride > 2048 => Err(
+                    format!("buffer {name} has a stride of {stride}, not a multiple of 4 up to 2048"),
+                ),
                 _ => Ok(()),
             };
             match &r.kind {
@@ -520,29 +540,329 @@ impl Interface {
                 } => {
                     buffer(kind)?;
                 }
-                ResourceKind::ConstantBuffer { layout } => {
-                    for c in &layout.constants {
-                        let size =
-                            c.ty.size()
-                                .ok_or_else(|| format!("constant {name}.{} overflows", c.name))?;
-                        if c.offset.checked_add(size).is_none_or(|end| end > layout.size) {
-                            return Err(format!(
-                                "constant {name}.{} ({size} bytes at {}) reaches past the end of the {}-byte buffer",
-                                c.name, c.offset, layout.size
-                            ));
-                        }
-                    }
-                }
+                ResourceKind::ConstantBuffer { layout } => layout_fits(name, layout)?,
                 _ => {}
+            }
+            if let Some(layout) = &r.provenance.layout {
+                layout_fits(name, layout)?;
+            }
+            if let Some(target) = r.provenance.counter_of {
+                let owner = self.resource(target).ok_or_else(|| {
+                    format!(
+                        "resource {name} is the counter of resource {}, which is not there",
+                        target.0
+                    )
+                })?;
+                if target == r.id || !matches!(owner.kind, ResourceKind::Storage { .. }) {
+                    return Err(format!(
+                        "resource {name} is the counter of resource {} ({}), which is not another storage resource",
+                        target.0, owner.provenance.name
+                    ));
+                }
+                if r.provenance.d3d.is_some() {
+                    return Err(format!(
+                        "resource {name} is a hidden counter and has a binding of its own"
+                    ));
+                }
+            }
+            if let Some(d3d) = r.provenance.d3d {
+                let class = match &r.kind {
+                    ResourceKind::ConstantBuffer { .. } => D3dClass::ConstantBuffer,
+                    ResourceKind::Texture { .. }
+                    | ResourceKind::Buffer(_)
+                    | ResourceKind::AccelerationStructure => D3dClass::ShaderResource,
+                    ResourceKind::Sampler { .. } => D3dClass::Sampler,
+                    ResourceKind::Storage { .. } => D3dClass::UnorderedAccess,
+                };
+                if d3d.class != class {
+                    return Err(format!(
+                        "resource {name} is bound as {:?} but its kind is read through {class:?}",
+                        d3d.class
+                    ));
+                }
+            }
+        }
+        // two resources may not share a register: each spans `count` registers (an unbounded array, all the rest)
+        let span = |r: &Resource| {
+            r.provenance.d3d.map(|d| {
+                let first = u64::from(d.register);
+                let end = if r.is_unbounded() {
+                    u64::MAX
+                } else {
+                    first + u64::from(r.count)
+                };
+                (d.class, d.space, first, end)
+            })
+        };
+        for (i, a) in self.resources.iter().enumerate() {
+            let Some((class, space, first, end)) = span(a) else {
+                continue;
+            };
+            for b in &self.resources[..i] {
+                if let Some((c, s, f, e)) = span(b)
+                    && (c, s) == (class, space)
+                    && first < e
+                    && f < end
+                {
+                    return Err(format!(
+                        "resources {} and {} share a {class:?} register of space {space}",
+                        b.provenance.name, a.provenance.name
+                    ));
+                }
             }
         }
         Ok(())
     }
 }
 
+/// Every constant of `layout` lies inside it, and none has a layout that overflows.
+fn layout_fits(name: &str, layout: &BufferLayout) -> Result<(), String> {
+    for c in &layout.constants {
+        let size =
+            c.ty.size()
+                .ok_or_else(|| format!("constant {name}.{} overflows", c.name))?;
+        if c.offset.checked_add(size).is_none_or(|end| end > layout.size) {
+            return Err(format!(
+                "constant {name}.{} ({size} bytes at {}) reaches past the end of the {}-byte buffer",
+                c.name, c.offset, layout.size
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shader::{
+        BufferLayout, Constant, ConstantType, D3dBinding, ResourceProvenance, SampleType, TextureDim,
+    };
+
+    fn pixel() -> Interface {
+        Interface {
+            stage: Stage::Pixel,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            resources: Vec::new(),
+            facts: Default::default(),
+        }
+    }
+    fn target(index: u32, system: Option<SystemValue>) -> Varying {
+        Varying {
+            label: Label {
+                name: "SV_Target".into(),
+                index,
+            },
+            system,
+            value: Value {
+                scalar: ScalarType::Float,
+                width: 4,
+            },
+            interp: None,
+            used: true,
+            provenance: Default::default(),
+        }
+    }
+    fn texture() -> ResourceKind {
+        ResourceKind::Texture {
+            dim: TextureDim::D2,
+            arrayed: false,
+            multisampled: false,
+            sample: SampleType::Float,
+        }
+    }
+    fn res(
+        id: u32,
+        name: &str,
+        kind: ResourceKind,
+        d3d: Option<(D3dClass, u32, u32)>,
+        count: u32,
+    ) -> Resource {
+        Resource {
+            id: ResourceId(id),
+            kind,
+            count,
+            provenance: ResourceProvenance {
+                name: name.into(),
+                d3d: d3d.map(|(class, register, space)| D3dBinding {
+                    class,
+                    register,
+                    space,
+                }),
+                ..ResourceProvenance::default()
+            },
+        }
+    }
+    fn storage() -> ResourceKind {
+        ResourceKind::Storage {
+            target: StorageTarget::Buffer(BufferKind::Raw),
+            access: crate::shader::Access::ReadWrite,
+        }
+    }
+    fn broken(i: &Interface, expect: &str) {
+        let message = i.verify().unwrap_err();
+        assert!(message.contains(expect), "{expect}: {message}");
+    }
+
+    #[test]
+    fn a_colour_output_is_a_pixel_outputs_target_of_0_to_7() {
+        let mut i = pixel();
+        i.outputs = vec![
+            target(0, Some(SystemValue::Target(0))),
+            target(7, Some(SystemValue::Target(7))),
+        ];
+        assert_eq!(i.verify(), Ok(()));
+        i.outputs.push(target(8, Some(SystemValue::Target(8))));
+        broken(&i, "colour output 8, not 0 to 7");
+        // not an input, and not an output of another stage
+        let mut i = pixel();
+        i.inputs = vec![target(0, Some(SystemValue::Target(0)))];
+        broken(&i, "only a pixel stage's outputs are");
+        let mut i = pixel();
+        i.stage = Stage::Vertex;
+        i.outputs = vec![target(0, Some(SystemValue::Target(0)))];
+        broken(&i, "only a pixel stage's outputs are");
+    }
+
+    #[test]
+    fn a_structured_buffers_stride_is_a_multiple_of_4_up_to_2048() {
+        for (stride, ok) in [
+            (4, true),
+            (16, true),
+            (2048, true),
+            (0, false),
+            (6, false),
+            (2052, false),
+        ] {
+            let mut i = pixel();
+            i.resources = vec![res(
+                0,
+                "b",
+                ResourceKind::Buffer(BufferKind::Structured { stride }),
+                Some((D3dClass::ShaderResource, 0, 0)),
+                1,
+            )];
+            assert_eq!(i.verify().is_ok(), ok, "stride {stride}");
+        }
+    }
+
+    #[test]
+    fn a_tbuffers_members_lie_inside_its_layout() {
+        let layout = |offset| BufferLayout {
+            size: 16,
+            constants: vec![Constant {
+                name: "m".into(),
+                offset,
+                ty: ConstantType::Vector(Value {
+                    scalar: ScalarType::Float,
+                    width: 4,
+                }),
+                default: None,
+            }],
+        };
+        let mut view = res(
+            0,
+            "tb",
+            ResourceKind::Buffer(BufferKind::Typed(Value {
+                scalar: ScalarType::Float,
+                width: 4,
+            })),
+            Some((D3dClass::ShaderResource, 0, 0)),
+            1,
+        );
+        view.provenance.layout = Some(layout(0));
+        let mut i = pixel();
+        i.resources = vec![view.clone()];
+        assert_eq!(i.verify(), Ok(()));
+        i.resources[0].provenance.layout = Some(layout(4));
+        broken(&i, "reaches past the end");
+    }
+
+    #[test]
+    fn a_hidden_counter_belongs_to_a_storage_resource_and_has_no_binding() {
+        let counter = |of: u32, d3d| {
+            let mut c = res(1, "c", ResourceKind::Buffer(BufferKind::Raw), d3d, 1);
+            c.provenance.counter_of = Some(ResourceId(of));
+            c
+        };
+        let uav = res(0, "u", storage(), Some((D3dClass::UnorderedAccess, 0, 0)), 1);
+        let mut i = pixel();
+        i.resources = vec![uav.clone(), counter(0, None)];
+        assert_eq!(i.verify(), Ok(()));
+        i.resources = vec![uav.clone(), counter(5, None)];
+        broken(&i, "which is not there");
+        i.resources = vec![uav.clone(), counter(1, None)];
+        broken(&i, "not another storage resource");
+        // the owner is a texture
+        i.resources = vec![
+            res(0, "t", texture(), Some((D3dClass::ShaderResource, 0, 0)), 1),
+            counter(0, None),
+        ];
+        broken(&i, "not another storage resource");
+        // a counter with a binding of its own
+        i.resources = vec![uav, counter(0, Some((D3dClass::ShaderResource, 3, 0)))];
+        broken(&i, "binding of its own");
+    }
+
+    #[test]
+    fn a_register_class_fits_the_kind_and_a_register_holds_one_resource() {
+        let cb = ResourceKind::ConstantBuffer {
+            layout: BufferLayout {
+                size: 16,
+                constants: Vec::new(),
+            },
+        };
+        let kinds = [
+            (cb.clone(), D3dClass::ConstantBuffer),
+            (texture(), D3dClass::ShaderResource),
+            (ResourceKind::Buffer(BufferKind::Raw), D3dClass::ShaderResource),
+            (ResourceKind::AccelerationStructure, D3dClass::ShaderResource),
+            (ResourceKind::Sampler { comparison: false }, D3dClass::Sampler),
+            (storage(), D3dClass::UnorderedAccess),
+        ];
+        for (kind, class) in &kinds {
+            let mut i = pixel();
+            i.resources = vec![res(0, "r", kind.clone(), Some((*class, 0, 0)), 1)];
+            assert_eq!(i.verify(), Ok(()), "{kind:?}");
+            // every other class is refused
+            for (_, other) in kinds.iter().filter(|(_, c)| c != class) {
+                i.resources = vec![res(0, "r", kind.clone(), Some((*other, 0, 0)), 1)];
+                broken(&i, "its kind is read through");
+            }
+        }
+        let t = |id, register, space, count| {
+            res(
+                id,
+                &format!("t{id}"),
+                texture(),
+                Some((D3dClass::ShaderResource, register, space)),
+                count,
+            )
+        };
+        let mut i = pixel();
+        // the same register in another space, or another class, or the next register, is free
+        i.resources = vec![t(0, 2, 0, 1), t(1, 2, 1, 1), t(2, 3, 0, 1)];
+        assert_eq!(i.verify(), Ok(()));
+        i.resources.push(res(
+            3,
+            "s",
+            ResourceKind::Sampler { comparison: false },
+            Some((D3dClass::Sampler, 2, 0)),
+            1,
+        ));
+        assert_eq!(i.verify(), Ok(()));
+        // the same register twice, an array over a register, an unbounded array over a later one
+        i.resources = vec![t(0, 2, 0, 1), t(1, 2, 0, 1)];
+        broken(&i, "share a ShaderResource register of space 0");
+        i.resources = vec![t(0, 2, 0, 4), t(1, 5, 0, 1)];
+        assert_eq!(i.verify(), Ok(()));
+        i.resources = vec![t(0, 2, 0, 4), t(1, 5, 0, 1), t(2, 4, 0, 1)];
+        broken(&i, "t2 share");
+        i.resources = vec![t(0, 2, 0, Resource::UNBOUNDED), t(1, 90, 0, 1)];
+        broken(&i, "share a ShaderResource");
+        i.resources = vec![t(0, 2, 0, Resource::UNBOUNDED), t(1, 1, 0, 1), t(2, 2, 1, 1)];
+        assert_eq!(i.verify(), Ok(()));
+    }
 
     #[test]
     fn a_varying_serializes_with_its_provenance() {
