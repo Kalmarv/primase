@@ -8,6 +8,7 @@ pub mod assemble;
 pub mod correspond;
 pub mod curve;
 pub mod deform;
+pub mod fit;
 pub mod joint_table;
 pub mod map;
 pub mod passes;
@@ -21,10 +22,11 @@ pub mod weights;
 pub use assemble::{
     AssembleCharacter, Correspondence, ReferencePose, UnweightedRests, WeightedRests, assemble_character,
 };
+pub use fit::{Fit, FitReport};
 pub use map::{MapClip, Rests, Unmapped, map_clip};
 pub use passes::{EvaluateClip, NormalizeSkinWeights, PoseSkin, RootChoice, register};
 pub use retarget::{Reference, RetargetClip, Translation, retarget_clip};
-pub use retarget_skin::{RetargetSkin, UnmappedJoints, retarget_skin};
+pub use retarget_skin::{Placement, RetargetSkin, UnmappedJoints, retarget_skin};
 pub use weights::{LimitSkinInfluences, QuantizeSkinWeights};
 
 /// What evaluation could not do, with why.

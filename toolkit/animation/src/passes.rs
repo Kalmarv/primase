@@ -593,7 +593,11 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register_requiring(
         "retarget-skin",
         crate::retarget_skin::retarget_skin,
-        &[("unmapped", "refuse"), ("placement", "automatic")],
+        &[
+            ("fit", "positions"),
+            ("unmapped", "refuse"),
+            ("placement", "automatic"),
+        ],
     );
     reg.register_requiring(
         "retarget-clip",

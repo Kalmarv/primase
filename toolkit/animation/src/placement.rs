@@ -8,9 +8,10 @@
 //! `P_t = S_j * fitted_j^-1 * T_t`
 //!
 //! (`S_j` the source joint's model rest, `T_t` the target joint's): the frame the mesh weighted to `j` is carried by, so
-//! that `fitted_j = T_t * P_t^-1 * S_j`. The fit's own placement is [`Frames::automatic`]; for a mapped joint it sits
-//! at the source joint's position. A stated [`JointOffset`] moves `P_t` in the source's model space: `P_t' = O * P_t`,
-//! `O` a translation by the offset's translation after a turn by its rotation about `P_t`'s origin. The mesh weighted to
+//! that `fitted_j = T_t * P_t^-1 * S_j`. The fit's own placement is [`Frames::automatic`]; under the positions fit
+//! ([`fit`]) a mapped joint's frame sits at the source joint's position, under the lengths fit
+//! ([`crate::fit::Fit::Lengths`]) where the source's segment lengths put the target joint. A stated [`JointOffset`] moves
+//! `P_t` in the source's model space: `P_t' = O * P_t`, `O` a translation by the offset's translation after a turn by its rotation about `P_t`'s origin. The mesh weighted to
 //! `j` then follows the moved frame, and [`place`] returns the `fitted` that does so:
 //! `fitted_j' = fitted_j * S_j^-1 * O^-1 * S_j`.
 //!
