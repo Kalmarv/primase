@@ -629,6 +629,50 @@ struct Taken {
     pause_matched: BTreeSet<String>,
 }
 
+/// The folders of a map's folder the writer owns: whatever a run does not write of them is not left from an earlier one.
+const OWNED_FOLDERS: [&str; 4] = ["meshes", "textures", "collision", "ui"];
+
+/// Whether a file of a map's folder (by its name there) is the writer's: its indexes and records, and the GLBs of its
+/// collision, hulls and water, written beside them.
+fn owned_file(name: &str) -> bool {
+    [
+        "map.json",
+        "stats.json",
+        "textures_index.json",
+        crate::records::VERTEX_BLEND_RECORD,
+        "trainer.json",
+    ]
+    .contains(&name)
+        || name.ends_with(".glb")
+}
+
+/// A map's folder made ready for a run: everything the writer owns in it removed (the one list is [`OWNED_FOLDERS`]
+/// and [`owned_file`], so a record this run has no reason to write, a pause-map picture, a vertex-blend list or a
+/// collision file of an earlier run cannot be taken for this map's), `meshes` and `textures` made empty. What else the
+/// folder holds is not the writer's and stays.
+fn begin_map(out_dir: &Path) -> Result<()> {
+    let io = |path: &Path| {
+        let path = path.to_owned();
+        move |source| Error::Io { path, source }
+    };
+    if out_dir.exists() {
+        for entry in std::fs::read_dir(out_dir).map_err(io(out_dir))? {
+            let entry = entry.map_err(io(out_dir))?;
+            let (path, name) = (entry.path(), entry.file_name().to_string_lossy().into_owned());
+            let kind = entry.file_type().map_err(io(&path))?;
+            if kind.is_dir() && OWNED_FOLDERS.contains(&name.as_str()) {
+                std::fs::remove_dir_all(&path).map_err(io(&path))?;
+            } else if !kind.is_dir() && owned_file(&name) {
+                std::fs::remove_file(&path).map_err(io(&path))?;
+            }
+        }
+    }
+    for folder in ["meshes", "textures"] {
+        fresh_folder(&out_dir.join(folder))?;
+    }
+    Ok(())
+}
+
 /// The folder `d` made afresh (empty).
 fn fresh_folder(d: &Path) -> Result<()> {
     if d.exists() {
@@ -718,8 +762,7 @@ impl MapSink {
         if self.taken.is_none() {
             // the gathered cells' folder is the map's, made with the first cell
             if self.cells.out_dir.is_none() {
-                fresh_folder(&out_dir.join("meshes"))?;
-                fresh_folder(&out_dir.join("textures"))?;
+                begin_map(&out_dir)?;
             }
             // the writer replays each part's own stack and chains as the part comes (below): made without them, so
             // no copy of the first part's is kept
@@ -1012,8 +1055,7 @@ impl MapSink {
             Some(_) => {}
             None => {
                 let out_dir = self.encoding.out_root.join(&layout.name);
-                fresh_folder(&out_dir.join("meshes"))?;
-                fresh_folder(&out_dir.join("textures"))?;
+                begin_map(&out_dir)?;
                 c.out_dir = Some(out_dir);
                 c.layout = Some(layout.clone());
             }
@@ -1188,12 +1230,6 @@ impl MapSink {
                 })?;
             }
             std::fs::write(&p, bytes).map_err(|source| Error::Io { path: p, source })?;
-        }
-        if !writer.files.contains_key("trainer.json") {
-            let p = out_dir.join("trainer.json");
-            if p.exists() {
-                std::fs::remove_file(&p).map_err(|source| Error::Io { path: p, source })?;
-            }
         }
         let stats = stats_json(&writer, &s, &o, placements, failed)?;
         let p = out_dir.join("stats.json");
