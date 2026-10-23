@@ -4,9 +4,10 @@
 //! ([`GtaBlendStreams`]) and the drawable's skeleton ([`GtaSkeleton`]: each bone's local transform and its stored
 //! inverse bind, [`Skeleton`]). This pass makes them what core states:
 //!
-//! - **The skeleton** (`core.skeleton`, one per prototype, shared by its levels of detail): a joint per bone, its id
-//!   the bone's index, its name the bone's tag, its parent and its local transform as stored (`Rest::Affine`), in
-//!   the world's frame.
+//! - **The skeleton** (`core.skeleton`, on the prototype that holds the [`GtaSkeleton`], shared by its levels of detail
+//!   and by the prototypes that refer to it with [`GtaSkeletonRef`], a component ped's parts): a joint per bone, its
+//!   id the bone's index, its name the bone's tag, its parent and its local transform as stored (`Rest::Affine`),
+//!   in the world's frame.
 //! - **The skin** (`core.skin`, on the entity holding the mesh): each skinned primitive's `Joints(0)` and `Weights(0)`
 //!   are the stored streams (four unsigned bytes a vertex each; weights that sum to 255, [`WeightRule::SumsToOne`]),
 //!   its palette the geometry's: slot `k` is the joint of bone `palette[k]` with that bone's stored inverse bind
@@ -26,7 +27,7 @@ use primase_core::skeleton::{Joint, JointId, Rest, Skeleton};
 use primase_core::skin::{Binding, BindingId, Deformation, Influences, Skin, Slot, WeightRule};
 use primase_core::{Entity, Lods, Mesh, Semantic, Stream, Transform, World};
 
-use crate::components::{BlendStreams, GTA, GtaBlendStreams, GtaSkeleton};
+use crate::components::{BlendStreams, GTA, GtaBlendStreams, GtaSkeleton, GtaSkeletonRef};
 
 /// A transform of the form `[x, y, z, translation]` rows (`p' = A (p, 1)`) as core's columns.
 fn affine(rows: &[[f32; 4]; 3]) -> Transform {
@@ -76,10 +77,12 @@ impl Pass for LowerGtaSkin {
             .flat_map(|(proto, l)| l.forms.iter().map(move |f| (f.form, proto)))
             .collect();
         let holders: Vec<Entity> = w.iter::<GtaBlendStreams>().map(|(e, _)| e).collect();
-        // the core.skeleton made for a prototype
-        let mut made: BTreeMap<Entity, Entity> = BTreeMap::new();
+        // the entities that got their core.skeleton
+        let mut made: std::collections::BTreeSet<Entity> = std::collections::BTreeSet::new();
         for holder in holders {
             let proto = owner.get(&holder).copied().unwrap_or(holder);
+            // the prototype's skeleton is its own, or the one it refers to
+            let proto = w.get::<GtaSkeletonRef>(proto).map_or(proto, |r| r.0);
             let blend = w
                 .get::<GtaBlendStreams>(holder)
                 .map(|b| b.0.clone())
@@ -135,12 +138,11 @@ impl Pass for LowerGtaSkin {
             if lowered.iter().all(Option::is_none) {
                 continue;
             }
-            let skeleton = *made.entry(proto).or_insert_with(|| {
-                let e = w.spawn();
-                w.insert(e, skeleton_of(&bones));
+            let skeleton = proto;
+            if made.insert(proto) {
+                w.insert(proto, skeleton_of(&bones));
                 log.count("skeletons made", 1);
-                e
-            });
+            }
             // the streams onto the primitives
             let mut mesh = w.remove::<Mesh>(holder).ok_or("a mesh")?;
             let mut influences = Vec::with_capacity(lowered.len());
@@ -418,5 +420,35 @@ mod tests {
             log.counts["skinned primitives of a drawable with no skeleton, left as gta.blend_streams"],
             1
         );
+    }
+
+    /// A prototype that refers to another's skeleton (a ped's part and the ped's fragment) is skinned to it: the
+    /// core.skeleton goes on the referred entity, once for any number of parts.
+    #[test]
+    fn a_part_is_skinned_to_the_skeleton_it_refers_to() {
+        let (mut w, part) = world(BlendStreams {
+            weights: None,
+            indices: None,
+            palette: vec![],
+        });
+        // the skeleton moves to an entity of its own
+        let bones = w.remove::<GtaSkeleton>(part).unwrap();
+        let rig = w.spawn();
+        w.insert(rig, bones);
+        w.insert(part, GtaSkeletonRef(rig));
+        let second = w.spawn();
+        w.insert(second, w.get::<Mesh>(part).unwrap().clone());
+        w.insert(second, w.get::<GtaBlendStreams>(part).unwrap().clone());
+        w.insert(second, GtaSkeletonRef(rig));
+        let mut log = PassLog::default();
+        LowerGtaSkin.run(&mut w, &mut log).unwrap();
+        assert_eq!(w.verify_components(), vec![]);
+        for e in [part, second] {
+            assert_eq!(w.get::<Skin>(e).unwrap().bindings[0].skeleton, rig);
+            assert!(!w.has::<Skeleton>(e));
+        }
+        assert!(w.has::<Skeleton>(rig));
+        assert_eq!(log.counts["skeletons made"], 1);
+        assert_eq!(log.counts["primitives skinned"], 2);
     }
 }

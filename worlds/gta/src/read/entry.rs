@@ -97,7 +97,7 @@ impl GtaSource {
 
     /// The archive set and state a file's textures resolve through: the state whose archive set has it live, Story's
     /// when neither does.
-    fn lookup_of(&self, ext: &str, stem: &str, file: FileRef) -> (Lookup<'_>, bool) {
+    pub(crate) fn lookup_of(&self, ext: &str, stem: &str, file: FileRef) -> (Lookup<'_>, bool) {
         let hash = primase_hash::joaat(stem.as_bytes());
         let live = |l: Lookup<'_>| l.set.tables.get(ext).and_then(|t| t.get(&hash)) == Some(&file);
         if !live(self.story()) && live(self.online()) {
@@ -278,7 +278,7 @@ impl GtaSource {
 
 /// An archetype for a drawable no live map types file names: its asset and nothing else, in particular no texture
 /// dictionary (the drawable's own textures and the resident detail dictionary are all its materials can find).
-fn made_archetype(asset_type: i32, asset_name: u32, dictionary: u32) -> GtaArchetype {
+pub(crate) fn made_archetype(asset_type: i32, asset_name: u32, dictionary: u32) -> GtaArchetype {
     GtaArchetype {
         ytyp: String::new(),
         name: asset_name,

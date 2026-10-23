@@ -8,6 +8,7 @@
 //! | LOD form | `core.mesh` and [`GtaSources`] (one of the drawable's coarser LODs), [`GtaBlendStreams`] likewise, unplaced |
 //! | material | [`GtaShader`] (one per drawable and shader) |
 //! | texture | `core.texture`, `core.name`, `core.source` |
+//! | ped part | a prototype of a component ped's drawable dictionary entry: [`GtaPedPart`], [`GtaSkeletonRef`], `core.condition` on its slot's `gta.ped.<slot>` axis |
 //! | effect | [`GtaEffect`] (the programs a drawable's shader name selects), [`GtaMaterialEffect`] (a material's effect) |
 //! | shader program | `core.shader`, `core.name` |
 
@@ -589,6 +590,52 @@ pub struct GtaSkeleton(pub crate::rage::drawable::Bones);
 
 impl Component for GtaSkeleton {
     const NAME: &'static str = "gta.skeleton";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+}
+
+/// The prototype whose [`GtaSkeleton`] a skinned prototype is bound to: a component ped's drawables carry no skeleton
+/// (their blend indices are bone indices of the ped's, which its fragment holds).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct GtaSkeletonRef(pub Entity);
+
+impl Component for GtaSkeletonRef {
+    const NAME: &'static str = "gta.skeleton_ref";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.0);
+    }
+    fn verify(&self, _e: Entity, w: &primase_core::World) -> Result<(), String> {
+        if w.has::<GtaSkeleton>(self.0) {
+            Ok(())
+        } else {
+            Err(format!("{:?} holds no gta.skeleton", self.0))
+        }
+    }
+}
+
+/// A drawable of a component ped, as the ped's variation info offers it ([`crate::rage::ped`]): its slot, its index in
+/// the slot, the name hash of its entry in the ped's drawable dictionary, and what the info says of it, as stored.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GtaPedPart {
+    /// The slot's name (`head`, `uppr`, ...).
+    pub slot: &'static str,
+    pub drawable: u32,
+    pub entry: u32,
+    pub prop_mask: u8,
+    pub alternatives: u8,
+    /// Its texture variations: `[id, distribution]` each.
+    pub textures: Vec<[u8; 2]>,
+    pub owns_cloth: bool,
+}
+
+impl Component for GtaPedPart {
+    const NAME: &'static str = "gta.ped_part";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)

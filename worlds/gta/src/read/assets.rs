@@ -240,6 +240,9 @@ pub(crate) struct Ctx<'a> {
     textures: BTreeMap<(String, u32), Entity>,
     /// Drawable dictionaries read, by file.
     ydds: BTreeMap<FileRef, DrawableDictionary>,
+    /// Texture dictionary files searched first, in order, for every texture a drawable names (a component ped's own
+    /// `.ytd`: its drawables name textures that dictionary holds, whatever the archetype's lookup).
+    pub(crate) own_dictionaries: Vec<FileRef>,
     pub(crate) report: AssetReport,
 }
 
@@ -251,6 +254,7 @@ impl<'a> Ctx<'a> {
             dicts: BTreeMap::new(),
             textures: BTreeMap::new(),
             ydds: BTreeMap::new(),
+            own_dictionaries: Vec::new(),
             report: AssetReport::default(),
         }
     }
@@ -513,6 +517,20 @@ impl Ctx<'_> {
                 .and_then(Option::as_ref)
         {
             return self.texture_entity(w, ydr, t).map(Some);
+        }
+        for f in self.own_dictionaries.clone() {
+            if !self.dicts.contains_key(&f) {
+                let dict = TextureDictionary::read_resource(&self.decode(f)?)?;
+                let path = lookup.set.path(f).to_string();
+                self.dicts.insert(f, (path, dict));
+            }
+            let found = self.dicts.get(&f).and_then(|(path, dict)| {
+                let i = dict.hashes.iter().position(|&x| x == h)?;
+                dict.textures.get(i)?.clone().map(|t| (path.clone(), t))
+            });
+            if let Some((path, t)) = found {
+                return self.texture_entity(w, &path, &t).map(Some);
+            }
         }
         for d in lookup.texture_dictionaries(txd) {
             let found = self.dictionary(lookup, d)?.and_then(|(path, dict)| {
