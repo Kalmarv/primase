@@ -158,9 +158,11 @@ impl<const N: usize> Scratch<N> {
     }
 }
 
-/// Runs an [`Executable`] for one invocation (`N` = 1) or a 2 x 2 quad in lockstep (`N` = 4: lanes 0 and 1 the top row,
-/// 2 and 3 the bottom), as a GPU does: lanes that diverge are masked, a screen derivative is a difference inside the
-/// quad, a lane that is discarded goes on as a helper. A runner is reused for any number of runs.
+/// Runs an [`Executable`] for a 2 x 2 quad in lockstep (`N` = 4: lanes 0 and 1 the top row, 2 and 3 the bottom), as a
+/// GPU does: lanes that diverge are masked, a screen derivative is a difference inside the quad, a lane that is
+/// discarded goes on as a helper. Any other `N` runs that many invocations of their own (`N` = 1, one), in lockstep
+/// and masked where they diverge, each as it would run alone: its own steps and budget, a discard ending it, the
+/// derivatives of its inputs the ones the caller gives for every lane. A runner is reused for any number of runs.
 pub struct Runner<'a, const N: usize, M: Mask = u8> {
     c: &'a Executable,
     b: &'a Bound<'a>,
@@ -168,7 +170,11 @@ pub struct Runner<'a, const N: usize, M: Mask = u8> {
     mem: Vec<u32>,
     sampler: &'a mut dyn Backend,
     ftz: bool,
+    grouping: Grouping,
+    /// The steps of a quad or a thread group, counted once for all its lanes.
     steps: u64,
+    /// The steps of each lane of independent invocations.
+    lane_steps: [u64; N],
     samples: [u64; N],
     outs: [Vec<Reg>; N],
     /// What an any-hit program decided, per lane.
@@ -193,11 +199,28 @@ pub struct Runner<'a, const N: usize, M: Mask = u8> {
 
 impl<const N: usize, M: Mask> std::fmt::Debug for Runner<'_, N, M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // independent invocations: the most steps a lane has taken
+        let steps = match self.grouping {
+            Grouping::Independent => self.lane_steps.iter().copied().max().unwrap_or(0),
+            Grouping::Quad | Grouping::Group => self.steps,
+        };
         f.debug_struct("Runner")
             .field("lanes", &N)
-            .field("steps", &self.steps)
+            .field("grouping", &self.grouping)
+            .field("steps", &steps)
             .finish_non_exhaustive()
     }
+}
+
+/// What the lanes of a run are to each other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Grouping {
+    /// Invocations of their own.
+    Independent,
+    /// A 2 x 2 quad.
+    Quad,
+    /// A compute thread group.
+    Group,
 }
 
 #[derive(Clone, Copy)]
@@ -216,6 +239,19 @@ impl<M: Mask> Default for Exits<M> {
     }
 }
 
+/// `$body` for each lane `$l` of `$active` (a runner's lanes): without a test per lane when every lane is active.
+macro_rules! each {
+    ($active:expr, $l:ident, $body:block) => {
+        if $active == M::first(N) {
+            for $l in 0..N $body
+        } else {
+            for $l in 0..N {
+                if $active.has($l) $body
+            }
+        }
+    };
+}
+
 #[inline(always)]
 fn fl(x: f32, on: bool) -> f32 {
     if on && x.is_subnormal() {
@@ -229,9 +265,9 @@ fn f(x: u32) -> f32 {
     f32::from_bits(x)
 }
 
-impl<'a, const N: usize> Runner<'a, N, u8> {
-    /// A runner of `exe` over `bound`, answering requests through `backend`. A scalar run (`N` = 1) that reads
-    /// derivatives of its inputs takes them in `derivatives`; a quad takes its own.
+impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
+    /// A runner of `exe` over `bound`, answering requests through `backend`. Invocations of their own that read
+    /// derivatives of their inputs take them in `derivatives`, the same for every lane; a quad takes its own.
     pub fn new(
         exe: &'a Executable,
         bound: &'a Bound<'a>,
@@ -259,30 +295,57 @@ impl<'a, const N: usize> Runner<'a, N, u8> {
             mem: scratch.mem,
             sampler,
             ftz,
+            grouping: if N == 4 {
+                Grouping::Quad
+            } else {
+                Grouping::Independent
+            },
             steps: 0,
+            lane_steps: [0; N],
             samples: [0; N],
             outs: std::array::from_fn(|_| Vec::new()),
             decisions: [Decision::None; N],
-            killed: 0,
+            killed: M::none(),
             store: Vec::new(),
             elem_store: Vec::new(),
             queries: Vec::new(),
-            group: 0,
-            retired: 0,
+            group: M::none(),
+            retired: M::none(),
             lanes: 0,
             wave: 0,
             derivs,
         }
     }
-}
 
-impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
     /// Give the registers back, to start the next runner of this program with.
     pub fn into_scratch(self) -> Scratch<N> {
         Scratch {
             regs: self.regs,
             mem: self.mem,
         }
+    }
+
+    /// Count `n` steps the lanes of `active` take, refusing a run past its budget: each lane's own for independent
+    /// invocations, the quad's or the group's once.
+    #[inline(always)]
+    fn count(&mut self, active: M, n: u64) -> Result<(), String> {
+        let over = if self.grouping == Grouping::Independent {
+            let mut over = false;
+            for l in 0..N {
+                if active.has(l) {
+                    self.lane_steps[l] += n;
+                    over |= self.lane_steps[l] > STEP_LIMIT;
+                }
+            }
+            over
+        } else {
+            self.steps += n;
+            self.steps > STEP_LIMIT
+        };
+        if over {
+            return Err("execution budget exceeded".into());
+        }
+        Ok(())
     }
 
     fn mem_get(&mut self, loc: Loc, lane: usize, extra: u32, n: u8) -> Result<Reg, String> {
@@ -441,152 +504,148 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
     }
 
     fn ops(&mut self, lo: u32, hi: u32, active: M) -> Result<(), String> {
-        self.steps += (hi - lo) as u64;
-        if self.steps > STEP_LIMIT {
-            return Err("execution budget exceeded".into());
-        }
+        self.count(active, (hi - lo) as u64)?;
         let c = self.c;
         let ftz = self.ftz;
         for k in lo..hi {
             let (dst, op) = &c.ops[k as usize];
             let dst = *dst as usize * N;
             match op {
-                Op::Load { loc, n } => {
-                    for l in 0..N {
-                        if active.has(l) {
-                            self.regs[dst + l] = self.mem_get(*loc, l, 0, *n)?;
-                        }
+                Op::Load { loc, n } => each!(active, l, {
+                    self.regs[dst + l] = self.mem_get(*loc, l, 0, *n)?;
+                }),
+                Op::LoadLanes { loc, offs, n } => each!(active, l, {
+                    let mut r = [0u32; 4];
+                    for i in 0..*n as usize {
+                        r[i] = self.mem_get(*loc, l, offs[i] as u32, 1)?[0];
                     }
-                }
-                Op::LoadLanes { loc, offs, n } => {
-                    for l in 0..N {
-                        if active.has(l) {
-                            let mut r = [0u32; 4];
-                            for i in 0..*n as usize {
-                                r[i] = self.mem_get(*loc, l, offs[i] as u32, 1)?[0];
-                            }
-                            self.regs[dst + l] = r;
-                        }
-                    }
-                }
-                Op::LoadDyn { ptr, n } => {
-                    for l in 0..N {
-                        if active.has(l) {
-                            let x = self.dyn_extra(ptr, l)?;
-                            self.regs[dst + l] = self.mem_get(ptr.loc, l, x, *n)?;
-                        }
-                    }
-                }
+                    self.regs[dst + l] = r;
+                }),
+                Op::LoadDyn { ptr, n } => each!(active, l, {
+                    let x = self.dyn_extra(ptr, l)?;
+                    self.regs[dst + l] = self.mem_get(ptr.loc, l, x, *n)?;
+                }),
                 Op::Swizzle { src, pat, n } => {
-                    for l in 0..N {
-                        if active.has(l) {
-                            let s = self.regs[*src as usize * N + l];
-                            let mut r = [0u32; 4];
-                            for i in 0..*n as usize {
-                                r[i] = s[pat[i] as usize];
-                            }
-                            self.regs[dst + l] = r;
+                    let src = *src as usize * N;
+                    each!(active, l, {
+                        let s = self.regs[src + l];
+                        let mut r = [0u32; 4];
+                        for i in 0..*n as usize {
+                            r[i] = s[pat[i] as usize];
                         }
-                    }
+                        self.regs[dst + l] = r;
+                    })
                 }
                 Op::Lane { src, i } => {
-                    for l in 0..N {
-                        if active.has(l) {
-                            let s = self.regs[*src as usize * N + l];
-                            self.regs[dst + l] = [s[*i as usize]; 4];
-                        }
-                    }
+                    let (src, i) = (*src as usize * N, *i as usize);
+                    each!(active, l, {
+                        self.regs[dst + l] = [self.regs[src + l][i]; 4];
+                    })
                 }
                 Op::Splat { src, n } => {
                     let _ = n;
-                    for l in 0..N {
-                        if active.has(l) {
-                            let s = self.regs[*src as usize * N + l];
-                            self.regs[dst + l] = [s[0]; 4];
+                    let src = *src as usize * N;
+                    each!(active, l, {
+                        self.regs[dst + l] = [self.regs[src + l][0]; 4];
+                    })
+                }
+                Op::Compose { parts, np } => each!(active, l, {
+                    let mut r = [0u32; 4];
+                    let mut at = 0;
+                    for p in &parts[..*np as usize] {
+                        let s = self.regs[p.0 as usize * N + l];
+                        for w in &s[..p.1 as usize] {
+                            r[at] = *w;
+                            at += 1;
                         }
                     }
-                }
-                Op::Compose { parts, np } => {
-                    for l in 0..N {
-                        if active.has(l) {
-                            let mut r = [0u32; 4];
-                            let mut at = 0;
-                            for p in &parts[..*np as usize] {
-                                let s = self.regs[p.0 as usize * N + l];
-                                for w in &s[..p.1 as usize] {
-                                    r[at] = *w;
-                                    at += 1;
-                                }
-                            }
-                            self.regs[dst + l] = r;
-                        }
-                    }
-                }
+                    self.regs[dst + l] = r;
+                }),
                 Op::Un { op, src, n } => {
-                    for l in 0..N {
-                        if active.has(l) {
-                            let s = self.regs[*src as usize * N + l];
-                            let mut r = [0u32; 4];
-                            for i in 0..*n as usize {
-                                r[i] = match op {
-                                    UnOp::NegF => s[i] ^ 0x8000_0000,
-                                    UnOp::NegI => (s[i] as i32).wrapping_neg() as u32,
-                                    UnOp::Not => (s[i] == 0) as u32,
-                                    UnOp::BitNot => !s[i],
-                                };
-                            }
-                            self.regs[dst + l] = r;
-                        }
+                    let (src, n) = (*src as usize * N, *n as usize);
+                    // each operation's own loop over the lanes
+                    macro_rules! un {
+                        ($w:ident => $e:expr) => {
+                            each!(active, l, {
+                                let s = self.regs[src + l];
+                                let mut r = [0u32; 4];
+                                for i in 0..n {
+                                    let $w = s[i];
+                                    r[i] = $e;
+                                }
+                                self.regs[dst + l] = r;
+                            })
+                        };
+                    }
+                    match op {
+                        UnOp::NegF => un!(w => w ^ 0x8000_0000),
+                        UnOp::NegI => un!(w => (w as i32).wrapping_neg() as u32),
+                        UnOp::Not => un!(w => (w == 0) as u32),
+                        UnOp::BitNot => un!(w => !w),
                     }
                 }
                 Op::Bin { op, a, b, n, a1, b1 } => {
-                    for l in 0..N {
-                        if active.has(l) {
-                            let x = self.regs[*a as usize * N + l];
-                            let y = self.regs[*b as usize * N + l];
-                            let mut r = [0u32; 4];
-                            for i in 0..*n as usize {
-                                r[i] = bin(*op, x[if *a1 { 0 } else { i }], y[if *b1 { 0 } else { i }], ftz)?;
+                    let (a, b, n) = (*a as usize * N, *b as usize * N, *n as usize);
+                    // a scalar operand's lane 0 for every component
+                    let (sa, sb) = (usize::from(!*a1), usize::from(!*b1));
+                    // each operation's own loop over the lanes, `bin` of a constant operation inlined into it
+                    macro_rules! bin {
+                        ($($o:ident),*) => {
+                            match op {
+                                $(BinOp::$o => each!(active, l, {
+                                    let x = self.regs[a + l];
+                                    let y = self.regs[b + l];
+                                    let mut r = [0u32; 4];
+                                    for i in 0..n {
+                                        r[i] = bin(BinOp::$o, x[i * sa], y[i * sb], ftz)?;
+                                    }
+                                    self.regs[dst + l] = r;
+                                }),)*
                             }
-                            self.regs[dst + l] = r;
-                        }
+                        };
                     }
+                    bin!(
+                        AddF, SubF, MulF, DivF, ModF, AddU, SubU, MulU, DivU, ModU, And, Or, Xor, Shl, ShrU,
+                        ShrI, EqW, NeW, EqF, NeF, LtF, LeF, GtF, GeF, LtU, LeU, GtU, GeU, LtI, LeI, GtI, GeI,
+                        LAnd, LOr
+                    )
                 }
                 Op::Select { c: cs, a, b, n, c1 } => {
-                    for l in 0..N {
-                        if active.has(l) {
-                            let cc = self.regs[*cs as usize * N + l];
-                            let x = self.regs[*a as usize * N + l];
-                            let y = self.regs[*b as usize * N + l];
-                            let mut r = [0u32; 4];
-                            for i in 0..*n as usize {
-                                r[i] = if cc[if *c1 { 0 } else { i }] != 0 {
-                                    x[i]
-                                } else {
-                                    y[i]
-                                };
-                            }
-                            self.regs[dst + l] = r;
+                    let (cs, a, b, n) = (*cs as usize * N, *a as usize * N, *b as usize * N, *n as usize);
+                    let sc = usize::from(!*c1);
+                    each!(active, l, {
+                        let cc = self.regs[cs + l];
+                        let x = self.regs[a + l];
+                        let y = self.regs[b + l];
+                        let mut r = [0u32; 4];
+                        for i in 0..n {
+                            r[i] = if cc[i * sc] != 0 { x[i] } else { y[i] };
                         }
-                    }
+                        self.regs[dst + l] = r;
+                    })
                 }
                 Op::Cvt { op, src, n } => {
-                    for l in 0..N {
-                        if active.has(l) {
-                            let s = self.regs[*src as usize * N + l];
-                            let mut r = [0u32; 4];
-                            for i in 0..*n as usize {
-                                r[i] = match op {
-                                    CvtOp::F2I => (f(s[i]) as i32) as u32,
-                                    CvtOp::F2U => f(s[i]) as u32,
-                                    CvtOp::I2F => (s[i] as i32 as f32).to_bits(),
-                                    CvtOp::U2F => (s[i] as f32).to_bits(),
-                                    CvtOp::B2F => (if s[i] != 0 { 1.0f32 } else { 0.0 }).to_bits(),
-                                    CvtOp::B2U => u32::from(s[i] != 0),
-                                };
-                            }
-                            self.regs[dst + l] = r;
-                        }
+                    let (src, n) = (*src as usize * N, *n as usize);
+                    macro_rules! cvt {
+                        ($w:ident => $e:expr) => {
+                            each!(active, l, {
+                                let s = self.regs[src + l];
+                                let mut r = [0u32; 4];
+                                for i in 0..n {
+                                    let $w = s[i];
+                                    r[i] = $e;
+                                }
+                                self.regs[dst + l] = r;
+                            })
+                        };
+                    }
+                    match op {
+                        CvtOp::F2I => cvt!(w => (f(w) as i32) as u32),
+                        CvtOp::F2U => cvt!(w => f(w) as u32),
+                        CvtOp::I2F => cvt!(w => (w as i32 as f32).to_bits()),
+                        CvtOp::U2F => cvt!(w => (w as f32).to_bits()),
+                        CvtOp::B2F => cvt!(w => (if w != 0 { 1.0f32 } else { 0.0 }).to_bits()),
+                        CvtOp::B2U => cvt!(w => u32::from(w != 0)),
                     }
                 }
                 Op::Math {
@@ -597,17 +656,16 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                     n,
                     c1,
                 } => {
-                    for l in 0..N {
-                        if active.has(l) {
-                            let x = self.regs[*a as usize * N + l];
-                            let y = self.regs[*b as usize * N + l];
-                            let mut z = self.regs[*cc as usize * N + l];
-                            if *c1 {
-                                z = [z[0]; 4];
-                            }
-                            self.regs[dst + l] = math(*mf, x, y, z, *n, ftz);
+                    let (a, b, cc) = (*a as usize * N, *b as usize * N, *cc as usize * N);
+                    each!(active, l, {
+                        let x = self.regs[a + l];
+                        let y = self.regs[b + l];
+                        let mut z = self.regs[cc + l];
+                        if *c1 {
+                            z = [z[0]; 4];
                         }
-                    }
+                        self.regs[dst + l] = math(*mf, x, y, z, *n, ftz);
+                    })
                 }
                 Op::CopyWords { src, dst, words } => {
                     for l in 0..N {
@@ -708,7 +766,7 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                     n,
                     prov,
                 } => {
-                    if N == 4 {
+                    if self.grouping == Grouping::Quad {
                         if active != M::first(4) {
                             return Err("a quad's lanes diverge at a derivative".into());
                         }
@@ -749,7 +807,11 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                                 .ok_or("no derivatives given for the argument")?
                                 [*axis as usize][lane as usize];
                         }
-                        self.regs[dst] = r;
+                        for l in 0..N {
+                            if active.has(l) {
+                                self.regs[dst + l] = r;
+                            }
+                        }
                     }
                 }
                 Op::Sample {
@@ -771,7 +833,9 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                         std::array::from_fn(|i| if i < cn { fl(f(r[i]), ftz) } else { 0.0 })
                     };
                     // a quad's implicit level of detail comes from the coordinates' differences
-                    let footprint = if N == 4 && matches!(level, LevelOp::Auto | LevelOp::Bias(_)) {
+                    let footprint = if self.grouping == Grouping::Quad
+                        && matches!(level, LevelOp::Auto | LevelOp::Bias(_))
+                    {
                         if active != M::first(4) {
                             return Err("a quad's lanes diverge at an implicit-LOD sample".into());
                         }
@@ -1363,10 +1427,7 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                 St::Loop { body, cont, break_if } => {
                     let mut lm = active;
                     loop {
-                        self.steps += 1;
-                        if self.steps > STEP_LIMIT {
-                            return Err("execution budget exceeded".into());
-                        }
+                        self.count(lm, 1)?;
                         let e = self.block(body, lm)?;
                         ex.ret = ex.ret.or(e.ret);
                         lm = lm.minus(e.ret.or(e.brk));
@@ -1467,7 +1528,7 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                 St::Kill => {
                     self.killed = self.killed.or(active);
                     self.retired = self.retired.or(active);
-                    if N == 1 {
+                    if self.grouping == Grouping::Independent {
                         ex.ret = ex.ret.or(active);
                         active = M::none();
                     }
@@ -1479,7 +1540,18 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
 
     /// Run once, each lane with its arguments (one register per entry argument, the lanes of its value first).
     pub fn run(&mut self, args: [&[[u32; 4]]; N]) -> Result<[Output; N], String> {
+        self.run_first(args, N)
+    }
+
+    /// [`Runner::run`] with lanes `0..count` only; the outputs of the others are empty (independent invocations).
+    pub fn run_first(&mut self, args: [&[[u32; 4]]; N], count: usize) -> Result<[Output; N], String> {
+        if count > N || (count < N && self.grouping != Grouping::Independent) {
+            return Err(format!(
+                "{count} of {N} lanes run: only independent invocations run fewer than all"
+            ));
+        }
         self.steps = 0;
+        self.lane_steps = [0; N];
         self.samples = [0; N];
         self.killed = M::none();
         self.queries.clear();
@@ -1516,8 +1588,9 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
             }
         }
         let c: &'a Executable = self.c;
-        self.block(&c.body, M::first(N))?;
-        let (steps, samples) = (self.steps, self.samples);
+        self.block(&c.body, M::first(count))?;
+        let (steps, lane_steps, samples) = (self.steps, self.lane_steps, self.samples);
+        let independent = self.grouping == Grouping::Independent;
         Ok(std::array::from_fn(|l| Output {
             pointees: c
                 .pointer_args
@@ -1530,7 +1603,7 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
             decision: self.decisions[l],
             values: std::mem::take(&mut self.outs[l]),
             discarded: self.killed.has(l),
-            steps,
+            steps: if independent { lane_steps[l] } else { steps },
             samples: samples[l],
         }))
     }
@@ -1919,7 +1992,9 @@ impl Executable {
             mem: scratch.mem,
             sampler: backend,
             ftz: self.flush_denormals,
+            grouping: Grouping::Group,
             steps: 0,
+            lane_steps: [0; N],
             samples: [0; N],
             outs: std::array::from_fn(|_| Vec::new()),
             decisions: [Decision::None; N],

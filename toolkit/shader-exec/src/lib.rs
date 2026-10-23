@@ -408,6 +408,26 @@ pub trait PixelShader: std::fmt::Debug + Sync {
         let _ = derivatives;
         self.execute(inputs, buffers, sampler)
     }
+    /// Evaluate invocations that share their inputs' screen derivatives (`derivatives`, as
+    /// [`PixelShader::execute_with_derivatives`] takes them), each as that would alone: the same outputs, instructions
+    /// and samples. On an error, the first failing invocation's index and its error. The sampler may be asked in
+    /// another order than one invocation after another. The default evaluates them one after another.
+    fn execute_lanes(
+        &self,
+        inputs: &[&[[u32; 4]]],
+        derivatives: &[[[u32; 4]; 2]],
+        buffers: &[(u32, &[[u32; 4]])],
+        sampler: &mut dyn Sampler,
+    ) -> std::result::Result<Vec<Execution>, (usize, Error)> {
+        inputs
+            .iter()
+            .enumerate()
+            .map(|(i, one)| {
+                self.execute_with_derivatives(one, derivatives, buffers, sampler)
+                    .map_err(|e| (i, e))
+            })
+            .collect()
+    }
     /// Evaluate a 2 x 2 quad together (lanes 0, 1 the top row, 2, 3 the bottom), its derivatives and implicit
     /// levels of detail the quad's own. A bytecode without quad evaluation refuses.
     fn execute_quad(

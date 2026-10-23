@@ -441,15 +441,18 @@ pub fn evaluate_raw_with(
         };
         match invocation {
             Invocation::Scalar => {
-                for x in 0..grid.size {
-                    let pixel = (y * grid.size + x) as usize;
-                    let result = shader
-                        .execute_with_derivatives(&at(x, y), &derivatives, &refs, &mut sampler)
-                        .map_err(|mut e| {
-                            e.detail = format!("pixel {pixel}: {}", e.detail);
-                            e
-                        })?;
-                    keep(pixel, &result);
+                // the row's pixels together, each as it evaluates alone
+                let registers: Vec<Vec<[u32; 4]>> = (0..grid.size).map(|x| at(x, y)).collect();
+                let lanes: Vec<&[[u32; 4]]> = registers.iter().map(Vec::as_slice).collect();
+                let first = (y * grid.size) as usize;
+                let results = shader
+                    .execute_lanes(&lanes, &derivatives, &refs, &mut sampler)
+                    .map_err(|(x, mut e)| {
+                        e.detail = format!("pixel {}: {}", first + x, e.detail);
+                        e
+                    })?;
+                for (x, result) in results.iter().enumerate() {
+                    keep(first + x, result);
                 }
             }
             Invocation::Quads => {

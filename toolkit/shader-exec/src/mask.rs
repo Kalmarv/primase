@@ -1,5 +1,5 @@
-//! Sets of lanes: which invocations of a run are active. A pixel run is at most a quad and its set a byte; a thread
-//! group of up to 1024 invocations needs [`Wide`].
+//! Sets of lanes: which invocations of a run are active. A pixel run is a quad or a few invocations in lockstep, its
+//! set an integer's bits; a thread group of up to 1024 invocations needs [`Wide`].
 
 /// A set of the lanes of a run.
 pub trait Mask: Copy + PartialEq + std::fmt::Debug {
@@ -17,35 +17,41 @@ pub trait Mask: Copy + PartialEq + std::fmt::Debug {
     fn is_empty(self) -> bool;
 }
 
-impl Mask for u8 {
-    fn none() -> Self {
-        0
-    }
-    fn first(n: usize) -> Self {
-        ((1u16 << n) - 1) as u8
-    }
-    fn has(self, lane: usize) -> bool {
-        self >> lane & 1 != 0
-    }
-    fn insert(&mut self, lane: usize) {
-        *self |= 1 << lane;
-    }
-    fn remove(&mut self, lane: usize) {
-        *self &= !(1 << lane);
-    }
-    fn and(self, other: Self) -> Self {
-        self & other
-    }
-    fn or(self, other: Self) -> Self {
-        self | other
-    }
-    fn minus(self, other: Self) -> Self {
-        self & !other
-    }
-    fn is_empty(self) -> bool {
-        self == 0
-    }
+/// A set of up to as many lanes as the integer has bits.
+macro_rules! bits {
+    ($($t:ty),*) => {$(
+        impl Mask for $t {
+            fn none() -> Self {
+                0
+            }
+            fn first(n: usize) -> Self {
+                if n >= <$t>::BITS as usize { <$t>::MAX } else { (1 << n) - 1 }
+            }
+            fn has(self, lane: usize) -> bool {
+                self >> lane & 1 != 0
+            }
+            fn insert(&mut self, lane: usize) {
+                *self |= 1 << lane;
+            }
+            fn remove(&mut self, lane: usize) {
+                *self &= !(1 << lane);
+            }
+            fn and(self, other: Self) -> Self {
+                self & other
+            }
+            fn or(self, other: Self) -> Self {
+                self | other
+            }
+            fn minus(self, other: Self) -> Self {
+                self & !other
+            }
+            fn is_empty(self) -> bool {
+                self == 0
+            }
+        }
+    )*};
 }
+bits!(u8, u16, u32);
 
 /// Up to 1024 lanes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

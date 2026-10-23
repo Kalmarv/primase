@@ -56,7 +56,11 @@ pub struct ProgramShader {
     /// Registers kept between runs, one set per concurrent run.
     scalar_scratch: Mutex<Vec<Scratch<1>>>,
     quad_scratch: Mutex<Vec<Scratch<4>>>,
+    lane_scratch: Mutex<Vec<Scratch<LANES>>>,
 }
+
+/// The invocations [`PixelShader::execute_lanes`] runs in lockstep at a time.
+const LANES: usize = 16;
 
 fn lanes_of(mask: u8) -> Vec<u8> {
     (0..4).filter(|l| mask >> l & 1 != 0).collect()
@@ -224,6 +228,7 @@ impl ProgramShader {
             buffers,
             scalar_scratch: Mutex::new(Vec::new()),
             quad_scratch: Mutex::new(Vec::new()),
+            lane_scratch: Mutex::new(Vec::new()),
         })
     }
 
@@ -562,6 +567,31 @@ impl PixelShader for ProgramShader {
         self.run_scalar(inputs, Some(derivatives), buffers, sampler)
     }
 
+    fn execute_lanes(
+        &self,
+        inputs: &[&[[u32; 4]]],
+        derivatives: &[[[u32; 4]; 2]],
+        buffers: &[(u32, &[[u32; 4]])],
+        sampler: &mut dyn Sampler,
+    ) -> Result<Vec<Execution>, (usize, Error)> {
+        let mut out = Vec::with_capacity(inputs.len());
+        for (k, chunk) in inputs.chunks(LANES).enumerate() {
+            match self.execute_lockstep(chunk, derivatives, buffers, sampler) {
+                Ok(done) => out.extend(done),
+                // run again one invocation after another: the error is then the first failing one's, as alone
+                Err(_) => {
+                    for (i, one) in chunk.iter().enumerate() {
+                        let done = self
+                            .run_scalar(one, Some(derivatives), buffers, sampler)
+                            .map_err(|e| (k * LANES + i, e))?;
+                        out.push(done);
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
     fn execute_quad(
         &self,
         inputs: [&[[u32; 4]]; 4],
@@ -585,6 +615,62 @@ impl PixelShader for ProgramShader {
 }
 
 impl ProgramShader {
+    /// [`PixelShader::execute_lanes`] without its second run: the invocations in lockstep, 16 at a time, and on an
+    /// error the one the lockstep run met (of whichever invocation met one first in lockstep, which need not be the
+    /// first to fail alone).
+    pub fn execute_lockstep(
+        &self,
+        inputs: &[&[[u32; 4]]],
+        derivatives: &[[[u32; 4]; 2]],
+        buffers: &[(u32, &[[u32; 4]])],
+        sampler: &mut dyn Sampler,
+    ) -> Result<Vec<Execution>, Error> {
+        let derivatives = self.derivatives_of(derivatives);
+        let mut out = Vec::with_capacity(inputs.len());
+        for chunk in inputs.chunks(LANES) {
+            out.extend(self.run_lanes(chunk, &derivatives, buffers, sampler)?);
+        }
+        Ok(out)
+    }
+
+    /// Up to [`LANES`] invocations in lockstep, sharing `derivatives` (the entry arguments').
+    fn run_lanes(
+        &self,
+        inputs: &[&[[u32; 4]]],
+        derivatives: &[[[u32; 4]; 2]],
+        buffers: &[(u32, &[[u32; 4]])],
+        sampler: &mut dyn Sampler,
+    ) -> Result<Vec<Execution>, Error> {
+        let bound = self.bound(buffers)?;
+        let arguments = inputs
+            .iter()
+            .map(|one| self.arguments_of(one))
+            .collect::<Result<Vec<_>, _>>()?;
+        let count = arguments.len();
+        let Some(last) = arguments.last() else {
+            return Ok(Vec::new());
+        };
+        // the lanes past the invocations are given the last one's arguments and not run
+        let args: [&[[u32; 4]]; LANES] = std::array::from_fn(|l| arguments.get(l).unwrap_or(last).as_slice());
+        let mut backend = self.backend(sampler);
+        let scratch = take(&self.lane_scratch).unwrap_or_else(|| Scratch::new(&self.executable));
+        let mut runner = Runner::<LANES, u16>::with_scratch(
+            &self.executable,
+            &bound,
+            &mut backend,
+            Some(derivatives),
+            scratch,
+        );
+        let outputs = runner.run_first(args, count);
+        give_back(&self.lane_scratch, runner.into_scratch());
+        Ok(outputs
+            .map_err(error)?
+            .into_iter()
+            .take(count)
+            .map(|o| self.execution(o))
+            .collect())
+    }
+
     fn run_scalar(
         &self,
         inputs: &[[u32; 4]],
