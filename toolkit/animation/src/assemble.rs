@@ -39,15 +39,13 @@
 //!   depend on it;
 //! - `unweighted-rests=refuse`: any part's, weighted or not, beyond `tolerance=`;
 //! - `unweighted-rests=report`: a part that does not weight the joint is not refused; its disagreement is reported.
-//! - `weighted-rests=report` (with `reference-pose=own` only): a part whose skin weights the joint is not refused
-//!   either. The part stays bound to its own skeleton and inverse binds, so its vertices follow what it stores; what
-//!   the disagreement costs is the displacement of its vertices when the assembled rest poses its joints directly,
-//!   reported per part (measured on the Wolf's face: its Head and the face chain under it stand 4.7e-3 from the other
-//!   parts' and from the player's Havok skeleton, a 0.27 degree turn, which displaces the face's vertices by at most
-//!   1.03 mm under the game's rule of the Havok pose times each part's own inverse binds). Each such joint is reported
-//!   with its amount and counted. `weighted-rests=refuse` refuses it beyond `tolerance=`, as every disagreement was.
-//!   `reference-pose=assembled` moves the part's inverse binds to the assembled rest, which would move its vertices:
-//!   a weighted disagreement beyond `tolerance=` is refused whatever `weighted-rests=` says.
+//! - `weighted-rests=report`: a part whose skin weights the joint is not refused either. The game poses a part by the
+//!   character's pose through the part's OWN inverse binds, whatever the part's rest is, so the disagreement costs
+//!   exactly what that rule costs: the displacement of the part's vertices from where it stores them (measured on the
+//!   Wolf's face: its Head and the face chain under it stand 4.7e-3 from the other parts' and from the player's Havok
+//!   skeleton, a 0.27 degree turn, which displaces the face's vertices by at most 1.03 mm). Each such joint is reported
+//!   with its amount and counted, and the part's vertex displacement is reported (see below). `weighted-rests=refuse`
+//!   refuses it beyond `tolerance=`, as every disagreement was.
 //!
 //! Each refused joint is named with its disagreement, every one in the one refusal; every disagreement above 1e-6
 //! that is not refused is reported as an approximation, with its amount.
@@ -61,8 +59,11 @@
 //! - `assembled`: every skinned binding of a part moves onto the assembled skeleton: each slot names the assembled
 //!   joint and takes the inverse of the assembled rest as its inverse bind, the vertices as stored. That is exact only
 //!   where the part's own model-space rest of each joint that carries weight agrees with the assembled one, so a
-//!   weighted joint that differs by more than `tolerance=` is refused, and one that differs at all is reported with the
-//!   amount its inverse bind moved. The parts' skeletons stay in the world, as the maps' sources.
+//!   weighted joint that differs by more than `tolerance=` is refused (`weighted-rests=refuse`), and one that differs
+//!   at all is reported with the amount its inverse bind moved. With `weighted-rests=report` such a joint's slots keep
+//!   the part's own inverse bind (only the joint they name changes), which is what the game draws: the part's vertices
+//!   then sit off their stored rest by the disagreement, counted and reported with the largest distance. The parts'
+//!   skeletons stay in the world, as the maps' sources.
 //!
 //! The result is one asset named `name=` (`core.source` `assembled/<name>`) holding the assembled skeleton as its rig
 //! (and, with `reference-pose=own`, each part's skeleton too: its skins bind to them) and every member of the parts'
@@ -75,7 +76,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{
-    Asset, Component, Entity, Joint, JointId, JointMap, Mesh, Name, Role, Skeleton, Skin, Source, World,
+    Asset, Component, Entity, Joint, JointId, JointMap, Mesh, Name, Role, Skeleton, Skin, Slot, Source, World,
 };
 
 use crate::deform::{Vertices, influences, skin};
@@ -681,8 +682,7 @@ impl Pass for AssembleCharacter {
         let (found, detached) = self.disagreements(&parts, &of, &asm, &rests)?;
         let mut within = Vec::new();
         let mut accepted_weighted = 0u64;
-        let weighted_accepted =
-            self.weighted_rests == WeightedRests::Report && self.reference_pose == ReferencePose::Own;
+        let weighted_accepted = self.weighted_rests == WeightedRests::Report;
         for &(c, p, j, d) in &found {
             let weighted_here = carrying[p].contains(&parts[p].skeleton.joints[j].id);
             let line = format!(
@@ -702,7 +702,7 @@ impl Pass for AssembleCharacter {
                     (true, true) => {
                         accepted_weighted += 1;
                         format!(
-                            "{line} (beyond tolerance {}; the part weights the joint and stays bound to its own rest and inverse binds)",
+                            "{line} (beyond tolerance {}; the part weights the joint and keeps its own inverse binds)",
                             self.tolerance
                         )
                     }
@@ -719,7 +719,7 @@ impl Pass for AssembleCharacter {
                         .index_of(jid)
                         .ok_or("a weighted joint is not in its skeleton")?;
                     let d = gap(&part.rests[&jid], &rests[&id(of[p][j])]);
-                    if d > self.tolerance {
+                    if d > self.tolerance && self.weighted_rests == WeightedRests::Refuse {
                         problems.push(format!(
                             "joint {} carries weight in {} and its rest there differs from the assembled rest by \
                              {d:.3e}: rebinding would move the part",
@@ -819,9 +819,19 @@ impl Pass for AssembleCharacter {
         if self.reference_pose == ReferencePose::Assembled {
             for (p, part) in parts.iter().enumerate() {
                 let (mut moved_unused, mut moved_weighted) = (0u64, BTreeMap::<String, f64>::new());
+                let mut kept_own = BTreeMap::<String, f64>::new();
+                // the bindings that keep an inverse bind, as they were: (prototype, binding, palettes)
+                let mut kept_in = Vec::new();
                 for (proto, carrying) in &prototypes[p] {
                     let s = w.get_mut::<Skin>(*proto).ok_or("a skin is gone")?;
-                    for b in s.bindings.iter_mut().filter(|b| b.skeleton == part.rig) {
+                    for (bi, b) in s
+                        .bindings
+                        .iter_mut()
+                        .enumerate()
+                        .filter(|(_, b)| b.skeleton == part.rig)
+                    {
+                        let before = b.palettes.clone();
+                        let mut kept = false;
                         b.skeleton = assembled;
                         for slot in b.palettes.iter_mut().flatten().flatten() {
                             let j = part
@@ -829,6 +839,19 @@ impl Pass for AssembleCharacter {
                                 .index_of(slot.joint)
                                 .ok_or("a slot names a joint its skeleton does not hold")?;
                             let c = of[p][j];
+                            // the game poses the part through its own inverse binds: a weighted joint whose rest
+                            // disagrees beyond the tolerance keeps its own, when the disagreement is accepted
+                            let rest_gap = gap(&part.rests[&slot.joint], &rests[&id(c)]);
+                            if carrying.contains(&slot.joint)
+                                && rest_gap > self.tolerance
+                                && self.weighted_rests == WeightedRests::Report
+                            {
+                                let e = kept_own.entry(asm.names[c].clone()).or_default();
+                                *e = e.max(rest_gap);
+                                kept = true;
+                                slot.joint = id(c);
+                                continue;
+                            }
                             let new = inverse(&rests[&id(c)]).ok_or("an assembled rest has no inverse")?;
                             let d = gap(&affine(&slot.inverse_bind), &new);
                             if carrying.contains(&slot.joint) {
@@ -840,7 +863,54 @@ impl Pass for AssembleCharacter {
                             slot.joint = id(c);
                             slot.inverse_bind = transform(&new);
                         }
+                        if kept {
+                            kept_in.push((*proto, bi, before));
+                        }
                     }
+                }
+                // what keeping them costs: the part's vertices posed by the assembled rest through the palettes now,
+                // against the part's own rest through the palettes as stored
+                let (mut most, mut displaced) = (0.0f64, 0u64);
+                for (proto, bi, before) in &kept_in {
+                    let (Some(s), Some(mesh)) = (w.get::<Skin>(*proto), w.get::<Mesh>(*proto)) else {
+                        continue;
+                    };
+                    let b = &s.bindings[*bi];
+                    for (i, prim) in mesh.primitives().iter().enumerate() {
+                        let (Some(Some(how)), Some(Some(now)), Some(Some(was))) =
+                            (s.influences.get(i), b.palettes.get(i), before.get(i))
+                        else {
+                            continue;
+                        };
+                        let v = Vertices::of(prim).map_err(|e| e.0)?;
+                        let at = |palette: &Vec<Slot>, pose: &BTreeMap<JointId, Affine>| {
+                            skin(&v, prim, *how, s.weights, b.deformation, palette, pose).map_err(|e| e.0)
+                        };
+                        let (stored, drawn) = (at(was, &part.rests)?, at(now, &rests)?);
+                        for (a, b) in stored.positions.iter().zip(&drawn.positions) {
+                            let d = (0..3).map(|k| f64::from(a[k] - b[k]).powi(2)).sum::<f64>().sqrt();
+                            most = most.max(d);
+                            displaced += u64::from(d > 1e-5);
+                        }
+                    }
+                }
+                for (joint, d) in kept_own {
+                    log.approximate(
+                        &format!(
+                            "joint {joint}: the inverse binds of {} kept as the part's own, its rest differs from the assembled by up to {d:.3e}",
+                            part.label
+                        ),
+                        1,
+                    );
+                }
+                if displaced > 0 {
+                    log.approximate(
+                        &format!(
+                            "vertices of {} sit up to {most:.3e} m from their stored rest where the part's own inverse binds are kept",
+                            part.label
+                        ),
+                        displaced,
+                    );
                 }
                 for (joint, d) in moved_weighted.into_iter().filter(|(_, d)| *d > REPORT_FLOOR) {
                     log.approximate(
@@ -1572,17 +1642,64 @@ mod tests {
             log.approximations
         );
         assert_eq!(w.verify_components(), vec![]);
-        // refuse refuses the same world; so does rebinding to the assembled rest, whatever weighted-rests says
-        for pipeline in [
-            OWN,
+        // refuse refuses the same world
+        let mut refused = build();
+        let err = run(&mut refused, OWN).unwrap_err();
+        assert!(err.contains("joint Neck: the rest in head differs"), "{err}");
+        // rebinding to the assembled skeleton with weighted-rests=report keeps the head's own inverse bind for the Neck
+        // it weights (the game poses a part through its own inverse binds) and rebinds what is within the tolerance
+        let mut w = build();
+        let head_proto = w
+            .iter::<Skin>()
+            .find(|(_, s)| {
+                w.get::<Skeleton>(s.bindings[0].skeleton)
+                    .is_some_and(|k| k.joints.len() == 4 && k.joints[3].name == "Head")
+            })
+            .map(|(e, _)| e)
+            .unwrap();
+        let own_neck = w.get::<Skin>(head_proto).unwrap().bindings[0].palettes[0]
+            .as_ref()
+            .unwrap()[2]
+            .inverse_bind;
+        let report = run(
+            &mut w,
             "assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,unweighted-rests=refuse,weighted-rests=report,name=hero}",
-        ] {
-            let mut w = build();
-            let err = run(&mut w, pipeline).unwrap_err();
-            assert!(
-                err.contains("joint Neck: the rest in head differs"),
-                "{pipeline}: {err}"
-            );
-        }
+        )
+        .unwrap();
+        let log = &report.steps[0].log;
+        assert!(
+            log.approximations.keys().any(|k| k.starts_with(
+                "joint Neck: the inverse binds of head kept as the part's own, its rest differs from the assembled by up to 3.000e-3"
+            )),
+            "{:?}",
+            log.approximations
+        );
+        assert!(
+            log.approximations
+                .keys()
+                .any(|k| k.starts_with("vertices of head sit up to ")
+                    && k.ends_with("where the part's own inverse binds are kept")),
+            "{:?}",
+            log.approximations
+        );
+        let (_, rig) = assembled(&w);
+        let slot = &w.get::<Skin>(head_proto).unwrap().bindings[0].palettes[0]
+            .as_ref()
+            .unwrap()[2];
+        assert_eq!(
+            slot.inverse_bind, own_neck,
+            "the weighted Neck keeps the head's own inverse bind"
+        );
+        assert_eq!(
+            rig.joints[slot.joint.0 as usize].name, "Neck",
+            "and names the assembled joint"
+        );
+        assert_eq!(w.verify_components(), vec![]);
+        // the body, whose Neck is the assembled one, is rebound as before: nothing of it is reported kept
+        assert!(
+            !log.approximations.keys().any(|k| k.contains("of body kept")),
+            "{:?}",
+            log.approximations
+        );
     }
 }

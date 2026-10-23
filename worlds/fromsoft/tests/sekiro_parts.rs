@@ -359,6 +359,29 @@ fn the_wolf_assembles_and_its_parts_stay_their_own() -> Result<()> {
         assert_eq!(faced.get::<Skin>(*e), Some(s));
     }
     assert_eq!(faced.verify_components(), vec![]);
+    // rebound to the assembled skeleton the face keeps its own inverse binds beyond the tolerance, as the game poses it
+    let mut rebound = world.clone();
+    let report = run(
+        &mut rebound,
+        "assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,unweighted-rests=report,weighted-rests=report,name=wolf}",
+    )?;
+    let log = &report.steps[0].log;
+    assert!(
+        log.approximations
+            .keys()
+            .any(|k| k.starts_with("joint Head: the inverse binds of fc_m_0220_l kept as the part's own")),
+        "{:?}",
+        log.approximations
+    );
+    assert!(
+        log.approximations
+            .keys()
+            .any(|k| k.starts_with("vertices of fc_m_0220_l sit up to ")
+                && k.ends_with("where the part's own inverse binds are kept")),
+        "{:?}",
+        log.approximations
+    );
+    assert_eq!(rebound.verify_components(), vec![]);
     // and weighted-rests=refuse refuses the same joint at that tolerance, as before
     let mut refused = world.clone();
     let err = run(
