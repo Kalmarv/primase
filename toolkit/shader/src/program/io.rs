@@ -393,6 +393,12 @@ pub fn entry_io(interface: &Interface) -> Result<EntryIo, String> {
                     next_location += 1;
                     location(stage, output, v, next_location - 1)
                 }
+                // WebGPU has no cull distance either: a vertex program's value travels as a varying, and culling the
+                // primitive whose vertices are all negative is the pipeline's
+                Some(SystemValue::CullDistance) if stage == Stage::Vertex && output => {
+                    next_location += 1;
+                    location(stage, output, v, next_location - 1)
+                }
                 Some(system) => Binding::BuiltIn(builtin(stage, output, system).ok_or_else(|| {
                     format!("{name}: {system:?} as a {stage:?} {direction} has no built-in binding")
                 })?),

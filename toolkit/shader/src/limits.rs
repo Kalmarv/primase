@@ -50,5 +50,16 @@ pub fn interface_notes(interface: &crate::Interface) -> Vec<String> {
                 .into(),
         );
     }
+    if interface
+        .outputs
+        .iter()
+        .any(|v| v.system == Some(crate::SystemValue::CullDistance))
+    {
+        notes.push(
+            "a cull distance is carried as a varying: WebGPU has no built-in for it, and culling a primitive whose \
+             vertices' distances are all negative is the pipeline's"
+                .into(),
+        );
+    }
     notes
 }

@@ -309,3 +309,54 @@ fn a_module_naga_refuses_is_reported_as_the_modules() {
     let found = problems(&p);
     assert!(found.iter().any(|m| m.contains("2 entry points")), "{found:?}");
 }
+
+#[test]
+fn a_vertex_programs_cull_distance_travels_as_a_varying_with_a_note() {
+    let interface = Interface {
+        stage: Stage::Vertex,
+        inputs: vec![varying("POSITION", 0, None, ScalarType::Float, 4)],
+        outputs: vec![
+            varying(
+                "SV_Position",
+                0,
+                Some(SystemValue::ClipPosition),
+                ScalarType::Float,
+                4,
+            ),
+            varying(
+                "SV_CullDistance",
+                0,
+                Some(SystemValue::CullDistance),
+                ScalarType::Float,
+                1,
+            ),
+        ],
+        resources: Vec::new(),
+        facts: primase_shader::StageFacts::None,
+    };
+    let io = primase_shader::entry_io(&interface).unwrap();
+    assert_eq!(io.results.len(), 2);
+    assert!(matches!(
+        io.results[0].binding,
+        Binding::BuiltIn(naga::BuiltIn::Position { .. })
+    ));
+    assert!(matches!(
+        io.results[1].binding,
+        Binding::Location { location: 0, .. }
+    ));
+    let notes = primase_shader::interface_notes(&interface);
+    assert!(notes.iter().any(|n| n.contains("cull distance")), "{notes:?}");
+    // a pixel program has no cull distance to read
+    let mut pixel = interface.clone();
+    pixel.stage = Stage::Pixel;
+    pixel.inputs = vec![varying(
+        "SV_CullDistance",
+        0,
+        Some(SystemValue::CullDistance),
+        ScalarType::Float,
+        1,
+    )];
+    pixel.outputs = Vec::new();
+    let refused = primase_shader::entry_io(&pixel).unwrap_err();
+    assert!(refused.contains("no built-in binding"), "{refused}");
+}
