@@ -28,7 +28,8 @@ use std::collections::BTreeMap;
 use primase_core::shader::{
     Blend, BlendEquation, BlendFactor, BlendOp, ConstantBinding, ConstantRole, Cull, D3dClass, InputBinding,
     InputRole, Interface, ObjectParameter, OutputBinding, OutputRole, RenderState, SamplerState, Shader,
-    ShaderBinding, ShaderFormat, Stage, StageBinding, TextureBinding, TextureSource, ViewParameter,
+    ShaderBinding, ShaderFormat, Stage, StageBinding, SystemValue, TextureBinding, TextureSource,
+    ViewParameter,
 };
 use primase_core::{Component, Entity, Name, Semantic, Texture, World};
 
@@ -538,21 +539,11 @@ impl ResolveUnityShaders {
                 _ => {}
             }
         }
-        let mut outputs = Vec::new();
-        if stage == Stage::Pixel {
-            for v in interface.outputs.iter().filter(|v| v.system.is_none()) {
-                let full: u8 = ((1u16 << v.value.width) - 1) as u8;
-                outputs.push(OutputBinding {
-                    label: v.label.clone(),
-                    lanes: full,
-                    role: if v.label.index == 0 {
-                        OutputRole::Colour
-                    } else {
-                        OutputRole::Unknown(v.label.index)
-                    },
-                });
-            }
-        }
+        let outputs = if stage == Stage::Pixel {
+            output_bindings(interface)
+        } else {
+            Vec::new()
+        };
         StageBinding {
             stage,
             shader,
@@ -562,6 +553,32 @@ impl ResolveUnityShaders {
             outputs,
         }
     }
+}
+
+/// The roles of a pixel program's colour outputs: target 0 is the colour, any other target Unknown by its number. A
+/// lifted program states a target as the system value `SV_Target<n>`, a program described by semantic as the label's
+/// index; any other system value is not a colour output.
+fn output_bindings(interface: &Interface) -> Vec<OutputBinding> {
+    interface
+        .outputs
+        .iter()
+        .filter_map(|v| {
+            let target = match v.system {
+                None => v.label.index,
+                Some(SystemValue::Target(n)) => n,
+                Some(_) => return None,
+            };
+            Some(OutputBinding {
+                label: v.label.clone(),
+                lanes: ((1u16 << v.value.width) - 1) as u8,
+                role: if target == 0 {
+                    OutputRole::Colour
+                } else {
+                    OutputRole::Unknown(target)
+                },
+            })
+        })
+        .collect()
 }
 
 /// What a texture parameter named `name` samples: the property's texture, else the shader's default.
@@ -897,5 +914,33 @@ mod tests {
             <ResolveUnityShaders as primase_core::pass::Pass>::options(&p)["keywords"],
             "A+B"
         );
+    }
+
+    /// The D3D behaviour fixture of the DXBC lifter (our own HLSL, `ps_5_0`): five colour targets, which a lifted
+    /// program states as the system values `SV_Target0..4` (not as semantics).
+    const LIFTED: &[u8] = include_bytes!("../../../../toolkit/dxbc/tests/fixtures/modes.dxbc");
+
+    /// A lifted pixel program's outputs are system values, and each has its role all the same: target 0 the colour,
+    /// the others Unknown by their number; a depth output is none.
+    #[test]
+    fn a_lifted_pixel_programs_targets_have_roles() {
+        let program = primase_dxbc::lift(LIFTED).unwrap();
+        let roles: Vec<OutputRole> = output_bindings(&program.interface)
+            .into_iter()
+            .map(|o| o.role)
+            .collect();
+        assert_eq!(
+            roles,
+            [
+                OutputRole::Colour,
+                OutputRole::Unknown(1),
+                OutputRole::Unknown(2),
+                OutputRole::Unknown(3),
+                OutputRole::Unknown(4),
+            ]
+        );
+        let mut with_depth = program.interface.clone();
+        with_depth.outputs[0].system = Some(SystemValue::Depth);
+        assert_eq!(output_bindings(&with_depth).len(), 4);
     }
 }

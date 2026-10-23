@@ -40,7 +40,7 @@ use primase_core::pbr::Filters;
 use primase_core::shader::{
     AlphaTest, Compare, ConstantBinding, ConstantRole, Cull, DepthState, InputBinding, InputRole, Interface,
     OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, ShaderBinding,
-    ShaderFormat, Stage, StageBinding, TextureBinding, TextureDim, TextureSource,
+    ShaderFormat, Stage, StageBinding, SystemValue, TextureBinding, TextureDim, TextureSource, Varying,
 };
 use primase_core::{ColorSpace, Component, Entity, Name, Semantic, Texture, World};
 
@@ -688,45 +688,7 @@ impl ResolveAnvilShaders {
         let mut outputs = Vec::new();
         if stage == Stage::Pixel {
             let class = shading_class(template);
-            let opaque = m.flags.blend_mode == 0;
-            for v in interface.outputs.iter().filter(|v| v.system.is_none()) {
-                let full: u8 = (1u16 << v.value.width).saturating_sub(1) as u8;
-                let mut role = |lanes: u8, role: OutputRole| {
-                    let lanes = lanes & full;
-                    if lanes != 0 {
-                        outputs.push(OutputBinding {
-                            label: v.label.clone(),
-                            lanes,
-                            role,
-                        });
-                    }
-                };
-                match v.label.index {
-                    0 => {
-                        role(0b0111, OutputRole::Albedo);
-                        role(
-                            0b1000,
-                            if opaque {
-                                OutputRole::Roughness
-                            } else {
-                                OutputRole::Unknown(0)
-                            },
-                        );
-                    }
-                    1 => {
-                        role(0b0111, OutputRole::Unknown(1));
-                        role(
-                            0b1000,
-                            match class {
-                                Some(1) => OutputRole::Metallic,
-                                Some(3..=5) => OutputRole::Occlusion,
-                                _ => OutputRole::Unknown(1),
-                            },
-                        );
-                    }
-                    n => role(0b1111, OutputRole::Unknown(n)),
-                }
-            }
+            outputs = output_bindings(interface, class, m.flags.blend_mode == 0);
             if class.is_none() {
                 bump(
                     "pixel stages of a template whose shading class is not in the notes' table (o1.w Unknown)",
@@ -916,6 +878,61 @@ mod tests {
     }
 }
 
+/// The render target a pixel output writes: a lifted program states it as the system value `SV_Target<n>`, a
+/// program described by semantic as the label's index; any other system value is not a colour output.
+fn target_of(v: &Varying) -> Option<u32> {
+    match v.system {
+        None => Some(v.label.index),
+        Some(SystemValue::Target(n)) => Some(n),
+        Some(_) => None,
+    }
+}
+
+/// The G-buffer roles of a pixel program's targets: target 0 is albedo (rgb) and roughness (a, opaque materials
+/// only), target 1 the unnamed rgb and the metallic or occlusion lane of the shading class; any other lane is Unknown.
+fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Vec<OutputBinding> {
+    let mut outputs = Vec::new();
+    for (v, target) in interface.outputs.iter().filter_map(|v| Some((v, target_of(v)?))) {
+        let full: u8 = (1u16 << v.value.width).saturating_sub(1) as u8;
+        let mut role = |lanes: u8, role: OutputRole| {
+            let lanes = lanes & full;
+            if lanes != 0 {
+                outputs.push(OutputBinding {
+                    label: v.label.clone(),
+                    lanes,
+                    role,
+                });
+            }
+        };
+        match target {
+            0 => {
+                role(0b0111, OutputRole::Albedo);
+                role(
+                    0b1000,
+                    if opaque {
+                        OutputRole::Roughness
+                    } else {
+                        OutputRole::Unknown(0)
+                    },
+                );
+            }
+            1 => {
+                role(0b0111, OutputRole::Unknown(1));
+                role(
+                    0b1000,
+                    match class {
+                        Some(1) => OutputRole::Metallic,
+                        Some(3..=5) => OutputRole::Occlusion,
+                        _ => OutputRole::Unknown(1),
+                    },
+                );
+            }
+            n => role(0b1111, OutputRole::Unknown(n)),
+        }
+    }
+    outputs
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "hand-worked fixtures")]
 mod key_tests {
@@ -1037,5 +1054,51 @@ mod key_tests {
             gbuffer_vertex_key(0x40_0000 | 0x10 | 0x1, 11),
             0x40_0000 | (11 << 17)
         );
+    }
+
+    /// The D3D behaviour fixture of the DXBC lifter (our own HLSL, `ps_5_0`): five colour targets, which a lifted
+    /// program states as the system values `SV_Target0..4` (not as semantics), as every program this pass binds.
+    const LIFTED: &[u8] = include_bytes!("../../../../toolkit/dxbc/tests/fixtures/modes.dxbc");
+
+    /// A lifted pixel program's outputs are system values, and the roles come all the same: target 0 is albedo and
+    /// roughness, target 1 the unnamed rgb and the lane its shading class names, the rest Unknown by number.
+    #[test]
+    fn a_lifted_pixel_programs_targets_have_the_gbuffer_roles() {
+        let program = primase_dxbc::lift(LIFTED).unwrap();
+        assert!(
+            program
+                .interface
+                .outputs
+                .iter()
+                .all(|v| matches!(v.system, Some(SystemValue::Target(_))))
+        );
+        let roles: Vec<(u32, u8, OutputRole)> = output_bindings(&program.interface, Some(1), true)
+            .into_iter()
+            .map(|o| {
+                let target = program
+                    .interface
+                    .outputs
+                    .iter()
+                    .position(|v| v.label == o.label)
+                    .unwrap();
+                (u32::try_from(target).unwrap(), o.lanes, o.role)
+            })
+            .collect();
+        assert_eq!(
+            roles,
+            [
+                (0, 0b0111, OutputRole::Albedo),
+                (0, 0b1000, OutputRole::Roughness),
+                (1, 0b0111, OutputRole::Unknown(1)),
+                (1, 0b1000, OutputRole::Metallic),
+                (2, 0b1111, OutputRole::Unknown(2)),
+                (3, 0b1111, OutputRole::Unknown(3)),
+                (4, 0b1111, OutputRole::Unknown(4)),
+            ]
+        );
+        // a depth output is not a colour target
+        let mut with_depth = program.interface.clone();
+        with_depth.outputs[0].system = Some(SystemValue::Depth);
+        assert_eq!(output_bindings(&with_depth, Some(1), true).len(), 5);
     }
 }
