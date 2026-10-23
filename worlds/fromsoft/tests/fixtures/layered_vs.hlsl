@@ -1,8 +1,8 @@
 // Fixture for resolve-fromsoft-shaders' vertex stage (worlds/fromsoft/tests/resolve.rs): the shape of a layered
 // shader's G-buffer vertex program, with its inputs (a packed normal and tangent, the packed first UV sets, the Byte4C
 // members 1 to 6 as TEXCOORD1 to TEXCOORD6, a second colour, the instance index), its outputs (the pixel program's
-// inputs by label) and the engine's constants by their own names (the texture scroll offsets read as the real program
-// does: added, in `zw`, to each set scaled by 1/2048; the third and fourth unused). It computes nothing meaningful.
+// inputs by label) and the engine's constants by their own names (the texture scroll read as the real program does:
+// each set times `xy` over 2048, plus `zw`; the third and fourth unused). It computes nothing meaningful.
 //   fxc /T vs_5_0 /E main /Fo layered_vs.dxbc layered_vs.hlsl
 cbuffer cbInstanceData : register(b4)
 {
@@ -65,7 +65,8 @@ Output main(Input i)
     o.world = w + SC_CameraPos * FC_ScreenSize + mul(FC_MatrixView, w) * FC_ShadowColor + VC_InstanceData[i.instance & 3];
     o.normal = float4(i.normal) / 255.0;
     o.tangent = float4(i.tangent) / 255.0;
-    o.uv = float4(float2(i.uv.xy) / 2048.0 + VC_TexScroll_0.zw, float2(i.uv.zw) / 2048.0 + VC_TexScroll_1.zw);
+    o.uv = float4(float2(i.uv.xy) * VC_TexScroll_0.xy / 2048.0 + VC_TexScroll_0.zw,
+                  float2(i.uv.zw) * VC_TexScroll_1.xy / 2048.0 + VC_TexScroll_1.zw);
     o.weights = float4(i.m1.x, i.m2.y, i.m4.x, i.m5.y);
     o.tint = float4(i.m3.xyz, i.colour.x);
     o.detail = float4(i.m6.z, i.colour.y, 0, 0);

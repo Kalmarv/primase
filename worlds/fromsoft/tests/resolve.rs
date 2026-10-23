@@ -571,7 +571,9 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
         named("VC_aObjMatrix"),
         ("cbObjMatrix".to_owned(), 0, 192, Object(ObjectParameter::World))
     );
-    // the texture scroll offsets are the engine's per draw; nothing the material or bundle states gives them
+    // the texture coordinate scale and scroll are the engine's per draw; nothing the material or bundle states gives them
+    let unknown: Vec<_> = stage.unknown_constants().map(|(name, _)| name).collect();
+    assert_eq!(unknown, ["VC_TexScroll_0", "VC_TexScroll_1"]);
     for (name, offset) in [("VC_TexScroll_0", 0), ("VC_TexScroll_1", 16)] {
         let (buffer, at, size, role) = named(name);
         assert_eq!((buffer.as_str(), at, size), ("cbTexScroll", offset, 16));

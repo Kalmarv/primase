@@ -340,6 +340,19 @@ impl ShaderBinding {
 }
 
 impl StageBinding {
+    /// The constants whose role is [`ConstantRole::Unknown`], by name (or offset when the source names none) and why.
+    /// A consumer that evaluates the stage uses it to refuse, or to say which values it left out, where zero is not a
+    /// neutral value (a scale, say): it never reads an unknown constant as zero without naming it.
+    pub fn unknown_constants(&self) -> impl Iterator<Item = (String, &str)> {
+        self.constants.iter().filter_map(|c| match &c.role {
+            ConstantRole::Unknown { why } => Some((
+                c.name.clone().unwrap_or_else(|| format!("+{}", c.offset)),
+                why.as_str(),
+            )),
+            _ => None,
+        })
+    }
+
     fn verify(&self, w: &crate::World) -> Result<(), String> {
         let shader = w
             .get::<Shader>(self.shader)

@@ -423,8 +423,9 @@ fn output_bindings(interface: &Interface) -> Vec<OutputBinding> {
 ///   has no such stream, and what the engine then feeds is not known;
 /// - the engine's scene and object constants it names as roles (a named table of the shader family's own constant names
 ///   to the vocabulary: the view, projection and their inverses, the camera position and the screen size, and the
-///   object matrices) and the texture scroll offsets (`VC_TexScroll_0` and `_1`, `Unknown`: no parameter of the
-///   shader names them); constants the table does not name are not bound;
+///   object matrices) and the texture coordinate scale and scroll (`VC_TexScroll_0` and `_1`, `Unknown`: no parameter
+///   of the shader names them; [`StageBinding::unknown_constants`] lists them for a consumer to refuse by name);
+///   constants the table does not name are not bound;
 /// - no output roles: its outputs reach the pixel stage by label.
 pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBinding> {
     use primase_core::Semantic;
@@ -482,9 +483,10 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
                 "SC_CameraPos" => ConstantRole::View(ViewParameter::CameraPosition),
                 "FC_ScreenSize" => ConstantRole::View(ViewParameter::ViewportSize),
                 "VC_aObjMatrix" => ConstantRole::Object(ObjectParameter::World),
-                // `xy` unused here; `zw` offset the packed texture coordinates (uv0 by set 0, uv1 by set 1)
+                // `_0` for the first texture coordinate set and `_1` for the second: the program multiplies the set by `xy`
+                // (a scale) and adds `zw` (a scroll offset), so a zero is not neutral
                 "VC_TexScroll_0" | "VC_TexScroll_1" => ConstantRole::Unknown {
-                    why: "texture scroll offsets the engine feeds per draw: the shader bundle's metaparam names no                           parameter for them (none of the layered bundles' parameters is a vertex-stage one), so                           they stay at frozen zero, no scroll"
+                    why: "per-set texture coordinate scale (xy) and scroll offset (zw) the engine feeds per draw: the                           shader bundle's metaparam names no parameter for them (none of the layered bundles'                           parameters is a vertex-stage one), so no value is known, and zero is not neutral (it                           collapses every coordinate to its offset)"
                         .into(),
                 },
                 _ => continue,
