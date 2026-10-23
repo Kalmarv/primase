@@ -30,6 +30,7 @@
     clippy::cast_possible_truncation
 )]
 
+pub use crate::components::{StoredBone, StoredPose, StoredPoseBone, StoredPoseGroup, StoredSkeleton};
 use crate::read::reference::{self, Reference};
 
 /// A record type: the CRC-32 of `Skeleton`.
@@ -189,86 +190,6 @@ impl Cursor<'_> {
     }
 }
 
-/// A bone as stored (see the module documentation for what each field is by the registry and by value).
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredBone {
-    /// The object's id: what a parent, the root and a mirror name.
-    pub id: u64,
-    /// The CRC-32 of the bone's name (the registry's two packed bit fields `41B24805` and `778FF80E`, 32 bits).
-    pub name_hash: u32,
-    /// The parent's id (none for a root).
-    pub parent: Option<u64>,
-    /// `230C4503`: the bone itself on a chain's bones, the opposite side's bone on a paired one, by value.
-    pub mirror: Option<u64>,
-    /// GlobalPosition: x, y, z and 0.
-    pub global_position: [f32; 4],
-    /// `02A2A3E3`, by value the global rotation: a unit quaternion x, y, z, w.
-    pub global_rotation: [f32; 4],
-    /// LocalPosition: in the parent's space, x, y, z and 0.
-    pub local_position: [f32; 4],
-    /// `8AE955A2`, by value the local rotation: a unit quaternion x, y, z, w.
-    pub local_rotation: [f32; 4],
-    /// `EF07E0C9`: 0 on all but one of the 11,113 bones read.
-    pub flag: u8,
-    /// `73196C8B`, an enum: 0 on 10,890 of 11,113 bones of the census, 1 to 5, 7, 8 and 14 on the others.
-    pub kind: u32,
-    /// `4007121E`, an array of u32 (a hash list like the skeleton's last array).
-    pub hashes: Vec<u32>,
-    /// `B58D6510`, an enum: 7 on every bone.
-    pub kind2: u32,
-    /// `8CE175E4`: 1.0 on every bone.
-    pub unnamed: f32,
-    /// `2DDF1266`: the low 16 bits the bone's position in the skeleton, the high 16 the bones below it, by value.
-    pub key: u32,
-}
-
-/// One SkeletonPoseBone: its object's id and its 16 bytes as stored (no field list of the registry describes them).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredPoseBone {
-    pub id: u64,
-    pub bytes: [u8; 16],
-}
-
-/// One SkeletonPose: a f32 and its bones.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredPose {
-    pub id: u64,
-    pub value: f32,
-    pub bones: Vec<StoredPoseBone>,
-}
-
-/// One SkeletonPoseGroup: its poses.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredPoseGroup {
-    pub id: u64,
-    pub poses: Vec<StoredPose>,
-}
-
-/// A Skeleton body as stored.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredSkeleton {
-    /// `9C78EB24`, an enum.
-    pub kind: u32,
-    pub bones: Vec<StoredBone>,
-    /// `4E1F230B`: the root bone's id.
-    pub root: Option<u64>,
-    /// `F4D6F079`: the skeleton's own position (x, y, z, 0).
-    pub position: [f32; 4],
-    /// `9B868C7D`: its own rotation (a quaternion x, y, z, w by value).
-    pub rotation: [f32; 4],
-    pub body_part_mapping: Option<Reference>,
-    pub pose_groups: Vec<StoredPoseGroup>,
-    /// The IKData object's id where the skeleton has one (the class stores no field).
-    pub ik_data: Option<u64>,
-    pub look_at: Option<Reference>,
-    /// `F656FC33` and `5FC3FE25`.
-    pub floats: [f32; 2],
-    /// The Reflex3SkeletonConstraints object's id and its byte buffer (8 bytes on every skeleton that has one).
-    pub reflex3: Option<(u64, Vec<u8>)>,
-    /// `3708B98C`, an array of u32.
-    pub hashes: Vec<u32>,
-}
-
 impl StoredSkeleton {
     /// The body parsed, consumed to its last byte.
     pub fn parse(body: &[u8]) -> Result<StoredSkeleton, Error> {
@@ -327,7 +248,7 @@ impl StoredSkeleton {
         let root = c.bone_pointer("root")?;
         let position = c.f32x4("skeleton position")?;
         let rotation = c.f32x4("skeleton rotation")?;
-        let body_part_mapping = c.reference()?;
+        let body_part_mapping = c.reference()?.map(|r| r.id);
         let groups = c.count("pose group count", 12)?;
         let mut pose_groups = Vec::with_capacity(groups);
         for _ in 0..groups {
@@ -355,7 +276,7 @@ impl StoredSkeleton {
             pose_groups.push(StoredPoseGroup { id, poses });
         }
         let ik_data = c.optional_object("IKData", IK_DATA)?;
-        let look_at = c.reference()?;
+        let look_at = c.reference()?.map(|r| r.id);
         c.expect("ReflexSystem pointer", 3, 1)?;
         let floats = [c.f32("skeleton float")?, c.f32("skeleton float")?];
         let reflex3 = match c.optional_object("Reflex3SkeletonConstraints", REFLEX3_CONSTRAINTS)? {
