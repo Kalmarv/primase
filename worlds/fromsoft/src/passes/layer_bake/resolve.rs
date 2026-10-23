@@ -84,7 +84,7 @@ pub const ENGINE_SCENE_DEPTH_TEXTURE: &str = "g_DepthTexture";
 /// `<index>` and role of a texture kind named `…Texture2D_<index>_<Role>…`: the first named segment after the index, past
 /// a blend shader's `GSBlendMap` prefix (`…Texture2D_2_GSBlendMap_AlbedoMap_1` is an albedo map, as both games' blend
 /// shaders name their slots; a slot named only `GSBlendMap` is the blend map) and past the empty segments of a kind such
-/// as `…Texture2D_2__DistortionDepth`.
+/// as `…Texture2D_2__DistortionDepth`. A kind naming no role (`…Texture2D_3_`) is still its slot, with an empty role.
 ///
 /// The evidence is the files' formats: in Elden Ring's m14_00_00_00 the 96 `GSBlendMap_AlbedoMap` bindings all point at
 /// DX10 `*_SRGB` textures and the 57 DX10 `GSBlendMap_NormalMap` ones at linear textures, as the plain albedo and normal
@@ -94,11 +94,10 @@ pub(crate) fn slot_name(kind: &str) -> Option<(u32, &str)> {
     let rest = kind.rsplit_once("Texture2D_")?.1;
     let (slot, roles) = rest.split_once('_')?;
     let mut segments = roles.split('_').filter(|s| !s.is_empty());
-    let first = segments.next()?;
-    let role = if first == "GSBlendMap" {
-        segments.next().unwrap_or(first)
-    } else {
-        first
+    let role = match segments.next() {
+        Some(blend @ "GSBlendMap") => segments.next().unwrap_or(blend),
+        Some(role) => role,
+        None => "",
     };
     Some((slot.parse().ok()?, role))
 }
@@ -981,7 +980,8 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
 mod tests {
     use super::slot_name;
 
-    /// Roles past a blend shader's `GSBlendMap` prefix and past empty segments; a slot named only `GSBlendMap` keeps it.
+    /// Roles past a blend shader's `GSBlendMap` prefix and past empty segments; a slot named only `GSBlendMap` keeps it,
+    /// and a slot naming no role is still a slot.
     #[test]
     fn slot_roles() {
         for (kind, slot, role) in [
@@ -989,6 +989,7 @@ mod tests {
             ("g_DetailBlend_Texture2D_3_GSBlendMap", 3, "GSBlendMap"),
             ("g_Water_Texture2D_2__DistortionDepth", 2, "DistortionDepth"),
             ("g_DetailBlend_Texture2D_0_AlbedoMap_0", 0, "AlbedoMap"),
+            ("g_Detail_Texture2D_3_", 3, ""),
         ] {
             assert_eq!(slot_name(kind), Some((slot, role)), "{kind}");
         }
