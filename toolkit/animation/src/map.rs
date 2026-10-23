@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Channel, Clip, ClipBinding, ClipTarget, Component, Entity, Interpolation, JointId, JointMap, Property,
     Rest, RigInstance, Skeleton, World,
@@ -65,41 +65,47 @@ pub struct MapClip {
     pub reparented: Reparented,
 }
 
-/// The pass factory.
-pub fn map_clip(o: &Options) -> Result<Box<dyn Pass>, String> {
-    let (mut unmapped, mut rests, mut reparented) = (None, None, None);
-    for (k, v) in o {
-        match k.as_str() {
-            "reparented" => {
-                reparented = Some(match v.as_str() {
-                    "refuse" => Reparented::Refuse,
-                    "model-space" => Reparented::ModelSpace,
-                    _ => return Err(format!("reparented={v}: refuse or model-space")),
-                });
-            }
-            "unmapped" => {
-                unmapped = Some(match v.as_str() {
-                    "refuse" => Unmapped::Refuse,
-                    "drop" => Unmapped::Drop,
-                    _ => return Err(format!("unmapped={v}: refuse or drop")),
-                });
-            }
-            "rests" => {
-                rests = Some(match v.as_str() {
-                    "target" => Rests::Target,
-                    "source" => Rests::Source,
-                    _ => return Err(format!("rests={v}: target or source")),
-                });
-            }
-            _ => return Err(format!("unknown option {k}")),
-        }
-    }
-    Ok(Box::new(MapClip {
-        unmapped: unmapped.ok_or("unmapped=refuse|drop is required")?,
-        rests: rests.ok_or("rests=target|source is required")?,
-        reparented: reparented.ok_or("reparented=refuse|model-space is required")?,
-    }))
+impl Choice for Unmapped {
+    const VALUES: &'static [(&'static str, Self)] = &[("refuse", Unmapped::Refuse), ("drop", Unmapped::Drop)];
 }
+
+impl Choice for Rests {
+    const VALUES: &'static [(&'static str, Self)] = &[("target", Rests::Target), ("source", Rests::Source)];
+}
+
+impl Choice for Reparented {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("refuse", Reparented::Refuse),
+        ("model-space", Reparented::ModelSpace),
+    ];
+}
+
+/// `map-clip`'s declaration ([`primase_core::pass::PassRegistry::add`]): every option required.
+pub const MAP_CLIP: PassSpec = PassSpec {
+    name: "map-clip",
+    options: &[
+        OptionSpec::choice::<Unmapped>(
+            "unmapped",
+            "a channel of a joint the map leaves out: the clip refused, or the channel left out, counted",
+        ),
+        OptionSpec::choice::<Rests>(
+            "rests",
+            "whose rests the mapped clip plays over: the target skeleton's own, or the source's as constant channels",
+        ),
+        OptionSpec::choice::<Reparented>(
+            "reparented",
+            "a pair whose parents do not correspond: the clip refused, or the target joint given the source's \
+             model-space pose",
+        ),
+    ],
+    make: |g| {
+        Ok(Box::new(MapClip {
+            unmapped: g.choice::<Unmapped>("unmapped"),
+            rests: g.choice::<Rests>("rests"),
+            reparented: g.choice::<Reparented>("reparented"),
+        }))
+    },
+};
 
 /// A joint map as lookups, with its skeletons' parents and rests.
 struct Map {
@@ -150,25 +156,10 @@ impl Pass for MapClip {
         "map-clip"
     }
     fn options(&self) -> Options {
-        let unmapped = match self.unmapped {
-            Unmapped::Refuse => "refuse",
-            Unmapped::Drop => "drop",
-        };
-        let rests = match self.rests {
-            Rests::Target => "target",
-            Rests::Source => "source",
-        };
         Options::from([
-            ("unmapped".to_owned(), unmapped.to_owned()),
-            ("rests".to_owned(), rests.to_owned()),
-            (
-                "reparented".to_owned(),
-                match self.reparented {
-                    Reparented::Refuse => "refuse",
-                    Reparented::ModelSpace => "model-space",
-                }
-                .to_owned(),
-            ),
+            ("unmapped".to_owned(), self.unmapped.text().to_owned()),
+            ("rests".to_owned(), self.rests.text().to_owned()),
+            ("reparented".to_owned(), self.reparented.text().to_owned()),
         ])
     }
     fn approximates(&self) -> &'static str {

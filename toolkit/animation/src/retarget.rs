@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Channel, Clip, ClipBinding, ClipTarget, Component, Entity, Interpolation, JointId, JointMap, Property,
     Rest, RigInstance, Skeleton, World,
@@ -50,33 +50,38 @@ pub struct RetargetClip {
     pub translation: Translation,
 }
 
-/// The pass factory.
-pub fn retarget_clip(o: &Options) -> Result<Box<dyn Pass>, String> {
-    let (mut reference, mut translation) = (None, None);
-    for (k, v) in o {
-        match k.as_str() {
-            "reference" => {
-                reference = Some(match v.as_str() {
-                    "rest" => Reference::Rest,
-                    "aligned" => Reference::Aligned,
-                    _ => return Err(format!("reference={v}: rest or aligned")),
-                });
-            }
-            "translation" => {
-                translation = Some(match v.as_str() {
-                    "root" => Translation::Root,
-                    "none" => Translation::None,
-                    _ => return Err(format!("translation={v}: root or none")),
-                });
-            }
-            _ => return Err(format!("unknown option {k}")),
-        }
-    }
-    Ok(Box::new(RetargetClip {
-        reference: reference.ok_or("reference=rest|aligned is required")?,
-        translation: translation.ok_or("translation=root|none is required")?,
-    }))
+impl Choice for Reference {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("rest", Reference::Rest), ("aligned", Reference::Aligned)];
 }
+
+impl Choice for Translation {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("none", Translation::None), ("root", Translation::Root)];
+}
+
+/// `retarget-clip`'s declaration ([`primase_core::pass::PassRegistry::add`]): both options required.
+pub const RETARGET_CLIP: PassSpec = PassSpec {
+    name: "retarget-clip",
+    options: &[
+        OptionSpec::choice::<Reference>(
+            "reference",
+            "the poses rotations are measured from: both rests, or the target's rest with its bones turned to point \
+             as the source's do",
+        ),
+        OptionSpec::choice::<Translation>(
+            "translation",
+            "which joint moves: none (every target joint keeps its rest translation), or the root-most mapped joint, \
+             scaled by the reference heights",
+        ),
+    ],
+    make: |g| {
+        Ok(Box::new(RetargetClip {
+            reference: g.choice::<Reference>("reference"),
+            translation: g.choice::<Translation>("translation"),
+        }))
+    },
+};
 
 /// The rotation part of an affine map with no shear (its columns normalised).
 pub(crate) fn rotation(m: &Affine) -> [f64; 4] {
@@ -238,17 +243,9 @@ impl Pass for RetargetClip {
         "retarget-clip"
     }
     fn options(&self) -> Options {
-        let reference = match self.reference {
-            Reference::Rest => "rest",
-            Reference::Aligned => "aligned",
-        };
-        let translation = match self.translation {
-            Translation::Root => "root",
-            Translation::None => "none",
-        };
         Options::from([
-            ("reference".to_owned(), reference.to_owned()),
-            ("translation".to_owned(), translation.to_owned()),
+            ("reference".to_owned(), self.reference.text().to_owned()),
+            ("translation".to_owned(), self.translation.text().to_owned()),
         ])
     }
     fn requires(&self) -> &[&'static str] {

@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Asset, Binding, Component, Entity, Influences, JointId, JointMap, JointOffset, JointPlacement, Mesh,
     Morphs, Role, Semantic, Skeleton, Skin, SkinInstance, Slot, Stream, World,
@@ -86,75 +86,104 @@ pub enum Placement {
     Stated,
 }
 
-/// The pass factory.
-pub fn retarget_skin(o: &Options) -> Result<Box<dyn Pass>, String> {
-    let (mut unmapped, mut placement, mut fit, mut ik, mut size) = (None, None, None, None, None);
-    for (k, v) in o {
-        match k.as_str() {
-            "fit" => {
-                fit = Some(match v.as_str() {
-                    "positions" | "lengths" => v.as_str(),
-                    _ => return Err(format!("fit={v}: positions or lengths")),
-                });
-            }
-            "ik" => {
-                ik = Some(if v == "none" {
-                    Vec::new()
-                } else {
-                    v.split(';')
-                        .map(|limb| {
-                            let names: Vec<&str> = limb.split(':').collect();
-                            match names.as_slice() {
-                                [a, b, c] if names.iter().all(|n| !n.is_empty()) => {
-                                    Ok([(*a).to_owned(), (*b).to_owned(), (*c).to_owned()])
-                                }
-                                _ => Err(format!("ik={v}: none, or root:mid:end joined by ;")),
-                            }
-                        })
-                        .collect::<Result<Vec<_>, String>>()?
-                });
-            }
-            "scale" => {
-                size = Some(
-                    v.parse::<f64>()
-                        .ok()
-                        .filter(|s| s.is_finite() && *s > 0.0)
-                        .ok_or(format!("scale={v}: a number above 0"))?,
-                );
-            }
-            "unmapped" => {
-                unmapped = Some(match v.as_str() {
-                    "refuse" => UnmappedJoints::Refuse,
-                    "ancestor" => UnmappedJoints::Ancestor,
-                    "nearest" => UnmappedJoints::Nearest,
-                    _ => return Err(format!("unmapped={v}: refuse, ancestor or nearest")),
-                });
-            }
-            "placement" => {
-                placement = Some(match v.as_str() {
-                    "automatic" => Placement::Automatic,
-                    "stated" => Placement::Stated,
-                    _ => return Err(format!("placement={v}: automatic or stated")),
-                });
-            }
-            _ => return Err(format!("unknown option {k}")),
-        }
-    }
-    let fit = match (fit.ok_or("fit=positions|lengths is required")?, ik) {
-        ("positions", Some(_)) => return Err("ik applies to fit=lengths".into()),
-        ("positions", None) if size.is_some() => return Err("scale applies to fit=lengths".into()),
-        ("positions", None) => Fit::Positions,
-        (_, Some(ik)) => Fit::Lengths {
+impl Choice for UnmappedJoints {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("refuse", UnmappedJoints::Refuse),
+        ("ancestor", UnmappedJoints::Ancestor),
+        ("nearest", UnmappedJoints::Nearest),
+    ];
+}
+
+impl Choice for Placement {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("automatic", Placement::Automatic), ("stated", Placement::Stated)];
+}
+
+/// Which [`Fit`] (option `fit`), its parameters apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FitKind {
+    Positions,
+    Lengths,
+}
+
+impl Choice for FitKind {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("positions", FitKind::Positions), ("lengths", FitKind::Lengths)];
+}
+
+/// `retarget-skin`'s declaration ([`primase_core::pass::PassRegistry::add`]).
+pub const RETARGET_SKIN: PassSpec = PassSpec {
+    name: "retarget-skin",
+    options: &[
+        OptionSpec::choice::<FitKind>(
+            "fit",
+            "how the target's joints are fitted: to the source's positions, or keeping the target's bone lengths",
+        ),
+        OptionSpec::optional(
+            "ik",
+            "none",
+            "with fit=lengths, required: none, or the limbs solved by IK as root:mid:end joint names, `;` between",
+        ),
+        OptionSpec::optional(
+            "scale",
+            "1",
+            "with fit=lengths, above 0: the target's size over the source's; without it 1",
+        ),
+        OptionSpec::choice::<UnmappedJoints>(
+            "unmapped",
+            "a weighted source joint the map leaves out: refused, given to its nearest mapped ancestor, or to the \
+             nearest mapped joint at rest",
+        ),
+        OptionSpec::choice::<Placement>(
+            "placement",
+            "where the target's joints stand: as the fit puts them, or as the map's core.joint_placement says",
+        ),
+    ],
+    make: retarget_skin,
+};
+
+fn retarget_skin(g: &Given) -> Result<Box<dyn Pass>, String> {
+    let ik = match g.optional("ik") {
+        None => None,
+        Some("none") => Some(Vec::new()),
+        Some(v) => Some(
+            v.split(';')
+                .map(|limb| {
+                    let names: Vec<&str> = limb.split(':').collect();
+                    match names.as_slice() {
+                        [a, b, c] if names.iter().all(|n| !n.is_empty()) => {
+                            Ok([(*a).to_owned(), (*b).to_owned(), (*c).to_owned()])
+                        }
+                        _ => Err(format!("ik={v}: none, or root:mid:end joined by ;")),
+                    }
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+        ),
+    };
+    let size = g
+        .optional("scale")
+        .map(|v| {
+            v.parse::<f64>()
+                .ok()
+                .filter(|s| s.is_finite() && *s > 0.0)
+                .ok_or(format!("scale={v}: a number above 0"))
+        })
+        .transpose()?;
+    let fit = match (g.choice::<FitKind>("fit"), ik) {
+        (FitKind::Positions, Some(_)) => return Err("ik applies to fit=lengths".into()),
+        (FitKind::Positions, None) if size.is_some() => return Err("scale applies to fit=lengths".into()),
+        (FitKind::Positions, None) => Fit::Positions,
+        (FitKind::Lengths, Some(ik)) => Fit::Lengths {
             ik,
             scale: size.unwrap_or(1.0),
         },
-        (_, None) => {
+        (FitKind::Lengths, None) => {
             return Err("fit=lengths needs ik=none|root:mid:end;... (the limbs to solve by IK)".into());
         }
     };
     Ok(Box::new(RetargetSkin {
-        unmapped: unmapped.ok_or("unmapped=refuse|ancestor|nearest is required")?,
-        placement: placement.ok_or("placement=automatic|stated is required")?,
+        unmapped: g.choice::<UnmappedJoints>("unmapped"),
+        placement: g.choice::<Placement>("placement"),
         fit,
     }))
 }
@@ -441,23 +470,14 @@ impl Pass for RetargetSkin {
         "retarget-skin"
     }
     fn options(&self) -> Options {
-        let v = match self.unmapped {
-            UnmappedJoints::Refuse => "refuse",
-            UnmappedJoints::Ancestor => "ancestor",
-            UnmappedJoints::Nearest => "nearest",
-        };
-        let p = match self.placement {
-            Placement::Automatic => "automatic",
-            Placement::Stated => "stated",
-        };
         let mut o = Options::from([
-            ("unmapped".to_owned(), v.to_owned()),
-            ("placement".to_owned(), p.to_owned()),
+            ("unmapped".to_owned(), self.unmapped.text().to_owned()),
+            ("placement".to_owned(), self.placement.text().to_owned()),
         ]);
         match &self.fit {
-            Fit::Positions => o.insert("fit".to_owned(), "positions".to_owned()),
+            Fit::Positions => o.insert("fit".to_owned(), FitKind::Positions.text().to_owned()),
             Fit::Lengths { ik, scale } => {
-                o.insert("fit".to_owned(), "lengths".to_owned());
+                o.insert("fit".to_owned(), FitKind::Lengths.text().to_owned());
                 o.insert("scale".to_owned(), scale.to_string());
                 let limbs: Vec<String> = ik.iter().map(|l| l.join(":")).collect();
                 o.insert(
@@ -1098,14 +1118,11 @@ mod tests {
         );
         let (mut w, ..) = world();
         let err = run(&mut w, "retarget-skin").unwrap_err();
-        assert!(err.contains("fit=positions|lengths is required"), "{err}");
+        assert!(err.contains("fit is required: "), "{err}");
         let err = run(&mut w, "retarget-skin{fit=positions}").unwrap_err();
-        assert!(
-            err.contains("unmapped=refuse|ancestor|nearest is required"),
-            "{err}"
-        );
+        assert!(err.contains("unmapped is required: "), "{err}");
         let err = run(&mut w, "retarget-skin{fit=positions,unmapped=ancestor}").unwrap_err();
-        assert!(err.contains("placement=automatic|stated is required"), "{err}");
+        assert!(err.contains("placement is required: "), "{err}");
         // nearest: the cloth point goes to the mapped joint nearest the cloth joint at rest (the hand, 0.14 away; the arm is 0.41)
         let (mut w, proto, _) = world();
         let report = run(

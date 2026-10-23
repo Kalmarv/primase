@@ -1339,19 +1339,27 @@ mod tests {
         let mut reg = PassRegistry::new();
         crate::register(&mut reg);
         let err = |p: &str| reg.parse(p).err().map(|e| e.to_string()).unwrap_or_default();
-        assert!(err("retarget-skin{unmapped=refuse}").contains("fit=positions|lengths is required"));
-        assert!(err("retarget-skin{fit=lengths,unmapped=refuse}").contains("needs ik="));
+        assert!(err("retarget-skin{unmapped=refuse,placement=automatic}").contains("fit is required: "));
+        assert!(err("retarget-skin{fit=lengths,unmapped=refuse,placement=automatic}").contains("needs ik="));
         assert!(
-            err("retarget-skin{fit=positions,ik=none,unmapped=refuse}").contains("ik applies to fit=lengths")
+            err("retarget-skin{fit=positions,ik=none,unmapped=refuse,placement=automatic}")
+                .contains("ik applies to fit=lengths")
         );
-        assert!(err("retarget-skin{fit=lengths,ik=a:b,unmapped=refuse}").contains("root:mid:end"));
-        assert!(err("retarget-skin{fit=stretch,unmapped=refuse}").contains("positions or lengths"));
         assert!(
-            err("retarget-skin{fit=positions,scale=2,unmapped=refuse}")
+            err("retarget-skin{fit=lengths,ik=a:b,unmapped=refuse,placement=automatic}")
+                .contains("root:mid:end")
+        );
+        assert!(
+            err("retarget-skin{fit=stretch,unmapped=refuse,placement=automatic}")
+                .contains("positions or lengths")
+        );
+        assert!(
+            err("retarget-skin{fit=positions,scale=2,unmapped=refuse,placement=automatic}")
                 .contains("scale applies to fit=lengths")
         );
         assert!(
-            err("retarget-skin{fit=lengths,ik=none,scale=0,unmapped=refuse}").contains("a number above 0")
+            err("retarget-skin{fit=lengths,ik=none,scale=0,unmapped=refuse,placement=automatic}")
+                .contains("a number above 0")
         );
         let bad = |ik: &str| {
             RetargetSkin {

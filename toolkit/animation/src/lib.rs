@@ -20,14 +20,17 @@ pub mod retarget_skin;
 pub mod weights;
 
 pub use assemble::{
-    AssembleCharacter, Correspondence, ReferencePose, UnweightedRests, WeightedRests, assemble_character,
+    ASSEMBLE_CHARACTER, AssembleCharacter, Correspondence, ReferencePose, UnweightedRests, WeightedRests,
 };
 pub use fit::{Fit, FitReport};
-pub use map::{MapClip, Rests, Unmapped, map_clip};
-pub use passes::{EvaluateClip, NormalizeSkinWeights, PoseSkin, RootChoice, register};
-pub use retarget::{Reference, RetargetClip, Translation, retarget_clip};
-pub use retarget_skin::{Placement, RetargetSkin, UnmappedJoints, retarget_skin};
-pub use weights::{LimitSkinInfluences, QuantizeSkinWeights};
+pub use map::{MAP_CLIP, MapClip, Rests, Unmapped};
+pub use passes::{
+    EVALUATE_CLIP, EvaluateClip, NORMALIZE_SKIN_WEIGHTS, NormalizeSkinWeights, POSE_SKIN, PoseSkin,
+    RootChoice, register,
+};
+pub use retarget::{RETARGET_CLIP, Reference, RetargetClip, Translation};
+pub use retarget_skin::{Placement, RETARGET_SKIN, RetargetSkin, UnmappedJoints};
+pub use weights::{LIMIT_SKIN_INFLUENCES, LimitSkinInfluences, QUANTIZE_SKIN_WEIGHTS, QuantizeSkinWeights};
 
 /// What evaluation could not do, with why.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

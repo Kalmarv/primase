@@ -19,7 +19,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, JointId, JointMap, Name, Rest, Skeleton, World};
 
 use crate::pose::{Trs, model_transforms};
@@ -46,44 +46,56 @@ pub struct CorrespondSkeletons {
     pub parents: Parents,
 }
 
-/// The pass factory.
-pub fn correspond_skeletons(o: &Options) -> Result<Box<dyn Pass>, String> {
-    let (mut from, mut to, mut tolerance, mut rotation_tolerance, mut parents) =
-        (None, None, None, None, None);
+impl Choice for Parents {
+    const VALUES: &'static [(&'static str, Self)] = &[("same", Parents::Same), ("any", Parents::Any)];
+}
+
+/// `correspond-skeletons`' declaration ([`primase_core::pass::PassRegistry::add`]).
+pub const CORRESPOND_SKELETONS: PassSpec = PassSpec {
+    name: "correspond-skeletons",
+    options: &[
+        OptionSpec::required("from", "a", "the source skeleton's name"),
+        OptionSpec::required("to", "b", "the target skeleton's name, another than from"),
+        OptionSpec::required(
+            "tolerance",
+            "0.001",
+            "above 0: how far rest translations and scales may differ for a pair",
+        ),
+        OptionSpec::optional(
+            "rotation-tolerance",
+            "0.01",
+            "radians, above 0: how far rest rotations may differ for a pair; without it, the tolerance",
+        ),
+        OptionSpec::choice::<Parents>(
+            "parents",
+            "what a name pair must also have: rests alike and corresponding parents, or nothing",
+        ),
+    ],
+    make: correspond_skeletons,
+};
+
+fn correspond_skeletons(g: &Given) -> Result<Box<dyn Pass>, String> {
     let positive = |name: &str, v: &str| {
         v.parse::<f64>()
             .ok()
             .filter(|t| t.is_finite() && *t > 0.0)
             .ok_or_else(|| format!("{name}={v}: a positive number"))
     };
-    for (k, v) in o {
-        match k.as_str() {
-            "parents" => {
-                parents = Some(match v.as_str() {
-                    "same" => Parents::Same,
-                    "any" => Parents::Any,
-                    _ => return Err(format!("parents={v}: same or any")),
-                });
-            }
-            "from" => from = Some(v.clone()),
-            "to" => to = Some(v.clone()),
-            "tolerance" => tolerance = Some(positive("tolerance", v)?),
-            "rotation-tolerance" => rotation_tolerance = Some(positive("rotation-tolerance", v)?),
-            _ => return Err(format!("unknown option {k}")),
-        }
-    }
-    let from = from.ok_or("from=NAME (the source skeleton's name) is required")?;
-    let to = to.ok_or("to=NAME (the target skeleton's name) is required")?;
+    let (from, to) = (g.required("from"), g.required("to"));
     if from == to {
         return Err("from and to name the same skeleton".into());
     }
-    let tolerance = tolerance.ok_or("tolerance=T is required")?;
+    let tolerance = positive("tolerance", g.required("tolerance"))?;
+    let rotation_tolerance = match g.optional("rotation-tolerance") {
+        Some(v) => positive("rotation-tolerance", v)?,
+        None => tolerance,
+    };
     Ok(Box::new(CorrespondSkeletons {
-        from,
-        to,
+        from: from.to_owned(),
+        to: to.to_owned(),
         tolerance,
-        rotation_tolerance: rotation_tolerance.unwrap_or(tolerance),
-        parents: parents.ok_or("parents=same|any is required")?,
+        rotation_tolerance,
+        parents: g.choice::<Parents>("parents"),
     }))
 }
 
@@ -123,14 +135,7 @@ impl Pass for CorrespondSkeletons {
                 "rotation-tolerance".to_owned(),
                 self.rotation_tolerance.to_string(),
             ),
-            (
-                "parents".to_owned(),
-                match self.parents {
-                    Parents::Same => "same",
-                    Parents::Any => "any",
-                }
-                .to_owned(),
-            ),
+            ("parents".to_owned(), self.parents.text().to_owned()),
         ])
     }
     fn requires(&self) -> &[&'static str] {
@@ -287,16 +292,7 @@ mod tests {
 
     fn run(w: &mut World, options: &str) -> Result<RunReport, String> {
         let mut reg = PassRegistry::new();
-        reg.register_requiring(
-            "correspond-skeletons",
-            correspond_skeletons,
-            &[
-                ("from", "a"),
-                ("to", "b"),
-                ("tolerance", "0.001"),
-                ("parents", "same"),
-            ],
-        );
+        reg.add(&CORRESPOND_SKELETONS);
         let m = PassManager::new(reg).with_pass_checks(true);
         let mut report = RunReport::default();
         m.run(
@@ -408,16 +404,17 @@ mod tests {
         run(&mut w, opts).unwrap();
         assert_eq!(pairs(&w), [(0, 10)]);
         assert!(
-            correspond_skeletons(&Options::from([
-                ("from".to_owned(), "a".to_owned()),
-                ("to".to_owned(), "b".to_owned()),
-                ("tolerance".to_owned(), "1".to_owned()),
-                ("parents".to_owned(), "same".to_owned()),
-                ("rotation-tolerance".to_owned(), "0".to_owned()),
-            ]))
-            .err()
-            .unwrap_or_default()
-            .contains("rotation-tolerance=0: a positive number")
+            CORRESPOND_SKELETONS
+                .instance(&Options::from([
+                    ("from".to_owned(), "a".to_owned()),
+                    ("to".to_owned(), "b".to_owned()),
+                    ("tolerance".to_owned(), "1".to_owned()),
+                    ("parents".to_owned(), "same".to_owned()),
+                    ("rotation-tolerance".to_owned(), "0".to_owned()),
+                ]))
+                .err()
+                .unwrap_or_default()
+                .contains("rotation-tolerance=0: a positive number")
         );
     }
 
@@ -509,13 +506,20 @@ mod tests {
         .unwrap_err();
         assert!(e.contains("2 skeletons are named b"), "{e}");
         for (options, why) in [
-            ("to=b,tolerance=1", "from=NAME"),
-            ("from=a,tolerance=1", "to=NAME"),
-            ("from=a,to=b", "tolerance=T"),
-            ("from=a,to=a,tolerance=1", "the same skeleton"),
-            ("from=a,to=b,tolerance=0", "positive"),
-            ("from=a,to=b,tolerance=1", "parents=same|any"),
-            ("from=a,to=b,tolerance=1,parents=up", "same or any"),
+            ("to=b,tolerance=1,parents=same", "from is required"),
+            ("from=a,tolerance=1,parents=same", "to is required"),
+            ("from=a,to=b,parents=same", "tolerance is required"),
+            ("from=a,to=a,tolerance=1,parents=same", "the same skeleton"),
+            ("from=a,to=b,tolerance=0,parents=same", "positive"),
+            (
+                "from=a,to=b,tolerance=1,rotation-tolerance=0,parents=same",
+                "positive",
+            ),
+            ("from=a,to=b,tolerance=1", "parents is required"),
+            (
+                "from=a,to=b,tolerance=1,parents=up",
+                "parents=up is none of same or any",
+            ),
         ] {
             let parsed: Options = options
                 .split(',')
@@ -525,7 +529,7 @@ mod tests {
                         .unwrap()
                 })
                 .collect();
-            let e = correspond_skeletons(&parsed).err().unwrap_or_default();
+            let e = CORRESPOND_SKELETONS.instance(&parsed).err().unwrap_or_default();
             assert!(e.contains(why), "{options}: {e}");
         }
     }

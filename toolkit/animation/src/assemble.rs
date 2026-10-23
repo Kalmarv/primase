@@ -74,7 +74,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Asset, Component, Entity, Joint, JointId, JointMap, Mesh, Name, Role, Skeleton, Skin, Slot, Source, World,
 };
@@ -136,63 +136,81 @@ pub struct AssembleCharacter {
     pub name: String,
 }
 
-/// The pass factory.
-pub fn assemble_character(o: &Options) -> Result<Box<dyn Pass>, String> {
-    let (mut correspondence, mut reference_pose, mut tolerance, mut unweighted, mut weighted, mut name) =
-        (None, None, None, None, None, None);
-    for (k, v) in o {
-        match k.as_str() {
-            "correspondence" => {
-                correspondence = Some(match v.as_str() {
-                    "by-name" => Correspondence::ByName,
-                    "table" => Correspondence::Table,
-                    _ => return Err(format!("correspondence={v}: by-name or table")),
-                });
-            }
-            "reference-pose" => {
-                reference_pose = Some(match v.as_str() {
-                    "own" => ReferencePose::Own,
-                    "assembled" => ReferencePose::Assembled,
-                    _ => return Err(format!("reference-pose={v}: own or assembled")),
-                });
-            }
-            "tolerance" => {
-                let t: f64 = v.parse().map_err(|_| format!("tolerance={v} is not a number"))?;
-                if !t.is_finite() || t < 0.0 {
-                    return Err(format!("tolerance={v}: a finite number, zero or more"));
-                }
-                tolerance = Some(t);
-            }
-            "unweighted-rests" => {
-                unweighted = Some(match v.as_str() {
-                    "report" => UnweightedRests::Report,
-                    "refuse" => UnweightedRests::Refuse,
-                    _ => return Err(format!("unweighted-rests={v}: report or refuse")),
-                });
-            }
-            "weighted-rests" => {
-                weighted = Some(match v.as_str() {
-                    "refuse" => WeightedRests::Refuse,
-                    "report" => WeightedRests::Report,
-                    _ => return Err(format!("weighted-rests={v}: refuse or report")),
-                });
-            }
-            "name" => {
-                if v.is_empty() {
-                    return Err("name= is empty".into());
-                }
-                name = Some(v.clone());
-            }
-            _ => return Err(format!("unknown option {k}")),
-        }
+impl Choice for Correspondence {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("by-name", Correspondence::ByName),
+        ("table", Correspondence::Table),
+    ];
+}
+
+impl Choice for ReferencePose {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("own", ReferencePose::Own),
+        ("assembled", ReferencePose::Assembled),
+    ];
+}
+
+impl Choice for UnweightedRests {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("report", UnweightedRests::Report),
+        ("refuse", UnweightedRests::Refuse),
+    ];
+}
+
+impl Choice for WeightedRests {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("refuse", WeightedRests::Refuse),
+        ("report", WeightedRests::Report),
+    ];
+}
+
+/// `assemble-character`'s declaration ([`primase_core::pass::PassRegistry::add`]): every option required.
+pub const ASSEMBLE_CHARACTER: PassSpec = PassSpec {
+    name: "assemble-character",
+    options: &[
+        OptionSpec::choice::<Correspondence>(
+            "correspondence",
+            "how the parts' joints pair up: equal names, or the world's core.joint_map tables",
+        ),
+        OptionSpec::choice::<ReferencePose>(
+            "reference-pose",
+            "whether each part stays bound to its own skeleton and rest, or is rebound to the assembled skeleton",
+        ),
+        OptionSpec::required(
+            "tolerance",
+            "0.001",
+            "the largest rest disagreement accepted between paired joints, finite and not negative",
+        ),
+        OptionSpec::choice::<UnweightedRests>(
+            "unweighted-rests",
+            "a disagreeing rest of a joint no vertex weights: reported, or refused beyond the tolerance",
+        ),
+        OptionSpec::choice::<WeightedRests>(
+            "weighted-rests",
+            "a disagreeing rest of a weighted joint: refused, or reported with the part kept on its own rest",
+        ),
+        OptionSpec::required("name", "character", "the assembled character's name, not empty"),
+    ],
+    make: assemble_character,
+};
+
+fn assemble_character(g: &Given) -> Result<Box<dyn Pass>, String> {
+    let v = g.required("tolerance");
+    let tolerance: f64 = v.parse().map_err(|_| format!("tolerance={v} is not a number"))?;
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(format!("tolerance={v}: a finite number, zero or more"));
+    }
+    let name = g.required("name");
+    if name.is_empty() {
+        return Err("name= is empty".into());
     }
     Ok(Box::new(AssembleCharacter {
-        correspondence: correspondence.ok_or("correspondence=by-name|table is required")?,
-        reference_pose: reference_pose.ok_or("reference-pose=own|assembled is required")?,
-        tolerance: tolerance.ok_or("tolerance=<largest rest disagreement accepted> is required")?,
-        unweighted_rests: unweighted.ok_or("unweighted-rests=report|refuse is required")?,
-        weighted_rests: weighted.ok_or("weighted-rests=refuse|report is required")?,
-        name: name.ok_or("name=<the assembled character's name> is required")?,
+        correspondence: g.choice::<Correspondence>("correspondence"),
+        reference_pose: g.choice::<ReferencePose>("reference-pose"),
+        tolerance,
+        unweighted_rests: g.choice::<UnweightedRests>("unweighted-rests"),
+        weighted_rests: g.choice::<WeightedRests>("weighted-rests"),
+        name: name.to_owned(),
     }))
 }
 
@@ -594,39 +612,14 @@ impl Pass for AssembleCharacter {
     }
     fn options(&self) -> Options {
         Options::from([
-            (
-                "correspondence".to_owned(),
-                match self.correspondence {
-                    Correspondence::ByName => "by-name",
-                    Correspondence::Table => "table",
-                }
-                .to_owned(),
-            ),
-            (
-                "reference-pose".to_owned(),
-                match self.reference_pose {
-                    ReferencePose::Own => "own",
-                    ReferencePose::Assembled => "assembled",
-                }
-                .to_owned(),
-            ),
+            ("correspondence".to_owned(), self.correspondence.text().to_owned()),
+            ("reference-pose".to_owned(), self.reference_pose.text().to_owned()),
             ("tolerance".to_owned(), self.tolerance.to_string()),
             (
                 "unweighted-rests".to_owned(),
-                match self.unweighted_rests {
-                    UnweightedRests::Report => "report",
-                    UnweightedRests::Refuse => "refuse",
-                }
-                .to_owned(),
+                self.unweighted_rests.text().to_owned(),
             ),
-            (
-                "weighted-rests".to_owned(),
-                match self.weighted_rests {
-                    WeightedRests::Refuse => "refuse",
-                    WeightedRests::Report => "report",
-                }
-                .to_owned(),
-            ),
+            ("weighted-rests".to_owned(), self.weighted_rests.text().to_owned()),
             ("name".to_owned(), self.name.clone()),
         ])
     }
@@ -1137,7 +1130,8 @@ mod tests {
         .iter()
         .map(|&(k, v)| (k.to_owned(), v.to_owned()))
         .collect();
-        let err = assemble_character(&options)
+        let err = ASSEMBLE_CHARACTER
+            .instance(&options)
             .unwrap()
             .run(&mut w, &mut PassLog::default())
             .unwrap_err();
@@ -1498,42 +1492,42 @@ mod tests {
     fn every_option_is_required_and_checked() {
         let (mut w, ..) = world(None, [0.0, 0.5, 0.0]);
         for (pipeline, said) in [
-            ("assemble-character", "correspondence=by-name|table is required"),
+            ("assemble-character", "correspondence is required: "),
             (
                 "assemble-character{correspondence=by-name}",
-                "reference-pose=own|assembled is required",
+                "reference-pose is required: ",
             ),
             (
                 "assemble-character{correspondence=by-name,reference-pose=own}",
-                "tolerance=<largest rest disagreement accepted> is required",
+                "tolerance is required: ",
             ),
             (
                 "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0}",
-                "unweighted-rests=report|refuse is required",
+                "unweighted-rests is required: ",
             ),
             (
                 "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0,unweighted-rests=report}",
-                "weighted-rests=refuse|report is required",
+                "weighted-rests is required: ",
             ),
             (
                 "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0,unweighted-rests=report,weighted-rests=refuse}",
-                "name=<the assembled character's name> is required",
+                "name is required: ",
             ),
             (
                 "assemble-character{correspondence=by-nam,reference-pose=own,tolerance=0,unweighted-rests=report,weighted-rests=refuse,name=a}",
-                "correspondence=by-nam: by-name or table",
+                "correspondence=by-nam is none of by-name or table",
             ),
             (
                 "assemble-character{correspondence=by-name,reference-pose=own,tolerance=-1,unweighted-rests=report,weighted-rests=refuse,name=a}",
                 "a finite number, zero or more",
             ),
             (
-                "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0,unweighted-rests=some,name=a}",
-                "unweighted-rests=some: report or refuse",
+                "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0,unweighted-rests=some,weighted-rests=refuse,name=a}",
+                "unweighted-rests=some is none of report or refuse",
             ),
             (
                 "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0,unweighted-rests=report,weighted-rests=some,name=a}",
-                "weighted-rests=some: refuse or report",
+                "weighted-rests=some is none of refuse or report",
             ),
         ] {
             let err = run(&mut w, pipeline).unwrap_err();

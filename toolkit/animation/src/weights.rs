@@ -2,7 +2,7 @@
 //! `quantize-skin-weights` stores float weights as normalised bytes or shorts. `normalize-skin-weights` (in
 //! [`crate::passes`]) shares their reading, writing and largest-remainder arithmetic.
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::skin::SUM_TOLERANCE;
 use primase_core::{
     Component, Entity, Influences, Mesh, Primitive, Semantic, Skin, Stream, WeightRule, World,
@@ -152,22 +152,25 @@ impl LimitSkinInfluences {
         Ok(LimitSkinInfluences { max })
     }
 
-    pub fn from_options(o: &Options) -> Result<LimitSkinInfluences, String> {
-        let mut max = None;
-        for (k, v) in o {
-            match k.as_str() {
-                "max" => {
-                    max = Some(
-                        v.parse::<u8>()
-                            .map_err(|_| format!("max={v} is not a whole number from 1 to 255"))?,
-                    )
-                }
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        LimitSkinInfluences::new(max.ok_or("max is required (1 to 255)")?)
+    fn from_given(g: &Given) -> Result<LimitSkinInfluences, String> {
+        let v = g.required("max");
+        let max = v
+            .parse::<u8>()
+            .map_err(|_| format!("max={v} is not a whole number from 1 to 255"))?;
+        LimitSkinInfluences::new(max)
     }
 }
+
+/// `limit-skin-influences`' declaration ([`primase_core::pass::PassRegistry::add`]).
+pub const LIMIT_SKIN_INFLUENCES: PassSpec = PassSpec {
+    name: "limit-skin-influences",
+    options: &[OptionSpec::required(
+        "max",
+        "4",
+        "1 to 255: the most influences a vertex keeps",
+    )],
+    make: |g| Ok(Box::new(LimitSkinInfluences::from_given(g)?)),
+};
 
 impl Pass for LimitSkinInfluences {
     fn name(&self) -> &'static str {
@@ -306,21 +309,26 @@ impl QuantizeSkinWeights {
         }
     }
 
-    pub fn from_options(o: &Options) -> Result<QuantizeSkinWeights, String> {
-        let mut bits = None;
-        for (k, v) in o {
-            match k.as_str() {
-                "bits" => bits = Some(v.parse::<u8>().map_err(|_| format!("bits={v} is not 8 or 16"))?),
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        QuantizeSkinWeights::new(bits.ok_or("bits is required (8 or 16)")?)
+    fn from_given(g: &Given) -> Result<QuantizeSkinWeights, String> {
+        let v = g.required("bits");
+        QuantizeSkinWeights::new(v.parse::<u8>().map_err(|_| format!("bits={v} is not 8 or 16"))?)
     }
 
     fn unit(&self) -> u64 {
         if self.bits == 8 { 255 } else { 65535 }
     }
 }
+
+/// `quantize-skin-weights`' declaration ([`primase_core::pass::PassRegistry::add`]).
+pub const QUANTIZE_SKIN_WEIGHTS: PassSpec = PassSpec {
+    name: "quantize-skin-weights",
+    options: &[OptionSpec::required(
+        "bits",
+        "8",
+        "8 or 16: the bits a weight is stored in",
+    )],
+    make: |g| Ok(Box::new(QuantizeSkinWeights::from_given(g)?)),
+};
 
 impl Pass for QuantizeSkinWeights {
     fn name(&self) -> &'static str {

@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Attachment, Clip, ClipBinding, Component, Entity, Instance, Lods, Mesh, MeshFile, MorphId, MorphWeights,
     Morphs, RigInstance, RigPose, Semantic, Skeleton, Skin, SkinInstance, Sockets, Stream, Transform, World,
@@ -48,33 +48,36 @@ impl EvaluateClip {
         Ok(EvaluateClip { time, root })
     }
 
-    pub fn from_options(o: &Options) -> Result<EvaluateClip, String> {
-        let mut time = None;
-        let mut root = None;
-        for (k, v) in o {
-            match k.as_str() {
-                "time" => {
-                    time = Some(
-                        v.parse::<f64>()
-                            .map_err(|_| format!("time={v} is not a number"))?,
-                    )
-                }
-                "root" => {
-                    root = Some(match v.as_str() {
-                        "ignore" => RootChoice::Ignore,
-                        "apply" => RootChoice::Apply,
-                        _ => return Err(format!("root={v} is not ignore or apply")),
-                    })
-                }
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        EvaluateClip::new(
-            time.ok_or("time is required")?,
-            root.ok_or("root is required (ignore or apply)")?,
-        )
+    fn from_given(g: &Given) -> Result<EvaluateClip, String> {
+        let v = g.required("time");
+        let time = v
+            .parse::<f64>()
+            .map_err(|_| format!("time={v} is not a number"))?;
+        EvaluateClip::new(time, g.choice::<RootChoice>("root"))
     }
 }
+
+impl Choice for RootChoice {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("ignore", RootChoice::Ignore), ("apply", RootChoice::Apply)];
+}
+
+/// `evaluate-clip`'s declaration ([`primase_core::pass::PassRegistry::add`]).
+pub const EVALUATE_CLIP: PassSpec = PassSpec {
+    name: "evaluate-clip",
+    options: &[
+        OptionSpec::required(
+            "time",
+            "0",
+            "seconds, finite and not negative: when each bound clip is evaluated",
+        ),
+        OptionSpec::choice::<RootChoice>(
+            "root",
+            "what a clip's root motion does: left out, counted, or moving the rig's transform",
+        ),
+    ],
+    make: |g| Ok(Box::new(EvaluateClip::from_given(g)?)),
+};
 
 impl Pass for EvaluateClip {
     fn name(&self) -> &'static str {
@@ -83,14 +86,7 @@ impl Pass for EvaluateClip {
     fn options(&self) -> Options {
         Options::from([
             ("time".to_owned(), self.time.to_string()),
-            (
-                "root".to_owned(),
-                match self.root {
-                    RootChoice::Ignore => "ignore",
-                    RootChoice::Apply => "apply",
-                }
-                .to_owned(),
-            ),
+            ("root".to_owned(), self.root.text().to_owned()),
         ])
     }
     fn requires(&self) -> &[&'static str] {
@@ -561,81 +557,74 @@ mod normalize_tests {
     }
 }
 
-/// Register this crate's passes.
+/// Register this crate's passes by their declarations.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    reg.register_requiring(
-        "evaluate-clip",
-        |o| Ok(Box::new(EvaluateClip::from_options(o)?)),
-        &[("time", "0"), ("root", "ignore")],
-    );
-    reg.register_requiring(
-        "assemble-character",
-        crate::assemble::assemble_character,
-        &[
-            ("correspondence", "by-name"),
-            ("reference-pose", "own"),
-            ("tolerance", "0.001"),
-            ("unweighted-rests", "report"),
-            ("weighted-rests", "refuse"),
-            ("name", "character"),
-        ],
-    );
-    reg.register_requiring(
-        "correspond-skeletons",
-        crate::correspond::correspond_skeletons,
-        &[
-            ("from", "a"),
-            ("to", "b"),
-            ("tolerance", "0.001"),
-            ("parents", "same"),
-        ],
-    );
-    reg.register_requiring(
-        "retarget-skin",
-        crate::retarget_skin::retarget_skin,
-        &[
-            ("fit", "positions"),
-            ("unmapped", "refuse"),
-            ("placement", "automatic"),
-        ],
-    );
-    reg.register_requiring(
-        "retarget-clip",
-        crate::retarget::retarget_clip,
-        &[("reference", "rest"), ("translation", "none")],
-    );
-    reg.register_requiring(
-        "map-clip",
-        crate::map::map_clip,
-        &[
-            ("unmapped", "refuse"),
-            ("rests", "target"),
-            ("reparented", "refuse"),
-        ],
-    );
-    reg.register("normalize-skin-weights", |o| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(NormalizeSkinWeights)),
-    });
-    reg.register_requiring(
-        "limit-skin-influences",
-        |o| Ok(Box::new(crate::weights::LimitSkinInfluences::from_options(o)?)),
-        &[("max", "4")],
-    );
-    reg.register_requiring(
-        "quantize-skin-weights",
-        |o| Ok(Box::new(crate::weights::QuantizeSkinWeights::from_options(o)?)),
-        &[("bits", "8")],
-    );
-    reg.register("pose-skin", |o| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(PoseSkin)),
-    });
+    for spec in [
+        &EVALUATE_CLIP,
+        &crate::assemble::ASSEMBLE_CHARACTER,
+        &crate::correspond::CORRESPOND_SKELETONS,
+        &crate::retarget_skin::RETARGET_SKIN,
+        &crate::retarget::RETARGET_CLIP,
+        &crate::map::MAP_CLIP,
+        &NORMALIZE_SKIN_WEIGHTS,
+        &crate::weights::LIMIT_SKIN_INFLUENCES,
+        &crate::weights::QUANTIZE_SKIN_WEIGHTS,
+        &POSE_SKIN,
+    ] {
+        reg.add(spec);
+    }
 }
+
+/// `normalize-skin-weights`' declaration: no options.
+pub const NORMALIZE_SKIN_WEIGHTS: PassSpec = PassSpec {
+    name: "normalize-skin-weights",
+    options: &[],
+    make: |_| Ok(Box::new(NormalizeSkinWeights)),
+};
+
+/// `pose-skin`'s declaration: no options.
+pub const POSE_SKIN: PassSpec = PassSpec {
+    name: "pose-skin",
+    options: &[],
+    make: |_| Ok(Box::new(PoseSkin)),
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The crate registers exactly these passes by their declarations: those with required options are made only with
+    /// them, and every one says what it takes.
+    #[test]
+    fn the_animation_passes_register_by_name() {
+        let mut reg = primase_core::pass::PassRegistry::new();
+        register(&mut reg);
+        let names = [
+            "assemble-character",
+            "correspond-skeletons",
+            "evaluate-clip",
+            "limit-skin-influences",
+            "map-clip",
+            "normalize-skin-weights",
+            "pose-skin",
+            "quantize-skin-weights",
+            "retarget-clip",
+            "retarget-skin",
+        ];
+        assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        let free = ["normalize-skin-weights", "pose-skin"];
+        for name in names {
+            assert_eq!(reg.requires_options(name), !free.contains(&name), "{name}");
+            assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");
+            let bare = reg.make(name, &Options::new());
+            assert_eq!(bare.is_err(), !free.contains(&name), "{name}");
+        }
+        assert!(
+            reg.describe("map-clip")
+                .unwrap()
+                .contains("\n  reparented (required; refuse | model-space; e.g. refuse): ")
+        );
+    }
     use primase_core::pass::{PassManager, PassRegistry, RunReport};
     use primase_core::{
         Binding, BindingId, Channel, ClipTarget, Deformation, Extrapolation, Influences, Interpolation,
@@ -918,13 +907,18 @@ mod tests {
     /// Options are required, checked and printed; two bindings on one rig are refused.
     #[test]
     fn evaluate_clip_options_and_refusals() {
-        assert!(EvaluateClip::from_options(&Options::from([("time".into(), "1".into())])).is_err());
+        assert!(
+            EVALUATE_CLIP
+                .instance(&Options::from([("time".into(), "1".into())]))
+                .is_err()
+        );
         assert!(EvaluateClip::new(-1.0, RootChoice::Apply).is_err());
-        let e = EvaluateClip::from_options(&Options::from([
-            ("time".into(), "0.25".into()),
-            ("root".into(), "apply".into()),
-        ]))
-        .unwrap();
+        let e = EVALUATE_CLIP
+            .instance(&Options::from([
+                ("time".into(), "0.25".into()),
+                ("root".into(), "apply".into()),
+            ]))
+            .unwrap();
         assert_eq!(e.options()["time"], "0.25");
         let (mut w, _, rigs, _) = world();
         let clip = w.get::<ClipBinding>(Entity::from_index(9)).map(|b| b.clip);
