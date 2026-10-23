@@ -75,8 +75,8 @@ impl Component for FrostbiteEbx {
 }
 
 /// A texture resource's header as stored, on the entity that holds its `core.texture`: the Frostbite format ordinal
-/// (the colour space of the format is not established, so the core texture's stays linear), the fields the reader
-/// does not interpret, and the GUID of the chunk the pixels were read from.
+/// (the core texture's colour space is the format's own: [`crate::entry::format_colour_space`]), the fields the
+/// reader does not interpret, and the GUID of the chunk the pixels were read from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrostbiteTexture {
     pub header: TextureHeader,

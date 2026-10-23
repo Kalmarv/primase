@@ -32,6 +32,21 @@ pub fn tex_format(format: u32) -> Option<TexFormat> {
     })
 }
 
+/// The colour space a Frostbite format ordinal states, `None` for an ordinal the texture reader does not decode. The
+/// game's `RenderFormat` name table (`Skate.exe`, build sha256 `fbce74d5e28ef525`: file offset 0x64d61d8, RVA
+/// 0x64d6bd8; 130 names, the ordinal being the position) names each format `_UNORM` or `_SRGB`: 18 `R8G8B8A8_UNORM`,
+/// 20 `R8G8B8A8_SRGB`, 23 `B8G8R8A8_UNORM`, 24 `B8G8R8A8_SRGB`, 54 and 55 `BC1`, 56 and 57 `BC1A`, 58 and 59 `BC2`,
+/// 60 and 61 `BC3`, 66 and 67 `BC7` (unorm, then sRGB). Every ordinal ReSkate decodes lands on those names, which is
+/// how the table's order was checked against an independent source. An sRGB format is [`ColorSpace::Srgb`], the others
+/// [`ColorSpace::Linear`]; there is no decoded format whose name does not say.
+pub fn format_colour_space(format: u32) -> Option<ColorSpace> {
+    Some(match format {
+        20 | 24 | 55 | 57 | 59 | 61 | 67 => ColorSpace::Srgb,
+        18 | 23 | 54 | 56 | 58 | 60 | 66 => ColorSpace::Linear,
+        _ => return None,
+    })
+}
+
 /// A new entity named `name` that records it was read from `entry`.
 pub(super) fn spawn_entity(w: &mut World, entry: &Listed, name: String) -> Entity {
     let e = w.spawn();
@@ -175,8 +190,8 @@ impl Source<'_> {
     /// (`first_mip` above 0) has the whole chain in its TOC's chunk table (`chunk_size` bytes, the levels one after
     /// another from the largest) and only the levels from `first_mip` on in its bundle's manifest (a tail of that
     /// chunk, at the logical offset of the bytes of the levels before them): the whole chain is read, from the TOC, and
-    /// refused by name when the TOC does not hold a chunk of that size. Colour space linear and role other until a
-    /// lowering states them.
+    /// refused by name when the TOC does not hold a chunk of that size. The colour space is the format's own
+    /// ([`format_colour_space`]); the role is other until a lowering states it.
     fn texture(&self, bundle: &Bundle, entry: &Listed, h: &texture::TextureHeader) -> Result<Texture> {
         if h.kind != 0 || h.depth > 1 || h.slices > 1 {
             return Err(unsupported(
@@ -244,7 +259,12 @@ impl Source<'_> {
             height: u32::from(h.height),
             format,
             levels,
-            color_space: ColorSpace::Linear,
+            color_space: format_colour_space(h.format).ok_or_else(|| {
+                unsupported(
+                    entry,
+                    format_args!("texture format {} states no colour space", h.format),
+                )
+            })?,
             role: TexRole::Other,
             normal: None,
         })

@@ -7,10 +7,10 @@
 #![allow(clippy::unwrap_used)]
 
 use primase_compress::oodle::{Oodle, Version};
-use primase_core::{Component, Texture, World};
+use primase_core::{ColorSpace, Component, Texture, World};
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbiteDepot, FrostbiteEbx, FrostbiteEntry, FrostbiteTexture};
-use primase_frostbite::entry::tex_format;
+use primase_frostbite::entry::{format_colour_space, tex_format};
 use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::listing::resource_type_name;
 use primase_frostbite::{depot, ebx, texture};
@@ -90,6 +90,18 @@ fn texture_formats_map_to_core_layouts() {
         }
     }
     assert_eq!(tex_format(66), tex_format(67));
+    // a colour space exactly where there is a layout: the sRGB ordinals are the odd member of each pair of the table
+    for format in 0..128 {
+        assert_eq!(
+            format_colour_space(format).is_some(),
+            tex_format(format).is_some(),
+            "format {format}"
+        );
+    }
+    let srgb: Vec<u32> = (0..128)
+        .filter(|&f| format_colour_space(f) == Some(ColorSpace::Srgb))
+        .collect();
+    assert_eq!(srgb, [20, 24, 55, 57, 59, 61, 67]);
     assert_eq!(resource_type_name(primase_frostbite::TEXTURE), Some("Texture"));
     assert_eq!(resource_type_name(depot::RTYPE), Some("ShaderBlockDepotResource"));
     assert_eq!(resource_type_name(0), None);
