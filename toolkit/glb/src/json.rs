@@ -20,7 +20,8 @@ impl<'a> Obj<'a> {
     }
 
     /// Error on any key outside `allowed` (strict reader: what we don't understand is not skipped silently), and on
-    /// a non-empty `extensions` object (an extension can change what the other fields mean).
+    /// a non-empty `extensions` object (an extension can change what the other fields mean). `extras` is a key like any
+    /// other: an object that has somewhere to keep it lists it, one that has not refuses it.
     pub fn only(&self, allowed: &[&str]) -> Result<()> {
         for (k, v) in self.map {
             if k == "extensions" {
@@ -29,7 +30,7 @@ impl<'a> Obj<'a> {
                 }
                 return Err(invalid(self.path, &format!("unsupported extensions {v}")));
             }
-            if k != "extras" && !allowed.contains(&k.as_str()) {
+            if !allowed.contains(&k.as_str()) {
                 return Err(invalid(self.path, &format!("unsupported property {k:?}")));
             }
         }

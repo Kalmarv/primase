@@ -39,7 +39,7 @@
 //! - **The asset**: a root with `core.asset` (each skeleton a rig, each placement a part, each clip a clip),
 //!   `core.source` the caller's key and `core.name`.
 //!
-//! Not read, counted: cameras, the skins' `skeleton` hints (no effect on deformation), images no core material slot
+//! Not read, counted: cameras, the `extras` of the objects read (but a mesh's `targetNames`), the skins' `skeleton` hints (no effect on deformation), images no core material slot
 //! samples, and the images refused by name.
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -81,6 +81,9 @@ pub struct ReadReport {
     pub nodes_outside_scene: usize,
     pub cameras: usize,
     pub skeleton_hints: usize,
+    /// Objects the reader read whose `extras` it keeps nowhere (a mesh's `targetNames` is read; other keys, and the extras
+    /// of primitives, nodes, skins, animations and the scene, are not).
+    pub extras_not_read: usize,
     pub channels_off_joints: usize,
     pub unskinned_joint_streams: usize,
     /// The document's textures and images, and what became of its images: those a core material slot samples were
@@ -104,6 +107,10 @@ impl ReadReport {
                 self.nodes_outside_scene,
             ),
             n("cameras, not read", self.cameras),
+            n(
+                "extras of meshes, primitives, nodes, skins, animations and the scene (other than a mesh's targetNames), not read",
+                self.extras_not_read,
+            ),
             n(
                 "skins' skeleton hints, not read (no effect on deformation)",
                 self.skeleton_hints,
@@ -231,6 +238,7 @@ pub fn read_with_images(
     let skins = gltf.skins()?;
     let animations = gltf.animations()?;
     let roots = gltf.scene_roots()?.unwrap_or_default();
+    report.extras_not_read += usize::from(gltf.scene_extras()?.is_some());
 
     // the scene's nodes, their parents and world transforms (composed in f64 from the roots down)
     let mut parent: BTreeMap<usize, usize> = BTreeMap::new();
@@ -255,6 +263,7 @@ pub fn read_with_images(
     let in_scene: BTreeSet<usize> = order.iter().copied().collect();
     report.nodes_outside_scene = nodes.len() - in_scene.len();
     report.cameras = order.iter().filter(|&&n| nodes[n].camera.is_some()).count();
+    report.extras_not_read += order.iter().filter(|&&n| nodes[n].extras.is_some()).count();
 
     // the skins drawn in the scene, and their joints with every node above them: the skeletons' nodes
     let drawn_skins: BTreeSet<usize> = order.iter().filter_map(|&n| nodes[n].skin).collect();
@@ -264,6 +273,7 @@ pub fn read_with_images(
         if skin.skeleton.is_some() {
             report.skeleton_hints += 1;
         }
+        report.extras_not_read += usize::from(skin.extras.is_some());
         for &j in &skin.joints {
             if !in_scene.contains(&j) {
                 return Err(invalid(
@@ -376,6 +386,13 @@ pub fn read_with_images(
             weights,
             extras,
         } = read;
+        // a mesh's `targetNames` are read below; any other key of its extras is not
+        report.extras_not_read += usize::from(
+            extras
+                .as_ref()
+                .is_some_and(|x| x.as_object().is_none_or(|o| o.keys().any(|k| k != "targetNames"))),
+        );
+        report.extras_not_read += primitives.iter().filter(|p| p.extras.is_some()).count();
         w.insert(e, Name(name.unwrap_or_else(|| format!("mesh {m}"))));
         let mut prims = Vec::with_capacity(primitives.len());
         for p in &primitives {
@@ -586,6 +603,7 @@ pub fn read_with_images(
     // animations
     let mut clips = Vec::new();
     for (i, a) in animations.iter().enumerate() {
+        report.extras_not_read += usize::from(a.extras.is_some());
         let name = a.name.clone().unwrap_or_else(|| format!("animation {i}"));
         // channels by skeleton (None: morph channels on no joint), morph-driven placements by skeleton
         let mut groups: BTreeMap<Option<Entity>, (Vec<primase_core::clip::Channel>, BTreeSet<Entity>)> =
@@ -714,7 +732,7 @@ pub fn read_with_images(
     report.clips = clips.len();
 
     // the images the materials' slots sample
-    let images = read_textures(gltf, source, w, &material_entities, resolve);
+    let images = read_textures(gltf, source, w, &material_entities, resolve)?;
     report.images_read = images.read;
     report.images_refused = images.refused;
     report.images_unused = images.unused;
@@ -730,6 +748,24 @@ pub fn read_with_images(
         .chain(clips.iter().map(|&c| (c, Role::Clip)))
         .collect();
     w.insert(root, Asset { members });
+    // whatever the world's own verifier refuses, the reader refuses here by name: a document with a joint index outside its
+    // skin's palette, a negative weight, a rotation that is not a unit quaternion or a transform that overflows is not a
+    // world the passes can be handed
+    if let Some((component, entity, detail)) = w.verify_components().into_iter().next() {
+        let who = w
+            .get::<Name>(entity)
+            .map_or_else(|| format!("{entity:?}"), |n| format!("{:?} ({entity:?})", n.0));
+        return Err(invalid(
+            "glTF document",
+            format!("{component} of {who} does not verify: {detail}"),
+        ));
+    }
+    if let Some((resource, detail)) = w.verify_resources().into_iter().next() {
+        return Err(invalid(
+            "glTF document",
+            format!("{resource} does not verify: {detail}"),
+        ));
+    }
     Ok(report)
 }
 

@@ -57,6 +57,8 @@ pub struct ReadSkin {
     pub inverse_binds: Vec<[[f32; 3]; 4]>,
     /// The document's skeleton root hint (no effect on deformation).
     pub skeleton: Option<usize>,
+    /// The skin's `extras`, as stored.
+    pub extras: Option<Value>,
 }
 
 /// What an animation channel drives.
@@ -105,6 +107,8 @@ pub struct ReadChannel {
 pub struct ReadAnimation {
     pub name: Option<String>,
     pub channels: Vec<ReadChannel>,
+    /// The animation's `extras`, as stored.
+    pub extras: Option<Value>,
 }
 
 /// The `key` array of the document, empty when absent.
@@ -193,6 +197,7 @@ impl Gltf {
                 "skin",
                 "weights",
                 "camera",
+                "extras",
             ])?;
             let children = indices(&o, "children", nodes.len(), "node")?.unwrap_or_default();
             for &c in &children {
@@ -275,11 +280,10 @@ impl Gltf {
         Ok(out)
     }
 
-    /// The default scene's root nodes (`scene`, else the first scene); `None` when the document has no scene.
-    pub fn scene_roots(&self) -> Result<Option<Vec<usize>>> {
+    /// The default scene (`scene`, else the first) and its index; `None` when the document has no scene.
+    fn default_scene(&self) -> Result<Option<(usize, &Value)>> {
         let json = self.json();
         let scenes = array(json, "scenes")?;
-        let nodes = array(json, "nodes")?.len();
         let chosen = match json.get("scene") {
             None => 0,
             Some(v) => v
@@ -288,12 +292,23 @@ impl Gltf {
                 .filter(|&s| s < scenes.len())
                 .ok_or_else(|| invalid("scene", &format!("{v} is not a scene index")))?,
         };
-        let Some(s) = scenes.get(chosen) else {
+        Ok(scenes.get(chosen).map(|s| (chosen, s)))
+    }
+
+    /// The default scene's `extras`, as stored; `None` when it has none or the document has no scene.
+    pub fn scene_extras(&self) -> Result<Option<Value>> {
+        Ok(self.default_scene()?.and_then(|(_, s)| s.get("extras").cloned()))
+    }
+
+    /// The default scene's root nodes (`scene`, else the first scene); `None` when the document has no scene.
+    pub fn scene_roots(&self) -> Result<Option<Vec<usize>>> {
+        let nodes = array(self.json(), "nodes")?.len();
+        let Some((chosen, s)) = self.default_scene()? else {
             return Ok(None);
         };
         let path = format!("scenes[{chosen}]");
         let o = Obj::new(s, &path)?;
-        o.only(&["nodes", "name"])?;
+        o.only(&["nodes", "name", "extras"])?;
         let roots = indices(&o, "nodes", nodes, "node")?.unwrap_or_default();
         let mut listed = std::collections::BTreeSet::new();
         if let Some(r) = roots.iter().find(|r| !listed.insert(**r)) {
@@ -320,7 +335,7 @@ impl Gltf {
             .map(|(i, s)| {
                 let path = format!("skins[{i}]");
                 let o = Obj::new(s, &path)?;
-                o.only(&["name", "joints", "inverseBindMatrices", "skeleton"])?;
+                o.only(&["name", "joints", "inverseBindMatrices", "skeleton", "extras"])?;
                 let joints = indices(&o, "joints", nodes, "node")?
                     .filter(|j| !j.is_empty())
                     .ok_or_else(|| invalid(&path, "no joints"))?;
@@ -355,6 +370,7 @@ impl Gltf {
                 };
                 Ok(ReadSkin {
                     name: o.str_opt("name")?.map(str::to_owned),
+                    extras: o.get("extras").cloned(),
                     joints,
                     inverse_binds,
                     skeleton: o
@@ -382,7 +398,7 @@ impl Gltf {
             .map(|(i, a)| {
                 let path = format!("animations[{i}]");
                 let o = Obj::new(a, &path)?;
-                o.only(&["name", "channels", "samplers"])?;
+                o.only(&["name", "channels", "samplers", "extras"])?;
                 let samplers = match o.get("samplers") {
                     Some(Value::Array(s)) if !s.is_empty() => s,
                     _ => return Err(invalid(&path, "samplers missing or empty")),
@@ -471,6 +487,7 @@ impl Gltf {
                 Ok(ReadAnimation {
                     name: o.str_opt("name")?.map(str::to_owned),
                     channels,
+                    extras: o.get("extras").cloned(),
                 })
             })
             .collect()

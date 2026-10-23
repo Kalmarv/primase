@@ -128,7 +128,7 @@ pub(crate) fn read_textures(
     w: &mut World,
     materials: &BTreeMap<usize, Entity>,
     resolve: &mut ImageResolver,
-) -> ImageCounts {
+) -> crate::Result<ImageCounts> {
     let json = gltf.json();
     let list = |key: &str| {
         json.get(key)
@@ -153,13 +153,18 @@ pub(crate) fn read_textures(
             let Some(info) = slot.info(&materials_json[m]) else {
                 continue;
             };
-            let Some(t) = info
+            let at = format!("materials[{m}].{slot:?}");
+            let index = info
                 .get("index")
                 .and_then(Value::as_u64)
-                .and_then(|i| textures.get(i as usize))
-            else {
-                continue;
-            };
+                .and_then(|i| usize::try_from(i).ok())
+                .ok_or_else(|| invalid(&at, "the texture info has no texture index"))?;
+            let t = textures.get(index).ok_or_else(|| {
+                invalid(
+                    &at,
+                    format!("texture {index} does not exist ({} textures)", textures.len()),
+                )
+            })?;
             // the image: `source`, else an extension's (KHR_texture_basisu, EXT_texture_webp, ...), refused by name
             let Some(i) = t.get("source").and_then(Value::as_u64).map(|i| i as usize) else {
                 let by = t
@@ -174,8 +179,30 @@ pub(crate) fn read_textures(
                     .or_default() += 1;
                 continue;
             };
-            let Some(image) = images.get(i) else { continue };
+            let image = images.get(i).ok_or_else(|| {
+                invalid(
+                    &format!("textures[{index}]"),
+                    format!("image {i} does not exist ({} images)", images.len()),
+                )
+            })?;
             sampled.insert(i);
+            // no `sampler` is glTF's default (an unfiltered, repeating sampler); one that is named must exist and be understood
+            let (filters, wrap) = match t.get("sampler") {
+                None => (Filters::default(), [Wrap::Repeat; 2]),
+                Some(s) => {
+                    let s = s
+                        .as_u64()
+                        .and_then(|s| usize::try_from(s).ok())
+                        .ok_or_else(|| invalid(&format!("textures[{index}]"), "sampler is not an index"))?;
+                    let sampler = samplers.get(s).ok_or_else(|| {
+                        invalid(
+                            &format!("textures[{index}]"),
+                            format!("sampler {s} does not exist ({} samplers)", samplers.len()),
+                        )
+                    })?;
+                    sampler_filters(sampler).map_err(|e| invalid(&format!("samplers[{s}]"), e.to_string()))?
+                }
+            };
             let pixels = decoded.entry(i).or_insert_with(|| decode(gltf, image, resolve));
             let Ok(pixels) = pixels else { continue };
             let usage = slot.usage();
@@ -206,12 +233,6 @@ pub(crate) fn read_textures(
                 w.insert(e, Source(format!("{source}#/images/{i}")));
                 e
             });
-            let (filters, wrap) = t
-                .get("sampler")
-                .and_then(Value::as_u64)
-                .and_then(|s| samplers.get(s as usize))
-                .and_then(|s| sampler_filters(s).ok())
-                .unwrap_or((Filters::default(), [Wrap::Repeat; 2]));
             slots.insert(
                 slot,
                 SlotTexture {
@@ -232,7 +253,14 @@ pub(crate) fn read_textures(
         }
     }
     counts.unused = images.len().saturating_sub(sampled.len());
-    counts
+    Ok(counts)
+}
+
+fn invalid(item: &str, detail: impl Into<String>) -> crate::Error {
+    crate::Error::Invalid {
+        item: item.to_owned(),
+        detail: detail.into(),
+    }
 }
 
 /// An image's bytes (its buffer view or its `uri`, through the resolver) decoded, or why it is refused.

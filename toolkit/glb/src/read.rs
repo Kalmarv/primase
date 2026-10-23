@@ -18,7 +18,9 @@
 //! application-specific attributes (named `_...`, glTF 3.7.2.1) as stored ([`AccessorData`]), for the caller to
 //! state. Everything else that could change the geometry is an error naming the item: strips, fans and loops, a
 //! GLB's external or extra buffers, required extensions, any extension on what is read, unknown properties,
-//! application-specific, texture-coordinate or color morph target attributes. Extensions a document only uses
+//! application-specific, texture-coordinate or color morph target attributes. `extras` are kept where the reader has a
+//! home for them (a mesh, primitive, node, skin or animation, and the default scene, [`Gltf::scene_extras`]) and an
+//! error anywhere else (an accessor, buffer view, sampler...): never dropped without a word. Extensions a document only uses
 //! (`extensionsUsed`, on materials or textures) are the caller's to read from [`Gltf::json`].
 
 use std::borrow::Cow;
@@ -62,6 +64,8 @@ pub struct ReadPrimitive {
     pub custom: BTreeMap<String, AccessorData>,
     /// The morph targets in order; every primitive of a mesh has as many.
     pub targets: Vec<ReadTarget>,
+    /// The primitive's `extras`, as stored.
+    pub extras: Option<Value>,
 }
 
 /// One morph target: deltas added to the primitive's attributes, one element per vertex like POSITION. FLOAT as
@@ -298,7 +302,7 @@ impl Gltf {
             .get(index)
             .ok_or_else(|| invalid(&path, "does not exist"))?;
         let m = Obj::new(m, &path)?;
-        m.only(&["primitives", "weights", "name"])?;
+        m.only(&["primitives", "weights", "name", "extras"])?;
         let prims = match m.get("primitives") {
             Some(Value::Array(a)) if !a.is_empty() => a,
             _ => return Err(invalid(&path, "primitives missing or empty")),
@@ -337,7 +341,7 @@ impl Gltf {
 
     fn read_primitive(&self, p: &Value, path: &str) -> Result<ReadPrimitive> {
         let p = Obj::new(p, path)?;
-        p.only(&["attributes", "indices", "material", "mode", "targets"])?;
+        p.only(&["attributes", "indices", "material", "mode", "targets", "extras"])?;
         let topology = match p.u64_opt("mode")?.unwrap_or(4) {
             0 => Topology::Points,
             1 => Topology::Lines,
@@ -442,6 +446,7 @@ impl Gltf {
             material_name,
             custom,
             targets,
+            extras: p.get("extras").cloned(),
         })
     }
 
