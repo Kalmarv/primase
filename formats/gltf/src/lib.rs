@@ -35,10 +35,15 @@ pub use write::{
     write, write_document, write_file,
 };
 
-/// Register this crate's passes.
+/// Register this crate's passes by their declarations.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    prepare::register(reg);
-    lower::register(reg);
+    for spec in [
+        &prepare::PREPARE_GLTF_MATERIALS,
+        &prepare::FILL_MISSING_TEXCOORDS,
+        &lower::LOWER_GLTF_MATERIALS,
+    ] {
+        reg.add(spec);
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -60,3 +65,28 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use primase_core::pass::{Options, PassRegistry};
+
+    /// The crate registers exactly these passes by their declarations: the one with required options is made only with
+    /// them, and every one says what it takes.
+    #[test]
+    fn the_gltf_passes_register_by_name() {
+        let mut reg = PassRegistry::new();
+        super::register(&mut reg);
+        let names = [
+            "fill-missing-texcoords",
+            "lower-gltf-materials",
+            "prepare-gltf-materials",
+        ];
+        assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        for name in names {
+            let required = name == "prepare-gltf-materials";
+            assert_eq!(reg.requires_options(name), required, "{name}");
+            assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");
+            assert_eq!(reg.make(name, &Options::new()).is_err(), required, "{name}");
+        }
+    }
+}

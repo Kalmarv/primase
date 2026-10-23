@@ -12,7 +12,7 @@
 //! approximation. A malformed material (a factor that is not a number or outside its range, an unknown alpha mode) is
 //! an error naming the material.
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, TextureRef, UvTransform};
 use primase_core::{Component, Entity, OpaqueData, World};
 use serde_json::{Map, Value};
@@ -23,6 +23,13 @@ use crate::textures::{GltfMaterialTextures, GltfSlot};
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LowerGltfMaterials;
+
+/// `lower-gltf-materials`' declaration ([`primase_core::pass::PassRegistry::add`]): no options.
+pub const LOWER_GLTF_MATERIALS: PassSpec = PassSpec {
+    name: "lower-gltf-materials",
+    options: &[],
+    make: |_| Ok(Box::new(LowerGltfMaterials)),
+};
 
 impl Pass for LowerGltfMaterials {
     fn name(&self) -> &'static str {
@@ -273,14 +280,6 @@ fn texture_transform(
     Ok((transform, texcoord))
 }
 
-/// Register this module's passes.
-pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    reg.register("lower-gltf-materials", |o| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(LowerGltfMaterials)),
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,7 +482,7 @@ mod tests {
     #[test]
     fn the_pass_is_registered_by_name() {
         let mut reg = primase_core::pass::PassRegistry::new();
-        register(&mut reg);
+        crate::register(&mut reg);
         let pass = reg.make_registered("lower-gltf-materials").unwrap();
         assert_eq!(pass.provides(), [PbrMaterial::NAME]);
         let mut o = Options::new();

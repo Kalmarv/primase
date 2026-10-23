@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use primase_core::layered::{Channel, LayeredMaterial, Source};
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Component, Entity, MaterialVariants, Mesh, Semantic, Stream, World};
 
@@ -48,33 +48,37 @@ pub struct PrepareGltfMaterials {
 }
 
 impl PrepareGltfMaterials {
-    pub fn from_options(o: &Options) -> Result<Self, String> {
-        let (mut base_color, mut metallic, mut roughness) = (None, None, None);
-        for (k, v) in o {
-            match k.as_str() {
-                "base-color" => {
-                    let parts = v
-                        .split('/')
-                        .map(|x| UnitValue::parse(k, x))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    base_color = Some(
-                        <[UnitValue; 4]>::try_from(parts)
-                            .map_err(|_| format!("base-color={v} is not four values R/G/B/A"))?,
-                    );
-                }
-                "metallic" => metallic = Some(UnitValue::parse(k, v)?),
-                "roughness" => roughness = Some(UnitValue::parse(k, v)?),
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        let missing = |what: &str| format!("{what} is required: the program states the material it fills in");
+    /// From its declared options.
+    fn from_given(g: &Given) -> Result<Self, String> {
+        let v = g.required("base-color");
+        let parts = v
+            .split('/')
+            .map(|x| UnitValue::parse("base-color", x))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(PrepareGltfMaterials {
-            base_color: base_color.ok_or_else(|| missing("base-color"))?,
-            metallic: metallic.ok_or_else(|| missing("metallic"))?,
-            roughness: roughness.ok_or_else(|| missing("roughness"))?,
+            base_color: <[UnitValue; 4]>::try_from(parts)
+                .map_err(|_| format!("base-color={v} is not four values R/G/B/A"))?,
+            metallic: UnitValue::parse("metallic", g.required("metallic"))?,
+            roughness: UnitValue::parse("roughness", g.required("roughness"))?,
         })
     }
 }
+
+/// `prepare-gltf-materials`' declaration ([`primase_core::pass::PassRegistry::add`]): the program states the material
+/// it fills in, every option required.
+pub const PREPARE_GLTF_MATERIALS: PassSpec = PassSpec {
+    name: "prepare-gltf-materials",
+    options: &[
+        OptionSpec::required(
+            "base-color",
+            "0.8/0.8/0.8/1",
+            "the linear base colour and alpha, R/G/B/A, each from 0 to 1",
+        ),
+        OptionSpec::required("metallic", "0", "the metallic factor, from 0 to 1"),
+        OptionSpec::required("roughness", "0.85", "the roughness factor, from 0 to 1"),
+    ],
+    make: |g| Ok(Box::new(PrepareGltfMaterials::from_given(g)?)),
+};
 
 /// The material entities primitives draw with, their variants' included.
 fn drawn_materials(w: &World) -> BTreeSet<Entity> {
@@ -166,6 +170,13 @@ pub fn sampled_texcoords(w: &World, material: Entity) -> BTreeSet<u8> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FillMissingTexcoords;
 
+/// `fill-missing-texcoords`' declaration ([`primase_core::pass::PassRegistry::add`]): no options.
+pub const FILL_MISSING_TEXCOORDS: PassSpec = PassSpec {
+    name: "fill-missing-texcoords",
+    options: &[],
+    make: |_| Ok(Box::new(FillMissingTexcoords)),
+};
+
 impl Pass for FillMissingTexcoords {
     fn name(&self) -> &'static str {
         "fill-missing-texcoords"
@@ -219,23 +230,6 @@ impl Pass for FillMissingTexcoords {
         }
         Ok(())
     }
-}
-
-/// Register this module's passes.
-pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    reg.register_requiring(
-        "prepare-gltf-materials",
-        |o| Ok(Box::new(PrepareGltfMaterials::from_options(o)?)),
-        &[
-            ("base-color", "0.8/0.8/0.8/1"),
-            ("metallic", "0"),
-            ("roughness", "0.85"),
-        ],
-    );
-    reg.register("fill-missing-texcoords", |o| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(FillMissingTexcoords)),
-    });
 }
 
 #[cfg(test)]
