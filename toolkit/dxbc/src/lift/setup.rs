@@ -825,8 +825,10 @@ impl Setup {
                 }
                 Some(SystemValue::Coverage) => coverage,
                 Some(SystemValue::StencilRef) => stencil,
+                // the program's own declaration, not the signature's mask of the lanes it writes (that stays in
+                // provenance, and says which lanes an executor marks written)
                 _ => {
-                    v.used &= declared;
+                    v.used = declared;
                     true
                 }
             };
@@ -932,7 +934,7 @@ impl Setup {
                     .get(&e.register)
                     .is_some_and(|m| m & e.mask != 0);
                 let mut v = e.varying(stage, output)?;
-                v.used &= declared;
+                v.used = declared;
                 patch_constants.push(v);
             }
             let code = |name: &str, value: u32, limit: u32| -> Result<u32> {
