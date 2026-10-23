@@ -1,7 +1,7 @@
 //! Typed source identities and records the area reader keeps for the passes that interpret them. They describe what
 //! the source stores and how it names it, never a target format's fields.
 use primase_core::json::{JsonError, to_value};
-use primase_core::{Component, Entity, Resource};
+use primase_core::{Component, Entity, Resource, Semantic, Stream};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -355,12 +355,16 @@ impl Component for FaceCull {
     }
 }
 
-/// Per primitive of a prototype, the FLVER Byte4C UV members it carries as raw vertex data: member `n` is the
-/// primitive's `Color(n)` stream, UNORM8 exactly as stored. The layered M[Multiple] shaders read these as layer
-/// weights, snow, tint and detail; their meaning belongs to the passes that evaluate those shaders.
+pub use crate::layer_bake::resolve::SECOND_COLOUR;
+
+/// Per primitive of a prototype, the streams it carries only because the layered M[Multiple] shaders read them as
+/// vertex inputs, in the order lowered: the FLVER Byte4C UV members (member `n` is `Color(n)`, UNORM8 exactly as
+/// stored: layer weights, snow, tint and detail), the second UV set (`TexCoord(1)`, the `zw` of the packed first
+/// input) and the second vertex colour ([`SECOND_COLOUR`]). Their meaning belongs to the passes that evaluate those
+/// shaders.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct LayerInputs {
-    pub primitives: Vec<Vec<u8>>,
+    pub primitives: Vec<Vec<Semantic>>,
 }
 impl Component for LayerInputs {
     const NAME: &'static str = "fromsoft.layer_inputs";
@@ -378,9 +382,9 @@ impl Component for LayerInputs {
 }
 impl LayerInputs {
     /// Take out the layer inputs of the primitives `consumed` selects (by owner, primitive index and primitive): the
-    /// `Color(n)` streams their entry lists and the entry itself; the component goes once no entry lists a member.
-    /// They are shader inputs, not vertex colours: a pass that consumed them, or lowered their material without them,
-    /// takes them out, and only those. Returns the streams removed.
+    /// streams their entry lists and the entry itself; the component goes once no entry lists a stream.
+    /// They are shader inputs, not vertex attributes: a pass that consumed them, or lowered their material without
+    /// them, takes them out, and only those. Returns the streams removed.
     pub fn consume(
         world: &mut primase_core::World,
         mut consumed: impl FnMut(Entity, usize, &primase_core::Primitive) -> bool,
@@ -399,13 +403,8 @@ impl LayerInputs {
                 if members.is_empty() || !consumed(e, index, &primitive) {
                     continue;
                 }
-                for n in std::mem::take(members) {
-                    removed += u64::from(
-                        primitive
-                            .streams_mut()
-                            .remove(&primase_core::Semantic::Color(n))
-                            .is_some(),
-                    );
+                for semantic in std::mem::take(members) {
+                    removed += u64::from(primitive.streams_mut().remove(&semantic).is_some());
                 }
             }
             if inputs.primitives.iter().all(Vec::is_empty) {
@@ -418,6 +417,63 @@ impl LayerInputs {
     }
 }
 
+/// Where one FLVER mesh keeps what the layered programs read as vertex inputs, by its element layout: UV storage
+/// slots count each UV set, so a Float4 or packed-short pair element (`TEXCOORD0`, uv0 in `xy` and uv1 in `zw`) takes
+/// two, and the colour elements count in the order the reader decodes them (`Vertex::colors`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LayerLayout {
+    /// The Byte4C UV members: `(member index, UV storage slot)`, in member order.
+    pub byte4: Vec<(u8, usize)>,
+    /// The UV storage slot of the second UV set: slot 1, when neither slot 0 nor slot 1 is a Byte4C member.
+    pub second_uv: Option<usize>,
+    /// The position among the mesh's colour elements of the one the FLVER indexes 1.
+    pub second_colour: Option<usize>,
+    /// UV storage slots the mesh holds, and colour elements.
+    pub uv_slots: usize,
+    pub colours: usize,
+}
+
+impl LayerLayout {
+    pub fn of(model: &crate::flver::Model, mesh: usize) -> crate::Result<Self> {
+        use crate::invalid;
+        let m = model
+            .meshes
+            .get(mesh)
+            .ok_or_else(|| invalid("FLVER layer inputs", mesh, "mesh index"))?;
+        let mut layout = Self::default();
+        for &index in &m.layouts {
+            for member in model
+                .layouts
+                .get(index)
+                .ok_or_else(|| invalid("FLVER layer inputs", index, "layout index"))?
+            {
+                match member.semantic {
+                    5 => {
+                        if member.kind == 0x13 {
+                            let n = u8::try_from(member.index)
+                                .map_err(|_| invalid("FLVER layer inputs", index, "member index"))?;
+                            layout.byte4.push((n, layout.uv_slots));
+                        }
+                        layout.uv_slots += if matches!(member.kind, 3 | 0x16) { 2 } else { 1 };
+                    }
+                    10 => {
+                        if member.index == 1 {
+                            layout.second_colour = Some(layout.colours);
+                        }
+                        layout.colours += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let byte4_at = |slot| layout.byte4.iter().any(|&(_, s)| s == slot);
+        if layout.uv_slots >= 2 && !byte4_at(0) && !byte4_at(1) {
+            layout.second_uv = Some(1);
+        }
+        Ok(layout)
+    }
+}
+
 /// The FLVER Byte4C UV members of one mesh as `(member index, values per selected vertex)`, in member order.
 /// `vertices` are the source vertex indices of the selected (compacted) vertices.
 pub fn byte4_uv_members(
@@ -426,29 +482,10 @@ pub fn byte4_uv_members(
     vertices: &[u32],
 ) -> crate::Result<Vec<(u8, Vec<[u8; 4]>)>> {
     use crate::invalid;
-    let m = model
-        .meshes
-        .get(mesh)
-        .ok_or_else(|| invalid("FLVER layer inputs", mesh, "mesh index"))?;
-    let mut members = Vec::new();
-    let mut slot = 0;
-    for &layout in &m.layouts {
-        for member in model
-            .layouts
-            .get(layout)
-            .ok_or_else(|| invalid("FLVER layer inputs", layout, "layout index"))?
-        {
-            if member.semantic == 5 {
-                if member.kind == 0x13 {
-                    let index = u8::try_from(member.index)
-                        .map_err(|_| invalid("FLVER layer inputs", layout, "member index"))?;
-                    members.push((index, slot));
-                }
-                slot += if matches!(member.kind, 3 | 0x16) { 2 } else { 1 };
-            }
-        }
-    }
-    members
+    let layout = LayerLayout::of(model, mesh)?;
+    let m = &model.meshes[mesh];
+    layout
+        .byte4
         .into_iter()
         .map(|(index, slot)| {
             let values = vertices
@@ -469,6 +506,68 @@ pub fn byte4_uv_members(
             Ok((index, values))
         })
         .collect()
+}
+
+/// Every stream the layered programs read as a vertex input beyond position, normal, tangent and the first UV set, for
+/// the selected vertices of one mesh, by the stream that carries it: the Byte4C members as `Color(n)`, the second UV
+/// set as `TexCoord(1)` (x and y of the stored pair) and the second colour as [`SECOND_COLOUR`]. A mesh that stores
+/// no second UV set or no second colour gets no such stream: what the engine feeds the program then is not known, and
+/// is not made up here.
+pub fn layer_streams(
+    model: &crate::flver::Model,
+    mesh: usize,
+    vertices: &[u32],
+) -> crate::Result<Vec<(Semantic, Stream)>> {
+    use crate::invalid;
+    let layout = LayerLayout::of(model, mesh)?;
+    if layout
+        .byte4
+        .iter()
+        .any(|&(n, _)| Semantic::Color(n) == SECOND_COLOUR)
+    {
+        return Err(invalid(
+            "FLVER layer inputs",
+            mesh,
+            "a Byte4C member takes the stream kept for the second colour",
+        ));
+    }
+    let mut streams: Vec<_> = byte4_uv_members(model, mesh, vertices)?
+        .into_iter()
+        .map(|(n, values)| (Semantic::Color(n), Stream::U8x4(values)))
+        .collect();
+    let m = &model.meshes[mesh];
+    let vertex = |v: u32| {
+        m.vertices
+            .get(v as usize)
+            .ok_or_else(|| invalid("FLVER layer inputs", v as usize, "vertex index"))
+    };
+    if let Some(slot) = layout.second_uv {
+        let uv = vertices
+            .iter()
+            .map(|&v| {
+                vertex(v)?
+                    .uvs
+                    .get(slot)
+                    .map(|uv| [uv[0], uv[1]])
+                    .ok_or_else(|| invalid("FLVER layer inputs", slot, "missing declared second UV set"))
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+        streams.push((Semantic::TexCoord(1), Stream::F32x2(uv)));
+    }
+    if let Some(at) = layout.second_colour {
+        let colour = vertices
+            .iter()
+            .map(|&v| {
+                vertex(v)?
+                    .colors
+                    .get(at)
+                    .copied()
+                    .ok_or_else(|| invalid("FLVER layer inputs", at, "missing declared second colour"))
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+        streams.push((SECOND_COLOUR, Stream::F32x4(colour)));
+    }
+    Ok(streams)
 }
 
 /// Source files by name, as stored, each an immutable buffer: a world's copy (a part's) shares them.

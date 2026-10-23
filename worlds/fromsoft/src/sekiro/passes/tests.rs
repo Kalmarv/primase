@@ -107,7 +107,7 @@ fn mesh_with_inputs(world: &mut World, material: Entity) -> Entity {
     world.insert(
         e,
         LayerInputs {
-            primitives: vec![vec![1]],
+            primitives: vec![vec![Semantic::Color(1)]],
         },
     );
     e
@@ -228,7 +228,12 @@ fn a_preview_drops_only_the_inputs_of_the_materials_it_previewed() {
     let skipped = world.spawn();
     world.insert(skipped, layered(Some(materials::SkipClass::Sky)));
     let e = world.spawn();
-    world.insert(e, Mesh::new(vec![primitive(previewed), primitive(skipped)]));
+    let mut first = primitive(previewed);
+    first.streams.insert(
+        Semantic::TexCoord(1),
+        Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
+    );
+    world.insert(e, Mesh::new(vec![first, primitive(skipped)]));
     world.insert(
         e,
         FaceCull {
@@ -238,7 +243,10 @@ fn a_preview_drops_only_the_inputs_of_the_materials_it_previewed() {
     world.insert(
         e,
         LayerInputs {
-            primitives: vec![vec![1], vec![1]],
+            primitives: vec![
+                vec![Semantic::Color(1), Semantic::TexCoord(1)],
+                vec![Semantic::Color(1)],
+            ],
         },
     );
     let mut log = PassLog::default();
@@ -247,13 +255,17 @@ fn a_preview_drops_only_the_inputs_of_the_materials_it_previewed() {
         .unwrap();
     assert_eq!(
         log.approximations["layer input streams dropped with layered materials lowered from previews"],
-        1
+        2
     );
     let mesh = world.get::<Mesh>(e).unwrap();
     assert!(!mesh.primitives()[0].streams.contains_key(&Semantic::Color(1)));
+    assert!(!mesh.primitives()[0].streams.contains_key(&Semantic::TexCoord(1)));
     // the skipped class was not lowered: its inputs are still the source's
     assert!(mesh.primitives()[1].streams.contains_key(&Semantic::Color(1)));
-    assert_eq!(world.get::<LayerInputs>(e).unwrap().primitives, [vec![], vec![1]]);
+    assert_eq!(
+        world.get::<LayerInputs>(e).unwrap().primitives,
+        [vec![], vec![Semantic::Color(1)]]
+    );
 }
 
 #[test]

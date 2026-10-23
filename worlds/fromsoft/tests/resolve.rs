@@ -3,12 +3,12 @@
 //! Sekiro's naming (tests/fixtures/layered.hlsl, compiled with fxc): the constants, texture slots and outputs a
 //! layered material's binding holds, worked out from the HLSL, fxc's listing of its buffers and the material.
 use primase_core::shader::{
-    AddressMode, ConstantRole, FrameParameter, InputRole, NormalEncoding, NormalSpace, ObjectParameter,
-    OutputRole, ResourceId, SamplerState, Shader, ShaderBinding, ShaderFormat, Stage, TextureSource,
-    ViewParameter,
+    AddressMode, ConstantRole, FrameParameter, InputRole, LaneStream, NormalEncoding, NormalSpace,
+    ObjectParameter, OutputRole, ResourceId, SamplerState, Shader, ShaderBinding, ShaderFormat, Stage,
+    TextureSource, ViewParameter,
 };
 use primase_core::{ColorSpace, Entity, Name, TexFormat, TexRole, Texture, World};
-use primase_fromsoft::layer_bake::resolve::{Unbound, resolve};
+use primase_fromsoft::layer_bake::resolve::{SECOND_COLOUR, Unbound, resolve};
 use primase_fromsoft::materials::{Binding, LayeredMaterial, Material};
 use primase_fromsoft::mtd::{self, MaterialDefinition, Parameter, Value};
 use primase_fromsoft::sekiro::source::{
@@ -518,13 +518,22 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
             stream("POSITION0", Semantic::Position),
             stream("NORMAL0", Semantic::Normal),
             stream("TANGENT0", Semantic::Tangent),
+            stream("COLOR1", SECOND_COLOUR),
             (
-                "COLOR1".to_owned(),
-                InputRole::Unknown {
-                    why: "no stream of the lowered geometry carries it".into()
-                }
+                "TEXCOORD0".to_owned(),
+                InputRole::Lanes(vec![
+                    LaneStream {
+                        semantic: Semantic::TexCoord(0),
+                        first: 0,
+                        count: 2
+                    },
+                    LaneStream {
+                        semantic: Semantic::TexCoord(1),
+                        first: 2,
+                        count: 2
+                    }
+                ])
             ),
-            stream("TEXCOORD0", Semantic::TexCoord(0)),
             stream("TEXCOORD1", Semantic::Color(1)),
             stream("TEXCOORD2", Semantic::Color(2)),
             stream("TEXCOORD3", Semantic::Color(3)),
@@ -562,6 +571,12 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
         named("VC_aObjMatrix"),
         ("cbObjMatrix".to_owned(), 0, 192, Object(ObjectParameter::World))
     );
-    assert_eq!(stage.constants.len(), 5);
+    // the texture scroll offsets are the engine's per draw; nothing the material or bundle states gives them
+    for (name, offset) in [("VC_TexScroll_0", 0), ("VC_TexScroll_1", 16)] {
+        let (buffer, at, size, role) = named(name);
+        assert_eq!((buffer.as_str(), at, size), ("cbTexScroll", offset, 16));
+        assert!(matches!(role, ConstantRole::Unknown { .. }), "{name}: {role:?}");
+    }
+    assert_eq!(stage.constants.len(), 7);
     assert!(stage.outputs.is_empty() && stage.textures.is_empty());
 }

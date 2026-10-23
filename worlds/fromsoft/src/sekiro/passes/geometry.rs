@@ -102,7 +102,9 @@ choice! {
 /// material the slot's `fromsoft.material` entity; level-0 face sets on the prototype, levels 1 and 2 as `core.lods`
 /// forms (`select-lod` chooses), a form holding the meshes that have a face set of its level (no source default, as
 /// the game switches by distance). Positions, unit normals, stored tangents (handedness reflected) and UV0 in the
-/// world frame; a layered material's Byte4C members as raw `Color(n)` streams listed by `fromsoft.layer_inputs`.
+/// world frame; a layered material's Byte4C members as raw `Color(n)` streams, its second UV set as `TexCoord(1)` and
+/// its second vertex colour as `Color(9)`, all listed by `fromsoft.layer_inputs` (a mesh that stores no second UV set or
+/// colour gets no such stream).
 ///
 /// Every field is the program's choice, stated (no default): `pose`, which model is lowered (the posed one
 /// `fromsoft-apply-rigid-skinning` made, or the stored one); `uv_tiling` (multiply UV0 by the material's tiling,
@@ -174,7 +176,7 @@ impl LowerFromSoftGeometry {
 #[derive(Default)]
 struct Level {
     primitives: Vec<Primitive>,
-    inputs: Vec<Vec<u8>>,
+    inputs: Vec<Vec<Semantic>>,
     cull: Vec<bool>,
     /// Per primitive, its influences when its prototype keeps a skin.
     skin: Vec<Option<Influences>>,
@@ -334,13 +336,22 @@ impl LowerFromSoftGeometry {
                 }
                 continue;
             }
-            if mesh.vertices.iter().any(|v| !v.colors.is_empty()) {
+            // a layered mesh keeps what its programs read (the Byte4C members, the second UV set and the second
+            // colour: `layer_streams`); what is left of its colours and UV sets is not lowered
+            let layout = if material.layered.is_some() {
+                crate::sekiro::source::LayerLayout::of(model, index).map_err(|e| e.to_string())?
+            } else {
+                Default::default()
+            };
+            let kept_colours = usize::from(layout.second_colour.is_some());
+            let kept_uvs = layout.byte4.len() + usize::from(layout.second_uv.is_some());
+            if mesh.vertices.iter().any(|v| v.colors.len() > kept_colours) {
                 log.approximate(
                     "meshes with vertex colours not lowered (their shader meaning is unknown)",
                     1,
                 );
             }
-            if mesh.vertices.iter().any(|v| v.uvs.len() > 1) {
+            if mesh.vertices.iter().any(|v| v.uvs.len() > 1 + kept_uvs) {
                 log.approximate("meshes with UV sets beyond UV0 not lowered", 1);
             }
             let mut levels = BTreeSet::new();
@@ -360,7 +371,7 @@ impl LowerFromSoftGeometry {
                     continue;
                 };
                 let layer = if material.layered.is_some() {
-                    crate::sekiro::source::byte4_uv_members(model, index, &part.source_vertices)
+                    crate::sekiro::source::layer_streams(model, index, &part.source_vertices)
                         .map_err(|e| e.to_string())?
                 } else {
                     Vec::new()
@@ -373,10 +384,8 @@ impl LowerFromSoftGeometry {
                 if !part.tangents.is_empty() {
                     streams.insert(Semantic::Tangent, Stream::F32x4(part.tangents));
                 }
-                let members = layer.iter().map(|(n, _)| *n).collect();
-                for (n, values) in layer {
-                    streams.insert(Semantic::Color(n), Stream::U8x4(values));
-                }
+                let members = layer.iter().map(|(semantic, _)| *semantic).collect();
+                streams.extend(layer);
                 let skinned = out.palette.is_some();
                 if skinned {
                     let vertex = |k: &u32| &mesh.vertices[*k as usize];
@@ -476,7 +485,7 @@ impl Pass for LowerFromSoftGeometry {
         true
     }
     fn approximates(&self) -> &'static str {
-        "motion-blur face sets, vertex colours and UV sets beyond UV0 not lowered; with winding=normals, a part's winding inferred from its stored normals"
+        "motion-blur face sets, vertex colours and UV sets not lowered but those a layered material's programs read; with winding=normals, a part's winding inferred from its stored normals"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let prototypes: Vec<Entity> = world.iter::<PrototypeSource>().map(|(e, _)| e).collect();

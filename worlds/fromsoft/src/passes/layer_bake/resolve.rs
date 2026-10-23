@@ -8,13 +8,18 @@ use crate::mtd::Value;
 use crate::{Result, invalid};
 use primase_core::Entity;
 use primase_core::shader::{
-    ConstantBinding, ConstantRole, FrameParameter, InputBinding, InputRole, NormalEncoding, NormalSpace,
-    ObjectParameter, OutputBinding, OutputRole, ResourceId, ResourceKind, SamplerState, Stage, StageBinding,
-    TextureBinding, TextureSource, ViewParameter,
+    ConstantBinding, ConstantRole, FrameParameter, InputBinding, InputRole, LaneStream, NormalEncoding,
+    NormalSpace, ObjectParameter, OutputBinding, OutputRole, ResourceId, ResourceKind, SamplerState, Stage,
+    StageBinding, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_dxbc::Shader;
 use primase_shader::{D3dClass, Interface, Layout, Resource, SystemValue};
 use std::collections::BTreeMap;
+
+/// The stream that carries a layered mesh's second stored vertex colour (the element the FLVER indexes 1, which the
+/// layered vertex programs read as `COLOR1`): `Color(0)` is the first colour of a glTF mesh and `Color(1)` to `Color(6)`
+/// are the Byte4C members, so the second colour is kept apart from both. Float values as decoded, four lanes.
+pub const SECOND_COLOUR: primase_core::Semantic = primase_core::Semantic::Color(9);
 
 /// What becomes of a texture slot the material binds no texture to, or whose texture file the reader does not hold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -410,13 +415,16 @@ fn output_bindings(interface: &Interface) -> Vec<OutputBinding> {
 
 /// Bind a layered shader's vertex program (`<shader>_Gbuf.vpo`: the G-buffer pass of an unskinned, uncloth draw) from its
 /// interface (`primase_dxbc::reflection`) as `core.shader_binding` states it:
-/// - its inputs as streams of the lowered geometry: `POSITION0`, `NORMAL0`, `TANGENT0` and the packed `TEXCOORD0` as
-///   the position, normal, tangent and first UV set, `TEXCOORD1` to `TEXCOORD6` as the FLVER Byte4C members the
-///   layered programs read as layer weights, tint and detail (the geometry lowering's `Color(n)` streams); the pipeline's
-///   instance index as itself; anything else `Unknown` with the reason;
+/// - its inputs as streams of the lowered geometry: `POSITION0`, `NORMAL0` and `TANGENT0` as the position, normal and
+///   tangent; the packed `TEXCOORD0` as lanes (`xy` the first UV set, `zw` the second: `TexCoord(1)`); `COLOR1` as the
+///   second vertex colour ([`SECOND_COLOUR`]); `TEXCOORD1` to `TEXCOORD6` as the FLVER Byte4C members the layered
+///   programs read as layer weights, tint and detail (the geometry lowering's `Color(n)` streams); the pipeline's
+///   instance index as itself; anything else `Unknown` with the reason. A mesh that stores no second UV set or colour
+///   has no such stream, and what the engine then feeds is not known;
 /// - the engine's scene and object constants it names as roles (a named table of the shader family's own constant names
 ///   to the vocabulary: the view, projection and their inverses, the camera position and the screen size, and the
-///   object matrices); constants the table does not name are not bound;
+///   object matrices) and the texture scroll offsets (`VC_TexScroll_0` and `_1`, `Unknown`: no parameter of the
+///   shader names them); constants the table does not name are not bound;
 /// - no output roles: its outputs reach the pixel stage by label.
 pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBinding> {
     use primase_core::Semantic;
@@ -433,7 +441,20 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
                 ("POSITION", 0, _) => InputRole::Stream(Semantic::Position),
                 ("NORMAL", 0, _) => InputRole::Stream(Semantic::Normal),
                 ("TANGENT", 0, _) => InputRole::Stream(Semantic::Tangent),
-                ("TEXCOORD", 0, _) => InputRole::Stream(Semantic::TexCoord(0)),
+                // the packed pair of texture coordinate sets: uv0 in `xy`, uv1 in `zw`
+                ("TEXCOORD", 0, _) => InputRole::Lanes(vec![
+                    LaneStream {
+                        semantic: Semantic::TexCoord(0),
+                        first: 0,
+                        count: 2,
+                    },
+                    LaneStream {
+                        semantic: Semantic::TexCoord(1),
+                        first: 2,
+                        count: 2,
+                    },
+                ]),
+                ("COLOR", 1, _) => InputRole::Stream(SECOND_COLOUR),
                 ("TEXCOORD", n @ 1..=6, _) => InputRole::Stream(Semantic::Color(n as u8)),
                 _ => InputRole::Unknown {
                     why: "no stream of the lowered geometry carries it".into(),
@@ -461,6 +482,11 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
                 "SC_CameraPos" => ConstantRole::View(ViewParameter::CameraPosition),
                 "FC_ScreenSize" => ConstantRole::View(ViewParameter::ViewportSize),
                 "VC_aObjMatrix" => ConstantRole::Object(ObjectParameter::World),
+                // `xy` unused here; `zw` offset the packed texture coordinates (uv0 by set 0, uv1 by set 1)
+                "VC_TexScroll_0" | "VC_TexScroll_1" => ConstantRole::Unknown {
+                    why: "texture scroll offsets the engine feeds per draw: the shader bundle's metaparam names no                           parameter for them (none of the layered bundles' parameters is a vertex-stage one), so                           they stay at frozen zero, no scroll"
+                        .into(),
+                },
                 _ => continue,
             };
             let size =

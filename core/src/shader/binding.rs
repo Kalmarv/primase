@@ -17,12 +17,24 @@ use crate::world::{Component, Entity};
 pub enum InputRole {
     /// A vertex attribute of the drawn mesh.
     Stream(Semantic),
+    /// An input whose lanes are different vertex attributes the source packed into one register (two texture
+    /// coordinate sets in one four-lane input): each entry is the attribute and the lanes it fills.
+    Lanes(Vec<LaneStream>),
     /// The value the previous stage wrote under the same label.
     Previous,
     /// The pipeline supplies it (the varying's system value says which).
     System,
     /// Nothing known: the source's own meaning is not resolved, and why.
     Unknown { why: String },
+}
+
+/// The lanes `first..first + count` of an input: the first `count` components of the vertex attribute `semantic`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct LaneStream {
+    pub semantic: Semantic,
+    /// The first lane (0 for x).
+    pub first: u8,
+    pub count: u8,
 }
 
 /// A camera or view-wide value.
