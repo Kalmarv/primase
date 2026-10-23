@@ -15,6 +15,7 @@
 
 mod compile;
 mod flat;
+pub mod geometry;
 mod mask;
 mod pipeline;
 mod pixel;
