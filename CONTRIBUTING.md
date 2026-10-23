@@ -143,10 +143,20 @@ embed; the GLB codec itself is `toolkit/glb`) only. What two of them share belon
 Names are owned: core, toolkit and formats name no game, engine or destination; a world crate uses only its own
 (`[package.metadata.primase] names`): a game crate its games and engine, an engine crate its engine, a destination
 crate its destination and engine. A source crate naming a destination, or any crate naming another game, is a break.
-Vendor formats used across engines (Havok, DXBC, DXIL) are toolkit mechanisms.
+Vendor formats used across engines (Havok, DXBC, DXIL) are toolkit mechanisms. One vendor vocabulary is a stated exception
+and sits in core: Direct3D's addressing of shader resources (`core::shader`: `D3dBinding`, `D3dClass`, `D3dSignature`, and the
+`ShaderFormat` names of the bytecodes). It is **provenance**: a lifter maps a program's resources and varyings into the
+API-independent meaning once and keeps the register, class and signature row it came from beside it, because every shader
+lifted here comes from a D3D-family bytecode and what runs or inspects a program (an executor, a consumer answering a request)
+addresses its resources by those. It is never the meaning itself, and no other vendor's vocabulary gets this place: a new
+engine's or middleware's names stay in its own crate.
 
 Namespaced components (`fromsoft.*`, `gta.*`, `skate.*`, ...) are owned by one crate: the game's or destination's
-crate (`skate.*`: `worlds/reskate`, with the skate-scene interchange it carries). `pbr.*` lives in core.
+crate (`skate.*`: `worlds/reskate`, with the skate-scene interchange it carries). `pbr.*` lives in core. A middleware or
+format crate that several games share owns its own namespace too (`havok.*`: `toolkit/havok`), with the passes that lower it
+in ways no game's policy enters (a game-free lowering: what the data means, not what a game wants from it); the crate names no
+game, as every toolkit crate, and a game's choice over the middleware's data (which clips, what to do with a bone it lacks)
+stays in the game's crate as a pass of its own. A namespace has one owner: two crates never write the same prefix.
 
 ### Worlds crates: one role vocabulary
 
