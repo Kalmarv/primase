@@ -25,10 +25,23 @@
 //!   [`GtaEffectParameters`]) is a material parameter, bound to the words the material stores under the new name
 //!   (`Material`), or `Unknown` where it stores none; the engine's world, view and projection matrices have the roles
 //!   [`engine_role`] names; every other engine constant is `Unknown` with its name.
-//! - **Textures.** A texture the program declares is the table record at its register and space; the material
-//!   parameter of the record's second name binds it (`Texture`), unset takes `unset-textures` (`white`: white,
-//!   counted as an approximation; `leave`: `Missing`), and a texture with no second name (the engine's) is `Missing`.
-//!   Samplers are bindless in the programs (an unbounded array indexed at run time): none is bound.
+//! - **Textures.** A texture the program declares is the table record at its register and space that has a texture tag
+//!   (the sampler heap's and the constant buffers' records share register and space numbers with it). The material
+//!   binds it (`Texture`) through the parameter it stores under the record's second name where the effect renames it,
+//!   else under the record's own name (`DiffuseTex`); unset takes `unset-textures` (`white`: white, counted as an
+//!   approximation; `leave`: `Missing`), and a texture of the engine's (an unrenamed one the material stores nothing
+//!   for) is `Missing`.
+//! - **Samplers.** Most programs sample through one bindless heap, indexed at run time by a word of the constant buffer
+//!   `g_rage_dynamicsamplerindices` ([`sampler_use`] traces each sample to its word, which is one of the program's
+//!   `gDynamicSamplerIndex_<name>` constants). A texture is read through the sampler its sample's word names: a static
+//!   sampler (`..._sdiTrilinearWrap`) has the state its name states ([`sampler_state::named`]; the effect's sampler
+//!   records hold it for most, counted), and the state is the texture's `sampler`. A word the material chooses
+//!   (`..._DiffuseSampler`) leaves the state unstated: the material stores a sampler value for it, but the value is
+//!   not an index into the effect's sampler records (primitives whose value points at a clamping record tile their
+//!   texture across several UV units; `tests/sampler_params.rs` counts them), and the heap's contents are the
+//!   engine's. A program that declares a sampler of its own samples through it: the texture binding names that
+//!   resource and the state is unstated (the root signature's, not read). A texture sampled through several samplers
+//!   of different states is left unstated.
 //! - **Inputs and outputs.** The vertex stage's inputs are the mesh streams their semantics name (terrain weights are
 //!   `COLOR1`); the pixel stage's are the vertex stage's. The outputs of a `PS_DeferredTextured*` program that writes
 //!   the four G-buffer targets have the roles [`gbuffer`] states: target 0's xyz the albedo, target 1's xyz the world
@@ -37,23 +50,26 @@
 //!   z the emission (where the program writes one) and target 4 the motion vector; every other lane, and every
 //!   output of another family or of a program that writes fewer targets, is `Unknown` by its index (the lanes'
 //!   contents are in [`gbuffer`]'s table).
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
-    DepthState, Fill, InputBinding, InputRole, NormalEncoding, NormalSpace, ObjectParameter, OutputBinding,
-    OutputRole, RenderState, ResourceKind, SamplerState, ScalarEncoding, Shader, ShaderBinding, Stage,
-    StageBinding, Stencil, StencilFace, StencilOp, SystemValue, TargetState, TextureBinding, TextureSource,
-    ViewParameter,
+    DepthState, Fill, InputBinding, InputRole, Interface, NormalEncoding, NormalSpace, ObjectMatrix,
+    ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState,
+    ScalarEncoding, Shader, ShaderBinding, Stage, StageBinding, Stencil, StencilFace, StencilOp, SystemValue,
+    TargetState, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
 
 use super::gbuffer::{self, GBufferWrites};
+use super::sampler_state;
+use super::sampler_use::{self, SamplerUses, Through};
 use crate::components::{
     GtaEffect, GtaEffectParameters, GtaEffectTechniques, GtaMaterialEffect, GtaParam, GtaPass, GtaShader,
     GtaShaderTable,
 };
+use crate::rage::sgd2_effect::SamplerDesc;
 use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
 
 /// The pixel program family whose targets the pass names roles for (`PS_DeferredTextured` and its alpha-clipped and
@@ -61,7 +77,7 @@ use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
 const GBUFFER_FAMILY: &str = "PS_DeferredTextured";
 
 /// The D3D12 comparison function as the vocabulary's.
-fn compare(f: u8) -> Option<Compare> {
+pub(super) fn compare(f: u8) -> Option<Compare> {
     Some(match f {
         1 => Compare::Never,
         2 => Compare::Less,
@@ -308,8 +324,31 @@ pub fn select_pass<'a>(techniques: &'a GtaEffectTechniques, name: &str) -> Resul
 pub fn engine_role(name: &str) -> Option<ConstantRole> {
     Some(match name {
         "gWorld" => ConstantRole::Object(ObjectParameter::World),
+        "gWorldView" => ConstantRole::Object(ObjectParameter::WorldView),
         "gWorldViewProj" => ConstantRole::Object(ObjectParameter::WorldViewProjection),
+        "gPrevWorld" => ConstantRole::Object(ObjectParameter::PreviousFrame(ObjectMatrix::World)),
+        "gPrevWorldView" => ConstantRole::Object(ObjectParameter::PreviousFrame(ObjectMatrix::WorldView)),
+        "gPrevWorldViewProj" => {
+            ConstantRole::Object(ObjectParameter::PreviousFrame(ObjectMatrix::WorldViewProjection))
+        }
+        "gRelativeWorld" => ConstantRole::Object(ObjectParameter::CameraRelative(ObjectMatrix::World)),
+        "gRelativeWorldView" => {
+            ConstantRole::Object(ObjectParameter::CameraRelative(ObjectMatrix::WorldView))
+        }
+        "gRelativeWorldViewProj" => {
+            ConstantRole::Object(ObjectParameter::CameraRelative(ObjectMatrix::WorldViewProjection))
+        }
+        "gRelativePrevWorld" => {
+            ConstantRole::Object(ObjectParameter::CameraRelativePreviousFrame(ObjectMatrix::World))
+        }
+        "gRelativePrevWorldView" => ConstantRole::Object(ObjectParameter::CameraRelativePreviousFrame(
+            ObjectMatrix::WorldView,
+        )),
+        "gRelativePrevWorldViewProj" => ConstantRole::Object(ObjectParameter::CameraRelativePreviousFrame(
+            ObjectMatrix::WorldViewProjection,
+        )),
         "gViewInverse" => ConstantRole::View(ViewParameter::InverseView),
+        "gPrevViewProj" => ConstantRole::View(ViewParameter::PreviousViewProjection),
         _ => return None,
     })
 }
@@ -354,6 +393,8 @@ struct Inputs<'a> {
     material: &'a GtaShader,
     /// The effect's parameter records: the program's name hash to the key the material stores the parameter under.
     renamed: BTreeMap<u32, u32>,
+    /// The effect's sampler records.
+    samplers: &'a [SamplerDesc],
     unset: UnsetTexture,
 }
 
@@ -367,33 +408,31 @@ impl Inputs<'_> {
     }
 }
 
-/// The resource record of `table` for a bind point, among those of its register and space: the constant buffer record
-/// has the size the program declares rounded up to 16 (or states none: the root constants' record has size 0); any
-/// other has the first with a current name, else the first.
-fn record(table: &ProgramTable, register: u32, space: u32, buffer_size: Option<u32>) -> Option<usize> {
-    let at: Vec<usize> = table
-        .resources
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| u32::from(r.register) == register && u32::from(r.space) == space)
-        .map(|(i, _)| i)
-        .collect();
-    match buffer_size {
-        Some(size) => {
-            let rounded = size.div_ceil(16).saturating_mul(16);
-            let sized = |size: u32| {
-                at.iter()
-                    .copied()
-                    .find(|&i| table.resources.get(i).is_some_and(|r| r.size == size))
-            };
-            sized(rounded).or_else(|| sized(0))
-        }
-        None => at
-            .iter()
-            .copied()
-            .find(|&i| table.resources.get(i).is_some_and(|r| r.second_name != 0))
-            .or_else(|| at.first().copied()),
-    }
+/// The record tags of the resources the programs bind as textures: 258 a 2D texture, 322 a 2D array, 514 and 770 the
+/// other dimensions. A texture shares its register and space with other records (the sampler heap's, tag 1059, a
+/// constant buffer's, 1072: the table numbers each kind of resource from 0 in each space), and the tag is what tells
+/// them apart (`tests/texture_records.rs` holds every texture bind point of the install to exactly one of these).
+const TEXTURE_TAGS: [u16; 4] = [258, 322, 514, 770];
+
+/// The constant buffer record of `table` for a bind point, among those of its register and space: the size the program
+/// declares rounded up to 16, or the root constants' record, which states none (size 0).
+fn buffer_record(table: &ProgramTable, register: u32, space: u32, size: u32) -> Option<usize> {
+    let at = |size: u32| {
+        table.resources.iter().position(|r| {
+            u32::from(r.register) == register
+                && u32::from(r.space) == space
+                && r.size == size
+                && r.constants > 0
+        })
+    };
+    at(size.div_ceil(16).saturating_mul(16)).or_else(|| at(0))
+}
+
+/// The texture record of `table` for a bind point: the one of the texture tags among those of its register and space.
+fn texture_record(table: &ProgramTable, register: u32, space: u32) -> Option<usize> {
+    table.resources.iter().position(|r| {
+        u32::from(r.register) == register && u32::from(r.space) == space && TEXTURE_TAGS.contains(&r.tag)
+    })
 }
 
 /// Counts of what one run resolved, by reason.
@@ -416,6 +455,7 @@ impl ResolveGtaShaders {
         shader: Entity,
         vertex_bound: bool,
         writes: Option<&Result<GBufferWrites, String>>,
+        sample_uses: &mut BTreeMap<Entity, Result<SamplerUses, String>>,
         counts: &mut Counts,
     ) -> Result<StageBinding, String> {
         let program = world
@@ -428,11 +468,14 @@ impl ResolveGtaShaders {
         let interface = &program.interface;
         let mut constants = Vec::new();
         let mut textures = Vec::new();
+        let uses = sample_uses
+            .entry(shader)
+            .or_insert_with(|| sampler_use::uses(&program.bytecode));
         for r in &interface.resources {
             let Some(bind) = r.provenance.d3d else { continue };
             match (&r.kind, bind.class) {
                 (ResourceKind::ConstantBuffer { layout }, D3dClass::ConstantBuffer) => {
-                    let Some(i) = record(table, bind.register, bind.space, Some(layout.size)) else {
+                    let Some(i) = buffer_record(table, bind.register, bind.space, layout.size) else {
                         counts.add("constant buffers with no table record of their size");
                         continue;
                     };
@@ -461,10 +504,18 @@ impl ResolveGtaShaders {
                     }
                 }
                 (ResourceKind::Texture { .. }, D3dClass::ShaderResource) => {
-                    let source = match record(table, bind.register, bind.space, None)
+                    let sampling = sampling(
+                        interface,
+                        table,
+                        inputs,
+                        uses,
+                        (bind.space, bind.register),
+                        counts,
+                    );
+                    let source = match texture_record(table, bind.register, bind.space)
                         .and_then(|i| table.resources.get(i))
                     {
-                        Some(t) => texture_source(world, inputs, t, counts),
+                        Some(t) => texture_source(world, inputs, t, sampling.state, counts),
                         None => {
                             counts.add("texture slots with no table record, left Missing");
                             TextureSource::Missing
@@ -472,7 +523,7 @@ impl ResolveGtaShaders {
                     };
                     textures.push(TextureBinding {
                         resource: r.id,
-                        sampler: None,
+                        sampler: sampling.resource,
                         source,
                     });
                 }
@@ -647,6 +698,12 @@ fn constant_role(
     space: u32,
     counts: &mut Counts,
 ) -> ConstantRole {
+    // a constant the program names after one of the engine's matrices is the engine's, whether or not the effect's
+    // parameter records list it under another name
+    if let Some(role) = name.and_then(engine_role) {
+        counts.add("engine constants with a role");
+        return role;
+    }
     if let Some(&key) = inputs.renamed.get(&c.name) {
         return match inputs.param(key) {
             Some(GtaParam::Floats(v)) => {
@@ -690,18 +747,151 @@ fn constant_role(
     }
 }
 
+/// What a texture is read through: the sampler resource the program declares for it, if it samples through one, and the
+/// state where the data states one.
+struct Sampling {
+    resource: Option<ResourceId>,
+    state: SamplerState,
+}
+
+/// The state a word of the sampler-index buffer stands for: a static sampler's, from its constant's name. `None` for the
+/// material's samplers and for a word this does not name.
+fn heap_state(
+    table: &ProgramTable,
+    inputs: &Inputs<'_>,
+    buffer: (u32, u32),
+    offset: u32,
+    counts: &mut Counts,
+) -> Option<SamplerState> {
+    let name = table
+        .resources
+        .iter()
+        .enumerate()
+        .find(|(_, r)| u32::from(r.space) == buffer.0 && u32::from(r.register) == buffer.1 && r.constants > 0)
+        .and_then(|(i, _)| {
+            table
+                .constants_of(i)
+                .iter()
+                .find(|c| u32::from(c.offset) == offset)
+        })
+        .and_then(|c| table.name_of(c.name));
+    let Some(name) = name else {
+        counts.add("sampler words with no constant in the program's table, sampler left unstated");
+        return None;
+    };
+    if let Some(state) = sampler_state::named(name) {
+        counts.add(if sampler_state::held_by(&state, inputs.samplers) {
+            "static samplers whose state is read from the constant's name, which the effect's sampler records hold (sampler state read from the constant's name)"
+        } else {
+            "static samplers whose state is read from the constant's name, which the effect's sampler records do not hold (sampler state read from the constant's name)"
+        });
+        return Some(state);
+    }
+    match name.strip_prefix("gDynamicSamplerIndex_") {
+        Some(material) => {
+            let stored = inputs.param(primase_hash::joaat(material.as_bytes()));
+            counts.add(if matches!(stored, Some(GtaParam::Sampler(_))) {
+                "samplers the material chooses (it stores a sampler value, which names no state), left unstated"
+            } else {
+                "samplers the material chooses (it stores no sampler value), left unstated"
+            });
+        }
+        None => counts.add("sampler words of a name this pass does not read, left unstated"),
+    }
+    None
+}
+
+/// The sampler a texture slot at a bind point is read through, from the samples of its program.
+fn sampling(
+    interface: &Interface,
+    table: &ProgramTable,
+    inputs: &Inputs<'_>,
+    uses: &Result<SamplerUses, String>,
+    texture: (u32, u32),
+    counts: &mut Counts,
+) -> Sampling {
+    let none = Sampling {
+        resource: None,
+        state: SamplerState::default(),
+    };
+    let uses = match uses {
+        Ok(u) => u,
+        Err(why) => {
+            counts.add(&format!(
+                "textures of programs whose samples could not be traced ({why}), sampler left unstated"
+            ));
+            return none;
+        }
+    };
+    let mut declared = BTreeSet::new();
+    let mut states = Vec::new();
+    let mut unstated = false;
+    for u in uses.uses.iter().filter(|u| u.texture == texture) {
+        match u.through {
+            Through::Direct(at) => {
+                let resource = interface.resources.iter().find(|r| {
+                    matches!(r.kind, ResourceKind::Sampler { .. })
+                        && r.provenance.d3d.is_some_and(|b| (b.space, b.register) == at)
+                });
+                match resource {
+                    Some(r) => {
+                        declared.insert(r.id);
+                    }
+                    None => unstated = true,
+                }
+            }
+            Through::Heap { buffer, offset } => match heap_state(table, inputs, buffer, offset, counts) {
+                Some(state) => {
+                    if !states.contains(&state) {
+                        states.push(state);
+                    }
+                }
+                None => unstated = true,
+            },
+        }
+    }
+    match (declared.len(), states.as_slice(), unstated) {
+        (0, [], false) => {
+            counts.add("textures no sample reads, sampler left unstated");
+            none
+        }
+        (0, [state], false) => Sampling {
+            resource: None,
+            state: *state,
+        },
+        (1, [], false) => {
+            counts.add("textures read through a sampler the program declares (its state is the root signature's, not read)");
+            Sampling {
+                resource: declared.first().copied(),
+                state: SamplerState::default(),
+            }
+        }
+        _ => {
+            if !unstated {
+                counts
+                    .add("textures read through several samplers of different states, sampler left unstated");
+            }
+            none
+        }
+    }
+}
+
 /// What a texture record's parameter samples.
 fn texture_source(
     world: &World,
     inputs: &Inputs<'_>,
     t: &TableResource,
+    sampler: SamplerState,
     counts: &mut Counts,
 ) -> TextureSource {
-    if t.second_name == 0 || t.second_name == t.name {
-        counts.add("texture slots that are the engine's, left Missing");
-        return TextureSource::Missing;
-    }
-    match inputs.param(t.second_name) {
+    // a texture the effect renames is stored under the new name; any other under the program's own
+    let renamed = t.second_name != 0 && t.second_name != t.name;
+    let key = if renamed { t.second_name } else { t.name };
+    match inputs.param(key) {
+        None if !renamed => {
+            counts.add("texture slots that are the engine's (the material stores none under their name), left Missing");
+            TextureSource::Missing
+        }
         Some(GtaParam::Texture {
             texture: Some(texture),
             ..
@@ -710,7 +900,7 @@ fn texture_source(
                 counts.add("texture parameters bound to the material's texture");
                 TextureSource::Texture {
                     texture: *texture,
-                    sampler: SamplerState::default(),
+                    sampler,
                 }
             } else {
                 counts.add("texture parameters whose texture is not loaded, left Missing");
@@ -766,7 +956,7 @@ impl Pass for ResolveGtaShaders {
         &[ShaderBinding::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "a texture parameter with no texture reads white (unset-textures=white)"
+        "a texture parameter with no texture reads white (unset-textures=white); a static sampler has the state its constant's name states"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let materials: Vec<(Entity, GtaShader, Entity)> = world
@@ -777,6 +967,8 @@ impl Pass for ResolveGtaShaders {
         // per effect: the programs chosen, or why not
         let mut chosen: BTreeMap<Entity, Result<Chosen, String>> = BTreeMap::new();
         let mut bound: Vec<(Entity, ShaderBinding)> = Vec::new();
+        // per program: the samplers its samples read through (lifting the program is the cost)
+        let mut sample_uses: BTreeMap<Entity, Result<SamplerUses, String>> = BTreeMap::new();
         for (material, shader, effect_entity) in materials {
             let picked = chosen
                 .entry(effect_entity)
@@ -843,13 +1035,25 @@ impl Pass for ResolveGtaShaders {
             let inputs = Inputs {
                 material: &shader,
                 renamed,
+                samplers: world
+                    .get::<GtaEffectTechniques>(effect_entity)
+                    .map_or(&[][..], |t| t.samplers.as_slice()),
                 unset: self.unset,
             };
             let mut stages = Vec::new();
             let mut failed = None;
             for (stage, e) in [(Stage::Vertex, Some(vertex)), (Stage::Pixel, pixel)] {
                 let Some(e) = e else { continue };
-                match self.stage_binding(world, &inputs, stage, e, true, writes.as_ref(), &mut counts) {
+                match self.stage_binding(
+                    world,
+                    &inputs,
+                    stage,
+                    e,
+                    true,
+                    writes.as_ref(),
+                    &mut sample_uses,
+                    &mut counts,
+                ) {
                     Ok(s) => stages.push(s),
                     Err(why) => {
                         failed = Some(why);
@@ -871,7 +1075,9 @@ impl Pass for ResolveGtaShaders {
             world.insert(e, b);
         }
         for (what, n) in counts.0 {
-            if what.contains("(unset-textures=white)") {
+            if what.contains("(unset-textures=white)")
+                || what.contains("(sampler state read from the constant's name)")
+            {
                 log.approximate(&what, n);
             } else {
                 log.count(&what, n);
@@ -1238,6 +1444,32 @@ mod tests {
         assert_eq!(
             engine_role("gViewInverse"),
             Some(ConstantRole::View(ViewParameter::InverseView))
+        );
+        assert_eq!(
+            engine_role("gWorldView"),
+            Some(ConstantRole::Object(ObjectParameter::WorldView))
+        );
+        assert_eq!(
+            engine_role("gPrevWorldViewProj"),
+            Some(ConstantRole::Object(ObjectParameter::PreviousFrame(
+                ObjectMatrix::WorldViewProjection
+            )))
+        );
+        assert_eq!(
+            engine_role("gRelativeWorld"),
+            Some(ConstantRole::Object(ObjectParameter::CameraRelative(
+                ObjectMatrix::World
+            )))
+        );
+        assert_eq!(
+            engine_role("gRelativePrevWorldView"),
+            Some(ConstantRole::Object(
+                ObjectParameter::CameraRelativePreviousFrame(ObjectMatrix::WorldView)
+            ))
+        );
+        assert_eq!(
+            engine_role("gPrevViewProj"),
+            Some(ConstantRole::View(ViewParameter::PreviousViewProjection))
         );
         assert_eq!(engine_role("gDirectionalLight"), None);
     }

@@ -514,6 +514,7 @@ pub fn for_each_mesh(
 /// - alpha: opaque for opaque surfaces, tested at [`CUTOFF`] for cutouts and foliage, blended for alpha, decals, glass
 ///   and water;
 /// - two-sided for the shaders GTA draws from both sides (cloth);
+/// - named by the effect its shader names (`normal_spec`, `decal_tnt`...: `core.name`, kept where the material has one);
 /// - emission (`*emissive*`, night-only emission only at night): the base texture times its alpha (the shaders' emission
 ///   mask: a texture derived from it, [`emissive_texture`], where the alpha is not all 255), scaled by
 ///   `EmissiveMultiplier` and by vertex colour 0's blue (primitives split by it, [`emission_by_vertex`]);
@@ -865,6 +866,15 @@ impl Pass for LowerGtaPbr {
             .filter_map(|(_, m)| m.normal_texture.map(|t| t.texture))
             .collect();
         for (e, m) in lowered {
+            // the material is labelled by the effect its shader names (a name it already has is kept)
+            if !w.has::<Name>(e)
+                && let Some(effect) = w
+                    .get::<GtaShader>(e)
+                    .and_then(|s| crate::passes::shader_names::effect(s.name))
+            {
+                w.insert(e, Name(effect.to_owned()));
+                log.count("materials named by their shader's effect", 1);
+            }
             w.insert(e, m);
         }
         for (e, d) in orders {
@@ -1278,6 +1288,8 @@ mod tests {
         let p = w.get::<primase_core::pbr::PbrMaterial>(m).unwrap();
         assert_eq!(p.normal_texture.map(|t| t.texture), Some(n));
         assert_eq!(p.normal_scale, 0.5);
+        // the material carries its effect's name
+        assert_eq!(w.get::<primase_core::Name>(m).unwrap().0, "normal_spec");
         let t = w.get::<Texture>(n).unwrap();
         assert_eq!(
             (t.role, t.color_space, t.normal),

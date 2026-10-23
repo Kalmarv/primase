@@ -10,6 +10,8 @@ pub mod pose;
 pub mod rect;
 pub mod resolve_shaders;
 pub mod roles;
+pub mod sampler_state;
+pub mod sampler_use;
 pub mod select;
 pub mod shader_class;
 pub mod shader_names;
