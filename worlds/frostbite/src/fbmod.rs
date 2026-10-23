@@ -17,8 +17,9 @@
 //! Decoding a payload needs the game's Oodle library, which is reader I/O: [`crate::read::fbmod`]. [`write`] is the reader's counterpart: an unmodified file read and written again is byte-identical. The SHA-1 of a
 //! payload is recomputed on writing (and checked on reading), so it is not a field.
 
+use crate::cas::CasRaw;
 use crate::{Rd, Result, bad, capacity};
-use primase_compress::{Compressor, cas::CasRaw};
+use primase_compress::Compressor;
 use sha1::{Digest, Sha1};
 
 const W: &str = "fbmod";

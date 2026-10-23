@@ -42,7 +42,7 @@ enum Capacity {
 }
 /// Oodle 5/6/9 on 64-bit Windows (version-specific capacity-query ABI). Owns the library for
 /// the entire lifetime of the copied function pointers. Compression is Kraken,
-/// level 4; use [`crate::cas::Cas`] for independent 64 KiB CAS framing.
+/// level 4.
 #[derive(Debug)]
 pub struct Oodle {
     _library: libloading::Library,
@@ -171,44 +171,6 @@ impl Compressor for Oodle {
     }
 }
 
-/// oozextract, the second Kraken decoder the tests hold the DLL to, behind one boundary: its refusals and its panics
-/// (its decoder asserts where it should refuse) both come back as a [`second_decoder::Failure`], so a corrupt or
-/// unsupported stream is a named test error and never a panic inside a gate.
-#[cfg(test)]
-mod second_decoder {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    #[derive(Debug, thiserror::Error)]
-    pub(super) enum Failure {
-        #[error("oozextract refused the stream: {0}")]
-        Refused(oozextract::OozError),
-        #[error("oozextract panicked instead of refusing the stream (an upstream defect): {0}")]
-        Panicked(String),
-        #[error("oozextract wrote {written} bytes, expected {expected}")]
-        Short { written: usize, expected: usize },
-    }
-    /// The `expected` bytes oozextract decodes from `input`.
-    pub(super) fn decode(input: &[u8], expected: usize) -> Result<Vec<u8>, Failure> {
-        let mut out = vec![0; expected];
-        let written = catch_unwind(AssertUnwindSafe(|| {
-            oozextract::Extractor::new().read_from_slice(input, &mut out)
-        }))
-        .map_err(|payload| {
-            Failure::Panicked(
-                payload
-                    .downcast_ref::<&str>()
-                    .map(|s| (*s).to_owned())
-                    .or_else(|| payload.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "a panic without a message".to_owned()),
-            )
-        })?
-        .map_err(Failure::Refused)?;
-        if written != expected {
-            return Err(Failure::Short { written, expected });
-        }
-        Ok(out)
-    }
-}
-
 #[cfg(test)]
 #[allow(
     clippy::disallowed_methods,
@@ -218,7 +180,7 @@ mod second_decoder {
 mod tests {
     use super::*;
     use primase_core::gate::{GateReport, Tolerance};
-    use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
+    use primase_testdata::{Tool, tool};
     /// Installed DLL oracle versus independently implemented oozextract; tests
     /// synthetic Kraken compression for all three ABI versions when configured.
     #[test]
@@ -239,35 +201,11 @@ mod tests {
                 let compressed = dll.compress(&src)?;
                 report.compare_bytes(format!("dll/{n}"), &dll.decompress(&compressed, n)?, &src);
                 if n != 0 {
-                    report.compare_bytes(format!("ooz/{n}"), &second_decoder::decode(&compressed, n)?, &src);
-                }
-                let cas = crate::cas::Cas { oodle: Some(&dll) };
-                let framed = cas.compress(&src)?;
-                report.compare_bytes(format!("cas/{n}"), &cas.decompress(&framed, n)?, &src);
-            }
-            if oodle == Tool::Oodle9
-                && let Some(folder) = oracle(OracleSet::Corpus, Game::Skate, "cas")
-            {
-                let mut files = std::fs::read_dir(folder)?.collect::<std::result::Result<Vec<_>, _>>()?;
-                files.sort_by_key(|f| f.path());
-                for file in files {
-                    if file.path().extension().is_none_or(|s| s != "casblock") {
-                        continue;
-                    }
-                    let bytes = std::fs::read(file.path())?;
-                    for block in crate::cas::blocks(&bytes)? {
-                        let reference = if block.kind == 0 {
-                            block.payload.to_vec()
-                        } else {
-                            second_decoder::decode(block.payload, block.decoded_size)?
-                        };
-                        let cas = crate::cas::Cas { oodle: Some(&dll) };
-                        report.compare_bytes(
-                            file.path().display().to_string(),
-                            &cas.decompress(&bytes, block.decoded_size)?,
-                            &reference,
-                        );
-                    }
+                    report.compare_bytes(
+                        format!("ooz/{n}"),
+                        &crate::reference::decode(&compressed, n)?,
+                        &src,
+                    );
                 }
             }
             println!("{report}");
@@ -293,12 +231,12 @@ mod tests {
                 .map(|i| ((i * 17 + i / 256 + j) % 251) as u8)
                 .collect();
             let compressed = dll.compress(&part)?;
-            assert_eq!(second_decoder::decode(&compressed, part.len())?, part);
+            assert_eq!(crate::reference::decode(&compressed, part.len())?, part);
             raw.extend(part);
             encoded.extend(compressed);
         }
         assert_eq!(dll.decompress(&encoded, raw.len())?, raw);
-        assert_eq!(second_decoder::decode(&encoded, raw.len())?, raw);
+        assert_eq!(crate::reference::decode(&encoded, raw.len())?, raw);
         Ok(())
     }
 }
@@ -458,11 +396,11 @@ mod dcx_gate {
                         reference,
                     );
                 }
-                match second_decoder::decode(quantum.bytes, quantum.size) {
+                match crate::reference::decode(quantum.bytes, quantum.size) {
                     Ok(decoded) => {
                         quantums.compare_bytes(format!("{}/quantum/{i}", file.display()), &decoded, reference)
                     }
-                    Err(second_decoder::Failure::Refused(_))
+                    Err(crate::reference::Failure::Refused(_))
                         if SINGLE_SYMBOL_HUFFMAN.contains(&(&name, i)) =>
                     {
                         pinned.push(format!("{name}/quantum/{i}"))
@@ -470,9 +408,9 @@ mod dcx_gate {
                     Err(e) => return Err(format!("{}/quantum/{i}: {e}", file.display()).into()),
                 }
             }
-            match second_decoder::decode(src, expected) {
+            match crate::reference::decode(src, expected) {
                 Ok(other) => report.compare_bytes(file.display().to_string(), &got, &other),
-                Err(second_decoder::Failure::Refused(_))
+                Err(crate::reference::Failure::Refused(_))
                     if SINGLE_SYMBOL_HUFFMAN.iter().any(|(pin, _)| *pin == name) =>
                 {
                     pinned.push(name.clone())
@@ -506,8 +444,8 @@ mod dcx_gate {
 )]
 mod upstream_defect {
     use super::dcx_gate::{QUANTUM, SINGLE_SYMBOL_HUFFMAN, krak_payload, quanta};
-    use super::second_decoder::{Failure, decode};
     use super::*;
+    use crate::reference::{Failure, decode};
     use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
     /// oozextract 0.5.6 refuses a Huffman byte chunk (chunk type 2 or 4) whose code lengths name a single symbol: having
     /// filled the output with that symbol, `decode_bytes_type12` returns `src - src_end`, 0 when the code-length

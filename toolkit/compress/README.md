@@ -7,10 +7,10 @@ Every decode takes the exact expected output length. `Lz4` reads raw blocks;
 all input consumed and the exact output size. Missing checksums cannot establish
 integrity.
 
-`cas::blocks` inspects Frostbite CAS headers. `cas::Cas` decodes stored, zlib,
-and Oodle kinds 0x11, 0x15 and 0x19, with a caller-supplied Oodle handle.
-`cas::CasRaw` writes stored 64 KiB blocks. `Cas` compression requires Oodle and
-writes Kraken level 4 with stored blocks when compression is not smaller.
+Frostbite's CAS block streams (`primase_frostbite::cas`) are a container of these codecs and live in the Frostbite world.
+
+With the `reference-decoder` feature, `reference::decode` is oozextract as a second Kraken decoder, for the gates that hold the
+game's Oodle library to it (a dev-dependency turns it on).
 
 `oodle::Oodle::load(path, version)` loads exactly the supplied trusted native
 library. It is unsafe because library initialization executes native code and

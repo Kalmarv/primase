@@ -115,7 +115,7 @@ impl Bundle {
         let file =
             file.ok_or_else(|| Error::Missing(format!("{}: chunk {} is removed", self.name, hex(guid))))?;
         let raw = src.raw(file)?;
-        let blocks = primase_compress::cas::blocks(&raw)?;
+        let blocks = crate::cas::blocks(&raw)?;
         Ok((file, blocks.iter().map(|b| b.decoded_size).sum()))
     }
 }

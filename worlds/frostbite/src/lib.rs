@@ -11,6 +11,7 @@
 
 pub mod bundle;
 pub mod bytecode;
+pub mod cas;
 pub mod components;
 pub mod db;
 pub mod depot;

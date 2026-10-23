@@ -1,11 +1,8 @@
-use primase_compress::{
-    cas::{Cas, CasRaw, blocks},
-    *,
-};
+use primase_compress::*;
 use primase_core::gate::{GateReport, Tolerance};
 
 /// Literal-only LZ4 and independently generated Python zlib fixtures; round trips
-/// include zero, one, and both sides of CAS's 64 KiB boundary.
+/// include zero, one, and both sides of a 64 KiB boundary.
 #[test]
 fn fixtures_and_roundtrips() -> Result<()> {
     let mut report = GateReport::new("compression synthetic", Tolerance::Exact);
@@ -26,11 +23,10 @@ fn fixtures_and_roundtrips() -> Result<()> {
     );
     for size in [0, 1, 15, 65535, 65536, 65537, 131072] {
         let input: Vec<u8> = (0..size).map(|i| (i * 31 + i / 17) as u8).collect();
-        let codecs: [(&str, &dyn Compressor, &dyn Decompressor); 4] = [
+        let codecs: [(&str, &dyn Compressor, &dyn Decompressor); 3] = [
             ("lz4", &Lz4, &Lz4),
             ("deflate", &Deflate, &Deflate),
             ("zlib", &Zlib, &Zlib),
-            ("cas", &CasRaw, &Cas::default()),
         ];
         for (name, enc, dec) in codecs {
             let encoded = enc.compress(&input)?;
@@ -74,29 +70,9 @@ fn strict_framing() -> Result<()> {
     let last = corrupt.len() - 1;
     corrupt[last] ^= 1;
     assert!(ZlibUnterminated.decompress(&corrupt, 5).is_err());
-    let raw = CasRaw.compress(b"hello")?;
-    for n in 1..raw.len() {
-        assert!(Cas::default().decompress(&raw[..n], 5).is_err());
-    }
-    let mut unknown = raw.clone();
-    unknown[4] = 0x7e;
-    assert!(Cas::default().decompress(&unknown, 5).is_err());
-    let mut dictionary = raw;
-    dictionary[0] = 1;
-    assert!(blocks(&dictionary).is_err());
     assert!(Lz4.decompress(&[0xf0], 15).is_err());
-    assert_eq!(CasRaw.compress(&[])?, [0, 0, 0, 0, 0, 0x70, 0, 0]);
     Ok(())
 }
-#[test]
-fn cas_zlib_fixture() -> Result<()> {
-    let z = [120, 156, 203, 72, 205, 201, 201, 7, 0, 6, 44, 2, 21];
-    let mut b = vec![0, 0, 0, 5, 2, 0x70, 0, 13];
-    b.extend(z);
-    assert_eq!(Cas::default().decompress(&b, 5)?, b"hello");
-    Ok(())
-}
-
 /// One zstd frame laid out by hand (RFC 8878): single segment with a one-byte content size, then `blocks`, each
 /// (last, kind, body): kind 0 raw (body is the bytes), 1 RLE (body is one byte repeated `size` times).
 fn zstd_frame(content: u8, dict: bool, blocks: &[(bool, u8, &[u8], u32)]) -> Vec<u8> {

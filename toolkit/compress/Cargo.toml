@@ -1,6 +1,6 @@
 [package]
 name = "primase-compress"
-description = "Compression codecs: LZ4, deflate/zlib, zstd, Frostbite CAS block streams, Oodle via the game's own DLL"
+description = "Compression codecs: LZ4, deflate/zlib, zstd, Oodle via the game's own DLL"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,11 +14,16 @@ lz4_flex.workspace = true
 flate2.workspace = true
 ruzstd.workspace = true
 libloading.workspace = true
+oozextract = { workspace = true, optional = true }
+
+[features]
+# oozextract as a second Kraken decoder (`reference`), for the gates that hold the game's Oodle library to it
+reference-decoder = ["dep:oozextract"]
 
 [dev-dependencies]
 primase-testdata.workspace = true
 primase-core.workspace = true
-oozextract.workspace = true
+primase-compress = { workspace = true, features = ["reference-decoder"] }
 
 [lints]
 workspace = true

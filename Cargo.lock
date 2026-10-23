@@ -936,6 +936,7 @@ dependencies = [
  "libloading 0.9.0",
  "lz4_flex",
  "oozextract",
+ "primase-compress",
  "primase-core",
  "primase-testdata",
  "ruzstd",

@@ -1,5 +1,26 @@
 //! Frostbite CAS: sequence of eight-byte headers and exactly sized payloads.
-use crate::{Compressor, Decompressor, Result, Zlib, buffer, check_size, invalid, oodle::Oodle};
+use primase_compress::{Compressor, Decompressor, Error, Result, Zlib, oodle::Oodle};
+
+fn invalid(offset: usize, detail: impl ToString) -> Error {
+    Error::Invalid {
+        codec: "cas",
+        offset,
+        detail: detail.to_string(),
+    }
+}
+fn buffer(size: usize) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(size).map_err(|_| Error::Limit)?;
+    out.resize(size, 0);
+    Ok(out)
+}
+fn check_size(actual: usize, expected: usize) -> Result<()> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(Error::Size { expected, actual })
+    }
+}
 /// A borrowed block, including its physical header offset.
 #[derive(Debug, Clone, Copy)]
 pub struct Block<'a> {
@@ -20,16 +41,16 @@ pub fn blocks(input: &[u8]) -> Result<Vec<Block<'_>>> {
         let start = pos;
         let h = input
             .get(pos..pos + 8)
-            .ok_or_else(|| invalid("cas", pos, "short header"))?;
+            .ok_or_else(|| invalid(pos, "short header"))?;
         if h[0] != 0 || h[4] & 0x80 != 0 {
-            return Err(invalid("cas", pos, "dictionary/reserved flag unsupported"));
+            return Err(invalid(pos, "dictionary/reserved flag unsupported"));
         }
         let decoded_size = (usize::from(h[1]) << 16) | (usize::from(h[2]) << 8) | usize::from(h[3]);
         let size = (usize::from(h[5] & 15) << 16) | (usize::from(h[6]) << 8) | usize::from(h[7]);
         pos += 8;
         let payload = input
             .get(pos..pos + size)
-            .ok_or_else(|| invalid("cas", pos, "short payload"))?;
+            .ok_or_else(|| invalid(pos, "short payload"))?;
         out.push(Block {
             offset: start,
             kind: h[4],
@@ -49,9 +70,9 @@ pub struct Cas<'a> {
 impl Decompressor for Cas<'_> {
     fn decompress(&self, input: &[u8], expected: usize) -> Result<Vec<u8>> {
         let blocks = blocks(input)?;
-        let total = blocks.iter().try_fold(0usize, |s, b| {
-            s.checked_add(b.decoded_size).ok_or(crate::Error::Limit)
-        })?;
+        let total = blocks
+            .iter()
+            .try_fold(0usize, |s, b| s.checked_add(b.decoded_size).ok_or(Error::Limit))?;
         check_size(total, expected)?;
         let mut out = buffer(expected)?;
         let mut pos = 0;
@@ -65,24 +86,20 @@ impl Decompressor for Cas<'_> {
                 2 => dst.copy_from_slice(
                     &Zlib
                         .decompress(b.payload, b.decoded_size)
-                        .map_err(|e| invalid("cas", b.offset, e))?,
+                        .map_err(|e| invalid(b.offset, e))?,
                 ),
                 0x11 | 0x15 | 0x19 => {
                     let oodle = self
                         .oodle
-                        .ok_or_else(|| invalid("cas", b.offset, "Oodle library required"))?;
+                        .ok_or_else(|| invalid(b.offset, "Oodle library required"))?;
                     dst.copy_from_slice(
                         &oodle
                             .decompress(b.payload, b.decoded_size)
-                            .map_err(|e| invalid("cas", b.offset, e))?,
+                            .map_err(|e| invalid(b.offset, e))?,
                     );
                 }
                 _ => {
-                    return Err(invalid(
-                        "cas",
-                        b.offset,
-                        format!("unsupported kind {:#x}", b.kind),
-                    ));
+                    return Err(invalid(b.offset, format!("unsupported kind {:#x}", b.kind)));
                 }
             }
             pos += b.decoded_size;
@@ -118,7 +135,7 @@ impl Compressor for Cas<'_> {
     fn compress(&self, input: &[u8]) -> Result<Vec<u8>> {
         let oodle = self
             .oodle
-            .ok_or_else(|| invalid("cas", 0, "Oodle library required for encoding"))?;
+            .ok_or_else(|| invalid(0, "Oodle library required for encoding"))?;
         let mut out = Vec::new();
         if input.is_empty() {
             append(&mut out, 0, 0, &[]);

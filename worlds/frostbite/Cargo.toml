@@ -20,6 +20,7 @@ sha1.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+primase-compress = { workspace = true, features = ["reference-decoder"] }
 primase-shader.workspace = true
 primase-testdata.workspace = true
 

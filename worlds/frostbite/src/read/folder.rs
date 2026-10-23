@@ -11,8 +11,8 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use crate::cas::Cas;
 use primase_compress::Decompressor;
-use primase_compress::cas::Cas;
 use primase_compress::oodle::Oodle;
 
 use crate::bundle::{self, FileRef, Manifest};
@@ -218,7 +218,7 @@ impl Source<'_> {
             let m = if bundle::is_manifest(&raw) {
                 raw
             } else {
-                let Ok(blocks) = primase_compress::cas::blocks(&raw) else {
+                let Ok(blocks) = crate::cas::blocks(&raw) else {
                     continue;
                 };
                 let n: usize = blocks.iter().map(|b| b.decoded_size).sum();

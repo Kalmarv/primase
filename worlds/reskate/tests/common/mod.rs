@@ -45,7 +45,7 @@ pub fn meshes(src: &Source) -> R<Meshes> {
                                 .ok_or("LOD chunk in neither bundle nor TOC")?;
                             let f = c.file.ok_or("removed chunk")?;
                             let raw = src.raw(f)?;
-                            let n = primase_compress::cas::blocks(&raw)?
+                            let n = primase_frostbite::cas::blocks(&raw)?
                                 .iter()
                                 .map(|b| b.decoded_size)
                                 .sum();

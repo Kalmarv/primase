@@ -1,10 +1,10 @@
 //! The payloads of a `.fbmod`, decoded: CAS blocks, raw, zlib or Oodle. Oodle is the game's own library, which the
 //! caller loads and names; this module is where it is reached (a [`Fbmod`] itself is Oodle-free).
 
+use crate::cas::{self, Cas};
 use crate::fbmod::Fbmod;
 use crate::{Result, bad};
 use primase_compress::Decompressor;
-use primase_compress::cas::{self, Cas};
 use primase_compress::oodle::Oodle;
 
 impl Fbmod {

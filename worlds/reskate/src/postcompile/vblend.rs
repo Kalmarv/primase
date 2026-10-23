@@ -32,8 +32,8 @@ use std::path::{Path, PathBuf};
 
 use half::f16;
 use primase_compress::Compressor;
-use primase_compress::cas::CasRaw;
 use primase_compress::oodle::Oodle;
+use primase_frostbite::cas::CasRaw;
 use sha1::{Digest, Sha1};
 
 use crate::postcompile::fb::bundle::{self, FileRef, Manifest};

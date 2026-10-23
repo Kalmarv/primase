@@ -3,9 +3,10 @@
 
 use std::io::Write;
 
-pub mod cas;
 #[allow(unsafe_code)]
 pub mod oodle;
+#[cfg(feature = "reference-decoder")]
+pub mod reference;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
