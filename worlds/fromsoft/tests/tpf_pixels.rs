@@ -27,6 +27,10 @@ fn query(input: &mut impl Write, output: &mut impl Read, path: &std::path::Path)
     }
     Ok(bytes)
 }
+/// The area textures the C# reference (BCnEncoder.Net 2.2.1) cannot decode over `oracles.soulsformats.sekiro/tpf`,
+/// by its reason, measured on that corpus: m25's Galaxy and MilkyWay maps.
+const PINNED_REFERENCE_REFUSALS: &[(&str, usize)] = &[("Unsupported compression format: Unknown", 2)];
+
 #[test]
 fn area_pixels() -> Result<()> {
     let Some(root) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "tpf") else {
@@ -55,6 +59,8 @@ fn area_pixels() -> Result<()> {
     let mut pyout = BufReader::new(py.stdout.take().ok_or("stdout")?);
     let mut hashes = BTreeMap::new();
     let mut path_count = 0;
+    // textures the C# reference cannot decode, by its reason (the census writes `rgba_error` in place of `rgba`)
+    let mut unreferenced: BTreeMap<String, usize> = BTreeMap::new();
     for line in std::fs::read_to_string(root.join("packages.jsonl"))?.lines() {
         let p: serde_json::Value = serde_json::from_str(line)?;
         if p["area"] != true {
@@ -63,10 +69,12 @@ fn area_pixels() -> Result<()> {
         for t in p["textures"].as_array().ok_or("textures")? {
             if t["kind"] == 0 {
                 path_count += 1;
-                hashes.insert(
-                    t["sha256"].as_str().ok_or("hash")?.to_owned(),
-                    t["rgba"].as_str().ok_or("reference decode failed")?.to_owned(),
-                );
+                let Some(rgba) = t["rgba"].as_str() else {
+                    let why = t["rgba_error"].as_str().ok_or("neither rgba nor rgba_error")?;
+                    *unreferenced.entry(why.to_owned()).or_default() += 1;
+                    continue;
+                };
+                hashes.insert(t["sha256"].as_str().ok_or("hash")?.to_owned(), rgba.to_owned());
             }
         }
     }
@@ -126,6 +134,20 @@ fn area_pixels() -> Result<()> {
     assert!(cs.wait()?.success());
     assert!(py.wait()?.success());
     println!("area references {path_count}, distinct DDS {}", hashes.len());
+    // the reference decoder's refusals, pinned: a new reason, or more of one, fails
+    for (why, n) in &unreferenced {
+        println!("  not decoded by the C# reference ({n}): {why}");
+    }
+    let over: Vec<String> = unreferenced
+        .iter()
+        .filter(|(why, n)| {
+            PINNED_REFERENCE_REFUSALS
+                .iter()
+                .all(|(p, pin)| p != why || *n > pin)
+        })
+        .map(|(why, n)| format!("{why}: {n}"))
+        .collect();
+    assert!(over.is_empty(), "C# reference refusals beyond the pins: {over:?}");
     println!("{pillow}\n{bcdec}\n{csharp}");
     for (k, h) in hist {
         println!(
