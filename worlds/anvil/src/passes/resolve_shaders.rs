@@ -35,6 +35,13 @@
 //! - **State.** `TwoSided` is no culling; `ZTestDisabled` an always-passing depth test, with the write the Material's
 //!   `ZWriteDisabledOpaque` (blend mode 0) or `ZWriteDisabledAlpha` states; `AlphaTestEnabled` an alpha test, a pixel
 //!   kept where `alpha >= AlphaTestValue / 255` (the engine's division). What the Material does not state stays `None`.
+//!   The template states none: a MaterialTemplate holds its programs, their keys and the parameters they read, and a
+//!   pipeline-state database that is null (`PSODB`, docs/registry-named-fields.md §12: the `CompiledMaterialTemplate`
+//!   field list read from the running image, null in the template examined; the shader code permutations carry a
+//!   `LowestShaderConfig` and a hash, no blend, rasterizer or depth-stencil record). The engine composes the state per
+//!   pass from the Material's flags (docs/shaders.md §6.2: "applied by one method that switches on six pass kinds"),
+//!   which is the part mapped here. Not stated, so `None`: the blend (the notes infer source alpha over inverse source
+//!   alpha for the deferred decals and do not establish it), the fill and the winding.
 //!
 //! Inputs of the pixel stage are the vertex stage's outputs by label (`Previous`) where it is bound, else `Unknown`;
 //! the vertex stage's are mesh streams by their semantic name.
