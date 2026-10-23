@@ -8,7 +8,8 @@
 //! [`primase_fromsoft::layer_bake::PipelineState::encode`]) and `warp/`, what the private WARP host's quad mode made of
 //! it: `warp.json` (its status by stage), `target<r>.f32` (each target register's four f32 lanes per pixel, row-major),
 //! `alpha.f32` (the albedo alpha sampled beside the program) and `vertex-outputs.json` (the vertex program's output
-//! registers at the four corners, as the state's `outputs`).
+//! registers at the four corners, as the state's `outputs`; null for a register stream output cannot carry, which
+//! `warp.json` lists under `vertex.not_streamed`: the clip distances, which no pixel input reads).
 //!
 //! Our executor's and WARP's outputs each go through the bake's own rules ([`PipelineState::bake`]): the albedo and
 //! normal bytes must agree within one level, the second output's x and the emission within one level of 1/255 or a
@@ -85,6 +86,7 @@ struct Census {
     worst_bytes: [u8; 4],
     worst_normal: [u8; 4],
     worst_vertex_ulps: u64,
+    not_streamed: usize,
     worst_float: [f64; 5],
 }
 
@@ -211,8 +213,16 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
                 c.vertex_runs += 1;
                 let theirs: Value =
                     serde_json::from_slice(&std::fs::read(warp.join("vertex-outputs.json"))?)?;
+                let not_streamed: Vec<u64> = status["vertex"]["not_streamed"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|n| n["register"].as_u64()).collect())
+                    .unwrap_or_default();
+                c.not_streamed += not_streamed.len();
                 for (corner, registers) in vertex.outputs.iter().enumerate() {
                     for (r, lanes) in registers.iter().enumerate() {
+                        if theirs[corner][r].is_null() && not_streamed.contains(&(r as u64)) {
+                            continue;
+                        }
                         for (lane, &bits) in lanes.iter().enumerate() {
                             let Some(w) = theirs[corner][r][lane].as_str() else {
                                 failures.push(format!("{at}: WARP wrote no o{r}.{lane} at corner {corner}"));
@@ -233,7 +243,8 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
     assert!(c.states > 0, "no state checked");
     println!(
         "layer pilot against WARP: {} states, {} pixels; vertex runs {}, alpha images {}; worst albedo levels {:?}, \
-         normal levels {:?}, vertex ulps {}, float difference by target {:?}",
+         normal levels {:?}, vertex ulps {} (registers stream output cannot carry {}), float difference by \
+         target {:?}",
         c.states,
         c.pixels,
         c.vertex_runs,
@@ -241,6 +252,7 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
         c.worst_bytes,
         c.worst_normal,
         c.worst_vertex_ulps,
+        c.not_streamed,
         c.worst_float
     );
     for f in &failures {
