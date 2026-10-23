@@ -98,16 +98,47 @@ fn programs_of_every_stage_match_the_oracle() {
     ) else {
         return;
     };
-    let Ok(oracle) = std::fs::read(programs.with_file_name("shader_programs_stages.json")) else {
+    all_stages(
+        "Sledding Game",
+        &data,
+        &tpk,
+        &programs.with_file_name("shader_programs_stages.json"),
+    );
+}
+
+/// SkateBIRD (Unity 2019.4: the older `m_SubPrograms` layout, one list of variants with their tiers, keywords by name
+/// index and parameters of their own) against the same reader's dump, `shader_programs_stages_skatebird.json`.
+#[test]
+fn skatebird_programs_of_every_stage_match_the_oracle() {
+    let (Some(data), Some(tpk), Some(programs)) = (
+        real_data("PRIMASE_UNITY_V21_DATA"),
+        real_data("PRIMASE_UNITY_TPK"),
+        real_data("PRIMASE_UNITY_PROGRAMS"),
+    ) else {
+        return;
+    };
+    all_stages(
+        "SkateBIRD",
+        &data,
+        &tpk,
+        &programs.with_file_name("shader_programs_stages_skatebird.json"),
+    );
+}
+
+fn all_stages(label: &str, data: &std::path::Path, tpk: &std::path::Path, oracle: &std::path::Path) {
+    let Ok(oracle) = std::fs::read(oracle) else {
         return;
     };
     let player = Player::open(
-        &data,
-        TypeTreePackage::parse(&std::fs::read(&tpk).unwrap()).unwrap(),
+        data,
+        TypeTreePackage::parse(&std::fs::read(tpk).unwrap()).unwrap(),
     )
     .unwrap();
     let oracle: Json = serde_json::from_slice(&oracle).unwrap();
-    let mut gate = GateReport::new("shader programs of all stages", Tolerance::Exact);
+    let mut gate = GateReport::new(
+        &format!("{label}: shader programs of all stages"),
+        Tolerance::Exact,
+    );
     let mut variants = [0usize; 5];
     let mut uncompared = 0;
     for t in oracle["shaders"].as_array().unwrap() {
