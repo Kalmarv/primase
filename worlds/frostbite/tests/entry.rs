@@ -1,6 +1,6 @@
 //! What a data folder lists and what an entry reads into a world: EBX documents as JSON (the committed synthetic
 //! fixtures, hand-worked values), the texture format table against core's layouts and the texture reader's sizes, a
-//! depot's component; and, on the game's data (`PRIMASE_SKATE_DATA`, `PRIMASE_OODLE9`), the listing of
+//! depot's component; and, on the game's data (`installs.skate/Data`, `tools.oodle9`), the listing of
 //! `Win32/items.toc` (every entry's count as its manifest states it, an archive for every entry) and one EBX
 //! document, one texture and one ShaderBlockDepot read into a world.
 
@@ -14,7 +14,7 @@ use primase_frostbite::entry::tex_format;
 use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::listing::resource_type_name;
 use primase_frostbite::{depot, ebx, texture};
-use primase_testdata::real_data;
+use primase_testdata::{Game, Tool, install_file, tool};
 use serde_json::json;
 
 type R = Result<(), Box<dyn std::error::Error>>;
@@ -144,11 +144,11 @@ fn a_depot_component_shows_blocks_and_parameters() -> R {
 
 #[test]
 fn the_stock_items_toc_lists_and_reads() -> R {
-    let (Some(data), Some(dll)) = (real_data("PRIMASE_SKATE_DATA"), real_data("PRIMASE_OODLE9")) else {
+    let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
         return Ok(());
     };
     let folder = Folder::open(data)?;
-    // SAFETY: the caller names the game's own Oodle DLL in PRIMASE_OODLE9.
+    // SAFETY: the configuration names the game's own Oodle DLL as tools.oodle9.
     #[allow(unsafe_code)]
     let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
     let src = Source {
