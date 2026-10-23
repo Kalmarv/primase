@@ -984,6 +984,18 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
                 patch_constants: patch(false)?,
             })
         }
+        stage if stage.is_ray_tracing() => {
+            let function = entry(program)?;
+            let export = program
+                .name(function)
+                .map(crate::rdat::export_name)
+                .ok_or_else(|| error(0, "a ray tracing entry point without a name"))?;
+            let subobjects = match part(b"RDAT") {
+                Some(rdat) => crate::rdat::subobjects(rdat)?,
+                None => Vec::new(),
+            };
+            StageFacts::RayTracing(primase_shader::RayTracingFacts { export, subobjects })
+        }
         _ => StageFacts::None,
     };
     Ok(Interface {

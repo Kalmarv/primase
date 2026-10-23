@@ -104,6 +104,12 @@ pub(super) fn text(p: &Program) -> Result<String, Error> {
     );
     match &p.interface.facts {
         StageFacts::None => {}
+        StageFacts::RayTracing(r) => {
+            let _ = writeln!(out, "// ray_tracing export={}", r.export);
+            for s in &r.subobjects {
+                let _ = writeln!(out, "// subobject {s:?}");
+            }
+        }
         StageFacts::VertexWithoutPosition => {
             let _ = writeln!(out, "// feeds a tessellator: functions, no entry point");
         }

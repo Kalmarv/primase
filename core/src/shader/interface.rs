@@ -276,6 +276,75 @@ pub struct GeometryFacts {
     pub instances: u32,
 }
 
+/// What a hit group runs for the geometry it is bound to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HitGroupKind {
+    /// Triangles: the built-in intersection test, an optional any-hit and closest-hit program.
+    Triangles,
+    /// Procedural primitives: an intersection program of the library, an optional any-hit and closest-hit program.
+    ProceduralPrimitives,
+}
+
+/// A hit group of a ray tracing library: the programs it runs, named by the library's exports (none where the group has
+/// no such program).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct HitGroup {
+    pub name: String,
+    pub kind: HitGroupKind,
+    pub any_hit: Option<String>,
+    pub closest_hit: Option<String>,
+    pub intersection: Option<String>,
+}
+
+/// A state object subobject of a ray tracing library, as the library declares it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Subobject {
+    /// The state object's flags (D3D12's `D3D12_STATE_OBJECT_FLAGS`).
+    StateObjectConfig {
+        name: String,
+        flags: u32,
+    },
+    /// A root signature as D3D serialised it, for every program of the state object.
+    GlobalRootSignature {
+        name: String,
+        signature: Vec<u8>,
+    },
+    /// A root signature as D3D serialised it, for the programs an association names.
+    LocalRootSignature {
+        name: String,
+        signature: Vec<u8>,
+    },
+    /// The exports (programs and hit groups, by name) another subobject applies to.
+    ExportsAssociation {
+        name: String,
+        subobject: String,
+        exports: Vec<String>,
+    },
+    /// The largest payload and hit attributes the state object's programs use.
+    ShaderConfig {
+        name: String,
+        max_payload_bytes: u32,
+        max_attribute_bytes: u32,
+    },
+    /// The deepest `TraceRay` recursion, and the pipeline flags where the library states them.
+    PipelineConfig {
+        name: String,
+        max_recursion_depth: u32,
+        flags: Option<u32>,
+    },
+    HitGroup(HitGroup),
+}
+
+/// What a ray tracing program's library states: the program's own export name (as the subobjects name it) and every
+/// subobject of the library, in the order it stores them. A pipeline is built from a library's programs and these.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize)]
+pub struct RayTracingFacts {
+    pub export: String,
+    pub subobjects: Vec<Subobject>,
+}
+
 /// Facts about a program a stage's varyings and resources do not carry.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -289,6 +358,8 @@ pub enum StageFacts {
     Hull(HullFacts),
     Domain(DomainFacts),
     Geometry(GeometryFacts),
+    /// A ray tracing program of a library (see [`RayTracingFacts`]).
+    RayTracing(RayTracingFacts),
 }
 
 /// What a program exposes: its stage, the varyings it takes and gives, and the resources it binds.
@@ -349,6 +420,12 @@ impl Interface {
             (Stage::Vertex, StageFacts::VertexWithoutPosition) => Ok(()),
             (Stage::Hull | Stage::Domain, _) => {
                 Err(format!("a {:?} program without its patch facts", self.stage))
+            }
+            (stage, StageFacts::RayTracing(r)) if stage.is_ray_tracing() => {
+                if r.export.is_empty() {
+                    return Err(format!("a {stage:?} program that names no export"));
+                }
+                Ok(())
             }
             (_, StageFacts::None) => Ok(()),
             (stage, facts) => Err(format!("{stage:?} program with {facts:?}")),

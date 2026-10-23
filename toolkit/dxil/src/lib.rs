@@ -6,6 +6,7 @@ pub mod bitstream;
 mod evaluate;
 mod lift;
 pub mod module;
+pub mod rdat;
 pub mod reflection;
 pub use evaluate::{Census, Shader};
 pub use lift::{LIFTER_VERSION, lift, refusal_reason};

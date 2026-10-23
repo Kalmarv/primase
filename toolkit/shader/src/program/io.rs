@@ -298,7 +298,7 @@ pub fn stage_functions(interface: &Interface) -> Result<Option<Vec<FunctionSig>>
         // a ray tracing program: the ray's system values it reads, then the payload (a hit, miss or callable program
         // has one, `payload`: what the traced ray carries, or a callable's parameter) and the attributes of the hit
         // (`attributes`, a triangle's barycentrics or what an intersection program reported)
-        (stage, StageFacts::None) if stage.is_ray_tracing() => {
+        (stage, StageFacts::None | StageFacts::RayTracing(_)) if stage.is_ray_tracing() => {
             let mut arguments = values(&interface.inputs, false);
             let memory = |name: &str| FnItem {
                 name: name.into(),
