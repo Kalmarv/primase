@@ -1707,8 +1707,10 @@ impl MapWriter {
         }
         let under = self.stack_overlays(&mut parts, Vec3::ZERO, &format!("proto {}", m.name))?;
         if self.o.max_render_edge > 0.0 {
-            for a in parts.values_mut() {
-                split_long(a, self.o.max_render_edge);
+            for (k, a) in parts.iter_mut() {
+                split_long(a, self.o.max_render_edge).map_err(|e| {
+                    Error::Scene(format!("proto {}: material {k}: max_render_edge: {e}", m.name))
+                })?;
             }
         }
         for k in parts.keys() {
@@ -2127,8 +2129,10 @@ impl MapWriter {
                     }
                     parts.retain(|_, a| !a.idx.is_empty());
                     if o.max_render_edge > 0.0 {
-                        for a in parts.values_mut() {
-                            split_long(a, o.max_render_edge);
+                        for (k, a) in parts.iter_mut() {
+                            split_long(a, o.max_render_edge).map_err(|e| {
+                                Error::Scene(format!("tile t_{tx}_{ty}: material {k}: max_render_edge: {e}"))
+                            })?;
                         }
                     }
                     // the order over every part, before the chain overlays leave: the relations through them still
@@ -2207,8 +2211,9 @@ impl MapWriter {
     }
 }
 
-/// --max-render-edge on one merged part.
-fn split_long(a: &mut Acc, max: f32) {
+/// --max-render-edge on one merged part: an error when the part is not a valid mesh (a tile's parts are its
+/// placements' transformed positions, which finite source data can still take past f32's range).
+fn split_long(a: &mut Acc, max: f32) -> primase_meshops::Result<()> {
     let m = primase_meshops::Mesh {
         positions: a
             .pos
@@ -2227,7 +2232,7 @@ fn split_long(a: &mut Acc, max: f32) {
         uv: a.uv.as_chunks::<2>().0.iter().map(|c| [c[0], c[1]]).collect(),
         indices: a.idx.clone(),
     };
-    let (out, _) = primase_meshops::split_long(&m, max, usize::MAX).expect("finite mesh");
+    let (out, _) = primase_meshops::split_long(&m, max, usize::MAX)?;
     if !a.blend.is_empty() {
         // the split interpolates UVs only: the same split (same positions and triangles, so the same new vertices in
         // the same order) of the blend weights in the UV slot interpolates them the same way
@@ -2235,7 +2240,7 @@ fn split_long(a: &mut Acc, max: f32) {
             uv: a.blend.iter().map(|&w| [w, 0.0]).collect(),
             ..m.clone()
         };
-        let (wout, _) = primase_meshops::split_long(&wm, max, usize::MAX).expect("finite mesh");
+        let (wout, _) = primase_meshops::split_long(&wm, max, usize::MAX)?;
         assert!(
             wout.indices == out.indices,
             "the blend split follows the geometry split"
@@ -2251,6 +2256,7 @@ fn split_long(a: &mut Acc, max: f32) {
         let top = a.lift.iter().copied().fold(0.0, f32::max);
         a.lift.resize(a.pos.len() / 3, top);
     }
+    Ok(())
 }
 
 /// One collision cell's content as the writer lays it out: its world soups' triangles and the props its render tiles
@@ -3156,6 +3162,28 @@ mod tests {
             seq,
             ..Acc::default()
         }
+    }
+
+    /// A merged part that is no mesh (a position past f32's range, as a far placement's transform can make of finite
+    /// source data) is the writer's error, the part left as it was, not a panic; a valid part is split.
+    #[test]
+    fn a_part_past_f32s_range_is_refused_by_the_edge_split() {
+        let mut far = Acc {
+            pos: vec![0.0, 0.0, 0.0, f32::INFINITY, 0.0, 0.0, 0.0, 1.0, 0.0],
+            idx: vec![0, 1, 2],
+            ..Acc::default()
+        };
+        let before = far.pos.clone();
+        let e = split_long(&mut far, 1.0).unwrap_err();
+        assert!(e.to_string().starts_with("invalid mesh"), "{e}");
+        assert_eq!(far.pos, before);
+        let mut near = Acc {
+            pos: vec![0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            idx: vec![0, 1, 2],
+            ..Acc::default()
+        };
+        split_long(&mut near, 1.0).unwrap();
+        assert!(near.idx.len() > 3 && near.pos.len() > 9);
     }
 
     /// Draw order: by class, then under before over by the overlay relations, then by first use; material ids
