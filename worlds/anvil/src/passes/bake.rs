@@ -61,6 +61,7 @@ use std::sync::Arc;
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
+use primase_core::shader::NormalEncoding;
 use primase_core::{
     ColorSpace, Component, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat,
     TexRole, Texture, VertexColor, World,
@@ -566,19 +567,10 @@ fn unorm8(x: f32) -> u8 {
     (x.clamp(0.0, 1.0) * 255.0).round_ties_even() as u8
 }
 
-/// The normal the lighting pass decodes from the stored `o1.xyz` (docs/material-spec.md §15.4): `b` the stored z,
-/// its bit 0 the sign of z, bits 1 and 2 the ninth bits of x and y; `(pu, pv)` the octahedral coordinates in -1..1,
-/// `x = (pu + pv) / 2`, `y = (pu - pv) / 2`, `|z| = 1 - |x| - |y|`, normalised; and its shading class (`b >> 3`).
+/// The normal the lighting pass decodes from the stored `o1.xyz` (docs/material-spec.md §15.4) and its shading class
+/// (`b >> 3`): [`NormalEncoding::OctahedralDiamond`].
 fn decode_normal(o1: [f32; 3]) -> ([f64; 3], u8) {
-    let [r, g, b] = o1.map(unorm8);
-    let u9 = f64::from(b >> 1 & 1) * 256.0 + f64::from(r);
-    let v9 = f64::from(b >> 2 & 1) * 256.0 + f64::from(g);
-    let pu = (u9 / 255.0 - 1.0).clamp(-1.0, 1.0);
-    let pv = (v9 / 255.0 - 1.0).clamp(-1.0, 1.0);
-    let (x, y) = ((pu + pv) / 2.0, (pu - pv) / 2.0);
-    let z = (1.0 - x.abs() - y.abs()) * if b & 1 == 1 { 1.0 } else { -1.0 };
-    let n = (x * x + y * y + z * z).sqrt();
-    ([x / n, y / n, z / n], b >> 3)
+    NormalEncoding::decode_octahedral_diamond(o1)
 }
 
 impl BakeAnvilMaterial {
@@ -1064,18 +1056,11 @@ mod tests {
         }
     }
 
-    /// The decode inverts the shader's encoding (the program's last 20 instructions, worked by hand): a normal along
-    /// +z stores x = y = 255 (octahedral 0, 0 at 255 of 0..510) and b's sign bit; along +x, u = v = 510 (both ninth
-    /// bits); along -y, u = 0, v = 510. The class is b's bits 3 and up.
+    /// The decode is core's (`core::shader::binding`'s unit test holds it to the encoding the shader's last 20
+    /// instructions make, worked by hand): +z with class 5 stores `[255, 255, 5 << 3 | 1]`.
     #[test]
-    fn the_normal_decode_inverts_the_encoding() {
-        let stored = |r: u32, g: u32, b: u32| [r, g, b].map(|v| v as f32 * 0.003922);
-        let near = |a: [f64; 3], b: [f64; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-9);
-        let (n, class) = decode_normal(stored(255, 255, 5 << 3 | 1));
-        assert!(near(n, [0.0, 0.0, 1.0]) && class == 5, "{n:?}");
-        let (n, _) = decode_normal(stored(254, 254, 5 << 3 | 0b111));
-        assert!(near(n, [1.0, 0.0, 0.0]), "{n:?}");
-        let (n, _) = decode_normal(stored(0, 254, 5 << 3 | 0b101));
-        assert!(near(n, [0.0, -1.0, 0.0]), "{n:?}");
+    fn the_normal_decode_is_the_octahedral_diamond_decode() {
+        let (n, class) = decode_normal([255, 255, 5 << 3 | 1].map(|v| v as f32 / 255.0));
+        assert_eq!((n, class), ([0.0, 0.0, 1.0], 5));
     }
 }

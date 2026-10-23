@@ -23,8 +23,10 @@
 //!   `leave` binds it `Missing`. The engine's textures (`t < 75`, the exposure `t23`, the terrain's) are `Missing`.
 //!   The sampler state is not read.
 //! - **Outputs** (§3, §15.4), the G-buffer's render targets: `o0.rgb` is the albedo, `o0.w` the roughness (opaque
-//!   Materials: for a blended one it is the alpha); `o1.xyz` the octahedral normal and shading class byte, which no
-//!   normal encoding of the vocabulary states (`Unknown(1)`); `o1.w` the metalness (shading class 1) or the occlusion
+//!   Materials: for a blended one it is the alpha); `o1.xyz` the world normal, `OctahedralDiamond` (the lighting pass
+//!   decodes the 9-bit diamond octahedral from the three lanes, its sign of z in lane 2's bit 0 and the shading class
+//!   in the lane's upper five bits: `NormalEncoding::decode_octahedral_diamond`, material-spec §15.4; the class byte is
+//!   not part of the normal); `o1.w` the metalness (shading class 1) or the occlusion
 //!   (classes 3 to 5) by the class its template writes ([`shading_class`], the notes' table of the templates it covers;
 //!   a template it does not cover leaves `o1.w` `Unknown(1)`); `o2` and `o3` `Unknown`.
 //! - **State.** `TwoSided` is no culling; `ZTestDisabled` an always-passing depth test, with the write the Material's
@@ -38,8 +40,9 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{
     AlphaTest, Compare, ConstantBinding, ConstantRole, Cull, DepthState, InputBinding, InputRole, Interface,
-    OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, ShaderBinding,
-    ShaderFormat, Stage, StageBinding, SystemValue, TextureBinding, TextureDim, TextureSource, Varying,
+    NormalEncoding, NormalSpace, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind,
+    SamplerState, Shader, ShaderBinding, ShaderFormat, Stage, StageBinding, SystemValue, TextureBinding,
+    TextureDim, TextureSource, Varying,
 };
 use primase_core::{ColorSpace, Component, Entity, Name, Semantic, Texture, World};
 
@@ -913,7 +916,13 @@ fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Ve
                 );
             }
             1 => {
-                role(0b0111, OutputRole::Unknown(1));
+                role(
+                    0b0111,
+                    OutputRole::Normal {
+                        encoding: NormalEncoding::OctahedralDiamond,
+                        space: NormalSpace::World,
+                    },
+                );
                 role(
                     0b1000,
                     match class {
@@ -1085,7 +1094,14 @@ mod key_tests {
             [
                 (0, 0b0111, OutputRole::Albedo),
                 (0, 0b1000, OutputRole::Roughness),
-                (1, 0b0111, OutputRole::Unknown(1)),
+                (
+                    1,
+                    0b0111,
+                    OutputRole::Normal {
+                        encoding: NormalEncoding::OctahedralDiamond,
+                        space: NormalSpace::World
+                    }
+                ),
                 (1, 0b1000, OutputRole::Metallic),
                 (2, 0b1111, OutputRole::Unknown(2)),
                 (3, 0b1111, OutputRole::Unknown(3)),

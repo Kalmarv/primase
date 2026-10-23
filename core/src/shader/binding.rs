@@ -253,6 +253,44 @@ pub enum NormalEncoding {
     XyzBiased { bias_bits: u32 },
     /// Octahedral mapping in two lanes, 0-1.
     Octahedral,
+    /// Octahedral in the diamond layout over three 8-bit UNORM lanes: lanes 0 and 1 are the low eight bits of two 9-bit
+    /// coordinates `u` and `v` (`round(255 (c + 1))`, 0 to 510 over -1 to 1), lane 2's bit 1 and bit 2 their ninth bits and
+    /// its bit 0 the sign of z; the lane's other five bits are not part of the normal (a payload byte, which an engine
+    /// may keep a class in). `x = (u + v) / 2`, `y = (u - v) / 2`, `|z| = 1 - |x| - |y|`, normalised
+    /// ([`NormalEncoding::decode_octahedral_diamond`]).
+    OctahedralDiamond,
+}
+
+impl NormalEncoding {
+    /// The normal and the payload byte of three UNORM lanes stored as [`NormalEncoding::OctahedralDiamond`]: each lane
+    /// is taken as the 8-bit value it rounds to.
+    pub fn decode_octahedral_diamond(lanes: [f32; 3]) -> ([f64; 3], u8) {
+        let [r, g, b] = lanes.map(|x| (x.clamp(0.0, 1.0) * 255.0).round_ties_even() as u8);
+        let u9 = f64::from(b >> 1 & 1) * 256.0 + f64::from(r);
+        let v9 = f64::from(b >> 2 & 1) * 256.0 + f64::from(g);
+        let pu = (u9 / 255.0 - 1.0).clamp(-1.0, 1.0);
+        let pv = (v9 / 255.0 - 1.0).clamp(-1.0, 1.0);
+        let (x, y) = ((pu + pv) / 2.0, (pu - pv) / 2.0);
+        let z = (1.0 - x.abs() - y.abs()) * if b & 1 == 1 { 1.0 } else { -1.0 };
+        let n = (x * x + y * y + z * z).sqrt();
+        ([x / n, y / n, z / n], b >> 3)
+    }
+
+    /// The three 8-bit lanes [`NormalEncoding::OctahedralDiamond`] stores a normal and a payload byte (below 32) as;
+    /// a z of 0 stores as positive. A vector that is not zero is normalised by the encoding itself.
+    pub fn encode_octahedral_diamond(normal: [f64; 3], payload: u8) -> [u8; 3] {
+        let [x, y, z] = normal;
+        let sum = x.abs() + y.abs() + z.abs();
+        let (x, y) = (x / sum, y / sum);
+        let nine = |c: f64| ((c * 255.0 + 255.0).round().clamp(0.0, 510.0)) as u16;
+        let (u9, v9) = (nine(x + y), nine(x - y));
+        let sign = u8::from(z >= 0.0);
+        [
+            (u9 & 0xff) as u8,
+            (v9 & 0xff) as u8,
+            sign | ((u9 >> 8) as u8) << 1 | ((v9 >> 8) as u8) << 2 | (payload & 0x1f) << 3,
+        ]
+    }
 }
 
 /// How a scalar is stored in the lanes of an output: `stored = (value / scale)^p`, p being 1/2 for a square root and 1
@@ -699,6 +737,51 @@ impl Component for ShaderBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The diamond octahedral store round-trips: the hand-worked axes (+z stores x = y = 255 and the sign bit; +x
+    /// stores u = v = 510, both ninth bits; -y stores u = 0, v = 510), the payload kept, and a grid of normals to
+    /// the 9-bit step.
+    #[test]
+    fn the_diamond_octahedral_decode_inverts_its_encoding() {
+        let unorm = |lanes: [u8; 3]| lanes.map(|v| f32::from(v) / 255.0);
+        let near = |a: [f64; 3], b: [f64; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-9);
+        let (n, class) = NormalEncoding::decode_octahedral_diamond(unorm([255, 255, 5 << 3 | 1]));
+        assert!(near(n, [0.0, 0.0, 1.0]) && class == 5, "{n:?}");
+        let (n, _) = NormalEncoding::decode_octahedral_diamond(unorm([254, 254, 5 << 3 | 0b111]));
+        assert!(near(n, [1.0, 0.0, 0.0]), "{n:?}");
+        let (n, _) = NormalEncoding::decode_octahedral_diamond(unorm([0, 254, 5 << 3 | 0b101]));
+        assert!(near(n, [0.0, -1.0, 0.0]), "{n:?}");
+        assert_eq!(
+            NormalEncoding::encode_octahedral_diamond([0.0, 0.0, 1.0], 5),
+            [255, 255, 5 << 3 | 1]
+        );
+        assert_eq!(
+            NormalEncoding::encode_octahedral_diamond([1.0, 0.0, 0.0], 5),
+            [254, 254, 5 << 3 | 0b111]
+        );
+        assert_eq!(
+            NormalEncoding::encode_octahedral_diamond([0.0, -1.0, 0.0], 5),
+            [0, 254, 5 << 3 | 0b101]
+        );
+        // a grid over the sphere, both hemispheres, every payload class that matters
+        let mut worst = 1.0f64;
+        for i in 0..40 {
+            for j in 0..80 {
+                let (theta, phi) = (
+                    std::f64::consts::PI * (f64::from(i) + 0.5) / 40.0,
+                    std::f64::consts::TAU * f64::from(j) / 80.0,
+                );
+                let n = [theta.sin() * phi.cos(), theta.sin() * phi.sin(), theta.cos()];
+                let class = (i % 6) as u8;
+                let lanes = NormalEncoding::encode_octahedral_diamond(n, class);
+                let (back, payload) = NormalEncoding::decode_octahedral_diamond(unorm(lanes));
+                assert_eq!(payload, class);
+                worst = worst.min(n[0] * back[0] + n[1] * back[1] + n[2] * back[2]);
+            }
+        }
+        // a 9-bit coordinate step is 2/510: the direction is within a few of them
+        assert!(worst > 1.0 - 2e-4, "worst dot {worst}");
+    }
     use crate::World;
     use crate::shader::{
         BufferLayout, Constant, ConstantType, ResourceProvenance, SampleType, ScalarType, ShaderFormat,
