@@ -105,6 +105,10 @@ quick-xml = { version = "=0.42.0", default-features = false }
 naga = { version = "=30.0.1", default-features = false, features = ["wgsl-out"] }
 
 png = { version = "=0.18.1", default-features = false }
+# JPEG decoding (primase_image::read_jpeg): pure Rust, MIT OR Apache-2.0 OR Zlib. Without its `x86` and `neon` features it has
+# no unsafe code (the SIMD paths are its only unsafe), and the integer scalar IDCT gives the same pixels on every machine.
+zune-jpeg = { version = "=0.5.15", default-features = false, features = ["std"] }
+zune-core = { version = "=0.5.3", default-features = false, features = ["std"] }
 bcdec_rs = { version = "=0.2.0", default-features = false }
 block_compression = { version = "=0.10.1", default-features = false, features = ["bc7"] }
 

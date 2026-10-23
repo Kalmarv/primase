@@ -10,7 +10,8 @@
 //!   metallic-roughness and occlusion slots (one entity when a packed map serves both), linear `Normal` in glTF's
 //!   convention for the normal slot. An image used in two ways is two entities.
 //! - **Formats.** Told by the bytes, not the declared MIME type: PNG is decoded (`primase_image::read_png`, 8 and 16
-//!   bits, to RGBA); JPEG, KTX2/Basis, WebP and anything else is refused by name, counted in
+//!   bits, to RGBA) and so is JPEG (`primase_image::read_jpeg`, 8 bits, to RGBA with alpha 255); KTX2/Basis, WebP, a
+//!   JPEG the decoder refuses (CMYK, 12-bit, arithmetic-coded) and anything else is refused by name, counted in
 //!   [`ReadReport::images_refused`], and its slots stay without a texture entry.
 //! - **Sources.** A GLB's `bufferView` images and, through the caller's resolver, `uri` images (a relative file, a
 //!   `data:` URI: resolving is the caller's, as for buffers).
@@ -24,7 +25,7 @@ use primase_core::{
 };
 use primase_glb::Gltf;
 use primase_glb::sampler_filters;
-use primase_image::{Samples, read_png};
+use primase_image::{Samples, read_jpeg, read_png};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -264,9 +265,19 @@ fn decode(gltf: &Gltf, image: &Value, resolve: &mut ImageResolver) -> Result<Dec
             bytes,
         });
     }
-    Err(if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        "JPEG (no JPEG decoder in the toolkit)".to_owned()
-    } else if bytes.starts_with(b"\xABKTX 20\xBB\r\n\x1A\n") {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        let jpeg = read_jpeg(&bytes).map_err(|e| format!("JPEG not decoded: {e}"))?;
+        let Samples::U8(rgba) = jpeg.image.samples else {
+            return Err("JPEG decoded to other than 8-bit samples".to_owned());
+        };
+        return Ok(Decoded {
+            width: jpeg.image.width,
+            height: jpeg.image.height,
+            format: TexFormat::Rgba8Unorm,
+            bytes: rgba,
+        });
+    }
+    Err(if bytes.starts_with(b"\xABKTX 20\xBB\r\n\x1A\n") {
         "KTX2 (KTX2/Basis not read)".to_owned()
     } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         "WebP (not read)".to_owned()

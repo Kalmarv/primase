@@ -1,6 +1,6 @@
 [package]
 name = "primase-image"
-description = "PNG pixels, exact sRGB transfer, and deterministic image mip chains"
+description = "PNG and JPEG pixels, exact sRGB transfer, and deterministic image mip chains"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,6 +15,11 @@ primase-meshops.workspace = true
 primase-texcodec.workspace = true
 thiserror.workspace = true
 png.workspace = true
+zune-jpeg.workspace = true
+zune-core.workspace = true
+
+[dev-dependencies]
+primase-testdata.workspace = true
 
 [lints]
 workspace = true

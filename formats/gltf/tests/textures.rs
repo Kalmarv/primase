@@ -1,19 +1,19 @@
 //! The glTF reader's images and the material lowering, end to end.
 //!
 //! - A hand-worked document: one PNG image sampled as base colour and as a normal map (two texture entities, one per
-//!   use), a JPEG, a KTX2 and an unknown image refused by name, a sampler, a texture transform; read, lowered by the
+//!   use), a cut-short JPEG, a KTX2 and an unknown image refused by name, a sampler, a texture transform; read, lowered by the
 //!   pass manager with its checks on, and every value compared with what the document states.
 //! - T1 (`oracles.khronos.general/sample-assets`, third-party files): every image of every fixture is identified as the
 //!   Khronos validator and Pillow identify it (`validator.json`'s `info.resources`, and `images.json`, which
 //!   `dump_images.py` writes with Pillow): a PNG is read at the size the validator reports with exactly the RGBA8
-//!   pixels Pillow decodes (sha256 of the rows), a JPEG is refused by name, and each lowered material states the
-//!   factors its JSON states (defaults per the specification) with a texture exactly where its image was read.
+//!   pixels Pillow decodes (sha256 of the rows), a JPEG is read at that size with RGBA8 pixels within 3 levels of the
+//!   ones Pillow decodes (`<Model>/images/<n>.rgba`, written with it; the two decoders' integer IDCTs differ by that much),
+//!   and each lowered material states the factors its JSON states (defaults per the specification) with a texture
+//!   exactly where its image was read.
 
 #![allow(clippy::unwrap_used)]
 
 mod common;
-
-use std::collections::BTreeMap;
 
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::pbr::{AlphaMode, Filter, PbrMaterial, Wrap};
@@ -96,12 +96,17 @@ fn a_document_with_images_reads_and_lowers_to_what_it_states() {
     let report = primase_gltf::read::read(&gltf, "doc.glb", &mut w).unwrap();
     assert_eq!(w.verify_components(), vec![]);
     assert_eq!((report.textures, report.images, report.images_read), (3, 3, 1));
+    assert_eq!(report.images_refused.len(), 2, "{:?}", report.images_refused);
+    assert_eq!(report.images_refused["KTX2 (KTX2/Basis not read)"], 1);
     assert_eq!(
-        report.images_refused,
-        BTreeMap::from([
-            ("JPEG (no JPEG decoder in the toolkit)".to_owned(), 1),
-            ("KTX2 (KTX2/Basis not read)".to_owned(), 1),
-        ])
+        report
+            .images_refused
+            .iter()
+            .filter(|(reason, count)| reason.starts_with("JPEG not decoded: ") && **count == 1)
+            .count(),
+        1,
+        "{:?}",
+        report.images_refused
     );
     let notices = report.notices();
     assert!(
@@ -236,6 +241,21 @@ fn t1_khronos_images_and_materials_read_as_the_validator_and_pillow_see_them() {
                 other => panic!("{model} image {i}: {other:?}"),
             }
             // every image of the fixtures is sampled by a core slot, so each is read or refused
+            if image["format"] == "JPEG" {
+                let rgba = std::fs::read(dir.join("images").join(format!("{i}.rgba"))).unwrap();
+                let found = w
+                    .iter::<Texture>()
+                    .filter(|(_, t)| (u64::from(t.width), u64::from(t.height)) == (width, height))
+                    .any(|(_, t)| {
+                        t.format == TexFormat::Rgba8Unorm
+                            && t.levels[0].len() == rgba.len()
+                            && t.levels[0].iter().zip(&rgba).all(|(a, b)| a.abs_diff(*b) <= 3)
+                    });
+                assert!(
+                    found,
+                    "{model} image {i}: no texture holds Pillow's RGBA8 pixels within 3 levels"
+                );
+            }
             if image["format"] == "PNG" {
                 let found = w
                     .iter::<Texture>()
@@ -250,19 +270,15 @@ fn t1_khronos_images_and_materials_read_as_the_validator_and_pillow_see_them() {
                 assert!(found, "{model} image {i}: no texture holds Pillow's RGBA8 pixels");
             }
         }
-        assert_eq!(report.images_read, want_png, "{model}: PNGs read");
         assert_eq!(
-            report
-                .images_refused
-                .iter()
-                .map(|(k, v)| (k.starts_with("JPEG"), *v))
-                .collect::<Vec<_>>(),
-            if want_jpeg > 0 {
-                vec![(true, want_jpeg)]
-            } else {
-                vec![]
-            },
-            "{model}: JPEGs refused by name"
+            report.images_read,
+            want_png + want_jpeg,
+            "{model}: PNGs and JPEGs read"
+        );
+        assert!(
+            report.images_refused.is_empty(),
+            "{model}: {:?}",
+            report.images_refused
         );
         png += want_png;
         jpeg += want_jpeg;
@@ -316,6 +332,6 @@ fn t1_khronos_images_and_materials_read_as_the_validator_and_pillow_see_them() {
         }
     }
     println!(
-        "T1: {png} PNGs read as Pillow reads them, {jpeg} JPEGs refused; {slots_read} slots textured, {slots_unread} left untextured"
+        "T1: {png} PNGs read as Pillow reads them, {jpeg} JPEGs within 3 levels of Pillow's pixels; {slots_read} slots textured, {slots_unread} left untextured"
     );
 }

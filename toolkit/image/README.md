@@ -6,6 +6,16 @@ grayscale-alpha, RGBA and indexed PNG inputs are supported, including packed
 low-bit-depth samples and tRNS transparency. `write_png` emits deterministic
 RGBA PNGs at the image's bit depth.
 
+`read_jpeg` returns a `Jpeg`: straight RGBA8 (alpha 255) of a baseline, extended
+sequential or progressive Huffman-coded 8-bit grey, YCbCr or RGB file, through the
+pure-Rust `zune-jpeg` decoder built without its SIMD features, so every machine
+decodes to the same bytes. Strict: a file that departs from the standard is an error;
+CMYK, YCCK, 12-bit, arithmetic-coded and lossless files are refused by name. EXIF
+(orientation included), ICC and XMP are not applied and are listed in `Jpeg::ignored`.
+The pixels are this decoder's integer IDCT and upsampling, not libjpeg's: against
+Pillow 11 (libjpeg) the Khronos samples' JPEGs differ by at most 3 levels on 0.2 to
+0.3 percent of the samples (`tests/jpeg.rs`).
+
 No colour transfer is applied implicitly. PNG ancillary chunks not represented
 in the image are returned by name in `Png::ignored_ancillary`. Animation is
 rejected. Chunk framing, CRCs, palette indices, image lengths and trailing bytes
@@ -24,7 +34,7 @@ against reference C# golden outputs. `tests/oracles/png.py` regenerates syntheti
 PNG fixtures. No external assets are included.
 
 Real PNGs are checked where they are read: `formats/gltf/tests/textures.rs`
-compares the Khronos sample assets' PNGs with Pillow 11's RGBA8, and
+compares the Khronos sample assets' PNGs with Pillow 11's RGBA8 (and their JPEGs within 3 levels), and
 `checks/tests/web_texture_decode.rs` round-trips every texture of a real scene
 through the PNG writer. PNG compressed-byte identity with other encoders is not
 promised: the contract is exact pixel roundtrip and deterministic output.

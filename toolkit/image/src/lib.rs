@@ -1,4 +1,4 @@
-//! PNG and QOI ([`read_qoi`]) to straight RGBA pixels, piecewise sRGB transfer, and integer box mips.
+//! PNG, JPEG ([`read_jpeg`]) and QOI ([`read_qoi`]) to straight RGBA pixels, piecewise sRGB transfer, and integer box mips.
 //! No implicit gamma conversion: filtering averages the stored channel values.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
@@ -8,8 +8,10 @@ mod cap;
 pub use cap::{Beyond, CapMode, CapRole, CapTextures, Capped, NormalDownscale, cap_texture, cap_textures};
 mod channels;
 mod frames;
+mod jpeg;
 pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels, map_rgba8_levels_with};
 pub use frames::{Bitangent, UvFrameNormals};
+pub use jpeg::{Jpeg, JpegColor, read_jpeg};
 mod layers;
 pub use layers::{BakeLayerChannels, register};
 mod modes;
@@ -42,6 +44,7 @@ pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/cap.rs", include_bytes!("cap.rs")),
     ("image/channels.rs", include_bytes!("channels.rs")),
     ("image/frames.rs", include_bytes!("frames.rs")),
+    ("image/jpeg.rs", include_bytes!("jpeg.rs")),
     ("image/layers.rs", include_bytes!("layers.rs")),
     ("image/lib.rs", include_bytes!("lib.rs")),
     ("image/modes.rs", include_bytes!("modes.rs")),
@@ -67,6 +70,8 @@ pub enum Error {
     Texture(#[from] primase_texcodec::Error),
     #[error("invalid image: {0}")]
     Invalid(String),
+    #[error("JPEG decoding: {0}")]
+    Jpeg(String),
     #[error("PNG decoding: {0}")]
     Decode(#[from] png::DecodingError),
     #[error("PNG encoding: {0}")]
