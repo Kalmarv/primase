@@ -315,13 +315,24 @@ impl NormalEncoding {
 /// How a scalar is stored in the lanes of an output: `stored = (value / scale)^(1 / power)`, so the value is
 /// `stored^power * scale` (the scale given by its f32 bits). Power 1 is linear, 2 a square root (a value kept in a
 /// perceptual range), 4 a fourth root.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ScalarEncoding {
     /// The power the stored value is raised to, to give the value over the scale: 1 for none, 2 for the square root
     /// stored, 4 for the fourth root. Never 0.
     pub power: u8,
-    /// The scale's f32 bits (1.0 for none).
+    /// The scale's f32 bits (1.0 for none): bits so the encoding compares and hashes exactly; it is written as the
+    /// number `scale`.
     pub scale_bits: u32,
+}
+
+impl Serialize for ScalarEncoding {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut out = serializer.serialize_struct("ScalarEncoding", 2)?;
+        out.serialize_field("power", &self.power)?;
+        out.serialize_field("scale", &f32::from_bits(self.scale_bits))?;
+        out.end()
+    }
 }
 
 impl ScalarEncoding {
@@ -893,6 +904,15 @@ mod tests {
         let fourth = ScalarEncoding::power_of(4, 4.0);
         assert_eq!(fourth.decode(0.5), 0.25);
         assert_eq!(ScalarEncoding::linear_over(16.0).decode(0.25), 4.0);
+        // written as the number it is, not its bit pattern
+        assert_eq!(
+            serde_json::to_value(fourth).unwrap(),
+            serde_json::json!({"power": 4, "scale": 4.0})
+        );
+        assert_eq!(
+            serde_json::to_value(ScalarEncoding::linear_over(0.0625)).unwrap(),
+            serde_json::json!({"power": 1, "scale": 0.0625})
+        );
         // a power of 0 is no power
         assert_eq!(ScalarEncoding::power_of(0, 2.0), ScalarEncoding::linear_over(2.0));
     }
@@ -1094,7 +1114,13 @@ mod tests {
         assert_eq!(refs, [s, t]);
         let json = b.to_json().unwrap().unwrap();
         assert_eq!(json["stages"][0]["stage"], "pixel");
-        assert_eq!(json["stages"][0]["outputs"][1]["role"], "occlusion");
+        // the role names what it occludes and how it is stored, the scale as a number
+        assert_eq!(
+            json["stages"][0]["outputs"][1]["role"],
+            serde_json::json!({
+                "occlusion": {"of": "all_light", "encoding": {"power": 1, "scale": 1.0}}
+            })
+        );
         assert_eq!(
             json["stages"][0]["constants"][1]["role"]["unknown"]["why"],
             "cb0[1] is not in the recipe"
