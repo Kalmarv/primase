@@ -1,6 +1,6 @@
 //! Every asset collision file of Elden Ring (each `_h` and `_l.geomhkxbnd.dcx` the census of the install lists:
 //! `entries.tsv` of `oracles.soulsformats.elden/census`) read as object collision bodies, and each body tessellated:
-//! compressed meshes, the convex shapes (box, polytope, capsule, cylinder, plain convex, triangle), the extern shape
+//! compressed meshes, the convex shapes (box, polytope, capsule, cylinder, plain convex, triangle, sphere), the extern shape
 //! instances compressed meshes hold, and the custom primitives of an unknown kind, which are counted. No file may be
 //! refused and no convex body may tessellate to nothing. HKLib's reading of the extern instances themselves is compared
 //! in `havok_census.rs`.

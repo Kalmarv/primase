@@ -39,7 +39,8 @@ Output vertices are inside every plane and incident to at least three planes
 within 0.01 mm after f32 rounding; sub-nanometre duplicates are welded and
 zero-area triangles caused by f32 rounding are omitted. This is a sharp
 polytope approximation, not the rounded Havok surface. Capsule cores yield
-box approximations. Spheres are not implemented. A core of zero thickness (two
+box approximations; a sphere's core is its centre (one vertex, no planes), tessellated as
+the cube of half-edge radius around it, the same sharp approximation. A core of zero thickness (two
 opposite planes whose offsets agree within the plane bound, every vertex on them)
 is a polygon: its two faces offset by the radius. An `hknpConvexShape` stores
 vertices only: its core is their hull (one triangle a face), or, for vertices within

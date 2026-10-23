@@ -586,7 +586,7 @@ indices each), `triangle_to_shape_key` (FromSoft's custom-param shape, else null
 this check, and the extern instances' transforms as the reader takes them are checked against the stored floats.
 
 Object bodies (`collision::read_bodies`) are compressed meshes and the convex classes (box, polytope, capsule,
-cylinder, plain convex, triangle). A compressed mesh's primitives whose second and fourth indices are equal are
+cylinder, plain convex, triangle, sphere). A compressed mesh's primitives whose second and fourth indices are equal are
 custom primitives, not triangles: in every compressed mesh of both games' object and map collision, no triangle or
 quad has them equal. Their first index names their data in the shared-vertex index. Data `[146, w, low, high]`
 (indices `[k, k, 4, k]`) references the mesh's extern shape instance `low | high << 16`: a convex shape placed by the

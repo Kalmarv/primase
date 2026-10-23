@@ -295,3 +295,39 @@ fn a_slab_thinner_than_the_plane_bound_is_a_polygon() {
     thick.planes[1][3] = -2e-5;
     assert!(thick.expanded_triangles().is_err());
 }
+#[test]
+fn a_sphere_is_the_cube_of_its_radius_around_its_centre() {
+    // a sphere of radius 0.5 centred at (1, 2, 3), as Sekiro stores one: its centre the core's only vertex
+    let c = ConvexCore {
+        vertices: vec![[1., 2., 3.]],
+        planes: Vec::new(),
+        faces: Vec::new(),
+        radius: 0.5,
+    };
+    let t = c.expanded_triangles().unwrap();
+    assert_eq!(t.len(), 12);
+    let centre = [1f32, 2., 3.];
+    for tri in &t {
+        // every corner on the cube, every triangle facing away from the centre
+        assert!(
+            tri.iter()
+                .all(|v| (0..3).all(|k| (v[k] - centre[k]).abs() == 0.5))
+        );
+        let n = normal_of(tri);
+        let out: f32 = (0..3).map(|k| n[k] * (tri[0][k] - centre[k])).sum();
+        assert!(out > 0., "{tri:?}");
+    }
+    // each of the six faces twice
+    let mut faces = std::collections::BTreeMap::<(usize, bool), usize>::new();
+    for tri in &t {
+        let n = normal_of(tri);
+        let axis = (0..3).max_by(|&a, &b| n[a].abs().total_cmp(&n[b].abs())).unwrap();
+        *faces.entry((axis, n[axis] > 0.)).or_default() += 1;
+    }
+    assert_eq!(faces.len(), 6);
+    assert!(faces.values().all(|&n| n == 2));
+    // a point of no radius bounds nothing
+    let mut none = c;
+    none.radius = 0.;
+    assert!(none.expanded_triangles().is_err());
+}

@@ -138,7 +138,7 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
 pub enum BodyGeometry {
     /// A compressed mesh: its triangles posed by the body, in the file frame, and their HitMtrl IDs.
     Mesh(Soup),
-    /// A convex shape (box, polytope, capsule, cylinder, triangle): its stored core and convex radius in its own space,
+    /// A convex shape (box, polytope, capsule, cylinder, plain convex, triangle, sphere): its stored core and convex radius in its own space,
     /// a capsule's stored segment, the shape's placement in the body's space where a compressed mesh holds it as an
     /// extern shape (`instance`, columns: rotation x, y and z, then the translation), and the body's pose in the file
     /// frame. It stores no material.
@@ -153,13 +153,14 @@ pub enum BodyGeometry {
 }
 
 /// The convex shape classes a body or an extern shape instance may be, read as their core ([`ConvexCore::read`]).
-const CONVEX_SHAPES: [&str; 6] = [
+const CONVEX_SHAPES: [&str; 7] = [
     "hknpBoxShape",
     "hknpConvexPolytopeShape",
     "hknpCapsuleShape",
     "hknpCylinderShape",
     "hknpConvexShape",
     "hknpTriangleShape",
+    "hknpSphereShape",
 ];
 
 /// The affine map (columns) from a convex shape's space to the file frame: its extern instance's transform, if any,

@@ -23,6 +23,20 @@ impl ConvexCore {
         if shape.type_name() == "hknpConvexShape" {
             return Self::hull_of(vertices, radius);
         }
+        if shape.type_name() == "hknpSphereShape" {
+            // its one vertex is the centre; the radius is the sphere's
+            if vertices.len() != 1 {
+                return Err(invalid(shape.offset, "a sphere shape without exactly one vertex"));
+            }
+            let core = Self {
+                vertices,
+                planes: Vec::new(),
+                faces: Vec::new(),
+                radius,
+            };
+            core.validate()?;
+            return Ok(core);
+        }
         let stored = shape.field("planes")?.array()?;
         let mut planes = Vec::with_capacity(stored.len());
         for i in 0..stored.len() {
@@ -134,6 +148,9 @@ impl ConvexCore {
     /// vertex's incident offset planes no longer meet at a single point.
     pub fn expanded_triangles(&self) -> Result<Vec<[[f32; 3]; 3]>> {
         self.validate()?;
+        if let Some(triangles) = self.point_triangles()? {
+            return Ok(triangles);
+        }
         if let Some(triangles) = self.flat_triangles()? {
             return Ok(triangles);
         }
@@ -221,6 +238,39 @@ impl ConvexCore {
             }
         }
         Ok(triangles)
+    }
+    /// A core that is a point (a sphere's centre: one vertex, no planes): the cube of half-edge `radius` around it,
+    /// the sharp approximation the offset half-spaces give every core (a capsule a box around its segment), twelve
+    /// triangles wound counter-clockwise from outside. `None` for a core with planes; an error for a point of no
+    /// radius, which bounds nothing.
+    fn point_triangles(&self) -> Result<Option<Vec<[[f32; 3]; 3]>>> {
+        let ([centre], true) = (self.vertices.as_slice(), self.planes.is_empty()) else {
+            return Ok(None);
+        };
+        if self.radius <= 0. {
+            return Err(invalid(0, "a point core without a radius bounds nothing"));
+        }
+        let (c, r) = (centre.map(f64::from), f64::from(self.radius));
+        // corner k: bit 0 x, bit 1 y, bit 2 z (set: +r)
+        let corner = |k: usize| -> [f32; 3] {
+            std::array::from_fn(|axis| (c[axis] + if k >> axis & 1 == 1 { r } else { -r }) as f32)
+        };
+        // each face's corners counter-clockwise seen from outside: -x, +x, -y, +y, -z, +z
+        const FACES: [[usize; 4]; 6] = [
+            [0, 4, 6, 2],
+            [1, 3, 7, 5],
+            [0, 1, 5, 4],
+            [2, 6, 7, 3],
+            [0, 2, 3, 1],
+            [4, 5, 7, 6],
+        ];
+        Ok(Some(
+            FACES
+                .iter()
+                .flat_map(|f| [[f[0], f[1], f[2]], [f[0], f[2], f[3]]])
+                .map(|t| t.map(corner))
+                .collect(),
+        ))
     }
     /// A core of zero thickness (two opposite stored planes at one offset, every vertex on them) bounds no volume:
     /// it is a polygon. Normals agree to f32 rounding; offsets and vertices to the plane bound ([`plane_bound`]: 0.01
