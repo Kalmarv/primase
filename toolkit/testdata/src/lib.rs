@@ -337,6 +337,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.require.as_deref(), Some("all"));
+        // the older switch in the environment, over a structured file
+        let gate = config(
+            &[("PRIMASE_REQUIRE_REAL_DATA", "gate")],
+            Some("[run]\nrequire = 'all'\n"),
+        )
+        .unwrap();
+        assert_eq!(gate.require.as_deref(), Some("gate"));
         // the environment wins over the file, as it did
         assert_eq!(
             configured(&c, Query::Install(Game::Gta, None)),
@@ -377,6 +384,8 @@ mod tests {
         for v in VARIABLES {
             match (v.kind, legacy::translate(v.name)) {
                 (Kind::Config | Kind::Child | Kind::Test, None) => {}
+                // the older switch is the configuration's [run] require (config::REQUIRE)
+                (Kind::Switch, None) if v.name == config::REQUIRE => {}
                 (Kind::Config | Kind::Child | Kind::Test, Some(q)) => {
                     panic!("{}: not configuration, but translated to {q:?}", v.name)
                 }

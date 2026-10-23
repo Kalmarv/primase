@@ -64,6 +64,17 @@ fn section_keys(section: &str) -> Option<Vec<&'static str>> {
     }
 }
 
+/// The older switch `[run] require` stands for, in the environment or the flat file.
+pub(crate) const REQUIRE: &str = "PRIMASE_REQUIRE_REAL_DATA";
+
+/// `[run] require` from the older switch's value: `1` was every input, `gate` the landing gate's.
+fn older_require(value: &str) -> String {
+    match value {
+        "1" => "all".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
 impl Config {
     /// The configuration `PRIMASE_DATA` (read through `environment`) names, read with `read`; empty when unset.
     pub(crate) fn load(
@@ -83,6 +94,9 @@ impl Config {
         for (name, value) in crate::legacy::from_environment(environment) {
             config.legacy_name(name, value);
         }
+        if let Some(value) = environment(REQUIRE) {
+            config.require = Some(older_require(&value.to_string_lossy()));
+        }
         Ok(config)
     }
 
@@ -97,11 +111,8 @@ impl Config {
             // the older flat map: every name a declared PRIMASE_* name, every value a string
             for (name, value) in &table {
                 let value = value.as_str().unwrap_or_default();
-                if name == "PRIMASE_REQUIRE_REAL_DATA" {
-                    self.require = Some(match value {
-                        "1" => "all".to_owned(),
-                        other => other.to_owned(),
-                    });
+                if name == REQUIRE {
+                    self.require = Some(older_require(value));
                     continue;
                 }
                 // a name this build does not declare belongs to work not merged yet: the older format read only the
