@@ -181,6 +181,7 @@ fn derivative_program() -> Program {
         conventions: Conventions::D3D,
         modes: D3dModes::ALL,
         provenance: provenance(),
+        notes: Vec::new(),
     }
 }
 
@@ -290,6 +291,7 @@ fn volume_program() -> Program {
         conventions: Conventions::D3D,
         modes: D3dModes::ALL,
         provenance: provenance(),
+        notes: Vec::new(),
     }
 }
 
