@@ -8,11 +8,16 @@
 //!   skeleton as the rig and its prototype as the part.
 //! - E2: the notices say what the read left out (the Havok skeleton and animation binder when animations are not
 //!   asked for).
+//! - E3: the textures a material binds from the parts folder (`AAT100_Crystal_a`, `AAT500_Hair_02_a`: the matbin's
+//!   sampler paths `N:\GR\data\Model\parts\tex\...`) are in `parts/common_body.tpf`, which every character reads: none
+//!   of them is unavailable on `c2200` (its backface and silhouette shells name only `AAT100_Crystal_*`) and `c2010`
+//!   (the fur cards' strand map is `AAT500_Hair_02_a`).
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
 use primase_core::{Asset, Role, Skeleton, World};
 use primase_fromsoft::dcx::Decoder;
+use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::{CharacterOptions, read_character_with};
 use primase_fromsoft::{Game, Install, Keys};
 use primase_testdata::{Game as Data, Tool, install, keys, tool};
@@ -127,5 +132,39 @@ fn a_character_with_no_model_lowers_to_nothing_and_its_asset_stays_whole() -> Re
     let (_, asset) = w.iter::<Asset>().next().unwrap();
     assert!(asset.members.iter().all(|(e, _)| w.is_alive(*e)));
     assert!(asset.members.iter().all(|(_, role)| *role != Role::Part));
+    Ok(())
+}
+
+/// E3: the parts folder's textures a character's materials bind are found.
+#[test]
+fn the_parts_folder_textures_of_a_character_are_found_in_the_common_body_package() -> Result<()> {
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    for id in ["c2200", "c2010"] {
+        let mut w = World::new();
+        read_character_with(&install, id, &decoder, CharacterOptions::default(), &mut w)?;
+        let mut parts = 0;
+        for (_, m) in w.iter::<Material>() {
+            for (kind, b) in &m.bindings {
+                if b.texture.starts_with("aat100_") || b.texture.starts_with("aat500_") {
+                    parts += 1;
+                    assert!(
+                        b.available,
+                        "{id}: {kind} binds {}, which no package held",
+                        b.texture
+                    );
+                }
+            }
+        }
+        assert!(parts > 0, "{id} binds no parts folder texture");
+    }
     Ok(())
 }

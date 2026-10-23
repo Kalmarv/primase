@@ -96,6 +96,19 @@ pub(crate) const SHADER_BINDERS: &[&str] = &[
 /// The texture packages every map can bind: the system and decal textures.
 pub(crate) const COMMON_TEXTURES: &[&str] = &["/other/systex.tpf.dcx", "/other/decaltex.tpf.dcx"];
 
+/// The texture packages every character can bind: [`COMMON_TEXTURES`] and `/parts/common_body.tpf.dcx`, which holds
+/// the textures the character materials bind from the parts folder (their matbin sampler paths are
+/// `N:\GR\data\Model\parts\tex\AAT100_Crystal_g.tif` and the like): 97 textures, the `aat100_*` skin, scale, leather,
+/// fabric, metal, rust, mud, bone and crystal albedo and normal maps and the `aat500_*` belt, hair, shell fur, beard
+/// and teeth ones (measured by opening the package in an install of the game). A character's own texture binders
+/// (`chr/<id>_h.texbnd`, `_l`) do not hold them: without this package every such binding is unavailable and a
+/// material whose only albedo is one draws the preview's fallback grey.
+pub(crate) const CHARACTER_TEXTURES: &[&str] = &[
+    "/parts/common_body.tpf.dcx",
+    "/other/systex.tpf.dcx",
+    "/other/decaltex.tpf.dcx",
+];
+
 /// The package of an asset texture `aetNNN_MMM_<suffix>`: `/asset/aet/aetNNN/aetNNN_MMM.tpf.dcx` (its full
 /// resolution; the `_l` package beside it holds the low one). `None` for another name.
 pub(crate) fn texture_package(stem: &str) -> Option<String> {
@@ -110,7 +123,7 @@ pub(crate) fn texture_package(stem: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{asset_model, parent_tiles, texture_package};
+    use super::{CHARACTER_TEXTURES, COMMON_TEXTURES, asset_model, parent_tiles, texture_package};
 
     /// Hand-worked: tile 39_54 is cell (1, 0) of the 512 m tile 19_27 (centre offset -128 + 256 = +128 in x, -128 in
     /// z) and cell (3, 2) of the 1024 m tile 09_13 (x: 3 * 256 + 128 - 512 = 384, z: 2 * 256 + 128 - 512 = 128).
@@ -159,6 +172,21 @@ mod tests {
         );
         assert!(texture_package("aat000_fabric_01_a").is_none());
         assert!(texture_package("systex_dummy").is_none());
+    }
+
+    /// Characters bind the parts folder's textures (`AAT100_*`, `AAT500_*`) besides the packages the maps bind.
+    #[test]
+    fn characters_read_the_common_body_package_and_the_map_packages() {
+        use crate::Game;
+        assert_eq!(Game::EldenRing.character_shared_textures(), CHARACTER_TEXTURES);
+        assert!(CHARACTER_TEXTURES.contains(&"/parts/common_body.tpf.dcx"));
+        assert!(COMMON_TEXTURES.iter().all(|p| CHARACTER_TEXTURES.contains(p)));
+        // the maps do not read it
+        assert!(
+            !Game::EldenRing
+                .common_textures()
+                .contains(&"/parts/common_body.tpf.dcx")
+        );
     }
 
     #[test]

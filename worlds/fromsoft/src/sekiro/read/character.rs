@@ -8,7 +8,8 @@
 //! the game keeps them: the texture binders of each other character a material names (in its definition's name or a
 //! texture path: Sekiro's c1010's bodies use `c1019_body_merge`, whose textures are in `chr/c1019.texbnd`, a character
 //! with no model), the packages every character shares ([`crate::Game::character_shared_textures`]: Sekiro's
-//! `parts/common_body.tpf` (hair, fabric, metal, seams, `FC_A_0000_*`) and `other/systex.tpf`). A part's materials also bind the full-resolution
+//! `parts/common_body.tpf` (hair, fabric, metal, seams, `FC_A_0000_*`) and `other/systex.tpf`; Elden Ring's
+//! `parts/common_body.tpf` (`AAT100_*`, `AAT500_*`), `other/systex.tpf` and `other/decaltex.tpf`). A part's materials also bind the full-resolution
 //! textures of the parts they were authored for (a `_l` part holds `_l` copies): the part's full sibling
 //! (`parts/bd_m_9120.partsbnd` for `bd_m_9120_l`) and the other parts its texture paths name (`fc_m_0200` for the face
 //! `fc_m_0220_l`). Each asset is:

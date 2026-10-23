@@ -126,12 +126,13 @@ impl Game {
     }
 
     /// The texture packages every character of the game binds besides its own, read whole: Sekiro's textures every
-    /// character shares (hair, fabric, metal, seams) and its system textures; Elden Ring's system and decal textures
-    /// (the packages its maps bind too).
+    /// character shares (hair, fabric, metal, seams) and its system textures; Elden Ring's textures every character
+    /// shares (`aat100_*`, `aat500_*`: skin, scale, leather, fabric, metal, hair, belts), its system textures and its
+    /// decal textures (the last two the packages its maps bind too).
     pub fn character_shared_textures(self) -> &'static [&'static str] {
         match self {
             Game::Sekiro => &["/parts/common_body.tpf.dcx", "/other/systex.tpf.dcx"],
-            Game::EldenRing => crate::elden::COMMON_TEXTURES,
+            Game::EldenRing => crate::elden::CHARACTER_TEXTURES,
         }
     }
 
