@@ -49,6 +49,7 @@ fn a_mesh_program_is_a_mesh_entry_point_with_its_facts() {
         assert!(wgsl.contains("@mesh(mesh_output)"), "{name}: {wgsl}");
         assert!(wgsl.contains("@workgroup_size(32, 1, 1)"), "{name}");
         assert!(wgsl.contains("@builtin(triangle_indices)"), "{name}");
-        assert!(primase_shader::exec::Executable::new(&p).is_err(), "{name}");
+        // a mesh program is an entry point the executor runs (a thread group writing one meshlet)
+        primase_shader::exec::Executable::new(&p).unwrap_or_else(|e| panic!("{name}: {e}"));
     }
 }

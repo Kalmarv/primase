@@ -67,6 +67,9 @@ fn every_fixture_lifts() {
                         // WebGPU has no ray tracing pipeline: those programs are refused by name
                         Err(primase_shader::ProgramError::Unsupported { detail, .. })
                             if detail.contains("ray tracing pipeline") => {}
+                        // naga's image atomics return no old value: a program that reads it is refused by name
+                        Err(primase_shader::ProgramError::Unsupported { detail, .. })
+                            if detail.contains("reads the old value of an image atomic operation") => {}
                         Err(e) => failures.push(format!("{name}: wgsl: {e}")),
                     }
                 }
