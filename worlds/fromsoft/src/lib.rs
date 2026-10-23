@@ -8,6 +8,7 @@ pub mod emevd;
 pub mod flver;
 mod keys;
 pub mod materials;
+pub mod metaparam;
 pub mod msb;
 pub mod mtd;
 mod passes;
