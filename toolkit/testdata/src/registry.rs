@@ -412,6 +412,10 @@ pub const DEBUG: &[(&str, &str)] = &[
         "the digest the Voronoi bake test's maps must have",
     ),
     (
+        "fromsoft.bake_digest",
+        "the digest the baked layer textures of Sekiro's m11_01 must have (printed by an earlier run)",
+    ),
+    (
         "anvil.bake_digest",
         "the digest the baked Riders Republic Materials must have",
     ),

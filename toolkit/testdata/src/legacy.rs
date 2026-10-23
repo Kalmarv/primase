@@ -170,6 +170,7 @@ pub fn translate(name: &str) -> Option<Query> {
         "SKATEBIRD_VORONOI_LEVEL" => Debug("skatebird.voronoi_level"),
         "SKATEBIRD_VORONOI_DIGEST" => Debug("skatebird.voronoi_digest"),
         "ANVIL_BAKE_DIGEST" => Debug("anvil.bake_digest"),
+        "FROMSOFT_BAKE_DIGEST" => Debug("fromsoft.bake_digest"),
         "DXIL_FUZZ_RUNS" => Debug("dxil.fuzz_runs"),
         "DXC" => Tool(self::Tool::Dxc),
         "FXC" => Tool(self::Tool::Fxc),

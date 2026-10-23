@@ -212,6 +212,16 @@ pub fn expect_items(name: &str, what: &str, n: usize) {
     }
 }
 
+/// A configured input that yields nothing is a failure, not a pass: call it after enumerating what `query` gave
+/// (`what`: "scene folders", "drawables"), with how many were found.
+#[track_caller]
+pub fn expect_found(query: Query, what: &str, n: usize) {
+    if n == 0 {
+        let about = entry_of(query).map_or("", |e| e.about);
+        panic!("{} is set but yielded 0 {what} (expected: {about})", query.key());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,6 +382,10 @@ mod tests {
         let empty = std::panic::catch_unwind(|| expect_items("PRIMASE_GTA_DIR", "archives", 0));
         assert!(empty.is_err());
         expect_items("PRIMASE_GTA_DIR", "archives", 1);
+        let gta = Query::Install(Game::Gta, None);
+        let empty = std::panic::catch_unwind(|| expect_found(gta, "archives", 0));
+        assert!(empty.is_err());
+        expect_found(gta, "archives", 1);
         let mut names: Vec<&str> = VARIABLES.iter().map(|v| v.name).collect();
         names.sort_unstable();
         names.dedup();
