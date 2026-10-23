@@ -13,5 +13,8 @@ thiserror.workspace = true
 primase-shader.workspace = true
 naga.workspace = true
 
+[dev-dependencies]
+primase-testdata.workspace = true
+
 [lints]
 workspace = true

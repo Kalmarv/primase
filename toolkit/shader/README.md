@@ -114,8 +114,8 @@ program it holds is stale. They are gated: a lifter's tests (`toolkit/dxbc/tests
 `toolkit/dxil/tests/versions.rs`, the last test of `toolkit/mojoshader/tests/lift.rs`) lift its committed fixtures and
 compare a table of their outcomes (the program's text form hashed, or the refusal) under both versions with the
 committed `tests/lifted.hashes`. Output that changed under unchanged versions fails and says which to bump; a bump
-fails until the table is replaced by the current one, which the failing test writes beside it
-(`tests/lifted.hashes.new`). The text form includes naga's WGSL, so a naga upgrade that changes it is a bump too. A
+fails until the table is replaced by the current one, which the failing test writes to the scratch root
+(`<crate>-lifted.hashes`; the failure names the path). The text form includes naga's WGSL, so a naga upgrade that changes it is a bump too. A
 program a lifter makes carries `source_hash`, the SHA-256 of the bytes it was given, which the lifter computes.
 
 ## Support ledger

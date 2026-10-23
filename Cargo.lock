@@ -1143,6 +1143,7 @@ version = "0.1.0"
 dependencies = [
  "naga",
  "primase-shader",
+ "primase-testdata",
  "thiserror",
 ]
 

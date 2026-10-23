@@ -1,7 +1,8 @@
 //! The version gate (`primase_shader::gate`): what the lifter makes of its committed fixtures is hashed under
 //! `LIFTER_VERSION` and `PROGRAM_VERSION` in `tests/lifted.hashes`. A change to the output without a bump of the version that
-//! names it fails here, and so does a bump without the table of that version. The new table is written beside the committed
-//! one (`tests/lifted.hashes.new`) when they differ; it replaces the committed one in the commit that bumps the version.
+//! names it fails here, and so does a bump without the table of that version. The current table is written to the scratch root
+//! (`dxil-lifted.hashes`, the path is in the failure) when they differ; it replaces the committed one in the commit that bumps the
+//! version.
 use std::path::Path;
 
 use primase_dxil::{LIFTER_VERSION, lift};
@@ -29,7 +30,8 @@ fn what_the_lifter_makes_of_its_fixtures_is_the_versions() {
     let current = gate::table("primase-dxil", LIFTER_VERSION, &outcomes);
     let committed = std::fs::read_to_string(dir.join("lifted.hashes")).unwrap_or_default();
     if let Err(what) = gate::check(&committed, &current) {
-        std::fs::write(dir.join("lifted.hashes.new"), &current).unwrap();
-        panic!("{what}; the current table is tests/lifted.hashes.new");
+        let new = primase_testdata::scratch().join("dxil-lifted.hashes");
+        std::fs::write(&new, &current).unwrap();
+        panic!("{what}; the current table is {}", new.display());
     }
 }
