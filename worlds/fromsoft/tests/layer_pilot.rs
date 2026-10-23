@@ -11,19 +11,25 @@
 //! registers at the four corners, as the state's `outputs`; null for a register stream output cannot carry, which
 //! `warp.json` lists under `vertex.not_streamed`: the clip distances).
 //!
-//! Our executor's and WARP's outputs each go through the bake's own rules ([`PipelineState::bake`]): the albedo and
+//! Our executor runs the state with Direct3D 11's filtering precision, as WARP and the GPU filter (the texel coordinate
+//! truncated to 8 sub-texel bits: [`primase_image::sampling::Subtexel::D3d11`]); what the bake's own sampler makes of the
+//! same state is reported beside it. Our executor's and WARP's outputs each go through the bake's own rules
+//! ([`PipelineState::bake`]): the albedo and
 //! normal bytes must agree within one level, the second output's x and the emission within one level of 1/255 or a
 //! thousandth of the value, the albedo alpha within one level, and the vertex outputs within four units in the last
 //! place. Float differences are reported per target. A vertex program's system-value outputs (the position, the clip
 //! distances) are not in our executor's register view of a vertex run, and no pixel input reads them: they are counted,
 //! not compared.
 use primase_core::parallel::Threads;
-use primase_fromsoft::layer_bake::{Encoded, PipelineState, TARGETS};
-use primase_shader::Raw;
+use primase_fromsoft::layer_bake::{BaseMipBilinearWrap, Encoded, PipelineState, SlotTexture, TARGETS};
+use primase_image::sampling::{Address, Decoded, Levels, Subtexel, Transfer};
+use primase_shader::exec::ProgramShader;
+use primase_shader::{Grid, Input, Invocation, Raw, Texture, evaluate_raw_with};
 use primase_testdata::{Game, OracleSet, oracle};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -41,6 +47,70 @@ fn encoded(folder: &Path) -> Result<Encoded> {
         description: serde_json::from_slice(&std::fs::read(folder.join("state.json"))?)?,
         files,
     })
+}
+
+/// A state's texture sampled as Direct3D 11 filters: its stored texels, transfer and addressing, base mip, bilinear
+/// with the coordinate at 8 sub-texel bits.
+#[derive(Debug)]
+struct D3dFiltered(Decoded, [Address; 2]);
+
+impl D3dFiltered {
+    fn of(image: &BaseMipBilinearWrap) -> Result<Self> {
+        let [w, h] = image.dimensions();
+        let transfer = if image.srgb() {
+            Transfer::SrgbColour
+        } else {
+            Transfer::Stored
+        };
+        Ok(Self(
+            Levels::one(w as u32, h as u32, image.rgba().to_vec())?.decoded(0, transfer),
+            image.address(),
+        ))
+    }
+}
+
+impl primase_shader::Image for D3dFiltered {
+    fn sample(&self, uv: [f32; 2], _lod: primase_shader::Lod) -> std::result::Result<[f32; 4], String> {
+        self.0
+            .bilinear_at(uv, self.1, Subtexel::D3d11)
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// The state's pixel program run by our executor with its textures filtered as Direct3D 11 filters.
+fn evaluate_d3d(state: &PipelineState) -> Result<Raw> {
+    let shader = ProgramShader::new(primase_dxbc::lift(&state.pixel.bytecode)?)?;
+    let mut textures = BTreeMap::new();
+    for (&slot, t) in &state.pixel.textures {
+        textures.insert(
+            slot,
+            match t {
+                SlotTexture::Image(image) => {
+                    Texture::Image(Arc::new(D3dFiltered::of(image)?) as Arc<dyn primase_shader::Image>)
+                }
+                SlotTexture::Constant(value) => Texture::Constant(*value),
+            },
+        );
+    }
+    let inputs = state
+        .pixel
+        .inputs
+        .iter()
+        .map(|(key, lanes)| (key.clone(), Input::Lanes(*lanes)))
+        .collect();
+    Ok(evaluate_raw_with(
+        Threads::ONE,
+        &shader,
+        &state.pixel.constants,
+        &textures,
+        &inputs,
+        Grid {
+            size: state.size,
+            period: state.period,
+        },
+        &TARGETS,
+        Invocation::Scalar,
+    )?)
 }
 
 /// Little-endian f32 words.
@@ -91,6 +161,8 @@ struct Census {
     not_streamed: usize,
     system_registers: usize,
     worst_float: [f64; 5],
+    /// The same with the bake's own sampler (f32 sub-texel positions), reported.
+    worst_float_bake_sampler: [f64; 5],
 }
 
 #[test]
@@ -126,7 +198,8 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
             let n = state.size as usize * state.size as usize;
             c.pixels += n;
             // the pixel program: ours and WARP's targets through the bake's rules
-            let ours = state.evaluate(Threads::ONE)?;
+            let ours = evaluate_d3d(&state)?;
+            let bake_sampler = state.evaluate(Threads::ONE)?;
             let mut targets = Vec::with_capacity(TARGETS.len());
             for (t, &(register, _)) in TARGETS.iter().enumerate() {
                 let theirs = words(&std::fs::read(warp.join(format!("target{register}.f32")))?)?;
@@ -149,8 +222,14 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
                         )
                     })
                     .collect();
-                for (i, (bits, mask)) in ours.pixels[t].iter().enumerate() {
+                for (i, ((bits, mask), (exact, _))) in
+                    ours.pixels[t].iter().zip(&bake_sampler.pixels[t]).enumerate()
+                {
                     for lane in (0..4).filter(|l| mask >> l & 1 != 0) {
+                        let e = (f64::from(f32::from_bits(exact[lane]))
+                            - f64::from(f32::from_bits(pixels[i].0[lane])))
+                        .abs();
+                        c.worst_float_bake_sampler[t] = c.worst_float_bake_sampler[t].max(e);
                         let d = (f64::from(f32::from_bits(bits[lane]))
                             - f64::from(f32::from_bits(pixels[i].0[lane])))
                         .abs();
@@ -196,17 +275,19 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
                 if theirs.len() != n {
                     return Err(format!("{at}: alpha.f32 is not the grid").into());
                 }
-                let worst = a
-                    .albedo
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .zip(&theirs)
-                    .map(|(ours, &w)| {
-                        ours[3].abs_diff((f32::from_bits(w).clamp(0., 1.) * 255.).round_ties_even() as u8)
-                    })
-                    .max()
-                    .unwrap_or(0);
+                let alpha = state.alpha.as_ref().ok_or("alpha")?;
+                let image = D3dFiltered::of(&alpha.image)?;
+                let size = state.size as usize;
+                let byte = |v: f32| (v.clamp(0., 1.) * 255.).round_ties_even() as u8;
+                let mut worst = 0;
+                for (i, &w) in theirs.iter().enumerate() {
+                    let uv = [
+                        ((i % size) as f32 + 0.5) / state.size as f32 * state.period[0] * alpha.scale[0],
+                        ((i / size) as f32 + 0.5) / state.size as f32 * state.period[1] * alpha.scale[1],
+                    ];
+                    let ours = image.0.bilinear_at(uv, image.1, Subtexel::D3d11)?[3];
+                    worst = worst.max(byte(ours).abs_diff(byte(f32::from_bits(w))));
+                }
                 if worst > 1 {
                     failures.push(format!("{at}: albedo alpha {worst} levels apart"));
                 }
@@ -255,7 +336,7 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
     println!(
         "layer pilot against WARP: {} states, {} pixels; vertex runs {}, alpha images {}; worst albedo levels {:?}, \
          normal levels {:?}, vertex ulps {} (system-value registers not compared {}, of them not streamed {}), float \
-         difference by target {:?}",
+         difference by target {:?} (the bake's own sampler: {:?})",
         c.states,
         c.pixels,
         c.vertex_runs,
@@ -265,7 +346,8 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
         c.worst_vertex_ulps,
         c.system_registers,
         c.not_streamed,
-        c.worst_float
+        c.worst_float,
+        c.worst_float_bake_sampler
     );
     for f in &failures {
         println!("FAIL {f}");

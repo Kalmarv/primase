@@ -202,6 +202,30 @@ impl Levels {
     }
 }
 
+/// How finely a bilinear filter resolves where a sample falls between texels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Subtexel {
+    /// The position in f32, as computed.
+    Exact,
+    /// Direct3D 11's filtering: the texel coordinate (after scaling by the texture's size) truncated to 8 fractional
+    /// bits, 256 subdivisions of a texel, before the weights are taken. The D3D11.3 functional specification requires
+    /// at least 8 bits of sub-texel precision (7.18.16.1, Texture Addressing and LOD Precision;
+    /// `D3D11_SUBTEXEL_FRACTIONAL_BIT_COUNT` = 8). Microsoft's WARP rasterizer truncates at 8, as measured against
+    /// it on the layer bake's states (`worlds/fromsoft/tests/layer_pilot.rs`), and the game's GPU pixels come from
+    /// such a filter.
+    D3d11,
+}
+
+impl Subtexel {
+    /// `x` resolved to this precision: unchanged, or truncated to 1/256.
+    fn resolve(self, x: f32) -> f32 {
+        match self {
+            Subtexel::Exact => x,
+            Subtexel::D3d11 => (x * 256.).floor() / 256.,
+        }
+    }
+}
+
 /// One level's texels in f32, their transfer applied.
 #[derive(Clone, Debug)]
 pub struct Decoded {
@@ -220,8 +244,12 @@ impl Decoded {
     /// Bilinear at `uv`, in f32 (the coordinate, the weights `(1 - t)` and `t` per axis, and the sum over the four
     /// texels row by row); a coordinate that isn't finite or past an i32's range is refused.
     pub fn bilinear(&self, uv: [f32; 2], address: [Address; 2]) -> Result<[f32; 4]> {
-        let x = uv[0] * self.width as f32 - 0.5;
-        let y = uv[1] * self.height as f32 - 0.5;
+        self.bilinear_at(uv, address, Subtexel::Exact)
+    }
+    /// [`Decoded::bilinear`] with the texel coordinate resolved to `subtexel` precision before the weights are taken.
+    pub fn bilinear_at(&self, uv: [f32; 2], address: [Address; 2], subtexel: Subtexel) -> Result<[f32; 4]> {
+        let x = subtexel.resolve(uv[0] * self.width as f32 - 0.5);
+        let y = subtexel.resolve(uv[1] * self.height as f32 - 0.5);
         if !x.is_finite() || !y.is_finite() || x.abs() >= 2147483520.0 || y.abs() >= 2147483520.0 {
             return Err(Error::Invalid(
                 "sampled texture: nonfinite or excessive texel coordinate".into(),
@@ -264,6 +292,28 @@ mod tests {
         assert_eq!(
             read(Address::MirrorOnce, -5, 5),
             [3, 3, 2, 1, 0, 0, 1, 2, 3, 3, 3]
+        );
+    }
+
+    /// Direct3D 11's sub-texel precision truncates the texel coordinate to 1/256: a sample 0.3 of the way from black to
+    /// white weighs white 76/256 (0.3 * 256 = 76.8, truncated), where the exact filter weighs it 0.3; on a 1/256 step
+    /// both agree.
+    #[test]
+    fn d3d11_subtexel_precision_truncates_to_eight_bits() {
+        let d = Levels::one(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255])
+            .unwrap()
+            .decoded(0, Transfer::Stored);
+        let clamp = [Address::Clamp; 2];
+        // texel coordinate 0.3: u = (0.3 + 0.5) / 2
+        let u = 0.4f32;
+        let exact = d.bilinear_at([u, 0.5], clamp, Subtexel::Exact).unwrap()[0];
+        let d3d = d.bilinear_at([u, 0.5], clamp, Subtexel::D3d11).unwrap()[0];
+        assert!((exact - 0.3).abs() < 1e-6, "{exact}");
+        assert_eq!(d3d, 76. / 256.);
+        let on_step = (64. / 256. + 0.5) / 2.;
+        assert_eq!(
+            d.bilinear_at([on_step, 0.5], clamp, Subtexel::D3d11).unwrap(),
+            d.bilinear_at([on_step, 0.5], clamp, Subtexel::Exact).unwrap()
         );
     }
 

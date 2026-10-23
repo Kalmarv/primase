@@ -486,10 +486,10 @@ pub const DECLARED: &[Declared] = &[
     },
     Declared {
         query: Query::Oracle(OracleSet::Baseline, Game::Sekiro, "layer-pilot"),
-        status: Status::Blocked,
+        status: Status::Live,
         gate: true,
-        about: r#"bounded layered-shader pilot inputs and reference pixels; schema in worlds/fromsoft/README.md"#,
-        source: r#"the existing pilot came from our earlier C# exporter's layer bake; replacement: the game's shaders on WARP"#,
+        about: r#"layer-bake pipeline states of an area's layered materials (cases.json; per case, size cap and weight variant a state folder) with WARP's outputs for each (warp/); schema in worlds/fromsoft/README.md; worlds/fromsoft/tests/layer_pilot.rs"#,
+        source: r#"the states: our own bake's (its stated policy), written by worlds/fromsoft/examples/layer_pilot_states.rs over the user's install (m11_01, region -170,180,-50,300); independent: Microsoft's WARP (d3d10warp 6.2.26100.9711) running the game's programs on them, through a thin quad host kept with the private oracle tools"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Baseline, Game::Sekiro, "scene"),
