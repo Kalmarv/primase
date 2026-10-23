@@ -904,9 +904,9 @@ mod tests {
         pad(&mut d, 16);
         let second = d.len() as u32;
         d.extend(static_block(2.0, 0.0));
-        let second_end = second + first_end;
         pad(&mut d, 16);
-        let a = animation(d, 1, &[(0, first_end), (second, second_end)], 3, 5);
+        // each block's float offset counts from the block's own start
+        let a = animation(d, 1, &[(0, first_end), (second, first_end)], 3, 5);
         let s = SplineAnimation::parse(&a).unwrap();
         assert_eq!(s.locate(0.5), (0, 0.5));
         assert_eq!(s.locate(1.9), (0, 1.9));
