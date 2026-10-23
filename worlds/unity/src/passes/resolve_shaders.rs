@@ -25,8 +25,9 @@
 //!   `LightShadows`) is not placed: the DXBC names no buffer and its sizes are not Unity's (a buffer's size there is
 //!   not its declared size), so the register is not told, and its read bytes are such gaps.
 //! - **Textures.** A texture parameter binds the texture the material's property of that name holds; a property the
-//!   material leaves unset takes the shader's declared default: `white` is white, any other (`bump`, `black`...)
-//!   `Missing`, counted by name (Unity's built-in textures' values are not read). A texture of Unity's own that the
+//!   material leaves unset takes the shader's declared default, valued from the editor oracle
+//!   (`primase-oracles/unity/default-textures`: [`default_colour`], whose doc states the version and colour-space gap;
+//!   a player holds no default texture of the engine), counted by name; a default it does not value is `Missing`. A texture of Unity's own that the
 //!   material has no property of is the frame's ([`frame_texture`]: the camera's depth and colour, the main light's
 //!   shadow map or screen-space shadows, the occlusion, the nearest reflection probe, the light-probe volume), counted
 //!   by name; the other engine textures the parameters name are `Missing` with the reason, and a slot the parameters do
@@ -439,9 +440,25 @@ pub fn buffer_constants(
     out
 }
 
-/// A shader's declared default texture (`white`...) as a colour, where Unity's name is one this pass values.
-fn default_colour(name: &str) -> Option<[f32; 4]> {
-    (name == "white").then_some([1.0; 4])
+/// A shader's declared default texture (`white`...) as the colour a fragment samples from it, where Unity's name is
+/// one this pass values: the editor oracle's (`primase-oracles/unity/default-textures`, Unity 6000.6.4f1 in a Gamma
+/// colour space project; a player does not hold the engine's default textures). `white` is 1 in every channel, `black`
+/// and `red` have alpha 0, `gray`, `grey`, `linearGray` and `linearGrey` are 127/255 in every channel (alpha too) and
+/// `bump` is (127/255, 127/255, 1, 1). Those are the editor's, not verified for the players' versions
+/// (SkateBIRD 2019.4, Sledding Game 6000.3), and for a Linear colour space (`linear`) only the colours whose channels
+/// are all 0 or 1 (`white`, `black`, `red`) are valued: a grey sampled through an sRGB decode is another number, which
+/// the oracle did not observe.
+fn default_colour(name: &str, linear: bool) -> Option<[f32; 4]> {
+    const GREY: f32 = 127.0 / 255.0;
+    Some(match name {
+        "white" => [1.0; 4],
+        "black" => [0.0; 4],
+        "red" => [1.0, 0.0, 0.0, 0.0],
+        _ if linear => return None,
+        "gray" | "grey" | "linearGray" | "linearGrey" => [GREY; 4],
+        "bump" => [GREY, GREY, 1.0, 1.0],
+        _ => return None,
+    })
 }
 
 /// Unity's `BlendMode` as the vocabulary's factor; `None` for `SrcAlphaSaturate`.
@@ -967,7 +984,9 @@ impl ResolveUnityShaders {
                                 .or_default() += 1;
                             TextureSource::Missing
                         }
-                        Some(t) => resolve_texture(m, defaults, &variant.keywords, &t.name, counts),
+                        Some(t) => {
+                            resolve_texture(m, defaults, &variant.keywords, self.linear, &t.name, counts)
+                        }
                     };
                     textures.push(TextureBinding {
                         resource: r.id,
@@ -1062,6 +1081,7 @@ fn resolve_texture(
     m: &UnityMaterial,
     defaults: &[(String, String)],
     keywords: &[String],
+    linear: bool,
     name: &str,
     counts: &mut BTreeMap<String, u64>,
 ) -> TextureSource {
@@ -1097,9 +1117,11 @@ fn resolve_texture(
             TextureSource::Missing
         }
         (false, _) => match defaults.iter().find(|(p, _)| p == name) {
-            Some((_, d)) => match default_colour(d) {
+            Some((_, d)) => match default_colour(d, linear) {
                 Some(value) => {
-                    bump("unset texture properties, bound the shader's default (white)".into());
+                    bump(format!(
+                        "unset texture properties, bound the shader's default ({d})"
+                    ));
                     TextureSource::Default {
                         value,
                         why: format!("unset; the shader's declared default is \"{d}\""),
@@ -1432,18 +1454,18 @@ mod tests {
         let mut counts = BTreeMap::new();
         // referenced, but the world holds no texture for it
         assert_eq!(
-            resolve_texture(&m, &defaults, &[], "_MainTex", &mut counts),
+            resolve_texture(&m, &defaults, &[], true, "_MainTex", &mut counts),
             TextureSource::Missing
         );
         // unset, with a default this pass does not value
         assert_eq!(
-            resolve_texture(&m, &defaults, &[], "_BumpMap", &mut counts),
+            resolve_texture(&m, &defaults, &[], true, "_BumpMap", &mut counts),
             TextureSource::Missing
         );
         assert!(counts.keys().any(|k| k.contains("\"bump\" is not valued")));
         // a property the material does not have
         assert_eq!(
-            resolve_texture(&m, &defaults, &[], "_Other", &mut counts),
+            resolve_texture(&m, &defaults, &[], true, "_Other", &mut counts),
             TextureSource::Missing
         );
         let mut unset = material();
@@ -1455,9 +1477,49 @@ mod tests {
             offset: [0.0; 2],
         });
         assert!(matches!(
-            resolve_texture(&unset, &defaults, &[], "_Other", &mut counts),
+            resolve_texture(&unset, &defaults, &[], true, "_Other", &mut counts),
             TextureSource::Default { value, .. } if value == [1.0; 4]
         ));
+    }
+
+    #[test]
+    fn a_shaders_default_texture_is_the_oracles_colour_and_only_the_certain_ones_in_a_linear_project() {
+        let grey = 127.0 / 255.0;
+        // gamma: every default the oracle observed
+        assert_eq!(default_colour("white", false), Some([1.0; 4]));
+        assert_eq!(default_colour("black", false), Some([0.0; 4]));
+        assert_eq!(default_colour("red", false), Some([1.0, 0.0, 0.0, 0.0]));
+        for name in ["gray", "grey", "linearGray", "linearGrey"] {
+            assert_eq!(default_colour(name, false), Some([grey; 4]), "{name}");
+        }
+        assert_eq!(default_colour("bump", false), Some([grey, grey, 1.0, 1.0]));
+        // linear: only the colours of 0 and 1 channels
+        assert_eq!(default_colour("white", true), Some([1.0; 4]));
+        assert_eq!(default_colour("black", true), Some([0.0; 4]));
+        assert_eq!(default_colour("gray", true), None);
+        assert_eq!(default_colour("bump", true), None);
+        // a name that is no default, or none
+        assert_eq!(default_colour("", false), None);
+        assert_eq!(default_colour("notadefault", false), None);
+        // an unset property takes the default, counted by its name
+        let mut counts = BTreeMap::new();
+        let defaults = vec![("_Other".to_owned(), "black".to_owned())];
+        let mut unset = material();
+        unset.textures.push(UnityTexEnv {
+            name: "_Other".into(),
+            referenced: false,
+            texture: None,
+            scale: [1.0; 2],
+            offset: [0.0; 2],
+        });
+        assert!(matches!(
+            resolve_texture(&unset, &defaults, &[], false, "_Other", &mut counts),
+            TextureSource::Default { value, .. } if value == [0.0; 4]
+        ));
+        assert_eq!(
+            counts["unset texture properties, bound the shader's default (black)"],
+            1
+        );
     }
 
     #[test]
@@ -1486,7 +1548,7 @@ mod tests {
         // a property the material has wins over the engine's name; one it has not is the frame's, counted
         let mut counts = BTreeMap::new();
         assert_eq!(
-            resolve_texture(&material(), &[], &none, "_CameraDepthTexture", &mut counts),
+            resolve_texture(&material(), &[], &none, true, "_CameraDepthTexture", &mut counts),
             TextureSource::Frame(FrameTexture::SceneDepth)
         );
         assert_eq!(
