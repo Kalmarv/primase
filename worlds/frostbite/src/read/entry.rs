@@ -11,9 +11,11 @@ use primase_core::{ColorSpace, Entity, Name, TexFormat, TexRole, Texture, World}
 use super::folder::Source;
 use super::listing::{Bundle, Listed};
 use crate::bundle::Kind;
-use crate::components::{FrostbiteBytecode, FrostbiteDepot, FrostbiteEbx, FrostbiteEntry, FrostbiteTexture};
+use crate::components::{
+    FrostbiteBytecode, FrostbiteDepot, FrostbiteEbx, FrostbiteEntry, FrostbitePrograms, FrostbiteTexture,
+};
 use crate::texture::{self, Storage};
-use crate::{Error, Result, bytecode, depot};
+use crate::{Error, Result, bytecode, depot, lookup, permutation};
 
 /// The core layout of a Frostbite texture format ordinal (the colour formats the texture reader decodes: 18 and 20
 /// RGBA8, 23 and 24 BGRA8, 54-57 BC1, 58 and 59 BC2, 60 and 61 BC3, 66 and 67 BC7); `None` for any other.
@@ -29,13 +31,33 @@ pub fn tex_format(format: u32) -> Option<TexFormat> {
     })
 }
 
+/// A new entity named `name` that records it was read from `entry`.
+pub(super) fn spawn_entity(w: &mut World, entry: &Listed, name: String) -> Entity {
+    let e = w.spawn();
+    w.insert(e, Name(name));
+    w.insert(
+        e,
+        FrostbiteEntry {
+            toc: entry.toc.clone(),
+            bundle: entry.bundle.clone(),
+            kind: entry.kind,
+            name: entry.name.clone(),
+            resource_type: entry.resource_type,
+            size: entry.size,
+            file: entry.file,
+        },
+    );
+    e
+}
+
 fn unsupported(entry: &Listed, what: impl std::fmt::Display) -> Error {
     Error::Unsupported(format!("{} ({}): {what}", entry.name, entry.bundle))
 }
 
 impl Source<'_> {
     /// `entry` of `bundle` as new entities of `w`: one, except a CompiledBytecode resource holding several containers
-    /// (a shader each, named `<name>#<n>`). An EBX document, a texture resource, a ShaderBlockDepot and a
+    /// (a shader each, named `<name>#<n>`) and a shader permutation (its own entity, then those of the programs it
+    /// names). An EBX document, a texture resource, a ShaderBlockDepot and a
     /// CompiledBytecode resource are read; a chunk, another resource type, a texture that is not a 2D map of a colour
     /// format the texture reader decodes, or a container whose interface cannot be read is an [`Error::Unsupported`]
     /// naming it.
@@ -53,6 +75,7 @@ impl Source<'_> {
             Texture(FrostbiteTexture, Texture),
             Depot(FrostbiteDepot),
             Bytecode(Vec<(Shader, FrostbiteBytecode)>),
+            Programs(Box<FrostbitePrograms>),
         }
         let read = match (entry.kind, entry.resource_type) {
             (Kind::Ebx, _) => Read::Ebx(Box::new(FrostbiteEbx {
@@ -74,6 +97,12 @@ impl Source<'_> {
             (Kind::Res, Some(bytecode::RTYPE)) => {
                 Read::Bytecode(bytecode::read(&bytes()?).map_err(|e| unsupported(entry, e))?)
             }
+            (Kind::Res, Some(permutation::RASTER | permutation::COMPUTE)) => {
+                return self.spawn_permutation(bundle, entry, w);
+            }
+            (Kind::Res, Some(lookup::PROGRAM_LOOKUP)) => {
+                Read::Programs(Box::new(self.read_database(bundle, entry)?))
+            }
             (Kind::Res, Some(t)) => {
                 return Err(unsupported(
                     entry,
@@ -88,23 +117,7 @@ impl Source<'_> {
                 ));
             }
         };
-        let spawn = |w: &mut World, name: String| {
-            let e = w.spawn();
-            w.insert(e, Name(name));
-            w.insert(
-                e,
-                FrostbiteEntry {
-                    toc: entry.toc.clone(),
-                    bundle: entry.bundle.clone(),
-                    kind: entry.kind,
-                    name: entry.name.clone(),
-                    resource_type: entry.resource_type,
-                    size: entry.size,
-                    file: entry.file,
-                },
-            );
-            e
-        };
+        let spawn = |w: &mut World, name: String| spawn_entity(w, entry, name);
         let entities = match read {
             Read::Ebx(c) => {
                 let e = spawn(w, entry.name.clone());
@@ -120,6 +133,11 @@ impl Source<'_> {
             Read::Depot(c) => {
                 let e = spawn(w, entry.name.clone());
                 w.insert(e, c);
+                vec![e]
+            }
+            Read::Programs(c) => {
+                let e = spawn(w, entry.name.clone());
+                w.insert(e, *c);
                 vec![e]
             }
             Read::Bytecode(programs) => {

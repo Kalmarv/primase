@@ -89,6 +89,12 @@ impl Bundle {
         ebx.chain(res).chain(chunks)
     }
 
+    /// Resource `i` of the manifest, as an entry.
+    pub fn resource(&self, i: usize) -> Listed {
+        let m = &self.manifest;
+        self.listed(Kind::Res, i, &m.res[i], self.first + m.ebx.len() + i)
+    }
+
     /// The chunk with GUID `guid` (as stored): its bytes' place and decoded size, from this bundle or else from the
     /// TOC's chunk table (content copied from the base game lies there).
     pub fn chunk(&self, src: &Source<'_>, guid: &[u8; 16]) -> Result<(FileRef, usize)> {

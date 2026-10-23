@@ -17,11 +17,12 @@ pub mod depot;
 pub mod ebx;
 pub mod fbmod;
 pub mod lookup;
+pub mod permutation;
 mod read;
 pub mod texture;
 pub mod toc;
 
-pub use read::{entry, folder, listing};
+pub use read::{entry, folder, listing, program};
 
 /// Resource type of a MeshSet.
 pub const MESHSET: u32 = 0x49B1_56D4;

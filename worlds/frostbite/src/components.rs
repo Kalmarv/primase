@@ -243,3 +243,108 @@ impl Component for FrostbiteBytecode {
         (self.before.len() + self.after.len()) as u64
     }
 }
+
+/// A shader permutation read ([`crate::permutation`]): its kind, its own id, the ids it names (the shared data, the
+/// input layout), the names of the CompiledBytecode resources its programs are, and the `core.shader` entities read
+/// from them (in the same order).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrostbitePermutation {
+    pub permutation: crate::permutation::Permutation,
+    pub shaders: Vec<Entity>,
+}
+
+impl Component for FrostbitePermutation {
+    const NAME: &'static str = "frostbite.permutation";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
+        if self.shaders.len() != self.permutation.bytecode.len() {
+            return Err(format!(
+                "{} shaders for {} programs",
+                self.shaders.len(),
+                self.permutation.bytecode.len()
+            ));
+        }
+        Ok(())
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(&self.shaders);
+    }
+    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
+        let p = &self.permutation;
+        Ok(Some(json!({
+            "kind": match p.kind {
+                crate::permutation::Kind::Raster => "raster",
+                crate::permutation::Kind::Compute => "compute",
+            },
+            "id": p.id.to_string(),
+            "shared_data": p.shared_data.to_string(),
+            "input_layout": p.input_layout.map(|i| i.to_string()),
+            "unknown_18": p.unknown_18,
+            "bytecode": p.bytecode.iter().map(crate::permutation::bytecode_name).collect::<Vec<_>>(),
+        })))
+    }
+}
+
+/// A program of a program database as a material key reaches it: the key the lookup row is under, the program's
+/// index in the database's records, the record's own key, and its permutations (`frostbite.permutation` entities,
+/// in the record's order).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrostbiteProgram {
+    pub material: u64,
+    pub index: u32,
+    pub record_key: u64,
+    pub permutations: Vec<Entity>,
+}
+
+impl Component for FrostbiteProgram {
+    const NAME: &'static str = "frostbite.program";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(&self.permutations);
+    }
+    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
+        Ok(Some(json!({
+            "material": format!("{:#018x}", self.material),
+            "index": self.index,
+            "record_key": format!("{:#018x}", self.record_key),
+            "permutations": self.permutations.len(),
+        })))
+    }
+}
+
+/// A program database (ExpressionShaderDatabase) read: its program records and its lookup rows (material key to
+/// program indices).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrostbitePrograms {
+    pub records: Vec<crate::lookup::ProgramRecord>,
+    pub lookup: crate::lookup::ProgramLookup,
+}
+
+impl Component for FrostbitePrograms {
+    const NAME: &'static str = "frostbite.programs";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
+        let n = self.records.len();
+        match (self.lookup.rows.iter()).find(|(_, row)| row.iter().any(|&i| i as usize >= n)) {
+            Some((key, _)) => Err(format!("row {key:#x} names a program past the {n} records")),
+            None => Ok(()),
+        }
+    }
+    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
+        let records: Vec<Value> = (self.records.iter())
+            .map(|r| {
+                json!({
+                    "key": format!("{:#018x}", r.key),
+                    "permutations": r.permutations.iter().map(u64::to_string).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let rows: serde_json::Map<String, Value> = (self.lookup.rows.iter())
+            .map(|(k, row)| (format!("{k:#018x}"), json!(row)))
+            .collect();
+        Ok(Some(json!({ "records": records, "rows": rows })))
+    }
+    fn payload_bytes(&self) -> u64 {
+        (self.records.len() * crate::lookup::RECORD_LEN + self.lookup.head.len()) as u64
+    }
+}

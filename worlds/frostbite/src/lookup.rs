@@ -91,3 +91,58 @@ pub fn write_texture_sets(rows: &[(u64, u64)]) -> Vec<u8> {
         .flat_map(|(k, v)| k.to_le_bytes().into_iter().chain(v.to_le_bytes()))
         .collect()
 }
+
+/// The size of a program record.
+pub const RECORD_LEN: usize = 168;
+
+/// One program record of a program lookup's head, as stored (168 bytes), with the fields read from it: its key (the
+/// first eight bytes) and the ids of the permutations it runs, an array of `u64` (the count at 0x60, a pointer to the
+/// array at 0x64). The rest of the record (arrays of state the permutations are drawn with) is kept as stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProgramRecord {
+    pub key: u64,
+    pub permutations: Vec<u64>,
+    pub raw: [u8; RECORD_LEN],
+}
+
+/// The program records of a program lookup: the head's first word is their count, the eight bytes after it the
+/// offset of the first, and the records follow one another. Refused: records or a permutation array outside the
+/// program section the metadata states.
+pub fn read_records(d: &[u8], meta: &[u8; 16]) -> Result<Vec<ProgramRecord>> {
+    let m = Rd::new(meta, "program lookup meta");
+    let program = m.u32le(0)? as usize;
+    let r = Rd::new(
+        d.get(..program)
+            .ok_or_else(|| bad("program records", 0, "metadata does not match the payload"))?,
+        "program records",
+    );
+    let (count, first) = (r.u32le(0)? as usize, r.u64le(4)? as usize);
+    count
+        .checked_mul(RECORD_LEN)
+        .and_then(|n| n.checked_add(first))
+        .filter(|&end| end <= program)
+        .ok_or_else(|| {
+            bad(
+                "program records",
+                first,
+                format!("{count} records past the program section"),
+            )
+        })?;
+    (0..count)
+        .map(|i| {
+            let at = first + i * RECORD_LEN;
+            let (n, ptr) = (r.u32le(at + 0x60)? as usize, r.u64le(at + 0x64)? as usize);
+            // the whole array lies in the section before any id is read
+            r.bytes(
+                ptr,
+                n.checked_mul(8)
+                    .ok_or_else(|| bad("program records", at, "permutation count"))?,
+            )?;
+            Ok(ProgramRecord {
+                key: r.u64le(at)?,
+                permutations: (0..n).map(|j| r.u64le(ptr + 8 * j)).collect::<Result<_>>()?,
+                raw: r.arr::<RECORD_LEN>(at)?,
+            })
+        })
+        .collect()
+}
