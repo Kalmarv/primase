@@ -29,8 +29,8 @@ use primase_fromsoft::sekiro;
 use primase_fromsoft::sekiro::convert::AreaReader;
 use primase_fromsoft::sekiro::passes::layers::AreaBake;
 use primase_fromsoft::sekiro::passes::{
-    Cards, Degenerates, DropFromSoftFar, LowerFromSoftGeometry, Pose, ResolveFromSoftShaders, Tiling,
-    Unbound, Winding,
+    Cards, Degenerates, DropFromSoftFar, LowerFromSoftGeometry, Pose, ResolveFromSoftShaders, SpeedTreeFrame,
+    Tiling, Unbound, Winding,
 };
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -106,6 +106,7 @@ fn main() -> Result<(), BoxError> {
                 degenerates: Degenerates::Drop,
                 leave_out: skip,
                 blocker_cards: Cards::Record,
+                speedtree_frame: SpeedTreeFrame::Program,
             }),
             Box::new(SelectLod {
                 choice: LodChoice::Finest,
