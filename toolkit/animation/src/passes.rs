@@ -498,7 +498,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register_requiring(
         "correspond-skeletons",
         crate::correspond::correspond_skeletons,
-        &[("from", "a"), ("to", "b"), ("tolerance", "0.001")],
+        &[
+            ("from", "a"),
+            ("to", "b"),
+            ("tolerance", "0.001"),
+            ("parents", "same"),
+        ],
     );
     reg.register_requiring(
         "retarget-skin",
@@ -513,7 +518,11 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.register_requiring(
         "map-clip",
         crate::map::map_clip,
-        &[("unmapped", "refuse"), ("rests", "target")],
+        &[
+            ("unmapped", "refuse"),
+            ("rests", "target"),
+            ("reparented", "refuse"),
+        ],
     );
     reg.register("normalize-skin-weights", |o| match o.keys().next() {
         Some(k) => Err(format!("unknown option {k}")),

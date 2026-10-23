@@ -84,8 +84,8 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
     let manager = PassManager::new(registry).with_pass_checks(true);
     let pipeline = manager.registry.parse(&format!(
         "lower-havok-clips{{absent=neutral,rate=1,clips={},root-motion=full}}, \
-         correspond-skeletons{{from=c1010 havok skeleton,to=c1010 skeleton,tolerance=0.0001}}, \
-         map-clip{{unmapped=drop,rests=target}}",
+         correspond-skeletons{{from=c1010 havok skeleton,to=c1010 skeleton,tolerance=0.0001,parents=same}}, \
+         map-clip{{unmapped=drop,rests=target,reparented=refuse}}",
         CLIPS.join(";")
     ))?;
     let mut run = RunReport::default();

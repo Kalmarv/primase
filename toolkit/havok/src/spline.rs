@@ -31,7 +31,11 @@
 //! (x, y, z) against 93%, 36% and 44% of all, so an encoder that left them out was leaving out zero and the identity,
 //! not the reference. The game agrees: its live pose of the idle animation (read from the running game's memory) equals
 //! the neutral decoding on the bones where the two fallbacks differ (12 of 12 closer to neutral, 0 to the reference,
-//! 1e-6 to 1e-5 against 5e-5 to 3e-4; knowledge base note 447729a8). Float tracks are not read: an animation with some is refused. A track bound to a negative bone
+//! 1e-6 to 1e-5 against 5e-5 to 3e-4; knowledge base note 447729a8). Elden Ring's files (611,903 tracks of 5,843 animations) show
+//! the same direction, more weakly, and cannot be compared in the game (it is not launched here): of its absent components, the share
+//! on a bone whose reference is not neutral is 51.6% (rotation), 59.9%, 6.5% and 19.7% (position x, y, z) against 85.6%, 93.1%, 33.6% and
+//! 47.2% of all tracks, so the encoder drops what is neutral, not what equals the reference (which would leave the two shares alike).
+//! Float tracks are not read: an animation with some is refused. A track bound to a negative bone
 //! index drives no bone.
 
 use crate::animation::{Animation, Binding, QsTransform, Skeleton, SplineData, Tracks};
