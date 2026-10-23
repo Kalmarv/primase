@@ -81,6 +81,11 @@ impl Reader for SkatebirdReader<'_> {
             "grind rail nodes on a GameObject without a Transform, left out",
             scripted.rail_nodes_without_transform as u64,
         );
+        self.notice(
+            NoticeKind::Unsupported,
+            "grind rail chains that end at a node already in another chain (two nodes name the same next), cut there",
+            scripted.joined_chains as u64,
+        );
         report.extend([
             ("skatebird markers".into(), format!("{markers:?}")),
             ("skatebird Voronoi programs".into(), format!("{programs:?}")),

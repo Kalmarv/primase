@@ -49,7 +49,8 @@ pub fn reset_position(version: &str, data: &[u8]) -> Result<bool> {
 }
 
 /// `MissionGiver`'s title, from its script bytes: on Unity [`MEASURED`] its first field is a string (a 32-bit length,
-/// that many UTF-8 bytes, aligned to 4), the rest of the script's fields following; `None` for an empty one.
+/// that many UTF-8 bytes, then zero padding to a multiple of 4); the fields after it are not read. `None` for an empty
+/// title.
 pub fn mission_giver_title(version: &str, data: &[u8]) -> Result<Option<String>> {
     const WHAT: &str = "MissionGiver";
     if version != MEASURED {
@@ -74,6 +75,20 @@ pub fn mission_giver_title(version: &str, data: &[u8]) -> Result<Option<String>>
     };
     let title = std::str::from_utf8(bytes)
         .map_err(|e| refuse(WHAT, version, format!("a title that is not UTF-8 ({e})")))?;
+    let end = (4 + len).next_multiple_of(4);
+    match data.get(4 + len..end) {
+        Some(padding) if padding.iter().all(|&b| b == 0) => {}
+        _ => {
+            return Err(refuse(
+                WHAT,
+                version,
+                format!(
+                    "a title of {len} bytes not followed by zero padding to {end} of {} script bytes",
+                    data.len()
+                ),
+            ));
+        }
+    }
     Ok((!title.is_empty()).then(|| title.to_owned()))
 }
 
@@ -228,5 +243,21 @@ mod tests {
                 .contains("UTF-8")
         );
         assert!(mission_giver_title(MEASURED, &[1, 0]).is_err());
+        // padding to a multiple of 4 follows the title: present and zero
+        let mut short = 5u32.to_le_bytes().to_vec();
+        short.extend_from_slice(b"bowls");
+        assert!(
+            mission_giver_title(MEASURED, &short)
+                .unwrap_err()
+                .to_string()
+                .contains("zero padding to 12")
+        );
+        short.extend_from_slice(&[0, 7, 0]);
+        assert!(mission_giver_title(MEASURED, &short).is_err());
+        short[10] = 0;
+        assert_eq!(
+            mission_giver_title(MEASURED, &short).unwrap().as_deref(),
+            Some("bowls")
+        );
     }
 }

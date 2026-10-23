@@ -39,7 +39,7 @@ pub fn parse(raw: &str) -> StuntboostName {
     };
     // the type characters, backwards from the end of the node name (the name up to its first '.')
     let (mut invisible, mut bake, mut collision) = (false, StuntboostBake::Baked, StuntboostCollision::None);
-    let mut count = 0;
+    let mut count = 0usize;
     for ch in before(inner, '.').chars().rev() {
         match ch {
             '_' => invisible = true,
@@ -49,10 +49,13 @@ pub fn parse(raw: &str) -> StuntboostName {
             '#' => collision = StuntboostCollision::Trigger,
             _ => break,
         }
-        count += ch.len_utf8();
+        count += 1;
     }
-    if count > 0 {
-        inner = inner.get(..inner.len().saturating_sub(count)).unwrap_or("");
+    // as many characters come off the end of the name (not bytes: a cut inside a character would drop the name)
+    if let Some(last) = count.checked_sub(1)
+        && let Some((cut, _)) = inner.char_indices().rev().nth(last)
+    {
+        inner = &inner[..cut];
     }
     if invisible {
         bake = StuntboostBake::HiddenInBake;
@@ -167,6 +170,18 @@ mod tests {
             n.bake,
             StuntboostBake::HiddenInBake,
             "an invisible node takes no part in the bake"
+        );
+
+        // the type characters are counted in characters: a multi-byte character after the first '.' is not cut through
+        let n = parse("a<.é=X()");
+        assert_eq!(
+            (n.name.as_str(), n.collision),
+            ("a<.", StuntboostCollision::Solid)
+        );
+        let n = parse("ab_<é=X()");
+        assert_eq!(
+            (n.name.as_str(), n.collision),
+            ("ab_<é", StuntboostCollision::None)
         );
 
         // '=': the code keeps its suffix; the calls do not

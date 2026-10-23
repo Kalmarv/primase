@@ -29,7 +29,7 @@ use primase_glb::Gltf;
 use primase_image::{Image, Samples};
 use primase_monogame::xnb::Xnb;
 
-use super::level::{bytes_of, content, export_dir, format, image_levels, string_of};
+use super::level::{bytes_of, content, export_dir, export_path, format, image_levels, string_of};
 use crate::{Error, Result};
 
 /// The reader name of a glTF the game stores.
@@ -70,7 +70,11 @@ pub fn model_gltf(install: &Path, name: &str) -> Result<Gltf> {
     let export = export_dir(install);
     let text = string_of(&export.join(format!("{name}.xnb")), Some(GLTF_READER))?;
     Ok(Gltf::from_gltf(text.as_bytes(), |_, uri| {
-        bytes_of(&export.join(format!("{uri}.xnb")), None).map_err(|e| e.to_string())
+        bytes_of(
+            &export_path(&export, &format!("{uri}.xnb")).map_err(|e| e.to_string())?,
+            None,
+        )
+        .map_err(|e| e.to_string())
     })?)
 }
 
@@ -78,7 +82,7 @@ pub fn model_gltf(install: &Path, name: &str) -> Result<Gltf> {
 /// reader decodes: the install's `<uri with .xnb>` (QOI or `Texture2D`), its largest level, RGBA8. An image the install
 /// does not ship is an error naming the file.
 pub fn model_image(install: &Path, uri: &str) -> Result<Vec<u8>> {
-    let path = export_dir(install).join(uri).with_extension("xnb");
+    let path = export_path(&export_dir(install), uri)?.with_extension("xnb");
     if !path.is_file() {
         return Err(format(
             &path.display().to_string(),

@@ -32,6 +32,9 @@ pub struct ScriptedReport {
     pub lone_rail_nodes: usize,
     /// Links one way only (a node's `next` whose `prev` is another node): the chain follows `next`.
     pub one_way_links: usize,
+    /// Chains that end at a node already in another chain (two nodes naming the same `next`): the chain stops there, as
+    /// an open one.
+    pub joined_chains: usize,
     /// Rail nodes on a GameObject without a Transform: no position, left out.
     pub rail_nodes_without_transform: usize,
 }
@@ -39,6 +42,42 @@ pub struct ScriptedReport {
 /// The script's class: its name without the namespace.
 fn class(b: &UnityBehaviour) -> &str {
     b.script.rsplit('.').next().unwrap_or(&b.script)
+}
+
+/// The chains of rail nodes `ids`, `next` giving each node's successor: from each of `starts`, then the closed ones from
+/// their lowest id, each with whether it closed on its first node; and how many chains ended at a node already in
+/// another (two nodes naming the same successor), which the walk leaves to the chain that reached it first.
+fn rail_chains(
+    ids: impl Iterator<Item = i64>,
+    next: &BTreeMap<i64, i64>,
+    starts: &[i64],
+) -> (Vec<(Vec<i64>, bool)>, usize) {
+    let mut seen: BTreeSet<i64> = BTreeSet::new();
+    let mut chains: Vec<(Vec<i64>, bool)> = Vec::new();
+    let mut joined = 0;
+    let mut walk = |from: i64, seen: &mut BTreeSet<i64>| -> (Vec<i64>, bool) {
+        let mut chain = vec![from];
+        seen.insert(from);
+        let mut at = from;
+        while let Some(&n) = next.get(&at) {
+            if !seen.insert(n) {
+                joined += usize::from(n != from);
+                return (chain, n == from);
+            }
+            chain.push(n);
+            at = n;
+        }
+        (chain, false)
+    };
+    for &s in starts {
+        chains.push(walk(s, &mut seen));
+    }
+    for id in ids {
+        if !seen.contains(&id) {
+            chains.push(walk(id, &mut seen));
+        }
+    }
+    (chains, joined)
 }
 
 /// Every entity of `w` that the Unity level read made from a renderer, collider or light of scene `level`, given
@@ -158,30 +197,8 @@ pub fn read_scripted(player: &Player, level: &str, w: &mut World) -> Result<Scri
             starts.push(id);
         }
     }
-    // the chains from each start, then the closed ones from their lowest path id
-    let mut seen: BTreeSet<i64> = BTreeSet::new();
-    let mut chains: Vec<(Vec<i64>, bool)> = Vec::new();
-    let walk = |from: i64, seen: &mut BTreeSet<i64>| -> (Vec<i64>, bool) {
-        let mut chain = vec![from];
-        seen.insert(from);
-        let mut at = from;
-        while let Some(&n) = next.get(&at) {
-            if !seen.insert(n) {
-                return (chain, n == from);
-            }
-            chain.push(n);
-            at = n;
-        }
-        (chain, false)
-    };
-    for &s in &starts {
-        chains.push(walk(s, &mut seen));
-    }
-    for &id in nodes.keys() {
-        if !seen.contains(&id) {
-            chains.push(walk(id, &mut seen));
-        }
-    }
+    let (chains, joined) = rail_chains(nodes.keys().copied(), &next, &starts);
+    report.joined_chains = joined;
     let mut axes = OffAxes::of(w);
     for (chain, closed) in chains {
         let mut points = Vec::with_capacity(chain.len());
@@ -252,4 +269,25 @@ pub fn read_scripted(player: &Player, level: &str, w: &mut World) -> Result<Scri
         );
     }
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A chain that meets a node of another chain stops there and is counted; chains that do not meet, and a closed one,
+    /// are not.
+    #[test]
+    fn a_chain_joining_another_is_counted() {
+        // 1 -> 2 -> 3 and 4 -> 3: the second start meets 3; 7 -> 8 -> 7 is closed
+        let next = BTreeMap::from([(1, 2), (2, 3), (4, 3), (7, 8), (8, 7)]);
+        let (chains, joined) = rail_chains([1, 2, 3, 4, 7, 8].into_iter(), &next, &[1, 4]);
+        assert_eq!(
+            chains,
+            [(vec![1, 2, 3], false), (vec![4], false), (vec![7, 8], true)]
+        );
+        assert_eq!(joined, 1);
+        let (_, joined) = rail_chains([1, 2, 3].into_iter(), &BTreeMap::from([(1, 2), (2, 3)]), &[1]);
+        assert_eq!(joined, 0);
+    }
 }

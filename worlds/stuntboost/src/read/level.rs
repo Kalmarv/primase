@@ -15,7 +15,7 @@
 )]
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::pbr::{Filters, Wrap};
@@ -91,6 +91,44 @@ pub(super) fn content(path: &Path) -> Result<Vec<u8>> {
 /// The folder the levels' files are in.
 pub(super) fn export_dir(install: &Path) -> PathBuf {
     install.join("Content").join("Models").join("Export")
+}
+
+/// How many folders `Content` is above the export folder (`Content/Models/Export`).
+const EXPORT_BELOW_CONTENT: usize = 2;
+
+/// `relative` (a uri a document names) under `export`, kept inside the install's `Content` folder: an absolute path, a
+/// drive or a `..` that would leave `Content` is refused (`Path::join` would take an absolute path whole). The path is
+/// read as written, so a link inside `Content` is followed.
+pub(super) fn export_path(export: &Path, relative: &str) -> Result<PathBuf> {
+    // `up` folders above `export`, then the names `below` that
+    let mut up = 0usize;
+    let mut below = Vec::new();
+    for part in Path::new(relative).components() {
+        match part {
+            Component::Normal(name) => below.push(name),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if below.pop().is_none() {
+                    up += 1;
+                    if up > EXPORT_BELOW_CONTENT {
+                        return Err(format(relative, "leaves the install's Content folder"));
+                    }
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format(
+                    relative,
+                    "is an absolute path, not one under the install's Content folder",
+                ));
+            }
+        }
+    }
+    let mut path = export.to_path_buf();
+    for _ in 0..up {
+        path.pop();
+    }
+    path.extend(below);
+    Ok(path)
 }
 
 /// The number of parts the level's sidecar (`Level_<Name>_.xnb`, a JSON object) states.
@@ -310,7 +348,11 @@ pub fn read_level(install: &Path, level: &str, metres_per_unit: f64, w: &mut Wor
         let path = export.join(&file);
         let text = string_of(&path, Some("BytingPipeline.GLTFReader"))?;
         let gltf = Gltf::from_gltf(text.as_bytes(), |_, uri| {
-            bytes_of(&export.join(format!("{uri}.xnb")), None).map_err(|e| e.to_string())
+            bytes_of(
+                &export_path(&export, &format!("{uri}.xnb")).map_err(|e| e.to_string())?,
+                None,
+            )
+            .map_err(|e| e.to_string())
         })?;
         read_part(
             w,
@@ -377,7 +419,7 @@ fn read_part(
         let uri = image.and_then(|i| i.get("uri")).and_then(Value::as_str);
         let entity = match uri {
             Some(uri) => {
-                let path = export.join(uri).with_extension("xnb");
+                let path = export_path(export, uri)?.with_extension("xnb");
                 if let Some(e) = images.get(&path) {
                     *e
                 } else {
@@ -582,6 +624,9 @@ fn read_part(
             return Err(format(file, format!("node {i} reached twice")));
         }
         let world = mul(&parent, &local(node));
+        if !world.iter().all(|v| v.is_finite()) {
+            return Err(format(file, format!("node {i}: its world matrix is not finite")));
+        }
         let e = w.spawn();
         if let Some(slot) = node_entities.get_mut(i) {
             *slot = Some(e);
@@ -851,6 +896,15 @@ mod tests {
     /// floor mesh placed under a parent moved 2 units up, a spawn, `material` naming an image the install does not
     /// ship) and its buffer.
     fn ship_level(test: &str, material: serde_json::Value) -> PathBuf {
+        ship_edited_level(test, material, |_| {})
+    }
+
+    /// [`ship_level`] with `edit` applied to the glTF document before it is written.
+    fn ship_edited_level(
+        test: &str,
+        material: serde_json::Value,
+        edit: impl FnOnce(&mut serde_json::Value),
+    ) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("primase-stuntboost-{test}-{}", std::process::id()));
         let export = dir.join("Content").join("Models").join("Export");
         std::fs::create_dir_all(&export).unwrap();
@@ -870,7 +924,7 @@ mod tests {
         for i in [0u16, 1, 2] {
             bin.extend_from_slice(&i.to_le_bytes());
         }
-        let gltf = serde_json::json!({
+        let mut gltf = serde_json::json!({
             "asset": {"version": "2.0"},
             "scene": 0,
             "scenes": [{"nodes": [0, 2]}],
@@ -894,6 +948,7 @@ mod tests {
             ],
             "buffers": [{"uri": "Level_T_0.bin", "byteLength": 42}]
         });
+        edit(&mut gltf);
         std::fs::write(
             export.join("Level_T_0.xnb"),
             xnb(
@@ -908,6 +963,72 @@ mod tests {
             "Microsoft.Xna.Framework.Content.ArrayReader`1[[System.Byte, System.Private.CoreLib]]";
         std::fs::write(export.join("Level_T_0.bin.xnb"), xnb(byte_array, &array)).unwrap();
         dir
+    }
+
+    /// A uri stays under the install's `Content` folder: `..` up to it is the game's own (`../Resources/..` from
+    /// `Models/Export`), an absolute path or a `..` past it is refused.
+    #[test]
+    fn a_uri_stays_under_the_content_folder() {
+        let export = Path::new("/install/Content/Models/Export");
+        let at = |uri| export_path(export, uri).map_err(|e| e.to_string());
+        assert_eq!(
+            at("../Resources/T.export/Bake0.png").unwrap(),
+            Path::new("/install/Content/Models/Resources/T.export/Bake0.png")
+        );
+        assert_eq!(
+            at("a/../b.bin").unwrap(),
+            Path::new("/install/Content/Models/Export/b.bin")
+        );
+        assert_eq!(
+            at("../../Textures/x").unwrap(),
+            Path::new("/install/Content/Textures/x")
+        );
+        for uri in ["../../../Secret", "/etc/passwd", "a/../../../../b", "../../.."] {
+            assert!(at(uri).is_err(), "{uri}");
+        }
+    }
+
+    /// A node whose matrix is not finite is an error naming the node, not an infinite transform; a primitive naming a
+    /// material the document lacks is already refused when the document's meshes are read.
+    #[test]
+    fn a_non_finite_matrix_or_a_missing_material_is_an_error() {
+        let material = serde_json::json!({"name": "M"});
+        let dir = ship_edited_level("infinite", material.clone(), |g| {
+            // each matrix is finite; the child's world, their product, is not
+            let big = serde_json::json!([
+                1e308, 0.0, 0.0, 0.0, 0.0, 1e308, 0.0, 0.0, 0.0, 0.0, 1e308, 0.0, 0.0, 0.0, 0.0, 1.0
+            ]);
+            g["nodes"][0]["matrix"] = big.clone();
+            g["nodes"][1]["matrix"] = big;
+        });
+        let e = read_level(&dir, "T", 0.01, &mut World::new())
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("not finite"), "{e}");
+        std::fs::remove_dir_all(&dir).ok();
+        let dir = ship_edited_level("material", material, |g| {
+            g["meshes"][0]["primitives"][0]["material"] = serde_json::json!(7);
+        });
+        let e = read_level(&dir, "T", 0.01, &mut World::new())
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("materials[7]"), "{e}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A collision model's mesh presence byte is 0 or 1; any other value is refused, and a huge mesh count over a few
+    /// bytes is an error at the end of the data, not an allocation.
+    #[test]
+    fn a_collision_models_presence_byte_is_zero_or_one() {
+        let model = |mesh_count: i32, presence: &[u8]| {
+            let mut c = vec![0u8; 24];
+            c.extend(mesh_count.to_le_bytes());
+            c.extend(presence);
+            xnb("SE.Pipeline.CollisionModelReader", &c)
+        };
+        let e = derived::collision_model(&model(1, &[2])).unwrap_err().to_string();
+        assert!(e.contains("mesh presence 2"), "{e}");
+        assert!(derived::collision_model(&model(i32::MAX, &[0, 0, 0])).is_err());
     }
 
     /// A level of one part as the game ships it: the sidecar, the glTF (a floor mesh placed under a parent moved 2

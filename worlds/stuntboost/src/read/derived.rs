@@ -119,11 +119,15 @@ pub fn collision_model(bytes: &[u8]) -> Result<CollisionModel> {
     let solids_cell = vector(&mut c)?;
     let triggers_cell = vector(&mut c)?;
     let mesh_count = count(&mut c, "mesh")?;
-    let mut meshes = Vec::with_capacity(mesh_count.min(1 << 16));
+    let mut meshes = Vec::new();
     for _ in 0..mesh_count {
-        if c.u8()? == 0 {
-            meshes.push(None);
-            continue;
+        match c.u8()? {
+            0 => {
+                meshes.push(None);
+                continue;
+            }
+            1 => {}
+            present => return Err(bad(format!("mesh presence {present} at {:#x}", c.position() - 1))),
         }
         let aggregate = c.u8()?;
         if aggregate > 2 {
@@ -154,7 +158,7 @@ pub fn collision_model(bytes: &[u8]) -> Result<CollisionModel> {
         meshes.push(Some(CollisionMesh { aggregate, parts }));
     }
     let corner_count = count(&mut c, "ledge corner")?;
-    let mut corners = Vec::with_capacity(corner_count.min(1 << 20));
+    let mut corners = Vec::new();
     for _ in 0..corner_count {
         corners.push(Corner {
             position: vector(&mut c)?,
@@ -172,7 +176,7 @@ pub fn collision_model(bytes: &[u8]) -> Result<CollisionModel> {
         }
     }
     let ledge_count = count(&mut c, "ledge")?;
-    let mut ledges = Vec::with_capacity(ledge_count.min(1 << 20));
+    let mut ledges = Vec::new();
     for _ in 0..ledge_count {
         let (min_angle, max_angle) = (c.f32()?, c.f32()?);
         let (normal, tangent) = (vector(&mut c)?, vector(&mut c)?);
