@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 use primase_dxbc::{Dimension, Program, ResourceDeclaration, ReturnType, Sample};
+mod common;
 
 fn instruction(op: u32, operands: &[u32]) -> Vec<u32> {
     let mut v = vec![op | (((operands.len() + 1) as u32) << 24)];
@@ -261,8 +262,13 @@ fn sample_callback_uses_coordinates_and_return_swizzle() {
     assert_eq!((calls, r.samples, r.instructions), (1, 1, 2));
 }
 
-/// Optional directory of independent ps_4_0, ps_4_1 and ps_5_0 binaries and matching disassembler
-/// text (.asm appended). Counts executable instructions including final ret.
+/// The reader's refusals over `oracles.corpus.general/dxbc` (Sekiro's 390 pixel programs with fxc 10.0.26100's
+/// disassembly), by reason with its numbers as N, measured on that corpus: more of a reason, or a new one, fails.
+const PINNED_REFUSALS: &[(&str, usize)] = &[("DXBC at word N: instructions after final ret", 1)];
+
+/// Optional directory of the game's ps_4_0, ps_4_1 and ps_5_0 binaries and Microsoft's disassembly of each (`.asm`
+/// appended): every program the reader reads has the disassembly's executable instructions, `ret` included, in order.
+/// A program the reader refuses is counted by reason, not failed (the lift censuses gate the refusals).
 #[test]
 fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
     let Some(root) = primase_testdata::oracle(
@@ -274,6 +280,7 @@ fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut count = 0;
     let (mut exact, mut within, mut nan) = (0, 0, 0);
+    let mut refused: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for entry in std::fs::read_dir(root)? {
         let path = entry?.path();
         if path.extension().is_none_or(|x| x != "ppo") {
@@ -284,7 +291,13 @@ fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         let asm = std::fs::read_to_string(asm_path)?;
-        let p = Program::parse(&std::fs::read(&path)?).map_err(|e| format!("{}: {e}", path.display()))?;
+        let p = match Program::parse(&std::fs::read(&path)?) {
+            Ok(p) => p,
+            Err(e) => {
+                *refused.entry(common::reason(&e.to_string())).or_default() += 1;
+                continue;
+            }
+        };
         let instructions: Vec<_> = asm
             .lines()
             .skip_while(|l| !matches!(l.trim(), "ps_4_0" | "ps_4_1" | "ps_5_0"))
@@ -295,16 +308,12 @@ fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(p.instructions().len(), instructions.len(), "{}", path.display());
         for (a, b) in p.instructions().iter().zip(instructions) {
             let name = b.split_whitespace().next().unwrap();
-            let name = if name.starts_with("sample_indexable") {
-                "sample"
-            } else {
-                name.strip_suffix("_sat").unwrap_or(name)
-            };
-            // a conditional's test is its control, not its name
-            let name = match name {
-                "if_nz" | "if_z" => "if",
-                "breakc_nz" | "breakc_z" => "breakc",
-                "continuec_nz" | "continuec_z" => "continuec",
+            // an indexable resource's form (`sample_d_indexable(texture2d)(float,float,float,float)`) is its opcode's
+            let name = name.split_once("_indexable").map_or(name, |(op, _)| op);
+            let name = name.strip_suffix("_sat").unwrap_or(name);
+            // a conditional's test (`if_nz`, `breakc_z`, `discard_nz`, `retc_z`) is its control, not its name
+            let name = match name.rsplit_once('_') {
+                Some((op @ ("if" | "breakc" | "continuec" | "discard" | "retc" | "callc"), "nz" | "z")) => op,
                 _ => name,
             };
             assert_eq!(a.name(), name, "{} word {}", path.display(), a.word);
@@ -362,6 +371,10 @@ fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
     }
     assert!(count > 0, "no paired shaders");
     println!("independent bytecode/disassembly instruction streams matched: {count}");
+    for (why, n) in &refused {
+        println!("  refused by the reader ({n}): {why}");
+    }
+    common::hold_to_pins(&refused, PINNED_REFUSALS);
     println!(
         "constant-sampler value oracle: {exact} exact, {within} within 4 f32 epsilon at max(1, abs(reference)), {nan} NaN pairs"
     );

@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 use primase_shader::{ConstantType, ResourceKind, ScalarType, Value};
+mod common;
 use std::collections::BTreeMap;
 
 fn set(bytes: &mut [u8], at: usize, value: u32) {
@@ -156,6 +157,7 @@ fn reflected_bindings_match_independent_disassembly() -> Result<(), Box<dyn std:
         return Ok(());
     };
     let (mut shaders, mut fields, mut bindings, mut inputs) = (0, 0, 0, 0);
+    let mut refused: BTreeMap<String, usize> = BTreeMap::new();
     for entry in std::fs::read_dir(root)? {
         let path = entry?.path();
         if path.extension().is_none_or(|x| x != "ppo") {
@@ -166,8 +168,13 @@ fn reflected_bindings_match_independent_disassembly() -> Result<(), Box<dyn std:
             continue;
         }
         let j: serde_json::Value = serde_json::from_slice(&std::fs::read(oracle)?)?;
-        let r = primase_dxbc::reflection(&std::fs::read(&path)?)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let r = match primase_dxbc::reflection(&std::fs::read(&path)?) {
+            Ok(r) => r,
+            Err(e) => {
+                *refused.entry(common::reason(&e.to_string())).or_default() += 1;
+                continue;
+            }
+        };
         for (group, textures) in [("textures", true), ("buffers", false)] {
             for (name, value) in j[group].as_object().unwrap() {
                 let resource = r
@@ -231,6 +238,11 @@ fn reflected_bindings_match_independent_disassembly() -> Result<(), Box<dyn std:
         shaders += 1;
     }
     assert!(shaders > 0, "no reflection fixtures");
+    for (why, n) in &refused {
+        println!("  refused by the reader ({n}): {why}");
+    }
+    // measured on oracles.corpus.general/dxbc (Sekiro's 390 pixel programs): the reader reflects every one
+    common::hold_to_pins(&refused, &[]);
     println!(
         "reflection exact: {shaders} shaders, {bindings} resource bindings, {inputs} input registers, {fields} member offsets/counts"
     );

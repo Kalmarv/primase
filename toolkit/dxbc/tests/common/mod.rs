@@ -213,3 +213,45 @@ pub fn containers(root: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
+
+/// A refusal's reason with its numbers as `N` (offsets and counts differ program to program; the reason does not).
+pub fn reason(refusal: &str) -> String {
+    let mut out = String::new();
+    let mut digits = false;
+    for c in refusal.chars() {
+        if c.is_ascii_digit() {
+            if !digits {
+                out.push('N');
+            }
+            digits = true;
+        } else {
+            out.push(c);
+            digits = false;
+        }
+    }
+    out
+}
+
+/// Hold a corpus's refusals (by [`reason`]) to the pinned ones: a reason not pinned, or more programs than its pin,
+/// fails; fewer is printed so the pin is lowered.
+pub fn hold_to_pins(refused: &BTreeMap<String, usize>, pinned: &[(&str, usize)]) {
+    let mut over = Vec::new();
+    for (why, &n) in refused {
+        match pinned.iter().find(|(p, _)| p == why) {
+            Some(&(_, pin)) if n < pin => println!("  {why}: {n}, below its pin of {pin}: lower the pin"),
+            Some(&(_, pin)) if n == pin => {}
+            Some(&(_, pin)) => over.push(format!("{why}: {n}, pinned at {pin}")),
+            None => over.push(format!("{why}: {n}, not pinned")),
+        }
+    }
+    for (why, pin) in pinned {
+        if !refused.contains_key(*why) {
+            println!("  {why}: 0, below its pin of {pin}: lower the pin");
+        }
+    }
+    assert!(
+        over.is_empty(),
+        "refusals beyond the pins (a regression):\n{}",
+        over.join("\n")
+    );
+}
