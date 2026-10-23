@@ -23,7 +23,13 @@ count` into `sharedVertices` and `primitives`, 2018.1 stores
 `firstPrimitiveIndex` and `numPrimitives`; `mesh_sections` returns them in one form
 (`MeshSection`), as the decoder reads them. The decoder uses the shared vertex toolkit
 11/11/10 and 21/21/22 position arithmetic, and handles quad splitting, per-triangle shape
-keys, and a counted DEAD primitive sentinel. It returns shape-local geometry;
+keys, and a counted DEAD primitive sentinel. A primitive whose second and fourth
+indices are equal is a custom primitive (`CustomPrimitive`): its first index names
+its data in the shared-vertex index, `[146, w, low, high]` an extern shape
+(`CustomKind::Extern`), records whose first word ends in byte 0x52 a kind not read
+(`CustomKind::Unread`), any other an error. `extern_shapes` reads a compressed mesh
+shape's `externShapes` instances (transform columns, scale one) and checks each is
+referenced exactly once; a 2016.2 shape has no such field. It returns shape-local geometry;
 rigid transforms and game-specific material mappings belong to its caller.
 `ConvexCore` retains stored vertices, faces, planes and convex radius. Its
 `expanded_triangles` policy builds the intersection of offset half-spaces in
@@ -33,7 +39,11 @@ Output vertices are inside every plane and incident to at least three planes
 within 0.01 mm after f32 rounding; sub-nanometre duplicates are welded and
 zero-area triangles caused by f32 rounding are omitted. This is a sharp
 polytope approximation, not the rounded Havok surface. Capsule cores yield
-box approximations. Spheres are not implemented.
+box approximations. Spheres are not implemented. A core of zero thickness (two
+opposite planes whose offsets agree within the plane bound, every vertex on them)
+is a polygon: its two faces offset by the radius. An `hknpConvexShape` stores
+vertices only: its core is their hull (one triangle a face), or, for vertices within
+the plane bound of one plane, their convex polygon as two faces.
 
 `oracles.corpus.sekiro/object-hkx` (the real-data configuration,
 CONTRIBUTING.md) holds loose self-contained object `.hkx` files for an

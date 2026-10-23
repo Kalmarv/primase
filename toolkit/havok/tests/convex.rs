@@ -267,3 +267,31 @@ fn thin_box_far_from_its_origin_closes() {
     let t = c.expanded_triangles().unwrap();
     assert_eq!(t.len(), 12);
 }
+#[test]
+fn a_slab_thinner_than_the_plane_bound_is_a_polygon() {
+    // A unit square in y = 0 whose stored top and bottom planes are 0.86 µm apart (an asset stores one so), with a side
+    // plane whose face is three collinear corners, and its top plane repeated: a polygon, not an unbounded volume.
+    let c = ConvexCore {
+        vertices: vec![[0., 0., 0.], [1., 0., 0.], [1., 0., 1.], [0., 0., 1.]],
+        planes: vec![
+            [0., 1., 0., 0.],
+            [0., -1., 0., -8.6e-7],
+            [1., 0., 0., -1.],
+            [0., 1., 0., 0.],
+        ],
+        faces: vec![
+            vec![3, 2, 1, 0],
+            vec![0, 1, 2, 3],
+            vec![1, 2, 1],
+            vec![3, 2, 1, 0],
+        ],
+        radius: 0.,
+    };
+    let t = c.expanded_triangles().unwrap();
+    assert_eq!(t.len(), 4);
+    assert!(t.iter().flatten().all(|v| v[1] == 0.));
+    // offsets further apart than the bound are a volume: three distinct planes bound none
+    let mut thick = c;
+    thick.planes[1][3] = -2e-5;
+    assert!(thick.expanded_triangles().is_err());
+}

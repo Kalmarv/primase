@@ -1,7 +1,9 @@
 use crate::{Result, Value, invalid};
 
 /// Stored polytope core. Radius expansion is a tessellation policy, not the
-/// rounded surface of a Havok convex shape (notably at capsule corners).
+/// rounded surface of a Havok convex shape (notably at capsule corners). An
+/// `hknpConvexShape` stores its vertices only: its faces and planes are those of
+/// the vertices' convex hull (one triangle each), not stored ones.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConvexCore {
     pub vertices: Vec<[f32; 3]>,
@@ -17,6 +19,9 @@ impl ConvexCore {
         for i in 0..stored.len() {
             let v = stored.get(i)?.vector::<4>()?;
             vertices.push([v[0], v[1], v[2]]);
+        }
+        if shape.type_name() == "hknpConvexShape" {
+            return Self::hull_of(vertices, radius);
         }
         let stored = shape.field("planes")?.array()?;
         let mut planes = Vec::with_capacity(stored.len());
@@ -44,6 +49,53 @@ impl ConvexCore {
                 );
             }
             faces.push(polygon);
+        }
+        let core = Self {
+            vertices,
+            planes,
+            faces,
+            radius,
+        };
+        core.validate()?;
+        Ok(core)
+    }
+    /// The core of vertices that store no faces: their convex hull's triangles, each with its outward plane in the
+    /// stored convention (`n . v + w = 0` on the face).
+    fn hull_of(vertices: Vec<[f32; 3]>, radius: f32) -> Result<Self> {
+        if vertices.len() < 4 || vertices.iter().flatten().any(|x| !x.is_finite()) {
+            return Err(invalid(0, "convex shape without a volume of finite vertices"));
+        }
+        let points: Vec<[f64; 3]> = vertices.iter().map(|v| v.map(f64::from)).collect();
+        if let Some((normal, polygon)) = flat_polygon(&points)? {
+            // a polygon: its two faces, each on its side's plane
+            let offset = -dot(normal, points[polygon[0]]);
+            let plane = |sign: f64| [normal[0], normal[1], normal[2], offset].map(|x| (sign * x) as f32);
+            let mut back = polygon.clone();
+            back.reverse();
+            let core = Self {
+                vertices,
+                planes: vec![plane(1.), plane(-1.)],
+                faces: vec![polygon, back],
+                radius,
+            };
+            core.validate()?;
+            return Ok(core);
+        }
+        let scale = points.iter().flatten().fold(1f64, |m, x| m.max(x.abs()));
+        let triangles = hull(&points, 1e-8 * scale)?;
+        let mut planes = Vec::with_capacity(triangles.len());
+        let mut faces = Vec::with_capacity(triangles.len());
+        for t in triangles {
+            let n = cross(sub(points[t[1]], points[t[0]]), sub(points[t[2]], points[t[0]]));
+            let length = dot(n, n).sqrt();
+            let n = n.map(|x| x / length);
+            planes.push([
+                n[0] as f32,
+                n[1] as f32,
+                n[2] as f32,
+                -dot(n, points[t[0]]) as f32,
+            ]);
+            faces.push(t.to_vec());
         }
         let core = Self {
             vertices,
@@ -171,7 +223,8 @@ impl ConvexCore {
         Ok(triangles)
     }
     /// A core of zero thickness (two opposite stored planes at one offset, every vertex on them) bounds no volume:
-    /// it is a polygon. Its faces on those planes, offset by the radius and fan-triangulated, are the tessellation;
+    /// it is a polygon. Normals agree to f32 rounding; offsets and vertices to the plane bound ([`plane_bound`]: 0.01
+    /// mm, or 4 f32 ULP where coarser), as thin slabs are stored. Its faces on those planes, offset by the radius and fan-triangulated, are the tessellation;
     /// the rim of height 2 x radius is not emitted (with radius 0 there is none). `None` for a core with volume.
     fn flat_triangles(&self) -> Result<Option<Vec<[[f32; 3]; 3]>>> {
         let normalized: Vec<[f64; 4]> = self
@@ -189,7 +242,10 @@ impl ConvexCore {
         // Offsets agree to f32 rounding (four units in the last place of the offset, or of 1).
         let same =
             |a: f64, b: f64| (a - b).abs() <= 4. * f64::from(f32::EPSILON) * a.abs().max(b.abs()).max(1.);
-        let opposite = |a: &[f64; 4], b: &[f64; 4]| (0..4).all(|k| same(a[k], -b[k]));
+        let opposite = |a: &[f64; 4], b: &[f64; 4]| {
+            (0..3).all(|k| same(a[k], -b[k]))
+                && (a[3] + b[3]).abs() <= 1e-5f64.max(4. * f64::from(f32::EPSILON) * a[3].abs())
+        };
         let Some(base) = normalized
             .iter()
             .find(|a| normalized.iter().any(|b| opposite(a, b)))
@@ -199,7 +255,7 @@ impl ConvexCore {
         };
         let on_base = |v: [f32; 3]| {
             let v = v.map(f64::from);
-            same(dot([base[0], base[1], base[2]], v), -base[3])
+            (dot([base[0], base[1], base[2]], v) + base[3]).abs() <= plane_bound(v)
         };
         if !self.vertices.iter().all(|&v| on_base(v)) {
             return Err(invalid(
@@ -244,6 +300,79 @@ impl ConvexCore {
         Ok(Some(triangles))
     }
 }
+/// Points within the plane bound of one plane ([`plane_bound`]): its unit normal (from the largest triangle the
+/// points span) and their convex hull in it, counter-clockwise about the normal, collinear points left out. `None`
+/// for points with volume; an error for points spanning no area.
+fn flat_polygon(points: &[[f64; 3]]) -> Result<Option<([f64; 3], Vec<usize>)>> {
+    let mut best = (0., [0.; 3]);
+    for i in 0..points.len() {
+        for j in i + 1..points.len() {
+            for k in j + 1..points.len() {
+                let n = cross(sub(points[j], points[i]), sub(points[k], points[i]));
+                let area = dot(n, n);
+                if area > best.0 {
+                    best = (area, n);
+                }
+            }
+        }
+    }
+    if best.0 == 0. {
+        return Err(invalid(0, "convex shape spanning no area"));
+    }
+    let length = best.0.sqrt();
+    let normal = best.1.map(|x| x / length);
+    let origin = points[0];
+    if points
+        .iter()
+        .any(|&p| dot(normal, sub(p, origin)).abs() > plane_bound(p))
+    {
+        return Ok(None);
+    }
+    // in-plane coordinates, then Andrew's monotone chain
+    let u = {
+        let far = points
+            .iter()
+            .map(|&p| sub(p, origin))
+            .max_by(|a, b| dot(*a, *a).total_cmp(&dot(*b, *b)))
+            .expect("points");
+        let l = dot(far, far).sqrt();
+        far.map(|x| x / l)
+    };
+    let v = cross(normal, u);
+    let flat: Vec<[f64; 2]> = points
+        .iter()
+        .map(|&p| {
+            let d = sub(p, origin);
+            [dot(d, u), dot(d, v)]
+        })
+        .collect();
+    let mut order: Vec<usize> = (0..points.len()).collect();
+    order.sort_by(|&a, &b| {
+        flat[a][0]
+            .total_cmp(&flat[b][0])
+            .then(flat[a][1].total_cmp(&flat[b][1]))
+    });
+    let turn = |o: usize, a: usize, b: usize| {
+        (flat[a][0] - flat[o][0]) * (flat[b][1] - flat[o][1])
+            - (flat[a][1] - flat[o][1]) * (flat[b][0] - flat[o][0])
+    };
+    let mut hull: Vec<usize> = Vec::new();
+    for pass in [order.clone(), order.into_iter().rev().collect()] {
+        let start = hull.len();
+        for i in pass {
+            while hull.len() >= start + 2 && turn(hull[hull.len() - 2], hull[hull.len() - 1], i) <= 0. {
+                hull.pop();
+            }
+            hull.push(i);
+        }
+        hull.pop();
+    }
+    if hull.len() < 3 {
+        return Err(invalid(0, "convex shape spanning no area"));
+    }
+    Ok(Some((normal, hull)))
+}
+
 /// 0.01 mm, or four f32 units in the last place at the vertex's magnitude when that is coarser (shapes far from their
 /// body's origin cannot be rounded to f32 more closely).
 fn plane_bound(p: [f64; 3]) -> f64 {
@@ -460,4 +589,58 @@ fn solve(mut a: [[f64; 4]; 3]) -> Option<[f64; 3]> {
         }
     }
     Some([a[0][3], a[1][3], a[2][3]])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConvexCore;
+
+    #[test]
+    fn vertices_alone_are_their_hull() {
+        // an octahedron's six corners (no four on one plane) and its centre: eight hull triangles over the corners
+        let vertices: Vec<[f32; 3]> = vec![
+            [1., 0., 0.],
+            [-1., 0., 0.],
+            [0., 1., 0.],
+            [0., -1., 0.],
+            [0., 0., 1.],
+            [0., 0., -1.],
+            [0., 0., 0.],
+        ];
+        let core = ConvexCore::hull_of(vertices, 0.).unwrap();
+        assert_eq!(core.faces.len(), 8);
+        assert!(core.faces.iter().flatten().all(|&i| i < 6));
+        // every plane faces away from the centre, at distance 1 / sqrt(3)
+        for p in &core.planes {
+            assert!((p[3] + 1. / 3f32.sqrt()).abs() < 1e-6, "{p:?}");
+        }
+        assert_eq!(core.expanded_triangles().unwrap().len(), 8);
+    }
+
+    #[test]
+    fn flat_vertices_are_a_two_sided_polygon() {
+        // a 12 m square within 0.06 mm of y = 0, as an asset stores one, and a point inside it
+        let vertices = vec![
+            [-6., 5.9e-5, -6.],
+            [6., 3.6e-5, -6.],
+            [6., -2.85e-5, 6.],
+            [-6., -5.7e-6, 6.],
+            [0., 1.52e-5, 0.],
+        ];
+        let core = ConvexCore::hull_of(vertices, 0.01).unwrap();
+        assert_eq!(core.faces.len(), 2);
+        assert_eq!(core.faces[0].len(), 4);
+        let reversed: Vec<usize> = core.faces[0].iter().rev().copied().collect();
+        assert_eq!(core.faces[1], reversed);
+        // the two faces, each offset by the radius along its own normal
+        let t = core.expanded_triangles().unwrap();
+        assert_eq!(t.len(), 4);
+        assert!(t.iter().flatten().all(|v| (v[1].abs() - 0.01).abs() < 1e-4));
+    }
+
+    #[test]
+    fn points_spanning_no_area_are_refused() {
+        let line = vec![[0., 0., 0.], [1., 0., 0.], [2., 0., 0.], [3., 0., 0.]];
+        assert!(ConvexCore::hull_of(line, 0.).is_err());
+    }
 }

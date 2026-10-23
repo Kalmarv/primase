@@ -10,7 +10,10 @@ mod section;
 pub mod spline;
 pub mod world;
 
-pub use mesh::{CompressedMesh, MeshSection, Triangle, compressed_mesh, mesh_sections};
+pub use mesh::{
+    CompressedMesh, CustomKind, CustomPrimitive, MeshSection, ShapeInstance, Triangle, compressed_mesh,
+    extern_shapes, mesh_sections,
+};
 /// Register this crate's passes (`lower-havok-clips`).
 pub use world::register;
 mod tagfile;

@@ -11,6 +11,113 @@ pub struct Triangle {
 pub struct CompressedMesh {
     pub triangles: Vec<Triangle>,
     pub dead_primitives: usize,
+    /// Primitives that are not triangles or quads, in key order.
+    pub custom: Vec<CustomPrimitive>,
+}
+
+/// A custom primitive of a mesh tree: one whose second and fourth indices are equal (`[k, x, n, x]`; no triangle or
+/// quad of either game's collision has them equal). Instead of vertices, `k` names where its data starts in the
+/// shared-vertex index (counting the section's packed vertices first, as a vertex index does).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomPrimitive {
+    /// Right-aligned shape key: section and primitive, quad half zero.
+    pub key: u32,
+    pub indices: [usize; 4],
+    pub kind: CustomKind,
+}
+
+/// What a custom primitive's data is, by its first word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomKind {
+    /// `[146, w, index low, index high]` with indices `[k, k, 4, k]`: the extern shape at `index` of the shape's
+    /// `externShapes` (the second word is not read). Elden Ring's asset collision.
+    Extern(usize),
+    /// Records whose first word's low byte is 0x52 (`[0x2252, 8, 0x3d4d]`: a word, what may be a vertex index and what
+    /// may be a half float; Sekiro's and Elden Ring's): their meaning is not known, so they are not read.
+    Unread,
+}
+
+/// One extern shape instance of a compressed mesh shape (`externShapes`): a shape the mesh holds whole, placed by its
+/// own transform (columns: rotation x, y and z, then the translation) in the mesh's space. Its scale is one: a scaled
+/// instance is refused.
+#[derive(Debug, Clone, Copy)]
+pub struct ShapeInstance<'t, 'a> {
+    pub transform: [[f32; 3]; 4],
+    pub shape: Value<'t, 'a>,
+}
+
+/// The first word of a custom primitive that references an extern shape.
+const EXTERN_SHAPE_TAG: u32 = 146;
+
+/// The extern shape instances of an hknpCompressedMeshShape (`externShapes`), each with its transform; each one is
+/// referenced by exactly one of its mesh's extern custom primitives, and they reference no other. A class without the
+/// field (Havok 2016's) holds none.
+pub fn extern_shapes<'t, 'a>(
+    shape: Value<'t, 'a>,
+    mesh: &CompressedMesh,
+) -> Result<Vec<ShapeInstance<'t, 'a>>> {
+    if !shape.has_field("externShapes") {
+        if mesh
+            .custom
+            .iter()
+            .any(|c| matches!(c.kind, CustomKind::Extern(_)))
+        {
+            return Err(invalid(
+                shape.offset,
+                "extern shape references in a shape without extern shapes",
+            ));
+        }
+        return Ok(Vec::new());
+    }
+    let stored = shape.field("externShapes")?.array()?;
+    let mut instances = Vec::with_capacity(stored.len());
+    for i in 0..stored.len() {
+        let instance = stored.get(i)?;
+        let t = instance.field("transform")?.vector::<16>()?;
+        let scale = instance.field("scale")?.vector::<4>()?;
+        if scale[..3] != [1., 1., 1.] {
+            return Err(invalid(instance.offset, "a scaled extern shape instance"));
+        }
+        let transform: [[f32; 3]; 4] = std::array::from_fn(|c| [t[4 * c], t[4 * c + 1], t[4 * c + 2]]);
+        if transform.iter().flatten().any(|x| !x.is_finite()) {
+            return Err(invalid(instance.offset, "nonfinite extern shape transform"));
+        }
+        instances.push(ShapeInstance {
+            transform,
+            shape: instance.field("shape")?.dereference()?,
+        });
+    }
+    let mut referenced = vec![false; instances.len()];
+    for custom in &mesh.custom {
+        let CustomKind::Extern(index) = custom.kind else {
+            continue;
+        };
+        match referenced.get_mut(index) {
+            Some(seen @ false) => *seen = true,
+            Some(true) => {
+                return Err(invalid(
+                    shape.offset,
+                    format!("extern shape {index} referenced twice"),
+                ));
+            }
+            None => {
+                return Err(invalid(
+                    shape.offset,
+                    format!(
+                        "custom primitive references extern shape {index} of {}",
+                        instances.len()
+                    ),
+                ));
+            }
+        }
+    }
+    if referenced.contains(&false) {
+        return Err(invalid(
+            shape.offset,
+            "an extern shape no custom primitive references",
+        ));
+    }
+    Ok(instances)
 }
 
 /// How a mesh-tree section names its vertex and primitive ranges.
@@ -91,7 +198,8 @@ pub fn mesh_sections(data: Value<'_, '_>) -> Result<Vec<MeshSection>> {
 
 /// Decode an hknpCompressedMeshShapeData mesh tree. Materials and rigid-body
 /// transforms belong to the caller. Packed section vertices are 11/11/10 bits;
-/// shared vertices are 21/21/22 bits over the declared domain.
+/// shared vertices are 21/21/22 bits over the declared domain. Custom primitives
+/// are listed ([`CustomPrimitive`]), not decoded.
 pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
     let tree = data.field("meshTree")?;
     let domain = tree.field("domain")?;
@@ -153,10 +261,49 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
                 result.dead_primitives += 1;
                 continue;
             }
+            let key = ((section_index as u32) << 8) | ((i as u32) << 1);
+            if ix[1] == ix[3] {
+                // a custom primitive `[k, x, n, x]`: its data from vertex index k on in the shared-vertex index
+                let k = ix[0];
+                let start = k
+                    .checked_sub(local_count)
+                    .and_then(|o| o.checked_add(shared_base))
+                    .ok_or_else(|| {
+                        invalid(
+                            section.offset,
+                            format!("custom primitive {ix:?} names a packed vertex"),
+                        )
+                    })?;
+                let word = |j: usize| -> Result<u32> {
+                    u32::try_from(shared_indices.get(start + j)?.unsigned()?)
+                        .map_err(|_| invalid(section.offset, "custom primitive word exceeds u32"))
+                };
+                let kind = match word(0)? {
+                    EXTERN_SHAPE_TAG if ix == [k, k, 4, k] => {
+                        let (low, high) = (word(2)?, word(3)?);
+                        if low > 0xffff || high > 0xffff {
+                            return Err(invalid(section.offset, "extern shape index exceeds 32 bits"));
+                        }
+                        CustomKind::Extern((low | (high << 16)) as usize)
+                    }
+                    first if first != EXTERN_SHAPE_TAG && first & 0xff == 0x52 => CustomKind::Unread,
+                    first => {
+                        return Err(invalid(
+                            section.offset,
+                            format!("custom primitive {ix:?} of an unknown kind (first word {first})"),
+                        ));
+                    }
+                };
+                result.custom.push(CustomPrimitive {
+                    key,
+                    indices: ix,
+                    kind,
+                });
+                continue;
+            }
             let a = vertex(ix[0])?;
             let b = vertex(ix[1])?;
             let c = vertex(ix[2])?;
-            let key = ((section_index as u32) << 8) | ((i as u32) << 1);
             result.triangles.push(Triangle {
                 key,
                 vertices: [a, b, c],

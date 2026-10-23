@@ -71,6 +71,18 @@ impl<'t, 'a> Value<'t, 'a> {
     pub fn format(self) -> Result<usize> {
         self.tag.format(self.type_index)
     }
+    /// Whether the value's class (or a class it derives from) declares a field `name`.
+    pub fn has_field(self, name: &str) -> bool {
+        let mut index = self.type_index;
+        while index != 0 {
+            let t = &self.tag.types[index];
+            if t.fields.iter().any(|f| f.name == name) {
+                return true;
+            }
+            index = t.parent;
+        }
+        false
+    }
     pub fn field(self, name: &str) -> Result<Self> {
         if self.format()? & 15 != 7 {
             return Err(invalid(self.offset, "field access requires a class"));
