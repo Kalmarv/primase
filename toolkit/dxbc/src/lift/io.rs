@@ -1,7 +1,7 @@
 //! The program's edges: locals for the registers, the prologue that unpacks the entry arguments into input registers,
 //! and the epilogue that packs output registers into the result.
 
-use naga::{Expression as E, FunctionArgument, Handle, Statement, StructMember, TypeInner};
+use naga::{Expression as E, Handle, Statement, TypeInner};
 use primase_shader::build::{Builder, Kind, Val};
 use primase_shader::{IoType, ScalarType, Stage, SystemValue};
 
@@ -12,12 +12,7 @@ use crate::Result;
 use crate::decode::{Declared, Decoded, Register};
 
 fn kind_of(s: ScalarType) -> Kind {
-    match s {
-        ScalarType::Bool => Kind::B,
-        ScalarType::Sint => Kind::I,
-        ScalarType::Uint => Kind::U,
-        _ => Kind::F,
-    }
+    Kind::of(s)
 }
 
 impl<'a> Lift<'a> {
@@ -117,16 +112,16 @@ impl<'a> Lift<'a> {
     /// The entry arguments and result type, and the stores of each argument into its input register lanes.
     pub(super) fn prologue(&mut self) -> Result<()> {
         let io = self.setup.io.clone();
+        let declared = match self.b.declare_entry(&io) {
+            Ok(d) => d,
+            Err(detail) => return self.refuse(detail),
+        };
+        self.arguments = declared.arguments;
+        self.result_type = declared.result;
         for (i, item) in io.arguments.iter().enumerate() {
             let IoType::Value(v) = item.ty else {
                 return self.refuse("an array-typed input");
             };
-            let ty = self.b.ty_of(kind_of(v.scalar), v.width);
-            self.arguments.push(FunctionArgument {
-                name: Some(item.name.clone()),
-                ty,
-                binding: Some(item.binding.clone()),
-            });
             let expr = self.b.app(E::FunctionArgument(i as u32));
             let mut value = Val {
                 expr,
@@ -175,54 +170,6 @@ impl<'a> Lift<'a> {
                 });
                 self.b.store(target, value);
             }
-        }
-        // the result structure
-        if !io.results.is_empty() {
-            let mut members = Vec::new();
-            let mut offset = 0u32;
-            for item in &io.results {
-                let (ty, size, align) = match item.ty {
-                    IoType::Value(v) => (
-                        self.b.ty_of(kind_of(v.scalar), v.width),
-                        u32::from(v.width) * 4,
-                        match v.width {
-                            1 => 4,
-                            2 => 8,
-                            _ => 16,
-                        },
-                    ),
-                    IoType::ClipDistances(n) => {
-                        let f = self.b.ty_of(Kind::F, 1);
-                        let len = std::num::NonZeroU32::new(n).expect("at least one clip distance");
-                        (
-                            self.b.ty(TypeInner::Array {
-                                base: f,
-                                size: naga::ArraySize::Constant(len),
-                                stride: 4,
-                            }),
-                            n * 4,
-                            4,
-                        )
-                    }
-                };
-                offset = offset.div_ceil(align) * align;
-                members.push(StructMember {
-                    name: Some(item.name.clone()),
-                    ty,
-                    binding: Some(item.binding.clone()),
-                    offset,
-                });
-                offset += size;
-            }
-            let span = offset.div_ceil(16) * 16;
-            let handle = self.b.module.types.insert(
-                naga::Type {
-                    name: Some("Out".into()),
-                    inner: TypeInner::Struct { members, span },
-                },
-                naga::Span::UNDEFINED,
-            );
-            self.result_type = Some(handle);
         }
         Ok(())
     }

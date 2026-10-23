@@ -3,6 +3,9 @@
 //! [`behaviour`] holds D3D's results spelled out as operations.
 
 pub mod behaviour;
+mod entry;
+
+pub use entry::EntryDecl;
 
 use naga::{
     BinaryOperator, Block, Expression, Function, GlobalVariable, Handle, Literal, LocalVariable,
