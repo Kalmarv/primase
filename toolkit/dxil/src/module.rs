@@ -59,6 +59,11 @@ pub enum Constant {
     Aggregate(Vec<ValueId>),
     Data(Vec<u64>),
     String(Vec<u8>),
+    /// A constant `getelementptr`: the base (a global) and its indices (module constants).
+    Gep {
+        base: ValueId,
+        indices: Vec<ValueId>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,7 +73,16 @@ pub enum Value {
         declaration: bool,
     },
     Global {
+        /// The global's type: a pointer to `value_ty`.
         ty: TypeId,
+        /// The type of the value it holds.
+        value_ty: TypeId,
+        /// Its initial value (a module constant), if it has one.
+        init: Option<ValueId>,
+        /// Whether it is a constant (read only).
+        constant: bool,
+        /// LLVM's address space: 0 default, 1 device memory, 3 group shared, 4 constants.
+        address_space: u32,
     },
     Constant(Constant),
     /// A function argument or an instruction's result.
@@ -167,6 +181,29 @@ pub enum Op {
         condition: ValueId,
         then: usize,
         otherwise: usize,
+    },
+    /// A multi-way branch: the value, the default block and the (case constant, block) pairs.
+    Switch {
+        value: ValueId,
+        default: usize,
+        cases: Vec<(ValueId, usize)>,
+    },
+    Unreachable,
+    /// A local variable of this type (the result is a pointer to it).
+    Alloca {
+        ty: TypeId,
+    },
+    Load {
+        pointer: ValueId,
+    },
+    Store {
+        pointer: ValueId,
+        value: ValueId,
+    },
+    /// `getelementptr`: the base pointer and its indices (the first steps over the pointer itself).
+    Gep {
+        base: ValueId,
+        indices: Vec<ValueId>,
     },
 }
 
@@ -331,6 +368,19 @@ impl Module {
                 ),
                 8 | 9 => Constant::String(text(&r.operands, r.at)?),
                 22 => Constant::Data(r.operands.clone()),
+                // CE_GEP and CE_INBOUNDS_GEP: [source type,] then (type, value) pairs, the first the base
+                12 | 20 => {
+                    let ops = &r.operands[usize::from(r.operands.len() % 2 == 1)..];
+                    let (pairs, rest) = ops.as_chunks::<2>();
+                    if !rest.is_empty() || pairs.is_empty() {
+                        return Err(error(r.at, "constant getelementptr operands"));
+                    }
+                    let id = |v: u64| usize::try_from(v).map_err(|_| error(r.at, "value id"));
+                    Constant::Gep {
+                        base: id(pairs[0][1])?,
+                        indices: pairs[1..].iter().map(|p| id(p[1])).collect::<Result<_>>()?,
+                    }
+                }
                 other => {
                     return Err(error(
                         r.at,
@@ -408,7 +458,7 @@ impl Body<'_> {
         self.m.values.len()
     }
     /// A relative operand (absolute = next - operand), with its explicit type following when it is a forward
-    /// reference. Returns the value id and advances `i`.
+    /// reference (a value defined later in the function's layout). Returns the value id and its type, and advances `i`.
     fn value_type(&self, r: &Record, i: &mut usize) -> Result<(ValueId, TypeId)> {
         let rel = op(r, *i)?;
         *i += 1;
@@ -417,14 +467,34 @@ impl Body<'_> {
         if id < self.next() {
             Ok((id, self.m.value_types[id]))
         } else {
-            Err(error(
-                r.at,
-                "forward reference (only straight-line definitions before use are supported)",
-            ))
+            let t = self.m.ty(op(r, *i)?, r.at)?;
+            *i += 1;
+            Ok((id, t))
         }
     }
+    /// A relative operand whose type is known from another operand: a forward reference carries none.
     fn value(&self, r: &Record, i: &mut usize) -> Result<ValueId> {
-        self.value_type(r, i).map(|(v, _)| v)
+        let rel = op(r, *i)?;
+        *i += 1;
+        Ok((self.next() as u32).wrapping_sub(rel as u32) as usize)
+    }
+    /// The type of a value defined before this point, or of a forward reference by the type given.
+    fn pointer_to(&mut self, t: TypeId) -> TypeId {
+        match self.m.types.iter().position(|x| *x == Type::Pointer(t)) {
+            Some(p) => p,
+            None => {
+                self.m.types.push(Type::Pointer(t));
+                self.m.types.len() - 1
+            }
+        }
+    }
+    /// The index a constant integer value stands for, if it is one defined in the module or this function.
+    fn constant_index(&self, v: ValueId) -> Option<usize> {
+        match self.m.values.get(v) {
+            Some(Value::Constant(Constant::Integer(i))) => usize::try_from(*i).ok(),
+            Some(Value::Constant(Constant::Null)) => Some(0),
+            _ => None,
+        }
     }
     fn result(&mut self, ty: TypeId, at: usize) -> Result<Option<(ValueId, TypeId)>> {
         if self.m.types[ty] == Type::Void {
@@ -472,18 +542,14 @@ fn cast(code: u64, at: usize) -> Result<CastOp> {
 /// The name of a function-body record code this reader refuses.
 fn refused(code: u64) -> &'static str {
     match code {
-        4 | 30 | 43 => "getelementptr",
+        4 | 30 => "getelementptr (old form)",
         6 => "extractelement",
         7 => "insertelement",
         8 => "shufflevector",
-        12 => "switch",
         13 => "invoke",
-        15 => "unreachable",
-        16 => "phi",
-        19 => "alloca",
-        20 | 41 => "load",
+        41 => "load (atomic)",
         23 => "va_arg",
-        24 | 44 | 42 | 45 => "store",
+        24 | 42 | 45 => "store (atomic)",
         31 => "indirectbr",
         36 => "fence",
         37 | 46 => "cmpxchg",
@@ -704,6 +770,90 @@ impl Module {
                         )
                     }
                 }
+                12 => {
+                    // [type, value, default block, (case constant, block)*]; case constants are absolute ids
+                    let block = |v: u64| -> Result<usize> {
+                        usize::try_from(v)
+                            .ok()
+                            .filter(|&b| b < body.blocks)
+                            .ok_or_else(|| error(r.at, "switch target"))
+                    };
+                    i = 1;
+                    let value = body.value(r, &mut i)?;
+                    let default = block(op(r, i)?)?;
+                    let pairs = &r.operands[i + 1..];
+                    if pairs.len() % 2 != 0 {
+                        return Err(error(r.at, "switch cases"));
+                    }
+                    let cases = pairs
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|p| {
+                            Ok((
+                                usize::try_from(p[0]).map_err(|_| error(r.at, "case value"))?,
+                                block(p[1])?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (
+                        Op::Switch {
+                            value,
+                            default,
+                            cases,
+                        },
+                        None,
+                    )
+                }
+                15 => (Op::Unreachable, None),
+                19 => {
+                    // [allocated type, size type, size (absolute id), alignment]
+                    let ty = body.m.ty(op(r, 0)?, r.at)?;
+                    (Op::Alloca { ty }, Some(body.pointer_to(ty)))
+                }
+                20 => {
+                    let (pointer, pt) = body.value_type(r, &mut i)?;
+                    let _ = pt;
+                    let ty = body.m.ty(op(r, i)?, r.at)?;
+                    (Op::Load { pointer }, Some(ty))
+                }
+                44 => {
+                    let (pointer, _) = body.value_type(r, &mut i)?;
+                    let (value, _) = body.value_type(r, &mut i)?;
+                    (Op::Store { pointer, value }, None)
+                }
+                43 => {
+                    // [inbounds, source element type, then each operand with its type when a forward reference]
+                    i = 2;
+                    let source = body.m.ty(op(r, 1)?, r.at)?;
+                    let (base, _) = body.value_type(r, &mut i)?;
+                    let mut indices = Vec::new();
+                    while i < r.operands.len() {
+                        indices.push(body.value_type(r, &mut i)?.0);
+                    }
+                    // the result points at what the indices reach: the first steps over the pointer, the rest into
+                    // arrays, vectors and structures
+                    let mut t = source;
+                    for (n, &index) in indices.iter().enumerate().skip(1) {
+                        let _ = n;
+                        t = match body.m.types[t].clone() {
+                            Type::Array(_, e) | Type::Vector(_, e) => e,
+                            Type::Struct { elements, .. } => {
+                                let k = match body.constant_index(index) {
+                                    Some(k) => k,
+                                    None => {
+                                        return Err(error(r.at, "a structure index that is not constant"));
+                                    }
+                                };
+                                *elements
+                                    .get(k)
+                                    .ok_or_else(|| error(r.at, "getelementptr structure index"))?
+                            }
+                            _ => return Err(error(r.at, "getelementptr into a scalar")),
+                        };
+                    }
+                    (Op::Gep { base, indices }, Some(body.pointer_to(t)))
+                }
                 other => {
                     return Err(error(
                         r.at,
@@ -715,7 +865,14 @@ impl Module {
                 Some(t) => body.result(t, r.at)?,
                 None => None,
             };
-            let terminator = matches!(op, Op::Return(_) | Op::Branch { .. } | Op::CondBranch { .. });
+            let terminator = matches!(
+                op,
+                Op::Return(_)
+                    | Op::Branch { .. }
+                    | Op::CondBranch { .. }
+                    | Op::Switch { .. }
+                    | Op::Unreachable
+            );
             instructions.push(Instruction {
                 op,
                 result,
@@ -732,13 +889,6 @@ impl Module {
         let end = body.next();
         for inst in &instructions {
             match &inst.op {
-                // Control flow only moves forward: loops are refused.
-                Op::Branch { target } if *target <= inst.block => {
-                    return Err(error(inst.at, "backward branch (loops are not supported)"));
-                }
-                Op::CondBranch { then, otherwise, .. } if *then <= inst.block || *otherwise <= inst.block => {
-                    return Err(error(inst.at, "backward branch (loops are not supported)"));
-                }
                 Op::Phi { incoming } if incoming.iter().any(|(v, _)| *v >= end) => {
                     return Err(error(inst.at, "phi names an undefined value"));
                 }
@@ -773,16 +923,41 @@ impl Module {
                     1 => version = Some(op(r, 0)?),
                     2..=6 | 11 | 13 | 16 => {} // triple, datalayout, asm, section, deplib, gc, source file
                     7 => {
-                        // GLOBALVAR: [type, flags (bit 1: explicit type), ...]
+                        // GLOBALVAR: [type, flags (bit 0 constant, bit 1 explicit type, from bit 2 the address space),
+                        // initial value + 1 or 0, ...]
                         let t = m.ty(op(r, 0)?, r.at)?;
-                        let explicit = op(r, 1)? & 2 != 0;
-                        let ty = if explicit {
-                            m.types.push(Type::Pointer(t));
-                            m.types.len() - 1
+                        let flags = op(r, 1)?;
+                        let (ty, value_ty) = if flags & 2 != 0 {
+                            let pointer = match m.types.iter().position(|x| *x == Type::Pointer(t)) {
+                                Some(p) => p,
+                                None => {
+                                    m.types.push(Type::Pointer(t));
+                                    m.types.len() - 1
+                                }
+                            };
+                            (pointer, t)
                         } else {
-                            t
+                            match &m.types[t] {
+                                Type::Pointer(inner) => (t, *inner),
+                                _ => return Err(error(r.at, "a global whose type is not a pointer")),
+                            }
                         };
-                        m.push(Value::Global { ty }, ty, r.at)?;
+                        let init = match op(r, 2)? {
+                            0 => None,
+                            n => Some(usize::try_from(n - 1).map_err(|_| error(r.at, "initial value id"))?),
+                        };
+                        m.push(
+                            Value::Global {
+                                ty,
+                                value_ty,
+                                init,
+                                constant: flags & 1 != 0,
+                                address_space: u32::try_from(flags >> 2)
+                                    .map_err(|_| error(r.at, "address space"))?,
+                            },
+                            ty,
+                            r.at,
+                        )?;
                     }
                     8 => {
                         // FUNCTION: [function type, cc, isproto, ...]

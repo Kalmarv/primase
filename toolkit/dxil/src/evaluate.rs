@@ -329,7 +329,40 @@ impl Shader {
                 Op::InsertValue { .. } => "InsertValue".into(),
                 Op::Phi { .. } => "Phi".into(),
                 Op::Return(_) => "Ret".into(),
-                Op::Branch { .. } | Op::CondBranch { .. } => "Br".into(),
+                Op::Branch { target } => {
+                    if *target <= inst.block {
+                        *c.refused
+                            .entry("backward branch (loops are not supported)".into())
+                            .or_default() += 1;
+                    }
+                    "Br".into()
+                }
+                Op::CondBranch { then, otherwise, .. } => {
+                    if *then <= inst.block || *otherwise <= inst.block {
+                        *c.refused
+                            .entry("backward branch (loops are not supported)".into())
+                            .or_default() += 1;
+                    }
+                    "Br".into()
+                }
+                // the evaluated subset has none of the control flow and memory only the lifter reads
+                Op::Switch { .. }
+                | Op::Unreachable
+                | Op::Alloca { .. }
+                | Op::Load { .. }
+                | Op::Store { .. }
+                | Op::Gep { .. } => {
+                    let n = match &inst.op {
+                        Op::Switch { .. } => "Switch",
+                        Op::Unreachable => "Unreachable",
+                        Op::Alloca { .. } => "Alloca",
+                        Op::Load { .. } => "Load",
+                        Op::Store { .. } => "Store",
+                        _ => "GetElementPtr",
+                    };
+                    *c.refused.entry(n.into()).or_default() += 1;
+                    n.into()
+                }
                 Op::Call { function, args } => {
                     match self.opcode(f, *function, args) {
                         Ok(code) => {
@@ -655,6 +688,12 @@ impl Shader {
                     Some(v)
                 }
                 Op::InsertValue { .. } => return Err(error(at, "insertvalue")),
+                Op::Switch { .. }
+                | Op::Unreachable
+                | Op::Alloca { .. }
+                | Op::Load { .. }
+                | Op::Store { .. }
+                | Op::Gep { .. } => return Err(error(at, "an instruction outside the evaluated subset")),
                 Op::Call { function, args } => {
                     let code = self.opcode(f, *function, args).map_err(|e| error(at, e))?;
                     let arg = |n: usize, locals: &[V]| -> Result<V> {
