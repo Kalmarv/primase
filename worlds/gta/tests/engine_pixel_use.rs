@@ -1,7 +1,7 @@
 //! The lanes of the engine constants the pixel and vertex programs read and `resolve-gta-shaders` gives no role (the
 //! remainder after it binds only what a program reads): per constant and stage, how many programs read each lane, which
-//! effects' programs they are, and the smallest reader. With `PRIMASE_DUMP` set to a folder, the emitted WGSL of the
-//! smallest reader of each constant is written there, so the statements in the role table's docs can be read off the
+//! effects' programs they are, and the smallest reader. The emitted WGSL and constant table of the smallest reader of
+//! each lane is written under the scratch root's `gta-engine-use` folder, so the statements in the role table's docs can be read off the
 //! code.
 //!
 //! What the smallest readers show (read off their WGSL; the roles' reasons in `engine_reason` state it):
@@ -120,7 +120,8 @@ fn how_the_programs_use_the_remaining_engine_constants() {
             }
         }
     }
-    let dump = std::env::var("PRIMASE_DUMP").ok();
+    let dump = primase_testdata::scratch().join("gta-engine-use");
+    std::fs::create_dir_all(&dump).unwrap();
     for ((name, stage), u) in &uses {
         let mut effects: Vec<_> = u.effects.iter().collect();
         effects.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
@@ -135,7 +136,7 @@ fn how_the_programs_use_the_remaining_engine_constants() {
             u.effects.len(),
             stems.join(" ")
         );
-        if let Some(dump) = &dump {
+        {
             for (lane, reader) in u.by_lane.iter().enumerate() {
                 let Some((_, program, entity)) = reader else {
                     continue;
@@ -147,7 +148,7 @@ fn how_the_programs_use_the_remaining_engine_constants() {
                 let Ok(text) = primase_shader::emit::wgsl(&lifted) else {
                     continue;
                 };
-                let stem = format!("{dump}/{name}.{stage}.lane{lane}");
+                let stem = format!("{}/{name}.{stage}.lane{lane}", dump.display());
                 std::fs::write(format!("{stem}.wgsl"), format!("// {program}\n{text}")).unwrap();
                 // the constants that reader reads, by buffer and offset: which row of the WGSL is which constant
                 let table = world.get::<GtaShaderTable>(*entity).unwrap();

@@ -1,7 +1,8 @@
 //! What the G-buffer programs of a campus do with the engine's per-frame, per-view and per-draw buffers (`cb0`, `cb1`,
 //! `cb2`), over the programs `resolve-anvil-shaders` binds on a small rectangle: per stage and buffer row, how many
-//! distinct programs read each lane (`USE stage cbN[row]: lanes x y z w`), and with `PRIMASE_DUMP` set to a folder the
-//! emitted WGSL of the smallest vertex and pixel program (`vertex.wgsl`, `pixel.wgsl`), so the statements in
+//! distinct programs read each lane (`USE stage cbN[row]: lanes x y z w`), and under the scratch root's
+//! `anvil-engine-use` folder the emitted WGSL of the smallest vertex and pixel program (`vertex.wgsl`, `pixel.wgsl`),
+//! so the statements in
 //! `resolve_shaders::engine_reason` can be read off the code.
 //!
 //! Needs `installs.riders`.
@@ -103,12 +104,14 @@ fn how_the_programs_read_the_engine_buffers() {
             l[0], l[1], l[2], l[3]
         );
     }
-    if let Ok(dump) = std::env::var("PRIMASE_DUMP") {
+    {
+        let dump = primase_testdata::scratch().join("anvil-engine-use");
+        std::fs::create_dir_all(&dump).unwrap();
         for (stage, (_, bytes)) in smallest {
             let lifted = primase_dxbc::lift(&bytes).unwrap();
             let text = primase_shader::emit::wgsl(&lifted).unwrap();
             let name = if stage == Stage::Vertex { "vertex" } else { "pixel" };
-            std::fs::write(format!("{dump}/{name}.wgsl"), text).unwrap();
+            std::fs::write(dump.join(format!("{name}.wgsl")), text).unwrap();
         }
     }
     assert!(programs > 10);
