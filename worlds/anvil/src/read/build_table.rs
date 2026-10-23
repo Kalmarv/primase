@@ -306,6 +306,38 @@ impl BuildRow {
     }
 }
 
+/// The solver class `MaterialPropertyPathNodeSolver`: its 59-byte body ends in two links, the generic Material the
+/// column's property replaces (at 41, a tag byte and a u64) and a MaterialTemplate (at 50; null on every column read).
+const MATERIAL_SOLVER: u32 = 0xBC5B_87AF;
+
+impl BuildColumn {
+    /// The generic Material this column's properties replace: the Material link of the one path node's
+    /// `MaterialPropertyPathNodeSolver`; `None` for a column of another kind. On the variant tables of Riders Republic
+    /// the generic Materials are the ones the part's own mesh names (`MAD_CHR_UBody_MF_ALL` for an upper body's
+    /// `_LODM`, and a LOD atlas Material for its lower levels).
+    pub fn generic_material(&self) -> Result<Option<u64>, Error> {
+        let [node] = self.path.as_slice() else {
+            return Ok(None);
+        };
+        let Some((class, body)) = &node.solver else {
+            return Ok(None);
+        };
+        if *class != MATERIAL_SOLVER {
+            return Ok(None);
+        }
+        let short = || Error::Short {
+            what: "material solver link",
+            at: 41,
+            have: body.len(),
+        };
+        let link = body.get(41..50).ok_or_else(short)?;
+        let (_, id) = link.split_first().ok_or_else(short)?;
+        let id: [u8; 8] = id.try_into().map_err(|_| short())?;
+        let id = u64::from_le_bytes(id);
+        Ok((id != 0).then_some(id))
+    }
+}
+
 impl BuildValue {
     /// The reference this value holds (kind `0x1C`): `None` for the null form.
     pub fn reference(&self) -> Result<Option<Reference>, Error> {

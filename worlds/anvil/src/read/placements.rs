@@ -435,6 +435,27 @@ impl Gender {
     }
 }
 
+/// Which materials a rider part is drawn with ([`RiderPartChoice::variant`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Variant {
+    /// The meshes' own Materials (the generic ones the meshes name), nothing replaced.
+    Own,
+    /// The variant table the caller names (a `T###_V###` BuildTable): its row for the gender replaces each generic
+    /// Material its columns' path nodes name with the Material its properties name.
+    Table(u64),
+    /// The variant the part's materials table states: the one row whose weight is exactly 1.0 (the other rows of the
+    /// tables read so far state 0.0). Refused where the part has no single materials table or the table states no
+    /// single such row: the weights of other tables are population odds, not a default.
+    Stated,
+}
+
+/// One part of a rider: its table and the materials it is drawn with, both the caller's choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RiderPartChoice {
+    pub table: u64,
+    pub variant: Variant,
+}
+
 /// A rider to put together ([`Placer::place_rider`]); every field is the caller's choice.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RiderSpec {
@@ -444,30 +465,58 @@ pub struct RiderSpec {
     pub skeletons: Vec<u64>,
     /// The row each part table takes.
     pub gender: Gender,
-    /// The part tables' ClassIDs (BuildTables whose rows name a mesh, its addon Skeleton and its material tables).
-    pub parts: Vec<u64>,
+    /// The parts: BuildTables whose rows name meshes, an addon Skeleton and the tables of their materials and addons.
+    pub parts: Vec<RiderPartChoice>,
+}
+
+/// A variant a part's materials table lists: the variant table, and the row's weight and condition as stored (the
+/// weights are population odds except where a row states 1.0 among 0.0s: [`Variant::Stated`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct VariantRow {
+    pub table: u64,
+    pub name: String,
+    pub weight: f32,
+    pub condition: u32,
+}
+
+/// The Material replacements a variant table states for a gender: pairs of the generic Material (named by a column's
+/// path node) and the Material the row's property of that column names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppliedVariant {
+    pub table: u64,
+    pub pairs: Vec<(u64, u64)>,
 }
 
 /// A part of a rider as its table states it, and what became of it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RiderPart {
     /// The part table's ClassID and its entry's name.
     pub table: u64,
     pub name: String,
-    /// The row's first Mesh link, its Skeleton links, its LODSelector links (not placed: the Mesh is the part's
-    /// highest-detail form, the selector its lower levels) and its BuildTable links (the materials and addons tables).
-    pub mesh: Option<u64>,
+    /// What the table's row for the gender links, by the type of what it names: every Mesh (the part's highest-detail
+    /// form, `_LODM`; a head's row names the head's and the eyelashes'), its Skeletons (the part's addons), its
+    /// LODSelectors (not placed: the lower levels of the same meshes), its Materials (not applied: no column of the
+    /// part row says which generic Material one replaces) and its BuildTables (the materials and addons tables).
+    pub meshes: Vec<u64>,
     pub skeletons: Vec<u64>,
     pub selectors: Vec<u64>,
+    pub materials: Vec<u64>,
     pub tables: Vec<u64>,
-    /// The placement of the mesh, following the rider's rig occurrence.
-    pub placement: Option<Entity>,
-    /// Why the part isn't placed.
-    pub refused: Option<String>,
+    /// The placements of the meshes, following the rider's rig occurrence.
+    pub placements: Vec<Entity>,
+    /// The variants the part's materials table lists (empty where it has none): the caller's choices for
+    /// [`Variant::Table`].
+    pub variants: Vec<VariantRow>,
+    /// The Material replacements applied to the placements, where the variant gave any.
+    pub variant: Option<AppliedVariant>,
+    /// Why the variant isn't applied (the meshes keep their own Materials).
+    pub variant_refused: Option<String>,
+    /// Why a mesh, or the whole part, isn't placed (one reason per refusal).
+    pub refused: Vec<String>,
 }
 
 /// A rider placed: its rig, the occurrence of it, and each part.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RiderPlaced {
     pub rig: Option<Entity>,
     pub occurrence: Option<Entity>,
@@ -1417,18 +1466,18 @@ impl<'a> Placer<'a> {
     }
 
     /// A rider put together from the parts `spec` chooses (see [`RiderSpec`]): each part table's row for the gender
-    /// names the part's mesh, its addon Skeleton and the tables of its materials and addons; the rig is the Skeletons
-    /// `spec` gives and the parts' addons; each part's mesh is placed following one occurrence of that rig. A part
-    /// that can't be placed is refused with its reason in [`RiderPart::refused`] (and in `placed`); nothing is
-    /// chosen for the caller.
+    /// names the part's meshes, its addon Skeleton and the tables of its materials and addons; the rig is the
+    /// Skeletons `spec` gives and the parts' addons; each part's meshes are placed following one occurrence of that
+    /// rig, with the Materials of the variant the caller chose. A mesh that can't be placed is refused with its
+    /// reason in [`RiderPart::refused`] (and in `placed`); nothing is chosen for the caller.
     pub fn place_rider(&mut self, spec: &RiderSpec, placed: &mut Placed) -> RiderPlaced {
         let mut parts: Vec<RiderPart> = spec
             .parts
             .iter()
-            .map(|&table| self.resolve_part(table, spec.gender))
+            .map(|c| self.describe_part(*c, spec.gender))
             .collect();
         let mut key = spec.skeletons.clone();
-        for part in parts.iter().filter(|p| p.refused.is_none()) {
+        for part in &parts {
             for &s in &part.skeletons {
                 if !key.contains(&s) {
                     key.push(s);
@@ -1437,8 +1486,7 @@ impl<'a> Placer<'a> {
         }
         let Some(rig) = self.rig_of(key, placed) else {
             for part in &mut parts {
-                part.refused
-                    .get_or_insert_with(|| "the rig can't be read".to_owned());
+                part.refused.push("the rig can't be read".to_owned());
             }
             return RiderPlaced {
                 rig: None,
@@ -1457,15 +1505,24 @@ impl<'a> Placer<'a> {
         self.world
             .insert(occurrence, self.frame.transform(&Transform::IDENTITY));
         for part in &mut parts {
-            if part.refused.is_some() {
+            if !part.refused.is_empty() {
                 continue;
             }
-            match self.place_part(part, occurrence, &joints, placed) {
-                Ok(p) => part.placement = p,
-                Err(why) => part.refused = Some(why),
+            let pairs = part.variant.as_ref().map(|v| v.pairs.clone()).unwrap_or_default();
+            for mesh in part.meshes.clone() {
+                match self.place_part_mesh(mesh, occurrence, &joints, &pairs, placed) {
+                    Ok(Some(p)) => part.placements.push(p),
+                    Ok(None) => {}
+                    Err(why) => part.refused.push(why),
+                }
             }
-            if let Some(why) = &part.refused {
+            for why in &part.refused {
                 placed.refused.push((part.table, format!("rider part: {why}")));
+            }
+            if let Some(why) = &part.variant_refused {
+                placed
+                    .refused
+                    .push((part.table, format!("rider part variant: {why}")));
             }
         }
         RiderPlaced {
@@ -1475,26 +1532,60 @@ impl<'a> Placer<'a> {
         }
     }
 
-    /// What the part table `table` states for `gender`: its row's mesh, Skeletons, selectors and tables.
+    /// The type of the entry `id` names (`None`: in no forge).
+    fn type_of(&self, id: u64) -> Option<u32> {
+        let at = self.archive.find(id)?;
+        self.archive
+            .forge(at.forge)
+            .and_then(|f| f.names.get(at.entry))
+            .map(|n| n.type_id)
+    }
+
+    /// The BuildTable `id` names, and its entry's name.
+    fn build_table(&mut self, id: u64) -> Result<(StoredBuildTable, String), String> {
+        let at = self.archive.find(id).ok_or("the table is in no forge")?;
+        let name = self.name(at).unwrap_or_default();
+        let r = self.archive.resource(at).map_err(|e| e.to_string())?;
+        if r.type_id != BUILD_TABLE {
+            return Err(format!("{id:#x} is type {:#010x}, not a BuildTable", r.type_id));
+        }
+        Ok((StoredBuildTable::parse(&r.body).map_err(|e| e.to_string())?, name))
+    }
+
+    /// What the part `choice` names states for `gender`, without placing anything: its row's meshes, Skeletons,
+    /// selectors, Materials and tables, the variants its materials table lists and the replacements the chosen
+    /// variant gives (or why it gives none).
+    pub fn describe_part(&mut self, choice: RiderPartChoice, gender: Gender) -> RiderPart {
+        let mut part = self.resolve_part(choice.table, gender);
+        if part.refused.is_empty() {
+            part.variants = self.variants_of(&part).unwrap_or_default();
+            match self.resolve_variant(&part, choice.variant, gender) {
+                Ok(v) => part.variant = v,
+                Err(why) => part.variant_refused = Some(why),
+            }
+        }
+        part
+    }
+
+    /// What the part table `table` states for `gender`: its row's meshes, Skeletons, selectors, Materials and tables.
     fn resolve_part(&mut self, table: u64, gender: Gender) -> RiderPart {
         let mut part = RiderPart {
             table,
             name: String::new(),
-            mesh: None,
+            meshes: Vec::new(),
             skeletons: Vec::new(),
             selectors: Vec::new(),
+            materials: Vec::new(),
             tables: Vec::new(),
-            placement: None,
-            refused: None,
+            placements: Vec::new(),
+            variants: Vec::new(),
+            variant: None,
+            variant_refused: None,
+            refused: Vec::new(),
         };
         let found = (|| -> Result<(), String> {
-            let at = self.archive.find(table).ok_or("the table is in no forge")?;
-            part.name = self.name(at).unwrap_or_default();
-            let r = self.archive.resource(at).map_err(|e| e.to_string())?;
-            if r.type_id != BUILD_TABLE {
-                return Err(format!("type {:#010x}, not a BuildTable", r.type_id));
-            }
-            let t = StoredBuildTable::parse(&r.body).map_err(|e| e.to_string())?;
+            let (t, name) = self.build_table(table)?;
+            part.name = name;
             let mut rows = t.rows_with(gender.condition());
             let (Some(row), None) = (rows.next(), rows.next()) else {
                 return Err(format!(
@@ -1503,42 +1594,139 @@ impl<'a> Placer<'a> {
                 ));
             };
             for (_, id) in row.links().map_err(|e| e.to_string())? {
-                let Some(at) = self.archive.find(id) else {
-                    continue;
-                };
-                let type_id = self
-                    .archive
-                    .forge(at.forge)
-                    .and_then(|f| f.names.get(at.entry))
-                    .map(|n| n.type_id);
-                match type_id {
-                    Some(MESH) if part.mesh.is_none() => part.mesh = Some(id),
+                match self.type_of(id) {
+                    Some(MESH) => part.meshes.push(id),
                     Some(LOD_SELECTOR) => part.selectors.push(id),
                     Some(SKELETON) => part.skeletons.push(id),
+                    Some(MATERIAL) => part.materials.push(id),
                     Some(BUILD_TABLE) => part.tables.push(id),
                     _ => {}
                 }
             }
+            if part.meshes.is_empty() {
+                return Err("its row names no Mesh".to_owned());
+            }
             Ok(())
         })();
         if let Err(why) = found {
-            part.refused = Some(why);
+            part.refused.push(why);
         }
         part
     }
 
-    /// The placement of `part`'s mesh following `occurrence`, once every bone a vertex weights is a joint of the rig
-    /// (`joints`).
-    fn place_part(
+    /// The replacements `variant` gives for `part`: `Ok(None)` for [`Variant::Own`].
+    fn resolve_variant(
         &mut self,
         part: &RiderPart,
+        variant: Variant,
+        gender: Gender,
+    ) -> Result<Option<AppliedVariant>, String> {
+        let table = match variant {
+            Variant::Own => return Ok(None),
+            Variant::Table(t) => t,
+            Variant::Stated => self.stated_variant(part)?,
+        };
+        let (t, _) = self.build_table(table)?;
+        let mut rows = t.rows_with(gender.condition());
+        let (Some(row), None) = (rows.next(), rows.next()) else {
+            return Err(format!(
+                "the variant table has no single row for the condition {:#010x}",
+                gender.condition()
+            ));
+        };
+        let links = row.links().map_err(|e| e.to_string())?;
+        let mut pairs = Vec::new();
+        for c in &t.columns {
+            let Some(generic) = c.generic_material().map_err(|e| e.to_string())? else {
+                continue;
+            };
+            let number = c.fields[0];
+            if let Some((_, effective)) = links.iter().find(|(column, _)| *column == number) {
+                pairs.push((generic, *effective));
+            }
+        }
+        if pairs.is_empty() {
+            return Err("the variant table's row replaces no Material".to_owned());
+        }
+        Ok(Some(AppliedVariant { table, pairs }))
+    }
+
+    /// The part's materials table: the one of its tables whose rows link variant tables (BuildTables with a column
+    /// naming a generic Material), with its entry's name; `None` where it has none or several.
+    fn materials_table(&mut self, part: &RiderPart) -> Result<Option<(StoredBuildTable, String)>, String> {
+        let mut found: Vec<(StoredBuildTable, String)> = Vec::new();
+        for &id in &part.tables {
+            let (t, name) = self.build_table(id)?;
+            let mut variants = false;
+            for row in &t.rows {
+                for (_, target) in row.links().map_err(|e| e.to_string())? {
+                    if self.type_of(target) != Some(BUILD_TABLE) {
+                        continue;
+                    }
+                    let (v, _) = self.build_table(target)?;
+                    variants |= v
+                        .columns
+                        .iter()
+                        .any(|c| c.generic_material().ok().flatten().is_some());
+                }
+            }
+            if variants {
+                found.push((t, name));
+            }
+        }
+        Ok(match <[_; 1]>::try_from(found) {
+            Ok([one]) => Some(one),
+            Err(_) => None,
+        })
+    }
+
+    /// The variants the part's materials table lists, one per variant table a row links.
+    fn variants_of(&mut self, part: &RiderPart) -> Result<Vec<VariantRow>, String> {
+        let Some((t, _)) = self.materials_table(part)? else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for row in &t.rows {
+            for (_, id) in row.links().map_err(|e| e.to_string())? {
+                if self.type_of(id) == Some(BUILD_TABLE) {
+                    out.push(VariantRow {
+                        table: id,
+                        name: self
+                            .archive
+                            .find(id)
+                            .and_then(|at| self.name(at))
+                            .unwrap_or_default(),
+                        weight: row.weight,
+                        condition: row.condition,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The variant table the part's materials table states: the one row of weight exactly 1.0.
+    fn stated_variant(&mut self, part: &RiderPart) -> Result<u64, String> {
+        if part.variants.is_empty() {
+            return Err("the part has no single materials table listing variant tables".to_owned());
+        }
+        let mut stated = part.variants.iter().filter(|v| v.weight == 1.0);
+        match (stated.next(), stated.next()) {
+            (Some(v), None) => Ok(v.table),
+            _ => Err("its materials table states no single variant of weight 1.0".to_owned()),
+        }
+    }
+
+    /// The placement of the mesh `mesh` following `occurrence`, once every bone a vertex weights is a joint of the
+    /// rig (`joints`), its Materials replaced by `pairs` (generic, effective).
+    fn place_part_mesh(
+        &mut self,
+        mesh: u64,
         occurrence: Entity,
         joints: &HashSet<u32>,
+        pairs: &[(u64, u64)],
         placed: &mut Placed,
     ) -> Result<Option<Entity>, String> {
-        let Some(mesh) = part.mesh else {
-            return Err("its row names no Mesh".to_owned());
-        };
         let at = self.archive.find(mesh).ok_or("its Mesh is in no forge")?;
         let r = self.archive.resource(at).map_err(|e| e.to_string())?;
         let stored = StoredMesh::parse(&r.body).map_err(|e| e.to_string())?;
@@ -1558,8 +1746,54 @@ impl<'a> Placer<'a> {
                 ));
             }
         }
-        self.place_object_following(at, Some(occurrence), placed)
-            .map_err(|e| e.to_string())
+        let Some(p) = self
+            .place_object_following(at, Some(occurrence), placed)
+            .map_err(|e| e.to_string())?
+        else {
+            return Ok(None);
+        };
+        if !pairs.is_empty() {
+            self.replace_materials(p, pairs, placed);
+        }
+        Ok(Some(p))
+    }
+
+    /// The placement `p` drawn with the Materials `pairs` (generic, effective) replace: its prototype copied, each
+    /// range whose Material is a generic one of a pair taking the effective one (read where the placer reads
+    /// Materials).
+    fn replace_materials(&mut self, p: Entity, pairs: &[(u64, u64)], placed: &mut Placed) {
+        let Some(prototype) = self.world.get::<Instance>(p).map(|i| i.prototype) else {
+            return;
+        };
+        let Some(copy) = self.world.duplicate(prototype) else {
+            return;
+        };
+        let Some(mut mesh) = self.world.get::<AnvilMesh>(copy).cloned() else {
+            return;
+        };
+        for (k, id) in mesh.materials.clone().into_iter().enumerate() {
+            let Some(&(_, effective)) = pairs.iter().find(|(generic, _)| *generic == id) else {
+                continue;
+            };
+            if let Some(slot) = mesh.materials.get_mut(k) {
+                *slot = effective;
+            }
+            if self.read_materials {
+                let e = self.material(effective, placed);
+                if let Some(slot) = mesh.material_entities.get_mut(k) {
+                    *slot = e;
+                }
+            }
+        }
+        self.world.insert(copy, mesh);
+        self.prototypes.insert(copy);
+        self.world.insert(
+            p,
+            Instance {
+                prototype: copy,
+                variant: 0,
+            },
+        );
     }
 
     /// The Entity or EntityGroup at `at` placed into the world: one placement per Visual with something to show, or per

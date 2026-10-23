@@ -3,21 +3,25 @@
 //! the rider (rig, parts, clips chosen by coverage) lowers under the pass manager with its checks on.
 use std::collections::{BTreeMap, HashSet};
 
-use primase_anvil::components::StoredBuildTable;
+use primase_anvil::components::{AnvilMesh, StoredBuildTable};
 use primase_anvil::passes::{
     LowerAnvilClips, LowerAnvilMesh, LowerAnvilRig, LowerAnvilSkin, OwnTransform, SelectAnvilClips,
     Static16Normal,
 };
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::build_table::{BUILD_TABLE, FEMALE, MALE};
+use primase_anvil::read::mesh::MATERIAL;
 use primase_anvil::read::mesh::{MESH, StoredMesh};
-use primase_anvil::read::placements::{Gender, InstancedLevels, Placed, Placer, RiderSpec};
+use primase_anvil::read::meshes::anvil_mesh;
+use primase_anvil::read::placements::{
+    Gender, InstancedLevels, Placed, Placer, RiderPartChoice, RiderSpec, Variant,
+};
 use primase_anvil::read::skeleton::{SKELETON, StoredSkeleton};
-use primase_core::World;
 use primase_core::clip::{Clip, ClipBinding, Extrapolation, Interpolation};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::rig::{RigInstance, SkinInstance};
+use primase_core::{Instance, World};
 use primase_testdata::{Game, install};
 
 fn open() -> Option<Archive> {
@@ -168,8 +172,23 @@ fn the_gender_rows_name_gendered_meshes_and_the_rigs_cover_most_parts() {
     );
 }
 
-/// A rider from four parts: placed, its rig lowered with the root replaced, the parts bound to it, and clips chosen
-/// by coverage, under the pass manager with its checks on.
+fn choice(archive: &Archive, name: &str, variant: Variant) -> RiderPartChoice {
+    RiderPartChoice {
+        table: id_of(archive, BUILD_TABLE, name),
+        variant,
+    }
+}
+
+fn base(archive: &Archive) -> Vec<u64> {
+    ["MAD_CHR_Skel_U", "MAD_CHR_SkelAddon_U", "MAD_CHR_SkelAddon_M"]
+        .iter()
+        .map(|n| id_of(archive, SKELETON, n))
+        .collect()
+}
+
+/// A rider from four parts, each with the variant its materials table states: placed, its rig lowered with the root
+/// replaced, the parts bound to it, and clips chosen by coverage, under the pass manager with its checks on; the
+/// upper body is drawn with the Materials its variant table names, not the generic ones its mesh names.
 #[test]
 fn a_rider_of_chosen_parts_places_and_lowers_with_clips() {
     let Some(mut archive) = open() else {
@@ -177,10 +196,7 @@ fn a_rider_of_chosen_parts_places_and_lowers_with_clips() {
     };
     let spec = RiderSpec {
         name: "rider".to_owned(),
-        skeletons: ["MAD_CHR_Skel_U", "MAD_CHR_SkelAddon_U", "MAD_CHR_SkelAddon_M"]
-            .iter()
-            .map(|n| id_of(&archive, SKELETON, n))
-            .collect(),
+        skeletons: base(&archive),
         gender: Gender::Male,
         parts: [
             "MAD_CHR_UBODY_001_U_1001",
@@ -189,9 +205,11 @@ fn a_rider_of_chosen_parts_places_and_lowers_with_clips() {
             "MAD_CHR_HEADW_001_U",
         ]
         .iter()
-        .map(|n| id_of(&archive, BUILD_TABLE, n))
+        .map(|n| choice(&archive, n, Variant::Stated))
         .collect(),
     };
+    let generic = id_of(&archive, MATERIAL, "MAD_CHR_UBody_MF_ALL");
+    let effective = id_of(&archive, MATERIAL, "MAD_CHR_UBody_001_MF_1001_T001_V001");
     let mut w = World::new();
     let mut placed = Placed::default();
     let rider = {
@@ -201,24 +219,38 @@ fn a_rider_of_chosen_parts_places_and_lowers_with_clips() {
             SourceFrame::WORLD,
             InstancedLevels::Selector,
         )
+        .with_materials()
         .with_clip_candidates();
         placer.place_rider(&spec, &mut placed)
     };
     for p in &rider.parts {
         println!(
-            "{}: mesh {:?}, {} skeletons, {} selectors, {} tables, placed {}, refused {:?}",
+            "{}: {} meshes, {} variants listed, variant {:?}, refused variant {:?}, placed {}, refused {:?}",
             p.name,
-            p.mesh,
-            p.skeletons.len(),
-            p.selectors.len(),
-            p.tables.len(),
-            p.placement.is_some(),
+            p.meshes.len(),
+            p.variants.len(),
+            p.variant.as_ref().map(|v| v.pairs.len()),
+            p.variant_refused,
+            p.placements.len(),
             p.refused
         );
     }
     assert!(rider.rig.is_some() && rider.occurrence.is_some());
-    let placed_parts = rider.parts.iter().filter(|p| p.placement.is_some()).count();
-    assert!(placed_parts > 0, "{:?}", rider.parts);
+    let placed_parts = rider.parts.iter().filter(|p| !p.placements.is_empty()).count();
+    assert_eq!(placed_parts, 4, "{:?}", rider.parts);
+    // the upper body: its Stated variant replaces the generic body Material with the variant's
+    let upper = &rider.parts[0];
+    let v = upper.variant.as_ref().expect("the upper body's stated variant");
+    assert!(v.pairs.contains(&(generic, effective)), "{:?}", v.pairs);
+    let instance = w.get::<Instance>(upper.placements[0]).expect("instance");
+    let mesh = w.get::<AnvilMesh>(instance.prototype).expect("mesh");
+    assert!(mesh.materials.contains(&effective) && !mesh.materials.contains(&generic));
+    assert!(
+        mesh.materials
+            .iter()
+            .zip(&mesh.material_entities)
+            .all(|(m, e)| (*m != effective) || e.is_some())
+    );
     let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
     let pipeline = Pipeline {
         passes: vec![
@@ -253,8 +285,35 @@ fn a_rider_of_chosen_parts_places_and_lowers_with_clips() {
     assert!(skins >= placed_parts && clips > 0 && bindings == clips);
 }
 
+/// A head part's row names two meshes (the head and the eyelashes): both place.
+#[test]
+fn a_head_part_places_all_the_meshes_its_row_names() {
+    let Some(mut archive) = open() else {
+        return;
+    };
+    let spec = RiderSpec {
+        name: "head".to_owned(),
+        skeletons: base(&archive),
+        gender: Gender::Male,
+        parts: vec![choice(&archive, "MAD_CHR_HEAD_001_U", Variant::Own)],
+    };
+    let mut w = World::new();
+    let mut placed = Placed::default();
+    let rider = Placer::new(
+        &mut archive,
+        &mut w,
+        SourceFrame::WORLD,
+        InstancedLevels::Selector,
+    )
+    .place_rider(&spec, &mut placed);
+    let head = &rider.parts[0];
+    println!("{:?}", head);
+    assert_eq!((head.meshes.len(), head.placements.len()), (2, 2));
+    assert!(head.refused.is_empty() && head.variant.is_none() && head.variant_refused.is_none());
+}
+
 /// A part whose mesh weights bones the rig lacks is refused with the reason, and one the table doesn't hold a row
-/// for is refused too; neither stops the others.
+/// for is refused too; neither stops the others. A stated variant a part doesn't have is refused as a variant only.
 #[test]
 fn a_part_the_rig_cannot_carry_is_refused_with_its_reason() {
     let Some(mut archive) = open() else {
@@ -266,9 +325,10 @@ fn a_part_the_rig_cannot_carry_is_refused_with_its_reason() {
         skeletons: vec![id_of(&archive, SKELETON, "MAD_CHR_Skel_U")],
         gender: Gender::Male,
         parts: vec![
-            id_of(&archive, BUILD_TABLE, "MAD_CHR_LBODY_001_U_1001"),
-            id_of(&archive, BUILD_TABLE, "MAD_CHR_FOOTW_001_U"),
-            id_of(&archive, BUILD_TABLE, "MAD_CHR_ICON_BUNDLE"),
+            choice(&archive, "MAD_CHR_LBODY_001_U_1001", Variant::Own),
+            choice(&archive, "MAD_CHR_FOOTW_001_U", Variant::Own),
+            choice(&archive, "MAD_CHR_ICON_BUNDLE", Variant::Own),
+            choice(&archive, "MAD_CHR_HEAD_001_U", Variant::Stated),
         ],
     };
     let mut w = World::new();
@@ -280,10 +340,111 @@ fn a_part_the_rig_cannot_carry_is_refused_with_its_reason() {
         InstancedLevels::Selector,
     )
     .place_rider(&spec, &mut placed);
-    let reasons: Vec<Option<&str>> = rider.parts.iter().map(|p| p.refused.as_deref()).collect();
+    let reasons: Vec<&[String]> = rider.parts.iter().map(|p| p.refused.as_slice()).collect();
     println!("{reasons:?}");
-    assert!(reasons[0].is_some_and(|r| r.contains("bones the rig has no joint for")));
-    assert!(reasons[1].is_none());
-    assert!(reasons[2].is_some());
+    assert!(
+        reasons[0]
+            .iter()
+            .any(|r| r.contains("bones the rig has no joint for"))
+    );
+    assert!(reasons[1].is_empty() && !rider.parts[1].placements.is_empty());
+    assert!(!reasons[2].is_empty());
+    // the head part has no materials table of variant tables: its Stated variant is refused, its meshes still place
+    assert!(rider.parts[3].variant_refused.is_some());
+    assert!(!rider.parts[3].placements.is_empty() || !rider.parts[3].refused.is_empty());
     assert!(!placed.refused.is_empty());
+}
+
+/// Every part table the slot tables list, both genders, with the variant its materials table states: how many list
+/// variants, how many state one, and that the generic Materials the variant tables name are the part meshes' own.
+#[test]
+fn the_variant_tables_replace_the_materials_the_part_meshes_name() {
+    let Some(mut archive) = open() else {
+        return;
+    };
+    let mut slots: Vec<At> = Vec::new();
+    let mut tables: BTreeMap<u64, At> = BTreeMap::new();
+    for forge in 0..5 {
+        for (entry, (i, n)) in archive.forge(forge).expect("forge").entries().enumerate() {
+            if n.type_id == BUILD_TABLE {
+                tables.entry(i.id).or_insert(At { forge, entry });
+                if n.name.starts_with("MAD_CHR_SLOT_") {
+                    slots.push(At { forge, entry });
+                }
+            }
+        }
+    }
+    let mut parts: Vec<u64> = Vec::new();
+    for at in &slots {
+        let slot = StoredBuildTable::parse(&archive.resource(*at).expect("slot").body).expect("slot");
+        for row in &slot.rows {
+            for p in row.properties.iter().filter(|p| p.column == 1) {
+                let id = link_id(p);
+                if tables.contains_key(&id) && !parts.contains(&id) {
+                    parts.push(id);
+                }
+            }
+        }
+    }
+    let mut w = World::new();
+    let mut all = Vec::new();
+    for gender in [Gender::Male, Gender::Female] {
+        let mut placer = Placer::new(
+            &mut archive,
+            &mut w,
+            SourceFrame::WORLD,
+            InstancedLevels::Selector,
+        );
+        for &table in &parts {
+            all.push(placer.describe_part(
+                RiderPartChoice {
+                    table,
+                    variant: Variant::Stated,
+                },
+                gender,
+            ));
+        }
+    }
+    let (mut described, mut listed, mut stated, mut refused, mut matched, mut replaced) =
+        (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut reasons: BTreeMap<String, u64> = BTreeMap::new();
+    for part in &all {
+        if !part.refused.is_empty() || part.meshes.is_empty() {
+            continue;
+        }
+        described += 1;
+        listed += u64::from(!part.variants.is_empty());
+        match (&part.variant, &part.variant_refused) {
+            (Some(v), _) => {
+                stated += 1;
+                replaced += u64::try_from(v.pairs.len()).expect("count");
+                // a generic Material of some pair is one a mesh of the part names
+                let mut ok = false;
+                for &m in &part.meshes {
+                    let at = archive.find(m).expect("mesh");
+                    let stored = StoredMesh::parse(&archive.resource(at).expect("mesh").body).expect("mesh");
+                    let names = anvil_mesh(&stored, at.entry, m, SourceFrame::WORLD)
+                        .expect("anvil mesh")
+                        .materials;
+                    ok |= v.pairs.iter().any(|(g, _)| names.contains(g));
+                }
+                matched += u64::from(ok);
+            }
+            (None, Some(why)) => {
+                refused += 1;
+                *reasons.entry(why.clone()).or_default() += 1;
+            }
+            (None, None) => {}
+        }
+    }
+    println!(
+        "{} part tables, {described} part rows described, {listed} list variants, {stated} state one, {refused} don't \
+         ({reasons:?}), {replaced} replacement pairs, {matched} of the stated variants name a generic Material one of the \
+         part's meshes has",
+        parts.len()
+    );
+    assert_eq!(
+        (parts.len(), described, listed, stated, refused, replaced, matched),
+        (451, 815, 809, 767, 48, 2047, 767)
+    );
 }

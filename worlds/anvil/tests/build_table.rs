@@ -226,3 +226,56 @@ fn the_footwear_part_table_names_its_selector_skeleton_and_materials() {
     }
     assert_eq!(t.resources.len(), 2);
 }
+
+/// A column whose one path node's solver is a `MaterialPropertyPathNodeSolver` names its generic Material (the link at
+/// 41 of the solver's 59 bytes); a column with no solver, another solver or a null link names none.
+#[test]
+fn a_material_solver_column_names_its_generic_material() {
+    use primase_anvil::components::{BuildColumn, BuildValue, PathNode};
+    let value = BuildValue {
+        class: 0,
+        before: 0,
+        after: 0,
+        kind: 0x1C,
+        value: vec![0; 10],
+    };
+    let column = |solver: Option<(u32, Vec<u8>)>| BuildColumn {
+        id: 1,
+        apply_id: 2,
+        apply_bits: 0,
+        path: vec![PathNode {
+            fields: vec![0; 41],
+            solver,
+        }],
+        path_bytes: [1, 0],
+        fields: [1, 0, 0],
+        table: BuildLink { tag: 1, id: 3 },
+        header: [1, 0x2CEC_F817],
+        declared: value.clone(),
+    };
+    let mut body = vec![0u8; 59];
+    body[42..50].copy_from_slice(&0x1234u64.to_le_bytes());
+    assert_eq!(
+        column(Some((0xBC5B_87AF, body.clone())))
+            .generic_material()
+            .expect("read"),
+        Some(0x1234)
+    );
+    assert_eq!(column(None).generic_material().expect("read"), None);
+    assert_eq!(
+        column(Some((0x1D6F_0AE7, vec![0; 34])))
+            .generic_material()
+            .expect("read"),
+        None
+    );
+    body[42..50].copy_from_slice(&0u64.to_le_bytes());
+    assert_eq!(
+        column(Some((0xBC5B_87AF, body)))
+            .generic_material()
+            .expect("read"),
+        None
+    );
+    let mut none = column(None);
+    none.path.clear();
+    assert_eq!(none.generic_material().expect("read"), None);
+}
