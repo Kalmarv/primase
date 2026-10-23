@@ -65,7 +65,7 @@ fn legion_materials_are_the_same_encoded_or_identified() -> Result<()> {
     let rect = "x0=95,y0=-1034,x1=295,y1=-834";
     let select = registry.parse(&format!(
         "resolve-state{{assign=gta.map:online;gta.hour:12}}, gta-select-region{{{rect},min_size=0.5,max_priority=3}}, \
-         lower-gta-lights{{state=false,{rect}}}, gta-select-collision{{detail=plain}}, \
+         lower-gta-lights{{hour=every,{rect}}}, gta-select-collision{{detail=plain}}, \
          lower-gta-collision{{{rect},foliage=leave-out,river=leave-out}}, lower-gta-surfaces, \
          gta-select-water{{{rect},clip=kept}}, place-spawn{{at=centre}}"
     ))?;

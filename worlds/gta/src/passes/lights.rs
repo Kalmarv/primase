@@ -1,7 +1,7 @@
-//! `lower-gta-lights{hour,state,x0,y0,x1,y1}`: every placement's light records ([`GtaLights`] on its prototype) as
-//! placed `core.light` entities, each with its record as `gta.light` (its hours among them), every light or, given
-//! `hour`, only those on then, or, with `state=true` (the hour kept as state), every light with its hours as a
-//! `core.condition` on the global `gta.hour` axis ([`crate::components::state::hour_axis`], made when the region has none; a light
+//! `lower-gta-lights{hour,x0,y0,x1,y1}`: every placement's light records ([`GtaLights`] on its prototype) as
+//! placed `core.light` entities, each with its record as `gta.light` (its hours among them): the required `hour` says
+//! which, every light (`hour=every`), only those on at an hour (`hour=0`-`23`), or, with `hour=state` (the hour kept as
+//! state), every light with its hours as a `core.condition` on the global `gta.hour` axis ([`crate::components::state::hour_axis`], made when the region has none; a light
 //! on every hour, or whose mask is 0 (always on, as GTA reads it), has none), and, given a region, those inside it (GTA ground
 //! coordinates; the light's own position decides, as the earlier exporter did). Runs on the read world after the selection (map state and hour
 //! resolved, region rules applied), so each light belongs to a placement that is drawn. Each light is declared as its
@@ -38,11 +38,11 @@ use crate::passes::rect::{GroundRect, Hour};
 /// Which lights `lower-gta-lights` places, by their hours.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LightHours {
-    /// Every light, each keeping its hours in its `gta.light` (option: neither `hour` nor `state`).
+    /// Every light, each keeping its hours in its `gta.light` (option `hour=every`).
     Every,
     /// Only the lights on at this hour (option `hour=H`).
     At(Hour),
-    /// Every light with its hours as a condition on `gta.hour`, the hour kept as state (option `state=true`).
+    /// Every light with its hours as a condition on `gta.hour`, the hour kept as state (option `hour=state`).
     State,
 }
 
@@ -57,21 +57,22 @@ pub struct LowerGtaLights {
 impl LowerGtaLights {
     pub fn from_options(o: &Options) -> Result<LowerGtaLights, String> {
         for k in o.keys() {
-            if !["hour", "state", "x0", "y0", "x1", "y1"].contains(&k.as_str()) {
+            if !["hour", "x0", "y0", "x1", "y1"].contains(&k.as_str()) {
                 return Err(format!("unknown option {k}"));
             }
         }
-        let hour = o.get("hour").map(|v| Hour::parse(v)).transpose()?;
-        let state = match o.get("state").map(String::as_str) {
-            None | Some("false") => false,
-            Some("true") => true,
-            Some(v) => return Err(format!("state: not true or false: {v}")),
-        };
-        let hours = match (hour, state) {
-            (Some(_), true) => return Err("hour and state=true: the hour is either resolved or kept".into()),
-            (Some(h), false) => LightHours::At(h),
-            (None, true) => LightHours::State,
-            (None, false) => LightHours::Every,
+        let hours = match o.get("hour").map(String::as_str) {
+            Some("every") => LightHours::Every,
+            Some("state") => LightHours::State,
+            Some(v) => LightHours::At(
+                Hour::parse(v).map_err(|_| format!("hour: {v} is none of 0-23, every and state"))?,
+            ),
+            None => {
+                return Err(
+                    "hour is required (0-23, every or state): which lights are placed is the caller's choice"
+                        .into(),
+                );
+            }
         };
         Ok(LowerGtaLights {
             hours,
@@ -104,15 +105,12 @@ impl Pass for LowerGtaLights {
     }
     fn options(&self) -> Options {
         let mut o = Options::new();
-        match self.hours {
-            LightHours::Every => {}
-            LightHours::At(h) => {
-                o.insert("hour".to_string(), h.to_string());
-            }
-            LightHours::State => {
-                o.insert("state".to_string(), "true".to_string());
-            }
-        }
+        let hour = match self.hours {
+            LightHours::Every => "every".to_string(),
+            LightHours::At(h) => h.to_string(),
+            LightHours::State => "state".to_string(),
+        };
+        o.insert("hour".to_string(), hour);
         if let Some(r) = self.region {
             r.insert_options(&mut o);
         }
@@ -402,5 +400,43 @@ mod tests {
         assert_eq!(conditions[0].0[0].0[0].values, 0x00F0_003F);
         assert_eq!(w.iter::<Light>().count(), 3);
         assert!(w.verify_components().is_empty(), "{:?}", w.verify_components());
+    }
+
+    /// `hour` is required and names the lights: every one, those on at an hour, or every one under the hour as state;
+    /// the options a pass gives read back as the same pass.
+    #[test]
+    fn the_hour_option_is_required_and_names_the_lights() {
+        use super::{LightHours, LowerGtaLights};
+        use primase_core::pass::Options;
+        let lights = |v: Option<&str>| {
+            let mut o = Options::new();
+            if let Some(v) = v {
+                o.insert("hour".into(), v.into());
+            }
+            LowerGtaLights::from_options(&o)
+        };
+        assert_eq!(
+            lights(None).unwrap_err(),
+            "hour is required (0-23, every or state): which lights are placed is the caller's choice"
+        );
+        assert_eq!(
+            lights(Some("noon")).unwrap_err(),
+            "hour: noon is none of 0-23, every and state"
+        );
+        assert!(lights(Some("24")).is_err());
+        let hour = crate::passes::rect::Hour::new(22).unwrap();
+        for (v, hours) in [
+            ("every", LightHours::Every),
+            ("22", LightHours::At(hour)),
+            ("state", LightHours::State),
+        ] {
+            let pass = lights(Some(v)).unwrap();
+            assert_eq!(pass.hours, hours, "{v}");
+            assert_eq!(
+                LowerGtaLights::from_options(&pass.options()).unwrap(),
+                pass,
+                "{v}"
+            );
+        }
     }
 }

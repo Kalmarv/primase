@@ -2,10 +2,11 @@
 //! region, and `lower-gta-water` makes the surfaces drawn meshes.
 //!
 //! `gta-select-water{x0,y0,x1,y1,clip}` (a selection pass): each placed water surface clipped to the region
-//! (`clip=region`, the default), none kept (`clip=none`: a level whose water comes from elsewhere, counted), or to the
+//! (`clip=region`), none kept (`clip=none`: a level whose water comes from elsewhere, counted), or to the
 //! region and as far past it as the placements `gta-select-region` kept reach
 //! (`clip=kept`: its `gta.region_extent`, which this pass then removes; the region rules keep a placement whose box
 //! meets the region, so the seabed reaches past it); a surface with nothing left is left out with its placement.
+//! `clip` has no default: each changes what water is written.
 //! Every placed surface is counted once, kept or outside; surfaces whose placement another state left out go too,
 //! counted. It removes `gta.water`, counting the calming and wave quads of every file read (they are not placed).
 //!
@@ -65,10 +66,9 @@ pub fn clip(p: &[[f32; 2]], r: [f32; 4]) -> Vec<[f32; 2]> {
 }
 
 /// What `gta-select-water` clips the placed water to.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Clip {
-    /// `clip=region` (the default): the region, or every surface whole without one.
-    #[default]
+    /// `clip=region`: the region, or every surface whole without one.
     Region,
     /// `clip=kept`: the region and as far as `gta.region_extent` reaches.
     Kept,
@@ -109,12 +109,17 @@ impl SelectGtaWater {
                 return Err(format!("unknown option {k}"));
             }
         }
-        let clip = match o.get("clip").map(String::as_str) {
-            None | Some("region") => Clip::Region,
-            Some("kept") => Clip::Kept,
-            Some("none") => Clip::None,
-            Some(v) => return Err(format!("clip: {v} is none of region, kept and none")),
-        };
+        let clip =
+            match o.get("clip").map(String::as_str) {
+                Some("region") => Clip::Region,
+                Some("kept") => Clip::Kept,
+                Some("none") => Clip::None,
+                Some(v) => return Err(format!("clip: {v} is none of region, kept and none")),
+                None => return Err(
+                    "clip is required (region, kept or none): what water is written is the caller's choice"
+                        .into(),
+                ),
+            };
         SelectGtaWater::new(GroundRect::from_options(o)?, clip)
     }
 }
@@ -128,15 +133,12 @@ impl Pass for SelectGtaWater {
         if let Some(r) = self.region {
             r.insert_options(&mut o);
         }
-        match self.clip {
-            Clip::Region => {}
-            Clip::Kept => {
-                o.insert("clip".into(), "kept".into());
-            }
-            Clip::None => {
-                o.insert("clip".into(), "none".into());
-            }
-        }
+        let clip = match self.clip {
+            Clip::Region => "region",
+            Clip::Kept => "kept",
+            Clip::None => "none",
+        };
+        o.insert("clip".into(), clip.into());
         o
     }
     fn requires(&self) -> &[&'static str] {
@@ -386,14 +388,12 @@ mod tests {
         assert!((area(&t) / 2.0 - 75.0).abs() < 1e-3, "{t:?}");
     }
 
-    fn select(region: [f32; 4], clip: Option<&str>) -> SelectGtaWater {
+    fn select(region: [f32; 4], clip: &str) -> SelectGtaWater {
         let mut o = Options::new();
         for (k, v) in ["x0", "y0", "x1", "y1"].into_iter().zip(region) {
             o.insert(k.into(), v.to_string());
         }
-        if let Some(c) = clip {
-            o.insert("clip".into(), c.into());
-        }
+        o.insert("clip".into(), clip.into());
         SelectGtaWater::from_options(&o).unwrap()
     }
 
@@ -403,11 +403,11 @@ mod tests {
             .collect()
     }
 
-    /// The options decide the clip: the region alone by default; with clip=kept, also as far as the kept placements
-    /// reach (here GTA x 0-20, y 0-10, past the 5 x 5 region), and the extent is used up.
+    /// The options decide the clip: the region alone with clip=region; with clip=kept, also as far as the kept
+    /// placements reach (here GTA x 0-20, y 0-10, past the 5 x 5 region), and the extent is used up. No clip is refused.
     #[test]
     fn the_clip_is_the_region_or_the_region_and_what_is_kept() {
-        for (clip, area_left) in [(None, 25.0), (Some("kept"), 200.0)] {
+        for (clip, area_left) in [("region", 25.0), ("kept", 200.0)] {
             let mut w = World::new();
             w.insert_resource(RegionExtent(Some([0.0, 0.0, 20.0, 10.0])));
             place_water(
@@ -418,16 +418,17 @@ mod tests {
                 )],
             );
             let pass = select([0.0, 0.0, 5.0, 5.0], clip);
-            assert_eq!(pass.requires().contains(&RegionExtent::NAME), clip.is_some());
+            let kept = clip == "kept";
+            assert_eq!(pass.requires().contains(&RegionExtent::NAME), kept);
             pass.run(&mut w, &mut PassLog::default()).unwrap();
             let s = surfaces(&w);
             assert_eq!(s.len(), 1);
             assert!(
                 (area(&s[0].outline) / 2.0 - area_left).abs() < 1e-3,
-                "{clip:?}: {:?}",
+                "{clip}: {:?}",
                 s[0].outline
             );
-            assert_eq!(w.resource::<RegionExtent>().is_none(), clip.is_some());
+            assert_eq!(w.resource::<RegionExtent>().is_none(), kept);
         }
         // clip=none: no water placed, counted
         let mut w = World::new();
@@ -439,7 +440,7 @@ mod tests {
             )],
         );
         let mut log = PassLog::default();
-        select([0.0, 0.0, 5.0, 5.0], Some("none"))
+        select([0.0, 0.0, 5.0, 5.0], "none")
             .run(&mut w, &mut log)
             .unwrap();
         assert!(surfaces(&w).is_empty() && w.iter::<GtaWaterSurface>().next().is_none());
@@ -458,6 +459,11 @@ mod tests {
         );
         o.insert("clip".into(), "all".into());
         assert!(SelectGtaWater::from_options(&o).is_err());
+        let error = SelectGtaWater::from_options(&Options::new()).unwrap_err();
+        assert_eq!(
+            error,
+            "clip is required (region, kept or none): what water is written is the caller's choice"
+        );
     }
 
     /// Two files: each placement carries its file's value on `gta.water`; resolve-state keeps the world map's by
@@ -498,7 +504,7 @@ mod tests {
         assert_eq!(log.counts.get("gta.water=world kept"), Some(&3));
         assert_eq!(log.counts.get("gta.water=world despawned"), Some(&1));
         let mut log = PassLog::default();
-        select([-5.0, -5.0, 5.0, 5.0], None)
+        select([-5.0, -5.0, 5.0, 5.0], "region")
             .run(&mut w, &mut log)
             .unwrap();
         assert_eq!(log.counts.get("water surfaces kept"), Some(&2));
@@ -547,7 +553,7 @@ mod tests {
             )],
         );
         let mut log = PassLog::default();
-        select([-5.0, -5.0, 5.0, 5.0], None)
+        select([-5.0, -5.0, 5.0, 5.0], "region")
             .run(&mut w, &mut log)
             .unwrap();
         assert!(w.iter::<GtaWater>().next().is_none());

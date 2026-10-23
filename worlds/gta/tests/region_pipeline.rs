@@ -24,7 +24,7 @@ fn select([x0, y0, x1, y1]: [f32; 4]) -> String {
     let rect = format!("x0={x0},y0={y0},x1={x1},y1={y1}");
     format!(
         "resolve-state{{assign=gta.map:online;gta.hour:12}}, gta-select-region{{{rect},min_size=0.5,max_priority=3}}, \
-         gta-leave-out-interiors, lower-gta-lights{{{rect}}}, gta-select-collision{{detail=plain}}, \
+         gta-leave-out-interiors, lower-gta-lights{{hour=every,{rect}}}, gta-select-collision{{detail=plain}}, \
          lower-gta-collision{{{rect},foliage=leave-out,river=leave-out}}, lower-gta-surfaces, \
          gta-select-water{{{rect},clip=kept}}"
     )

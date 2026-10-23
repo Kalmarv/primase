@@ -57,9 +57,9 @@ pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) 
 /// Registers the GTA passes by name: `gta-pose-fragments`, `lower-gta-skin`, `lower-gta-clips`, `lower-gta-pbr{night}`, `gta-winding`, `gta-tint`, `gta-terrain-layers`,
 /// `gta-vertex-colours`, `gta-select-region{x0,y0,x1,y1,max_priority,min_size}`, `gta-select-stand-ins{levels,x0,y0,x1,y1}`,
 /// `gta-leave-out-interiors`,
-/// `lower-gta-lights{hour,x0,y0,x1,y1}`, `gta-select-collision{detail}`, `lower-gta-collision{x0,y0,x1,y1,foliage,river}`,
+/// `lower-gta-lights{hour,x0,y0,x1,y1}` (`hour` required), `gta-select-collision{detail}`, `lower-gta-collision{x0,y0,x1,y1,foliage,river}`,
 /// `lower-gta-embedded-collision{foliage,river}` (their `foliage` and `river` required),
-/// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1}`, `lower-gta-water` and `resolve-gta-shaders{technique,
+/// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1,clip}` (`clip` required), `lower-gta-water` and `resolve-gta-shaders{technique,
 /// unset-textures}` (both required).
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     use primase_core::pass::{Options, Pass};
@@ -229,7 +229,7 @@ mod tests {
         let p = reg
             .parse(
                 "gta-select-region{x0=0,y0=0,x1=1,y1=1}, gta-select-stand-ins{levels=2;3;4}, gta-select-collision, \
-                 gta-leave-out-interiors, gta-select-water, lower-gta-collision{foliage=leave-out,river=leave-out}",
+                 gta-leave-out-interiors, gta-select-water{clip=region}, lower-gta-collision{foliage=leave-out,river=leave-out}",
             )
             .unwrap();
         for pass in &p.passes {
@@ -269,11 +269,11 @@ mod tests {
             )
         };
         let pipelines = [
-            select("assign=gta.map:online;gta.hour:12", "state=false,"),
+            select("assign=gta.map:online;gta.hour:12", "hour=every,"),
             part("finest", "false"),
             select("assign=gta.map:online;gta.hour:22", "hour=22,"),
             part("1", "true"),
-            select("assign=gta.map:story,keep=gta.hour", "state=true,"),
+            select("assign=gta.map:story,keep=gta.hour", "hour=state,"),
             part("finest", "state"),
         ];
         for text in pipelines {
