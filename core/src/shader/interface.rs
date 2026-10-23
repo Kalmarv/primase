@@ -854,10 +854,11 @@ mod tests {
         // the same register twice, an array over a register, an unbounded array over a later one
         i.resources = vec![t(0, 2, 0, 1), t(1, 2, 0, 1)];
         broken(&i, "share a ShaderResource register of space 0");
-        i.resources = vec![t(0, 2, 0, 4), t(1, 5, 0, 1)];
+        // an array of 4 from register 2 holds registers 2 to 5: register 6 is free, register 5 is not
+        i.resources = vec![t(0, 2, 0, 4), t(1, 6, 0, 1)];
         assert_eq!(i.verify(), Ok(()));
-        i.resources = vec![t(0, 2, 0, 4), t(1, 5, 0, 1), t(2, 4, 0, 1)];
-        broken(&i, "t2 share");
+        i.resources = vec![t(0, 2, 0, 4), t(1, 6, 0, 1), t(2, 5, 0, 1)];
+        broken(&i, "t0 and t2 share");
         i.resources = vec![t(0, 2, 0, Resource::UNBOUNDED), t(1, 90, 0, 1)];
         broken(&i, "share a ShaderResource");
         i.resources = vec![t(0, 2, 0, Resource::UNBOUNDED), t(1, 1, 0, 1), t(2, 2, 1, 1)];
