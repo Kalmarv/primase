@@ -314,7 +314,7 @@ fn the_wolf_assembles_and_its_parts_stay_their_own() -> Result<()> {
     let mut strict = world.clone();
     let err = run(
         &mut strict,
-        "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.00001,unweighted-rests=refuse,name=wolf}",
+        "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.00001,unweighted-rests=refuse,weighted-rests=refuse,name=wolf}",
     )
     .unwrap_err();
     println!("tolerance 1e-5: {err}");
@@ -326,11 +326,56 @@ fn the_wolf_assembles_and_its_parts_stay_their_own() -> Result<()> {
         "a refusal changes nothing"
     );
 
+    // the face part's Head and the joints under it stand 4.7e-3 from the other parts' (a 0.27 degree turn): with
+    // weighted-rests=report the Wolf with his face is assembled at the default tolerance, the disagreements named and
+    // counted, the face's displacement reported, every part bound as stored
+    let mut faced = world.clone();
+    let report = run(
+        &mut faced,
+        "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.001,unweighted-rests=report,weighted-rests=report,name=wolf}",
+    )?;
+    let log = &report.steps[0].log;
+    assert!(
+        log.counts["weighted joint rests beyond the tolerance, accepted by weighted-rests=report"] > 0,
+        "{:?}",
+        log.counts
+    );
+    assert!(
+        log.approximations
+            .keys()
+            .any(|k| k.starts_with("joint Head: the rest in fc_m_0220_l differs")
+                && k.contains("beyond tolerance 0.001")),
+        "{:?}",
+        log.approximations
+    );
+    assert!(
+        log.approximations
+            .keys()
+            .any(|k| k.starts_with("vertices of fc_m_0220_l sit up to ")),
+        "{:?}",
+        log.approximations
+    );
+    for (e, s) in &before {
+        assert_eq!(faced.get::<Skin>(*e), Some(s));
+    }
+    assert_eq!(faced.verify_components(), vec![]);
+    // and weighted-rests=refuse refuses the same joint at that tolerance, as before
+    let mut refused = world.clone();
+    let err = run(
+        &mut refused,
+        "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.001,unweighted-rests=report,weighted-rests=refuse,name=wolf}",
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("joint Head: the rest in fc_m_0220_l differs"),
+        "{err}"
+    );
+
     // the same name is not the same joint for a rest 5 mm apart in a rotation entry: refused at 1e-3, accepted at 1e-2
     let mut own = world.clone();
     let report = run(
         &mut own,
-        "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.01,unweighted-rests=report,name=wolf}",
+        "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.01,unweighted-rests=report,weighted-rests=refuse,name=wolf}",
     )?;
     let log = &report.steps[0].log;
     println!("own counts: {:?}", log.counts);
@@ -417,7 +462,7 @@ fn the_wolf_assembles_and_its_parts_stay_their_own() -> Result<()> {
     let mut assembled_world = world.clone();
     let report = run(
         &mut assembled_world,
-        "assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.01,unweighted-rests=report,name=wolf}",
+        "assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.01,unweighted-rests=report,weighted-rests=refuse,name=wolf}",
     )?;
     for (what, n) in &report.steps[0].log.approximations {
         println!("assembled approximation ({n}): {what}");

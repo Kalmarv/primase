@@ -492,6 +492,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
             ("reference-pose", "own"),
             ("tolerance", "0.001"),
             ("unweighted-rests", "report"),
+            ("weighted-rests", "refuse"),
             ("name", "character"),
         ],
     );

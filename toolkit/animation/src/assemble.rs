@@ -36,6 +36,15 @@
 //!   depend on it;
 //! - `unweighted-rests=refuse`: any part's, weighted or not, beyond `tolerance=`;
 //! - `unweighted-rests=report`: a part that does not weight the joint is not refused; its disagreement is reported.
+//! - `weighted-rests=report` (with `reference-pose=own` only): a part whose skin weights the joint is not refused
+//!   either. The part stays bound to its own skeleton and inverse binds, so its vertices follow what it stores; what
+//!   the disagreement costs is the displacement of its vertices when the assembled rest poses its joints directly,
+//!   reported per part (measured on the Wolf's face: its Head and the face chain under it stand 4.7e-3 from the other
+//!   parts' and from the player's Havok skeleton, a 0.27 degree turn, which displaces the face's vertices by at most
+//!   1.03 mm under the game's rule of the Havok pose times each part's own inverse binds). Each such joint is reported
+//!   with its amount and counted. `weighted-rests=refuse` refuses it beyond `tolerance=`, as every disagreement was.
+//!   `reference-pose=assembled` moves the part's inverse binds to the assembled rest, which would move its vertices:
+//!   a weighted disagreement beyond `tolerance=` is refused whatever `weighted-rests=` says.
 //!
 //! Each refused joint is named with its disagreement, every one in the one refusal; every disagreement above 1e-6
 //! that is not refused is reported as an approximation, with its amount.
@@ -56,7 +65,7 @@
 //! (and, with `reference-pose=own`, each part's skeleton too: its skins bind to them) and every member of the parts'
 //! assets other than their rigs; the parts' own asset roots are removed.
 //!
-//! All five options are required. Approximations, reported: joints whose rests differ within the tolerance, the
+//! All six options are required. Approximations, reported: joints whose rests differ within the tolerance, the
 //! vertex displacement measure of `own`, and the inverse binds `assembled` moves.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -99,8 +108,18 @@ pub enum UnweightedRests {
     Refuse,
 }
 
+/// What the pass does with a rest disagreement of a joint the part weights, beyond the tolerance (`weighted-rests=`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WeightedRests {
+    /// Refused.
+    Refuse,
+    /// Reported with its amount and counted, the part staying bound to its own rest and inverse binds
+    /// (`reference-pose=own`; with `assembled` it is refused all the same).
+    Report,
+}
+
 /// `assemble-character{correspondence=by-name|table, reference-pose=own|assembled, tolerance=<number>,
-/// unweighted-rests=report|refuse, name=<word>}` (see the module documentation).
+/// unweighted-rests=report|refuse, weighted-rests=refuse|report, name=<word>}` (see the module documentation).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AssembleCharacter {
     pub correspondence: Correspondence,
@@ -108,14 +127,15 @@ pub struct AssembleCharacter {
     /// The largest rest disagreement accepted.
     pub tolerance: f64,
     pub unweighted_rests: UnweightedRests,
+    pub weighted_rests: WeightedRests,
     /// The assembled asset's name.
     pub name: String,
 }
 
 /// The pass factory.
 pub fn assemble_character(o: &Options) -> Result<Box<dyn Pass>, String> {
-    let (mut correspondence, mut reference_pose, mut tolerance, mut unweighted, mut name) =
-        (None, None, None, None, None);
+    let (mut correspondence, mut reference_pose, mut tolerance, mut unweighted, mut weighted, mut name) =
+        (None, None, None, None, None, None);
     for (k, v) in o {
         match k.as_str() {
             "correspondence" => {
@@ -146,6 +166,13 @@ pub fn assemble_character(o: &Options) -> Result<Box<dyn Pass>, String> {
                     _ => return Err(format!("unweighted-rests={v}: report or refuse")),
                 });
             }
+            "weighted-rests" => {
+                weighted = Some(match v.as_str() {
+                    "refuse" => WeightedRests::Refuse,
+                    "report" => WeightedRests::Report,
+                    _ => return Err(format!("weighted-rests={v}: refuse or report")),
+                });
+            }
             "name" => {
                 if v.is_empty() {
                     return Err("name= is empty".into());
@@ -160,6 +187,7 @@ pub fn assemble_character(o: &Options) -> Result<Box<dyn Pass>, String> {
         reference_pose: reference_pose.ok_or("reference-pose=own|assembled is required")?,
         tolerance: tolerance.ok_or("tolerance=<largest rest disagreement accepted> is required")?,
         unweighted_rests: unweighted.ok_or("unweighted-rests=report|refuse is required")?,
+        weighted_rests: weighted.ok_or("weighted-rests=refuse|report is required")?,
         name: name.ok_or("name=<the assembled character's name> is required")?,
     }))
 }
@@ -577,6 +605,14 @@ impl Pass for AssembleCharacter {
                 }
                 .to_owned(),
             ),
+            (
+                "weighted-rests".to_owned(),
+                match self.weighted_rests {
+                    WeightedRests::Refuse => "refuse",
+                    WeightedRests::Report => "report",
+                }
+                .to_owned(),
+            ),
             ("name".to_owned(), self.name.clone()),
         ])
     }
@@ -599,7 +635,7 @@ impl Pass for AssembleCharacter {
         true
     }
     fn approximates(&self) -> &'static str {
-        "parts whose rests for a joint differ within the tolerance related as one joint; with reference-pose=assembled, inverse binds moved to the assembled rest"
+        "parts whose rests for a joint differ within the tolerance related as one joint (with weighted-rests=report, beyond it too); with reference-pose=assembled, inverse binds moved to the assembled rest"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let parts = gather(w)?;
@@ -631,19 +667,34 @@ impl Pass for AssembleCharacter {
 
         let (found, detached) = self.disagreements(&parts, &of, &asm, &rests)?;
         let mut within = Vec::new();
+        let mut accepted_weighted = 0u64;
+        let weighted_accepted =
+            self.weighted_rests == WeightedRests::Report && self.reference_pose == ReferencePose::Own;
         for &(c, p, j, d) in &found {
             let weighted_here = carrying[p].contains(&parts[p].skeleton.joints[j].id);
             let line = format!(
                 "joint {}: the rest in {} differs from the assembled rest (taken from {}) by {d:.3e}",
                 asm.names[c], parts[p].label, parts[asm.source[c].0].label
             );
-            if d > self.tolerance && (weighted_here || self.unweighted_rests == UnweightedRests::Refuse) {
+            let refused = d > self.tolerance
+                && if weighted_here {
+                    !weighted_accepted
+                } else {
+                    self.unweighted_rests == UnweightedRests::Refuse
+                };
+            if refused {
                 problems.push(line);
             } else if d > REPORT_FLOOR {
-                within.push(if weighted_here {
-                    line
-                } else {
-                    format!("{line} (the part does not weight the joint)")
+                within.push(match (weighted_here, d > self.tolerance) {
+                    (true, true) => {
+                        accepted_weighted += 1;
+                        format!(
+                            "{line} (beyond tolerance {}; the part weights the joint and stays bound to its own rest and inverse binds)",
+                            self.tolerance
+                        )
+                    }
+                    (true, false) => line,
+                    (false, _) => format!("{line} (the part does not weight the joint)"),
                 });
             }
         }
@@ -799,6 +850,12 @@ impl Pass for AssembleCharacter {
         }
         for line in within {
             log.approximate(&line, 1);
+        }
+        if accepted_weighted > 0 {
+            log.count(
+                "weighted joint rests beyond the tolerance, accepted by weighted-rests=report",
+                accepted_weighted,
+            );
         }
         log.count("parts assembled", parts.len() as u64);
         log.count("assembled joints", asm.names.len() as u64);
@@ -977,7 +1034,7 @@ mod tests {
         (rig, w.get::<Skeleton>(rig).unwrap().clone())
     }
 
-    const OWN: &str = "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.001,unweighted-rests=refuse,name=hero}";
+    const OWN: &str = "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.001,unweighted-rests=refuse,weighted-rests=refuse,name=hero}";
 
     /// The pass reads the rests itself: a NaN in a part's rest would make every difference involving it compare as no
     /// difference (`f64::max` skips a NaN), so it is refused naming the joint and the part, before any comparison.
@@ -991,6 +1048,7 @@ mod tests {
             ("reference-pose", "own"),
             ("tolerance", "0.001"),
             ("unweighted-rests", "refuse"),
+            ("weighted-rests", "refuse"),
             ("name", "hero"),
         ]
         .iter()
@@ -1043,7 +1101,7 @@ mod tests {
         let stray = between(&mut w, head_rig, outside, vec![(JointId(0), JointId(0))]);
         let err = run(
             &mut w,
-            "assemble-character{correspondence=table,reference-pose=own,tolerance=0.001,unweighted-rests=refuse,name=hero}",
+            "assemble-character{correspondence=table,reference-pose=own,tolerance=0.001,unweighted-rests=refuse,weighted-rests=refuse,name=hero}",
         )
         .unwrap_err();
         assert!(
@@ -1131,7 +1189,7 @@ mod tests {
         let (mut w, ..) = world(None, [0.0, 0.503, 0.0]);
         let report = run(
             &mut w,
-            "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.01,unweighted-rests=refuse,name=hero}",
+            "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.01,unweighted-rests=refuse,weighted-rests=refuse,name=hero}",
         )
         .unwrap();
         assert_eq!(
@@ -1159,7 +1217,7 @@ mod tests {
     /// not the assembled one) is refused instead.
     #[test]
     fn rebinding_keeps_vertices_at_the_assembled_rest_and_refuses_what_would_move_a_part() {
-        let rebind = "assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,unweighted-rests=refuse,name=hero}";
+        let rebind = "assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,unweighted-rests=refuse,weighted-rests=refuse,name=hero}";
         let (mut w, body, head) = world(Some([0.0, 1.0, 0.0]), [0.0, 0.5, 0.0]);
         let stored: Vec<Vec<[f32; 3]>> = [body, head]
             .iter()
@@ -1225,7 +1283,7 @@ mod tests {
         );
         let rigs: Vec<Entity> = w.iter::<Asset>().map(|(_, a)| a.members[0].0).collect();
         // no table, no correspondence
-        let table = "assemble-character{correspondence=table,reference-pose=own,tolerance=0.001,unweighted-rests=refuse,name=hero}";
+        let table = "assemble-character{correspondence=table,reference-pose=own,tolerance=0.001,unweighted-rests=refuse,weighted-rests=refuse,name=hero}";
         assert!(
             run(&mut w, table)
                 .unwrap_err()
@@ -1282,7 +1340,7 @@ mod tests {
         );
         let err = run(
             &mut w,
-            "assemble-character{correspondence=table,reference-pose=own,tolerance=1,unweighted-rests=refuse,name=hero}",
+            "assemble-character{correspondence=table,reference-pose=own,tolerance=1,unweighted-rests=refuse,weighted-rests=refuse,name=hero}",
         )
         .unwrap_err();
         assert!(
@@ -1351,19 +1409,27 @@ mod tests {
             ),
             (
                 "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0,unweighted-rests=report}",
+                "weighted-rests=refuse|report is required",
+            ),
+            (
+                "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0,unweighted-rests=report,weighted-rests=refuse}",
                 "name=<the assembled character's name> is required",
             ),
             (
-                "assemble-character{correspondence=by-nam,reference-pose=own,tolerance=0,unweighted-rests=report,name=a}",
+                "assemble-character{correspondence=by-nam,reference-pose=own,tolerance=0,unweighted-rests=report,weighted-rests=refuse,name=a}",
                 "correspondence=by-nam: by-name or table",
             ),
             (
-                "assemble-character{correspondence=by-name,reference-pose=own,tolerance=-1,unweighted-rests=report,name=a}",
+                "assemble-character{correspondence=by-name,reference-pose=own,tolerance=-1,unweighted-rests=report,weighted-rests=refuse,name=a}",
                 "a finite number, zero or more",
             ),
             (
                 "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0,unweighted-rests=some,name=a}",
                 "unweighted-rests=some: report or refuse",
+            ),
+            (
+                "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0,unweighted-rests=report,weighted-rests=some,name=a}",
+                "weighted-rests=some: refuse or report",
             ),
         ] {
             let err = run(&mut w, pipeline).unwrap_err();
@@ -1386,7 +1452,7 @@ mod tests {
         part(&mut w, "body", &BODY, &[([0.0, 1.6, 0.0], 2)]);
         let report = run(
             &mut w,
-            "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.001,unweighted-rests=report,name=hero}",
+            "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.001,unweighted-rests=report,weighted-rests=refuse,name=hero}",
         )
         .unwrap();
         // the body's rest wins although the head part comes first: it is the part whose skin weights the joint
@@ -1425,9 +1491,64 @@ mod tests {
         part(&mut w, "body", &BODY, &[([0.0, 1.6, 0.0], 2)]);
         let err = run(
             &mut w,
-            "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.001,unweighted-rests=report,name=hero}",
+            "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.001,unweighted-rests=report,weighted-rests=refuse,name=hero}",
         )
         .unwrap_err();
         assert!(err.contains("joint Neck: the rest in "), "{err}");
+    }
+
+    /// `weighted-rests=report` accepts a weighted disagreement beyond the tolerance with `reference-pose=own`, names it
+    /// with its amount and counts it, leaves every part bound as stored, and reports the part's vertex displacement;
+    /// `assembled` and `refuse` still refuse it.
+    #[test]
+    fn weighted_rests_beyond_the_tolerance_are_reported_when_asked_and_the_part_stays_as_stored() {
+        // both parts weight the Neck; the head part's sits 3 mm higher than the body's
+        let build = || {
+            let mut w = World::new();
+            part(
+                &mut w,
+                "head",
+                &head_joints(Some([0.0, 1.0, 0.0]), [0.0, 0.503, 0.0]),
+                &[([0.0, 1.5, 0.0], 2)],
+            );
+            part(&mut w, "body", &BODY, &[([0.0, 1.6, 0.0], 2)]);
+            w
+        };
+        let report_own = "assemble-character{correspondence=by-name,reference-pose=own,tolerance=0.001,unweighted-rests=refuse,weighted-rests=report,name=hero}";
+        let mut w = build();
+        let skins: Vec<(Entity, Skin)> = w.iter::<Skin>().map(|(e, s)| (e, s.clone())).collect();
+        let report = run(&mut w, report_own).unwrap();
+        let log = &report.steps[0].log;
+        assert_eq!(
+            log.approximations["joint Neck: the rest in head differs from the assembled rest (taken from body) by 3.000e-3 (beyond tolerance 0.001; the part weights the joint and stays bound to its own rest and inverse binds)"],
+            1
+        );
+        assert_eq!(
+            log.counts["weighted joint rests beyond the tolerance, accepted by weighted-rests=report"],
+            1
+        );
+        for (e, s) in &skins {
+            assert_eq!(w.get::<Skin>(*e), Some(s), "a part stays bound as stored");
+        }
+        assert!(
+            log.approximations
+                .keys()
+                .any(|k| k.starts_with("vertices of head sit up to ")),
+            "{:?}",
+            log.approximations
+        );
+        assert_eq!(w.verify_components(), vec![]);
+        // refuse refuses the same world; so does rebinding to the assembled rest, whatever weighted-rests says
+        for pipeline in [
+            OWN,
+            "assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,unweighted-rests=refuse,weighted-rests=report,name=hero}",
+        ] {
+            let mut w = build();
+            let err = run(&mut w, pipeline).unwrap_err();
+            assert!(
+                err.contains("joint Neck: the rest in head differs"),
+                "{pipeline}: {err}"
+            );
+        }
     }
 }

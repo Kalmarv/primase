@@ -17,7 +17,9 @@ pub mod retarget;
 pub mod retarget_skin;
 pub mod weights;
 
-pub use assemble::{AssembleCharacter, Correspondence, ReferencePose, UnweightedRests, assemble_character};
+pub use assemble::{
+    AssembleCharacter, Correspondence, ReferencePose, UnweightedRests, WeightedRests, assemble_character,
+};
 pub use map::{MapClip, Rests, Unmapped, map_clip};
 pub use passes::{EvaluateClip, NormalizeSkinWeights, PoseSkin, RootChoice, register};
 pub use retarget::{Reference, RetargetClip, Translation, retarget_clip};
