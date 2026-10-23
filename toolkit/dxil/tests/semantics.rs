@@ -1294,7 +1294,6 @@ mod lane_2d {
     }
 }
 
-
 mod ray_queries {
     use super::*;
     use primase_shader::D3dClass;
