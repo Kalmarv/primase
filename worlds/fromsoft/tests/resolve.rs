@@ -502,7 +502,10 @@ fn the_unbound_textures_option_is_required_and_named() {
     let e = common::run(&mut world, "resolve-fromsoft-shaders{unbound-textures=grey}")
         .unwrap_err()
         .to_string();
-    assert!(e.contains("not preview or leave"), "{e}");
+    assert!(
+        e.contains("unbound-textures=grey is none of preview or leave"),
+        "{e}"
+    );
 }
 
 /// The bake reads the binding: a frozen frame gives the engine's roles their values, the material's words reach the
