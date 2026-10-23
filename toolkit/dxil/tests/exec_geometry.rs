@@ -175,3 +175,41 @@ fn a_draw_of_another_kind_of_primitive_is_refused() {
         .unwrap_err();
     assert!(e.contains("which has 3"), "{e}");
 }
+
+/// An indexed draw reads the vertices at its indices; one holding the restart index is refused by name.
+#[test]
+fn an_indexed_draw_with_a_restart_index_is_refused() {
+    let gs = shader("geometry.dxil");
+    let vertices = [
+        vertex(1.0, 0.0, 0.0),
+        vertex(2.0, 0.0, 0.0),
+        vertex(3.0, 0.0, 0.0),
+    ];
+    let drawn = gs
+        .draw_indexed(
+            &constants(1.0),
+            &mut NoSampler,
+            &vertices,
+            &[2, 1, 0],
+            Some(0xFFFF),
+            Topology::TriangleList,
+        )
+        .unwrap();
+    let first = drawn
+        .iter()
+        .find(|s| (s.primitive, s.instance) == (0, 0))
+        .unwrap();
+    let xs: Vec<f32> = values(first).iter().map(|v| v[0]).collect();
+    assert_eq!(xs, [3.0, 2.0, 1.0]);
+    let e = gs
+        .draw_indexed(
+            &constants(1.0),
+            &mut NoSampler,
+            &vertices,
+            &[0, 1, 2, 0xFFFF, 0, 1, 2],
+            Some(0xFFFF),
+            Topology::TriangleStrip,
+        )
+        .unwrap_err();
+    assert!(e.contains("restart index 0xffff"), "{e}");
+}

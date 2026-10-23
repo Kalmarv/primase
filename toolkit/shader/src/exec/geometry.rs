@@ -14,7 +14,8 @@
 //! that writes each input vertex out): a triangle strip's odd primitives swap their last two vertices, so that every
 //! triangle keeps its winding; a triangle strip with adjacency is numbered as [`Topology::TriangleStripAdjacency`]
 //! says; `SV_PrimitiveID` counts the primitives of the draw from 0; the instances of a primitive run in order before the
-//! next primitive's. Strips cut by an index value (the restart index) are not assembled: a draw is a list of vertices.
+//! next primitive's. A draw with a restart index (an index list holding the value that cuts a strip) is refused by
+//! [`GeometryShader::draw_indexed`]: what the assembler makes of the vertices around a cut is not measured.
 
 use std::collections::BTreeMap;
 
@@ -295,6 +296,37 @@ impl GeometryShader {
             }
         }
         Ok(strips)
+    }
+
+    /// [`GeometryShader::draw`] of an indexed draw: the vertices at `indices`, in order. When the draw has a restart
+    /// index (`restart`, the value that cuts a strip: 0xFFFF or 0xFFFFFFFF in D3D), an index list that holds it is
+    /// refused: the primitives around a cut are not assembled.
+    pub fn draw_indexed(
+        &self,
+        constants: &BTreeMap<(u32, u32), Vec<[u32; 4]>>,
+        sampler: &mut dyn Sampler,
+        vertices: &[Vertex],
+        indices: &[u32],
+        restart: Option<u32>,
+        topology: Topology,
+    ) -> Result<Vec<Strip>, String> {
+        if let Some(cut) = restart
+            && let Some(at) = indices.iter().position(|&i| i == cut)
+        {
+            return Err(format!(
+                "index {at} is the restart index {cut:#x}: a draw with a strip restart is not assembled (the                  primitives around a cut are not measured on the D3D reference)"
+            ));
+        }
+        let drawn = indices
+            .iter()
+            .map(|&i| {
+                vertices
+                    .get(i as usize)
+                    .cloned()
+                    .ok_or_else(|| format!("index {i} names a vertex past the {} given", vertices.len()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.draw(constants, sampler, &drawn, topology)
     }
 
     fn bind<'a>(&self, constants: &'a BTreeMap<(u32, u32), Vec<[u32; 4]>>) -> Result<Bound<'a>, String> {
