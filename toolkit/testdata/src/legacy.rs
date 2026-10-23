@@ -24,6 +24,7 @@ pub fn translate(name: &str) -> Option<Query> {
         "GTA_GTXD" => Oracle(CodeWalker, Gta, "gtxd.json"),
         "GTA_FRAMES" => Oracle(CodeWalker, Gta, "frames.json"),
         "GTA_BOUNDS" => Oracle(CodeWalker, Gta, "bounds"),
+        "GTA_SHADER_CONVERSION" => Oracle(CodeWalker, Gta, "ShadersGen9Conversion.xml"),
         "GTA_SHADERS" => Oracle(Corpus, Gta, "legacy-effects"),
         "GTA_SHADER_DB" => Oracle(Corpus, Gta, "shader-database.awc"),
         "GTA_FILTER" => Debug("gta.archive_filter"),
