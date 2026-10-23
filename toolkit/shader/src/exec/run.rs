@@ -1058,18 +1058,26 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
             o.clear();
         }
         for l in 0..N {
-            if args[l].len() < self.c.args.len() {
+            if args[l].len() < self.c.arg_len {
                 return Err(format!(
-                    "{} arguments given, the entry point takes {}",
+                    "{} argument registers given, the function takes {}",
                     args[l].len(),
-                    self.c.args.len()
+                    self.c.arg_len
                 ));
             }
-            for (i, (s, _)) in self.c.args.iter().enumerate() {
-                self.regs[*s as usize * N + l] = args[l][i];
+            for (i, (s, n)) in self.c.args.iter().enumerate() {
+                if *n != 0 {
+                    self.regs[*s as usize * N + l] = args[l][self.c.arg_at[i]];
+                }
             }
             for w in self.mem[l * self.c.local_words..(l + 1) * self.c.local_words].iter_mut() {
                 *w = 0;
+            }
+            for &(at, off, count, width) in &self.c.array_args {
+                for k in 0..count as usize {
+                    let base = l * self.c.local_words + off as usize + k * width as usize;
+                    self.mem[base..base + width as usize].copy_from_slice(&args[l][at + k][..width as usize]);
+                }
             }
         }
         let c: &'a Executable = self.c;
@@ -1390,7 +1398,10 @@ impl<'a, const N: usize> Runner<'a, N, Wide> {
                 (l as u32 / size[0]) % size[1],
                 l as u32 / (size[0] * size[1]),
             ];
-            for (i, (slot, _)) in c.args.iter().enumerate() {
+            for (i, (slot, n)) in c.args.iter().enumerate() {
+                if *n == 0 {
+                    continue;
+                }
                 let value = match c.builtins.get(i).copied().flatten() {
                     Some(naga::BuiltIn::WorkGroupId) => [id[0], id[1], id[2], 0],
                     Some(naga::BuiltIn::LocalInvocationId) => [local[0], local[1], local[2], 0],

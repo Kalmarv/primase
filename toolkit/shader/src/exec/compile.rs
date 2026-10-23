@@ -68,9 +68,17 @@ fn shape_of(inner: &TypeInner) -> Result<Shape, String> {
     })
 }
 
-pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Executable, String> {
+/// Compile the entry point of `p`, or when `function` names one, that function of a program made of functions.
+pub(super) fn compile(
+    p: &Program,
+    info: &naga::valid::ModuleInfo,
+    function: Option<&str>,
+) -> Result<Executable, String> {
     let m = &p.module;
-    let ep = m.entry_points.first().ok_or("no entry point")?;
+    let ep = match function {
+        None => Some(m.entry_points.first().ok_or("no entry point")?),
+        Some(_) => None,
+    };
     // each global that is a resource: its id and, for an array, how many elements the interface says it has
     let resource_of: BTreeMap<usize, (ResourceId, u32)> = p
         .bindings
@@ -85,8 +93,18 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
             (h.index(), (*id, count))
         })
         .collect();
-    let f = &ep.function;
-    let finfo = info.get_entry_point(0);
+    let (f, finfo) = match (ep, function) {
+        (Some(ep), _) => (&ep.function, info.get_entry_point(0)),
+        (None, name) => {
+            let name = name.unwrap_or_default();
+            let (h, func) = m
+                .functions
+                .iter()
+                .find(|(_, func)| func.name.as_deref() == Some(name))
+                .ok_or_else(|| format!("no function {name}"))?;
+            (func, &info[h])
+        }
+    };
     let n_expr = f.expressions.len();
     let inner = |h: Handle<E>| -> &TypeInner { finfo[h].ty.inner_with(&m.types) };
     let shape = |h: Handle<E>| shape_of(inner(h));
@@ -97,6 +115,38 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
     for (_, l) in f.local_variables.iter() {
         local_off.push(local_words);
         local_words += words(m, l.ty)?;
+    }
+    // arguments that are arrays (a stage function's control points) live in local memory, one element after another;
+    // the caller passes each element as a register of its own
+    let mut array_arg: Vec<Option<(u32, u32, u8)>> = Vec::new();
+    let mut arg_at: Vec<usize> = Vec::new();
+    let mut arg_len = 0usize;
+    for a in f.arguments.iter() {
+        arg_at.push(arg_len);
+        match &m.types[a.ty].inner {
+            TypeInner::Array {
+                base,
+                size: naga::ArraySize::Constant(n),
+                ..
+            } => {
+                let width = words(m, *base)?;
+                if width > 4
+                    || !matches!(
+                        m.types[*base].inner,
+                        TypeInner::Scalar(_) | TypeInner::Vector { .. }
+                    )
+                {
+                    return Err("an array argument of anything but scalars and vectors".into());
+                }
+                array_arg.push(Some((local_words, n.get(), width as u8)));
+                local_words += n.get() * width;
+                arg_len += n.get() as usize;
+            }
+            _ => {
+                array_arg.push(None);
+                arg_len += 1;
+            }
+        }
     }
     // globals
     let mut globals: Vec<GlobalDesc> = Vec::new();
@@ -286,6 +336,26 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
             }
             // an element of a resource array is named by the operation that reads it
             E::Access { base, .. } | E::AccessIndex { base, .. } if is_binding_array(m, f, *base) => {}
+            // an element of an array argument: a read of its words
+            E::AccessIndex { base, index } if array_of(f, &array_arg, *base).is_some() => {
+                let (off, count, width) = array_of(f, &array_arg, *base).expect("checked");
+                if *index >= count {
+                    return Err("an array argument indexed past its end".into());
+                }
+                let loc = Loc::Local(off + index * u32::from(width));
+                op_of[i] = Some(Op::Load { loc, n: width });
+                static_load[i] = Some((loc, width));
+            }
+            E::Access { base, index } if array_of(f, &array_arg, *base).is_some() => {
+                let (off, count, width) = array_of(f, &array_arg, *base).expect("checked");
+                op_of[i] = Some(Op::LoadDyn {
+                    ptr: Ptr {
+                        loc: Loc::Local(off),
+                        dynamic: Some((slot[index.index()], u32::from(width), count)),
+                    },
+                    n: width,
+                });
+            }
             E::AccessIndex { base, index } => {
                 if let Some(p) = ptr_of[base.index()] {
                     // pointer arithmetic: the pointee decides the step
@@ -347,6 +417,7 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                     dynamic: Some((slot[index.index()], stride, len)),
                 });
             }
+            E::FunctionArgument(a) if array_arg[*a as usize].is_some() => {}
             E::FunctionArgument(a) => {
                 let Shape::V(_, n) = sh else {
                     return Err("aggregate argument".into());
@@ -1203,16 +1274,27 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
         b.retain(|s| !matches!(s, St::Run(lo, hi) if lo == hi));
     }
     fix(&mut body, &remap);
+    args.resize(f.arguments.len(), (0, 0));
+    let array_args: Vec<(usize, u32, u32, u8)> = array_arg
+        .iter()
+        .zip(&arg_at)
+        .filter_map(|(a, at)| a.map(|(off, count, width)| (*at, off, count, width)))
+        .collect();
     Ok(Executable {
         ops: kept,
         body,
         slots: n_slots,
         inits,
         args,
+        arg_at,
+        arg_len,
+        array_args,
         local_words: local_words as usize,
         globals,
         flush_denormals: p.modes.flush_denormals,
-        workgroup: (p.stage == crate::Stage::Compute).then_some(ep.workgroup_size),
+        workgroup: ep
+            .filter(|_| p.stage == crate::Stage::Compute)
+            .map(|e| e.workgroup_size),
         builtins: f
             .arguments
             .iter()
@@ -1222,6 +1304,18 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
             })
             .collect(),
     })
+}
+
+/// The array argument an expression is, as its local words' offset, element count and element width.
+fn array_of(
+    f: &naga::Function,
+    array_arg: &[Option<(u32, u32, u8)>],
+    h: Handle<E>,
+) -> Option<(u32, u32, u8)> {
+    match f.expressions[h] {
+        E::FunctionArgument(a) => array_arg[a as usize],
+        _ => None,
+    }
 }
 
 /// An image global as an expression names it: the resource, its class, its dimension and whether it is arrayed.

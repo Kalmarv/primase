@@ -413,8 +413,15 @@ pub struct Executable {
     pub(super) body: Vec<St>,
     pub(super) slots: usize,
     pub(super) inits: Vec<(u32, Reg)>,
-    /// Per entry argument: its slot and lanes.
+    /// Per entry argument: its slot and lanes (none for an array argument, or one nothing reads).
     pub(super) args: Vec<(u32, u8)>,
+    /// Per argument, where its registers start among those the caller passes (an array argument takes one per
+    /// element), and how many there are in all.
+    pub(super) arg_at: Vec<usize>,
+    pub(super) arg_len: usize,
+    /// The array arguments: where they start among the passed registers, their words in local memory, their element
+    /// count and element width.
+    pub(super) array_args: Vec<(usize, u32, u32, u8)>,
     pub(super) local_words: usize,
     pub(super) globals: Vec<GlobalDesc>,
     /// Whether 32-bit denormals are flushed to zero (the program's D3D modes).

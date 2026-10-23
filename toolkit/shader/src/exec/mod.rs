@@ -62,7 +62,24 @@ impl Executable {
                     .join("; "),
             )
         })?;
-        compile::compile(program, &info).map_err(error)
+        compile::compile(program, &info, None).map_err(error)
+    }
+
+    /// Compile one function of a program made of functions (a hull program's `main` and `patch_constant`, a domain
+    /// program's or a position-less vertex program's `main`; see [`crate::stage_functions`]) to run for one
+    /// invocation. The registers it takes are its arguments in order, an array argument (the control points) as one
+    /// register per element; the members of its result are the members of [`crate::FunctionSig::result`].
+    pub fn function(program: &Program, name: &str) -> Result<Self, Error> {
+        let info = program.validate().map_err(|problems| {
+            error(
+                problems
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        })?;
+        compile::compile(program, &info, Some(name)).map_err(error)
     }
 
     /// The textures and the samplers the program's compiled code samples, loads from or asks the size of (an operation

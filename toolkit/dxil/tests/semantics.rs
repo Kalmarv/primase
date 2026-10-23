@@ -770,3 +770,157 @@ mod waves {
         }
     }
 }
+
+
+mod stage_functions {
+    use super::*;
+    use primase_shader::exec::Runner;
+    use primase_shader::{D3dClass, stage_functions};
+    use std::collections::BTreeMap;
+
+    /// Run function `name` of the lifted program `base` once, its constant buffer 0 `constants`, giving each argument
+    /// the registers `give` says for its name (an array argument one register per element); the result members by
+    /// name.
+    fn call(
+        base: &str,
+        variant: &str,
+        name: &str,
+        constants: &[[u32; 4]],
+        give: &dyn Fn(&str) -> Option<Vec<[u32; 4]>>,
+    ) -> BTreeMap<String, [u32; 4]> {
+        let bytes = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(format!("tessellation.{base}{variant}.dxil")),
+        )
+        .unwrap();
+        let program = lift(&bytes).unwrap_or_else(|e| panic!("{base}{variant}: {e}"));
+        let sigs = stage_functions(&program.interface).unwrap().unwrap();
+        let sig = sigs.iter().find(|s| s.name == name).unwrap();
+        let exe = Executable::function(&program, name).unwrap_or_else(|e| panic!("{base}{variant}: {e}"));
+        let mut registers = Vec::new();
+        for argument in &sig.arguments {
+            let given = give(&argument.name).unwrap_or_else(|| {
+                panic!(
+                    "{base}{variant}: no value for argument {} of {name}",
+                    argument.name
+                )
+            });
+            registers.extend(given);
+        }
+        let mut resources = Resources::default();
+        if let Some(cb) = program.interface.resources.iter().find(|r| {
+            r.provenance
+                .d3d
+                .is_some_and(|d| d.class == D3dClass::ConstantBuffer && d.register == 0)
+        }) {
+            resources.constants.insert(cb.id, constants.to_vec());
+        }
+        let bound = exe.bind_resources(&resources).unwrap();
+        let mut backend = NoBackend;
+        let mut runner = Runner::<1>::new(&exe, &bound, &mut backend, None);
+        let [out] = runner
+            .run([&registers])
+            .unwrap_or_else(|e| panic!("{base}{variant} {name}: {e}"));
+        assert_eq!(out.values.len(), sig.result.len(), "{base}{variant} {name}");
+        sig.result
+            .iter()
+            .zip(out.values)
+            .map(|(item, v)| (item.name.clone(), v))
+            .collect()
+    }
+
+    fn floats(x: [f32; 4]) -> [u32; 4] {
+        x.map(f32::to_bits)
+    }
+    fn identity_and_scale(scale: f32) -> Vec<[u32; 4]> {
+        vec![
+            floats([1.0, 0.0, 0.0, 0.0]),
+            floats([0.0, 1.0, 0.0, 0.0]),
+            floats([0.0, 0.0, 1.0, 0.0]),
+            floats([0.0, 0.0, 0.0, 1.0]),
+            floats([scale, 0.0, 0.0, 0.0]),
+        ]
+    }
+    /// The control points of the patch the tests use.
+    const POSITIONS: [[f32; 4]; 3] = [[1.0, 2.0, 3.0, 0.0], [4.0, 5.0, 6.0, 0.0], [7.0, 8.0, 9.0, 0.0]];
+    const COLOURS: [[f32; 4]; 3] = [[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]];
+    fn points(of: &[[f32; 4]; 3]) -> Vec<[u32; 4]> {
+        of.map(floats).to_vec()
+    }
+    fn lanes(v: [u32; 4], n: usize) -> Vec<f32> {
+        v[..n].iter().map(|b| f32::from_bits(*b)).collect()
+    }
+
+    /// The vertex program scales the position (cbuffer scale 2) and passes the colour on.
+    #[test]
+    fn a_vertex_program_without_a_position() {
+        for v in ["", ".od"] {
+            let out = call("vs", v, "main", &identity_and_scale(2.0), &|n| match n {
+                "POSITION0" => Some(vec![floats([1.0, 2.0, 3.0, 0.0])]),
+                "COLOR0" => Some(vec![floats([0.25, 0.5, 0.75, 1.0])]),
+                _ => None,
+            });
+            assert_eq!(lanes(out["CTRL_POSITION0"], 3), [2.0, 4.0, 6.0], "{v}");
+            assert_eq!(lanes(out["CTRL_COLOR0"], 4), [0.25, 0.5, 0.75, 1.0], "{v}");
+        }
+    }
+
+    /// The control-point phase of the hull program gives point i its own position moved by i along z.
+    #[test]
+    fn the_hull_programs_control_point_phase_runs_per_output_point() {
+        for v in ["", ".od"] {
+            for i in 0..3u32 {
+                let out = call("hs", v, "main", &[], &|n| match n {
+                    "CTRL_POSITION0" => Some(points(&POSITIONS)),
+                    "CTRL_COLOR0" => Some(points(&COLOURS)),
+                    "SV_OutputControlPointID" => Some(vec![[i, 0, 0, 0]]),
+                    _ => None,
+                });
+                let mut want = POSITIONS[i as usize];
+                want[2] += i as f32;
+                assert_eq!(lanes(out["CTRL_POSITION0"], 3), want[..3], "{v} point {i}");
+                assert_eq!(lanes(out["CTRL_COLOR0"], 4), COLOURS[i as usize], "{v} point {i}");
+            }
+        }
+    }
+
+    /// The patch-constant phase: edges 2, 3 and 4 + the primitive id, inside 5, the centre of the three points.
+    #[test]
+    fn the_hull_programs_patch_constant_phase() {
+        for v in ["", ".od"] {
+            let out = call("hs", v, "patch_constant", &[], &|n| match n {
+                "CTRL_POSITION0" | "out_CTRL_POSITION0" => Some(points(&POSITIONS)),
+                "CTRL_COLOR0" | "out_CTRL_COLOR0" => Some(points(&COLOURS)),
+                "SV_PrimitiveID" => Some(vec![[7, 0, 0, 0]]),
+                _ => None,
+            });
+            let edge = |k: usize| f32::from_bits(out[&format!("SV_TessFactor{k}")][0]);
+            assert_eq!([edge(0), edge(1), edge(2)], [2.0, 3.0, 11.0], "{v}");
+            assert_eq!(f32::from_bits(out["SV_InsideTessFactor0"][0]), 5.0, "{v}");
+            assert_eq!(lanes(out["CENTRE0"], 3), [4.0, 5.0, 6.0], "{v}");
+        }
+    }
+
+    /// The domain program places a vertex at (0.5, 0.25, 0.25) of the patch: the weighted points plus the centre
+    /// halved, a quarter of the first edge factor and an eighth of the inside factor; under an identity matrix.
+    #[test]
+    fn the_domain_program_places_a_vertex() {
+        for v in ["", ".od"] {
+            let out = call("ds", v, "main", &identity_and_scale(1.0), &|n| match n {
+                "SV_TessFactor0" => Some(vec![floats([2.0, 0.0, 0.0, 0.0])]),
+                "SV_TessFactor1" => Some(vec![floats([3.0, 0.0, 0.0, 0.0])]),
+                "SV_TessFactor2" => Some(vec![floats([4.0, 0.0, 0.0, 0.0])]),
+                "SV_InsideTessFactor0" => Some(vec![floats([5.0, 0.0, 0.0, 0.0])]),
+                "CENTRE0" => Some(vec![floats([4.0, 5.0, 6.0, 0.0])]),
+                "CTRL_POSITION0" => Some(points(&POSITIONS)),
+                "CTRL_COLOR0" => Some(points(&COLOURS)),
+                "SV_DomainLocation" => Some(vec![floats([0.5, 0.25, 0.25, 0.0])]),
+                "SV_PrimitiveID" => Some(vec![[0, 0, 0, 0]]),
+                _ => None,
+            });
+            assert_eq!(lanes(out["SV_Position0"], 4), [6.375, 8.125, 9.375, 1.0], "{v}");
+            assert_eq!(lanes(out["COLOR0"], 4), [0.5, 0.25, 0.25, 1.0], "{v}");
+        }
+    }
+}
