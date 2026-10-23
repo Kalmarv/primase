@@ -5,7 +5,8 @@
 //! indexed by `(r * 3 + g * 5 + b * 7 + a * 11) % 64` (initially all zero): `QOI_OP_RGB` (0xFE, alpha kept),
 //! `QOI_OP_RGBA` (0xFF), `QOI_OP_INDEX` (`00`, a table entry), `QOI_OP_DIFF` (`01`, each channel -2..1, wrapping),
 //! `QOI_OP_LUMA` (`10`, green -32..31 and red and blue -8..7 relative to it, wrapping) and `QOI_OP_RUN` (`11`, the
-//! previous pixel 1..62 times); the stream ends with seven 0x00 bytes and a 0x01. Strict: a run past the last pixel,
+//! previous pixel 1..62 times); the stream ends with seven 0x00 bytes and a 0x01. Strict: a header stating more pixels than the
+//! stream can make (62 to a byte, refused before the image is allocated), a run past the last pixel,
 //! a stream ending early, or bytes other than the end marker after the last pixel are errors. The header's channels
 //! and colorspace describe the source and change no pixel: they are returned with it.
 
@@ -47,6 +48,8 @@ const OP_DIFF: u8 = 0x40;
 const OP_LUMA: u8 = 0x80;
 const OP_RUN: u8 = 0xC0;
 const MASK: u8 = 0xC0;
+/// The most pixels one byte of a stream makes: a run's 62.
+const MOST_PIXELS_PER_BYTE: usize = 62;
 
 fn hash([r, g, b, a]: [u8; 4]) -> usize {
     (usize::from(r) * 3 + usize::from(g) * 5 + usize::from(b) * 7 + usize::from(a) * 11) % 64
@@ -77,8 +80,18 @@ pub fn read_qoi(data: &[u8]) -> Result<Qoi> {
         c => return Err(invalid(format!("colorspace {c}, not 0 or 1"))),
     };
     let samples = sample_count(width, height)?;
-    let mut out: Vec<u8> = allocate(samples)?;
     let pixels = samples / 4;
+    // a chunk is at least one byte and makes at most 62 pixels (a run), so a stream shorter than that cannot fill the
+    // image: refused before the image is allocated, which the header alone sizes
+    let chunks = data.len() - HEADER;
+    let chunks = chunks.saturating_sub(END.len());
+    if chunks < pixels.div_ceil(MOST_PIXELS_PER_BYTE) {
+        return Err(invalid(format!(
+            "{chunks} bytes of chunks cannot make the {width} x {height} pixels it states (a byte makes at \
+             most {MOST_PIXELS_PER_BYTE})"
+        )));
+    }
+    let mut out: Vec<u8> = allocate(samples)?;
     let mut table = [[0u8; 4]; 64];
     let mut px = [0u8, 0, 0, 255];
     let mut at = HEADER;
@@ -265,9 +278,16 @@ mod tests {
         assert!(err(&one[..10]).contains("shorter than the header"));
         assert!(err(&file(0, 1, &[])).contains("zero dimension"));
         // the stream ends before the last pixel
-        assert!(err(&one[..16]).contains("before the last pixel"));
+        assert!(err(&one[..16]).contains("cannot make"));
         // a run past the last pixel
         assert!(err(&file(2, 1, &[OP_RUN | 2])).contains("passes the last pixel"));
+        // a header that states more pixels than the stream can make is refused before anything is allocated: 38 bytes
+        // stating 2^31 - 1 x 4 pixels (8.6 GiB of RGBA) once got the process killed for memory
+        let huge = file(0x7FFF_FFFF, 4, &[OP_RGB, 1, 2, 3]);
+        assert!(err(&huge).contains("cannot make"), "{}", err(&huge));
+        // 62 pixels are one run byte; 63 need two bytes
+        assert!(read_qoi(&file(62, 1, &[OP_RUN | 61])).is_ok());
+        assert!(err(&file(63, 1, &[OP_RUN | 61])).contains("cannot make"));
         // no end marker, or bytes after it
         assert!(err(&one[..one.len() - 1]).contains("end marker"));
         let mut long = one.clone();
