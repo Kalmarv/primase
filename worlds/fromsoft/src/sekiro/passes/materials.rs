@@ -4,7 +4,7 @@ use crate::sekiro::components::lowered::UvTiling;
 use crate::sekiro::source::LayerInputs;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{PbrMaterial, UvTransform};
-use primase_core::{Component, DrawOrder, Entity, MaterialUsage, Mesh, World};
+use primase_core::{Component, DrawOrder, Entity, MaterialUsage, Mesh, VertexColor, World};
 use std::collections::BTreeMap;
 
 /// `lower-fromsoft-materials{layers=preserve|preview}`: source materials as core PBR from their bindings and the
@@ -81,6 +81,7 @@ impl Pass for LowerFromSoftMaterials {
             Material::NAME,
             LayeredMaterial::NAME,
             UvTiling::NAME,
+            VertexColor::NAME,
         ]
     }
     fn removes(&self) -> &[&'static str] {

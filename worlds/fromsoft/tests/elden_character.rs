@@ -8,6 +8,10 @@
 //!   skeleton as the rig and its prototype as the part.
 //! - E2: the notices say what the read left out (the Havok skeleton and animation binder when animations are not
 //!   asked for).
+//! - E4: an alpha-tested card (c5840's wing feathers, `C[Fur]`) is drawn with the slot its pixel program tests
+//!   (`c5840_feather_a`, sampled with a later UV pair of the mesh than the first and multiplied by the first vertex colour's alpha),
+//!   not the slot the preview colours with (`c5840_feather_color_a`, whose alpha is 255 everywhere); the meshes keep
+//!   their UV sets and first colour.
 //! - E3: the textures a material binds from the parts folder (`AAT100_Crystal_a`, `AAT500_Hair_02_a`: the matbin's
 //!   sampler paths `N:\GR\data\Model\parts\tex\...`) are in `parts/common_body.tpf`, which every character reads: none
 //!   of them is unavailable on `c2200` (its backface and silhouette shells name only `AAT100_Crystal_*`) and `c2010`
@@ -206,6 +210,60 @@ fn the_asset_textures_a_character_binds_are_read_from_their_packages() -> Result
             }
         }
         assert!(assets > 0, "{id} binds no asset texture");
+    }
+    Ok(())
+}
+
+/// E5: the cut-out of a fur card is in the slot its program tests, on the UV set the program samples it with.
+#[test]
+fn an_alpha_tested_card_is_drawn_with_the_slot_its_program_tests() -> Result<()> {
+    use primase_core::pbr::{AlphaMode, PbrMaterial};
+    use primase_core::{Mesh, Name, Semantic, VertexColor};
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let mut w = World::new();
+    read_character_with(&install, "c5840", &decoder, CharacterOptions::default(), &mut w)?;
+    common::run(
+        &mut w,
+        "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program},lower-fromsoft-materials{layers=preserve}",
+    )?;
+    let wing: Vec<_> = w
+        .iter::<PbrMaterial>()
+        .filter(|(_, p)| {
+            p.base_color_texture
+                .is_some_and(|t| w.get::<Name>(t.texture).is_some_and(|n| n.0 == "c5840_feather_a"))
+        })
+        .map(|(e, p)| (e, p.base_color_texture.unwrap().texcoord, p.alpha_mode))
+        .collect();
+    assert!(
+        !wing.is_empty(),
+        "no material is drawn with the feather coverage texture"
+    );
+    for (e, texcoord, alpha) in wing {
+        // not the first set: the cut-out is on a later UV pair of the vertex (`C[Fur]_Arts`: `TEXCOORD0.zw`)
+        assert!(texcoord > 0);
+        assert!(matches!(alpha, AlphaMode::Mask { .. }));
+        // the colour is multiplied by the vertex colour only where the program's alpha test reads it
+        assert!(w.get::<VertexColor>(e).is_none());
+        let drawn = w
+            .iter::<Mesh>()
+            .map(|(_, m)| m.primitives().iter().filter(|p| p.material == Some(e)).count())
+            .sum::<usize>();
+        assert!(drawn > 0);
+        for (_, m) in w.iter::<Mesh>() {
+            for p in m.primitives().iter().filter(|p| p.material == Some(e)) {
+                assert!(p.streams.contains_key(&Semantic::TexCoord(texcoord)));
+                assert!(p.streams.contains_key(&Semantic::Color(0)));
+            }
+        }
     }
     Ok(())
 }

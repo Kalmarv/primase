@@ -480,7 +480,11 @@ impl LowerFromSoftGeometry {
             } else {
                 Default::default()
             };
-            let kept_colours = usize::from(layout.second_colour.is_some());
+            // a material binary's mesh (Elden Ring's) keeps every UV set and its first vertex colour: the programs the
+            // material is bound to read them (`source_streams`)
+            let source_streams_kept =
+                matches!(material.definition, Some(crate::materials::Definition::Matbin(_)));
+            let kept_colours = usize::from(layout.second_colour.is_some() || source_streams_kept);
             let kept_uvs = layout.byte4.len() + usize::from(layout.second_uv.is_some());
             if mesh.vertices.iter().any(|v| v.colors.len() > kept_colours) {
                 log.approximate(
@@ -488,7 +492,7 @@ impl LowerFromSoftGeometry {
                     1,
                 );
             }
-            if mesh.vertices.iter().any(|v| v.uvs.len() > 1 + kept_uvs) {
+            if !source_streams_kept && mesh.vertices.iter().any(|v| v.uvs.len() > 1 + kept_uvs) {
                 log.approximate("meshes with UV sets beyond UV0 not lowered", 1);
             }
             let mut levels = BTreeSet::new();
@@ -523,6 +527,9 @@ impl LowerFromSoftGeometry {
                 }
                 let members = layer.iter().map(|(semantic, _)| *semantic).collect();
                 streams.extend(layer);
+                if source_streams_kept {
+                    streams.extend(source_streams(&mesh.vertices, &part.source_vertices));
+                }
                 let skinned = out.palette.is_some();
                 if skinned {
                     let vertex = |k: &u32| &mesh.vertices[*k as usize];
@@ -586,6 +593,33 @@ impl LowerFromSoftGeometry {
         }
         Ok(out)
     }
+}
+
+/// The UV sets beyond the first, as `TexCoord(n)` in the order the vertex layout stores them (a four component UV member
+/// is two sets), and the first vertex colour as `Color(0)`, of the vertices `vertices` of a mesh: what a material
+/// binary's programs read besides the first UV set. A set or colour the mesh's vertices do not all have is not kept.
+fn source_streams(mesh: &[crate::flver::Vertex], vertices: &[u32]) -> Vec<(Semantic, Stream)> {
+    let at = |v: &u32| &mesh[*v as usize];
+    let sets = vertices.iter().map(|v| at(v).uvs.len()).min().unwrap_or(0);
+    let mut out = Vec::new();
+    for set in 1..sets.min(usize::from(u8::MAX)) {
+        out.push((
+            Semantic::TexCoord(set as u8),
+            Stream::F32x2(
+                vertices
+                    .iter()
+                    .map(|v| [at(v).uvs[set][0], at(v).uvs[set][1]])
+                    .collect(),
+            ),
+        ));
+    }
+    if vertices.iter().all(|v| !at(v).colors.is_empty()) {
+        out.push((
+            Semantic::Color(0),
+            Stream::F32x4(vertices.iter().map(|v| at(v).colors[0]).collect()),
+        ));
+    }
+    out
 }
 
 impl Pass for LowerFromSoftGeometry {

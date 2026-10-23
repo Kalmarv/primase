@@ -3,6 +3,7 @@
 //! Source metadata stays attached. Existing baked PBR base/normal bindings win.
 //! A metallic value without a traced source constant or map is dielectric 0,
 //! never glTF's fully metallic default of 1, and every such material is counted.
+mod coverage;
 mod gx;
 use crate::preview::{Preview, is_emissive, preview};
 use crate::{
@@ -455,6 +456,47 @@ fn lower_materials(
             p.metallic = value;
             log.approximate("dielectric F0 0.03 represented by glTF 0.04", 1);
         }
+        // An alpha-tested Elden Ring material is coloured with the slot its programs test, on the UV set they sample it
+        // with, not the preview's slot: the cut-out is in that slot's alpha (`coverage`)
+        let mut coverage_vertex_alpha = false;
+        if !baked && m.class == "cutout" && p.base_color_texture.is_none() {
+            match coverage::coverage(world, e, &m) {
+                Ok(Some(c)) => {
+                    let binding = m.bindings.get(&c.binding).filter(|b| {
+                        b.available
+                            && payloads.contains_key(&b.texture)
+                            && b.scale.iter().all(|v| v.is_finite())
+                    });
+                    if let Some(b) = binding {
+                        let mut r = TextureRef::new(texture(world, payloads, &mut cache, &b.texture, false)?);
+                        r.texcoord = c.texcoord;
+                        r.transform = Some(UvTransform {
+                            scale: b.scale,
+                            ..UvTransform::IDENTITY
+                        });
+                        p.base_color_texture = Some(r);
+                        coverage_vertex_alpha = c.vertex_alpha;
+                        log.approximate(
+                            "alpha-tested material drawn with its coverage texture alone: the colour slots its program blends in are left out",
+                            1,
+                        );
+                        for what in c.left_out {
+                            log.approximate(&format!("alpha test: {what} left out"), 1);
+                        }
+                    } else {
+                        log.approximate(
+                            "alpha-tested material whose coverage texture is not held: preview slot",
+                            1,
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => log.approximate(
+                    "alpha-tested material whose programs' alpha test could not be read: preview slot",
+                    1,
+                ),
+            }
+        }
         if !baked {
             if p.base_color_texture.is_none()
                 && let Some(name) = &pv.albedo
@@ -462,7 +504,7 @@ fn lower_materials(
                 p.base_color_texture = Some(TextureRef::new(texture(
                     world, payloads, &mut cache, name, false,
                 )?));
-            } else if fresh && pv.albedo.is_none() {
+            } else if fresh && pv.albedo.is_none() && p.base_color_texture.is_none() {
                 p.base_color = fallback_base_color(&m);
                 log.approximate("missing base texture: preview fallback colour", 1);
             }
@@ -595,6 +637,18 @@ fn lower_materials(
             }
             log.approximate(
                 "additive blend (g_BlendMode 4) lowered as the base colour's emission, alpha blended",
+                1,
+            );
+        }
+        if !baked
+            && matches!(m.definition, Some(crate::materials::Definition::Matbin(_)))
+            && !coverage_vertex_alpha
+        {
+            // the geometry lowering keeps the first vertex colour of these meshes (their programs read it); only an alpha
+            // test read from the program is known to use it, as an alpha: the other materials do not take it as a colour
+            world.insert(e, primase_core::VertexColor::Ignored);
+            log.approximate(
+                "vertex colours of material binary materials ignored: their use is not read from the programs",
                 1,
             );
         }

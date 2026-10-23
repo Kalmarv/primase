@@ -3,4 +3,5 @@
 pub mod geometry;
 pub mod layer_bake;
 pub mod preview;
+pub(crate) mod program_reads;
 pub mod rigid;
