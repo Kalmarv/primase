@@ -57,7 +57,7 @@ pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) 
 /// Registers the GTA passes by name: `gta-pose-fragments`, `lower-gta-skin`, `lower-gta-clips`, `lower-gta-pbr{night}` (`night` required), `gta-winding`, `gta-tint`, `gta-terrain-layers`,
 /// `gta-vertex-colours`, `gta-select-region{x0,y0,x1,y1,max_priority,min_size}`, `gta-select-stand-ins{levels,x0,y0,x1,y1}`,
 /// `gta-leave-out-interiors`,
-/// `lower-gta-lights{hour,x0,y0,x1,y1}` (`hour` required), `gta-select-collision{detail}`, `lower-gta-collision{x0,y0,x1,y1,foliage,river}`,
+/// `lower-gta-lights{hour,x0,y0,x1,y1}` (`hour` required), `gta-select-collision{detail}` (`detail` required), `lower-gta-collision{x0,y0,x1,y1,foliage,river}`,
 /// `lower-gta-embedded-collision{foliage,river}` (their `foliage` and `river` required),
 /// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1,clip}` (`clip` required), `lower-gta-water` and `resolve-gta-shaders{technique,
 /// unset-textures}` (both required).
@@ -108,9 +108,12 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         |o| Ok(Box::new(passes::select::SelectStandIns::from_options(o)?)),
         &[("levels", "2;3;4")],
     );
-    reg.register("gta-select-collision", |o| {
-        Ok(Box::new(passes::collision::SelectCollision::from_options(o)?))
-    });
+    // which detail of the map's collision is kept is the caller's choice: no default
+    reg.register_requiring(
+        "gta-select-collision",
+        |o| Ok(Box::new(passes::collision::SelectCollision::from_options(o)?)),
+        &[("detail", "plain")],
+    );
     reg.register_requiring(
         "lower-gta-embedded-collision",
         |o| {
@@ -215,6 +218,7 @@ mod tests {
                     ("lower-gta-pbr", ("night", "false")),
                     ("gta-select-water", ("clip", "region")),
                     ("lower-gta-lights", ("hour", "every")),
+                    ("gta-select-collision", ("detail", "plain")),
                 ]
                 .into_iter()
                 .find(|(n, _)| *n == name)
@@ -244,7 +248,7 @@ mod tests {
         super::register(&mut reg);
         let p = reg
             .parse(
-                "gta-select-region{x0=0,y0=0,x1=1,y1=1}, gta-select-stand-ins{levels=2;3;4}, gta-select-collision, \
+                "gta-select-region{x0=0,y0=0,x1=1,y1=1}, gta-select-stand-ins{levels=2;3;4}, gta-select-collision{detail=plain}, \
                  gta-leave-out-interiors, gta-select-water{clip=region}, lower-gta-collision{foliage=leave-out,river=leave-out}",
             )
             .unwrap();

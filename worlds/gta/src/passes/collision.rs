@@ -3,7 +3,7 @@
 //! fragment embeds, attached with its geometry), and these passes select and lower it.
 //!
 //! `gta-select-collision{detail}`: the map bounds of the details asked for kept (`plain`, `hi`, `ma`, `;` between;
-//! `plain` unless given), the others despawned, counted per detail.
+//! required: which detail is written is the caller's choice), the others despawned, counted per detail.
 //!
 //! `lower-gta-collision{x0,y0,x1,y1,foliage,river}`: every [`GtaBounds`] entity (placed at the origin by the reader:
 //! a map bound is world space) becomes an entity with an identity `core.transform` and a `core.collision` triangle
@@ -80,7 +80,7 @@ impl SelectCollision {
         }
         let details = o
             .get("detail")
-            .map_or("plain", String::as_str)
+            .ok_or("detail is required (plain, hi or ma, `;` between): which collision is written is the caller's choice")?
             .split(';')
             .map(|d| match d.trim().to_ascii_lowercase().as_str() {
                 "plain" => Ok(BoundDetail::Plain),
@@ -1153,7 +1153,7 @@ mod tests {
         }
     }
 
-    /// `gta-select-collision` keeps plain bounds unless asked for others, and the details named.
+    /// `gta-select-collision` keeps the details named, and refuses to choose without them.
     #[test]
     fn map_bounds_are_chosen_by_detail_in_a_pass() {
         let mut w = World::new();
@@ -1173,7 +1173,10 @@ mod tests {
         let hi = spawn(Some("hi"));
         let ma = spawn(Some("ma"));
         let mut log = PassLog::default();
-        SelectCollision::from_options(&Options::new())
+        assert!(SelectCollision::from_options(&Options::new()).is_err());
+        let mut plain_only = Options::new();
+        plain_only.insert("detail".into(), "plain".into());
+        SelectCollision::from_options(&plain_only)
             .unwrap()
             .run(&mut w, &mut log)
             .unwrap();
