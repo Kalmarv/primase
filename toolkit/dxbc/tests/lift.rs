@@ -234,3 +234,69 @@ fn a_partial_write_mask_on_a_view_is_refused() {
     let e = lift(&container).unwrap_err();
     assert!(e.detail.contains("partial write mask"), "{e}");
 }
+
+const COMPUTE: [&[u8]; 2] = [
+    include_bytes!("fixtures/compute_basic.dxbc"),
+    include_bytes!("fixtures/compute_basic.od.dxbc"),
+];
+
+/// The compute fixture (tests/fixtures/compute_basic.hlsl, fxc /T cs_5_0): a thread group of 8 by 4 by 2, the four
+/// ids, shared memory with atomics, and a raw, a structured and a typed buffer.
+#[test]
+fn the_compute_fixture_lifts_validates_and_writes_wgsl() {
+    for (name, container) in ["default", "/Od"].into_iter().zip(COMPUTE) {
+        let program = lift(container).unwrap_or_else(|e| panic!("{name}: {e}"));
+        program.validate().unwrap_or_else(|p| panic!("{name}: {p:?}"));
+        assert_eq!(program.stage, Stage::Compute, "{name}");
+        assert_eq!(program.provenance.target, "cs_5_0", "{name}");
+        assert_eq!(program.module.entry_points[0].workgroup_size, [8, 4, 2], "{name}");
+        let systems: Vec<_> = program.interface.inputs.iter().filter_map(|v| v.system).collect();
+        for id in [
+            SystemValue::GroupId,
+            SystemValue::GroupThreadId,
+            SystemValue::DispatchThreadId,
+            SystemValue::GroupIndex,
+        ] {
+            assert!(systems.contains(&id), "{name}: no {id:?} in {systems:?}");
+        }
+        // u0 raw, u1 structured of uint, u2 typed: all read and written
+        let storage: Vec<_> = program
+            .interface
+            .resources
+            .iter()
+            .filter_map(|r| match &r.kind {
+                ResourceKind::Storage {
+                    target: primase_shader::StorageTarget::Buffer(kind),
+                    ..
+                } => Some((r.provenance.d3d.unwrap().register, *kind)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            storage.iter().any(|(r, k)| *r == 0 && *k == BufferKind::Raw),
+            "{name}: {storage:?}"
+        );
+        assert!(
+            storage
+                .iter()
+                .any(|(r, k)| *r == 1 && matches!(k, BufferKind::Structured { stride: 4 })),
+            "{name}: {storage:?}"
+        );
+        assert!(
+            storage
+                .iter()
+                .any(|(r, k)| *r == 2 && matches!(k, BufferKind::Typed(_))),
+            "{name}: {storage:?}"
+        );
+        let wgsl = primase_shader::emit::wgsl(&program).unwrap();
+        for needle in [
+            "@compute @workgroup_size(8, 4, 2)",
+            "var<workgroup>",
+            "atomicAdd(",
+            "workgroupBarrier()",
+            "var<storage, read_write>",
+        ] {
+            assert!(wgsl.contains(needle), "{name}: {needle:?} is not in\n{wgsl}");
+        }
+    }
+}
