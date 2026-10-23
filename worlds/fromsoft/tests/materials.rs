@@ -176,3 +176,34 @@ fn the_stored_tiling_types_become_the_bindings_addressing() {
         [Some(AddressMode::Border), Some(AddressMode::MirrorOnce)]
     );
 }
+
+/// A stated repeat and an unstated addressing sample alike, so they are one material identity; an addressing that
+/// samples differently is another.
+#[test]
+fn material_identity_compares_the_addressing_as_sampled() {
+    use primase_fromsoft::flver::Tiling;
+    let identity = |u, v| {
+        let mut src = source();
+        src.textures = vec![flver::Texture {
+            kind: "Texture2D_8_AlbedoMap".into(),
+            path: "a.dds".into(),
+            tiling: [u, v],
+            ..Default::default()
+        }];
+        materials::resolve(&src, Some(&definition()), |_| true)
+            .identity()
+            .unwrap()
+    };
+    assert_eq!(
+        identity(Tiling::None, Tiling::None),
+        identity(Tiling::Repeat, Tiling::Repeat)
+    );
+    assert_ne!(
+        identity(Tiling::Repeat, Tiling::Repeat),
+        identity(Tiling::Repeat, Tiling::MirrorRepeat)
+    );
+    assert_ne!(
+        identity(Tiling::Repeat, Tiling::Repeat),
+        identity(Tiling::Clamp, Tiling::Repeat)
+    );
+}

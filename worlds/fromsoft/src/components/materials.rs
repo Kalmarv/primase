@@ -97,10 +97,22 @@ pub struct Material {
     pub layered: Option<LayeredMaterial>,
 }
 impl Material {
-    /// The material's identity record: the JSON of every field. The reader keeps one entity per record, so two
-    /// source materials are one when their records are equal.
+    /// The material with every binding's addressing as the engine samples it: an addressing the source does not state
+    /// is repeat, the same as a stated repeat.
+    pub fn with_effective_addressing(&self) -> Material {
+        use primase_core::shader::AddressMode::Repeat;
+        let mut effective = self.clone();
+        let layered = effective.layered.iter_mut().flat_map(|l| l.bindings.values_mut());
+        for binding in effective.bindings.values_mut().chain(layered) {
+            binding.address = binding.address.map(|a| a.or(Some(Repeat)));
+        }
+        effective
+    }
+    /// The material's identity record: the JSON of every field, the addressing as the engine samples it
+    /// ([`Material::with_effective_addressing`]: a stated repeat and an unstated addressing are one). The reader keeps
+    /// one entity per record, so two source materials are one when their records are equal.
     pub fn identity(&self) -> crate::Result<String> {
-        primase_core::json::to_value(self)
+        primase_core::json::to_value(&self.with_effective_addressing())
             .map(|v| v.to_string())
             .map_err(|e| crate::invalid("Sekiro material", 0, e))
     }
