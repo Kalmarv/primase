@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::components::{UnityAmbient, UnityBehaviour, UnityObject};
+use crate::components::{UnityAmbient, UnityBehaviour, UnityFog, UnityObject};
 use crate::read::player::{ObjRef, Player};
 use crate::read::value::{Array, Value};
 use crate::{Result, invalid};
@@ -1061,7 +1061,22 @@ impl Scene {
                     },
                 }),
             };
-            found = Some(SceneRenderSettings { sun, ambient });
+            // fog: absent from a type tree that does not state it
+            let fog = match settings.get("m_Fog").and_then(Value::as_bool) {
+                None => None,
+                Some(enabled) => Some(UnityFog {
+                    enabled,
+                    mode: settings
+                        .get("m_FogMode")
+                        .and_then(Value::as_i64)
+                        .ok_or_else(|| invalid(format!("{file}: RenderSettings without m_FogMode")))?,
+                    color: rgba("m_FogColor")?,
+                    density: num(&settings, "m_FogDensity")? as f32,
+                    start: num(&settings, "m_LinearFogStart")? as f32,
+                    end: num(&settings, "m_LinearFogEnd")? as f32,
+                }),
+            };
+            found = Some(SceneRenderSettings { sun, ambient, fog });
         }
         Ok(found)
     }
@@ -1339,6 +1354,7 @@ pub struct TerrainComponent {
 pub struct SceneRenderSettings {
     pub sun: Option<ObjRef>,
     pub ambient: Option<UnityAmbient>,
+    pub fog: Option<UnityFog>,
 }
 
 #[cfg(test)]

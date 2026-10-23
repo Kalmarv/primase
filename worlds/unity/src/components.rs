@@ -234,31 +234,64 @@ impl UnityPrograms {
 
 /// The variant of each stage a draw uses ([`UnityPrograms::draw_variants`]); `None` for a stage the pass has no
 /// variants of, or none of for the draw.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DrawVariants<'a> {
     pub vertex: Option<&'a UnityProgramVariant>,
     pub fragment: Option<&'a UnityProgramVariant>,
     pub geometry: Option<&'a UnityProgramVariant>,
     pub hull: Option<&'a UnityProgramVariant>,
     pub domain: Option<&'a UnityProgramVariant>,
+    /// The keywords the draw has beyond the ones it was given: those every stored variant of a stage has in the tier
+    /// ([`UnityPrograms::draw_variants`]), sorted.
+    pub implied: Vec<&'a String>,
+}
+
+impl UnityPrograms {
+    /// The keywords every stored variant of some stage has in the tier `tier`, over the stages that have variants
+    /// there. A player stores a stage's variants only for the keyword sets a draw can have, so a draw has these.
+    fn required_keywords(&self, tier: usize) -> std::collections::BTreeSet<&String> {
+        let mut required = std::collections::BTreeSet::new();
+        for list in [
+            &self.variants,
+            &self.vertex,
+            &self.geometry,
+            &self.hull,
+            &self.domain,
+        ] {
+            let mut at_tier = list.iter().filter(|v| v.tier == tier);
+            let Some(first) = at_tier.next() else { continue };
+            let mut always: std::collections::BTreeSet<&String> = first.keywords.iter().collect();
+            for v in at_tier {
+                always.retain(|k| v.keywords.contains(k));
+            }
+            required.extend(always);
+        }
+        required
+    }
 }
 
 impl UnityPrograms {
     /// The variant of each stage a draw with the keywords `material` and `global` (their union is the draw's keyword
-    /// set) and hardware tier `tier` uses. Unity compiles each stage for the keyword sets that stage uses, so per stage
-    /// the draw's keywords are restricted to those some variant of the stage has, and the variant is the one with
-    /// exactly those, in that tier (`tests/program_pairing.rs` checks on every pass of two players that a fragment
-    /// variant and a vertex variant so selected exist together: a fragment variant's keywords alone do not determine
-    /// the vertex variant). Where a stage has the same keywords and tier in two shader models, the fragment stage takes
-    /// the first stored and the others the model of its (a vertex program two types below the pixel program's), else
-    /// the first.
+    /// set, with the keywords [`UnityPrograms::required_keywords`] names: `implied`) and hardware tier `tier` uses.
+    /// Unity compiles each stage for the keyword sets that stage uses, so per stage the draw's keywords are restricted
+    /// to those some variant of the stage has, and the variant is the one with exactly those, in that tier
+    /// (`tests/program_pairing.rs` checks on every pass of two players that a fragment variant and a vertex variant so
+    /// selected exist together: a fragment variant's keywords alone do not determine the vertex variant). Where a
+    /// stage has the same keywords and tier in two shader models, the fragment stage takes the first stored and the
+    /// others the model of its (a vertex program two types below the pixel program's), else the first.
     pub fn draw_variants<'a>(
         &'a self,
         material: &[String],
         global: &[String],
         tier: usize,
     ) -> DrawVariants<'a> {
-        let draw: std::collections::BTreeSet<&String> = material.iter().chain(global).collect();
+        let mut draw: std::collections::BTreeSet<&String> = material.iter().chain(global).collect();
+        let implied: Vec<&String> = self
+            .required_keywords(tier)
+            .into_iter()
+            .filter(|k| !draw.contains(k))
+            .collect();
+        draw.extend(implied.iter().copied());
         let pick = |list: &'a [UnityProgramVariant], model: Option<i64>| -> Option<&'a UnityProgramVariant> {
             let used: std::collections::BTreeSet<&String> = list.iter().flat_map(|v| &v.keywords).collect();
             let wanted: std::collections::BTreeSet<&String> = draw.intersection(&used).copied().collect();
@@ -283,6 +316,7 @@ impl UnityPrograms {
             geometry: pick(&self.geometry, None),
             hull: pick(&self.hull, None),
             domain: pick(&self.domain, None),
+            implied,
         }
     }
 }
@@ -843,6 +877,54 @@ pub struct UnityAmbient {
     pub probe: Option<[f32; 27]>,
 }
 
+/// The scene's fog as RenderSettings stores it: whether it is on (`m_Fog`), its `mode` (`m_FogMode`: 1 linear, 2
+/// exponential, 3 exponential squared), its colour, `density` (exponential modes) and the linear mode's `start` and
+/// `end`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityFog {
+    pub enabled: bool,
+    pub mode: i64,
+    pub color: [f32; 4],
+    pub density: f32,
+    pub start: f32,
+    pub end: f32,
+}
+
+/// The lighting and shadow settings of a Universal Render Pipeline asset as stored (`UniversalRenderPipelineAsset`,
+/// asset version 13; [`crate::read::pipeline`] holds the verified layout): the light modes as `LightRenderingMode`
+/// numbers them (0 disabled, 1 per pixel, 2 per vertex), the shadow cascade count (1 to 4), the settings that decide
+/// which of a pass's keywords the pipeline sets.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityUrpSettings {
+    pub main_light_mode: i64,
+    pub main_light_shadows: bool,
+    pub additional_lights_mode: i64,
+    pub additional_light_shadows: bool,
+    pub reflection_probe_blending: bool,
+    pub reflection_probe_box_projection: bool,
+    pub reflection_probe_atlas: bool,
+    pub shadow_distance: f32,
+    pub shadow_cascades: u8,
+    pub soft_shadows: bool,
+    pub mixed_lighting: bool,
+    pub light_cookies: bool,
+    pub light_layers: bool,
+    pub lod_cross_fade: bool,
+    /// `ShEvalMode`: 0 auto, 1 per vertex, 2 mixed, 3 per pixel.
+    pub sh_eval_mode: i64,
+    /// `LightProbeSystem`: 0 legacy light probes, 1 probe volumes.
+    pub light_probe_system: i64,
+}
+
+/// The shadow settings of a quality level (`QualitySettings`): `shadows` 0 for none, 1 for hard shadows only and 2 for
+/// all, the distance shadows are drawn to, the built-in pipeline's cascade count.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityShadowQuality {
+    pub shadows: i64,
+    pub distance: f32,
+    pub cascades: i64,
+}
+
 /// The script class of Universal Render Pipeline's asset (`m_Namespace.m_ClassName` of its MonoScript).
 pub const URP_ASSET: &str = "UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset";
 
@@ -870,12 +952,20 @@ pub struct UnityRenderSettings {
     pub pipeline: Option<RenderPipeline>,
     /// Its ambient lighting; `None` when the scene has no RenderSettings or they store no ambient mode.
     pub ambient: Option<UnityAmbient>,
+    /// Its fog; `None` when the scene has no RenderSettings or they store no fog.
+    pub fog: Option<UnityFog>,
+    /// The settings of the Universal Render Pipeline asset the read quality level draws with; `None` for another
+    /// pipeline, or where the levels differ and none was named.
+    pub urp: Option<UnityUrpSettings>,
+    /// The shadow settings of the quality level the scene was read for (every level's where they agree and none was
+    /// named); `None` where the levels differ and none was named, or the player has none.
+    pub shadow_quality: Option<UnityShadowQuality>,
 }
 
 impl primase_core::Resource for UnityRenderSettings {
     const NAME: &'static str = "unity.render_settings";
-    /// 2: `pipeline`; 3: `ambient`; 4: the ambient's `probe`.
-    const VERSION: u32 = 4;
+    /// 2: `pipeline`; 3: `ambient`; 4: the ambient's `probe`; 5: `fog`, `urp` and `shadow_quality`.
+    const VERSION: u32 = 5;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -1035,9 +1125,14 @@ mod tests {
         let d = programs.draw_variants(&[], &s(&["LOD_FADE_PERCENTAGE"]), 2);
         assert_eq!((code(d.fragment), code(d.vertex)), (Some(3), Some(13)));
         assert_eq!(programs.draw_variants(&[], &[], 0), DrawVariants::default());
-        // without the keyword the vertex stage always has, no vertex variant (the fragment one is still found)
+        // the keyword every vertex variant of the tier has is the draw's though nobody states it (the player stores no
+        // vertex variant without it): implied, and named
         let d = programs.draw_variants(&[], &[], 1);
-        assert_eq!((code(d.fragment), code(d.vertex)), (Some(1), None));
+        assert_eq!((code(d.fragment), code(d.vertex)), (Some(1), Some(11)));
+        assert_eq!(d.implied, [&"LOD_FADE_PERCENTAGE".to_owned()]);
+        // stated, it is not implied again
+        let d = programs.draw_variants(&[], &s(&["LOD_FADE_PERCENTAGE"]), 1);
+        assert!(d.implied.is_empty());
     }
 
     /// The submesh each primitive is follows a rebuild of the primitive list (one split in two, one dropped).

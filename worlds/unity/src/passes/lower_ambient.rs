@@ -297,6 +297,7 @@ mod tests {
             sun: None,
             pipeline: None,
             ambient: Some(stored(mode, intensity)),
+            ..Default::default()
         });
         let mut log = PassLog::default();
         LowerUnityAmbient { probe }.run(&mut w, &mut log).unwrap();
@@ -413,6 +414,7 @@ mod tests {
             sun: None,
             pipeline: None,
             ambient: Some(stored(3, 1.0)),
+            ..Default::default()
         });
         let pass = LowerUnityAmbient {
             probe: UnityAmbientProbe::Omit,
@@ -541,6 +543,7 @@ mod tests {
                     probe,
                     ..stored(0, 1.0)
                 }),
+                ..Default::default()
             });
             let mut log = PassLog::default();
             LowerUnityAmbient {
@@ -567,6 +570,7 @@ mod tests {
                 intensity: 1.0,
                 probe: None,
             }),
+            ..Default::default()
         });
         let mut log = PassLog::default();
         LowerUnityAmbient {

@@ -34,11 +34,16 @@ impl From<&ObjRef> for UnityObject {
     }
 }
 
-/// A quality level of the player ([`Player::quality_levels`]): its name and the bone influences a vertex may have.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A quality level of the player ([`Player::quality_levels`]): its name, the bone influences a vertex may have and
+/// its shadow settings (`shadows`: 0 disabled, 1 hard shadows only, 2 all; the distance shadows are drawn to; the
+/// built-in pipeline's cascade count, which a Universal Render Pipeline asset replaces with its own).
+#[derive(Clone, Debug, PartialEq)]
 pub struct QualityLevel {
     pub name: String,
     pub skin_weights: SkinWeights,
+    pub shadows: i64,
+    pub shadow_distance: f32,
+    pub shadow_cascades: i64,
 }
 
 /// A scene of the build ([`Player::scenes`]).
@@ -236,9 +241,11 @@ impl Player {
         Ok((d.value, bytes[bytes.len() - d.rest..].to_vec()))
     }
 
-    /// The player's [`RenderPipeline`], from `globalgamemanagers`' GraphicsSettings and QualitySettings; `None` when
-    /// the player has no GraphicsSettings.
-    pub fn render_pipeline(&self) -> Result<Option<RenderPipeline>> {
+    /// The pipeline asset each quality level draws with, each with the level's name: its own (`customRenderPipeline`),
+    /// else GraphicsSettings' default (`m_CustomRenderPipeline`); one level without a name when the player has no
+    /// QualitySettings levels. `None` when the player has no GraphicsSettings.
+    #[allow(clippy::type_complexity)]
+    fn pipeline_assets(&self) -> Result<Option<Vec<(Option<String>, Option<ObjRef>)>>> {
         const FILE: &str = "globalgamemanagers";
         let Some(f) = self.files.get(FILE) else {
             return Ok(None);
@@ -262,43 +269,61 @@ impl Player {
         let Some(graphics) = one("GraphicsSettings")? else {
             return Ok(None);
         };
-        // a pipeline asset's script class; `None` for no asset
-        let class = |pptr: Option<&Value>| -> Result<Option<String>> {
-            let Some(asset) = pptr.map(|p| self.resolve(FILE, p)).transpose()?.flatten() else {
-                return Ok(None);
-            };
-            let (base, _) = self.behaviour(&asset)?;
-            let script = base
-                .get("m_Script")
-                .map(|p| self.resolve(&asset.file, p))
-                .transpose()?
-                .flatten()
-                .ok_or_else(|| {
-                    invalid(format!(
-                        "{}/{}: pipeline asset without a script",
-                        asset.file, asset.path_id
-                    ))
-                })?;
-            let s = self.decode(&script)?;
-            let field = |k: &str| s.get(k).and_then(Value::as_str).unwrap_or("");
-            Ok(Some(match field("m_Namespace") {
-                "" => field("m_ClassName").to_owned(),
-                ns => format!("{ns}.{}", field("m_ClassName")),
-            }))
+        let asset = |pptr: Option<&Value>| -> Result<Option<ObjRef>> {
+            Ok(pptr.map(|p| self.resolve(FILE, p)).transpose()?.flatten())
         };
-        let default = class(graphics.get("m_CustomRenderPipeline"))?;
+        let default = asset(graphics.get("m_CustomRenderPipeline"))?;
         let mut levels = Vec::new();
         if let Some(Value::Array(crate::read::value::Array::Values(qs))) = one("QualitySettings")?
             .as_ref()
             .and_then(|q| q.get("m_QualitySettings"))
         {
             for q in qs {
-                levels.push(class(q.get("customRenderPipeline"))?.or_else(|| default.clone()));
+                let name = q.get("name").and_then(Value::as_str).map(str::to_owned);
+                levels.push((
+                    name,
+                    asset(q.get("customRenderPipeline"))?.or_else(|| default.clone()),
+                ));
             }
         }
         if levels.is_empty() {
-            levels.push(default);
+            levels.push((None, default));
         }
+        Ok(Some(levels))
+    }
+
+    /// A pipeline asset's script class (`namespace.class`).
+    fn pipeline_class(&self, asset: &ObjRef) -> Result<String> {
+        let (base, _) = self.behaviour(asset)?;
+        let script = base
+            .get("m_Script")
+            .map(|p| self.resolve(&asset.file, p))
+            .transpose()?
+            .flatten()
+            .ok_or_else(|| {
+                invalid(format!(
+                    "{}/{}: pipeline asset without a script",
+                    asset.file, asset.path_id
+                ))
+            })?;
+        let s = self.decode(&script)?;
+        let field = |k: &str| s.get(k).and_then(Value::as_str).unwrap_or("");
+        Ok(match field("m_Namespace") {
+            "" => field("m_ClassName").to_owned(),
+            ns => format!("{ns}.{}", field("m_ClassName")),
+        })
+    }
+
+    /// The player's [`RenderPipeline`], from `globalgamemanagers`' GraphicsSettings and QualitySettings; `None` when
+    /// the player has no GraphicsSettings.
+    pub fn render_pipeline(&self) -> Result<Option<RenderPipeline>> {
+        let Some(levels) = self.pipeline_assets()? else {
+            return Ok(None);
+        };
+        let levels: Vec<Option<String>> = levels
+            .iter()
+            .map(|(_, asset)| asset.as_ref().map(|a| self.pipeline_class(a)).transpose())
+            .collect::<Result<_>>()?;
         Ok(Some(if levels.iter().all(Option::is_none) {
             RenderPipeline::BuiltIn
         } else if levels.iter().all(|l| l.as_deref() == Some(URP_ASSET)) {
@@ -312,6 +337,37 @@ impl Player {
             names.dedup();
             RenderPipeline::Other(names)
         }))
+    }
+
+    /// The Universal Render Pipeline asset the quality level `quality` draws with (every level's when none is named
+    /// and they all draw with one); `Ok(None)` when the level (or the levels) draw with no URP asset, or with more
+    /// than one where no level is named. An unknown level name is an error.
+    pub fn urp_asset(&self, quality: Option<&str>) -> Result<Option<ObjRef>> {
+        let Some(levels) = self.pipeline_assets()? else {
+            return Ok(None);
+        };
+        let chosen: Vec<&Option<ObjRef>> = match quality {
+            Some(name) => vec![
+                levels
+                    .iter()
+                    .find(|(n, _)| n.as_deref() == Some(name))
+                    .map(|(_, a)| a)
+                    .ok_or_else(|| invalid(format!("no quality level named {name}")))?,
+            ],
+            None => levels.iter().map(|(_, a)| a).collect(),
+        };
+        let mut found: Option<&ObjRef> = None;
+        for asset in chosen {
+            let Some(asset) = asset else { return Ok(None) };
+            if self.pipeline_class(asset)? != URP_ASSET {
+                return Ok(None);
+            }
+            match found {
+                Some(f) if f != asset => return Ok(None),
+                _ => found = Some(asset),
+            }
+        }
+        Ok(found.cloned())
     }
 
     /// The quality levels of `globalgamemanagers`' QualitySettings, in order, each with its name and the skin weights
@@ -359,9 +415,22 @@ impl Player {
                     .get("skinWeights")
                     .and_then(Value::as_i64)
                     .ok_or_else(|| invalid(format!("quality level {name}: no skinWeights")))?;
+                let field = |k: &str| -> Result<&Value> {
+                    q.get(k)
+                        .ok_or_else(|| invalid(format!("quality level {name}: no {k}")))
+                };
                 Ok(QualityLevel {
-                    name,
                     skin_weights: SkinWeights::from_setting(weights)?,
+                    shadows: field("shadows")?
+                        .as_i64()
+                        .ok_or_else(|| invalid(format!("quality level {name}: shadows is not a number")))?,
+                    shadow_distance: field("shadowDistance")?.as_f32().ok_or_else(|| {
+                        invalid(format!("quality level {name}: shadowDistance is not a number"))
+                    })?,
+                    shadow_cascades: field("shadowCascades")?.as_i64().ok_or_else(|| {
+                        invalid(format!("quality level {name}: shadowCascades is not a number"))
+                    })?,
+                    name,
                 })
             })
             .collect()

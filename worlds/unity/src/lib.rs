@@ -50,7 +50,7 @@ mod read;
 pub mod shader;
 
 pub use passes::{
-    drawn, lower, lower_ambient, lower_collision, lower_lights, lower_terrain, resolve_shaders,
+    draw_keywords, drawn, lower, lower_ambient, lower_collision, lower_lights, lower_terrain, resolve_shaders,
 };
 pub use read::serialized::{ObjectInfo, SerializedFile};
 pub use read::tpk::TypeTreePackage;
@@ -58,8 +58,8 @@ pub use read::typetree::TypeTree;
 pub use read::value::Value;
 pub use read::version::UnityVersion;
 pub use read::{
-    asset, clip, convert, level, listing, material, mesh, player, program, resource, scene, serialized,
-    terrain, texture, tpk, typetree, value, version,
+    asset, clip, convert, level, listing, material, mesh, pipeline, player, program, resource, scene,
+    serialized, terrain, texture, tpk, typetree, value, version,
 };
 
 /// Registers the Unity passes by name: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,

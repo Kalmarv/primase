@@ -47,8 +47,8 @@ use crate::animator::{UnityAnimator, UnityAnimatorController, UnityAvatar};
 use crate::components::{
     ColliderMesh, UNITY, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape, UnityLight,
     UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings, UnityRenderer,
-    UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture, UnityTree,
-    UnityTreeInstance,
+    UnityShadowQuality, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
+    UnityTree, UnityTreeInstance, UnityUrpSettings,
 };
 use crate::read::clip::{ClipData, controller_clips, path_hash};
 use crate::read::material::{ShaderData, UnityMaterialData};
@@ -2257,15 +2257,70 @@ fn read_scene(
     }
     b.report.cameras = cameras.len();
     b.report.sun_named = sun.is_some();
+    // the pipeline asset's settings belong to the scene's rendering, not to a prefab's
+    let urp = if root.is_none() {
+        urp_settings(player, options.quality.as_deref()).unwrap_or_else(|why| {
+            b.notice(
+                &format!("Universal Render Pipeline asset settings not read: {why}"),
+                1,
+            );
+            None
+        })
+    } else {
+        None
+    };
+    let shadow_quality = if root.is_none() {
+        shadow_quality(player, options.quality.as_deref()).unwrap_or_else(|why| {
+            b.notice(&format!("quality level shadow settings not read: {why}"), 1);
+            None
+        })
+    } else {
+        None
+    };
     w.insert_resource(UnityRenderSettings {
         sun: sun_entity,
         pipeline: player.render_pipeline()?,
+        fog: settings.as_ref().and_then(|s| s.fog.clone()),
         ambient: settings.and_then(|s| s.ambient),
+        urp,
+        shadow_quality,
     });
     b.report.renderers = renderers.iter().filter(|r| !role_of(r).folded).count();
     b.report.tree_renderers = trees.iter().filter(|(_, r)| !role_of(r).folded).count();
     b.report.prototypes = prototypes.len();
     Ok(b.report)
+}
+
+/// The shadow settings of the quality level `quality`, or of every level where they agree and none is named.
+fn shadow_quality(player: &Player, quality: Option<&str>) -> Result<Option<UnityShadowQuality>> {
+    let levels = player.quality_levels()?;
+    let chosen: Vec<&QualityLevel> = match quality {
+        Some(name) => vec![
+            levels
+                .iter()
+                .find(|l| l.name == name)
+                .ok_or_else(|| invalid(format!("no quality level named {name}")))?,
+        ],
+        None => levels.iter().collect(),
+    };
+    let of = |l: &QualityLevel| UnityShadowQuality {
+        shadows: l.shadows,
+        distance: l.shadow_distance,
+        cascades: l.shadow_cascades,
+    };
+    let Some(first) = chosen.first().map(|l| of(l)) else {
+        return Ok(None);
+    };
+    Ok(chosen.iter().all(|l| of(l) == first).then_some(first))
+}
+
+/// The settings of the Universal Render Pipeline asset the quality level `quality` draws with, where it is one.
+fn urp_settings(player: &Player, quality: Option<&str>) -> Result<Option<UnityUrpSettings>> {
+    let Some(asset) = player.urp_asset(quality)? else {
+        return Ok(None);
+    };
+    let (_, bytes) = player.behaviour(&asset)?;
+    crate::read::pipeline::read_urp_settings(&bytes).map(Some)
 }
 
 /// The five fields of a PhysicMaterial, by the two names a type tree gives them: Unity 6 and its kin prefix them

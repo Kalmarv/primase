@@ -215,6 +215,7 @@ fn level(mode: i64) -> World {
             intensity: 1.0,
             probe: None,
         }),
+        ..Default::default()
     });
     let mut place = |corners: Vec<[f32; 3]>, indices: Option<Vec<u32>>, cols: [[f32; 3]; 4]| {
         let prototype = w.spawn();

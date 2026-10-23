@@ -234,6 +234,7 @@ mod tests {
             sun,
             pipeline,
             ambient: None,
+            ..Default::default()
         }
     }
 

@@ -83,6 +83,7 @@ fn the_lodges_ambient_lowers_by_its_stored_mode() {
             sun: None,
             pipeline: None,
             ambient: Some(stored.clone()),
+            ..Default::default()
         });
         let mut log = PassLog::default();
         LowerUnityAmbient { probe }.run(&mut w, &mut log).unwrap();

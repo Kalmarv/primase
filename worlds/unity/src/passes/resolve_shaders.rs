@@ -1,13 +1,17 @@
-//! `resolve-unity-shaders{tier=N,keywords=A+B|none,colour-space=linear|gamma}`: the programs of the pass each Unity
+//! `resolve-unity-shaders{tier=N,keywords=A+B|scene|none,colour-space=linear|gamma}`: the programs of the pass each Unity
 //! material draws with (`unity.programs`, [`crate::program::read_programs`]) as `core.shader` entities and each
 //! material's `core.shader_binding`, by Unity's rules. The one home of those rules for the binding; `bind` still serves
 //! the CPU evaluation until it is moved onto the binding.
 //!
 //! - **Variants.** The draw's keyword set is the material's keywords and `keywords` (the renderer's: the light, shadow,
-//!   lightmap and probe keywords Unity sets per draw); with hardware tier `tier`, each stage's variant is the one
-//!   whose keywords are the draw's restricted to those the stage uses ([`UnityPrograms::draw_variants`]). A material
-//!   with none for a stage's variants is counted and the stage left out (no fragment variant: the material is left
-//!   unbound).
+//!   lightmap and probe keywords Unity sets per draw; `scene` stands for the ones the scene's own state gives each
+//!   material, [`SceneKeywords`]); with hardware tier `tier`, each stage's variant is the one
+//!   whose keywords are the draw's restricted to those the stage uses ([`UnityPrograms::draw_variants`]). A player
+//!   stores a stage's variants only for the keyword sets a draw can have, so the draw also has the keywords every
+//!   stored variant of a stage has in the tier (a light type the pass always runs under, a feature the pipeline
+//!   always enables): counted per keyword, since they are the build's evidence, not the material's or the renderer's.
+//!   A material with none for a stage's variants is counted and the stage left out (no fragment variant: the
+//!   material is left unbound).
 //! - **Constants.** Each constant-buffer field the variant's parameters name, at its byte offset: a float or int
 //!   property of the material by the field's name; a colour property (`colour-space=linear`: converted from its
 //!   gamma-encoded storage to linear, as Unity sets colours in a linear-colour-space player; `gamma`: as stored); a
@@ -41,12 +45,15 @@ use primase_core::shader::{
 use primase_core::{Component, Entity, Name, Semantic, Texture, World};
 
 use crate::components::{Parameters, Shape, UnityMaterial, UnityProgramVariant, UnityPrograms, UnityTexEnv};
+use crate::passes::draw_keywords::{SceneKeywords, receivers};
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolveUnityShaders {
     tier: usize,
     keywords: Vec<String>,
+    /// Whether the scene's state gives each material its renderer keywords too.
+    scene: bool,
     linear: bool,
 }
 
@@ -55,13 +62,20 @@ impl ResolveUnityShaders {
         ResolveUnityShaders {
             tier,
             keywords,
+            scene: false,
             linear,
         }
     }
 
+    /// Also give each material the keywords the scene's own state gives its draws ([`SceneKeywords`]).
+    pub fn with_scene_keywords(mut self) -> Self {
+        self.scene = true;
+        self
+    }
+
     /// From its options (all required), through [`ResolveUnityShaders::new`].
     pub fn from_options(o: &primase_core::pass::Options) -> Result<Self, String> {
-        let (mut tier, mut keywords, mut linear) = (None, None, None);
+        let (mut tier, mut keywords, mut linear, mut scene) = (None, None, None, false);
         for (k, v) in o {
             match k.as_str() {
                 "tier" => {
@@ -71,11 +85,15 @@ impl ResolveUnityShaders {
                     )
                 }
                 "keywords" => {
-                    keywords = Some(if v == "none" {
-                        Vec::new()
-                    } else {
-                        v.split('+').map(str::to_owned).collect()
-                    });
+                    let mut named: Vec<String> = Vec::new();
+                    for k in v.split('+') {
+                        match k {
+                            "none" if v == "none" => {}
+                            "scene" => scene = true,
+                            _ => named.push(k.to_owned()),
+                        }
+                    }
+                    keywords = Some(named);
                 }
                 "colour-space" => {
                     linear = Some(match v.as_str() {
@@ -87,13 +105,14 @@ impl ResolveUnityShaders {
                 _ => return Err(format!("unknown option {k}")),
             }
         }
-        Ok(Self::new(
+        let pass = Self::new(
             tier.ok_or("tier is required: the hardware tier the variants are chosen for")?,
-            keywords.ok_or("keywords is required: the renderer's keywords joined by +, or none")?,
+            keywords.ok_or("keywords is required: the renderer's keywords joined by +, scene, or none")?,
             linear.ok_or(
                 "colour-space is required: whether the player sets colour properties linear or as stored",
             )?,
-        ))
+        );
+        Ok(if scene { pass.with_scene_keywords() } else { pass })
     }
 }
 
@@ -505,10 +524,16 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
             ("tier".to_owned(), self.tier.to_string()),
             (
                 "keywords".to_owned(),
-                if self.keywords.is_empty() {
-                    "none".to_owned()
-                } else {
-                    self.keywords.join("+")
+                match (self.scene, self.keywords.is_empty()) {
+                    (false, true) => "none".to_owned(),
+                    (true, true) => "scene".to_owned(),
+                    (scene, false) => {
+                        let mut named = self.keywords.clone();
+                        if scene {
+                            named.insert(0, "scene".to_owned());
+                        }
+                        named.join("+")
+                    }
                 },
             ),
             (
@@ -538,14 +563,55 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
             without,
         );
         let mut shaders: BTreeMap<std::sync::Arc<[u8]>, Result<Entity, String>> = BTreeMap::new();
+        let scene = self.scene.then(|| SceneKeywords::read(world));
+        if scene.as_ref().is_some_and(|s| !s.known()) {
+            log.approximate(
+                "keywords=scene on a scene whose render pipeline has no rules here (not the built-in pipeline, or a Universal one whose asset was not read): the scene gives no keywords",
+                1,
+            );
+        }
+        if scene.as_ref().is_some_and(SceneKeywords::known) {
+            log.approximate(
+                "draw keywords the scene's state cannot give (lightmaps, vertex lights, GPU instancing) taken as absent",
+                1,
+            );
+        }
+        let receiving = receivers(world);
         for (material, m, programs) in materials {
-            let chosen = programs.draw_variants(&m.keywords, &self.keywords, self.tier);
+            let mut global = self.keywords.clone();
+            if let Some(scene) = &scene {
+                // a material drawn by renderers that both receive shadows and do not takes the commoner state
+                let (yes, no) = receiving
+                    .get(&(m.material.file.clone(), m.material.path_id))
+                    .copied()
+                    .unwrap_or((1, 0));
+                if yes > 0 && no > 0 {
+                    log.approximate(
+                        "materials drawn by renderers that both receive shadows and do not: bound as the commoner state",
+                        1,
+                    );
+                }
+                for k in scene.for_draw(yes >= no) {
+                    *counts
+                        .entry(format!("draws given a keyword the scene's state gives: {k}"))
+                        .or_default() += 1;
+                    global.push(k.to_owned());
+                }
+            }
+            let chosen = programs.draw_variants(&m.keywords, &global, self.tier);
             let Some(fragment) = chosen.fragment else {
                 *counts
                     .entry("materials left unbound: no fragment variant for these keywords and tier".into())
                     .or_default() += 1;
                 continue;
             };
+            for keyword in &chosen.implied {
+                *counts
+                    .entry(format!(
+                        "draws given a keyword the build implies, not the material or the renderer: {keyword} (every stored variant of a stage in the tier has it)"
+                    ))
+                    .or_default() += 1;
+            }
             let mut bound = Vec::new();
             for (stage, variant, lists) in [
                 (Stage::Vertex, chosen.vertex, !programs.vertex.is_empty()),

@@ -9,6 +9,7 @@ pub mod level;
 pub mod listing;
 pub mod material;
 pub mod mesh;
+pub mod pipeline;
 pub mod player;
 pub mod program;
 pub mod resource;
