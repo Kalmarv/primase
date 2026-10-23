@@ -197,6 +197,8 @@ pub enum ResourceKind {
     Buffer(BufferKind),
     /// An image or buffer the program may write.
     Storage { target: StorageTarget, access: Access },
+    /// A ray tracing acceleration structure the program traces rays into.
+    AccelerationStructure,
 }
 
 /// The register class of a D3D binding: `b`, `t`, `s` or `u`.

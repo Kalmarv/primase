@@ -37,6 +37,18 @@ pub fn wgsl(program: &Program) -> Result<String, Error> {
 
 /// The module as WGSL whatever its stage: for a program of a stage with no entry point, its functions, to be read.
 pub fn wgsl_functions(program: &Program) -> Result<String, Error> {
+    // naga's WGSL writer does not write ray queries (it stops on one), so a program that has one is refused here
+    if program
+        .module
+        .types
+        .iter()
+        .any(|(_, t)| matches!(t.inner, naga::TypeInner::RayQuery { .. }))
+    {
+        return Err(Error::Unsupported {
+            writer: "wgsl",
+            detail: "naga's WGSL writer does not write ray queries".into(),
+        });
+    }
     let info = program.validate().map_err(|problems| {
         Error::Invalid(
             problems

@@ -15,6 +15,7 @@ mod compute;
 mod flow;
 mod memory;
 mod ops;
+mod rayquery;
 mod resources;
 mod setup;
 mod stages;
@@ -51,13 +52,6 @@ pub fn lift(container: &[u8]) -> Result<Program> {
         .iter()
         .find(|f| f.value == entry_value)
         .ok_or_else(|| error(0, "the entry point has no body"))?;
-    // ray queries are not a thing a Program carries
-    if module.functions.iter().flat_map(|f| &f.instructions).any(|i| {
-        matches!(&i.op, Op::Call { function, .. }
-                if module.name(*function).is_some_and(|n| n.starts_with("dx.op.allocateRayQuery")))
-    }) {
-        return Err(error(0, "ray queries are not lifted"));
-    }
     // a hull program is two functions: the control-point phase (the entry) and the patch-constant function
     let patch_constant = if part.program_version >> 16 == 3 {
         let state = crate::reflection::hull_state(&module)?;
@@ -126,6 +120,8 @@ pub(crate) enum Lv {
         element: Option<Val>,
     },
     Pointer(memory::Ptr),
+    /// An inline ray tracing query (see [`rayquery`]).
+    RayQuery(Handle<LocalVariable>, u32),
 }
 
 /// Where a value lives once defined: as the expressions of its block, or in locals when another block reads it.

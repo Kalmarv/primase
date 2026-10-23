@@ -149,6 +149,9 @@ pub(super) fn text(p: &Program) -> Result<String, Error> {
     for r in &p.interface.resources {
         let _ = write!(out, "// resource {} {:?}", r.id.0, r.provenance.name);
         match &r.kind {
+            ResourceKind::AccelerationStructure => {
+                let _ = write!(out, " acceleration_structure");
+            }
             ResourceKind::ConstantBuffer { layout } => {
                 let _ = write!(out, " constant_buffer size={}", layout.size);
             }

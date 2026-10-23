@@ -220,6 +220,8 @@ impl Lift<'_> {
             68 | 139 => self.buffer_load(inst, args),
             72 => self.get_dimensions(inst, args),
             69 | 140 => self.buffer_store(args),
+            178 => self.allocate_ray_query(inst, args),
+            179..=215 => self.ray_query_op(inst, code, args),
             103 => self.load_output_control_point(inst, args),
             104 => self.load_patch_constant(inst, args),
             105 => self.domain_location(inst, args),
@@ -376,8 +378,14 @@ impl Lift<'_> {
         if system == SystemValue::LaneIndex && self.setup.interface.stage == primase_shader::Stage::Compute {
             let [_, y, z] = self.b.workgroup_size;
             if y != 1 || z != 1 {
+                // Kept refused: naga rejects `subgroup_invocation_id` with a multi-dimensional workgroup, and WebGPU does not
+                // say how such a workgroup divides into subgroups, so `local_invocation_index % subgroup_size` would be a
+                // guess at the device's layout (D3D's own mapping is hardware's too). `subgroupExclusiveAdd(1)` is the
+                // rank among the active lanes, not the lane, wherever lanes are inactive.
                 return self.refuse(
-                    "a wave lane index in a thread group that is not along x alone (WebGPU gives no lane number there)",
+                    "a wave lane index in a thread group that is not along x alone (naga rejects the lane-number \
+                     built-in with a multi-dimensional workgroup, and WebGPU does not say how one divides into \
+                     subgroups)",
                 );
             }
         }

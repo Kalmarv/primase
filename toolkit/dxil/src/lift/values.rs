@@ -137,6 +137,8 @@ impl Lift<'_> {
                     .map(|i| self.store_new(i, hint))
                     .collect::<Result<Vec<_>>>()?,
             ),
+            // a query is a local of the function, the same wherever it is read
+            Lv::RayQuery(..) => Stored::Plain(lv.clone()),
             Lv::Handle {
                 class,
                 resource,

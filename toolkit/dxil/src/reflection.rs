@@ -642,6 +642,7 @@ fn view(range: &Range, name: &str, ty: Option<TypeId>, m: &Module) -> Result<Vie
             width: typed_width(m, ty).unwrap_or(4),
         }))),
         11 => Ok(View::Buffer(BufferKind::Raw)),
+        16 => Ok(View::AccelerationStructure),
         12 => match range.stride {
             Some(stride) if stride > 0 => Ok(View::Buffer(BufferKind::Structured { stride })),
             _ => Err(error(0, format!("{name}: a structured buffer without a stride"))),
@@ -666,6 +667,7 @@ fn typed_width(m: &Module, ty: Option<TypeId>) -> Option<u8> {
 }
 
 enum View {
+    AccelerationStructure,
     Texture {
         dim: TextureDim,
         arrayed: bool,
@@ -758,6 +760,13 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
                         },
                         access: Access::ReadWrite,
                     },
+                    View::AccelerationStructure if !uav => ResourceKind::AccelerationStructure,
+                    View::AccelerationStructure => {
+                        return Err(error(
+                            0,
+                            format!("{name}: an unordered-access acceleration structure"),
+                        ));
+                    }
                     View::Buffer(buffer) if !uav => ResourceKind::Buffer(buffer),
                     View::Buffer(buffer) => ResourceKind::Storage {
                         target: StorageTarget::Buffer(buffer),

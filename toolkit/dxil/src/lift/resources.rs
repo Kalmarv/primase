@@ -216,6 +216,12 @@ impl Lift<'_> {
                     }
                     (format!("t{}", range.lower), AddressSpace::Handle, 1, ty)
                 }
+                ResourceKind::AccelerationStructure => {
+                    let ty = self
+                        .b
+                        .ty(TypeInner::AccelerationStructure { vertex_return: false });
+                    (format!("t{}", range.lower), AddressSpace::Handle, 1, ty)
+                }
                 ResourceKind::Sampler { comparison } => {
                     let ty = self.b.ty(TypeInner::Sampler {
                         comparison: *comparison,
@@ -475,7 +481,7 @@ impl Lift<'_> {
 
     /// The interface resource a handle of `class` names and the expression of the image or sampler it reads: the
     /// global, or the element of its binding array the program's index picks.
-    fn handle_expr(&mut self, v: ValueId, class: u8) -> Result<(usize, Handle<E>)> {
+    pub(super) fn handle_expr(&mut self, v: ValueId, class: u8) -> Result<(usize, Handle<E>)> {
         let Lv::Handle {
             class: c,
             resource,

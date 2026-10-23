@@ -30,7 +30,7 @@ impl fmt::Display for Problem {
 /// The capabilities programs may use: WGSL's baseline and what a D3D program can need beyond it (clip distances,
 /// per-sample shading, the primitive index, cube array textures, half-float packing for `f16tof32`/`f32tof16`, forced
 /// early depth tests, arrays of textures and samplers indexed by a computed, possibly divergent, index, and subgroup
-/// (wave) operations in compute and pixel programs, atomic operations on storage textures, arrays of storage buffers). A consumer that cannot provide one refuses the program that
+/// (wave) operations in compute and pixel programs, atomic operations on storage textures, arrays of storage buffers, ray queries). A consumer that cannot provide one refuses the program that
 /// needs it; nothing outside this list is ever produced.
 ///
 /// A compute program's thread group is validated against D3D's limits (1024 invocations, 1024 along x and y, 64 along
@@ -46,6 +46,7 @@ pub const CAPABILITIES: naga::valid::Capabilities = naga::valid::Capabilities::C
     .union(naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING)
     .union(naga::valid::Capabilities::SUBGROUP)
     .union(naga::valid::Capabilities::TEXTURE_ATOMIC)
+    .union(naga::valid::Capabilities::RAY_QUERY)
     .union(naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY)
     .union(naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY_NON_UNIFORM_INDEXING);
 
@@ -504,6 +505,9 @@ fn resources(p: &Program, problems: &mut Vec<Problem>) {
                         == TypeInner::Sampler {
                             comparison: *comparison,
                         }
+            }
+            ResourceKind::AccelerationStructure => {
+                space == AddressSpace::Handle && matches!(inner, TypeInner::AccelerationStructure { .. })
             }
             ResourceKind::Buffer(kind) => {
                 matches!(space, AddressSpace::Storage { access } if access == naga::StorageAccess::LOAD)

@@ -42,8 +42,12 @@ fn every_fixture_lifts() {
                     } else {
                         primase_shader::emit::wgsl(&p)
                     };
-                    if let Err(e) = written {
-                        failures.push(format!("{name}: wgsl: {e}"));
+                    match written {
+                        Ok(_) => {}
+                        // naga's WGSL writer does not write ray queries: the lifted program is what is checked
+                        Err(primase_shader::ProgramError::Unsupported { detail, .. })
+                            if detail.contains("ray queries") => {}
+                        Err(e) => failures.push(format!("{name}: wgsl: {e}")),
                     }
                 }
             }

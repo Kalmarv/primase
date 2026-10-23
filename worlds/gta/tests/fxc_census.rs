@@ -148,6 +148,7 @@ fn the_enhanced_shader_database() {
     let (mut lifted, mut programs) = (0, 0);
     let mut refused: BTreeMap<String, (usize, String)> = BTreeMap::new();
     let mut invalid = Vec::new();
+    let mut unwritten: BTreeMap<String, usize> = BTreeMap::new();
     let mut unrunnable: BTreeMap<String, (usize, String)> = BTreeMap::new();
     // per group: programs, lifted
     let mut tally: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
@@ -191,8 +192,13 @@ fn the_enhanced_shader_database() {
                                 } else {
                                     primase_shader::emit::wgsl(&p)
                                 };
-                            if let Err(e) = written {
-                                invalid.push(format!("{}: {e}", program.name));
+                            match written {
+                                Ok(_) => {}
+                                // a program the validator accepts and a writer cannot write is counted, not wrong
+                                Err(primase_shader::ProgramError::Unsupported { detail, .. }) => {
+                                    *unwritten.entry(detail).or_default() += 1;
+                                }
+                                Err(e) => invalid.push(format!("{}: {e}", program.name)),
                             }
                             // the executor compiles it too, or refuses it by name
                             if let Err(e) = primase_shader::exec::Executable::new(&p) {
@@ -215,6 +221,9 @@ fn the_enhanced_shader_database() {
     reasons.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));
     for (reason, (n, example)) in reasons.iter().take(40) {
         println!("  refused {n:5}  {reason}  (e.g. {example})");
+    }
+    for (reason, n) in &unwritten {
+        println!("  not written {n:5}  {reason}");
     }
     println!("LIFTED per group (programs, lifted): {tally:?}");
     for (reason, (n, example)) in &unrunnable {
