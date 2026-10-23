@@ -30,7 +30,8 @@
 //!   material has no property of is the frame's ([`frame_texture`]: the camera's depth and colour, the main light's
 //!   shadow map or screen-space shadows, the occlusion, the nearest reflection probe, the light-probe volume), counted
 //!   by name; the other engine textures the parameters name are `Missing` with the reason, and a slot the parameters do
-//!   not name is `Missing` (the Unity 2021 URP programs of Sledding Game's `level1` name 1 of their 1,375 texture slots: their shader objects store no texture parameters, and the DXBC has no names). The sampler state is Unity's
+//!   not name is `Missing` (a 2021.2 player stores a variant's textures in its parameter blob, which
+//!   [`crate::program::parameter_blob`] reads: the pass's common parameters name none). The sampler state is Unity's
 //!   packed value ([`crate::components::Parameters::samplers`]): not decoded.
 //! - **Outputs.** The fragment stage's first target is the finished colour of a forward pass; the others `Unknown`.
 //! - **State.** The pass's stored render state (`m_State`), each value the material's property where the pass binds
@@ -334,9 +335,10 @@ pub fn buffer_constants(
                 whole(ConstantRole::Unknown {
                     why: match builtin_reason(&f.name) {
                         Some(reason) => format!("{}: {reason}", f.name),
-                        None => {
-                            "not a material property of this name and not a built-in this pass maps".into()
-                        }
+                        None => format!(
+                            "{}: not a material property of this name and not a built-in this pass maps",
+                            f.name
+                        ),
                     },
                 })
             };
@@ -358,7 +360,7 @@ pub fn buffer_constants(
                     0,
                     bytes,
                     ConstantRole::Unknown {
-                        why: "a struct field (an instancing array): not laid out".into(),
+                        why: format!("{}: a struct field (an instancing array): not laid out", s.name),
                     },
                 )],
             });

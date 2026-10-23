@@ -8,11 +8,11 @@
 //!
 //! - SkateBIRD's programs name their engine textures (`_ShadowMapTexture`, `unity_SpecCube0`, `unity_SpecCube1`,
 //!   `unity_ProbeVolumeSH`, the grab textures).
-//! - Sledding Game's Unity 2021 URP programs name 1 of their 1,375 texture slots: their shader objects store no
-//!   texture parameters (the pass's common parameters and the variants have empty `m_TextureParams` and `m_Samplers`),
-//!   their DXBC containers have no RDEF (no resource names), and the tail of each blob record after the code is a short
-//!   list of small integers, not names. The slots are `Missing` ("texture slots the parameters do not name") and the
-//!   named engine textures that remain are the few programs that do name some.
+//! - Sledding Game's Unity 2021 URP shader objects store no texture parameters in the pass's common parameters, and
+//!   their DXBC containers have no RDEF (no resource names): a 2021.2 player keeps a variant's textures in its
+//!   parameter blob (`m_ParameterBlobIndices`), which `primase_unity::program::parameter_blob` reads. Before it was
+//!   read the programs named 1 of their 1,375 texture slots; now the engine textures are named like SkateBIRD's
+//!   (`_MainLightShadowmapTexture`, `_GlossyEnvironmentCubeMap`, `_ScreenSpaceOcclusionTexture`, `_DBufferTexture0`..).
 //!
 //! Needs the installs and the type tree package.
 #![allow(clippy::unwrap_used)]
@@ -109,8 +109,17 @@ fn unitys_own_textures_are_the_frames_where_the_vocabulary_has_one() {
             .filter(|(what, _)| what.starts_with("texture parameters that are the frame's"))
             .map(|(_, n)| n)
             .sum::<u64>();
-        // 1,374 slots of 1,375 are unnamed in the programs
-        assert!(c["texture slots the parameters do not name (the engine's), left Missing"] > 1_000);
+        // the parameter blobs name the slots: none is left unnamed (1,374 of 1,375 were before they were read), and
+        // the shadow map and the reflection cube are the frame's
+        assert!(
+            !c.contains_key("texture slots the parameters do not name (the engine's), left Missing"),
+            "{c:?}"
+        );
+        assert!(
+            c.keys()
+                .any(|what| what.ends_with("ShadowMap: _MainLightShadowmapTexture")),
+            "{c:?}"
+        );
         for what in c.keys() {
             assert!(
                 !mapped
