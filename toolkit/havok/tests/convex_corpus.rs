@@ -4,8 +4,11 @@
 use primase_havok::{ConvexCore, Tagfile};
 #[test]
 fn object_half_spaces() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(dir) = primase_testdata::real_data_value("PRIMASE_HAVOK_OBJECT_CORPUS") else {
-        eprintln!("SKIPPED: PRIMASE_HAVOK_OBJECT_CORPUS not set");
+    let Some(dir) = primase_testdata::oracle(
+        primase_testdata::OracleSet::Corpus,
+        primase_testdata::Game::Sekiro,
+        "object-hkx",
+    ) else {
         return Ok(());
     };
     let mut files = std::fs::read_dir(dir)?

@@ -1,10 +1,11 @@
 //! Container coverage gate. The independent decoder supplies loose tagfiles
 //! and their compendium; no game data is included in the repository.
 use primase_havok::{Compendium, Tagfile};
+use primase_testdata::{Game, OracleSet, Query, expect_found, resolve};
 #[test]
 fn tagfile_containers() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(dir) = primase_testdata::real_data_value("PRIMASE_HAVOK_CORPUS") else {
-        eprintln!("SKIPPED: PRIMASE_HAVOK_CORPUS not set");
+    let corpus = Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok");
+    let Some(dir) = resolve(corpus) else {
         return Ok(());
     };
     let mut files = std::fs::read_dir(dir)?
@@ -15,13 +16,13 @@ fn tagfile_containers() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .filter(|p| p.extension().is_some_and(|e| e == "hkx"))
         .collect();
-    assert!(!tagfiles.is_empty(), "PRIMASE_HAVOK_CORPUS has no .hkx files");
+    expect_found(corpus, ".hkx files", tagfiles.len());
     let comps = files
         .iter()
         .filter(|p| p.extension().is_some_and(|e| e == "compendium"))
         .map(|p| Compendium::read(&std::fs::read(p)?).map_err(Box::<dyn std::error::Error>::from))
         .collect::<Result<Vec<_>, _>>()?;
-    assert!(!comps.is_empty(), "PRIMASE_HAVOK_CORPUS has no .compendium");
+    expect_found(corpus, ".compendium files", comps.len());
     let mut triangles = 0;
     let mut shapes = std::collections::BTreeMap::<String, usize>::new();
     let mut count = 0;

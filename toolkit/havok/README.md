@@ -35,14 +35,15 @@ zero-area triangles caused by f32 rounding are omitted. This is a sharp
 polytope approximation, not the rounded Havok surface. Capsule cores yield
 box approximations. Spheres are not implemented.
 
-`PRIMASE_HAVOK_OBJECT_CORPUS` points to loose self-contained object `.hkx`
-files for an independent half-space residual gate. Non-convex classes are
-counted separately, not silently claimed as decoded.
+`oracles.corpus.sekiro/object-hkx` (the real-data configuration,
+CONTRIBUTING.md) holds loose self-contained object `.hkx` files for an
+independent half-space residual gate. Non-convex classes are counted
+separately, not silently claimed as decoded.
 
 Synthetic tests use hand-authored section/type/item records, including pointer
 arrays, bad references, oversized items and every truncated fixture prefix.
-`PRIMASE_HAVOK_CORPUS` enables the loose-file container and compressed-mesh gate.
-The folder contains `.hkx` files and their `.compendium`. The FromSoft raw-soup
+`oracles.corpus.sekiro/havok` enables the loose-file container and
+compressed-mesh gate. The folder contains `.hkx` files and their `.compendium`. The FromSoft raw-soup
 gate additionally reads an independent decoder's `<name>.hkx.soup`: little-endian
 u32 triangle count, count*9 f32 positions, then count i32 material IDs. No game
 assets or oracle binaries are distributed.
