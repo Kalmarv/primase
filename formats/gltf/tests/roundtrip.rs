@@ -769,6 +769,30 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
         .0;
         assert!(many == one, "{n} threads");
     }
+    // with a memo shared between writes: the same document, the second write from the memo; a texture changed since
+    // encoded again; a memo too small to hold anything drops its encodings and writes the same
+    let memo = primase_gltf::ImageMemo::new(1 << 20);
+    let with = |w: &primase_core::World, memo: &primase_gltf::ImageMemo| {
+        write(
+            w,
+            &WriteOptions {
+                images: Some(memo.clone()),
+                ..options()
+            },
+        )
+        .unwrap()
+        .0
+    };
+    assert!(with(&distinct, &memo) == one);
+    assert!(with(&distinct, &memo) == one);
+    let first = distinct.iter::<TextureFile>().map(|(e, _)| e).next().unwrap();
+    distinct.get_mut::<primase_core::Texture>(first).unwrap().levels = vec![vec![7, 7, 7, 255]];
+    let changed = write(&distinct, &options()).unwrap().0;
+    assert!(changed != one);
+    assert!(with(&distinct, &memo) == changed);
+    let tiny = primase_gltf::ImageMemo::new(1);
+    assert!(with(&distinct, &tiny) == changed);
+    assert!(tiny.dropped() > 0);
     let n = b.world.get_mut::<Texture>(b.tex_normal).unwrap();
     n.role = TexRole::Normal;
     n.normal = Some(NormalConvention {

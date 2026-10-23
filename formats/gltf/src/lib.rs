@@ -31,8 +31,8 @@ pub use preview::{Manifest, PreviewParts, Recipe};
 pub use read::{ReadReport, read_glb, read_with_images};
 pub use textures::{GltfMaterialTextures, GltfSlot, ImageResolver, SlotTexture};
 pub use write::{
-    Drawn, GroupBy, Layout, Piece, RigNodes, Selected, Selection, WriteOptions, WriteReport, write,
-    write_document, write_file,
+    Drawn, GroupBy, ImageMemo, Layout, Piece, RigNodes, Selected, Selection, WriteOptions, WriteReport,
+    write, write_document, write_file,
 };
 
 /// Register this crate's passes.

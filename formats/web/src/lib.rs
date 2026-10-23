@@ -62,6 +62,9 @@ pub struct Options {
     /// again.
     #[cfg(feature = "ktx2")]
     pub encoding_memory: usize,
+    /// At most this many bytes of PNG encodings held in memory between tiles ([`DEFAULT_IMAGE_MEMORY`]), so an image
+    /// several tiles use is encoded once; the oldest dropped first (encoded again when a later tile uses it).
+    pub image_memory: usize,
     /// Viewer-only records, already lowered from a source dialect into world space.
     pub viewer_items: Vec<ViewerItem>,
     /// Placement entities to partition by transformed element centre (a triangle's, a line segment's, a point),
@@ -104,6 +107,9 @@ impl TileSize {
 }
 /// The deepest [`Subcell::level`] a cell is split to.
 pub const MAX_SUBCELL_LEVEL: u8 = 8;
+
+/// The default bound of the PNG encodings a tile set holds between tiles ([`Options::image_memory`]), 256 MiB.
+pub const DEFAULT_IMAGE_MEMORY: usize = 256 << 20;
 impl Options {
     /// Tiles of `tile_size`, GPU-instanced and compressed, images as PNG, no viewer records, no byte budget, no
     /// camera, geometry in the tile GLBs (format 2.x).
@@ -120,6 +126,7 @@ impl Options {
             cache_verify: false,
             #[cfg(feature = "ktx2")]
             encoding_memory: ktx2::DEFAULT_ENCODING_MEMORY,
+            image_memory: DEFAULT_IMAGE_MEMORY,
             viewer_items: Vec::new(),
             split_by_tile: BTreeSet::new(),
             tile_byte_budget: None,
@@ -534,6 +541,8 @@ pub struct TilePlan {
     without_mesh: u64,
     #[cfg(feature = "ktx2")]
     textures: ktx2::TextureEncoder,
+    /// The tiles' PNG encodings ([`Options::image_memory`]).
+    images_memo: primase_gltf::ImageMemo,
 }
 /// The world a cell is written from, with what the cell writes made from it: its records (by number), their
 /// entities' other shown components, and its scene lights.
@@ -774,6 +783,7 @@ pub fn plan_with_geometry(
         #[cfg(feature = "ktx2")]
         textures: ktx2::TextureEncoder::new(options.cache.clone(), options.cache_verify)
             .with_memory(options.encoding_memory),
+        images_memo: primase_gltf::ImageMemo::new(options.image_memory),
     };
     // every placement owned by one cell, as a placement (its first role): what it draws or collides with, and whether
     // its transform is degenerate, is what its cell's world holds when the cell is written
@@ -1589,6 +1599,7 @@ impl TilePlan {
                     &primase_gltf::WriteOptions {
                         group_by: primase_gltf::GroupBy::None,
                         selection: Some(selection),
+                        images: Some(self.images_memo.clone()),
                         ..Default::default()
                     },
                 )?;

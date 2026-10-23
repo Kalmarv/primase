@@ -147,6 +147,86 @@ pub struct WriteOptions {
     /// image a material binds is encoded up front, at most this many at once, the same bytes in the same order as one
     /// at a time. Default one.
     pub threads: primase_core::parallel::Threads,
+    /// Image encodings shared with the caller's other writes (a tiled writer writing many documents of one world):
+    /// each texture's PNG taken from it when it holds one of the same content, else encoded and kept. `None`: each
+    /// write encodes its own. The same bytes either way.
+    pub images: Option<ImageMemo>,
+}
+
+/// PNG encodings of textures' level 0, kept between writes that share it ([`WriteOptions::images`]): by the texture's
+/// content (format, size and level 0's bytes), so a texture changed between writes is encoded again; at most `cap`
+/// bytes of PNGs held, the oldest dropped first (encoded again when they come back). Clones share one memo; usable
+/// from several threads.
+#[derive(Clone)]
+pub struct ImageMemo(std::sync::Arc<std::sync::Mutex<Encodings>>);
+
+#[derive(Default)]
+struct Encodings {
+    entries: BTreeMap<[u8; 32], Vec<u8>>,
+    order: std::collections::VecDeque<[u8; 32]>,
+    bytes: usize,
+    cap: usize,
+    dropped: u64,
+}
+
+impl ImageMemo {
+    /// A memo holding at most `cap` bytes of PNGs.
+    pub fn new(cap: usize) -> ImageMemo {
+        ImageMemo(std::sync::Arc::new(std::sync::Mutex::new(Encodings {
+            cap,
+            ..Encodings::default()
+        })))
+    }
+
+    /// Encodings dropped to stay within the bound, so far.
+    pub fn dropped(&self) -> u64 {
+        self.0.lock().map_or(0, |m| m.dropped)
+    }
+
+    /// `texture`'s level 0 as PNG ([`primase_image::texture_level_png`]): held, else encoded and kept.
+    fn png(&self, texture: &Texture) -> primase_image::Result<Vec<u8>> {
+        let mut h = Sha256::new();
+        h.update(format!("{:?} {} {} ", texture.format, texture.width, texture.height).as_bytes());
+        if let Some(level) = texture.levels.first() {
+            h.update((level.len() as u64).to_le_bytes());
+            h.update(level);
+        }
+        let key: [u8; 32] = h.finalize().into();
+        // a poisoned memo only means another write panicked: encode without it
+        if let Some(png) = self.0.lock().ok().and_then(|m| m.entries.get(&key).cloned()) {
+            return Ok(png);
+        }
+        let png = primase_image::texture_level_png(texture, 0)?;
+        if let Ok(mut m) = self.0.lock()
+            && !m.entries.contains_key(&key)
+        {
+            m.bytes += png.len();
+            m.entries.insert(key, png.clone());
+            m.order.push_back(key);
+            while m.bytes > m.cap {
+                let Some(old) = m.order.pop_front() else { break };
+                if let Some(b) = m.entries.remove(&old) {
+                    m.bytes -= b.len();
+                    m.dropped += 1;
+                }
+            }
+        }
+        Ok(png)
+    }
+}
+
+impl fmt::Debug for ImageMemo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0.lock() {
+            Ok(m) => f
+                .debug_struct("ImageMemo")
+                .field("held", &m.entries.len())
+                .field("bytes", &m.bytes)
+                .field("cap", &m.cap)
+                .finish(),
+            Err(_) => f.write_str("ImageMemo(poisoned)"),
+        }
+    }
 }
 
 /// What to write of the world a tiled writer is given, without changing it: only these placements (instances or
@@ -1747,7 +1827,11 @@ impl Writer<'_> {
             }
             let bytes = match self.encoded.remove(&e) {
                 Some(encoded) => encoded.map_err(|detail| Error::World { entity: e, detail })?,
-                None => primase_image::texture_level_png(texture, 0).map_err(|error| Error::World {
+                None => match &self.options.images {
+                    Some(memo) => memo.png(texture),
+                    None => primase_image::texture_level_png(texture, 0),
+                }
+                .map_err(|error| Error::World {
                     entity: e,
                     detail: error.to_string(),
                 })?,

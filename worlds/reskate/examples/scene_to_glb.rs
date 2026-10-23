@@ -82,6 +82,7 @@ fn main() -> Result<(), BoxError> {
         selection: None,
         all_variants: false,
         threads: primase_core::parallel::Threads::ONE,
+        images: None,
     };
     let written = write_file(&world, &options, &out)?;
     println!(
