@@ -177,7 +177,7 @@ fn fixed_function_programs(game: Game, shader: &str, binder: &Binder) -> Result<
 /// The shader kind (0 pixel, 1 vertex, 3 hull, 4 domain) a program's container states, read as the game's `format`.
 fn shader_kind(format: ShaderFormat, code: &[u8]) -> std::result::Result<Option<u32>, String> {
     match format {
-        ShaderFormat::Dxbc => Ok(primase_dxbc::chunks(code)
+        ShaderFormat::Dxbc => Ok(primase_dxcontainer::chunks(code)
             .map_err(|e| e.to_string())?
             .into_iter()
             .find(|c| &c.kind == b"SHEX" || &c.kind == b"SHDR")

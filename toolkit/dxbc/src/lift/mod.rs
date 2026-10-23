@@ -34,7 +34,7 @@ use primase_shader::build::Builder;
 use primase_shader::{Conventions, D3dModes, Program, Provenance, ShaderFormat, Stage};
 
 use crate::decode::{Decoded, decode};
-use crate::{Result, chunks, error};
+use crate::{Result, error};
 
 /// The version of the lifter: bumped when what it produces for the same bytecode changes, so a cache keyed by the
 /// bytecode's hash knows what is stale; gated by `tests/versions.rs` (the lifted fixtures hashed under it, `primase_shader::gate`).
@@ -49,7 +49,7 @@ pub fn lift(bytes: &[u8]) -> Result<Program> {
 }
 
 fn lift_program(bytes: &[u8]) -> Result<Program> {
-    let directory = chunks(bytes)?;
+    let directory = crate::parts(bytes)?;
     let code = directory
         .iter()
         .find(|c| matches!(&c.kind, b"SHDR" | b"SHEX"))

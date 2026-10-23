@@ -3,7 +3,8 @@
 //! evaluation ([`Shader::census`] lists what a shader uses).
 use crate::module::{BinaryOp, CastOp, Constant, Function, Module, Op, Type, TypeId, Value, ValueId};
 use crate::reflection::{Element, Range};
-use crate::{Chunk, Result, error};
+use crate::{Result, error};
+use primase_dxcontainer::Chunk;
 use primase_shader::{Execution, Interface, Lod, PixelShader, Sample, Sampler};
 use std::collections::BTreeMap;
 
@@ -136,7 +137,7 @@ impl Shader {
     /// Parse a container: the `DXIL` program, its entry point's signatures, resources and the reflection (named
     /// from the `STAT` part when present). Refuses a program outside the subset ([`Shader::census`]).
     pub fn parse(container: &[u8]) -> Result<Self> {
-        let chunks: Vec<Chunk<'_>> = crate::chunks(container)?;
+        let chunks: Vec<Chunk<'_>> = crate::parts(container)?;
         let module = crate::reflection::module(&chunks, b"DXIL")?.ok_or_else(|| error(0, "no DXIL part"))?;
         let named = crate::reflection::module(&chunks, b"STAT")?;
         let entry_value = crate::reflection::entry(&module)?;

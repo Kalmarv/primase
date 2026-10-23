@@ -24,6 +24,7 @@ quick-xml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 [dev-dependencies]
+primase-dxcontainer.workspace = true
 primase-testdata.workspace = true
 primase-dxbc.workspace = true
 primase-shader.workspace = true

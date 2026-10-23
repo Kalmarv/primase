@@ -4,7 +4,8 @@
 //! primase's interface vocabulary. D3D's and DXIL's enum numbers stop here: a value the mapping does not know is an
 //! error naming it.
 use crate::module::{Constant, Metadata, MetadataId, Module, Type, TypeId, Value};
-use crate::{Chunk, Result, error};
+use crate::{Result, error};
+use primase_dxcontainer::Chunk;
 use primase_shader::d3d;
 use primase_shader::{
     Access, BufferKind, BufferLayout, Constant as BufferConstant, ConstantType, D3dBinding, D3dClass,
@@ -831,7 +832,7 @@ pub fn module(chunks: &[Chunk<'_>], kind: &[u8; 4]) -> Result<Option<Module>> {
 /// The interface of a DXIL container read alone, without checking that its program is within the evaluated subset
 /// ([`crate::Shader::parse`] does): stage, varyings with interpolation and resources.
 pub fn interface(container: &[u8]) -> Result<Interface> {
-    let chunks = crate::chunks(container)?;
+    let chunks = crate::parts(container)?;
     let program = module(&chunks, b"DXIL")?.ok_or_else(|| error(0, "no DXIL part"))?;
     let named = module(&chunks, b"STAT")?;
     reflection(&chunks, &program, named.as_ref())

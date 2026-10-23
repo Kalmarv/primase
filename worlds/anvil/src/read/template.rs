@@ -612,7 +612,7 @@ pub fn descriptors(body: &[u8]) -> Result<Vec<Descriptor>, Error> {
 }
 
 /// The shader programs a template's body holds: each DXBC container, by the offset of its magic in the body, found
-/// by that magic and proven by its own stored checksum ([`primase_dxbc::checksum`]): a `DXBC` whose stated size
+/// by that magic and proven by its own stored checksum ([`primase_dxcontainer::checksum`]): a `DXBC` whose stated size
 /// runs past the body, or whose checksum isn't its bytes', isn't one (the bytes there are something else). The
 /// Riders Republic notes read 24 bytes before each (a hash, a u32, 0x7C7AC9C7 and the size: docs/material-spec.md
 /// §13.3); which material state selects which program isn't read.
@@ -634,7 +634,10 @@ pub fn shaders(body: &[u8]) -> Vec<(usize, &[u8])> {
             continue;
         };
         if container.len() >= 32
-            && primase_dxbc::checksum(container).as_ref().map(|c| c.as_slice()) == container.get(4..20)
+            && primase_dxcontainer::checksum(container)
+                .as_ref()
+                .map(|c| c.as_slice())
+                == container.get(4..20)
         {
             out.push((start, container));
             at = start.saturating_add(container.len());
@@ -705,7 +708,7 @@ pub fn permutations(body: &[u8]) -> Result<Vec<Permutation<'_>>, PermutationErro
         let end = at.saturating_add(container.len());
         let (Some(hash), Some(kind)) = (
             u32_at(end),
-            primase_dxbc::chunks(container).ok().and_then(|c| {
+            primase_dxcontainer::chunks(container).ok().and_then(|c| {
                 c.into_iter()
                     .find(|k| &k.kind == b"SHEX" || &k.kind == b"SHDR")
                     .and_then(|k| {

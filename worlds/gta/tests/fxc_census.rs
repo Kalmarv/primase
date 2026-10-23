@@ -56,7 +56,7 @@ fn every_effect_of_the_install() {
                     continue;
                 }
                 programs += 1;
-                let chunks = primase_dxbc::chunks(&shader.bytecode)
+                let chunks = primase_dxcontainer::chunks(&shader.bytecode)
                     .unwrap_or_else(|e| panic!("{} {}: {e}", path.display(), shader.name));
                 let is_dxil = chunks.iter().any(|c| &c.kind == b"DXIL");
                 if is_dxil {
@@ -155,8 +155,8 @@ fn the_enhanced_shader_database() {
     for (g, stage) in sgd2::GROUP_STAGES.iter().enumerate() {
         for program in &db.groups[g] {
             programs += 1;
-            let chunks =
-                primase_dxbc::chunks(program.container).unwrap_or_else(|e| panic!("{}: {e}", program.name));
+            let chunks = primase_dxcontainer::chunks(program.container)
+                .unwrap_or_else(|e| panic!("{}: {e}", program.name));
             assert!(
                 chunks.iter().any(|c| &c.kind == b"DXIL"),
                 "{}: not a DXIL container",

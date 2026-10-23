@@ -212,7 +212,7 @@ fn the_subobjects_dxc_wrote_are_the_ones_the_source_declares() {
         .unwrap()
     };
     let bytes = fixture("ray_subobjects.dxil");
-    let chunks = primase_dxil::chunks(&bytes).unwrap();
+    let chunks = primase_dxcontainer::chunks(&bytes).unwrap();
     let rdat = chunks.iter().find(|c| &c.kind == b"RDAT").unwrap();
     let found = subobjects(rdat.data).unwrap();
     let names: Vec<_> = found

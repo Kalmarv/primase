@@ -9,7 +9,8 @@ use primase_shader::{
 
 use crate::module::{Constant, Function, Module, Op, Value, ValueId};
 use crate::reflection::{self, Element, Range};
-use crate::{Chunk, Result, error};
+use crate::{Result, error};
+use primase_dxcontainer::Chunk;
 
 /// The constant integer a value is, if it is one.
 pub(super) fn const_int(m: &Module, f: &Function, v: ValueId) -> Option<i64> {

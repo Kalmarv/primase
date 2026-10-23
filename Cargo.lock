@@ -883,6 +883,7 @@ dependencies = [
  "primase-compress",
  "primase-core",
  "primase-dxbc",
+ "primase-dxcontainer",
  "primase-hash",
  "primase-image",
  "primase-meshops",
@@ -965,10 +966,19 @@ name = "primase-dxbc"
 version = "0.1.0"
 dependencies = [
  "naga",
- "primase-hash",
+ "primase-dxcontainer",
  "primase-shader",
  "primase-testdata",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "primase-dxcontainer"
+version = "0.1.0"
+dependencies = [
+ "primase-bytes",
+ "primase-hash",
  "thiserror",
 ]
 
@@ -978,6 +988,7 @@ version = "0.1.0"
 dependencies = [
  "naga",
  "primase-bytes",
+ "primase-dxcontainer",
  "primase-shader",
  "primase-testdata",
  "serde_json",
@@ -1008,6 +1019,7 @@ dependencies = [
  "primase-core",
  "primase-dds",
  "primase-dxbc",
+ "primase-dxcontainer",
  "primase-dxil",
  "primase-havok",
  "primase-image",
@@ -1077,6 +1089,7 @@ dependencies = [
  "primase-compress",
  "primase-core",
  "primase-dxbc",
+ "primase-dxcontainer",
  "primase-dxil",
  "primase-hash",
  "primase-image",

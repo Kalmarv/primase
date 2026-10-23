@@ -1,6 +1,6 @@
 //! SM5 RDEF and signature metadata, mapped into primase's interface vocabulary; no material or binding policy.
 //! D3D's enum numbers stop here: a value the mapping does not know is an error naming it.
-use crate::{Result, chunks, error};
+use crate::{Result, error};
 use primase_shader::d3d;
 use primase_shader::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, Interface, Majorness,
@@ -176,14 +176,14 @@ fn signature(bytes: &[u8], kind: &[u8; 4], stage: Stage, output: bool) -> Result
 
 /// A hull or domain program's patch-constant signature elements as stored (the `PCSG` chunk).
 pub fn patch_signature_elements(bytes: &[u8]) -> Result<Vec<SignatureElement>> {
-    let directory = chunks(bytes)?;
+    let directory = crate::parts(bytes)?;
     signature_elements_of(chunk(&directory, b"PCSG")?, b"PCSG")
 }
 
 /// A container's input and output signature elements as stored, and its stage: for a consumer that maps only the
 /// elements it uses ([`signatures`] maps all and refuses the container for one it cannot map, used or not).
 pub fn signature_elements(bytes: &[u8]) -> Result<(Stage, Vec<SignatureElement>, Vec<SignatureElement>)> {
-    let directory = chunks(bytes)?;
+    let directory = crate::parts(bytes)?;
     let stage = stage(&directory)?;
     let read = |tags: &[&[u8; 4]]| -> Result<Vec<SignatureElement>> {
         let tag = tags
@@ -201,7 +201,7 @@ pub fn signature_elements(bytes: &[u8]) -> Result<(Stage, Vec<SignatureElement>,
 
 /// The signature in whichever of these chunks the container has.
 fn signature_of(
-    directory: &[crate::Chunk<'_>],
+    directory: &[primase_dxcontainer::Chunk<'_>],
     tags: &[&[u8; 4]],
     stage: Stage,
     output: bool,
@@ -214,7 +214,7 @@ fn signature_of(
 }
 
 /// A container's one chunk of kind `tag`.
-fn chunk<'a>(directory: &[crate::Chunk<'a>], tag: &[u8; 4]) -> Result<&'a [u8]> {
+fn chunk<'a>(directory: &[primase_dxcontainer::Chunk<'a>], tag: &[u8; 4]) -> Result<&'a [u8]> {
     let mut matching = directory.iter().filter(|c| &c.kind == tag);
     let data = matching
         .next()
@@ -232,7 +232,7 @@ fn chunk<'a>(directory: &[crate::Chunk<'a>], tag: &[u8; 4]) -> Result<&'a [u8]> 
 }
 
 /// The stage of a container's program: its code chunk's version token names the program type in the high 16 bits.
-fn stage(directory: &[crate::Chunk<'_>]) -> Result<Stage> {
+fn stage(directory: &[primase_dxcontainer::Chunk<'_>]) -> Result<Stage> {
     let code = directory
         .iter()
         .find(|c| matches!(&c.kind, b"SHDR" | b"SHEX"))
@@ -265,7 +265,7 @@ fn stage(directory: &[crate::Chunk<'_>]) -> Result<Stage> {
 /// them): no resources, so the caller states the constant layout from its own records. Interpolation is the
 /// program's to state: [`crate::Shader::parse_stripped`] reads it from the declarations.
 pub fn signatures(bytes: &[u8]) -> Result<Interface> {
-    let directory = chunks(bytes)?;
+    let directory = crate::parts(bytes)?;
     let stage = stage(&directory)?;
     Ok(Interface {
         stage,
@@ -436,7 +436,7 @@ impl Binding {
 
 /// Read a container's RDEF resource and constant-buffer metadata and its ISGN/OSGN signatures.
 pub fn reflection(bytes: &[u8]) -> Result<Interface> {
-    let directory = chunks(bytes)?;
+    let directory = crate::parts(bytes)?;
     let get = |tag: &[u8; 4]| chunk(&directory, tag);
     let v = View(get(b"RDEF")?);
     // SM5.0 pixel or vertex shader (the stage is the RDEF's own target, so reflection reads a container without

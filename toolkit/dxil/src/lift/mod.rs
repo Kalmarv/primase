@@ -49,7 +49,7 @@ pub fn lift(container: &[u8]) -> Result<Program> {
 }
 
 fn lift_program(container: &[u8]) -> Result<Program> {
-    let chunks = crate::chunks(container)?;
+    let chunks = crate::parts(container)?;
     let module = crate::reflection::module(&chunks, b"DXIL")?.ok_or_else(|| error(0, "no DXIL part"))?;
     let part = crate::program(
         chunks

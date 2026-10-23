@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+primase-dxcontainer.workspace = true
 thiserror.workspace = true
 primase-core.workspace = true
 primase-compress.workspace = true

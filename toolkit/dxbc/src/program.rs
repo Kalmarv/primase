@@ -1,5 +1,5 @@
 use crate::decode::{Declaration, Declared, decode, opcode_name};
-use crate::{Result, chunks, error};
+use crate::{Result, error};
 use primase_shader::Interpolation;
 
 pub use crate::decode::{Instruction, Operand, Register, Selection};
@@ -287,7 +287,7 @@ impl Program {
         &self.code
     }
     pub fn parse(bytes: &[u8]) -> Result<Self> {
-        let directory = chunks(bytes)?;
+        let directory = crate::parts(bytes)?;
         let code = directory
             .iter()
             .find(|c| matches!(&c.kind, b"SHDR" | b"SHEX"))

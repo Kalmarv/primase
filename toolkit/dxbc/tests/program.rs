@@ -815,7 +815,7 @@ fn pack_against_microsoft_disassembly() {
     for path in paths {
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(
-            primase_dxbc::checksum(&bytes).unwrap()[..],
+            primase_dxcontainer::checksum(&bytes).unwrap()[..],
             bytes[4..20],
             "{}",
             path.display()
