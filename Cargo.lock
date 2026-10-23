@@ -1009,8 +1009,10 @@ dependencies = [
  "primase-compress",
  "primase-core",
  "primase-fromsoft",
+ "primase-gltf",
  "primase-image",
  "primase-reskate",
+ "primase-web",
 ]
 
 [[package]]

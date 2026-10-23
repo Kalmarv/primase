@@ -8,12 +8,23 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+# the web writer's KTX2 encoding (the native Basis encoder), for sekiro_ktx2_tiles
+ktx2 = ["primase-web/ktx2"]
+
 [dev-dependencies]
 primase-core.workspace = true
 primase-compress.workspace = true
 primase-fromsoft.workspace = true
 primase-image.workspace = true
 primase-reskate.workspace = true
+primase-gltf.workspace = true
+primase-web.workspace = true
 
 [lints]
 workspace = true
+
+[[example]]
+name = "sekiro_ktx2_tiles"
+required-features = ["ktx2"]
