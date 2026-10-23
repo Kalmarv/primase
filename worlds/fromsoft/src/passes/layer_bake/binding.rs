@@ -1,6 +1,7 @@
 use super::BaseMipBilinearWrap;
 use super::resolve::{self, Unbound, resolve, textures_of};
 use super::sampler::address;
+use super::vertex::VertexStage;
 use crate::{Result, invalid, materials::LayeredMaterial};
 use primase_core::Entity;
 use primase_core::parallel::Threads;
@@ -32,6 +33,17 @@ impl Default for Inputs {
         }
     }
 }
+/// The programs a layered material's bake runs, as resolved against: the pixel program parsed (the interface its
+/// binding names), its container's bytes, its pixel stage binding and, where the material has one, the vertex program
+/// (`core.shader`) with its binding.
+#[derive(Debug)]
+pub struct Programs<'a> {
+    pub shader: &'a Shader,
+    pub bytecode: &'a [u8],
+    pub stage: &'a StageBinding,
+    pub vertex: Option<(&'a primase_core::shader::Shader, &'a StageBinding)>,
+}
+
 /// Evaluated by the toolkit ([`evaluate_raw_with`], one pixel at a time) on the program executor: the lifted program,
 /// its constants and a texture per sampled slot, frozen; the main albedo's alpha, sampled beside the program at its
 /// own scale.
@@ -41,6 +53,9 @@ pub struct Prepared {
     constants: Constants,
     textures: BTreeMap<u32, Texture>,
     alpha: Option<(Arc<BaseMipBilinearWrap>, [f32; 2])>,
+    /// The material's vertex program, which gives the pixel program what it reads of a vertex; `None` where the
+    /// material has none, and a fixed table does.
+    vertex: Option<VertexStage>,
     pub policies: BTreeMap<String, u64>,
     pub decoded_bytes: usize,
     /// Static repeat policy calculated from resources used by this shader.
@@ -106,6 +121,76 @@ fn evaluation(e: primase_shader::Error) -> crate::Error {
     invalid("layer bake", e.at, e.detail)
 }
 
+const IDENTITY: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+
+/// An input's four lanes.
+fn lanes_of_input(input: &Input) -> [Lane; 4] {
+    match input {
+        Input::Lanes(lanes) => *lanes,
+        Input::Constant(c) => c.map(|v| Lane::Bits(v.to_bits())),
+        Input::GridUv => [Lane::U, Lane::V, Lane::Bits(0), Lane::Bits(0)],
+    }
+}
+
+/// The words a role's constant is frozen to by `frame`, counting the policy the freezing is (`policies`); `None` for a
+/// role the bake gives no value (the time of day, and an unknown one, counted by its reason): the words stay zero. A
+/// material's own words are the role's own. A role the bake has no value for is an error.
+pub(super) fn frozen_words(
+    role: &ConstantRole,
+    frame: &FrozenFrame,
+    policies: &mut BTreeMap<String, u64>,
+) -> Result<Option<Vec<u32>>> {
+    let bits = |values: &[f32]| -> Vec<u32> { values.iter().map(|v| v.to_bits()).collect() };
+    Ok(Some(match role {
+        ConstantRole::Material(words) => words.clone(),
+        ConstantRole::View(ViewParameter::CameraPosition) => bits(&frame.camera_position),
+        ConstantRole::View(ViewParameter::InverseViewProjection) => bits(&frame.inverse_view_projection),
+        ConstantRole::View(
+            ViewParameter::View
+            | ViewParameter::Projection
+            | ViewParameter::ViewProjection
+            | ViewParameter::InverseView
+            | ViewParameter::InverseProjection,
+        ) => bits(&frame.view_matrix),
+        ConstantRole::View(ViewParameter::ViewportSize) => bits(&frame.viewport_size),
+        ConstantRole::Object(ObjectParameter::World) => bits(&frame.world),
+        ConstantRole::Object(ObjectParameter::InstanceColour) => bits(&frame.instance_colour),
+        ConstantRole::Object(ObjectParameter::TextureScroll(set)) => {
+            policies.insert(TEXTURE_SCROLL_POLICY.into(), 1);
+            let scroll = frame
+                .texture_scroll
+                .get(usize::from(*set))
+                .ok_or_else(|| invalid("layer binding", 0, "a texture scroll of a fifth set"))?;
+            bits(scroll)
+        }
+        ConstantRole::Frame(FrameParameter::AlbedoTint) => bits(&frame.albedo_tint),
+        ConstantRole::Frame(FrameParameter::ColourSlot) => bits(&[frame.colour_slot]),
+        ConstantRole::Frame(FrameParameter::Time) => {
+            policies.insert("global time at the program's sample time".into(), 1);
+            bits(&[frame.time])
+        }
+        ConstantRole::Frame(FrameParameter::Exposure) => {
+            policies.insert("unit pre-exposure for static material bake".into(), 1);
+            bits(&[frame.exposure])
+        }
+        ConstantRole::Frame(FrameParameter::TimeOfDay) => {
+            policies.insert("time of day left at frozen zero".into(), 1);
+            return Ok(None);
+        }
+        ConstantRole::Unknown { why } => {
+            *policies.entry(why.clone()).or_default() += 1;
+            return Ok(None);
+        }
+        other => {
+            return Err(invalid(
+                "layer binding",
+                0,
+                format!("no frozen value for {other:?}"),
+            ));
+        }
+    }))
+}
+
 /// The policy a consumer counts when it freezes a model's texture scroll ([`ObjectParameter::TextureScroll`]) to the
 /// identity (scale one, offset zero, in each of the four sets): a capture of the running game (Sekiro 1.06, a castle
 /// interior, a hook on its D3D11 contexts) found the vertex program's `cbTexScroll` to be that, in all 40,744 layered
@@ -135,6 +220,11 @@ pub struct FrozenFrame {
     pub instance_colour: [f32; 4],
     /// `Object(TextureScroll(n))`: the identity, scale one and offset zero ([`TEXTURE_SCROLL_POLICY`]).
     pub texture_scroll: [[f32; 4]; 4],
+    /// `View(View)`, `Projection`, `ViewProjection`, `InverseView` and `InverseProjection`: the identity, so a vertex
+    /// program's clip position is its camera-relative position.
+    pub view_matrix: [f32; 16],
+    /// `View(ViewportSize)`: one by one pixel, and its reciprocals.
+    pub viewport_size: [f32; 4],
 }
 impl FrozenFrame {
     /// The static bake's frame, its global time `time` seconds.
@@ -151,6 +241,8 @@ impl FrozenFrame {
             world: [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.],
             instance_colour: [1.; 4],
             texture_scroll: [[1., 1., 0., 0.]; 4],
+            view_matrix: IDENTITY,
+            viewport_size: [1.; 4],
         }
     }
 }
@@ -202,9 +294,12 @@ impl Prepared {
             Ok(found)
         })?;
         Self::from_binding(
-            &shader,
-            bytes,
-            &resolution.stage,
+            Programs {
+                shader: &shader,
+                bytecode: bytes,
+                stage: &resolution.stage,
+                vertex: None,
+            },
             material,
             &FrozenFrame::static_bake(sample_time),
             |texture, _, _| {
@@ -226,14 +321,18 @@ impl Prepared {
     /// binding was resolved against (its resources are what the binding names) and `bytecode` its container, which
     /// the bake lifts and executes.
     pub fn from_binding(
-        shader: &Shader,
-        bytecode: &[u8],
-        stage: &StageBinding,
+        programs: Programs<'_>,
         material: &LayeredMaterial,
         frame: &FrozenFrame,
         mut texture: impl FnMut(Entity, bool, [Address; 2]) -> Result<Arc<BaseMipBilinearWrap>>,
         mut stem: impl FnMut(&str, bool, [Address; 2]) -> Result<Option<Arc<BaseMipBilinearWrap>>>,
     ) -> Result<Self> {
+        let Programs {
+            shader,
+            bytecode,
+            stage,
+            vertex,
+        } = programs;
         let (program, interface) = (&shader.program, &shader.interface);
         let leaf = material
             .definition
@@ -270,6 +369,20 @@ impl Prepared {
         if reads_second_uv {
             policies.insert(SECOND_UV_APPROXIMATION.into(), 1);
         }
+        let vertex = vertex
+            .map(|(core, vertex_binding)| {
+                VertexStage::new(core, vertex_binding, family == "M[MultipleGround]", frame)
+            })
+            .transpose()?;
+        match &vertex {
+            Some(stage) => policies.extend(stage.policies.iter().map(|(k, v)| (k.clone(), *v))),
+            None => {
+                policies.insert(
+                    "pixel inputs from a fixed table: the material has no vertex program".into(),
+                    1,
+                );
+            }
+        }
         let lifted =
             ProgramShader::new(primase_dxbc::lift(bytecode).map_err(lifting)?).map_err(evaluation)?;
         let layout = Layout::of(&lifted).map_err(evaluation)?;
@@ -285,48 +398,8 @@ impl Prepared {
                 resolve::register(interface.resource(c.resource).ok_or_else(|| {
                     invalid("layer binding", 0, "a constant of a resource the shader lacks")
                 })?)?;
-            let bits = |values: &[f32]| -> Vec<u32> { values.iter().map(|v| v.to_bits()).collect() };
-            let mut values = match &c.role {
-                ConstantRole::Material(words) => words.clone(),
-                ConstantRole::View(ViewParameter::CameraPosition) => bits(&frame.camera_position),
-                ConstantRole::View(ViewParameter::InverseViewProjection) => {
-                    bits(&frame.inverse_view_projection)
-                }
-                ConstantRole::Object(ObjectParameter::World) => bits(&frame.world),
-                ConstantRole::Object(ObjectParameter::InstanceColour) => bits(&frame.instance_colour),
-                ConstantRole::Object(ObjectParameter::TextureScroll(set)) => {
-                    policies.insert(TEXTURE_SCROLL_POLICY.into(), 1);
-                    let scroll = frame
-                        .texture_scroll
-                        .get(usize::from(*set))
-                        .ok_or_else(|| invalid("layer binding", 0, "a texture scroll of a fifth set"))?;
-                    bits(scroll)
-                }
-                ConstantRole::Frame(FrameParameter::AlbedoTint) => bits(&frame.albedo_tint),
-                ConstantRole::Frame(FrameParameter::ColourSlot) => bits(&[frame.colour_slot]),
-                ConstantRole::Frame(FrameParameter::Time) => {
-                    policies.insert("global time at the program's sample time".into(), 1);
-                    bits(&[frame.time])
-                }
-                ConstantRole::Frame(FrameParameter::Exposure) => {
-                    policies.insert("unit pre-exposure for static material bake".into(), 1);
-                    bits(&[frame.exposure])
-                }
-                ConstantRole::Frame(FrameParameter::TimeOfDay) => {
-                    policies.insert("time of day left at frozen zero".into(), 1);
-                    continue;
-                }
-                ConstantRole::Unknown { why } => {
-                    *policies.entry(why.clone()).or_default() += 1;
-                    continue;
-                }
-                other => {
-                    return Err(invalid(
-                        "layer binding",
-                        0,
-                        format!("no frozen value for {other:?}"),
-                    ));
-                }
+            let Some(mut values) = frozen_words(&c.role, frame, &mut policies)? else {
+                continue;
             };
             // the words inside a buffer the program reads (it reads no others)
             let Some(&n) = words.get(&slot) else {
@@ -431,6 +504,7 @@ impl Prepared {
             constants,
             textures,
             alpha,
+            vertex,
             policies,
             decoded_bytes,
             period,
@@ -512,6 +586,45 @@ impl Prepared {
                 }
             };
             inputs.insert((s.label.name.clone(), s.label.index), input);
+        }
+        // what the material's own vertex program writes replaces the table's value, and where they differ is counted by input
+        let mut differences = BTreeMap::new();
+        if let Some(vertex) = &self.vertex {
+            for (key, derived) in vertex.pixel_inputs(self.shader.interface(), &params)? {
+                let width = self
+                    .shader
+                    .interface()
+                    .inputs
+                    .iter()
+                    .find(|i| (i.label.name.as_str(), i.label.index) == (key.0.as_str(), key.1))
+                    .map_or(4, |i| i.value.width as usize);
+                if let Some(table) = inputs.get(&key) {
+                    let (a, b) = (lanes_of_input(&derived), lanes_of_input(table));
+                    if a[..width] != b[..width] {
+                        let name = |l: &[Lane; 4]| {
+                            l[..width]
+                                .iter()
+                                .map(|l| match l {
+                                    Lane::U => "U".to_owned(),
+                                    Lane::V => "V".to_owned(),
+                                    Lane::Bits(b) => format!("{}", f32::from_bits(*b)),
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        };
+                        *differences
+                            .entry(format!(
+                                "pixel input {}{} from the vertex program is [{}], the fixed table's was [{}]",
+                                key.0,
+                                key.1,
+                                name(&a),
+                                name(&b)
+                            ))
+                            .or_insert(0u64) += 1;
+                    }
+                }
+                inputs.insert(key, derived);
+            }
         }
         if !inputs
             .keys()
@@ -626,6 +739,7 @@ impl Prepared {
         }
         let (instructions, samples) = (raw.instructions, raw.samples);
         let mut policies = self.policies.clone();
+        policies.extend(differences);
         // A per-material decision for this bake; area censuses deduplicate
         // weight variants by their source material before summing this count.
         policies.insert(
@@ -741,6 +855,7 @@ mod tests {
             constants: Constants::new(&Layout::default()),
             textures: BTreeMap::new(),
             alpha: None,
+            vertex: None,
             policies: BTreeMap::new(),
             decoded_bytes: 0,
             period: [1.; 2],

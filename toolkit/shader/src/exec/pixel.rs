@@ -1,5 +1,7 @@
 //! A [`Program`] lifted from D3D bytecode behind [`PixelShader`]: inputs and outputs by signature register, constant
-//! buffers and samplers by bind slot, as every bake already drives a shader.
+//! buffers and samplers by bind slot, as every bake already drives a shader. A vertex program has the same register view
+//! (its inputs the vertex attributes by register, its outputs the varyings by register; the position and clip distances,
+//! which have no output register, are not in it), so a caller can run one per vertex through [`PixelShader::execute`].
 
 use std::collections::BTreeMap;
 
@@ -79,8 +81,8 @@ impl ProgramShader {
     /// Compile `program`. Its inputs and outputs need their D3D registers (the lifter keeps them in provenance),
     /// and every resource a D3D bind slot.
     pub fn new(program: Program) -> Result<Self, Error> {
-        if program.stage != Stage::Pixel {
-            return Err(error("not a pixel program"));
+        if !matches!(program.stage, Stage::Pixel | Stage::Vertex) {
+            return Err(error("not a pixel or vertex program"));
         }
         let executable = Executable::new(&program)?;
         let interface = &program.interface;

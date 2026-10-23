@@ -63,12 +63,13 @@ Output main(Input i)
     float4 w = float4(dot(VC_aObjMatrix[k], p), dot(VC_aObjMatrix[k + 1], p), dot(VC_aObjMatrix[k + 2], p), 1);
     o.clip = mul(VC_MatrixViewProj, w);
     o.world = w + SC_CameraPos * FC_ScreenSize + mul(FC_MatrixView, w) * FC_ShadowColor + VC_InstanceData[i.instance & 3];
-    o.normal = float4(i.normal) / 255.0;
-    o.tangent = float4(i.tangent) / 255.0;
+    // the stored bytes as the real program decodes them: (byte - 127) / 127
+    o.normal = float4((float3(i.normal.xyz) - 127.0) * 0.007874016, 0);
+    o.tangent = float4((float3(i.tangent.xyz) - 127.0) * 0.007874016, (float(i.tangent.w) - 127.0) * 0.007874016);
     o.uv = float4(float2(i.uv.xy) * VC_TexScroll_0.xy / 2048.0 + VC_TexScroll_0.zw,
                   float2(i.uv.zw) * VC_TexScroll_1.xy / 2048.0 + VC_TexScroll_1.zw);
-    o.weights = float4(i.m1.x, i.m2.y, i.m4.x, i.m5.y);
+    o.weights = float4(i.m1.x, i.m2.z, i.m4.x, i.m5.y);
     o.tint = float4(i.m3.xyz, i.colour.x);
-    o.detail = float4(i.m6.z, i.colour.y, 0, 0);
+    o.detail = float4(i.m6.z, 0, 0, 0);
     return o;
 }

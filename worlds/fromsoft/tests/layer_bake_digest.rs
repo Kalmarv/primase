@@ -60,6 +60,9 @@ fn the_baked_textures_of_m11_01() {
         bake.pass,
         bake.log.counts
     );
+    for (what, count) in &bake.log.approximations {
+        println!("approximation ({count}): {what}");
+    }
     let mut digests = std::collections::BTreeMap::new();
     for (e, t) in world.iter::<Texture>() {
         let Some(Name(name)) = world.get::<Name>(e) else {

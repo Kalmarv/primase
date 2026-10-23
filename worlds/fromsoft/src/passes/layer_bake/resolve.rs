@@ -413,6 +413,21 @@ fn output_bindings(interface: &Interface) -> Vec<OutputBinding> {
     out
 }
 
+/// The Byte4C member and the lane of it that each of the eight bake inputs (four layer weights, the tint's red, green and
+/// blue, the detail) is read from: MultipleGround reads its second weight from member 2's y, Multiple from its z.
+pub fn layer_channels(ground: bool) -> [(u8, usize); 8] {
+    [
+        (1, 0),
+        (2, if ground { 1 } else { 2 }),
+        (4, 0),
+        (5, 1),
+        (3, 0),
+        (3, 1),
+        (3, 2),
+        (6, 2),
+    ]
+}
+
 /// The texture coordinate set a `VC_TexScroll_<n>` constant (the scale and scroll of set `n`, four to a model) is for.
 fn texture_scroll_set(name: &str) -> Option<u8> {
     name.strip_prefix("VC_TexScroll_")?

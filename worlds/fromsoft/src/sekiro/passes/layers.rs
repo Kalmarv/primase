@@ -35,11 +35,18 @@ impl<'a> AreaBake<'a> {
         }
         Ok(Self { groups, payloads })
     }
-    /// A group's program (parsed, and its container's bytes) and its pixel stage binding, from its material entity.
+    /// A group's program (parsed, and its container's bytes), its pixel stage binding and, where its material has one, its
+    /// vertex program and binding, from its material entity.
+    #[allow(clippy::type_complexity)]
     fn bound<'w>(
         world: &'w World,
         group: &MaterialGroups,
-    ) -> Result<(primase_dxbc::Shader, &'w [u8], StageBinding)> {
+    ) -> Result<(
+        primase_dxbc::Shader,
+        &'w [u8],
+        StageBinding,
+        Option<(&'w ShaderProgram, StageBinding)>,
+    )> {
         let binding = world.get::<ShaderBinding>(group.entity).ok_or_else(|| {
             invalid(
                 "area bake",
@@ -62,7 +69,22 @@ impl<'a> AreaBake<'a> {
                 .map_err(|e| invalid("layer DXBC", e.word * 4, e.detail))?,
             interface: program.interface.clone(),
         };
-        Ok((shader, &program.bytecode, stage.clone()))
+        let vertex = binding
+            .stage(Stage::Vertex)
+            .map(|vertex| {
+                world
+                    .get::<ShaderProgram>(vertex.shader)
+                    .map(|program| (program, vertex.clone()))
+                    .ok_or_else(|| {
+                        invalid(
+                            "area bake",
+                            0,
+                            "a vertex stage whose shader entity has no core.shader",
+                        )
+                    })
+            })
+            .transpose()?;
+        Ok((shader, &program.bytecode, stage.clone(), vertex))
     }
     /// A group's program bound to its materials' inputs, sampled at `sample_time` seconds.
     pub fn prepare(
@@ -82,7 +104,7 @@ impl<'a> AreaBake<'a> {
             .layered
             .as_ref()
             .ok_or_else(|| invalid("area bake", group, "group index"))?;
-        let (shader, bytecode, stage) = Self::bound(world, g)?;
+        let (shader, bytecode, stage, vertex) = Self::bound(world, g)?;
         let view = |t: &Texture,
                     srgb: bool,
                     address: [primase_image::sampling::Address; 2]|
@@ -99,9 +121,12 @@ impl<'a> AreaBake<'a> {
             )?))
         };
         crate::layer_bake::Prepared::from_binding(
-            &shader,
-            bytecode,
-            &stage,
+            crate::layer_bake::Programs {
+                shader: &shader,
+                bytecode,
+                stage: &stage,
+                vertex: vertex.as_ref().map(|(program, binding)| (*program, binding)),
+            },
             material,
             &crate::layer_bake::FrozenFrame::static_bake(sample_time),
             |entity: Entity, srgb, address| {
@@ -153,16 +178,7 @@ pub(super) fn bake_identity(material: &Material) -> Result<String> {
 /// The eight bake inputs per vertex from the raw Byte4C members: layer weights, snow, tint RGB and detail.
 /// MultipleGround reads its second weight from member 2's y, Multiple from its z. Missing members read zero.
 fn vertex_inputs(primitive: &primase_core::Primitive, ground: bool) -> Result<Vec<Features>> {
-    let channels = [
-        (1, 0),
-        (2, if ground { 1 } else { 2 }),
-        (4, 0),
-        (5, 1),
-        (3, 0),
-        (3, 1),
-        (3, 2),
-        (6, 2),
-    ];
+    let channels = crate::layer_bake::resolve::layer_channels(ground);
     let count = primitive.positions().map(|p| p.len()).unwrap_or(0);
     let mut features = vec![[0.; 8]; count];
     for (k, (member, channel)) in channels.into_iter().enumerate() {
