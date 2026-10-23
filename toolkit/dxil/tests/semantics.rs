@@ -1152,3 +1152,144 @@ mod image_arrays {
         }
     }
 }
+
+mod wide_ints {
+    use super::*;
+    use primase_shader::D3dClass;
+    use std::collections::BTreeMap;
+
+    /// The 32 words `wide_ints.hlsl` writes for a, b and n: thirteen 64-bit results as low then high word (a + b, a - b,
+    /// a * b, a & b, a | b, a ^ b, a << n, a >> n logical and arithmetic, a / b and a % b unsigned and signed), then
+    /// a < b, a < b signed, a == b, countbits(a), firstbitlow(a) and firstbithigh(a) (the bit's position from the least
+    /// significant end, all ones for none): the arithmetic of the source, worked out on the machine's own 64-bit integers.
+    fn expected(a: u64, b: u64, n: u32) -> Vec<u32> {
+        let (sa, sb) = (a as i64, b as i64);
+        let wide = [
+            a.wrapping_add(b),
+            a.wrapping_sub(b),
+            a.wrapping_mul(b),
+            a & b,
+            a | b,
+            a ^ b,
+            a << n,
+            a >> n,
+            (sa >> n) as u64,
+            a / b,
+            a % b,
+            sa.wrapping_div(sb) as u64,
+            sa.wrapping_rem(sb) as u64,
+        ];
+        let mut words = Vec::new();
+        for w in wide {
+            words.push(w as u32);
+            words.push((w >> 32) as u32);
+        }
+        words.push(u32::from(a < b));
+        words.push(u32::from(sa < sb));
+        words.push(u32::from(a == b));
+        words.push(a.count_ones());
+        words.push(if a == 0 { u32::MAX } else { a.trailing_zeros() });
+        words.push(if a == 0 { u32::MAX } else { 63 - a.leading_zeros() });
+        words
+    }
+
+    /// Each case runs in every build: values with bits in both halves, carries and borrows across the halves, shifts
+    /// below, at and above 32, and negative operands for the signed results.
+    #[test]
+    fn sixty_four_bit_integers_agree_with_the_machines() {
+        let cases: [(u64, u64, u32); 6] = [
+            (0x0000_0003_8000_0001, 0xffff_ffff_ffff_fff9, 33),
+            (0x8000_0000_0000_0005, 1000, 3),
+            (0xffff_ffff_0000_0000, 0x0000_0001_ffff_ffff, 32),
+            (0x1234_5678_9abc_def0, 0x0fed_cba9_8765_4321, 1),
+            (u64::MAX - 1, 3, 63),
+            (7, 0x1_0000_0000, 0),
+        ];
+        for v in BOTH {
+            let (program, exe) = lifted(&fixture("wide_ints", v));
+            let find = |class: D3dClass| {
+                program
+                    .interface
+                    .resources
+                    .iter()
+                    .find(|r| {
+                        r.provenance
+                            .d3d
+                            .is_some_and(|d| d.class == class && d.register == 0)
+                    })
+                    .unwrap_or_else(|| panic!("{v}: no {class:?} 0"))
+                    .id
+            };
+            let (results, constants) = (find(D3dClass::UnorderedAccess), find(D3dClass::ConstantBuffer));
+            for (a, b, n) in cases {
+                let mut resources = Resources::default();
+                resources.constants.insert(
+                    constants,
+                    vec![
+                        [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32],
+                        [n, 0, 0, 0],
+                    ],
+                );
+                let bound = exe.bind_resources(&resources).unwrap();
+                let mut buffers = BTreeMap::from([(results, vec![0u32; 32])]);
+                exe.dispatch(&bound, &mut NoBackend, &mut buffers, [1, 1, 1], 32)
+                    .unwrap_or_else(|e| panic!("{v}: {e}"));
+                assert_eq!(
+                    buffers[&results],
+                    expected(a, b, n),
+                    "{v}: a {a:#x} b {b:#x} n {n}"
+                );
+            }
+        }
+    }
+}
+
+mod lane_2d {
+    use super::*;
+    use primase_shader::D3dClass;
+    use std::collections::BTreeMap;
+
+    /// `lane_2d.hlsl`: 64 invocations in an 8 by 8 group, on waves of 32 lanes (invocation i, the group's flattened
+    /// index, is lane i % 32 of wave i / 32). Each writes its lane, the lanes active with it (32) and the flattened index
+    /// of its wave's first lane (32 times the wave). WebGPU has no lane number for a group laid out in two dimensions,
+    /// so the lifted program makes it as the rank among the active invocations when it starts.
+    #[test]
+    fn a_wave_lane_in_a_group_of_two_dimensions() {
+        for v in BOTH {
+            let (program, exe) = lifted(&fixture("lane_2d", v));
+            assert_eq!(exe.workgroup_size(), Some([8, 8, 1]), "{v}");
+            assert!(
+                program
+                    .notes
+                    .iter()
+                    .any(|n| n.contains("more than one dimension")),
+                "{v}: {:?}",
+                program.notes
+            );
+            let results = program
+                .interface
+                .resources
+                .iter()
+                .find(|r| {
+                    r.provenance
+                        .d3d
+                        .is_some_and(|d| d.class == D3dClass::UnorderedAccess && d.register == 0)
+                })
+                .unwrap()
+                .id;
+            let mut buffers = BTreeMap::from([(results, vec![0u32; 64 * 3])]);
+            let resources = Resources::default();
+            let bound = exe.bind_resources(&resources).unwrap();
+            exe.dispatch(&bound, &mut NoBackend, &mut buffers, [1, 1, 1], 32)
+                .unwrap_or_else(|e| panic!("{v}: {e}"));
+            for i in 0..64u32 {
+                let at = (i * 3) as usize;
+                assert_eq!(
+                    buffers[&results][at..at + 3],
+                    [i % 32, 32, (i / 32) * 32],
+                    "{v} invocation {i}"
+                );
+            }
+        }
+    }
+}

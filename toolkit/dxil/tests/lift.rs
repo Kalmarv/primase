@@ -47,6 +47,9 @@ fn every_fixture_lifts() {
                         // naga's WGSL writer does not write ray queries: the lifted program is what is checked
                         Err(primase_shader::ProgramError::Unsupported { detail, .. })
                             if detail.contains("ray queries") => {}
+                        // WebGPU has no ray tracing pipeline: those programs are refused by name
+                        Err(primase_shader::ProgramError::Unsupported { detail, .. })
+                            if detail.contains("ray tracing pipeline") => {}
                         Err(e) => failures.push(format!("{name}: wgsl: {e}")),
                     }
                 }
