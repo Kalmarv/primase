@@ -3,7 +3,8 @@
 //! (registry-named-fields §9, §10; placement.md §19): each RigidBody's `QueryFlags` slots, its `CollisionLayerBits`,
 //! `IsGround`; the run's `IsPhantom` and `IsHidden` by Entity name; MeshInstanceData's `IsFake` with `FakeMeshIndex`
 //! the FarFake cell's number. The census reads bodies this reader refuses (46,477 Entities, UI widgets most of them);
-//! its counts bound this reader's, and match them where it finds none in those.
+//! its counts bound this reader's while it refuses them, and every body reads now (the UI widgets too: the hidden
+//! names are the 3D ones and the UI's).
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_anvil::read::archive::{Archive, At};
@@ -148,15 +149,22 @@ fn rigid_body_filters_and_entity_flags_count_as_the_registry_census() {
     }
     assert!(ground <= 33_960);
     // the run's IsHidden and IsPhantom (bytes 4 and 3), each name checked against the census's read of its body
-    // (placement.md §19.1: these three are phantom and hidden in their base-forge copies)
+    // (placement.md §19.1: these three are phantom and hidden in their base-forge copies). Every body reads now, the UI
+    // widgets too (the census's "mostly UI"): of the hidden names the 3D ones are these three, and the names are at
+    // least the 200 the census counts (one body per name; across the four forges' copies the names here are 438)
     assert_eq!(
-        hidden.iter().map(String::as_str).collect::<Vec<_>>(),
+        hidden
+            .iter()
+            .filter(|n| ["MAD_FX", "MAD_GRP", "MAD_PRP"].iter().any(|p| n.starts_with(p)))
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
         [
             "MAD_FX_Mesh_UFOBeamSmall",
             "MAD_GRP_RRGENEVENT_CheckpointAerial_Flying15_A_001",
             "MAD_GRP_RRGENEVENT_CheckpointAerial_Flying15_A_002",
         ]
     );
+    assert!(hidden.len() >= 200, "{} hidden names", hidden.len());
     assert!(hidden.is_subset(&phantom));
     for name in [
         "FX_MAD_CIN_SnowPuff_001",
