@@ -4,7 +4,11 @@
 //! (offsets in the constant buffer, defaults, name hashes). Every length, offset and zero field is checked; a file
 //! that breaks one is refused with its offset. Names follow the third-party SoulsFormatsNEXT reader of the format;
 //! a field it calls unknown is kept under its offset.
-use crate::{Result, bytes::View, invalid};
+use crate::{
+    Result,
+    bytes::{Budget, View},
+    invalid,
+};
 
 const FORMAT: &str = "METAPARAM";
 
@@ -100,6 +104,7 @@ pub struct Metaparam {
 
 struct Reader<'a> {
     v: View<'a>,
+    budget: Budget,
 }
 impl Reader<'_> {
     fn zero(&self, at: usize, n: usize) -> Result<()> {
@@ -123,15 +128,16 @@ impl Reader<'_> {
             .data
             .get(start..)
             .ok_or_else(|| invalid(FORMAT, at, "string offset"))?;
-        let mut units = Vec::new();
-        for pair in rest.as_chunks::<2>().0 {
-            let u = u16::from_le_bytes(*pair);
-            if u == 0 {
-                return String::from_utf16(&units).map_err(|_| invalid(FORMAT, start, "unpaired surrogate"));
-            }
-            units.push(u);
-        }
-        Err(invalid(FORMAT, start, "unterminated string"))
+        let Some(length) = rest.as_chunks::<2>().0.iter().position(|pair| *pair == [0, 0]) else {
+            return Err(invalid(FORMAT, start, "unterminated string"));
+        };
+        // charged once its end is found, before it is built: names naming one long string over and over are refused
+        self.budget.charge(start, 2 * length + 2)?;
+        let units: Vec<u16> = rest.as_chunks::<2>().0[..length]
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect();
+        String::from_utf16(&units).map_err(|_| invalid(FORMAT, start, "unpaired surrogate"))
     }
     fn f32(&self, at: usize) -> Result<f32> {
         let x = f32::from_bits(self.v.u32(at)?);
@@ -164,6 +170,7 @@ impl Metaparam {
                 format: FORMAT,
                 be: false,
             },
+            budget: Budget::new(FORMAT, data.len()),
         };
         r.v.expect(0, b"SMD\0")?;
         r.v.expect(4, &[0; 4])?;

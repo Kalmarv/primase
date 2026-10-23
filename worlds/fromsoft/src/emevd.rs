@@ -7,7 +7,7 @@
 //! then the tables. Every byte is accounted for: the tables, each instruction's arguments and the strings, with at most
 //! 15 zero bytes of alignment between them.
 
-use crate::bytes::{View, coverage};
+use crate::bytes::{Budget, View, coverage};
 use crate::{Result, invalid};
 
 const FORMAT: &str = "EMEVD";
@@ -110,6 +110,7 @@ impl Script {
         let (args_len, args_at) = (count(&v, h(12))?, v.size(h(13))?);
         let (strings_len, strings_at) = (count(&v, h(14))?, v.size(h(15))?);
 
+        let budget = Budget::new(FORMAT, data.len());
         let mut spans = vec![(0, HEADER)];
         spans.push(table(&v, events_at, n_events, EVENT)?);
         spans.push(table(&v, instructions_at, n_instructions, INSTRUCTION)?);
@@ -183,6 +184,7 @@ impl Script {
                         return Err(invalid(FORMAT, p + 16, "arguments outside the argument block"));
                     }
                     spans.push((args_at + at, len));
+                    budget.charge(p + 8, len)?;
                     v.slice(args_at + at, len)?.to_vec()
                 };
                 let layer = match layer_at {
@@ -245,6 +247,7 @@ impl Script {
         let linked_files = (0..n_linked)
             .map(|i| i64_at(&v, linked_at + 8 * i))
             .collect::<Result<Vec<_>>>()?;
+        budget.charge(h(14), strings_len)?;
         let strings = v.slice(strings_at, strings_len)?.to_vec();
         coverage(&v, spans, data.len(), 15)?;
         Ok(Script {

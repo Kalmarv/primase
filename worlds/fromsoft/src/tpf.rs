@@ -1,7 +1,7 @@
 //! PC texture packages. DDS payloads are retained exactly, including all faces/mips.
 use crate::{
     Result,
-    bytes::{View, coverage},
+    bytes::{Budget, View, coverage},
     invalid,
 };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,37 +95,21 @@ impl Package {
             };
             descriptors.push((offset, size, format, kind, mipmaps, texture_flags, name, extra));
         }
+        let budget = Budget::new("TPF", data.len());
         let mut spans = vec![(0, p)];
         let mut names_end = p;
         let mut payload_start = None::<usize>;
         let mut payload_end = 0;
         let mut textures = Vec::new();
         for (offset, size, format, kind, mipmaps, flags, name, extra) in descriptors {
-            let mut end = name;
-            let text = if encoding == 1 {
-                let mut words = Vec::new();
-                loop {
-                    let word = v.u16(end)?;
-                    end += 2;
-                    if word == 0 {
-                        break;
-                    }
-                    words.push(word);
-                }
-                String::from_utf16(&words).map_err(|_| invalid("TPF", name, "invalid UTF16"))?
+            let (text, end) = if encoding == 1 {
+                v.utf16z(name, &budget)?
             } else {
-                while v.u8(end)? != 0 {
-                    end += 1;
-                }
-                let raw = v.slice(name, end - name)?;
-                end += 1;
-                if !raw.is_ascii() {
-                    return Err(invalid("TPF", name, "non-ASCII Shift-JIS name unsupported"));
-                }
-                String::from_utf8(raw.to_vec()).map_err(|_| invalid("TPF", name, "name encoding"))?
+                v.asciiz(name, &budget)?
             };
             spans.push((name, end - name));
             names_end = names_end.max(end);
+            budget.charge(offset, size)?;
             let dds = v.slice(offset, size)?.to_vec();
             if !dds.starts_with(b"DDS ") {
                 return Err(invalid("TPF", offset, "PC texture is not DDS"));

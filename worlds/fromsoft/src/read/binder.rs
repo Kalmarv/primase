@@ -1,11 +1,14 @@
 //! BND4 file tables, names, hash buckets and file payloads.
 use crate::{
     Result,
-    bytes::{View, coverage},
-    dcx::Decoder,
+    bytes::{Budget, View, coverage},
+    dcx::{Decoder, Envelope},
     invalid,
 };
-use primase_compress::{Decompressor, Zlib};
+use primase_compress::{DEFLATE_MAX_RATIO, Decompressor, Zlib};
+/// How many times over the file's bytes a binder's records may decode to (compressed files hold fewer bytes than they
+/// make; the real binders of the games decode to a small multiple of their size).
+const DECODED_TIMES: usize = 64;
 #[derive(Debug, Clone)]
 pub struct BinderFile {
     pub id: Option<i32>,
@@ -83,6 +86,10 @@ impl Binder {
             format: if split { "BDF4" } else { "BND4" },
             be: v.be,
         };
+        // what the records copy out of the file, and what they decode: each record is charged for the bytes it names, so
+        // records that name one range over and over are refused before they are copied
+        let budget = Budget::new("BND4", data.len() + pv.data.len());
+        let decoded_budget = Budget::times("BND4", data.len() + pv.data.len(), DECODED_TIMES);
         let mut payload_spans = Vec::new();
         if split && !index_only {
             pv.expect(0, b"BDF4")?;
@@ -172,28 +179,10 @@ impl Binder {
             let name = if names {
                 let o = v.u32(q)? as usize;
                 q += 4;
-                let mut end = o;
-                let text = if unicode {
-                    let mut u = Vec::new();
-                    loop {
-                        let c = v.u16(end)?;
-                        end += 2;
-                        if c == 0 {
-                            break;
-                        }
-                        u.push(c);
-                    }
-                    String::from_utf16(&u).map_err(|_| invalid("BND4", o, "invalid UTF16"))?
+                let (text, end) = if unicode {
+                    v.utf16z(o, &budget)?
                 } else {
-                    while v.u8(end)? != 0 {
-                        end += 1;
-                    }
-                    let bytes = v.slice(o, end - o)?;
-                    end += 1;
-                    if !bytes.is_ascii() {
-                        return Err(invalid("BND4", o, "non-ASCII Shift-JIS name unsupported"));
-                    }
-                    String::from_utf8(bytes.to_vec()).map_err(|_| invalid("BND4", o, "name encoding"))?
+                    v.asciiz(o, &budget)?
                 };
                 if end > headerend {
                     return Err(invalid("BND4", o, "name outside header"));
@@ -223,6 +212,7 @@ impl Binder {
             if off < if split { 48 } else { headerend } {
                 return Err(invalid("BND4", off, "file overlaps header"));
             }
+            budget.charge(off, size)?;
             if size > 0 {
                 if split {
                     payload_spans.push((off, size));
@@ -235,6 +225,15 @@ impl Binder {
                 if want > decoder.max_output {
                     return Err(invalid("BND4", p, "output limit"));
                 }
+                // a deflate stream cannot make more than this of what it holds
+                if want > size.saturating_mul(DEFLATE_MAX_RATIO) {
+                    return Err(invalid(
+                        "BND4",
+                        p,
+                        "decoded size beyond what the stored bytes can inflate to",
+                    ));
+                }
+                decoded_budget.charge(p, want)?;
                 let b = if bytes.starts_with(b"DCX\0") {
                     decoder.decode(bytes)?
                 } else {
@@ -247,11 +246,17 @@ impl Binder {
             } else {
                 bytes.to_vec()
             };
+            let bytes = if bytes.starts_with(b"DCX\0") {
+                decoded_budget.charge(off, Envelope::parse(&bytes, decoder.max_output)?.decoded_size)?;
+                decoder.decode(&bytes)?
+            } else {
+                bytes
+            };
             files.push(BinderFile {
                 id,
                 name,
                 flags,
-                bytes: decoder.decode_if_dcx(&bytes)?,
+                bytes,
             });
         }
         if ext == 4 {

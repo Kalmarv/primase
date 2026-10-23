@@ -1,7 +1,11 @@
 //! Sekiro FLVER2 geometry, retaining file coordinates and material bindings.
 mod geometry;
 mod vertex;
-use crate::{Result, bytes::View, invalid};
+use crate::{
+    Result,
+    bytes::{Budget, View},
+    invalid,
+};
 pub use geometry::{FaceSetKind, Part, tangent_to_scene};
 pub use vertex::Vertex;
 
@@ -165,18 +169,8 @@ fn table(v: &View<'_>, pos: &mut usize, n: usize, stride: usize) -> Result<usize
     *pos += len;
     Ok(start)
 }
-fn string(v: &View<'_>, o: usize) -> Result<String> {
-    let mut units = Vec::new();
-    let mut p = o;
-    loop {
-        let c = v.u16(p)?;
-        p += 2;
-        if c == 0 {
-            break;
-        }
-        units.push(c);
-    }
-    String::from_utf16(&units).map_err(|e| invalid(v.format, o, e))
+fn string(v: &View<'_>, o: usize, budget: &Budget) -> Result<String> {
+    Ok(v.utf16z(o, budget)?.0)
 }
 fn float(v: &View<'_>, o: usize) -> Result<f32> {
     let n = f32::from_bits(v.u32(o)?);
@@ -185,12 +179,12 @@ fn float(v: &View<'_>, o: usize) -> Result<f32> {
     }
     Ok(n)
 }
-fn refs(v: &View<'_>, o: usize, n: usize, limit: usize) -> Result<Vec<usize>> {
-    v.slice(
-        o,
-        n.checked_mul(4)
-            .ok_or_else(|| invalid(v.format, o, "array overflow"))?,
-    )?;
+fn refs(v: &View<'_>, o: usize, n: usize, limit: usize, budget: &Budget) -> Result<Vec<usize>> {
+    let bytes = n
+        .checked_mul(4)
+        .ok_or_else(|| invalid(v.format, o, "array overflow"))?;
+    v.slice(o, bytes)?;
+    budget.charge(o, bytes)?;
     (0..n)
         .map(|i| {
             let r = count(v, o + i * 4)?;
@@ -229,6 +223,9 @@ impl Model {
             format: v.format,
             be: false,
         };
+        // names, GX records, palettes, index lists and vertex buffers are copied or decoded from the bytes the records
+        // name: records that name one range over and over are refused before it is copied
+        let budget = Budget::new(v.format, data.len());
         for i in 0..6 {
             float(&v, 40 + i * 4)?;
         }
@@ -280,7 +277,7 @@ impl Model {
         let mut bones = Vec::new();
         for i in 0..bone_count {
             let o = bone + i * 128;
-            let name = string(&meta, count(&v, o + 12)?)?;
+            let name = string(&meta, count(&v, o + 12)?, &budget)?;
             v.expect(o + 76, &[0; 52])?;
             bones.push(Bone {
                 name,
@@ -339,8 +336,8 @@ impl Model {
                 Tiling::read(v.u8(at)?).ok_or_else(|| invalid(v.format, at, "texture tiling type"))
             };
             textures.push(Some(Texture {
-                path: string(&meta, count(&v, o)?)?,
-                kind: string(&meta, count(&v, o + 4)?)?,
+                path: string(&meta, count(&v, o)?, &budget)?,
+                kind: string(&meta, count(&v, o + 4)?, &budget)?,
                 scale: [float(&v, o + 8)?, float(&v, o + 12)?],
                 tiling: [tiling(o + 16)?, tiling(o + 17)?],
                 unknown: [float(&v, o + 20)?, float(&v, o + 24)?, float(&v, o + 28)?],
@@ -391,6 +388,7 @@ impl Model {
                         return Err(invalid(v.format, gx, "short GX record"));
                     }
                     meta.slice(gx, len)?;
+                    budget.charge(gx, len)?;
                     gx_items.push(GxItem {
                         id: meta.slice(gx, 4)?.try_into().expect("four-byte checked slice"),
                         version: meta.u32(gx + 4)?,
@@ -400,8 +398,8 @@ impl Model {
                 }
             }
             materials.push(Material {
-                name: string(&meta, count(&v, o)?)?,
-                mtd: string(&meta, count(&v, o + 4)?)?,
+                name: string(&meta, count(&v, o)?, &budget)?,
+                mtd: string(&meta, count(&v, o + 4)?, &budget)?,
                 textures: bound,
                 gx: gx_items,
             });
@@ -437,6 +435,7 @@ impl Model {
                 n.checked_mul(width as usize / 8)
                     .ok_or_else(|| invalid(v.format, o, "index size overflow"))?,
             )?;
+            budget.charge(start, n * (width as usize / 8))?;
             let indices = (0..n)
                 .map(|j| {
                     if width == 16 {
@@ -467,11 +466,12 @@ impl Model {
             let palette_len = count(&v, o + 20)?;
             let mut at = count(&v, o + 28)?;
             let start = table(&meta, &mut at, palette_len, 4)?;
+            budget.charge(start, palette_len * 4)?;
             let palette = (0..palette_len)
                 .map(|i| meta.u32(start + i * 4))
                 .collect::<Result<Vec<u32>>>()?;
-            let face_refs = refs(&meta, count(&v, o + 36)?, count(&v, o + 32)?, face_count)?;
-            let buffers = refs(&meta, count(&v, o + 44)?, count(&v, o + 40)?, vb_count)?;
+            let face_refs = refs(&meta, count(&v, o + 36)?, count(&v, o + 32)?, face_count, &budget)?;
+            let buffers = refs(&meta, count(&v, o + 44)?, count(&v, o + 40)?, vb_count, &budget)?;
             // A mesh with neither face sets nor vertex buffers is empty: its bounds are the exporter's sentinel
             // (minimum -inf, maximum NaN in Elden Ring's files) and are read but not required to be finite.
             let empty = face_refs.is_empty() && buffers.is_empty();
@@ -538,6 +538,7 @@ impl Model {
                     n.checked_mul(stride)
                         .ok_or_else(|| invalid(v.format, r, "buffer size overflow"))?,
                 )?;
+                budget.charge(start, n * stride)?;
                 streams.push((l, stride, start));
             }
             let mut vertices = vec![Vertex::default(); n];

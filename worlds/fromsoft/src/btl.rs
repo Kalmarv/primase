@@ -2,7 +2,7 @@
 //! RGB bytes; their transfer function and the mapping of intensity into target watts are lowering policy.
 use crate::{
     Result,
-    bytes::View,
+    bytes::{Budget, View},
     edge::{float, vector},
     invalid,
 };
@@ -68,6 +68,7 @@ impl LightBank {
             format: "BTL names",
             be: false,
         };
+        let budget = Budget::new("BTL", bytes.len());
         let mut lights = Vec::with_capacity(count);
         for i in 0..count {
             let r = View {
@@ -75,20 +76,11 @@ impl LightBank {
                 format: "BTL light",
                 be: false,
             };
-            let mut n = r.size(16)?;
+            let n = r.size(16)?;
             if n % 2 != 0 {
                 return Err(invalid("BTL", start + i * 232 + 16, "unaligned UTF-16 name"));
             }
-            let mut units = Vec::new();
-            loop {
-                let x = names.u16(n)?;
-                n += 2;
-                if x == 0 {
-                    break;
-                }
-                units.push(x);
-            }
-            let name = String::from_utf16(&units).map_err(|e| invalid("BTL", 60 + n, e))?;
+            let (name, _) = names.utf16z(n, &budget)?;
             let kind = match r.u32(24)? {
                 0 => Kind::Point,
                 1 => Kind::Spot,

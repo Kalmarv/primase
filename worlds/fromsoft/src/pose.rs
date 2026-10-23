@@ -98,25 +98,61 @@ pub fn skeleton(model: &Model) -> primase_core::Skeleton {
     }
 }
 
-/// Each bone's model-space matrix, through its parents.
+/// Each bone's model-space matrix, through its parents: its parent's matrix (made once, whichever order the bones
+/// come in) composed with its own, so a chain of any depth costs one composition a bone.
 pub(crate) fn bone_matrices(bones: &[Bone]) -> Result<Vec<Matrix>, String> {
-    let mut worlds = Vec::with_capacity(bones.len());
+    #[derive(Clone, Copy)]
+    enum State {
+        Unseen,
+        /// On the chain being resolved: meeting it again is a loop.
+        Open,
+        Done(Matrix),
+    }
+    let mut state = vec![State::Unseen; bones.len()];
+    let mut chain = Vec::new();
     for i in 0..bones.len() {
-        let mut m = local(&bones[i]);
-        let mut parent = bones[i].parent;
-        let mut seen = vec![i];
-        while parent >= 0 {
-            let p = parent as usize;
-            if p >= bones.len() || seen.contains(&p) {
+        // up from `i` to a bone already made or a root
+        let mut at = i;
+        let mut above = None;
+        loop {
+            match state[at] {
+                State::Done(m) => {
+                    above = Some(m);
+                    break;
+                }
+                State::Open => return Err(format!("invalid rigid bone hierarchy at {i}")),
+                State::Unseen => {}
+            }
+            state[at] = State::Open;
+            chain.push(at);
+            let parent = bones[at].parent;
+            if parent < 0 {
+                break;
+            }
+            let parent = parent as usize;
+            if parent >= bones.len() {
                 return Err(format!("invalid rigid bone hierarchy at {i}"));
             }
-            seen.push(p);
-            m = compose(&local(&bones[p]), &m);
-            parent = bones[p].parent;
+            at = parent;
         }
-        worlds.push(m);
+        // and back down
+        while let Some(bone) = chain.pop() {
+            let m = match above {
+                Some(parent) => compose(&parent, &local(&bones[bone])),
+                None => local(&bones[bone]),
+            };
+            state[bone] = State::Done(m);
+            above = Some(m);
+        }
     }
-    Ok(worlds)
+    state
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| match s {
+            State::Done(m) => Ok(m),
+            State::Unseen | State::Open => Err(format!("invalid rigid bone hierarchy at {i}")),
+        })
+        .collect()
 }
 
 /// Every vertex of every mesh in model space (file frame): static vertices posed by the bone their NORMAL.w names,
@@ -194,4 +230,70 @@ pub fn posed(c: &[[f32; 3]; 4], v: [f32; 3]) -> [f32; 3] {
 
 pub(crate) fn pose(v: [f32; 3], p: [f32; 4], q: [f32; 4]) -> [f32; 3] {
     posed(&pose_columns([p[0], p[1], p[2]], q), v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bone(parent: i16, x: f32, yaw: f32) -> Bone {
+        Bone {
+            name: String::new(),
+            translation: [x, 1.0, -x],
+            rotation: [0.0, yaw, 0.1],
+            scale: [1.0, 1.5, 1.0],
+            parent,
+        }
+    }
+
+    /// The matrix of a bone by walking up its parents, composing each outside the ones below it.
+    fn walked(bones: &[Bone], i: usize) -> Matrix {
+        let mut m = local(&bones[i]);
+        let mut parent = bones[i].parent;
+        while parent >= 0 {
+            let p = parent as usize;
+            m = compose(&local(&bones[p]), &m);
+            parent = bones[p].parent;
+        }
+        m
+    }
+
+    /// Bones in any order (a parent after its child included) get the matrices walking up their parents gives, to
+    /// rounding.
+    #[test]
+    fn a_bones_matrix_is_its_parents_composed_with_its_own_in_any_order() {
+        let bones = [
+            bone(2, 1.0, 0.3),
+            bone(0, 2.0, -0.2),
+            bone(-1, 3.0, 0.5),
+            bone(1, -1.0, 1.1),
+            bone(-1, 0.5, 0.0),
+            bone(4, 4.0, 0.7),
+        ];
+        let made = bone_matrices(&bones).unwrap();
+        for (i, m) in made.iter().enumerate() {
+            let expected = walked(&bones, i);
+            for (a, b) in m.iter().flatten().zip(expected.iter().flatten()) {
+                assert!(
+                    (a - b).abs() <= 1e-12 * (1.0 + b.abs()),
+                    "bone {i}: {a} against {b}"
+                );
+            }
+        }
+    }
+
+    /// A chain of every bone a model can hold (an i16 parent) is one composition a bone, not a walk up the whole chain
+    /// for each; a loop and a parent past the bones are errors naming the bone.
+    #[test]
+    fn a_deep_chain_is_linear_and_a_loop_is_an_error() {
+        let chain: Vec<Bone> = (0..i16::MAX).map(|i| bone(i - 1, 0.001, 0.0001)).collect();
+        assert_eq!(bone_matrices(&chain).unwrap().len(), chain.len());
+        let looped = [bone(1, 0.0, 0.0), bone(2, 0.0, 0.0), bone(0, 0.0, 0.0)];
+        assert_eq!(
+            bone_matrices(&looped).unwrap_err(),
+            "invalid rigid bone hierarchy at 0"
+        );
+        assert!(bone_matrices(&[bone(5, 0.0, 0.0)]).is_err());
+        assert!(bone_matrices(&[bone(0, 0.0, 0.0)]).is_err());
+    }
 }
