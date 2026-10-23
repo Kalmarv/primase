@@ -143,7 +143,7 @@ fn elden_ring_clips_move_onto_the_model_by_the_games_own_rule() -> Result<()> {
     assert_eq!((clips, pairs), (3, 122));
     assert!(key_times > 100);
     assert!(reparented >= 100, "{reparented} reparented joints");
-    let (clips, key_times, pairs, _) = check("c2030", "a000_000000;a000_041000", &decoder, &install)?;
+    let (clips, key_times, pairs, _) = check("c2030", "a000_000020;a000_041000", &decoder, &install)?;
     assert_eq!((clips, pairs), (2, 184));
     assert!(key_times > 100);
     // M3: a character whose own anibnd holds only the skeleton and the load lists of its divisions

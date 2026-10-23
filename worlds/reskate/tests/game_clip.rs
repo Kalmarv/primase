@@ -1,8 +1,8 @@
 //! skate. clips read from the game's data (`installs.skate/Data`, `tools.oodle9`), lowered and moved onto the render
 //! skeleton: the off-board idle read as stored (`skate.clip`, verified against the rig), lowered to a `core.clip`
 //! (linear between keys, the stated choice), then mapped onto the render skeleton by the rig's own correspondence
-//! (`render_map`, `map-clip{rests=source}`). Exact: at every time checked, each render bone composes to the model-space
-//! transform of its animation joint under the same clip, within 1e-5.
+//! (`render_map`, `map-clip{rests=source,reparented=refuse}`). Exact: at every time checked, each render bone composes to
+//! the model-space transform of its animation joint under the same clip, within 1e-5.
 
 use std::collections::BTreeMap;
 
@@ -105,7 +105,8 @@ fn a_skate_clip_drives_the_render_skeleton_as_it_drives_the_rig() -> R {
     let mut report = RunReport::default();
     m.run(
         &mut w,
-        &m.registry.parse("map-clip{unmapped=drop,rests=source}")?,
+        &m.registry
+            .parse("map-clip{unmapped=drop,rests=source,reparented=refuse}")?,
         &mut report,
     )?;
     println!(
