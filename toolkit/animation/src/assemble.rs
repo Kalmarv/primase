@@ -1,6 +1,9 @@
 //! `assemble-character`: the assets of a world that each hold a rig (a character's parts, each read with the skeleton
 //! and bindings its source stores for it) related into one skeleton for animation, by a stated rule.
 //!
+//! A part is an asset that holds a rig; an entity is a member of one part only (a member listed by two parts is
+//! refused, not merged).
+//!
 //! The parts are not merged. Every part keeps its own skeleton entity and its own skin; what the pass adds is the
 //! relation between them: one assembled skeleton, and for each part a `core.joint_map` from its skeleton to the
 //! assembled one that lists every joint of the part. A clip on the assembled skeleton reaches a part through
@@ -227,6 +230,9 @@ fn gap(a: &Affine, b: &Affine) -> f64 {
 
 fn gather(w: &World) -> Result<Vec<Part>, String> {
     let mut parts = Vec::new();
+    // the part asset that holds each entity: one entity cannot belong to two parts (it would be held twice by the
+    // assembled asset, and its skin rebound once per holder)
+    let mut held_by: BTreeMap<Entity, String> = BTreeMap::new();
     for (root, asset) in w.iter::<Asset>() {
         let label = w
             .get::<Name>(root)
@@ -242,6 +248,13 @@ fn gather(w: &World) -> Result<Vec<Part>, String> {
             [rig] => *rig,
             _ => return Err(format!("asset {label} has {} rigs: a part has one", rigs.len())),
         };
+        for (member, _) in &asset.members {
+            if let Some(other) = held_by.insert(*member, label.clone()) {
+                return Err(format!(
+                    "{member:?} is a member of both asset {other} and asset {label}: a part's members are its own                      (merging them is not done)"
+                ));
+            }
+        }
         let skeleton = w
             .get::<Skeleton>(rig)
             .ok_or_else(|| format!("asset {label}: its rig holds no core.skeleton"))?
@@ -1109,6 +1122,27 @@ mod tests {
             "{err}"
         );
         assert!(!err.contains(&format!("{table:?}")), "{err}");
+    }
+
+    /// A mesh listed by two part assets would be held twice by the assembled asset and rebound once per part: refused,
+    /// naming the entity and both assets.
+    #[test]
+    fn a_member_shared_by_two_parts_is_refused() {
+        let (mut w, body, _) = world(None, [0.0, 0.5, 0.0]);
+        let head_root = w
+            .iter::<Asset>()
+            .find(|(e, _)| w.get::<Name>(*e).is_some_and(|n| n.0 == "head"))
+            .map(|(e, _)| e)
+            .unwrap();
+        w.get_mut::<Asset>(head_root)
+            .unwrap()
+            .members
+            .push((body, Role::Part));
+        let err = run(&mut w, OWN).unwrap_err();
+        assert!(
+            err.contains(&format!("{body:?}")) && err.contains("asset body") && err.contains("asset head"),
+            "{err}"
+        );
     }
 
     /// The parts join into five joints: Master, Spine, Neck and the arm and head once each; the head part's Spine is a

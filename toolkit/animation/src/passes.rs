@@ -5,13 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{
-    Clip, ClipBinding, Component, Entity, Instance, Lods, Mesh, MeshFile, MorphId, MorphWeights, Morphs,
-    RigInstance, RigPose, Semantic, Skeleton, Skin, SkinInstance, Stream, Transform, World,
+    Attachment, Clip, ClipBinding, Component, Entity, Instance, Lods, Mesh, MeshFile, MorphId, MorphWeights,
+    Morphs, RigInstance, RigPose, Semantic, Skeleton, Skin, SkinInstance, Sockets, Stream, Transform, World,
 };
 
 use crate::deform::{Vertices, apply_morphs};
-use crate::pose::{Affine, affine, compose, evaluate, locals, model_transforms, transform};
-use crate::weights::{quantize, read_weights, write_weights};
+use crate::pose::{Affine, affine, compose, evaluate, inverse, locals, model_transforms, transform};
+use crate::weights::{check_weights, quantize, read_weights, write_weights};
 
 /// What `evaluate-clip` does with a clip's root motion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,7 +24,11 @@ pub enum RootChoice {
 
 /// `evaluate-clip{time=S,root=ignore|apply}`: every `core.clip_binding`'s clip at `time` seconds: its rig's pose (a
 /// `core.rig_pose` over the rig's own pose, else the rests) and the morph weights of its mesh occurrences
-/// (`core.morph_weights`, the targets the clip drives set, others kept). Root motion as `root` says. A source control
+/// (`core.morph_weights`, the targets the clip drives set, others kept). Root motion as `root` says; `root=apply` takes
+/// off the root motion an earlier run applied (the pose's `root_applied`) before applying this one, so the same run
+/// twice, or a later time, leaves the rig at its placement times that time's root motion, and a rig moved by anything
+/// else stays so moved. The objects attached to a posed rig (`core.attachment`) follow its pose and placement: each
+/// is placed at the rig's transform times its socket joint's pose, the socket's offset and its own. A source control
 /// channel has no core meaning to evaluate into: counted. Two bindings driving one rig are refused: how they layer is
 /// not stated.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -128,19 +132,41 @@ impl Pass for EvaluateClip {
             let out =
                 evaluate(&clip, skeleton_entity, &skeleton, base.as_ref(), self.time).map_err(|e| e.0)?;
             if let Some(r) = b.rig {
-                w.insert(r, out.pose);
-                log.count("rigs posed", 1);
-                match (self.root, out.root) {
-                    (RootChoice::Apply, Some(root)) => {
-                        let placed = w
-                            .get::<Transform>(r)
-                            .copied()
-                            .ok_or("a rig without a transform")?;
-                        w.insert(r, transform(&compose(&affine(&placed), &affine(&root))));
-                        log.count("rigs moved by their root motion", 1);
+                let mut pose = out.pose;
+                match self.root {
+                    RootChoice::Apply => {
+                        let previous = pose.root_applied;
+                        if out.root != previous {
+                            let placed = w
+                                .get::<Transform>(r)
+                                .copied()
+                                .ok_or("a rig without a transform")?;
+                            let mut moved = affine(&placed);
+                            if let Some(p) = previous {
+                                let undo = inverse(&affine(&p)).ok_or_else(|| {
+                                    format!("{r:?}: the root motion applied before has no inverse")
+                                })?;
+                                moved = compose(&moved, &undo);
+                            }
+                            if let Some(now) = out.root {
+                                moved = compose(&moved, &affine(&now));
+                            }
+                            w.insert(r, transform(&moved));
+                            log.count("rigs moved by their root motion", 1);
+                        }
+                        pose.root_applied = out.root;
                     }
-                    (RootChoice::Ignore, Some(_)) => log.count("root motions left out (root=ignore)", 1),
-                    (_, None) => {}
+                    RootChoice::Ignore if out.root.is_some() => {
+                        log.count("root motions left out (root=ignore)", 1);
+                    }
+                    RootChoice::Ignore => {}
+                }
+                let posed = locals(&skeleton, Some(&pose));
+                w.insert(r, pose);
+                log.count("rigs posed", 1);
+                let moved = follow_rig(w, r, skeleton_entity, &skeleton, &posed)?;
+                if moved > 0 {
+                    log.count("attached objects moved with their rig", moved);
                 }
             }
             for &m in &b.meshes {
@@ -320,6 +346,47 @@ impl Pass for PoseSkin {
     }
 }
 
+/// Places every object attached to rig `rig` (skeleton `skeleton_entity`, `skeleton`) at the rig's transform times its
+/// socket joint's transform under `locals`, the socket's offset and its own; returns how many.
+fn follow_rig(
+    w: &mut World,
+    rig: Entity,
+    skeleton_entity: Entity,
+    skeleton: &Skeleton,
+    locals: &BTreeMap<primase_core::JointId, primase_core::Rest>,
+) -> Result<u64, String> {
+    let attached: Vec<(Entity, Attachment)> = w
+        .iter::<Attachment>()
+        .filter(|(_, a)| a.rig == rig)
+        .map(|(e, a)| (e, *a))
+        .collect();
+    if attached.is_empty() {
+        return Ok(0);
+    }
+    let model = model_transforms(skeleton, locals).map_err(|e| e.0)?;
+    let sockets = w
+        .get::<Sockets>(skeleton_entity)
+        .ok_or("an attachment on a rig whose skeleton has no sockets")?
+        .clone();
+    let placed = affine(w.get::<Transform>(rig).ok_or("a rig without a transform")?);
+    for (e, a) in &attached {
+        let socket = sockets
+            .0
+            .iter()
+            .find(|s| s.id == a.socket)
+            .ok_or_else(|| format!("{e:?}: socket {:?} is not its rig's skeleton's", a.socket))?;
+        let joint = model
+            .get(&socket.joint)
+            .ok_or_else(|| format!("{e:?}: socket {:?}'s joint is not posed", a.socket))?;
+        let at = compose(
+            &compose(&compose(&placed, joint), &affine(&socket.offset)),
+            &affine(&a.offset),
+        );
+        w.insert(*e, transform(&at));
+    }
+    Ok(attached.len() as u64)
+}
+
 /// The map from rig `rig`'s space to occurrence `e`'s: `inverse(e's placement) * rig's placement`.
 fn rig_to_occurrence(w: &World, rig: Entity, e: Entity) -> Result<Affine, String> {
     let r = affine(w.get::<Transform>(rig).ok_or("a rig without a transform")?);
@@ -338,7 +405,7 @@ fn rig_to_occurrence(w: &World, rig: Entity, e: Entity) -> Result<Affine, String
 /// to 1 per vertex, as glTF and most engines require: float weights divided by their sum; normalised byte or short
 /// weights requantised to sum to exactly 255 or 65535 (each influence's share rounded down, the remainder given to the
 /// largest fractional parts, ties to the earlier influence). The skin's rule becomes `SumsToOne`. A vertex whose
-/// weights are all zero is refused (nothing to normalise). Counted: vertices changed, and the largest change of one
+/// weights are all zero is refused (nothing to normalise), as is a NaN, infinite or negative weight. Counted: vertices changed, and the largest change of one
 /// weight.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NormalizeSkinWeights;
@@ -370,6 +437,7 @@ impl Pass for NormalizeSkinWeights {
                 let (mut all, unit) =
                     read_weights(&p, sets).map_err(|m| format!("{e:?} primitive {i}: {m}"))?;
                 for (v, ws) in all.iter_mut().enumerate() {
+                    check_weights(ws).map_err(|m| format!("{e:?} primitive {i}: vertex {v}: {m}"))?;
                     let sum: f64 = ws.iter().sum();
                     if sum <= 0.0 {
                         return Err(format!(
@@ -551,7 +619,8 @@ mod tests {
     use primase_core::pass::{PassManager, PassRegistry, RunReport};
     use primase_core::{
         Binding, BindingId, Channel, ClipTarget, Deformation, Extrapolation, Influences, Interpolation,
-        Joint, JointId, Primitive, Property, Rest, Slot, Topology, WeightRule,
+        Joint, JointId, Primitive, Property, Rest, RootMotion, RootSpace, Slot, Socket, SocketId, Topology,
+        WeightRule,
     };
 
     fn translate(t: [f32; 3]) -> Transform {
@@ -732,6 +801,98 @@ mod tests {
         )
         .unwrap();
         assert_eq!(position(&w, placed[0]), [10.0, 1.0, 0.0]);
+    }
+
+    /// The world's clip given a root motion of 4 m along x a second (linear over 0 to 1 s), and its rig 0 placed at
+    /// x=10: returns the rig.
+    fn with_root_motion(w: &mut World, rig: Entity) -> Entity {
+        let clip = w.iter::<ClipBinding>().next().unwrap().1.clip;
+        w.get_mut::<Clip>(clip).unwrap().root_motion = Some(RootMotion {
+            space: RootSpace::Rig,
+            translation: Some((
+                Interpolation::Linear,
+                vec![0.0, 1.0],
+                vec![0.0, 0.0, 0.0, 4.0, 0.0, 0.0],
+            )),
+            rotation: None,
+        });
+        w.insert(rig, translate([10.0, 0.0, 0.0]));
+        rig
+    }
+
+    fn evaluate_at(w: &mut World, time: f64) {
+        let m = manager();
+        m.run(
+            w,
+            &m.registry
+                .parse(&format!("evaluate-clip{{time={time},root=apply}}"))
+                .unwrap(),
+            &mut RunReport::default(),
+        )
+        .unwrap();
+    }
+
+    /// Hand-worked: the rig is placed at x=10 and the clip moves it 4 m a second. At 0.5 s it is at x=12, and
+    /// evaluating that time again leaves exactly that transform (the root motion applied before is taken off first).
+    /// From there to 1 s is x=14, what 1 s alone gives from the placement; a rig moved by something else in between
+    /// (5 m along x) keeps the move: 17 - 2 + 4 = 19.
+    #[test]
+    fn root_motion_is_applied_from_the_placement_not_the_current_transform() {
+        let (mut w, _, rigs, _) = world();
+        let rig = with_root_motion(&mut w, rigs[0]);
+        evaluate_at(&mut w, 0.5);
+        let once = *w.get::<Transform>(rig).unwrap();
+        assert_eq!(once.cols[3], [12.0, 0.0, 0.0]);
+        evaluate_at(&mut w, 0.5);
+        assert_eq!(*w.get::<Transform>(rig).unwrap(), once);
+        evaluate_at(&mut w, 1.0);
+        assert_eq!(w.get::<Transform>(rig).unwrap().cols[3], [14.0, 0.0, 0.0]);
+        let (mut alone, _, rigs, _) = world();
+        let rig_alone = with_root_motion(&mut alone, rigs[0]);
+        evaluate_at(&mut alone, 1.0);
+        assert_eq!(w.get::<Transform>(rig), alone.get::<Transform>(rig_alone));
+        assert_eq!(
+            w.get::<RigPose>(rig).unwrap().root_applied,
+            alone.get::<RigPose>(rig_alone).unwrap().root_applied
+        );
+        // moved by something else: 14 + 5, then back to 0.5 s (-4 + 2)
+        w.insert(rig, translate([19.0, 0.0, 0.0]));
+        evaluate_at(&mut w, 0.5);
+        assert_eq!(w.get::<Transform>(rig).unwrap().cols[3], [17.0, 0.0, 0.0]);
+    }
+
+    /// Hand-worked: a socket on joint 2 (at y=1 at rest; the clip raises it to y=2 at 0.5 s), an object attached at
+    /// (0, 0, 1) in the socket's space. The rig is at x=10 and the root motion moves it to x=12: the object sits at
+    /// (12, 2, 1), and does again when the same time is evaluated twice.
+    #[test]
+    fn attached_objects_follow_the_posed_and_moved_rig() {
+        let (mut w, _, rigs, _) = world();
+        let rig = with_root_motion(&mut w, rigs[0]);
+        let skeleton = w.get::<RigInstance>(rig).unwrap().skeleton;
+        w.insert(
+            skeleton,
+            Sockets(vec![Socket {
+                id: SocketId(0),
+                name: "grip".into(),
+                joint: JointId(2),
+                offset: Transform::IDENTITY,
+            }]),
+        );
+        let held = w.spawn();
+        w.insert(
+            held,
+            Attachment {
+                rig,
+                socket: SocketId(0),
+                offset: translate([0.0, 0.0, 1.0]),
+            },
+        );
+        w.insert(held, Transform::IDENTITY);
+        for _ in 0..2 {
+            evaluate_at(&mut w, 0.5);
+            assert_eq!(w.get::<Transform>(held).unwrap().cols[3], [12.0, 2.0, 1.0]);
+        }
+        assert_eq!(w.verify_components(), vec![]);
     }
 
     /// Options are required, checked and printed; two bindings on one rig are refused.

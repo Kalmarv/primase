@@ -211,7 +211,10 @@ pub fn evaluate(
     let mut locals = locals(skeleton, base);
     let mut driven: BTreeMap<JointId, Trs> = BTreeMap::new();
     let mut out = Evaluated {
-        pose: RigPose { joints: Vec::new() },
+        pose: RigPose {
+            joints: Vec::new(),
+            root_applied: base.and_then(|b| b.root_applied),
+        },
         morphs: Vec::new(),
         controls: Vec::new(),
         root: None,

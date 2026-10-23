@@ -32,6 +32,15 @@ pub(crate) fn quantize(w: &[f64], unit: u64) -> Vec<u64> {
     q
 }
 
+/// Refuses a vertex's weights holding a NaN, an infinity or a negative value (a sum check passes some of them: NaN
+/// compares false, and +w with -w can sum to 1).
+pub(crate) fn check_weights(ws: &[f64]) -> Result<(), String> {
+    match ws.iter().find(|x| !x.is_finite() || **x < 0.0) {
+        Some(x) => Err(format!("a weight is {x}: not finite or negative")),
+        None => Ok(()),
+    }
+}
+
 /// The weights of a primitive with `Influences::Streams { sets }`: each vertex's weights over all its sets (four a
 /// set, in set order) as floats (normalised integers divided by their unit), and the unit: 0 for `F32x4`, 255 for
 /// `U8x4`, 65535 for `U16x4`.
@@ -279,7 +288,8 @@ impl Pass for LimitSkinInfluences {
 /// `quantize-skin-weights{bits=8|16}` (required): every skinned primitive's float weights ([`Stream::F32x4`]) stored
 /// as normalised bytes (`bits=8`) or shorts (`bits=16`): each vertex's weights over all its sets quantised to sum to
 /// exactly 255 (or 65535) by largest remainder. A primitive whose vertex weights do not sum to 1 (within
-/// [`SUM_TOLERANCE`]) is refused: normalise first (`normalize-skin-weights`). Weights already stored in the asked
+/// [`SUM_TOLERANCE`]) is refused: normalise first (`normalize-skin-weights`); so is a NaN, infinite or negative weight.
+/// Weights already stored in the asked
 /// width stay as they are; weights stored in the other width are refused (converting between widths is not done
 /// silently). The skin's rule becomes `SumsToOne`. Counted: vertices quantised, and the largest error of one weight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,6 +352,9 @@ impl Pass for QuantizeSkinWeights {
                         if stored == 255 { 8 } else { 16 },
                         self.bits
                     ));
+                }
+                for (v, ws) in all.iter().enumerate() {
+                    check_weights(ws).map_err(|m| format!("{at}: vertex {v}: {m}"))?;
                 }
                 if let Some(v) = all
                     .iter()
@@ -663,6 +676,26 @@ mod tests {
             0
         );
         assert_eq!(w.get::<Skin>(e).unwrap().weights, WeightRule::SumsToOne);
+    }
+
+    /// A NaN weight (its sum compares false against the tolerance) and a negative one (1.5 + -0.5 sums to 1) are
+    /// refused by name by both passes, not stored as quantised garbage.
+    #[test]
+    fn nan_and_negative_weights_are_refused() {
+        for (weights, what) in [
+            ([f32::NAN, 0.5, 0.5, 0.0], "NaN"),
+            ([1.5, -0.5, 0.0, 0.0], "-0.5"),
+            ([f32::INFINITY, 0.0, 0.0, 0.0], "inf"),
+        ] {
+            for pass in ["quantize-skin-weights{bits=8}", "normalize-skin-weights"] {
+                let (mut w, _) = world(&[vec![[1, 2, 3, 4]]], Stream::F32x4(vec![weights]), vec![]);
+                let err = run(&mut w, pass).unwrap_err();
+                assert!(
+                    err.contains("vertex 0") && err.contains(what) && err.contains("not finite or negative"),
+                    "{pass}: {err}"
+                );
+            }
+        }
     }
 
     /// Weights not summing to 1 are refused with the way out; the other width is refused; options are checked.

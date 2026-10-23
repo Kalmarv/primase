@@ -229,6 +229,10 @@ impl Pass for MapClip {
             if skeletons.len() > 1 {
                 return Err(format!("clip {c:?} drives several skeletons"));
             }
+            // an additive clip's reference is a pose or a frame of a clip of the source skeleton: not remapped here
+            if clip.additive.is_some() {
+                return Err(format!("clip {c:?} is additive: not mapped"));
+            }
             if let Some(&(_, rig)) = bound.iter().find(|(clip, rig)| {
                 *clip == c && w.get::<RigInstance>(*rig).is_some_and(|r| r.skeleton == from)
             }) {
@@ -533,7 +537,9 @@ mod tests {
     use super::*;
     use crate::pose::{evaluate, model_transforms};
     use primase_core::pass::{PassManager, PassRegistry, RunReport};
-    use primase_core::{Channel, Extrapolation, Interpolation, Joint, Property, Rest, Transform};
+    use primase_core::{
+        AdditiveReference, Channel, Extrapolation, Interpolation, Joint, Property, Rest, Transform,
+    };
 
     const S: f32 = std::f32::consts::FRAC_1_SQRT_2;
 
@@ -694,6 +700,11 @@ mod tests {
             report.steps[0].log.omitted["clip channels on joints the map does not list (unmapped=drop)"],
             1
         );
+        // an additive clip's reference is not remapped: refused, as retarget-clip does
+        let (mut w, _, _, clip) = world(&[(1, 10), (2, 20), (3, 30)]);
+        w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::ClipFrame { clip, time: 0.0 });
+        let err = run(&mut w, "map-clip{unmapped=refuse,rests=target,reparented=refuse}").unwrap_err();
+        assert!(err.contains("additive"), "{err}");
         // bound to a rig of the source skeleton: map first
         let (mut w, a, _, clip) = world(&[(1, 10), (2, 20), (3, 30)]);
         let rig = w.spawn();

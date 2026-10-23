@@ -32,9 +32,16 @@ pub struct RigInstance {
 
 /// `core.rig_pose`: a rig's joints' local transforms, every joint of its skeleton once, each in its parent's space as
 /// the skeleton's rests are.
+///
+/// `root_applied` is the root motion a pass has already moved the rig's `core.transform` by (`placed * root_applied`
+/// is the transform): a pass that applies root motion again takes that one off first, so repeating it, or moving to
+/// another time, leaves the rig where its own placement and the new root motion put it. A rig moved by anything else
+/// stays as it was moved.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RigPose {
     pub joints: Vec<(JointId, Rest)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_applied: Option<Transform>,
 }
 
 /// `core.skin_instance`: the rig a mesh occurrence follows and the binding of its mesh's skin it is drawn with.
@@ -123,9 +130,12 @@ impl Component for RigPose {
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
-    /// On a rig; every joint of its skeleton exactly once; every transform finite.
+    /// On a rig; every joint of its skeleton exactly once; every transform finite, the applied root motion too.
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
         let skeleton = rig_skeleton(w, e)?;
+        if self.root_applied.as_ref().is_some_and(|m| !finite(m)) {
+            return Err("the applied root motion is not finite".into());
+        }
         let mut seen = BTreeSet::new();
         for (j, rest) in &self.joints {
             if skeleton.index_of(*j).is_none() {
@@ -407,6 +417,7 @@ mod tests {
                         (JointId(2), Rest::Affine(up)),
                         (JointId(1), Rest::Affine(Transform::IDENTITY)),
                     ],
+                    root_applied: None,
                 },
             );
             let p = w.spawn();
@@ -493,6 +504,15 @@ mod tests {
         fails(
             &|w, r, _, _| w.get_mut::<RigPose>(r[0]).unwrap().joints[0].0 = JointId(7),
             "not a joint",
+        );
+        // an applied root motion that is not finite
+        fails(
+            &|w, r, _, _| {
+                let mut m = Transform::IDENTITY;
+                m.cols[3][0] = f32::NAN;
+                w.get_mut::<RigPose>(r[0]).unwrap().root_applied = Some(m);
+            },
+            "applied root motion is not finite",
         );
         // a rig unplaced; a skin instance with a binding the skin lacks, or following a rig of another skeleton
         fails(

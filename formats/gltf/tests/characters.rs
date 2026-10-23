@@ -143,6 +143,7 @@ fn world(weights: [u8; 4]) -> World {
                 ),
                 (JointId(3), Rest::Affine(translate([0.0, 1.0, 0.0]))),
             ],
+            root_applied: None,
         },
     );
     let placed = w.spawn();

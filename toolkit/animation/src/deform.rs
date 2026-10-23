@@ -100,7 +100,8 @@ pub fn apply_morphs(
         .tangents
         .as_ref()
         .map(|x| x.iter().map(|t| [t[0], t[1], t[2]].map(f64::from)).collect());
-    let (mut normals_moved, mut tangents_moved) = (false, false);
+    // the vertices a delta reached: only they are renormalised, the others keep their stored lengths
+    let (mut normals_moved, mut tangents_moved) = (vec![false; n], vec![false; n]);
     for t in &morphs.targets {
         let w = f64::from(weights.get(&t.id).copied().unwrap_or(t.default_weight));
         if w == 0.0 {
@@ -120,25 +121,28 @@ pub fn apply_morphs(
                     .then_some(i)
                     .ok_or_else(|| Error(format!("target {:?}: vertex {i} of {n}", t.id)))
             };
-            let add = |dst: &mut Vec<[f64; 3]>, src: &[[f32; 3]]| -> Result<()> {
-                for (k, delta) in src.iter().enumerate() {
-                    let i = at(k)?;
-                    for c in 0..3 {
-                        dst[i][c] += factor * f64::from(delta[c]);
+            let add =
+                |dst: &mut Vec<[f64; 3]>, moved: Option<&mut Vec<bool>>, src: &[[f32; 3]]| -> Result<()> {
+                    let mut moved = moved;
+                    for (k, delta) in src.iter().enumerate() {
+                        let i = at(k)?;
+                        for c in 0..3 {
+                            dst[i][c] += factor * f64::from(delta[c]);
+                        }
+                        if let Some(m) = moved.as_deref_mut() {
+                            m[i] = true;
+                        }
                     }
-                }
-                Ok(())
-            };
+                    Ok(())
+                };
             if let Some(dp) = &d.positions {
-                add(&mut pos, dp)?;
+                add(&mut pos, None, dp)?;
             }
             if let (Some(dn), Some(nor)) = (&d.normals, nor.as_mut()) {
-                add(nor, dn)?;
-                normals_moved = true;
+                add(nor, Some(&mut normals_moved), dn)?;
             }
             if let (Some(dt), Some(tan)) = (&d.tangents, tan.as_mut()) {
-                add(tan, dt)?;
-                tangents_moved = true;
+                add(tan, Some(&mut tangents_moved), dt)?;
             }
         }
     }
@@ -146,14 +150,16 @@ pub fn apply_morphs(
         positions: pos.iter().map(|p| p.map(|x| x as f32)).collect(),
         normals: nor.map(|x| {
             x.iter()
-                .map(|n| (if normals_moved { unit(*n) } else { *n }).map(|c| c as f32))
+                .zip(&normals_moved)
+                .map(|(n, &moved)| (if moved { unit(*n) } else { *n }).map(|c| c as f32))
                 .collect()
         }),
         tangents: tan.map(|x| {
             x.iter()
                 .zip(v.tangents.iter().flatten())
-                .map(|(t, orig)| {
-                    let t = if tangents_moved { unit(*t) } else { *t };
+                .zip(&tangents_moved)
+                .map(|((t, orig), &moved)| {
+                    let t = if moved { unit(*t) } else { *t };
                     [t[0] as f32, t[1] as f32, t[2] as f32, orig[3]]
                 })
                 .collect()
@@ -205,10 +211,20 @@ pub fn influences(p: &Primitive, how: Influences, rule: WeightRule) -> Result<Ve
             }
         }
     }
+    for (i, v) in out.iter().enumerate() {
+        // a NaN weight is no zero and would pass every comparison below it
+        if let Some((_, w)) = v.iter().find(|(_, w)| !w.is_finite()) {
+            return Err(Error(format!("vertex {i}: a weight is {w}")));
+        }
+        // no influence at all: the vertex would collapse to the origin whatever the rule says about sums
+        if v.is_empty() {
+            return Err(Error(format!("vertex {i}: all its weights are zero")));
+        }
+    }
     if rule == WeightRule::EngineNormalizes {
         for (i, v) in out.iter_mut().enumerate() {
             let sum: f64 = v.iter().map(|(_, w)| w).sum();
-            if sum <= 0.0 {
+            if !sum.is_finite() || sum <= 0.0 {
                 return Err(Error(format!(
                     "vertex {i}: weights sum to {sum}, nothing to normalise"
                 )));
@@ -495,6 +511,88 @@ mod tests {
         };
         let m = apply_morphs(&v, 0, &sparse, &BTreeMap::from([(MorphId(2), 0.5)])).unwrap();
         assert!(near(m.positions[0], [0.0; 3]) && near(m.positions[1], [0.0, 2.0, 0.0]));
+    }
+
+    /// Only the normals and tangents a delta reached are made unit length: a delta on vertex 1 leaves vertex 0's stored
+    /// normal (2, 0, 0) and tangent (0, 3, 0) as they are, and takes vertex 1's (0, 0, 1) + (0, 1, 0) to
+    /// (0, 1, 1) / sqrt 2.
+    #[test]
+    fn morphs_renormalise_only_what_they_moved() {
+        let v = Vertices {
+            positions: vec![[0.0; 3]; 2],
+            normals: Some(vec![[2.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
+            tangents: Some(vec![[0.0, 3.0, 0.0, 1.0], [1.0, 0.0, 0.0, -1.0]]),
+        };
+        let morphs = Morphs {
+            targets: vec![MorphTarget {
+                id: MorphId(1),
+                name: "t".into(),
+                default_weight: 0.0,
+                frames: vec![MorphFrame {
+                    weight: 1.0,
+                    primitives: vec![Some(Deltas {
+                        normals: Some(vec![[0.0, 1.0, 0.0]]),
+                        tangents: Some(vec![[0.0, 1.0, 0.0]]),
+                        indices: Some(vec![1]),
+                        ..Deltas::default()
+                    })],
+                }],
+            }],
+        };
+        let m = apply_morphs(&v, 0, &morphs, &BTreeMap::from([(MorphId(1), 1.0)])).unwrap();
+        let (n, t) = (m.normals.unwrap(), m.tangents.unwrap());
+        assert_eq!(n[0], [2.0, 0.0, 0.0]);
+        assert_eq!(t[0], [0.0, 3.0, 0.0, 1.0]);
+        let r = std::f32::consts::FRAC_1_SQRT_2;
+        assert!(near(n[1], [0.0, r, r]), "{:?}", n[1]);
+        assert!(near([t[1][0], t[1][1], t[1][2]], [r, r, 0.0]), "{:?}", t[1]);
+        assert_eq!(t[1][3], -1.0);
+    }
+
+    /// A vertex with no weight is refused whatever the rule (it would collapse to the origin), and a NaN weight or a
+    /// NaN sum is refused by name rather than compared past.
+    #[test]
+    fn unweighted_and_nan_vertices_are_refused() {
+        let palette = [Slot {
+            joint: JointId(1),
+            inverse_bind: Transform::IDENTITY,
+        }];
+        let model = BTreeMap::from([(JointId(1), translate([0.0; 3]))]);
+        let with = |weights: [f32; 4]| {
+            primitive(vec![
+                (Semantic::Position, Stream::F32x3(vec![[0.0, 1.0, 0.0]])),
+                (Semantic::Joints(0), Stream::U8x4(vec![[0; 4]])),
+                (Semantic::Weights(0), Stream::F32x4(vec![weights])),
+            ])
+        };
+        for (weights, rule, what) in [
+            ([0.0; 4], WeightRule::AsStored, "all its weights are zero"),
+            ([0.0; 4], WeightRule::SumsToOne, "all its weights are zero"),
+            ([f32::NAN, 1.0, 0.0, 0.0], WeightRule::AsStored, "a weight is NaN"),
+            (
+                [f32::NAN, 1.0, 0.0, 0.0],
+                WeightRule::EngineNormalizes,
+                "a weight is NaN",
+            ),
+            ([0.0; 4], WeightRule::EngineNormalizes, "all its weights are zero"),
+        ] {
+            let p = with(weights);
+            let err = skin(
+                &Vertices::of(&p).unwrap(),
+                &p,
+                Influences::Streams { sets: 1 },
+                rule,
+                Deformation::Linear,
+                &palette,
+                &model,
+            )
+            .unwrap_err();
+            assert!(
+                err.0.contains("vertex 0") && err.0.contains(what),
+                "{rule:?}: {}",
+                err.0
+            );
+        }
     }
 
     /// One rule, through the zero point wherever the frames lie: frames at -1 and 1 put it between them; a single frame
