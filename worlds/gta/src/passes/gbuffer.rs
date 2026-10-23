@@ -11,6 +11,7 @@
 //! | 0 | xyz | the diffuse colour (texture times the material's colour, darkened by wetness) |
 //! | 0 | w | a byte of the draw's state, from the engine's constants |
 //! | 1 | xyz | the world normal biased to 0 to 1 (`n * 0.5 + 0.5`) |
+//! | 1 | w | the normal's sub-step bits for the lighting passes (3, 3 and 2 bits of x, y and z in one byte; the twiddle effects write them, the others `saturate(128 z - 127)`): no role, `tests/gbuffer_normal_w.rs` |
 //! | 2 | x | the specular intensity, stored as its square root |
 //! | 2 | y | the specular falloff over 512, stored as its square root (the lighting passes read `y * y * 512`) |
 //! | 2 | z | the Fresnel term |
