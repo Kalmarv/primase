@@ -86,8 +86,8 @@ textures are errors. Unplaced prototypes are not exported. Tile filenames are
 validated before filesystem writes; unrelated destination files are retained.
 
 `cargo test -p primase-web` checks deterministic bytes, negative boundaries,
-triangle-centre partitioning, bounds and invalid inputs. Set
-`PRIMASE_GLTF_VALIDATOR` for the optional official validator gate.
+triangle-centre partitioning, bounds and invalid inputs. Configure
+`tools.gltf_validator` (CONTRIBUTING.md) for the optional official validator gate.
 
 GPU instancing is enabled by default (`Options::gpu_instancing`). Compatible
 positive TRS placements sharing a resolved mesh become `EXT_mesh_gpu_instancing`
@@ -263,7 +263,7 @@ blend bounds above, and reports per-role channel maxima/means and normal-angle
 maxima/means/p99 of the codec error; an image whose plain twin has another size
 is an error (nothing independent gives its input). It runs on the synthetic
 fixture (`fixture::synthetic_world`; colour p99 within 8) and on a real export,
-`PRIMASE_WEB_KTX2_TILES` (colour p99 within 5, as measured on slice A; blocked:
+`oracles.baseline.sekiro/ktx2-tiles` (colour p99 within 5, as measured on slice A; blocked:
 the export on hand came from a removed command, its plain set not prepared
 alike). A reference image is found in the plain set by its name, in whichever
 plain tile holds it: the plain set tiles on its own (its PNG tiles are larger, so

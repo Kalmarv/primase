@@ -4,7 +4,7 @@
 //! written from the same prepared world; an image of another size there is an error): PNG images exactly those
 //! pixels, cut-out visibility changed for fewer than 0.1% of pixels at each material's cutoff, blended alpha p99
 //! within 8 levels, and per-role codec quality. Runs on the synthetic fixture always, and on a real export
-//! (`PRIMASE_WEB_KTX2_TILES`) when configured, against the bounds the README states.
+//! (`oracles.baseline.sekiro/ktx2-tiles`) when configured, against the bounds the README states.
 #![cfg(feature = "ktx2")]
 #![allow(clippy::unwrap_used)]
 use basisu::{DecodeFlags, TargetFormat, Transcoder};
@@ -309,7 +309,11 @@ fn the_synthetic_export_decodes_and_keeps_its_bounds() -> R<()> {
 
 #[test]
 fn a_real_export_decodes_and_keeps_the_measured_bounds() -> R<()> {
-    let Some(dir) = primase_testdata::real_data("PRIMASE_WEB_KTX2_TILES") else {
+    let Some(dir) = primase_testdata::oracle(
+        primase_testdata::OracleSet::Baseline,
+        primase_testdata::Game::Sekiro,
+        "ktx2-tiles",
+    ) else {
         return Ok(());
     };
     let a = audit(&dir)?;
