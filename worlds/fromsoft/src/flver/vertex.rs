@@ -10,8 +10,24 @@ pub struct Vertex {
     pub normal_w: i32,
     pub bone_weights: [f32; 4],
     pub bone_indices: [u16; 4],
-    pub uvs: Vec<[f32; 3]>,
-    /// Byte4C UV payloads before the signed-short interpretation, for layer weights.
+    /// The UV members in stream order, each as one four-lane attribute the way the game's vertex program receives it
+    /// (`TEXCOORDn.xyzw`; a lane its format has no value for is zero). A `Short2`, `Byte4A`, `Byte4B` or `Short2toFloat2`
+    /// member is two int16 lanes over the UV factor (the program's integer input, scaled by 1/2048 in the program) and a
+    /// `Float2` or `Float3` member its floats; a `Float4` or `UVPair` member gives two such attributes. A `UByte4Norm`
+    /// (`0x13`) member is four normalised unsigned bytes (`b / 255`), which the program reads as a float `TEXCOORDn` and
+    /// passes on unscaled: Elden Ring's `M[AMSN_V][Mb3][Ov_N]_Gbuf.vpo` (`TEXCOORD1 xyzw float`, loaded by
+    /// `dx.op.loadInput.f32` at lines 288-290 of its disassembly and stored to the output unchanged at lines 501-503) and
+    /// Sekiro's `M_MultipleGround__Gbuf.vpo` (`TEXCOORD1..6` float, `mov o5.x, v5.x` and the like, lines 222-228) alike. A
+    /// `Half4` (`0x2e`) member is four IEEE half floats, which is also a float `TEXCOORDn xyzw` in the program with no
+    /// scale: Elden Ring's `M[AMSN_V]_Vesitation_Emissive_Glow_Gbuf.vpo` declares `TEXCOORD3 xyzw float`, loads it with
+    /// `dx.op.loadInput.f32` (lines 400-402), multiplies and adds it into a vector (lines 575-585) and stores it
+    /// unchanged (lines 962-964); no 1/2048 or 1/1024 follows the load, as one does for the `Short2` member
+    /// (`TEXCOORD0 int`, `sitofp` then a multiply by 2^-11). Read as int16 over the UV factor (SoulsFormats'
+    /// `Short4toFloat4B`, SoulsFormatsNEXT's mislabelled `Half4` UV branch) the first mesh's vector would be
+    /// (5.5, -11.9, -8.8) for an asset whose vertices span 0.1; as halves it is (0.065, -0.010, -0.721).
+    pub uvs: Vec<[f32; 4]>,
+    /// The four stored bytes of each `UByte4Norm` UV member and the index in [`Vertex::uvs`] of its attribute, for layer
+    /// weights (the same values as that attribute's lanes before the `/ 255`).
     pub layer_bytes: Vec<(usize, [u8; 4])>,
     pub tangents: Vec<[f32; 4]>,
     pub bitangent: [f32; 4],
@@ -83,7 +99,7 @@ impl Vertex {
         let p = self.speedtree[position];
         let t = self.speedtree[uv];
         self.position = [p[0], p[1], p[2]];
-        self.uvs = vec![[t[0], t[1], 0.]];
+        self.uvs = vec![[t[0], t[1], 0., 0.]];
         self.speedtree_frame(normal, tangent);
     }
 
@@ -180,29 +196,36 @@ impl Vertex {
                     }
                     self.normal_w = v.u16(o + 6)? as i16 as i32;
                 }
-                (5, 1) => self.uvs.push([f(0)?, f(1)?, 0.]),
-                (5, 2) => self.uvs.push([f(0)?, f(1)?, f(2)?]),
+                (5, 1) => self.uvs.push([f(0)?, f(1)?, 0., 0.]),
+                (5, 2) => self.uvs.push([f(0)?, f(1)?, f(2)?, 0.]),
                 (5, 3) => {
-                    self.uvs.push([f(0)?, f(1)?, 0.]);
-                    self.uvs.push([f(2)?, f(3)?, 0.]);
+                    self.uvs.push([f(0)?, f(1)?, 0., 0.]);
+                    self.uvs.push([f(2)?, f(3)?, 0., 0.]);
                 }
-                (5, 0x10..=0x13 | 0x15 | 0x16) => {
-                    if m.kind == 0x13 {
-                        self.layer_bytes
-                            .push((self.uvs.len(), [raw[0], raw[1], raw[2], raw[3]]));
-                    }
-                    self.uvs.push([short(0)? / uv_factor, short(1)? / uv_factor, 0.]);
+                (5, 0x10..=0x12 | 0x15 | 0x16) => {
+                    self.uvs
+                        .push([short(0)? / uv_factor, short(1)? / uv_factor, 0., 0.]);
                     if m.kind == 0x16 {
-                        self.uvs.push([short(2)? / uv_factor, short(3)? / uv_factor, 0.]);
+                        self.uvs
+                            .push([short(2)? / uv_factor, short(3)? / uv_factor, 0., 0.]);
                     }
+                }
+                (5, 0x13) => {
+                    self.layer_bytes
+                        .push((self.uvs.len(), [raw[0], raw[1], raw[2], raw[3]]));
+                    self.uvs.push(std::array::from_fn(|i| f32::from(raw[i]) / 255.));
                 }
                 (5, 0x2e) => {
-                    self.uvs.push([
-                        short(0)? / uv_factor,
-                        short(1)? / uv_factor,
-                        short(2)? / uv_factor,
-                    ]);
-                    v.expect(o + 6, &[0, 0])?;
+                    let lanes = [
+                        half(v.u16(o)?),
+                        half(v.u16(o + 2)?),
+                        half(v.u16(o + 4)?),
+                        half(v.u16(o + 6)?),
+                    ];
+                    if lanes.iter().any(|x: &f32| !x.is_finite()) {
+                        return Err(invalid(v.format, o, "non-finite half-float UV member"));
+                    }
+                    self.uvs.push(lanes);
                 }
                 (6, 3) => self.tangents.push(decode(Format::Float4)?),
                 (6, 0x10 | 0x11 | 0x13 | 0x2f) => self.tangents.push(byte_norm()),

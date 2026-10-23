@@ -117,7 +117,8 @@ fn packed_attributes_keep_layer_bytes() {
     let m = Model::read(&fixture()).unwrap();
     let v = &m.meshes[0].vertices[0];
     assert_eq!(v.normal, [0., 0., 1.]);
-    assert_eq!(v.uvs, [[1., -1., 0.]]);
+    // four normalised bytes (0, 8, 0, 248) / 255: what the game's vertex program receives as a float TEXCOORD, unscaled
+    assert_eq!(v.uvs, [[0., 8. / 255., 0., 248. / 255.]]);
     assert_eq!(v.layer_bytes, [(0, [0, 8, 0, 248])]);
     assert_eq!(v.colors, [[1., 128. / 255., 0., 1.]]);
 }
@@ -357,7 +358,7 @@ fn a_speedtree_vertex_takes_its_attributes_from_the_members_its_programs_read() 
     let m = Model::read(&speedtree_fixture()).unwrap();
     let v = &m.meshes[0].vertices[1];
     assert_eq!(v.position, [1., 0., 0.]);
-    assert_eq!(v.uvs, [[0.5, 0.25, 0.]]);
+    assert_eq!(v.uvs, [[0.5, 0.25, 0., 0.]]);
     // the bytes unpacked as x * 2 - 1
     assert_eq!(v.normal, [1., -1., -1.]);
     // the tangent of the ordinary convention: the stored one (-1, -1, 1) crossed with the normal, w 1
@@ -384,7 +385,7 @@ fn a_speedtree_mesh_takes_the_normal_and_tangent_a_program_reads() {
     assert_eq!(v.tangents, [[0.5, 1., -0.5, 1.]]);
     // the position and UV stay
     assert_eq!(v.position, [1., 0., 0.]);
-    assert_eq!(v.uvs, [[0.5, 0.25, 0.]]);
+    assert_eq!(v.uvs, [[0.5, 0.25, 0., 0.]]);
     // an input the layout does not store, and an ordinary model's mesh, are refused
     assert!(
         m.set_speedtree_frame(0, [9, 4])

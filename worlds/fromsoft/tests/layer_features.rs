@@ -65,7 +65,7 @@ fn a_layered_mesh_keeps_its_second_uv_set_and_second_colour() {
         member(3, 10, 1),
     ]];
     let vertex = |u: f32, c: f32| Vertex {
-        uvs: vec![[u, 0., 0.], [u + 0.5, 1., 0.], [9., 9., 0.]],
+        uvs: vec![[u, 0., 0., 0.], [u + 0.5, 1., 0., 0.], [9., 9., 0., 0.]],
         layer_bytes: vec![(0, [5; 4]), (1, [6; 4]), (2, [1, 2, 3, 4])],
         colors: vec![[0.; 4], [c, 0.25, 0.5, 1.]],
         ..Default::default()
