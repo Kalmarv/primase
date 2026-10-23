@@ -398,12 +398,12 @@ pub struct InputBinding {
 }
 
 /// What picks one of several stages of one kind in a binding: the mesh-side field a consumer reads, named by the dialect
-/// component and field that holds it (`anvil.mesh.kind`), and the value that picks this stage. A consumer draws a mesh
+/// component and field that holds it (`anvil.layout.kind`), and the value that picks this stage. A consumer draws a mesh
 /// with the stage whose key names a field it has and whose value that field equals; a mesh whose value matches no stage
 /// is refused by name, not drawn with a first or default stage.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VariantKey {
-    /// The component and field the mesh carries the key in, as `component.field` (`anvil.mesh.kind`).
+    /// The component and field the mesh carries the key in, as `component.field` (`anvil.layout.kind`).
     pub field: String,
     pub value: u32,
 }

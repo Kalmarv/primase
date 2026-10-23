@@ -1245,6 +1245,34 @@ impl Component for AnvilPalette {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
+/// The vertex layout number of each primitive of a lowered mesh (`anvil.layout`, left by `lower-anvil-mesh` beside the
+/// core mesh it made): the compiled mesh's `kind` byte ([`AnvilMesh::kind`], the same for every primitive of one mesh),
+/// which picks the vertex program a Material's binding holds for it (bits 17 to 21 of the vertex key). It is the key a
+/// binding's vertex stages carry ([`crate::passes::MESH_LAYOUT_FIELD`], `anvil.layout.kind`): a consumer reads
+/// `kind[primitive]` of the entity that owns the mesh. It describes the mesh's primitives, so it follows them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnvilLayout {
+    pub kind: Vec<u8>,
+}
+
+impl Component for AnvilLayout {
+    const NAME: &'static str = "anvil.layout";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(primase_core::remap_list(&self.kind, from).map(|kind| AnvilLayout { kind }))
+    }
+    fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
+        match w.get::<primase_core::Mesh>(e) {
+            Some(m) if m.primitives().len() != self.kind.len() => Err(format!(
+                "{} layout numbers for {} primitives",
+                self.kind.len(),
+                m.primitives().len()
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// The rig of a SkeletonComponent (`anvil.rig`), on an entity of its own: its main Skeleton's and addon Skeletons'
 /// bones joined by name ([`StoredRig::assemble`]), and the main Skeleton's own position and rotation (the bones'
 /// stored transforms leave it out), in the game's source frame (`frame`, as the reader was given it).

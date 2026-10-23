@@ -51,8 +51,9 @@ use primase_core::{
 };
 
 use crate::components::{
-    AnvilCollisionShape, AnvilDataLayers, AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape,
-    AnvilPalette, AnvilTerrain, AnvilTextureMap, CollisionMaterialRef, ShapeGeometry, TerrainTile,
+    AnvilCollisionShape, AnvilDataLayers, AnvilFloorHeight, AnvilLayout, AnvilLods, AnvilMesh,
+    AnvilMeshShape, AnvilPalette, AnvilTerrain, AnvilTextureMap, CollisionMaterialRef, ShapeGeometry,
+    TerrainTile,
 };
 
 /// What names a lowered collision surface.
@@ -439,7 +440,7 @@ impl Pass for LowerAnvilMesh {
         &[AnvilMesh::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[Mesh::NAME, AnvilPalette::NAME]
+        &[Mesh::NAME, AnvilPalette::NAME, AnvilLayout::NAME]
     }
     fn removes(&self) -> &[&'static str] {
         &[AnvilMesh::NAME]
@@ -600,6 +601,12 @@ impl Pass for LowerAnvilMesh {
                 );
             }
             log.count("primitives lowered", primitives.len() as u64);
+            w.insert(
+                e,
+                AnvilLayout {
+                    kind: vec![m.kind; primitives.len()],
+                },
+            );
             w.insert(e, Mesh::new(primitives));
             log.count("Meshes lowered", 1);
             log.count("triangles lowered", triangles);

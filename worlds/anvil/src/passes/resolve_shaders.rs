@@ -7,8 +7,10 @@
 //!   G-buffer pass of a plain draw: the pixel key [`gbuffer_key`] composes from the Material's flags (a
 //!   Material that sets a flag the template's feature word gates is left unbound, naming it), and a vertex key for each
 //!   vertex layout number (bits 17 to 21 of the key: the mesh's, not the Material's) of the meshes drawn with the
-//!   Material, read from the data: the `kind` of every `anvil.mesh` that lists the Material among its ranges' Materials.
-//!   A Material drawn with several layouts has a vertex stage for each, each a [`VariantKey`] (`anvil.mesh.kind` = the
+//!   Material, read from the data: the `kind` of every `anvil.mesh` that lists the Material among its ranges' Materials, or of
+//!   every lowered mesh's primitive that draws it (its Material, or one of its variants'; `anvil.layout`), so the pass
+//!   binds the same stages before `lower-anvil-mesh` and after it.
+//!   A Material drawn with several layouts has a vertex stage for each, each a [`VariantKey`] (`anvil.layout.kind` = the
 //!   layout) a consumer matches to the mesh it draws, refusing a mesh whose layout has no stage; a Material no mesh is
 //!   drawn with has the pixel stage only (counted). Each program's interface is lifted from its DXBC (the containers are
 //!   stripped of their resource definitions, so its resources are its declarations').
@@ -61,10 +63,11 @@ use primase_core::shader::{
     SamplerState, Shader, ShaderBinding, ShaderFormat, Stage, StageBinding, SystemValue, TextureBinding,
     TextureDim, TextureSource, VariantKey, Varying,
 };
-use primase_core::{ColorSpace, Component, Entity, Name, Semantic, Texture, World};
+use primase_core::{ColorSpace, Component, Entity, MaterialVariants, Mesh, Name, Semantic, Texture, World};
 
 use crate::components::{
-    AnvilMaterial, AnvilMesh, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags, MaterialValue,
+    AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags,
+    MaterialValue,
 };
 
 /// What a texture binding with no texture becomes.
@@ -101,7 +104,7 @@ impl ResolveAnvilShaders {
                 }
                 "vertex-layout" => {
                     return Err(
-                        "vertex-layout is gone: each mesh's vertex stage is bound by its own layout (anvil.mesh.kind)"
+                        "vertex-layout is gone: each mesh's vertex stage is bound by its own layout (anvil.layout.kind)"
                             .into(),
                     );
                 }
@@ -432,11 +435,30 @@ impl Pass for ResolveAnvilShaders {
             .map(|(e, m)| (e, m.clone()))
             .collect();
         let mut programs: BTreeMap<(Entity, bool, u32), Result<Entity, String>> = BTreeMap::new();
-        // the vertex layout number (`anvil.mesh.kind`) of every mesh drawn with each Material
+        // the vertex layout number (`anvil.layout.kind`) of every mesh drawn with each Material
         let mut layouts_of: BTreeMap<Entity, std::collections::BTreeSet<u8>> = BTreeMap::new();
         for (_, mesh) in world.iter::<AnvilMesh>() {
             for material in mesh.material_entities.iter().flatten() {
                 layouts_of.entry(*material).or_default().insert(mesh.kind);
+            }
+        }
+        // a mesh `lower-anvil-mesh` has lowered: each primitive's layout, for the Material it draws with and the ones its
+        // variants draw it with
+        for (e, layout) in world.iter::<AnvilLayout>() {
+            let Some(mesh) = world.get::<Mesh>(e) else {
+                continue;
+            };
+            let variants = world.get::<MaterialVariants>(e);
+            for (i, (primitive, &kind)) in mesh.primitives().iter().zip(&layout.kind).enumerate() {
+                let drawn = primitive.material.into_iter().chain(
+                    variants
+                        .and_then(|v| v.0.get(i))
+                        .into_iter()
+                        .flat_map(|v| v.values().copied()),
+                );
+                for material in drawn {
+                    layouts_of.entry(material).or_default().insert(kind);
+                }
             }
         }
         let mut textures = Textures {
@@ -558,8 +580,8 @@ impl Pass for ResolveAnvilShaders {
 }
 
 /// The mesh-side field a vertex stage's variant key names: the vertex layout number of the mesh (bits 17 to 21 of its
-/// vertex key).
-pub const MESH_LAYOUT_FIELD: &str = "anvil.mesh.kind";
+/// vertex key), kept per primitive of a lowered mesh ([`AnvilLayout`]).
+pub const MESH_LAYOUT_FIELD: &str = "anvil.layout.kind";
 
 /// The `core.shader` entity of the template's `key` permutation of one stage, made once and kept in `programs`.
 fn program(
