@@ -47,11 +47,16 @@
 //!   their components; the index of the one left out is bit 15 of the first word (high) and the second (low), bit 15 of
 //!   the third its sign (0 on all 84,886 keys of the sample: a clip that sets it is refused);
 //! - kind 7: a u16 whose low 15 bits are z of a rotation about z alone, the same scale, w the positive root (bit 15 is
-//!   set on 9% of keys and makes no difference to the match: left unread).
+//!   set on 9% of keys and makes no difference to the match: left unread);
+//! - kind 5: a little-endian u64 of three 20-bit components and four more bits, on a ring: bits 8 to 27 the first
+//!   component kept, bits 32 to 51 the third, bits 52 to 63 and then bits 0 to 7 (twenty bits, the low ones first) the
+//!   second, bits 30 and 31 the index of the component left out, bits 28 and 29 zero on every key (a key that sets
+//!   them is refused), the scale as above. Told by every key's three components having squares that sum to at most 1
+//!   (all 53,647 keys of 600 sampled tracks: a layout with a wrong bit does not), the keys of a track moving
+//!   smoothly (the median of the median dot of consecutive keys 0.999996), and first keys equal to the mapped bone's
+//!   stored rotation (1 - |dot| < 1e-3 on 28% of 4,000 sampled).
 //!
-//! Kinds 5 and 25 (8 bytes), 21 and 22 (4), 16, 17 and 18 (1 or 2 bytes) are not read: kind 5's fields sit in 20 bits
-//! at bytes 1 to 3 and 4 to 6 (a quaternion of two comparable halves and a third whose bits lie in the first and last
-//! byte), which no smallest-three reading of the 64 bits matches.
+//! Kind 25 (8 bytes), 21 and 22 (4), 16, 17 and 18 (1 or 2 bytes) are not read.
 //!
 //! Where the `AnimTrackEvent` array isn't empty its elements' length isn't read: the `AnimTrackData` object's start
 //! is found as the first place after the count where a pointer's header with the type 0x0181EFE8 is followed by
@@ -120,7 +125,7 @@ pub fn value_width(kind: u8) -> Option<usize> {
 pub enum Values {
     /// Kind 9: translations.
     Vec3(Vec<[f32; 3]>),
-    /// Kinds 3, 4, 7 and 8: unit quaternions `[x, y, z, w]`, the component the format leaves out the positive root.
+    /// Kinds 3, 4, 5, 7 and 8: unit quaternions `[x, y, z, w]`, the component the format leaves out the positive root.
     Quaternions(Vec<[f32; 4]>),
 }
 
@@ -246,6 +251,28 @@ impl StoredTrack {
                         let omitted = u8::try_from(((w0 >> 15) << 1) | (w1 >> 15)).unwrap_or(3);
                         let kept = words.map(|w| component(w & 0x7FFF, 32767.0));
                         Ok(smallest_three(omitted, kept))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(Values::Quaternions)
+            }
+            5 => {
+                let v = self.values.as_chunks::<8>().0;
+                counted(v.len())?;
+                v.iter()
+                    .map(|b| {
+                        let u = u64::from_le_bytes(*b);
+                        if (u >> 28) & 3 != 0 {
+                            return Err(Error::Values("a kind 5 value with its spare bits set".into()));
+                        }
+                        let field = |v: u64| {
+                            let v = u32::try_from(v & 0xF_FFFF).unwrap_or(0);
+                            (v as f32 / 1_048_575.0 * 2.0 - 1.0) * std::f32::consts::FRAC_1_SQRT_2
+                        };
+                        let first = field(u >> 8);
+                        let third = field(u >> 32);
+                        let second = field((u >> 52) | ((u & 0xFF) << 12));
+                        let omitted = u8::try_from((u >> 30) & 3).unwrap_or(3);
+                        Ok(smallest_three(omitted, [first, second, third]))
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .map(Values::Quaternions)
@@ -723,6 +750,17 @@ mod tests {
             &[-0.16247, -0.156476, 0.003176, 0.974222],
             2e-3
         ));
+        // kind 5 (tag 15): the identity, and a rotation the stored rest of its bone gives to 1e-4
+        assert!(close(
+            &kind(15, &[0x7F, 0xFF, 0xFF, 0xC7, 0xFF, 0xFF, 0xF7, 0xFF]),
+            &[0.0, 0.0, 0.0, 1.0],
+            1e-4
+        ));
+        assert!(close(
+            &kind(15, &[0x7F, 0x67, 0xFD, 0xC7, 0x79, 0xF2, 0xC9, 0xFA]),
+            &[-0.00085, -0.00009, 0.17211, 0.98508],
+            2e-4
+        ));
         // kind 7 (tag 21): a rotation about z
         assert!(close(
             &kind(21, &[0x4A, 0x36]),
@@ -740,9 +778,15 @@ mod tests {
         );
         // a kind not read, and a sign bit set
         assert!(matches!(
-            track(15, Times::U8(vec![]), &[0; 8]).values(),
-            Err(Error::Unread { kind: 5 })
+            track(75, Times::U8(vec![]), &[0; 8]).values(),
+            Err(Error::Unread { kind: 25 })
         ));
+        // kind 5's spare bits (28 and 29) must be clear
+        assert!(
+            track(15, Times::U8(vec![]), &[0, 0, 0, 0x10, 0, 0, 0, 0])
+                .values()
+                .is_err()
+        );
         assert!(
             track(12, Times::U8(vec![]), &[0, 0, 0, 0, 0, 0x80])
                 .values()

@@ -127,6 +127,7 @@ fn the_values_and_times_of_every_track_of_a_kind_read_decode() {
     let mut late = 0u64;
     let mut not_rising = 0u64;
     let mut matched: BTreeMap<u8, (u64, u64)> = BTreeMap::new();
+    let mut near: BTreeMap<u8, u64> = BTreeMap::new();
     for at in animations {
         let body = archive.resource(at).expect("resource").body;
         let a = StoredAnimation::parse(&body).expect("animation");
@@ -165,22 +166,29 @@ fn the_values_and_times_of_every_track_of_a_kind_read_decode() {
                 let e = matched.entry(t.kind()).or_default();
                 e.1 += 1;
                 e.0 += u64::from(1.0 - dot.abs() < 1e-5);
+                *near.entry(t.kind()).or_default() += u64::from(1.0 - dot.abs() < 1e-3);
             }
         }
     }
     println!(
         "decoded tracks by kind {decoded:?}; unread {unread:?}; quaternions not unit {not_unit}; tracks whose last \
          time is past the clip's Length {late}; times not rising {not_rising}; first keys equal to the bone's stored \
-         rotation (matches, tracks with one such rotation) by kind {matched:?}"
+         rotation (matches, tracks with one such rotation) by kind {matched:?}, within 1e-3: {near:?}"
     );
     assert_eq!(
         decoded,
-        BTreeMap::from([(3, 56_316), (4, 91_519), (7, 36_916), (8, 20_595), (9, 310_926)])
+        BTreeMap::from([
+            (3, 56_316),
+            (4, 91_519),
+            (5, 153_187),
+            (7, 36_916),
+            (8, 20_595),
+            (9, 310_926)
+        ])
     );
     assert_eq!(
         unread,
         BTreeMap::from([
-            (5, 153_187),
             (16, 706_403),
             (17, 51),
             (18, 4_066),
@@ -195,8 +203,13 @@ fn the_values_and_times_of_every_track_of_a_kind_read_decode() {
         BTreeMap::from([
             (3, (6_341, 34_228)),
             (4, (1_493, 6_871)),
+            (5, (1_647, 76_364)),
             (7, (3_178, 17_817)),
             (8, (364, 1_019))
         ])
+    );
+    assert_eq!(
+        near,
+        BTreeMap::from([(3, 12_538), (4, 1_967), (5, 22_324), (7, 4_022), (8, 439)])
     );
 }
