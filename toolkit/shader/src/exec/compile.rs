@@ -1435,6 +1435,7 @@ pub(super) fn compile(
         }
         for l in 0..n as u32 {
             *stored.entry(o + l).or_default() += 1;
+            // a register past the expressions' own (an aggregate's member) carries no provenance
             if let Some(src) = prov0
                 .get(slot[value.index()] as usize)
                 .copied()

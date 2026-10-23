@@ -16,7 +16,8 @@ struct Census {
     lifted: usize,
     validated: usize,
     written: usize,
-    refused: BTreeMap<String, usize>,
+    /// Refusals by reason: how many, and the first program.
+    refused: BTreeMap<String, (usize, String)>,
     invalid: Vec<String>,
     /// Lifted programs the executor refuses, by reason, with the first program of each.
     unrunnable: BTreeMap<String, (usize, String)>,
@@ -33,7 +34,10 @@ fn census(game: Game) {
         let program = match primase_dxbc::lift(&bytes) {
             Ok(p) => p,
             Err(e) => {
-                *c.refused.entry(primase_dxbc::refusal_reason(&e)).or_default() += 1;
+                c.refused
+                    .entry(primase_dxbc::refusal_reason(&e))
+                    .or_insert((0, path.display().to_string()))
+                    .0 += 1;
                 continue;
             }
         };
@@ -80,10 +84,10 @@ fn census(game: Game) {
         c.lifted,
         c.validated,
         c.written,
-        c.refused.values().sum::<usize>()
+        c.refused.values().map(|(n, _)| n).sum::<usize>()
     );
-    for (reason, n) in &c.refused {
-        println!("  refused {n:5}  {reason}");
+    for (reason, (n, example)) in &c.refused {
+        println!("  refused {n:5}  {reason}  (e.g. {example})");
     }
     for (reason, (n, example)) in &c.unrunnable {
         println!("  not executable {n:5}  {reason}  (e.g. {example})");

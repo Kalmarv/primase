@@ -102,3 +102,47 @@ one refuses) and then ours: interface against entry point, resources against glo
 size). `text()` is the stable text form (a header of everything above, then the module as WGSL) and `emit::wgsl`
 writes WGSL by naga's backend; a writer that cannot express a program refuses it, never approximates. `build::Builder`
 is the typed builder lifters share.
+
+## Support ledger
+
+What the lifters make of every program of every corpus the project holds, counted by the census tests (`toolkit/dxbc/tests/lift_corpus.rs`, `toolkit/dxil/tests/lift_corpus.rs`, `worlds/gta/tests/fxc_census.rs`, `worlds/stuntboost/tests/effects.rs`) in one run on main `08b8fbe` plus the one-line executor fix in the commit that adds this section (without it the GTA census panics in `Executable::new`: a provenance index past the expressions). Release build, the corpora from the oracle tree (`oracles.corpus.<game>/shaders`) and the STUNTBOOST install's `Content/Effects`; the numbers are the tests' own output, recounted from that run. Lifted is `lift` returning a program; validated is `Program::validate`; written is `emit::wgsl` (or `wgsl_functions` for a stage with no entry point) succeeding; executable is `Executable::new` succeeding (function-form stages, ray tracing pipeline programs and procedural-primitive ray queries are refused by name there).
+
+| corpus (test) | programs | lifted | validated | written as WGSL | refused by the lift | executable |
+|---|---:|---:|---:|---:|---:|---:|
+| GTA V Enhanced shader database (SGD2; `fxc_census`) | 12,405 | 12,405 | 12,405 | 12,375 | 0 | 11,130 |
+| Riders Republic (DXBC; `lift_corpus`) | 2,443 | 2,442 | 2,442 | 2,442 | 1 | 2,416 |
+| Unity player (DXBC, `sledding`) | 4,854 | 4,854 | 4,854 | 4,854 | 0 | 4,854 |
+| Sekiro (DXBC) | 432 | 432 | 432 | 432 | 0 | 432 |
+| Elden Ring (DXIL; 44,450 containers) | 44,450 | 44,450 | 44,450 | 44,441 | 0 | 43,985 |
+| skate. (DXIL; 19,445 containers) | 19,445 | 19,442 | 19,442 | 19,137 | 3 | 19,199 |
+| STUNTBOOST (MojoShader GLSL in 18 effects) | 47 | 47 | 47 | 47 | 0 | not measured |
+
+Not measured: GTA V Legacy's `.fxc` effects (`oracles.corpus.gta/legacy-effects`; the folder is not on the machine that ran this) and the STUNTBOOST shaders on the executor.
+
+### Refused by the lift
+
+| count | corpus | reason | example (corpus-relative) |
+|---:|---|---|---|
+| 2 | skate. | the old value of an atomic operation on a texture view (naga's image atomic returns none) | `235911bb-c5c8-bef5-9998-f3e2ea6597fb.dxil` |
+| 1 | Riders Republic | the same (`imm_atomic_umin`) | `1378.dxbc` |
+| 1 | skate. | mesh shader programs are not lifted | `9a0c446d-25d6-12c5-de1a-173f84c0ab09.dxil` |
+
+### Lifted and validated but not written as WGSL
+
+| count | corpus | reason | example |
+|---:|---|---|---|
+| 100 | skate. | naga's WGSL writer does not write ray queries (`unreachable!()` on `Statement::RayQuery`; naga 30.0.1 is the newest release, so only a writer of our own or a change to naga lifts it) | `01f9f54b-846f-2a4b-c576-9e1e6f1d8077.dxil` |
+| 30 | GTA Enhanced | the same | (the census prints none) |
+| 205 | skate. | a ray tracing pipeline program (172 ray generation, 16 closest-hit, 8 miss, 6 intersection, 3 any-hit) has no WGSL form: WebGPU has no ray tracing pipeline | `000e14b5-25b8-967b-532c-1b7f6c7e62cb.dxil` |
+| 9 | Elden Ring | the same (3 ray generation, 2 any-hit, 2 closest-hit, 2 miss) | `gxraytracing/GXRayGen.cpo` |
+
+### Not executable (the executor refuses them by name)
+
+| count | corpus | reason |
+|---:|---|---|
+| 1,275 | GTA Enhanced | function-form stages (458 domain, 406 hull, 411 vertex programs that feed a tessellator) |
+| 26 | Riders Republic | function-form stages (9 domain, 9 hull, 7 geometry, 1 vertex) |
+| 465 | Elden Ring | function-form stages (150 domain, 136 hull, 33 geometry, 137 vertex) and 9 ray tracing pipeline programs |
+| 243 | skate. | 205 ray tracing pipeline programs (no pipeline to run them in), 38 ray queries that generate an intersection with a procedural primitive (scenes carry triangles only) |
+
+The executable column is the program count less these.
