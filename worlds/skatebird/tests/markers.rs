@@ -10,7 +10,7 @@ use primase_core::{Name, Source, Transform, World};
 use primase_skatebird::components::{SkatebirdMissionGiver, SkatebirdResetPosition};
 use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::TypeTreePackage;
-use primase_unity::level::read_level;
+use primase_unity::level::{LevelOptions, read_level_with};
 use primase_unity::player::Player;
 
 const LEVELS: [&str; 8] = [
@@ -33,7 +33,11 @@ fn every_level_s_reset_points_and_mission_givers_are_read() {
     let mut starting = 0;
     for level in LEVELS {
         let mut w = World::new();
-        read_level(&player, level, &mut w).unwrap();
+        // the top quality level: the markers do not depend on the skinned meshes' influences
+        let options = LevelOptions {
+            quality: Some("Fantastic".into()),
+        };
+        read_level_with(&player, level, &options, &mut w).unwrap();
         let r = primase_skatebird::read_markers(&player, level, &mut w).unwrap();
         println!("{level}: {r:?}");
         assert!(r.starting_positions <= 1, "{level}: {r:?}");

@@ -35,6 +35,14 @@ impl<'a> SkatebirdReader<'a> {
         }
     }
 
+    /// The reader told the quality level whose skin weights limit the skinned meshes
+    /// ([`primase_unity::level::LevelOptions::quality`]).
+    #[must_use]
+    pub fn with_quality(mut self, quality: impl Into<String>) -> SkatebirdReader<'a> {
+        self.unity = self.unity.with_quality(quality);
+        self
+    }
+
     fn notice(&mut self, kind: NoticeKind, reason: &str, count: u64) {
         if count > 0 {
             self.pending

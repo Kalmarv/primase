@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use primase_core::convert::{Notice, NoticeKind, Reader, Report, Result};
 use primase_core::{Entity, Mesh, World};
 
-use crate::level::{LevelReport, read_level};
+use crate::level::{LevelOptions, LevelReport, read_level_with};
 use crate::player::Player;
 
 /// The stage notices name.
@@ -19,6 +19,7 @@ const STAGE: &str = "unity reader";
 pub struct UnityReader<'a> {
     pub player: &'a Player,
     pub level: String,
+    options: LevelOptions,
     pending: Vec<Notice>,
 }
 
@@ -36,15 +37,23 @@ impl<'a> UnityReader<'a> {
         UnityReader {
             player,
             level: level.into(),
+            options: LevelOptions::default(),
             pending: Vec::new(),
         }
+    }
+
+    /// The reader told the quality level whose skin weights limit the skinned meshes ([`LevelOptions::quality`]).
+    #[must_use]
+    pub fn with_quality(mut self, quality: impl Into<String>) -> UnityReader<'a> {
+        self.options.quality = Some(quality.into());
+        self
     }
 
     /// Read the scene into a new world: the world, the level report (as [`read_level`] gives it) and the report lines
     /// [`Reader::read`] returns. The notices are kept for [`Reader::notices`].
     pub fn read_world(&mut self) -> Result<(World, LevelReport, Report)> {
         let mut w = World::new();
-        let level = read_level(self.player, &self.level, &mut w)?;
+        let level = read_level_with(self.player, &self.level, &self.options, &mut w)?;
         self.notices_of(&level);
         let report = vec![("unity level".into(), format!("{}: {level:?}", self.level))];
         Ok((w, level, report))

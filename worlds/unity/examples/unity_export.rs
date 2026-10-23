@@ -1,6 +1,7 @@
 //! A Unity level end to end: read, lowered, written as one GLB and as web tiles.
 //!
-//! Usage: `unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2]`.
+//! Usage: `unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2] [--quality <level>]`.
+//! `--quality` names the quality level whose skin weights limit the skinned meshes, needed where the game's levels differ.
 //! Writes `<output>/<level>.glb`; with `--web`, the web tile set in `<output>/web` (`--ktx2`: textures as KTX2).
 //! Prints every pass's counts and approximations. A ReSkate map of a Unity level is a program's recipe (raising,
 //! surfaces, spawn and travel points are its choices), composed with `primase-reskate` in the consumer program.
@@ -10,11 +11,10 @@ use std::path::Path;
 use primase_core::World;
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_unity::TypeTreePackage;
-use primase_unity::level::read_level;
+use primase_unity::level::{LevelOptions, read_level_with};
 use primase_unity::player::Player;
 
-const USAGE: &str =
-    "usage: unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2]";
+const USAGE: &str = "usage: unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2]                      [--quality <level>]";
 
 fn show(pass: &str, log: &PassLog) {
     println!("{pass}: {:?}", log.counts);
@@ -24,11 +24,18 @@ fn show(pass: &str, log: &PassLog) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (mut paths, mut web, mut ktx2) = (Vec::new(), false, false);
-    for arg in std::env::args().skip(1) {
+    let (mut paths, mut web, mut ktx2, mut quality) = (Vec::new(), false, false, None);
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--web" => web = true,
             "--ktx2" => ktx2 = true,
+            "--quality" => {
+                quality = Some(
+                    args.next()
+                        .ok_or_else(|| format!("--quality needs a level; {USAGE}"))?,
+                )
+            }
             _ if arg.starts_with("--") => return Err(format!("unknown option {arg}; {USAGE}").into()),
             _ => paths.push(arg),
         }
@@ -43,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let player = Player::open(Path::new(data), TypeTreePackage::parse(&std::fs::read(tpk)?)?)?;
     let mut w = World::new();
     let started = std::time::Instant::now();
-    let report = read_level(&player, level, &mut w)?;
+    let report = read_level_with(&player, level, &LevelOptions { quality }, &mut w)?;
     println!(
         "read {level}: {} renderers, {} tree renderers, {} prototypes, {} primitives, {} materials, {} \
          textures, {} terrains, {} lights (sun named: {}), {} colliders ({} by trees); axes {:?}, conditioned {:?}, \n         LODGroups {:?}, {} LOD forms",

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::components::{RenderPipeline, URP_ASSET, UnityObject};
+use crate::read::mesh::SkinWeights;
 use crate::read::serialized::SerializedFile;
 use crate::read::tpk::TypeTreePackage;
 use crate::read::typetree::TypeTree;
@@ -31,6 +32,13 @@ impl From<&ObjRef> for UnityObject {
             path_id: r.path_id,
         }
     }
+}
+
+/// A quality level of the player ([`Player::quality_levels`]): its name and the bone influences a vertex may have.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QualityLevel {
+    pub name: String,
+    pub skin_weights: SkinWeights,
 }
 
 /// A scene of the build ([`Player::scenes`]).
@@ -304,6 +312,59 @@ impl Player {
             names.dedup();
             RenderPipeline::Other(names)
         }))
+    }
+
+    /// The quality levels of `globalgamemanagers`' QualitySettings, in order, each with its name and the skin weights
+    /// it allows; none when the player has no QualitySettings. Which level is current is a runtime setting (the player's
+    /// `m_CurrentQuality` is only the editor's default), so a consumer states the level it wants where levels differ.
+    pub fn quality_levels(&self) -> Result<Vec<QualityLevel>> {
+        const FILE: &str = "globalgamemanagers";
+        let Some(f) = self.files.get(FILE) else {
+            return Ok(Vec::new());
+        };
+        let mut found = None;
+        for o in &f.objects {
+            let r = ObjRef {
+                file: FILE.into(),
+                path_id: o.path_id,
+            };
+            if self.class_name(&r) == Some("QualitySettings") {
+                if found.is_some() {
+                    return Err(invalid(format!("{FILE}: more than one QualitySettings")));
+                }
+                found = Some(self.decode(&r)?);
+            }
+        }
+        let Some(settings) = found else {
+            return Ok(Vec::new());
+        };
+        let levels = match settings.get("m_QualitySettings") {
+            Some(Value::Array(Array::Values(levels))) => levels.as_slice(),
+            Some(Value::Array(a)) if a.is_empty() => &[],
+            _ => {
+                return Err(invalid(format!(
+                    "{FILE}: QualitySettings without m_QualitySettings"
+                )));
+            }
+        };
+        levels
+            .iter()
+            .map(|q| {
+                let name = q
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| invalid("a quality level without a name"))?
+                    .to_owned();
+                let weights = q
+                    .get("skinWeights")
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| invalid(format!("quality level {name}: no skinWeights")))?;
+                Ok(QualityLevel {
+                    name,
+                    skin_weights: SkinWeights::from_setting(weights)?,
+                })
+            })
+            .collect()
     }
 
     /// The object a `PPtr` (`m_FileID`, `m_PathID`) found in `file` points at; `None` for a null pointer.

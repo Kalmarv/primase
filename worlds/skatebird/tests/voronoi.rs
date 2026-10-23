@@ -45,7 +45,8 @@ fn the_baked_maps_of_a_level() {
         TypeTreePackage::parse(&std::fs::read(tpk).unwrap()).unwrap(),
     )
     .unwrap();
-    let mut reader = SkatebirdReader::new(&player, level.clone());
+    // the top quality level: the bake does not depend on the skinned meshes' influences
+    let mut reader = SkatebirdReader::new(&player, level.clone()).with_quality("Fantastic");
     let (raw, _) = reader.read().unwrap();
     let roots: BTreeSet<_> = raw.entities().collect();
     let (mut world, _): (World, _) = reader.load(&raw, &roots).unwrap();

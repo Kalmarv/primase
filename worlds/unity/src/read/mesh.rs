@@ -63,20 +63,148 @@ pub struct SubMesh {
     pub base_vertex: u32,
 }
 
-/// A mesh's skin as stored: per vertex up to four bone influences (the vertex channels `BlendWeight` and
-/// `BlendIndices`), and per bone the bind pose, the matrix taking the renderer's local space to the bone's at bind time.
-/// Unity's frame.
+/// How many bone influences a vertex may have under a quality level (`QualitySettings`' `skinWeights`: 1, 2, 4 or
+/// 255 for unlimited).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkinWeights {
+    Bones(u32),
+    Unlimited,
+}
+
+impl SkinWeights {
+    /// The setting `value` as stored.
+    pub fn from_setting(value: i64) -> Result<SkinWeights> {
+        match value {
+            1 | 2 | 4 => Ok(SkinWeights::Bones(value as u32)),
+            255 => Ok(SkinWeights::Unlimited),
+            v => Err(Error::Unsupported(format!("skinWeights {v}"))),
+        }
+    }
+}
+
+impl std::fmt::Display for SkinWeights {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SkinWeights::Bones(1) => write!(f, "1 bone"),
+            SkinWeights::Bones(n) => write!(f, "{n} bones"),
+            SkinWeights::Unlimited => write!(f, "unlimited"),
+        }
+    }
+}
+
+/// Bone influences per vertex, as a mesh stores them: vertex `v`'s weights and bone slots are
+/// `weights[starts[v]..starts[v + 1]]` and `bones[..]`, heaviest first.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Blend {
+    pub starts: Vec<u32>,
+    pub weights: Vec<f32>,
+    pub bones: Vec<u32>,
+}
+
+impl Blend {
+    /// `influences` to a vertex from lists padded to four with zero weights.
+    pub fn from_padded(influences: usize, weights: &[[f32; 4]], bones: &[[u32; 4]]) -> Blend {
+        Blend {
+            starts: (0..=weights.len()).map(|v| (v * influences) as u32).collect(),
+            weights: weights
+                .iter()
+                .flat_map(|w| w[..influences].iter().copied())
+                .collect(),
+            bones: bones
+                .iter()
+                .flat_map(|b| b[..influences].iter().copied())
+                .collect(),
+        }
+    }
+
+    pub fn vertices(&self) -> usize {
+        self.starts.len().saturating_sub(1)
+    }
+
+    /// Vertex `v`'s weights and bone slots.
+    pub fn vertex(&self, v: usize) -> (&[f32], &[u32]) {
+        let range = self.starts[v] as usize..self.starts[v + 1] as usize;
+        (&self.weights[range.clone()], &self.bones[range])
+    }
+
+    /// The most influences any vertex has.
+    pub fn max_influences(&self) -> usize {
+        self.starts
+            .windows(2)
+            .map(|p| (p[1] - p[0]) as usize)
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+/// A skin's influences as sets of four per vertex (`[set][vertex]`): the weights, the bone slots and the number of
+/// vertices cut to a limit ([`MeshSkin::padded`]).
+pub type PaddedSets = (Vec<Vec<[f32; 4]>>, Vec<Vec<[u32; 4]>>, u64);
+
+/// A mesh's skin as stored, in Unity's frame: the blend channels (`BlendWeight` and `BlendIndices`: up to four
+/// influences a vertex, as Unity draws them at four or fewer), the full influences of a mesh that stores them
+/// (`m_VariableBoneCountWeights`, which Unity draws only at unlimited skin weights; the channels then hold its first
+/// four renormalised), and per bone the bind pose, the matrix taking the renderer's local space to the bone's at bind
+/// time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeshSkin {
-    /// The influences stored for each vertex (1 to 4); the lists below are padded to four with zero weights.
-    pub influences: usize,
-    /// Per vertex; a mesh with indices but no weights channel binds each vertex to its one bone wholly.
-    pub weights: Vec<[f32; 4]>,
-    /// Per vertex, a slot of the renderer's bone list (`m_Bones`), one bone of each pose in
-    /// [`MeshSkin::bind_poses`].
-    pub bones: Vec<[u32; 4]>,
+    /// Bone slots are slots of the renderer's bone list (`m_Bones`); a mesh with indices but no weights channel binds
+    /// each vertex to its one bone wholly.
+    pub channel: Blend,
+    pub unlimited: Option<Blend>,
     /// `m_BindPose`, row-major (`[row][column]`, the translation in column 3).
     pub bind_poses: Vec<[[f64; 4]; 4]>,
+}
+
+impl MeshSkin {
+    /// The blend `limit` draws and the most influences a vertex keeps.
+    fn drawn(&self, limit: SkinWeights) -> (&Blend, usize) {
+        match limit {
+            SkinWeights::Unlimited => (self.unlimited.as_ref().unwrap_or(&self.channel), usize::MAX),
+            SkinWeights::Bones(n) => (&self.channel, n as usize),
+        }
+    }
+
+    /// What `limit` makes of this skin: whether the full influences are drawn, and the most influences a vertex keeps.
+    /// Two limits with the same outcome draw the same mesh.
+    pub fn outcome(&self, limit: SkinWeights) -> (bool, usize) {
+        let (blend, keep) = self.drawn(limit);
+        (
+            std::ptr::eq(blend, &self.channel),
+            blend.max_influences().min(keep),
+        )
+    }
+
+    /// The sets of four influences `limit` draws: `Joints(k)`/`Weights(k)` for each.
+    pub fn sets(&self, limit: SkinWeights) -> usize {
+        self.outcome(limit).1.div_ceil(4).max(1)
+    }
+
+    /// The influences `limit` draws as sets of four per vertex (weights and bone slots, zero-padded); a vertex with
+    /// more influences than the limit keeps its first ones renormalised to sum to 1. Also the vertices cut so.
+    pub fn padded(&self, limit: SkinWeights) -> PaddedSets {
+        let (blend, keep) = self.drawn(limit);
+        let n = blend.vertices();
+        let sets = self.sets(limit);
+        let mut weights = vec![vec![[0.0f32; 4]; n]; sets];
+        let mut bones = vec![vec![[0u32; 4]; n]; sets];
+        let mut cut = 0;
+        for v in 0..n {
+            let (w, b) = blend.vertex(v);
+            let kept = w.len().min(keep);
+            let divisor = if kept < w.len() {
+                cut += 1;
+                Some(w[..kept].iter().sum::<f32>()).filter(|sum| *sum > 0.0)
+            } else {
+                None
+            };
+            for i in 0..kept {
+                weights[i / 4][v][i % 4] = divisor.map_or(w[i], |sum| w[i] / sum);
+                bones[i / 4][v][i % 4] = b[i];
+            }
+        }
+        (weights, bones, cut)
+    }
 }
 
 /// The blend channels of an uncompressed mesh: the influences stored a vertex and each vertex's weights and bone
@@ -90,11 +218,8 @@ pub struct UnityMeshData {
     pub vertex_count: usize,
     /// By shader channel (see [`CHANNELS`]); the blend weights and indices are in [`UnityMeshData::skin`].
     pub channels: [Option<Channel>; 12],
-    /// The mesh's skin: its blend weights and indices with the bind poses; `None` for a mesh without blend data and for
-    /// one with [`UnityMeshData::unlimited_weights`].
+    /// The mesh's skin: its blend weights and indices with the bind poses; `None` for a mesh without blend data.
     pub skin: Option<MeshSkin>,
-    /// The mesh stores a variable number of bone influences a vertex (`m_VariableBoneCountWeights`): not read.
-    pub unlimited_weights: bool,
     pub compressed: bool,
     /// The index buffer, decoded.
     pub indices: Vec<u32>,
@@ -212,6 +337,35 @@ fn rebuild_z(x: f32, y: f32, positive: bool) -> [f32; 3] {
         [x / l, y / l, 0.0]
     };
     [x, y, if positive { z } else { -z }]
+}
+
+/// A mesh's `m_VariableBoneCountWeights` data for `n` vertices: `n + 1` start offsets (word indexes into the data, the
+/// first being `n + 1`, the last the data's length), then each vertex's influences as words, the bone slot in the low
+/// 16 bits and the weight in the high 16 (normalised), heaviest first.
+fn read_variable_weights(name: &str, data: &[u32], n: usize) -> Result<Blend> {
+    let bad = |why: String| invalid(format!("{name}: variable bone weights: {why}"));
+    if data.len() < n + 1 {
+        return Err(bad(format!("{} words for {n} vertices", data.len())));
+    }
+    let starts = &data[..=n];
+    if starts[0] as usize != n + 1
+        || starts[n] as usize != data.len()
+        || starts.windows(2).any(|p| p[1] <= p[0])
+    {
+        return Err(bad(
+            "start offsets not increasing from the end of the table to the end of the data".into(),
+        ));
+    }
+    let words = &data[n + 1..];
+    let first = starts[0];
+    Ok(Blend {
+        starts: starts.iter().map(|o| o - first).collect(),
+        weights: words
+            .iter()
+            .map(|w| f32::from((w >> 16) as u16) / 65535.0)
+            .collect(),
+        bones: words.iter().map(|w| w & 0xFFFF).collect(),
+    })
 }
 
 /// The bind poses of mesh `m` (`m_BindPose`, Matrix4x4f `eRC` fields), row-major.
@@ -349,9 +503,15 @@ impl UnityMeshData {
                 "{name}: compressed mesh skin weights"
             )));
         }
-        let unlimited_weights = m
-            .at(&["m_VariableBoneCountWeights", "m_Data"])
-            .is_some_and(|d| matches!(d, Value::Array(a) if !a.is_empty()));
+        let variable = match m.at(&["m_VariableBoneCountWeights", "m_Data"]) {
+            Some(Value::Array(Array::U32(d))) if !d.is_empty() => Some(d.as_slice()),
+            Some(Value::Array(a)) if !a.is_empty() => {
+                return Err(Error::Unsupported(format!(
+                    "{name}: variable bone weights not stored as 32-bit words"
+                )));
+            }
+            _ => None,
+        };
         let mut channels: [Option<Channel>; 12] = Default::default();
         let mut skin_channels = None;
         let vertex_count;
@@ -460,9 +620,7 @@ impl UnityMeshData {
                 }
                 None => bytes(vd, "m_DataSize")?.to_vec(),
             };
-            if !unlimited_weights {
-                skin_channels = read_skin_channels(&name, &info, &stream_at, &data, vertex_count)?;
-            }
+            skin_channels = read_skin_channels(&name, &info, &stream_at, &data, vertex_count)?;
             for (ch, &(s, off, f, d)) in info.iter().enumerate().take(12) {
                 if d == 0 {
                     continue;
@@ -538,16 +696,31 @@ impl UnityMeshData {
                 .collect::<Result<Vec<_>>>()?,
             _ => return Err(invalid("mesh: no m_SubMeshes")),
         };
+        if variable.is_some() && compressed {
+            return Err(Error::Unsupported(format!(
+                "{name}: compressed mesh with variable bone weights"
+            )));
+        }
         let skin = match skin_channels {
             Some((influences, weights, bones)) => {
                 let bind_poses = bind_poses(&m, &name)?;
-                if let Some(v) = (0..vertex_count).find(|&v| {
-                    (0..4).any(|k| weights[v][k] > 0.0 && bones[v][k] as usize >= bind_poses.len())
-                }) {
-                    return Err(invalid(format!(
-                        "{name}: vertex {v} binds a bone beyond its {} bind poses",
-                        bind_poses.len()
-                    )));
+                let channel = Blend::from_padded(influences, &weights, &bones);
+                let unlimited = variable
+                    .map(|d| read_variable_weights(&name, d, vertex_count))
+                    .transpose()?;
+                for blend in std::iter::once(&channel).chain(&unlimited) {
+                    let bad = blend
+                        .weights
+                        .iter()
+                        .zip(&blend.bones)
+                        .position(|(w, b)| *w > 0.0 && *b as usize >= bind_poses.len());
+                    if let Some(i) = bad {
+                        return Err(invalid(format!(
+                            "{name}: an influence binds bone {} of {} bind poses",
+                            blend.bones[i],
+                            bind_poses.len()
+                        )));
+                    }
                 }
                 if bind_poses.len() > usize::from(u16::MAX) {
                     return Err(Error::Unsupported(format!(
@@ -556,11 +729,15 @@ impl UnityMeshData {
                     )));
                 }
                 Some(MeshSkin {
-                    influences,
-                    weights,
-                    bones,
+                    channel,
+                    unlimited,
                     bind_poses,
                 })
+            }
+            None if variable.is_some() => {
+                return Err(invalid(format!(
+                    "{name}: variable bone weights without blend channels"
+                )));
             }
             None => None,
         };
@@ -569,7 +746,6 @@ impl UnityMeshData {
             vertex_count,
             channels,
             skin,
-            unlimited_weights,
             compressed,
             indices,
             index_size,
@@ -693,23 +869,28 @@ impl UnityMeshData {
     /// primitive is made finite as core requires ([`make_finite`]). What could not be read as stored is counted in the
     /// returned notices, over the primitives returned (and those left out).
     pub fn primitives(&self, range: Range<usize>) -> Result<(Vec<(usize, Primitive)>, MeshNotices)> {
-        self.primitives_with(range, false)
+        self.primitives_with(range, None)
     }
 
-    /// [`UnityMeshData::primitives`] with the skin's streams: `Joints(0)` (the bone slots, 16 bits) and `Weights(0)`
-    /// (floats), each vertex's four influences, the bone slot of a zero-weight influence beyond the bind poses set to
-    /// 0 (counted). An error for a mesh without a skin.
-    pub fn skinned_primitives(&self, range: Range<usize>) -> Result<(Vec<(usize, Primitive)>, MeshNotices)> {
+    /// [`UnityMeshData::primitives`] with the skin's streams as `limit` draws them: `Joints(k)` (the bone slots, 16
+    /// bits) and `Weights(k)` (floats) for each set of four influences ([`MeshSkin::sets`]); a vertex with more
+    /// influences than `limit` allows keeps its first ones renormalised, and the bone slot of a zero-weight influence
+    /// beyond the bind poses is set to 0 (both counted). An error for a mesh without a skin.
+    pub fn skinned_primitives(
+        &self,
+        range: Range<usize>,
+        limit: SkinWeights,
+    ) -> Result<(Vec<(usize, Primitive)>, MeshNotices)> {
         if self.skin.is_none() {
             return Err(invalid(format!("{}: no skin to read", self.name)));
         }
-        self.primitives_with(range, true)
+        self.primitives_with(range, Some(limit))
     }
 
     fn primitives_with(
         &self,
         range: Range<usize>,
-        skinned: bool,
+        skinned: Option<SkinWeights>,
     ) -> Result<(Vec<(usize, Primitive)>, MeshNotices)> {
         let mut notices = MeshNotices::new();
         let n = self.vertex_count;
@@ -772,30 +953,39 @@ impl UnityMeshData {
             };
             streams.insert(semantic, stream);
         }
-        if let Some(skin) = self.skin.as_ref().filter(|_| skinned) {
+        if let Some((skin, limit)) = self.skin.as_ref().zip(skinned) {
             let poses = skin.bind_poses.len() as u32;
+            let (weights, bones, cut) = skin.padded(limit);
+            note(
+                &mut notices,
+                "skin influences beyond the quality level's limit cut and the rest renormalised (vertices)",
+                cut,
+            );
             let mut beyond = 0u64;
-            let joints = skin
-                .bones
-                .iter()
-                .map(|b| {
-                    b.map(|slot| {
-                        if slot >= poses {
-                            beyond += 1;
-                            0
-                        } else {
-                            slot as u16
-                        }
+            for (k, (weights, bones)) in weights.into_iter().zip(bones).enumerate() {
+                let joints = bones
+                    .iter()
+                    .zip(&weights)
+                    .map(|(b, w)| {
+                        std::array::from_fn(|i| {
+                            if b[i] >= poses {
+                                debug_assert_eq!(w[i], 0.0, "checked when read");
+                                beyond += 1;
+                                0
+                            } else {
+                                b[i] as u16
+                            }
+                        })
                     })
-                })
-                .collect();
+                    .collect();
+                streams.insert(Semantic::Joints(k as u8), Stream::U16x4(joints));
+                streams.insert(Semantic::Weights(k as u8), Stream::F32x4(weights));
+            }
             note(
                 &mut notices,
                 "zero-weight skin influences naming a bone beyond the bind poses set to bone 0 (vertices)",
                 beyond,
             );
-            streams.insert(Semantic::Joints(0), Stream::U16x4(joints));
-            streams.insert(Semantic::Weights(0), Stream::F32x4(skin.weights.clone()));
         }
         let subs = self.submeshes.get(range.clone()).ok_or_else(|| {
             invalid(format!(
@@ -897,7 +1087,6 @@ mod tests {
             vertex_count: 4,
             channels,
             skin: None,
-            unlimited_weights: false,
             compressed: false,
             indices: vec![0, 1, 2],
             index_size: 2,
@@ -952,7 +1141,6 @@ mod tests {
             vertex_count: channels[0].as_ref().map_or(0, |c| c.values.len() / c.dim),
             channels,
             skin: None,
-            unlimited_weights: false,
             compressed: false,
             index_size: 2,
             submeshes: vec![SubMesh {
@@ -1110,19 +1298,22 @@ mod tests {
         channels[0] = channel(3, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 5.0, 5.0]);
         let mut m = mesh(channels, vec![0, 1, 3], 0);
         m.skin = Some(MeshSkin {
-            influences: 2,
-            weights: vec![
-                [0.5, 0.5, 0.0, 0.0],
-                [1.0, 0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0, 0.0],
-                [0.25, 0.75, 0.0, 0.0],
-            ],
-            bones: vec![[1, 0, 0, 0], [0, 9, 0, 0], [0, 0, 0, 0], [0, 1, 0, 0]],
+            channel: Blend::from_padded(
+                2,
+                &[
+                    [0.5, 0.5, 0.0, 0.0],
+                    [1.0, 0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.25, 0.75, 0.0, 0.0],
+                ],
+                &[[1, 0, 0, 0], [0, 9, 0, 0], [0, 0, 0, 0], [0, 1, 0, 0]],
+            ),
+            unlimited: None,
             bind_poses: vec![[[0.0; 4]; 4]; 2],
         });
         let (plain, _) = m.primitives(0..1).unwrap();
         assert!(!plain[0].1.streams.contains_key(&Semantic::Joints(0)));
-        let (skinned, notices) = m.skinned_primitives(0..1).unwrap();
+        let (skinned, notices) = m.skinned_primitives(0..1, SkinWeights::Bones(4)).unwrap();
         let p = &skinned[0].1;
         // vertices 0, 1 and 3 are used, in that order
         assert_eq!(
@@ -1145,7 +1336,96 @@ mod tests {
             )])
         );
         m.skin = None;
-        assert!(m.skinned_primitives(0..1).is_err());
+        assert!(m.skinned_primitives(0..1, SkinWeights::Bones(4)).is_err());
+    }
+
+    /// The variable-bone-count data: start offsets, then a word per influence (bone in the low 16 bits, weight in the
+    /// high 16); its refusals.
+    #[test]
+    fn variable_bone_weights_read_by_their_offsets() {
+        let word = |weight: u16, bone: u16| (u32::from(weight) << 16) | u32::from(bone);
+        // two vertices: five influences summing to 65535, then three (the last of weight 0)
+        let data = [
+            3,
+            8,
+            11,
+            word(32768, 6),
+            word(16384, 7),
+            word(8192, 5),
+            word(4096, 15),
+            word(4095, 3),
+            word(43690, 2),
+            word(21845, 1),
+            word(0, 0),
+        ];
+        let b = read_variable_weights("m", &data, 2).unwrap();
+        assert_eq!(b.starts, vec![0, 5, 8]);
+        assert_eq!(b.bones, vec![6, 7, 5, 15, 3, 2, 1, 0]);
+        assert_eq!(b.weights[0], 32768.0 / 65535.0);
+        assert_eq!(b.weights[7], 0.0);
+        assert_eq!(b.max_influences(), 5);
+        assert_eq!(b.vertex(1).1, &[2, 1, 0]);
+        let refused = |data: &[u32], n: usize| read_variable_weights("m", data, n).unwrap_err().to_string();
+        assert!(refused(&data[..2], 2).contains("words for 2 vertices"));
+        let mut bad = data;
+        bad[0] = 4;
+        assert!(refused(&bad, 2).contains("start offsets"));
+        let mut bad = data;
+        bad[2] = 12;
+        assert!(refused(&bad, 2).contains("start offsets"));
+        let mut bad = data;
+        bad[1] = 3;
+        assert!(refused(&bad, 2).contains("start offsets"));
+    }
+
+    /// What a quality level makes of a skin: the channel's four influences under 4 or fewer bones (cut and renormalised
+    /// below the stored count), the full influences under unlimited; levels with one outcome draw one mesh.
+    #[test]
+    fn the_skin_weights_limit_decides_the_influences_drawn() {
+        let channel = Blend::from_padded(4, &[[0.5, 0.25, 0.125, 0.125]], &[[3, 2, 1, 0]]);
+        let unlimited = Blend {
+            starts: vec![0, 5],
+            weights: vec![0.4, 0.25, 0.125, 0.125, 0.1],
+            bones: vec![3, 2, 1, 0, 4],
+        };
+        let skin = MeshSkin {
+            channel: channel.clone(),
+            unlimited: Some(unlimited),
+            bind_poses: vec![[[0.0; 4]; 4]; 5],
+        };
+        assert_eq!(skin.outcome(SkinWeights::Bones(4)), (true, 4));
+        assert_eq!(skin.outcome(SkinWeights::Bones(2)), (true, 2));
+        assert_eq!(skin.outcome(SkinWeights::Bones(1)), (true, 1));
+        assert_eq!(skin.outcome(SkinWeights::Unlimited), (false, 5));
+        assert_eq!(skin.sets(SkinWeights::Bones(4)), 1);
+        assert_eq!(skin.sets(SkinWeights::Unlimited), 2);
+        let (w, b, cut) = skin.padded(SkinWeights::Bones(4));
+        assert_eq!(
+            (w, b, cut),
+            (vec![vec![[0.5, 0.25, 0.125, 0.125]]], vec![vec![[3, 2, 1, 0]]], 0)
+        );
+        let (w, b, cut) = skin.padded(SkinWeights::Bones(2));
+        assert_eq!(w, vec![vec![[0.5 / 0.75, 0.25 / 0.75, 0.0, 0.0]]]);
+        assert_eq!((b, cut), (vec![vec![[3, 2, 0, 0]]], 1));
+        let (w, b, cut) = skin.padded(SkinWeights::Unlimited);
+        assert_eq!(
+            w,
+            vec![vec![[0.4, 0.25, 0.125, 0.125]], vec![[0.1, 0.0, 0.0, 0.0]]]
+        );
+        assert_eq!((b, cut), (vec![vec![[3, 2, 1, 0]], vec![[4, 0, 0, 0]]], 0));
+        // a skin with no full influences draws its channel at unlimited too
+        let plain = MeshSkin {
+            unlimited: None,
+            ..skin
+        };
+        assert_eq!(plain.outcome(SkinWeights::Unlimited), (true, 4));
+        assert_eq!(
+            plain.outcome(SkinWeights::Unlimited),
+            plain.outcome(SkinWeights::Bones(4))
+        );
+        assert_eq!(SkinWeights::from_setting(255).unwrap(), SkinWeights::Unlimited);
+        assert_eq!(SkinWeights::from_setting(2).unwrap(), SkinWeights::Bones(2));
+        assert!(SkinWeights::from_setting(3).is_err());
     }
 
     /// A quad submesh is two triangles per quad and a line strip one line per segment, both counted.
