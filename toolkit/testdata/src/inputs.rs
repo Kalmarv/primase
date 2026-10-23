@@ -848,6 +848,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "",
     },
     Variable {
+        name: "PRIMASE_DEBUG",
+        kind: Kind::Config,
+        gate: false,
+        about: r#"optional: the debug keys' values, `key=value;key=value` (toolkit/testdata/src/registry.rs's DEBUG)"#,
+        status: Status::Live,
+        source: "",
+    },
+    Variable {
         name: "PRIMASE_REQUIRE_REAL_DATA",
         kind: Kind::Switch,
         gate: false,
