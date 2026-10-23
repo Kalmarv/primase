@@ -98,7 +98,9 @@ pub struct ShaderClass {
     pub class: Class,
     /// Set when the geometry has no surface material.
     pub skip: Option<Skip>,
-    /// The texture's alpha is multiplied by vertex colour 0's alpha.
+    /// The texture's alpha is multiplied by vertex colour 0's alpha. Always the default: the tables only say which
+    /// effects do not ([`NO_VERTEX_ALPHA`] and the families), so `gta-vertex-colours` reports it, by effect, where it
+    /// keeps a fade.
     pub vertex_alpha: bool,
     /// Drawn from both sides.
     pub two_sided: bool,

@@ -3,12 +3,13 @@
 //! layered material, both dropped elsewhere (glTF
 //! multiplies COLOR_0 into the base colour; GTA's red and green are ambient occlusion and its blue a palette column,
 //! none of them a colour).
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, LayeredMaterial, Semantic, Stream, World};
 
+use crate::components::GtaShader;
 use crate::components::tint::GtaTinted;
 use crate::passes::lower::{classes, for_each_mesh};
 use crate::passes::shader_class::Class;
@@ -46,6 +47,19 @@ impl Pass for GtaVertexColours {
             .collect();
         let lowered: BTreeSet<Entity> = w.iter::<PbrMaterial>().map(|(e, _)| e).collect();
         let tinted: BTreeSet<Entity> = w.resource::<GtaTinted>().map_or(BTreeSet::new(), |t| t.0.clone());
+        // the effect each material's shader is (`classes` has checked every name)
+        let effects: BTreeMap<Entity, &'static str> = w
+            .iter::<GtaShader>()
+            .filter_map(|(e, s)| Some((e, crate::passes::shader_names::effect(s.name)?)))
+            .collect();
+        // a fade kept by vertex alpha is the classification's default (no table says an effect fades): by effect
+        let by_default = |log: &mut PassLog, m: &Entity| {
+            let effect = effects.get(m).copied().unwrap_or("unknown effect");
+            log.count(
+                &format!("vertex alpha: effect in no table, COLOR_0.a fades (default) ({effect})"),
+                1,
+            );
+        };
         for_each_mesh(w, |mesh| {
             for mut p in mesh.primitives_mut() {
                 let Some(m) = p.material else { continue };
@@ -63,6 +77,9 @@ impl Pass for GtaVertexColours {
                             && matches!(c.class, Class::Alpha | Class::Decal | Class::Glass)
                             && v.iter().any(|c| c[3] < 255);
                         let weighs = weighed_by_colour0.contains(&m);
+                        if fades {
+                            by_default(log, &m);
+                        }
                         if fades || weighs {
                             let white = v.iter().map(|c| [255, 255, 255, c[3]]).collect();
                             p.streams_mut().insert(Semantic::Color(0), Stream::U8x4(white));
@@ -83,6 +100,9 @@ impl Pass for GtaVertexColours {
                         let fades = c.vertex_alpha
                             && matches!(c.class, Class::Alpha | Class::Decal | Class::Glass)
                             && v.iter().any(|c| c[3] < 65535);
+                        if fades {
+                            by_default(log, &m);
+                        }
                         if !fades {
                             for c in &mut v {
                                 c[3] = 65535;
