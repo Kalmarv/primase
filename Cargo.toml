@@ -105,6 +105,8 @@ sha2 = { version = "=0.11.1", default-features = false }
 sha1 = { version = "=0.11.0", default-features = false }
 quick-xml = { version = "=0.42.0", default-features = false }
 naga = { version = "=30.0.1", default-features = false, features = ["wgsl-out"] }
+# benches (CONTRIBUTING.md, "Priorities"): dev-dependencies only, without its plots and its rayon
+criterion = { version = "=0.8.2", default-features = false }
 
 png = { version = "=0.18.1", default-features = false }
 # JPEG decoding (primase_image::read_jpeg): pure Rust, MIT OR Apache-2.0 OR Zlib. Without its `x86` and `neon` features it has

@@ -34,6 +34,13 @@ sha2.workspace = true
 primase-compress = { workspace = true, features = ["reference-decoder"] }
 primase-testdata.workspace = true
 sha2.workspace = true
+criterion.workspace = true
+
+# the program executor on the layer bake's own pipeline states (oracles.baseline.sekiro/layer-pilot)
+[[bench]]
+name = "layer_pilot"
+harness = false
+
 [lints]
 workspace = true
 
