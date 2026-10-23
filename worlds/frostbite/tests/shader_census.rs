@@ -2,7 +2,8 @@
 //! to its containers and its interface, each program of a stage the lift handles lifted, validated and written as
 //! WGSL, and the census printed (resources, containers, tags, stages, refusals by reason). A resource the bytecode
 //! reader cannot read to its end fails the test; a lift refusal is counted, not a failure, but a program that lifts
-//! must validate and write WGSL. Needs the skate. install (`Data`) and the game's Oodle 9 library: unset skips.
+//! must validate and either write WGSL or, when WGSL cannot express it (a texture atomic's old value), keep a text form
+//! that states why: those are counted by reason, and any other failure is invalid. Needs the skate. install (`Data`) and the game's Oodle 9 library: unset skips.
 
 #![allow(clippy::unwrap_used)]
 
@@ -36,6 +37,7 @@ fn every_compiled_program_of_the_install() {
     let mut unread: BTreeMap<String, usize> = BTreeMap::new();
     let mut refused: BTreeMap<String, usize> = BTreeMap::new();
     let (mut lifted, mut invalid) = (0usize, Vec::new());
+    let mut text_form: BTreeMap<String, usize> = BTreeMap::new();
     for toc in &folder.tocs {
         let listing = src.listing(toc).unwrap();
         assert!(listing.unread.is_empty(), "{toc}: {:?}", listing.unread);
@@ -78,8 +80,26 @@ fn every_compiled_program_of_the_install() {
                             match program.validate() {
                                 Err(p) => invalid.push(format!("{}: {p:?}", e.name)),
                                 Ok(_) => {
-                                    if let Err(err) = primase_shader::emit::wgsl(&program) {
-                                        invalid.push(format!("{}: {err}", e.name));
+                                    match primase_shader::emit::wgsl(&program) {
+                                        Ok(_) => {}
+                                        // WGSL cannot write it: the program keeps a text form that says why
+                                        Err(primase_shader::ProgramError::Unsupported { detail, .. }) => {
+                                            match program.text() {
+                                                Ok(text)
+                                                    if text.lines().any(|l| {
+                                                        l.starts_with(
+                                                            "// the module below is naga's IR (Debug), not WGSL",
+                                                        ) && l.contains(&detail)
+                                                    }) =>
+                                                {
+                                                    *text_form.entry(reason(&detail)).or_default() += 1;
+                                                }
+                                                Ok(_) => invalid
+                                                    .push(format!("{}: no stated reason for: {detail}", e.name)),
+                                                Err(err) => invalid.push(format!("{}: text form: {err}", e.name)),
+                                            }
+                                        }
+                                        Err(err) => invalid.push(format!("{}: {err}", e.name)),
                                     }
                                 }
                             }
@@ -91,7 +111,9 @@ fn every_compiled_program_of_the_install() {
     }
     println!(
         "{resources} CompiledBytecode resources, {containers} containers, tags {tags:?}, per stage {per_stage:?}; \
-         {lifted} vertex, pixel and compute programs lifted, {} refused, {} resources whose interface is not read",
+         {lifted} vertex, pixel and compute programs lifted ({} keep a text form, WGSL cannot write them), {} refused, \
+         {} resources whose interface is not read",
+        text_form.values().sum::<usize>(),
         refused.values().sum::<usize>(),
         unread.values().sum::<usize>()
     );
@@ -101,13 +123,16 @@ fn every_compiled_program_of_the_install() {
     for (why, n) in &refused {
         println!("  lift refused {n:5}  {why}");
     }
+    for (why, n) in &text_form {
+        println!("  text form only {n:5}  {why}");
+    }
     for line in invalid.iter().take(20) {
         println!("  INVALID {line}");
     }
     assert!(resources > 15_000, "{resources} resources");
     assert!(
         invalid.is_empty(),
-        "{} lifted programs failed validation or writing",
+        "{} lifted programs failed validation, writing or keeping a text form",
         invalid.len()
     );
 }
