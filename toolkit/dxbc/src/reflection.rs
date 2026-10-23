@@ -103,23 +103,32 @@ impl View<'_> {
         }
     }
 }
-fn signature(bytes: &[u8], stage: Stage, output: bool) -> Result<Vec<Varying>> {
+/// A signature chunk's record layout: `ISGN`/`OSGN` (name, index, system value, component type, register, masks),
+/// `ISG1`/`OSG1` (a stream and a minimum precision besides) and `OSG5` (a stream besides).
+fn signature(bytes: &[u8], kind: &[u8; 4], stage: Stage, output: bool) -> Result<Vec<Varying>> {
     let v = View(bytes);
     let count = v.u32(0)? as usize;
     if v.u32(4)? != 8 {
         return Err(error(1, "unsupported signature directory offset"));
     }
+    // words before the name offset, and the record size
+    let (skip, record) = match kind {
+        b"ISG1" | b"OSG1" => (4, 32),
+        b"OSG5" => (4, 28),
+        _ => (0, 24),
+    };
     let mut result = Vec::new();
-    for i in v.table(8, count, 24)? {
-        let p = 8 + i * 24;
-        let lanes = v.bytes(p + 20, 4)?;
-        let name = v.string(v.u32(p)? as usize)?;
+    for i in v.table(8, count, record)? {
+        let p = 8 + i * record;
+        let q = p + skip;
+        let lanes = v.bytes(q + 20, 4)?;
+        let name = v.string(v.u32(q)? as usize)?;
         let element = d3d::Element {
             name: &name,
-            index: v.u32(p + 4)?,
-            system_value: v.u32(p + 8)?,
-            component_type: v.u32(p + 12)?,
-            register: v.u32(p + 16)?,
+            index: v.u32(q + 4)?,
+            system_value: v.u32(q + 8)?,
+            component_type: v.u32(q + 12)?,
+            register: v.u32(q + 16)?,
             mask: lanes[0],
             read_write_mask: lanes[1],
         };
@@ -127,6 +136,20 @@ fn signature(bytes: &[u8], stage: Stage, output: bool) -> Result<Vec<Varying>> {
     }
     Ok(result)
 }
+/// The signature in whichever of these chunks the container has.
+fn signature_of(
+    directory: &[crate::Chunk<'_>],
+    tags: &[&[u8; 4]],
+    stage: Stage,
+    output: bool,
+) -> Result<Vec<Varying>> {
+    let tag = tags
+        .iter()
+        .find(|t| directory.iter().any(|c| &&c.kind == *t))
+        .unwrap_or(&tags[0]);
+    signature(chunk(directory, tag)?, tag, stage, output)
+}
+
 /// A container's one chunk of kind `tag`.
 fn chunk<'a>(directory: &[crate::Chunk<'a>], tag: &[u8; 4]) -> Result<&'a [u8]> {
     let mut matching = directory.iter().filter(|c| &c.kind == tag);
@@ -179,8 +202,8 @@ pub fn signatures(bytes: &[u8]) -> Result<Interface> {
     let stage = stage(&directory)?;
     Ok(Interface {
         stage,
-        inputs: signature(chunk(&directory, b"ISGN")?, stage, false)?,
-        outputs: signature(chunk(&directory, b"OSGN")?, stage, true)?,
+        inputs: signature_of(&directory, &[b"ISGN", b"ISG1"], stage, false)?,
+        outputs: signature_of(&directory, &[b"OSGN", b"OSG1", b"OSG5"], stage, true)?,
         resources: Vec::new(),
     })
 }
@@ -485,8 +508,8 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
     }
     Ok(Interface {
         stage: Stage::Pixel,
-        inputs: signature(get(b"ISGN")?, Stage::Pixel, false)?,
-        outputs: signature(get(b"OSGN")?, Stage::Pixel, true)?,
+        inputs: signature(get(b"ISGN")?, b"ISGN", Stage::Pixel, false)?,
+        outputs: signature(get(b"OSGN")?, b"OSGN", Stage::Pixel, true)?,
         resources,
     })
 }

@@ -148,7 +148,10 @@ impl Instruction {
 }
 
 pub fn opcode_name(opcode: u16) -> &'static str {
-    NAMES.get(usize::from(opcode)).copied().unwrap_or("unknown opcode")
+    NAMES
+        .get(usize::from(opcode))
+        .copied()
+        .unwrap_or("unknown opcode")
 }
 
 /// The type of a program's four return lanes in a resource declaration, as D3D_RETURN_TYPE codes (1 unorm, 2 snorm,
@@ -170,35 +173,84 @@ pub enum Declared {
     /// `dcl_temps`.
     Temps(u32),
     /// `dcl_indexable_temp x<register>[size], components`.
-    IndexableTemp { register: u32, size: u32, components: u32 },
+    IndexableTemp {
+        register: u32,
+        size: u32,
+        components: u32,
+    },
     /// `dcl_globalFlags`: the control bits as stored (bit 0 refactoring allowed, 1 double precision, 2 forced early
     /// depth-stencil, 3 raw and structured buffers, 4 skip optimization, 5 min precision, 6 double extensions, 7
     /// shader extensions).
     GlobalFlags(u32),
     /// `dcl_constantbuffer cb<slot>[rows]`; `dynamic` when it is dynamically indexed.
-    ConstantBuffer { slot: u32, rows: u32, dynamic: bool, dimensions: usize },
+    ConstantBuffer {
+        slot: u32,
+        rows: u32,
+        dynamic: bool,
+        dimensions: usize,
+    },
     /// `dcl_sampler s<slot>`, its mode: 0 default, 1 comparison, 2 mono.
-    Sampler { slot: u32, mode: u32 },
+    Sampler {
+        slot: u32,
+        mode: u32,
+    },
     /// `dcl_resource_<dimension> t<slot>`: the D3D resource dimension code, the sample count of a multisampled one,
     /// and the four return types.
-    Resource { slot: u32, dimension: u32, samples: u32, returns: ReturnCodes, token: u32 },
-    ResourceRaw { slot: u32 },
-    ResourceStructured { slot: u32, stride: u32 },
+    Resource {
+        slot: u32,
+        dimension: u32,
+        samples: u32,
+        returns: ReturnCodes,
+        token: u32,
+    },
+    ResourceRaw {
+        slot: u32,
+    },
+    ResourceStructured {
+        slot: u32,
+        stride: u32,
+    },
     /// `dcl_uav_typed` and its control bits (dimension in bits 0 to 4, globally coherent bit 5).
-    UavTyped { slot: u32, dimension: u32, returns: ReturnCodes, token: u32, control: u32 },
-    UavRaw { slot: u32, control: u32 },
-    UavStructured { slot: u32, stride: u32, control: u32 },
+    UavTyped {
+        slot: u32,
+        dimension: u32,
+        returns: ReturnCodes,
+        token: u32,
+        control: u32,
+    },
+    UavRaw {
+        slot: u32,
+        control: u32,
+    },
+    UavStructured {
+        slot: u32,
+        stride: u32,
+        control: u32,
+    },
     /// An input register or special input: `dcl_input`, `_sgv`, `_siv`, `_ps`, `_ps_sgv`, `_ps_siv`. `interpolation` is
     /// a pixel input's `D3D_INTERPOLATION_MODE`; `name` a system value's `D3D_NAME`.
-    Input { operand: Operand, interpolation: Option<u32>, name: Option<u32> },
+    Input {
+        operand: Operand,
+        interpolation: Option<u32>,
+        name: Option<u32>,
+    },
     /// An output register or special output: `dcl_output`, `_sgv`, `_siv`.
-    Output { operand: Operand, name: Option<u32> },
+    Output {
+        operand: Operand,
+        name: Option<u32>,
+    },
     /// `dcl_immediateConstantBuffer`.
     ImmediateBuffer(Vec<[u32; 4]>),
     /// Custom data that is not an immediate constant buffer (a comment, debug information, ...) by its class.
-    CustomData { class: u32 },
+    CustomData {
+        class: u32,
+    },
     /// A declaration this decoder does not type: stage-specific (geometry, tessellation, compute), interface tables.
-    Other { opcode: u16, control: u32, words: Vec<u32> },
+    Other {
+        opcode: u16,
+        control: u32,
+        words: Vec<u32>,
+    },
 }
 
 /// The kind of program a version token names.
@@ -366,7 +418,12 @@ pub fn decode(words: &[u32]) -> Result<Decoded> {
         3 => ProgramType::Hull,
         4 => ProgramType::Domain,
         5 => ProgramType::Compute,
-        other => return Err(error(0, format!("program type {other} is not a Shader Model 4 or 5 stage"))),
+        other => {
+            return Err(error(
+                0,
+                format!("program type {other} is not a Shader Model 4 or 5 stage"),
+            ));
+        }
     };
     let mut result = Decoded {
         kind,
@@ -495,7 +552,9 @@ fn declaration(opcode: u16, control: u32, c: &mut Cursor<'_>) -> Result<Declared
             let operand = c.operand(0)?;
             let pixel = matches!(opcode, 98..=100);
             let interpolation = pixel.then_some(control & 15);
-            let name = matches!(opcode, 96 | 97 | 99 | 100).then(|| c.take()).transpose()?;
+            let name = matches!(opcode, 96 | 97 | 99 | 100)
+                .then(|| c.take())
+                .transpose()?;
             Declared::Input {
                 operand,
                 interpolation,

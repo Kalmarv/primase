@@ -2,7 +2,7 @@ use crate::decode::{Declaration, Declared, decode, opcode_name};
 use crate::{Result, chunks, error};
 use primase_shader::Interpolation;
 
-pub use crate::decode::{Index, Instruction, Operand, Register, Selection};
+pub use crate::decode::{Instruction, Operand, Register, Selection};
 
 /// A declared resource's shape: what its loads and samples address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,7 +206,10 @@ fn supported_operand(o: &Operand, word: usize) -> Result<()> {
             | Register::Uav
             | Register::ImmediateBuffer
     ) {
-        return Err(error(word, format!("unsupported operand register type {:?}", o.register)));
+        return Err(error(
+            word,
+            format!("unsupported operand register type {:?}", o.register),
+        ));
     }
     if o.precision != 0 || o.non_uniform {
         return Err(error(word, "unsupported extended operand (precision/modifier)"));
@@ -219,10 +222,16 @@ fn supported_operand(o: &Operand, word: usize) -> Result<()> {
             || r.precision != 0
             || r.indices.iter().any(|i| i.relative.is_some())
         {
-            return Err(error(word, "relative index must select a direct temp/input component"));
+            return Err(error(
+                word,
+                "relative index must select a direct temp/input component",
+            ));
         }
         if !((o.register == Register::Constant && d == 1) || o.register == Register::ImmediateBuffer) {
-            return Err(error(word, "dynamic register addressing outside a constant buffer"));
+            return Err(error(
+                word,
+                "dynamic register addressing outside a constant buffer",
+            ));
         }
     }
     Ok(())
@@ -363,7 +372,11 @@ impl Program {
                 }
             }
             // the conditionals' test (bit 18: nonzero) is their only control besides saturation
-            let test = if matches!(ins.opcode, 3 | 8 | 13 | 31) { 0x80 } else { 0 };
+            let test = if matches!(ins.opcode, 3 | 8 | 13 | 31) {
+                0x80
+            } else {
+                0
+            };
             if ins.control & 0x1ffb & !test != 0 {
                 return Err(error(at, "unsupported instruction controls"));
             }
@@ -600,7 +613,8 @@ impl Program {
                 self.input_declarations.push(InputDeclaration {
                     register: i,
                     mask,
-                    interpolation: primase_shader::d3d::interpolation(*mode).map_err(|detail| error(pos, detail))?,
+                    interpolation: primase_shader::d3d::interpolation(*mode)
+                        .map_err(|detail| error(pos, detail))?,
                 });
             }
             Declared::Output { operand, name: None } if d.opcode == 101 => {

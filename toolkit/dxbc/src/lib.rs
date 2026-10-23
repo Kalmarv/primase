@@ -2,11 +2,12 @@
 //! Sampling belongs to the caller: a scalar interpreter cannot infer derivatives, so the caller states its inputs'.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
-mod decode;
+pub mod decode;
 mod evaluate;
 mod opcodes;
 mod program;
 mod reflection;
+pub use decode::{Index, decode};
 pub use evaluate::{RegisterValue, Trace};
 pub use primase_shader::{
     AtomicAdd, Execution, Interface, Load, Lod, PixelShader, Resource, Sample, Sampler, Store, Varying,
