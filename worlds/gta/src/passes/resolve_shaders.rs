@@ -20,8 +20,10 @@
 //!   non-zero on the two foam effects, which of the depth bias terms it is is not established); the alpha test is not a
 //!   render state in GTA (the cutoff is a shader constant).
 //! - **Constants.** Each constant buffer a program declares is the table record at its register and space; each
-//!   constant of the record is bound at its byte offset (a constant past the end of the buffer the program declares is
-//!   one it does not read, and is left out, counted). A constant the effect renames (its parameter records:
+//!   constant of the record is bound at its byte offset where the program reads it
+//!   ([`constant_reads::ConstantReads`](super::constant_reads): the words its loads take after naga's compaction; a
+//!   buffer indexed by a value that is not a literal is read at every row). A constant the program does not read, or
+//!   one past the end of the buffer it declares, is left out, counted. A constant the effect renames (its parameter records:
 //!   [`GtaEffectParameters`]) is a material parameter, bound to the words the material stores under the new name
 //!   (`Material`), or `Unknown` where it stores none; the engine's world, view and projection matrices have the roles
 //!   [`engine_role`] names; every other engine constant is `Unknown` with its name.
@@ -62,6 +64,7 @@ use primase_core::shader::{
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
 
+use super::constant_reads::ConstantReads;
 use super::gbuffer::{self, GBufferWrites};
 use super::sampler_state;
 use super::sampler_use::{self, SamplerUses, Through};
@@ -467,6 +470,7 @@ impl ResolveGtaShaders {
         vertex_bound: bool,
         writes: Option<&Result<GBufferWrites, String>>,
         sample_uses: &mut BTreeMap<Entity, Result<SamplerUses, String>>,
+        constant_reads: &mut BTreeMap<Entity, Result<ConstantReads, String>>,
         counts: &mut Counts,
     ) -> Result<StageBinding, String> {
         let program = world
@@ -482,6 +486,10 @@ impl ResolveGtaShaders {
         let uses = sample_uses
             .entry(shader)
             .or_insert_with(|| sampler_use::uses(&program.bytecode));
+        // the constants the program reads: a buffer declares far more than a program uses
+        let reads = constant_reads
+            .entry(shader)
+            .or_insert_with(|| ConstantReads::of(&program.bytecode));
         for r in &interface.resources {
             let Some(bind) = r.provenance.d3d else { continue };
             match (&r.kind, bind.class) {
@@ -501,6 +509,13 @@ impl ResolveGtaShaders {
                         };
                         if u32::from(c.offset).saturating_add(bytes) > layout.size {
                             counts.add("constants past the end of the buffer the program declares (not read), left out");
+                            continue;
+                        }
+                        // a program whose reads cannot be found keeps every constant its buffers declare
+                        if let Ok(reads) = reads
+                            && !reads.reads(bind.space, bind.register, u32::from(c.offset), bytes)
+                        {
+                            counts.add("constants the program does not read, left out");
                             continue;
                         }
                         let name = table.name_of(c.name).map(str::to_owned);
@@ -1017,6 +1032,8 @@ impl Pass for ResolveGtaShaders {
         let mut bound: Vec<(Entity, ShaderBinding)> = Vec::new();
         // per program: the samplers its samples read through (lifting the program is the cost)
         let mut sample_uses: BTreeMap<Entity, Result<SamplerUses, String>> = BTreeMap::new();
+        // per program: the constant-buffer words it reads
+        let mut constant_reads: BTreeMap<Entity, Result<ConstantReads, String>> = BTreeMap::new();
         for (material, shader, effect_entity) in materials {
             let picked = chosen
                 .entry(effect_entity)
@@ -1100,6 +1117,7 @@ impl Pass for ResolveGtaShaders {
                     true,
                     writes.as_ref(),
                     &mut sample_uses,
+                    &mut constant_reads,
                     &mut counts,
                 ) {
                     Ok(s) => stages.push(s),

@@ -2,6 +2,7 @@
 //! tables. No I/O: each takes the world and its settings.
 pub mod clips;
 pub mod collision;
+pub mod constant_reads;
 pub mod gbuffer;
 pub mod interiors;
 pub mod lights;
