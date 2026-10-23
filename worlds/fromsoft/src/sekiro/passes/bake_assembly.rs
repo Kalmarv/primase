@@ -376,16 +376,18 @@ mod tests {
         use primase_texcodec::TexDecoder;
         use sha2::{Digest, Sha256};
         use std::sync::Arc;
-        let Some(path) = primase_testdata::oracle(
+        // the oracle's folder: reflectance.json and the program and textures it names, by paths relative to it
+        let Some(folder) = primase_testdata::oracle(
             primase_testdata::OracleSet::Scripts,
             primase_testdata::Game::Sekiro,
-            "reflectance.json",
+            "reflectance",
         ) else {
             return Ok(());
         };
-        let oracle: serde_json::Value = serde_json::from_slice(&primase_testdata::read_input(path)?)?;
+        let oracle: serde_json::Value =
+            serde_json::from_slice(&primase_testdata::read_input(folder.join("reflectance.json"))?)?;
         let read = |path: &str, expected: &str| -> std::result::Result<Vec<u8>, Box<dyn std::error::Error>> {
-            let bytes = primase_testdata::read_input(path)?;
+            let bytes = primase_testdata::read_input(folder.join(path))?;
             assert_eq!(
                 Sha256::digest(&bytes)
                     .iter()

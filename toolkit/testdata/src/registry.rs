@@ -730,10 +730,10 @@ pub const DECLARED: &[Declared] = &[
         source: r#"the install's own DDS with statistics computed by a script kept with the private oracle tools"#,
     },
     Declared {
-        query: Query::Oracle(OracleSet::Scripts, Game::Sekiro, "reflectance.json"),
+        query: Query::Oracle(OracleSet::Scripts, Game::Sekiro, "reflectance"),
         status: Status::Live,
         gate: true,
-        about: r#"a JSON file naming one layered material's G-buffer program (path, sha256, the dielectric literal's offset and bits) and its DDS inputs (paths, sha256), whose traced reflectance the static bake must reproduce at every texel while the other lowered channels stay unchanged; `worlds/fromsoft/src/sekiro/passes/bake_assembly.rs`"#,
+        about: r#"a folder: `reflectance.json`, naming one layered material's G-buffer program (path, sha256, the dielectric literal's offset and bits) and its DDS inputs (paths, sha256), every path relative to the folder, and the program and DDS files it names; the static bake must reproduce the traced reflectance at every texel while the other lowered channels stay unchanged; `worlds/fromsoft/src/sekiro/passes/bake_assembly.rs`"#,
         source: r#"the game's own shader program and textures from the user's install, with the literal's offset read from the program's bytes; the file only names and hashes them"#,
     },
     Declared {

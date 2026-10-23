@@ -173,7 +173,7 @@ pub const OLDER: &[(&str, Query)] = {
         ("PRIMASE_FROMSOFT_PBR_ORACLE", Oracle(Scripts, Sekiro, "pbr")),
         (
             "PRIMASE_FROMSOFT_REFLECTANCE_ORACLE",
-            Oracle(Scripts, Sekiro, "reflectance.json"),
+            Oracle(Scripts, Sekiro, "reflectance"),
         ),
         (
             "PRIMASE_FROMSOFT_NORMAL_CURL",
