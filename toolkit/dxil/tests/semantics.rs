@@ -646,3 +646,73 @@ mod pixel_ops {
         }
     }
 }
+
+mod compute {
+    use super::*;
+    use primase_shader::D3dClass;
+    use std::collections::BTreeMap;
+
+    /// `compute_basic.hlsl` dispatched as (2, 2, 1) groups of 8 by 4 by 2 with scale 0xff. Per group g = gx + 2 gy
+    /// and invocation index idx = local.x + 8 local.y + 32 local.z: the group's counter is the sum of the 64
+    /// indices (2016); words[0] counts the 256 invocations; words[1 + idx + 64 g] = tile[63 - idx] + 2016, where
+    /// tile[i] = id.x * 100 + id.y * 10 + id.z of the group's invocation i; the raw word idx + 64 g is
+    /// tile[idx] ^ 0xff; the typed element idx + 64 g is (local.x, local.y, local.z, idx).
+    #[test]
+    fn a_dispatch_of_groups_with_shared_memory_barriers_and_atomics() {
+        for v in BOTH {
+            let (program, exe) = lifted(&fixture("compute_basic", v));
+            assert_eq!(exe.workgroup_size(), Some([8, 4, 2]), "{v}");
+            let find = |class: D3dClass, register: u32| {
+                program
+                    .interface
+                    .resources
+                    .iter()
+                    .find(|r| {
+                        r.provenance
+                            .d3d
+                            .is_some_and(|d| d.class == class && d.register == register)
+                    })
+                    .unwrap_or_else(|| panic!("{v}: no {class:?} {register}"))
+                    .id
+            };
+            let (raw, words, typed) = (
+                find(D3dClass::UnorderedAccess, 0),
+                find(D3dClass::UnorderedAccess, 1),
+                find(D3dClass::UnorderedAccess, 2),
+            );
+            let mut buffers = BTreeMap::from([
+                (raw, vec![0u32; 256]),
+                (words, vec![0u32; 257]),
+                (typed, vec![0u32; 1024]),
+            ]);
+            let mut resources = Resources::default();
+            resources
+                .constants
+                .insert(find(D3dClass::ConstantBuffer, 0), vec![[0xff, 0, 0, 0]]);
+            let bound = exe.bind_resources(&resources).unwrap();
+            let done = exe
+                .dispatch(&bound, &mut NoBackend, &mut buffers, [2, 2, 1], 32)
+                .unwrap_or_else(|e| panic!("{v}: {e}"));
+            assert_eq!(done.groups, 4, "{v}");
+            assert_eq!(buffers[&words][0], 256, "{v}");
+            for g in 0..4u32 {
+                let (gx, gy) = (g % 2, g / 2);
+                let tile = |i: u32| {
+                    let (lx, ly, lz) = (i % 8, (i / 8) % 4, i / 32);
+                    (gx * 8 + lx) * 100 + (gy * 4 + ly) * 10 + lz
+                };
+                for idx in 0..64u32 {
+                    let at = (idx + 64 * g) as usize;
+                    assert_eq!(
+                        buffers[&words][1 + at],
+                        tile(63 - idx) + 2016,
+                        "{v} words {g} {idx}"
+                    );
+                    assert_eq!(buffers[&raw][at], tile(idx) ^ 0xff, "{v} raw {g} {idx}");
+                    let local = [idx % 8, (idx / 8) % 4, idx / 32, idx].map(|x| f(x as f32));
+                    assert_eq!(buffers[&typed][at * 4..at * 4 + 4], local, "{v} typed {g} {idx}");
+                }
+            }
+        }
+    }
+}

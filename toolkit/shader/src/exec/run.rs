@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use super::flat::{
-    BinOp, CvtOp, Executable, GlobalKind, LevelOp, Loc, MathOp, Op, Pick, Ptr, Reg, Res, St, UnOp,
+    AtomOp, BinOp, CvtOp, Executable, GlobalKind, LevelOp, Loc, MathOp, Op, Pick, Ptr, Reg, Res, St, UnOp,
 };
+use super::mask::{Mask, Wide};
 use super::request::{Backend, Element, ImageLoad, ImageLod, ImageQuery, ImageSample, ImageStore};
 use crate::ResourceId;
 
@@ -50,6 +51,8 @@ impl Executable {
                 ),
                 GlobalKind::Private(words) => Words::Owned(words.clone()),
                 GlobalKind::Storage(id) => buffers(*id).map_or(Words::Backend, Words::Slice),
+                // thread-group memory is the run's own
+                GlobalKind::Workgroup(_) => Words::Owned(Vec::new()),
             });
         }
         Ok(Bound { data })
@@ -101,7 +104,7 @@ impl<const N: usize> Scratch<N> {
 /// Runs an [`Executable`] for one invocation (`N` = 1) or a 2 x 2 quad in lockstep (`N` = 4: lanes 0 and 1 the top row,
 /// 2 and 3 the bottom), as a GPU does: lanes that diverge are masked, a screen derivative is a difference inside the
 /// quad, a lane that is discarded goes on as a helper. A runner is reused for any number of runs.
-pub struct Runner<'a, const N: usize> {
+pub struct Runner<'a, const N: usize, M: Mask = u8> {
     c: &'a Executable,
     b: &'a Bound<'a>,
     regs: Vec<Reg>,
@@ -111,12 +114,18 @@ pub struct Runner<'a, const N: usize> {
     steps: u64,
     samples: [u64; N],
     outs: [Vec<Reg>; N],
-    killed: u8,
+    killed: M,
+    /// The memory a run changes, by global: thread-group memory and the buffers a compute run writes (empty for a
+    /// pixel run, which hands its writes to the backend).
+    store: Vec<Option<Vec<u32>>>,
+    /// The lanes of a thread group, and those of them that have left the program.
+    group: M,
+    retired: M,
     /// The derivatives of the arguments (scalar mode): per argument, d/dx then d/dy lanes.
     derivs: Option<&'a [[Reg; 2]]>,
 }
 
-impl<const N: usize> std::fmt::Debug for Runner<'_, N> {
+impl<const N: usize, M: Mask> std::fmt::Debug for Runner<'_, N, M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Runner")
             .field("lanes", &N)
@@ -125,11 +134,20 @@ impl<const N: usize> std::fmt::Debug for Runner<'_, N> {
     }
 }
 
-#[derive(Default, Clone, Copy)]
-struct Exits {
-    brk: u8,
-    cont: u8,
-    ret: u8,
+#[derive(Clone, Copy)]
+struct Exits<M> {
+    brk: M,
+    cont: M,
+    ret: M,
+}
+impl<M: Mask> Default for Exits<M> {
+    fn default() -> Self {
+        Self {
+            brk: M::none(),
+            cont: M::none(),
+            ret: M::none(),
+        }
+    }
 }
 
 #[inline(always)]
@@ -145,7 +163,7 @@ fn f(x: u32) -> f32 {
     f32::from_bits(x)
 }
 
-impl<'a, const N: usize> Runner<'a, N> {
+impl<'a, const N: usize> Runner<'a, N, u8> {
     /// A runner of `exe` over `bound`, answering requests through `backend`. A scalar run (`N` = 1) that reads
     /// derivatives of its inputs takes them in `derivatives`; a quad takes its own.
     pub fn new(
@@ -179,10 +197,15 @@ impl<'a, const N: usize> Runner<'a, N> {
             samples: [0; N],
             outs: std::array::from_fn(|_| Vec::new()),
             killed: 0,
+            store: Vec::new(),
+            group: 0,
+            retired: 0,
             derivs,
         }
     }
+}
 
+impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
     /// Give the registers back, to start the next runner of this program with.
     pub fn into_scratch(self) -> Scratch<N> {
         Scratch {
@@ -204,6 +227,13 @@ impl<'a, const N: usize> Runner<'a, N> {
             }
             Loc::Global(g, o) => {
                 let base = (o + extra) as usize;
+                if let Some(Some(d)) = self.store.get(g as usize) {
+                    let s = d
+                        .get(base..base + n as usize)
+                        .ok_or("memory index out of range")?;
+                    r[..n as usize].copy_from_slice(s);
+                    return Ok(r);
+                }
                 let bound = self.b;
                 match &bound.data[g as usize] {
                     Words::Owned(d) => {
@@ -255,6 +285,14 @@ impl<'a, const N: usize> Runner<'a, N> {
                 Ok(())
             }
             Loc::Global(g, o) => {
+                if let Some(Some(d)) = self.store.get_mut(g as usize) {
+                    let at = (o + extra) as usize;
+                    let s = d
+                        .get_mut(at..at + n as usize)
+                        .ok_or("memory index out of range")?;
+                    s.copy_from_slice(&v[..n as usize]);
+                    return Ok(());
+                }
                 // a write to a storage buffer is the caller's effect (it reaches none of this evaluation's reads)
                 let GlobalKind::Storage(view) = self.c.globals[g as usize].kind else {
                     return Err("store to a read-only global".into());
@@ -277,7 +315,7 @@ impl<'a, const N: usize> Runner<'a, N> {
         }
     }
 
-    fn ops(&mut self, lo: u32, hi: u32, active: u8) -> Result<(), String> {
+    fn ops(&mut self, lo: u32, hi: u32, active: M) -> Result<(), String> {
         self.steps += (hi - lo) as u64;
         if self.steps > STEP_LIMIT {
             return Err("execution budget exceeded".into());
@@ -290,14 +328,14 @@ impl<'a, const N: usize> Runner<'a, N> {
             match op {
                 Op::Load { loc, n } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             self.regs[dst + l] = self.mem_get(*loc, l, 0, *n)?;
                         }
                     }
                 }
                 Op::LoadLanes { loc, offs, n } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let mut r = [0u32; 4];
                             for i in 0..*n as usize {
                                 r[i] = self.mem_get(*loc, l, offs[i] as u32, 1)?[0];
@@ -308,7 +346,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                 }
                 Op::LoadDyn { ptr, n } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let x = self.dyn_extra(ptr, l)?;
                             self.regs[dst + l] = self.mem_get(ptr.loc, l, x, *n)?;
                         }
@@ -316,7 +354,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                 }
                 Op::Swizzle { src, pat, n } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let s = self.regs[*src as usize * N + l];
                             let mut r = [0u32; 4];
                             for i in 0..*n as usize {
@@ -328,7 +366,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                 }
                 Op::Lane { src, i } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let s = self.regs[*src as usize * N + l];
                             self.regs[dst + l] = [s[*i as usize]; 4];
                         }
@@ -337,7 +375,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                 Op::Splat { src, n } => {
                     let _ = n;
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let s = self.regs[*src as usize * N + l];
                             self.regs[dst + l] = [s[0]; 4];
                         }
@@ -345,7 +383,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                 }
                 Op::Compose { parts, np } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let mut r = [0u32; 4];
                             let mut at = 0;
                             for p in &parts[..*np as usize] {
@@ -361,7 +399,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                 }
                 Op::Un { op, src, n } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let s = self.regs[*src as usize * N + l];
                             let mut r = [0u32; 4];
                             for i in 0..*n as usize {
@@ -378,7 +416,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                 }
                 Op::Bin { op, a, b, n, a1, b1 } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let x = self.regs[*a as usize * N + l];
                             let y = self.regs[*b as usize * N + l];
                             let mut r = [0u32; 4];
@@ -391,7 +429,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                 }
                 Op::Select { c: cs, a, b, n, c1 } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let cc = self.regs[*cs as usize * N + l];
                             let x = self.regs[*a as usize * N + l];
                             let y = self.regs[*b as usize * N + l];
@@ -409,7 +447,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                 }
                 Op::Cvt { op, src, n } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let s = self.regs[*src as usize * N + l];
                             let mut r = [0u32; 4];
                             for i in 0..*n as usize {
@@ -432,7 +470,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                     n,
                 } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let x = self.regs[*a as usize * N + l];
                             let y = self.regs[*b as usize * N + l];
                             let z = self.regs[*cc as usize * N + l];
@@ -443,6 +481,9 @@ impl<'a, const N: usize> Runner<'a, N> {
                 Op::ArrLen { gid, elem_words } => {
                     let bound = self.b;
                     let words = match &bound.data[*gid as usize] {
+                        _ if matches!(self.store.get(*gid as usize), Some(Some(_))) => {
+                            self.store[*gid as usize].as_ref().map_or(0, Vec::len) as u32
+                        }
                         Words::Owned(d) => d.len() as u32,
                         Words::Slice(d) => d.len() as u32,
                         Words::Rows(d) => d.len() as u32 * 4,
@@ -464,7 +505,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                     prov,
                 } => {
                     if N == 4 {
-                        if active != 15 {
+                        if active != M::first(4) {
                             return Err("a quad's lanes diverge at a derivative".into());
                         }
                         let v: [Reg; 4] = std::array::from_fn(|l| self.regs[*src as usize * N + l]);
@@ -527,7 +568,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                     };
                     // a quad's implicit level of detail comes from the coordinates' differences
                     let footprint = if N == 4 && matches!(level, LevelOp::Auto | LevelOp::Bias(_)) {
-                        if active != 15 {
+                        if active != M::first(4) {
                             return Err("a quad's lanes diverge at an implicit-LOD sample".into());
                         }
                         let uv: [[f32; 3]; 4] = std::array::from_fn(|l| c3(self, l, *coord));
@@ -537,7 +578,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                         None
                     };
                     for l in 0..N {
-                        if active >> l & 1 == 0 {
+                        if !active.has(l) {
                             continue;
                         }
                         let rd = |s: u32, me: &Self| me.regs[s as usize * N + l];
@@ -582,7 +623,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                     mip,
                 } => {
                     for l in 0..N {
-                        if active >> l & 1 == 0 {
+                        if !active.has(l) {
                             continue;
                         }
                         let cd = self.regs[*coord as usize * N + l];
@@ -606,7 +647,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                     level,
                 } => {
                     for l in 0..N {
-                        if active >> l & 1 == 0 {
+                        if !active.has(l) {
                             continue;
                         }
                         let level = level.map(|s| self.regs[s as usize * N + l][0]);
@@ -640,18 +681,18 @@ impl<'a, const N: usize> Runner<'a, N> {
         Ok(Element { id: res.id, index })
     }
 
-    fn block(&mut self, b: &'a [St], active: u8) -> Result<Exits, String> {
-        let mut ex = Exits::default();
+    fn block(&mut self, b: &'a [St], active: M) -> Result<Exits<M>, String> {
+        let mut ex = Exits::<M>::default();
         let mut active = active;
         for st in b {
-            if active == 0 {
+            if active.is_empty() {
                 break;
             }
             match st {
                 St::Run(lo, hi) => self.ops(*lo, *hi, active)?,
                 St::Store { loc, src, n } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let v = self.regs[*src as usize * N + l];
                             self.mem_put(*loc, l, 0, *n, v)?;
                         }
@@ -659,7 +700,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                 }
                 St::StoreDyn { ptr, src, n } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let x = self.dyn_extra(ptr, l)?;
                             let v = self.regs[*src as usize * N + l];
                             self.mem_put(ptr.loc, l, x, *n, v)?;
@@ -676,7 +717,7 @@ impl<'a, const N: usize> Runner<'a, N> {
                     vn,
                 } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let cd = self.regs[*coord as usize * N + l];
                             self.sampler.store_image(ImageStore {
                                 view: *tex,
@@ -689,39 +730,73 @@ impl<'a, const N: usize> Runner<'a, N> {
                         }
                     }
                 }
-                St::Atomic { ptr, value, result } => {
+                St::Atomic {
+                    ptr,
+                    fun,
+                    signed,
+                    value,
+                    compare,
+                    result,
+                    exchanged,
+                } => {
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let Loc::Global(g, o) = ptr.loc else {
                                 return Err("atomic on a local".into());
                             };
-                            let GlobalKind::Storage(view) = self.c.globals[g as usize].kind else {
-                                return Err("atomic on a read-only global".into());
+                            let word = (o + self.dyn_extra(ptr, l)?) as usize;
+                            let v = self.regs[*value as usize * N + l][0];
+                            let expected = compare.map_or(0, |c| self.regs[c as usize * N + l][0]);
+                            let (old, swapped) = if let Some(Some(d)) = self.store.get_mut(g as usize) {
+                                let cell = d.get_mut(word).ok_or("atomic past the end of the memory")?;
+                                let old = *cell;
+                                let (new, swapped) = atomic(*fun, *signed, old, v, expected);
+                                *cell = new;
+                                (old, swapped)
+                            } else {
+                                let GlobalKind::Storage(view) = self.c.globals[g as usize].kind else {
+                                    return Err("atomic on a read-only global".into());
+                                };
+                                if *fun != AtomOp::Add {
+                                    return Err(format!(
+                                        "atomic {fun:?} on a buffer the backend holds (only add is passed on)"
+                                    ));
+                                }
+                                (self.sampler.atomic_add(view, word as u32, v)?, true)
                             };
-                            let word = o + self.dyn_extra(ptr, l)?;
-                            let old =
-                                self.sampler
-                                    .atomic_add(view, word, self.regs[*value as usize * N + l][0])?;
                             if let Some(r) = result {
                                 self.regs[*r as usize * N + l] = [old; 4];
+                            }
+                            if let Some(x) = exchanged {
+                                self.regs[*x as usize * N + l] = [u32::from(swapped); 4];
                             }
                         }
                     }
                 }
+                St::Barrier => {
+                    // lockstep makes every write before the barrier visible after it; what a barrier needs is that
+                    // every invocation still in the program is at it (D3D leaves a divergent barrier undefined)
+                    if self.store.is_empty() {
+                        return Err("a barrier outside a compute run".into());
+                    }
+                    if active != self.group.minus(self.retired) {
+                        return Err("a barrier that not every invocation of the group reaches".into());
+                    }
+                }
                 St::If { c, a, r } => {
-                    let mut take = 0u8;
+                    let mut take = M::none();
                     for l in 0..N {
-                        if active >> l & 1 != 0 && self.regs[*c as usize * N + l][0] != 0 {
-                            take |= 1 << l;
+                        if active.has(l) && self.regs[*c as usize * N + l][0] != 0 {
+                            take.insert(l);
                         }
                     }
                     let e1 = self.block(a, take)?;
-                    let e2 = self.block(r, active & !take)?;
-                    let (b, cn, rt) = (e1.brk | e2.brk, e1.cont | e2.cont, e1.ret | e2.ret);
-                    ex.brk |= b;
-                    ex.cont |= cn;
-                    ex.ret |= rt;
-                    active &= !(b | cn | rt);
+                    let e2 = self.block(r, active.minus(take))?;
+                    let (b, cn, rt) = (e1.brk.or(e2.brk), e1.cont.or(e2.cont), e1.ret.or(e2.ret));
+                    ex.brk = ex.brk.or(b);
+                    ex.cont = ex.cont.or(cn);
+                    ex.ret = ex.ret.or(rt);
+                    active = active.minus(b.or(cn).or(rt));
                 }
                 St::Loop { body, cont, break_if } => {
                     let mut lm = active;
@@ -731,31 +806,31 @@ impl<'a, const N: usize> Runner<'a, N> {
                             return Err("execution budget exceeded".into());
                         }
                         let e = self.block(body, lm)?;
-                        ex.ret |= e.ret;
-                        lm &= !(e.ret | e.brk);
-                        if lm == 0 {
+                        ex.ret = ex.ret.or(e.ret);
+                        lm = lm.minus(e.ret.or(e.brk));
+                        if lm.is_empty() {
                             break;
                         }
                         let e2 = self.block(cont, lm)?;
-                        ex.ret |= e2.ret;
-                        lm &= !(e2.ret | e2.brk);
+                        ex.ret = ex.ret.or(e2.ret);
+                        lm = lm.minus(e2.ret.or(e2.brk));
                         if let Some(bi) = break_if {
                             for l in 0..N {
-                                if lm >> l & 1 != 0 && self.regs[*bi as usize * N + l][0] != 0 {
-                                    lm &= !(1 << l);
+                                if lm.has(l) && self.regs[*bi as usize * N + l][0] != 0 {
+                                    lm.remove(l);
                                 }
                             }
                         }
-                        if lm == 0 {
+                        if lm.is_empty() {
                             break;
                         }
                     }
-                    active &= !ex.ret;
+                    active = active.minus(ex.ret);
                 }
                 St::Switch { sel, cases } => {
                     let mut chosen = [usize::MAX; N];
                     for (l, slot) in chosen.iter_mut().enumerate() {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let v = self.regs[*sel as usize * N + l][0];
                             *slot = cases
                                 .iter()
@@ -764,39 +839,40 @@ impl<'a, const N: usize> Runner<'a, N> {
                                 .unwrap_or(usize::MAX);
                         }
                     }
-                    let mut carry = 0u8;
+                    let mut carry = M::none();
                     for (i, (_, fall, body)) in cases.iter().enumerate() {
                         let mut enter = carry;
                         for (l, slot) in chosen.iter().enumerate() {
                             if *slot == i {
-                                enter |= 1 << l;
+                                enter.insert(l);
                             }
                         }
-                        carry = 0;
-                        if enter == 0 {
+                        carry = M::none();
+                        if enter.is_empty() {
                             continue;
                         }
                         let e = self.block(body, enter)?;
-                        ex.cont |= e.cont;
-                        ex.ret |= e.ret;
-                        let done = e.brk | e.cont | e.ret;
+                        ex.cont = ex.cont.or(e.cont);
+                        ex.ret = ex.ret.or(e.ret);
+                        let done = e.brk.or(e.cont).or(e.ret);
                         if *fall {
-                            carry = enter & !done;
+                            carry = enter.minus(done);
                         }
                     }
-                    active &= !(ex.cont | ex.ret);
+                    active = active.minus(ex.cont.or(ex.ret));
                 }
                 St::Break => {
-                    ex.brk |= active;
-                    active = 0;
+                    ex.brk = ex.brk.or(active);
+                    active = M::none();
                 }
                 St::Continue => {
-                    ex.cont |= active;
-                    active = 0;
+                    ex.cont = ex.cont.or(active);
+                    active = M::none();
                 }
                 St::Return(result) => {
+                    self.retired = self.retired.or(active);
                     for l in 0..N {
-                        if active >> l & 1 != 0 {
+                        if active.has(l) {
                             let mut members = Vec::with_capacity(result.len());
                             for (s, n) in result {
                                 let mut r = [0u32; 4];
@@ -807,14 +883,15 @@ impl<'a, const N: usize> Runner<'a, N> {
                             self.outs[l] = members;
                         }
                     }
-                    ex.ret |= active;
-                    active = 0;
+                    ex.ret = ex.ret.or(active);
+                    active = M::none();
                 }
                 St::Kill => {
-                    self.killed |= active;
+                    self.killed = self.killed.or(active);
+                    self.retired = self.retired.or(active);
                     if N == 1 {
-                        ex.ret |= active;
-                        active = 0;
+                        ex.ret = ex.ret.or(active);
+                        active = M::none();
                     }
                 }
             }
@@ -826,7 +903,7 @@ impl<'a, const N: usize> Runner<'a, N> {
     pub fn run(&mut self, args: [&[[u32; 4]]; N]) -> Result<[Output; N], String> {
         self.steps = 0;
         self.samples = [0; N];
-        self.killed = 0;
+        self.killed = M::none();
         for o in self.outs.iter_mut() {
             o.clear();
         }
@@ -846,15 +923,35 @@ impl<'a, const N: usize> Runner<'a, N> {
             }
         }
         let c: &'a Executable = self.c;
-        self.block(&c.body, ((1u16 << N) - 1) as u8)?;
+        self.block(&c.body, M::first(N))?;
         let (steps, samples) = (self.steps, self.samples);
         Ok(std::array::from_fn(|l| Output {
             values: std::mem::take(&mut self.outs[l]),
-            discarded: self.killed >> l & 1 != 0,
+            discarded: self.killed.has(l),
             steps,
             samples: samples[l],
         }))
     }
+}
+
+/// The new word and whether a compare-exchange swapped, of an atomic operation on `old`.
+fn atomic(fun: AtomOp, signed: bool, old: u32, v: u32, expected: u32) -> (u32, bool) {
+    let new = match fun {
+        AtomOp::Add => old.wrapping_add(v),
+        AtomOp::Sub => old.wrapping_sub(v),
+        AtomOp::And => old & v,
+        AtomOp::Or => old | v,
+        AtomOp::Xor => old ^ v,
+        AtomOp::Min if signed => (old as i32).min(v as i32) as u32,
+        AtomOp::Max if signed => (old as i32).max(v as i32) as u32,
+        AtomOp::Min => old.min(v),
+        AtomOp::Max => old.max(v),
+        AtomOp::Exchange => v,
+        AtomOp::CompareExchange => {
+            return if old == expected { (v, true) } else { (old, false) };
+        }
+    };
+    (new, true)
 }
 
 #[inline(always)]
@@ -971,4 +1068,160 @@ fn math(mf: MathOp, a: Reg, b: Reg, c: Reg, n: u8, z: bool) -> Reg {
         };
     }
     r
+}
+
+// ---------------------------------------------------------------------------------------------------- compute
+
+/// What a compute run did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Dispatched {
+    /// Thread groups run.
+    pub groups: u64,
+    /// Operations and loop turns executed, summed over the groups (a group's lanes run each together).
+    pub steps: u64,
+}
+
+impl Executable {
+    /// The thread group of a compute program (`numthreads`), or `None` for any other.
+    pub fn workgroup_size(&self) -> Option<[u32; 3]> {
+        self.workgroup
+    }
+
+    /// Run `groups` thread groups of a compute program. Each group's invocations run in lockstep (a barrier is the
+    /// point where every invocation still in the program has arrived), thread-group memory starts at zero in every
+    /// group, and the groups run one after another in x, y, z order. `buffers` holds the words of every read-write
+    /// buffer by resource: writes and atomics change them and later reads see the changes, as they do between
+    /// groups. A buffer not given is one the backend answers reads of and takes writes to ([`Backend::read_buffer`],
+    /// [`Backend::store_buffer`]). `wave` is the wave width the wave operations and lane built-ins report; it must
+    /// divide the thread group's invocations into whole waves only for programs that care.
+    pub fn dispatch(
+        &self,
+        bound: &Bound<'_>,
+        backend: &mut dyn Backend,
+        buffers: &mut BTreeMap<ResourceId, Vec<u32>>,
+        groups: [u32; 3],
+        wave: u32,
+    ) -> Result<Dispatched, String> {
+        let size = self.workgroup.ok_or("not a compute program")?;
+        if wave == 0 {
+            return Err("a wave of no lanes".into());
+        }
+        let ids = (0..groups[2])
+            .flat_map(move |z| (0..groups[1]).flat_map(move |y| (0..groups[0]).map(move |x| [x, y, z])));
+        match size[0] * size[1] * size[2] {
+            0 => Err("a thread group of no invocations".into()),
+            1..=64 => self.groups::<64>(bound, backend, buffers, ids, size, wave),
+            65..=256 => self.groups::<256>(bound, backend, buffers, ids, size, wave),
+            257..=1024 => self.groups::<1024>(bound, backend, buffers, ids, size, wave),
+            _ => Err("a thread group of more than 1024 invocations".into()),
+        }
+    }
+
+    fn groups<const N: usize>(
+        &self,
+        bound: &Bound<'_>,
+        backend: &mut dyn Backend,
+        buffers: &mut BTreeMap<ResourceId, Vec<u32>>,
+        ids: impl Iterator<Item = [u32; 3]>,
+        size: [u32; 3],
+        wave: u32,
+    ) -> Result<Dispatched, String> {
+        let lanes = (size[0] * size[1] * size[2]) as usize;
+        // the buffers move into the run, and back whatever happens
+        let store: Vec<Option<Vec<u32>>> = self
+            .globals
+            .iter()
+            .map(|g| match g.kind {
+                GlobalKind::Storage(id) => buffers.remove(&id),
+                _ => None,
+            })
+            .collect();
+        let scratch = Scratch::<N>::new(self);
+        let mut runner = Runner::<N, Wide> {
+            c: self,
+            b: bound,
+            regs: scratch.regs,
+            mem: scratch.mem,
+            sampler: backend,
+            ftz: self.flush_denormals,
+            steps: 0,
+            samples: [0; N],
+            outs: std::array::from_fn(|_| Vec::new()),
+            killed: Wide::none(),
+            store,
+            group: Wide::first(lanes),
+            retired: Wide::none(),
+            derivs: None,
+        };
+        let mut done = Dispatched::default();
+        let mut result = Ok(());
+        for id in ids {
+            match runner.run_group(id, size, wave) {
+                Ok(steps) => {
+                    done.groups += 1;
+                    done.steps += steps;
+                }
+                Err(e) => {
+                    result = Err(format!("group {id:?}: {e}"));
+                    break;
+                }
+            }
+        }
+        for (g, memory) in self.globals.iter().zip(runner.store) {
+            if let (GlobalKind::Storage(id), Some(words)) = (&g.kind, memory) {
+                buffers.insert(*id, words);
+            }
+        }
+        result.map(|()| done)
+    }
+}
+
+impl<'a, const N: usize> Runner<'a, N, Wide> {
+    /// Run one thread group: `id` its position in the dispatch, `size` its `numthreads`. Returns the steps taken.
+    fn run_group(&mut self, id: [u32; 3], size: [u32; 3], wave: u32) -> Result<u64, String> {
+        let c: &'a Executable = self.c;
+        let lanes = (size[0] * size[1] * size[2]) as usize;
+        self.steps = 0;
+        self.killed = Wide::none();
+        self.retired = Wide::none();
+        for (i, g) in c.globals.iter().enumerate() {
+            if let GlobalKind::Workgroup(words) = g.kind {
+                match &mut self.store[i] {
+                    Some(v) => v.iter_mut().for_each(|w| *w = 0),
+                    slot => *slot = Some(vec![0; words as usize]),
+                }
+            }
+        }
+        for l in 0..lanes {
+            let local = [
+                l as u32 % size[0],
+                (l as u32 / size[0]) % size[1],
+                l as u32 / (size[0] * size[1]),
+            ];
+            for (i, (slot, _)) in c.args.iter().enumerate() {
+                let value = match c.builtins.get(i).copied().flatten() {
+                    Some(naga::BuiltIn::WorkGroupId) => [id[0], id[1], id[2], 0],
+                    Some(naga::BuiltIn::LocalInvocationId) => [local[0], local[1], local[2], 0],
+                    Some(naga::BuiltIn::GlobalInvocationId) => [
+                        id[0] * size[0] + local[0],
+                        id[1] * size[1] + local[1],
+                        id[2] * size[2] + local[2],
+                        0,
+                    ],
+                    Some(naga::BuiltIn::LocalInvocationIndex) => [l as u32, 0, 0, 0],
+                    Some(naga::BuiltIn::SubgroupInvocationId) => [l as u32 % wave, 0, 0, 0],
+                    Some(naga::BuiltIn::SubgroupSize) => [wave, 0, 0, 0],
+                    Some(naga::BuiltIn::SubgroupId) => [l as u32 / wave, 0, 0, 0],
+                    Some(naga::BuiltIn::NumSubgroups) => [(lanes as u32).div_ceil(wave), 0, 0, 0],
+                    other => return Err(format!("compute entry argument {i} carries {other:?}")),
+                };
+                self.regs[*slot as usize * N + l] = value;
+            }
+            for w in self.mem[l * c.local_words..(l + 1) * c.local_words].iter_mut() {
+                *w = 0;
+            }
+        }
+        self.block(&c.body, self.group)?;
+        Ok(self.steps)
+    }
 }

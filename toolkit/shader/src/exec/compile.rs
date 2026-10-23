@@ -10,7 +10,8 @@ use naga::{
 };
 
 use super::flat::{
-    BinOp, CvtOp, Executable, GlobalDesc, GlobalKind, LevelOp, Loc, MathOp, Op, Pick, Ptr, Reg, Res, St, UnOp,
+    AtomOp, BinOp, CvtOp, Executable, GlobalDesc, GlobalKind, LevelOp, Loc, MathOp, Op, Pick, Ptr, Reg, Res,
+    St, UnOp,
 };
 use super::request::{Dim, QueryKind};
 use crate::{Program, ResourceId};
@@ -112,6 +113,7 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
             naga::AddressSpace::Storage { .. } => Some(GlobalKind::Storage(
                 resource_of.get(&h.index()).ok_or("unbound storage")?.0,
             )),
+            naga::AddressSpace::WorkGroup => Some(GlobalKind::Workgroup(words(m, g.ty)?)),
             naga::AddressSpace::Handle => None,
             s => return Err(format!("address space {s:?}")),
         };
@@ -126,6 +128,7 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
     }
 
     let mut slot: Vec<u32> = (0..n_expr as u32).collect();
+    let mut n_slots = n_expr;
     let mut op_of: Vec<Option<Op>> = vec![None; n_expr];
     let mut ptr_of: Vec<Option<Ptr>> = vec![None; n_expr];
     let mut agg_of: Vec<Option<Vec<(u32, u8)>>> = vec![None; n_expr];
@@ -660,8 +663,15 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                     level,
                 });
             }
-            // written by the atomic statement that names it
-            E::AtomicResult { .. } => {}
+            // written by the atomic statement that names it; a compare-exchange's is the old value and whether it
+            // was exchanged
+            E::AtomicResult { comparison, .. } => {
+                if *comparison {
+                    let extra = n_slots;
+                    n_slots += 1;
+                    agg_of[i] = Some(vec![(slot[i], 1), (extra as u32, 1)]);
+                }
+            }
             e => return Err(format!("expression {:?}", std::mem::discriminant(e))),
         }
     }
@@ -877,21 +887,49 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                     value,
                     result,
                 } => {
-                    if !matches!(fun, naga::AtomicFunction::Add) {
-                        return Err(format!("atomic {fun:?} (only add is supported)"));
-                    }
+                    let (op, compare) = match fun {
+                        naga::AtomicFunction::Add => (AtomOp::Add, None),
+                        naga::AtomicFunction::Subtract => (AtomOp::Sub, None),
+                        naga::AtomicFunction::And => (AtomOp::And, None),
+                        naga::AtomicFunction::InclusiveOr => (AtomOp::Or, None),
+                        naga::AtomicFunction::ExclusiveOr => (AtomOp::Xor, None),
+                        naga::AtomicFunction::Min => (AtomOp::Min, None),
+                        naga::AtomicFunction::Max => (AtomOp::Max, None),
+                        naga::AtomicFunction::Exchange { compare: None } => (AtomOp::Exchange, None),
+                        naga::AtomicFunction::Exchange { compare: Some(c) } => {
+                            (AtomOp::CompareExchange, Some(cx.slot[c.index()]))
+                        }
+                    };
                     let p = cx.ptr_of[pointer.index()].ok_or("atomic through a non-pointer")?;
                     let v = cx.slot[value.index()];
+                    let signed = matches!((cx.shape)(*value)?, Shape::V(Kind::I, _));
                     cx.uses[v as usize] += 1;
+                    if let Some(c) = compare {
+                        cx.uses[c as usize] += 1;
+                    }
                     if let Some(d) = p.dynamic {
                         cx.uses[d.0 as usize] += 1;
                     }
+                    let (result, exchanged) = match result {
+                        Some(r) => match &cx.agg_of[r.index()] {
+                            Some(members) => (Some(members[0].0), Some(members[1].0)),
+                            None => (Some(cx.slot[r.index()]), None),
+                        },
+                        None => (None, None),
+                    };
                     out.push(St::Atomic {
                         ptr: p,
+                        fun: op,
+                        signed,
                         value: v,
-                        result: result.map(|r| cx.slot[r.index()]),
+                        compare,
+                        result,
+                        exchanged,
                     });
                 }
+                Statement::ControlBarrier(_) => out.push(St::Barrier),
+                // one sequential schedule: every write is visible at once
+                Statement::MemoryBarrier(_) => {}
                 s => return Err(format!("statement {:?}", std::mem::discriminant(s))),
             }
         }
@@ -1030,12 +1068,21 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
     Ok(Executable {
         ops: kept,
         body,
-        slots: n_expr,
+        slots: n_slots,
         inits,
         args,
         local_words: local_words as usize,
         globals,
         flush_denormals: p.modes.flush_denormals,
+        workgroup: (p.stage == crate::Stage::Compute).then_some(ep.workgroup_size),
+        builtins: f
+            .arguments
+            .iter()
+            .map(|a| match a.binding {
+                Some(naga::Binding::BuiltIn(b)) => Some(b),
+                _ => None,
+            })
+            .collect(),
     })
 }
 

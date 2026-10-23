@@ -272,9 +272,18 @@ pub(super) enum St {
     },
     Atomic {
         ptr: Ptr,
+        fun: AtomOp,
+        /// Min and max compare as signed integers.
+        signed: bool,
         value: u32,
+        /// The expected value of a compare-exchange.
+        compare: Option<u32>,
+        /// The value the word held, and for a compare-exchange whether it was exchanged.
         result: Option<u32>,
+        exchanged: Option<u32>,
     },
+    /// A group barrier: every live invocation of the group must reach it together.
+    Barrier,
     If {
         c: u32,
         a: Vec<St>,
@@ -296,6 +305,19 @@ pub(super) enum St {
     Kill,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum AtomOp {
+    Add,
+    Sub,
+    And,
+    Or,
+    Xor,
+    Min,
+    Max,
+    Exchange,
+    CompareExchange,
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum GlobalKind {
     /// A constant buffer of the interface.
@@ -304,6 +326,8 @@ pub(super) enum GlobalKind {
     Private(Vec<u32>),
     /// A buffer of the interface read through the storage address space.
     Storage(ResourceId),
+    /// Thread-group memory of this many words, zero at the start of every group.
+    Workgroup(u32),
 }
 #[derive(Clone, Debug)]
 pub(super) struct GlobalDesc {
@@ -326,4 +350,8 @@ pub struct Executable {
     pub(super) globals: Vec<GlobalDesc>,
     /// Whether 32-bit denormals are flushed to zero (the program's D3D modes).
     pub(super) flush_denormals: bool,
+    /// The thread group of a compute program.
+    pub(super) workgroup: Option<[u32; 3]>,
+    /// Per entry argument, the built-in it carries.
+    pub(super) builtins: Vec<Option<naga::BuiltIn>>,
 }
