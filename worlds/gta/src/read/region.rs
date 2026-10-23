@@ -34,7 +34,7 @@ use primase_core::{Instance, Name, Provenance, Source, Transform, World};
 
 use crate::components::state::hour_axis;
 use crate::components::{GTA, GtaArchetype, GtaEntity, GtaResolvedIn};
-use crate::rage::map::{ArchetypeDef, EntityDef, EntityKind, MapData, MapTypes};
+use crate::rage::map::{ArchetypeDef, EntityDef, EntityKind, MapData, MapHeader, MapTypes};
 use crate::rage::meta::Meta;
 use crate::read::archive::archive_set::{ArchiveSet, FileRef, Install, MapState};
 use crate::read::archive::keys::Keys;
@@ -119,26 +119,36 @@ fn map_name(path: &str) -> String {
     file.strip_suffix(".ymap").unwrap_or(file).to_string()
 }
 
-fn decode(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<crate::rage::meta::Struct> {
+fn meta(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<Meta> {
     let a = &set.install.archives[f.archive];
     let r = a.resource(&mut File::open(&a.file)?, f.entry, keys)?;
-    Meta::read(&r)?.root()
+    Meta::read(&r)
 }
 
-/// The live maps' entities whose pivot lies within the region and its reach.
+fn decode(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<crate::rage::meta::Struct> {
+    meta(set, keys, f)?.root()
+}
+
+/// A map file's header, the whole file walked and checked ([`Meta::root_scalars`]) but its entities not kept.
+fn header(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<MapHeader> {
+    MapHeader::from_root(&meta(set, keys, f)?.root_scalars()?)
+}
+
+/// The live maps' entities whose pivot lies within the region and its reach. Every live map's header is read (every
+/// file walked and checked), its entities only where its entities' extents touch the region and its reach.
 fn region_maps(set: &ArchiveSet, keys: &Keys, region: &Region) -> Result<Vec<MapRead>> {
     let mut out = Vec::new();
     // every live map's name hash: whether it is script-managed, and its LOD parent's
     let mut chain: BTreeMap<u32, (bool, u32, String)> = BTreeMap::new();
     for &f in set.tables.get("ymap").into_iter().flat_map(|t| t.values()) {
-        let map = MapData::from_root(&decode(set, keys, f)?)?;
+        let map = header(set, keys, f)?;
         chain.insert(map.name, (map.flags & 1 != 0, map.parent, map_name(set.path(f))));
         let ipl = {
             let (mut at, mut found, mut guard) = (map.name, None, 0);
             while let Some((scripted, parent, name)) = chain.get(&at).cloned().or_else(|| {
                 // a parent not seen yet: read its header from its file
                 let &pf = set.tables.get("ymap")?.get(&at)?;
-                let pm = MapData::from_root(&decode(set, keys, pf).ok()?).ok()?;
+                let pm = header(set, keys, pf).ok()?;
                 let e = (pm.flags & 1 != 0, pm.parent, map_name(set.path(pf)));
                 chain.insert(at, e.clone());
                 Some(e)
@@ -156,10 +166,10 @@ fn region_maps(set: &ArchiveSet, keys: &Keys, region: &Region) -> Result<Vec<Map
             found
         };
         let [lo, hi] = map.entities_extents;
-        if map.entities.is_empty() || !region.touches(lo, hi) {
+        if !region.touches(lo, hi) {
             continue;
         }
-        let entities: Vec<(u32, EntityDef)> = map
+        let entities: Vec<(u32, EntityDef)> = MapData::from_root(&decode(set, keys, f)?)?
             .entities
             .into_iter()
             .enumerate()

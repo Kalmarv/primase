@@ -107,20 +107,47 @@ pub struct MapData {
 
 impl MapData {
     pub fn from_root(s: &Struct) -> Result<Self> {
-        name_is(s, &["CMapData"])?;
+        let h = MapHeader::from_root(s)?;
         Ok(MapData {
-            name: s.hash("name")?,
-            parent: s.hash("parent")?,
-            flags: s.u32("flags")?,
-            content_flags: s.u32("contentFlags")?,
-            streaming_extents: [s.vec3("streamingExtentsMin")?, s.vec3("streamingExtentsMax")?],
-            entities_extents: [s.vec3("entitiesExtentsMin")?, s.vec3("entitiesExtentsMax")?],
+            name: h.name,
+            parent: h.parent,
+            flags: h.flags,
+            content_flags: h.content_flags,
+            streaming_extents: h.streaming_extents,
+            entities_extents: h.entities_extents,
             entities: s
                 .pointed("entities")?
                 .into_iter()
                 .map(EntityDef::from_struct)
                 .collect::<Result<_>>()?,
             physics_dictionaries: s.hashes("physicsDictionaries")?,
+        })
+    }
+}
+
+/// A map's own fields (`CMapData` without its entities and other arrays): what tells whether its entities are wanted.
+/// Read from [`crate::rage::meta::Meta::root_scalars`] (or a whole root).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MapHeader {
+    pub name: u32,
+    /// The LOD parent map's name, 0 for none.
+    pub parent: u32,
+    pub flags: u32,
+    pub content_flags: u32,
+    pub streaming_extents: [[f32; 3]; 2],
+    pub entities_extents: [[f32; 3]; 2],
+}
+
+impl MapHeader {
+    pub fn from_root(s: &Struct) -> Result<Self> {
+        name_is(s, &["CMapData"])?;
+        Ok(MapHeader {
+            name: s.hash("name")?,
+            parent: s.hash("parent")?,
+            flags: s.u32("flags")?,
+            content_flags: s.u32("contentFlags")?,
+            streaming_extents: [s.vec3("streamingExtentsMin")?, s.vec3("streamingExtentsMax")?],
+            entities_extents: [s.vec3("entitiesExtentsMin")?, s.vec3("entitiesExtentsMax")?],
         })
     }
 }

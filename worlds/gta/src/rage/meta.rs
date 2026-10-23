@@ -369,9 +369,21 @@ impl Meta {
         self.root_covered().map(|(s, _)| s)
     }
 
+    /// The root block's first structure with only its own plain fields (numbers, vectors, hashes, enums and character
+    /// arrays): its structures, pointers, arrays, strings and data blocks are left out. The whole tree is walked and
+    /// checked as [`Meta::root`] checks it, an error where that one errs; nothing beyond those fields is kept.
+    pub fn root_scalars(&self) -> Result<Struct> {
+        self.walk_root(Keep::Scalars).map(|(s, _)| s)
+    }
+
     /// Decodes the root block's first structure, and counts per block the bytes the decoding never reached (a
     /// structure covers its whole extent, padding included; a string covers its terminating NUL).
     pub fn root_covered(&self) -> Result<(Struct, Vec<usize>)> {
+        self.walk_root(Keep::All)
+    }
+
+    /// The root structure walked and checked, keeping what `keep` says, and the bytes of each block never reached.
+    fn walk_root(&self, keep: Keep) -> Result<(Struct, Vec<usize>)> {
         let block = self
             .blocks
             .get(self.root)
@@ -392,7 +404,7 @@ impl Meta {
                 .saturating_add(1)
                 .saturating_mul(bytes.saturating_add(1)),
         };
-        let root = self.decode_struct(self.root, 0, info, 0, &mut walk)?;
+        let root = self.decode_struct(self.root, 0, info, 0, keep, &mut walk)?;
         Ok((
             root,
             walk.seen
@@ -433,6 +445,7 @@ impl Meta {
         offset: usize,
         info: &StructInfo,
         depth: usize,
+        keep: Keep,
         walk: &mut Walk,
     ) -> Result<Struct> {
         if depth > MAX_DEPTH {
@@ -455,7 +468,15 @@ impl Meta {
             )
         })?;
         walk.mark(block, offset, size)?;
-        let mut fields = Vec::with_capacity(info.fields.len());
+        // what the fields' own structures, pointers and arrays keep
+        let inner = match keep {
+            Keep::All => Keep::All,
+            Keep::Scalars | Keep::Nothing => Keep::Nothing,
+        };
+        let mut fields = match keep {
+            Keep::Nothing => Vec::new(),
+            Keep::All | Keep::Scalars => Vec::with_capacity(info.fields.len()),
+        };
         for f in &info.fields {
             if f.name == ARRAY_INFO {
                 continue;
@@ -510,23 +531,31 @@ impl Meta {
                     enum_name: f.ref_key,
                     value: i32::from_le_bytes(u32_at(v, 0)?.to_le_bytes()),
                 },
+                Kind::Chars if keep == Keep::Nothing => Value::Chars(Vec::new()),
                 Kind::Chars => Value::Chars(v.iter().copied().take_while(|&b| b != 0).collect()),
                 Kind::Inline => {
                     let el = self.array_info(info, f)?;
                     let es = self.element_size(el)?;
                     // the field is exactly its elements (its size is their count times this)
-                    let items = v
-                        .chunks_exact(es)
-                        .map(|e| self.decode_inline(el, e))
-                        .collect::<Result<_>>()?;
+                    let mut items = Vec::new();
+                    for e in v.chunks_exact(es) {
+                        let item = self.decode_inline(el, e)?;
+                        if inner == Keep::All {
+                            items.push(item);
+                        }
+                    }
                     Value::Array(items)
                 }
                 Kind::DataBlock => match Self::unpack(u64_at(v, 0)?)? {
                     None => Value::Data(Vec::new()),
                     Some((id, 0)) => {
-                        let data = self.block(id)?.data.clone();
+                        let data = &self.block(id)?.data;
                         walk.mark(Self::index(id)?, 0, data.len())?;
-                        Value::Data(data)
+                        Value::Data(if inner == Keep::All {
+                            data.clone()
+                        } else {
+                            Vec::new()
+                        })
                     }
                     Some((_, off)) => {
                         return Err(err(here, format!("data block pointer at offset {off}")));
@@ -550,11 +579,15 @@ impl Meta {
                             let end = off.saturating_add(len);
                             let nul = usize::from(b.data.get(end) == Some(&0));
                             walk.mark(Self::index(id)?, off, len.saturating_add(nul))?;
-                            Value::Str(Some(s.to_vec()))
+                            Value::Str(Some(if inner == Keep::All {
+                                s.to_vec()
+                            } else {
+                                Vec::new()
+                            }))
                         }
                     }
                 }
-                Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0)?, depth, walk)?),
+                Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0)?, depth, inner, walk)?),
                 Kind::Structure => {
                     let si = self.struct_info(f.ref_key)?;
                     Value::Struct(self.decode_struct(
@@ -562,6 +595,7 @@ impl Meta {
                         offset.saturating_add(o),
                         si,
                         depth.saturating_add(1),
+                        inner,
                         walk,
                     )?)
                 }
@@ -571,10 +605,20 @@ impl Meta {
                     if u32_at(v, 12)? != 0 || cap < count {
                         return Err(err(here, format!("array count {count}, capacity {cap}")));
                     }
-                    Value::Array(self.decode_array(el, u64_at(v, 0)?, count, depth, walk)?)
+                    Value::Array(self.decode_array(el, u64_at(v, 0)?, count, depth, inner, walk)?)
                 }
             };
-            fields.push((f.name, value));
+            let kept = match keep {
+                Keep::All => true,
+                Keep::Nothing => false,
+                Keep::Scalars => !matches!(
+                    value,
+                    Value::Struct(_) | Value::Pointer(_) | Value::Array(_) | Value::Data(_) | Value::Str(_)
+                ),
+            };
+            if kept {
+                fields.push((f.name, value));
+            }
         }
         Ok(Struct {
             name: info.name,
@@ -635,7 +679,7 @@ impl Meta {
     }
 
     /// A structure pointer: the structure is the one its block holds.
-    fn follow(&self, pointer: u64, depth: usize, walk: &mut Walk) -> Result<Option<Struct>> {
+    fn follow(&self, pointer: u64, depth: usize, keep: Keep, walk: &mut Walk) -> Result<Option<Struct>> {
         let Some((id, off)) = Self::unpack(pointer)? else {
             return Ok(None);
         };
@@ -654,6 +698,7 @@ impl Meta {
             off,
             info,
             depth.saturating_add(1),
+            keep,
             walk,
         )?))
     }
@@ -665,6 +710,7 @@ impl Meta {
         pointer: u64,
         count: usize,
         depth: usize,
+        keep: Keep,
         walk: &mut Walk,
     ) -> Result<Vec<Value>> {
         if count == 0 {
@@ -683,8 +729,13 @@ impl Meta {
             }
             _ => u32::from(el_code(el.kind)),
         };
-        let mut items = Vec::with_capacity(count);
-        while items.len() < count {
+        let mut items = match keep {
+            Keep::All => Vec::with_capacity(count),
+            Keep::Scalars | Keep::Nothing => Vec::new(),
+        };
+        // the elements walked, kept or not
+        let mut done = 0usize;
+        while done < count {
             let b = self.block(id)?;
             if b.name != block_name {
                 return Err(err(
@@ -702,13 +753,13 @@ impl Meta {
                 ));
             }
             let index = Self::index(id)?;
-            while items.len() < count
+            while done < count
                 && let Some(v) = span(&b.data, off, es)
             {
                 if el.kind != Kind::Structure {
                     walk.mark(index, off, es)?;
                 }
-                items.push(match el.kind {
+                let item = match el.kind {
                     Kind::Structure => {
                         walk.reach(id, off)?;
                         Value::Struct(self.decode_struct(
@@ -716,12 +767,19 @@ impl Meta {
                             off,
                             self.struct_info(el.ref_key)?,
                             depth.saturating_add(1),
+                            keep,
                             walk,
                         )?)
                     }
-                    Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0)?, depth, walk)?),
+                    Kind::StructurePointer => {
+                        Value::Pointer(self.follow(u64_at(v, 0)?, depth, keep, walk)?)
+                    }
                     _ => self.decode_inline(el, v)?,
-                });
+                };
+                if keep == Keep::All {
+                    items.push(item);
+                }
+                done = done.saturating_add(1);
                 off = off.saturating_add(es);
             }
             id = id
@@ -731,6 +789,17 @@ impl Meta {
         }
         Ok(items)
     }
+}
+
+/// What a decoding keeps of the tree it walks (every part is walked and checked either way).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Keep {
+    /// Everything.
+    All,
+    /// The structure's own plain fields; nothing of its structures, pointers, arrays, strings and data blocks.
+    Scalars,
+    /// Nothing: the structure's fields are walked and checked, none kept.
+    Nothing,
 }
 
 /// What a decoding reached: per block, which bytes; and where the structures that pointers and arrays lead to start.
@@ -1023,6 +1092,21 @@ mod tests {
             .collect();
         assert_eq!(vs[2], (Value::F32(3.0), Value::Hash(12)));
         assert_eq!(vs.len(), 3);
+        // the root's plain fields alone: the array and the string left out
+        assert_eq!(
+            m.root_scalars().expect("decodes"),
+            Struct {
+                name: root.name,
+                fields: vec![(joaat(b"count"), Value::U32(3))],
+            }
+        );
+    }
+
+    /// `root` refuses `m` with an error containing `what`, and `root_scalars` with the same error.
+    fn refused(m: &Meta, what: &str) {
+        let e = m.root().expect_err(what).to_string();
+        assert!(e.contains(what), "{e}");
+        assert_eq!(m.root_scalars().expect_err(what).to_string(), e);
     }
 
     #[test]
@@ -1031,7 +1115,7 @@ mod tests {
         assert_eq!(m.root_covered().expect("decodes").1, vec![0, 0, 0, 1]);
         // a fourth item would continue into the string block
         let m = Meta::read(&sample(4, b"hello\0")).expect("container");
-        assert!(m.root().is_err());
+        refused(&m, "");
     }
 
     /// A field description: name, offset, kind, reference index, reference key.
@@ -1108,9 +1192,7 @@ mod tests {
             &[(root, 16, fields), (item, 0, Vec::new())],
             &[(root, array(2, 1)), (item, vec![0; 8])],
         );
-        let m = Meta::read(&r).expect("container");
-        let e = m.root().expect_err("size 0");
-        assert!(e.to_string().contains("size 0"), "{e}");
+        refused(&Meta::read(&r).expect("container"), "size 0");
     }
 
     #[test]
@@ -1127,8 +1209,7 @@ mod tests {
             &[(root, 32, arrays), (item, 4, fields(joaat(b"v")))],
             &[(root, [array(2, 1), array(2, 1)].concat()), (item, vec![0; 4])],
         );
-        let e = Meta::read(&r).expect("container").root().expect_err("twice");
-        assert!(e.to_string().contains("reached twice"), "{e}");
+        refused(&Meta::read(&r).expect("container"), "reached twice");
         // two pointers at the same structure
         let pointers = vec![(joaat(b"p"), 0, 0x07, 0, 0), (joaat(b"q"), 8, 0x07, 0, 0)];
         let r = container(
@@ -1138,8 +1219,7 @@ mod tests {
                 (item, vec![0; 4]),
             ],
         );
-        let e = Meta::read(&r).expect("container").root().expect_err("twice");
-        assert!(e.to_string().contains("reached twice"), "{e}");
+        refused(&Meta::read(&r).expect("container"), "reached twice");
         // one pointer decodes
         let pointers = vec![(joaat(b"p"), 0, 0x07, 0, 0), (joaat(b"q"), 8, 0x07, 0, 0)];
         let r = container(
@@ -1165,7 +1245,6 @@ mod tests {
             structs.push((name(k), 4, f));
         }
         let r = container(&structs, &[(name(40), vec![0; 4])]);
-        let e = Meta::read(&r).expect("container").root().expect_err("budget");
-        assert!(e.to_string().contains("more structures"), "{e}");
+        refused(&Meta::read(&r).expect("container"), "more structures");
     }
 }
