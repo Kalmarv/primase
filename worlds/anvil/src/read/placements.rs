@@ -42,17 +42,18 @@ use primase_core::{Entity, Instance, Name, Transform, World};
 use crate::components::{
     AnvilBounds, AnvilCollisionFilter, AnvilCollisionOnly, AnvilCollisionShape, AnvilDataLayers,
     AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake, AnvilGrass, AnvilGrassModel,
-    AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilSkeleton,
-    AnvilWater, BoundTexture, CollisionMaterialRef, DataLayerAction, DeferredDecal, GrassSystemSetup,
-    MaterialBinding, MaterialValue, ShapeGeometry, TextureFrom,
+    AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilRig,
+    AnvilRigOccurrence, AnvilSkeleton, AnvilSkinned, AnvilWater, BoundTexture, CollisionMaterialRef,
+    DataLayerAction, DeferredDecal, GrassSystemSetup, MaterialBinding, MaterialValue, ShapeGeometry,
+    TextureFrom,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::ddecal::{
     DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, STATIC_DDECAL, StoredDecalModel, StoredDeferredDecals,
 };
 use crate::read::entity::{
-    CollisionFilter, ComponentBody, ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, Slot,
-    StoredEntity, StoredEntityGroup, Visual, query,
+    CollisionFilter, ComponentBody, ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, SkeletonBinding,
+    Slot, StoredEntity, StoredEntityGroup, Visual, query,
 };
 use crate::read::grass::{GRASS_PATTERN_LIBRARY, StoredGrassLibrary};
 use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
@@ -60,6 +61,7 @@ use crate::read::material::{Payload, StoredMaterial, StoredTextureSet};
 use crate::read::mesh::{MATERIAL, MESH, StoredMesh, max_culling_distance};
 use crate::read::mesh_shape::{MESH_SHAPE, MeshShape};
 use crate::read::meshes::anvil_mesh;
+use crate::read::rig::StoredRig;
 use crate::read::shape::{
     BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE, StoredBox, StoredCapsule,
     StoredReferenceList, StoredSphere,
@@ -379,6 +381,9 @@ pub struct Placer<'a> {
     materials: HashMap<u64, Option<Entity>>,
     /// Per Skeleton id, its entity (`None`: not a Skeleton, or not read).
     skeletons: HashMap<u64, Option<Entity>>,
+    /// Per SkeletonComponent's Skeletons (the main one's id, then its addons'), the entity holding their rig (`None`:
+    /// one of them isn't a Skeleton or can't be read).
+    rigs: HashMap<Vec<u64>, Option<Entity>>,
     /// Per TextureMap id, its texture's entity.
     textures: HashMap<u64, Option<Entity>>,
     /// Per DDecalModel id, its entity (`None`: not a DDecalModel, or not read).
@@ -443,6 +448,7 @@ impl<'a> Placer<'a> {
             shaders: HashMap::new(),
             materials: HashMap::new(),
             skeletons: HashMap::new(),
+            rigs: HashMap::new(),
             textures: HashMap::new(),
             decal_models: HashMap::new(),
             objects: HashMap::new(),
@@ -615,6 +621,63 @@ impl<'a> Placer<'a> {
         };
         self.skeletons.insert(id, e);
         e
+    }
+
+    /// The entity holding the rig of the SkeletonComponent `sc`, read once ([`AnvilRig`], named for its main Skeleton):
+    /// `None` where it names no main Skeleton, or one of its Skeletons isn't one or can't be read (recorded in
+    /// `placed`).
+    fn rig(&mut self, sc: &SkeletonBinding, placed: &mut Placed) -> Option<Entity> {
+        let main = sc.main?;
+        let key: Vec<u64> = std::iter::once(main.id)
+            .chain(sc.addons.iter().map(|a| a.id))
+            .collect();
+        if let Some(&e) = self.rigs.get(&key) {
+            return e;
+        }
+        let e = match self.read_rig(&key) {
+            Ok(e) => Some(e),
+            Err(why) => {
+                placed.refused.push((main.id, format!("rig: {why}")));
+                None
+            }
+        };
+        self.rigs.insert(key, e);
+        e
+    }
+
+    fn read_rig(&mut self, key: &[u64]) -> Result<Entity, String> {
+        let mut skeletons = Vec::with_capacity(key.len());
+        let mut name = None;
+        for &id in key {
+            let at = self
+                .archive
+                .find(id)
+                .ok_or_else(|| format!("no resource {id:#x} in the forges"))?;
+            let r = self.archive.resource(at).map_err(|e| e.to_string())?;
+            if r.type_id != SKELETON {
+                return Err(format!("{id:#x} is type {:#010x}, not a Skeleton", r.type_id));
+            }
+            skeletons.push(StoredSkeleton::parse(&r.body).map_err(|e| format!("{id:#x}: {e}"))?);
+            name = name.or_else(|| self.name(at));
+        }
+        let refs: Vec<&StoredSkeleton> = skeletons.iter().collect();
+        let rig = StoredRig::assemble(&refs).map_err(|e| e.to_string())?;
+        let main = skeletons.first().ok_or("no main Skeleton")?;
+        let (position, rotation) = (main.position, main.rotation);
+        let e = self.world.spawn();
+        if let Some(name) = name {
+            self.world.insert(e, Name(name));
+        }
+        self.world.insert(
+            e,
+            AnvilRig {
+                frame: self.frame,
+                position,
+                rotation,
+                rig,
+            },
+        );
+        Ok(e)
     }
 
     fn read_skeleton(&mut self, id: u64) -> Result<Option<Entity>, String> {
@@ -1212,6 +1275,23 @@ impl<'a> Placer<'a> {
                 _ => None,
             })
             .collect();
+        // a SkeletonComponent's rig, placed once at the owner's transform: its Visuals follow it
+        let occurrence = e
+            .components
+            .iter()
+            .find_map(|c| match &c.body {
+                ComponentBody::Skeleton(sc) => Some(sc),
+                _ => None,
+            })
+            .and_then(|sc| self.rig(sc, placed))
+            .map(|rig| {
+                let o = self.world.spawn();
+                self.world.insert(o, Name(name.clone()));
+                self.world.insert(o, AnvilRigOccurrence { rig });
+                self.world
+                    .insert(o, self.frame.transform(&transform(&e.matrix, e.scale)));
+                o
+            });
         for (v, decal, grass_model) in e
             .visuals()
             .map(|v| (v, false, None))
@@ -1324,6 +1404,9 @@ impl<'a> Placer<'a> {
                     placed.fakes = placed.fakes.saturating_add(1);
                 }
                 self.world.insert(p, bounds);
+                if let Some(occurrence) = occurrence {
+                    self.world.insert(p, AnvilSkinned { occurrence });
+                }
                 if let Some(g) = grass_model {
                     self.world.insert(
                         p,

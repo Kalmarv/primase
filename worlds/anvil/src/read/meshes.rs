@@ -14,7 +14,7 @@ use std::path::Path;
 use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
-use crate::components::AnvilMesh;
+use crate::components::{AnvilMesh, AnvilSkin};
 use crate::read::data::{Resource, read_entry};
 use crate::read::forge::Forge;
 use crate::read::mesh::{MESH, StoredMesh};
@@ -116,6 +116,16 @@ pub fn anvil_mesh(
     let materials = stored.materials().map_err(mesh_err)?;
     let v = &stored.vertices;
     let positions = stored.positions().map_err(mesh_err)?;
+    let skin = stored
+        .skin()
+        .map_err(mesh_err)?
+        .map(|skin| {
+            Ok::<_, Error>(AnvilSkin {
+                bones: stored.bones().map_err(mesh_err)?,
+                skin,
+            })
+        })
+        .transpose()?;
     Ok(AnvilMesh {
         entry: u32::try_from(entry).map_err(|_| Error::Entry(entry))?,
         index_id,
@@ -134,5 +144,6 @@ pub fn anvil_mesh(
             &v.bytes,
             &stored.positions_stream,
         ),
+        skin,
     })
 }

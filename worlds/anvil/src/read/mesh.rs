@@ -53,6 +53,8 @@
 
 use std::ops::Range;
 
+pub use crate::components::{StoredMeshBone, StoredSkin};
+
 /// A record type: equals the CRC-32 of the ASCII string `Mesh` (the name a label).
 pub const MESH: u32 = 0x415D_9568;
 /// The compiled mesh's marker: equals the CRC-32 of `CompiledMesh` (the name a label).
@@ -290,19 +292,6 @@ pub enum Layout {
     Inline(Inline),
 }
 
-/// One `MeshBone` of a Mesh's bone list: a bone the mesh's skin stream may name, as the 81-byte record stores it
-/// (an object id of 0, the class `MeshBone`, then the registry's three fields, `BoneID`, `InitialMatrixInverse` and
-/// `IsUsedBySubMeshes`; docs/registry-named-fields.md §4).
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredMeshBone {
-    /// `BoneID`: by value the CRC-32 of the bone's name, the key of a skeleton's [`StoredBone::name_hash`].
-    pub bone_id: u32,
-    /// `InitialMatrixInverse`: a 4x4 as 16 f32 in four rows of x, y, z and w, the translation in the last row.
-    pub initial_matrix_inverse: [[f32; 4]; 4],
-    /// `IsUsedBySubMeshes`.
-    pub used_by_submeshes: bool,
-}
-
 impl StoredMeshBone {
     /// An 81-byte record ([`StoredMesh::records_81`]); refused when its object id isn't 0, its class isn't `MeshBone`
     /// or its last byte isn't a bool.
@@ -336,21 +325,6 @@ impl StoredMeshBone {
             used_by_submeshes: used == 1,
         })
     }
-}
-
-/// A mesh's skin as its skin stream stores it (the split layouts'): each vertex a record of `influences` bone slots
-/// (a byte each: positions in the mesh's bone list, [`StoredMesh::bones`]) and then as many weights (a byte each,
-/// summing to 255). Established on every one of Riders Republic's 29,174 meshes with bones (29,116 with 4 influences
-/// and 58 with 8; 39,795,423 vertices: tests/skin_binding.rs): the weights sum to 255 on every vertex, and every slot
-/// with a weight is below the bone count. A slot with no weight is kept as stored.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredSkin {
-    /// The slots and weights of a vertex each: 4 or 8.
-    pub influences: usize,
-    /// Each vertex's slots, in vertex order, `influences` a vertex.
-    pub slots: Vec<u8>,
-    /// Each vertex's weights, in the same order.
-    pub weights: Vec<u8>,
 }
 
 impl StoredSkin {

@@ -33,6 +33,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::components::StoredSkeleton;
+pub use crate::components::{RigBone, StoredRig};
 use crate::read::mesh::StoredMeshBone;
 
 /// Why Skeletons can't be joined into a rig.
@@ -44,28 +45,6 @@ pub enum Error {
     Duplicate { skeleton: usize, bone: u32 },
     #[error("the bone {bone:08x} is its own ancestor")]
     Cycle { bone: u32 },
-}
-
-/// One bone of a rig.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RigBone {
-    /// The CRC-32 of its name.
-    pub name_hash: u32,
-    /// The name of its parent bone: none for a root.
-    pub parent: Option<u32>,
-    /// LocalPosition as stored (x, y, z, 0), in its parent's space.
-    pub local_position: [f32; 4],
-    /// The local rotation as stored: a unit quaternion x, y, z, w.
-    pub local_rotation: [f32; 4],
-    /// The position in the list given to [`StoredRig::assemble`] of the Skeleton the bone is from.
-    pub skeleton: usize,
-}
-
-/// A rig (see the module documentation): each bone once, the main Skeleton's first, then each addon's new bones in the
-/// order it stores them.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredRig {
-    pub bones: Vec<RigBone>,
 }
 
 impl StoredRig {

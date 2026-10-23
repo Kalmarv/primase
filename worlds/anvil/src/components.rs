@@ -70,7 +70,9 @@ impl Component for AnvilMeshShape {
 /// Material ClassID for range *k* (in order; descriptor *k*'s vertex count equals range *k*'s low 16 bits; how the
 /// engine binds them is not established); the compiled mesh's `kind` byte, `stride` and each vertex's primary record
 /// as stored (`vertex_records`, `stride` bytes each); and its attributes as the engine's vertex declarations decode
-/// them (`attributes`, [`VertexAttributes`]: normals, tangents, texture coordinates, colour, in the source's frame). `entry` and `index_id` name the forge entry it came from.
+/// them (`attributes`, [`VertexAttributes`]: normals, tangents, texture coordinates, colour, in the source's frame). On a
+/// mesh with bones, `skin` holds its bone list and skin stream as stored. `entry` and `index_id` name the forge entry it
+/// came from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilMesh {
     pub entry: u32,
@@ -86,6 +88,8 @@ pub struct AnvilMesh {
     pub stride: u32,
     pub vertex_records: Vec<u8>,
     pub attributes: VertexAttributes,
+    /// The bone list and skin stream, on a mesh with bones.
+    pub skin: Option<AnvilSkin>,
 }
 
 /// A Mesh's vertex attributes as the engine's vertex declarations decode them ([`crate::read::vertex`]; each empty where
@@ -112,6 +116,14 @@ impl Component for AnvilMesh {
     }
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         let n = self.positions.len();
+        if let Some(s) = &self.skin
+            && s.skin.vertices().count() != n
+        {
+            return Err(format!(
+                "{n} positions, {} skinned vertices",
+                s.skin.vertices().count()
+            ));
+        }
         let stride = usize::try_from(self.stride).unwrap_or(0);
         if self.vertex_records.len() != n.saturating_mul(stride) {
             return Err(format!(
@@ -1154,4 +1166,128 @@ pub struct AnvilTextureMap {
 impl Component for AnvilTextureMap {
     const NAME: &'static str = "anvil.texture_map";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
+/// One `MeshBone` of a Mesh's bone list: a bone the mesh's skin stream may name, as the 81-byte record stores it
+/// (an object id of 0, the class `MeshBone`, then the registry's three fields, `BoneID`, `InitialMatrixInverse` and
+/// `IsUsedBySubMeshes`; docs/registry-named-fields.md §4).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredMeshBone {
+    /// `BoneID`: by value the CRC-32 of the bone's name, the key of a skeleton's [`StoredBone::name_hash`].
+    pub bone_id: u32,
+    /// `InitialMatrixInverse`: a 4x4 as 16 f32 in four rows of x, y, z and w, the translation in the last row.
+    pub initial_matrix_inverse: [[f32; 4]; 4],
+    /// `IsUsedBySubMeshes`.
+    pub used_by_submeshes: bool,
+}
+
+/// A mesh's skin as its skin stream stores it (the split layouts'): each vertex a record of `influences` bone slots
+/// (a byte each: positions in the mesh's bone list, [`crate::read::mesh::StoredMesh::bones`]) and then as many weights (a byte each,
+/// summing to 255). Established on every one of Riders Republic's 29,174 meshes with bones (29,116 with 4 influences
+/// and 58 with 8; 39,795,423 vertices: tests/skin_binding.rs): the weights sum to 255 on every vertex, and every slot
+/// with a weight is below the bone count. A slot with no weight is kept as stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredSkin {
+    /// The slots and weights of a vertex each: 4 or 8.
+    pub influences: usize,
+    /// Each vertex's slots, in vertex order, `influences` a vertex.
+    pub slots: Vec<u8>,
+    /// Each vertex's weights, in the same order.
+    pub weights: Vec<u8>,
+}
+
+/// One bone of a rig.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RigBone {
+    /// The CRC-32 of its name.
+    pub name_hash: u32,
+    /// The name of its parent bone: none for a root.
+    pub parent: Option<u32>,
+    /// LocalPosition as stored (x, y, z, 0), in its parent's space.
+    pub local_position: [f32; 4],
+    /// The local rotation as stored: a unit quaternion x, y, z, w.
+    pub local_rotation: [f32; 4],
+    /// The position in the list given to [`StoredRig::assemble`] of the Skeleton the bone is from.
+    pub skeleton: usize,
+}
+
+/// A rig (see the module documentation): each bone once, the main Skeleton's first, then each addon's new bones in the
+/// order it stores them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredRig {
+    pub bones: Vec<RigBone>,
+}
+
+/// A Mesh's skin as the reader keeps it, on the mesh's prototype with its [`AnvilMesh`]: the bone list (the slots the
+/// skin stream names are positions in it) and the per-vertex slots and weights, both as stored. `lower-anvil-mesh` makes
+/// joint and weight streams of it and leaves the bone list as [`AnvilPalette`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilSkin {
+    pub bones: Vec<StoredMeshBone>,
+    pub skin: StoredSkin,
+}
+
+/// What a lowered skinned mesh keeps for its binding (`anvil.palette`, left by `lower-anvil-mesh` on the entity whose
+/// `AnvilMesh` had an [`AnvilSkin`]): the bone list with its inverse binds as stored, in the source's frame (`frame`),
+/// how many four-influence sets the skin streams hold, and those streams, per primitive of the core mesh (`Joints(k)`
+/// and `Weights(k)`, U8x4): a core mesh may not hold them before it has a `core.skin`. `lower-anvil-skin` binds it to a
+/// rig and puts them in the mesh.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilPalette {
+    pub frame: primase_core::frame::SourceFrame,
+    pub bones: Vec<StoredMeshBone>,
+    pub sets: u8,
+    pub streams: Vec<std::collections::BTreeMap<primase_core::Semantic, primase_core::Stream>>,
+}
+
+impl Component for AnvilPalette {
+    const NAME: &'static str = "anvil.palette";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
+/// The rig of a SkeletonComponent (`anvil.rig`), on an entity of its own: its main Skeleton's and addon Skeletons'
+/// bones joined by name ([`StoredRig::assemble`]), and the main Skeleton's own position and rotation (the bones'
+/// stored transforms leave it out), in the game's source frame (`frame`, as the reader was given it).
+/// `lower-anvil-rig` makes a `core.skeleton` of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilRig {
+    pub frame: primase_core::frame::SourceFrame,
+    pub position: [f32; 4],
+    pub rotation: [f32; 4],
+    pub rig: StoredRig,
+}
+
+impl Component for AnvilRig {
+    const NAME: &'static str = "anvil.rig";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
+/// One placed SkeletonComponent (`anvil.rig_occurrence`), on an entity at its owner's transform: the rig it poses.
+/// `lower-anvil-skin` makes a `core.rig_instance` of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnvilRigOccurrence {
+    pub rig: Entity,
+}
+
+impl Component for AnvilRigOccurrence {
+    const NAME: &'static str = "anvil.rig_occurrence";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.rig);
+    }
+}
+
+/// A Visual's placement that follows its owner's SkeletonComponent (`anvil.skinned`): the owner's
+/// [`AnvilRigOccurrence`]. `lower-anvil-skin` binds the placement's meshes to the rig and names the binding on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnvilSkinned {
+    pub occurrence: Entity,
+}
+
+impl Component for AnvilSkinned {
+    const NAME: &'static str = "anvil.skinned";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.occurrence);
+    }
 }

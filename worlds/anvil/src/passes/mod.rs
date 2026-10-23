@@ -12,6 +12,7 @@ mod material;
 mod resolve_shaders;
 mod select;
 mod skeleton;
+mod skin;
 mod splat;
 mod water;
 mod world_uv;
@@ -27,7 +28,8 @@ pub use resolve_shaders::{
     shading_class,
 };
 pub use select::{CollisionOnly, Keep, Overlap, SelectAnvilEntities};
-pub use skeleton::LowerAnvilSkeleton;
+pub use skeleton::{LowerAnvilRig, LowerAnvilSkeleton};
+pub use skin::LowerAnvilSkin;
 pub use splat::{Splat, SplatUv};
 pub use water::{LowerAnvilWater, Shore};
 pub use world_uv::LowerAnvilWorldUv;
@@ -46,7 +48,7 @@ use primase_core::{
 
 use crate::components::{
     AnvilCollisionShape, AnvilDataLayers, AnvilFloorHeight, AnvilLods, AnvilMesh, AnvilMeshShape,
-    AnvilTerrain, AnvilTextureMap, CollisionMaterialRef, ShapeGeometry, TerrainTile,
+    AnvilPalette, AnvilTerrain, AnvilTextureMap, CollisionMaterialRef, ShapeGeometry, TerrainTile,
 };
 
 /// What names a lowered collision surface.
@@ -382,8 +384,12 @@ pub enum Static16Normal {
 /// range, of the vertices its triangles use, drawn with the range's Material entity. Its streams are the attributes the
 /// engine's vertex declarations give ([`crate::read::vertex`], converted through the reader's frame): positions;
 /// normals and tangents (unit length, as glTF requires: the vertex programs don't normalise; the tangent's w the
-/// bitangent's sign, flipped where the frame mirrors); texture coordinates 0 and 1; the vertex colour as UNORM8 RGBA.
-/// static16 meshes take `static16-normal`'s choice (the one reading not established). The buffers are consumed.
+/// bitangent's sign, flipped where the frame mirrors); texture coordinates 0 and 1; the vertex colour as UNORM8 RGBA;
+/// and on a mesh with bones the skin: `Joints(k)` (the slot of each influence, U8x4) and `Weights(k)` (U8x4, summing to
+/// 255 as stored) for each four influences, kept with the bone list as [`AnvilPalette`] (a core mesh may not hold them
+/// before it has a skin) for `lower-anvil-skin`. An influence with no weight stores a slot the vertex doesn't use
+/// (anything on the stored mesh): its slot is written as 0, as core's padding. static16 meshes take
+/// `static16-normal`'s choice (the one reading not established). The buffers are consumed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerAnvilMesh {
     pub static16_normal: Static16Normal,
@@ -429,7 +435,7 @@ impl Pass for LowerAnvilMesh {
         &[AnvilMesh::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[Mesh::NAME]
+        &[Mesh::NAME, AnvilPalette::NAME]
     }
     fn removes(&self) -> &[&'static str] {
         &[AnvilMesh::NAME]
@@ -508,8 +514,38 @@ impl Pass for LowerAnvilMesh {
                 streams.insert(Semantic::Color(0), Stream::U8x4(a.colour.clone()));
             }
             let triangles = m.triangles.len() as u64;
+            if let Some(s) = &m.skin {
+                let sets = s.skin.influences / 4;
+                let mut padding = 0u64;
+                for k in 0..sets {
+                    let (mut joints, mut weights) = (Vec::with_capacity(n), Vec::with_capacity(n));
+                    for (slots, ws) in s.skin.vertices() {
+                        let at = k * 4;
+                        let (Some(&[s0, s1, s2, s3]), Some(&[w0, w1, w2, w3])) = (
+                            slots.get(at..at + 4).and_then(|s| s.first_chunk()),
+                            ws.get(at..at + 4).and_then(|w| w.first_chunk()),
+                        ) else {
+                            return Err(format!(
+                                "a skin of {} influences isn't whole sets of four",
+                                s.skin.influences
+                            ));
+                        };
+                        let used = [(s0, w0), (s1, w1), (s2, w2), (s3, w3)];
+                        padding += used.iter().filter(|&&(slot, w)| w == 0 && slot != 0).count() as u64;
+                        joints.push(used.map(|(slot, w)| if w == 0 { 0 } else { slot }));
+                        weights.push(used.map(|(_, w)| w));
+                    }
+                    let set = u8::try_from(k).map_err(|_| "too many influence sets".to_owned())?;
+                    streams.insert(Semantic::Joints(set), Stream::U8x4(joints));
+                    streams.insert(Semantic::Weights(set), Stream::U8x4(weights));
+                }
+                if padding > 0 {
+                    log.omit("stored slot numbers of zero-weight influences: 0", padding);
+                }
+                log.count("skinned meshes lowered", 1);
+            }
             streams.insert(Semantic::Position, Stream::F32x3(m.positions));
-            let primitives = if m.material_entities.is_empty() {
+            let mut primitives = if m.material_entities.is_empty() {
                 vec![Primitive {
                     topology: Topology::Triangles,
                     streams,
@@ -538,6 +574,27 @@ impl Pass for LowerAnvilMesh {
                     })
                     .collect()
             };
+            if let Some(s) = &m.skin {
+                // the skin streams leave the primitives: they come back with the skin
+                let mut kept = Vec::with_capacity(primitives.len());
+                for p in &mut primitives {
+                    let (skin, rest): (BTreeMap<_, _>, BTreeMap<_, _>) = std::mem::take(&mut p.streams)
+                        .into_iter()
+                        .partition(|(s, _)| matches!(s, Semantic::Joints(_) | Semantic::Weights(_)));
+                    p.streams = rest;
+                    kept.push(skin);
+                }
+                w.insert(
+                    e,
+                    AnvilPalette {
+                        frame: m.frame,
+                        bones: s.bones.clone(),
+                        sets: u8::try_from(s.skin.influences / 4)
+                            .map_err(|_| "too many influence sets".to_owned())?,
+                        streams: kept,
+                    },
+                );
+            }
             log.count("primitives lowered", primitives.len() as u64);
             w.insert(e, Mesh::new(primitives));
             log.count("Meshes lowered", 1);
@@ -2877,6 +2934,12 @@ pub fn register(reg: &mut PassRegistry) {
         |o| Ok(Box::new(LowerAnvilSkeleton::from_options(o)?)),
         &[("own-transform", "refuse")],
     );
+    reg.register_requiring(
+        "lower-anvil-rig",
+        |o| Ok(Box::new(LowerAnvilRig::from_options(o)?)),
+        &[("own-transform", "refuse")],
+    );
+    reg.register_requiring("lower-anvil-skin", |_| Ok(Box::new(LowerAnvilSkin)), &[]);
     reg.register_requiring(
         "lower-anvil-data-layers",
         |o| Ok(Box::new(LowerAnvilDataLayers::from_options(o)?)),
