@@ -5,10 +5,11 @@
 //!
 //! The fixtures are the control-flow and memory ones the DXIL evaluator cannot run (flow, loops, switch, arrays, bits;
 //! default and -Od builds). Needs `PRIMASE_WARP` (the oracle program), `PRIMASE_DXC` (for the oracle's vertex shader)
-//! and `PRIMASE_WARP_SCRATCH` (a folder). The vertex shader is generated from the lifted program's own interface:
-//! every input varying read from `cbuffer Case : register(b0, space1) { uint4 r[32]; }`, row by register.
+//! and `PRIMASE_WARP_SCRATCH` (a folder). The vertex shader is generated from the container's interface
+//! ([`primase_dxil::interface`]): every input varying read from `cbuffer Case : register(b0, space1) { uint4 r[32]; }`,
+//! row by register.
 use primase_shader::exec::ProgramShader;
-use primase_shader::{InterpMode, InterpSampling, PixelShader, Program, Sample, ScalarType, SystemValue};
+use primase_shader::{Interface, InterpMode, InterpSampling, PixelShader, Sample, ScalarType, SystemValue};
 use primase_testdata::real_data;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -24,15 +25,16 @@ fn hex(words: &[u32]) -> String {
         .join(" ")
 }
 
-/// HLSL of a vertex shader that feeds `program`'s pixel inputs: one clockwise triangle covering the pixel at the
+/// HLSL of a vertex shader that feeds the pixel inputs of `interface` (the container's whole signature, unused elements
+/// too: the pipeline links it to the vertex shader's): one clockwise triangle covering the pixel at the
 /// origin of a one-pixel viewport (SV_Position (0.5, 0.5, 0.5, 1)), every other input read from the case buffer.
 /// Elements are declared in signature order with the pixel program's types and interpolation so the compiler packs
 /// them alike; system values the rasterizer generates (front face, sample index, ...) are left out.
-fn vertex_hlsl(program: &Program) -> String {
+fn vertex_hlsl(interface: &Interface) -> String {
     let lanes = ["x", "y", "z", "w"];
     let mut fields = String::new();
     let mut body = String::new();
-    for (k, v) in program.interface.inputs.iter().enumerate() {
+    for (k, v) in interface.inputs.iter().enumerate() {
         let position = v.system == Some(SystemValue::FragCoord);
         if v.system.is_some() && !position {
             continue;
@@ -88,6 +90,23 @@ fn vertex_hlsl(program: &Program) -> String {
             body.push_str(&format!("    o.e{k} = {cast}(r[{}].{swizzle});\n", d3d.register));
         }
     }
+    // a vertex shader must write SV_Position, whether or not the pixel program declares it
+    if !interface
+        .inputs
+        .iter()
+        .any(|v| v.system == Some(SystemValue::FragCoord))
+    {
+        fields.insert_str(
+            0,
+            "    float4 position : SV_Position;
+",
+        );
+        body.insert_str(
+            0,
+            "    o.position = float4(p, 0.5, 1.0);
+",
+        );
+    }
     format!(
         "cbuffer Case : register(b0, space1) {{ uint4 r[32]; }};\n\
          struct Out\n{{\n{fields}}};\n\
@@ -133,7 +152,7 @@ fn compare(
         .replace('.', "_");
     let hlsl = scratch.join(format!("{stem}.lifted.vs.hlsl"));
     let vs = scratch.join(format!("{stem}.lifted.vs.dxil"));
-    std::fs::write(&hlsl, vertex_hlsl(&program)).unwrap();
+    std::fs::write(&hlsl, vertex_hlsl(&primase_dxil::interface(&bytes).unwrap())).unwrap();
     let out = std::process::Command::new(dxc)
         .args(["-T", "vs_6_0", "-E", "main", "-Fo"])
         .arg(&vs)
@@ -275,12 +294,58 @@ fn lifted_fixtures_agree_with_warp() {
         case("switch2", [1.5, 2.5, 3.5, 0.0], [9, 0, 0, 0], [0.25, 2.0]),
         case("switch3", [1.5, 2.5, 3.5, 0.0], [0, 4, 0, 0], [0.25, 2.0]),
     ];
+    // Values { float4 a; int4 n; float4 table[6]; }, t = TEXCOORD0 at register 1
+    let array_case = |name: &str, a: [f32; 4], n: [i32; 4]| {
+        let table = (0..6).map(|r| [f(10.0 + r as f32), f(20.0 + r as f32), f(0.5), f(0.25)]);
+        let mut rows = vec![a.map(f32::to_bits), n.map(|x| x as u32)];
+        rows.extend(table);
+        Case {
+            name: name.to_owned(),
+            inputs: BTreeMap::from([(1, [0, 0, 0, 0])]),
+            buffers: BTreeMap::from([(0, rows)]),
+        }
+    };
+    let arrays = [
+        array_case("arrays0", [1.0, 2.0, 3.0, 4.0], [1, 2, 3, 4]),
+        array_case("arrays1", [0.5, -2.0, 8.0, 0.125], [0, 3, 5, 0]),
+        array_case("arrays2", [7.0, 1.0, -1.0, 2.0], [6, 5, 1, 5]),
+        array_case("arrays3", [1.0, 2.0, 3.0, 4.0], [-1, 1, 0, 2]),
+    ];
+    // Values { float4 f; uint4 u; int4 i; }; no divide by zero
+    let bits_case = |name: &str, f4: [f32; 4], u4: [u32; 4], i4: [i32; 4]| Case {
+        name: name.to_owned(),
+        inputs: BTreeMap::new(),
+        buffers: BTreeMap::from([(0, vec![f4.map(f32::to_bits), u4, i4.map(|x| x as u32)])]),
+    };
+    let bits = [
+        bits_case(
+            "bits0",
+            [3.0, 4.0, 1.5, 0.0],
+            [176, 8, 0x1_0000, 1],
+            [-7, 2, -16, 2],
+        ),
+        bits_case("bits1", [-2.5, 0.5, -0.25, 9.0], [0, 1, 0, 31], [7, -3, 1000, 35]),
+        bits_case(
+            "bits2",
+            [100.0, 3.0, 0.75, 4e9],
+            [u32::MAX, 3, 0x8000_0001, 0xdead_beef],
+            [i32::MIN, 7, i32::MAX, 31],
+        ),
+        bits_case(
+            "bits3",
+            [1e-3, -1e3, 2.0, 255.5],
+            [12345, 678, 0x0f0f_0f0f, 5],
+            [-100, -9, -1, 1],
+        ),
+    ];
     let mut total = 0;
     let mut all = Vec::new();
     for (base, cases) in [
         ("flow", &flow[..]),
         ("loops", &loops[..]),
         ("switch", &switch[..]),
+        ("arrays", &arrays[..]),
+        ("bits", &bits[..]),
     ] {
         for variant in ["", ".od"] {
             let container = dir.join(format!("{base}{variant}.dxil"));
