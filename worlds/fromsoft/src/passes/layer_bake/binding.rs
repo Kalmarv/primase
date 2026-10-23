@@ -9,8 +9,9 @@ use primase_core::shader::{
 };
 use primase_dxbc::Shader;
 use primase_image::sampling::Address;
+use primase_shader::exec::ProgramShader;
 use primase_shader::{
-    Constants, Grid, Input, Interface, Invocation, Lane, Layout, Texture, evaluate_raw_with,
+    Constants, Grid, Input, Interface, Invocation, Lane, Layout, PixelShader, Texture, evaluate_raw_with,
 };
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -31,11 +32,12 @@ impl Default for Inputs {
         }
     }
 }
-/// Evaluated by the toolkit ([`evaluate_raw`], one pixel at a time): the program, its constants and a texture per
-/// sampled slot, frozen; the main albedo's alpha, sampled beside the program at its own scale.
+/// Evaluated by the toolkit ([`evaluate_raw_with`], one pixel at a time) on the program executor: the lifted program,
+/// its constants and a texture per sampled slot, frozen; the main albedo's alpha, sampled beside the program at its
+/// own scale.
 #[derive(Debug)]
 pub struct Prepared {
-    shader: Shader,
+    shader: ProgramShader,
     constants: Constants,
     textures: BTreeMap<u32, Texture>,
     alpha: Option<(Arc<BaseMipBilinearWrap>, [f32; 2])>,
@@ -96,6 +98,9 @@ pub(crate) struct OutputRgb {
 }
 fn dxbc(e: primase_dxbc::Error) -> crate::Error {
     invalid("layer DXBC", e.word * 4, e.detail)
+}
+fn lifting(e: primase_dxbc::Error) -> crate::Error {
+    invalid("layer lift", e.word * 4, e.detail)
 }
 fn evaluation(e: primase_shader::Error) -> crate::Error {
     invalid("layer bake", e.at, e.detail)
@@ -187,7 +192,8 @@ impl Prepared {
             Ok(found)
         })?;
         Self::from_binding(
-            shader,
+            &shader,
+            bytes,
             &resolution.stage,
             material,
             &FrozenFrame::static_bake(sample_time),
@@ -206,9 +212,12 @@ impl Prepared {
     /// applies, an unknown one left at zero, counted by its reason), each texture slot as bound (`texture` decodes a
     /// texture entity, `true` for the sRGB colour layers; a default is its constant), and the outputs by their roles.
     /// The material source gives what a shader does not read: the main albedo's alpha (`stem` decodes a texture file
-    /// by name), the shader family the bake supports and the sampled layers' UV scales.
+    /// by name), the shader family the bake supports and the sampled layers' UV scales. `shader` is the program the
+    /// binding was resolved against (its resources are what the binding names) and `bytecode` its container, which
+    /// the bake lifts and executes.
     pub fn from_binding(
-        shader: Shader,
+        shader: &Shader,
+        bytecode: &[u8],
         stage: &StageBinding,
         material: &LayeredMaterial,
         frame: &FrozenFrame,
@@ -251,9 +260,11 @@ impl Prepared {
         if reads_second_uv {
             policies.insert(SECOND_UV_APPROXIMATION.into(), 1);
         }
-        let layout = Layout::of(&shader).map_err(evaluation)?;
+        let lifted =
+            ProgramShader::new(primase_dxbc::lift(bytecode).map_err(lifting)?).map_err(evaluation)?;
+        let layout = Layout::of(&lifted).map_err(evaluation)?;
         // the buffers the program reads, by slot: their words
-        let words: BTreeMap<u32, usize> = program
+        let words: BTreeMap<u32, usize> = lifted
             .constant_buffers()
             .iter()
             .map(|&(slot, rows)| (slot, rows as usize * 4))
@@ -357,7 +368,7 @@ impl Prepared {
             };
             textures.insert(register, source);
         }
-        for &slot in program.textures() {
+        for &slot in lifted.textures() {
             if !textures.contains_key(&slot) {
                 return Err(invalid(
                     "layer binding",
@@ -398,7 +409,7 @@ impl Prepared {
         }
         let decoded_bytes = cache.values().map(|t| t.decoded_bytes()).sum::<usize>() + alpha_bytes;
         Ok(Self {
-            shader,
+            shader: lifted,
             constants,
             textures,
             alpha,
@@ -460,7 +471,7 @@ impl Prepared {
         }
         // every used input by its semantic: the grid's UV in TEXCOORD0, the frozen values elsewhere
         let mut inputs = BTreeMap::new();
-        for s in self.shader.interface.inputs.iter().filter(|s| s.used) {
+        for s in self.shader.interface().inputs.iter().filter(|s| s.used) {
             let input = match (s.label.name.to_ascii_uppercase().as_str(), s.label.index) {
                 ("POSITION", 1) => Input::Constant([0., 0., 0., 1.]),
                 ("NORMAL", 0) => Input::Constant([0., 1., 0., 0.]),
@@ -691,35 +702,24 @@ mod tests {
         }
         instruction(62, &[]);
         words[1] = words.len() as u32;
+        // the signatures state what the program writes: o0 and o2 whole, o1 and o4 when `writes`, o3 as `output` says
+        let mut targets = vec![(0, 15), (2, 15)];
+        if writes {
+            targets.extend([(1, 15), (4, 15)]);
+        }
+        targets.extend(output.map(|(mask, _)| (3, mask)));
+        let bytes = container(
+            &words,
+            &signature(&[("TEXCOORD", 0, 0, 0, 15, 15)]),
+            &signature(
+                &targets
+                    .iter()
+                    .map(|&(register, mask)| ("SV_Target", register, 64, register, mask, 0))
+                    .collect::<Vec<_>>(),
+            ),
+        );
         Prepared {
-            shader: Shader {
-                program: primase_dxbc::Program::from_words(&words).unwrap(),
-                interface: primase_dxbc::Interface {
-                    stage: primase_shader::Stage::Pixel,
-                    inputs: vec![primase_dxbc::Varying {
-                        label: primase_shader::Label {
-                            name: "TEXCOORD".into(),
-                            index: 0,
-                        },
-                        system: None,
-                        value: primase_shader::Value {
-                            scalar: primase_shader::ScalarType::Float,
-                            width: 4,
-                        },
-                        interp: None,
-                        used: true,
-                        provenance: primase_shader::VaryingProvenance {
-                            d3d: Some(primase_shader::D3dSignature {
-                                register: 0,
-                                mask: 15,
-                                read_write_mask: 15,
-                            }),
-                        },
-                    }],
-                    outputs: vec![],
-                    resources: vec![],
-                },
-            },
+            shader: ProgramShader::new(primase_dxbc::lift(&bytes).unwrap()).unwrap(),
             constants: Constants::new(&Layout::default()),
             textures: BTreeMap::new(),
             alpha: None,
@@ -730,6 +730,52 @@ mod tests {
             reads_second_uv: false,
             largest_colour_dimension: 0,
         }
+    }
+    /// A signature chunk: its elements as (name, index, system value, register, mask, read-write mask), floats.
+    fn signature(elements: &[(&str, u32, u32, u32, u8, u8)]) -> Vec<u8> {
+        let mut records = Vec::new();
+        let mut names = Vec::new();
+        let names_at = 8 + 24 * elements.len() as u32;
+        for &(name, index, system, register, mask, read_write) in elements {
+            for word in [names_at + names.len() as u32, index, system, 3, register] {
+                records.extend(word.to_le_bytes());
+            }
+            records.extend([mask, read_write, 0, 0]);
+            names.extend(name.bytes().chain([0]));
+        }
+        let mut out = Vec::new();
+        for word in [elements.len() as u32, 8] {
+            out.extend(word.to_le_bytes());
+        }
+        out.extend(records);
+        out.extend(names);
+        out.resize(out.len().next_multiple_of(4), 0);
+        out
+    }
+    /// A DXBC container around a ps_5_0 program's `words` and its two signatures.
+    fn container(words: &[u32], input: &[u8], output: &[u8]) -> Vec<u8> {
+        let code: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let chunks: [(&[u8; 4], &[u8]); 3] = [(b"ISGN", input), (b"OSGN", output), (b"SHEX", &code)];
+        let mut at = 32 + 4 * chunks.len();
+        let mut offsets = Vec::new();
+        for (_, data) in &chunks {
+            offsets.push(at as u32);
+            at += 8 + data.len();
+        }
+        let mut out = b"DXBC".to_vec();
+        out.extend([0u8; 16]);
+        for word in [1, at as u32, chunks.len() as u32] {
+            out.extend(word.to_le_bytes());
+        }
+        for offset in offsets {
+            out.extend(offset.to_le_bytes());
+        }
+        for (tag, data) in chunks {
+            out.extend(tag);
+            out.extend((data.len() as u32).to_le_bytes());
+            out.extend(data);
+        }
+        out
     }
 
     #[test]

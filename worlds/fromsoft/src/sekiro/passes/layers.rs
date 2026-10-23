@@ -29,14 +29,17 @@ impl<'a> AreaBake<'a> {
         let mut groups = groups(world)?;
         for group in &mut groups {
             let material = group.material.layered.as_ref().expect("layered group");
-            let (shader, _) = Self::bound(world, group)?;
+            let (shader, ..) = Self::bound(world, group)?;
             (group.period, group.period_exact) =
                 crate::layer_bake::sampled_period(&shader.interface, material)?;
         }
         Ok(Self { groups, payloads })
     }
-    /// A group's program and its pixel stage binding, from its material entity.
-    fn bound(world: &World, group: &MaterialGroups) -> Result<(primase_dxbc::Shader, StageBinding)> {
+    /// A group's program (parsed, and its container's bytes) and its pixel stage binding, from its material entity.
+    fn bound<'w>(
+        world: &'w World,
+        group: &MaterialGroups,
+    ) -> Result<(primase_dxbc::Shader, &'w [u8], StageBinding)> {
         let binding = world.get::<ShaderBinding>(group.entity).ok_or_else(|| {
             invalid(
                 "area bake",
@@ -59,7 +62,7 @@ impl<'a> AreaBake<'a> {
                 .map_err(|e| invalid("layer DXBC", e.word * 4, e.detail))?,
             interface: program.interface.clone(),
         };
-        Ok((shader, stage.clone()))
+        Ok((shader, &program.bytecode, stage.clone()))
     }
     /// A group's program bound to its materials' inputs, sampled at `sample_time` seconds.
     pub fn prepare(
@@ -79,7 +82,7 @@ impl<'a> AreaBake<'a> {
             .layered
             .as_ref()
             .ok_or_else(|| invalid("area bake", group, "group index"))?;
-        let (shader, stage) = Self::bound(world, g)?;
+        let (shader, bytecode, stage) = Self::bound(world, g)?;
         let view = |t: &Texture,
                     srgb: bool,
                     address: [primase_image::sampling::Address; 2]|
@@ -96,7 +99,8 @@ impl<'a> AreaBake<'a> {
             )?))
         };
         crate::layer_bake::Prepared::from_binding(
-            shader,
+            &shader,
+            bytecode,
             &stage,
             material,
             &crate::layer_bake::FrozenFrame::static_bake(sample_time),

@@ -462,7 +462,8 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
         )?))
     };
     let prepared = Prepared::from_binding(
-        shader,
+        &shader,
+        PROGRAM,
         &stage,
         &layered,
         &FrozenFrame::static_bake(1.5),

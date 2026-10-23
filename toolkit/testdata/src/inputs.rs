@@ -816,6 +816,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "the user's own install: the file extracted from its archive",
     },
     Variable {
+        name: "PRIMASE_FROMSOFT_BAKE_DIGEST",
+        kind: Kind::Switch,
+        gate: false,
+        about: r#"optional: the digest the baked layer textures of Sekiro's m11_01 in `worlds/fromsoft/tests/layer_bake_digest.rs` must have (printed by an earlier run)"#,
+        status: Status::Live,
+        source: "",
+    },
+    Variable {
         name: "PRIMASE_SKATE_MASK_ORACLE",
         kind: Kind::Input,
         gate: true,
