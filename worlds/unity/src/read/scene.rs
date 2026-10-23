@@ -1,5 +1,6 @@
 //! A scene's hierarchy: GameObjects, their Transforms (local TRS composed to world matrices in Unity's frame), and
-//! its mesh renderers, LODGroups, colliders, lights and terrains, each whatever its state.
+//! its mesh renderers (skinned ones with their bones), LODGroups, colliders, lights and terrains, each whatever its
+//! state.
 //!
 //! State is data: each object carries its [`OffFlag`]s, the GameObjects on its Transform chain stored inactive and the
 //! component itself stored disabled; Unity draws or uses it when it has none. A LODGroup lists its levels' renderers
@@ -137,6 +138,29 @@ struct Node {
     game_object: i64,
     father: i64,
     local: Matrix,
+    /// The stored local position, rotation (a quaternion `[x, y, z, w]`) and scale.
+    trs: ([f64; 3], [f64; 4], [f64; 3]),
+    /// A RectTransform: its `local` comes from its anchors, not from `trs`.
+    rect: bool,
+}
+
+/// A Transform as a joint of a skeleton: its GameObject's name, its father (a Transform's path id) and its local
+/// position, rotation (`[x, y, z, w]`) and scale as stored, in Unity's frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneJoint {
+    pub name: String,
+    pub father: Option<i64>,
+    pub translation: [f64; 3],
+    pub rotation: [f64; 4],
+    pub scale: [f64; 3],
+}
+
+/// A skinned renderer's bones: the Transforms (path ids in the renderer's file) its mesh's bone slots name, in slot
+/// order, and its root bone; a null entry stays `None`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RendererSkin {
+    pub bones: Vec<Option<i64>>,
+    pub root_bone: Option<i64>,
 }
 
 /// A mesh renderer with a mesh, whatever its state.
@@ -160,6 +184,8 @@ pub struct Renderer {
     pub receive_shadows: Option<bool>,
     /// What keeps it from being drawn; drawn when empty.
     pub off: Vec<OffFlag>,
+    /// A SkinnedMeshRenderer's bones; `None` for a MeshRenderer.
+    pub skin: Option<RendererSkin>,
 }
 
 /// A LODGroup: its levels' renderers (path ids in the scene's file, a level's in stored order, null entries left out),
@@ -215,6 +241,8 @@ impl Scene {
                             game_object: path_id(&t, "m_GameObject")?,
                             father: path_id(&t, "m_Father")?,
                             local: trs(p, q, s),
+                            trs: (p, q, s),
+                            rect: name_of(o) == "RectTransform",
                         },
                     );
                     if name_of(o) == "RectTransform" {
@@ -473,6 +501,28 @@ impl Scene {
         out
     }
 
+    /// Transform `tp` as a joint ([`SceneJoint`]); `None` when it is no Transform of this file. A RectTransform is
+    /// no joint: its local placement is not its stored position, rotation and scale.
+    pub fn joint(&self, tp: i64) -> Result<Option<SceneJoint>> {
+        let Some(n) = self.nodes.get(&tp) else {
+            return Ok(None);
+        };
+        if n.rect {
+            return Err(invalid(format!("Transform {tp} is a RectTransform, not a joint")));
+        }
+        Ok(Some(SceneJoint {
+            name: self
+                .game_objects
+                .get(&n.game_object)
+                .map_or("", |g| g.name.as_str())
+                .to_owned(),
+            father: (n.father != 0).then_some(n.father),
+            translation: n.trs.0,
+            rotation: n.trs.1,
+            scale: n.trs.2,
+        }))
+    }
+
     /// A Transform's local matrix.
     pub fn local_of(&self, tp: i64) -> Option<Matrix> {
         self.nodes.get(&tp).map(|n| n.local)
@@ -570,7 +620,12 @@ impl Scene {
         let class = |pid: i64| player.class_name(&r(pid)).unwrap_or("");
         let mut out = Vec::new();
         let mut skipped = Skipped::new();
-        for o in f.objects.iter().filter(|o| class(o.path_id) == "MeshRenderer") {
+        for o in f
+            .objects
+            .iter()
+            .filter(|o| matches!(class(o.path_id), "MeshRenderer" | "SkinnedMeshRenderer"))
+        {
+            let skinned = class(o.path_id) == "SkinnedMeshRenderer";
             let mr = player.decode(&r(o.path_id))?;
             let go = path_id(&mr, "m_GameObject")?;
             let Some(tp) = self.transform_of(go) else {
@@ -586,14 +641,21 @@ impl Scene {
             };
             let off = self.off_flags(tp, Some((o.path_id, flag(&mr, "m_Enabled")?)));
             let g = &self.game_objects[&go];
-            let Some(&mf) = g.components.iter().find(|&&c| class(c) == "MeshFilter") else {
-                *skipped.entry("no MeshFilter").or_default() += 1;
-                continue;
+            // a skinned renderer holds its mesh itself; a mesh renderer's is on its MeshFilter
+            let filter;
+            let mesh_ptr = if skinned {
+                mr.get("m_Mesh")
+                    .ok_or_else(|| invalid("SkinnedMeshRenderer without m_Mesh"))?
+            } else {
+                let Some(&mf) = g.components.iter().find(|&&c| class(c) == "MeshFilter") else {
+                    *skipped.entry("no MeshFilter").or_default() += 1;
+                    continue;
+                };
+                filter = player.decode(&r(mf))?;
+                filter
+                    .get("m_Mesh")
+                    .ok_or_else(|| invalid("MeshFilter without m_Mesh"))?
             };
-            let filter = player.decode(&r(mf))?;
-            let mesh_ptr = filter
-                .get("m_Mesh")
-                .ok_or_else(|| invalid("MeshFilter without m_Mesh"))?;
             let Some(mesh) = player.resolve(file, mesh_ptr)? else {
                 *skipped.entry("null mesh").or_default() += 1;
                 continue;
@@ -612,6 +674,30 @@ impl Scene {
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
             let submeshes = (count > 0).then_some((first as u32, count as u32));
+            let skin = if skinned {
+                let bone = |p: &Value| -> Result<Option<i64>> {
+                    let pid = p
+                        .get("m_PathID")
+                        .and_then(Value::as_i64)
+                        .ok_or_else(|| invalid("a bone pointer without m_PathID"))?;
+                    if p.get("m_FileID").and_then(Value::as_i64).unwrap_or(0) != 0 {
+                        return Err(invalid(format!(
+                            "SkinnedMeshRenderer {}: a bone in another file",
+                            o.path_id
+                        )));
+                    }
+                    Ok((pid != 0).then_some(pid))
+                };
+                Some(RendererSkin {
+                    bones: values(&mr, "m_Bones")?.iter().map(bone).collect::<Result<_>>()?,
+                    root_bone: match mr.get("m_RootBone") {
+                        Some(p) => bone(p)?,
+                        None => None,
+                    },
+                })
+            } else {
+                None
+            };
             out.push(Renderer {
                 renderer: r(o.path_id),
                 game_object: go,
@@ -631,6 +717,7 @@ impl Scene {
                 cast_shadows: mr.get("m_CastShadows").and_then(Value::as_i64).unwrap_or(1),
                 receive_shadows: mr.get("m_ReceiveShadows").and_then(Value::as_i64).map(|v| v != 0),
                 off,
+                skin,
             });
         }
         Ok((out, skipped))

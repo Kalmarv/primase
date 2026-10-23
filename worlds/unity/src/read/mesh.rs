@@ -63,13 +63,38 @@ pub struct SubMesh {
     pub base_vertex: u32,
 }
 
+/// A mesh's skin as stored: per vertex up to four bone influences (the vertex channels `BlendWeight` and
+/// `BlendIndices`), and per bone the bind pose, the matrix taking the renderer's local space to the bone's at bind time.
+/// Unity's frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshSkin {
+    /// The influences stored for each vertex (1 to 4); the lists below are padded to four with zero weights.
+    pub influences: usize,
+    /// Per vertex; a mesh with indices but no weights channel binds each vertex to its one bone wholly.
+    pub weights: Vec<[f32; 4]>,
+    /// Per vertex, a slot of the renderer's bone list (`m_Bones`), one bone of each pose in
+    /// [`MeshSkin::bind_poses`].
+    pub bones: Vec<[u32; 4]>,
+    /// `m_BindPose`, row-major (`[row][column]`, the translation in column 3).
+    pub bind_poses: Vec<[[f64; 4]; 4]>,
+}
+
+/// The blend channels of an uncompressed mesh: the influences stored a vertex and each vertex's weights and bone
+/// slots, padded to four.
+type BlendChannels = (usize, Vec<[f32; 4]>, Vec<[u32; 4]>);
+
 /// A mesh as stored, in Unity's frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnityMeshData {
     pub name: String,
     pub vertex_count: usize,
-    /// By shader channel (see [`CHANNELS`]); blend weights and indices are not decoded (skinning).
+    /// By shader channel (see [`CHANNELS`]); the blend weights and indices are in [`UnityMeshData::skin`].
     pub channels: [Option<Channel>; 12],
+    /// The mesh's skin: its blend weights and indices with the bind poses; `None` for a mesh without blend data and for
+    /// one with [`UnityMeshData::unlimited_weights`].
+    pub skin: Option<MeshSkin>,
+    /// The mesh stores a variable number of bone influences a vertex (`m_VariableBoneCountWeights`): not read.
+    pub unlimited_weights: bool,
     pub compressed: bool,
     /// The index buffer, decoded.
     pub indices: Vec<u32>,
@@ -189,6 +214,124 @@ fn rebuild_z(x: f32, y: f32, positive: bool) -> [f32; 3] {
     [x, y, if positive { z } else { -z }]
 }
 
+/// The bind poses of mesh `m` (`m_BindPose`, Matrix4x4f `eRC` fields), row-major.
+fn bind_poses(m: &Value, name: &str) -> Result<Vec<[[f64; 4]; 4]>> {
+    let list = match m.get("m_BindPose") {
+        Some(Value::Array(Array::Values(l))) => l.as_slice(),
+        Some(Value::Array(a)) if a.is_empty() => &[],
+        _ => return Err(invalid(format!("{name}: no m_BindPose"))),
+    };
+    list.iter()
+        .map(|p| {
+            let mut out = [[0.0; 4]; 4];
+            for (r, row) in out.iter_mut().enumerate() {
+                for (c, x) in row.iter_mut().enumerate() {
+                    let k = format!("e{r}{c}");
+                    *x = f64::from(
+                        p.get(&k)
+                            .and_then(Value::as_f32)
+                            .ok_or_else(|| invalid(format!("{name}: bind pose without {k}")))?,
+                    );
+                }
+            }
+            Ok(out)
+        })
+        .collect()
+}
+
+/// An IEEE binary16 value as an f32 (exact).
+fn half_to_f32(h: u16) -> f32 {
+    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let (exponent, fraction) = (i32::from((h >> 10) & 0x1F), f32::from(h & 0x3FF));
+    match exponent {
+        0 => sign * fraction * 2f32.powi(-24),
+        0x1F if fraction == 0.0 => sign * f32::INFINITY,
+        0x1F => f32::NAN,
+        e => sign * (1.0 + fraction / 1024.0) * 2f32.powi(e - 15),
+    }
+}
+
+/// A blend weight component by Unity's `VertexFormat`: `Float` (0), `Float16` (1), `UNorm8` (2) or `UNorm16` (4).
+fn blend_weight(bytes: &[u8], format: i64) -> f32 {
+    match format {
+        0 => f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+        1 => half_to_f32(u16::from_le_bytes([bytes[0], bytes[1]])),
+        2 => f32::from(bytes[0]) / 255.0,
+        _ => f32::from(u16::from_le_bytes([bytes[0], bytes[1]])) / 65535.0,
+    }
+}
+
+/// The `BlendWeight` and `BlendIndices` channels (12 and 13) of an uncompressed mesh: the influences stored per
+/// vertex and each vertex's weights and bone slots, padded to four with zeros. An indices channel without a weights
+/// channel is one influence of weight 1 (a rigid bind); a weights channel without indices, or of another dimension,
+/// is an error. `None` for a mesh without either channel. Indices are `UInt8` (6), `UInt16` (8) or `UInt32` (10).
+fn read_skin_channels(
+    name: &str,
+    info: &[(usize, usize, i64, usize)],
+    stream_at: &[(usize, usize)],
+    data: &[u8],
+    n: usize,
+) -> Result<Option<BlendChannels>> {
+    let channel = |ch: usize| info.get(ch).copied().filter(|c| c.3 > 0);
+    let (w, i) = (channel(12), channel(13));
+    let Some((is, io, ifmt, id)) = i else {
+        if w.is_some() {
+            return Err(invalid(format!("{name}: blend weights without blend indices")));
+        }
+        return Ok(None);
+    };
+    if id > 4 {
+        return Err(Error::Unsupported(format!(
+            "{name}: {id} bone influences a vertex"
+        )));
+    }
+    if !matches!(ifmt, 6 | 8 | 10) {
+        return Err(Error::Unsupported(format!(
+            "{name}: blend indices of format {ifmt}"
+        )));
+    }
+    if let Some((_, _, wfmt, wd)) = w {
+        if wd != id {
+            return Err(invalid(format!(
+                "{name}: {wd} blend weights and {id} blend indices a vertex"
+            )));
+        }
+        if !matches!(wfmt, 0 | 1 | 2 | 4) {
+            return Err(Error::Unsupported(format!(
+                "{name}: blend weights of format {wfmt}"
+            )));
+        }
+    } else if id != 1 {
+        return Err(invalid(format!(
+            "{name}: {id} blend indices a vertex and no blend weights"
+        )));
+    }
+    let at = |stream: usize, off: usize, row: usize, k: usize, size: usize| -> Result<&[u8]> {
+        let (base, stride) = stream_at[stream];
+        let from = base + row * stride + off + k * size;
+        data.get(from..from + size)
+            .ok_or_else(|| invalid(format!("{name}: blend data past the vertex data")))
+    };
+    let index_size = component_size(ifmt)?;
+    let mut weights = vec![[0.0f32; 4]; n];
+    let mut bones = vec![[0u32; 4]; n];
+    for v in 0..n {
+        for k in 0..id {
+            let b = at(is, io, v, k, index_size)?;
+            bones[v][k] = match ifmt {
+                6 => u32::from(b[0]),
+                8 => u32::from(u16::from_le_bytes([b[0], b[1]])),
+                _ => u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            };
+            weights[v][k] = match w {
+                Some((ws, wo, wfmt, _)) => blend_weight(at(ws, wo, v, k, component_size(wfmt)?)?, wfmt),
+                None => 1.0,
+            };
+        }
+    }
+    Ok(Some((id, weights, bones)))
+}
+
 impl UnityMeshData {
     /// Decode the Mesh object `r` of `player` (its vertex data in the mesh or streamed beside its file).
     pub fn read(player: &Player, r: &ObjRef) -> Result<Self> {
@@ -201,7 +344,16 @@ impl UnityMeshData {
             .get("m_CompressedMesh")
             .ok_or_else(|| invalid("mesh: no m_CompressedMesh"))?;
         let compressed = items(cm.get("m_Vertices").ok_or_else(|| invalid("no m_Vertices"))?)? > 0;
+        if compressed && cm.get("m_Weights").map(items).transpose()?.unwrap_or(0) > 0 {
+            return Err(Error::Unsupported(format!(
+                "{name}: compressed mesh skin weights"
+            )));
+        }
+        let unlimited_weights = m
+            .at(&["m_VariableBoneCountWeights", "m_Data"])
+            .is_some_and(|d| matches!(d, Value::Array(a) if !a.is_empty()));
         let mut channels: [Option<Channel>; 12] = Default::default();
+        let mut skin_channels = None;
         let vertex_count;
         if compressed {
             let get = |k: &str| {
@@ -308,6 +460,9 @@ impl UnityMeshData {
                 }
                 None => bytes(vd, "m_DataSize")?.to_vec(),
             };
+            if !unlimited_weights {
+                skin_channels = read_skin_channels(&name, &info, &stream_at, &data, vertex_count)?;
+            }
             for (ch, &(s, off, f, d)) in info.iter().enumerate().take(12) {
                 if d == 0 {
                     continue;
@@ -383,10 +538,38 @@ impl UnityMeshData {
                 .collect::<Result<Vec<_>>>()?,
             _ => return Err(invalid("mesh: no m_SubMeshes")),
         };
+        let skin = match skin_channels {
+            Some((influences, weights, bones)) => {
+                let bind_poses = bind_poses(&m, &name)?;
+                if let Some(v) = (0..vertex_count).find(|&v| {
+                    (0..4).any(|k| weights[v][k] > 0.0 && bones[v][k] as usize >= bind_poses.len())
+                }) {
+                    return Err(invalid(format!(
+                        "{name}: vertex {v} binds a bone beyond its {} bind poses",
+                        bind_poses.len()
+                    )));
+                }
+                if bind_poses.len() > usize::from(u16::MAX) {
+                    return Err(Error::Unsupported(format!(
+                        "{name}: {} bind poses (bone slots are 16 bits)",
+                        bind_poses.len()
+                    )));
+                }
+                Some(MeshSkin {
+                    influences,
+                    weights,
+                    bones,
+                    bind_poses,
+                })
+            }
+            None => None,
+        };
         Ok(UnityMeshData {
             name,
             vertex_count,
             channels,
+            skin,
+            unlimited_weights,
             compressed,
             indices,
             index_size,
@@ -479,6 +662,7 @@ fn make_finite(p: &mut Primitive, used: &BTreeSet<u32>, notices: &mut MeshNotice
         let what = match semantic {
             Semantic::TexCoord(_) => Some("non-finite texture coordinates read as 0"),
             Semantic::Color(_) => Some("non-finite vertex colour values read as 0"),
+            Semantic::Weights(_) => Some("non-finite skin weights read as 0"),
             _ => None,
         };
         if let Some(what) = what {
@@ -509,6 +693,24 @@ impl UnityMeshData {
     /// primitive is made finite as core requires ([`make_finite`]). What could not be read as stored is counted in the
     /// returned notices, over the primitives returned (and those left out).
     pub fn primitives(&self, range: Range<usize>) -> Result<(Vec<(usize, Primitive)>, MeshNotices)> {
+        self.primitives_with(range, false)
+    }
+
+    /// [`UnityMeshData::primitives`] with the skin's streams: `Joints(0)` (the bone slots, 16 bits) and `Weights(0)`
+    /// (floats), each vertex's four influences, the bone slot of a zero-weight influence beyond the bind poses set to
+    /// 0 (counted). An error for a mesh without a skin.
+    pub fn skinned_primitives(&self, range: Range<usize>) -> Result<(Vec<(usize, Primitive)>, MeshNotices)> {
+        if self.skin.is_none() {
+            return Err(invalid(format!("{}: no skin to read", self.name)));
+        }
+        self.primitives_with(range, true)
+    }
+
+    fn primitives_with(
+        &self,
+        range: Range<usize>,
+        skinned: bool,
+    ) -> Result<(Vec<(usize, Primitive)>, MeshNotices)> {
         let mut notices = MeshNotices::new();
         let n = self.vertex_count;
         let mut streams = BTreeMap::new();
@@ -569,6 +771,31 @@ impl UnityMeshData {
                 }
             };
             streams.insert(semantic, stream);
+        }
+        if let Some(skin) = self.skin.as_ref().filter(|_| skinned) {
+            let poses = skin.bind_poses.len() as u32;
+            let mut beyond = 0u64;
+            let joints = skin
+                .bones
+                .iter()
+                .map(|b| {
+                    b.map(|slot| {
+                        if slot >= poses {
+                            beyond += 1;
+                            0
+                        } else {
+                            slot as u16
+                        }
+                    })
+                })
+                .collect();
+            note(
+                &mut notices,
+                "zero-weight skin influences naming a bone beyond the bind poses set to bone 0 (vertices)",
+                beyond,
+            );
+            streams.insert(Semantic::Joints(0), Stream::U16x4(joints));
+            streams.insert(Semantic::Weights(0), Stream::F32x4(skin.weights.clone()));
         }
         let subs = self.submeshes.get(range.clone()).ok_or_else(|| {
             invalid(format!(
@@ -669,6 +896,8 @@ mod tests {
             name: "t".into(),
             vertex_count: 4,
             channels,
+            skin: None,
+            unlimited_weights: false,
             compressed: false,
             indices: vec![0, 1, 2],
             index_size: 2,
@@ -722,6 +951,8 @@ mod tests {
             name: "t".into(),
             vertex_count: channels[0].as_ref().map_or(0, |c| c.values.len() / c.dim),
             channels,
+            skin: None,
+            unlimited_weights: false,
             compressed: false,
             index_size: 2,
             submeshes: vec![SubMesh {
@@ -778,6 +1009,143 @@ mod tests {
                 ),
             ])
         );
+    }
+
+    /// The `info` rows of a mesh whose only channels are blend weights (12) and indices (13): (stream, offset, format,
+    /// dimension).
+    fn blend_info(
+        weights: (usize, usize, i64, usize),
+        indices: (usize, usize, i64, usize),
+    ) -> Vec<(usize, usize, i64, usize)> {
+        let mut info = vec![(0, 0, 0, 0); 14];
+        info[12] = weights;
+        info[13] = indices;
+        info
+    }
+
+    /// Two influences a vertex: float weights then 32-bit indices in one stream of stride 16, a rigid bind (indices
+    /// only), 16-bit normalised weights, and the refusals: weights without indices, other dimensions, five influences,
+    /// an unsupported format and data short of the vertices.
+    #[test]
+    fn blend_channels_read_by_their_formats_and_refuse_the_rest() {
+        let mut data = Vec::new();
+        for (w, i) in [([0.75f32, 0.25], [3u32, 1]), ([1.0, 0.0], [2, 0])] {
+            w.iter().for_each(|x| data.extend(x.to_le_bytes()));
+            i.iter().for_each(|x| data.extend(x.to_le_bytes()));
+        }
+        let info = blend_info((0, 0, 0, 2), (0, 8, 10, 2));
+        let (k, weights, bones) = read_skin_channels("m", &info, &[(0, 16)], &data, 2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(k, 2);
+        assert_eq!(weights, vec![[0.75, 0.25, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]);
+        assert_eq!(bones, vec![[3, 1, 0, 0], [2, 0, 0, 0]]);
+
+        // no weights channel: each vertex wholly on its one bone (8-bit indices here)
+        let (k, weights, bones) = read_skin_channels(
+            "m",
+            &blend_info((0, 0, 0, 0), (0, 0, 6, 1)),
+            &[(0, 1)],
+            &[5, 7],
+            2,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            (k, weights, bones),
+            (1, vec![[1.0, 0.0, 0.0, 0.0]; 2], vec![[5, 0, 0, 0], [7, 0, 0, 0]])
+        );
+
+        // 16-bit normalised weights with 16-bit indices
+        let data = [0xFF, 0xFF, 0x00, 0x00, 4, 0, 9, 0];
+        let (_, weights, bones) =
+            read_skin_channels("m", &blend_info((0, 0, 4, 2), (0, 4, 8, 2)), &[(0, 8)], &data, 1)
+                .unwrap()
+                .unwrap();
+        assert_eq!((weights, bones), (vec![[1.0, 0.0, 0.0, 0.0]], vec![[4, 9, 0, 0]]));
+
+        assert!(
+            read_skin_channels("m", &blend_info((0, 0, 0, 0), (0, 0, 0, 0)), &[(0, 0)], &[], 0)
+                .unwrap()
+                .is_none()
+        );
+        let refused = |info: Vec<(usize, usize, i64, usize)>, stride: usize, len: usize| {
+            read_skin_channels("m", &info, &[(0, stride)], &vec![0u8; len], 2)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(refused(blend_info((0, 0, 0, 2), (0, 0, 0, 0)), 8, 16).contains("without blend indices"));
+        assert!(
+            refused(blend_info((0, 0, 0, 2), (0, 8, 10, 3)), 20, 40)
+                .contains("2 blend weights and 3 blend indices")
+        );
+        assert!(refused(blend_info((0, 0, 0, 0), (0, 0, 10, 2)), 8, 16).contains("no blend weights"));
+        assert!(refused(blend_info((0, 0, 0, 4), (0, 16, 10, 5)), 36, 72).contains("5 bone influences"));
+        assert!(
+            refused(blend_info((0, 0, 3, 2), (0, 8, 10, 2)), 16, 32).contains("blend weights of format 3")
+        );
+        assert!(
+            refused(blend_info((0, 0, 0, 2), (0, 8, 5, 2)), 12, 24).contains("blend indices of format 5")
+        );
+        assert!(refused(blend_info((0, 0, 0, 2), (0, 8, 10, 2)), 16, 20).contains("past the vertex data"));
+    }
+
+    /// binary16 values: zero, a subnormal, one, the largest finite value, infinity and NaN.
+    #[test]
+    fn half_floats_convert_exactly() {
+        assert_eq!(half_to_f32(0x0000), 0.0);
+        assert_eq!(half_to_f32(0x0001), 2f32.powi(-24));
+        assert_eq!(half_to_f32(0x3C00), 1.0);
+        assert_eq!(half_to_f32(0xC000), -2.0);
+        assert_eq!(half_to_f32(0x7BFF), 65504.0);
+        assert_eq!(half_to_f32(0x7C00), f32::INFINITY);
+        assert!(half_to_f32(0x7E00).is_nan());
+    }
+
+    /// A skinned mesh's primitives carry `Joints(0)` (16-bit slots) and `Weights(0)` only when asked, compacted with the
+    /// vertices; a zero-weight influence beyond the bind poses reads as bone 0, counted.
+    #[test]
+    fn skinned_primitives_carry_the_skin_streams() {
+        let mut channels: [Option<Channel>; 12] = Default::default();
+        channels[0] = channel(3, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 5.0, 5.0]);
+        let mut m = mesh(channels, vec![0, 1, 3], 0);
+        m.skin = Some(MeshSkin {
+            influences: 2,
+            weights: vec![
+                [0.5, 0.5, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.25, 0.75, 0.0, 0.0],
+            ],
+            bones: vec![[1, 0, 0, 0], [0, 9, 0, 0], [0, 0, 0, 0], [0, 1, 0, 0]],
+            bind_poses: vec![[[0.0; 4]; 4]; 2],
+        });
+        let (plain, _) = m.primitives(0..1).unwrap();
+        assert!(!plain[0].1.streams.contains_key(&Semantic::Joints(0)));
+        let (skinned, notices) = m.skinned_primitives(0..1).unwrap();
+        let p = &skinned[0].1;
+        // vertices 0, 1 and 3 are used, in that order
+        assert_eq!(
+            p.streams[&Semantic::Joints(0)],
+            Stream::U16x4(vec![[1, 0, 0, 0], [0, 0, 0, 0], [0, 1, 0, 0]])
+        );
+        assert_eq!(
+            p.streams[&Semantic::Weights(0)],
+            Stream::F32x4(vec![
+                [0.5, 0.5, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.25, 0.75, 0.0, 0.0]
+            ])
+        );
+        assert_eq!(
+            notices,
+            MeshNotices::from([(
+                "zero-weight skin influences naming a bone beyond the bind poses set to bone 0 (vertices)",
+                1
+            )])
+        );
+        m.skin = None;
+        assert!(m.skinned_primitives(0..1).is_err());
     }
 
     /// A quad submesh is two triangles per quad and a line strip one line per segment, both counted.

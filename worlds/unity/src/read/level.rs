@@ -35,13 +35,14 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
+use primase_core::skin::SUM_TOLERANCE;
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{
-    Entity, Instance, LodForm, Lods, MaterialVariants, Mesh, Name, ShadowCast, Shadows, Source, Transform,
-    World,
+    Binding, BindingId, Deformation, Entity, Influences, Instance, Joint, JointId, LodForm, Lods,
+    MaterialVariants, Mesh, Name, Rest, RigInstance, ShadowCast, Shadows, Skeleton, Skin, SkinInstance, Slot,
+    Source, Transform, WeightRule, World,
 };
 
-use crate::Result;
 use crate::components::{
     ColliderMesh, UNITY, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape, UnityLight,
     UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings, UnityRenderer,
@@ -52,11 +53,12 @@ use crate::read::material::{ShaderData, UnityMaterialData};
 use crate::read::mesh::UnityMeshData;
 use crate::read::player::{ObjRef, Player};
 use crate::read::scene::{ColliderComponent, ColliderShape};
-use crate::read::scene::{IDENTITY, LodGroup, Matrix, OffFlag, Renderer, Scene, Skipped};
+use crate::read::scene::{IDENTITY, LodGroup, Matrix, OffFlag, Renderer, RendererSkin, Scene, Skipped};
 use crate::read::terrain::{TerrainData, TerrainLayerData};
 use crate::read::texture::UnityTexture as UnityTextureData;
 use crate::read::value::Value;
 use crate::shader::procedural;
+use crate::{Result, invalid};
 
 /// A prototype's or form's provenance: the Unity mesh it was read from, and the slice a static-batched renderer draws.
 pub(crate) fn mesh_source(mesh: &ObjRef, submeshes: Option<(u32, u32)>) -> Source {
@@ -129,6 +131,11 @@ pub struct LevelReport {
     pub lights: usize,
     /// Cameras read, whatever their state (`unity.camera`).
     pub cameras: usize,
+    /// Skinned renderers read with their skin (`core.skin_instance`), the skeletons made for their bones (every
+    /// Transform from a bone up to its scene root) and those skeletons' joints.
+    pub skinned_renderers: usize,
+    pub skeletons: usize,
+    pub joints: usize,
     /// RenderSettings names a sun (`unity.render_settings` holds it when it is a light read).
     pub sun_named: bool,
     /// Colliders read: those that collide, and those that do not by reason (inactive or disabled, trigger,
@@ -171,8 +178,92 @@ struct Proto {
 /// A coarser LOD level folded into a prototype: its mesh and materials.
 type Form = (ObjRef, Vec<Option<ObjRef>>);
 
-/// A prototype's key: its mesh, its static-batch slice, the chain of its coarser forms.
-type ProtoKey = (ObjRef, Option<(u32, u32)>, Vec<Form>);
+/// A prototype's key: its mesh, its static-batch slice, the chain of its coarser forms, whether it is drawn skinned.
+type ProtoKey = (ObjRef, Option<(u32, u32)>, Vec<Form>, bool);
+
+/// How a skinned renderer is skinned: the skeleton and rig its bones are joints of, and the joint of each bone slot.
+#[derive(Clone, Debug)]
+struct Skinning {
+    skeleton: Entity,
+    rig: Entity,
+    joints: Vec<JointId>,
+}
+
+/// The skin of a prototype being built: its mesh and, per binding, the skeleton and the joint of each bone slot.
+struct SkinBuild {
+    mesh: ObjRef,
+    bindings: Vec<(Entity, Vec<JointId>)>,
+}
+
+/// The skeleton, rig and joint of each Transform of the skeletons [`build_rigs`] made.
+type JointOf = BTreeMap<i64, (Entity, Entity, JointId)>;
+
+/// The skeletons of the bones in `bones` (lists of Transforms in `scene`'s file): one per scene root, its joints the
+/// bones and every Transform above them (in path id order, `JointId` their position), each with the local position,
+/// rotation and scale as stored, and a rig at the identity. Each Transform's skeleton, rig and joint, and the number
+/// of skeletons and joints made.
+fn build_rigs(w: &mut World, scene: &Scene, bones: &[&[Option<i64>]]) -> Result<(JointOf, usize, usize)> {
+    let mut joints: BTreeMap<i64, crate::read::scene::SceneJoint> = BTreeMap::new();
+    for &tp in bones.iter().flat_map(|list| list.iter().flatten()) {
+        let mut at = Some(tp);
+        while let Some(t) = at {
+            if joints.contains_key(&t) {
+                break;
+            }
+            let j = scene
+                .joint(t)?
+                .ok_or_else(|| invalid(format!("bone {t} is no Transform of its file")))?;
+            at = j.father;
+            joints.insert(t, j);
+        }
+    }
+    let root_of = |mut t: i64| {
+        while let Some(f) = joints[&t].father {
+            t = f;
+        }
+        t
+    };
+    let mut groups: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    for &t in joints.keys() {
+        groups.entry(root_of(t)).or_default().push(t);
+    }
+    let mut out = BTreeMap::new();
+    for (root, members) in &groups {
+        let id: BTreeMap<i64, JointId> = members
+            .iter()
+            .enumerate()
+            .map(|(k, &t)| (t, JointId(k as u32)))
+            .collect();
+        let list: Vec<Joint> = members
+            .iter()
+            .map(|t| {
+                let j = &joints[t];
+                Joint {
+                    id: id[t],
+                    name: j.name.clone(),
+                    parent: j.father.map(|f| id[&f]),
+                    rest: Rest::Trs {
+                        translation: j.translation.map(|x| x as f32),
+                        rotation: j.rotation.map(|x| x as f32),
+                        scale: j.scale.map(|x| x as f32),
+                    }
+                    .converted(&UNITY),
+                }
+            })
+            .collect();
+        let skeleton = w.spawn();
+        w.insert(skeleton, Name(format!("skeleton {}", joints[root].name)));
+        w.insert(skeleton, Skeleton { joints: list });
+        let rig = w.spawn();
+        w.insert(rig, Name(format!("rig {}", joints[root].name)));
+        w.insert(rig, RigInstance { skeleton });
+        w.insert(rig, Transform::IDENTITY);
+        for &t in members {
+            out.insert(t, (skeleton, rig, id[&t]));
+        }
+    }
+    Ok((out, groups.len(), joints.len()))
+}
 
 /// What a renderer is in its scene's LODGroups.
 #[derive(Clone, Debug, Default)]
@@ -254,6 +345,7 @@ fn lod_roles(
         let fits = singles.as_ref().is_some_and(|rs| {
             let r0 = rs[0];
             r0.submeshes.is_none()
+                && rs.iter().all(|r| r.skin.is_none())
                 && rs[1..].iter().all(|r| {
                     close(&r.world, &r0.world)
                         && r.submeshes.is_none()
@@ -477,6 +569,13 @@ impl Builder<'_> {
     /// Count what reading a mesh could not put into core as stored ([`LevelReport::notices`]).
     pub(crate) fn note_mesh(&mut self, notices: crate::read::mesh::MeshNotices) {
         for (what, n) in notices {
+            *self.report.notices.entry(what.to_owned()).or_default() += n;
+        }
+    }
+
+    /// Count what was read differently from how it is stored ([`LevelReport::notices`]).
+    fn notice(&mut self, what: &str, n: u64) {
+        if n > 0 {
             *self.report.notices.entry(what.to_owned()).or_default() += n;
         }
     }
@@ -962,6 +1061,67 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
     let (first, rest): (Vec<_>, Vec<_>) = placed.into_iter().partition(|(tree, r)| drawn_as_stored(tree, r));
     let mut meshes: BTreeMap<ObjRef, UnityMeshData> = BTreeMap::new();
     let mut prototypes: BTreeMap<ProtoKey, Proto> = BTreeMap::new();
+    // the skinned renderers whose skin is read: a mesh with blend weights, a bone for each of its bind poses, every
+    // bone a joint of one skeleton; the others are drawn unskinned, counted
+    let mut candidates: Vec<(&Renderer, &RendererSkin)> = Vec::new();
+    for (tree, r) in first.iter().chain(rest.iter()) {
+        let Some(skin) = &r.skin else { continue };
+        if tree.is_some() {
+            b.notice("tree renderers with bones drawn unskinned", 1);
+            continue;
+        }
+        if !meshes.contains_key(&r.mesh) {
+            meshes.insert(r.mesh.clone(), UnityMeshData::read(player, &r.mesh)?);
+        }
+        let data = &meshes[&r.mesh];
+        let why = if data.unlimited_weights {
+            Some(
+                "skinned renderers whose mesh stores a variable number of influences a vertex drawn unskinned",
+            )
+        } else if let Some(mesh_skin) = &data.skin {
+            if mesh_skin.bind_poses.len() != skin.bones.len() {
+                Some("skinned renderers whose bones and bind poses differ in number drawn unskinned")
+            } else if skin.bones.is_empty() {
+                Some("skinned renderers without bones drawn unskinned")
+            } else if skin.bones.iter().any(Option::is_none) {
+                Some("skinned renderers with a null bone drawn unskinned")
+            } else {
+                None
+            }
+        } else {
+            Some("skinned renderers whose mesh has no blend weights drawn unskinned")
+        };
+        match why {
+            Some(why) => b.notice(why, 1),
+            None => candidates.push((*r, skin)),
+        }
+    }
+    let mut skinning: BTreeMap<ObjRef, Skinning> = BTreeMap::new();
+    if !candidates.is_empty() {
+        let lists: Vec<&[Option<i64>]> = candidates.iter().map(|(_, s)| s.bones.as_slice()).collect();
+        let (of, skeletons, joints) = build_rigs(w, &scene, &lists)?;
+        b.report.skeletons = skeletons;
+        b.report.joints = joints;
+        for (r, skin) in &candidates {
+            let at: Vec<(Entity, Entity, JointId)> = skin.bones.iter().flatten().map(|t| of[t]).collect();
+            if at.iter().any(|(sk, ..)| *sk != at[0].0) {
+                b.notice(
+                    "skinned renderers whose bones hang from different roots drawn unskinned",
+                    1,
+                );
+                continue;
+            }
+            skinning.insert(
+                r.renderer.clone(),
+                Skinning {
+                    skeleton: at[0].0,
+                    rig: at[0].1,
+                    joints: at.iter().map(|a| a.2).collect(),
+                },
+            );
+        }
+    }
+    let mut skin_builds: BTreeMap<Entity, SkinBuild> = BTreeMap::new();
     for batch in [first, rest] {
         for (tree, r) in batch {
             let role = role_of(r);
@@ -991,9 +1151,20 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
                 Some((first, count)) => (first, count as usize),
                 None => (0, data.submeshes.len()),
             };
-            let key = (r.mesh.clone(), r.submeshes, role.forms.clone());
+            let skinning_of = skinning.get(&r.renderer);
+            let key = (
+                r.mesh.clone(),
+                r.submeshes,
+                role.forms.clone(),
+                skinning_of.is_some(),
+            );
             if !prototypes.contains_key(&key) {
-                let (read, notices) = data.primitives(first as usize..first as usize + count)?;
+                let range = first as usize..first as usize + count;
+                let (read, notices) = if skinning_of.is_some() {
+                    data.skinned_primitives(range)?
+                } else {
+                    data.primitives(range)?
+                };
                 b.note_mesh(notices);
                 let (drawn, primitives): (Vec<u32>, Vec<_>) =
                     read.into_iter().map(|(k, p)| (k as u32, p)).unzip();
@@ -1057,6 +1228,31 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
             );
             w.insert(e, Name(r.path.clone()));
             w.insert(e, unity_renderer(r));
+            if let Some(sk) = skinning_of {
+                let build = skin_builds.entry(entity).or_insert_with(|| SkinBuild {
+                    mesh: r.mesh.clone(),
+                    bindings: Vec::new(),
+                });
+                let id = match build
+                    .bindings
+                    .iter()
+                    .position(|(skeleton, joints)| *skeleton == sk.skeleton && *joints == sk.joints)
+                {
+                    Some(id) => id,
+                    None => {
+                        build.bindings.push((sk.skeleton, sk.joints.clone()));
+                        build.bindings.len() - 1
+                    }
+                };
+                w.insert(
+                    e,
+                    SkinInstance {
+                        rig: sk.rig,
+                        binding: BindingId(id as u32),
+                    },
+                );
+                b.report.skinned_renderers += 1;
+            }
             let cast = match r.cast_shadows {
                 0 => Some(ShadowCast::Off),
                 1 => Some(ShadowCast::On),
@@ -1198,6 +1394,54 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
         if overrides.iter().any(|o| !o.is_empty()) {
             w.insert(p.entity, MaterialVariants(overrides));
         }
+    }
+    // each skinned prototype's skin: the influences its streams carry, a binding per skeleton and bone list
+    for (proto, build) in &skin_builds {
+        let Some(mesh_skin) = meshes[&build.mesh].skin.as_ref() else {
+            continue;
+        };
+        let primitives = w.get::<Mesh>(*proto).map_or(0, |m| m.primitives().len());
+        let sums_to_one = mesh_skin
+            .weights
+            .iter()
+            .all(|wt| (wt.iter().sum::<f32>() - 1.0).abs() <= SUM_TOLERANCE);
+        b.notice(
+            "skinned meshes whose weights do not all sum to 1 (used as stored)",
+            u64::from(!sums_to_one),
+        );
+        let bindings = build
+            .bindings
+            .iter()
+            .enumerate()
+            .map(|(id, (skeleton, joints))| {
+                let palette: Vec<Slot> = joints
+                    .iter()
+                    .zip(&mesh_skin.bind_poses)
+                    .map(|(&joint, pose)| Slot {
+                        joint,
+                        inverse_bind: UNITY.transform(&transform_of(pose)),
+                    })
+                    .collect();
+                Binding {
+                    id: BindingId(id as u32),
+                    skeleton: *skeleton,
+                    palettes: vec![Some(palette); primitives],
+                    deformation: Deformation::Linear,
+                }
+            })
+            .collect();
+        w.insert(
+            *proto,
+            Skin {
+                influences: vec![Some(Influences::Streams { sets: 1 }); primitives],
+                weights: if sums_to_one {
+                    WeightRule::SumsToOne
+                } else {
+                    WeightRule::AsStored
+                },
+                bindings,
+            },
+        );
     }
     // colliders: the scene's, then the terrain trees'
     for c in scene.colliders_under(player, None)? {
@@ -1462,6 +1706,7 @@ mod tests {
             cast_shadows: 1,
             receive_shadows: Some(true),
             off: Vec::new(),
+            skin: None,
         }
     }
 
