@@ -10,7 +10,7 @@ use primase_core::convert::{Finished, Report, Writer, convert};
 use primase_core::pass::{PassManager, PassRegistry, Target};
 use primase_gta::convert::{GtaOptions, GtaReader};
 use primase_reskate::{AssembledMaterial, EncodingOptions, assembled_materials};
-use primase_testdata::real_data;
+use primase_testdata::{Game, install, keys};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -51,7 +51,7 @@ impl Writer for Both {
 
 #[test]
 fn legion_materials_are_the_same_encoded_or_identified() -> Result<()> {
-    let (Some(install), Some(keys)) = (real_data("PRIMASE_GTA_DIR"), real_data("PRIMASE_GTA_KEYS")) else {
+    let (Some(install), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
         return Ok(());
     };
     let mut reader = GtaReader::open(&GtaOptions {

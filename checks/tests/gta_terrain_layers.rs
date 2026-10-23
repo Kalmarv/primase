@@ -2,11 +2,11 @@
 //! writes them (`PRIMASE_layered_material` version 2, the lookup a mask at TEXCOORD_1), and after `bake-layer-channels`
 //! they are vertex-weighted (version 1, a colour attribute) for a destination that blends by vertex weights.
 //!
-//! Needs `PRIMASE_GTA_DIR` and `PRIMASE_GTA_KEYS`.
+//! Needs `installs.gta` and `keys.gta`.
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{LayeredMaterial, World};
 use primase_gta::read::source::GtaSource;
-use primase_testdata::real_data;
+use primase_testdata::{Game, install, keys};
 use serde_json::Value;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -45,7 +45,7 @@ fn layered(w: &World) -> Result<Vec<Value>> {
 
 #[test]
 fn lookup_terrain_is_written_per_pixel_and_bakes_to_vertex_weights() -> Result<()> {
-    let (Some(install), Some(keys)) = (real_data("PRIMASE_GTA_DIR"), real_data("PRIMASE_GTA_KEYS")) else {
+    let (Some(install), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
         return Ok(());
     };
     let source = GtaSource::open(&install, &keys)?;
