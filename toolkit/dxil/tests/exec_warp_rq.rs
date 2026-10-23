@@ -48,7 +48,22 @@ fn bits(x: f32) -> String {
 
 /// A scene from a seed: bottom levels of several geometries of random triangles (some opaque), and instances with a
 /// rotation about z, a scale and a translation, masks, ids and flags.
-fn scene(seed: u64, with_instance_flags: bool) -> Scene {
+/// Eight spheres (centre, radius) the procedural primitives stand for.
+fn spheres() -> Vec<[f32; 4]> {
+    let mut r = Lcg(31337);
+    (0..8)
+        .map(|_| {
+            [
+                r.float(-2.5, 2.5),
+                r.float(-2.5, 2.5),
+                r.float(-2.5, 2.5),
+                r.float(0.5, 1.5),
+            ]
+        })
+        .collect()
+}
+
+fn scene(seed: u64, with_instance_flags: bool, procedural: bool) -> Scene {
     let mut r = Lcg(seed);
     let mut bottoms = Vec::new();
     for _ in 0..2 {
@@ -66,6 +81,27 @@ fn scene(seed: u64, with_instance_flags: bool) -> Scene {
             }
             geometries.push(Geometry {
                 positions,
+                boxes: Vec::new(),
+                indices: None,
+                opaque: r.below(2) == 0,
+            });
+        }
+        if procedural {
+            // four boxes, each bounding sphere k with room to spare, so that some rays enter a box and miss the sphere
+            let boxes = spheres()
+                .iter()
+                .take(4)
+                .map(|s| {
+                    let slack = 1.3 * s[3];
+                    [
+                        [s[0] - slack, s[1] - slack, s[2] - slack],
+                        [s[0] + slack, s[1] + slack, s[2] + slack],
+                    ]
+                })
+                .collect();
+            geometries.push(Geometry {
+                positions: Vec::new(),
+                boxes,
                 indices: None,
                 opaque: r.below(2) == 0,
             });
@@ -106,8 +142,10 @@ fn scene(seed: u64, with_instance_flags: bool) -> Scene {
     Scene { bottoms, instances }
 }
 
-/// 64 rays: origin, direction, flags, mask.
-fn rays(seed: u64) -> Vec<([f32; 3], [f32; 3], u32, u32)> {
+/// 64 rays: origin, direction, flags, mask. With `outside`, every origin is far from the scene (further than any
+/// instance of it reaches), so that no ray starts inside a procedural primitive's box: WARP offers no candidate for a box
+/// the ray starts in (its entry before the ray's t min), which DXR does not say, so the gate leaves such rays out.
+fn rays(seed: u64, outside: bool) -> Vec<([f32; 3], [f32; 3], u32, u32)> {
     let mut r = Lcg(seed);
     let flag_sets = [
         0u32,
@@ -124,7 +162,12 @@ fn rays(seed: u64) -> Vec<([f32; 3], [f32; 3], u32, u32)> {
     ];
     (0..64)
         .map(|_| {
-            let origin = [r.float(-5.0, 5.0), r.float(-5.0, 5.0), r.float(-5.0, 5.0)];
+            let mut origin = [r.float(-5.0, 5.0), r.float(-5.0, 5.0), r.float(-5.0, 5.0)];
+            if outside {
+                // push the origin out along itself to a distance of 16 or more
+                let length = origin.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-3);
+                origin = origin.map(|x| x / length * 16.0);
+            }
             let target = [r.float(-3.0, 3.0), r.float(-3.0, 3.0), r.float(-3.0, 3.0)];
             let direction = [
                 target[0] - origin[0],
@@ -143,12 +186,21 @@ fn rays(seed: u64) -> Vec<([f32; 3], [f32; 3], u32, u32)> {
 
 #[test]
 fn ray_queries_agree_with_warp() {
+    gate("ray_query_grid", false);
+}
+
+#[test]
+fn procedural_primitives_agree_with_warp() {
+    gate("ray_query_procedural", true);
+}
+
+fn gate(fixture_name: &str, procedural: bool) {
     let Some(warp) = tool(Tool::Warp) else {
         return;
     };
     let scratch = scratch().join("warp");
     std::fs::create_dir_all(&scratch).unwrap();
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ray_query_grid.dxil");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{fixture_name}.dxil"));
     let bytes = std::fs::read(&fixture).unwrap();
     let program = lift(&bytes).unwrap();
     let exe = Executable::new(&program).unwrap();
@@ -174,9 +226,9 @@ fn ray_queries_agree_with_warp() {
     let mut ours = BTreeMap::new();
     let mut cases = Vec::new();
     for (seed, instance_flags) in (1u64..=12).map(|seed| (seed, seed > 3)) {
-        let name = format!("rq{seed}");
-        let scene = scene(seed, instance_flags);
-        let rays = rays(seed * 7919);
+        let name = format!("{fixture_name}{seed}");
+        let scene = scene(seed, instance_flags, procedural);
+        let rays = rays(seed * 7919, procedural);
         let mut rows: Vec<[u32; 4]> = Vec::new();
         rows.extend(
             rays.iter()
@@ -187,6 +239,9 @@ fn ray_queries_agree_with_warp() {
                 .map(|t| [t.1[0], t.1[1], t.1[2], 0.0].map(f32::to_bits)),
         );
         rows.extend(rays.iter().map(|t| [t.2, t.3, 0, 0]));
+        if procedural {
+            rows.extend(spheres().iter().map(|s| s.map(f32::to_bits)));
+        }
 
         text.push_str(&format!(
             "case {name}\napi d3d12rt\ncs {}\nresults 640\ngroups 1 1 1\ncb 0 {}\n",
@@ -201,6 +256,27 @@ fn ray_queries_agree_with_warp() {
         }
         for (b, geometries) in scene.bottoms.iter().enumerate() {
             for g in geometries {
+                if !g.boxes.is_empty() {
+                    text.push_str(&format!(
+                        "procedural {b} {} {}
+",
+                        u8::from(g.opaque),
+                        g.boxes.len()
+                    ));
+                    for corners in &g.boxes {
+                        text.push_str(&format!(
+                            "box {}
+",
+                            corners
+                                .iter()
+                                .flatten()
+                                .map(|x| bits(*x))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        ));
+                    }
+                    continue;
+                }
                 text.push_str(&format!(
                     "geometry {b} {} {}\n",
                     u8::from(g.opaque),
@@ -249,8 +325,8 @@ fn ray_queries_agree_with_warp() {
         ours.insert(name.clone(), buffers.remove(&results).unwrap());
         cases.push((name, rays));
     }
-    let cases_file = scratch.join("rq.cases.txt");
-    let out_file = scratch.join("rq.warp.jsonl");
+    let cases_file = scratch.join(format!("{fixture_name}.cases.txt"));
+    let out_file = scratch.join(format!("{fixture_name}.warp.jsonl"));
     std::fs::write(&cases_file, text).unwrap();
     let run = std::process::Command::new(&warp)
         .arg(&cases_file)
@@ -298,10 +374,10 @@ fn ray_queries_agree_with_warp() {
                 let (x, y) = (f32::from_bits(x), f32::from_bits(y));
                 (x - y).abs() <= 1e-4 * x.abs().max(y.abs()).max(1e-2)
             };
+            // a triangle also has barycentrics and a facing; a procedural hit has neither (the words are 0)
             let same = [2, 3, 4, 5, 6, 9].iter().all(|&k| a[k] == b[k])
                 && close(a[1], b[1])
-                && close(a[7], b[7])
-                && close(a[8], b[8]);
+                && (a[0] != 1 || (close(a[7], b[7]) && close(a[8], b[8])));
             if !same {
                 let (o, d, f, m) = &rays[i];
                 mismatches.push(format!(
@@ -311,7 +387,7 @@ fn ray_queries_agree_with_warp() {
         }
     }
     println!(
-        "{} rays: {hits} hits and {misses} misses agree with WARP, {} differ",
+        "{fixture_name}: {} rays: {hits} hits and {misses} misses agree with WARP, {} differ",
         12 * 64,
         mismatches.len()
     );

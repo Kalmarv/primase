@@ -360,6 +360,11 @@ pub(super) enum St {
     RqConfirm {
         q: u32,
     },
+    /// Commit the procedural candidate at the distance in this register.
+    RqGenerate {
+        q: u32,
+        t: u32,
+    },
     RqTerminate {
         q: u32,
     },

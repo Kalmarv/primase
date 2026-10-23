@@ -1202,6 +1202,17 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
                         }
                     }
                 }
+                St::RqGenerate { q, t } => {
+                    for l in 0..N {
+                        if active.has(l) {
+                            let t = fl(f(self.regs[*t as usize * N + l][0]), self.ftz);
+                            self.query_slots(*q)[l]
+                                .as_mut()
+                                .ok_or("an intersection generated before the query was initialized")?
+                                .generate(t)?;
+                        }
+                    }
+                }
                 St::RqTerminate { q } => {
                     for l in 0..N {
                         if active.has(l) {

@@ -517,14 +517,15 @@ pub(super) fn compile(
             E::RayQueryGetIntersection { query, committed } => {
                 let q = rq_of[query.index()].ok_or("an intersection of something that is not a ray query")?;
                 let first = n_slots as u32;
-                n_slots += 17;
+                n_slots += 19;
                 let r = |k: u32| first + k;
                 let (o2w, w2o) = (
                     (0..4).map(|c| (r(9 + c), 3)).collect::<Vec<_>>(),
                     (0..4).map(|c| (r(13 + c), 3)).collect::<Vec<_>>(),
                 );
-                nested_of.insert(r(9), o2w);
-                nested_of.insert(r(13), w2o);
+                // the matrices are stood for by registers of their own (17 and 18), not by their first columns'
+                nested_of.insert(r(17), o2w);
+                nested_of.insert(r(18), w2o);
                 agg_of[i] = Some(vec![
                     (r(0), 1),
                     (r(1), 1),
@@ -535,8 +536,8 @@ pub(super) fn compile(
                     (r(6), 1),
                     (r(7), 2),
                     (r(8), 1),
-                    (r(9), 0),
-                    (r(13), 0),
+                    (r(17), 0),
+                    (r(18), 0),
                 ]);
                 op_of[i] = Some(Op::RqHit {
                     q,
@@ -1136,7 +1137,11 @@ pub(super) fn compile(
                         }),
                         naga::RayQueryFunction::ConfirmIntersection => out.push(St::RqConfirm { q }),
                         naga::RayQueryFunction::Terminate => out.push(St::RqTerminate { q }),
-                        naga::RayQueryFunction::GenerateIntersection { .. } => return Err(ray_queries()),
+                        naga::RayQueryFunction::GenerateIntersection { hit_t } => {
+                            let t = cx.slot[hit_t.index()];
+                            cx.uses[t as usize] += 1;
+                            out.push(St::RqGenerate { q, t });
+                        }
                     }
                 }
                 Statement::Store { pointer, value } => {
@@ -1430,7 +1435,12 @@ pub(super) fn compile(
         }
         for l in 0..n as u32 {
             *stored.entry(o + l).or_default() += 1;
-            if let Some(src) = prov0[slot[value.index()] as usize].and_then(|pr| pr[l as usize]) {
+            if let Some(src) = prov0
+                .get(slot[value.index()] as usize)
+                .copied()
+                .flatten()
+                .and_then(|pr| pr[l as usize])
+            {
                 local_src.insert(o + l, src);
             }
         }
@@ -1579,11 +1589,6 @@ fn is_buffer_array(
             .is_some_and(|&gid| matches!(globals[gid as usize].kind, GlobalKind::StorageArray(..))),
         _ => false,
     }
-}
-
-/// Why a program that generates an intersection is refused.
-fn ray_queries() -> String {
-    "a ray query generates an intersection with a procedural primitive: scenes carry triangles only".into()
 }
 
 /// An image global as an expression names it: the resource, its class, its dimension and whether it is arrayed.

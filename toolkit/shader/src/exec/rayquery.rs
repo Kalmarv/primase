@@ -15,7 +15,9 @@
 //! Checked against WARP's DXR 1.1 (`toolkit/dxil/tests/exec_warp_rq.rs`): 768 rays through random scenes with instance
 //! transforms, masks and flags, every committed hit equal in its integer fields, facing included, and in distance and
 //! barycentrics to 1e-4 relative. Not checked: rays that hit an edge or a vertex exactly (the scenes are random), and
-//! `ACCEPT_FIRST_HIT_AND_END_SEARCH`, whose hit depends on the order a traversal visits triangles in.
+//! `ACCEPT_FIRST_HIT_AND_END_SEARCH`, whose hit depends on the order a traversal visits triangles in. Procedural
+//! primitives are checked the same way (`ray_query_procedural.hlsl`, spheres in boxes) with the two exceptions named
+//! at [`Query::generate`].
 
 use std::collections::BTreeMap;
 
@@ -33,17 +35,31 @@ pub mod flags {
     pub const SKIP_PROCEDURAL: u32 = 0x200;
 }
 
-/// One geometry of a bottom level: triangles.
+/// One geometry of a bottom level: triangles, or (when `boxes` is not empty) procedural primitives, each an
+/// axis-aligned box the program intersects itself.
 #[derive(Clone, Debug)]
 pub struct Geometry {
     pub positions: Vec<[f32; 3]>,
     /// Vertex indices, three to a triangle; none: the positions are the triangles, three to each.
     pub indices: Option<Vec<u32>>,
-    /// Whether its triangles are opaque (D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE).
+    /// The boxes of a procedural geometry, each as its minimum and maximum corner (the positions are then unused).
+    pub boxes: Vec<[[f32; 3]; 2]>,
+    /// Whether its primitives are opaque (D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE).
     pub opaque: bool,
 }
 
 impl Geometry {
+    fn procedural(&self) -> bool {
+        !self.boxes.is_empty()
+    }
+    /// How many primitives it has: triangles or boxes.
+    fn primitives(&self) -> usize {
+        if self.procedural() {
+            self.boxes.len()
+        } else {
+            self.triangles()
+        }
+    }
     fn triangles(&self) -> usize {
         self.indices.as_ref().map_or(self.positions.len(), Vec::len) / 3
     }
@@ -285,12 +301,16 @@ impl Built {
             let mut primitives = Vec::new();
             let mut bounds = Vec::new();
             for (g, geometry) in geometries.iter().enumerate() {
-                for k in 0..geometry.triangles() {
-                    let tri = geometry.triangle(k).ok_or_else(|| {
-                        format!("geometry {g}: triangle {k} names a vertex that does not exist")
-                    })?;
+                for k in 0..geometry.primitives() {
                     let mut b = Aabb::EMPTY;
-                    tri.iter().for_each(|&p| b.grow(p));
+                    if geometry.procedural() {
+                        geometry.boxes[k].iter().for_each(|&p| b.grow(p));
+                    } else {
+                        let tri = geometry.triangle(k).ok_or_else(|| {
+                            format!("geometry {g}: triangle {k} names a vertex that does not exist")
+                        })?;
+                        tri.iter().for_each(|&p| b.grow(p));
+                    }
                     primitives.push((g as u32, k as u32));
                     bounds.push(b);
                 }
@@ -435,6 +455,50 @@ impl Query {
         Ok(())
     }
 
+    /// Whether a geometry's primitives are opaque to this ray: the ray's flags decide first, then the instance's,
+    /// then the geometry's own.
+    fn opaque_of(&self, geometry: &Geometry, f: InstanceFlags) -> bool {
+        if self.flags & flags::FORCE_OPAQUE != 0 {
+            true
+        } else if self.flags & flags::FORCE_NON_OPAQUE != 0 {
+            false
+        } else if f.force_opaque {
+            true
+        } else if f.force_non_opaque {
+            false
+        } else {
+            geometry.opaque
+        }
+    }
+
+    /// Commit a procedural candidate at distance `t`, which the program found by intersecting the primitive itself. A
+    /// distance outside the ray's current range, from the t min to the nearest hit committed so far, is ignored, as DXR
+    /// says. WARP takes a farther one, so the WARP gate's program commits only nearer hits and no check against WARP
+    /// covers this. A ray that starts inside a primitive's box is offered that primitive here (the box overlaps the
+    /// range); WARP offers none, and the gate leaves such rays out.
+    pub(super) fn generate(&mut self, t: f32) -> Result<(), String> {
+        let Some(mut hit) = self.candidate else {
+            return Err("an intersection generated when there is no candidate".into());
+        };
+        if hit.kind != 3 {
+            return Err(
+                "an intersection generated for a candidate that is not a procedural primitive".into(),
+            );
+        }
+        if !(self.tmin <= t && t <= self.tmax) {
+            return Ok(());
+        }
+        hit.kind = 2;
+        hit.t = t;
+        self.candidate = None;
+        self.tmax = t;
+        self.committed = Some(hit);
+        if self.flags & flags::ACCEPT_FIRST_HIT != 0 {
+            self.terminate();
+        }
+        Ok(())
+    }
+
     /// Go on to the next candidate: true when there is one for the program to commit or let go.
     pub(super) fn proceed(&mut self, scene: &Built) -> bool {
         self.candidate = None;
@@ -443,7 +507,7 @@ impl Query {
         }
         if !self.started {
             self.started = true;
-            if self.flags & flags::SKIP_TRIANGLES == 0 && !scene.top.nodes.is_empty() {
+            if !scene.top.nodes.is_empty() {
                 self.stack.push(Frame::Top(0));
             }
         }
@@ -507,6 +571,36 @@ impl Query {
                     let (i, origin, direction) = self.inside.expect("inside an instance");
                     let built = &scene.instances[i as usize];
                     let geometry = &scene.bottoms[built.instance.bottom].geometries[g as usize];
+                    if geometry.procedural() {
+                        if self.flags & flags::SKIP_PROCEDURAL != 0 {
+                            continue;
+                        }
+                        let [min, max] = geometry.boxes[k as usize];
+                        let boxed = Aabb { min, max };
+                        if !crosses(&boxed, origin, inverse_direction(direction), self.tmin, self.tmax) {
+                            continue;
+                        }
+                        let f = built.instance.flags;
+                        let opaque = self.opaque_of(geometry, f);
+                        if (self.flags & flags::CULL_OPAQUE != 0 && opaque)
+                            || (self.flags & flags::CULL_NON_OPAQUE != 0 && !opaque)
+                        {
+                            continue;
+                        }
+                        self.candidate = Some(Hit {
+                            kind: 3,
+                            t: self.tmax,
+                            barycentrics: [0.0; 2],
+                            front: false,
+                            instance: i,
+                            geometry: g,
+                            primitive: k,
+                        });
+                        return true;
+                    }
+                    if self.flags & flags::SKIP_TRIANGLES != 0 {
+                        continue;
+                    }
                     let Some(tri) = geometry.triangle(k as usize) else {
                         continue;
                     };
@@ -519,17 +613,7 @@ impl Query {
                     let f = built.instance.flags;
                     // front-facing is clockwise unless the instance says counter-clockwise
                     let front = front_clockwise != f.front_counter_clockwise;
-                    let opaque = if self.flags & flags::FORCE_OPAQUE != 0 {
-                        true
-                    } else if self.flags & flags::FORCE_NON_OPAQUE != 0 {
-                        false
-                    } else if f.force_opaque {
-                        true
-                    } else if f.force_non_opaque {
-                        false
-                    } else {
-                        geometry.opaque
-                    };
+                    let opaque = self.opaque_of(geometry, f);
                     if (self.flags & flags::CULL_OPAQUE != 0 && opaque)
                         || (self.flags & flags::CULL_NON_OPAQUE != 0 && !opaque)
                     {

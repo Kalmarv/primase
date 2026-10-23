@@ -1306,6 +1306,7 @@ mod ray_queries {
     fn scene() -> Scene {
         let triangle = |z: f32, opaque: bool| Geometry {
             positions: vec![[0.0, 0.0, z], [4.0, 0.0, z], [0.0, 4.0, z]],
+            boxes: Vec::new(),
             indices: None,
             opaque,
         };
@@ -1497,5 +1498,173 @@ mod uav_counter {
             );
             assert_eq!(counters.map(|c| buffers[&c][0]), [8, 0, 13, 12], "{v} counters");
         }
+    }
+}
+
+mod procedural_primitives {
+    use super::*;
+    use primase_shader::D3dClass;
+    use primase_shader::exec::{Geometry, Instance, InstanceFlags, Scene};
+    use std::collections::BTreeMap;
+
+    /// `ray_query_procedural.hlsl` on one sphere (centre (0.5, 0, 1), radius 1, in the object space of an instance)
+    /// bounded by a box, under the identity, a uniform scale of 2 about the origin, and a translation. The program
+    /// intersects the ray with the sphere in the object space it makes from the instance's world-to-object matrix, so
+    /// the distance it commits is the distance in the world: 5 - sqrt(0.75) + 1 = 5.134 under the identity (the ray runs
+    /// along z from z = -5 at x = 0).
+    #[test]
+    fn a_procedural_primitive_is_intersected_by_the_program_in_the_instances_object_space() {
+        let (program, exe) = lifted(&fixture("ray_query_procedural", ""));
+        let find = |class: Option<D3dClass>| {
+            program
+                .interface
+                .resources
+                .iter()
+                .find(|r| match class {
+                    Some(c) => r.provenance.d3d.is_some_and(|d| d.class == c && d.register == 0),
+                    None => matches!(r.kind, ResourceKind::AccelerationStructure),
+                })
+                .unwrap()
+                .id
+        };
+        let (structure, results, rays) = (
+            find(None),
+            find(Some(D3dClass::UnorderedAccess)),
+            find(Some(D3dClass::ConstantBuffer)),
+        );
+        let identity = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        let scaled = [[2.0, 0.0, 0.0, 0.0], [0.0, 2.0, 0.0, 0.0], [0.0, 0.0, 2.0, 0.0]];
+        let moved = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 3.0]];
+        for (name, transform, want) in [
+            ("identity", identity, 5.0 + 1.0 - 0.75f32.sqrt()),
+            // scaled by 2 about the origin: the sphere's centre (0.5, 0, 1) and radius become (1, 0, 2) and 2
+            ("scaled", scaled, 5.0 + 2.0 - (4.0f32 - 1.0).sqrt()),
+            ("moved", moved, 5.0 + 4.0 - 0.75f32.sqrt()),
+        ] {
+            let scene = Scene {
+                bottoms: vec![vec![Geometry {
+                    positions: Vec::new(),
+                    boxes: vec![[[-0.5, -1.0, 0.0], [1.5, 1.0, 2.0]]],
+                    indices: None,
+                    opaque: false,
+                }]],
+                instances: vec![Instance {
+                    bottom: 0,
+                    transform,
+                    id: 5,
+                    mask: 0xff,
+                    contribution: 2,
+                    flags: InstanceFlags::default(),
+                }],
+            };
+            let mut rows: Vec<[u32; 4]> = Vec::new();
+            rows.extend((0..64).map(|_| [0.0f32, 0.0, -5.0, 0.0].map(f32::to_bits)));
+            rows.extend((0..64).map(|_| [0.0f32, 0.0, 1.0, 0.0].map(f32::to_bits)));
+            rows.extend((0..64).map(|_| [0, 0xff, 0, 0]));
+            rows.extend((0..8).map(|_| [0.5f32, 0.0, 1.0, 1.0].map(f32::to_bits)));
+            let mut resources = Resources::default();
+            resources.constants.insert(rays, rows);
+            resources.scenes.insert(structure, scene);
+            let bound = exe.bind_resources(&resources).unwrap();
+            let mut buffers = BTreeMap::from([(results, vec![0u32; 640])]);
+            exe.dispatch(&bound, &mut NoBackend, &mut buffers, [1, 1, 1], 32)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let w = &buffers[&results];
+            assert_eq!(w[0], 2, "{name}: a procedural hit");
+            let t = f32::from_bits(w[1]);
+            assert!((t - want).abs() < 1e-4, "{name}: t {t}, want {want}");
+            assert_eq!((w[3], w[4], w[5], w[6]), (5, 2, 0, 0), "{name}");
+        }
+    }
+}
+
+mod instance_matrices {
+    use super::*;
+    use primase_shader::D3dClass;
+    use primase_shader::exec::{Geometry, Instance, InstanceFlags, Scene};
+    use std::collections::BTreeMap;
+
+    /// `ray_query_matrices.hlsl` on an instance that rotates a little, scales unevenly and translates: the matrices a
+    /// program reads of a candidate's instance are the instance's transform (object to world) and its inverse (world to
+    /// object), row by row, and the world ray is the ray traced. The expected inverse is the one WARP reports for the
+    /// same instance.
+    #[test]
+    fn a_program_reads_the_transform_and_its_inverse_of_the_instance_it_is_offered() {
+        let (program, exe) = lifted(&fixture("ray_query_matrices", ""));
+        let find = |class: Option<D3dClass>| {
+            program
+                .interface
+                .resources
+                .iter()
+                .find(|r| match class {
+                    Some(c) => r.provenance.d3d.is_some_and(|d| d.class == c && d.register == 0),
+                    None => matches!(r.kind, ResourceKind::AccelerationStructure),
+                })
+                .unwrap()
+                .id
+        };
+        let (structure, results, rays) = (
+            find(None),
+            find(Some(D3dClass::UnorderedAccess)),
+            find(Some(D3dClass::ConstantBuffer)),
+        );
+        let transform = [
+            [1.242_584_3, -0.140_744_72, 0.0, 1.559_948_9],
+            [0.140_744_72, 1.242_584_3, 0.0, -1.719_660_7],
+            [0.0, 0.0, 1.250_529_9, 1.522_493_8],
+        ];
+        let scene = Scene {
+            bottoms: vec![vec![Geometry {
+                positions: Vec::new(),
+                boxes: vec![[[-9.0; 3], [9.0; 3]]],
+                indices: None,
+                opaque: true,
+            }]],
+            instances: vec![Instance {
+                bottom: 0,
+                transform,
+                id: 5,
+                mask: 0xff,
+                contribution: 2,
+                flags: InstanceFlags::default(),
+            }],
+        };
+        let mut resources = Resources::default();
+        resources.constants.insert(
+            rays,
+            vec![
+                [0.3f32, -0.2, -5.0, 0.0].map(f32::to_bits),
+                [0.1f32, 0.05, 1.0, 0.0].map(f32::to_bits),
+            ],
+        );
+        resources.scenes.insert(structure, scene);
+        let bound = exe.bind_resources(&resources).unwrap();
+        let mut buffers = BTreeMap::from([(results, vec![0u32; 64])]);
+        exe.dispatch(&bound, &mut NoBackend, &mut buffers, [1, 1, 1], 32)
+            .unwrap();
+        let w: Vec<f32> = buffers[&results].iter().map(|b| f32::from_bits(*b)).collect();
+        assert_eq!(buffers[&results][30], 1, "a candidate");
+        let want_object_to_world: Vec<f32> = transform.iter().flatten().copied().collect();
+        let want_world_to_object = [
+            0.794_580_2,
+            0.090_000_29,
+            0.0,
+            -1.084_734_4,
+            -0.090_000_29,
+            0.794_580_2,
+            0.0,
+            1.506_804_5,
+            0.0,
+            0.0,
+            0.799_661_04,
+            -1.217_478_9,
+        ];
+        for (k, (got, want)) in w[..12].iter().zip(&want_object_to_world).enumerate() {
+            assert!((got - want).abs() < 1e-6, "object to world [{k}]: {got}, {want}");
+        }
+        for (k, (got, want)) in w[12..24].iter().zip(&want_world_to_object).enumerate() {
+            assert!((got - want).abs() < 1e-5, "world to object [{k}]: {got}, {want}");
+        }
+        assert_eq!(w[24..30], [0.3, -0.2, -5.0, 0.1, 0.05, 1.0]);
     }
 }
