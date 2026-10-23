@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     Result, invalid,
-    layer_bake::{Inputs, grouping},
+    layer_bake::{Inputs, SECOND_UV_APPROXIMATION, grouping},
 };
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
 use primase_core::{
@@ -213,6 +213,23 @@ pub(super) fn assemble(
                 })?;
             // the tiling the geometry pass multiplied into these coordinates, if it did
             let scale = world.get::<super::UvTiling>(original).map_or([1.; 2], |t| t.0);
+            if prepared.reads_second_uv {
+                let (meshes, vertices) = second_uv_differs(&primitive, scale);
+                let by = |what: &str| {
+                    format!(
+                        "{SECOND_UV_APPROXIMATION}, {}: {what}",
+                        group.material.mtd.rsplit(['/', '\\']).next().unwrap_or("")
+                    )
+                };
+                if meshes > 0 {
+                    report
+                        .policies
+                        .approximate(&by("parts whose stored UV1 differs from UV0"), meshes);
+                    report
+                        .policies
+                        .approximate(&by("vertices whose stored UV1 differs from UV0"), vertices);
+                }
+            }
             replaced_materials.insert(original);
             // Only instantiate levels used by this source part. Equal bake inputs
             // share textures, never the full source material/GX identity: a variant is one source material's (its
@@ -330,6 +347,24 @@ fn split(
             Ok((part, gather))
         })
         .collect()
+}
+
+/// Whether a part's stored second UV set (`TexCoord(1)`) differs from its first, un-tiled by `scale` (the factor the
+/// geometry pass multiplied into `TexCoord(0)`): `(1, vertices that differ)` or `(0, 0)`. A part with no stored second
+/// set counts nothing: what the engine feeds its program is not known.
+fn second_uv_differs(part: &Primitive, scale: [f32; 2]) -> (u64, u64) {
+    let (Some(Stream::F32x2(first)), Some(Stream::F32x2(second))) = (
+        part.streams.get(&Semantic::TexCoord(0)),
+        part.streams.get(&Semantic::TexCoord(1)),
+    ) else {
+        return (0, 0);
+    };
+    let differs = first
+        .iter()
+        .zip(second)
+        .filter(|(a, b)| (0..2).any(|i| (b[i] - a[i] / scale[i]).abs() > 1e-6 * b[i].abs().max(1.)))
+        .count() as u64;
+    (u64::from(differs > 0), differs)
 }
 
 #[cfg(test)]
@@ -774,6 +809,41 @@ mod tests {
                 assert!(world.get::<Name>(entity).unwrap().0.starts_with("bake_"));
             }
         }
+    }
+
+    #[test]
+    fn a_stored_second_uv_set_that_differs_is_counted_against_the_untiled_first() {
+        let part = |first: Vec<[f32; 2]>, second: Option<Vec<[f32; 2]>>| {
+            let mut streams = BTreeMap::from([(Semantic::TexCoord(0), Stream::F32x2(first))]);
+            streams.extend(second.map(|s| (Semantic::TexCoord(1), Stream::F32x2(s))));
+            Primitive {
+                topology: primase_core::Topology::Triangles,
+                streams,
+                indices: None,
+                material: None,
+            }
+        };
+        // tiled by (2, 4) by the geometry pass: the stored first set is uv0 * scale
+        let tiled = vec![[1., 2.], [3., 8.], [5., 4.]];
+        let same = vec![[0.5, 0.5], [1.5, 2.], [2.5, 1.]];
+        assert_eq!(
+            second_uv_differs(&part(tiled.clone(), Some(same.clone())), [2., 4.]),
+            (0, 0)
+        );
+        let mut moved = same.clone();
+        moved[2][1] += 0.01;
+        moved[0][0] = 7.;
+        assert_eq!(
+            second_uv_differs(&part(tiled.clone(), Some(moved)), [2., 4.]),
+            (1, 2)
+        );
+        // the first set taken as stored when the geometry pass did not tile
+        assert_eq!(
+            second_uv_differs(&part(tiled.clone(), Some(tiled.clone())), [1., 1.]),
+            (0, 0)
+        );
+        // no stored second set: nothing is counted, and nothing is made up
+        assert_eq!(second_uv_differs(&part(tiled, None), [2., 4.]), (0, 0));
     }
 
     #[test]

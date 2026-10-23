@@ -15,7 +15,7 @@ use primase_shader::{
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Frozen per-vertex input for one baked layer-weight group. Choosing groups
-/// and replacing the second UV set with the first are separate lowering policies.
+/// and replacing the second UV set with the first ([`SECOND_UV_APPROXIMATION`]) are separate lowering policies.
 #[derive(Clone, Copy, Debug)]
 pub struct Inputs {
     pub weights_snow: [f32; 4],
@@ -44,8 +44,23 @@ pub struct Prepared {
     /// Static repeat policy calculated from resources used by this shader.
     pub period: [f32; 2],
     pub period_exact: bool,
+    /// Whether the program reads the second texture coordinate set (`TEXCOORD0.zw`), which the static bake replaces by
+    /// the first ([`SECOND_UV_APPROXIMATION`]).
+    pub reads_second_uv: bool,
     largest_colour_dimension: u32,
 }
+/// The one approximation of how the static bake feeds a layered program's texture coordinates, on the programs that
+/// read `TEXCOORD0.zw` (11 of the 22 layered pixel programs of the corpus): the grid's `(u, v)` fills `zw` as it fills
+/// `xy`, so the second set is the first. The stored second set (`uv1`, the pair the layered vertex program adds
+/// `cbTexScroll` to and hands on in `zw`) is not made from the first: a census of Sekiro's layered meshes finds it
+/// differs from uv0 in 236 of 1,420 meshes of m10_00 (183 of them on a program that reads `zw`, in 64 of 384
+/// prototypes) and 31 of 1,790 of m11_01's scene region (14 on a reading program, 9 prototypes), by up to 31 units, and
+/// not by any scale and offset of uv0. None of those 197 meshes has a unique, non-overlapping uv0 unwrap (m10_00: 182
+/// tile uv0 outside 0 to 1 and one overlaps inside it; m11_01: 13 and 1), so there is no texture-space rasterisation
+/// of the surface a baked texture could stand for: a texel has several surface points with several uv1. The bake
+/// reports it by material with the meshes and vertices affected; the faithful path is a renderer that runs the game's
+/// shaders, or a destination that keeps uv1 and the layered material.
+pub const SECOND_UV_APPROXIMATION: &str = "second UV set replaced by first for static bake";
 #[derive(Debug)]
 pub struct Bake {
     pub size: u32,
@@ -226,8 +241,16 @@ impl Prepared {
                 "base-mip bilinear wrap overrides runtime sampler state".into(),
                 program.samplers().len() as u64,
             ),
-            ("second UV set replaced by first for static bake".into(), 1),
         ]);
+        let reads_second_uv = interface
+            .inputs
+            .iter()
+            .find(|v| v.label.name.eq_ignore_ascii_case("TEXCOORD") && v.label.index == 0)
+            .and_then(|v| v.provenance.d3d)
+            .is_some_and(|d| d.read_write_mask & 0b1100 != 0);
+        if reads_second_uv {
+            policies.insert(SECOND_UV_APPROXIMATION.into(), 1);
+        }
         let layout = Layout::of(&shader).map_err(evaluation)?;
         // the buffers the program reads, by slot: their words
         let words: BTreeMap<u32, usize> = program
@@ -383,6 +406,7 @@ impl Prepared {
             decoded_bytes,
             period,
             period_exact,
+            reads_second_uv,
             largest_colour_dimension,
         })
     }
@@ -441,6 +465,7 @@ impl Prepared {
                 ("POSITION", 1) => Input::Constant([0., 0., 0., 1.]),
                 ("NORMAL", 0) => Input::Constant([0., 1., 0., 0.]),
                 ("TANGENT", 0) => Input::Constant([1., 0., 0., 1.]),
+                // zw is the second set, replaced by the first: SECOND_UV_APPROXIMATION
                 ("TEXCOORD", 0) => Input::Lanes([Lane::U, Lane::V, Lane::U, Lane::V]),
                 ("TEXCOORD", 5) => Input::Constant(params.weights_snow),
                 ("TEXCOORD", 7) => Input::Constant(params.tint_color),
@@ -702,6 +727,7 @@ mod tests {
             decoded_bytes: 0,
             period: [1.; 2],
             period_exact: true,
+            reads_second_uv: false,
             largest_colour_dimension: 0,
         }
     }

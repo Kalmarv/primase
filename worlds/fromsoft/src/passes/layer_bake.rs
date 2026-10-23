@@ -4,7 +4,7 @@ pub use sampler::BaseMipBilinearWrap;
 mod binding;
 pub(crate) use binding::OutputRgb;
 pub(crate) use binding::sampled_period;
-pub use binding::{Bake, FrozenFrame, Inputs, Prepared};
+pub use binding::{Bake, FrozenFrame, Inputs, Prepared, SECOND_UV_APPROXIMATION};
 pub mod grouping;
 pub mod period;
 pub mod resolve;
