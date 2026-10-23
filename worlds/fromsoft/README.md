@@ -309,17 +309,19 @@ constant or map; without either, a material is dielectric (metallic 0), not
 glTF's default of 1, and is counted as an approximation. Material identity is chosen by the caller, independently of
 any reference exporter's string formatting or key hashing.
 
-`oracles.soulsformats.sekiro/materials` supplies two independent outputs:
-`mtd-boundaries.jsonl` lists independently audited block starts, kinds, declared
-and consumed lengths for every file. The gate counts length mismatches.
-`mtd.jsonl` lists binder names, decoded SHA256, shader, description, typed
-parameters and every texture declaration; `models.jsonl` lists model keys,
-texture availability and per-FLVER-material assignments. The first gate compares
-stored fields exactly, including f32 bits. The second isolates selection policy
-using the oracle's availability input and compares assignments, then checks
-the material references on each part in `oracles.baseline.sekiro/scene`. It is not a
-gate of archive texture discovery, which belongs to area assembly. Both require
-`installs.sekiro` and `tools.oodle6`; absent inputs skip explicitly.
+`oracles.soulsformats.sekiro/materials` is SoulsFormats' reading of every MTD in
+`/mtd/allmaterialbnd.mtdbnd.dcx`, in binder order, made by the dump harness's `mtd` mode (`tests/mtd_census.rs`).
+`mtd.jsonl` lists each one's binder name, decoded SHA256, shader, description,
+typed parameters and every texture declaration; the gate compares them exactly,
+f32 values by their bits. `mtd-boundaries.jsonl` lists each file's blocks as
+`{start, kind, declared, consumed}` in the order they close. SoulsFormats' reader
+does not keep block lengths, so the consumed length is its writer's: the harness
+writes each file back, requires the rewrite to equal the file outside the
+blocks' length fields, and takes the length its writer measures. The declared
+length is the file's own. The gate compares every block and counts the files
+whose declared lengths differ. It requires `installs.sekiro` and `tools.oodle6`;
+absent inputs skip explicitly. Area material assignments and texture
+availability have no independent reference.
 
 ## Material binaries (Elden Ring)
 

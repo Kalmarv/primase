@@ -794,10 +794,10 @@ pub const DECLARED: &[Declared] = &[
     },
     Declared {
         query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "materials"),
-        status: Status::Blocked,
+        status: Status::Live,
         gate: true,
-        about: r#"independent MTD fields, area material assignments and per-model texture availability for object collision; schema in worlds/fromsoft/README.md"#,
-        source: r#"the earlier oracle is gone; replacement: SoulsFormats' MTD reading in the dump harness, hand-worked fixtures for assignments and availability"#,
+        about: r#"independent MTD fields and block lengths (mtd.jsonl, mtd-boundaries.jsonl); schema in worlds/fromsoft/README.md; worlds/fromsoft/tests/mtd_census.rs"#,
+        source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`mtd` mode): the fields from its MTD reader, the consumed block lengths from its writer's rewrite of each file"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "objects"),
