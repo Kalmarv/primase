@@ -11,6 +11,7 @@
 //! buffers, samples, loads, derivatives, discard), and `alloca`, `getelementptr`, `load` and `store` the local arrays
 //! and constant tables.
 
+mod compute;
 mod flow;
 mod memory;
 mod ops;
@@ -49,6 +50,15 @@ pub fn lift(container: &[u8]) -> Result<Program> {
         .iter()
         .find(|f| f.value == entry_value)
         .ok_or_else(|| error(0, "the entry point has no body"))?;
+    // ray queries are not a thing a Program carries
+    if module
+        .functions
+        .iter()
+        .flat_map(|f| &f.instructions)
+        .any(|i| matches!(&i.op, Op::Call { function, .. } if module.name(*function).is_some_and(|n| n.starts_with("dx.op.allocateRayQuery"))))
+    {
+        return Err(error(0, "ray queries are not lifted"));
+    }
     let setup = setup::Setup::new(&chunks, &module, entry)?;
     if part.program_version >> 16 == 1
         && !setup
@@ -66,12 +76,17 @@ pub fn lift(container: &[u8]) -> Result<Program> {
         "{}_{}_{}",
         match part.program_version >> 16 {
             0 => "ps",
+            5 => "cs",
             _ => "vs",
         },
         (part.program_version >> 4) & 15,
         part.program_version & 15
     );
     let mut lift = Lift::new(&module, entry, setup)?;
+    if lift.setup.interface.stage == Stage::Compute {
+        lift.b.workgroup_size = crate::reflection::num_threads(&module)?
+            .ok_or_else(|| error(0, "a compute program that states no thread group size"))?;
+    }
     lift.run()?;
     lift.finish(target)
 }
@@ -245,7 +260,20 @@ impl<'m> Lift<'m> {
                         mark(*i, at, &mut cross);
                     }
                 }
-                Op::Return(None) | Op::Branch { .. } | Op::Unreachable | Op::Alloca { .. } => {}
+                Op::AtomicRmw { pointer, value, .. } => {
+                    mark(*pointer, at, &mut cross);
+                    mark(*value, at, &mut cross);
+                }
+                Op::CmpXchg {
+                    pointer,
+                    compare,
+                    value,
+                } => {
+                    for v in [pointer, compare, value] {
+                        mark(*v, at, &mut cross);
+                    }
+                }
+                Op::Return(None) | Op::Branch { .. } | Op::Unreachable | Op::Alloca { .. } | Op::Fence => {}
             }
         }
         // a pointer is symbolic and is read wherever it is used: its index values are read there too
@@ -319,6 +347,7 @@ impl<'m> Lift<'m> {
             "main",
             match stage {
                 Stage::Vertex => naga::ShaderStage::Vertex,
+                Stage::Compute => naga::ShaderStage::Compute,
                 _ => naga::ShaderStage::Fragment,
             },
             self.arguments,

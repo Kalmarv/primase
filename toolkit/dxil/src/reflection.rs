@@ -99,6 +99,39 @@ pub fn entry(m: &Module) -> Result<crate::module::ValueId> {
     }
 }
 
+/// The entry point's thread group size (`numthreads`): the value of the properties' tag 4. `None` when the entry
+/// point states none (every stage but compute).
+pub fn num_threads(m: &Module) -> Result<Option<[u32; 3]>> {
+    let entries = named(m, "dx.entryPoints").ok_or_else(|| error(0, "no dx.entryPoints"))?;
+    let [entry] = entries else {
+        return Err(error(0, "not exactly one entry point"));
+    };
+    let entry = node(m, *entry, "entry point")?;
+    let Some(properties) = entry.get(4).copied().flatten() else {
+        return Ok(None);
+    };
+    let properties = node(m, properties, "entry point properties")?;
+    for pair in properties.chunks(2) {
+        let [tag, value] = pair else {
+            return Err(error(0, "entry point properties: a tag without a value"));
+        };
+        if int(m, *tag, "property tag")? != 4 {
+            continue;
+        }
+        let size = node(
+            m,
+            value.ok_or_else(|| error(0, "numthreads without a value"))?,
+            "numthreads",
+        )?;
+        let axis = |k: usize| -> Result<u32> {
+            u32::try_from(int(m, size.get(k).copied().flatten(), "numthreads")?)
+                .map_err(|_| error(0, "numthreads: an axis out of range"))
+        };
+        return Ok(Some([axis(0)?, axis(1)?, axis(2)?]));
+    }
+    Ok(None)
+}
+
 /// The entry point's input and output elements, by id.
 pub fn elements(m: &Module) -> Result<(Vec<Element>, Vec<Element>)> {
     let entries = named(m, "dx.entryPoints").ok_or_else(|| error(0, "no dx.entryPoints"))?;
@@ -593,6 +626,7 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
         match crate::program(part(b"DXIL").ok_or_else(|| error(0, "no DXIL part"))?)?.program_version >> 16 {
             0 => Stage::Pixel,
             1 => Stage::Vertex,
+            5 => Stage::Compute,
             kind => return Err(error(0, format!("program kind {kind} is not mapped"))),
         };
     let source = named.unwrap_or(program);

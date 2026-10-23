@@ -152,7 +152,25 @@ pub fn operations(container: &[u8]) -> Result<(u32, std::collections::BTreeMap<S
                 continue;
             };
             if let Some(name) = module.name(*function).filter(|n| n.starts_with("dx.op.")) {
-                *out.entry(name.to_owned()).or_default() += 1;
+                let code = match &inst.op {
+                    Op::Call { args, .. } => args.first().and_then(|&a| {
+                        let value = if a < f.first {
+                            module.values.get(a)
+                        } else {
+                            f.locals.get(a - f.first)
+                        };
+                        match value {
+                            Some(module::Value::Constant(module::Constant::Integer(i))) => Some(*i),
+                            _ => None,
+                        }
+                    }),
+                    _ => None,
+                };
+                let key = match code {
+                    Some(code) => format!("{name} (op {code})"),
+                    None => name.to_owned(),
+                };
+                *out.entry(key).or_default() += 1;
             }
         }
     }

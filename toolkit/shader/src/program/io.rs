@@ -55,6 +55,12 @@ pub fn carried(stage: Stage, output: bool, v: &Varying) -> Value {
             | SystemValue::SampleIndex
             | SystemValue::Coverage,
         ) => (ScalarType::Uint, 1),
+        Some(SystemValue::GroupId | SystemValue::GroupThreadId | SystemValue::DispatchThreadId) => {
+            (ScalarType::Uint, 3)
+        }
+        Some(SystemValue::GroupIndex | SystemValue::LaneIndex | SystemValue::LaneCount) => {
+            (ScalarType::Uint, 1)
+        }
         Some(SystemValue::Depth | SystemValue::DepthGreaterEqual | SystemValue::DepthLessEqual) => {
             (ScalarType::Float, 1)
         }
@@ -77,6 +83,12 @@ fn builtin(stage: Stage, output: bool, system: SystemValue) -> Option<naga::Buil
         (Stage::Pixel, false, PrimitiveIndex) => naga::BuiltIn::PrimitiveIndex,
         (Stage::Pixel, false, SampleIndex) => naga::BuiltIn::SampleIndex,
         (Stage::Pixel, _, Coverage) => naga::BuiltIn::SampleMask,
+        (Stage::Compute, false, GroupId) => naga::BuiltIn::WorkGroupId,
+        (Stage::Compute, false, GroupThreadId) => naga::BuiltIn::LocalInvocationId,
+        (Stage::Compute, false, DispatchThreadId) => naga::BuiltIn::GlobalInvocationId,
+        (Stage::Compute, false, GroupIndex) => naga::BuiltIn::LocalInvocationIndex,
+        (Stage::Compute | Stage::Pixel, false, LaneIndex) => naga::BuiltIn::SubgroupInvocationId,
+        (Stage::Compute | Stage::Pixel, false, LaneCount) => naga::BuiltIn::SubgroupSize,
         // naga has no conservative-depth variants: the depth hints are not carried
         (Stage::Pixel, true, Depth | DepthGreaterEqual | DepthLessEqual) => naga::BuiltIn::FragDepth,
         _ => return None,

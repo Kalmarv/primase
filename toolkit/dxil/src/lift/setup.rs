@@ -67,8 +67,8 @@ impl Setup {
     pub(super) fn new(chunks: &[Chunk<'_>], m: &Module, entry: &Function) -> Result<Self> {
         let named = reflection::module(chunks, b"STAT")?;
         let mut interface = reflection::reflection(chunks, m, named.as_ref())?;
-        if !matches!(interface.stage, Stage::Pixel | Stage::Vertex) {
-            return Err(error(0, "only pixel and vertex programs are lifted"));
+        if !matches!(interface.stage, Stage::Pixel | Stage::Vertex | Stage::Compute) {
+            return Err(error(0, "only pixel, vertex and compute programs are lifted"));
         }
         let (input_elements, output_elements) = reflection::elements(m)?;
         let program_ranges: Vec<Range> = reflection::ranges(m)?.into_iter().map(|r| r.0).collect();
@@ -84,7 +84,9 @@ impl Setup {
         let mut system_out: BTreeSet<u8> = BTreeSet::new();
         let mut used_ranges: BTreeSet<(u8, u32)> = BTreeSet::new();
         let mut used_bindings: BTreeSet<(u8, u32, u32)> = BTreeSet::new();
-        let mut sample_index = false;
+        // the system inputs the program reads that the signature does not list: the sample index and, in a compute
+        // program, the invocation's ids
+        let mut system_inputs: BTreeSet<SystemValue> = BTreeSet::new();
         for inst in &entry.instructions {
             let Op::Call { function, args } = &inst.op else {
                 continue;
@@ -139,7 +141,29 @@ impl Setup {
                     }
                 }
                 // SampleIndex: the pixel's sample number, which the input signature does not list
-                90 => sample_index = true,
+                90 => {
+                    system_inputs.insert(SystemValue::SampleIndex);
+                }
+                // ThreadId, GroupId, ThreadIdInGroup, FlattenedThreadIdInGroup
+                93 => {
+                    system_inputs.insert(SystemValue::DispatchThreadId);
+                }
+                94 => {
+                    system_inputs.insert(SystemValue::GroupId);
+                }
+                95 => {
+                    system_inputs.insert(SystemValue::GroupThreadId);
+                }
+                96 => {
+                    system_inputs.insert(SystemValue::GroupIndex);
+                }
+                // IsFirstLane, LaneIndex and PrefixBitCount read the lane's number; LaneCount the wave's size
+                110 | 111 | 136 => {
+                    system_inputs.insert(SystemValue::LaneIndex);
+                }
+                112 => {
+                    system_inputs.insert(SystemValue::LaneCount);
+                }
                 217 => {
                     let Some((class, lower, space)) = binding_of(m, entry, args[1]) else {
                         return Err(error(inst.at, "a handle of a binding that is not constant"));
@@ -168,21 +192,28 @@ impl Setup {
         let none = BTreeSet::new();
         interface.inputs.retain(|v| keeps(v, &cells_in, &none));
         interface.outputs.retain(|v| keeps(v, &cells_out, &system_out));
-        if sample_index
-            && !interface
-                .inputs
-                .iter()
-                .any(|v| v.system == Some(SystemValue::SampleIndex))
-        {
+        for system in system_inputs {
+            if interface.inputs.iter().any(|v| v.system == Some(system)) {
+                continue;
+            }
+            let (name, width) = match system {
+                SystemValue::SampleIndex => ("SV_SampleIndex", 1),
+                SystemValue::DispatchThreadId => ("SV_DispatchThreadID", 3),
+                SystemValue::GroupId => ("SV_GroupID", 3),
+                SystemValue::GroupThreadId => ("SV_GroupThreadID", 3),
+                SystemValue::LaneIndex => ("SV_LaneIndex", 1),
+                SystemValue::LaneCount => ("SV_LaneCount", 1),
+                _ => ("SV_GroupIndex", 1),
+            };
             interface.inputs.push(primase_shader::Varying {
                 label: primase_shader::Label {
-                    name: "SV_SampleIndex".into(),
+                    name: name.into(),
                     index: 0,
                 },
-                system: Some(SystemValue::SampleIndex),
+                system: Some(system),
                 value: primase_shader::Value {
                     scalar: primase_shader::ScalarType::Uint,
-                    width: 1,
+                    width,
                 },
                 interp: None,
                 used: true,

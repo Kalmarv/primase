@@ -219,6 +219,11 @@ impl Lift<'_> {
             67 => self.texture_store(args),
             68 | 139 => self.buffer_load(inst, args),
             72 => self.get_dimensions(inst, args),
+            69 | 140 => self.buffer_store(args),
+            78 => self.buffer_atomic(inst, args),
+            79 => self.buffer_compare_exchange(inst, args),
+            80 => self.barrier(args),
+            110..=123 | 135 | 136 => self.wave(inst, code, args),
             75 => self.sample_position(inst, args),
             // LegacyF32ToF16 and LegacyF16ToF32: the half in the low 16 bits of an integer
             130 => {
@@ -243,6 +248,25 @@ impl Lift<'_> {
             }
             90 => {
                 let index = self.system_input(SystemValue::SampleIndex)?;
+                scalar!(index)
+            }
+            // ThreadId, GroupId, ThreadIdInGroup (a component of the id), FlattenedThreadIdInGroup
+            93..=95 => {
+                let system = match code {
+                    93 => SystemValue::DispatchThreadId,
+                    94 => SystemValue::GroupId,
+                    _ => SystemValue::GroupThreadId,
+                };
+                let id = self.system_input(system)?;
+                let Some(component) = const_int(self.m, self.f, args[1]).filter(|c| (0..3).contains(c))
+                else {
+                    return self.refuse("an invocation id read at a computed component");
+                };
+                let lane = self.b.lane(id, component as u8);
+                scalar!(lane)
+            }
+            96 => {
+                let index = self.system_input(SystemValue::GroupIndex)?;
                 scalar!(index)
             }
             82 => {
@@ -342,7 +366,16 @@ impl Lift<'_> {
     }
 
     /// The value of the input varying that carries a system value the signature does not list.
-    fn system_input(&mut self, system: SystemValue) -> Result<Val> {
+    pub(super) fn system_input(&mut self, system: SystemValue) -> Result<Val> {
+        // WebGPU gives a lane number only to a thread group laid out along x
+        if system == SystemValue::LaneIndex && self.setup.interface.stage == primase_shader::Stage::Compute {
+            let [_, y, z] = self.b.workgroup_size;
+            if y != 1 || z != 1 {
+                return self.refuse(
+                    "a wave lane index in a thread group that is not along x alone (WebGPU gives no lane number there)",
+                );
+            }
+        }
         let io = self.setup.io.clone();
         let Some(index) = io
             .arguments

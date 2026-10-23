@@ -69,6 +69,8 @@ pub struct Builder {
     pub function: Function,
     /// The blocks being filled, innermost last; statements go to the last.
     pub blocks: Vec<Block>,
+    /// A compute entry point's thread group size (set before [`Builder::finish`]; 0 for the other stages).
+    pub workgroup_size: [u32; 3],
 }
 impl Default for Builder {
     fn default() -> Self {
@@ -81,6 +83,7 @@ impl Builder {
             module: Module::default(),
             function: Function::default(),
             blocks: vec![Block::new()],
+            workgroup_size: [0; 3],
         }
     }
 
@@ -111,6 +114,21 @@ impl Builder {
             self.push(Statement::Emit(range));
         }
         h
+    }
+    /// A result expression (an atomic's old value): made before the statement that fills it, covered by no emit.
+    pub fn result_expr(&mut self, e: Expression) -> Handle<Expression> {
+        self.function.expressions.append(e, Span::UNDEFINED)
+    }
+    /// `if condition { then }`: what `then` appends goes in the accept block.
+    pub fn when(&mut self, condition: Val, then: impl FnOnce(&mut Self)) {
+        self.blocks.push(Block::new());
+        then(self);
+        let accept = self.blocks.pop().expect("the block just pushed");
+        self.push(Statement::If {
+            condition: condition.expr,
+            accept,
+            reject: Block::new(),
+        });
     }
     pub fn push(&mut self, s: Statement) {
         self.blocks
@@ -405,7 +423,7 @@ impl Builder {
             name: name.to_owned(),
             stage,
             early_depth_test: early_depth_test.then_some(naga::EarlyDepthTest::Force),
-            workgroup_size: [0; 3],
+            workgroup_size: self.workgroup_size,
             workgroup_size_overrides: None,
             function,
             mesh_info: None,

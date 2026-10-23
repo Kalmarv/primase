@@ -771,7 +771,7 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_GTA_SHADER_DB",
         kind: Kind::Input,
         gate: false,
-        about: r#"GTA V Enhanced's shader database (`sga_win32_60_final.awc`, magic `SGD2`, from update/update2.rpf `common/shaders/fxdb`) as the install stores it after decryption and decompression: every program and effect is read, every vertex and pixel program lifted; worlds/gta/tests/fxc_census.rs"#,
+        about: r#"GTA V Enhanced's shader database (`sga_win32_60_final.awc`, magic `SGD2`, from update/update2.rpf `common/shaders/fxdb`) as the install stores it after decryption and decompression: every program and effect is read, every vertex, pixel and compute program lifted; worlds/gta/tests/fxc_census.rs"#,
         status: Status::Live,
         source: "the user's own install: the file extracted from its archive",
     },

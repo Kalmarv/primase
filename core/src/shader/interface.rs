@@ -73,6 +73,19 @@ pub enum SystemValue {
     Coverage,
     /// Coverage of the pixel by the primitive alone (conservative rasterization).
     InnerCoverage,
+    /// A compute stage's thread group (workgroup) number, three components.
+    GroupId,
+    /// A compute invocation's position inside its thread group, three components.
+    GroupThreadId,
+    /// A compute invocation's position in the whole dispatch (group number times the group size plus its position in
+    /// the group), three components.
+    DispatchThreadId,
+    /// A compute invocation's index in its thread group, row-major over the group's three axes.
+    GroupIndex,
+    /// The invocation's lane in its wave (subgroup).
+    LaneIndex,
+    /// How many lanes the wave (subgroup) has.
+    LaneCount,
 }
 
 /// How a varying is interpolated across a primitive.

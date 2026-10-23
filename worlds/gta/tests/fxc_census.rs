@@ -87,7 +87,7 @@ fn every_effect_of_the_install() {
     }
     println!(
         "{effects} effects, {programs} programs ({dxbc} DXBC, {dxil} DXIL), per stage {per_stage:?}, models {models:?}; \
-         {lifted} vertex and pixel programs lifted, {} refused",
+         {lifted} vertex, pixel and compute programs lifted, {} refused",
         refused.values().sum::<usize>()
     );
     for (reason, n) in &refused {
@@ -105,7 +105,7 @@ fn every_effect_of_the_install() {
 
 /// GTA V Enhanced's shader database: `PRIMASE_GTA_SHADER_DB`, the `sga_win32_60_final.awc` file (or its `_init`
 /// sibling) as the install stores it after decryption and decompression. Every group and effect is read to the end
-/// of the file; every program's container is checked and every vertex and pixel program lifted (DXIL), validated and
+/// of the file; every program's container is checked and every vertex, pixel and compute program lifted (DXIL), validated and
 /// written as WGSL; the effects' program lists are checked to name programs of the right stage.
 #[test]
 fn the_enhanced_shader_database() {
@@ -141,6 +141,8 @@ fn the_enhanced_shader_database() {
     let mut invalid = Vec::new();
     let mut unrunnable: BTreeMap<String, usize> = BTreeMap::new();
     let mut kinds: BTreeMap<(usize, u32), usize> = BTreeMap::new();
+    // per group: programs, lifted
+    let mut tally: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
     let mut other_ops: BTreeMap<(usize, String), usize> = BTreeMap::new();
     for (g, stage) in sgd2::GROUP_STAGES.iter().enumerate() {
         for program in &db.groups[g] {
@@ -152,7 +154,18 @@ fn the_enhanced_shader_database() {
                 "{}: not a DXIL container",
                 program.name
             );
-            if !matches!(stage, Some(ProgramStage::Vertex | ProgramStage::Pixel)) {
+            if std::env::var_os("OPS").is_some()
+                && matches!(stage, Some(ProgramStage::Compute))
+                && let Ok((_, calls)) = primase_dxil::operations(program.container)
+            {
+                for (name, n) in calls {
+                    *other_ops.entry((g, name)).or_default() += n;
+                }
+            }
+            if !matches!(
+                stage,
+                Some(ProgramStage::Vertex | ProgramStage::Pixel | ProgramStage::Compute)
+            ) {
                 // the stages with no lifter yet: which kind the container is, and the operations they call
                 let (kind, calls) = match primase_dxil::operations(program.container) {
                     Ok(r) => r,
@@ -169,10 +182,17 @@ fn the_enhanced_shader_database() {
                 }
                 continue;
             }
+            tally.entry(g).or_default().0 += 1;
             match primase_dxil::lift(program.container) {
-                Err(e) => *refused.entry(primase_dxil::refusal_reason(&e)).or_default() += 1,
+                Err(e) => {
+                    if std::env::var_os("SHOW").is_some_and(|k| e.detail.contains(&*k.to_string_lossy())) {
+                        println!("SHOW {}: {}", program.name, e.detail);
+                    }
+                    *refused.entry(primase_dxil::refusal_reason(&e)).or_default() += 1
+                }
                 Ok(p) => {
                     lifted += 1;
+                    tally.entry(g).or_default().1 += 1;
                     match p.validate() {
                         Err(problems) => invalid.push(format!("{}: {problems:?}", program.name)),
                         Ok(_) => {
@@ -190,7 +210,7 @@ fn the_enhanced_shader_database() {
         }
     }
     println!(
-        "{programs} programs, {lifted} vertex and pixel programs lifted, {} refused",
+        "{programs} programs, {lifted} vertex, pixel and compute programs lifted, {} refused",
         refused.values().sum::<usize>()
     );
     let mut reasons: Vec<_> = refused.iter().collect();
@@ -199,10 +219,11 @@ fn the_enhanced_shader_database() {
         println!("  refused {n:5}  {reason}");
     }
     println!("KINDS (group, program kind): {kinds:?}");
-    for ((g, name), n) in other_ops
-        .iter()
-        .filter(|((_, name), _)| name.starts_with("UNREADABLE"))
-    {
+    println!("LIFTED per group (programs, lifted): {tally:?}");
+    for ((g, name), n) in other_ops.iter().filter(|((_, name), _)| {
+        name.starts_with("UNREADABLE")
+            || (std::env::var_os("OPS").is_some() && (name.contains("wave") || name.contains("quad")))
+    }) {
         println!("  group {g}: {n} {name}");
     }
     for (reason, n) in &unrunnable {

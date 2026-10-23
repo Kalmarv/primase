@@ -29,8 +29,9 @@ impl fmt::Display for Problem {
 
 /// The capabilities programs may use: WGSL's baseline and what a D3D program can need beyond it (clip distances,
 /// per-sample shading, the primitive index, cube array textures, half-float packing for `f16tof32`/`f32tof16`, forced
-/// early depth tests, arrays of textures and samplers indexed by a computed, possibly divergent, index). A consumer that cannot provide one refuses the program that needs it; nothing outside this list
-/// is ever produced.
+/// early depth tests, arrays of textures and samplers indexed by a computed, possibly divergent, index, and subgroup
+/// (wave) operations in compute and pixel programs). A consumer that cannot provide one refuses the program that
+/// needs it; nothing outside this list is ever produced.
 pub const CAPABILITIES: naga::valid::Capabilities = naga::valid::Capabilities::CLIP_DISTANCES
     .union(naga::valid::Capabilities::MULTISAMPLED_SHADING)
     .union(naga::valid::Capabilities::PRIMITIVE_INDEX)
@@ -38,7 +39,8 @@ pub const CAPABILITIES: naga::valid::Capabilities = naga::valid::Capabilities::C
     .union(naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32)
     .union(naga::valid::Capabilities::EARLY_DEPTH_TEST)
     .union(naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY)
-    .union(naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING);
+    .union(naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING)
+    .union(naga::valid::Capabilities::SUBGROUP);
 
 /// Check `program`: naga's validation of its module, then the program rules. Every problem found is returned.
 pub fn validate(program: &Program) -> Result<naga::valid::ModuleInfo, Vec<Problem>> {
@@ -110,6 +112,7 @@ fn interface(p: &Program, problems: &mut Vec<Problem>) {
     let stage = match entry.stage {
         ShaderStage::Vertex => Some(crate::Stage::Vertex),
         ShaderStage::Fragment => Some(crate::Stage::Pixel),
+        ShaderStage::Compute => Some(crate::Stage::Compute),
         _ => None,
     };
     if stage != Some(p.stage) || p.interface.stage != p.stage {
@@ -118,6 +121,20 @@ fn interface(p: &Program, problems: &mut Vec<Problem>) {
             entry.stage, p.stage, p.interface.stage
         ));
         return;
+    }
+    // a thread group is D3D's size: at most 1024 invocations, 1024 along x and y, 64 along z
+    if entry.stage == ShaderStage::Compute {
+        let [x, y, z] = entry.workgroup_size;
+        if x == 0
+            || y == 0
+            || z == 0
+            || x > 1024
+            || y > 1024
+            || z > 64
+            || u64::from(x) * u64::from(y) * u64::from(z) > 1024
+        {
+            fail(format!("a thread group of {x} by {y} by {z}"));
+        }
     }
     // labels are unique within a direction
     for (what, list) in [("input", &p.interface.inputs), ("output", &p.interface.outputs)] {
@@ -339,7 +356,10 @@ fn resources(p: &Program, problems: &mut Vec<Problem>) {
                 };
                 match target {
                     StorageTarget::Buffer(kind) => {
-                        matches!(space, AddressSpace::Storage { access } if access == want)
+                        // naga has no write-only storage buffers: a program that only writes has a read-write global
+                        matches!(space, AddressSpace::Storage { access } if access == want
+                            || (want == naga::StorageAccess::STORE
+                                && access == naga::StorageAccess::LOAD | naga::StorageAccess::STORE))
                             && buffer_fits(&p.module, inner, *kind)
                     }
                     StorageTarget::Image { dim, arrayed, .. } => {
@@ -397,11 +417,16 @@ fn buffer_fits(module: &naga::Module, inner: &TypeInner, kind: BufferKind) -> bo
         return false;
     };
     let base = &module.types[*base].inner;
+    let words = |base: &TypeInner| {
+        matches!(
+            base,
+            TypeInner::Scalar(naga::Scalar::U32) | TypeInner::Atomic(naga::Scalar::U32 | naga::Scalar::I32)
+        )
+    };
     match kind {
-        BufferKind::Raw => *base == TypeInner::Scalar(naga::Scalar::U32) && *stride == 4,
-        BufferKind::Structured { stride: s } => {
-            *base == TypeInner::Scalar(naga::Scalar::U32) && *stride == 4 && s % 4 == 0
-        }
+        // a buffer the program reaches with atomic operations is an array of atomic words
+        BufferKind::Raw => words(base) && *stride == 4,
+        BufferKind::Structured { stride: s } => words(base) && *stride == 4 && s % 4 == 0,
         BufferKind::Typed(v) => {
             v.width == 4
                 && *stride == 16

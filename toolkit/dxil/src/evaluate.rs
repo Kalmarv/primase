@@ -351,8 +351,14 @@ impl Shader {
                 | Op::Alloca { .. }
                 | Op::Load { .. }
                 | Op::Store { .. }
+                | Op::AtomicRmw { .. }
+                | Op::CmpXchg { .. }
+                | Op::Fence
                 | Op::Gep { .. } => {
                     let n = match &inst.op {
+                        Op::AtomicRmw { .. } => "AtomicRmw",
+                        Op::CmpXchg { .. } => "CmpXchg",
+                        Op::Fence => "Fence",
                         Op::Switch { .. } => "Switch",
                         Op::Unreachable => "Unreachable",
                         Op::Alloca { .. } => "Alloca",
@@ -693,6 +699,9 @@ impl Shader {
                 | Op::Alloca { .. }
                 | Op::Load { .. }
                 | Op::Store { .. }
+                | Op::AtomicRmw { .. }
+                | Op::CmpXchg { .. }
+                | Op::Fence
                 | Op::Gep { .. } => return Err(error(at, "an instruction outside the evaluated subset")),
                 Op::Call { function, args } => {
                     let code = self.opcode(f, *function, args).map_err(|e| error(at, e))?;

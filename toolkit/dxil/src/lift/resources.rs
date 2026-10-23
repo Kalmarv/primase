@@ -26,6 +26,8 @@ pub(super) struct Resources {
     depth: BTreeSet<usize>,
     /// The access the program makes of each unordered-access view: (loads, stores).
     views: BTreeMap<usize, (bool, bool)>,
+    /// The unordered-access buffers an atomic operation reaches, and the integer type their atomics have.
+    pub(super) atomic: BTreeMap<usize, naga::Scalar>,
     /// The table of D3D's standard sample positions, made when a program asks for one.
     sample_positions: Option<Handle<GlobalVariable>>,
 }
@@ -65,6 +67,15 @@ const STANDARD_POSITIONS: [(i8, i8); 31] = [
     (6, 7),
     (-7, -8),
 ];
+
+/// The kind an atomic integer type is read as.
+pub(super) fn kind_of_atomic(scalar: naga::Scalar) -> Kind {
+    if scalar == naga::Scalar::I32 {
+        Kind::I
+    } else {
+        Kind::U
+    }
+}
 
 fn dim_of(d: TextureDim) -> naga::ImageDimension {
     match d {
@@ -114,6 +125,7 @@ impl Lift<'_> {
     fn scan_resources(&mut self) {
         let mut depth = BTreeSet::new();
         let mut views: BTreeMap<usize, (bool, bool)> = BTreeMap::new();
+        let mut atomic: BTreeMap<usize, naga::Scalar> = BTreeMap::new();
         for inst in &self.f.instructions {
             let Op::Call { function, args } = &inst.op else {
                 continue;
@@ -127,17 +139,27 @@ impl Lift<'_> {
                 64 | 65 | 74 => {
                     depth.insert(r);
                 }
-                66 | 68 => {
+                66 | 68 | 139 => {
                     if matches!(self.setup.kind(r), ResourceKind::Storage { .. }) {
                         views.entry(r).or_default().0 = true;
                     }
                 }
-                67 | 69 => views.entry(r).or_default().1 = true,
+                67 | 69 | 140 => views.entry(r).or_default().1 = true,
+                // atomics read and write; a signed min or max (4, 5) makes the buffer's atomics signed
+                78 | 79 => {
+                    views.insert(r, (true, true));
+                    let signed = code == 78 && matches!(const_int(self.m, self.f, args[2]), Some(4 | 5));
+                    let entry = atomic.entry(r).or_insert(naga::Scalar::U32);
+                    if signed {
+                        *entry = naga::Scalar::I32;
+                    }
+                }
                 _ => {}
             }
         }
         self.resources.depth = depth;
         self.resources.views = views;
+        self.resources.atomic = atomic;
     }
 
     pub(super) fn declare_resources(&mut self) -> Result<()> {
@@ -254,11 +276,50 @@ impl Lift<'_> {
                     );
                     (format!("u{}", range.lower), AddressSpace::Handle, 3, ty)
                 }
-                ResourceKind::Storage { .. } => {
-                    return self.refuse(format!(
-                        "{}: unordered-access buffer views are not lifted",
-                        resource.provenance.name
-                    ));
+                ResourceKind::Storage {
+                    target: StorageTarget::Buffer(kind),
+                    ..
+                } => {
+                    let (load, store) = self.resources.views.get(&i).copied().unwrap_or((true, false));
+                    // naga has no write-only storage buffers: the global is read-write, the interface says what is done
+                    let mut access = StorageAccess::LOAD;
+                    access.set(StorageAccess::STORE, store);
+                    let atomic = self.resources.atomic.get(&i).copied();
+                    let (base, stride) = match (kind, atomic) {
+                        (BufferKind::Typed(_), Some(_)) => {
+                            return self.refuse(format!(
+                                "{}: an atomic operation on a typed buffer",
+                                resource.provenance.name
+                            ));
+                        }
+                        (BufferKind::Typed(_), None) => (u4, 16),
+                        (_, Some(scalar)) => (self.b.ty(TypeInner::Atomic(scalar)), 4),
+                        (_, None) => (u1, 4),
+                    };
+                    let ty = self.b.ty(TypeInner::Array {
+                        base,
+                        size: ArraySize::Dynamic,
+                        stride,
+                    });
+                    // a typed buffer is carried as four 32-bit lanes per element, whatever the view's own width
+                    let kind = match kind {
+                        BufferKind::Typed(v) => BufferKind::Typed(primase_shader::Value { width: 4, ..*v }),
+                        other => *other,
+                    };
+                    self.setup.interface.resources[i].kind = ResourceKind::Storage {
+                        target: StorageTarget::Buffer(kind),
+                        access: match (load, store) {
+                            (true, true) => Access::ReadWrite,
+                            (false, true) => Access::Write,
+                            _ => Access::Read,
+                        },
+                    };
+                    (
+                        format!("u{}", range.lower),
+                        AddressSpace::Storage { access },
+                        3,
+                        ty,
+                    )
                 }
             };
             // a resource array is a binding array of the resource's own type, dynamically sized when unbounded
@@ -318,7 +379,7 @@ impl Lift<'_> {
     }
 
     /// The interface resource a handle of `class` names, where the resource is one binding.
-    fn handle(&mut self, v: ValueId, class: u8) -> Result<usize> {
+    pub(super) fn handle(&mut self, v: ValueId, class: u8) -> Result<usize> {
         match self.get(v)? {
             Lv::Handle {
                 class: c,
@@ -434,7 +495,7 @@ impl Lift<'_> {
         self.define_result(inst.result, handle)
     }
 
-    fn global_of(&self, resource: usize) -> Handle<GlobalVariable> {
+    pub(super) fn global_of(&self, resource: usize) -> Handle<GlobalVariable> {
         self.resources.globals[resource]
     }
 
@@ -927,12 +988,22 @@ impl Lift<'_> {
 
     /// `BufferLoad(handle, index, offset)`: four lanes of a typed, raw or structured buffer.
     pub(super) fn buffer_load(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
-        let resource = self.handle(args[1], 0)?;
+        let class = match self.get(args[1])? {
+            Lv::Handle { class, .. } => class,
+            _ => return self.refuse("a buffer load through something that is not a handle"),
+        };
+        let resource = self.handle(args[1], class)?;
         let g = self.global_of(resource);
         let kind = match self.setup.kind(resource).clone() {
-            ResourceKind::Buffer(k) => k,
+            ResourceKind::Buffer(k)
+            | ResourceKind::Storage {
+                target: StorageTarget::Buffer(k),
+                ..
+            } => k,
             _ => return self.refuse("a buffer load from something that is not a buffer"),
         };
+        // the words of an atomic buffer are read by atomic loads, as the buffer's integer type
+        let atomic = self.resources.atomic.get(&resource).copied();
         let index = self.uint(args[2])?;
         let ty = inst.result.map(|(_, t)| t).expect("a call has a result");
         let crate::module::Type::Struct { elements, .. } = self.m.types[ty].clone() else {
@@ -994,7 +1065,13 @@ impl Lift<'_> {
                         base: pointer,
                         index: safe.expr,
                     });
-                    let value = self.b.load(element, Kind::U, 1);
+                    let value = match atomic {
+                        Some(scalar) => {
+                            let loaded = self.b.load(element, kind_of_atomic(scalar), 1);
+                            self.b.bitcast_to(loaded, Kind::U)
+                        }
+                        None => self.b.load(element, Kind::U, 1),
+                    };
                     lanes.push(self.b.select(inside, value, zero));
                 }
                 self.b.compose(&lanes)

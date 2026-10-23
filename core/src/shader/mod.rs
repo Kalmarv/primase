@@ -59,4 +59,6 @@ pub enum ShaderFormat {
 pub enum Stage {
     Vertex,
     Pixel,
+    /// A compute program: no varyings, system inputs naming the invocation, a thread group size.
+    Compute,
 }

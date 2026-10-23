@@ -205,6 +205,21 @@ pub enum Op {
         base: ValueId,
         indices: Vec<ValueId>,
     },
+    /// `atomicrmw`: the operation (LLVM's code: 0 xchg, 1 add, 2 sub, 3 and, 4 nand, 5 or, 6 xor, 7 max, 8 min, 9 umax,
+    /// 10 umin); the result is the value the pointer held.
+    AtomicRmw {
+        pointer: ValueId,
+        value: ValueId,
+        op: u64,
+    },
+    /// `cmpxchg`: the result is the pair (the value the pointer held, whether it was swapped).
+    CmpXchg {
+        pointer: ValueId,
+        compare: ValueId,
+        value: ValueId,
+    },
+    /// `fence`: ordering between invocations, which a lockstep reading does not have.
+    Fence,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -551,9 +566,8 @@ fn refused(code: u64) -> &'static str {
         23 => "va_arg",
         24 | 42 | 45 => "store (atomic)",
         31 => "indirectbr",
-        36 => "fence",
-        37 | 46 => "cmpxchg",
-        38 => "atomicrmw",
+        37 => "cmpxchg (old form)",
+        59 => "atomicrmw (new form)",
         39 => "resume",
         40 | 47 => "landingpad",
         _ => "unknown instruction record",
@@ -823,6 +837,51 @@ impl Module {
                     let (value, _) = body.value_type(r, &mut i)?;
                     (Op::Store { pointer, value }, None)
                 }
+                // atomicrmw (LLVM 3.7): [pointer with its type, value, operation, volatile, ordering, scope]
+                38 => {
+                    let (pointer, _) = body.value_type(r, &mut i)?;
+                    let value = body.value(r, &mut i)?;
+                    let op = op(r, i)?;
+                    let ty = body.m.value_types.get(value).copied();
+                    let ty = match ty {
+                        Some(t) if value < body.next() => t,
+                        _ => return Err(error(r.at, "an atomicrmw of a value defined later")),
+                    };
+                    (Op::AtomicRmw { pointer, value, op }, Some(ty))
+                }
+                // cmpxchg: [pointer with its type, compare with its type, new value, volatile, orderings, ...]; the
+                // result is a structure of the value and a flag
+                46 => {
+                    let (pointer, _) = body.value_type(r, &mut i)?;
+                    let (compare, ty) = body.value_type(r, &mut i)?;
+                    let value = body.value(r, &mut i)?;
+                    let flag = body
+                        .m
+                        .types
+                        .iter()
+                        .position(|t| *t == Type::Integer(1))
+                        .ok_or_else(|| error(r.at, "a cmpxchg without a boolean type"))?;
+                    let pair = Type::Struct {
+                        name: None,
+                        elements: vec![ty, flag],
+                    };
+                    let result = match body.m.types.iter().position(|t| *t == pair) {
+                        Some(p) => p,
+                        None => {
+                            body.m.types.push(pair);
+                            body.m.types.len() - 1
+                        }
+                    };
+                    (
+                        Op::CmpXchg {
+                            pointer,
+                            compare,
+                            value,
+                        },
+                        Some(result),
+                    )
+                }
+                36 => (Op::Fence, None),
                 43 => {
                     // [inbounds, source element type, then each operand with its type when a forward reference]
                     i = 2;

@@ -215,7 +215,18 @@ impl Lift<'_> {
         let result = inst.result;
         match &inst.op {
             Op::Binary { op, lhs, rhs } => {
-                let (a, b) = (self.scalar(*lhs)?, self.scalar(*rhs)?);
+                let (mut a, mut b) = (self.scalar(*lhs)?, self.scalar(*rhs)?);
+                // an integer operation on a value carried as a float (memory of one kind read as another) is on its bits
+                let lhs_type = if *lhs < self.f.first {
+                    self.m.value_types.get(*lhs).copied()
+                } else {
+                    self.f.local_types.get(*lhs - self.f.first).copied()
+                };
+                let integer = matches!(lhs_type.and_then(|t| self.m.types.get(t)), Some(Type::Integer(_)));
+                if integer && a.kind == Kind::F {
+                    a = self.b.bitcast_to(a, Kind::U);
+                    b = self.b.bitcast_to(b, Kind::U);
+                }
                 let r = self.binary(*op, a, b)?;
                 self.define_result(result, Lv::Scalar(r))
             }
@@ -286,6 +297,14 @@ impl Lift<'_> {
             Op::Alloca { .. } | Op::Load { .. } | Op::Store { .. } | Op::Gep { .. } => {
                 self.memory_instruction(inst)
             }
+            Op::AtomicRmw { pointer, value, op } => self.atomic_rmw(inst, *pointer, *value, *op),
+            Op::CmpXchg {
+                pointer,
+                compare,
+                value,
+            } => self.cmp_xchg(inst, *pointer, *compare, *value),
+            // invocations run in step, so there is no ordering to enforce
+            Op::Fence => Ok(()),
             // flow is the structurizer's, phis the edges'
             Op::Phi { .. }
             | Op::Branch { .. }

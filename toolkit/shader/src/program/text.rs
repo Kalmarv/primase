@@ -59,6 +59,7 @@ pub(super) fn text(p: &Program) -> Result<String, Error> {
         match p.stage {
             Stage::Vertex => "vertex",
             Stage::Pixel => "pixel",
+            Stage::Compute => "compute",
             _ => "other",
         },
         p.entry
