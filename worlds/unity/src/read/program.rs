@@ -336,6 +336,26 @@ fn stage_program(
     Ok(PassProgram { variants, parameters })
 }
 
+/// Blob segments of a [`ShaderPrograms`] already decompressed ([`ShaderPrograms::code_with`]).
+#[derive(Debug, Default)]
+pub struct Segments(std::collections::BTreeMap<(usize, usize), std::sync::Arc<Vec<u8>>>);
+
+impl Segments {
+    fn get(
+        &mut self,
+        programs: &ShaderPrograms,
+        platform: usize,
+        k: usize,
+    ) -> Result<std::sync::Arc<Vec<u8>>> {
+        if let Some(s) = self.0.get(&(platform, k)) {
+            return Ok(s.clone());
+        }
+        let s = std::sync::Arc::new(programs.segment(platform, k)?);
+        self.0.insert((platform, k), s.clone());
+        Ok(s)
+    }
+}
+
 impl ShaderPrograms {
     /// Read the Shader `r` of `player`.
     pub fn read(player: &Player, r: &ObjRef) -> Result<Self> {
@@ -460,12 +480,18 @@ impl ShaderPrograms {
     /// The code of blob entry `index` of the blob for `platform` (Unity's `ShaderCompilerPlatform`): the program
     /// record's code bytes, as stored.
     pub fn code(&self, platform: i64, index: u32) -> Result<Vec<u8>> {
+        self.code_with(&mut Segments::default(), platform, index)
+    }
+
+    /// [`ShaderPrograms::code`] keeping the segments it decompresses in `cache`, which reads many entries of one
+    /// shader without decompressing a segment for each.
+    pub fn code_with(&self, cache: &mut Segments, platform: i64, index: u32) -> Result<Vec<u8>> {
         let p = self
             .platforms
             .iter()
             .position(|&x| x == platform)
             .ok_or_else(|| invalid(format!("shader {}: no blob for platform {platform}", self.name)))?;
-        let table = self.segment(p, 0)?;
+        let table = cache.get(self, p, 0)?;
         let mut r = super::Reader::new(&table, false);
         let count = usize::try_from(r.i32()?).map_err(|_| invalid("shader blob: a negative entry count"))?;
         let at = 4 + usize::try_from(index).map_err(|_| invalid("shader blob: an entry index"))? * 12;
@@ -482,7 +508,7 @@ impl ShaderPrograms {
         let data = if segment == 0 {
             table
         } else {
-            self.segment(p, segment)?
+            cache.get(self, p, segment)?
         };
         let entry = offset
             .checked_add(length)
@@ -587,7 +613,18 @@ pub fn read_programs(
 ) -> Result<ProgramsReport> {
     use crate::components::{UnityMaterial, UnityProgramVariant, UnityPrograms};
     let mut report = ProgramsReport::default();
-    let mut read: std::collections::BTreeMap<(String, i64), ShaderPrograms> =
+    let mut read: std::collections::BTreeMap<(String, i64), (ShaderPrograms, Segments)> =
+        std::collections::BTreeMap::new();
+    // each (shader, subshader, pass)'s variants of every stage and the shader's texture defaults, made once
+    type Built = (
+        Vec<UnityProgramVariant>,
+        Vec<UnityProgramVariant>,
+        Vec<UnityProgramVariant>,
+        Vec<UnityProgramVariant>,
+        Vec<UnityProgramVariant>,
+        Vec<(String, String)>,
+    );
+    let mut built: std::collections::BTreeMap<((String, i64), usize, usize), Built> =
         std::collections::BTreeMap::new();
     let materials: Vec<(primase_core::Entity, UnityMaterial)> = w
         .iter::<UnityMaterial>()
@@ -620,9 +657,13 @@ pub fn read_programs(
         };
         let key = (shader.file.clone(), shader.path_id);
         if !read.contains_key(&key) {
-            read.insert(key.clone(), ShaderPrograms::read(player, &shader)?);
+            read.insert(
+                key.clone(),
+                (ShaderPrograms::read(player, &shader)?, Segments::default()),
+            );
         }
-        let programs = &read[&key];
+        let (programs, segments) = read.get_mut(&key).expect("read above");
+        let programs = &*programs;
         let Some(pass) = programs.passes.get(i).and_then(|sub| sub.get(j)) else {
             leave("no draw pass");
             continue;
@@ -631,46 +672,57 @@ pub fn read_programs(
             leave("no D3D11 code");
             continue;
         }
-        let mut stored = |stage: Stage, program: &PassProgram| -> Result<Vec<UnityProgramVariant>> {
-            let mut variants = Vec::new();
-            for v in &program.variants {
-                // a pass stores the variants of every graphics API its shader was compiled for; this blob is D3D11's
-                if !D3D11_PROGRAM_TYPES.contains(&v.gpu_program_type) {
-                    *report
-                        .left_out
-                        .entry("variants of another graphics API than D3D11".to_owned())
-                        .or_default() += 1;
-                    continue;
+        let built_key = (key.clone(), i, j);
+        if !built.contains_key(&built_key) {
+            let mut stored = |stage: Stage, program: &PassProgram| -> Result<Vec<UnityProgramVariant>> {
+                let mut variants = Vec::new();
+                for v in &program.variants {
+                    // a pass stores the variants of every graphics API its shader was compiled for; this blob is D3D11's
+                    if !D3D11_PROGRAM_TYPES.contains(&v.gpu_program_type) {
+                        *report
+                            .left_out
+                            .entry("variants of another graphics API than D3D11".to_owned())
+                            .or_default() += 1;
+                        continue;
+                    }
+                    let code = programs.code_with(segments, 4, v.blob_index)?;
+                    let Some(code) = dxbc(&code) else {
+                        *report
+                            .left_out
+                            .entry(match stage {
+                                Stage::Fragment => {
+                                    "variants whose D3D11 code holds no DXBC container".to_owned()
+                                }
+                                _ => format!(
+                                    "{} variants whose D3D11 code holds no DXBC container",
+                                    format!("{stage:?}").to_lowercase()
+                                ),
+                            })
+                            .or_default() += 1;
+                        continue;
+                    };
+                    variants.push(UnityProgramVariant {
+                        tier: v.group,
+                        gpu_program_type: v.gpu_program_type,
+                        keywords: v.keywords.clone(),
+                        parameters: program.parameters_of(v).clone(),
+                        code: std::sync::Arc::from(code),
+                    });
                 }
-                let code = programs.code(4, v.blob_index)?;
-                let Some(code) = dxbc(&code) else {
-                    *report
-                        .left_out
-                        .entry(match stage {
-                            Stage::Fragment => "variants whose D3D11 code holds no DXBC container".to_owned(),
-                            _ => format!(
-                                "{} variants whose D3D11 code holds no DXBC container",
-                                format!("{stage:?}").to_lowercase()
-                            ),
-                        })
-                        .or_default() += 1;
-                    continue;
-                };
-                variants.push(UnityProgramVariant {
-                    tier: v.group,
-                    keywords: v.keywords.clone(),
-                    parameters: program.parameters_of(v).clone(),
-                    code: code.to_vec(),
-                });
-            }
-            Ok(variants)
-        };
-        let variants = stored(Stage::Fragment, &pass.fragment)?;
-        let vertex = stored(Stage::Vertex, &pass.vertex)?;
-        let geometry = stored(Stage::Geometry, &pass.geometry)?;
-        let hull = stored(Stage::Hull, &pass.hull)?;
-        let domain = stored(Stage::Domain, &pass.domain)?;
-        let texture_defaults = texture_defaults(player, &shader)?;
+                Ok(variants)
+            };
+            let variants = stored(Stage::Fragment, &pass.fragment)?;
+            let vertex = stored(Stage::Vertex, &pass.vertex)?;
+            let geometry = stored(Stage::Geometry, &pass.geometry)?;
+            let hull = stored(Stage::Hull, &pass.hull)?;
+            let domain = stored(Stage::Domain, &pass.domain)?;
+            let texture_defaults = texture_defaults(player, &shader)?;
+            built.insert(
+                built_key.clone(),
+                (variants, vertex, geometry, hull, domain, texture_defaults),
+            );
+        }
+        let (variants, vertex, geometry, hull, domain, texture_defaults) = built[&built_key].clone();
         w.insert(
             e,
             UnityPrograms {
@@ -715,9 +767,10 @@ mod tests {
         use crate::components::{UnityProgramVariant, UnityPrograms};
         let variant = |tier: usize, keywords: &[&str]| UnityProgramVariant {
             tier,
+            gpu_program_type: 18,
             keywords: keywords.iter().map(|k| k.to_string()).collect(),
             parameters: Parameters::default(),
-            code: vec![tier as u8, keywords.len() as u8],
+            code: std::sync::Arc::from(vec![tier as u8, keywords.len() as u8]),
         };
         let programs = UnityPrograms {
             shader: "Test".into(),
@@ -739,7 +792,7 @@ mod tests {
         let chosen = |material: &[&str], global: &[&str], tier| {
             programs
                 .variant(&s(material), &s(global), tier)
-                .map(|v| v.code.clone())
+                .map(|v| v.code.to_vec())
         };
         assert_eq!(chosen(&[], &["DIRECTIONAL"], 0), Some(vec![0, 1]));
         assert_eq!(chosen(&[], &["DIRECTIONAL"], 1), Some(vec![1, 1]));

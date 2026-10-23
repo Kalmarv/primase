@@ -136,7 +136,7 @@ fn all_stages(label: &str, data: &std::path::Path, tpk: &std::path::Path, oracle
     .unwrap();
     let oracle: Json = serde_json::from_slice(&oracle).unwrap();
     let mut gate = GateReport::new(
-        &format!("{label}: shader programs of all stages"),
+        format!("{label}: shader programs of all stages"),
         Tolerance::Exact,
     );
     let mut variants = [0usize; 5];

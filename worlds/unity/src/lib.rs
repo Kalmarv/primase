@@ -36,6 +36,7 @@
 //! - [`lower_collision`]: colliders and terrain colliders lowered to collision geometry.
 //! - [`lower_lights`]: lights lowered to `core.light`.
 //! - [`lower_ambient`]: the scene's ambient lighting lowered to `core.environment`'s ambient.
+//! - [`resolve_shaders`]: a material's programs and what they read, as `core.shader` and `core.shader_binding`.
 //! - [`register`]: the passes by name.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
@@ -45,7 +46,9 @@ pub mod passes;
 mod read;
 pub mod shader;
 
-pub use passes::{drawn, lower, lower_ambient, lower_collision, lower_lights, lower_terrain};
+pub use passes::{
+    drawn, lower, lower_ambient, lower_collision, lower_lights, lower_terrain, resolve_shaders,
+};
 pub use read::serialized::{ObjectInfo, SerializedFile};
 pub use read::tpk::TypeTreePackage;
 pub use read::typetree::TypeTree;
@@ -77,6 +80,11 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         none(o, lower_collision::LowerUnityCollision)
     });
     reg.register("lower-unity-lights", |o| none(o, lower_lights::LowerUnityLights));
+    reg.register_requiring(
+        "resolve-unity-shaders",
+        |o| Ok(Box::new(resolve_shaders::ResolveUnityShaders::from_options(o)?)),
+        &[("tier", "0"), ("keywords", "none"), ("colour-space", "linear")],
+    );
     reg.register_requiring(
         "lower-unity-ambient",
         |o| Ok(Box::new(lower_ambient::LowerUnityAmbient::from_options(o)?)),

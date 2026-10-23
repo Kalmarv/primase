@@ -178,10 +178,13 @@ pub struct Parameters {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityProgramVariant {
     pub tier: usize,
+    /// Unity's `ShaderGpuProgramType` (15 and 16 D3D11 vertex shader model 4.0 and 5.0, 17 and 18 pixel, 19 and 20
+    /// geometry, 21 hull, 22 domain).
+    pub gpu_program_type: i64,
     pub keywords: Vec<String>,
     pub parameters: Parameters,
     #[serde(skip)]
-    pub code: Vec<u8>,
+    pub code: std::sync::Arc<[u8]>,
 }
 
 /// The compiled programs of the pass a material draws with, as the player stores them
@@ -229,10 +232,65 @@ impl UnityPrograms {
     }
 }
 
+/// The variant of each stage a draw uses ([`UnityPrograms::draw_variants`]); `None` for a stage the pass has no
+/// variants of, or none of for the draw.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DrawVariants<'a> {
+    pub vertex: Option<&'a UnityProgramVariant>,
+    pub fragment: Option<&'a UnityProgramVariant>,
+    pub geometry: Option<&'a UnityProgramVariant>,
+    pub hull: Option<&'a UnityProgramVariant>,
+    pub domain: Option<&'a UnityProgramVariant>,
+}
+
+impl UnityPrograms {
+    /// The variant of each stage a draw with the keywords `material` and `global` (their union is the draw's keyword
+    /// set) and hardware tier `tier` uses. Unity compiles each stage for the keyword sets that stage uses, so per stage
+    /// the draw's keywords are restricted to those some variant of the stage has, and the variant is the one with
+    /// exactly those, in that tier (`tests/program_pairing.rs` checks on every pass of two players that a fragment
+    /// variant and a vertex variant so selected exist together: a fragment variant's keywords alone do not determine
+    /// the vertex variant). Where a stage has the same keywords and tier in two shader models, the fragment stage takes
+    /// the first stored and the others the model of its (a vertex program two types below the pixel program's), else
+    /// the first.
+    pub fn draw_variants<'a>(
+        &'a self,
+        material: &[String],
+        global: &[String],
+        tier: usize,
+    ) -> DrawVariants<'a> {
+        let draw: std::collections::BTreeSet<&String> = material.iter().chain(global).collect();
+        let pick = |list: &'a [UnityProgramVariant], model: Option<i64>| -> Option<&'a UnityProgramVariant> {
+            let used: std::collections::BTreeSet<&String> = list.iter().flat_map(|v| &v.keywords).collect();
+            let wanted: std::collections::BTreeSet<&String> = draw.intersection(&used).copied().collect();
+            let mut found = list.iter().filter(|v| {
+                v.tier == tier && v.keywords.iter().collect::<std::collections::BTreeSet<_>>() == wanted
+            });
+            match model {
+                Some(m) => {
+                    let all: Vec<_> = found.collect();
+                    all.iter()
+                        .copied()
+                        .find(|v| v.gpu_program_type == m)
+                        .or_else(|| all.first().copied())
+                }
+                None => found.next(),
+            }
+        };
+        let fragment = pick(&self.variants, None);
+        DrawVariants {
+            fragment,
+            vertex: pick(&self.vertex, fragment.map(|f| f.gpu_program_type - 2)),
+            geometry: pick(&self.geometry, None),
+            hull: pick(&self.hull, None),
+            domain: pick(&self.domain, None),
+        }
+    }
+}
+
 impl Component for UnityPrograms {
     const NAME: &'static str = "unity.programs";
-    /// 2: the vertex, geometry, hull and domain stages beside the fragment's.
-    const VERSION: u32 = 2;
+    /// 2: the vertex, geometry, hull and domain stages beside the fragment's. 3: each variant's GPU program type.
+    const VERSION: u32 = 3;
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
@@ -925,6 +983,62 @@ impl Component for UnityCollider {
 mod tests {
     use super::*;
     use crate::shader::fixture;
+
+    fn variant(tier: usize, model: i64, keywords: &[&str], code: u8) -> UnityProgramVariant {
+        UnityProgramVariant {
+            tier,
+            gpu_program_type: model,
+            keywords: keywords.iter().map(|k| (*k).to_owned()).collect(),
+            parameters: Parameters::default(),
+            code: std::sync::Arc::from(vec![code]),
+        }
+    }
+
+    /// A draw's keywords select each stage's variant by the keywords that stage uses: the vertex stage reads
+    /// `LOD_FADE_PERCENTAGE` (and the fragment stage never does), so the fragment variant for `FOG` is paired with the
+    /// vertex variant of `FOG` and `LOD_FADE_PERCENTAGE`; a keyword neither stage reads has no effect; the fragment's
+    /// shader model decides between two stored models of one vertex variant.
+    #[test]
+    fn a_draws_keywords_select_each_stages_variant_by_what_the_stage_uses() {
+        let programs = UnityPrograms {
+            shader: "S".into(),
+            subshader: 0,
+            pass: 0,
+            texture_defaults: Vec::new(),
+            variants: vec![
+                variant(1, 18, &[], 1),
+                variant(1, 18, &["FOG"], 2),
+                variant(2, 18, &[], 3),
+            ],
+            vertex: vec![
+                variant(1, 15, &["LOD_FADE_PERCENTAGE"], 10),
+                variant(1, 16, &["LOD_FADE_PERCENTAGE"], 11),
+                variant(1, 16, &["LOD_FADE_PERCENTAGE", "FOG"], 12),
+                variant(2, 16, &["LOD_FADE_PERCENTAGE"], 13),
+            ],
+            geometry: Vec::new(),
+            hull: Vec::new(),
+            domain: Vec::new(),
+        };
+        let s = |k: &[&str]| k.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>();
+        let code = |v: Option<&UnityProgramVariant>| v.map(|v| v.code[0]);
+        let d = programs.draw_variants(&s(&["FOG", "UNREAD"]), &s(&["LOD_FADE_PERCENTAGE"]), 1);
+        assert_eq!((code(d.fragment), code(d.vertex)), (Some(2), Some(12)));
+        assert_eq!(
+            (code(d.geometry), code(d.hull), code(d.domain)),
+            (None, None, None)
+        );
+        // no fog: the fragment variant without keywords; its model 18 takes the vertex model 16
+        let d = programs.draw_variants(&[], &s(&["LOD_FADE_PERCENTAGE"]), 1);
+        assert_eq!((code(d.fragment), code(d.vertex)), (Some(1), Some(11)));
+        // another tier, and a tier that has none
+        let d = programs.draw_variants(&[], &s(&["LOD_FADE_PERCENTAGE"]), 2);
+        assert_eq!((code(d.fragment), code(d.vertex)), (Some(3), Some(13)));
+        assert_eq!(programs.draw_variants(&[], &[], 0), DrawVariants::default());
+        // without the keyword the vertex stage always has, no vertex variant (the fragment one is still found)
+        let d = programs.draw_variants(&[], &[], 1);
+        assert_eq!((code(d.fragment), code(d.vertex)), (Some(1), None));
+    }
 
     /// The submesh each primitive is follows a rebuild of the primitive list (one split in two, one dropped).
     #[test]

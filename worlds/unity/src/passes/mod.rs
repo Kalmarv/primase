@@ -6,3 +6,4 @@ pub mod lower_ambient;
 pub mod lower_collision;
 pub mod lower_lights;
 pub mod lower_terrain;
+pub mod resolve_shaders;
