@@ -6,7 +6,9 @@
 //!
 //! - A lane responds to a class when a change of that class changes it at either operating point.
 //! - Target 1's xyz is held to the world normal biased, `n * 0.5 + 0.5`, with every texture flat (a texel of 0.5) and
-//!   the constants zero.
+//!   the constants zero. A program that discards that pixel stores no normal (the executor reports the lanes written:
+//!   none), and is tried at a second operating point (an opaque vertex colour); a program that discards both is
+//!   counted by family and must be one of the alpha-test and stipple programs.
 //! - Target 3's z is the lane the emissive effects write: with every texel, constant word and vertex colour at 1 it is
 //!   non-zero, and the effects of the programs where it is are listed.
 //!
@@ -25,6 +27,22 @@ use primase_shader_exec::{
     Grid, Input, Invocation, Layout, PixelShader, Texture, evaluate::Constants, evaluate_raw,
 };
 use primase_testdata::{Game, install, keys};
+
+/// Whether the lifted program has a `discard` anywhere in its body.
+fn has_discard(bytecode: &[u8]) -> bool {
+    fn block(b: &naga::Block) -> bool {
+        use naga::Statement as S;
+        b.iter().any(|s| match s {
+            S::Kill => true,
+            S::Block(b) => block(b),
+            S::If { accept, reject, .. } => block(accept) || block(reject),
+            S::Loop { body, continuing, .. } => block(body) || block(continuing),
+            S::Switch { cases, .. } => cases.iter().any(|c| block(&c.body)),
+            _ => false,
+        })
+    }
+    primase_dxil::lift(bytecode).is_ok_and(|p| p.module.entry_points.iter().any(|e| block(&e.function.body)))
+}
 
 /// A program lifted and ready to run, or why not.
 fn executor(bytecode: &[u8]) -> Result<ProgramShader, String> {
@@ -77,6 +95,12 @@ fn unit(v: [f32; 3]) -> [f32; 3] {
 
 /// One pixel of `shader`: the four words of each target, or why not.
 fn run(shader: &ProgramShader, s: Setup) -> Result<Vec<[f32; 4]>, String> {
+    run_written(shader, s).map(|(out, _)| out)
+}
+
+/// One pixel of `shader`: the four words of each target, and whether the program wrote any lane of any target. A pixel
+/// the program discards before it stores anything (an alpha test, a stipple) writes none, and its words read 0.
+fn run_written(shader: &ProgramShader, s: Setup) -> Result<(Vec<[f32; 4]>, bool), String> {
     let buffers: Vec<(u32, u32)> = PixelShader::constant_buffers(shader)
         .iter()
         .map(|&(slot, rows)| (slot, rows.saturating_mul(4)))
@@ -135,14 +159,17 @@ fn run(shader: &ProgramShader, s: Setup) -> Result<Vec<[f32; 4]>, String> {
         Invocation::Scalar,
     )
     .map_err(|e| e.to_string())?;
-    Ok(raw
-        .pixels
-        .iter()
-        .map(|p| {
-            let (bits, _) = p[0];
-            bits.map(f32::from_bits)
-        })
-        .collect())
+    let written = raw.pixels.iter().any(|p| p[0].1 != 0);
+    Ok((
+        raw.pixels
+            .iter()
+            .map(|p| {
+                let (bits, _) = p[0];
+                bits.map(f32::from_bits)
+            })
+            .collect(),
+        written,
+    ))
 }
 
 /// The group of the G-buffer pass's programs that write five targets.
@@ -247,6 +274,8 @@ fn the_deferred_programs_write_one_g_buffer() {
     let mut unevaluated: BTreeMap<String, usize> = BTreeMap::new();
     let mut static_text = StaticText::default();
     let mut biased_not_normal: Vec<String> = Vec::new();
+    // programs whose pixel is discarded at every operating point tried, by program family
+    let mut discarded_flat: BTreeMap<String, usize> = BTreeMap::new();
     for (entity, (stem, effects)) in &programs {
         let sh = world.get::<Shader>(*entity).unwrap();
         let widths: Vec<u32> = sh
@@ -359,31 +388,53 @@ fn the_deferred_programs_write_one_g_buffer() {
         }
         // target 1's normal
         if widths.len() > 1 && widths[1] == 4 {
-            let flat_out = run(&shader, flat).unwrap();
-            let t = normal.entry(group.clone()).or_default();
-            t.1 += 1;
-            let is_normal = (0..3).all(|k| (flat_out[1][k] - (flat.normal[k] * 0.5 + 0.5)).abs() < 1e-2);
-            // a program the pass reads as storing target 1 biased holds the normal there
-            if stem.starts_with("PS_DeferredTextured")
-                && gbuffer::writes(&sh.bytecode).is_ok_and(|w| w.normal_biased)
-                && !is_normal
-            {
-                biased_not_normal.push(format!("{stem} {effects:?}: {:?}", flat_out[1]));
-            }
-            if is_normal {
-                t.0 += 1;
-            } else {
-                let misses = normal_misses.entry(group.clone()).or_default();
-                if misses.len() < 3 {
-                    misses.push(format!(
-                        "{stem}: {:?} outputs {:?}",
-                        flat_out[1],
-                        sh.interface
-                            .outputs
-                            .iter()
-                            .map(|v| (v.used, v.provenance.d3d.map(|d| (d.mask, d.read_write_mask))))
-                            .collect::<Vec<_>>()
-                    ));
+            // the flat pixel, or the first of a few operating points that is not discarded: a program with an alpha
+            // test or a stipple can discard it, and a discarded pixel stores no normal to hold to anything
+            'normal: {
+                let kept = [
+                    flat,
+                    Setup {
+                        colour: [0.5, 0.5, 0.5, 1.0],
+                        ..flat
+                    },
+                ]
+                .into_iter()
+                .map(|s| run_written(&shader, s).unwrap())
+                .find(|(_, written)| *written);
+                let Some((flat_out, _)) = kept else {
+                    *discarded_flat.entry(stem.to_owned()).or_default() += 1;
+                    // it can only be a program with a discard in it
+                    assert!(
+                        has_discard(&sh.bytecode),
+                        "{stem} {effects:?} writes nothing and has no discard"
+                    );
+                    break 'normal;
+                };
+                let t = normal.entry(group.clone()).or_default();
+                t.1 += 1;
+                let is_normal = (0..3).all(|k| (flat_out[1][k] - (flat.normal[k] * 0.5 + 0.5)).abs() < 1e-2);
+                // a program the pass reads as storing target 1 biased holds the normal there
+                if stem.starts_with("PS_DeferredTextured")
+                    && gbuffer::writes(&sh.bytecode).is_ok_and(|w| w.normal_biased)
+                    && !is_normal
+                {
+                    biased_not_normal.push(format!("{stem} {effects:?}: {:?}", flat_out[1]));
+                }
+                if is_normal {
+                    t.0 += 1;
+                } else {
+                    let misses = normal_misses.entry(group.clone()).or_default();
+                    if misses.len() < 3 {
+                        misses.push(format!(
+                            "{stem}: {:?} outputs {:?}",
+                            flat_out[1],
+                            sh.interface
+                                .outputs
+                                .iter()
+                                .map(|v| (v.used, v.provenance.d3d.map(|d| (d.mask, d.read_write_mask))))
+                                .collect::<Vec<_>>()
+                        ));
+                    }
                 }
             }
         }
@@ -441,9 +492,14 @@ fn the_deferred_programs_write_one_g_buffer() {
     );
     println!("not biased: {:#?}", static_text.odd);
     println!("target 3 z nonzero under stress, by effect: {emission:?}");
+    println!(
+        "programs that discard the flat pixel at every operating point tried, by family: {discarded_flat:?}"
+    );
     // the reading of the stores holds: every program read as storing target 1 biased holds the normal there, no
     // program of the G-buffer pass is refused, and the emission is written only by emissive effects
     assert!(biased_not_normal.is_empty(), "{biased_not_normal:?}");
+    // a handful of programs: the alpha-test and stipple families, and two grass programs
+    assert!(discarded_flat.values().sum::<usize>() < 60, "{discarded_flat:?}");
     assert!(static_text.refused.is_empty(), "{:?}", static_text.refused);
     assert!(static_text.unread.is_empty(), "{:?}", static_text.unread);
     assert!(
