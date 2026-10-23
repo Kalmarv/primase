@@ -158,10 +158,21 @@ vertex program (lifted, on the executor) on each of its vertices with an identit
 instance at the finest level and the wind off (the wind block's fourth row's `y` set to
 1, with which every program outputs the stored position as it stands), and requires the decoded position and UV to be its
 outputs exactly and the normal and tangent within 1e-6. The programs of the three
-meshes of AEG801_258 drawn with `SpeedTree_5030f_w31a187` and `SpeedTree_5030ff8_w31a187` read their layout's
-`Half4` UV5 as the normal (it holds values up to 15.6, or zeros, not a direction),
-while the layout's two `UByte4Norm` members are a unit normal and tangent, perpendicular
-to each other: those meshes' normals and tangents are the layout's, not compared. The
+meshes of AEG801_258 (placed 194 times) drawn with `SpeedTree_5030f_w31a187` and
+`SpeedTree_5030ff8_w31a187` are the exception. Those programs read the inputs the
+eight-member layout holds (UV2 to UV4, the normal at TEXCOORD5, the tangent at
+TEXCOORD6, the same lanes as `SpeedTree_5010f_w312187`'s), but these meshes' layout has a
+fourth `Half4` (UV5) before its `UByte4Norm` pair (UV6, UV7). Nothing in the layout marks
+it (its member words are those of every other stored member, the indices run 2 to 7),
+and binding by index is what reproduces every other mesh exactly, so the game most likely
+gives those programs UV5 as the normal: all zeros in two meshes (the constant
+(-1, -1, -1) once unpacked), and in the third `x` from 0.28 to 15.6 with `y` 1, not unit
+directions. The lowering does not follow the programs there. It keeps the layout's pair,
+a unit normal and tangent perpendicular to each other whose normal follows the faces, so
+these meshes are lit as authored, not as the game most likely lights them. Following the
+programs would mean taking the roles from each material's program (its last two
+TEXCOORD inputs are the normal and the tangent in all 46) rather than from the layout.
+The test lists these meshes and compares only their positions and UVs. The
 collision of the same assets checks the frame: the position as stored lies nearest its
 own collision (101 of the 106 with collision; for the other five the best of the 48
 signed axis permutations is within 0.02 m of it), mirrored in z farther (median 0.165 m against 0.064 m).
