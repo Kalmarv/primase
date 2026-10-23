@@ -11,6 +11,7 @@ pub mod deform;
 pub mod joint_table;
 pub mod map;
 pub mod passes;
+pub mod placement;
 pub mod pose;
 pub mod quat;
 pub mod retarget;

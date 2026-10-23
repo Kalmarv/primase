@@ -50,7 +50,8 @@ pub use clip::{
 pub use morphs::{Deltas, Frame as MorphFrame, MorphId, Morphs, Target as MorphTarget};
 pub use provenance::{Origin, Provenance};
 pub use rig::{
-    Attachment, JointMap, MorphWeights, RigInstance, RigPose, SkinInstance, Socket, SocketId, Sockets,
+    Attachment, JointMap, JointOffset, JointPlacement, MorphWeights, RigInstance, RigPose, SkinInstance,
+    Socket, SocketId, Sockets,
 };
 pub use skeleton::{Joint, JointId, Rest, Skeleton};
 pub use skin::{Binding, BindingId, Deformation, Influences, Skin, Slot, WeightRule};

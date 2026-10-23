@@ -55,7 +55,9 @@ pub enum Reparented {
 /// a clip bound (`core.clip_binding`) to a rig of the source skeleton: map, then bind. A pair whose hierarchy differs
 /// is refused with `reparented=refuse` (the joints a clip drives) and moved by its model-space pose with
 /// `reparented=model-space` (every such pair, driven or not: the joint takes the source joint's model-space pose at
-/// each of the clip's key times, as local keys from its target parent's pose; see [`Reparented`]).
+/// each of the clip's key times, as local keys from its target parent's pose; see [`Reparented`]). A map's
+/// `core.joint_placement` (where the target joints stand inside a source mesh) is a statement about meshes, not
+/// motion: this pass never reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MapClip {
     pub unmapped: Unmapped,

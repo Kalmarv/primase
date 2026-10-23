@@ -5,13 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{
-    Asset, Binding, Component, Entity, Influences, JointId, JointMap, Mesh, Morphs, Role, Semantic, Skeleton,
-    Skin, SkinInstance, Slot, Stream, World,
+    Asset, Binding, Component, Entity, Influences, JointId, JointMap, JointOffset, JointPlacement, Mesh,
+    Morphs, Role, Semantic, Skeleton, Skin, SkinInstance, Slot, Stream, World,
 };
 
 use crate::deform::{Vertices, influences, skin};
+use crate::placement::{fit, place};
 use crate::pose::{Affine, affine, compose, inverse, locals, model_transforms, transform};
-use crate::retarget::{between, parents_first, rotate, rotation, with_rotation};
 
 /// Where the weight of a source joint the map does not list goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,14 +25,18 @@ pub enum UnmappedJoints {
     Nearest,
 }
 
-/// `retarget-skin{unmapped=refuse|ancestor|nearest}` (required): every skinned prototype bound to the `from` skeleton
-/// of a `core.joint_map` is moved onto its `to` skeleton, in three steps:
+/// `retarget-skin{unmapped=refuse|ancestor|nearest,placement=automatic|stated}` (both required): every skinned
+/// prototype bound to the `from` skeleton of a `core.joint_map` is moved onto its `to` skeleton, in three steps:
 ///
 /// 1. **Fit.** The source skeleton is posed onto the target's proportions: each mapped joint placed at its target
 ///    joint's rest position, and turned (the least rotation) so its bone points the way its target's bone does (the
 ///    bone to its one mapped joint below; a joint with none or several keeps its parent's turn); joints the map does
 ///    not list keep their rest relative to their parent. Bone directions, not whole rotations, are matched: two rigs'
-///    bone axes need not agree.
+///    bone axes need not agree. With `placement=stated` the map's `core.joint_placement` then moves where the target
+///    joints stand inside the mesh from where this fit put them ([`crate::placement`]): the mesh weighted to a mapped
+///    joint follows its moved target joint, and the joints the map does not list under it follow it; a joint with the
+///    identity offset keeps the fit's own. `placement=automatic` is the fit alone and refuses a map that has a
+///    placement (it would be ignored); `stated` refuses a map that has none.
 /// 2. **Deform.** The mesh is skinned into that pose by its own weights (positions, normals, tangents): it now stands
 ///    in the target's rest pose with the target's proportions.
 /// 3. **Rebind.** Each influence moves to its joint's target joint, the weight of joints the map does not list as
@@ -53,11 +57,21 @@ pub enum UnmappedJoints {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RetargetSkin {
     pub unmapped: UnmappedJoints,
+    pub placement: Placement,
+}
+
+/// Where the target joints stand inside the mesh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    /// As the fit puts them; a map with a `core.joint_placement` is refused.
+    Automatic,
+    /// As the map's `core.joint_placement` says; a map without one is refused.
+    Stated,
 }
 
 /// The pass factory.
 pub fn retarget_skin(o: &Options) -> Result<Box<dyn Pass>, String> {
-    let mut unmapped = None;
+    let (mut unmapped, mut placement) = (None, None);
     for (k, v) in o {
         match k.as_str() {
             "unmapped" => {
@@ -68,69 +82,25 @@ pub fn retarget_skin(o: &Options) -> Result<Box<dyn Pass>, String> {
                     _ => return Err(format!("unmapped={v}: refuse, ancestor or nearest")),
                 });
             }
+            "placement" => {
+                placement = Some(match v.as_str() {
+                    "automatic" => Placement::Automatic,
+                    "stated" => Placement::Stated,
+                    _ => return Err(format!("placement={v}: automatic or stated")),
+                });
+            }
             _ => return Err(format!("unknown option {k}")),
         }
     }
     Ok(Box::new(RetargetSkin {
         unmapped: unmapped.ok_or("unmapped=refuse|ancestor|nearest is required")?,
+        placement: placement.ok_or("placement=automatic|stated is required")?,
     }))
 }
 
 /// The most an entry of a weighted joint's rest times its inverse bind may differ from the identity (the mesh is in the
 /// skeleton's model space when it is zero): single-precision noise of values stored as f32.
 const BIND_TOLERANCE: f64 = 1e-4;
-
-/// The source skeleton posed onto the target's proportions (see [`RetargetSkin`], step 1): each source joint's model
-/// transform.
-fn fit(
-    source: &Skeleton,
-    target_rest: &BTreeMap<JointId, Affine>,
-    pairs: &BTreeMap<JointId, JointId>,
-) -> Result<BTreeMap<JointId, Affine>, String> {
-    let local: BTreeMap<JointId, Affine> = locals(source, None)
-        .into_iter()
-        .map(|(j, r)| (j, affine(&r.matrix())))
-        .collect();
-    let parent: BTreeMap<JointId, Option<JointId>> = source.joints.iter().map(|j| (j.id, j.parent)).collect();
-    // each mapped joint's mapped joints below it with no mapped joint between
-    let mut below: BTreeMap<JointId, Vec<JointId>> = BTreeMap::new();
-    for j in source.joints.iter().filter(|j| pairs.contains_key(&j.id)) {
-        let mut at = parent[&j.id];
-        while let Some(p) = at {
-            if pairs.contains_key(&p) {
-                below.entry(p).or_default().push(j.id);
-                break;
-            }
-            at = parent[&p];
-        }
-    }
-    let mut out: BTreeMap<JointId, Affine> = BTreeMap::new();
-    for i in parents_first(source)? {
-        let j = &source.joints[i];
-        let mut m = match j.parent {
-            Some(p) => compose(&out[&p], &local[&j.id]),
-            None => local[&j.id],
-        };
-        if let Some(&t) = pairs.get(&j.id) {
-            m[3] = target_rest[&t][3];
-            if let Some([child]) = below.get(&j.id).map(Vec::as_slice) {
-                // the child's offset in this joint's space, through the rests between them
-                let mut chain = affine(&primase_core::Transform::IDENTITY);
-                let mut at = *child;
-                while at != j.id {
-                    chain = compose(&local[&at], &chain);
-                    at = parent[&at].ok_or("a mapped joint below another is not under it")?;
-                }
-                let now = rotate(rotation(&m), chain[3]);
-                let want: [f64; 3] =
-                    std::array::from_fn(|k| target_rest[&pairs[child]][3][k] - target_rest[&t][3][k]);
-                m = with_rotation(m[3], crate::quat::mul(between(now, want), rotation(&m)), &m);
-            }
-        }
-        out.insert(j.id, m);
-    }
-    Ok(out)
-}
 
 /// Joint to joint.
 type JointMapping = BTreeMap<JointId, JointId>;
@@ -212,10 +182,20 @@ impl Pass for RetargetSkin {
             UnmappedJoints::Ancestor => "ancestor",
             UnmappedJoints::Nearest => "nearest",
         };
-        Options::from([("unmapped".to_owned(), v.to_owned())])
+        let p = match self.placement {
+            Placement::Automatic => "automatic",
+            Placement::Stated => "stated",
+        };
+        Options::from([
+            ("unmapped".to_owned(), v.to_owned()),
+            ("placement".to_owned(), p.to_owned()),
+        ])
     }
     fn requires(&self) -> &[&'static str] {
-        &[Skin::NAME, JointMap::NAME]
+        match self.placement {
+            Placement::Automatic => &[Skin::NAME, JointMap::NAME],
+            Placement::Stated => &[Skin::NAME, JointMap::NAME, JointPlacement::NAME],
+        }
     }
     fn modifies(&self) -> &[&'static str] {
         &[Mesh::NAME, Skin::NAME, Asset::NAME]
@@ -224,9 +204,9 @@ impl Pass for RetargetSkin {
         "a skinned mesh fitted onto a skeleton of other proportions; weight of joints the map does not list moved"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let maps: Vec<JointMap> = w.iter::<JointMap>().map(|(_, m)| m.clone()).collect();
+        let maps: Vec<(Entity, JointMap)> = w.iter::<JointMap>().map(|(e, m)| (e, m.clone())).collect();
         let mut from = BTreeSet::new();
-        for m in &maps {
+        for (_, m) in &maps {
             if !from.insert(m.from) {
                 return Err(format!(
                     "two joint maps from skeleton {:?}: which is meant is not stated",
@@ -238,7 +218,26 @@ impl Pass for RetargetSkin {
             .iter::<SkinInstance>()
             .filter_map(|(e, _)| w.get::<primase_core::Instance>(e).map(|i| i.prototype))
             .collect();
-        for map in maps {
+        for (map_entity, map) in maps {
+            let placements: Vec<JointPlacement> = w
+                .iter::<JointPlacement>()
+                .filter(|(_, p)| p.map == map_entity)
+                .map(|(_, p)| p.clone())
+                .collect();
+            let offsets: BTreeMap<JointId, JointOffset> = match (self.placement, placements.as_slice()) {
+                (Placement::Automatic, []) => BTreeMap::new(),
+                (Placement::Automatic, _) => {
+                    return Err(format!(
+                        "map {map_entity:?} has a core.joint_placement: placement=stated uses it, placement=automatic would ignore it"
+                    ));
+                }
+                (Placement::Stated, [p]) => p.offsets.iter().copied().collect(),
+                (Placement::Stated, _) => {
+                    return Err(format!(
+                        "placement=stated: map {map_entity:?} has no core.joint_placement"
+                    ));
+                }
+            };
             let source = w
                 .get::<Skeleton>(map.from)
                 .ok_or("the map's source is no skeleton")?
@@ -251,6 +250,10 @@ impl Pass for RetargetSkin {
             let source_rest = model_transforms(&source, &locals(&source, None)).map_err(|e| e.0)?;
             let target_rest = model_transforms(&target, &locals(&target, None)).map_err(|e| e.0)?;
             let fitted = fit(&source, &target_rest, &pairs)?;
+            let (fitted, placed) = place(&source, &source_rest, &fitted, &target_rest, &pairs, &offsets)?;
+            if !placed.is_empty() {
+                log.count("source joints moved by a stated placement", placed.len() as u64);
+            }
             let prototypes: Vec<Entity> = w
                 .iter::<Skin>()
                 .filter(|(_, s)| s.bindings.iter().any(|b| b.skeleton == map.from))
@@ -633,7 +636,7 @@ mod tests {
     #[test]
     fn a_skin_moves_onto_the_target_skeleton() {
         let (mut w, proto, target) = world();
-        let report = run(&mut w, "retarget-skin{unmapped=ancestor}").unwrap();
+        let report = run(&mut w, "retarget-skin{unmapped=ancestor,placement=automatic}").unwrap();
         let h = std::f64::consts::FRAC_1_SQRT_2;
         let arm = [0.3, 2.6, 0.0];
         let hand = [0.3 + 0.6 * h, 2.6 - 0.6 * h, 0.0];
@@ -815,7 +818,7 @@ mod tests {
     #[test]
     fn retarget_skin_refuses_what_it_was_not_told() {
         let (mut w, ..) = world();
-        let err = run(&mut w, "retarget-skin{unmapped=refuse}").unwrap_err();
+        let err = run(&mut w, "retarget-skin{unmapped=refuse,placement=automatic}").unwrap_err();
         assert!(
             err.contains("joint j4 carries weight and the map does not list it"),
             "{err}"
@@ -826,9 +829,11 @@ mod tests {
             err.contains("unmapped=refuse|ancestor|nearest is required"),
             "{err}"
         );
+        let err = run(&mut w, "retarget-skin{unmapped=ancestor}").unwrap_err();
+        assert!(err.contains("placement=automatic|stated is required"), "{err}");
         // nearest: the cloth point goes to the mapped joint nearest the cloth joint at rest (the hand, 0.14 away; the arm is 0.41)
         let (mut w, proto, _) = world();
-        let report = run(&mut w, "retarget-skin{unmapped=nearest}").unwrap();
+        let report = run(&mut w, "retarget-skin{unmapped=nearest,placement=automatic}").unwrap();
         assert_eq!(
             report.steps[0].log.approximations["vertex weight of unmapped joint j4 moved to j30 (the mapped joint nearest it)"],
             1
@@ -840,5 +845,114 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    fn positions(w: &World, proto: Entity) -> Vec<[f32; 3]> {
+        let mesh = w.get::<Mesh>(proto).unwrap();
+        let Stream::F32x3(p) = &mesh.primitives()[0].streams[&Semantic::Position] else {
+            panic!("positions")
+        };
+        p.clone()
+    }
+
+    fn length(a: [f32; 3], b: [f32; 3]) -> f64 {
+        (0..3).map(|k| f64::from(a[k] - b[k]).powi(2)).sum::<f64>().sqrt()
+    }
+
+    /// A placement of the world's map, stating `offsets` (by target joint id).
+    fn state(w: &mut World, offsets: &[(u32, JointOffset)]) {
+        let map = w.iter::<JointMap>().next().map(|(e, _)| e).unwrap();
+        let p = w.spawn();
+        w.insert(
+            p,
+            JointPlacement {
+                map,
+                offsets: offsets.iter().map(|&(j, o)| (JointId(j), o)).collect(),
+            },
+        );
+        assert_eq!(w.verify_components(), vec![]);
+    }
+
+    fn up(y: f32) -> JointOffset {
+        JointOffset {
+            translation: [0.0, y, 0.0],
+            ..JointOffset::IDENTITY
+        }
+    }
+
+    /// Stating only identity offsets (a joint listed or not) is the automatic fit, bit for bit: the same mesh, the same
+    /// skin.
+    #[test]
+    fn zero_offsets_are_the_automatic_fit_exactly() {
+        let (mut auto, p, _) = world();
+        run(&mut auto, "retarget-skin{unmapped=ancestor,placement=automatic}").unwrap();
+        let (mut stated, q, _) = world();
+        state(
+            &mut stated,
+            &[(20, JointOffset::IDENTITY), (30, JointOffset::IDENTITY)],
+        );
+        let report = run(&mut stated, "retarget-skin{unmapped=ancestor,placement=stated}").unwrap();
+        assert_eq!(auto.get::<Mesh>(p), stated.get::<Mesh>(q));
+        assert_eq!(auto.get::<Skin>(p), stated.get::<Skin>(q));
+        assert!(
+            !report.steps[0]
+                .log
+                .counts
+                .contains_key("source joints moved by a stated placement")
+        );
+    }
+
+    /// An offset on the hand's target joint moves the vertex weighted only to the hand by the offset, the one half
+    /// weighted to it by half, and nothing else; an offset on the arm's moves what the arm carries, and the cloth
+    /// joint the map does not list that follows it, and leaves the hand's vertex where it was.
+    #[test]
+    fn a_stated_offset_moves_exactly_the_vertices_its_joint_weights() {
+        let (mut w, p, _) = world();
+        run(&mut w, "retarget-skin{unmapped=ancestor,placement=automatic}").unwrap();
+        let fit = positions(&w, p);
+
+        let (mut w, p, _) = world();
+        state(&mut w, &[(30, up(0.1))]);
+        let report = run(&mut w, "retarget-skin{unmapped=ancestor,placement=stated}").unwrap();
+        let hand = positions(&w, p);
+        // vertices: 0 on the hand, 1 half arm half hand, 2 on the cloth joint (which follows the arm)
+        assert!(
+            (length(hand[0], fit[0]) - 0.1).abs() < 1e-6,
+            "{:?} {:?}",
+            hand[0],
+            fit[0]
+        );
+        assert!((length(hand[1], fit[1]) - 0.05).abs() < 1e-6);
+        assert_eq!(hand[2], fit[2]);
+        assert_eq!(
+            report.steps[0].log.counts["source joints moved by a stated placement"],
+            1
+        );
+
+        let (mut w, p, _) = world();
+        state(&mut w, &[(20, up(0.1))]);
+        let report = run(&mut w, "retarget-skin{unmapped=ancestor,placement=stated}").unwrap();
+        let arm = positions(&w, p);
+        assert_eq!(arm[0], fit[0]);
+        assert!((length(arm[1], fit[1]) - 0.05).abs() < 1e-6);
+        assert!((length(arm[2], fit[2]) - 0.1).abs() < 1e-6);
+        // the arm and the cloth joint that follows it
+        assert_eq!(
+            report.steps[0].log.counts["source joints moved by a stated placement"],
+            2
+        );
+        assert_eq!(w.verify_components(), vec![]);
+    }
+
+    /// `automatic` refuses a map that has a placement, and `stated` one that has none.
+    #[test]
+    fn the_placement_choice_is_checked() {
+        let (mut w, ..) = world();
+        state(&mut w, &[(30, up(0.1))]);
+        let err = run(&mut w, "retarget-skin{unmapped=ancestor,placement=automatic}").unwrap_err();
+        assert!(err.contains("placement=automatic would ignore it"), "{err}");
+        let (mut w, ..) = world();
+        let err = run(&mut w, "retarget-skin{unmapped=ancestor,placement=stated}").unwrap_err();
+        assert!(err.contains("has no core.joint_placement"), "{err}");
     }
 }

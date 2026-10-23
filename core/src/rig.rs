@@ -321,6 +321,96 @@ impl Component for JointMap {
     }
 }
 
+/// Where a target joint stands inside the source mesh, as an offset from where a fit would put it: the target joint's
+/// frame (its rest, carried into the source's model space) is moved by `translation` (metres, along the source's model
+/// axes) and turned by `rotation` (a unit quaternion `[x, y, z, w]`, about the joint's own origin, in the source's
+/// model axes). The identity offset (zero, `[0, 0, 0, 1]`) is the fit's own placement.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct JointOffset {
+    pub translation: [f32; 3],
+    pub rotation: [f32; 4],
+}
+
+impl JointOffset {
+    /// The offset that moves nothing.
+    pub const IDENTITY: JointOffset = JointOffset {
+        translation: [0.0; 3],
+        rotation: [0.0, 0.0, 0.0, 1.0],
+    };
+
+    /// How far a rotation's length may be from 1 and still be a unit quaternion.
+    pub const UNIT_TOLERANCE: f32 = 1e-3;
+
+    /// Finite entries and a rotation of unit length (within [`Self::UNIT_TOLERANCE`]).
+    pub fn check(&self) -> Result<(), String> {
+        if !self
+            .translation
+            .iter()
+            .chain(&self.rotation)
+            .all(|x| x.is_finite())
+        {
+            return Err("an entry not finite".into());
+        }
+        let len = self.rotation.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if (len - 1.0).abs() > Self::UNIT_TOLERANCE {
+            return Err(format!("rotation of length {len}, not a unit quaternion"));
+        }
+        Ok(())
+    }
+
+    /// Whether this is the identity offset (the fit's own placement).
+    pub fn is_identity(&self) -> bool {
+        *self == Self::IDENTITY
+    }
+}
+
+/// `core.joint_placement`, on an entity of its own: where a person (or a tool) stands the target joints of a
+/// [`JointMap`] inside the source mesh, as offsets from the fit's own placement. Offsets are keyed by target joint, each
+/// at most once; a target joint not listed has the identity offset. A map has at most one placement. The placement is
+/// not part of the map: a pass that reads the map's pairs (`map-clip`) never reads it, and only the passes that fit a
+/// mesh to the target (`retarget-skin{placement=stated}`) do.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct JointPlacement {
+    /// The entity holding the `core.joint_map` the offsets belong to.
+    pub map: Entity,
+    pub offsets: Vec<(JointId, JointOffset)>,
+}
+
+impl Component for JointPlacement {
+    const NAME: &'static str = "core.joint_placement";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.map);
+    }
+    /// The map holds a `core.joint_map`, no other placement names it, and each offset is of a target joint the map
+    /// lists, once, finite and of a unit rotation.
+    fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
+        let map = w
+            .get::<JointMap>(self.map)
+            .ok_or_else(|| format!("{:?} holds no core.joint_map", self.map))?;
+        if let Some((other, _)) = w
+            .iter::<JointPlacement>()
+            .find(|(o, p)| *o != e && p.map == self.map)
+        {
+            return Err(format!("{other:?} also places the joints of map {:?}", self.map));
+        }
+        let mut seen = BTreeSet::new();
+        for (joint, offset) in &self.offsets {
+            if !map.pairs.iter().any(|(_, to)| to == joint) {
+                return Err(format!("joint {joint:?} is not a target joint the map lists"));
+            }
+            if !seen.insert(*joint) {
+                return Err(format!("joint {joint:?} placed twice"));
+            }
+            offset.check().map_err(|why| format!("joint {joint:?}: {why}"))?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,5 +661,112 @@ mod tests {
             },
             "socket SocketId(6)",
         );
+    }
+
+    /// Two skeletons of two joints, a map pairing them, and a placement of the target's joint 20.
+    fn placed() -> (World, Entity, Entity) {
+        let mut w = World::new();
+        let (a, b) = (w.spawn(), w.spawn());
+        for (e, ids) in [(a, [1, 2]), (b, [10, 20])] {
+            w.insert(
+                e,
+                Skeleton {
+                    joints: vec![joint(ids[0], None), joint(ids[1], Some(ids[0]))],
+                },
+            );
+        }
+        let map = w.spawn();
+        w.insert(
+            map,
+            JointMap {
+                from: a,
+                to: b,
+                pairs: vec![(JointId(1), JointId(10)), (JointId(2), JointId(20))],
+            },
+        );
+        let placement = w.spawn();
+        w.insert(
+            placement,
+            JointPlacement {
+                map,
+                offsets: vec![(
+                    JointId(20),
+                    JointOffset {
+                        translation: [0.0, 0.1, 0.0],
+                        ..JointOffset::IDENTITY
+                    },
+                )],
+            },
+        );
+        (w, map, placement)
+    }
+
+    /// A placement is of one map, of target joints the map lists, once each, with finite entries and a unit rotation.
+    #[test]
+    fn malformed_placements_fail_verification() {
+        let (w, ..) = placed();
+        assert_eq!(errors(&w), Vec::<String>::new());
+        let fails = |edit: &dyn Fn(&mut World, Entity, Entity), what: &str| {
+            let (mut w, map, placement) = placed();
+            edit(&mut w, map, placement);
+            let e = errors(&w);
+            assert!(e.iter().any(|m| m.contains(what)), "{what}: {e:?}");
+        };
+        // a source joint of the map is not one of its targets; neither is a joint of no skeleton
+        fails(
+            &|w, _, p| w.get_mut::<JointPlacement>(p).unwrap().offsets[0].0 = JointId(2),
+            "not a target joint the map lists",
+        );
+        fails(
+            &|w, _, p| w.get_mut::<JointPlacement>(p).unwrap().offsets[0].0 = JointId(99),
+            "not a target joint the map lists",
+        );
+        fails(
+            &|w, _, p| {
+                let o = w.get::<JointPlacement>(p).unwrap().offsets[0];
+                w.get_mut::<JointPlacement>(p).unwrap().offsets.push(o);
+            },
+            "placed twice",
+        );
+        fails(
+            &|w, _, p| w.get_mut::<JointPlacement>(p).unwrap().offsets[0].1.translation[1] = f32::NAN,
+            "not finite",
+        );
+        fails(
+            &|w, _, p| w.get_mut::<JointPlacement>(p).unwrap().offsets[0].1.rotation = [0.0, 0.0, 0.0, 2.0],
+            "not a unit quaternion",
+        );
+        // a placement of an entity that is no map, and a second placement of one map
+        fails(
+            &|w, _, p| {
+                let other = w.spawn();
+                w.get_mut::<JointPlacement>(p).unwrap().map = other;
+            },
+            "holds no core.joint_map",
+        );
+        fails(
+            &|w, map, _| {
+                let second = w.spawn();
+                w.insert(
+                    second,
+                    JointPlacement {
+                        map,
+                        offsets: Vec::new(),
+                    },
+                );
+            },
+            "also places the joints of map",
+        );
+    }
+
+    #[test]
+    fn the_identity_offset_is_the_one_that_moves_nothing() {
+        assert!(JointOffset::IDENTITY.is_identity());
+        assert!(JointOffset::IDENTITY.check().is_ok());
+        let moved = JointOffset {
+            rotation: [0.0, 1.0, 0.0, 0.0],
+            ..JointOffset::IDENTITY
+        };
+        assert!(!moved.is_identity() && moved.check().is_ok());
     }
 }
