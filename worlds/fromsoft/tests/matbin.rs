@@ -111,3 +111,51 @@ fn every_truncation_is_an_error() {
         assert!(Material::read(&b[..n]).is_err(), "{n}");
     }
 }
+
+/// A material whose last stored item is a float3 value (after its name, shader and source strings), then `tail`.
+fn last_value(tail: &[u8]) -> Vec<u8> {
+    let records = 0x38 + 0x28;
+    let mut b = vec![0u8; records];
+    b[..4].copy_from_slice(b"MAB\0");
+    b[4] = 2;
+    b[0x1c..0x20].copy_from_slice(&1u32.to_le_bytes());
+    let push = |b: &mut Vec<u8>, bytes: &[u8]| {
+        let at = b.len();
+        b.extend_from_slice(bytes);
+        at
+    };
+    let shader = push(&mut b, &utf16("x.spx"));
+    let source = push(&mut b, &utf16("x.matxml"));
+    let name = push(&mut b, &utf16("p0"));
+    let one = 1f32.to_le_bytes();
+    let at = push(&mut b, &[one, one, one].concat());
+    put64(&mut b, 8, shader);
+    put64(&mut b, 16, source);
+    put64(&mut b, 0x38, name);
+    put64(&mut b, 0x38 + 8, at);
+    b[0x38 + 0x14..0x38 + 0x18].copy_from_slice(&10u32.to_le_bytes());
+    b.extend_from_slice(tail);
+    b
+}
+
+#[test]
+fn the_last_value_is_bounded_by_its_type() {
+    // eight tail bytes after a float3 are the tail, not the two further floats a five-float colour stores
+    let tail = [2f32.to_le_bytes(), 3f32.to_le_bytes()].concat();
+    let m = Material::read(&last_value(&tail)).unwrap();
+    assert_eq!(m.params[0].value, Value::Float3([1.; 3], None));
+    assert_eq!(m.unreferenced_tail, tail);
+    let m = Material::read(&last_value(&[])).unwrap();
+    assert_eq!(m.params[0].value, Value::Float3([1.; 3], None));
+    assert!(m.unreferenced_tail.is_empty());
+    // a last value the file cuts short is still kept as stored
+    let b = last_value(&[]);
+    let m = Material::read(&b[..b.len() - 4]).unwrap();
+    assert_eq!(
+        m.params[0].value,
+        Value::Truncated {
+            code: 10,
+            bytes: [1f32.to_le_bytes(), 1f32.to_le_bytes()].concat()
+        }
+    );
+}

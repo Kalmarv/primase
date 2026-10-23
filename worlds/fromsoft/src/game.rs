@@ -31,12 +31,15 @@ impl Game {
     }
 
     /// The archive folder holding a map's own files (map pieces, collision, light banks): Sekiro keeps them in
-    /// `/map/<map>`, Elden Ring in `/map/<mAA>/<map>`.
-    pub fn map_folder(self, map: &str) -> String {
-        match self {
+    /// `/map/<map>`, Elden Ring in `/map/<mAA>/<map>`. A map name that is not ASCII is refused by name.
+    pub fn map_folder(self, map: &str) -> crate::Result<String> {
+        if !map.is_ascii() {
+            return Err(crate::invalid("map name", 0, format!("{map:?} is not ASCII")));
+        }
+        Ok(match self {
             Game::Sekiro => format!("/map/{map}"),
             Game::EldenRing => format!("/map/{}/{map}", &map[..map.len().min(3)]),
-        }
+        })
     }
 
     /// The source-identity prefix of a placed object model (`obj/<model>` in Sekiro, `asset/<model>` in Elden Ring).

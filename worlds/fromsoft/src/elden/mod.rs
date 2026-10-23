@@ -55,7 +55,7 @@ pub(crate) fn parent_tiles(tile: &str) -> Vec<(String, [f64; 2])> {
     let Some(&(_, edge, levels)) = TILED_AREAS.iter().find(|(area, _, _)| tile.starts_with(area)) else {
         return Vec::new();
     };
-    if tile.len() != 12 || !tile.ends_with("_00") {
+    if tile.len() != 12 || !tile.is_ascii() || !tile.ends_with("_00") {
         return Vec::new();
     }
     let (Ok(x), Ok(z)) = (tile[4..6].parse::<u32>(), tile[7..9].parse::<u32>()) else {
@@ -116,6 +116,26 @@ mod tests {
         );
         assert!(parent_tiles("m14_00_00_00").is_empty());
         assert!(parent_tiles("m60_19_27_01").is_empty());
+        // twelve bytes, not ASCII: no tile, and no slice through a character
+        assert!(parent_tiles("m60_3é_4_00").is_empty());
+    }
+
+    #[test]
+    fn map_folders_refuse_names_that_are_not_ascii() {
+        use crate::Game;
+        assert_eq!(
+            Game::EldenRing.map_folder("m60_35_46_00").unwrap(),
+            "/map/m60/m60_35_46_00"
+        );
+        assert_eq!(Game::Sekiro.map_folder("m11_01").unwrap(), "/map/m11_01");
+        for game in [Game::EldenRing, Game::Sekiro] {
+            assert!(
+                game.map_folder("mé0_35_46_00")
+                    .unwrap_err()
+                    .to_string()
+                    .contains("not ASCII")
+            );
+        }
     }
 
     #[test]

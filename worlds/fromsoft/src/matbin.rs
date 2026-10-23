@@ -3,7 +3,8 @@
 //!
 //! A value's stored extent runs to the next stored item (string or value), so it is measured rather than assumed
 //! from its type: float3 colours are stored with three floats or five, and a few vectors are stored shorter than
-//! their type (kept as [`Value::Truncated`]).
+//! their type (kept as [`Value::Truncated`]). A value no item follows is bounded by its type: what follows it is the
+//! unreferenced tail.
 use crate::{
     Result,
     bytes::{View, coverage},
@@ -95,10 +96,9 @@ fn floats<const N: usize>(v: &View<'_>, o: usize) -> Result<[f32; N]> {
     }
     Ok(out)
 }
-/// The value of type `code` stored at `o` with `extent` bytes available before the next item, and the bytes it
-/// occupies.
-fn value(v: &View<'_>, at: usize, code: u32, o: usize, extent: usize) -> Result<(Value, usize)> {
-    let declared = match code {
+/// The bytes a value of type `code` declares.
+fn declared(v: &View<'_>, at: usize, code: u32) -> Result<usize> {
+    Ok(match code {
         0 => 1,
         4 | 8 => 4,
         5 | 9 => 8,
@@ -106,7 +106,12 @@ fn value(v: &View<'_>, at: usize, code: u32, o: usize, extent: usize) -> Result<
         11 => 16,
         12 => 20,
         _ => return Err(invalid(v.format, at, format!("parameter type {code}"))),
-    };
+    })
+}
+/// The value of type `code` stored at `o` with `extent` bytes available before the next item, and the bytes it
+/// occupies.
+fn value(v: &View<'_>, at: usize, code: u32, o: usize, extent: usize) -> Result<(Value, usize)> {
+    let declared = declared(v, at, code)?;
     if extent < declared {
         return Ok((
             Value::Truncated {
@@ -192,8 +197,13 @@ impl Material {
             .collect();
         let mut param_list = Vec::with_capacity(params);
         for (name, key, at, code, o) in stored {
-            let next = starts.range(o + 1..).next().copied().unwrap_or(data.len());
-            let (value, len) = value(&v, at, code, o, next - o)?;
+            // A later item bounds the value's extent; the last one is bounded by its type, so the bytes after it are
+            // the unreferenced tail (no later item proves a float3's two further floats).
+            let extent = match starts.range(o + 1..).next() {
+                Some(&next) => next - o,
+                None => data.len().saturating_sub(o).min(declared(&v, at, code)?),
+            };
+            let (value, len) = value(&v, at, code, o, extent)?;
             spans.push((o, len));
             param_list.push(Param { name, key, value });
         }

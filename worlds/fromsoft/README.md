@@ -323,8 +323,8 @@ gate of archive texture discovery, which belongs to area assembly. Both require
 `matbin::Material::read` reads Elden Ring's material binaries (`MAB\0` version 2), which a FLVER material's
 `.matxml` path names: the shader (`.spx`) and source paths, the key, typed parameters (bool, int, int2, float to
 float5) and texture samplers (the shader's sampler name, the texture path, a key and two floats), as stored. A value's
-extent is measured to the next stored item: float3 values are stored with three floats or five (both kept), a value
-shorter than its type is kept raw (`Value::Truncated`), one zero byte may realign UTF-16 strings after an odd value,
+extent is measured to the next stored item (a value no item follows is bounded by its type): float3 values are stored
+with three floats or five (both kept), a value shorter than its type is kept raw (`Value::Truncated`), one zero byte may realign UTF-16 strings after an odd value,
 and bytes after the last referenced item are kept as the unreferenced tail; any other gap is an error. Checked against
 SoulsFormatsNEXT's MATBIN over every material binder of the install (`matbin.jsonl` of `oracles.soulsformats.elden/format`:
 one record per member in member order, `binder` (archive path), `name`, `shader`, `source`, `key`, `params` (`name`,

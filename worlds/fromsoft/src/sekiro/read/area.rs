@@ -548,7 +548,7 @@ pub fn read_game_area(
                 ))?
             );
             (
-                format!("{}/{name}.mapbnd.dcx", game.map_folder(kind)),
+                format!("{}/{name}.mapbnd.dcx", game.map_folder(kind)?),
                 format!("{name}.flver"),
                 Vec::new(),
             )
@@ -811,7 +811,7 @@ pub fn read_game_area(
         report.placements += 1;
         report.far_placements += usize::from(far);
     }
-    let folder = game.map_folder(&area);
+    let folder = game.map_folder(&area)?;
     report.collision = collision::read(
         &archive,
         decoder,
