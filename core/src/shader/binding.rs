@@ -67,6 +67,10 @@ pub enum ObjectParameter {
     /// The scale (`xy`) and offset (`zw`) a model's texture coordinate set `n` is drawn with: the engine feeds one
     /// value per model for each set, a scroll that animates some models (water, flags).
     TextureScroll(u8),
+    /// The matrices of a skinned draw's joints, each three rows of four (the object-to-world transform of the joint
+    /// the pose gives, in the engine's own palette order): what a skinning program blends by the vertex's joint indices
+    /// and weights.
+    BonePalette,
 }
 
 /// A value of the frame being drawn.

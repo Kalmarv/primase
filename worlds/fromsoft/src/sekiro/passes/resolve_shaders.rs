@@ -5,7 +5,7 @@ use crate::materials::Material;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{Shader, ShaderBinding, ShaderFormat};
-use primase_core::{ColorSpace, Component, Entity, Name, TexRole, Texture, World};
+use primase_core::{ColorSpace, Component, Entity, Mesh, Name, Semantic, TexRole, Texture, World};
 use std::collections::BTreeMap;
 
 /// `resolve-fromsoft-shaders{unbound-textures=preview|leave}`: for each material with a layered definition, bind its
@@ -20,6 +20,11 @@ use std::collections::BTreeMap;
 /// The option is required: it says what a texture slot with no texture, or whose file the reader does not hold,
 /// becomes. `preview` gives it a stated colour for its role (a mid-grey albedo, a flat normal, zero elsewhere), a
 /// counted approximation; `leave` binds it `Missing`, so a consumer that needs the slot refuses.
+///
+/// A material's vertex program is chosen by the data of the primitives that draw it: when every one of them carries joint
+/// indices and weights (the geometry lowering keeps them for a skinned model), the shader's skinned permutation
+/// (`<shader>_Gbuf_Skin.vpo`); otherwise the unskinned one (`<shader>_Gbuf.vpo`). Run it after the geometry lowering, so
+/// the primitives exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolveFromSoftShaders {
     unbound: Unbound,
@@ -50,6 +55,28 @@ impl ResolveFromSoftShaders {
             "unbound-textures is required: what a texture slot with no texture reads is the program's choice",
         )?))
     }
+}
+
+/// How the primitives of a world draw each material: `(unskinned, skinned)`, a primitive being skinned when it carries
+/// joint indices and weights (`Joints(0)` and `Weights(0)`): the mesh's own data, not a guess from a name.
+fn draws(world: &World) -> BTreeMap<Entity, (u64, u64)> {
+    let mut draws = BTreeMap::<Entity, (u64, u64)>::new();
+    for (_, mesh) in world.iter::<Mesh>() {
+        for primitive in mesh.primitives() {
+            let Some(material) = primitive.material else {
+                continue;
+            };
+            let skinned = primitive.streams.contains_key(&Semantic::Joints(0))
+                && primitive.streams.contains_key(&Semantic::Weights(0));
+            let entry = draws.entry(material).or_default();
+            if skinned {
+                entry.1 += 1;
+            } else {
+                entry.0 += 1;
+            }
+        }
+    }
+    draws
 }
 
 /// The bound texture's component, a DDS read as stored with the colour space the slot's role gives it.
@@ -123,7 +150,9 @@ fn run(
     let mut textures: BTreeMap<(String, bool), Entity> = BTreeMap::new();
     // the vertex programs, each its own entity, by file name
     let mut vertex_shaders: BTreeMap<String, Entity> = BTreeMap::new();
+    let draws = draws(world);
     let (mut bound, mut without_program, mut without_vertex) = (0u64, 0u64, 0u64);
+    let (mut skinned_materials, mut mixed_materials, mut without_skin) = (0u64, 0u64, 0u64);
     let mut policies: BTreeMap<String, u64> = BTreeMap::new();
     for (material_entity, material) in layered {
         let name = material.program_name().map_err(|e| e.to_string())?;
@@ -171,12 +200,26 @@ fn run(
         for (policy, count) in resolution.policies {
             *policies.entry(policy).or_default() += count;
         }
-        // the vertex program of an unskinned, uncloth G-buffer draw, from the shader's bundle
-        let vertex = world
+        // the G-buffer vertex program from the shader's bundle: the skinned permutation when every primitive that draws
+        // the material carries joint indices and weights, the unskinned one otherwise (a material drawn both ways has
+        // one binding, the unskinned, counted). `@[cl]` is the same program without clip-distance outputs: not needed
+        let (unskinned_draws, skinned_draws) = draws.get(&material_entity).copied().unwrap_or((0, 0));
+        let skin = skinned_draws > 0 && unskinned_draws == 0;
+        if skinned_draws > 0 && unskinned_draws > 0 {
+            mixed_materials += 1;
+        }
+        let bundle = world
             .get::<MaterialShader>(material_entity)
-            .and_then(|m| world.get::<ShaderBundle>(m.0))
-            .and_then(|b| b.program(&format!("{}_Gbuf.vpo", b.name)))
+            .and_then(|m| world.get::<ShaderBundle>(m.0));
+        let vertex = bundle
+            .and_then(|b| b.program(&format!("{}_Gbuf{}.vpo", b.name, if skin { "_Skin" } else { "" })))
             .map(|p| (p.name.clone(), p.code.clone()));
+        if skin {
+            skinned_materials += 1;
+            if vertex.is_none() && bundle.is_some() {
+                without_skin += 1;
+            }
+        }
         let mut stages = Vec::new();
         match vertex {
             Some((vertex_name, code)) => {
@@ -219,6 +262,24 @@ fn run(
         log.count(
             "layered materials without a vertex program (no bundle, or no <shader>_Gbuf.vpo in it)",
             without_vertex,
+        );
+    }
+    if skinned_materials > 0 {
+        log.count(
+            "layered materials drawn only by skinned primitives (the skinned vertex program)",
+            skinned_materials,
+        );
+    }
+    if mixed_materials > 0 {
+        log.count(
+            "layered materials drawn by skinned and unskinned primitives (bound to the unskinned vertex program)",
+            mixed_materials,
+        );
+    }
+    if without_skin > 0 {
+        log.count(
+            "skinned layered materials whose bundle has no <shader>_Gbuf_Skin.vpo (no vertex program bound)",
+            without_skin,
         );
     }
     log.count("shader programs", (shaders.len() + vertex_shaders.len()) as u64);

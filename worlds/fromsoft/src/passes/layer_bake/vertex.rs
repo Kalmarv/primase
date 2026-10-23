@@ -38,6 +38,10 @@ enum Feed {
     Colour1,
     /// The instance index, zero.
     Instance,
+    /// The joint indices of a skinned vertex: joint zero in all four slots (the bind pose: the palette is the identity).
+    Joints,
+    /// The joint weights: all of it on the first.
+    Weights,
 }
 
 /// One vertex attribute of the lifted program: where its lanes go in the input registers, and what feeds them.
@@ -147,6 +151,8 @@ impl VertexStage {
                 InputRole::Stream(Semantic::Position) => Feed::Position,
                 InputRole::Stream(Semantic::Normal) => Feed::Normal,
                 InputRole::Stream(Semantic::Tangent) => Feed::Tangent,
+                InputRole::Stream(Semantic::Joints(0)) => Feed::Joints,
+                InputRole::Stream(Semantic::Weights(0)) => Feed::Weights,
                 InputRole::Stream(Semantic::Color(n)) if (1..=6).contains(n) => Feed::Member(*n),
                 InputRole::Stream(s) if *s == super::resolve::SECOND_COLOUR => {
                     // only x is handed on: anything more would be a value the bake does not know
@@ -225,6 +231,8 @@ impl VertexStage {
                     v.map(f32::to_bits)
                 }
                 Feed::Colour1 => [1f32.to_bits(), 0, 0, 0],
+                Feed::Joints => [0; 4],
+                Feed::Weights => [1f32.to_bits(), 0, 0, 0],
             };
             if let Some(row) = registers.get_mut(a.register) {
                 for (k, &lane) in a.lanes.iter().enumerate() {
@@ -372,6 +380,33 @@ mod tests {
         assert!(inputs.keys().all(|(n, _)| !n.eq_ignore_ascii_case("SV_Position")));
         assert!(vertex.policies.contains_key(COLOUR1_POLICY));
         assert!(vertex.policies.contains_key(TEXTURE_SCROLL_POLICY));
+    }
+
+    /// The skinned permutation, at the bind pose (joint zero at full weight, a palette of identities), gives the pixel program
+    /// the same inputs as the unskinned one: its coordinates the grid's, its weights the level's.
+    #[test]
+    fn the_skinned_permutation_at_the_bind_pose_gives_the_same_pixel_inputs() {
+        const SKIN: &[u8] = include_bytes!("../../../tests/fixtures/layered_skin_vs.dxbc");
+        let interface = primase_dxbc::reflection(SKIN).unwrap();
+        let entity = World::default().spawn();
+        let binding = resolve_vertex(&interface, entity).unwrap();
+        let shader = CoreShader {
+            format: ShaderFormat::Dxbc,
+            bytecode: SKIN.to_vec(),
+            interface,
+        };
+        let skinned = VertexStage::new(&shader, &binding, false, &FrozenFrame::static_bake(0.)).unwrap();
+        assert!(skinned.policies.contains_key(super::super::BIND_POSE_POLICY));
+        let pixel = primase_dxbc::reflection(PIXEL).unwrap();
+        let params = Inputs {
+            weights_snow: [0.125, 0.25, 0.5, 0.75],
+            ..Inputs::default()
+        };
+        let plain = stage(&FrozenFrame::static_bake(0.)).unwrap();
+        assert_eq!(
+            skinned.pixel_inputs(&pixel, &params).unwrap(),
+            plain.pixel_inputs(&pixel, &params).unwrap()
+        );
     }
 
     /// A scroll that is not the identity is not a grid lane: refused, by input and lane, not baked as the identity.

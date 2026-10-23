@@ -436,17 +436,19 @@ fn texture_scroll_set(name: &str) -> Option<u8> {
         .filter(|n| *n < 4)
 }
 
-/// Bind a layered shader's vertex program (`<shader>_Gbuf.vpo`: the G-buffer pass of an unskinned, uncloth draw) from its
+/// Bind a layered shader's vertex program (`<shader>_Gbuf.vpo`, the G-buffer pass of an unskinned draw, or `<shader>_Gbuf_Skin.vpo`
+/// of a skinned one; the `@[cl]` permutations differ only in having no clip-distance outputs) from its
 /// interface (`primase_dxbc::reflection`) as `core.shader_binding` states it:
 /// - its inputs as streams of the lowered geometry: `POSITION0`, `NORMAL0` and `TANGENT0` as the position, normal and
-///   tangent; the packed `TEXCOORD0` as lanes (`xy` the first UV set, `zw` the second: `TexCoord(1)`); `COLOR1` as the
+///   tangent (and of the skinned permutation `BLENDINDICES0` and `BLENDWEIGHT0` as `Joints(0)` and `Weights(0)`); the
+///   packed `TEXCOORD0` as lanes (`xy` the first UV set, `zw` the second: `TexCoord(1)`); `COLOR1` as the
 ///   second vertex colour ([`SECOND_COLOUR`]); `TEXCOORD1` to `TEXCOORD6` as the FLVER Byte4C members the layered
 ///   programs read as layer weights, tint and detail (the geometry lowering's `Color(n)` streams); the pipeline's
 ///   instance index as itself; anything else `Unknown` with the reason. A mesh that stores no second UV set or colour
 ///   has no such stream, and what the engine then feeds is not known;
 /// - the engine's scene and object constants it names as roles (a named table of the shader family's own constant names
 ///   to the vocabulary: the view, projection and their inverses, the camera position and the screen size, and the
-///   object matrices) and the texture coordinate scale and scroll (`VC_TexScroll_0` to `_3`: `Object(TextureScroll(n))`,
+///   object matrices, the skinned permutation's the joints' palette: `Object(BonePalette)`) and the texture coordinate scale and scroll (`VC_TexScroll_0` to `_3`: `Object(TextureScroll(n))`,
 ///   the engine's per-model value, observed as the identity on every layered draw of a running game: see
 ///   [`super::TEXTURE_SCROLL_POLICY`]); constants the table does not name are not bound;
 /// - no output roles: its outputs reach the pixel stage by label.
@@ -480,6 +482,9 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
                 ]),
                 ("COLOR", 1, _) => InputRole::Stream(SECOND_COLOUR),
                 ("TEXCOORD", n @ 1..=6, _) => InputRole::Stream(Semantic::Color(n as u8)),
+                // the skinned permutation's joint indices and weights
+                ("BLENDINDICES", 0, _) => InputRole::Stream(Semantic::Joints(0)),
+                ("BLENDWEIGHT", 0, _) => InputRole::Stream(Semantic::Weights(0)),
                 _ => InputRole::Unknown {
                     why: "no stream of the lowered geometry carries it".into(),
                 },
@@ -490,6 +495,10 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
             }
         })
         .collect();
+    let skinned = interface
+        .inputs
+        .iter()
+        .any(|v| v.label.name.eq_ignore_ascii_case("BLENDINDICES"));
     let mut constants = Vec::new();
     for resource in &interface.resources {
         let ResourceKind::ConstantBuffer { layout } = &resource.kind else {
@@ -505,6 +514,9 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
                 "FC_MatrixInvViewProj" => ConstantRole::View(ViewParameter::InverseViewProjection),
                 "SC_CameraPos" => ConstantRole::View(ViewParameter::CameraPosition),
                 "FC_ScreenSize" => ConstantRole::View(ViewParameter::ViewportSize),
+                // the object matrices: one per object, or the joints' palette in the skinned permutation (the program
+                // that takes joint indices)
+                "VC_aObjMatrix" if skinned => ConstantRole::Object(ObjectParameter::BonePalette),
                 "VC_aObjMatrix" => ConstantRole::Object(ObjectParameter::World),
                 // `_n` for texture coordinate set n: the program multiplies the set by `xy` (a scale) and adds `zw` (a scroll
                 // offset)

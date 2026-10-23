@@ -7,7 +7,9 @@ use primase_core::shader::{
     ObjectParameter, OutputRole, ResourceId, SamplerState, Shader, ShaderBinding, ShaderFormat, Stage,
     TextureSource, ViewParameter,
 };
-use primase_core::{ColorSpace, Entity, Name, TexFormat, TexRole, Texture, World};
+use primase_core::{
+    ColorSpace, Entity, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology, World,
+};
 use primase_fromsoft::layer_bake::resolve::{SECOND_COLOUR, Unbound, resolve};
 use primase_fromsoft::materials::{Binding, LayeredMaterial, Material};
 use primase_fromsoft::mtd::{self, MaterialDefinition, Parameter, Value};
@@ -23,6 +25,7 @@ mod common;
 const GRASS_ADDRESS: [Option<AddressMode>; 2] = [Some(AddressMode::Repeat), Some(AddressMode::Mirror)];
 const PROGRAM: &[u8] = include_bytes!("fixtures/layered.dxbc");
 const VERTEX_PROGRAM: &[u8] = include_bytes!("fixtures/layered_vs.dxbc");
+const SKIN_PROGRAM: &[u8] = include_bytes!("fixtures/layered_skin_vs.dxbc");
 
 fn texture_kind(kind: &str) -> mtd::Texture {
     mtd::Texture {
@@ -593,4 +596,135 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
     assert_eq!(stage.unknown_constants().count(), 0);
     assert_eq!(stage.constants.len(), 9);
     assert!(stage.outputs.is_empty() && stage.textures.is_empty());
+}
+
+/// The skinned permutation: its joint indices and weights are the mesh's `Joints(0)` and `Weights(0)`, and the array the
+/// unskinned program reads as object matrices is, in this one, the joints' palette.
+#[test]
+fn a_skinned_vertex_program_is_bound_to_joint_streams_and_a_palette() {
+    let interface = primase_dxbc::reflection(SKIN_PROGRAM).unwrap();
+    let entity = World::default().spawn();
+    let stage = primase_fromsoft::layer_bake::resolve::resolve_vertex(&interface, entity).unwrap();
+    let role = |name: &str| {
+        stage
+            .inputs
+            .iter()
+            .find(|i| format!("{}{}", i.label.name, i.label.index) == name)
+            .map(|i| i.role.clone())
+            .unwrap()
+    };
+    assert_eq!(role("BLENDINDICES0"), InputRole::Stream(Semantic::Joints(0)));
+    assert_eq!(role("BLENDWEIGHT0"), InputRole::Stream(Semantic::Weights(0)));
+    let palette = stage
+        .constants
+        .iter()
+        .find(|c| c.name.as_deref() == Some("VC_aObjMatrix"))
+        .unwrap();
+    assert_eq!(palette.role, ConstantRole::Object(ObjectParameter::BonePalette));
+    assert_eq!(stage.unknown_constants().count(), 0);
+}
+
+/// A material's vertex program follows the data of the primitives that draw it: the skinned permutation when all of them
+/// carry joint indices and weights, the unskinned one when none does or when they are mixed (counted), and none, counted,
+/// when the bundle has no skinned permutation.
+#[test]
+fn the_pass_chooses_the_vertex_permutation_by_the_primitives_streams() {
+    let primitive = |material: Entity, skinned: bool| {
+        let mut streams = BTreeMap::from([(
+            Semantic::Position,
+            Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
+        )]);
+        if skinned {
+            streams.insert(Semantic::Joints(0), Stream::U8x4(vec![[0, 0, 0, 0]; 3]));
+            streams.insert(Semantic::Weights(0), Stream::F32x4(vec![[1., 0., 0., 0.]; 3]));
+        }
+        Primitive {
+            topology: Topology::Triangles,
+            streams,
+            indices: Some(vec![0, 1, 2]),
+            material: Some(material),
+        }
+    };
+    // `skins`: whether each primitive of the world's one mesh is skinned; `with_skin`: the bundle holds the permutation
+    let run = |skins: &[bool], with_skin: bool| {
+        let mut world = World::default();
+        let a = world.spawn();
+        world.insert(
+            a,
+            Material {
+                mtd: "layered.mtd".into(),
+                definition: Some(primase_fromsoft::materials::Definition::Mtd(
+                    material().definition.clone(),
+                )),
+                gx: Vec::new(),
+                shader: "M[Multiple]".into(),
+                class: "opaque".into(),
+                skip: None,
+                cutoff: 0.5,
+                bindings: BTreeMap::new(),
+                layered: Some(material()),
+            },
+        );
+        world.insert_resource(ShaderPrograms(BTreeMap::from([(
+            "M[Multiple]_27_Gbuf.ppo".to_owned(),
+            Arc::from(PROGRAM),
+        )])));
+        world.insert_resource(TexturePayloads(BTreeMap::from([(
+            "grass_a".to_owned(),
+            dds(4, 4),
+        )])));
+        let mut programs = vec![ShaderProgram {
+            name: "M[Multiple]_Gbuf.vpo".into(),
+            stage: ShaderStage::Vertex,
+            code: Arc::from(VERTEX_PROGRAM),
+        }];
+        if with_skin {
+            programs.push(ShaderProgram {
+                name: "M[Multiple]_Gbuf_Skin.vpo".into(),
+                stage: ShaderStage::Vertex,
+                code: Arc::from(SKIN_PROGRAM),
+            });
+        }
+        let bundle = world.spawn();
+        world.insert(
+            bundle,
+            ShaderBundle {
+                name: "M[Multiple]".into(),
+                programs,
+                parameters: None,
+            },
+        );
+        world.insert(a, MaterialShader(bundle));
+        let mesh = world.spawn();
+        world.insert(mesh, Mesh::new(skins.iter().map(|&s| primitive(a, s)).collect()));
+        let run = common::run(&mut world, "resolve-fromsoft-shaders{unbound-textures=preview}").unwrap();
+        let counts = run.steps[0].log.counts.clone();
+        let vertex = world
+            .get::<ShaderBinding>(a)
+            .unwrap()
+            .stage(Stage::Vertex)
+            .map(|s| world.get::<Name>(s.shader).unwrap().0.clone());
+        (vertex, counts)
+    };
+    let (vertex, counts) = run(&[true, true], true);
+    assert_eq!(vertex.as_deref(), Some("M[Multiple]_Gbuf_Skin.vpo"));
+    assert_eq!(
+        counts["layered materials drawn only by skinned primitives (the skinned vertex program)"],
+        1
+    );
+    let (vertex, counts) = run(&[false, false], true);
+    assert_eq!(vertex.as_deref(), Some("M[Multiple]_Gbuf.vpo"));
+    assert!(!counts.keys().any(|k| k.contains("skinned")));
+    let (vertex, counts) = run(&[true, false], true);
+    assert_eq!(vertex.as_deref(), Some("M[Multiple]_Gbuf.vpo"));
+    assert_eq!(
+        counts["layered materials drawn by skinned and unskinned primitives (bound to the unskinned vertex program)"],
+        1
+    );
+    let (vertex, counts) = run(&[true], false);
+    assert_eq!(vertex, None);
+    assert_eq!(
+        counts["skinned layered materials whose bundle has no <shader>_Gbuf_Skin.vpo (no vertex program bound)"],
+        1
+    );
 }

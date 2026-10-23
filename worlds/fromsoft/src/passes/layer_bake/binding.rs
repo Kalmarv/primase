@@ -132,6 +132,12 @@ fn lanes_of_input(input: &Input) -> [Lane; 4] {
     }
 }
 
+/// The policy a consumer counts when it runs a skinning program: the pose is the bind pose, every joint's matrix the
+/// identity, so a vertex at weight one on any joint is where it is stored. What the layered pixel program is given
+/// (coordinates, layer weights, tint) does not depend on the pose.
+pub const BIND_POSE_POLICY: &str =
+    "skinning palette frozen to the identity (bind pose); the pixel inputs do not depend on the pose";
+
 /// The words a role's constant is frozen to by `frame`, counting the policy the freezing is (`policies`); `None` for a
 /// role the bake gives no value (the time of day, and an unknown one, counted by its reason): the words stay zero. A
 /// material's own words are the role's own. A role the bake has no value for is an error.
@@ -154,6 +160,11 @@ pub(super) fn frozen_words(
         ) => bits(&frame.view_matrix),
         ConstantRole::View(ViewParameter::ViewportSize) => bits(&frame.viewport_size),
         ConstantRole::Object(ObjectParameter::World) => bits(&frame.world),
+        ConstantRole::Object(ObjectParameter::BonePalette) => {
+            policies.insert(BIND_POSE_POLICY.into(), 1);
+            // every joint's matrix the identity: the palette's words, as many as any buffer holds
+            (0..64).flat_map(|_| bits(&frame.world)).collect()
+        }
         ConstantRole::Object(ObjectParameter::InstanceColour) => bits(&frame.instance_colour),
         ConstantRole::Object(ObjectParameter::TextureScroll(set)) => {
             policies.insert(TEXTURE_SCROLL_POLICY.into(), 1);
