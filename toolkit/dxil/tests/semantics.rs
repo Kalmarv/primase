@@ -239,3 +239,239 @@ fn a_vertex_program() {
         // (the executor returns the clip distance array member as zeros: asserted when it carries arrays)
     }
 }
+
+mod textures {
+    use super::*;
+    use primase_shader::exec::{ImageLoad, ImageQuery, QueryKind, Runner};
+    use std::collections::BTreeSet;
+
+    /// Answers every request with a fixed value and records what was asked, by texture register.
+    struct Recording {
+        registers: Vec<u32>,
+        requests: BTreeSet<String>,
+    }
+    impl Recording {
+        fn register(&self, id: ResourceId) -> u32 {
+            self.registers[id.0 as usize]
+        }
+    }
+    impl Backend for Recording {
+        fn sample(&mut self, r: ImageSample<ResourceId>) -> Result<[f32; 4], String> {
+            self.requests.insert(format!(
+                "t{} {:?} coord={:?} layer={:?} lod={:?} offset={:?} gather={:?} ref={:?} depth={}",
+                self.register(r.texture),
+                r.dim,
+                r.coord,
+                r.layer,
+                r.lod,
+                r.offset,
+                r.gather,
+                r.depth_ref,
+                r.depth
+            ));
+            Ok(if r.depth_ref.is_some() {
+                [0.5, 0.0, 0.0, 0.0]
+            } else if r.gather.is_some() {
+                [0.1, 0.2, 0.3, 0.4]
+            } else {
+                [0.25, 0.5, 0.75, 1.0]
+            })
+        }
+        fn load(&mut self, r: ImageLoad<ResourceId>) -> Result<[u32; 4], String> {
+            self.requests.insert(format!(
+                "load t{} {:?} texel={:?} mip={:?} storage={}",
+                self.register(r.texture),
+                r.dim,
+                r.texel,
+                r.mip,
+                r.storage
+            ));
+            Ok(match self.register(r.texture) {
+                5 => [10, 20, 30, 40],
+                _ => [0.5f32.to_bits(); 4],
+            })
+        }
+        fn query(&mut self, r: ImageQuery<ResourceId>) -> Result<[u32; 4], String> {
+            self.requests.insert(format!(
+                "query t{} {:?} level={:?}",
+                self.register(r.texture),
+                r.kind,
+                r.level
+            ));
+            Ok(match r.kind {
+                QueryKind::Size => [256, 128, 1, 0],
+                QueryKind::Levels => [9, 0, 0, 0],
+                _ => [1, 0, 0, 0],
+            })
+        }
+    }
+
+    #[test]
+    fn texture_operations() {
+        for v in BOTH {
+            let (program, exe) = lifted(&fixture("textures", v));
+            let mut resources = Resources::default();
+            // Values { float4 a; int4 n; }
+            let cb = program
+                .interface
+                .resources
+                .iter()
+                .find(|r| matches!(r.kind, ResourceKind::ConstantBuffer { .. }))
+                .unwrap()
+                .id;
+            resources.constants.insert(
+                cb,
+                vec![[0.5f32, 1.5, 0.25, 0.75].map(f32::to_bits), [3u32, 4, 5, 6]],
+            );
+            let bound = exe.bind_resources(&resources).unwrap();
+            let mut backend = Recording {
+                registers: program
+                    .interface
+                    .resources
+                    .iter()
+                    .map(|r| r.provenance.d3d.unwrap().register)
+                    .collect(),
+                requests: BTreeSet::new(),
+            };
+            // a quad of four equal lanes: every screen derivative is zero. The argument is uvw = (0.25, 0.5, 0.75).
+            let uvw = [[f(0.25), f(0.5), f(0.75), 0]];
+            let mut runner = Runner::<4>::new(&exe, &bound, &mut backend, None);
+            let out = runner
+                .run([&uvw, &uvw, &uvw, &uvw])
+                .unwrap_or_else(|e| panic!("{v}: {e}"));
+            let c = [0.25f32, 0.5, 0.75, 1.0];
+            let three = c.map(|x| x + x + x);
+            // x = Sample + SampleBias + SampleLevel, then += Load (0.5) + Sample(offset) + ddx + ddy
+            let load_and_sample = c.map(|x| 0.5 + x + 0.0 + 0.0);
+            let x: Vec<u32> = (0..4).map(|i| f(three[i] + load_and_sample[i])).collect();
+            assert_eq!(out[0].values[0], [x[0], x[1], x[2], x[3]], "{v}");
+            assert_eq!(out[0].values[1], three.map(f32::to_bits), "{v}");
+            // z = SampleGrad + Gather, z.x += SampleCmp + SampleCmpLevelZero (0.5 each)
+            let gather = [0.1f32, 0.2, 0.3, 0.4];
+            let mut z: Vec<f32> = (0..4).map(|i| c[i] + gather[i]).collect();
+            z[0] += 0.5 + 0.5;
+            assert_eq!(
+                out[0].values[2],
+                [z[0], z[1], z[2], z[3]].map(f32::to_bits),
+                "{v}"
+            );
+            // k = Load of the uint texture (10, 20, 30, 40) + (width 256, height 128, levels 9, 0)
+            assert_eq!(out[0].values[3], [266, 148, 39, 40], "{v}");
+            // what was asked: coordinates, levels, offsets, layers, references, gathers
+            let asked = backend.requests;
+            let has = |needle: &str| {
+                assert!(
+                    asked.iter().any(|r| r.contains(needle)),
+                    "{v}: nothing asks {needle:?} in {asked:#?}"
+                );
+            };
+            // in a quad an implicit level is the quad's own footprint (zero here), with the bias the program states
+            let zero = "Gradients([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])";
+            has(&format!(
+                "t0 D2 coord=[0.25, 0.5, 0.0] layer=None lod={zero} offset=[0, 0, 0] gather=None ref=None"
+            ));
+            has(&format!(
+                "t0 D2 coord=[0.25, 0.5, 0.0] layer=None lod={zero} offset=[1, -1, 0] gather=None ref=None"
+            ));
+            has("lod=GradientsBias([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], 0.5)");
+            has("t0 D2 coord=[0.25, 0.5, 0.0] layer=None lod=Level(1.5)");
+            has(&format!(
+                "t1 D2 coord=[0.25, 0.5, 0.0] layer=Some(2.0) lod={zero}"
+            ));
+            has("t2 D3 coord=[0.25, 0.5, 0.75] layer=None lod=Level(1.0)");
+            has("t3 Cube coord=[0.25, 0.5, 0.75] layer=None lod=Level(0.0)");
+            has("t0 D2 coord=[0.25, 0.5, 0.0] layer=None lod=Level(0.0) offset=[0, 0, 0] gather=Some(0)");
+            has(&format!(
+                "t4 D2 coord=[0.25, 0.5, 0.0] layer=None lod={zero} offset=[0, 0, 0] gather=None ref=Some(0.25) depth=true"
+            ));
+            has(
+                "t4 D2 coord=[0.25, 0.5, 0.0] layer=None lod=Level(0.0) offset=[0, 0, 0] gather=None ref=Some(0.75) depth=true",
+            );
+            has("load t5 D2 texel=[3, 4, 0] mip=Some(0)");
+            has("load t0 D2 texel=[5, 6, 0] mip=Some(0)");
+            has("query t0 Size level=Some(0)");
+        }
+    }
+}
+
+mod resources {
+    use super::*;
+    use primase_shader::exec::{ImageLoad, ImageStore, Runner};
+
+    #[derive(Default)]
+    struct Views {
+        loads: Vec<String>,
+        stores: Vec<ImageStore<ResourceId>>,
+    }
+    impl Backend for Views {
+        fn sample(&mut self, _: ImageSample<ResourceId>) -> Result<[f32; 4], String> {
+            Err("no sampling".into())
+        }
+        fn load(&mut self, r: ImageLoad<ResourceId>) -> Result<[u32; 4], String> {
+            self.loads
+                .push(format!("{:?} storage={} texel={:?}", r.dim, r.storage, r.texel));
+            Ok([0.5f32.to_bits(); 4])
+        }
+        fn store_image(&mut self, r: ImageStore<ResourceId>) -> Result<(), String> {
+            self.stores.push(r);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn buffer_views_and_an_unordered_access_texture() {
+        for v in BOTH {
+            let (program, exe) = lifted(&fixture("resources", v));
+            let by_register = |register: u32, class: primase_shader::D3dClass| {
+                program
+                    .interface
+                    .resources
+                    .iter()
+                    .find(|r| {
+                        r.provenance
+                            .d3d
+                            .is_some_and(|d| d.register == register && d.class == class)
+                    })
+                    .unwrap_or_else(|| panic!("{v}: no {class:?} {register}"))
+                    .id
+            };
+            let mut resources = Resources::default();
+            // Values { int4 n; }: n = (2, 1, 3, 4)
+            resources.constants.insert(
+                by_register(0, primase_shader::D3dClass::ConstantBuffer),
+                vec![[2u32, 1, 3, 4]],
+            );
+            // t0 StructuredBuffer<float4>: element e lane l is 10e + l; t2 Buffer<float4>: 100 + 10e + l; t1 raw: 1000 + word
+            let sb: Vec<u32> = (0..16).map(|w| f((w / 4 * 10 + w % 4) as f32)).collect();
+            let typed: Vec<u32> = (0..16).map(|w| f((100 + w / 4 * 10 + w % 4) as f32)).collect();
+            let raw: Vec<u32> = (0..16).map(|w| 1000 + w).collect();
+            resources
+                .buffers
+                .insert(by_register(0, primase_shader::D3dClass::ShaderResource), sb);
+            resources
+                .buffers
+                .insert(by_register(1, primase_shader::D3dClass::ShaderResource), raw);
+            resources
+                .buffers
+                .insert(by_register(2, primase_shader::D3dClass::ShaderResource), typed);
+            let bound = exe.bind_resources(&resources).unwrap();
+            let mut backend = Views::default();
+            let mut runner = Runner::<1>::new(&exe, &bound, &mut backend, None);
+            // the argument is SV_Position = (3.75, 4.25, 0.5, 1)
+            let [out] = runner
+                .run([&[[f(3.75), f(4.25), f(0.5), f(1.0)]]])
+                .unwrap_or_else(|e| panic!("{v}: {e}"));
+            // x = sb[2] + typed[1] + the view's texel at n.zw (0.5)
+            assert_eq!(out.values[0], [f(130.5), f(132.5), f(134.5), f(136.5)], "{v}");
+            // k = raw.Load4(n.x * 16 = 32): words 8 to 11
+            assert_eq!(out.values[1], [1008, 1009, 1010, 1011], "{v}");
+            assert_eq!(backend.loads, ["D2 storage=true texel=[3, 4, 0]"], "{v}");
+            // image[uint2(position.xy)] = x: texel (3, 4)
+            let [store] = backend.stores.as_slice() else {
+                panic!("{v}: {:?}", backend.stores)
+            };
+            assert_eq!(store.texel, [3, 4, 0], "{v}");
+            assert_eq!(store.value, [f(130.5), f(132.5), f(134.5), f(136.5)], "{v}");
+        }
+    }
+}
