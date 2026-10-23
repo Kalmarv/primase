@@ -523,21 +523,21 @@ pub fn for_each_mesh(
 /// - specular (`KHR_materials_specular`): factor `SpecularColor` (0 without one), colour (1 - `Fresnel`) / 0.04, the
 ///   strength and the roughness per texel (the map's alpha scaling the power) in one texture derived from `SpecularTex`
 ///   ([`specular_texture`]), its specular and metallic-roughness texture; none for water.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LowerGtaPbr {
     /// Day, night, or both as state.
     pub night: Night,
 }
 
-/// Which of GTA's times `lower-gta-pbr` lowers for.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Which of GTA's times `lower-gta-pbr` lowers for: its required `night` option (no default: each changes what is
+/// drawn).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Night {
-    /// Day: night-only geometry dropped, night emission off.
-    #[default]
+    /// Day (`night=false`): night-only geometry dropped, night emission off.
     Day,
-    /// Night: night-only geometry kept, night emission on.
+    /// Night (`night=true`): night-only geometry kept, night emission on.
     Night,
-    /// Both, the hour kept as state: a prototype with night-only geometry or night emission gets a night copy (its
+    /// Both, the hour kept as state (`night=state`): a prototype with night-only geometry or night emission gets a night copy (its
     /// LOD forms with it) that keeps the geometry and draws with night copies of those materials (emission on); the
     /// prototype itself is lowered for day, and each of its placements switches to the night copy while `gta.hour` is
     /// a night hour ([`crate::passes::rect::NIGHT_HOURS`]; a `core.state_override`, first in its list).
@@ -546,20 +546,21 @@ pub enum Night {
 
 impl LowerGtaPbr {
     pub fn from_options(o: &Options) -> Result<LowerGtaPbr, String> {
-        let mut night = Night::Day;
-        for (k, v) in o.iter() {
-            match k.as_str() {
-                "night" => {
-                    night = match v.as_str() {
-                        "false" => Night::Day,
-                        "true" => Night::Night,
-                        "state" => Night::State,
-                        _ => return Err(format!("night: not true, false or state: {v}")),
-                    }
-                }
-                _ => return Err(format!("unknown option {k}")),
-            }
+        if let Some(k) = o.keys().find(|k| k.as_str() != "night") {
+            return Err(format!("unknown option {k}"));
         }
+        let night = match o.get("night").map(String::as_str) {
+            Some("false") => Night::Day,
+            Some("true") => Night::Night,
+            Some("state") => Night::State,
+            Some(v) => return Err(format!("night: not true, false or state: {v}")),
+            None => {
+                return Err(
+                    "night is required (true, false or state): which of GTA's times is drawn is the caller's choice"
+                        .into(),
+                );
+            }
+        };
         Ok(LowerGtaPbr { night })
     }
 }
@@ -570,15 +571,12 @@ impl Pass for LowerGtaPbr {
     }
     fn options(&self) -> Options {
         let mut o = Options::new();
-        match self.night {
-            Night::Day => {}
-            Night::Night => {
-                o.insert("night".into(), "true".into());
-            }
-            Night::State => {
-                o.insert("night".into(), "state".into());
-            }
-        }
+        let night = match self.night {
+            Night::Day => "false",
+            Night::Night => "true",
+            Night::State => "state",
+        };
+        o.insert("night".into(), night.into());
         o
     }
     // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
@@ -1282,9 +1280,11 @@ mod tests {
         // x = 2 * 255 / 255 - 1 = 1 (along the tangent), y = 2 * 128 / 255 - 1 (about 0)
         w.insert(n, rgba([255, 128, 77, 0]));
         let m = bumped(d, n, &mut w);
-        super::LowerGtaPbr::default()
-            .run(&mut w, &mut primase_core::pass::PassLog::default())
-            .unwrap();
+        super::LowerGtaPbr {
+            night: super::Night::Day,
+        }
+        .run(&mut w, &mut primase_core::pass::PassLog::default())
+        .unwrap();
         let p = w.get::<primase_core::pbr::PbrMaterial>(m).unwrap();
         assert_eq!(p.normal_texture.map(|t| t.texture), Some(n));
         assert_eq!(p.normal_scale, 0.5);
@@ -1335,7 +1335,11 @@ mod tests {
         let unused = shader(b"decal", 2);
         drawn(&mut w, &[decal, named, cutout, alpha, other]);
         let mut log = PassLog::default();
-        super::LowerGtaPbr::default().run(&mut w, &mut log).unwrap();
+        super::LowerGtaPbr {
+            night: super::Night::Day,
+        }
+        .run(&mut w, &mut log)
+        .unwrap();
         let layer = |e| w.get::<DrawOrder>(e).map(|d| d.layer);
         assert_eq!(
             [decal, named, cutout, alpha, other].map(layer),
@@ -1399,7 +1403,11 @@ mod tests {
         );
         drawn(&mut w, &[m]);
         let mut log = PassLog::default();
-        super::LowerGtaPbr::default().run(&mut w, &mut log).unwrap();
+        super::LowerGtaPbr {
+            night: super::Night::Day,
+        }
+        .run(&mut w, &mut log)
+        .unwrap();
         assert_eq!(w.get::<Texture>(palette).unwrap().role, TexRole::Data);
         assert_eq!(w.get::<Texture>(diffuse).unwrap().role, TexRole::Color);
         assert_eq!(
@@ -1417,9 +1425,11 @@ mod tests {
         let t = w.spawn();
         w.insert(t, rgba([128, 128, 255, 255]));
         let m = bumped(t, t, &mut w);
-        super::LowerGtaPbr::default()
-            .run(&mut w, &mut primase_core::pass::PassLog::default())
-            .unwrap();
+        super::LowerGtaPbr {
+            night: super::Night::Day,
+        }
+        .run(&mut w, &mut primase_core::pass::PassLog::default())
+        .unwrap();
         let p = w.get::<primase_core::pbr::PbrMaterial>(m).unwrap();
         let (base, normal) = (
             p.base_color_texture.unwrap().texture,
@@ -1472,9 +1482,11 @@ mod tests {
                 sources: vec![[0, 0], [0, 1]],
             },
         );
-        super::LowerGtaPbr::default()
-            .run(&mut w, &mut primase_core::pass::PassLog::default())
-            .unwrap();
+        super::LowerGtaPbr {
+            night: super::Night::Day,
+        }
+        .run(&mut w, &mut primase_core::pass::PassLog::default())
+        .unwrap();
         assert_eq!(w.get::<primase_core::Mesh>(proto).unwrap().primitives().len(), 1);
         assert_eq!(w.get::<GtaSources>(proto).unwrap().sources, vec![[0, 1]]);
     }
@@ -1761,9 +1773,11 @@ mod tests {
             },
         );
         w.insert(proto, PerVertex(vec![vec![10, 11, 12, 13, 14, 15]]));
-        super::LowerGtaPbr::default()
-            .run(&mut w, &mut primase_core::pass::PassLog::default())
-            .unwrap();
+        super::LowerGtaPbr {
+            night: super::Night::Day,
+        }
+        .run(&mut w, &mut primase_core::pass::PassLog::default())
+        .unwrap();
         let mesh = w.get::<primase_core::Mesh>(proto).unwrap();
         assert_eq!(mesh.primitives().len(), 2);
         // each half's vertices compacted, the per-vertex values with them
@@ -1856,5 +1870,33 @@ mod tests {
         assert_eq!(s.levels[0][1], 128);
         // alpha 0: power 0, roughness 1
         assert_eq!(s.levels[0][5], 255);
+    }
+
+    /// `night` is required and names the time drawn; the options a pass gives read back as the same pass.
+    #[test]
+    fn the_night_option_is_required() {
+        use super::{LowerGtaPbr, Night};
+        use primase_core::pass::{Options, Pass};
+        let pbr = |v: Option<&str>| {
+            let mut o = Options::new();
+            if let Some(v) = v {
+                o.insert("night".into(), v.into());
+            }
+            LowerGtaPbr::from_options(&o)
+        };
+        assert_eq!(
+            pbr(None).unwrap_err(),
+            "night is required (true, false or state): which of GTA's times is drawn is the caller's choice"
+        );
+        assert!(pbr(Some("dusk")).is_err());
+        for (v, night) in [
+            ("false", Night::Day),
+            ("true", Night::Night),
+            ("state", Night::State),
+        ] {
+            let pass = pbr(Some(v)).unwrap();
+            assert_eq!(pass.night, night, "{v}");
+            assert_eq!(LowerGtaPbr::from_options(&pass.options()).unwrap(), pass, "{v}");
+        }
     }
 }
