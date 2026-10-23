@@ -1109,9 +1109,7 @@ dependencies = [
  "primase-core",
  "primase-dds",
  "primase-meshops",
- "primase-testdata",
  "primase-texcodec",
- "sha2",
  "thiserror",
 ]
 

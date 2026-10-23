@@ -23,15 +23,11 @@ against independently constructed source samples and Pillow 11, and mip levels
 against reference C# golden outputs. `tests/oracles/png.py` regenerates synthetic
 PNG fixtures. No external assets are included.
 
-Optional scene PNG gates use `PRIMASE_SCENES_GTA`, `PRIMASE_SCENES_SEKIRO` and
-`PRIMASE_MAPS_GTA`. They recursively select PNGs under `textures`, compare decoded
-RGBA8 with Pillow 11, and roundtrip decoded samples through the PNG writer. A
-configured corpus without PNGs is counted explicitly; if all configured corpora
-are empty the test fails. PNG compressed-byte identity with other encoders is not
+Real PNGs are checked where they are read: `formats/gltf/tests/textures.rs`
+compares the Khronos sample assets' PNGs with Pillow 11's RGBA8, and
+`checks/tests/web_texture_decode.rs` round-trips every texture of a real scene
+through the PNG writer. PNG compressed-byte identity with other encoders is not
 promised: the contract is exact pixel roundtrip and deterministic output.
-
-Censuses deduplicate input files by SHA256 within each configured root, reporting
-path counts separately from checked distinct contents. All paths are read and hashed.
 
 `load_textures`, a reader's load step, loads PNG and DDS file components atomically,
 retaining file provenance and stored mip levels. Absolute paths are used directly;
