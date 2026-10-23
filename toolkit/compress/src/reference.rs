@@ -14,6 +14,27 @@ pub enum Failure {
     Short { written: usize, expected: usize },
 }
 
+impl Failure {
+    /// Whether this is a refusal for `reason`: oozextract wraps its error once per layer it passes through, each wrapper
+    /// without a message of its own, so the reason is that of the innermost error that states one.
+    pub fn refuses_for(&self, reason: &str) -> bool {
+        let Failure::Refused(e) = self else {
+            return false;
+        };
+        let mut at: Option<&(dyn std::error::Error + 'static)> = Some(e);
+        while let Some(error) = at {
+            if error
+                .downcast_ref::<oozextract::OozError>()
+                .is_some_and(|ooz| ooz.message.as_deref() == Some(reason))
+            {
+                return true;
+            }
+            at = error.source();
+        }
+        false
+    }
+}
+
 /// The `expected` bytes oozextract decodes from `input`.
 pub fn decode(input: &[u8], expected: usize) -> Result<Vec<u8>, Failure> {
     let mut out = vec![0; expected];

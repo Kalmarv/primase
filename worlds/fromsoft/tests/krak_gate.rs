@@ -199,7 +199,7 @@ fn oozextract_056_single_symbol_huffman_chunk_reports_no_bytes_used()
             "{name}/quantum/{i}: the DLL alone"
         );
         match reference::decode(quantum.bytes, quantum.size) {
-            Err(Failure::Refused(e)) if e.message.as_deref() == Some("Expected 0 == 3 for chunk type 4") => {}
+            Err(e) if e.refuses_for("Expected 0 == 3 for chunk type 4") => {}
             Err(other) => return Err(format!("{name}/quantum/{i}: a different failure: {other}").into()),
             Ok(decoded) => {
                 assert_eq!(decoded, reference, "{name}/quantum/{i}");
