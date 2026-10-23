@@ -148,3 +148,24 @@ refer to the first enclosing array element. The production reflection retains
 the full hierarchy. An optional `.ppo.trace.json` array contains post-instruction
 `temps` and `outputs` as flat raw u32 arrays; the value gate reports the first
 divergent initialized component and its instruction for diagnosis.
+
+## Lifting
+
+`lift(container)` turns a Shader Model 4 or 5 pixel or vertex program into a `primase_shader::Program`. It reads the
+program through `decode` (the token-level decoder every consumer shares: any stage's version token, typed
+declarations, instructions with their controls and extended tokens; `Program::from_words` is that plus the evaluator's
+subset checks) and the container's signatures and, where there is one, its RDEF (names and constant layouts).
+
+A register is four raw lanes (`vec4<u32>` locals); each instruction bitcasts to the type it implies. Varyings are
+unpacked from D3D registers (the register and lanes stay in provenance); only signature elements the program declares
+are in the interface. Resources are `cb<n>` uniform `array<vec4<u32>, rows>` (group 0), `t<n>` textures and buffer
+views (group 1), `s<n>` samplers (group 2), binding = slot. Reads out of range of a dynamically indexed buffer are
+zero, as in D3D. D3D's results are written out (`D3dModes::ALL`). Refused by name, with the instruction word: compute,
+geometry and tessellation programs, unordered-access views and atomics, `sample_info`, index ranges, a pixel input of
+`SV_RenderTargetArrayIndex`, a vertex program with no `SV_Position`, doubles, SM5.1 declarations.
+
+`tests/lift.rs` lifts our own HLSL fixture (`tests/fixtures/modes.hlsl`, fxc `/T ps_5_0`) and checks its interface,
+layout and the D3D guards in the WGSL. `tests/lift_corpus.rs` (`PRIMASE_SHADER_CORPUS_SEKIRO`, `_RR`, `_UNITY`)
+lifts a folder of real containers, validates and writes each, and prints the refusals by reason; a lifted program that
+fails validation fails the test. Lifting is checked structurally here; values are checked against WARP and a GPU by the
+batch that runs the executor over the lifted programs.

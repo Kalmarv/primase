@@ -78,3 +78,27 @@ fxc (SM5) and dxc (SM6) and holds the vocabulary read from either to the same va
 own listing of the buffer layouts. `tests/evaluate.rs` evaluates `tests/fixtures/evaluate.hlsl` through both
 implementations against outputs worked out from the HLSL, the refusals, and constant packing worked out from D3D's
 rules.
+
+## The program representation
+
+`Program` is what every bytecode lifts into (`primase-dxbc`'s `lift` today): a `naga::Module` (typed body, structured
+control flow, resources as globals; naga 30.0.1 is the IR) with what the module cannot say:
+
+- `interface` (the vocabulary above) and `bindings` (which global each `ResourceId` is). `entry_io(&Interface)` is the
+  one statement of how the entry point carries the interface: one argument per input varying, one result member per
+  output varying (a vertex stage's clip distances together, one `array<f32, N>`), named `<NAME><index>`, built-in
+  bindings for system values, locations in interface order, a pixel `Target(n)` always four lanes. The validator
+  checks the module against it.
+- `conventions` (clip depth, fragment and texture origin; D3D's are `Conventions::D3D`), applied once where a program
+  meets a pipeline, never inside the body.
+- `modes` (`D3dModes`): the D3D behaviours the body spells out as plain operations because the IR's and other APIs'
+  answers differ (division by zero, float to integer of NaN and overflow, `min`/`max`/`saturate` with a NaN); the
+  denormal flush is the source's expectation, which WGSL leaves to the implementation. `build::behaviour` writes them.
+- `provenance` (bytecode format, target, lifter and its version) and `notes` (what a lifter approximated).
+
+`validate()` runs naga's validator (with `CAPABILITIES`: WGSL's baseline plus clip distances, per-sample shading, the
+primitive index, cube array textures, half-float packing and forced early depth, which a consumer that cannot provide
+one refuses) and then ours: interface against entry point, resources against globals (kind, space, binding, layout
+size). `text()` is the stable text form (a header of everything above, then the module as WGSL) and `emit::wgsl`
+writes WGSL by naga's backend; a writer that cannot express a program refuses it, never approximates. `build::Builder`
+is the typed builder lifters share.
