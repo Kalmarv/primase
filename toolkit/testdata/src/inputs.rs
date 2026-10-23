@@ -712,6 +712,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "third-party: Microsoft's dxc",
     },
     Variable {
+        name: "PRIMASE_FXC",
+        kind: Kind::Input,
+        gate: false,
+        about: r#"Microsoft's `fxc` shader compiler executable, for the DXBC executor's comparison with WARP (the oracle's vertex shader); `toolkit/dxbc/tests/exec_warp.rs`"#,
+        status: Status::Live,
+        source: "third-party: Microsoft's fxc",
+    },
+    Variable {
         name: "PRIMASE_WARP",
         kind: Kind::Input,
         gate: true,

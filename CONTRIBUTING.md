@@ -396,6 +396,7 @@ than the code it checks.
 | `PRIMASE_DATA` | config | live | the absolute path of a local TOML file mapping these names to string values (see above) | - |
 | `PRIMASE_REQUIRE_REAL_DATA` | switch | live | optional: `1` makes every unset input fail its test; `gate` only the inputs the landing gate must have | - |
 | `PRIMASE_DXC` | input | live | Microsoft's `dxc` shader compiler executable, for the DXIL evaluator's comparison with WARP; `toolkit/dxil/tests/warp.rs` | third-party: Microsoft's dxc |
+| `PRIMASE_FXC` | input | live | Microsoft's `fxc` shader compiler executable, for the DXBC executor's comparison with WARP (the oracle's vertex shader); `toolkit/dxbc/tests/exec_warp.rs` | third-party: Microsoft's fxc |
 | `PRIMASE_WARP` | input | live | the WARP oracle program that runs a shader on Microsoft's WARP rasterizer; `toolkit/dxil/tests/common/warp.rs` | third-party: Microsoft's WARP rasterizer, through a thin host program kept with the private oracle tools |
 | `PRIMASE_WARP_SCRATCH` | output | live | a folder for the WARP comparison's case files and results | - |
 | `PRIMASE_DXIL_FUZZ_RUNS` | switch | live | optional: how many mutated fixtures the DXIL fuzz test runs (default 3000) | - |
