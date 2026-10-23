@@ -929,6 +929,10 @@ impl Builder<'_> {
                                         usize::from(!h.hips),
                                     ),
                                     (
+                                        "humanoid clips whose hips rotation is a fit of the editor's body frame, not exact (0.05 degrees rms on spine poses, 0.25 rms and up to 3.2 on random poses, up to 9.6 with every muscle near its limit; the centre of mass is exact)",
+                                        usize::from(h.hips),
+                                    ),
+                                    (
                                         "humanoid clip RootT or RootQ curves missing (the body keeps the avatar's rest position, or no turn, in them)",
                                         if h.hips { h.missing_root_curves } else { 0 },
                                     ),
