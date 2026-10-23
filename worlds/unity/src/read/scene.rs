@@ -138,10 +138,9 @@ struct Node {
     game_object: i64,
     father: i64,
     local: Matrix,
-    /// The stored local position, rotation (a quaternion `[x, y, z, w]`) and scale.
+    /// The stored local position, rotation (a quaternion `[x, y, z, w]`) and scale (a RectTransform's `local`
+    /// position comes from its anchors instead).
     trs: ([f64; 3], [f64; 4], [f64; 3]),
-    /// A RectTransform: its `local` comes from its anchors, not from `trs`.
-    rect: bool,
 }
 
 /// A Transform as a joint of a skeleton: its GameObject's name, its father (a Transform's path id) and its local
@@ -242,7 +241,6 @@ impl Scene {
                             father: path_id(&t, "m_Father")?,
                             local: trs(p, q, s),
                             trs: (p, q, s),
-                            rect: name_of(o) == "RectTransform",
                         },
                     );
                     if name_of(o) == "RectTransform" {
@@ -501,15 +499,12 @@ impl Scene {
         out
     }
 
-    /// Transform `tp` as a joint ([`SceneJoint`]); `None` when it is no Transform of this file. A RectTransform is
-    /// no joint: its local placement is not its stored position, rotation and scale.
+    /// Transform `tp` as a joint ([`SceneJoint`]); `None` when it is no Transform of this file. A RectTransform's
+    /// position is the one its anchors give (as in its local matrix), its rotation and scale as stored.
     pub fn joint(&self, tp: i64) -> Result<Option<SceneJoint>> {
         let Some(n) = self.nodes.get(&tp) else {
             return Ok(None);
         };
-        if n.rect {
-            return Err(invalid(format!("Transform {tp} is a RectTransform, not a joint")));
-        }
         Ok(Some(SceneJoint {
             name: self
                 .game_objects
@@ -517,7 +512,7 @@ impl Scene {
                 .map_or("", |g| g.name.as_str())
                 .to_owned(),
             father: (n.father != 0).then_some(n.father),
-            translation: n.trs.0,
+            translation: [n.local[0][3], n.local[1][3], n.local[2][3]],
             rotation: n.trs.1,
             scale: n.trs.2,
         }))

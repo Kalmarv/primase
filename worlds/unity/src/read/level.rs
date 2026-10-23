@@ -31,7 +31,7 @@
 //! ([`UnityBehaviours`]), which hold the shape. A mesh with no submesh that has indices draws nothing: its prototype
 //! has no mesh. Leaving such renderers out is a pass's ([`crate::drawn`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
@@ -53,7 +53,9 @@ use crate::read::material::{ShaderData, UnityMaterialData};
 use crate::read::mesh::UnityMeshData;
 use crate::read::player::{ObjRef, Player};
 use crate::read::scene::{ColliderComponent, ColliderShape};
-use crate::read::scene::{IDENTITY, LodGroup, Matrix, OffFlag, Renderer, RendererSkin, Scene, Skipped};
+use crate::read::scene::{
+    IDENTITY, LodGroup, Matrix, OffFlag, Renderer, RendererSkin, Scene, SceneJoint, Skipped,
+};
 use crate::read::terrain::{TerrainData, TerrainLayerData};
 use crate::read::texture::UnityTexture as UnityTextureData;
 use crate::read::value::Value;
@@ -195,53 +197,127 @@ struct SkinBuild {
     bindings: Vec<(Entity, Vec<JointId>)>,
 }
 
-/// The skeleton, rig and joint of each Transform of the skeletons [`build_rigs`] made.
-type JointOf = BTreeMap<i64, (Entity, Entity, JointId)>;
+/// What [`build_rigs`] made for one skinned renderer: the skeleton and rig its bones are joints of, and the joint of
+/// each bone slot.
+type RigOf = (Entity, Entity, Vec<JointId>);
 
-/// The skeletons of the bones in `bones` (lists of Transforms in `scene`'s file): one per scene root, its joints the
-/// bones and every Transform above them (in path id order, `JointId` their position), each with the local position,
-/// rotation and scale as stored, and a rig at the identity. Each Transform's skeleton, rig and joint, and the number
-/// of skeletons and joints made.
-fn build_rigs(w: &mut World, scene: &Scene, bones: &[&[Option<i64>]]) -> Result<(JointOf, usize, usize)> {
-    let mut joints: BTreeMap<i64, crate::read::scene::SceneJoint> = BTreeMap::new();
-    for &tp in bones.iter().flat_map(|list| list.iter().flatten()) {
-        let mut at = Some(tp);
-        while let Some(t) = at {
-            if joints.contains_key(&t) {
-                break;
-            }
-            let j = scene
-                .joint(t)?
-                .ok_or_else(|| invalid(format!("bone {t} is no Transform of its file")))?;
-            at = j.father;
-            joints.insert(t, j);
+/// Transform `t` and every Transform above it, up to its scene root, reading the joint data into `joints`.
+fn chain_of(scene: &Scene, joints: &mut BTreeMap<i64, SceneJoint>, t: i64) -> Result<Vec<i64>> {
+    let mut chain = Vec::new();
+    let mut at = Some(t);
+    while let Some(t) = at {
+        if chain.len() > 100_000 {
+            return Err(invalid(format!("Transform {t}: parents loop")));
+        }
+        chain.push(t);
+        if let std::collections::btree_map::Entry::Vacant(slot) = joints.entry(t) {
+            slot.insert(
+                scene
+                    .joint(t)?
+                    .ok_or_else(|| invalid(format!("Transform {t} is not of its file")))?,
+            );
+        }
+        at = joints[&t].father;
+    }
+    Ok(chain)
+}
+
+/// The skeletons of skinned renderers' bones. A renderer's joints are its bones and its root bone with the Transforms
+/// between them and their lowest common ancestor (`None` for a renderer whose bones hang from different scene roots);
+/// renderers whose joints share a Transform share a skeleton, so a character's renderers are one skeleton and
+/// characters under one parent are not. Joints are in path id order (`JointId` their position), each with its local
+/// position, rotation and scale as stored, in the world frame; the rig sits where its top joint's parent does (the
+/// identity for a scene root). One entry per renderer, and the number of skeletons and joints made.
+fn build_rigs(
+    w: &mut World,
+    scene: &Scene,
+    skins: &[&RendererSkin],
+) -> Result<(Vec<Option<RigOf>>, usize, usize)> {
+    let mut joints: BTreeMap<i64, SceneJoint> = BTreeMap::new();
+    // each renderer's joint set
+    let mut sets: Vec<Option<BTreeSet<i64>>> = Vec::with_capacity(skins.len());
+    for skin in skins {
+        let mut wanted: Vec<i64> = skin.bones.iter().flatten().copied().collect();
+        wanted.extend(skin.root_bone);
+        wanted.sort_unstable();
+        wanted.dedup();
+        let chains = wanted
+            .iter()
+            .map(|&t| chain_of(scene, &mut joints, t))
+            .collect::<Result<Vec<_>>>()?;
+        let others: Vec<BTreeSet<i64>> = chains[1..].iter().map(|c| c.iter().copied().collect()).collect();
+        sets.push(
+            chains[0]
+                .iter()
+                .copied()
+                .find(|t| others.iter().all(|o| o.contains(t)))
+                .map(|lca| {
+                    chains
+                        .iter()
+                        .flat_map(|c| {
+                            let end = c
+                                .iter()
+                                .position(|t| *t == lca)
+                                .expect("the common ancestor is in every chain");
+                            c[..=end].iter().copied()
+                        })
+                        .collect()
+                }),
+        );
+    }
+    // renderers sharing a joint are one skeleton: union-find over the renderers
+    let mut group: Vec<usize> = (0..skins.len()).collect();
+    fn find(group: &mut [usize], mut i: usize) -> usize {
+        while group[i] != i {
+            group[i] = group[group[i]];
+            i = group[i];
+        }
+        i
+    }
+    let mut first_user: BTreeMap<i64, usize> = BTreeMap::new();
+    for (i, set) in sets.iter().enumerate() {
+        for &t in set.iter().flatten() {
+            let other = *first_user.entry(t).or_insert(i);
+            let (a, b) = (find(&mut group, i), find(&mut group, other));
+            group[a.max(b)] = a.min(b);
         }
     }
-    let root_of = |mut t: i64| {
-        while let Some(f) = joints[&t].father {
-            t = f;
+    let mut members: BTreeMap<usize, BTreeSet<i64>> = BTreeMap::new();
+    for (i, set) in sets.iter().enumerate() {
+        if let Some(set) = set {
+            let g = find(&mut group, i);
+            members.entry(g).or_default().extend(set.iter().copied());
         }
-        t
-    };
-    let mut groups: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
-    for &t in joints.keys() {
-        groups.entry(root_of(t)).or_default().push(t);
     }
-    let mut out = BTreeMap::new();
-    for (root, members) in &groups {
-        let id: BTreeMap<i64, JointId> = members
+    let mut made: BTreeMap<usize, (Entity, Entity, BTreeMap<i64, JointId>)> = BTreeMap::new();
+    let mut joint_count = 0;
+    for (g, set) in &members {
+        let id: BTreeMap<i64, JointId> = set
             .iter()
             .enumerate()
             .map(|(k, &t)| (t, JointId(k as u32)))
             .collect();
-        let list: Vec<Joint> = members
+        // the top joint: the one whose father is outside the skeleton (the sets are paths up to common ancestors, so
+        // sharing a joint makes one tree)
+        let tops: Vec<i64> = set
+            .iter()
+            .copied()
+            .filter(|t| joints[t].father.is_none_or(|f| !set.contains(&f)))
+            .collect();
+        let [top] = tops[..] else {
+            return Err(invalid(format!(
+                "skinned renderers' joints form {} trees, not one skeleton",
+                tops.len()
+            )));
+        };
+        let list: Vec<Joint> = set
             .iter()
             .map(|t| {
                 let j = &joints[t];
                 Joint {
                     id: id[t],
                     name: j.name.clone(),
-                    parent: j.father.map(|f| id[&f]),
+                    parent: j.father.filter(|f| set.contains(f)).map(|f| id[&f]),
                     rest: Rest::Trs {
                         translation: j.translation.map(|x| x as f32),
                         rotation: j.rotation.map(|x| x as f32),
@@ -251,18 +327,35 @@ fn build_rigs(w: &mut World, scene: &Scene, bones: &[&[Option<i64>]]) -> Result<
                 }
             })
             .collect();
+        joint_count += list.len();
+        let at = match joints[&top].father {
+            Some(parent) => UNITY.transform(&transform_of(&scene.world_of(parent)?)),
+            None => Transform::IDENTITY,
+        };
         let skeleton = w.spawn();
-        w.insert(skeleton, Name(format!("skeleton {}", joints[root].name)));
+        w.insert(skeleton, Name(format!("skeleton {}", joints[&top].name)));
         w.insert(skeleton, Skeleton { joints: list });
         let rig = w.spawn();
-        w.insert(rig, Name(format!("rig {}", joints[root].name)));
+        w.insert(rig, Name(format!("rig {}", joints[&top].name)));
         w.insert(rig, RigInstance { skeleton });
-        w.insert(rig, Transform::IDENTITY);
-        for &t in members {
-            out.insert(t, (skeleton, rig, id[&t]));
-        }
+        w.insert(rig, at);
+        made.insert(*g, (skeleton, rig, id));
     }
-    Ok((out, groups.len(), joints.len()))
+    let mut out = Vec::with_capacity(skins.len());
+    for (i, skin) in skins.iter().enumerate() {
+        out.push(match sets[i] {
+            Some(_) => {
+                let (skeleton, rig, id) = &made[&find(&mut group, i)];
+                Some((
+                    *skeleton,
+                    *rig,
+                    skin.bones.iter().flatten().map(|t| id[t]).collect(),
+                ))
+            }
+            None => None,
+        });
+    }
+    Ok((out, made.len(), joint_count))
 }
 
 /// What a renderer is in its scene's LODGroups.
@@ -1098,27 +1191,27 @@ pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelRe
     }
     let mut skinning: BTreeMap<ObjRef, Skinning> = BTreeMap::new();
     if !candidates.is_empty() {
-        let lists: Vec<&[Option<i64>]> = candidates.iter().map(|(_, s)| s.bones.as_slice()).collect();
-        let (of, skeletons, joints) = build_rigs(w, &scene, &lists)?;
+        let skins: Vec<&RendererSkin> = candidates.iter().map(|(_, s)| *s).collect();
+        let (made, skeletons, joints) = build_rigs(w, &scene, &skins)?;
         b.report.skeletons = skeletons;
         b.report.joints = joints;
-        for (r, skin) in &candidates {
-            let at: Vec<(Entity, Entity, JointId)> = skin.bones.iter().flatten().map(|t| of[t]).collect();
-            if at.iter().any(|(sk, ..)| *sk != at[0].0) {
-                b.notice(
+        for ((r, _), rig) in candidates.iter().zip(made) {
+            match rig {
+                Some((skeleton, rig, joints)) => {
+                    skinning.insert(
+                        r.renderer.clone(),
+                        Skinning {
+                            skeleton,
+                            rig,
+                            joints,
+                        },
+                    );
+                }
+                None => b.notice(
                     "skinned renderers whose bones hang from different roots drawn unskinned",
                     1,
-                );
-                continue;
+                ),
             }
-            skinning.insert(
-                r.renderer.clone(),
-                Skinning {
-                    skeleton: at[0].0,
-                    rig: at[0].1,
-                    joints: at.iter().map(|a| a.2).collect(),
-                },
-            );
         }
     }
     let mut skin_builds: BTreeMap<Entity, SkinBuild> = BTreeMap::new();
