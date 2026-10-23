@@ -15,9 +15,9 @@ fn the_fixture_lifts_validates_and_writes_wgsl() {
     assert!(program.modes.divide_by_zero && program.modes.float_to_int && program.modes.min_max_nan);
     program.validate().unwrap_or_else(|p| panic!("{p:?}"));
 
-    // SV_Position in, five colour targets out: a float4, three uint4 and a float4 (HLSL: struct O)
-    let inputs: Vec<_> = program.interface.inputs.iter().map(|v| v.system).collect();
-    assert_eq!(inputs, [Some(SystemValue::FragCoord)]);
+    // five colour targets out: a float4, three uint4 and a float4 (HLSL: struct O). The program takes SV_Position as
+    // a parameter but never reads it, so it declares no input and exposes none.
+    assert!(program.interface.inputs.is_empty());
     let targets: Vec<_> = program
         .interface
         .outputs

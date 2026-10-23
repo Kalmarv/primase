@@ -27,13 +27,16 @@ impl fmt::Display for Problem {
     }
 }
 
-/// The capabilities programs may use: WGSL's baseline and the optional WebGPU features a D3D program can need
-/// (clip distances, per-sample shading, the primitive index, cube array textures). A consumer that cannot enable
-/// one refuses the program that needs it; nothing outside this list is ever produced.
+/// The capabilities programs may use: WGSL's baseline and what a D3D program can need beyond it (clip distances,
+/// per-sample shading, the primitive index, cube array textures, half-float packing for `f16tof32`/`f32tof16`, forced
+/// early depth tests). A consumer that cannot provide one refuses the program that needs it; nothing outside this list
+/// is ever produced.
 pub const CAPABILITIES: naga::valid::Capabilities = naga::valid::Capabilities::CLIP_DISTANCES
     .union(naga::valid::Capabilities::MULTISAMPLED_SHADING)
     .union(naga::valid::Capabilities::PRIMITIVE_INDEX)
-    .union(naga::valid::Capabilities::CUBE_ARRAY_TEXTURES);
+    .union(naga::valid::Capabilities::CUBE_ARRAY_TEXTURES)
+    .union(naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32)
+    .union(naga::valid::Capabilities::EARLY_DEPTH_TEST);
 
 /// Check `program`: naga's validation of its module, then the program rules. Every problem found is returned.
 pub fn validate(program: &Program) -> Result<naga::valid::ModuleInfo, Vec<Problem>> {

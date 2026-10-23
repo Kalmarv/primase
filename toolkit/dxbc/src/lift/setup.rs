@@ -499,6 +499,18 @@ impl Setup {
                 },
             });
         }
+        if stage == Stage::Vertex
+            && !setup
+                .interface
+                .outputs
+                .iter()
+                .any(|v| v.system == Some(SystemValue::ClipPosition))
+        {
+            return Err(refuse(
+                "a vertex program that writes no SV_Position (a stream-output or geometry-feeding stage)"
+                    .into(),
+            ));
+        }
         setup.io = entry_io(&setup.interface).map_err(refuse)?;
         Ok(setup)
     }

@@ -58,6 +58,22 @@ pub fn lift(bytes: &[u8]) -> Result<Program> {
     if words.len() > 1_048_576 {
         return Err(error(1, "program exceeds word budget"));
     }
+    // the stage first: a compute or tessellation program is refused as such, not for the registers only it has
+    if let Some(&version) = words.first() {
+        let kind = match version >> 16 {
+            2 => "gs",
+            3 => "hs",
+            4 => "ds",
+            5 => "cs",
+            _ => "",
+        };
+        if !kind.is_empty() {
+            return Err(error(
+                0,
+                format!("{kind} programs are outside the lifted stages (ps, vs)"),
+            ));
+        }
+    }
     let decoded = decode(&words)?;
     let stage = match decoded.kind {
         crate::decode::ProgramType::Pixel => Stage::Pixel,

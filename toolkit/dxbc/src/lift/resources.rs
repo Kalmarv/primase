@@ -294,13 +294,13 @@ impl Lift<'_> {
         let offset = match ins.sample_offset() {
             Some(o) if o != [0, 0, 0] => {
                 let parts: Vec<_> = (0..n as usize)
-                    .map(|c| self.b.global_expr(E::Literal(naga::Literal::I32(o[c]))))
+                    .map(|c| self.b.app(E::Literal(naga::Literal::I32(o[c]))))
                     .collect();
                 Some(if n == 1 {
                     parts[0]
                 } else {
                     let ty = self.b.ty_of(Kind::I, n);
-                    self.b.global_expr(E::Compose {
+                    self.b.app(E::Compose {
                         ty,
                         components: parts,
                     })
