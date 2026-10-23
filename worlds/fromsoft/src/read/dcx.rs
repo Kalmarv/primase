@@ -1,6 +1,13 @@
 //! DCX DFLT and KRAK envelopes. Only documented header permutations are accepted.
 use crate::{Result, bytes::View, invalid};
 use primase_compress::{Decompressor, Zlib, oodle::Oodle};
+/// The compression a DCX envelope names at offset 40 (`KRAK`, `DFLT`), or `None` for bytes that are not one.
+pub fn compression(data: &[u8]) -> Option<[u8; 4]> {
+    if !data.starts_with(b"DCX\0") {
+        return None;
+    }
+    data.get(40..44)?.try_into().ok()
+}
 /// Explicit native decoder and caller-controlled allocation ceiling in bytes.
 #[derive(Debug, Clone, Copy)]
 pub struct Decoder<'a> {
@@ -83,5 +90,17 @@ impl Decoder<'_> {
         } else {
             Ok(data.to_vec())
         }
+    }
+}
+#[cfg(test)]
+mod compression_tests {
+    #[test]
+    fn the_envelope_names_its_compression() {
+        let mut krak = b"DCX\0".to_vec();
+        krak.resize(40, 0);
+        krak.extend_from_slice(b"KRAK");
+        assert_eq!(super::compression(&krak), Some(*b"KRAK"));
+        assert_eq!(super::compression(&krak[..42]), None);
+        assert_eq!(super::compression(b"BND4"), None);
     }
 }
