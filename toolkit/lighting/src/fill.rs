@@ -25,7 +25,7 @@
 //! ([`primase_core::convert::PartScope`]) that is not the whole, the pass refuses (see the crate's README).
 
 use primase_core::convert::PartScope;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{AmbientLight, Environment, Light, LightKind, Name, Transform, World};
 
 use crate::surfaces::SurfaceGrid;
@@ -41,13 +41,9 @@ pub enum FillCells {
     Inside,
 }
 
-impl FillCells {
-    fn text(self) -> &'static str {
-        match self {
-            FillCells::Meeting => "meeting",
-            FillCells::Inside => "inside",
-        }
-    }
+impl Choice for FillCells {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("meeting", FillCells::Meeting), ("inside", FillCells::Inside)];
 }
 
 /// Where [`FillAmbientLights`] puts its lights and how far they reach: see the module documentation.
@@ -124,15 +120,10 @@ impl FillGrid {
         Ok(grid)
     }
 
-    /// From pipeline options: `anchor=X;Y;Z`, `spacing=S`, `bounds=X0;Y0;Z0;X1;Y1;Z1`, `cells=meeting|inside`,
-    /// `clearance=C` and `reach=R`, each required.
-    pub fn from_options(o: &Options) -> Result<FillGrid, String> {
-        const KEYS: [&str; 6] = ["anchor", "spacing", "bounds", "cells", "clearance", "reach"];
-        if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
+    /// From the options [`FILL_AMBIENT_LIGHTS`] declares, each required.
+    fn from_given(g: &Given) -> Result<FillGrid, String> {
         let numbers = |k: &str, n: usize| -> Result<Vec<f64>, String> {
-            let v = o.get(k).ok_or_else(|| format!("{k} is required ({n} numbers)"))?;
+            let v = g.required(k);
             let xs: Vec<f64> = v
                 .split(';')
                 .map(|x| {
@@ -147,12 +138,7 @@ impl FillGrid {
                 Err(format!("{k}={v}: {n} numbers expected"))
             }
         };
-        let cells = match o.get("cells").map(String::as_str) {
-            Some("meeting") => FillCells::Meeting,
-            Some("inside") => FillCells::Inside,
-            Some(v) => return Err(format!("cells={v}: meeting or inside expected")),
-            None => return Err("cells=meeting|inside is required".into()),
-        };
+        let cells = g.choice::<FillCells>("cells");
         let a = numbers("anchor", 3)?;
         let b = numbers("bounds", 6)?;
         FillGrid::new(
@@ -240,6 +226,36 @@ impl FillAmbientLights {
         FillAmbientLights { grid }
     }
 }
+
+/// `fill-ambient-lights`' declaration ([`primase_core::pass::PassRegistry::add`]): the grid is the program's choice,
+/// every option required.
+pub const FILL_AMBIENT_LIGHTS: PassSpec = PassSpec {
+    name: "fill-ambient-lights",
+    options: &[
+        OptionSpec::required(
+            "anchor",
+            "0;0;0",
+            "X;Y;Z, metres in the world frame: a corner of the lattice's cells",
+        ),
+        OptionSpec::required("spacing", "15", "metres between lights, above 0"),
+        OptionSpec::required(
+            "bounds",
+            "0;0;0;15;15;15",
+            "X0;Y0;Z0;X1;Y1;Z1, metres in the world frame: the box the lights cover, min not above max",
+        ),
+        OptionSpec::choice::<FillCells>(
+            "cells",
+            "which cells get a light: every one that meets the bounds, or only those whose centre is inside them",
+        ),
+        OptionSpec::required(
+            "clearance",
+            "3.75",
+            "metres, not below 0: a light nearer a placed surface is left out (0 leaves none out)",
+        ),
+        OptionSpec::required("reach", "22.5", "metres, above 0: each light's range"),
+    ],
+    make: |g| Ok(Box::new(FillAmbientLights::new(FillGrid::from_given(g)?))),
+};
 
 impl Pass for FillAmbientLights {
     fn name(&self) -> &'static str {

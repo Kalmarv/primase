@@ -40,7 +40,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, Wrap};
 use primase_core::{
     ColorSpace, Component, Entity, Instance, Light, LightKind, Mesh, Name, Semantic, Stream, Texture,
@@ -68,24 +68,6 @@ pub struct EmissivePolicy {
     shadows: Option<bool>,
     animated: BTreeSet<String>,
 }
-
-/// The option names, in the order the pass prints them.
-const KEYS: [&str; 14] = [
-    "weld",
-    "big",
-    "string",
-    "per_string",
-    "strip",
-    "nits_per_strength",
-    "area_factor",
-    "min_luminance",
-    "e_min",
-    "range_min",
-    "range_max",
-    "max_total",
-    "shadows",
-    "animated",
-];
 
 impl EmissivePolicy {
     /// A policy from its values, each finite where a number: `weld`, `big`, `strip`, `nits_per_strength`, `area_factor`
@@ -160,29 +142,18 @@ impl EmissivePolicy {
         })
     }
 
-    /// From pipeline options (every key of the module documentation required, unknown keys refused): numbers as text,
-    /// `shadows=on|off`, `animated=<prefix>;<prefix>...` or `none`.
-    pub fn from_options(o: &Options) -> Result<EmissivePolicy, String> {
-        if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let text = |k: &str| o.get(k).ok_or_else(|| format!("{k} is required"));
+    /// From the options [`EMISSIVE_LIGHTS`] declares: numbers as text, `animated=<prefix>;<prefix>...` or `none`.
+    fn from_given(g: &Given) -> Result<EmissivePolicy, String> {
         let number = |k: &str| -> Result<f64, String> {
-            text(k)?
-                .parse::<f64>()
-                .map_err(|_| format!("{k}={} is not a number", o[k]))
+            let v = g.required(k);
+            v.parse::<f64>().map_err(|_| format!("{k}={v} is not a number"))
         };
         let count = |k: &str| -> Result<usize, String> {
-            text(k)?
-                .parse::<usize>()
-                .map_err(|_| format!("{k}={} is not a count", o[k]))
+            let v = g.required(k);
+            v.parse::<usize>().map_err(|_| format!("{k}={v} is not a count"))
         };
-        let shadows = match text("shadows")?.as_str() {
-            "on" => Some(true),
-            "off" => Some(false),
-            v => return Err(format!("shadows={v}: on or off")),
-        };
-        let animated = match text("animated")?.as_str() {
+        let shadows = Some(g.choice::<Shadows>("shadows") == Shadows::On);
+        let animated = match g.required("animated") {
             "none" => BTreeSet::new(),
             v => v.split(';').map(str::to_owned).collect(),
         };
@@ -222,10 +193,12 @@ impl EmissivePolicy {
         put("max_total", self.max_total.to_string());
         put(
             "shadows",
-            match self.shadows {
-                Some(true) => "on",
-                _ => "off",
+            if self.shadows == Some(true) {
+                Shadows::On
+            } else {
+                Shadows::Off
             }
+            .text()
             .to_owned(),
         );
         put(
@@ -244,10 +217,83 @@ impl EmissivePolicy {
 #[derive(Clone, Debug, PartialEq)]
 pub struct EmissiveLights(pub EmissivePolicy);
 
-/// [`EmissivePolicy::from_options`] as a pass factory.
-pub fn emissive_lights(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(EmissiveLights(EmissivePolicy::from_options(o)?)))
+/// Whether every light made casts shadows (option `shadows`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shadows {
+    Off,
+    On,
 }
+
+impl Choice for Shadows {
+    const VALUES: &'static [(&'static str, Self)] = &[("off", Shadows::Off), ("on", Shadows::On)];
+}
+
+/// `emissive-lights`' declaration ([`primase_core::pass::PassRegistry::add`]): what the emission becomes, how a string
+/// is thinned and what is too many are the program's, every option required (see the module documentation).
+pub const EMISSIVE_LIGHTS: PassSpec = PassSpec {
+    name: "emissive-lights",
+    options: &[
+        OptionSpec::required(
+            "weld",
+            "0.001",
+            "metres, above 0: vertices this near join triangles into one piece",
+        ),
+        OptionSpec::required(
+            "big",
+            "2.5",
+            "metres, above 0: a piece no longer is a bulb or fixture, a longer one a strip",
+        ),
+        OptionSpec::required(
+            "string",
+            "8",
+            "at least 2: a prototype with this many small pieces or more is a string",
+        ),
+        OptionSpec::required(
+            "per_string",
+            "6",
+            "at least 1 and below string: the lights a string becomes",
+        ),
+        OptionSpec::required(
+            "strip",
+            "8",
+            "metres, above 0: a strip gets one light per this length",
+        ),
+        OptionSpec::required(
+            "nits_per_strength",
+            "558.5",
+            "cd/m2 per unit of emissive strength, above 0: how bright the program states a unit is",
+        ),
+        OptionSpec::required(
+            "area_factor",
+            "1",
+            "above 0: the part of a piece's area that faces a viewer (1: a face seen whole)",
+        ),
+        OptionSpec::required(
+            "min_luminance",
+            "0.05",
+            "not below 0: a piece whose colour's luminance is under it is left out, counted",
+        ),
+        OptionSpec::required(
+            "e_min",
+            "2",
+            "lux, above 0: a light's range is where a surface gets this much",
+        ),
+        OptionSpec::required("range_min", "3", "metres, above 0: the least range"),
+        OptionSpec::required("range_max", "30", "metres, not below range_min: the most range"),
+        OptionSpec::required(
+            "max_total",
+            "3500",
+            "the most lights: more is an error naming the count",
+        ),
+        OptionSpec::choice::<Shadows>("shadows", "whether every light made casts shadows"),
+        OptionSpec::required(
+            "animated",
+            "none",
+            "name prefixes of materials whose texture the source scrolls, `;` between, or none",
+        ),
+    ],
+    make: |g| Ok(Box::new(EmissiveLights(EmissivePolicy::from_given(g)?))),
+};
 
 /// One emissive piece of a prototype's mesh, in the mesh's own space.
 #[derive(Clone, Debug)]

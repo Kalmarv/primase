@@ -14,7 +14,7 @@ use primase_core::{
     ColorSpace, Entity, Instance, Light, LightKind, Mesh, Name, Primitive, Semantic, Stream, TexFormat,
     TexRole, Texture, Topology, Transform, World,
 };
-use primase_lighting::{EmissiveLights, EmissivePolicy};
+use primase_lighting::{EMISSIVE_LIGHTS, EmissiveLights, EmissivePolicy};
 
 /// The options every case starts from (weld 1 mm, a bulb up to 2.5 m, a string from 4 pieces kept as 2 lights, a strip
 /// light per 8 m, 100 nits per strength, area counted whole, luminance floor 0.05, 2 lux at the range, range 3 to 30 m,
@@ -547,21 +547,17 @@ fn an_entity_that_draws_its_own_mesh_is_placed() {
 #[test]
 fn options_are_required_and_round_trip() {
     let full: Options = policy_options();
-    let p = EmissivePolicy::from_options(&full).unwrap();
-    assert_eq!(EmissiveLights(p).options(), full);
+    let make = |o: &Options| EMISSIVE_LIGHTS.instance(o);
+    assert_eq!(make(&full).unwrap().options(), full);
     for k in full.keys() {
         let mut o = full.clone();
         o.remove(k);
-        let err = EmissivePolicy::from_options(&o).unwrap_err();
-        assert!(err.contains(k.as_str()), "{k}: {err}");
+        let err = make(&o).err().unwrap();
+        assert!(err.starts_with(&format!("{k} is required: ")), "{k}: {err}");
     }
     let mut o = full.clone();
     o.insert("colour".into(), "red".into());
-    assert!(
-        EmissivePolicy::from_options(&o)
-            .unwrap_err()
-            .contains("unknown option colour")
-    );
+    assert!(make(&o).err().unwrap().contains("unknown option colour"));
     for (k, v) in [
         ("per_string", "8"),
         ("string", "1"),
@@ -571,14 +567,11 @@ fn options_are_required_and_round_trip() {
     ] {
         let mut o = full.clone();
         o.insert(k.into(), v.into());
-        assert!(EmissivePolicy::from_options(&o).is_err(), "{k}={v}");
+        assert!(make(&o).is_err(), "{k}={v}");
     }
     let mut o = full;
     o.insert("animated".into(), "A_;B_".into());
-    assert_eq!(
-        EmissiveLights(EmissivePolicy::from_options(&o).unwrap()).options()["animated"],
-        "A_;B_"
-    );
+    assert_eq!(make(&o).unwrap().options()["animated"], "A_;B_");
 }
 
 fn policy_options() -> Options {
