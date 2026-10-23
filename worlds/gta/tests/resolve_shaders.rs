@@ -15,10 +15,9 @@ use primase_gta::passes::resolve_shaders::ResolveGtaShaders;
 use primase_gta::read::source::GtaSource;
 use primase_testdata::{Game, debug, install, keys};
 
-fn run(world: &World, vertex: &str) -> (World, PassLog) {
+fn run(world: &World, technique: &str) -> (World, PassLog) {
     let options = Options::from([
-        ("pixel".to_owned(), "PS_DeferredTextured".to_owned()),
-        ("vertex".to_owned(), vertex.to_owned()),
+        ("technique".to_owned(), technique.to_owned()),
         ("unset-textures".to_owned(), "white".to_owned()),
     ]);
     let mut w = world.clone();
@@ -51,13 +50,20 @@ fn a_regions_materials_are_bound_or_left_with_a_reason() {
         "{materials} materials, {} effects used; {} tables read of {} programs; {} effect parameter records",
         join.effects_used, table.tables, table.shaders, table.parameters
     );
-    for vertex in ["VS_TransformD", "VS_TransformSkinD", "VS_TransformCube"] {
-        let (w, log) = run(&world, vertex);
+    for technique in [
+        "deferred_draw",
+        "deferred_drawskinned",
+        "deferredalphaclip_draw",
+        "cube_draw",
+        "lightweight0_draw",
+        "wdcascade_draw",
+    ] {
+        let (w, log) = run(&world, technique);
         let bound = w.iter::<ShaderBinding>().count();
         for (e, b) in w.iter::<ShaderBinding>() {
             b.verify(e, &w).unwrap_or_else(|why| panic!("{why}"));
         }
-        println!("vertex={vertex}: {bound} of {materials} bound");
+        println!("technique={technique}: {bound} of {materials} bound");
         // the roles of the pixel stages' outputs, by (target, lanes)
         let mut roles: BTreeMap<String, usize> = BTreeMap::new();
         for (_, b) in w.iter::<ShaderBinding>() {
@@ -73,7 +79,9 @@ fn a_regions_materials_are_bound_or_left_with_a_reason() {
             }
         }
         println!("  output roles of the bound pixel stages: {roles:#?}");
-        if vertex != "VS_TransformCube" {
+        assert!(bound > 0, "{technique}");
+        // the G-buffer techniques have the roles of the G-buffer's lanes
+        if technique.starts_with("deferred") {
             assert!(
                 [
                     "Albedo",
@@ -88,21 +96,21 @@ fn a_regions_materials_are_bound_or_left_with_a_reason() {
                 "{roles:?}"
             );
         }
-        // naming the vertex family leaves no effect with two programs that fit
-        assert!(
-            !log.counts
-                .keys()
-                .any(|what| what.contains("permutations that fit")),
-            "{vertex}: {:?}",
-            log.counts
-                .keys()
-                .filter(|what| what.contains("permutations that fit"))
-                .collect::<Vec<_>>()
-        );
-        if vertex == "VS_TransformCube" {
-            // the cube-map pass shares the pixel programs of the effects that list it
-            assert!(bound > 0);
-            continue;
+        // the refusals are by name: no technique, several passes, tessellation, a missing table
+        for what in log.counts.keys().filter(|w| w.contains("left unbound")) {
+            assert!(
+                [
+                    "has no technique",
+                    "passes",
+                    "is tessellated",
+                    "no technique table",
+                    "no vertex program",
+                    "has no interface"
+                ]
+                .iter()
+                .any(|r| what.contains(r)),
+                "{what}"
+            );
         }
         for (what, n) in &log.counts {
             println!("  {n:>7}  {what}");

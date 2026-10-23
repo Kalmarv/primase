@@ -265,6 +265,55 @@ impl Component for GtaEffect {
     }
 }
 
+/// One pass of a technique: the programs it runs (the vertex and pixel programs, and the hull and domain programs of a
+/// tessellated pass), each as the effect lists it, and the pass record as stored (its first four bytes are the programs'
+/// positions; the other 20 are not read).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GtaPass {
+    pub vertex: Option<GtaEffectProgram>,
+    pub pixel: Option<GtaEffectProgram>,
+    pub hull: Option<GtaEffectProgram>,
+    pub domain: Option<GtaEffectProgram>,
+    pub record: Vec<u8>,
+}
+
+/// A technique of an effect: the passes the game draws with under a name (`deferred_draw`, `lightweight0_draw`,
+/// `wdcascade_drawskinned`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GtaTechnique {
+    pub name: String,
+    pub passes: Vec<GtaPass>,
+}
+
+/// An effect's techniques ([`crate::rage::sgd2_effect`]) on its `gta.effect` entity, and the fixed-function state
+/// tables stored with them (which of the tables a pass draws with is not read). An effect of the post-processing and
+/// lighting kinds has none.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GtaEffectTechniques {
+    pub techniques: Vec<GtaTechnique>,
+    pub depth_stencil: Vec<crate::rage::sgd2_effect::DepthStencil>,
+    pub blend: Vec<crate::rage::sgd2_effect::Blend>,
+    pub samplers: Vec<crate::rage::sgd2_effect::SamplerDesc>,
+}
+
+impl Component for GtaEffectTechniques {
+    const NAME: &'static str = "gta.effect_techniques";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        for pass in self.techniques.iter().flat_map(|t| &t.passes) {
+            out.extend(
+                [&pass.vertex, &pass.pixel, &pass.hull, &pass.domain]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p.shader),
+            );
+        }
+    }
+}
+
 /// A shader program's binding table, as the shader database stores it ([`crate::rage::sgd2_table`]), on the program's
 /// `core.shader` entity: its constant buffers, textures and samplers with their registers and spaces, and each constant
 /// with its byte offset in its buffer, named by hashes of the names in `names`. Not serialised.

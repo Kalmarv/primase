@@ -1,18 +1,17 @@
-//! `resolve-gta-shaders{pixel=NAME,vertex=NAME,unset-textures=white|leave}`: a drawable's material bound to its
-//! effect's programs, as `core.shader_binding` on the material's entity. The programs are the `core.shader` entities
+//! `resolve-gta-shaders{technique=NAME,unset-textures=white|leave}`: a drawable's material bound to the programs of its
+//! effect's technique, as `core.shader_binding` on the material's entity. The programs are the `core.shader` entities
 //! of the shader database ([`crate::read::shaders`]); what they read comes from the database's own tables
 //! ([`crate::rage::sgd2_table`]) and the material's stored parameters.
 //!
-//! - **Programs.** An effect lists every permutation of its programs; the draw picks one by pass and vertex format.
-//!   `pixel` names the pixel program family by its name without the permutation hash (`PS_DeferredTextured`: the
-//!   G-buffer pass; `PS_DeferredTextured_AlphaClipC`: its alpha-clipped variant), and `vertex` the vertex program
-//!   family drawn with it (`VS_TransformD`: the G-buffer pass of an unskinned mesh; `VS_TransformSkinD`: of a skinned
-//!   one; `VS_TransformCube` is the same programs' cube-map reflection pass, which writes a different interpolant
-//!   and shares the pixel program). Which pass and which vertex format a draw is in is the draw's, not the
-//!   material's, so both are options. Each of the effect's pixel programs of the family has a hash suffix shared with
-//!   its vertex program (`PS_DeferredTextured_0174add1_Wrapped` and `VS_TransformD_0174add1_Wrapped`); the
-//!   tessellated vertex programs (`..._PNTri_...`, which feed hull and domain programs) are other families. An effect
-//!   with no such pair, or with several, leaves its materials unbound, by name.
+//! - **Programs.** An effect names its techniques ([`GtaEffectTechniques`], read from the effect's record by
+//!   [`crate::rage::sgd2_effect`]): `deferred_draw` is its G-buffer pass for an unskinned mesh, `deferred_drawskinned`
+//!   for a skinned one, `deferredalphaclip_draw` the alpha-clipped variant, `lightweight0_draw` a forward pass,
+//!   `wdcascade_draw` the cascaded shadow pass, `cube_draw` the cube-map pass, and each lists the programs it runs
+//!   (the vertex and the pixel program, or the vertex program alone of a depth-only pass). Which technique a draw uses
+//!   (its pass, its vertex format, its alpha mode) is the draw's choice, not the material's, so `technique` is a
+//!   required option. An effect without that technique, with several passes in it, with a tessellated pass (the hull
+//!   and domain stages are not bound) or with no technique table (the post-processing and lighting effects) leaves its
+//!   materials unbound, by name.
 //! - **Constants.** Each constant buffer a program declares is the table record at its register and space; each
 //!   constant of the record is bound at its byte offset (a constant past the end of the buffer the program declares is
 //!   one it does not read, and is left out, counted). A constant the effect renames (its parameter records:
@@ -43,8 +42,8 @@ use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
 
 use super::gbuffer::{self, GBufferWrites};
 use crate::components::{
-    GtaEffect, GtaEffectParameters, GtaEffectProgram, GtaMaterialEffect, GtaParam, GtaShader, GtaShaderTable,
-    GtaStage,
+    GtaEffect, GtaEffectParameters, GtaEffectTechniques, GtaMaterialEffect, GtaParam, GtaPass, GtaShader,
+    GtaShaderTable,
 };
 use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
 
@@ -55,7 +54,8 @@ const GBUFFER_FAMILY: &str = "PS_DeferredTextured";
 /// The programs an effect's materials are bound to.
 #[derive(Clone)]
 struct Chosen {
-    pixel: Entity,
+    /// None for a depth-only pass.
+    pixel: Option<Entity>,
     vertex: Entity,
     /// The pixel program's G-buffer stores, where its family has a layout.
     writes: Option<Result<GBufferWrites, String>>,
@@ -71,36 +71,28 @@ pub enum UnsetTexture {
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolveGtaShaders {
-    pixel: String,
-    vertex: String,
+    technique: String,
     unset: UnsetTexture,
 }
 
 impl ResolveGtaShaders {
-    pub fn new(pixel: &str, vertex: &str, unset: UnsetTexture) -> Self {
+    pub fn new(technique: &str, unset: UnsetTexture) -> Self {
         ResolveGtaShaders {
-            pixel: pixel.to_owned(),
-            vertex: vertex.to_owned(),
+            technique: technique.to_owned(),
             unset,
         }
     }
 
-    /// From its options (all three required), through [`ResolveGtaShaders::new`].
+    /// From its options (both required), through [`ResolveGtaShaders::new`].
     pub fn from_options(o: &Options) -> Result<Self, String> {
-        let (mut pixel, mut vertex, mut unset) = (None, None, None);
+        let (mut technique, mut unset) = (None, None);
         for (k, v) in o {
             match k.as_str() {
-                "pixel" => {
+                "technique" => {
                     if v.is_empty() || !v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-                        return Err(format!("pixel={v:?} is not a program name without its hash"));
+                        return Err(format!("technique={v:?} is not a technique name"));
                     }
-                    pixel = Some(v.clone());
-                }
-                "vertex" => {
-                    if v.is_empty() || !v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-                        return Err(format!("vertex={v:?} is not a program name without its hash"));
-                    }
-                    vertex = Some(v.clone());
+                    technique = Some(v.clone());
                 }
                 "unset-textures" => {
                     unset = Some(match v.as_str() {
@@ -113,10 +105,8 @@ impl ResolveGtaShaders {
             }
         }
         Ok(Self {
-            pixel: pixel
-                .ok_or("pixel is required: the pixel program family drawn with (PS_DeferredTextured...)")?,
-            vertex: vertex.ok_or(
-                "vertex is required: the vertex program family drawn with it (VS_TransformD, VS_TransformSkinD...)",
+            technique: technique.ok_or(
+                "technique is required: the technique drawn with (deferred_draw, deferred_drawskinned, lightweight0_draw...)",
             )?,
             unset: unset
                 .ok_or("unset-textures is required: what a texture parameter with no texture reads")?,
@@ -131,46 +121,26 @@ pub fn split_program_name(name: &str) -> Option<(&str, &str)> {
     (hash.len() == 8 && hash.bytes().all(|b| b.is_ascii_hexdigit())).then_some((stem, hash))
 }
 
-/// The pixel program of `pixel` family and its vertex program, among an effect's programs: the one pair whose names
-/// share a permutation hash, the vertex program of `vertex` family.
-pub fn select_programs<'a>(
-    programs: &'a [GtaEffectProgram],
-    pixel: &str,
-    vertex: &str,
-) -> Result<(&'a GtaEffectProgram, &'a GtaEffectProgram), String> {
-    let mut pairs = Vec::new();
-    for p in programs
+/// The pass of the technique `name` of an effect: its one pass, if it has one, with a vertex program and no
+/// tessellation.
+pub fn select_pass<'a>(techniques: &'a GtaEffectTechniques, name: &str) -> Result<&'a GtaPass, String> {
+    let technique = techniques
+        .techniques
         .iter()
-        .filter(|p| p.stage == GtaStage::Pixel && p.shader.is_some())
-    {
-        let Some((stem, hash)) = split_program_name(&p.name) else {
-            continue;
-        };
-        if stem != pixel {
-            continue;
-        }
-        for v in programs
-            .iter()
-            .filter(|v| v.stage == GtaStage::Vertex && v.shader.is_some())
-        {
-            let Some((vstem, vhash)) = split_program_name(&v.name) else {
-                continue;
-            };
-            if vhash == hash && vstem == vertex {
-                pairs.push((p, v));
-            }
-        }
+        .find(|t| t.name == name)
+        .ok_or_else(|| format!("the effect has no technique {name}"))?;
+    let [pass] = technique.passes.as_slice() else {
+        return Err(format!("technique {name} has {} passes", technique.passes.len()));
+    };
+    if pass.hull.is_some() || pass.domain.is_some() {
+        return Err(format!(
+            "technique {name} is tessellated (the hull and domain stages are not bound)"
+        ));
     }
-    match pairs.as_slice() {
-        [] => Err(format!(
-            "the effect has no {pixel} program with a {vertex} vertex program of its hash"
-        )),
-        [one] => Ok(*one),
-        many => Err(format!(
-            "the effect has {} {pixel} permutations that fit",
-            many.len()
-        )),
+    if pass.vertex.is_none() {
+        return Err(format!("technique {name} has no vertex program"));
     }
+    Ok(pass)
 }
 
 /// The role of an engine constant, by the program's name for it: the object and view matrices the vocabulary names.
@@ -614,8 +584,7 @@ impl Pass for ResolveGtaShaders {
     }
     fn options(&self) -> Options {
         Options::from([
-            ("pixel".to_owned(), self.pixel.clone()),
-            ("vertex".to_owned(), self.vertex.clone()),
+            ("technique".to_owned(), self.technique.clone()),
             (
                 "unset-textures".to_owned(),
                 match self.unset {
@@ -631,6 +600,7 @@ impl Pass for ResolveGtaShaders {
             GtaShader::NAME,
             GtaMaterialEffect::NAME,
             GtaEffectParameters::NAME,
+            GtaEffectTechniques::NAME,
         ]
     }
     fn provides(&self) -> &[&'static str] {
@@ -655,19 +625,37 @@ impl Pass for ResolveGtaShaders {
                     let effect = world
                         .get::<GtaEffect>(effect_entity)
                         .ok_or_else(|| "a material's effect entity without its effect".to_owned())?;
-                    let (p, v) = select_programs(&effect.programs, &self.pixel, &self.vertex)
-                        .map_err(|why| format!("{} ({})", why, effect.name))?;
-                    let pixel = p.shader.ok_or("a pixel program without an entity")?;
+                    let techniques = world
+                        .get::<GtaEffectTechniques>(effect_entity)
+                        .ok_or_else(|| format!("the effect has no technique table ({})", effect.name))?;
+                    let pass = select_pass(techniques, &self.technique)
+                        .map_err(|why| format!("{why} ({})", effect.name))?;
+                    let vertex =
+                        pass.vertex.as_ref().and_then(|p| p.shader).ok_or_else(|| {
+                            format!("the vertex program has no interface ({})", effect.name)
+                        })?;
+                    let pixel = match &pass.pixel {
+                        None => None,
+                        Some(p) => Some((
+                            p.shader.ok_or_else(|| {
+                                format!("the pixel program {} has no interface ({})", p.name, effect.name)
+                            })?,
+                            split_program_name(&p.name)
+                                .is_some_and(|(stem, _)| stem.starts_with(GBUFFER_FAMILY)),
+                        )),
+                    };
                     // the G-buffer's roles are read from the program's own stores
-                    let writes = self.pixel.starts_with(GBUFFER_FAMILY).then(|| {
-                        world
-                            .get::<Shader>(pixel)
-                            .ok_or_else(|| "a pixel program without its shader".to_owned())
-                            .and_then(|s| gbuffer::writes(&s.bytecode))
+                    let writes = pixel.and_then(|(entity, gbuffer_family)| {
+                        gbuffer_family.then(|| {
+                            world
+                                .get::<Shader>(entity)
+                                .ok_or_else(|| "a pixel program without its shader".to_owned())
+                                .and_then(|s| gbuffer::writes(&s.bytecode))
+                        })
                     });
                     Ok(Chosen {
-                        pixel,
-                        vertex: v.shader.ok_or("a vertex program without an entity")?,
+                        pixel: pixel.map(|(entity, _)| entity),
+                        vertex,
                         writes,
                     })
                 })
@@ -694,7 +682,8 @@ impl Pass for ResolveGtaShaders {
             };
             let mut stages = Vec::new();
             let mut failed = None;
-            for (stage, e) in [(Stage::Vertex, vertex), (Stage::Pixel, pixel)] {
+            for (stage, e) in [(Stage::Vertex, Some(vertex)), (Stage::Pixel, pixel)] {
+                let Some(e) = e else { continue };
                 match self.stage_binding(world, &inputs, stage, e, true, writes.as_ref(), &mut counts) {
                     Ok(s) => stages.push(s),
                     Err(why) => {
@@ -738,31 +727,85 @@ impl Pass for ResolveGtaShaders {
 )]
 mod tests {
     use super::*;
+    use crate::components::{GtaEffectProgram, GtaStage, GtaTechnique};
 
-    fn program(stage: GtaStage, name: &str) -> GtaEffectProgram {
-        GtaEffectProgram {
+    fn program(stage: GtaStage, name: &str) -> Option<GtaEffectProgram> {
+        Some(GtaEffectProgram {
             stage,
             name: name.to_owned(),
             shader: Some(World::new().spawn()),
+        })
+    }
+
+    fn pass(vertex: Option<GtaEffectProgram>, pixel: Option<GtaEffectProgram>, tessellated: bool) -> GtaPass {
+        GtaPass {
+            vertex,
+            pixel,
+            hull: tessellated
+                .then(|| program(GtaStage::Hull, "HS_x_0174add1_Wrapped"))
+                .flatten(),
+            domain: tessellated
+                .then(|| program(GtaStage::Domain, "DS_x_0174add1_Wrapped"))
+                .flatten(),
+            record: vec![0; 24],
         }
     }
 
-    /// An effect with a plain unskinned pair, a plain skinned pair, an alpha-clipped unskinned pair, a tessellated
-    /// and a cube-map vertex program of the plain hash, and a forward pass.
-    fn effect() -> Vec<GtaEffectProgram> {
+    fn technique(name: &str, passes: Vec<GtaPass>) -> GtaTechnique {
+        GtaTechnique {
+            name: name.to_owned(),
+            passes,
+        }
+    }
+
+    /// An effect with a G-buffer pass, its tessellated variant, a technique of two passes, a depth-only pass and a
+    /// forward pass.
+    fn techniques() -> GtaEffectTechniques {
         use GtaStage::{Pixel as P, Vertex as V};
-        vec![
-            program(V, "VS_Transform_7903a05e_Wrapped"),
-            program(P, "PS_Textured_Zero_7903a05e_Wrapped"),
-            program(V, "VS_TransformD_0174add1_Wrapped"),
-            program(V, "VS_northVertexInputBump_PNTri_0174add1_Wrapped"),
-            program(V, "VS_TransformCube_0174add1_Wrapped"),
-            program(P, "PS_DeferredTextured_0174add1_Wrapped"),
-            program(V, "VS_TransformSkinD_f146f347_Wrapped"),
-            program(P, "PS_DeferredTextured_f146f347_Wrapped"),
-            program(V, "VS_TransformD_672703e2_Wrapped"),
-            program(P, "PS_DeferredTextured_AlphaClip2_672703e2_Wrapped"),
-        ]
+        let gbuffer = || {
+            pass(
+                program(V, "VS_TransformD_0174add1_Wrapped"),
+                program(P, "PS_DeferredTextured_0174add1_Wrapped"),
+                false,
+            )
+        };
+        GtaEffectTechniques {
+            techniques: vec![
+                technique("deferred_draw", vec![gbuffer()]),
+                technique(
+                    "deferred_drawtessellated",
+                    vec![pass(
+                        program(V, "VS_northVertexInputBump_PNTri_0174add1_Wrapped"),
+                        program(P, "PS_DeferredTextured_0174add1_Wrapped"),
+                        true,
+                    )],
+                ),
+                technique("furry", vec![gbuffer(), gbuffer()]),
+                technique(
+                    "wdcascade_draw",
+                    vec![pass(
+                        program(V, "VS_CascadeShadows_draw_273b268a_Wrapped"),
+                        None,
+                        false,
+                    )],
+                ),
+                technique(
+                    "lightweight0_draw",
+                    vec![pass(
+                        program(V, "VS_Transform_7903a05e_Wrapped"),
+                        program(P, "PS_Textured_Zero_7903a05e_Wrapped"),
+                        false,
+                    )],
+                ),
+                technique(
+                    "broken",
+                    vec![pass(None, program(P, "PS_x_7903a05e_Wrapped"), false)],
+                ),
+            ],
+            depth_stencil: Vec::new(),
+            blend: Vec::new(),
+            samplers: Vec::new(),
+        }
     }
 
     #[test]
@@ -776,55 +819,49 @@ mod tests {
         assert_eq!(split_program_name("PS_X_0174add_Wrapped"), None);
     }
 
-    /// The pixel and vertex families pick the one pair that shares a hash; the tessellated and cube-map vertex programs
-    /// of the same hash are other families; a family the effect lacks, and two fits, are named.
+    /// A technique is found by its exact name and gives its one pass: the vertex program and the pixel program (none in
+    /// a depth-only pass); a technique the effect lacks, one of several passes, a tessellated one and one with no
+    /// vertex program are refused by name.
     #[test]
-    fn a_pair_is_chosen_by_family_and_hash() {
-        let programs = effect();
-        let names = |p: &str, v: &str| {
-            select_programs(&programs, p, v).map(|(p, v)| (p.name.clone(), v.name.clone()))
+    fn a_pass_is_chosen_by_the_techniques_name() {
+        let t = techniques();
+        let names = |name: &str| {
+            select_pass(&t, name).map(|p| {
+                (
+                    p.vertex.as_ref().map(|v| v.name.clone()),
+                    p.pixel.as_ref().map(|v| v.name.clone()),
+                )
+            })
         };
         assert_eq!(
-            names("PS_DeferredTextured", "VS_TransformD").unwrap(),
+            names("deferred_draw").unwrap(),
             (
-                "PS_DeferredTextured_0174add1_Wrapped".to_owned(),
-                "VS_TransformD_0174add1_Wrapped".to_owned()
-            )
-        );
-        // the cube-map pass shares the pixel program
-        assert_eq!(
-            names("PS_DeferredTextured", "VS_TransformCube").unwrap().1,
-            "VS_TransformCube_0174add1_Wrapped"
-        );
-        assert_eq!(
-            names("PS_DeferredTextured", "VS_TransformSkinD").unwrap(),
-            (
-                "PS_DeferredTextured_f146f347_Wrapped".to_owned(),
-                "VS_TransformSkinD_f146f347_Wrapped".to_owned()
+                Some("VS_TransformD_0174add1_Wrapped".to_owned()),
+                Some("PS_DeferredTextured_0174add1_Wrapped".to_owned())
             )
         );
         assert_eq!(
-            names("PS_DeferredTextured_AlphaClip2", "VS_TransformD").unwrap(),
-            (
-                "PS_DeferredTextured_AlphaClip2_672703e2_Wrapped".to_owned(),
-                "VS_TransformD_672703e2_Wrapped".to_owned()
-            )
+            names("wdcascade_draw").unwrap(),
+            (Some("VS_CascadeShadows_draw_273b268a_Wrapped".to_owned()), None)
+        );
+        assert_eq!(
+            names("lightweight0_draw").unwrap().1,
+            Some("PS_Textured_Zero_7903a05e_Wrapped".to_owned())
         );
         assert!(
-            names("PS_DeferredTextured_AlphaClip2", "VS_TransformSkinD")
+            names("deferred_drawskinned")
                 .unwrap_err()
-                .contains("VS_TransformSkinD vertex program")
+                .contains("no technique deferred_drawskinned")
         );
-        assert!(names("PS_DeferredVehicleTextured", "VS_TransformD").is_err());
-        // two permutations of the family that fit
-        let mut two = effect();
-        two.push(program(GtaStage::Vertex, "VS_TransformD_aaaaaaaa_Wrapped"));
-        two.push(program(GtaStage::Pixel, "PS_DeferredTextured_aaaaaaaa_Wrapped"));
+        assert!(names("furry").unwrap_err().contains("has 2 passes"));
         assert!(
-            select_programs(&two, "PS_DeferredTextured", "VS_TransformD")
+            names("deferred_drawtessellated")
                 .unwrap_err()
-                .contains("2 PS_DeferredTextured permutations")
+                .contains("tessellated")
         );
+        assert!(names("broken").unwrap_err().contains("no vertex program"));
+        // the name is exact
+        assert!(names("Deferred_draw").is_err());
     }
 
     #[test]
@@ -860,24 +897,32 @@ mod tests {
                 .collect::<Options>()
         };
         assert!(ResolveGtaShaders::from_options(&o(&[])).is_err());
+        assert!(ResolveGtaShaders::from_options(&o(&[("unset-textures", "white")])).is_err());
         assert!(
             ResolveGtaShaders::from_options(&o(&[
-                ("pixel", "PS Deferred"),
+                ("technique", "deferred draw"),
+                ("unset-textures", "white")
+            ]))
+            .is_err()
+        );
+        // the options of the previous version name programs, not a technique
+        assert!(
+            ResolveGtaShaders::from_options(&o(&[
+                ("pixel", "PS_DeferredTextured"),
                 ("vertex", "VS_TransformD"),
                 ("unset-textures", "white")
             ]))
             .is_err()
         );
         let p = ResolveGtaShaders::from_options(&o(&[
-            ("pixel", "PS_DeferredTextured"),
-            ("vertex", "VS_TransformSkinD"),
+            ("technique", "deferred_drawskinned"),
             ("unset-textures", "leave"),
         ]))
         .unwrap();
         assert_eq!(
             p,
-            ResolveGtaShaders::new("PS_DeferredTextured", "VS_TransformSkinD", UnsetTexture::Leave)
+            ResolveGtaShaders::new("deferred_drawskinned", UnsetTexture::Leave)
         );
-        assert_eq!(p.options()["vertex"], "VS_TransformSkinD");
+        assert_eq!(p.options()["technique"], "deferred_drawskinned");
     }
 }

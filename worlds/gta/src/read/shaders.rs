@@ -15,10 +15,12 @@ use primase_core::shader::{Shader, ShaderFormat};
 use primase_core::{Entity, Name, World};
 
 use crate::components::{
-    GtaEffect, GtaEffectParameters, GtaEffectProgram, GtaMaterialEffect, GtaShader, GtaShaderTable, GtaStage,
+    GtaEffect, GtaEffectParameters, GtaEffectProgram, GtaEffectTechniques, GtaMaterialEffect, GtaPass,
+    GtaShader, GtaShaderTable, GtaStage, GtaTechnique,
 };
 use crate::rage::fxc::ProgramStage;
 use crate::rage::sgd2::{self, Sgd2};
+use crate::rage::sgd2_effect;
 
 /// What [`add_shader_database`] made.
 #[derive(Debug, Default)]
@@ -33,6 +35,13 @@ pub struct ShaderTable {
     pub unread_tables: Vec<(String, String)>,
     /// Parameter records found in the effects' records (`gta.effect_parameters`).
     pub parameters: usize,
+    /// The effects whose techniques were read (`gta.effect_techniques`), and the passes in them.
+    pub techniques: usize,
+    pub passes: usize,
+    /// The effects with no technique table (the post-processing and lighting effects).
+    pub without_techniques: usize,
+    /// The effects whose technique table was found and does not fit the effect, by the reason.
+    pub unread_techniques: Vec<(String, String)>,
     /// The programs whose interface could not be read, by the reason: left without an entity.
     pub unread: Vec<(String, String)>,
 }
@@ -114,7 +123,10 @@ pub fn add_shader_database(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
     }
     for effect in &db.effects {
         let mut named = Vec::new();
+        // the programs of each of the effect's lists, in the list's order
+        let mut listed: Vec<Vec<GtaEffectProgram>> = Vec::new();
         for (list, group) in effect.programs.iter().zip(sgd2::EFFECT_LISTS) {
+            listed.push(Vec::new());
             let Some(stage) = sgd2::GROUP_STAGES.get(group).copied().flatten() else {
                 continue;
             };
@@ -122,7 +134,7 @@ pub fn add_shader_database(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
                 let Some(program) = db.groups.get(group).and_then(|g| g.get(index as usize)) else {
                     continue;
                 };
-                named.push(GtaEffectProgram {
+                let entry = GtaEffectProgram {
                     stage: stage_of(stage),
                     name: program.name.to_owned(),
                     shader: entities
@@ -130,7 +142,11 @@ pub fn add_shader_database(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
                         .and_then(|g| g.get(index as usize))
                         .copied()
                         .flatten(),
-                });
+                };
+                if let Some(l) = listed.last_mut() {
+                    l.push(entry.clone());
+                }
+                named.push(entry);
             }
         }
         // what its programs' tables read: each constant's name hash with its type bytes
@@ -154,9 +170,77 @@ pub fn add_shader_database(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
             },
         );
         w.insert(e, GtaEffectParameters(parameters));
+        match crate::rage::sgd2_effect::parse(effect.rest) {
+            Ok(Some(t)) => match techniques(&t, &listed) {
+                Ok(t) => {
+                    table.techniques += 1;
+                    table.passes += t.techniques.iter().map(|t| t.passes.len()).sum::<usize>();
+                    w.insert(e, t);
+                }
+                Err(reason) => table.unread_techniques.push((effect.name.to_owned(), reason)),
+            },
+            Ok(None) => table.without_techniques += 1,
+            Err(reason) => table
+                .unread_techniques
+                .push((effect.name.to_owned(), reason.to_string())),
+        }
         table.effects.push(e);
     }
     table
+}
+
+/// An effect's techniques with each pass's programs named: positions are 1-based in the effect's lists of a stage
+/// (vertex, pixel, geometry, domain, hull, compute); the hull and domain program of a tessellated pass is at the same
+/// position in both lists.
+fn techniques(
+    t: &sgd2_effect::EffectTechniques,
+    listed: &[Vec<GtaEffectProgram>],
+) -> Result<GtaEffectTechniques, String> {
+    let at = |list: usize, position: u8| -> Result<Option<GtaEffectProgram>, String> {
+        let Some(index) = usize::from(position).checked_sub(1) else {
+            return Ok(None);
+        };
+        listed
+            .get(list)
+            .and_then(|l| l.get(index))
+            .cloned()
+            .map(Some)
+            .ok_or_else(|| {
+                format!(
+                    "a pass names program {position} of a list of {}",
+                    listed.get(list).map_or(0, Vec::len)
+                )
+            })
+    };
+    let mut out = Vec::with_capacity(t.techniques.len());
+    for technique in &t.techniques {
+        let mut passes = Vec::with_capacity(technique.passes.len());
+        for p in &technique.passes {
+            if p.geometry != 0 {
+                return Err(format!(
+                    "{}: a pass with a geometry program ({})",
+                    technique.name, p.geometry
+                ));
+            }
+            passes.push(GtaPass {
+                vertex: at(0, p.vertex)?,
+                pixel: at(1, p.pixel)?,
+                domain: at(3, p.tessellation)?,
+                hull: at(4, p.tessellation)?,
+                record: p.raw.clone(),
+            });
+        }
+        out.push(GtaTechnique {
+            name: technique.name.clone(),
+            passes,
+        });
+    }
+    Ok(GtaEffectTechniques {
+        techniques: out,
+        depth_stencil: t.depth_stencil.clone(),
+        blend: t.blend.clone(),
+        samplers: t.samplers.clone(),
+    })
 }
 
 /// Links every material of `w` (an entity with [`GtaShader`]) to the effect among `effects` (the entities

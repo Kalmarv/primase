@@ -59,8 +59,8 @@ pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) 
 /// `gta-leave-out-interiors`,
 /// `lower-gta-lights{hour,x0,y0,x1,y1}`, `gta-select-collision{detail}`, `lower-gta-collision{x0,y0,x1,y1,foliage,river}`,
 /// `lower-gta-embedded-collision{foliage,river}` (their `foliage` and `river` required),
-/// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1}`, `lower-gta-water` and `resolve-gta-shaders{pixel,vertex,
-/// unset-textures}` (all three required).
+/// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1}`, `lower-gta-water` and `resolve-gta-shaders{technique,
+/// unset-textures}` (both required).
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     use primase_core::pass::{Options, Pass};
     fn none(o: &Options, pass: impl Pass + 'static) -> std::result::Result<Box<dyn Pass>, String> {
@@ -122,7 +122,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         Ok(Box::new(passes::water::SelectGtaWater::from_options(o)?))
     });
     reg.register("lower-gta-water", |o| none(o, passes::water::LowerGtaWater));
-    // which permutation of an effect a draw uses (its pass, its vertex format) is the draw's choice: no default
+    // which technique of an effect a draw uses (pass, vertex format, alpha mode) is the draw's choice: no default
     reg.register_requiring(
         "resolve-gta-shaders",
         |o| {
@@ -130,11 +130,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
                 passes::resolve_shaders::ResolveGtaShaders::from_options(o)?,
             ))
         },
-        &[
-            ("pixel", "PS_DeferredTextured"),
-            ("vertex", "VS_TransformD"),
-            ("unset-textures", "white"),
-        ],
+        &[("technique", "deferred_draw"), ("unset-textures", "white")],
     );
     reg.register("lower-gta-lights", |o| {
         Ok(Box::new(passes::lights::LowerGtaLights::from_options(o)?))
@@ -189,14 +185,10 @@ mod tests {
                 Some(region)
             } else if name == "resolve-gta-shaders" {
                 Some(
-                    [
-                        ("pixel", "PS_DeferredTextured"),
-                        ("vertex", "VS_TransformD"),
-                        ("unset-textures", "white"),
-                    ]
-                    .into_iter()
-                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                    .collect(),
+                    [("technique", "deferred_draw"), ("unset-textures", "white")]
+                        .into_iter()
+                        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                        .collect(),
                 )
             } else if name == "gta-select-stand-ins" {
                 Some(

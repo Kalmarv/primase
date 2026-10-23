@@ -1,6 +1,5 @@
 //! What `resolve-gta-shaders` still leaves Unknown on a region of the map (Vespucci Beach by default; the debug key
-//! `gta.region` `x0,y0,x1,y1`), for the G-buffer pass `PS_DeferredTextured` with the unskinned vertex programs
-//! `VS_TransformD`: the materials left unbound by reason, and over the bound materials' stages the output lanes, the
+//! `gta.region` `x0,y0,x1,y1`), for the technique `deferred_draw` (the G-buffer pass of an unskinned mesh): the materials left unbound by reason, and over the bound materials' stages the output lanes, the
 //! vertex inputs, the constants (by constant buffer and name) and the texture slots with no role or no texture, the
 //! render state and the samplers. The counts are printed and the totals asserted to add up; the numbers are what is
 //! left for full GTA shader support.
@@ -14,9 +13,8 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{
     ConstantRole, InputRole, OutputRole, RenderState, Shader, ShaderBinding, Stage, TextureSource,
 };
-use primase_gta::components::{GtaEffect, GtaMaterialEffect, GtaShader, GtaShaderTable, GtaStage};
+use primase_gta::components::{GtaEffectTechniques, GtaMaterialEffect, GtaShader, GtaShaderTable};
 use primase_gta::passes::resolve_shaders::ResolveGtaShaders;
-use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
 use primase_testdata::{Game, debug, install, keys};
 
@@ -38,8 +36,7 @@ fn what_is_left_unknown_on_a_region() {
     let materials = world.iter::<GtaShader>().count();
     source.add_shader_database(&mut world).unwrap();
     let options = Options::from([
-        ("pixel".to_owned(), "PS_DeferredTextured".to_owned()),
-        ("vertex".to_owned(), "VS_TransformD".to_owned()),
+        ("technique".to_owned(), "deferred_draw".to_owned()),
         ("unset-textures".to_owned(), "white".to_owned()),
     ]);
     let mut log = PassLog::default();
@@ -72,38 +69,33 @@ fn what_is_left_unknown_on_a_region() {
         println!("  {n:>6} materials in {effects} effects: {reason}");
     }
     assert_eq!(bound as u64 + unbound, materials as u64);
-    // what the unbound materials' effects do have: the pixel families of the G-buffer pass with a VS_TransformD vertex
-    // program of their hash
+    // what the unbound materials' effects do have: techniques of the G-buffer pass or only forward ones
     let mut elsewhere: BTreeMap<String, usize> = BTreeMap::new();
     for (e, link) in world.iter::<GtaMaterialEffect>() {
         if world.has::<ShaderBinding>(e) {
             continue;
         }
-        let effect = world.get::<GtaEffect>(link.effect).unwrap();
-        let vertex_hashes: Vec<&str> = effect
-            .programs
-            .iter()
-            .filter(|p| p.stage == GtaStage::Vertex)
-            .filter_map(|p| {
-                split_program_name(&p.name)
-                    .filter(|(stem, _)| *stem == "VS_TransformD")
-                    .map(|(_, h)| h)
-            })
-            .collect();
-        let mut stems: Vec<&str> = effect
-            .programs
-            .iter()
-            .filter(|p| p.stage == GtaStage::Pixel)
-            .filter_map(|p| split_program_name(&p.name))
-            .filter(|(stem, h)| stem.starts_with("PS_Deferred") && vertex_hashes.contains(h))
-            .map(|(stem, _)| stem)
-            .collect();
-        stems.sort_unstable();
-        stems.dedup();
-        let key = if stems.is_empty() {
-            "no G-buffer pixel program pairs with VS_TransformD".to_owned()
-        } else {
-            format!("only {}", stems.join(", "))
+        let key = match world.get::<GtaEffectTechniques>(link.effect) {
+            None => "no technique table".to_owned(),
+            Some(t) => {
+                let mut deferred: Vec<&str> = t
+                    .techniques
+                    .iter()
+                    .map(|t| t.name.as_str())
+                    .filter(|n| n.starts_with("deferred"))
+                    .collect();
+                deferred.sort_unstable();
+                if deferred.is_empty() {
+                    "no deferred technique (forward and shadow techniques only)".to_owned()
+                } else if deferred.contains(&"deferred_draw") {
+                    "deferred_draw is tessellated or has several passes".to_owned()
+                } else {
+                    format!(
+                        "deferred techniques without deferred_draw: {}",
+                        deferred.join(", ")
+                    )
+                }
+            }
         };
         *elsewhere.entry(key).or_default() += 1;
     }
