@@ -2,12 +2,12 @@
 //! traverses the acceleration structure the caller supplies, running the hit group's any-hit and intersection programs
 //! for the candidates the ray meets, the closest-hit program for the hit it keeps and the miss program when it has none;
 //! a callable program runs for `CallShader`. The programs are the function-form [`Program`]s of a ray tracing library
-//! (see [`crate::stage_functions`]), run one invocation at a time with [`Executable::function`]; their payloads,
+//! (see [`primase_shader::stage_functions`]), run one invocation at a time with [`Executable::function`]; their payloads,
 //! attributes and parameters are passed by value in and out, which is what a pointer to a structure of function memory
 //! is when nothing else touches it.
 //!
 //! What a library states (its hit groups: which programs make a group, of triangles or of procedural primitives) comes
-//! from its subobjects ([`crate::Subobject`]). What the application states, the shader table, is the caller's: which
+//! from its subobjects ([`primase_shader::Subobject`]). What the application states, the shader table, is the caller's: which
 //! hit group a hit index selects, which program a miss index and a callable index select. The hit group index of a hit
 //! is DXR's: the ray's offset, plus its stride times the geometry's index in the bottom level, plus the instance's
 //! contribution (section "Indexing into shader tables" of the specification,
@@ -22,9 +22,10 @@ use super::{
     Backend, CallShader, Decision, Element, Executable, ImageAtomic, ImageLoad, ImageQuery, ImageSample,
     ImageStore, ReportHit, Resources, Runner, TraceRay,
 };
-use crate::{
-    BufferKind, D3dClass, FunctionSig, HitGroup, IoType, Program, ResourceId, ResourceKind, Sampler,
-    StageFacts, StorageTarget, Subobject, SystemValue, stage_functions,
+use crate::Sampler;
+use primase_shader::{
+    BufferKind, D3dClass, FunctionSig, HitGroup, IoType, Program, ResourceId, ResourceKind, StageFacts,
+    StorageTarget, Subobject, SystemValue, stage_functions,
 };
 
 /// The pipeline flags the pipeline runs: they are added to the flags of every `TraceRay`, as the specification says of
@@ -241,7 +242,7 @@ impl Pipeline {
             .programs
             .get(raygen)
             .ok_or_else(|| format!("no program {raygen}"))?;
-        if entry.program.stage != crate::Stage::RayGeneration {
+        if entry.program.stage != primase_shader::Stage::RayGeneration {
             return Err(format!(
                 "{raygen} is a {:?} program, not a ray generation program",
                 entry.program.stage

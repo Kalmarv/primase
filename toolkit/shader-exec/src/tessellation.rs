@@ -2,7 +2,7 @@
 //! fixed-function tessellator ([`super::tessellator`]) over the factors the hull program wrote, and the domain program
 //! for each point it made. WGSL has no tessellation stages, so this is how the lab draws a patch.
 //!
-//! The programs are the function-form [`Program`]s of [`crate::stage_functions`], run one invocation at a time with
+//! The programs are the function-form [`Program`]s of [`primase_shader::stage_functions`], run one invocation at a time with
 //! [`Executable::function`]. A control point (the vertex program's output, the hull program's input) is a
 //! [`Vertex`](super::geometry::Vertex): one register per input varying of the hull program, in the order of its
 //! interface ([`TessellationShader::inputs`]). The hull program's outputs reach the domain program by label (the
@@ -15,9 +15,9 @@ use super::tessellator::{
     Factors, OutputPrimitive, Tessellation, tessellate_isolines, tessellate_quad, tessellate_triangle,
 };
 use super::{Bound, Executable, Runner, Scratch};
-use crate::{
-    DomainFacts, FunctionSig, HullFacts, Program, Sampler, StageFacts, TessDomain, TessTopology,
-    stage_functions,
+use crate::Sampler;
+use primase_shader::{
+    DomainFacts, FunctionSig, HullFacts, Program, StageFacts, TessDomain, TessTopology, stage_functions,
 };
 
 /// What the tessellator made of a patch, with the programs' results.

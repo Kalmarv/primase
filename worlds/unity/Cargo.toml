@@ -15,6 +15,7 @@ primase-meshops.workspace = true
 primase-texcodec.workspace = true
 primase-image.workspace = true
 primase-shader.workspace = true
+primase-shader-exec.workspace = true
 primase-dxbc.workspace = true
 thiserror.workspace = true
 primase-compress.workspace = true

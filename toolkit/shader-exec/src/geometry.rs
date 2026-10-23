@@ -6,7 +6,7 @@
 //!
 //! A vertex is one register per input varying of the program, in the order of its interface (the names are
 //! [`GeometryShader::inputs`]); an emitted vertex is one register per output varying ([`GeometryShader::outputs`]).
-//! The program is the function-form [`Program`] of [`crate::stage_functions`], run one invocation at a time with
+//! The program is the function-form [`Program`] of [`primase_shader::stage_functions`], run one invocation at a time with
 //! [`Executable::function`].
 //!
 //! The assembly rules are the ones D3D11's input assembler and stream output follow, measured with the D3D11 reference
@@ -20,7 +20,8 @@
 use super::pixel::SlotBackend;
 use super::stage::{Bindings, Constants};
 use super::{Bound, Executable, Runner, Scratch};
-use crate::{FunctionSig, GeometryFacts, GsInput, GsOutput, Program, Sampler, StageFacts, stage_functions};
+use crate::Sampler;
+use primase_shader::{FunctionSig, GeometryFacts, GsInput, GsOutput, Program, StageFacts, stage_functions};
 
 /// The values of one vertex: a register (four 32-bit lanes) for each varying.
 pub type Vertex = Vec<[u32; 4]>;

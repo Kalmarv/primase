@@ -10,9 +10,10 @@ use primase_core::shader::{
     AddressMode, ConstantRole, FrameParameter, ObjectParameter, StageBinding, TextureSource, ViewParameter,
 };
 use primase_image::sampling::Address;
-use primase_shader::exec::ProgramShader;
-use primase_shader::{
-    Constants, Grid, Input, Interface, Invocation, Lane, Layout, PixelShader, Raw, evaluate_raw_with,
+use primase_shader::Interface;
+use primase_shader_exec::ProgramShader;
+use primase_shader_exec::{
+    Grid, Input, Invocation, Lane, Layout, PixelShader, Raw, evaluate::Constants, evaluate_raw_with,
 };
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -116,7 +117,7 @@ pub(crate) struct OutputRgb {
 fn lifting(e: primase_dxbc::Error) -> crate::Error {
     invalid("layer lift", e.at * 4, e.detail)
 }
-fn evaluation(e: primase_shader::Error) -> crate::Error {
+fn evaluation(e: primase_shader_exec::Error) -> crate::Error {
     invalid("layer bake", e.at, e.detail)
 }
 /// A DXBC pixel program's container lifted and ready to run.

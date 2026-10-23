@@ -6,7 +6,7 @@
 use primase_dxbc::lift;
 use primase_shader::D3dClass;
 use primase_shader::ResourceId;
-use primase_shader::exec::{
+use primase_shader_exec::{
     Backend, Element, Executable, ImageAtomic, ImageAtomicOp, ImageSample, ImageStore, Resources,
 };
 use std::collections::BTreeMap;

@@ -13,7 +13,7 @@
 //! K >= 2 cells a side) and the resolution (`max-texels`, at most this many texels per cell; a map larger is baked at
 //! it, counted). The evaluation grid, (K + 1) x texels a side, is at most 4096, an option beyond it refused.
 //!
-//! The bake (approximated, counted): [`primase_shader::evaluate_periodic`] over a block of K x K cells of the map's
+//! The bake (approximated, counted): [`primase_shader_exec::evaluate_periodic`] over a block of K x K cells of the map's
 //! coordinate at the map's own texel density (up to `max-texels`), its first cell cross-faded so the block tiles. The
 //! program's output is lit, so the surface comes out of five evaluations, each with one white directional light (x,
 //! -x, y, -y, z) and nothing else ([`primase_unity::bind::directional_light`]: ambient, light probes and shadows off),
@@ -42,14 +42,14 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World};
 use primase_image::linear_to_srgb;
-use primase_shader::{Input, Lane, PixelShader};
+use primase_shader_exec::{Input, Lane, PixelShader};
 use primase_unity::bind::{UnityImage, bind, constants, directional_light};
 use primase_unity::components::{UnityMaterial, UnityPrograms, UnityTexEnv, UnityTexture};
 
 /// The shader this pass bakes.
 pub const VORONOI: &str = "Bumped Specular Voronoi";
 
-/// The largest evaluation grid a side ([`primase_shader::evaluate`]'s bound).
+/// The largest evaluation grid a side ([`primase_shader_exec::evaluate`]'s bound).
 const GRID: u32 = 4096;
 
 /// The five lights, towards the light: x, -x, y, -y, z.
@@ -140,8 +140,8 @@ struct Block {
 fn bake(
     threads: Threads,
     shader: &(dyn PixelShader + Sync),
-    constants: &primase_shader::Constants,
-    textures: &BTreeMap<u32, primase_shader::Texture>,
+    constants: &primase_shader_exec::evaluate::Constants,
+    textures: &BTreeMap<u32, primase_shader_exec::Texture>,
     cells: u32,
     texels: u32,
 ) -> std::result::Result<Block, String> {
@@ -163,7 +163,7 @@ fn bake(
         .map(|&towards| {
             let mut c = constants.clone();
             directional_light(&mut c, towards, [1.0; 3]).map_err(|e| e.to_string())?;
-            let e = primase_shader::evaluate_periodic_with(
+            let e = primase_shader_exec::evaluate_periodic_with(
                 threads,
                 shader,
                 &c,
@@ -362,7 +362,7 @@ impl LowerSkatebirdVoronoi {
                 )));
             };
             let texture = match source(w, m, property) {
-                Source::Pixels(t, wrap, filter) => primase_shader::Texture::Image(Arc::new(
+                Source::Pixels(t, wrap, filter) => primase_shader_exec::Texture::Image(Arc::new(
                     UnityImage::new(t, wrap, filter).map_err(|err| err.to_string())?,
                 )),
                 Source::Missing(why) => return Ok(Err(format!("{property} {why}"))),
@@ -381,7 +381,7 @@ impl LowerSkatebirdVoronoi {
                                 ),
                                 1,
                             );
-                            primase_shader::Texture::Constant(texel)
+                            primase_shader_exec::Texture::Constant(texel)
                         }
                         None => {
                             return Ok(Err(format!(

@@ -2,9 +2,9 @@
 //! `evaluate_periodic` with a synthetic program whose output is a function of the grid's U and V: exact for a program
 //! already periodic, the program's value outside the cross-faded first cell, seamless across the wrap, and its size
 //! limits.
-use primase_shader::{
-    Constants, D3dSignature, Execution, Input, Interface, Label, Layout, PixelShader, Sampler, ScalarType,
-    Stage, Texture, Value, Varying, VaryingProvenance, evaluate_periodic,
+use primase_shader::{D3dSignature, Interface, Label, ScalarType, Stage, Value, Varying, VaryingProvenance};
+use primase_shader_exec::{
+    Execution, Input, Layout, PixelShader, Sampler, Texture, evaluate::Constants, evaluate_periodic,
 };
 use std::collections::BTreeMap;
 
@@ -32,7 +32,7 @@ impl PixelShader for Uv {
         inputs: &[[u32; 4]],
         _: &[(u32, &[[u32; 4]])],
         _: &mut dyn Sampler,
-    ) -> Result<Execution, primase_shader::Error> {
+    ) -> Result<Execution, primase_shader_exec::Error> {
         let (u, v) = (f32::from_bits(inputs[0][0]), f32::from_bits(inputs[0][1]));
         Ok(Execution {
             discarded: false,
@@ -201,7 +201,7 @@ fn on_any_thread_count_the_bake_is_the_serial_one() {
     let s = shader(f);
     let inputs = BTreeMap::from([(("TEXCOORD".to_owned(), 0), Input::GridUv)]);
     let run = |n: usize| {
-        let e = primase_shader::evaluate_periodic_with(
+        let e = primase_shader_exec::evaluate_periodic_with(
             primase_core::parallel::Threads::new(n).unwrap(),
             &s,
             &Constants::new(&Layout::default()),

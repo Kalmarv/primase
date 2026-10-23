@@ -1,12 +1,12 @@
 #![allow(clippy::unwrap_used)]
 //! Hand-worked controls of the lifted programs' values: each case is a program written as tokens, its expected outputs worked out
 //! by hand from Direct3D's definition of the instruction (the value, not what a lift or an executor does), lifted and run by
-//! the executor (`primase_shader::exec::ProgramShader`). The oracle is the hand-worked value; these cases stood for the
+//! the executor (`primase_shader_exec::ProgramShader`). The oracle is the hand-worked value; these cases stood for the
 //! legacy evaluator's and now stand for the executor's.
 use primase_dxbc::decode::Declared;
 use primase_dxbc::{decode, lift};
-use primase_shader::exec::ProgramShader;
-use primase_shader::{Execution, PixelShader, Sample, Sampler};
+use primase_shader_exec::ProgramShader;
+use primase_shader_exec::{Execution, PixelShader, Sample, Sampler};
 
 fn instruction(op: u32, operands: &[u32]) -> Vec<u32> {
     let mut v = vec![op | (((operands.len() + 1) as u32) << 24)];
@@ -553,7 +553,10 @@ fn gradient_samples_and_shader_model_4() {
         let r = p
             .execute(&[], &[], &mut |s: Sample| {
                 assert_eq!((s.texture, s.uv), (1, [0.25, 0.5]));
-                assert_eq!(s.lod, primase_shader::Lod::Gradients([[0.125, 0.], [0., 0.0625]]));
+                assert_eq!(
+                    s.lod,
+                    primase_shader_exec::Lod::Gradients([[0.125, 0.], [0., 0.0625]])
+                );
                 Ok([1., 2., 3., 4.])
             })
             .unwrap();
@@ -641,7 +644,7 @@ fn a_quads_implicit_sample_has_its_gradients() {
             },
         )
         .unwrap();
-    let footprint = primase_shader::Lod::Gradients([[0.25, 0.], [0., 0.5]]);
+    let footprint = primase_shader_exec::Lod::Gradients([[0.25, 0.], [0., 0.5]]);
     assert_eq!(seen, uvs.map(|uv| (uv, footprint)));
     assert!(
         r.iter()

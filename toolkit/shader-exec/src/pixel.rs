@@ -9,9 +9,10 @@ use super::{
     Backend, Element, Executable, ImageAtomic, ImageLoad, ImageQuery, ImageSample, ImageStore, Runner,
     Scratch, error,
 };
-use crate::{
-    AtomicAdd, BufferKind, D3dClass, Error, Execution, Interface, PixelShader, Program, ResourceId,
-    ResourceKind, Sampler, Stage, StorageTarget, Store, SystemValue, TextureDim,
+use crate::{AtomicAdd, Error, Execution, PixelShader, Sampler, Store};
+use primase_shader::{
+    BufferKind, D3dClass, Interface, Program, ResourceId, ResourceKind, Stage, StorageTarget, SystemValue,
+    TextureDim,
 };
 use std::sync::Mutex;
 
@@ -62,7 +63,7 @@ fn lanes_of(mask: u8) -> Vec<u8> {
 }
 
 /// The lanes the module carries for an input: the pipeline fixes some, the interface states the rest.
-fn width_of(v: &crate::Varying) -> usize {
+fn width_of(v: &primase_shader::Varying) -> usize {
     match v.system {
         Some(SystemValue::FragCoord) => 4,
         Some(
@@ -89,7 +90,7 @@ impl ProgramShader {
         let mut arguments = Vec::new();
         let mut input_count = 0;
         // the module's arguments: the interface's inputs the entry point carries, in order
-        let io = crate::entry_io(interface).map_err(error)?;
+        let io = primase_shader::entry_io(interface).map_err(error)?;
         for item in &io.arguments {
             let v = &interface.inputs[item.varyings[0]];
             let name = Program::varying_name(&v.label);

@@ -279,12 +279,12 @@ fn a_ray_tracing_program_is_refused_by_name_by_the_writer_and_as_an_entry_point_
         assert!(wgsl.contains("no WGSL stage"), "{wgsl}");
         let functions = emit::wgsl_functions(&p).unwrap_err().to_string();
         assert!(functions.contains("ray tracing pipeline"), "{functions}");
-        let exec = primase_shader::exec::Executable::new(&p)
+        let exec = primase_shader_exec::Executable::new(&p)
             .err()
             .unwrap()
             .to_string();
         assert!(exec.contains("ray tracing pipeline"), "{exec}");
         // its function compiles: the pipeline runs it (the hand-built programs here have no real body to run)
-        let _ = primase_shader::exec::Executable::function(&p, "main");
+        let _ = primase_shader_exec::Executable::function(&p, "main");
     }
 }

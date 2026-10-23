@@ -886,6 +886,7 @@ dependencies = [
  "primase-image",
  "primase-meshops",
  "primase-shader",
+ "primase-shader-exec",
  "primase-testdata",
  "primase-texcodec",
  "serde_json",
@@ -967,6 +968,7 @@ dependencies = [
  "naga",
  "primase-dxcontainer",
  "primase-shader",
+ "primase-shader-exec",
  "primase-testdata",
  "serde_json",
 ]
@@ -988,6 +990,7 @@ dependencies = [
  "primase-bytes",
  "primase-dxcontainer",
  "primase-shader",
+ "primase-shader-exec",
  "primase-testdata",
  "serde_json",
 ]
@@ -1022,6 +1025,7 @@ dependencies = [
  "primase-image",
  "primase-meshops",
  "primase-shader",
+ "primase-shader-exec",
  "primase-testdata",
  "primase-texcodec",
  "primase-vertex",
@@ -1092,6 +1096,7 @@ dependencies = [
  "primase-image",
  "primase-meshops",
  "primase-shader",
+ "primase-shader-exec",
  "primase-testdata",
  "primase-texcodec",
  "quick-xml",
@@ -1196,12 +1201,22 @@ dependencies = [
 name = "primase-shader"
 version = "0.1.0"
 dependencies = [
+ "naga",
+ "primase-core",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "primase-shader-exec"
+version = "0.1.0"
+dependencies = [
  "half",
  "naga",
  "primase-core",
  "primase-dxbc",
  "primase-dxil",
- "sha2",
+ "primase-shader",
  "thiserror",
 ]
 
@@ -1213,6 +1228,7 @@ dependencies = [
  "primase-image",
  "primase-meshops",
  "primase-shader",
+ "primase-shader-exec",
  "primase-testdata",
  "primase-unity",
  "serde",
@@ -1230,6 +1246,7 @@ dependencies = [
  "primase-image",
  "primase-monogame",
  "primase-shader",
+ "primase-shader-exec",
  "primase-testdata",
  "serde",
  "serde_json",
@@ -1266,6 +1283,7 @@ dependencies = [
  "primase-image",
  "primase-meshops",
  "primase-shader",
+ "primase-shader-exec",
  "primase-testdata",
  "primase-texcodec",
  "primase-vertex",

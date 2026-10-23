@@ -6,8 +6,8 @@ use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderProgra
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{Shader, ShaderBinding, ShaderFormat};
 use primase_core::{ColorSpace, Component, Entity, Mesh, Name, Semantic, TexRole, Texture, World};
-use primase_shader::PixelShader;
-use primase_shader::exec::ProgramShader;
+use primase_shader_exec::PixelShader;
+use primase_shader_exec::ProgramShader;
 use std::collections::BTreeMap;
 
 /// `resolve-fromsoft-shaders{unbound-textures=preview|leave}`: for each material with a layered definition, bind its

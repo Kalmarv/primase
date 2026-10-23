@@ -2,7 +2,7 @@
 //! them.
 
 use super::request::{Dim, ImageAtomicOp, QueryKind};
-use crate::ResourceId;
+use primase_shader::ResourceId;
 
 pub(super) type Reg = [u32; 4];
 

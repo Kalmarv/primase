@@ -13,6 +13,7 @@ primase-bytes.workspace = true
 primase-dxbc.workspace = true
 primase-dxil.workspace = true
 primase-shader.workspace = true
+primase-shader-exec.workspace = true
 primase-havok.workspace = true
 primase-texcodec.workspace = true
 primase-image.workspace = true

@@ -304,7 +304,7 @@ fn a_geometry_program_is_a_function_of_a_primitive_returning_its_vertices() {
 /// vertex count (3) and the strip starts (1, 0, 0); each array element is an entry of its own.
 #[test]
 fn the_geometry_function_returns_its_vertices_count_and_strip_starts() {
-    use primase_shader::exec::{Executable, Resources, Runner};
+    use primase_shader_exec::{Executable, Resources, Runner};
     let p = geometry();
     let exe = Executable::function(&p, "main").unwrap();
     let bits = |x: [f32; 4]| x.map(f32::to_bits);
@@ -318,10 +318,10 @@ fn the_geometry_function_returns_its_vertices_count_and_strip_starts() {
     let resources = Resources::default();
     let bound = exe.bind_resources(&resources).unwrap();
     struct None_;
-    impl primase_shader::exec::Backend for None_ {
+    impl primase_shader_exec::Backend for None_ {
         fn sample(
             &mut self,
-            _: primase_shader::exec::ImageSample<primase_shader::exec::Element>,
+            _: primase_shader_exec::ImageSample<primase_shader_exec::Element>,
         ) -> Result<[f32; 4], String> {
             Err("none".into())
         }

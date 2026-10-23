@@ -5,7 +5,7 @@ stage's version token, instructions with their controls and extended tokens) and
 not a program; it says nothing about what a consumer supports. `reflection` reads RDEF with the signatures
 (`signatures` alone for a container whose RDEF was stripped, as some engines ship them, leaving the constant layout to
 the caller's own records). `lift` turns a program of any stage into a `primase_shader::Program`; running one is
-`primase_shader::exec`'s (`ProgramShader` for a pixel or vertex program). The container itself is read by
+`primase_shader_exec`'s (`ProgramShader` for a pixel or vertex program). The container itself is read by
 `primase-dxcontainer`: its digest is not verified, this reader does not authenticate shaders.
 
 Sampling belongs to the caller of an execution: it states its footprint/LOD, addressing, filtering and transfer

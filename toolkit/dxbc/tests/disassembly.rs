@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 
 use primase_dxbc::decode::{Declared, Decoded};
 use primase_dxbc::{decode, lift};
-use primase_shader::exec::ProgramShader;
-use primase_shader::{PixelShader, Sample};
+use primase_shader_exec::ProgramShader;
+use primase_shader_exec::{PixelShader, Sample};
 
 mod common;
 

@@ -14,8 +14,9 @@ use primase_core::shader::{
     ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Stage,
     StageBinding, TargetState, TextureBinding, TextureSource, ViewParameter,
 };
-use primase_shader::exec::ProgramShader;
-use primase_shader::{D3dClass, Interface, Layout, PixelShader, Resource, SystemValue};
+use primase_shader::{D3dClass, Interface, Resource, SystemValue};
+use primase_shader_exec::ProgramShader;
+use primase_shader_exec::{Layout, PixelShader};
 use std::collections::BTreeMap;
 
 /// The stream that carries a layered mesh's second stored vertex colour (the element the FLVER indexes 1, which the
@@ -267,7 +268,7 @@ pub fn resolve(
     let mut constants = Vec::new();
     // a constant of the layout, at `word` words into it, `size` bytes (cut where its buffer ends), by name
     let mut constant = |name: &str, word: usize, size: u32, mut role: ConstantRole| -> Result<()> {
-        let Some(&primase_shader::Field { buffer, offset, .. }) = layout.fields.get(name) else {
+        let Some(&primase_shader_exec::Field { buffer, offset, .. }) = layout.fields.get(name) else {
             return Ok(());
         };
         let Some((resource, buffer_size)) = buffer_of(buffer) else {

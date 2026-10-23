@@ -1,12 +1,13 @@
 //! Synthetic gates on our own dxc-built fixtures (`tests/fixtures/*.hlsl`, compiled with the command at the top of
-//! each): the lifted interface, execution (`primase_shader::exec::ProgramShader`) against outputs derived from the HLSL by
+//! each): the lifted interface, execution (`primase_shader_exec::ProgramShader`) against outputs derived from the HLSL by
 //! hand, every truncation refused, and a seeded mutation run that must never panic.
 use primase_dxil::lift;
-use primase_shader::exec::ProgramShader;
 use primase_shader::{
-    ConstantType, InterpMode, InterpSampling, PixelShader, ResourceKind, Sample, SampleType, ScalarType,
-    SystemValue, TextureDim, Value,
+    ConstantType, InterpMode, InterpSampling, ResourceKind, SampleType, ScalarType, SystemValue, TextureDim,
+    Value,
 };
+use primase_shader_exec::ProgramShader;
+use primase_shader_exec::{PixelShader, Sample};
 
 const BLEND: &[u8] = include_bytes!("fixtures/blend.dxil");
 

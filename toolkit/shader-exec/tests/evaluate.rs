@@ -1,11 +1,14 @@
 #![allow(clippy::unwrap_used)]
 //! `evaluate` on one HLSL fixture compiled to both bytecodes (tests/fixtures/evaluate.hlsl), with outputs worked out
 //! from the HLSL, and constant packing worked out from D3D's packing rules.
-use primase_shader::exec::ProgramShader;
 use primase_shader::{
-    BufferLayout, Constant, ConstantType, Constants, D3dBinding, D3dClass, Execution, Field, Grid, Image,
-    Input, Interface, Lane, Layout, Majorness, Member, PixelShader, Resource, ResourceId, ResourceKind,
-    ResourceProvenance, Sampler, ScalarType, Stage, Texture, d3d, evaluate,
+    BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, Interface, Majorness, Member, Resource,
+    ResourceId, ResourceKind, ResourceProvenance, ScalarType, Stage, d3d,
+};
+use primase_shader_exec::ProgramShader;
+use primase_shader_exec::{
+    Execution, Field, Grid, Image, Input, Lane, Layout, PixelShader, Sampler, Texture, evaluate,
+    evaluate::Constants,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -36,7 +39,7 @@ fn shaders() -> Vec<(&'static str, Box<dyn PixelShader>)> {
 #[derive(Debug)]
 struct Coordinates;
 impl Image for Coordinates {
-    fn sample(&self, uv: [f32; 2], _lod: primase_shader::Lod) -> Result<[f32; 4], String> {
+    fn sample(&self, uv: [f32; 2], _lod: primase_shader_exec::Lod) -> Result<[f32; 4], String> {
         Ok([uv[0], uv[1], 0.5, 1.])
     }
 }
@@ -128,8 +131,8 @@ fn what_the_program_needs_and_is_not_given_is_refused() {
         let shader = shader.as_ref();
         let layout = Layout::of(shader).unwrap();
         let c = constants(&layout);
-        let message = |r: Result<_, primase_shader::Error>| {
-            r.map(|_: primase_shader::Evaluation| ()).unwrap_err().detail
+        let message = |r: Result<_, primase_shader_exec::Error>| {
+            r.map(|_: primase_shader_exec::Evaluation| ()).unwrap_err().detail
         };
         let mut missing = inputs();
         missing.remove(&("texcoord".into(), 1));
@@ -208,7 +211,7 @@ impl PixelShader for Reflected {
         _: &[[u32; 4]],
         _: &[(u32, &[[u32; 4]])],
         _: &mut dyn Sampler,
-    ) -> Result<Execution, primase_shader::Error> {
+    ) -> Result<Execution, primase_shader_exec::Error> {
         unreachable!("layout only")
     }
 }
@@ -319,9 +322,9 @@ fn struct_members_are_flattened_with_d3d_packing() {
 #[test]
 fn quads_give_the_scalar_outputs_and_their_footprints() {
     #[derive(Debug, Default)]
-    struct Footprints(std::sync::Mutex<Vec<primase_shader::Lod>>);
+    struct Footprints(std::sync::Mutex<Vec<primase_shader_exec::Lod>>);
     impl Image for Footprints {
-        fn sample(&self, uv: [f32; 2], lod: primase_shader::Lod) -> Result<[f32; 4], String> {
+        fn sample(&self, uv: [f32; 2], lod: primase_shader_exec::Lod) -> Result<[f32; 4], String> {
             self.0.lock().unwrap().push(lod);
             Ok([uv[0], uv[1], 0.5, 1.])
         }
@@ -337,40 +340,40 @@ fn quads_give_the_scalar_outputs_and_their_footprints() {
             size,
             period: [1., 1.],
         };
-        let scalar = primase_shader::evaluate_raw(
+        let scalar = primase_shader_exec::evaluate_raw(
             shader.as_ref(),
             &c,
             &textures,
             &inputs(),
             grid,
             &targets,
-            primase_shader::Invocation::Scalar,
+            primase_shader_exec::Invocation::Scalar,
         )
         .unwrap();
         footprints.0.lock().unwrap().clear();
-        let quads = primase_shader::evaluate_raw(
+        let quads = primase_shader_exec::evaluate_raw(
             shader.as_ref(),
             &c,
             &textures,
             &inputs(),
             grid,
             &targets,
-            primase_shader::Invocation::Quads,
+            primase_shader_exec::Invocation::Quads,
         )
         .unwrap();
         assert_eq!(quads.pixels, scalar.pixels, "grid of {size}");
         // on several threads (a row, or row of quads, each): the same pixels and counts as one
         for invocation in [
-            primase_shader::Invocation::Scalar,
-            primase_shader::Invocation::Quads,
+            primase_shader_exec::Invocation::Scalar,
+            primase_shader_exec::Invocation::Quads,
         ] {
-            let one = if invocation == primase_shader::Invocation::Scalar {
+            let one = if invocation == primase_shader_exec::Invocation::Scalar {
                 &scalar
             } else {
                 &quads
             };
             for n in [2, 8] {
-                let many = primase_shader::evaluate_raw_with(
+                let many = primase_shader_exec::evaluate_raw_with(
                     primase_core::parallel::Threads::new(n).unwrap(),
                     shader.as_ref(),
                     &c,
@@ -390,14 +393,14 @@ fn quads_give_the_scalar_outputs_and_their_footprints() {
         }
         footprints.0.lock().unwrap().clear();
         // the footprints again, of one quads run
-        primase_shader::evaluate_raw(
+        primase_shader_exec::evaluate_raw(
             shader.as_ref(),
             &c,
             &textures,
             &inputs(),
             grid,
             &targets,
-            primase_shader::Invocation::Quads,
+            primase_shader_exec::Invocation::Quads,
         )
         .unwrap();
         let step = 1. / size as f32;
@@ -410,7 +413,8 @@ fn quads_give_the_scalar_outputs_and_their_footprints() {
             "grid of {size}"
         );
         assert!(
-            seen.iter().all(|l| matches!(l, primase_shader::Lod::Gradients(g)
+            seen.iter()
+                .all(|l| matches!(l, primase_shader_exec::Lod::Gradients(g)
                 if (0..2).all(|i| (0..2).all(|k| (g[i][k] - want[i][k]).abs() < 1e-6)))),
             "grid of {size}: {seen:?}"
         );
@@ -441,14 +445,14 @@ impl PixelShader for Loads {
         _: &[[u32; 4]],
         _: &[(u32, &[[u32; 4]])],
         sampler: &mut dyn Sampler,
-    ) -> Result<Execution, primase_shader::Error> {
+    ) -> Result<Execution, primase_shader_exec::Error> {
         let value = sampler
-            .load(primase_shader::Load {
+            .load(primase_shader_exec::Load {
                 texture: 0,
                 texel: [1, 2, 0],
                 mip: 0,
             })
-            .map_err(|detail| primase_shader::Error {
+            .map_err(|detail| primase_shader_exec::Error {
                 bytecode: "test",
                 at: 0,
                 detail,
@@ -479,14 +483,14 @@ fn a_constant_texture_answers_loads() {
     };
     let constants = Constants::new(&Layout::default());
     let run = |texture: Texture| {
-        primase_shader::evaluate_raw(
+        primase_shader_exec::evaluate_raw(
             &shader,
             &constants,
             &BTreeMap::from([(0, texture)]),
             &BTreeMap::new(),
             grid,
             &[(0, 15)],
-            primase_shader::Invocation::Scalar,
+            primase_shader_exec::Invocation::Scalar,
         )
     };
     let raw = run(Texture::Constant([0.25, -1., 0., 2.])).unwrap();

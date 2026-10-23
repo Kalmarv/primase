@@ -3,8 +3,8 @@
 //! both the default and the -Od build of each (different instruction streams of one source). The evaluator cannot run
 //! them (loops, switches, memory); the values below are the arithmetic of the source, not of the lifter.
 use primase_dxil::lift;
-use primase_shader::exec::{Backend, Element, Executable, ImageSample, Output, Resources};
 use primase_shader::{Program, ResourceId, ResourceKind};
+use primase_shader_exec::{Backend, Element, Executable, ImageSample, Output, Resources};
 use std::path::Path;
 
 fn f(x: f32) -> u32 {
@@ -68,7 +68,7 @@ fn run(name: &str, args: &[[u32; 4]], constants: &[(u32, Vec<[u32; 4]>)]) -> Out
     }
     let bound = exe.bind_resources(&resources).unwrap();
     let mut backend = NoBackend;
-    let mut runner = primase_shader::exec::Runner::<1>::new(&exe, &bound, &mut backend, None);
+    let mut runner = primase_shader_exec::Runner::<1>::new(&exe, &bound, &mut backend, None);
     let args = arguments(&program, args);
     let [out] = runner.run([&args]).unwrap_or_else(|e| panic!("{name}: {e}"));
     out
@@ -263,7 +263,7 @@ fn a_vertex_program() {
 
 mod textures {
     use super::*;
-    use primase_shader::exec::{ImageLoad, ImageQuery, QueryKind, Runner};
+    use primase_shader_exec::{ImageLoad, ImageQuery, QueryKind, Runner};
     use std::collections::BTreeSet;
 
     /// Answers every request with a fixed value and records what was asked, by texture register.
@@ -418,7 +418,7 @@ mod textures {
 
 mod resources {
     use super::*;
-    use primase_shader::exec::{ImageLoad, ImageStore, Runner};
+    use primase_shader_exec::{ImageLoad, ImageStore, Runner};
 
     #[derive(Default)]
     struct Views {
@@ -500,7 +500,7 @@ mod resources {
 
 mod resource_arrays {
     use super::*;
-    use primase_shader::exec::{ImageLoad, ImageQuery, QueryKind, Runner};
+    use primase_shader_exec::{ImageLoad, ImageQuery, QueryKind, Runner};
 
     /// The textures of `resource_arrays.hlsl` answer with their element: a sample is (texture, sampler, 0.25, 1), a
     /// load 100 + the texture's element, a size 2 << element wide and 1 << element high; the single texture is 32 by 64.
@@ -602,7 +602,7 @@ mod resource_arrays {
 
 mod pixel_ops {
     use super::*;
-    use primase_shader::exec::{ImageLoad, ImageQuery, QueryKind, Runner};
+    use primase_shader_exec::{ImageLoad, ImageQuery, QueryKind, Runner};
 
     /// A load answers its texel as floats; a query of the sample count answers 4.
     struct Texels;
@@ -798,8 +798,8 @@ mod waves {
 
 mod stage_functions {
     use super::*;
-    use primase_shader::exec::Runner;
     use primase_shader::{D3dClass, stage_functions};
+    use primase_shader_exec::Runner;
     use std::collections::BTreeMap;
 
     /// Run function `name` of the lifted program `base` once, its constant buffer 0 `constants`, giving each argument
@@ -980,7 +980,7 @@ mod half_ops {
 mod image_atomics {
     use super::*;
     use primase_shader::D3dClass;
-    use primase_shader::exec::{ImageAtomic, ImageAtomicOp};
+    use primase_shader_exec::{ImageAtomic, ImageAtomicOp};
     use std::collections::BTreeMap;
 
     /// Two textures that apply the atomic operations they are asked for: the words of each by texel, absent ones 0
@@ -1086,7 +1086,7 @@ mod image_atomics {
             };
             Ok(old)
         }
-        fn store_image(&mut self, r: primase_shader::exec::ImageStore<ResourceId>) -> Result<(), String> {
+        fn store_image(&mut self, r: primase_shader_exec::ImageStore<ResourceId>) -> Result<(), String> {
             self.stores.insert((r.view, r.texel), r.value[0]);
             Ok(())
         }
@@ -1206,7 +1206,7 @@ mod buffer_arrays {
 mod image_arrays {
     use super::*;
     use primase_shader::D3dClass;
-    use primase_shader::exec::ImageStore;
+    use primase_shader_exec::ImageStore;
     use std::collections::BTreeMap;
 
     /// Keeps the stores by view and element, and by texel.
@@ -1404,7 +1404,7 @@ mod lane_2d {
 mod ray_queries {
     use super::*;
     use primase_shader::D3dClass;
-    use primase_shader::exec::{Geometry, Instance, InstanceFlags, Scene};
+    use primase_shader_exec::{Geometry, Instance, InstanceFlags, Scene};
     use std::collections::BTreeMap;
 
     /// Two bottom-level geometries in one bottom level, the triangle (0,0), (4,0), (0,4) at z = 5 (opaque, geometry 0)
@@ -1611,7 +1611,7 @@ mod uav_counter {
 mod procedural_primitives {
     use super::*;
     use primase_shader::D3dClass;
-    use primase_shader::exec::{Geometry, Instance, InstanceFlags, Scene};
+    use primase_shader_exec::{Geometry, Instance, InstanceFlags, Scene};
     use std::collections::BTreeMap;
 
     /// `ray_query_procedural.hlsl` on one sphere (centre (0.5, 0, 1), radius 1, in the object space of an instance)
@@ -1688,7 +1688,7 @@ mod procedural_primitives {
 mod instance_matrices {
     use super::*;
     use primase_shader::D3dClass;
-    use primase_shader::exec::{Geometry, Instance, InstanceFlags, Scene};
+    use primase_shader_exec::{Geometry, Instance, InstanceFlags, Scene};
     use std::collections::BTreeMap;
 
     /// `ray_query_matrices.hlsl` on an instance that rotates a little, scales unevenly and translates: the matrices a

@@ -18,5 +18,6 @@ naga.workspace = true
 primase-testdata.workspace = true
 serde_json.workspace = true
 
+primase-shader-exec.workspace = true
 [lints]
 workspace = true

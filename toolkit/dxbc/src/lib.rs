@@ -1,6 +1,6 @@
 //! Shader Model 4 and 5 programs: the token reader (`decode`), the signatures and reflection (`reflection`,
 //! `signatures`) and the lifter to `primase_shader::Program` (`lift`, any stage). A lifted program is run by
-//! `primase_shader::exec`.
+//! `primase_shader_exec`.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 mod arity;

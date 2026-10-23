@@ -13,8 +13,9 @@ use super::resolve::{layer_channels, register};
 use crate::{Result, invalid};
 use primase_core::Semantic;
 use primase_core::shader::{ConstantRole, InputRole, Shader as CoreShader, StageBinding};
-use primase_shader::exec::ProgramShader;
-use primase_shader::{Input, Interface, Lane, PixelShader, Sampler, Varying};
+use primase_shader::{Interface, Varying};
+use primase_shader_exec::ProgramShader;
+use primase_shader_exec::{Input, Lane, PixelShader, Sampler};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -69,7 +70,7 @@ pub(crate) struct VertexStage {
 /// The raw buffer of per-instance indices the program reads: one instance, index zero.
 struct Instances;
 impl Sampler for Instances {
-    fn sample(&mut self, request: primase_shader::Sample) -> std::result::Result<[f32; 4], String> {
+    fn sample(&mut self, request: primase_shader_exec::Sample) -> std::result::Result<[f32; 4], String> {
         Err(format!(
             "t{}: a vertex program of this bake samples nothing",
             request.texture

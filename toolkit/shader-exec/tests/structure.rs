@@ -7,11 +7,12 @@
 use naga::{Expression, Handle, Statement, SwitchValue};
 use primase_shader::build::structure::{self, Cfg, Emit, Term};
 use primase_shader::build::{Builder, Kind, Val};
-use primase_shader::exec::ProgramShader;
 use primase_shader::{
-    Conventions, D3dModes, D3dSignature, Interface, InterpMode, Label, PixelShader, Program, Provenance,
-    ScalarType, ShaderFormat, Stage, SystemValue, Value, Varying, VaryingProvenance, entry_io,
+    Conventions, D3dModes, D3dSignature, Interface, InterpMode, Label, Program, Provenance, ScalarType,
+    ShaderFormat, Stage, SystemValue, Value, Varying, VaryingProvenance, entry_io,
 };
+use primase_shader_exec::PixelShader;
+use primase_shader_exec::ProgramShader;
 
 const LIMIT: u32 = 64;
 
@@ -259,7 +260,7 @@ fn program(cfg: &Cfg, seed: u32) -> Result<Program, structure::Error> {
 fn run(program: Program) -> u32 {
     let shader = ProgramShader::new(program).unwrap();
     let execution = shader
-        .execute(&[], &[], &mut |_: primase_shader::Sample| Ok([0.0; 4]))
+        .execute(&[], &[], &mut |_: primase_shader_exec::Sample| Ok([0.0; 4]))
         .unwrap();
     execution.outputs[0][0]
 }

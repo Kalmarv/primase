@@ -202,14 +202,14 @@ fn the_enhanced_shader_database() {
                                 Err(e) => invalid.push(format!("{}: {e}", program.name)),
                             }
                             // the executor compiles it too (as an entry point, or as its functions), or refuses it by name
-                            let compiled = match primase_shader::exec::Executable::functions(&p) {
+                            let compiled = match primase_shader_exec::Executable::functions(&p) {
                                 Ok(Some(_)) => {
                                     *as_functions
                                         .entry(format!("{:?}", p.interface.stage))
                                         .or_default() += 1;
                                     Ok(())
                                 }
-                                Ok(None) => primase_shader::exec::Executable::new(&p).map(|_| ()),
+                                Ok(None) => primase_shader_exec::Executable::new(&p).map(|_| ()),
                                 Err(e) => Err(e),
                             };
                             if let Err(e) = compiled {

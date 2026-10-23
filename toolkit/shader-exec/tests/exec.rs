@@ -6,12 +6,13 @@ use naga::{
     ImageDimension, ResourceBinding, SampleLevel, ScalarKind, StructMember, TypeInner,
 };
 use primase_shader::build::{Builder, Kind, Val};
-use primase_shader::exec::{Dim, ImageLod, ImageSample, ProgramShader};
 use primase_shader::{
-    BufferLayout, Conventions, D3dBinding, D3dClass, D3dModes, D3dSignature, Interface, Label, PixelShader,
-    Program, Provenance, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, Sampler,
-    ScalarType, ShaderFormat, Stage, TextureDim, Value, Varying, VaryingProvenance,
+    BufferLayout, Conventions, D3dBinding, D3dClass, D3dModes, D3dSignature, Interface, Label, Program,
+    Provenance, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType, ShaderFormat,
+    Stage, TextureDim, Value, Varying, VaryingProvenance,
 };
+use primase_shader_exec::{Dim, ImageLod, ImageSample, ProgramShader};
+use primase_shader_exec::{PixelShader, Sampler};
 
 fn val(expr: naga::Handle<naga::Expression>, kind: Kind, width: u8) -> Val {
     Val { expr, kind, width }
@@ -303,7 +304,7 @@ fn volume_program() -> Program {
 
 struct Unused;
 impl Sampler for Unused {
-    fn sample(&mut self, _: primase_shader::Sample) -> Result<[f32; 4], String> {
+    fn sample(&mut self, _: primase_shader_exec::Sample) -> Result<[f32; 4], String> {
         Err("no samples expected".into())
     }
 }
@@ -371,7 +372,7 @@ struct Recording {
     requests: Vec<ImageSample<u32>>,
 }
 impl Sampler for Recording {
-    fn sample(&mut self, _: primase_shader::Sample) -> Result<[f32; 4], String> {
+    fn sample(&mut self, _: primase_shader_exec::Sample) -> Result<[f32; 4], String> {
         Err("a plain 2D sample was not expected".into())
     }
     fn sample_image(&mut self, request: ImageSample<u32>) -> Result<[f32; 4], String> {
@@ -670,8 +671,8 @@ fn array_program() -> Program {
 
 /// Answers a sample with the elements it names: (texture element, sampler element, 0, 1).
 struct Elements;
-impl primase_shader::exec::Backend for Elements {
-    fn sample(&mut self, r: ImageSample<primase_shader::exec::Element>) -> Result<[f32; 4], String> {
+impl primase_shader_exec::Backend for Elements {
+    fn sample(&mut self, r: ImageSample<primase_shader_exec::Element>) -> Result<[f32; 4], String> {
         assert_eq!((r.texture.id, r.sampler.id), (ResourceId(0), ResourceId(1)));
         Ok([r.texture.index as f32, r.sampler.index as f32, 0.0, 1.0])
     }
@@ -682,7 +683,7 @@ impl primase_shader::exec::Backend for Elements {
 /// to check here (the caller's to check): sampler 5 is asked for by texture 4.
 #[test]
 fn an_index_the_program_computes_picks_an_element_of_a_resource_array() {
-    use primase_shader::exec::{Executable, Resources, Runner};
+    use primase_shader_exec::{Executable, Resources, Runner};
     let program = array_program();
     program.validate().unwrap();
     let exe = Executable::new(&program).unwrap();

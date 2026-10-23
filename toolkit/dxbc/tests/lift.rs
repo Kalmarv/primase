@@ -319,6 +319,6 @@ fn a_hull_program_whose_phases_declare_different_temporaries_lifts() {
     program.validate().unwrap_or_else(|p| panic!("{p:?}"));
     assert_eq!(program.stage, Stage::Hull);
     for name in ["main", "patch_constant"] {
-        primase_shader::exec::Executable::function(&program, name).unwrap_or_else(|e| panic!("{name}: {e}"));
+        primase_shader_exec::Executable::function(&program, name).unwrap_or_else(|e| panic!("{name}: {e}"));
     }
 }

@@ -15,8 +15,8 @@ use super::flat::{
 };
 use super::request::{Dim, ImageAtomicOp, QueryKind};
 use super::run::Decision;
-use crate::rt as primase_rt;
-use crate::{Program, ResourceId};
+use primase_shader::rt as primase_rt;
+use primase_shader::{Program, ResourceId};
 
 /// The scalar kind of a typed value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1693,7 +1693,12 @@ pub(super) fn compile(
         globals,
         flush_denormals: p.modes.flush_denormals,
         workgroup: ep
-            .filter(|_| matches!(p.stage, crate::Stage::Compute | crate::Stage::Mesh))
+            .filter(|_| {
+                matches!(
+                    p.stage,
+                    primase_shader::Stage::Compute | primase_shader::Stage::Mesh
+                )
+            })
             .map(|e| e.workgroup_size),
         mesh_output,
         builtins: f

@@ -6,8 +6,8 @@ use crate::{Result, invalid, materials::Material};
 use primase_core::shader::{Shader as ShaderProgram, ShaderBinding, Stage, StageBinding};
 use primase_core::{Entity, Instance, Mesh, Semantic, Stream, World};
 use primase_meshops::vector::Vec3;
-use primase_shader::PixelShader;
-use primase_shader::exec::ProgramShader;
+use primase_shader_exec::PixelShader;
+use primase_shader_exec::ProgramShader;
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Prepared bake inventory over the texture files it borrows; each worker may prepare one material at a time, keeping

@@ -16,11 +16,12 @@
 //! far apart they are, and only a lane further apart than 1e-3 relative fails.
 mod common;
 use common::case;
-use primase_shader::exec::{Dim, ImageLoad, ImageQuery, ImageSample, ProgramShader, QueryKind};
 use primase_shader::{
-    InterpMode, InterpSampling, PixelShader, Program, ResourceKind, SampleType, Sampler, ScalarType,
-    StorageTarget, SystemValue, TextureDim,
+    InterpMode, InterpSampling, Program, ResourceKind, SampleType, ScalarType, StorageTarget, SystemValue,
+    TextureDim,
 };
+use primase_shader_exec::{Dim, ImageLoad, ImageQuery, ImageSample, ProgramShader, QueryKind};
+use primase_shader_exec::{PixelShader, Sampler};
 use primase_testdata::{Game, Tool, debug, tool};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -237,14 +238,14 @@ struct Uniform {
     samples: usize,
 }
 impl Sampler for Uniform {
-    fn sample(&mut self, r: primase_shader::Sample) -> Result<[f32; 4], String> {
+    fn sample(&mut self, r: primase_shader_exec::Sample) -> Result<[f32; 4], String> {
         self.sample_image(ImageSample {
             texture: r.texture,
             sampler: r.sampler,
             dim: Dim::D2,
             coord: [r.uv[0], r.uv[1], 0.0],
             layer: r.layer,
-            lod: primase_shader::exec::ImageLod::Implicit,
+            lod: primase_shader_exec::ImageLod::Implicit,
             offset: [0; 3],
             gather: None,
             depth_ref: None,
@@ -263,7 +264,7 @@ impl Sampler for Uniform {
             None => *c,
         })
     }
-    fn load(&mut self, r: primase_shader::Load) -> Result<[u32; 4], String> {
+    fn load(&mut self, r: primase_shader_exec::Load) -> Result<[u32; 4], String> {
         // a plain load: x, y and an array layer or 3D slice in the third lane
         let (dim, layers) = self.shapes[&r.texture];
         let (layer, z) = match dim {

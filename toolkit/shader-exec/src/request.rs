@@ -3,7 +3,7 @@
 //! A request names its resources by `R`: [`Element`] where the program's own interface is the vocabulary
 //! ([`Backend`]), the D3D bind slot where [`crate::Sampler`] answers for a bytecode that counts slots.
 
-use crate::ResourceId;
+use primase_shader::ResourceId;
 
 /// A resource of the program's interface and, for an array of them (`binding_array`), the element the program's index
 /// picked (0 for a resource that is not an array). An index past a bounded array's length is an error that stops the

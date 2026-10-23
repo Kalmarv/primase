@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 
 use primase_testdata::{Game, OracleSet, Query, expect_found, resolve};
 
-use primase_shader::{ConstantType, Majorness, PixelShader, ResourceKind, ScalarType, SystemValue};
+use primase_shader::{ConstantType, Majorness, ResourceKind, ScalarType, SystemValue};
+use primase_shader_exec::PixelShader;
 
 pub fn mix64(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);

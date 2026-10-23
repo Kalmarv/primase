@@ -30,7 +30,7 @@
 //! Direct3D 11 reference device of WARP) is in the tests.
 
 /// How the tessellator spaces the segments along an edge (`partitioning(...)` of the hull program).
-pub use crate::Partitioning;
+pub use primase_shader::Partitioning;
 /// What the tessellator emits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputPrimitive {

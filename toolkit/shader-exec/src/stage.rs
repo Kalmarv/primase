@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 
 use super::pixel::SlotBackend;
 use super::{Bound, Executable};
-use crate::{BufferKind, D3dClass, Program, ResourceId, ResourceKind, Sampler, StorageTarget};
+use crate::Sampler;
+use primase_shader::{BufferKind, D3dClass, Program, ResourceId, ResourceKind, StorageTarget};
 
 /// The rows of constant buffers, by (register, space).
 pub type Constants = BTreeMap<(u32, u32), Vec<[u32; 4]>>;

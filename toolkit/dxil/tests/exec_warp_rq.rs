@@ -9,7 +9,7 @@
 //! scenes and rays are made from fixed seeds.
 use primase_dxil::lift;
 use primase_shader::D3dClass;
-use primase_shader::exec::{
+use primase_shader_exec::{
     Backend, Element, Executable, Geometry, ImageSample, Instance, InstanceFlags, Resources, Scene,
 };
 use primase_testdata::{Tool, scratch, tool};

@@ -400,7 +400,7 @@ enum Frame {
 /// A ray query: the ray, the search's place, and what it has found.
 #[derive(Clone, Debug)]
 pub(super) struct Query {
-    scene: crate::ResourceId,
+    scene: primase_shader::ResourceId,
     pub flags: u32,
     mask: u32,
     pub tmin: f32,
@@ -422,7 +422,7 @@ fn inverse_direction(d: Vec3) -> Vec3 {
 
 impl Query {
     pub(super) fn new(
-        scene: crate::ResourceId,
+        scene: primase_shader::ResourceId,
         flags: u32,
         mask: u32,
         tmin: f32,
@@ -447,7 +447,7 @@ impl Query {
         }
     }
 
-    pub(super) fn scene(&self) -> crate::ResourceId {
+    pub(super) fn scene(&self) -> primase_shader::ResourceId {
         self.scene
     }
 
@@ -799,4 +799,4 @@ impl Reported {
 }
 
 /// The scenes a run was bound with.
-pub(super) type Scenes = BTreeMap<crate::ResourceId, std::sync::Arc<Built>>;
+pub(super) type Scenes = BTreeMap<primase_shader::ResourceId, std::sync::Arc<Built>>;

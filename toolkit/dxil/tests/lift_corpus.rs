@@ -104,14 +104,14 @@ fn census(game: Game) {
             Err(e) => c.invalid.push(format!("{}: {e}", path.display())),
         }
         // the executor compiles it too (as an entry point, or as its functions), or refuses it by name
-        let compiled = match primase_shader::exec::Executable::functions(&program) {
+        let compiled = match primase_shader_exec::Executable::functions(&program) {
             Ok(Some(_)) => {
                 *c.as_functions
                     .entry(format!("{:?}", program.interface.stage))
                     .or_default() += 1;
                 Ok(())
             }
-            Ok(None) => primase_shader::exec::Executable::new(&program).map(|_| ()),
+            Ok(None) => primase_shader_exec::Executable::new(&program).map(|_| ()),
             Err(e) => Err(e),
         };
         if let Err(e) = compiled {

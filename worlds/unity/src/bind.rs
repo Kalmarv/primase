@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use primase_core::{ColorSpace, Texture};
 use primase_image::srgb_to_linear;
-use primase_shader::{Constants, Field, Layout};
+use primase_shader_exec::{Field, Layout, evaluate::Constants};
 use primase_texcodec::TexDecoder;
 
 use crate::components::{Shape, UnityMaterial, UnityProgramVariant};
@@ -26,7 +26,7 @@ use crate::{Result, invalid};
 /// A program bound to its layout.
 #[derive(Debug)]
 pub struct Bound {
-    pub shader: primase_shader::exec::ProgramShader,
+    pub shader: primase_shader_exec::ProgramShader,
     pub layout: Layout,
     /// Each texture parameter's slot (`t<n>`), by property name.
     pub textures: BTreeMap<String, u32>,
@@ -49,9 +49,9 @@ fn words(shape: Shape, array_size: u32) -> u32 {
 /// program reads, and its texture slots. A field named twice is an error.
 pub fn bind(name: &str, p: &UnityProgramVariant) -> Result<Bound> {
     let program = primase_dxbc::lift(&p.code).map_err(|e| invalid(format!("program of {name}: {e}")))?;
-    let shader = primase_shader::exec::ProgramShader::new(program)
+    let shader = primase_shader_exec::ProgramShader::new(program)
         .map_err(|e| invalid(format!("program of {name}: {e}")))?;
-    let read = primase_shader::PixelShader::constant_buffers(&shader).to_vec();
+    let read = primase_shader_exec::PixelShader::constant_buffers(&shader).to_vec();
     let mut layout = Layout {
         buffers: read.iter().map(|&(slot, rows)| (slot, rows * 4)).collect(),
         fields: BTreeMap::new(),
@@ -277,19 +277,21 @@ impl UnityImage {
     }
 }
 
-impl primase_shader::Image for UnityImage {
-    fn sample(&self, uv: [f32; 2], lod: primase_shader::Lod) -> std::result::Result<[f32; 4], String> {
+impl primase_shader_exec::Image for UnityImage {
+    fn sample(&self, uv: [f32; 2], lod: primase_shader_exec::Lod) -> std::result::Result<[f32; 4], String> {
         let (w, h, _) = self.levels[0];
         let texels = |d: [f32; 2]| (f64::from(d[0]) * f64::from(w)).hypot(f64::from(d[1]) * f64::from(h));
         let lod = match lod {
-            primase_shader::Lod::Gradients([dx, dy]) => texels(dx).max(texels(dy)).max(1e-12).log2().max(0.0),
-            primase_shader::Lod::GradientsBias([dx, dy], b) => {
+            primase_shader_exec::Lod::Gradients([dx, dy]) => {
+                texels(dx).max(texels(dy)).max(1e-12).log2().max(0.0)
+            }
+            primase_shader_exec::Lod::GradientsBias([dx, dy], b) => {
                 (texels(dx).max(texels(dy)).max(1e-12).log2() + f64::from(b)).max(0.0)
             }
             // a scalar evaluation has no footprint: the implicit level is the finest, plus a stated bias or level
-            primase_shader::Lod::Implicit => 0.0,
-            primase_shader::Lod::Bias(b) => f64::from(b).max(0.0),
-            primase_shader::Lod::Level(l) => f64::from(l).max(0.0),
+            primase_shader_exec::Lod::Implicit => 0.0,
+            primase_shader_exec::Lod::Bias(b) => f64::from(b).max(0.0),
+            primase_shader_exec::Lod::Level(l) => f64::from(l).max(0.0),
         };
         let last = self.levels.len() - 1;
         Ok(match self.filter {
@@ -312,7 +314,7 @@ mod tests {
 
     use super::*;
     use primase_core::{TexFormat, TexRole};
-    use primase_shader::Image;
+    use primase_shader_exec::Image;
 
     fn texture(width: u32, height: u32, rows_top_first: &[[u8; 4]], space: ColorSpace) -> Texture {
         Texture {
@@ -343,21 +345,27 @@ mod tests {
         );
         let point = UnityImage::new(&t, [0, 1], 0).unwrap();
         assert_eq!(
-            point.sample([0.25, 0.25], primase_shader::Lod::Implicit).unwrap(),
+            point
+                .sample([0.25, 0.25], primase_shader_exec::Lod::Implicit)
+                .unwrap(),
             [0., 0., 1., 1.]
         );
         assert_eq!(
-            point.sample([0.25, 0.75], primase_shader::Lod::Implicit).unwrap(),
+            point
+                .sample([0.25, 0.75], primase_shader_exec::Lod::Implicit)
+                .unwrap(),
             [1., 0., 0., 1.]
         );
         // u repeats: 1.25 is 0.25; v clamps: 1.5 is the top row
         assert_eq!(
-            point.sample([1.25, 1.5], primase_shader::Lod::Implicit).unwrap(),
+            point
+                .sample([1.25, 1.5], primase_shader_exec::Lod::Implicit)
+                .unwrap(),
             [1., 0., 0., 1.]
         );
         let bilinear = UnityImage::new(&t, [0, 0], 1).unwrap();
         let mid = bilinear
-            .sample([0.5, 0.5], primase_shader::Lod::Implicit)
+            .sample([0.5, 0.5], primase_shader_exec::Lod::Implicit)
             .unwrap();
         assert_eq!(mid, [0.5, 0.5, 0.5, 1.]);
     }
@@ -368,7 +376,7 @@ mod tests {
         let t = texture(1, 1, &[[128, 128, 128, 128]], ColorSpace::Srgb);
         let s = UnityImage::new(&t, [0, 0], 0)
             .unwrap()
-            .sample([0.5, 0.5], primase_shader::Lod::Implicit)
+            .sample([0.5, 0.5], primase_shader_exec::Lod::Implicit)
             .unwrap();
         assert!((s[0] - srgb_to_linear(128.0 / 255.0) as f32).abs() < 1e-6);
         assert!((s[3] - 128.0 / 255.0).abs() < 1e-6);

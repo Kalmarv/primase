@@ -3,8 +3,9 @@
 //! corners moved by the primitive and the instance; two instances) drawn on the CPU: the primitives a topology makes,
 //! the instances of each, the strips they emit. The values are the arithmetic of the HLSL.
 use primase_dxil::lift;
-use primase_shader::exec::geometry::{GeometryShader, Strip, Topology, Vertex};
-use primase_shader::{GsInput, GsOutput, Sample, Sampler};
+use primase_shader::{GsInput, GsOutput};
+use primase_shader_exec::geometry::{GeometryShader, Strip, Topology, Vertex};
+use primase_shader_exec::{Sample, Sampler};
 use std::collections::BTreeMap;
 use std::path::Path;
 

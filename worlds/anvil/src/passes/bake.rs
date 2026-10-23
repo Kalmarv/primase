@@ -67,7 +67,9 @@ use primase_core::{
     TexRole, Texture, VertexColor, World,
 };
 use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
-use primase_shader::{Constants, Grid, Input, Invocation, Layout, Lod, PixelShader, evaluate_raw_with};
+use primase_shader_exec::{
+    Grid, Input, Invocation, Layout, Lod, PixelShader, evaluate::Constants, evaluate_raw_with,
+};
 
 use super::material::{ShaderUv, uv_transform};
 use crate::components::{
@@ -522,7 +524,7 @@ struct Footprinted {
     transfer: Transfer,
 }
 
-impl primase_shader::Image for Footprinted {
+impl primase_shader_exec::Image for Footprinted {
     fn sample(&self, uv: [f32; 2], lod: Lod) -> Result<[f32; 4], String> {
         let (w, h) = (self.levels.width, self.levels.height);
         let grad = |g: [[f32; 2]; 2]| g.map(|d| d.map(f64::from));
@@ -577,7 +579,7 @@ impl BakeAnvilMaterial {
     /// Run `program` for `m` (whose recipe is `recipe`) over the texture square.
     fn bake(&self, w: &World, m: &AnvilMaterial, recipe: &Recipe, program: &[u8]) -> Result<Baked, String> {
         let shader =
-            primase_shader::exec::ProgramShader::new(primase_dxbc::lift(program).map_err(|e| e.to_string())?)
+            primase_shader_exec::ProgramShader::new(primase_dxbc::lift(program).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
         let rows = material_rows(m)?;
         if let Some(r) = recipe.rows.iter().find(|r| !rows.contains_key(r)) {
@@ -688,7 +690,7 @@ impl BakeAnvilMaterial {
         for &(slot, value) in recipe.engine {
             let ao = recipe.terrain.is_some_and(|t| t.ao_texture == slot);
             let value = if ao { self.terrain_ao } else { value };
-            textures.insert(slot, primase_shader::Texture::Constant([value; 4]));
+            textures.insert(slot, primase_shader_exec::Texture::Constant([value; 4]));
         }
         for &slot in recipe.slots {
             // the texture the binding resolves to (the Material's record, its TextureSet's slot, or the template's
@@ -705,12 +707,12 @@ impl BakeAnvilMaterial {
                     s == slot && row.is_none_or(|r| rows.get(&r).is_some_and(|v| v[0] == 0.0))
                 }) =>
                 {
-                    textures.insert(75 + slot, primase_shader::Texture::Constant([0.0; 4]));
+                    textures.insert(75 + slot, primase_shader_exec::Texture::Constant([0.0; 4]));
                     continue;
                 }
                 // resolved to none: white, as `unset=white` states
                 None => {
-                    textures.insert(75 + slot, primase_shader::Texture::Constant([1.0; 4]));
+                    textures.insert(75 + slot, primase_shader_exec::Texture::Constant([1.0; 4]));
                     continue;
                 }
             };
@@ -726,7 +728,7 @@ impl BakeAnvilMaterial {
                     Transfer::Stored
                 },
             };
-            textures.insert(75 + slot, primase_shader::Texture::Image(Arc::new(image)));
+            textures.insert(75 + slot, primase_shader_exec::Texture::Image(Arc::new(image)));
         }
         let constant = |v: [f32; 4]| Input::Constant(v);
         let mut inputs = BTreeMap::from([

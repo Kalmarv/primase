@@ -25,8 +25,10 @@ use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaStage};
 use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
-use primase_shader::exec::ProgramShader;
-use primase_shader::{Constants, Grid, Input, Invocation, Layout, PixelShader, Texture, evaluate_raw};
+use primase_shader_exec::ProgramShader;
+use primase_shader_exec::{
+    Grid, Input, Invocation, Layout, PixelShader, Texture, evaluate::Constants, evaluate_raw,
+};
 use primase_testdata::{Game, install, keys};
 
 /// A program lifted and ready to run, or why not.

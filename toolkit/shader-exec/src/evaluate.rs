@@ -2,9 +2,8 @@
 //! program reads (constant layout and values, a texture per sampled slot, a value per used input) and which output
 //! registers it wants; the evaluator has no game names and no policy, and refuses what it is not given.
 
-use crate::{
-    ConstantType, D3dClass, Error, Interface, Load, Member, PixelShader, ResourceKind, Sample, Sampler,
-};
+use crate::{Error, Load, PixelShader, Sample, Sampler};
+use primase_shader::{ConstantType, D3dClass, Interface, Member, ResourceKind};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

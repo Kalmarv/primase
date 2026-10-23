@@ -1,6 +1,6 @@
 [package]
 name = "primase-shader"
-description = "One interface for bounded CPU evaluation of pixel shaders, whatever their bytecode"
+description = "The shader program every bytecode lifts into: interface, validation, builder, WGSL writer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,13 +12,7 @@ publish.workspace = true
 primase-core.workspace = true
 thiserror.workspace = true
 naga.workspace = true
-half.workspace = true
 sha2.workspace = true
-
-[dev-dependencies]
-# The implementations, to evaluate one fixture through each bytecode (a dev-dependency cycle cargo allows).
-primase-dxbc.workspace = true
-primase-dxil.workspace = true
 
 [lints]
 workspace = true

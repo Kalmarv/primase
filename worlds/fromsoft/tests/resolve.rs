@@ -17,8 +17,8 @@ use primase_fromsoft::sekiro::source::{
     MaterialShader, ShaderBundle, ShaderProgram, ShaderPrograms, ShaderStage, TexturePayloads,
 };
 use primase_image::sampling::Address;
-use primase_shader::PixelShader;
-use primase_shader::exec::ProgramShader;
+use primase_shader_exec::PixelShader;
+use primase_shader_exec::ProgramShader;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 mod common;

@@ -2,7 +2,7 @@
 
 Shader Model 6 containers. `module` reads the LLVM bitcode of the `DXIL` part (our own bounded bitstream reader),
 `reflection` the signatures, resources and constant-buffer layouts, and `lift` turns a program of any stage into a
-`primase_shader::Program`; running one is `primase_shader::exec`'s (`ProgramShader` for a pixel or vertex program).
+`primase_shader::Program`; running one is `primase_shader_exec`'s (`ProgramShader` for a pixel or vertex program).
 Sampling belongs to the caller of an execution.
 
 ## Reading
@@ -42,7 +42,7 @@ bind slot. An operation's arguments are read by position after one check of thei
 
 - `tests/fixtures.rs`: our own HLSL (`tests/fixtures/*.hlsl`, compiled with the dxc command in each file):
   the lifted interface (signature packing of every signature element, `used` where the program reads or writes a cell of it, resource names and slots, buffer field names
-  and offsets), execution (`primase_shader::exec::ProgramShader`) against outputs worked out from the HLSL, missing
+  and offsets), execution (`primase_shader_exec::ProgramShader`) against outputs worked out from the HLSL, missing
   bindings refused, every truncation of a fixture refused, and a seeded mutation run (the debug key `dxil.fuzz_runs`,
   default 3000).
 - `tests/exec_warp.rs`: the fixtures (blend, ops, flow, loops, switch, arrays, bits, resource arrays, pixel

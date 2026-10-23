@@ -2,7 +2,7 @@
 //! it emits. The expected lists are what the D3D11 input assembler of WARP gave a geometry shader that streams each
 //! input vertex's number out (`geometry_probe` of the WARP oracle).
 use primase_shader::GsOutput;
-use primase_shader::exec::geometry::{Strip, Topology};
+use primase_shader_exec::geometry::{Strip, Topology};
 
 fn lists(topology: Topology, vertices: usize) -> Vec<Vec<usize>> {
     topology.primitives(vertices)

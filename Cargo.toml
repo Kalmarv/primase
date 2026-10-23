@@ -18,6 +18,7 @@ members = [
     "toolkit/havok",
     "toolkit/dxbc",
     "toolkit/shader",
+    "toolkit/shader-exec",
     "toolkit/dxil",
     "toolkit/mojoshader",
     "toolkit/cache",
@@ -78,6 +79,7 @@ primase-cache = { path = "toolkit/cache" }
 primase-havok = { path = "toolkit/havok" }
 primase-dxbc = { path = "toolkit/dxbc" }
 primase-shader = { path = "toolkit/shader" }
+primase-shader-exec = { path = "toolkit/shader-exec" }
 primase-dxil = { path = "toolkit/dxil" }
 primase-mojoshader = { path = "toolkit/mojoshader" }
 primase-frostbite = { path = "worlds/frostbite" }

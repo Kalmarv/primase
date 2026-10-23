@@ -9,14 +9,14 @@
 //! and `tools.dxc` (for the oracle's vertex shader); it works in `warp` under the scratch folder. The vertex shader is
 //! generated from the container's interface ([`primase_dxil::interface`]): every input varying read from
 //! `cbuffer Case : register(b0, space1) { uint4 r[32]; }`, row by register.
-use primase_shader::exec::{
+use primase_shader::{
+    D3dClass, Interface, InterpMode, InterpSampling, Program, ResourceId, ScalarType, SystemValue,
+};
+use primase_shader_exec::{
     Backend, Element, Executable, ImageLoad, ImageQuery, ImageSample, ProgramShader, QueryKind, Resources,
     Runner,
 };
-use primase_shader::{
-    D3dClass, Interface, InterpMode, InterpSampling, PixelShader, Program, ResourceId, Sample, ScalarType,
-    SystemValue,
-};
+use primase_shader_exec::{PixelShader, Sample};
 use primase_testdata::{Tool, scratch, tool};
 use std::collections::BTreeMap;
 use std::path::Path;

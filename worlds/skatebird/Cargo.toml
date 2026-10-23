@@ -13,6 +13,7 @@ primase-core.workspace = true
 primase-unity.workspace = true
 primase-meshops.workspace = true
 primase-shader.workspace = true
+primase-shader-exec.workspace = true
 primase-image.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -93,8 +93,8 @@ pub(crate) fn address(mode: Option<primase_core::shader::AddressMode>) -> Result
 }
 
 /// The policy's sampling whatever level of detail the program states: the base mip.
-impl primase_shader::Image for BaseMipBilinearWrap {
-    fn sample(&self, uv: [f32; 2], _lod: primase_shader::Lod) -> std::result::Result<[f32; 4], String> {
+impl primase_shader_exec::Image for BaseMipBilinearWrap {
+    fn sample(&self, uv: [f32; 2], _lod: primase_shader_exec::Lod) -> std::result::Result<[f32; 4], String> {
         BaseMipBilinearWrap::sample(self, uv).map_err(|e| e.to_string())
     }
 }

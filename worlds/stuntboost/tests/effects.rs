@@ -193,7 +193,7 @@ fn e3_every_shader_compiles_on_the_executor() {
         for index in 0..effect.shaders.len() {
             let program = primase_monogame::programs::program(&effect, index).unwrap();
             programs += 1;
-            if let Err(e) = primase_shader::exec::Executable::new(&program) {
+            if let Err(e) = primase_shader_exec::Executable::new(&program) {
                 refused
                     .entry(e.detail.clone())
                     .or_default()

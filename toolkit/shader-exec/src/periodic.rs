@@ -12,7 +12,8 @@
 //! The cross-fade is the one approximation: a program that is already periodic with period K (E(x + K * texels) =
 //! E(x)) bakes exactly; any other is changed in the first cell of each axis only, to the blend above.
 
-use crate::{Constants, Error, Evaluation, Grid, Input, PixelShader, Texture, evaluate_with};
+use crate::evaluate::Constants;
+use crate::{Error, Evaluation, Grid, Input, PixelShader, Texture, evaluate_with};
 use primase_core::parallel::Threads;
 use std::collections::BTreeMap;
 

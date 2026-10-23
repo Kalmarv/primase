@@ -1,19 +1,10 @@
-# Shader programs and the pixel-shader evaluation interface
+# Shader programs
 
 This crate holds what the lifters share: the program representation (`Program`: a naga module with the interface in
 primase's vocabulary, `validate`, `text`, `emit`), the typed `build::Builder` they lift with, the D3D mapping tables
-(`d3d`), the executor (`exec`), the refusal type and the version gate (`Refusal`, `gate`), and the older pixel-shader
-evaluation interface described first. The program representation, the versions and the support ledger follow it.
-
-`PixelShader` is what a bake evaluates, whatever the bytecode: `interface()` (the program's varyings and resources in
-primase's own vocabulary, below), `input_count()`, `constant_buffers()` (bind slot and rows of four lanes),
-`textures()` and `samplers()` (bind slots), and `execute(inputs, buffers, sampler)`. `primase-dxbc` (`Shader`, Shader
-Model 5) and `primase-dxil` (`Shader`, Shader Model 6) implement it.
-
-Sampling is the caller's `Sampler` callback (texture and sampler slots, UV): a scalar evaluation has no
-derivatives, so the caller states its footprint, addressing, filtering and transfer. An `Execution` holds the
-output registers, the mask of lanes the shader wrote, and instruction and sample counts. Errors name their
-bytecode and location.
+(`d3d`), the refusal type and the version gate (`Refusal`, `gate`). Running a program is `primase-shader-exec`, which
+depends on this crate; the lifters (`primase-dxbc`, `primase-dxil`, `primase-mojoshader`) do not. The interface
+vocabulary, the program representation, the versions and the support ledger follow.
 
 ## The interface vocabulary
 
@@ -54,34 +45,6 @@ What the readers keep and drop, so nobody looks for it:
 - A DXIL `half` and a DXBC-side min-precision type are read as 32-bit; DXIL min-precision signature annotations are not
   read.
 - What is not mapped is refused by name; the support ledger below counts each lifter's refusals by reason.
-
-## Evaluating over a grid
-
-`evaluate` runs a `PixelShader` once per pixel of a UV grid: the generic part of a material bake. The caller states
-everything the program reads and the evaluator adds no policy of its own:
-
-- `Layout`: the buffers the program reads (bind slot, words) and where each named constant lives (`Field`: buffer,
-  word offset, words). `Layout::of` builds it from the interface, struct members flattened to their own names (a name
-  that occurs twice, or a field off a word boundary, is an error); a caller whose bytecode carries no reflection
-  builds it from its own records. A field's words are its type's extent (`ConstantType::size()`).
-- `Constants`: the words, zero until set. `set(field, values)` writes a field's leading words (`Ok(false)` for an
-  unknown name, an error for more values than the field has); `set_words(buffer, offset, bits)` writes raw words at
-  a stated offset; words past the rows the program reads are not stored. `unset_words` counts what stays zero.
-- `Texture` per bind slot: an `Image` the caller samples by its own policy, or a constant. A slot the program
-  samples without one is an error.
-- `Input` per (semantic, index), compared case-insensitively: lanes of raw bits, the grid's U or V, a constant, or
-  `GridUv`. Lane k is the element's k-th component wherever the signature places it (a float2 packed into `.zw`
-  receives lanes 0 and 1 there). A used input without one is an error. The evaluation still runs on D3D's register
-  model, so it reads each input's register and lanes from `provenance.d3d`.
-- `Grid`: pixel (x, y) of size x size is evaluated at U = (x + 0.5) / size * period[0], V likewise, in f32.
-- Targets: (output register, component mask). Each comes back as size x size values, or None when the program does
-  not write those components; a program that writes them at some pixels only is an error.
-
-Tests: `tests/interface.rs` reads two HLSL fixtures (`tests/fixtures/resources.hlsl`, `varyings.hlsl`) compiled with
-fxc (SM5) and dxc (SM6) and holds the vocabulary read from either to the same values worked out from the HLSL and fxc's
-own listing of the buffer layouts. `tests/evaluate.rs` evaluates `tests/fixtures/evaluate.hlsl` through both
-implementations against outputs worked out from the HLSL, the refusals, and constant packing worked out from D3D's
-rules.
 
 ## The program representation
 
@@ -124,7 +87,7 @@ program a lifter makes carries `source_hash`, the SHA-256 of the bytes it was gi
 
 ## Support ledger
 
-What the lifters make of every program of every corpus the project holds, counted by the census tests (`toolkit/dxbc/tests/lift_corpus.rs`, `toolkit/dxil/tests/lift_corpus.rs`, `worlds/gta/tests/fxc_census.rs`, `worlds/stuntboost/tests/effects.rs`) in one release run on main `11fe408a` plus the commit that switches naga to the fork (the STUNTBOOST row was not re-run: it is as first measured, and the fork changes nothing it uses). The corpora are from the oracle tree (`oracles.corpus.<game>/shaders`; the Elden Ring folder holds 50,283 containers today, the row it replaces counted 44,450) and the STUNTBOOST install's `Content/Effects`; the numbers are the tests' own output. Lifted is `lift` returning a program; validated is `Program::validate`; written is `emit::wgsl` (or `wgsl_functions` for a stage with no entry point) succeeding. A lifted program is executable in one of two forms: as an entry point (`Executable::new`: pixel, vertex, compute and mesh programs) or as its functions (`Executable::functions`, which compiles each with `Executable::function`: hull, domain and geometry programs, vertex programs that feed a tessellator, and the ray tracing pipeline's programs, which `exec::Pipeline` runs). No lifted program of any corpus is refused by the executor.
+What the lifters make of every program of every corpus the project holds, counted by the census tests (`toolkit/dxbc/tests/lift_corpus.rs`, `toolkit/dxil/tests/lift_corpus.rs`, `worlds/gta/tests/fxc_census.rs`, `worlds/stuntboost/tests/effects.rs`) in one release run on main `11fe408a` plus the commit that switches naga to the fork (the STUNTBOOST row was not re-run: it is as first measured, and the fork changes nothing it uses). The corpora are from the oracle tree (`oracles.corpus.<game>/shaders`; the Elden Ring folder holds 50,283 containers today, the row it replaces counted 44,450) and the STUNTBOOST install's `Content/Effects`; the numbers are the tests' own output. Lifted is `lift` returning a program; validated is `Program::validate`; written is `emit::wgsl` (or `wgsl_functions` for a stage with no entry point) succeeding. A lifted program is executable in one of two forms: as an entry point (`primase_shader_exec::Executable::new`: pixel, vertex, compute and mesh programs) or as its functions (`primase_shader_exec::Executable::functions`, which compiles each with `primase_shader_exec::Executable::function`: hull, domain and geometry programs, vertex programs that feed a tessellator, and the ray tracing pipeline's programs, which `primase_shader_exec::Pipeline` runs). No lifted program of any corpus is refused by the executor.
 
 | corpus (test) | programs | lifted | validated | written as WGSL | refused by the lift | executable as an entry point | executable as functions |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -160,4 +123,4 @@ None: no program of any corpus is refused by a lifter.
 | 4,737 | Elden Ring | 150 domain, 136 hull, 33 geometry, 137 vertex, and 4,281 ray tracing pipeline programs (2,138 any-hit, 2,138 closest-hit, 2 miss, 3 ray generation) |
 | 205 | skate. | ray tracing pipeline programs (172 ray generation, 16 closest-hit, 8 miss, 6 intersection, 3 any-hit) |
 
-A mesh program (skate. has one) is an entry point: `exec::mesh::MeshShader` runs each of its thread groups in lockstep and returns the meshlet it wrote. The census prints no refusal by the executor; the ledger it replaces counted 38 ray-query programs with procedural intersections and this mesh program as refused here.
+A mesh program (skate. has one) is an entry point: `primase_shader_exec::mesh::MeshShader` runs each of its thread groups in lockstep and returns the meshlet it wrote. The census prints no refusal by the executor; the ledger it replaces counted 38 ray-query programs with procedural intersections and this mesh program as refused here.

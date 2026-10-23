@@ -7,10 +7,11 @@
 //!
 //! Needs the WARP oracle program with the `d3d12rtp` case form (the configured `Tool::Warp`) and the scratch folder.
 use primase_dxil::lift;
-use primase_shader::exec::{
+use primase_shader::{HitGroup, HitGroupKind};
+use primase_shader_exec::{
     Geometry, Instance, InstanceFlags, Pipeline, PipelineResources, Scene, ShaderTable,
 };
-use primase_shader::{HitGroup, HitGroupKind, Sample, Sampler, Store};
+use primase_shader_exec::{Sample, Sampler, Store};
 use primase_testdata::{Tool, scratch, tool};
 use std::collections::BTreeMap;
 use std::path::PathBuf;

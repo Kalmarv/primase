@@ -3,7 +3,7 @@
 //! geometry program's emitted vertices are, [`MeshShader::outputs`] names them) and its primitives (the indices of their
 //! vertices). What the rasterizer does with them is the pipeline's.
 //!
-//! The program is the entry point of [`crate::build::Builder::finish_mesh`]: the group's invocations run in lockstep
+//! The program is the entry point of [`primase_shader::build::Builder::finish_mesh`]: the group's invocations run in lockstep
 //! like a compute program's, and what they write is the module's output variable, thread-group memory that is read when
 //! the group has finished. The counts the program set are the group's (D3D requires every invocation to set the same),
 //! and a count past the most the program declares, or an index past the vertices it counted, is an error of the run:
@@ -12,7 +12,8 @@
 use super::geometry::Vertex;
 use super::stage::{Bindings, Constants};
 use super::{Executable, error};
-use crate::{Error, IoType, MeshFacts, MeshTopology, Program, Sampler, StageFacts, mesh_vertex_io};
+use crate::{Error, Sampler};
+use primase_shader::{IoType, MeshFacts, MeshTopology, Program, StageFacts, mesh_vertex_io};
 
 /// What one thread group wrote.
 #[derive(Clone, Debug, PartialEq, Eq)]
