@@ -50,6 +50,11 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
     let mut constants: BTreeMap<String, (usize, u64)> = BTreeMap::new();
     // per bound material: variants, stages, constants and the bytes they cover
     let mut sizes: Vec<[u64; 4]> = Vec::new();
+    // the engine's lists (b0, b4) as signatures of (name, offset, size), distinct per list, and the constants that
+    // remain when adjacent constants of one resource with the same Unknown reason are merged into runs
+    let mut engine_lists: std::collections::BTreeSet<Vec<(Option<String>, u32, u32)>> =
+        std::collections::BTreeSet::new();
+    let (mut engine_constants, mut engine_runs, mut all_runs) = (0u64, 0u64, 0u64);
     let mut inputs: BTreeMap<String, usize> = BTreeMap::new();
     let mut textures: BTreeMap<&'static str, usize> = BTreeMap::new();
     // histograms: drawing programs per material with a row; per drawing program the listed permutations, the distinct
@@ -117,6 +122,35 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
                 .collect::<std::collections::BTreeSet<_>>()
                 .len() as u64;
             for s in &b.stages {
+                let mut runs: Vec<(u32, u32, u32, &str)> = Vec::new(); // (resource, offset, end, reason)
+                let mut lists: BTreeMap<u32, Vec<(Option<String>, u32, u32)>> = BTreeMap::new();
+                for c in &s.constants {
+                    let ConstantRole::Unknown { why } = &c.role else {
+                        all_runs += 1;
+                        continue;
+                    };
+                    let engine = why.starts_with("the engine fills");
+                    if engine {
+                        engine_constants += 1;
+                        lists
+                            .entry(c.resource.0)
+                            .or_default()
+                            .push((c.name.clone(), c.offset, c.size));
+                    }
+                    match runs.last_mut() {
+                        Some(r) if r.0 == c.resource.0 && r.2 == c.offset && r.3 == why => {
+                            r.2 = c.offset + c.size
+                        }
+                        _ => {
+                            runs.push((c.resource.0, c.offset, c.offset + c.size, why));
+                            if engine {
+                                engine_runs += 1;
+                            }
+                        }
+                    }
+                }
+                all_runs += runs.len() as u64;
+                engine_lists.extend(lists.into_values());
                 size[1] += 1;
                 size[2] += s.constants.len() as u64;
                 size[3] += s.constants.iter().map(|c| u64::from(c.size)).sum::<u64>();
@@ -168,6 +202,12 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
         println!("  {n:>7}  {k}");
     }
     println!("texture slots by source: {textures:?}");
+    println!(
+        "engine constants {engine_constants} -> {engine_runs} runs; all constants {} -> {all_runs} with Unknown runs merged; {} distinct engine lists (name, offset, size) over {} stages",
+        sizes.iter().map(|s| s[2]).sum::<u64>(),
+        engine_lists.len(),
+        sizes.iter().map(|s| s[1]).sum::<u64>()
+    );
     for (what, i) in [
         ("variants", 0),
         ("stages", 1),

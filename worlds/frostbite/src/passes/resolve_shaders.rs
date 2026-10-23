@@ -26,7 +26,9 @@
 //!   (b0, b4) are the engine's and `Unknown`, as is a parameter the block does not hold. Bytes of a buffer no placed
 //!   parameter covers (a parameter whose entry states no offset, a read past the last placed one) are `Unknown`, and
 //!   a buffer with no source (b2, b3, any other register or space) is one `Unknown` constant. A constant is clipped
-//!   to the extent the shader declares for the buffer.
+//!   to the extent the shader declares for the buffer. Adjacent `Unknown` constants of one reason are one constant
+//!   over their bytes, the parameter names dropped (the group on the permutation entity names every parameter): on the
+//!   census sample the engine's lists were 205,208 constants in 1,916 stages and are 3,248 runs.
 //! - **Textures.** Every texture is `Missing`: the depot block holds a texture reference (two GUIDs) for the slots the
 //!   sets name, and linking it to a texture asset is not done here. The log counts the slots by whether the sets name
 //!   them and the block holds a reference.
@@ -503,7 +505,29 @@ fn buffer_constants(
         });
     }
     kept.sort_by_key(|c| c.offset);
-    kept
+    merge_unknown_runs(kept, log)
+}
+
+/// Adjacent `Unknown` constants of one reason as one constant over their bytes (its name dropped: the group on the
+/// permutation entity still names every parameter). A constant with a role of its own, and one next to a different
+/// reason or past a gap, stays as it is. Most of the pass binding's and of set 1's parameters are one run, so a stage
+/// holds a few constants for them instead of a hundred.
+fn merge_unknown_runs(constants: Vec<ConstantBinding>, log: &mut PassLog) -> Vec<ConstantBinding> {
+    let mut out: Vec<ConstantBinding> = Vec::with_capacity(constants.len());
+    for c in constants {
+        if let (Some(last), ConstantRole::Unknown { why }) = (out.last_mut(), &c.role)
+            && matches!(&last.role, ConstantRole::Unknown { why: before } if before == why)
+            && last.resource == c.resource
+            && last.offset + last.size == c.offset
+        {
+            last.size += c.size;
+            last.name = None;
+            log.count("unknown constants merged into the run before them", 1);
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -627,6 +651,63 @@ mod tests {
         let c = buffer_constants(Some(&other), 1, 0, ResourceId(0), 32, Some(&d), &mut log);
         assert!(matches!(&c[0].role, ConstantRole::Unknown { why } if why.contains("another type")));
         assert!(matches!(&c[1].role, ConstantRole::Unknown { why } if why.contains("no parameter")));
+    }
+
+    #[test]
+    fn adjacent_unknown_constants_of_one_reason_are_one_run() {
+        // b4: three engine parameters, two adjacent (0..32) and one after a gap (48..64)
+        let g = group(&[
+            (0xB1, FLOAT4, 0, 16),
+            (0xB2, FLOAT4, 16, 16),
+            (0xB3, FLOAT4, 48, 16),
+        ]);
+        let mut log = PassLog::default();
+        let c = buffer_constants(Some(&g), 4, 0, ResourceId(0), 64, None, &mut log);
+        let runs: Vec<(u32, u32, Option<&str>)> =
+            c.iter().map(|c| (c.offset, c.size, c.name.as_deref())).collect();
+        // the first two are one run without a name, the gap has its own reason, the lone parameter keeps its name
+        assert_eq!(
+            runs,
+            [
+                (0, 32, None),
+                (32, 16, None),
+                (48, 16, Some("0x00000000000000b3"))
+            ]
+        );
+        assert_eq!(log.counts["unknown constants merged into the run before them"], 1);
+        // the parameters are still counted one by one
+        assert_eq!(log.counts["constants of the engine's sets (b0, b4), Unknown"], 3);
+        // set 0: a material's own words are never merged, nor are Unknowns of two reasons (the block holds 0xA2 as a
+        // float4, not a float); the two parameters it holds nothing for are one run
+        let g = group(&[
+            (0xA1, FLOAT, 0, 4),
+            (0xA2, FLOAT, 4, 4),
+            (0xB9, FLOAT, 8, 4),
+            (0xA3, FLOAT, 12, 4),
+        ]);
+        let d = material();
+        let c = buffer_constants(
+            Some(&g),
+            1,
+            0,
+            ResourceId(0),
+            16,
+            Some(&d),
+            &mut PassLog::default(),
+        );
+        let shape: Vec<(u32, u32, &str)> = c
+            .iter()
+            .map(|c| {
+                let what = match &c.role {
+                    ConstantRole::Material(_) => "material",
+                    ConstantRole::Unknown { why } if why.contains("another type") => "type",
+                    ConstantRole::Unknown { why } if why.contains("no parameter") => "none",
+                    _ => "other",
+                };
+                (c.offset, c.size, what)
+            })
+            .collect();
+        assert_eq!(shape, [(0, 4, "material"), (4, 4, "type"), (8, 8, "none")]);
     }
 
     #[test]
