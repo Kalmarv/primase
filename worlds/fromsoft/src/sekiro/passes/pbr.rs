@@ -251,8 +251,8 @@ fn base_unread(
 ) -> Option<String> {
     match base {
         Err(u) => Some(format!(
-            "material binary whose program's base albedo could not be read, drawn without a base texture: {}",
-            u.program
+            "material binary whose program's base albedo could not be read, drawn without a base texture: {}: {}",
+            u.program, u.why
         )),
         Ok(Some(b)) if preview.albedo_binding.as_deref() != Some(b.slot.binding.as_str()) => Some(format!(
             "material binary whose base albedo is not held, drawn without a base texture: {}",
