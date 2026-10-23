@@ -30,4 +30,4 @@ workspace = true
 
 [package.metadata.primase]
 kind = "engine"
-names = ["anvil", "scimitar"]
+names = ["anvil", "scimitar", "riders"]
