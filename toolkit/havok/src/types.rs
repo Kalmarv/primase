@@ -13,6 +13,8 @@ pub struct Type {
     pub abstract_value: Option<u64>,
     pub parameters: Vec<(String, u64)>,
     pub fields: Vec<Field>,
+    /// Reflection properties the type declares beside its fields: counted, their records are not serialized.
+    pub properties: usize,
     pub interfaces: Vec<(usize, u64)>,
     pub hash: Option<u32>,
 }
@@ -211,7 +213,11 @@ pub(crate) fn read_types(section: Section<'_>) -> Result<Vec<Type>> {
             t.abstract_value = Some(c.packed()?);
         }
         if t.flags & 32 != 0 {
-            let n = c.index()?;
+            // The low 16 bits count the field records that follow; the high 16 bits count reflection properties,
+            // which store no records here (as HKLib's 2018 reader reads the same word).
+            let counts = c.packed()?;
+            t.properties = usize::try_from(counts >> 16).map_err(|_| c.error("property count overflow"))?;
+            let n = (counts & 0xffff) as usize;
             if n > c.bytes.len() / 4 {
                 return Err(c.error("unsupported or invalid member count"));
             }

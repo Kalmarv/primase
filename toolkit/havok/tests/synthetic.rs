@@ -19,10 +19,17 @@ fn packed(value: u32) -> Vec<u8> {
     }
 }
 fn fixture() -> Vec<u8> {
+    fixture_with(b"20160200", packed(3))
+}
+/// The fixture with another SDK version and Root's packed member counts (fields in the low 16 bits, reflection
+/// properties above).
+fn fixture_with(sdk: &[u8; 8], root_counts: Vec<u8>) -> Vec<u8> {
     let strings = b"Root\0uint\0Pointer\0Array\0".to_vec();
     let names = vec![5, 0, 0, 1, 0, 2, 0, 3, 0];
     // Root{u32 value @0; pointer @8; array @16}, uint, ptr<uint>, array<ptr>.
-    let mut body = vec![1, 0, 41, 7, 32, 8, 3, 0, 32, 0, 2, 1, 32, 8, 3, 2, 32, 16, 4];
+    let mut body = vec![1, 0, 41, 7, 32, 8];
+    body.extend(root_counts);
+    body.extend([0, 32, 0, 2, 1, 32, 8, 3, 2, 32, 16, 4]);
     body.extend([2, 0, 9]);
     body.extend(packed(0x8004));
     body.extend([4, 4]);
@@ -49,7 +56,7 @@ fn fixture() -> Vec<u8> {
         items.extend(offset.to_le_bytes());
         items.extend(count.to_le_bytes());
     }
-    let mut root = section(b"SDKV", true, b"20160200".to_vec());
+    let mut root = section(b"SDKV", true, sdk.to_vec());
     root.extend(section(b"DATA", true, data));
     root.extend(section(b"TYPE", false, types));
     root.extend(section(b"INDX", false, section(b"ITEM", true, items)));
@@ -112,4 +119,18 @@ fn oversized_item_and_bad_reference_fail() {
             .dereference()
             .is_err()
     );
+}
+#[test]
+fn sdk_2018_member_counts_carry_property_counts() {
+    let bytes = fixture_with(b"20180100", packed(0x0002_0003));
+    let tag = Tagfile::read(&bytes, None).expect("fixture");
+    assert_eq!(&tag.version, b"20180100");
+    let root = tag.root().expect("root");
+    assert_eq!(root.field("value").expect("value").unsigned().expect("uint"), 17);
+    assert_eq!(tag.types[1].fields.len(), 3);
+    assert_eq!(tag.types[1].properties, 2);
+    let old = fixture();
+    let tag = Tagfile::read(&old, None).expect("fixture");
+    assert_eq!(tag.types[1].properties, 0);
+    assert!(Tagfile::read(&fixture_with(b"20170100", packed(3)), None).is_err());
 }

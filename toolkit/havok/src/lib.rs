@@ -6,11 +6,11 @@ mod convex;
 mod mesh;
 pub use convex::ConvexCore;
 mod section;
-pub use mesh::{CompressedMesh, Triangle, compressed_mesh};
+pub use mesh::{CompressedMesh, MeshSection, Triangle, compressed_mesh, mesh_sections};
 mod tagfile;
 mod types;
 mod value;
-pub use tagfile::{Item, Tagfile};
+pub use tagfile::{Item, SDK_VERSIONS, Tagfile};
 pub use types::{Compendium, Field, Type};
 pub use value::{Array, Value};
 

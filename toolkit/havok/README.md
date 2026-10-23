@@ -1,7 +1,9 @@
 # Havok tagfiles
 
-The reader accepts Havok 2016.2 `TAG0` object files and `TCM0` external type
-compendia. Class layouts, inheritance and members come from the declared TYPE
+The reader accepts Havok 2016.2 and 2018.1 `TAG0` object files (`SDK_VERSIONS`)
+and `TCM0` external type compendia. A type body's packed member count holds the
+field count in its low 16 bits and a count of reflection properties, which store
+no records, above them (`Type::properties`; HKLib's 2018 reader reads the word the same way). Class layouts, inheritance and members come from the declared TYPE
 metadata; no game-specific offsets or material rules are embedded here.
 
 `Tagfile` retains borrowed DATA with owned type and item indexes. `Value` and
@@ -14,8 +16,13 @@ Havok class or unused DATA byte; supported accessors validate the values they
 read. Stored nonfinite floats are preserved in unused SIMD lanes; geometry
 operations reject nonfinite coordinates.
 
-`compressed_mesh` decodes hknp compressed mesh data with shared vertex toolkit
-11/11/10 and 21/21/22 position arithmetic, quad splitting, per-triangle shape
+`compressed_mesh` decodes hknp compressed mesh data. Mesh-tree sections name
+their vertex and primitive ranges per SDK version: 2016.2 packs `(first << 8) |
+count` into `sharedVertices` and `primitives`, 2018.1 stores
+`firstPackedVertexIndex`, `numPackedVertices`, `firstSharedVertexIndex`,
+`firstPrimitiveIndex` and `numPrimitives`; `mesh_sections` returns them in one form
+(`MeshSection`), as the decoder reads them. The decoder uses the shared vertex toolkit
+11/11/10 and 21/21/22 position arithmetic, and handles quad splitting, per-triangle shape
 keys, and a counted DEAD primitive sentinel. It returns shape-local geometry;
 rigid transforms and game-specific material mappings belong to its caller.
 `ConvexCore` retains stored vertices, faces, planes and convex radius. Its

@@ -507,6 +507,14 @@ blockers; 40) and the crop are `lower-fromsoft-collision`'s options. HitMtrl IDs
 map by their base value modulo 100 to core surface names where the class's surface
 is known.
 
+Elden Ring's collision is Havok 2018.1 (`primase-havok`'s `SDK_VERSIONS`). Its stored compressed meshes are
+checked against HKLib ac40bc9 (`havok.jsonl` of `PRIMASE_ELDEN_FORMAT_ORACLE`, `tests/havok_census.rs`): one record
+per file, `file` (`<binder path>:<member>`), then `error` or `shapes`, each `kind`, `bits_per_key`, `sections`
+(`codec` as six f32 bit patterns, `first_packed_vertex`, `packed_vertices`, `first_shared_vertex`,
+`first_primitive`, `primitives`), `packed_vertices`, `shared_vertices`, `shared_vertices_index`, `primitives` (four
+indices each) and `triangle_to_shape_key` (FromSoft's custom-param shape, else null). A file's shapes are compared as
+a set; the triangle decode built on them is not part of this check.
+
 The reader preserves raw authored roof collision. Roof smoothing, generated
 opened-up surfaces, and object collision are not included in this step.
 The whole-install collision census includes map h/l/f binders and all HKX members

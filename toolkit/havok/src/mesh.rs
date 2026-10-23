@@ -13,6 +13,82 @@ pub struct CompressedMesh {
     pub dead_primitives: usize,
 }
 
+/// How a mesh-tree section names its vertex and primitive ranges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SectionLayout {
+    /// 2016.2: `firstPackedVertex`, and `sharedVertices.data` / `primitives.data` each packing `(first << 8) | count`.
+    Packed,
+    /// 2018.1: separate `firstPackedVertexIndex`, `numPackedVertices`, `firstSharedVertexIndex`, `firstPrimitiveIndex`
+    /// and `numPrimitives` fields.
+    Fields,
+}
+/// The section layout of each supported SDK version.
+const SECTION_LAYOUTS: [([u8; 8], SectionLayout); 2] = [
+    (*b"20160200", SectionLayout::Packed),
+    (*b"20180100", SectionLayout::Fields),
+];
+/// One section of a compressed mesh tree as stored, whichever SDK version stored it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeshSection {
+    /// The dequantisation offset (xyz) and scale (xyz) of the section's packed vertices.
+    pub codec: [f32; 6],
+    pub first_packed_vertex: usize,
+    pub packed_vertices: usize,
+    /// The section's first entry of the shared-vertex index.
+    pub first_shared_vertex: usize,
+    pub first_primitive: usize,
+    pub primitives: usize,
+}
+/// The sections of an hknpCompressedMeshShapeData mesh tree, as its SDK version names their ranges.
+pub fn mesh_sections(data: Value<'_, '_>) -> Result<Vec<MeshSection>> {
+    let layout = SECTION_LAYOUTS
+        .iter()
+        .find(|(version, _)| *version == data.tag.version)
+        .map(|(_, layout)| *layout)
+        .ok_or_else(|| invalid(data.offset, "no mesh section layout for this SDK version"))?;
+    let sections = data.field("meshTree")?.field("sections")?.array()?;
+    (0..sections.len())
+        .map(|i| {
+            let section = sections.get(i)?;
+            let field = |name: &str| section.field(name)?.unsigned().map(|v| v as usize);
+            let [
+                first_packed_vertex,
+                packed_vertices,
+                first_shared_vertex,
+                first_primitive,
+                primitives,
+            ] = match layout {
+                SectionLayout::Packed => {
+                    let shared = section.field("sharedVertices")?.field("data")?.unsigned()? as usize;
+                    let range = section.field("primitives")?.field("data")?.unsigned()? as usize;
+                    [
+                        field("firstPackedVertex")?,
+                        shared & 255,
+                        shared >> 8,
+                        range >> 8,
+                        range & 255,
+                    ]
+                }
+                SectionLayout::Fields => [
+                    field("firstPackedVertexIndex")?,
+                    field("numPackedVertices")?,
+                    field("firstSharedVertexIndex")?,
+                    field("firstPrimitiveIndex")?,
+                    field("numPrimitives")?,
+                ],
+            };
+            Ok(MeshSection {
+                codec: section.field("codecParms")?.vector::<6>()?,
+                first_packed_vertex,
+                packed_vertices,
+                first_shared_vertex,
+                first_primitive,
+                primitives,
+            })
+        })
+        .collect()
+}
+
 /// Decode an hknpCompressedMeshShapeData mesh tree. Materials and rigid-body
 /// transforms belong to the caller. Packed section vertices are 11/11/10 bits;
 /// shared vertices are 21/21/22 bits over the declared domain.
@@ -28,19 +104,20 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
     let shared = tree.field("sharedVertices")?.array()?;
     let shared_indices = tree.field("sharedVerticesIndex")?.array()?;
     let sections = tree.field("sections")?.array()?;
+    let ranges = mesh_sections(data)?;
     let mut result = CompressedMesh::default();
-    for section_index in 0..sections.len() {
+    for (section_index, range) in ranges.iter().enumerate() {
         let section = sections.get(section_index)?;
-        let codec = section.field("codecParms")?.vector::<6>()?;
+        let &MeshSection {
+            codec,
+            first_packed_vertex: first,
+            packed_vertices: local_count,
+            first_shared_vertex: shared_base,
+            first_primitive: start,
+            primitives: count,
+        } = range;
         let offset = [codec[0], codec[1], codec[2]];
         let scale = [codec[3], codec[4], codec[5]];
-        let first = section.field("firstPackedVertex")?.unsigned()? as usize;
-        let shared_range = section.field("sharedVertices")?.field("data")?.unsigned()? as usize;
-        let local_count = shared_range & 255;
-        let shared_base = shared_range >> 8;
-        let range = section.field("primitives")?.field("data")?.unsigned()? as usize;
-        let count = range & 255;
-        let start = range >> 8;
         // The primitive occupies seven key bits; its quad half occupies one.
         if count > 128 || section_index > 0x00ff_ffff {
             return Err(invalid(section.offset, "shape key range overflow"));

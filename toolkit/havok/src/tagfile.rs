@@ -1,6 +1,10 @@
 use crate::types::{Cursor, read_types, required};
 use crate::{Compendium, Result, Type, invalid, sections};
 
+/// SDK versions whose tagfile layout this reader knows: 2016.2 and 2018.1. Both store the same section tree and the
+/// same item and patch tables; class layouts come from each file's own type metadata.
+pub const SDK_VERSIONS: [[u8; 8]; 2] = [*b"20160200", *b"20180100"];
+
 #[derive(Debug, Clone, Copy)]
 pub struct Item {
     pub type_index: usize,
@@ -36,7 +40,7 @@ impl<'a> Tagfile<'a> {
             .payload
             .try_into()
             .map_err(|_| invalid(sdk.offset, "invalid SDK version"))?;
-        if version != *b"20160200" {
+        if !SDK_VERSIONS.contains(&version) {
             return Err(invalid(sdk.offset, "unsupported SDK version"));
         }
         let ts = required(&children, &[*b"TYPE", *b"TCRF"])?;
