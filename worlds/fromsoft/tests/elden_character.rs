@@ -100,3 +100,32 @@ fn joints_scaled_to_nothing_hold_the_identity_when_no_vertex_weights_them() -> R
     );
     Ok(())
 }
+
+/// `c8000`, a character with no model of its own (0 meshes, a skeleton and animations only): its geometry lowers to
+/// nothing, the prototype is dropped with the asset's mention of it, and the world still verifies.
+#[test]
+fn a_character_with_no_model_lowers_to_nothing_and_its_asset_stays_whole() -> Result<()> {
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let mut w = World::new();
+    read_character_with(&install, "c8000", &decoder, CharacterOptions::default(), &mut w)?;
+    let report = common::run(
+        &mut w,
+        "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}",
+    )?;
+    let counts = &report.steps[0].log.counts;
+    assert_eq!(counts["prototypes left drawing nothing"], 1);
+    assert_eq!(counts["asset members dropped with the entity they listed"], 1);
+    let (_, asset) = w.iter::<Asset>().next().unwrap();
+    assert!(asset.members.iter().all(|(e, _)| w.is_alive(*e)));
+    assert!(asset.members.iter().all(|(_, role)| *role != Role::Part));
+    Ok(())
+}

@@ -37,6 +37,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::asset::Asset;
 use crate::components::{Instance, Mesh, Texture, TextureFile, Topology};
 use crate::pass::PassLog;
 use crate::world::{Entity, RebuildLog, Rebuilt, World};
@@ -95,7 +96,9 @@ pub fn held(w: &World, e: Entity) -> Vec<(Measure, u64)> {
 }
 
 /// Despawn `e` on purpose, declaring in `log` what it held ([`held`]) as left out for `why`. False, and nothing
-/// declared, when it was not alive.
+/// declared, when it was not alive. Every `core.asset` that lists `e` as a member stops listing it (an asset naming an
+/// entity that is gone is not an asset the world verifies), counted as "asset members dropped with the entity they
+/// listed"; a pass that despawns entities an asset may list declares that it modifies `core.asset`.
 pub fn despawn(w: &mut World, e: Entity, log: &mut PassLog, why: &str) -> bool {
     if !w.is_alive(e) {
         return false;
@@ -103,7 +106,23 @@ pub fn despawn(w: &mut World, e: Entity, log: &mut PassLog, why: &str) -> bool {
     for (m, n) in held(w, e) {
         log.dropped(m, why, n);
     }
-    w.despawn(e)
+    let listing: Vec<Entity> = w
+        .iter::<Asset>()
+        .filter(|(_, a)| a.members.iter().any(|(m, _)| *m == e))
+        .map(|(a, _)| a)
+        .collect();
+    let gone = w.despawn(e);
+    for a in listing {
+        if let Some(asset) = w.get_mut::<Asset>(a) {
+            let before = asset.members.len();
+            asset.members.retain(|(m, _)| *m != e);
+            log.count(
+                "asset members dropped with the entity they listed",
+                (before - asset.members.len()) as u64,
+            );
+        }
+    }
+    gone
 }
 
 /// Whether the pass manager runs the conservation diagnostics (see the module documentation).
@@ -748,6 +767,44 @@ mod tests {
         assert_eq!(
             log.drops.get(&(Measure::Primitives, "left out".to_owned())),
             Some(&2)
+        );
+    }
+
+    /// An entity an asset lists as a member is dropped from the asset when it is despawned, counted: the asset stays
+    /// whole (what it lists is alive), and an entity no asset lists is not counted.
+    #[test]
+    fn despawn_drops_the_entity_from_the_assets_that_list_it() {
+        use crate::asset::Role;
+        let mut w = World::new();
+        let (part, rig, other) = (w.spawn(), w.spawn(), w.spawn());
+        let (a, b) = (w.spawn(), w.spawn());
+        w.insert(
+            a,
+            Asset {
+                members: vec![(rig, Role::Rig), (part, Role::Part)],
+            },
+        );
+        w.insert(
+            b,
+            Asset {
+                members: vec![(part, Role::Part), (other, Role::Part)],
+            },
+        );
+        let mut log = PassLog::default();
+        assert!(despawn(&mut w, part, &mut log, "left out"));
+        assert_eq!(w.get::<Asset>(a).unwrap().members, [(rig, Role::Rig)]);
+        assert_eq!(w.get::<Asset>(b).unwrap().members, [(other, Role::Part)]);
+        assert_eq!(log.counts["asset members dropped with the entity they listed"], 2);
+        let mut log = PassLog::default();
+        assert!(despawn(&mut w, other, &mut log, "left out"));
+        assert_eq!(log.counts["asset members dropped with the entity they listed"], 1);
+        // an entity no asset lists counts nothing
+        let loose = w.spawn();
+        let mut log = PassLog::default();
+        assert!(despawn(&mut w, loose, &mut log, "left out"));
+        assert!(
+            !log.counts
+                .contains_key("asset members dropped with the entity they listed")
         );
     }
 }

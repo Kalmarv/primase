@@ -18,8 +18,8 @@ use crate::sekiro::source::{
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::world::Resource;
 use primase_core::{
-    Binding, BindingId, Component, Deformation, Entity, Influences, Instance, LodForm, Lods, Mesh, Primitive,
-    Semantic, Skeleton, Skin, Slot, Source, Stream, Topology, Transform, WeightRule, World,
+    Asset, Binding, BindingId, Component, Deformation, Entity, Influences, Instance, LodForm, Lods, Mesh,
+    Primitive, Semantic, Skeleton, Skin, Slot, Source, Stream, Topology, Transform, WeightRule, World,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -621,8 +621,10 @@ impl Pass for LowerFromSoftGeometry {
             Pose::Stored => &[],
         }
     }
+    /// The blocker cards it records, and the assets that list a prototype left drawing nothing (it is despawned, and
+    /// they stop listing it).
     fn modifies(&self) -> &[&'static str] {
-        &[BlockerCards::NAME]
+        &[BlockerCards::NAME, Asset::NAME]
     }
     fn despawns_entities(&self) -> bool {
         true
