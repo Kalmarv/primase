@@ -254,10 +254,15 @@ impl Lift<'_> {
                     let mut access = StorageAccess::empty();
                     access.set(StorageAccess::LOAD, load || !store);
                     access.set(StorageAccess::STORE, store);
-                    let format = match kind_of_sample(*sample) {
-                        Kind::I => naga::StorageFormat::Rgba32Sint,
-                        Kind::U => naga::StorageFormat::Rgba32Uint,
-                        _ => naga::StorageFormat::Rgba32Float,
+                    // a view that atomic operations reach is one lane of 32 bits: the formats naga has image atomics for
+                    let atomic = self.resources.atomic.get(&i).copied();
+                    access.set(StorageAccess::ATOMIC, atomic.is_some());
+                    let format = match (atomic, kind_of_sample(*sample)) {
+                        (Some(naga::Scalar::I32), _) => naga::StorageFormat::R32Sint,
+                        (Some(_), _) => naga::StorageFormat::R32Uint,
+                        (None, Kind::I) => naga::StorageFormat::Rgba32Sint,
+                        (None, Kind::U) => naga::StorageFormat::Rgba32Uint,
+                        (None, _) => naga::StorageFormat::Rgba32Float,
                     };
                     let ty = self.b.ty(TypeInner::Image {
                         dim: dim_of(*dim),
@@ -326,16 +331,51 @@ impl Lift<'_> {
             };
             // a resource array is a binding array of the resource's own type, dynamically sized when unbounded
             let ty = if resource.is_array() {
-                self.notes.insert(
+                let buffers = matches!(
+                    resource.kind,
+                    ResourceKind::Buffer(_)
+                        | ResourceKind::Storage {
+                            target: StorageTarget::Buffer(_),
+                            ..
+                        }
+                );
+                self.notes.insert(if buffers {
+                    "a resource array is a binding array: it needs STORAGE_BUFFER_BINDING_ARRAY (with non-uniform \
+                     indexing), each element a structure holding the buffer's words, and an unbounded one is sized by \
+                     the bound data"
+                        .into()
+                } else {
                     "a resource array is a binding array: it needs TEXTURE_AND_SAMPLER_BINDING_ARRAY (with non-uniform \
                      indexing), and an unbounded one is sized by the bound data"
-                        .into(),
-                );
+                        .into()
+                });
+                // a buffer is a structure holding its runtime-sized array, for naga to bind several of them
+                let base = if buffers {
+                    let stride = match &resource.kind {
+                        ResourceKind::Buffer(BufferKind::Typed(_))
+                        | ResourceKind::Storage {
+                            target: StorageTarget::Buffer(BufferKind::Typed(_)),
+                            ..
+                        } => 16,
+                        _ => 4,
+                    };
+                    self.b.ty(TypeInner::Struct {
+                        members: vec![naga::StructMember {
+                            name: Some("data".into()),
+                            ty,
+                            binding: None,
+                            offset: 0,
+                        }],
+                        span: stride,
+                    })
+                } else {
+                    ty
+                };
                 let size = match NonZeroU32::new(resource.count) {
                     Some(n) if !resource.is_unbounded() => ArraySize::Constant(n),
                     _ => ArraySize::Dynamic,
                 };
-                self.b.ty(TypeInner::BindingArray { base: ty, size })
+                self.b.ty(TypeInner::BindingArray { base, size })
             } else {
                 ty
             };
@@ -358,7 +398,7 @@ impl Lift<'_> {
         Ok(())
     }
 
-    fn texture_shape(&self, resource: usize) -> Result<(TextureDim, bool, bool, Kind, bool)> {
+    pub(super) fn texture_shape(&self, resource: usize) -> Result<(TextureDim, bool, bool, Kind, bool)> {
         match self.setup.kind(resource) {
             ResourceKind::Texture {
                 dim,
@@ -393,6 +433,44 @@ impl Lift<'_> {
             }
             _ => self.refuse(format!("a handle of class {class} was expected")),
         }
+    }
+
+    /// The interface resource a handle of `class` names, whether or not it picks an element of an array.
+    pub(super) fn handle_resource(&mut self, v: ValueId, class: u8) -> Result<usize> {
+        match self.get(v)? {
+            Lv::Handle {
+                class: c, resource, ..
+            } if c == class => Ok(resource),
+            _ => self.refuse(format!("a handle of class {class} was expected")),
+        }
+    }
+
+    /// The interface resource of a buffer handle of `class` and a pointer to its array of words (an element of a
+    /// buffer array is a structure holding the array: the handle's element picks it).
+    pub(super) fn buffer_words(&mut self, v: ValueId, class: u8) -> Result<(usize, Handle<E>)> {
+        let Lv::Handle {
+            class: c,
+            resource,
+            element,
+        } = self.get(v)?
+        else {
+            return self.refuse(format!("a handle of class {class} was expected"));
+        };
+        if c != class {
+            return self.refuse(format!("a handle of class {class} was expected"));
+        }
+        let global = self.b.global_ptr(self.global_of(resource));
+        let words = match element {
+            None => global,
+            Some(index) => {
+                let item = self.b.app(E::Access {
+                    base: global,
+                    index: index.expr,
+                });
+                self.b.app(E::AccessIndex { base: item, index: 0 })
+            }
+        };
+        Ok((resource, words))
     }
 
     /// The interface resource a handle of `class` names and the expression of the image or sampler it reads: the
@@ -562,7 +640,7 @@ impl Lift<'_> {
         self.b.select(inside, value, none)
     }
 
-    fn coordinates(
+    pub(super) fn coordinates(
         &mut self,
         args: &[ValueId],
         first: usize,
@@ -677,6 +755,13 @@ impl Lift<'_> {
                 expect_undef(self, args[10])?;
                 (None, None, SampleLevel::Auto)
             }
+            61 if depth => {
+                return self.refuse("a depth texture sampled with a bias (WGSL's depth sampling has none)");
+            }
+            63 if depth => {
+                return self
+                    .refuse("a depth texture sampled with gradients (WGSL's depth sampling has none)");
+            }
             61 => {
                 expect_undef(self, args[11])?;
                 let bias = self.float(args[10])?;
@@ -684,7 +769,20 @@ impl Lift<'_> {
             }
             62 => {
                 let lod = self.float(args[10])?;
-                (None, None, SampleLevel::Exact(lod.expr))
+                // level 0 is WGSL's `Zero`, which a depth texture can be sampled at; any other level of a depth
+                // texture is an integer there, which a float level is not
+                if matches!(
+                    self.b.function.expressions[lod.expr],
+                    naga::Expression::Literal(naga::Literal::F32(0.0))
+                ) {
+                    (None, None, SampleLevel::Zero)
+                } else if depth {
+                    return self.refuse(
+                        "a depth texture sampled at a level the program computes (WGSL takes an integer level there)",
+                    );
+                } else {
+                    (None, None, SampleLevel::Exact(lod.expr))
+                }
             }
             63 => {
                 expect_undef(self, args[16])?;
@@ -862,12 +960,59 @@ impl Lift<'_> {
         Ok(())
     }
 
+    /// `GetDimensions` of a buffer: the element count (the byte size of a raw buffer) and, for a structured buffer, the
+    /// stride.
+    fn buffer_dimensions(
+        &mut self,
+        inst: &Instruction,
+        handle: ValueId,
+        class: u8,
+        kind: BufferKind,
+    ) -> Result<()> {
+        let (_, pointer) = self.buffer_words(handle, class)?;
+        let words = Val {
+            expr: self.b.app(E::ArrayLength(pointer)),
+            kind: Kind::U,
+            width: 1,
+        };
+        let four = self.b.lit_u(4);
+        let zero = self.b.lit_u(0);
+        let (x, y) = match kind {
+            // elements of four lanes
+            BufferKind::Typed(_) => (words, zero),
+            BufferKind::Raw => (self.b.binary(Bo::Multiply, words, four), zero),
+            BufferKind::Structured { stride } => {
+                let stride = self.b.lit_u(stride);
+                let bytes = self.b.binary(Bo::Multiply, words, four);
+                (self.b.binary(Bo::Divide, bytes, stride), stride)
+            }
+        };
+        self.define_result(
+            inst.result,
+            Lv::Agg(vec![
+                Lv::Scalar(x),
+                Lv::Scalar(y),
+                Lv::Scalar(zero),
+                Lv::Scalar(zero),
+            ]),
+        )
+    }
+
     /// `GetDimensions(handle, mip)`: width, height, depth or layers, and the number of levels.
     pub(super) fn get_dimensions(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
         let class = match self.get(args[1])? {
             Lv::Handle { class, .. } => class,
             _ => return self.refuse("dimensions of something that is not a handle"),
         };
+        let resource = self.handle_resource(args[1], class)?;
+        if let ResourceKind::Buffer(kind)
+        | ResourceKind::Storage {
+            target: StorageTarget::Buffer(kind),
+            ..
+        } = self.setup.kind(resource).clone()
+        {
+            return self.buffer_dimensions(inst, args[1], class, kind);
+        }
         let (resource, g) = self.handle_expr(args[1], class)?;
         let (dim, arrayed, multi, _, _) = self.texture_shape(resource)?;
         let mip = self.uint(args[2])?;
@@ -994,8 +1139,7 @@ impl Lift<'_> {
             Lv::Handle { class, .. } => class,
             _ => return self.refuse("a buffer load through something that is not a handle"),
         };
-        let resource = self.handle(args[1], class)?;
-        let g = self.global_of(resource);
+        let (resource, words_ptr) = self.buffer_words(args[1], class)?;
         let kind = match self.setup.kind(resource).clone() {
             ResourceKind::Buffer(k)
             | ResourceKind::Storage {
@@ -1014,18 +1158,16 @@ impl Lift<'_> {
         let lane_kind = self.kind_of_type(elements[0])?;
         let row = match kind {
             BufferKind::Typed(_) => {
-                let pointer = self.b.global_ptr(g);
                 let length = Val {
-                    expr: self.b.app(E::ArrayLength(pointer)),
+                    expr: self.b.app(E::ArrayLength(words_ptr)),
                     kind: Kind::U,
                     width: 1,
                 };
                 let inside = self.b.binary(Bo::Less, index, length);
                 let zero = self.b.lit_u(0);
                 let safe = self.b.select(inside, index, zero);
-                let pointer = self.b.global_ptr(g);
                 let element = self.b.app(E::Access {
-                    base: pointer,
+                    base: words_ptr,
                     index: safe.expr,
                 });
                 let value = match atomic {
@@ -1068,18 +1210,16 @@ impl Lift<'_> {
                 for lane in 0..4u32 {
                     let k = self.b.lit_u(lane);
                     let at = self.b.binary(Bo::Add, word, k);
-                    let pointer = self.b.global_ptr(g);
                     let length = Val {
-                        expr: self.b.app(E::ArrayLength(pointer)),
+                        expr: self.b.app(E::ArrayLength(words_ptr)),
                         kind: Kind::U,
                         width: 1,
                     };
                     let inside = self.b.binary(Bo::Less, at, length);
                     let zero = self.b.lit_u(0);
                     let safe = self.b.select(inside, at, zero);
-                    let pointer = self.b.global_ptr(g);
                     let element = self.b.app(E::Access {
-                        base: pointer,
+                        base: words_ptr,
                         index: safe.expr,
                     });
                     let value = match atomic {

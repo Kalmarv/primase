@@ -329,11 +329,12 @@ impl<'m> Lift<'m> {
 
     pub(crate) fn kind_of_type(&self, ty: TypeId) -> Result<Kind> {
         match self.m.types.get(ty) {
-            Some(Type::Float) => Ok(Kind::F),
+            // a half is computed as a float and rounded to a half where it is made (see `Lift::quantized`)
+            Some(Type::Float | Type::Half) => Ok(Kind::F),
             Some(Type::Integer(1)) => Ok(Kind::B),
-            Some(Type::Integer(32)) => Ok(Kind::U),
+            // a 16-bit integer is carried as the 32-bit unsigned integer of its bits, zero-extended
+            Some(Type::Integer(16 | 32)) => Ok(Kind::U),
             Some(Type::Integer(n)) => self.refuse(format!("{n}-bit integers are not lifted")),
-            Some(Type::Half) => self.refuse("half-precision floats are not lifted"),
             Some(Type::Double) => self.refuse("double-precision floats are not lifted"),
             other => self.refuse(format!("a value of type {other:?}")),
         }

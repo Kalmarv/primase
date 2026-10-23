@@ -80,16 +80,11 @@ impl Builder {
         (old, exchanged)
     }
 
-    /// The pointer to word `word` of the buffer global `g` (a typed buffer's element is four words: its first).
-    pub fn buffer_word(
-        &mut self,
-        g: Handle<naga::GlobalVariable>,
-        word: Val,
-        typed: bool,
-    ) -> Handle<Expression> {
-        let pointer = self.global_ptr(g);
+    /// The pointer to word `word` of the buffer whose words `words` points to (a typed buffer's element is four words:
+    /// its first).
+    pub fn buffer_word(&mut self, words: Handle<Expression>, word: Val, typed: bool) -> Handle<Expression> {
         let element = self.app(Expression::Access {
-            base: pointer,
+            base: words,
             index: word.expr,
         });
         if typed {

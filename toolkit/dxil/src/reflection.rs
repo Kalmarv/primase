@@ -638,12 +638,8 @@ fn view(range: &Range, name: &str, ty: Option<TypeId>, m: &Module) -> Result<Vie
         9 => texture(TextureDim::Cube, true, false),
         10 => Ok(View::Buffer(BufferKind::Typed(Lanes {
             scalar: element_scalar(name, range.element)?,
-            width: typed_width(m, ty).ok_or_else(|| {
-                error(
-                    0,
-                    format!("{name}: a typed buffer whose element width the module does not state"),
-                )
-            })?,
+            // a module that states no width leaves the four lanes the lifter carries a typed buffer's element as
+            width: typed_width(m, ty).unwrap_or(4),
         }))),
         11 => Ok(View::Buffer(BufferKind::Raw)),
         12 => match range.stride {

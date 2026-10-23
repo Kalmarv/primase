@@ -30,7 +30,7 @@ impl fmt::Display for Problem {
 /// The capabilities programs may use: WGSL's baseline and what a D3D program can need beyond it (clip distances,
 /// per-sample shading, the primitive index, cube array textures, half-float packing for `f16tof32`/`f32tof16`, forced
 /// early depth tests, arrays of textures and samplers indexed by a computed, possibly divergent, index, and subgroup
-/// (wave) operations in compute and pixel programs, atomic operations on storage textures). A consumer that cannot provide one refuses the program that
+/// (wave) operations in compute and pixel programs, atomic operations on storage textures, arrays of storage buffers). A consumer that cannot provide one refuses the program that
 /// needs it; nothing outside this list is ever produced.
 ///
 /// A compute program's thread group is validated against D3D's limits (1024 invocations, 1024 along x and y, 64 along
@@ -45,7 +45,9 @@ pub const CAPABILITIES: naga::valid::Capabilities = naga::valid::Capabilities::C
     .union(naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY)
     .union(naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING)
     .union(naga::valid::Capabilities::SUBGROUP)
-    .union(naga::valid::Capabilities::TEXTURE_ATOMIC);
+    .union(naga::valid::Capabilities::TEXTURE_ATOMIC)
+    .union(naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY)
+    .union(naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY_NON_UNIFORM_INDEXING);
 
 /// Check `program`: naga's validation of its module, then the program rules. Every problem found is returned.
 pub fn validate(program: &Program) -> Result<naga::valid::ModuleInfo, Vec<Problem>> {
@@ -402,14 +404,23 @@ fn resources(p: &Program, problems: &mut Vec<Problem>) {
         if r.count == 0 {
             fail(format!("resource {id}: a range of no bindings"));
         }
+        let buffer = matches!(
+            r.kind,
+            ResourceKind::Buffer(_)
+                | ResourceKind::Storage {
+                    target: StorageTarget::Buffer(_),
+                    ..
+                }
+        );
         if array
-            && !matches!(
-                r.kind,
-                ResourceKind::Texture { .. } | ResourceKind::Sampler { .. }
-            )
+            && !(buffer
+                || matches!(
+                    r.kind,
+                    ResourceKind::Texture { .. } | ResourceKind::Sampler { .. }
+                ))
         {
             fail(format!(
-                "resource {id}: only textures and samplers are carried as arrays (count {})",
+                "resource {id}: only textures, samplers and buffers are carried as arrays (count {})",
                 r.count
             ));
         }
@@ -430,6 +441,17 @@ fn resources(p: &Program, problems: &mut Vec<Problem>) {
                         ));
                     }
                     inner = &p.module.types[*base].inner;
+                    // a buffer's element is a structure holding its runtime-sized array
+                    if buffer {
+                        match inner {
+                            TypeInner::Struct { members, .. } if members.len() == 1 => {
+                                inner = &p.module.types[members[0].ty].inner;
+                            }
+                            _ => fail(format!(
+                                "resource {id}: an element of a buffer array is not a structure of its words"
+                            )),
+                        }
+                    }
                 }
                 _ => fail(format!(
                     "resource {id}: an array of {} bindings is not a binding array",

@@ -137,7 +137,7 @@ fn the_enhanced_shader_database() {
     }
     println!("TAGS {tags:?}");
     let (mut lifted, mut programs) = (0, 0);
-    let mut refused: BTreeMap<String, usize> = BTreeMap::new();
+    let mut refused: BTreeMap<String, (usize, String)> = BTreeMap::new();
     let mut invalid = Vec::new();
     let mut unrunnable: BTreeMap<String, (usize, String)> = BTreeMap::new();
     // per group: programs, lifted
@@ -155,12 +155,20 @@ fn the_enhanced_shader_database() {
             // a geometry program (none in this database) or a group of an unknown stage is not lifted
             if !matches!(stage, Some(s) if *s != ProgramStage::Geometry) {
                 tally.entry(g).or_default().0 += 1;
-                *refused.entry("a stage with no lifter".into()).or_default() += 1;
+                refused
+                    .entry("a stage with no lifter".into())
+                    .or_insert((0, program.name.to_string()))
+                    .0 += 1;
                 continue;
             }
             tally.entry(g).or_default().0 += 1;
             match primase_dxil::lift(program.container) {
-                Err(e) => *refused.entry(primase_dxil::refusal_reason(&e)).or_default() += 1,
+                Err(e) => {
+                    refused
+                        .entry(primase_dxil::refusal_reason(&e))
+                        .or_insert((0, format!("{}: {}", program.name, e.detail)))
+                        .0 += 1;
+                }
                 Ok(p) => {
                     lifted += 1;
                     tally.entry(g).or_default().1 += 1;
@@ -192,12 +200,12 @@ fn the_enhanced_shader_database() {
     }
     println!(
         "{programs} programs, {lifted} lifted, {} refused",
-        refused.values().sum::<usize>()
+        refused.values().map(|(n, _)| n).sum::<usize>()
     );
     let mut reasons: Vec<_> = refused.iter().collect();
-    reasons.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
-    for (reason, n) in reasons.iter().take(40) {
-        println!("  refused {n:5}  {reason}");
+    reasons.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));
+    for (reason, (n, example)) in reasons.iter().take(40) {
+        println!("  refused {n:5}  {reason}  (e.g. {example})");
     }
     println!("LIFTED per group (programs, lifted): {tally:?}");
     for (reason, (n, example)) in &unrunnable {

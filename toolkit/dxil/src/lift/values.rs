@@ -16,14 +16,16 @@ impl Lift<'_> {
             Constant::Integer(i) => match self.m.types.get(ty) {
                 Some(Type::Integer(1)) => Lv::Scalar(self.b.lit_b(i & 1 != 0)),
                 Some(Type::Integer(32)) => Lv::Scalar(self.b.lit_u(*i as u32)),
+                Some(Type::Integer(16)) => Lv::Scalar(self.b.lit_u(*i as u32 & 0xffff)),
                 _ => return kind(self).map(|_| unreachable!("an integer constant of another type")),
             },
             Constant::Float(bits) => match self.m.types.get(ty) {
                 Some(Type::Float) => Lv::Scalar(self.b.lit_f(f32::from_bits(*bits as u32))),
+                Some(Type::Half) => Lv::Scalar(self.b.lit_f(half_to_f32(*bits as u16))),
                 _ => return kind(self).map(|_| unreachable!("a float constant of another type")),
             },
             Constant::Null | Constant::Undef => match self.m.types.get(ty) {
-                Some(Type::Float | Type::Integer(_)) => {
+                Some(Type::Float | Type::Half | Type::Integer(_)) => {
                     let k = kind(self)?;
                     Lv::Scalar(self.b.lit_bits(k, 0))
                 }
@@ -227,7 +229,11 @@ impl Lift<'_> {
                     a = self.b.bitcast_to(a, Kind::U);
                     b = self.b.bitcast_to(b, Kind::U);
                 }
-                let r = self.binary(*op, a, b)?;
+                let r = if self.is_sixteen(*lhs) {
+                    self.binary_sixteen(*op, a, b)?
+                } else {
+                    self.binary(*op, a, b)?
+                };
                 self.define_result(result, Lv::Scalar(r))
             }
             Op::Cast { op, value } => {
@@ -239,11 +245,21 @@ impl Lift<'_> {
                 }
                 let v = self.scalar(*value)?;
                 let to = result.map(|(_, t)| t).expect("a cast has a result");
-                let r = self.cast(*op, v, to)?;
+                let r = if self.is_sixteen(*value) || matches!(self.m.types.get(to), Some(Type::Integer(16)))
+                {
+                    self.cast_sixteen(*op, v, self.is_sixteen(*value), to)?
+                } else {
+                    self.cast(*op, v, to)?
+                };
                 self.define_result(result, Lv::Scalar(r))
             }
             Op::Compare { predicate, lhs, rhs } => {
-                let (a, b) = (self.scalar(*lhs)?, self.scalar(*rhs)?);
+                let (mut a, mut b) = (self.scalar(*lhs)?, self.scalar(*rhs)?);
+                // a signed comparison of 16-bit integers is on their sign extensions
+                if self.is_sixteen(*lhs) && (38..=41).contains(predicate) {
+                    a = self.sign_extend_sixteen(a);
+                    b = self.sign_extend_sixteen(b);
+                }
                 let r = self.compare(*predicate, a, b)?;
                 self.define_result(result, Lv::Scalar(r))
             }
@@ -317,8 +333,38 @@ impl Lift<'_> {
 
     pub(crate) fn define_result(&mut self, result: Option<(ValueId, TypeId)>, lv: Lv) -> Result<()> {
         match result {
-            Some((v, _)) => self.define(v, lv),
+            Some((v, ty)) => {
+                let lv = self.quantized(lv, ty);
+                self.define(v, lv)
+            }
             None => Ok(()),
+        }
+    }
+
+    /// A value of type `ty` as the half it is: a half is carried as a float, so each half made is rounded to the
+    /// nearest half where it is defined (the elements of a structure of halves, a sample's lanes, one by one).
+    fn quantized(&mut self, lv: Lv, ty: TypeId) -> Lv {
+        match (lv, self.m.types.get(ty).cloned()) {
+            (Lv::Scalar(v), Some(Type::Half)) => {
+                self.notes.insert(
+                    "a half is computed as a 32-bit float and rounded to a half after each operation: exact for \
+                     addition, subtraction, multiplication, division and square root, a fused multiply-add may \
+                     differ in the last bit where the two roundings disagree, and the rounding itself is the \
+                     implementation's (quantizeToF16)"
+                        .into(),
+                );
+                Lv::Scalar(self.b.math(Mf::QuantizeToF16, &[v]))
+            }
+            (Lv::Agg(items), Some(Type::Struct { elements, .. })) if items.len() == elements.len() => {
+                Lv::Agg(
+                    items
+                        .into_iter()
+                        .zip(elements)
+                        .map(|(item, e)| self.quantized(item, e))
+                        .collect(),
+                )
+            }
+            (lv, _) => lv,
         }
     }
 
@@ -397,6 +443,85 @@ impl Lift<'_> {
         })
     }
 
+    /// Whether a value is a 16-bit integer.
+    fn is_sixteen(&self, v: ValueId) -> bool {
+        let ty = if v < self.f.first {
+            self.m.value_types.get(v).copied()
+        } else {
+            self.f.local_types.get(v - self.f.first).copied()
+        };
+        matches!(ty.and_then(|t| self.m.types.get(t)), Some(Type::Integer(16)))
+    }
+
+    /// The low 16 bits of a 32-bit value, zero-extended: a 16-bit integer's carried form.
+    fn mask_sixteen(&mut self, v: Val) -> Val {
+        let v = self.b.bitcast_to(v, Kind::U);
+        let mask = self.b.lit_u(0xffff);
+        self.b.binary(Bo::And, v, mask)
+    }
+
+    /// The sign extension of a carried 16-bit integer to 32 bits, as the same bits.
+    fn sign_extend_sixteen(&mut self, v: Val) -> Val {
+        let v = self.b.bitcast_to(v, Kind::U);
+        let sixteen = self.b.lit_u(16);
+        let high = self.b.binary(Bo::ShiftLeft, v, sixteen);
+        let signed = self.b.bitcast(high, Kind::I);
+        let back = self.b.binary(Bo::ShiftRight, signed, sixteen);
+        self.b.bitcast(back, Kind::U)
+    }
+
+    /// A binary operation on 16-bit integers: the 32-bit operation, signed ones on sign extensions, the result cut
+    /// back to 16 bits.
+    fn binary_sixteen(&mut self, op: BinaryOp, a: Val, b: Val) -> Result<Val> {
+        let (a, b) = (self.b.bitcast_to(a, Kind::U), self.b.bitcast_to(b, Kind::U));
+        let (a, b) = if matches!(op, BinaryOp::AShr | BinaryOp::SDiv | BinaryOp::SRem) {
+            (self.sign_extend_sixteen(a), b)
+        } else {
+            (a, b)
+        };
+        let b = if matches!(op, BinaryOp::SDiv | BinaryOp::SRem) {
+            self.sign_extend_sixteen(b)
+        } else {
+            b
+        };
+        let r = self.binary(op, a, b)?;
+        Ok(self.mask_sixteen(r))
+    }
+
+    /// A cast from or to a 16-bit integer.
+    fn cast_sixteen(&mut self, op: CastOp, v: Val, from_sixteen: bool, to: TypeId) -> Result<Val> {
+        let v = if v.kind == Kind::F {
+            v
+        } else {
+            self.b.bitcast_to(v, Kind::U)
+        };
+        Ok(match (op, from_sixteen) {
+            (CastOp::ZExt, true) => v,
+            (CastOp::SExt, true) => self.sign_extend_sixteen(v),
+            (CastOp::Trunc, false) => self.mask_sixteen(v),
+            (CastOp::UiToFp, true) => self.b.convert(v, Kind::F),
+            (CastOp::SiToFp, true) => {
+                let s = self.sign_extend_sixteen(v);
+                let i = self.b.bitcast_to(s, Kind::I);
+                self.b.convert(i, Kind::F)
+            }
+            (CastOp::FpToUi, false) => {
+                let u = self.b.d3d_float_to_uint(v);
+                self.mask_sixteen(u)
+            }
+            (CastOp::FpToSi, false) => {
+                let i = self.b.d3d_float_to_int(v);
+                let u = self.b.bitcast(i, Kind::U);
+                self.mask_sixteen(u)
+            }
+            (CastOp::BitCast, _) => {
+                let kind = self.kind_of_type(to)?;
+                self.b.bitcast_to(v, kind)
+            }
+            (other, _) => return self.refuse(format!("the cast {other:?} of a 16-bit integer")),
+        })
+    }
+
     fn cast(&mut self, op: CastOp, v: Val, to: TypeId) -> Result<Val> {
         let target = self.kind_of_type(to)?;
         Ok(match op {
@@ -419,6 +544,8 @@ impl Lift<'_> {
                 let zero = self.b.lit_u(0);
                 self.b.binary(Bo::NotEqual, low, zero)
             }
+            // a half is a float carried at 32 bits: widening changes nothing, narrowing is the rounding `define_result` does
+            CastOp::FpExt | CastOp::FpTrunc => v,
             CastOp::FpToUi => self.b.d3d_float_to_uint(v),
             CastOp::FpToSi => {
                 let i = self.b.d3d_float_to_int(v);
@@ -510,5 +637,18 @@ impl Lift<'_> {
             41 => signed(self, Bo::LessEqual),
             other => return self.refuse(format!("the integer predicate {other}")),
         })
+    }
+}
+
+/// The value of an IEEE half, from its bits.
+fn half_to_f32(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 != 0 { -1.0f32 } else { 1.0 };
+    let exponent = i32::from((bits >> 10) & 31);
+    let fraction = f32::from(bits & 1023);
+    sign * match exponent {
+        0 => fraction * 2f32.powi(-24),
+        31 if fraction == 0.0 => f32::INFINITY,
+        31 => f32::NAN,
+        e => (1.0 + fraction / 1024.0) * 2f32.powi(e - 15),
     }
 }

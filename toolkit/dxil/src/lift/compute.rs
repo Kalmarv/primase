@@ -138,8 +138,7 @@ impl Lift<'_> {
     /// `BufferStore` and `RawBufferStore(handle, index, offset, value x4, mask)`: the masked lanes written at the
     /// buffer's words; a write past the end of the buffer is dropped.
     pub(super) fn buffer_store(&mut self, args: &[ValueId]) -> Result<()> {
-        let resource = self.handle(args[1], 1)?;
-        let g = self.global_of(resource);
+        let (resource, words) = self.buffer_words(args[1], 1)?;
         let Some(mask) = const_int(self.m, self.f, args[8]) else {
             return self.refuse("a buffer write with a computed mask");
         };
@@ -160,17 +159,15 @@ impl Lift<'_> {
                     self.b.binary(Bo::Add, word, k)
                 }
             };
-            let pointer = self.b.global_ptr(g);
             let length = Val {
-                expr: self.b.app(E::ArrayLength(pointer)),
+                expr: self.b.app(E::ArrayLength(words)),
                 kind: Kind::U,
                 width: 1,
             };
             let inside = self.b.binary(Bo::Less, at, length);
             self.b.when(inside, |b| {
-                let pointer = b.global_ptr(g);
                 let mut element = b.app(E::Access {
-                    base: pointer,
+                    base: words,
                     index: at.expr,
                 });
                 if matches!(kind, BufferKind::Typed(_)) {
@@ -189,11 +186,88 @@ impl Lift<'_> {
         Ok(())
     }
 
+    /// Whether a value is read by any instruction of the function.
+    fn value_is_read(&self, v: ValueId) -> bool {
+        self.f.instructions.iter().any(|i| match &i.op {
+            crate::module::Op::Binary { lhs, rhs, .. } | crate::module::Op::Compare { lhs, rhs, .. } => {
+                *lhs == v || *rhs == v
+            }
+            crate::module::Op::Cast { value, .. } | crate::module::Op::Load { pointer: value } => *value == v,
+            crate::module::Op::Select {
+                condition,
+                then,
+                otherwise,
+            } => [*condition, *then, *otherwise].contains(&v),
+            crate::module::Op::ExtractValue { aggregate, .. } => *aggregate == v,
+            crate::module::Op::InsertValue { aggregate, value, .. } => *aggregate == v || *value == v,
+            crate::module::Op::Call { args, .. } => args.contains(&v),
+            crate::module::Op::Phi { incoming } => incoming.iter().any(|(x, _)| *x == v),
+            crate::module::Op::Return(x) => *x == Some(v),
+            crate::module::Op::CondBranch { condition, .. } => *condition == v,
+            crate::module::Op::Switch { value, .. } => *value == v,
+            crate::module::Op::Store { pointer, value } => *pointer == v || *value == v,
+            crate::module::Op::Gep { base, indices } => *base == v || indices.contains(&v),
+            crate::module::Op::AtomicRmw { pointer, value, .. } => *pointer == v || *value == v,
+            crate::module::Op::CmpXchg {
+                pointer,
+                compare,
+                value,
+            } => [*pointer, *compare, *value].contains(&v),
+            _ => false,
+        })
+    }
+
+    /// `AtomicBinOp` on an unordered-access texture: naga's image atomic, which returns no old value; refused where
+    /// the program reads the old value.
+    fn image_atomic(&mut self, inst: &Instruction, args: &[ValueId], resource: usize) -> Result<()> {
+        if inst.result.is_some_and(|(v, _)| self.value_is_read(v)) {
+            return self.refuse(
+                "the old value of an atomic operation on a texture view (naga's image atomic returns none)",
+            );
+        }
+        let fun = match const_int(self.m, self.f, args[2]) {
+            Some(ATOMIC_ADD) => AtomicFunction::Add,
+            Some(ATOMIC_AND) => AtomicFunction::And,
+            Some(ATOMIC_OR) => AtomicFunction::InclusiveOr,
+            Some(ATOMIC_XOR) => AtomicFunction::ExclusiveOr,
+            Some(ATOMIC_IMIN | ATOMIC_UMIN) => AtomicFunction::Min,
+            Some(ATOMIC_IMAX | ATOMIC_UMAX) => AtomicFunction::Max,
+            other => return self.refuse(format!("atomic operation {other:?} on a texture view")),
+        };
+        let (dim, arrayed, _, _, _) = self.texture_shape(resource)?;
+        let (coordinate, array_index) = self.coordinates(args, 3, dim, arrayed, Kind::U)?;
+        let coordinate = self.b.bitcast_to(coordinate, Kind::I);
+        let array_index = array_index.map(|l| {
+            let layer = Val {
+                expr: l,
+                kind: Kind::U,
+                width: 1,
+            };
+            self.b.bitcast_to(layer, Kind::I).expr
+        });
+        let scalar = self
+            .resources
+            .atomic
+            .get(&resource)
+            .copied()
+            .unwrap_or(naga::Scalar::U32);
+        let value = self.scalar(args[6])?;
+        let value = self.b.bitcast_to(value, kind_of_atomic(scalar));
+        let image = self.b.global_ptr(self.global_of(resource));
+        self.b.push(Statement::ImageAtomic {
+            image,
+            coordinate: coordinate.expr,
+            array_index,
+            fun,
+            value: value.expr,
+        });
+        Ok(())
+    }
+
     /// Whether word (or, for a typed buffer, element) `word` is inside the buffer `g`.
-    fn buffer_word_inside(&mut self, g: Handle<naga::GlobalVariable>, word: Val) -> Val {
-        let pointer = self.b.global_ptr(g);
+    fn buffer_word_inside(&mut self, words: Handle<E>, word: Val) -> Val {
         let length = Val {
-            expr: self.b.app(E::ArrayLength(pointer)),
+            expr: self.b.app(E::ArrayLength(words)),
             kind: Kind::U,
             width: 1,
         };
@@ -203,8 +277,15 @@ impl Lift<'_> {
     /// `AtomicBinOp(handle, op, index, offset, unused, value)` on an unordered-access buffer: the old value, zero when
     /// the word is past the end of the buffer (the operation does nothing there, as in D3D).
     pub(super) fn buffer_atomic(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
-        let resource = self.handle(args[1], 1)?;
-        let g = self.global_of(resource);
+        let resource = self.handle_resource(args[1], 1)?;
+        if let ResourceKind::Storage {
+            target: StorageTarget::Image { .. },
+            ..
+        } = self.setup.kind(resource)
+        {
+            return self.image_atomic(inst, args, resource);
+        }
+        let (_, words) = self.buffer_words(args[1], 1)?;
         let Some(op) = const_int(self.m, self.f, args[2]) else {
             return self.refuse("an atomic operation of a computed kind");
         };
@@ -223,10 +304,10 @@ impl Lift<'_> {
             return self.refuse("an atomic operation on a buffer the lifter did not make atomic");
         };
         let value = self.scalar(args[6])?;
-        let inside = self.buffer_word_inside(g, word);
+        let inside = self.buffer_word_inside(words, word);
         let typed = matches!(kind, BufferKind::Typed(_));
         let old = self.b.atomic_inside(inside, kind_of_atomic(scalar), |b| {
-            let element = b.buffer_word(g, word, typed);
+            let element = b.buffer_word(words, word, typed);
             b.atomic(element, fun, value, scalar)
         });
         self.define_result(inst.result, Lv::Scalar(old))
@@ -234,17 +315,16 @@ impl Lift<'_> {
 
     /// `AtomicCompareExchange(handle, index, offset, unused, compare, value)` on an unordered-access buffer.
     pub(super) fn buffer_compare_exchange(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
-        let resource = self.handle(args[1], 1)?;
-        let g = self.global_of(resource);
+        let (resource, words) = self.buffer_words(args[1], 1)?;
         let (word, kind) = self.uav_word(resource, args[2], args[3])?;
         let Some(scalar) = self.resources.atomic.get(&resource).copied() else {
             return self.refuse("an atomic operation on a buffer the lifter did not make atomic");
         };
         let (compare, value) = (self.scalar(args[5])?, self.scalar(args[6])?);
-        let inside = self.buffer_word_inside(g, word);
+        let inside = self.buffer_word_inside(words, word);
         let typed = matches!(kind, BufferKind::Typed(_));
         let old = self.b.atomic_inside(inside, kind_of_atomic(scalar), |b| {
-            let element = b.buffer_word(g, word, typed);
+            let element = b.buffer_word(words, word, typed);
             b.compare_exchange(element, compare, value, scalar).0
         });
         self.define_result(inst.result, Lv::Scalar(old))

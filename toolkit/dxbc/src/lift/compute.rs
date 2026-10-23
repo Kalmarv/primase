@@ -367,7 +367,7 @@ impl Lift<'_> {
         };
         let inside = self.b.binary(Bo::Less, word, length);
         let old = self.b.atomic_inside(inside, kind, |b| {
-            let element = b.buffer_word(mem.global, word, mem.typed);
+            let element = b.buffer_word(pointer, word, mem.typed);
             match (fun, second) {
                 (Some(fun), _) => b.atomic(element, fun, first, scalar),
                 (None, Some(new)) => b.compare_exchange(element, first, new, scalar).0,

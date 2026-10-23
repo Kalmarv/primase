@@ -265,13 +265,19 @@ impl Setup {
             if original.is_array()
                 && !matches!(
                     original.kind,
-                    ResourceKind::Texture { .. } | ResourceKind::Sampler { .. }
+                    ResourceKind::Texture { .. }
+                        | ResourceKind::Sampler { .. }
+                        | ResourceKind::Buffer(_)
+                        | ResourceKind::Storage {
+                            target: primase_shader::StorageTarget::Buffer(_),
+                            ..
+                        }
                 )
             {
                 return Err(error(
                     0,
                     format!(
-                        "{}: arrays of resources other than textures and samplers (a range of {}) are not lifted",
+                        "{}: arrays of resources other than textures, samplers and buffers (a range of {}) are not lifted",
                         original.provenance.name, original.count
                     ),
                 ));
