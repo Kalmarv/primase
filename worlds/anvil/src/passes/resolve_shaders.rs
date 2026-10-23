@@ -19,8 +19,14 @@
 //!   `(su cos t, -su sin t, tu, 0)` and `(sv sin t, sv cos t, tv, 0)` where the speeds are 0, as the words of the
 //!   Material's property, else the template's default for the binding). A property neither sets, and a UV transform
 //!   that moves or rotates (the time term and the product order are not established), is `Unknown` with the reason.
-//!   The rest of `cb3` and the other constant buffers (`cb0` per frame, `cb1` per view, `cb2` per draw) are the
-//!   engine's: `Unknown`, not resolved to a role.
+//!   The rows of `cb3` no binding covers are `Unknown`. The other constant buffers (`cb0` per frame, `cb1` per view,
+//!   `cb2` per draw) are the engine's: the program is lifted and only the lanes it reads are bound (a program reads a
+//!   few rows of buffers of some hundred; the rest are counted as left out, a buffer indexed by a computed value is one
+//!   `Unknown` constant). The rows the notes establish have roles where the vocabulary has one: `cb1[37]`
+//!   (`1/W, 1/H, W, H`) the `InverseViewportSize`, `cb1[39].x` the `Exposure`, `cb2[8..12]` and `cb2[12..16]` the object's `WorldViewProjection` and its `PreviousFrame` one,
+//!   `cb2[18].y` the Material's alpha-test
+//!   reference (`AlphaTestValue / 255` where `AlphaTestEnabled`, else 0); the rest are `Unknown` with the notes' reason
+//!   where they state one.
 //! - **Textures.** The template's texture binding of shader slot `i` is `t(75 + i)`: the texture the Material's
 //!   binding resolves to (record, else TextureSet slot, else template default), as a `core.texture` entity per
 //!   texture and colour space (sRGB where its TextureMap's field 25 says so). A binding resolved to none is
@@ -33,7 +39,10 @@
 //!   in the lane's upper five bits: `NormalEncoding::decode_octahedral_diamond`, material-spec §15.4; the class byte is
 //!   not part of the normal); `o1.w` the metalness (shading class 1) or the occlusion
 //!   (classes 3 to 5) by the class its template writes ([`shading_class`], the notes' table of the templates it covers;
-//!   a template it does not cover leaves `o1.w` `Unknown(1)`); `o2` and `o3` `Unknown`.
+//!   a template it does not cover leaves `o1.w` `Unknown(1)`); `o2` and `o3` by the class the lighting pass reads them
+//!   with (§15.4): the velocity `MotionVector` in `o2.xy`; class 1 the `Emission` in `o2.z` and in `o3` the `Occlusion`
+//!   (x), the `SpecularOcclusion` (z) and the `Translucency` (w); classes 3 to 5 the `SpecularOcclusion` in `o2.z` and the
+//!   `Translucency` in `o2.w`; every other lane, and every target of a template the table does not cover, `Unknown`.
 //! - **State.** `TwoSided` is no culling; `ZTestDisabled` an always-passing depth test, with the write the Material's
 //!   `ZWriteDisabledOpaque` (blend mode 0) or `ZWriteDisabledAlpha` states; `AlphaTestEnabled` an alpha test, a pixel
 //!   kept where `alpha >= AlphaTestValue / 255` (the engine's division). What the Material does not state stays `None`.
@@ -54,16 +63,18 @@
 //!
 //! Inputs of the pixel stage are the vertex stage's outputs by label (`Previous`) where it is bound, else `Unknown`;
 //! the vertex stage's are mesh streams by their semantic name.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{
-    AlphaTest, Compare, ConstantBinding, ConstantRole, Cull, DepthState, InputBinding, InputRole, Interface,
-    NormalEncoding, NormalSpace, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind,
-    SamplerState, Shader, ShaderBinding, ShaderFormat, Stage, StageBinding, SystemValue, TextureBinding,
-    TextureDim, TextureSource, VariantKey, Varying,
+    AlphaTest, Compare, ConstantBinding, ConstantRole, Cull, DepthState, FrameParameter, InputBinding,
+    InputRole, Interface, NormalEncoding, NormalSpace, ObjectMatrix, ObjectParameter, OutputBinding,
+    OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, ShaderBinding, ShaderFormat,
+    Stage, StageBinding, SystemValue, TextureBinding, TextureDim, TextureSource, VariantKey, Varying,
+    ViewParameter,
 };
 use primase_core::{ColorSpace, Component, Entity, MaterialVariants, Mesh, Name, Semantic, Texture, World};
+use primase_shader::ConstantReads;
 
 use crate::components::{
     AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags,
@@ -345,6 +356,189 @@ pub fn material_constants(
 }
 
 /// The register of a resource of class `class` in `interface`, with its id.
+/// A reason a row of the engine's buffers has no role, where the notes (docs/material-spec.md §3, §12.3, §17.1, §23)
+/// say what the programs do with it: not a role in the vocabulary, or not established.
+fn engine_reason(register: u32, row: u32, lane: u32) -> Option<&'static str> {
+    Some(match (register, row, lane) {
+        (2, 16, 0 | 1) => {
+            "the LOD cross-fade: x and y are multiplied into a hash of the pixel's screen position, a fragment is discarded where it is below 0 (shaders.md §6.2, key bit 0x4000)"
+        }
+        (2, 18, 3) => {
+            "the instance index the program adds to its own to find the instance's record in a buffer"
+        }
+        (2, 22, 1) => {
+            "the offset of the instance's data in the per-instance buffer (three float4 per instance)"
+        }
+        (2, 0..=2, _) => {
+            "the instance's transform as three rows of four (the translation in w), read with the position and normal by the vertex programs: not bound to a role, the rows' space (the stream's decoded coordinates or the world's) is not established"
+        }
+        (1, 41, 1) => "the bias of every biased texture sample",
+        (1, 53, _) => "scene depth to view depth",
+        (1, 77 | 78, _) => {
+            "read as the sun's colour or illuminance and its Lambert term (an inference, material-spec §17.1)"
+        }
+        (1, 83, _) => "the water scale of the water pass: its colours are divided by it (material-spec §16)",
+        (0, 4, 0..=2) => "a per-frame light vector",
+        (0, 47 | 48, _) => "the terrain's virtual texture constants (material-spec §14.2, §23)",
+        _ => return None,
+    })
+}
+
+/// The matrices of the engine's buffers that have a role: the first row, and the role, of the four rows (64 bytes) that
+/// contain `row`. The vertex programs write `SV_Position` as the dot products of the position (the stream's
+/// coordinates divided by 32768, with w = 1) with `cb2[8..12]`, and the interpolant their pixel programs turn into the
+/// velocity (`uv - (xy / w * (0.5, -0.5) + 0.5)`, `tests/engine_use.rs`) the same with `cb2[12..16]`: the object's clip
+/// matrix and the previous frame's, as the rows `x`, `y`, `z`, `w` of a column-vector matrix.
+fn engine_matrix(register: u32, row: u32) -> Option<(u32, ObjectParameter)> {
+    Some(match (register, row) {
+        (2, 8..=11) => (8, ObjectParameter::WorldViewProjection),
+        (2, 12..=15) => (
+            12,
+            ObjectParameter::PreviousFrame(ObjectMatrix::WorldViewProjection),
+        ),
+        _ => return None,
+    })
+}
+
+/// The tiles of the engine's buffers that have a role: (first lane, lanes, the role) of a row. A program that reads any
+/// lane of a tile has the tile bound whole, the role naming all of its values.
+fn engine_tile(register: u32, row: u32, alpha_test_reference: f32) -> Option<(u32, u32, ConstantRole)> {
+    Some(match (register, row) {
+        // `cb1[37]` is `(1/W, 1/H, W, H)` in every copy of the per-view buffer found in memory, and the G-buffer pixel
+        // shaders scale a pixel position by its xy for the velocity output (material-spec §17.1)
+        (1, 37) => (0, 4, ConstantRole::View(ViewParameter::InverseViewportSize)),
+        // the multiplier the lighting passes scale their output by (`cb1[39].x`, 1 in every copy)
+        (1, 39) => (0, 1, ConstantRole::Frame(FrameParameter::Exposure)),
+        // the alpha-test reference of the G-buffer pass: the Material's `AlphaTestValue / 255` where `AlphaTestEnabled`
+        // is on, else 0 (shaders.md §6.2): a fragment is discarded where its alpha minus this is below 0
+        (2, 18) => (1, 1, ConstantRole::Material(bits(&[alpha_test_reference]))),
+        _ => return None,
+    })
+}
+
+/// The engine's constant buffers a program reads, as constants: `cb0` per frame, `cb1` per view, `cb2` per draw. The
+/// notes know a handful of their rows ([`engine_tile`] holds the ones the vocabulary has a role for, [`engine_reason`]
+/// the reasons for others); a program reads a few rows of each, so only the lanes it reads are bound, the rest counted
+/// as left out, and a buffer the program indexes by a value it computes is one `Unknown` constant (any row may be read).
+fn engine_constants(
+    register: u32,
+    resource: ResourceId,
+    size: u32,
+    reads: Option<&ConstantReads>,
+    m: &AnvilMaterial,
+    counts: &mut BTreeMap<String, u64>,
+) -> Vec<ConstantBinding> {
+    let mut bump = |what: &str, n: u64| *counts.entry(what.to_owned()).or_default() += n;
+    let whole = |why: String| {
+        vec![ConstantBinding {
+            resource,
+            offset: 0,
+            size,
+            name: None,
+            role: ConstantRole::Unknown { why },
+        }]
+    };
+    let Some(reads) = reads else {
+        bump(
+            "engine constant buffers of a program whose reads could not be taken, bound whole and Unknown",
+            1,
+        );
+        return whole(format!(
+            "cb{register} is the engine's per-frame, per-view or per-draw constants: no role resolved (the program's reads were not taken)"
+        ));
+    };
+    let (rows, dynamic) = reads.rows_of(0, register);
+    if dynamic {
+        bump(
+            "engine constant buffers a program indexes by a computed value, bound whole and Unknown",
+            1,
+        );
+        return whole(format!(
+            "cb{register} is indexed by a value the program computes, so any row may be read: no role resolved"
+        ));
+    }
+    let reference = if m.flags.booleans.get(MaterialFlags::ALPHA_TEST_ENABLED).copied() == Some(1) {
+        f32::from(m.flags.alpha_test_value) / 255.0
+    } else {
+        0.0
+    };
+    let mut out = Vec::new();
+    let mut read_rows = 0u32;
+    // a matrix a program reads any row of is bound whole, once
+    let mut matrices = BTreeSet::new();
+    for row in rows
+        .into_iter()
+        .filter(|r| r.checked_mul(16).is_some_and(|at| at < size))
+    {
+        read_rows += 1;
+        if let Some((first, parameter)) = engine_matrix(register, row) {
+            if matrices.insert(first) && (first + 4) * 16 <= size {
+                bump("engine constants with a role", 1);
+                out.push(ConstantBinding {
+                    resource,
+                    offset: first * 16,
+                    size: 64,
+                    name: None,
+                    role: ConstantRole::Object(parameter),
+                });
+            }
+            continue;
+        }
+        let lanes = reads.lanes_of(0, register, row);
+        let mut covered = [false; 4];
+        if let Some((first, count, role)) = engine_tile(register, row, reference) {
+            bump("engine constants with a role", 1);
+            for lane in first..first + count {
+                covered[lane as usize] = true;
+            }
+            out.push(ConstantBinding {
+                resource,
+                offset: row * 16 + first * 4,
+                size: count * 4,
+                name: None,
+                role,
+            });
+        }
+        // the other lanes it reads, in runs of one reason
+        let mut lane = 0u32;
+        while lane < 4 {
+            if !lanes.contains(&lane) || covered[lane as usize] {
+                lane += 1;
+                continue;
+            }
+            let reason = engine_reason(register, row, lane);
+            let start = lane;
+            while lane < 4
+                && lanes.contains(&lane)
+                && !covered[lane as usize]
+                && engine_reason(register, row, lane) == reason
+            {
+                lane += 1;
+            }
+            bump("engine constants without a role, Unknown", 1);
+            out.push(ConstantBinding {
+                resource,
+                offset: row * 16 + start * 4,
+                size: (lane - start) * 4,
+                name: None,
+                role: ConstantRole::Unknown {
+                    why: match reason {
+                        Some(r) => format!("engine constant cb{register}[{row}]: {r}"),
+                        None => format!(
+                            "engine constant cb{register}[{row}] (per-frame, per-view or per-draw): no role resolved"
+                        ),
+                    },
+                },
+            });
+        }
+    }
+    bump(
+        "rows of the engine's constant buffers the program does not read, left out",
+        u64::from((size / 16).saturating_sub(read_rows)),
+    );
+    out
+}
+
 fn by_register(
     interface: &Interface,
     class: primase_core::shader::D3dClass,
@@ -435,6 +629,7 @@ impl Pass for ResolveAnvilShaders {
             .map(|(e, m)| (e, m.clone()))
             .collect();
         let mut programs: BTreeMap<(Entity, bool, u32), Result<Entity, String>> = BTreeMap::new();
+        let mut reads_of: BTreeMap<Entity, Option<ConstantReads>> = BTreeMap::new();
         // the vertex layout number (`anvil.layout.kind`) of every mesh drawn with each Material
         let mut layouts_of: BTreeMap<Entity, std::collections::BTreeSet<u8>> = BTreeMap::new();
         for (_, mesh) in world.iter::<AnvilMesh>() {
@@ -541,6 +736,16 @@ impl Pass for ResolveAnvilShaders {
                     .get::<Shader>(shader)
                     .map(|s| s.interface.clone())
                     .ok_or("a resolved shader entity without its shader")?;
+                // the constants the program reads (lifting it again is the cost; a program is lifted once per run)
+                let reads = reads_of
+                    .entry(shader)
+                    .or_insert_with(|| {
+                        world
+                            .get::<Shader>(shader)
+                            .and_then(|s| primase_dxbc::lift(&s.bytecode).ok())
+                            .map(|p| ConstantReads::of_module(p.module, |b| (b.group, b.binding)))
+                    })
+                    .clone();
                 bound.push(self.stage_binding(
                     world,
                     &mut textures,
@@ -551,6 +756,7 @@ impl Pass for ResolveAnvilShaders {
                     shader,
                     &interface,
                     vertex_bound,
+                    reads.as_ref(),
                     &mut counts,
                 ));
             }
@@ -643,6 +849,7 @@ impl ResolveAnvilShaders {
         shader: Entity,
         interface: &Interface,
         vertex_bound: bool,
+        reads: Option<&ConstantReads>,
         counts: &mut BTreeMap<String, u64>,
     ) -> StageBinding {
         let bump = |what: &str, counts: &mut BTreeMap<String, u64>| {
@@ -684,15 +891,7 @@ impl ResolveAnvilShaders {
             if register == 3 {
                 constants.extend(material_constants(m, r.id, layout.size, counts));
             } else if layout.size > 0 {
-                constants.push(ConstantBinding {
-                    resource: r.id,
-                    offset: 0,
-                    size: layout.size,
-                    name: None,
-                    role: ConstantRole::Unknown {
-                        why: format!("cb{register} is the engine's per-frame, per-view or per-draw constants: no role resolved"),
-                    },
-                });
+                constants.extend(engine_constants(register, r.id, layout.size, reads, m, counts));
             }
         }
         // textures
@@ -781,7 +980,7 @@ mod tests {
     use super::*;
     use primase_core::frame::SourceFrame;
 
-    fn material(
+    pub(super) fn material(
         bindings: Vec<(u32, MaterialBinding)>,
         values: Vec<(u32, MaterialValue)>,
         defaults: Vec<(MaterialBinding, MaterialValue)>,
@@ -996,6 +1195,31 @@ fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Ve
                     },
                 );
             }
+            // the lanes the deferred lighting pass reads, by the shading class in `o1.z` (material-spec §15.4): the
+            // velocity in xy for every class; for layout A (class 1) `o2.z` the emissive scalar (divided by the exposure
+            // texture), and `o3` the occlusion in x, the specular occlusion in z and the translucency in w; for layout B
+            // (classes 3 to 5) `o2.z` the specular occlusion and `o2.w` the translucency, with no `o3`. `o2.w` of
+            // layout A (the albedo alpha of the blended permutations) and `o3.y` (a 6-bit per-pixel value the lighting
+            // pass reads, meaning not established) are `Unknown`.
+            2 if class.is_some() => {
+                role(0b0011, OutputRole::MotionVector);
+                match class {
+                    Some(1) => {
+                        role(0b0100, OutputRole::Emission);
+                        role(0b1000, OutputRole::Unknown(2));
+                    }
+                    _ => {
+                        role(0b0100, OutputRole::SpecularOcclusion);
+                        role(0b1000, OutputRole::Translucency);
+                    }
+                }
+            }
+            3 if class == Some(1) => {
+                role(0b0001, OutputRole::Occlusion);
+                role(0b0010, OutputRole::Unknown(3));
+                role(0b0100, OutputRole::SpecularOcclusion);
+                role(0b1000, OutputRole::Translucency);
+            }
             n => role(0b1111, OutputRole::Unknown(n)),
         }
     }
@@ -1005,6 +1229,7 @@ fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Ve
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "hand-worked fixtures")]
 mod key_tests {
+    use super::tests::material;
     use super::*;
 
     /// A template whose feature node has the given features set (byte 0, the object's, then one byte per feature).
@@ -1130,7 +1355,8 @@ mod key_tests {
     const LIFTED: &[u8] = include_bytes!("../../../../toolkit/dxbc/tests/fixtures/modes.dxbc");
 
     /// A lifted pixel program's outputs are system values, and the roles come all the same: target 0 is albedo and
-    /// roughness, target 1 the unnamed rgb and the lane its shading class names, the rest Unknown by number.
+    /// roughness, target 1 the unnamed rgb and the lane its shading class names, targets 2 and 3 the lanes the lighting
+    /// pass reads for the class, the rest Unknown by number.
     #[test]
     fn a_lifted_pixel_programs_targets_have_the_gbuffer_roles() {
         let program = primase_dxbc::lift(LIFTED).unwrap();
@@ -1167,14 +1393,153 @@ mod key_tests {
                     }
                 ),
                 (1, 0b1000, OutputRole::Metallic),
-                (2, 0b1111, OutputRole::Unknown(2)),
-                (3, 0b1111, OutputRole::Unknown(3)),
+                (2, 0b0011, OutputRole::MotionVector),
+                (2, 0b0100, OutputRole::Emission),
+                (2, 0b1000, OutputRole::Unknown(2)),
+                (3, 0b0001, OutputRole::Occlusion),
+                (3, 0b0010, OutputRole::Unknown(3)),
+                (3, 0b0100, OutputRole::SpecularOcclusion),
+                (3, 0b1000, OutputRole::Translucency),
                 (4, 0b1111, OutputRole::Unknown(4)),
             ]
         );
         // a depth output is not a colour target
         let mut with_depth = program.interface.clone();
         with_depth.outputs[0].system = Some(SystemValue::Depth);
-        assert_eq!(output_bindings(&with_depth, Some(1), true).len(), 5);
+        assert_eq!(output_bindings(&with_depth, Some(1), true).len(), 10);
+    }
+
+    /// The lanes of targets 2 and 3 follow the shading class the lighting pass decodes them with (material-spec §15.4):
+    /// layout B has the specular occlusion in `o2.z` and the translucency in `o2.w` and its `o3` is read by nothing, and a
+    /// template with no class in the notes' table has them all Unknown.
+    #[test]
+    fn the_lanes_of_targets_2_and_3_follow_the_shading_class() {
+        let program = primase_dxbc::lift(LIFTED).unwrap();
+        let of = |class: Option<u8>, target: u32| -> Vec<(u8, OutputRole)> {
+            output_bindings(&program.interface, class, true)
+                .into_iter()
+                .filter(|o| {
+                    program.interface.outputs.iter().position(|v| v.label == o.label)
+                        == Some(usize::try_from(target).unwrap())
+                })
+                .map(|o| (o.lanes, o.role))
+                .collect()
+        };
+        assert_eq!(
+            of(Some(5), 2),
+            [
+                (0b0011, OutputRole::MotionVector),
+                (0b0100, OutputRole::SpecularOcclusion),
+                (0b1000, OutputRole::Translucency),
+            ]
+        );
+        assert_eq!(of(Some(5), 3), [(0b1111, OutputRole::Unknown(3))]);
+        assert_eq!(of(None, 2), [(0b1111, OutputRole::Unknown(2))]);
+        assert_eq!(of(None, 3), [(0b1111, OutputRole::Unknown(3))]);
+    }
+
+    /// Only the lanes a program reads of the engine's buffers are bound, each with the role the notes establish or an
+    /// Unknown with a reason; the rows it does not read are counted as left out. Held to the lanes the lifted program
+    /// takes, on the lifter's D3D fixture.
+    #[test]
+    fn the_engine_buffers_bind_the_lanes_the_program_reads() {
+        let program = primase_dxbc::lift(LIFTED).unwrap();
+        let reads = ConstantReads::of_module(program.module.clone(), |b| (b.group, b.binding));
+        let m = material(Vec::new(), Vec::new(), Vec::new());
+        let mut found_buffer = false;
+        for r in &program.interface.resources {
+            let (ResourceKind::ConstantBuffer { layout }, Some(bind)) = (&r.kind, r.provenance.d3d) else {
+                continue;
+            };
+            if bind.register == 3 || layout.size == 0 {
+                continue;
+            }
+            found_buffer = true;
+            let mut counts = BTreeMap::new();
+            let bound = engine_constants(bind.register, r.id, layout.size, Some(&reads), &m, &mut counts);
+            let (rows, dynamic) = reads.rows_of(0, bind.register);
+            if dynamic {
+                assert_eq!(bound.len(), 1);
+                assert_eq!(bound[0].size, layout.size);
+                continue;
+            }
+            // every lane read is inside a binding, and a binding of an Unknown run holds only lanes that were read
+            for row in &rows {
+                for lane in reads.lanes_of(0, bind.register, *row) {
+                    let at = row * 16 + lane * 4;
+                    assert!(
+                        bound.iter().any(|c| c.offset <= at && at < c.offset + c.size),
+                        "cb{} row {row} lane {lane} is read and not bound",
+                        bind.register
+                    );
+                }
+            }
+            for c in bound
+                .iter()
+                .filter(|c| matches!(c.role, ConstantRole::Unknown { .. }))
+            {
+                for at in (c.offset..c.offset + c.size).step_by(4) {
+                    assert!(
+                        reads.reads(0, bind.register, at, 4),
+                        "cb{} byte {at} is bound Unknown and not read",
+                        bind.register
+                    );
+                }
+            }
+            let left_out = counts
+                .get("rows of the engine's constant buffers the program does not read, left out")
+                .copied()
+                .unwrap_or(0);
+            assert_eq!(left_out, u64::from(layout.size / 16) - rows.len() as u64);
+        }
+        assert!(found_buffer, "the fixture declares no engine constant buffer");
+    }
+
+    /// The rows the notes establish have roles, and a tile is bound whole when a program reads any lane of it.
+    #[test]
+    fn the_established_rows_have_roles() {
+        let mut m = material(Vec::new(), Vec::new(), Vec::new());
+        m.flags.alpha_test_value = 128;
+        m.flags.booleans[MaterialFlags::ALPHA_TEST_ENABLED] = 1;
+        let mut counts = BTreeMap::new();
+        // a program that reads cb2[18].y gets the Material's reference, the 128 / 255 of a Material with the test on
+        let reads = ConstantReads::of_module(primase_dxbc::lift(LIFTED).unwrap().module, |b| {
+            (b.group, b.binding)
+        });
+        let _ = engine_constants(2, ResourceId(0), 18 * 16 + 16, Some(&reads), &m, &mut counts);
+        let tile = |reference: f32| engine_tile(2, 18, reference).unwrap();
+        assert_eq!(
+            tile(128.0 / 255.0).2,
+            ConstantRole::Material(vec![(128.0f32 / 255.0).to_bits()])
+        );
+        assert_eq!(
+            engine_tile(1, 37, 0.0).unwrap(),
+            (0, 4, ConstantRole::View(ViewParameter::InverseViewportSize))
+        );
+        assert_eq!(
+            engine_tile(1, 39, 0.0).unwrap(),
+            (0, 1, ConstantRole::Frame(FrameParameter::Exposure))
+        );
+        assert!(engine_tile(0, 4, 0.0).is_none());
+        // the clip matrix and the previous frame's are four rows each, whichever row a program reads
+        for row in 8..12 {
+            assert_eq!(
+                engine_matrix(2, row),
+                Some((8, ObjectParameter::WorldViewProjection))
+            );
+        }
+        for row in 12..16 {
+            assert_eq!(
+                engine_matrix(2, row),
+                Some((
+                    12,
+                    ObjectParameter::PreviousFrame(ObjectMatrix::WorldViewProjection)
+                ))
+            );
+        }
+        assert_eq!(engine_matrix(2, 7), None);
+        assert_eq!(engine_matrix(1, 8), None);
+        assert!(engine_reason(2, 16, 0).is_some());
+        assert!(engine_reason(2, 16, 2).is_none());
     }
 }

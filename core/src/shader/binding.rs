@@ -53,6 +53,9 @@ pub enum ViewParameter {
     /// coordinate to move whole texels (the reciprocals, by use: GTA's SSAO vertex program offsets a coordinate by two
     /// times each).
     ViewportSize,
+    /// The render target's size as four values in the other order: the uv-space step of a whole texel in x and y (the
+    /// reciprocals of the width and height), then the width and height in pixels in z and w.
+    InverseViewportSize,
     /// The previous frame's view-projection matrix (what a motion vector is measured against).
     PreviousViewProjection,
 }
@@ -356,6 +359,13 @@ pub enum OutputRole {
     Roughness,
     Metallic,
     Occlusion,
+    /// How much of the light a surface reflects as a highlight is blocked where the surface faces away from the
+    /// environment (1 unblocked): the term a lighting pass multiplies its specular by, apart from the diffuse
+    /// [`OutputRole::Occlusion`].
+    SpecularOcclusion,
+    /// How much light passes through the surface (a leaf, a petal): a lighting pass tints the albedo by it and adds it
+    /// to the lit colour, 0 for an opaque surface.
+    Translucency,
     /// Specular reflectance at normal incidence.
     Reflectance,
     /// The strength of the specular term, how much light the surface reflects as a highlight (0 to 1 once decoded).

@@ -16,6 +16,7 @@ pub mod emit;
 pub mod gate;
 mod limits;
 mod program;
+mod reads;
 pub mod rt;
 pub use primase_core::shader::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, D3dSignature,
@@ -32,4 +33,5 @@ pub use program::{
     Origin, Problem, Program, Provenance, VERSION as PROGRAM_VERSION, entry_io, mesh_vertex_io,
     stage_functions,
 };
+pub use reads::ConstantReads;
 pub use refusal::{Refusal, Unit, source_hash};
