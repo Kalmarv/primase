@@ -716,7 +716,9 @@ impl Cursor<'_> {
             }
             // HoudiniDecalInstancerComponent: 212 bytes, an object, R references, S items (00, an object, 3 bytes, a
             // count k, 100 k bytes), 46 bytes
-            0x4148_CD56 => {
+            // StaticDDecalComponent (0x5B413085) and its subclass HoudiniDecalInstancerComponent, which stores nothing more:
+            // the same body
+            0x4148_CD56 | 0x5B41_3085 => {
                 self.take(212, "HoudiniDecalInstancerComponent")?;
                 self.object("HoudiniDecalInstancerComponent", 0xB43F_ECF1)?;
                 let r = self.count("HoudiniDecalInstancerComponent references", 10)?;

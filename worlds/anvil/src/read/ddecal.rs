@@ -26,6 +26,10 @@ use crate::read::reference::{self, Reference};
 
 /// A component type: HoudiniDecalInstancerComponent.
 pub const HOUDINI_DECAL_INSTANCER: u32 = 0x4148_CD56;
+/// A component type: StaticDDecalComponent, which HoudiniDecalInstancerComponent derives from without storing a field
+/// more (the registry's class list): its body is the same. On Riders Republic's two (one graffiti rock's, 278 bytes)
+/// its library holds no model and no item: they draw nothing.
+pub const STATIC_DDECAL: u32 = 0x5B41_3085;
 /// A record type: DDecalModel.
 pub const DDECAL_MODEL: u32 = 0x5056_3D58;
 

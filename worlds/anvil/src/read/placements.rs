@@ -46,7 +46,9 @@ use crate::components::{
     DataLayerAction, DeferredDecal, MaterialBinding, MaterialValue, ShapeGeometry, TextureFrom,
 };
 use crate::read::archive::{Archive, At};
-use crate::read::ddecal::{DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, StoredDecalModel, StoredDeferredDecals};
+use crate::read::ddecal::{
+    DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, STATIC_DDECAL, StoredDecalModel, StoredDeferredDecals,
+};
 use crate::read::entity::{
     CollisionFilter, ComponentBody, ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, Slot,
     StoredEntity, StoredEntityGroup, Visual, query,
@@ -1298,12 +1300,12 @@ impl<'a> Placer<'a> {
             }
             placed.lakes.push(lake);
         }
-        // deferred decals: each item of each HoudiniDecalInstancerComponent, on an entity of its own
+        // deferred decals: each item of each StaticDDecalComponent or HoudiniDecalInstancerComponent, on an entity of its own
         for c in &e.components {
             let ComponentBody::Raw(body) = &c.body else {
                 continue;
             };
-            if c.kind != HOUDINI_DECAL_INSTANCER {
+            if !matches!(c.kind, HOUDINI_DECAL_INSTANCER | STATIC_DDECAL) {
                 continue;
             }
             let stored = match StoredDeferredDecals::parse(body) {
