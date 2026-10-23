@@ -1,13 +1,19 @@
-//! `resolve-frostbite-shaders`: a `frostbite.material`'s program as `core.shader_binding`, where one program draws it
-//! and one permutation of it is told.
+//! `resolve-frostbite-shaders`: a `frostbite.material`'s programs as `core.shader_binding`, every permutation of every
+//! program that draws pixels as a variant, none chosen.
 //!
-//! - **Which program.** A material's program row holds one to a dozen programs in no fixed order (a compute program, a
+//! - **Which programs.** A material's program row holds one to a dozen programs in no fixed order (a compute program, a
 //!   depth or shadow program with a vertex stage alone, the passes that draw pixels). The programs that draw pixels
-//!   are the ones with a raster permutation that has a pixel stage. Which of several is the main pass is not decoded: a
-//!   row with more than one is left unbound, counted, and so is a row with none.
-//! - **Which permutation.** A program lists one to 72 permutations (input layout variants, the options of the
-//!   program): the selector that picks one is not decoded. A program that lists more than one distinct permutation is
-//!   left unbound, counted; no option picks one and nothing is chosen silently.
+//!   are the ones with a raster permutation that has a pixel stage, and each is bound: which of them is the main pass
+//!   is not decoded (no record word, and not the pass binding, tells the 1-output programs from the 5-output ones), so
+//!   the choice is left to the consumer, as is the choice among a program's permutations. A row with none is left
+//!   unbound, counted. Vertex-only and compute programs are not bound.
+//! - **Variants.** Each distinct permutation of a drawing program (a program lists up to 72, many the same one: the
+//!   listing has one entry per leaf of its selector tree, [`crate::selector`]) is one vertex stage and one pixel stage
+//!   under a [`VariantKey`] of `frostbite.variant`, its value the permutation's index among the binding's (dense, from
+//!   0). The key's parts describe it: `program` (the program's place in the material's row), `outputs` (the pixel
+//!   stage's output count) and `permutation` (the permutation's id). They never identify it. Which option values
+//!   reach a permutation is not kept here: the tree is on the program entity ([`crate::selector::Selector`]), walked
+//!   for it. A permutation whose stages the world does not hold is left out, counted.
 //! - **Inputs.** A vertex input is the element of the permutation's input layout its semantic index and name find
 //!   ([`InputLayout::resolve`]); the element's usage names the stream: 1 the position, 33 and 34 the texture coordinate
 //!   sets, 30 and 31 the colour sets (the usages [`crate::geometry`] decodes); any other usage, an element wider in the
@@ -31,9 +37,9 @@ use std::collections::BTreeSet;
 
 use primase_core::pass::{Pass, PassLog};
 use primase_core::shader::{
-    ConstantBinding, ConstantRole, D3dClass, InputBinding, InputRole, Interface, OutputBinding, OutputRole,
-    RenderState, ResourceId, ResourceKind, Shader, ShaderBinding, Stage, StageBinding, SystemValue,
-    TextureBinding, TextureSource,
+    ConstantBinding, ConstantRole, D3dClass, InputBinding, InputRole, Interface, KeyPart, OutputBinding,
+    OutputRole, RenderState, ResourceId, ResourceKind, Shader, ShaderBinding, Stage, StageBinding,
+    SystemValue, TextureBinding, TextureSource, VariantKey,
 };
 use primase_core::{Component, Entity, Semantic, World};
 
@@ -93,84 +99,92 @@ impl Pass for ResolveFrostbiteShaders {
     }
 }
 
-/// The program that draws the material and its one permutation, or why neither is told.
-fn chosen(world: &World, m: &FrostbiteMaterial) -> Result<(Entity, FrostbitePermutation), String> {
-    if m.programs.is_empty() {
-        return Err("it has no program row".into());
-    }
-    // the programs with a raster permutation that has a pixel stage
-    let mut drawing = Vec::new();
-    for &p in &m.programs {
-        let Some(program) = world.get::<FrostbiteProgram>(p) else {
-            continue;
-        };
-        let draws = program.permutations.iter().any(|&e| {
-            world
-                .get::<FrostbitePermutation>(e)
-                .is_some_and(|f| f.permutation.kind == Kind::Raster && f.permutation.bytecode.len() == 2)
-        });
-        if draws {
-            drawing.push(program);
-        }
-    }
-    let program = match drawing.as_slice() {
-        [] => return Err("no program of its row draws pixels".into()),
-        [one] => *one,
-        _ => {
-            return Err(
-                "several programs of its row draw pixels (which is the main pass is not decoded)".into(),
-            );
-        }
+/// The key field of a binding's variants.
+const VARIANT_FIELD: &str = "frostbite.variant";
+
+/// The key of the `index`th variant of a binding: the permutation of the program at `program` in the material's row,
+/// whose pixel stage writes `outputs` values.
+fn variant_key(index: u32, program: usize, outputs: usize, permutation: u64) -> VariantKey {
+    let part = |name: &str, value: u64| KeyPart {
+        name: name.to_owned(),
+        value,
     };
-    let distinct: BTreeSet<Entity> = program.permutations.iter().copied().collect();
-    let mut ids = BTreeSet::new();
-    for &e in &distinct {
-        if let Some(f) = world.get::<FrostbitePermutation>(e) {
-            ids.insert(f.permutation.id);
-        }
+    VariantKey {
+        field: VARIANT_FIELD.to_owned(),
+        value: index,
+        parts: vec![
+            part("program", program as u64),
+            part("outputs", outputs as u64),
+            part("permutation", permutation),
+        ],
     }
-    let [only] = distinct.iter().copied().collect::<Vec<_>>()[..] else {
-        return Err(format!(
-            "its program lists {} distinct permutations (the selector is not decoded)",
-            ids.len().max(distinct.len())
-        ));
-    };
-    let permutation = world
-        .get::<FrostbitePermutation>(only)
-        .ok_or("its permutation entity has no frostbite.permutation")?
-        .clone();
-    Ok((only, permutation))
 }
 
 fn bind_material(world: &World, m: &FrostbiteMaterial, log: &mut PassLog) -> Result<ShaderBinding, String> {
-    let (entity, permutation) = chosen(world, m)?;
-    let sets = world.get::<FrostbiteBindings>(entity);
-    let layout = world.get::<FrostbiteInputLayout>(entity).map(|l| &l.0);
-    if sets.is_none() {
-        log.count(
-            "permutations with no binding sets read: every constant and texture Unknown",
-            1,
-        );
+    if m.programs.is_empty() {
+        return Err("it has no program row".into());
     }
-    let bindings = sets.map(FrostbiteBindings::bindings);
-    let mut stages = Vec::new();
-    for (i, stage) in [Stage::Vertex, Stage::Pixel].into_iter().enumerate() {
-        let Some(&shader) = permutation.shaders.get(i) else {
+    let mut stages: Vec<StageBinding> = Vec::new();
+    let mut variants = 0u32;
+    for (place, &p) in m.programs.iter().enumerate() {
+        let Some(program) = world.get::<FrostbiteProgram>(p) else {
             continue;
         };
-        let program = world
-            .get::<Shader>(shader)
-            .ok_or("a program entity of its permutation has no core.shader")?;
-        stages.push(stage_binding(
-            stage,
-            shader,
-            &program.interface,
-            bindings.as_ref(),
-            layout,
-            m.depot.as_ref(),
-            stages.iter().any(|s: &StageBinding| s.stage == Stage::Vertex),
-            log,
-        ));
+        // a program lists a permutation once for each leaf of its selector tree: bound once
+        let mut done = BTreeSet::new();
+        for &e in &program.permutations {
+            let Some(f) = world.get::<FrostbitePermutation>(e) else {
+                continue;
+            };
+            let permutation = &f.permutation;
+            if permutation.kind != Kind::Raster || permutation.bytecode.len() != 2 {
+                continue;
+            }
+            if !done.insert(permutation.id) {
+                continue;
+            }
+            let shaders: Vec<(Stage, Entity, &Shader)> = [Stage::Vertex, Stage::Pixel]
+                .into_iter()
+                .zip(&f.shaders)
+                .filter_map(|(stage, &s)| Some((stage, s, world.get::<Shader>(s)?)))
+                .collect();
+            let [_, (_, _, pixel)] = shaders.as_slice() else {
+                log.count(
+                    "permutations left out: a program entity of theirs has no core.shader",
+                    1,
+                );
+                continue;
+            };
+            let key = variant_key(variants, place, pixel.interface.outputs.len(), permutation.id);
+            let sets = world.get::<FrostbiteBindings>(e);
+            let layout = world.get::<FrostbiteInputLayout>(e).map(|l| &l.0);
+            if sets.is_none() {
+                log.count(
+                    "permutations with no binding sets read: every constant and texture Unknown",
+                    1,
+                );
+            }
+            let bindings = sets.map(FrostbiteBindings::bindings);
+            for (i, (stage, shader, program)) in shaders.iter().enumerate() {
+                let mut bound = stage_binding(
+                    *stage,
+                    *shader,
+                    &program.interface,
+                    bindings.as_ref(),
+                    layout,
+                    m.depot.as_ref(),
+                    i > 0,
+                    log,
+                );
+                bound.variant = Some(key.clone());
+                stages.push(bound);
+            }
+            variants += 1;
+            log.count("variants bound", 1);
+        }
+    }
+    if stages.is_empty() {
+        return Err("no program of its row draws pixels".into());
     }
     Ok(ShaderBinding {
         stages,
@@ -666,6 +680,16 @@ mod tests {
         assert!(
             matches!(element_role(&layout, 2, 4, &mut log), InputRole::Unknown { why } if why.contains("usage 52"))
         );
+    }
+
+    #[test]
+    fn a_variants_key_is_a_dense_value_that_its_parts_only_describe() {
+        let key = variant_key(3, 1, 5, 0xABCD);
+        assert_eq!((key.field.as_str(), key.value), ("frostbite.variant", 3));
+        let parts: Vec<(&str, u64)> = key.parts.iter().map(|p| (p.name.as_str(), p.value)).collect();
+        assert_eq!(parts, [("program", 1), ("outputs", 5), ("permutation", 0xABCD)]);
+        // the same value with other parts is another description of a variant of the same index
+        assert_eq!(variant_key(3, 2, 1, 7).value, key.value);
     }
 
     #[test]

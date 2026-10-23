@@ -486,9 +486,22 @@ pub struct InputBinding {
 /// is refused by name, not drawn with a first or default stage.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VariantKey {
-    /// The component and field the mesh carries the key in, as `component.field` (`anvil.layout.kind`).
+    /// The component and field the mesh carries the key in, as `component.field` (`anvil.layout.kind`), or the name
+    /// the source gives its keys where no mesh field holds them (`frostbite.variant`).
     pub field: String,
     pub value: u32,
+    /// What the key stands for, in the source's terms. A description only: it never identifies a variant (a binding's
+    /// check, and a consumer picking a stage, go by `field` and `value`) and may be empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<KeyPart>,
+}
+
+/// One named number of what a [`VariantKey`] stands for (a program's place in its row, a pixel output count, a
+/// permutation id). It describes and never identifies.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct KeyPart {
+    pub name: String,
+    pub value: u64,
 }
 
 /// One shader program in a material, with the role of everything it reads and writes.
@@ -1219,6 +1232,7 @@ mod tests {
             Some(VariantKey {
                 field: field.to_owned(),
                 value,
+                parts: Vec::new(),
             })
         };
         let with = |a: Option<VariantKey>, b: Option<VariantKey>| {

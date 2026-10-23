@@ -48,6 +48,8 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
     let (mut bundles, mut meshsets, mut bound) = (0usize, 0usize, 0usize);
     // constants and bytes by role (`material`, or `unknown: <why>` cut at its first colon)
     let mut constants: BTreeMap<String, (usize, u64)> = BTreeMap::new();
+    // per bound material: variants, stages, constants and the bytes they cover
+    let mut sizes: Vec<[u64; 4]> = Vec::new();
     let mut inputs: BTreeMap<String, usize> = BTreeMap::new();
     let mut textures: BTreeMap<&'static str, usize> = BTreeMap::new();
     // histograms: drawing programs per material with a row; per drawing program the listed permutations, the distinct
@@ -105,9 +107,19 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
         }
         for (e, b) in w.iter::<ShaderBinding>() {
             bound += 1;
+            let mut size = [0u64; 4];
             b.verify(e, &w)
                 .unwrap_or_else(|why| panic!("{} does not verify: {why}", bundle.name));
+            size[0] = b
+                .stages
+                .iter()
+                .filter_map(|s| s.variant.as_ref().map(|k| k.value))
+                .collect::<std::collections::BTreeSet<_>>()
+                .len() as u64;
             for s in &b.stages {
+                size[1] += 1;
+                size[2] += s.constants.len() as u64;
+                size[3] += s.constants.iter().map(|c| u64::from(c.size)).sum::<u64>();
                 for c in &s.constants {
                     let role = match &c.role {
                         ConstantRole::Material(_) => "material".to_owned(),
@@ -139,6 +151,7 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
                     *textures.entry(key).or_default() += 1;
                 }
             }
+            sizes.push(size);
         }
     }
     println!("{bundles} bundles, {meshsets} meshsets, {bound} bindings");
@@ -155,6 +168,23 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
         println!("  {n:>7}  {k}");
     }
     println!("texture slots by source: {textures:?}");
+    for (what, i) in [
+        ("variants", 0),
+        ("stages", 1),
+        ("constants", 2),
+        ("constant bytes", 3),
+    ] {
+        let mut v: Vec<u64> = sizes.iter().map(|s| s[i]).collect();
+        v.sort_unstable();
+        if let (Some(&min), Some(&max)) = (v.first(), v.last()) {
+            println!(
+                "per bound material, {what}: total {} min {min} median {} mean {:.1} max {max}",
+                v.iter().sum::<u64>(),
+                v[v.len() / 2],
+                v.iter().sum::<u64>() as f64 / v.len() as f64
+            );
+        }
+    }
     println!(
         "materials with a program row, by the programs of the row that draw pixels: {drawing_per_row:?}"
     );

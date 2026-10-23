@@ -22,7 +22,7 @@ use serde::Serialize;
 pub use binding::{
     AddressMode, AlphaTest, Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding,
     ConstantRole, Cull, DepthBias, DepthState, Fill, FrameParameter, FrameTexture, InputBinding, InputRole,
-    LaneStream, NormalEncoding, NormalSpace, ObjectMatrix, ObjectParameter, Occluded, OutputBinding,
+    KeyPart, LaneStream, NormalEncoding, NormalSpace, ObjectMatrix, ObjectParameter, Occluded, OutputBinding,
     OutputRole, RenderState, SamplerState, ScalarEncoding, ShaderBinding, StageBinding, Stencil, StencilFace,
     StencilOp, TargetState, TextureBinding, TextureSource, VariantKey, ViewParameter,
 };

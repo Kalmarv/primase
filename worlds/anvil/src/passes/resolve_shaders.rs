@@ -724,6 +724,7 @@ impl Pass for ResolveAnvilShaders {
                         Some(VariantKey {
                             field: MESH_LAYOUT_FIELD.to_owned(),
                             value: u32::from(kind),
+                            parts: Vec::new(),
                         }),
                         e,
                     )),
