@@ -38,6 +38,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::asset::Asset;
+use crate::clip::ClipBinding;
 use crate::components::{Instance, Mesh, Texture, TextureFile, Topology};
 use crate::pass::PassLog;
 use crate::world::{Entity, RebuildLog, Rebuilt, World};
@@ -98,7 +99,8 @@ pub fn held(w: &World, e: Entity) -> Vec<(Measure, u64)> {
 /// Despawn `e` on purpose, declaring in `log` what it held ([`held`]) as left out for `why`. False, and nothing
 /// declared, when it was not alive. Every `core.asset` that lists `e` as a member stops listing it (an asset naming an
 /// entity that is gone is not an asset the world verifies), counted as "asset members dropped with the entity they
-/// listed"; a pass that despawns entities an asset may list declares that it modifies `core.asset`.
+/// listed", and every `core.clip_binding` that names `e` as a mesh it drives stops naming it ([`unbind`]); a pass that
+/// despawns entities an asset or a clip binding may name declares that it modifies `core.asset` or `core.clip_binding`.
 pub fn despawn(w: &mut World, e: Entity, log: &mut PassLog, why: &str) -> bool {
     if !w.is_alive(e) {
         return false;
@@ -108,7 +110,29 @@ pub fn despawn(w: &mut World, e: Entity, log: &mut PassLog, why: &str) -> bool {
     }
     let gone = w.despawn(e);
     unlist(w, e, log);
+    unbind(w, e, log);
     gone
+}
+
+/// Every `core.clip_binding` that names `e` among the mesh occurrences its clip drives stops naming it, counted as
+/// "clip binding meshes dropped with the entity they named": the clip still drives the occurrences that remain, and a
+/// binding naming an entity that is gone is not one the world verifies. The binding's clip and rig are not touched.
+pub fn unbind(w: &mut World, e: Entity, log: &mut PassLog) {
+    let naming: Vec<Entity> = w
+        .iter::<ClipBinding>()
+        .filter(|(_, b)| b.meshes.contains(&e))
+        .map(|(b, _)| b)
+        .collect();
+    for b in naming {
+        if let Some(binding) = w.get_mut::<ClipBinding>(b) {
+            let before = binding.meshes.len();
+            binding.meshes.retain(|m| *m != e);
+            log.count(
+                "clip binding meshes dropped with the entity they named",
+                (before - binding.meshes.len()) as u64,
+            );
+        }
+    }
 }
 
 /// Every `core.asset` that lists `e` as a member stops listing it, counted as "asset members dropped with the entity they
@@ -812,6 +836,41 @@ mod tests {
         assert!(
             !log.counts
                 .contains_key("asset members dropped with the entity they listed")
+        );
+    }
+
+    /// An occurrence a clip binding drives is dropped from the binding when it is despawned, counted: the binding keeps
+    /// its clip and its other meshes, and an entity no binding names counts nothing.
+    #[test]
+    fn despawn_drops_the_entity_from_the_clip_bindings_that_name_it() {
+        let mut w = World::new();
+        let (clip, a, b) = (w.spawn(), w.spawn(), w.spawn());
+        let (first, second) = (w.spawn(), w.spawn());
+        for (e, meshes) in [(first, vec![a, b]), (second, vec![a])] {
+            w.insert(
+                e,
+                ClipBinding {
+                    clip,
+                    rig: None,
+                    meshes,
+                },
+            );
+        }
+        let mut log = PassLog::default();
+        assert!(despawn(&mut w, a, &mut log, "left out"));
+        assert_eq!(w.get::<ClipBinding>(first).unwrap().meshes, [b]);
+        assert!(w.get::<ClipBinding>(second).unwrap().meshes.is_empty());
+        assert_eq!(w.get::<ClipBinding>(first).unwrap().clip, clip);
+        assert_eq!(
+            log.counts["clip binding meshes dropped with the entity they named"],
+            2
+        );
+        let loose = w.spawn();
+        let mut log = PassLog::default();
+        assert!(despawn(&mut w, loose, &mut log, "left out"));
+        assert!(
+            !log.counts
+                .contains_key("clip binding meshes dropped with the entity they named")
         );
     }
 }

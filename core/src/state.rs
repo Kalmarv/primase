@@ -26,6 +26,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::asset::{Asset, Role};
+use crate::clip::ClipBinding;
 use crate::components::{Instance, Mesh, Transform};
 use crate::json::JsonError;
 use crate::ledger::Measure;
@@ -389,7 +390,13 @@ const REMOVED: &[&str] = &[
 
 /// What resolving state changes in what stays: placements, their prototypes, meshes that lose primitives, assets that
 /// lose members.
-const MODIFIED: &[&str] = &[Transform::NAME, Instance::NAME, Mesh::NAME, Asset::NAME];
+const MODIFIED: &[&str] = &[
+    Transform::NAME,
+    Instance::NAME,
+    Mesh::NAME,
+    Asset::NAME,
+    ClipBinding::NAME,
+];
 
 /// A condition with its literals on resolved axes evaluated.
 enum Reduced {
