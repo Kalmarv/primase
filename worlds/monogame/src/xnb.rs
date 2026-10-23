@@ -44,6 +44,9 @@ pub enum Error {
     /// The bytes break the format, at this absolute offset.
     #[error("XNB at byte {offset}: {detail}")]
     Format { offset: u128, detail: String },
+    /// The bytes of an effect (`mgfx`) break its format, at this offset in the effect's own bytes.
+    #[error("MGFX effect at byte {offset} of its bytes: {detail}")]
+    Effect { offset: u128, detail: String },
     /// A compressed XNB: only uncompressed content is read.
     #[error("XNB compressed with {0}: only uncompressed content is read")]
     Compressed(Compression),
@@ -75,10 +78,11 @@ const LZX: u8 = 0x80;
 /// The fixed header: magic, platform, version, flags, file size.
 const HEADER: usize = 10;
 
-/// XNA's string reader, as [`TypeReader::type_name`] gives it.
+/// XNA's texture reader, as [`TypeReader::type_name`] gives it.
 pub const TEXTURE_2D_READER: &str = "Microsoft.Xna.Framework.Content.Texture2DReader";
 /// MonoGame's effect reader, as [`TypeReader::type_name`] gives it.
 pub const EFFECT_READER: &str = "Microsoft.Xna.Framework.Content.EffectReader";
+/// XNA's string reader, as [`TypeReader::type_name`] gives it.
 const STRING_READER: &str = "Microsoft.Xna.Framework.Content.StringReader";
 /// XNA's array reader, as [`TypeReader::base_name`] gives it; its one generic argument is the element type.
 pub const ARRAY_READER: &str = "Microsoft.Xna.Framework.Content.ArrayReader`1";
@@ -397,6 +401,20 @@ pub struct Content<'a> {
 }
 
 impl<'a> Content<'a> {
+    /// A reader of `bytes` that are not a file (an effect inside an XNB): offsets in its errors are the bytes'.
+    pub fn of_bytes(bytes: &'a [u8]) -> Content<'a> {
+        Content {
+            cursor: Cursor::new(bytes),
+            origin: 0,
+            shared_resources: 0,
+        }
+    }
+
+    /// How many bytes are left.
+    pub fn remaining(&self) -> usize {
+        self.cursor.remaining()
+    }
+
     /// The absolute offset of the next byte.
     pub fn position(&self) -> usize {
         self.origin.saturating_add(self.cursor.position())
@@ -414,6 +432,14 @@ impl<'a> Content<'a> {
 
     pub fn u8(&mut self) -> Result<u8> {
         Ok(u8::from_le_bytes(self.array()?))
+    }
+
+    pub fn i16(&mut self) -> Result<i16> {
+        Ok(i16::from_le_bytes(self.array()?))
+    }
+
+    pub fn u16(&mut self) -> Result<u16> {
+        Ok(u16::from_le_bytes(self.array()?))
     }
 
     pub fn i32(&mut self) -> Result<i32> {

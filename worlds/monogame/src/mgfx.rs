@@ -29,9 +29,7 @@
     clippy::cast_possible_truncation
 )]
 
-use primase_bytes::Cursor;
-
-use crate::xnb::Error;
+use crate::xnb::{Content, Error};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -162,23 +160,56 @@ pub struct Effect<'a> {
 }
 
 fn bad(offset: usize, detail: impl Into<String>) -> Error {
-    Error::Format {
+    Error::Effect {
         offset: offset as u128,
         detail: detail.into(),
     }
 }
 
+/// An error of the byte reader as one of the effect's.
+fn effect(e: Error) -> Error {
+    match e {
+        Error::Format { offset, detail } => Error::Effect { offset, detail },
+        other => other,
+    }
+}
+
+/// The effect's bytes read in order, through the one reader of .NET's encodings ([`Content`]).
 struct Reader<'a> {
-    cursor: Cursor<'a>,
+    content: Content<'a>,
 }
 
 impl<'a> Reader<'a> {
     fn position(&self) -> usize {
-        self.cursor.position()
+        self.content.position()
+    }
+
+    fn remaining(&self) -> usize {
+        self.content.remaining()
     }
 
     fn bytes(&mut self, n: usize) -> Result<&'a [u8]> {
-        Ok(self.cursor.take(n)?)
+        self.content.bytes(n).map_err(effect)
+    }
+
+    fn u8(&mut self) -> Result<u8> {
+        self.content.u8().map_err(effect)
+    }
+
+    fn i16(&mut self) -> Result<i16> {
+        self.content.i16().map_err(effect)
+    }
+
+    fn u16(&mut self) -> Result<u16> {
+        self.content.u16().map_err(effect)
+    }
+
+    fn i32(&mut self) -> Result<i32> {
+        self.content.i32().map_err(effect)
+    }
+
+    fn f32(&mut self) -> Result<f32> {
+        self.content.f32().map_err(effect)
     }
 
     fn array<const N: usize>(&mut self) -> Result<[u8; N]> {
@@ -187,61 +218,19 @@ impl<'a> Reader<'a> {
         Ok(a)
     }
 
-    fn u8(&mut self) -> Result<u8> {
-        Ok(u8::from_le_bytes(self.array()?))
-    }
-
-    fn i16(&mut self) -> Result<i16> {
-        Ok(i16::from_le_bytes(self.array()?))
-    }
-
-    fn u16(&mut self) -> Result<u16> {
-        Ok(u16::from_le_bytes(self.array()?))
-    }
-
-    fn i32(&mut self) -> Result<i32> {
-        Ok(i32::from_le_bytes(self.array()?))
-    }
-
-    fn f32(&mut self) -> Result<f32> {
-        Ok(f32::from_le_bytes(self.array()?))
-    }
-
     /// A count: an i32 that is not negative and cannot promise more items than there are bytes left (each item is at
     /// least a byte).
     fn count(&mut self, what: &str) -> Result<usize> {
         let at = self.position();
         let n = self.i32()?;
         match usize::try_from(n) {
-            Ok(n) if n <= self.cursor.remaining() => Ok(n),
+            Ok(n) if n <= self.remaining() => Ok(n),
             _ => Err(bad(at, format!("{what}: a count of {n}"))),
         }
     }
 
-    fn seven_bit(&mut self) -> Result<u32> {
-        let at = self.position();
-        let mut value = 0u32;
-        for shift in [0u32, 7, 14, 21, 28] {
-            let b = self.u8()?;
-            let bits = u32::from(b & 0x7F)
-                .checked_shl(shift)
-                .ok_or_else(|| bad(at, "a 7-bit encoded integer over 32 bits"))?;
-            value |= bits;
-            if b & 0x80 == 0 {
-                return Ok(value);
-            }
-        }
-        Err(bad(at, "a 7-bit encoded integer over 32 bits"))
-    }
-
     fn string(&mut self) -> Result<String> {
-        let at = self.position();
-        let len = self.seven_bit()?;
-        let len = usize::try_from(len).map_err(|_| bad(at, format!("string length {len}")))?;
-        let bytes = self.bytes(len)?;
-        Ok(std::str::from_utf8(bytes)
-            .map_err(|e| bad(at, format!("a string that is not UTF-8: {e}")))?
-            .to_owned())
+        Ok(self.content.string().map_err(effect)?.to_owned())
     }
 
     /// A byte that must be `expected` in every file read.
@@ -434,7 +423,7 @@ impl<'a> Effect<'a> {
     /// [`crate::xnb::Xnb::effect`]). The whole of `code` is read.
     pub fn parse(code: &'a [u8]) -> Result<Effect<'a>> {
         let mut r = Reader {
-            cursor: Cursor::new(code),
+            content: Content::of_bytes(code),
         };
         if r.bytes(4)? != SIGNATURE {
             return Err(bad(0, "not an MGFX effect"));
@@ -495,13 +484,28 @@ impl<'a> Effect<'a> {
                 "the effect does not end with MGFX",
             ));
         }
-        if r.cursor.remaining() != 0 {
+        if r.remaining() != 0 {
             return Err(bad(
                 r.position(),
-                format!("{} bytes after the effect", r.cursor.remaining()),
+                format!("{} bytes after the effect", r.remaining()),
             ));
         }
         // every index a buffer, a sampler or a shader makes is in range
+        for buffer in &constant_buffers {
+            for &(index, _) in &buffer.parameters {
+                if usize::try_from(index).is_ok_and(|i| i < parameters.len()) {
+                    continue;
+                }
+                return Err(bad(
+                    0,
+                    format!(
+                        "constant buffer {} holds parameter {index} of {}",
+                        buffer.name,
+                        parameters.len()
+                    ),
+                ));
+            }
+        }
         for shader in &shaders {
             for &b in &shader.constant_buffers {
                 if usize::from(b) >= constant_buffers.len() {
@@ -682,6 +686,71 @@ mod tests {
         extra.push(0);
         let extra = Effect::parse(&extra).unwrap_err().to_string();
         assert!(extra.contains("after the effect"), "{extra}");
+    }
+
+    #[test]
+    fn an_effect_error_is_the_effects_and_a_constant_buffer_names_only_parameters_it_has() {
+        let message = Effect::parse(b"XXXX").unwrap_err().to_string();
+        assert!(
+            message.contains("MGFX effect at byte 0 of its bytes"),
+            "{message}"
+        );
+        // the constant buffer's one parameter, index 0, made 9 (the effect has two)
+        let mut bytes = effect(VERSION, 0, 0);
+        let at = bytes.windows(16).position(|w| w == b"ps_uniforms_vec4").unwrap();
+        // the name, a byte, the size (i16), a byte, the count (i32), then the index (i32)
+        let index = at + 16 + 1 + 2 + 1 + 4;
+        assert_eq!(bytes[index..index + 4], 0i32.to_le_bytes());
+        bytes[index] = 9;
+        let message = Effect::parse(&bytes).unwrap_err().to_string();
+        assert!(
+            message.contains("constant buffer ps_uniforms_vec4 holds parameter 9 of 2"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_seven_bit_length_over_32_bits_is_refused_wherever_it_is_read() {
+        // the constant buffer's name, whose one-byte length (16) is five bytes that carry bits above the 32nd
+        let mut bytes = effect(VERSION, 0, 0);
+        let at = bytes.windows(16).position(|w| w == b"ps_uniforms_vec4").unwrap() - 1;
+        assert_eq!(bytes[at], 16);
+        bytes.splice(at..=at, [0x90, 0x80, 0x80, 0x80, 0x7F]);
+        let message = Effect::parse(&bytes).unwrap_err().to_string();
+        assert!(message.contains("over 32 bits"), "{message}");
+    }
+
+    #[test]
+    fn a_program_is_not_made_of_tables_that_do_not_hold_what_they_name() {
+        use crate::programs::{Error as ProgramError, program};
+        let bytes = effect(VERSION, 0, 0);
+        let good = Effect::parse(&bytes).unwrap();
+        // the pixel shader (0) reads buffer 0, whose parameter is made one the effect does not have
+        let mut effect = good.clone();
+        effect.constant_buffers[0].parameters[0].0 = 9;
+        assert!(matches!(
+            program(&effect, 0),
+            Err(ProgramError::NoSuchParameter(9, 2))
+        ));
+        // a sampler's parameter
+        let mut effect = good.clone();
+        effect.shaders[0].samplers[0].parameter = 7;
+        assert!(matches!(
+            program(&effect, 0),
+            Err(ProgramError::NoSuchParameter(7, 2))
+        ));
+        // a constant buffer the shader reads
+        let mut effect = good.clone();
+        effect.shaders[0].constant_buffers[0] = 3;
+        assert!(matches!(
+            program(&effect, 0),
+            Err(ProgramError::NoSuchConstantBuffer(3, 1))
+        ));
+        // a vertex usage MonoGame does not have
+        let mut effect = good;
+        effect.shaders[1].attributes[0].usage = 99;
+        let error = program(&effect, 1).unwrap_err().to_string();
+        assert!(error.contains("vs_v0") && error.contains("usage 99"), "{error}");
     }
 
     #[test]

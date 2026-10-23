@@ -20,6 +20,14 @@ pub enum Error {
     NotGlsl,
     #[error("the shader's code is not UTF-8 text")]
     NotText,
+    #[error("the shader reads constant buffer {0}, the effect has {1}")]
+    NoSuchConstantBuffer(usize, usize),
+    #[error("a constant buffer holds parameter {0}, the effect has {1}")]
+    NoSuchParameter(usize, usize),
+    #[error(
+        "the vertex attribute {name} has the usage {usage}, which MonoGame's VertexElementUsage does not have"
+    )]
+    UnknownUsage { name: String, usage: u8 },
     #[error("{0}")]
     Lift(#[from] primase_mojoshader::Error),
 }
@@ -44,21 +52,30 @@ fn semantic(usage: u8) -> Option<&'static str> {
     })
 }
 
-/// What the effect says about `shader` that its text does not.
-fn hints(effect: &Effect<'_>, shader: &Shader<'_>) -> Hints {
+/// What the effect says about `shader` that its text does not. An index the tables make that they do not hold is an
+/// error, as is a vertex usage MonoGame does not have: nothing is left out.
+fn hints(effect: &Effect<'_>, shader: &Shader<'_>) -> Result<Hints, Error> {
     let mut constants = Vec::new();
     for &b in &shader.constant_buffers {
-        let Some(buffer) = effect.constant_buffers.get(usize::from(b)) else {
-            continue;
-        };
+        let buffer = effect
+            .constant_buffers
+            .get(usize::from(b))
+            .ok_or(Error::NoSuchConstantBuffer(
+                usize::from(b),
+                effect.constant_buffers.len(),
+            ))?;
         // a parameter holds the registers up to the next one's offset (or the end of the buffer)
         let mut offsets: Vec<u32> = buffer.parameters.iter().map(|&(_, o)| u32::from(o)).collect();
         offsets.sort_unstable();
         offsets.dedup();
         for &(index, offset) in &buffer.parameters {
-            let Some(parameter) = usize::try_from(index).ok().and_then(|i| effect.parameters.get(i)) else {
-                continue;
-            };
+            let parameter = usize::try_from(index)
+                .ok()
+                .and_then(|i| effect.parameters.get(i))
+                .ok_or(Error::NoSuchParameter(
+                    usize::try_from(index).unwrap_or(usize::MAX),
+                    effect.parameters.len(),
+                ))?;
             let offset = u32::from(offset);
             let end = offsets
                 .iter()
@@ -80,35 +97,39 @@ fn hints(effect: &Effect<'_>, shader: &Shader<'_>) -> Hints {
             });
         }
     }
-    let samplers = shader
-        .samplers
-        .iter()
-        .map(|s| Sampler {
+    let mut samplers = Vec::new();
+    for s in &shader.samplers {
+        let parameter = effect
+            .parameters
+            .get(usize::from(s.parameter))
+            .ok_or(Error::NoSuchParameter(
+                usize::from(s.parameter),
+                effect.parameters.len(),
+            ))?;
+        samplers.push(Sampler {
             glsl_name: s.name.clone(),
             slot: u32::from(s.texture_slot),
-            name: effect
-                .parameters
-                .get(usize::from(s.parameter))
-                .map_or_else(|| s.name.clone(), |p| p.name.clone()),
-        })
-        .collect();
-    let attributes = shader
-        .attributes
-        .iter()
-        .filter_map(|a| {
-            Some(Attribute {
-                glsl_name: a.name.clone(),
-                semantic: semantic(a.usage)?.to_owned(),
-                index: u32::from(a.index),
-            })
-        })
-        .collect();
-    Hints {
+            name: parameter.name.clone(),
+        });
+    }
+    let mut attributes = Vec::new();
+    for a in &shader.attributes {
+        let semantic = semantic(a.usage).ok_or_else(|| Error::UnknownUsage {
+            name: a.name.clone(),
+            usage: a.usage,
+        })?;
+        attributes.push(Attribute {
+            glsl_name: a.name.clone(),
+            semantic: semantic.to_owned(),
+            index: u32::from(a.index),
+        });
+    }
+    Ok(Hints {
         target: "mgfx 12 opengl".into(),
         constants,
         samplers,
         attributes,
-    }
+    })
 }
 
 /// Shader `index` of `effect` lifted to a program.
@@ -125,5 +146,5 @@ pub fn program(effect: &Effect<'_>, index: usize) -> Result<Program, Error> {
         ShaderStage::Vertex => Stage::Vertex,
         ShaderStage::Pixel => Stage::Pixel,
     };
-    Ok(primase_mojoshader::lift(source, stage, &hints(effect, shader))?)
+    Ok(primase_mojoshader::lift(source, stage, &hints(effect, shader)?)?)
 }
