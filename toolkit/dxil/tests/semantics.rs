@@ -1095,3 +1095,60 @@ mod buffer_arrays {
         }
     }
 }
+
+mod image_arrays {
+    use super::*;
+    use primase_shader::D3dClass;
+    use primase_shader::exec::ImageStore;
+    use std::collections::BTreeMap;
+
+    /// Keeps the stores by view and element, and by texel.
+    struct Views {
+        stores: BTreeMap<(ResourceId, u32, [u32; 3]), [u32; 4]>,
+    }
+    impl Backend for Views {
+        fn sample(&mut self, _: ImageSample<Element>) -> Result<[f32; 4], String> {
+            Err("no sampling in this fixture".into())
+        }
+        fn store_image(&mut self, r: ImageStore<ResourceId>) -> Result<(), String> {
+            assert_eq!(r.lanes, 4);
+            self.stores.insert((r.view, r.index, r.texel), r.value);
+            Ok(())
+        }
+    }
+
+    /// `image_arrays.hlsl`: thread (x, y) of an 8 by 8 group, group index g = x + 8 y, writes (x, y, g, 1) to texel
+    /// (x, y) of imgs[g & 3].
+    #[test]
+    fn stores_reach_the_element_of_an_array_of_images_the_program_computes() {
+        for v in BOTH {
+            let (program, exe) = lifted(&fixture("image_arrays", v));
+            let imgs = program
+                .interface
+                .resources
+                .iter()
+                .find(|r| {
+                    r.provenance
+                        .d3d
+                        .is_some_and(|d| d.class == D3dClass::UnorderedAccess && d.register == 0)
+                })
+                .unwrap_or_else(|| panic!("{v}: no u0"))
+                .id;
+            let mut backend = Views {
+                stores: BTreeMap::new(),
+            };
+            let resources = Resources::default();
+            let bound = exe.bind_resources(&resources).unwrap();
+            exe.dispatch(&bound, &mut backend, &mut BTreeMap::new(), [1, 1, 1], 32)
+                .unwrap_or_else(|e| panic!("{v}: {e}"));
+            assert_eq!(backend.stores.len(), 64, "{v}");
+            for y in 0..8u32 {
+                for x in 0..8u32 {
+                    let g = x + 8 * y;
+                    let want = [x as f32, y as f32, g as f32, 1.0].map(f32::to_bits);
+                    assert_eq!(backend.stores[&(imgs, g & 3, [x, y, 0])], want, "{v} ({x}, {y})");
+                }
+            }
+        }
+    }
+}
