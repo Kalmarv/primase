@@ -20,14 +20,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::World;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, PassLog};
 use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::components::{RenderPipeline, UnityMaterial, UnityRenderSettings};
 use primase_unity::level::{LevelOptions, read_level_with};
 use primase_unity::player::Player;
 use primase_unity::program::read_programs;
-use primase_unity::resolve_shaders::ResolveUnityShaders;
+use primase_unity::resolve_shaders::RESOLVE_UNITY_SHADERS;
 
 /// The pass's counts about textures for `level1` of the game at `data`.
 fn counts(label: &str, data: &std::path::Path, tpk: &std::path::Path) -> BTreeMap<String, u64> {
@@ -55,7 +55,8 @@ fn counts(label: &str, data: &std::path::Path, tpk: &std::path::Path) -> BTreeMa
         ("colour-space".to_owned(), "linear".to_owned()),
     ]);
     let mut log = PassLog::default();
-    ResolveUnityShaders::from_options(&options)
+    RESOLVE_UNITY_SHADERS
+        .instance(&options)
         .unwrap()
         .run(&mut w, &mut log)
         .unwrap();

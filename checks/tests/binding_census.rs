@@ -266,7 +266,7 @@ fn unity_scene(game: &str, label: &str, data: &std::path::Path, tpk: &std::path:
     use primase_unity::level::{LevelOptions, read_level_with};
     use primase_unity::player::Player;
     use primase_unity::program::read_programs;
-    use primase_unity::resolve_shaders::ResolveUnityShaders;
+    use primase_unity::resolve_shaders::RESOLVE_UNITY_SHADERS;
     let player = Player::open(
         data,
         TypeTreePackage::parse(&std::fs::read(tpk).unwrap()).unwrap(),
@@ -316,7 +316,8 @@ fn unity_scene(game: &str, label: &str, data: &std::path::Path, tpk: &std::path:
                 ("colour-space".to_owned(), "linear".to_owned()),
             ]);
             let mut log = PassLog::default();
-            ResolveUnityShaders::from_options(&options)
+            RESOLVE_UNITY_SHADERS
+                .instance(&options)
                 .unwrap()
                 .run(&mut world, &mut log)
                 .unwrap();

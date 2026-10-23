@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, PassLog};
 use primase_core::shader::ShaderBinding;
 use primase_core::{Component, World};
 use primase_testdata::{Game, Tool, install_file, tool};
@@ -17,7 +17,7 @@ use primase_unity::components::{
 use primase_unity::level::{LevelOptions, read_level_with};
 use primase_unity::player::Player;
 use primase_unity::program::read_programs;
-use primase_unity::resolve_shaders::ResolveUnityShaders;
+use primase_unity::resolve_shaders::RESOLVE_UNITY_SHADERS;
 
 fn census(label: &str, data: &std::path::Path, tpk: &std::path::Path, level: &str) {
     let started = std::time::Instant::now();
@@ -104,7 +104,8 @@ fn census(label: &str, data: &std::path::Path, tpk: &std::path::Path, level: &st
                 ("colour-space".to_owned(), "linear".to_owned()),
             ]);
             let mut log = PassLog::default();
-            ResolveUnityShaders::from_options(&options)
+            RESOLVE_UNITY_SHADERS
+                .instance(&options)
                 .unwrap()
                 .run(&mut world, &mut log)
                 .unwrap();

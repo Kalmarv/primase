@@ -17,7 +17,7 @@
 //!   terrain's far edge), every cell split along the drawn terrain's diagonal. The collider's own heights, when they
 //!   differ from the drawn ones, are not read: counted.
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::state::Condition;
 use primase_core::{
     Collider, Collision, Diagonal, Entity, Heightfield, Name, Shape, Surfaces, Transform, World,
@@ -316,6 +316,13 @@ pub fn lower_unity_collision(w: &mut World) -> Result<PassLog> {
 /// [`lower_unity_collision`] as a pass.
 #[derive(Debug, Clone, Copy)]
 pub struct LowerUnityCollision;
+
+/// `lower-unity-collision`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by Unity's own rules.
+pub const LOWER_UNITY_COLLISION: PassSpec = PassSpec {
+    name: "lower-unity-collision",
+    options: &[],
+    make: |_| Ok(Box::new(LowerUnityCollision)),
+};
 
 impl Pass for LowerUnityCollision {
     fn name(&self) -> &'static str {

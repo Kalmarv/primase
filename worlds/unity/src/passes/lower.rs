@@ -76,7 +76,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef, UvTransform, Wrap};
 use primase_core::{
     ColorSpace, Entity, Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexRole, Texture,
@@ -1063,6 +1063,13 @@ pub fn lower_unity_pbr(w: &mut World) -> Result<PassLog> {
 /// [`lower_unity_pbr`] as a pass.
 #[derive(Debug, Clone, Copy)]
 pub struct LowerUnityPbr;
+
+/// `lower-unity-pbr`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by Unity's own rules.
+pub const LOWER_UNITY_PBR: PassSpec = PassSpec {
+    name: "lower-unity-pbr",
+    options: &[],
+    make: |_| Ok(Box::new(LowerUnityPbr)),
+};
 
 impl Pass for LowerUnityPbr {
     fn name(&self) -> &'static str {

@@ -25,7 +25,7 @@
 //!
 //! The pass keeps the environment's sun (`lower-unity-lights`') and replaces its ambient.
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Ambient, AmbientLight, Environment, World};
 use primase_image::srgb_to_linear_f32;
 
@@ -43,14 +43,12 @@ pub enum UnityAmbientProbe {
     ProbeAverage,
 }
 
-impl UnityAmbientProbe {
-    fn text(self) -> &'static str {
-        match self {
-            UnityAmbientProbe::Omit => "omit",
-            UnityAmbientProbe::StoredGradient => "stored-gradient",
-            UnityAmbientProbe::ProbeAverage => "probe-average",
-        }
-    }
+impl Choice for UnityAmbientProbe {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("omit", UnityAmbientProbe::Omit),
+        ("stored-gradient", UnityAmbientProbe::StoredGradient),
+        ("probe-average", UnityAmbientProbe::ProbeAverage),
+    ];
 }
 
 /// `lower-unity-ambient{probe=omit|stored-gradient|probe-average}`: see the module documentation.
@@ -59,32 +57,20 @@ pub struct LowerUnityAmbient {
     pub probe: UnityAmbientProbe,
 }
 
-impl LowerUnityAmbient {
-    /// From pipeline options: `probe` is required.
-    pub fn from_options(o: &Options) -> Result<LowerUnityAmbient, String> {
-        if let Some(k) = o.keys().find(|k| k.as_str() != "probe") {
-            return Err(format!("unknown option {k}"));
-        }
-        let probe = match o.get("probe").map(String::as_str) {
-            Some("omit") => UnityAmbientProbe::Omit,
-            Some("stored-gradient") => UnityAmbientProbe::StoredGradient,
-            Some("probe-average") => UnityAmbientProbe::ProbeAverage,
-            Some(v) => {
-                return Err(format!(
-                    "probe={v}: omit, stored-gradient or probe-average expected"
-                ));
-            }
-            None => {
-                return Err(
-                    "probe=omit|stored-gradient|probe-average is required: what a skybox or custom ambient \
-                            becomes"
-                        .into(),
-                );
-            }
-        };
-        Ok(LowerUnityAmbient { probe })
-    }
-}
+/// `lower-unity-ambient`'s declaration ([`primase_core::pass::PassRegistry::add`]): what an ambient whose probe is
+/// not read becomes is the program's, no default.
+pub const LOWER_UNITY_AMBIENT: PassSpec = PassSpec {
+    name: "lower-unity-ambient",
+    options: &[OptionSpec::choice::<UnityAmbientProbe>(
+        "probe",
+        "what a skybox or custom ambient becomes: omitted, the stored gradient, or the stored probe's average",
+    )],
+    make: |g| {
+        Ok(Box::new(LowerUnityAmbient {
+            probe: g.choice("probe"),
+        }))
+    },
+};
 
 /// The stored colours as linear light, alpha left out.
 fn linear(c: [f32; 4]) -> [f32; 3] {
@@ -439,11 +425,15 @@ mod tests {
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect()
         };
-        assert!(LowerUnityAmbient::from_options(&o(&[])).is_err());
-        assert!(LowerUnityAmbient::from_options(&o(&[("probe", "sky")])).is_err());
-        assert!(LowerUnityAmbient::from_options(&o(&[("probe", "omit"), ("x", "1")])).is_err());
+        assert!(LOWER_UNITY_AMBIENT.instance(&o(&[])).is_err());
+        assert!(LOWER_UNITY_AMBIENT.instance(&o(&[("probe", "sky")])).is_err());
+        assert!(
+            LOWER_UNITY_AMBIENT
+                .instance(&o(&[("probe", "omit"), ("x", "1")]))
+                .is_err()
+        );
         for p in ["omit", "stored-gradient", "probe-average"] {
-            let pass = LowerUnityAmbient::from_options(&o(&[("probe", p)])).unwrap();
+            let pass = LOWER_UNITY_AMBIENT.instance(&o(&[("probe", p)])).unwrap();
             assert_eq!(pass.options(), o(&[("probe", p)]));
         }
     }

@@ -10,7 +10,7 @@
 //!   mean diffuse colour (linear, times its diffuse remap maximum), encoded as sRGB. The layers' tiled textures and the
 //!   terrain's material template are not reproduced (counted).
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef, Wrap};
 use primase_core::{
     ColorSpace, Entity, Instance, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture,
@@ -221,6 +221,13 @@ pub fn lower_unity_terrain(w: &mut World) -> Result<PassLog> {
 /// [`lower_unity_terrain`] as a pass.
 #[derive(Debug, Clone, Copy)]
 pub struct LowerUnityTerrain;
+
+/// `lower-unity-terrain`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by Unity's own rules.
+pub const LOWER_UNITY_TERRAIN: PassSpec = PassSpec {
+    name: "lower-unity-terrain",
+    options: &[],
+    make: |_| Ok(Box::new(LowerUnityTerrain)),
+};
 
 impl Pass for LowerUnityTerrain {
     fn name(&self) -> &'static str {

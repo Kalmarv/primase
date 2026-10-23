@@ -36,7 +36,7 @@
 //! Lights with a state condition (`core.condition`: off as stored) are not visible as stored, so neither named nor
 //! candidates; `resolve-state` before this pass leaves the same choice.
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::state::Condition;
 use primase_core::{Entity, Light, LightKind, World};
 use primase_image::srgb_to_linear;
@@ -167,6 +167,13 @@ fn sun(w: &World, log: &mut PassLog) -> Option<Entity> {
 /// [`lower_unity_lights`] as a pass.
 #[derive(Debug, Clone, Copy)]
 pub struct LowerUnityLights;
+
+/// `lower-unity-lights`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by Unity's own rules.
+pub const LOWER_UNITY_LIGHTS: PassSpec = PassSpec {
+    name: "lower-unity-lights",
+    options: &[],
+    make: |_| Ok(Box::new(LowerUnityLights)),
+};
 
 impl Pass for LowerUnityLights {
     fn name(&self) -> &'static str {

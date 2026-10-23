@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Entity, Instance, MaterialVariants, Mesh, MeshFile, World};
 
 use crate::components::RenderPipeline;
@@ -138,6 +138,13 @@ pub fn unity_drawn(w: &mut World) -> PassLog {
 /// [`unity_drawn`] as a pass.
 #[derive(Debug, Clone, Copy)]
 pub struct UnityDrawn;
+
+/// `unity-drawn`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by Unity's own rules.
+pub const UNITY_DRAWN: PassSpec = PassSpec {
+    name: "unity-drawn",
+    options: &[],
+    make: |_| Ok(Box::new(UnityDrawn)),
+};
 
 impl Pass for UnityDrawn {
     fn name(&self) -> &'static str {

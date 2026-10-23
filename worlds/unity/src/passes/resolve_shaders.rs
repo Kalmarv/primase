@@ -48,6 +48,7 @@
 //!   winding, `ZClip`, alpha-to-coverage and the conservative flag.
 use std::collections::BTreeMap;
 
+use primase_core::pass::{Choice, Given, OptionSpec, PassSpec};
 use primase_core::shader::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
     DepthBias, DepthState, FrameParameter, FrameTexture, InputBinding, InputRole, Interface, ObjectParameter,
@@ -87,48 +88,61 @@ impl ResolveUnityShaders {
         self
     }
 
-    /// From its options (all required), through [`ResolveUnityShaders::new`].
-    pub fn from_options(o: &primase_core::pass::Options) -> Result<Self, String> {
-        let (mut tier, mut keywords, mut linear, mut scene) = (None, None, None, false);
-        for (k, v) in o {
-            match k.as_str() {
-                "tier" => {
-                    tier = Some(
-                        v.parse::<usize>()
-                            .map_err(|_| format!("tier={v} is not a number"))?,
-                    )
-                }
-                "keywords" => {
-                    let mut named: Vec<String> = Vec::new();
-                    for k in v.split('+') {
-                        match k {
-                            "none" if v == "none" => {}
-                            "scene" => scene = true,
-                            _ => named.push(k.to_owned()),
-                        }
-                    }
-                    keywords = Some(named);
-                }
-                "colour-space" => {
-                    linear = Some(match v.as_str() {
-                        "linear" => true,
-                        "gamma" => false,
-                        _ => return Err(format!("colour-space={v} is not linear or gamma")),
-                    });
-                }
-                _ => return Err(format!("unknown option {k}")),
+    /// From its declared options, through [`ResolveUnityShaders::new`]: `keywords` the renderer's joined by `+`,
+    /// `scene` among them for the scene's own, or `none`.
+    fn from_given(g: &Given) -> Result<Self, String> {
+        let v = g.required("tier");
+        let tier = v
+            .parse::<usize>()
+            .map_err(|_| format!("tier={v} is not a number"))?;
+        let v = g.required("keywords");
+        let (mut named, mut scene) = (Vec::new(), false);
+        for k in v.split('+') {
+            match k {
+                "none" if v == "none" => {}
+                "scene" => scene = true,
+                _ => named.push(k.to_owned()),
             }
         }
         let pass = Self::new(
-            tier.ok_or("tier is required: the hardware tier the variants are chosen for")?,
-            keywords.ok_or("keywords is required: the renderer's keywords joined by +, scene, or none")?,
-            linear.ok_or(
-                "colour-space is required: whether the player sets colour properties linear or as stored",
-            )?,
+            tier,
+            named,
+            g.choice::<ColourSpace>("colour-space") == ColourSpace::Linear,
         );
         Ok(if scene { pass.with_scene_keywords() } else { pass })
     }
 }
+
+/// Option `colour-space`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColourSpace {
+    Linear,
+    Gamma,
+}
+
+impl Choice for ColourSpace {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("linear", ColourSpace::Linear), ("gamma", ColourSpace::Gamma)];
+}
+
+/// `resolve-unity-shaders`' declaration ([`primase_core::pass::PassRegistry::add`]): the variant and colour space
+/// are the program's, every option required.
+pub const RESOLVE_UNITY_SHADERS: PassSpec = PassSpec {
+    name: "resolve-unity-shaders",
+    options: &[
+        OptionSpec::required("tier", "0", "the hardware tier the variants are chosen for"),
+        OptionSpec::required(
+            "keywords",
+            "none",
+            "the renderer's keywords joined by +, scene among them for the ones the scene's state gives, or none",
+        ),
+        OptionSpec::choice::<ColourSpace>(
+            "colour-space",
+            "whether the player sets colour properties linear (converted from storage) or as stored",
+        ),
+    ],
+    make: |g| Ok(Box::new(ResolveUnityShaders::from_given(g)?)),
+};
 
 /// What Unity's built-in constants are, by field name, where one role names the whole field: the matrices and the camera
 /// position the roles of the vocabulary name. (`unity_CameraToWorld` is the camera's world matrix, the inverse of
@@ -744,7 +758,13 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
             ),
             (
                 "colour-space".to_owned(),
-                if self.linear { "linear" } else { "gamma" }.to_owned(),
+                if self.linear {
+                    ColourSpace::Linear
+                } else {
+                    ColourSpace::Gamma
+                }
+                .text()
+                .to_owned(),
             ),
         ])
     }
@@ -1758,29 +1778,15 @@ mod tests {
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect::<primase_core::pass::Options>()
         };
-        assert!(ResolveUnityShaders::from_options(&o(&[("tier", "1")])).is_err());
-        assert!(
-            ResolveUnityShaders::from_options(&o(&[
-                ("tier", "x"),
-                ("keywords", "none"),
-                ("colour-space", "linear")
-            ]))
-            .is_err()
-        );
-        let p = ResolveUnityShaders::from_options(&o(&[
-            ("tier", "1"),
-            ("keywords", "A+B"),
-            ("colour-space", "gamma"),
-        ]))
-        .unwrap();
-        assert_eq!(
-            p,
-            ResolveUnityShaders::new(1, vec!["A".into(), "B".into()], false)
-        );
-        assert_eq!(
-            <ResolveUnityShaders as primase_core::pass::Pass>::options(&p)["keywords"],
-            "A+B"
-        );
+        let make = |pairs: &[(&str, &str)]| RESOLVE_UNITY_SHADERS.instance(&o(pairs));
+        assert!(make(&[("tier", "1")]).is_err());
+        assert!(make(&[("tier", "x"), ("keywords", "none"), ("colour-space", "linear")]).is_err());
+        let p = make(&[("tier", "1"), ("keywords", "A+B"), ("colour-space", "gamma")]).unwrap();
+        let typed = ResolveUnityShaders::new(1, vec!["A".into(), "B".into()], false);
+        assert_eq!(p.options(), primase_core::pass::Pass::options(&typed));
+        assert_eq!(p.options()["keywords"], "A+B");
+        let scene = make(&[("tier", "1"), ("keywords", "B+scene"), ("colour-space", "linear")]).unwrap();
+        assert_eq!(scene.options()["keywords"], "scene+B");
     }
 
     /// The D3D behaviour fixture of the DXBC lifter (our own HLSL, `ps_5_0`): five colour targets, which a lifted
