@@ -30,6 +30,16 @@ impl Lift<'_> {
         Ok(())
     }
 
+    /// A source read once, as all four destination lanes, before an instruction with two destinations writes either
+    /// (a destination may alias a source: `sincos r0.x, r1.x, r0.x`); `lanes` then takes a destination's own.
+    fn read_whole(&mut self, op: &crate::decode::Operand, kind: Kind) -> Result<Val> {
+        self.read_lanes(op, &[0, 1, 2, 3], kind)
+    }
+    fn lanes(&mut self, whole: Val, destination: &crate::decode::Operand) -> Val {
+        let mask = self.dest_mask(destination);
+        self.b.swizzle(whole, &super::resources::lanes_of(mask))
+    }
+
     fn float2(&mut self, ins: &Instruction, f: impl Fn(&mut Self, Val, Val) -> Val) -> Result<()> {
         let mask = self.dest_mask(&ins.operands[0]);
         let a = self.read(&ins.operands[1], mask, Kind::F)?;
@@ -164,17 +174,14 @@ impl Lift<'_> {
                 })?
             }
             "sincos" => {
-                let sine_mask = self.dest_mask(&ops[0]);
-                let cosine_mask = self.dest_mask(&ops[1]);
-                let sine = ops[0].register != Register::Null;
-                let cosine = ops[1].register != Register::Null;
-                if sine {
-                    let a = self.read(&ops[2], sine_mask, Kind::F)?;
+                let source = self.read_whole(&ops[2], Kind::F)?;
+                if ops[0].register != Register::Null {
+                    let a = self.lanes(source, &ops[0]);
                     let r = self.b.math(Mf::Sin, &[a]);
                     self.write(&ops[0], r, ins.saturate)?;
                 }
-                if cosine {
-                    let a = self.read(&ops[2], cosine_mask, Kind::F)?;
+                if ops[1].register != Register::Null {
+                    let a = self.lanes(source, &ops[1]);
                     let r = self.b.math(Mf::Cos, &[a]);
                     self.write(&ops[1], r, ins.saturate)?;
                 }
@@ -216,17 +223,12 @@ impl Lift<'_> {
             }
             "imul" | "umul" => {
                 let signed = name == "imul";
-                let high_mask = self.dest_mask(&ops[0]);
-                let low_mask = self.dest_mask(&ops[1]);
-                if ops[1].register != Register::Null {
-                    let a = self.read(&ops[2], low_mask, Kind::U)?;
-                    let b = self.read(&ops[3], low_mask, Kind::U)?;
-                    let low = self.b.binary(Multiply, a, b);
-                    self.write(&ops[1], low, false)?;
-                }
+                let (a, b) = (
+                    self.read_whole(&ops[2], Kind::U)?,
+                    self.read_whole(&ops[3], Kind::U)?,
+                );
                 if ops[0].register != Register::Null {
-                    let a = self.read(&ops[2], high_mask, Kind::U)?;
-                    let b = self.read(&ops[3], high_mask, Kind::U)?;
+                    let (a, b) = (self.lanes(a, &ops[0]), self.lanes(b, &ops[0]));
                     let mut high = self.b.mul_high_unsigned(a, b);
                     if signed {
                         // the signed high word is the unsigned one less each operand where the other is negative
@@ -241,7 +243,18 @@ impl Lift<'_> {
                         high = self.b.binary(Subtract, high, from_a);
                         high = self.b.binary(Subtract, high, from_b);
                     }
-                    self.write(&ops[0], high, false)?;
+                    if ops[1].register != Register::Null {
+                        let (la, lb) = (self.lanes(a, &ops[1]), self.lanes(b, &ops[1]));
+                        let low = self.b.binary(Multiply, la, lb);
+                        self.write(&ops[0], high, false)?;
+                        self.write(&ops[1], low, false)?;
+                    } else {
+                        self.write(&ops[0], high, false)?;
+                    }
+                } else if ops[1].register != Register::Null {
+                    let (la, lb) = (self.lanes(a, &ops[1]), self.lanes(b, &ops[1]));
+                    let low = self.b.binary(Multiply, la, lb);
+                    self.write(&ops[1], low, false)?;
                 }
             }
             "imin" | "imax" => {
@@ -269,18 +282,17 @@ impl Lift<'_> {
                 self.write(&ops[0], r, false)?;
             }
             "udiv" => {
-                let quotient_mask = self.dest_mask(&ops[0]);
-                let remainder_mask = self.dest_mask(&ops[1]);
+                let (a, b) = (
+                    self.read_whole(&ops[2], Kind::U)?,
+                    self.read_whole(&ops[3], Kind::U)?,
+                );
+                let (quotient, remainder) = self.b.d3d_unsigned_divide(a, b);
                 if ops[0].register != Register::Null {
-                    let a = self.read(&ops[2], quotient_mask, Kind::U)?;
-                    let b = self.read(&ops[3], quotient_mask, Kind::U)?;
-                    let (q, _) = self.b.d3d_unsigned_divide(a, b);
+                    let q = self.lanes(quotient, &ops[0]);
                     self.write(&ops[0], q, false)?;
                 }
                 if ops[1].register != Register::Null {
-                    let a = self.read(&ops[2], remainder_mask, Kind::U)?;
-                    let b = self.read(&ops[3], remainder_mask, Kind::U)?;
-                    let (_, r) = self.b.d3d_unsigned_divide(a, b);
+                    let r = self.lanes(remainder, &ops[1]);
                     self.write(&ops[1], r, false)?;
                 }
             }
@@ -369,28 +381,27 @@ impl Lift<'_> {
             }
             "uaddc" | "usubb" => {
                 let subtract = name == "usubb";
-                for (d, dst) in ops.iter().take(2).enumerate() {
-                    if dst.register == Register::Null {
-                        continue;
-                    }
-                    let mask = self.dest_mask(dst);
-                    let a = self.read(&ops[2], mask, Kind::U)?;
-                    let b = self.read(&ops[3], mask, Kind::U)?;
-                    let r = if d == 0 {
-                        self.b.binary(if subtract { Subtract } else { Add }, a, b)
-                    } else {
-                        // the carry, or the borrow
-                        let condition = if subtract {
-                            self.b.binary(Less, a, b)
-                        } else {
-                            let sum = self.b.binary(Add, a, b);
-                            self.b.binary(Less, sum, a)
-                        };
-                        let one = self.b.lit_u(1);
-                        let zero = self.b.lit_u(0);
-                        self.b.select(condition, one, zero)
-                    };
-                    self.write(dst, r, false)?;
+                let (a, b) = (
+                    self.read_whole(&ops[2], Kind::U)?,
+                    self.read_whole(&ops[3], Kind::U)?,
+                );
+                let result = self.b.binary(if subtract { Subtract } else { Add }, a, b);
+                // the carry, or the borrow
+                let condition = if subtract {
+                    self.b.binary(Less, a, b)
+                } else {
+                    self.b.binary(Less, result, a)
+                };
+                let one = self.b.lit_u(1);
+                let zero = self.b.lit_u(0);
+                let flag = self.b.select(condition, one, zero);
+                if ops[0].register != Register::Null {
+                    let r = self.lanes(result, &ops[0]);
+                    self.write(&ops[0], r, false)?;
+                }
+                if ops[1].register != Register::Null {
+                    let f = self.lanes(flag, &ops[1]);
+                    self.write(&ops[1], f, false)?;
                 }
             }
             // ---- flow

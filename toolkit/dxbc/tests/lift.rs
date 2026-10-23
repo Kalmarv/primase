@@ -74,3 +74,79 @@ fn the_text_form_names_what_the_lift_decided() {
         "{text}"
     );
 }
+
+/// A ps_5_0 container around `body` (declarations and instructions), with empty signatures.
+fn pixel_container(body: &[Vec<u32>]) -> Vec<u8> {
+    let mut code = vec![0x50u32, 0];
+    for b in body {
+        code.extend(b);
+    }
+    code[1] = code.len() as u32;
+    let empty_signature: Vec<u8> = [0u32, 8].iter().flat_map(|w| w.to_le_bytes()).collect();
+    let shex: Vec<u8> = code.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let chunks: [(&[u8; 4], &[u8]); 3] = [
+        (b"ISGN", &empty_signature),
+        (b"OSGN", &empty_signature),
+        (b"SHEX", &shex),
+    ];
+    let directory = 32 + 4 * chunks.len();
+    let mut offsets = Vec::new();
+    let mut at = directory;
+    for (_, data) in &chunks {
+        offsets.push(at as u32);
+        at += 8 + data.len();
+    }
+    let mut out = b"DXBC".to_vec();
+    out.extend([0u8; 16]);
+    for w in [1, at as u32, chunks.len() as u32] {
+        out.extend(w.to_le_bytes());
+    }
+    for o in offsets {
+        out.extend(o.to_le_bytes());
+    }
+    for (tag, data) in chunks {
+        out.extend(tag);
+        out.extend((data.len() as u32).to_le_bytes());
+        out.extend(data);
+    }
+    out
+}
+
+fn instruction(token: u32, operands: &[u32]) -> Vec<u32> {
+    let mut v = vec![token | (((operands.len() + 1) as u32) << 24)];
+    v.extend_from_slice(operands);
+    v
+}
+
+/// `sincos r0.x, r1.x, r0.x` writes the sine to r0.x and the cosine to r1.x, both of the original r0.x: the
+/// instruction reads its source once. (A lift that re-read r0.x for the cosine gave cos(sin(x)): found by the
+/// executor-against-evaluator comparison on a Unity program.)
+#[test]
+fn a_destination_that_aliases_the_source_does_not_change_the_second_result() {
+    let temp = |register: u32, mask: u32| [2 | mask << 4 | 1 << 20, register];
+    let scalar = |register: u32, lane: u32| [2 | 2 << 2 | lane << 4 | 1 << 20, register];
+    let operands = [temp(0, 1), temp(1, 1), scalar(0, 0)].concat();
+    let container = pixel_container(&[
+        instruction(104, &[2]),
+        instruction(77, &operands),
+        instruction(62, &[]),
+    ]);
+    let program = lift(&container).unwrap();
+    program.validate().unwrap_or_else(|p| panic!("{p:?}"));
+    let function = &program.module.entry_points[0].function;
+    let argument_of = |wanted: naga::MathFunction| {
+        function.expressions.iter().find_map(|(_, e)| match e {
+            naga::Expression::Math { fun, arg, .. } if *fun == wanted => Some(*arg),
+            _ => None,
+        })
+    };
+    let base_of = |h| match &function.expressions[h] {
+        naga::Expression::AccessIndex { base, .. } => *base,
+        other => panic!("{other:?}"),
+    };
+    let (sin, cos) = (
+        argument_of(naga::MathFunction::Sin).unwrap(),
+        argument_of(naga::MathFunction::Cos).unwrap(),
+    );
+    assert_eq!(base_of(sin), base_of(cos), "both read the one loaded source");
+}
