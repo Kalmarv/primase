@@ -210,5 +210,9 @@ fn e3_every_shader_compiles_on_the_executor() {
         println!("  refused {:3}  {reason}  e.g. {}", which.len(), which[0]);
     }
     assert_eq!(programs, 47);
-    assert!(refused.is_empty(), "{} programs the executor refuses", refused.len());
+    assert!(
+        refused.is_empty(),
+        "{} programs the executor refuses",
+        refused.len()
+    );
 }
