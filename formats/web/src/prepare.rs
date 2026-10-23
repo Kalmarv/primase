@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use primase_core::layered::{Channel, LayeredMaterial, Source};
 use primase_core::parallel::Threads;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
 use primase_core::{Component, Entity, Name, Resource, TexRole, Texture, World};
 use serde_json::Value;
@@ -210,41 +210,35 @@ impl PrepareWebTextures {
         }
     }
 
-    pub fn from_options(o: &Options) -> Result<Self, String> {
-        let cap = |key: &str| -> Result<WebCap, String> {
-            let text = o.get(key).ok_or_else(|| {
-                format!("{key}=N is required: the largest {key} texture is the program's choice")
-            })?;
-            WebCap::parse(key, text)
-        };
+    /// From its declared options.
+    fn from_given(g: &Given) -> Result<Self, String> {
+        let cap = |key: &str| WebCap::parse(key, g.required(key));
         let mut pass = PrepareWebTextures::new(RoleCaps {
             color: cap("color")?,
             normal: cap("normal")?,
             mask: cap("mask")?,
         });
-        for (k, v) in o {
-            match k.as_str() {
-                "color" | "normal" | "mask" => {}
-                "color-bytes" => pass.color_bytes = Some(ByteBudget::parse(k, v)?),
-                "mask-bytes" => pass.mask_bytes = Some(ByteBudget::parse(k, v)?),
-                "memo-mib" => {
-                    let mib = v
-                        .parse::<usize>()
-                        .ok()
-                        .filter(|m| *m > 0)
-                        .ok_or_else(|| format!("{k}={v} is not a number of MiB above 0"))?;
-                    pass.memo = Some(Arc::new(std::sync::Mutex::new(Memo::new(mib << 20))));
-                }
-                "names" => {
-                    for rule in v.split(';').filter(|r| !r.is_empty()) {
-                        let (prefix, caps) = rule
-                            .rsplit_once(':')
-                            .ok_or_else(|| format!("names: {rule} is not PREFIX:C/N/M"))?;
-                        pass.caps_by_name
-                            .push((prefix.to_owned(), RoleCaps::parse(k, caps)?));
-                    }
-                }
-                _ => return Err(format!("unknown option {k}")),
+        if let Some(v) = g.optional("color-bytes") {
+            pass.color_bytes = Some(ByteBudget::parse("color-bytes", v)?);
+        }
+        if let Some(v) = g.optional("mask-bytes") {
+            pass.mask_bytes = Some(ByteBudget::parse("mask-bytes", v)?);
+        }
+        if let Some(v) = g.optional("memo-mib") {
+            let mib = v
+                .parse::<usize>()
+                .ok()
+                .filter(|m| *m > 0)
+                .ok_or_else(|| format!("memo-mib={v} is not a number of MiB above 0"))?;
+            pass.memo = Some(Arc::new(std::sync::Mutex::new(Memo::new(mib << 20))));
+        }
+        if let Some(v) = g.optional("names") {
+            for rule in v.split(';').filter(|r| !r.is_empty()) {
+                let (prefix, caps) = rule
+                    .rsplit_once(':')
+                    .ok_or_else(|| format!("names: {rule} is not PREFIX:C/N/M"))?;
+                pass.caps_by_name
+                    .push((prefix.to_owned(), RoleCaps::parse("names", caps)?));
             }
         }
         Ok(pass)
@@ -697,13 +691,53 @@ impl PrepareWebTextures {
     }
 }
 
-/// Register this module's pass.
+/// `prepare-web-textures`' declaration ([`primase_core::pass::PassRegistry::add`]): the largest texture of each role
+/// is the program's choice, no default.
+pub const PREPARE_WEB_TEXTURES: PassSpec = PassSpec {
+    name: "prepare-web-textures",
+    options: &[
+        OptionSpec::required(
+            "color",
+            "512",
+            "pixels, a power of two of at least 4: the largest colour texture",
+        ),
+        OptionSpec::required(
+            "normal",
+            "512",
+            "pixels, a power of two of at least 4: the largest normal map",
+        ),
+        OptionSpec::required(
+            "mask",
+            "256",
+            "pixels, a power of two of at least 4: the largest mask texture",
+        ),
+        OptionSpec::optional(
+            "color-bytes",
+            "1000000",
+            "bytes above 0: the most a colour texture's prepared image may take, halved until it fits",
+        ),
+        OptionSpec::optional(
+            "mask-bytes",
+            "1000000",
+            "bytes above 0: the most a mask texture's prepared image may take, halved until it fits",
+        ),
+        OptionSpec::optional(
+            "memo-mib",
+            "64",
+            "MiB above 0: preparations kept in memory between runs (the same output either way)",
+        ),
+        OptionSpec::optional(
+            "names",
+            "bake_:16/8/4",
+            "PREFIX:C/N/M rules joined by ;: a texture named with the first matching prefix takes those caps",
+        ),
+    ],
+    make: |g| Ok(Box::new(PrepareWebTextures::from_given(g)?)),
+};
+
+/// Register this module's pass by its declaration.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    reg.register_requiring(
-        "prepare-web-textures",
-        |o| Ok(Box::new(PrepareWebTextures::from_options(o)?)),
-        &[("color", "512"), ("normal", "512"), ("mask", "256")],
-    );
+    reg.add(&PREPARE_WEB_TEXTURES);
 }
 
 #[cfg(test)]
@@ -730,14 +764,29 @@ mod tests {
         e
     }
 
-    fn pass(options: &[(&str, &str)]) -> PrepareWebTextures {
-        PrepareWebTextures::from_options(
-            &options
-                .iter()
-                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                .collect(),
-        )
-        .unwrap()
+    fn pass(options: &[(&str, &str)]) -> Box<dyn Pass> {
+        PREPARE_WEB_TEXTURES.instance(&opts(options)).unwrap()
+    }
+
+    fn opts(options: &[(&str, &str)]) -> Options {
+        options
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+
+    /// Colour and normal maps capped at 512, masks at 256, with these byte budgets: a pass a test hands a memo.
+    fn budgeted(color_bytes: usize, mask_bytes: Option<usize>) -> PrepareWebTextures {
+        let cap = |pixels| WebCap::new(pixels).unwrap();
+        PrepareWebTextures {
+            color_bytes: Some(ByteBudget::new(color_bytes).unwrap()),
+            mask_bytes: mask_bytes.map(|b| ByteBudget::new(b).unwrap()),
+            ..PrepareWebTextures::new(RoleCaps {
+                color: cap(512),
+                normal: cap(512),
+                mask: cap(256),
+            })
+        }
     }
 
     /// `wall` (513 x 3) as base colour, metallic-roughness and normal map of one material; `bake_wall` (64 x 64) as
@@ -962,12 +1011,7 @@ mod tests {
     /// log.
     #[test]
     fn a_remembered_preparation_is_the_same_as_a_fresh_one() {
-        let mut p = pass(&[
-            ("color", "512"),
-            ("normal", "512"),
-            ("mask", "256"),
-            ("color-bytes", "1000000"),
-        ]);
+        let mut p = budgeted(1000000, None);
         let fresh = |p: &PrepareWebTextures| {
             let (mut w, wall, ..) = world();
             let mut log = PassLog::default();
@@ -999,17 +1043,20 @@ mod tests {
             ("mask".to_owned(), "256".to_owned()),
             ("memo-mib".to_owned(), "64".to_owned()),
         ]);
-        let made = PrepareWebTextures::from_options(&o).unwrap();
-        assert_eq!(made.memo.as_ref().unwrap().lock().unwrap().cap(), 64 << 20);
-        assert_eq!(made.options()["memo-mib"], "64");
+        // the printed size is the memo's own cap
+        assert_eq!(
+            PREPARE_WEB_TEXTURES.instance(&o).unwrap().options()["memo-mib"],
+            "64"
+        );
         assert!(
-            PrepareWebTextures::from_options(&Options::from([
-                ("color".to_owned(), "512".to_owned()),
-                ("normal".to_owned(), "512".to_owned()),
-                ("mask".to_owned(), "256".to_owned()),
-                ("memo-mib".to_owned(), "0".to_owned()),
-            ]))
-            .is_err()
+            PREPARE_WEB_TEXTURES
+                .instance(&opts(&[
+                    ("color", "512"),
+                    ("normal", "512"),
+                    ("mask", "256"),
+                    ("memo-mib", "0"),
+                ]))
+                .is_err()
         );
         // a memo too small to hold anything: every preparation made again, the drops counted
         p.memo = Some(Arc::new(std::sync::Mutex::new(Memo::new(1))));
@@ -1025,13 +1072,7 @@ mod tests {
     #[test]
     fn on_any_thread_count_the_preparations_are_the_serial_ones() {
         let run = |threads: usize, memo: Option<usize>, runs: usize| {
-            let mut p = pass(&[
-                ("color", "512"),
-                ("normal", "512"),
-                ("mask", "256"),
-                ("color-bytes", "2000"),
-                ("mask-bytes", "1000"),
-            ]);
+            let mut p = budgeted(2000, Some(1000));
             p.memo = memo.map(|cap| Arc::new(std::sync::Mutex::new(Memo::new(cap))));
             let mut out = Vec::new();
             for _ in 0..runs {
@@ -1065,14 +1106,11 @@ mod tests {
 
     #[test]
     fn the_caps_are_the_programs_and_powers_of_two() {
-        assert!(PrepareWebTextures::from_options(&Options::new()).is_err());
+        assert!(PREPARE_WEB_TEXTURES.instance(&Options::new()).is_err());
         assert!(
-            PrepareWebTextures::from_options(&Options::from([
-                ("color".into(), "300".into()),
-                ("normal".into(), "512".into()),
-                ("mask".into(), "256".into()),
-            ]))
-            .is_err()
+            PREPARE_WEB_TEXTURES
+                .instance(&opts(&[("color", "300"), ("normal", "512"), ("mask", "256")]))
+                .is_err()
         );
         assert!(WebCap::new(2).is_err() && ByteBudget::new(0).is_err());
         let p = pass(&[
@@ -1082,5 +1120,18 @@ mod tests {
             ("names", "a:4/4/4;b:8/8/8"),
         ]);
         assert_eq!(p.options()["names"], "a:4/4/4;b:8/8/8");
+    }
+
+    /// The module registers its pass by its declaration, made only with its required caps, saying what it takes.
+    #[test]
+    fn the_web_pass_registers_by_name() {
+        let mut reg = primase_core::pass::PassRegistry::new();
+        register(&mut reg);
+        assert_eq!(format!("{reg:?}"), r#"["prepare-web-textures"]"#);
+        assert!(reg.requires_options("prepare-web-textures"));
+        assert!(reg.describe("prepare-web-textures").unwrap().starts_with(
+            "prepare-web-textures{color*,normal*,mask*,color-bytes,mask-bytes,memo-mib,names}\n"
+        ));
+        assert!(reg.make("prepare-web-textures", &Options::new()).is_err());
     }
 }
