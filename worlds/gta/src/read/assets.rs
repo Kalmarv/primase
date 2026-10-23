@@ -7,7 +7,7 @@
 //!   drawable) or a drawable dictionary's entry (3: the archetype's live ydd, entry by asset name) gets `core.mesh` from
 //!   that drawable's high LOD: every model's geometries in order, one primitive each, streams as stored (frame
 //!   converted), 16-bit indices widened; the blend streams (`BLENDWEIGHT0`, `BLENDINDICES0`) not in it but as stored in
-//!   [`GtaBlendStreams`], since the bone palette they index is not read;
+//!   [`GtaBlendStreams`] with the geometry's bone palette (the bone ids they index), as stored;
 //!   [`GtaSources`] (LOD 0, each primitive's model and geometry), [`GtaBones`] when a model is bound to a bone (its
 //!   bones the prototype's [`GtaSkeleton`], as stored; `gta-pose-fragments` places it), and [`GtaDrawable`] with the drawable's box, sphere, LOD
 //!   distances and render masks as stored. Each coarser LOD that has models (medium, low, very low) is a
@@ -225,8 +225,8 @@ pub struct AssetReport {
     /// Vertex streams left out because the file stores values that are not finite (NaN, infinity), by semantic: one
     /// per primitive of any LOD. Such a value is unknown, and core holds finite streams only.
     pub non_finite_streams: BTreeMap<String, usize>,
-    /// Primitives of any LOD whose geometry stores vertex blend streams, kept as [`GtaBlendStreams`] rather than core
-    /// joints and weights: the geometry's bone palette, which they index, is not read.
+    /// Primitives of any LOD whose geometry stores vertex blend streams, kept as [`GtaBlendStreams`] with their bone
+    /// palette rather than core joints and weights.
     pub blend_streams: usize,
 }
 
@@ -366,6 +366,7 @@ fn mesh(
             let mut b = BlendStreams {
                 weights: None,
                 indices: None,
+                palette: g.bone_ids.clone(),
             };
             for &e in &g.elements {
                 let (sem, s) = match stream(g, e)? {
@@ -951,6 +952,7 @@ mod tests {
             elements: vec![e],
             vertices,
             indices: vec![],
+            bone_ids: vec![],
         };
         let super::Element::Core(semantic, s) = stream(&g, e).unwrap() else {
             panic!("a tangent is a core stream")
@@ -960,9 +962,9 @@ mod tests {
         assert_eq!(s, Stream::F32x4(vec![[d[0], d[1], d[2], -1.0]]));
     }
 
-    /// A geometry's BLENDWEIGHT0 and BLENDINDICES0 index a bone palette the reader does not read: they stay out of
-    /// the core mesh (no joints or weights without a skin), kept as stored per primitive in `gta.blend_streams`; a
-    /// geometry without them has no entry, and a mesh with none has no component.
+    /// A geometry's BLENDWEIGHT0 and BLENDINDICES0 index its bone palette: they stay out of the core mesh (no joints
+    /// or weights without a skin), kept as stored with the palette per primitive in `gta.blend_streams`; a geometry
+    /// without them has no entry, and a mesh with none has no component.
     #[test]
     fn blend_streams_stay_in_the_dialect_as_stored() {
         use crate::components::BlendStreams;
@@ -991,6 +993,7 @@ mod tests {
                 elements,
                 vertices,
                 indices: vec![0, 1, 2],
+                bone_ids: if stride == 20 { vec![5, 9, 33, 2] } else { vec![] },
             }
         };
         let model = |geometries| Model {
@@ -1023,6 +1026,7 @@ mod tests {
                 Some(BlendStreams {
                     weights: Some(vec![[255, 0, 0, 0], [255, 0, 0, 1], [255, 0, 0, 2]]),
                     indices: Some(vec![[0, 1, 2, 3], [1, 1, 2, 3], [2, 1, 2, 3]]),
+                    palette: vec![5, 9, 33, 2],
                 }),
                 None
             ]

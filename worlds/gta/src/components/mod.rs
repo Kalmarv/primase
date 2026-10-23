@@ -460,9 +460,9 @@ impl Component for GtaBones {
 }
 
 /// Per primitive of the entity's mesh, its geometry's vertex blend streams as stored (`BLENDWEIGHT0` and
-/// `BLENDINDICES0`, four bytes a vertex each), `None` for a geometry storing neither. The indices name entries of the
-/// geometry's own bone palette, which the reader does not read yet, so they are no core skin (`core.mesh`'s joints and
-/// weights): they stay here, reported, until the palette is read and checked.
+/// `BLENDINDICES0`, four bytes a vertex each) with the geometry's bone palette, `None` for a geometry storing neither.
+/// The indices name entries of the palette, which holds bone ids (skeleton tags): they are no core skin (`core.mesh`'s
+/// joints and weights, which need a skeleton and its binding) until a pass lowers them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GtaBlendStreams(pub Vec<Option<BlendStreams>>);
 
@@ -473,6 +473,8 @@ pub struct BlendStreams {
     pub weights: Option<Vec<[u8; 4]>>,
     /// `BLENDINDICES0`: four bytes a vertex, entries of the geometry's bone palette.
     pub indices: Option<Vec<[u8; 4]>>,
+    /// The geometry's bone palette: the bone ids (skeleton tags) `indices` index, as stored; empty when it has none.
+    pub palette: Vec<u16>,
 }
 
 impl BlendStreams {
@@ -523,6 +525,7 @@ impl Component for GtaBlendStreams {
             Ok(BlendStreams {
                 weights: b.weights.as_ref().map(gather).transpose()?,
                 indices: b.indices.as_ref().map(gather).transpose()?,
+                palette: b.palette.clone(),
             })
         })();
         Some(remapped.map(|b| {
@@ -631,6 +634,7 @@ mod tests {
         let b = BlendStreams {
             weights: Some(vec![[255, 0, 0, 0], [128, 127, 0, 0], [0, 255, 0, 0]]),
             indices: Some(vec![[0, 0, 0, 0], [0, 1, 0, 0], [1, 0, 0, 0]]),
+            palette: vec![17, 40],
         };
         w.insert(e, GtaBlendStreams(vec![None, Some(b)]));
         assert_eq!(w.verify_components(), vec![]);
@@ -652,6 +656,7 @@ mod tests {
             &[Some(BlendStreams {
                 weights: Some(vec![[0, 255, 0, 0], [255, 0, 0, 0]]),
                 indices: Some(vec![[1, 0, 0, 0], [0, 0, 0, 0]]),
+                palette: vec![17, 40],
             })]
         );
         assert_eq!(w.verify_components(), vec![]);

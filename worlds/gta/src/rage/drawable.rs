@@ -122,6 +122,9 @@ pub struct Geometry {
     pub elements: Vec<Element>,
     pub vertices: Vec<u8>,
     pub indices: Vec<u16>,
+    /// The geometry's bone palette: the bone ids (skeleton tags) its `BLENDINDICES0` entries index, in the order
+    /// stored; empty for a geometry that is not skinned (a ped's or a prop's skinned geometry has one).
+    pub bone_ids: Vec<u16>,
 }
 
 impl Geometry {
@@ -839,6 +842,24 @@ fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Re
     if indices.iter().any(|&i| u32::from(i) >= vertex_count) {
         return Err(err(ib_ptr, "an index past the vertices"));
     }
+    // the bone palette: a pointer (0x68) and a count (0x72), both or neither; a blend index is one byte
+    let (palette, palette_count) = (le::u64(g, 0x68)?, usize::from(le::u16(g, 0x72)?));
+    if (palette == 0) != (palette_count == 0) || palette_count > 256 {
+        return Err(err(
+            p,
+            format!("a bone palette of {palette_count} ids at {palette:#x}"),
+        ));
+    }
+    let bone_ids = if palette_count == 0 {
+        Vec::new()
+    } else {
+        r.records(palette, palette_count, 2)?
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| u16::from_le_bytes(*b))
+            .collect()
+    };
     Ok(Geometry {
         shader,
         bounds,
@@ -847,6 +868,7 @@ fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Re
         elements,
         vertices,
         indices,
+        bone_ids,
     })
 }
 

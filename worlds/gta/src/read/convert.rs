@@ -123,8 +123,8 @@ fn load_notices(
         out.push(Notice::new(
             STAGE,
             NoticeKind::Unsupported,
-            "primitives whose vertex blend weights and indices are kept as gta.blend_streams, not core joints and \
-             weights: the bone palette they index is not read",
+            "primitives whose vertex blend weights, indices and bone palette are kept as gta.blend_streams, not \
+             core joints and weights (a core skin needs a skeleton and its binding, which a pass makes)",
             blend_streams as u64,
         ));
     }
