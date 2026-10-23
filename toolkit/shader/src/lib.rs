@@ -18,6 +18,7 @@ pub mod d3d;
 pub mod emit;
 mod evaluate;
 pub mod exec;
+mod limits;
 mod program;
 pub use evaluate::{
     Constants, Evaluation, Field, Grid, Image, Input, Invocation, Lane, Layout, Raw, Texture, evaluate,
@@ -30,6 +31,7 @@ pub use primase_core::shader::{
     Value, Varying, VaryingProvenance,
 };
 mod periodic;
+pub use limits::{WEBGPU_BASELINE, compute_limit_notes};
 pub use periodic::{evaluate_periodic, evaluate_periodic_with};
 pub use program::{
     ClipDepth, Conventions, D3dModes, EntryIo, Error as ProgramError, IoItem, IoType, Origin, Problem,

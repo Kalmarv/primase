@@ -286,12 +286,7 @@ impl Lift<'_> {
                     access.set(StorageAccess::STORE, store);
                     let atomic = self.resources.atomic.get(&i).copied();
                     let (base, stride) = match (kind, atomic) {
-                        (BufferKind::Typed(_), Some(_)) => {
-                            return self.refuse(format!(
-                                "{}: an atomic operation on a typed buffer",
-                                resource.provenance.name
-                            ));
-                        }
+                        (BufferKind::Typed(_), Some(scalar)) => (self.b.atomic_quad(scalar), 16),
                         (BufferKind::Typed(_), None) => (u4, 16),
                         (_, Some(scalar)) => (self.b.ty(TypeInner::Atomic(scalar)), 4),
                         (_, None) => (u1, 4),
@@ -1026,7 +1021,22 @@ impl Lift<'_> {
                     base: pointer,
                     index: safe.expr,
                 });
-                let value = self.b.load(element, Kind::U, 4);
+                let value = match atomic {
+                    // four atomic words an element
+                    Some(scalar) => {
+                        let mut words = Vec::new();
+                        for k in 0..4u32 {
+                            let word = self.b.app(E::AccessIndex {
+                                base: element,
+                                index: k,
+                            });
+                            let loaded = self.b.load(word, kind_of_atomic(scalar), 1);
+                            words.push(self.b.bitcast_to(loaded, Kind::U));
+                        }
+                        self.b.compose(&words)
+                    }
+                    None => self.b.load(element, Kind::U, 4),
+                };
                 let none = {
                     let z = self.b.lit_u(0);
                     self.b.splat(z, 4)

@@ -35,6 +35,13 @@ pub enum Register {
     /// `oMask`, the coverage output.
     OutputCoverage,
     OutputStencilRef,
+    /// `g<n>`, thread-group shared memory.
+    GroupSharedMemory,
+    /// `vThreadID`, `vThreadGroupID`, `vThreadIDInGroup` and `vThreadIDInGroupFlattened`, a compute program's ids.
+    ThreadId,
+    ThreadGroupId,
+    ThreadIdInGroup,
+    ThreadIdInGroupFlattened,
 }
 impl Register {
     /// How many index dimensions an operand of this register has in Shader Model 5.0.
@@ -48,7 +55,11 @@ impl Register {
             | Register::OutputDepthGreaterEqual
             | Register::OutputDepthLessEqual
             | Register::OutputCoverage
-            | Register::OutputStencilRef => 0,
+            | Register::OutputStencilRef
+            | Register::ThreadId
+            | Register::ThreadGroupId
+            | Register::ThreadIdInGroup
+            | Register::ThreadIdInGroupFlattened => 0,
             Register::Constant | Register::IndexableTemp => 2,
             _ => 1,
         }
@@ -69,6 +80,11 @@ impl Register {
             13 => Register::Null,
             15 => Register::OutputCoverage,
             30 => Register::Uav,
+            31 => Register::GroupSharedMemory,
+            32 => Register::ThreadId,
+            33 => Register::ThreadGroupId,
+            34 => Register::ThreadIdInGroup,
+            36 => Register::ThreadIdInGroupFlattened,
             35 => Register::InputCoverage,
             38 => Register::OutputDepthGreaterEqual,
             39 => Register::OutputDepthLessEqual,
@@ -226,6 +242,19 @@ pub enum Declared {
         slot: u32,
         stride: u32,
         control: u32,
+    },
+    /// `dcl_thread_group x, y, z`.
+    ThreadGroup([u32; 3]),
+    /// `dcl_tgsm_raw g<register>, bytes`.
+    GroupSharedRaw {
+        register: u32,
+        bytes: u32,
+    },
+    /// `dcl_tgsm_structured g<register>, stride, count`.
+    GroupSharedStructured {
+        register: u32,
+        stride: u32,
+        count: u32,
     },
     /// An input register or special input: `dcl_input`, `_sgv`, `_siv`, `_ps`, `_ps_sgv`, `_ps_siv`. `interpolation` is
     /// a pixel input's `D3D_INTERPOLATION_MODE`; `name` a system value's `D3D_NAME`.
@@ -590,6 +619,22 @@ fn declaration(opcode: u16, control: u32, c: &mut Cursor<'_>) -> Result<Declared
                 slot: slot(&o)?,
                 stride: c.take()?,
                 control,
+            }
+        }
+        155 => Declared::ThreadGroup([c.take()?, c.take()?, c.take()?]),
+        159 => {
+            let o = c.operand(0)?;
+            Declared::GroupSharedRaw {
+                register: slot(&o)?,
+                bytes: c.take()?,
+            }
+        }
+        160 => {
+            let o = c.operand(0)?;
+            Declared::GroupSharedStructured {
+                register: slot(&o)?,
+                stride: c.take()?,
+                count: c.take()?,
             }
         }
         161 => {

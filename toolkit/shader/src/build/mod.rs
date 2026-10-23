@@ -2,6 +2,7 @@
 //! never asks naga's typifier and a bitcast or splat is explicit where it is needed. Nothing here knows a bytecode;
 //! [`behaviour`] holds D3D's results spelled out as operations.
 
+mod atomic;
 pub mod behaviour;
 mod entry;
 pub mod structure;
@@ -114,6 +115,19 @@ impl Builder {
             self.push(Statement::Emit(range));
         }
         h
+    }
+    /// The type of an element of a typed buffer the program reaches with atomic operations: four atomic words.
+    pub fn atomic_quad(&mut self, scalar: naga::Scalar) -> Handle<Type> {
+        let atomic = self.ty(TypeInner::Atomic(scalar));
+        let members = (0..4u32)
+            .map(|k| naga::StructMember {
+                name: Some(format!("w{k}")),
+                ty: atomic,
+                binding: None,
+                offset: 4 * k,
+            })
+            .collect();
+        self.ty(TypeInner::Struct { members, span: 16 })
     }
     /// A result expression (an atomic's old value): made before the statement that fills it, covered by no emit.
     pub fn result_expr(&mut self, e: Expression) -> Handle<Expression> {

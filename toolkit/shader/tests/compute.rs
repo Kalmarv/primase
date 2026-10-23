@@ -189,3 +189,14 @@ fn a_thread_group_d3d_cannot_have_is_refused() {
         );
     }
 }
+
+#[test]
+fn a_thread_group_beyond_webgpus_defaults_says_so() {
+    let notes = primase_shader::compute_limit_notes(&program([4, 1, 1]).module);
+    assert!(notes.is_empty(), "{notes:?}");
+    let notes = primase_shader::compute_limit_notes(&program([64, 8, 1]).module);
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].contains("64 by 8 by 1 (512 invocations)"), "{notes:?}");
+    let notes = primase_shader::compute_limit_notes(&program([512, 1, 1]).module);
+    assert!(notes[0].contains("512 by 1 by 1"), "{notes:?}");
+}

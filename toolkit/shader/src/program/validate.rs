@@ -32,6 +32,10 @@ impl fmt::Display for Problem {
 /// early depth tests, arrays of textures and samplers indexed by a computed, possibly divergent, index, and subgroup
 /// (wave) operations in compute and pixel programs). A consumer that cannot provide one refuses the program that
 /// needs it; nothing outside this list is ever produced.
+///
+/// A compute program's thread group is validated against D3D's limits (1024 invocations, 1024 along x and y, 64 along
+/// z), not WebGPU's guaranteed ones (256, 256, 256, 64, and 16 KiB of workgroup memory): a program beyond those says
+/// so in its notes ([`crate::compute_limit_notes`]) and a consumer checks them against its device's limits.
 pub const CAPABILITIES: naga::valid::Capabilities = naga::valid::Capabilities::CLIP_DISTANCES
     .union(naga::valid::Capabilities::MULTISAMPLED_SHADING)
     .union(naga::valid::Capabilities::PRIMITIVE_INDEX)
@@ -430,11 +434,21 @@ fn buffer_fits(module: &naga::Module, inner: &TypeInner, kind: BufferKind) -> bo
         BufferKind::Typed(v) => {
             v.width == 4
                 && *stride == 16
-                && *base
+                && (*base
                     == TypeInner::Vector {
                         size: naga::VectorSize::Quad,
                         scalar: naga::Scalar::U32,
                     }
+                    // a buffer the program reaches with atomic operations: four atomic words an element
+                    || matches!(base, TypeInner::Struct { members, span: 16 }
+                        if members.len() == 4
+                            && members.iter().enumerate().all(|(k, m)| {
+                                m.offset == 4 * k as u32
+                                    && matches!(
+                                        module.types[m.ty].inner,
+                                        TypeInner::Atomic(naga::Scalar::U32 | naga::Scalar::I32)
+                                    )
+                            })))
         }
     }
 }

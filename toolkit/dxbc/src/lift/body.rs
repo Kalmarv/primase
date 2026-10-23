@@ -186,6 +186,23 @@ impl Lift<'_> {
                     self.write(&ops[1], r, ins.saturate)?;
                 }
             }
+            // swapc d0, d1, c, a, b: where c holds, d0 = b and d1 = a, else d0 = a and d1 = b; the sources read before
+            // either destination is written
+            "swapc" => {
+                let c = self.read_whole(&ops[2], Kind::U)?;
+                let a = self.read_whole(&ops[3], Kind::U)?;
+                let b = self.read_whole(&ops[4], Kind::U)?;
+                let zero = self.b.lit_u(0);
+                let cond = self.b.binary(NotEqual, c, zero);
+                let first = self.b.select(cond, b, a);
+                let second = self.b.select(cond, a, b);
+                for (destination, whole) in [(&ops[0], first), (&ops[1], second)] {
+                    if destination.register != Register::Null {
+                        let v = self.lanes(whole, destination);
+                        self.write(destination, v, false)?;
+                    }
+                }
+            }
             "eq" => self.compare(ins, Kind::F, Equal)?,
             "ne" => self.compare(ins, Kind::F, NotEqual)?,
             "lt" => self.compare(ins, Kind::F, Less)?,
@@ -563,14 +580,29 @@ impl Lift<'_> {
             "resinfo" => self.resource_info(ins)?,
             "ld_structured" => self.load_structured(ins)?,
             "ld_raw" => self.load_raw(ins)?,
-            "store_uav_typed" => self.store_view(ins)?,
-            "ld_uav_typed" => self.load_view(ins)?,
-            "store_raw" | "store_structured" => {
-                return self.refuse("unordered-access views are not lifted");
+            "ld_uav_typed" => {
+                if matches!(ops[2].register, Register::Uav)
+                    && self.resources.uav_buffers.contains_key(&ops[2].indices[0].base)
+                {
+                    self.load_typed_buffer(ins)?
+                } else {
+                    self.load_view(ins)?
+                }
             }
-            n if n.starts_with("atomic_") || n.starts_with("imm_atomic_") => {
-                return self.refuse("atomic operations are not lifted");
+            "store_uav_typed" => {
+                if self.resources.uav_buffers.contains_key(&ops[0].indices[0].base) {
+                    self.store_typed_buffer(ins)?
+                } else {
+                    self.store_view(ins)?
+                }
             }
+            "store_raw" => self.store_memory(ins, &[&ops[1]], &ops[2])?,
+            "store_structured" => self.store_memory(ins, &[&ops[1], &ops[2]], &ops[3])?,
+            "sync" => self.sync(ins),
+            "imm_atomic_alloc" | "imm_atomic_consume" => {
+                return self.refuse("append and consume buffer counters are not lifted");
+            }
+            n if n.starts_with("atomic_") || n.starts_with("imm_atomic_") => self.atomic_instruction(ins)?,
             _ => return self.refuse("the instruction is not lifted"),
         }
         Ok(())

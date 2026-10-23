@@ -25,6 +25,7 @@ impl<'a> Lift<'a> {
             inputs: Default::default(),
             outputs: Default::default(),
             indexable: Default::default(),
+            ids: Default::default(),
             primitive_id: None,
             input_coverage: None,
             depth: None,
@@ -69,6 +70,18 @@ impl<'a> Lift<'a> {
                     Register::InputCoverage if lift.input_coverage.is_none() => {
                         lift.input_coverage = Some(lift.b.local("vCoverage", u4));
                     }
+                    Register::ThreadId
+                    | Register::ThreadGroupId
+                    | Register::ThreadIdInGroup
+                    | Register::ThreadIdInGroupFlattened => {
+                        let (system, name) = match operand.register {
+                            Register::ThreadId => (SystemValue::DispatchThreadId, "vThreadID"),
+                            Register::ThreadGroupId => (SystemValue::GroupId, "vThreadGroupID"),
+                            Register::ThreadIdInGroup => (SystemValue::GroupThreadId, "vThreadIDInGroup"),
+                            _ => (SystemValue::GroupIndex, "vThreadIDInGroupFlattened"),
+                        };
+                        lift.ids.entry(system).or_insert_with(|| lift.b.local(name, u4));
+                    }
                     _ => {}
                 }
             }
@@ -105,7 +118,7 @@ impl<'a> Lift<'a> {
                 lift.outputs.insert(d3d.register, local);
             }
         }
-        lift.declare_resources();
+        lift.declare_resources()?;
         Ok(lift)
     }
 
@@ -160,6 +173,28 @@ impl<'a> Lift<'a> {
             let special = match varying.system {
                 Some(SystemValue::PrimitiveIndex) => self.primitive_id,
                 Some(SystemValue::Coverage) => self.input_coverage,
+                Some(
+                    SystemValue::DispatchThreadId
+                    | SystemValue::GroupId
+                    | SystemValue::GroupThreadId
+                    | SystemValue::GroupIndex,
+                ) => {
+                    // an id's lanes, then zero in the lanes it does not have
+                    let system = varying.system.expect("matched");
+                    let Some(&local) = self.ids.get(&system) else {
+                        continue;
+                    };
+                    let pointer = self.b.local_ptr(local);
+                    for lane in 0..value.width {
+                        let component = self.b.lane(value, lane);
+                        let target = self.b.app(E::AccessIndex {
+                            base: pointer,
+                            index: u32::from(lane),
+                        });
+                        self.b.store(target, component);
+                    }
+                    None
+                }
                 _ => None,
             };
             if let Some(local) = special {

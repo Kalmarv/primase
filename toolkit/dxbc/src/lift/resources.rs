@@ -11,7 +11,7 @@ use primase_shader::ResourceId;
 use primase_shader::build::{Kind, Val, component};
 
 use super::Lift;
-use super::setup::{Declaration, Texture, View};
+use super::setup::{Declaration, Shared, Texture, UavBuffer, UavKind, View};
 use crate::Result;
 use crate::decode::{Instruction, Operand, Selection};
 
@@ -34,6 +34,10 @@ pub(super) struct Resources {
     pub buffers: BTreeMap<u32, (Handle<GlobalVariable>, Buffer)>,
     /// Typed unordered-access views `u<n>`.
     pub views: BTreeMap<u32, (Handle<GlobalVariable>, View)>,
+    /// Unordered-access buffers `u<n>`.
+    pub uav_buffers: BTreeMap<u32, (Handle<GlobalVariable>, UavBuffer)>,
+    /// Thread-group shared memory `g<n>`.
+    pub shared: BTreeMap<u32, (Handle<GlobalVariable>, Shared)>,
     /// The immediate constant buffer and its rows.
     pub immediate: Option<(Handle<GlobalVariable>, u32)>,
 }
@@ -44,7 +48,7 @@ pub(super) fn lanes_of(mask: u8) -> Vec<u8> {
 
 impl Lift<'_> {
     /// One global per declared resource, and the immediate constant buffer.
-    pub(super) fn declare_resources(&mut self) {
+    pub(super) fn declare_resources(&mut self) -> Result<()> {
         let u4 = self.u4();
         let u1 = self.b.ty_of(Kind::U, 1);
         let declarations = self.setup.declarations.clone();
@@ -105,6 +109,30 @@ impl Lift<'_> {
                     );
                     (format!("u{}", v.slot), AddressSpace::Handle, 3, v.slot, ty)
                 }
+                Declaration::UavBuffer(b) => {
+                    let typed = matches!(b.kind, UavKind::Typed(_));
+                    let (base, stride) = match (typed, b.atomic) {
+                        (true, Some(scalar)) => (self.b.atomic_quad(scalar), 16),
+                        (true, None) => (u4, 16),
+                        (false, Some(scalar)) => (self.b.ty(TypeInner::Atomic(scalar)), 4),
+                        (false, None) => (u1, 4),
+                    };
+                    let ty = self.b.ty(TypeInner::Array {
+                        base,
+                        size: ArraySize::Dynamic,
+                        stride,
+                    });
+                    // naga has no write-only storage buffers: the global is read-write, the interface says what is done
+                    let mut access = StorageAccess::LOAD;
+                    access.set(StorageAccess::STORE, b.store);
+                    (
+                        format!("u{}", b.slot),
+                        AddressSpace::Storage { access },
+                        3,
+                        b.slot,
+                        ty,
+                    )
+                }
                 Declaration::TypedBuffer { slot } => {
                     let ty = self.b.ty(TypeInner::Array {
                         base: u4,
@@ -162,6 +190,9 @@ impl Lift<'_> {
                 Declaration::View(v) => {
                     self.resources.views.insert(v.slot, (global, *v));
                 }
+                Declaration::UavBuffer(b) => {
+                    self.resources.uav_buffers.insert(b.slot, (global, *b));
+                }
                 Declaration::TypedBuffer { slot } => {
                     self.resources.buffers.insert(*slot, (global, Buffer::Typed));
                 }
@@ -182,6 +213,30 @@ impl Lift<'_> {
                     );
                 }
             }
+        }
+        // thread-group shared memory: words, atomic ones where an atomic operation reaches them
+        for g in self.setup.shared.clone() {
+            let Some(len) = NonZeroU32::new(g.words) else {
+                return self.refuse(format!("g{}: no thread-group memory", g.register));
+            };
+            let base = match g.atomic {
+                Some(scalar) => self.b.ty(TypeInner::Atomic(scalar)),
+                None => u1,
+            };
+            let ty = self.b.ty(TypeInner::Array {
+                base,
+                size: ArraySize::Constant(len),
+                stride: 4,
+            });
+            let global = self.b.global(GlobalVariable {
+                name: Some(format!("g{}", g.register)),
+                space: AddressSpace::WorkGroup,
+                binding: None,
+                ty,
+                init: None,
+                memory_decorations: Default::default(),
+            });
+            self.resources.shared.insert(g.register, (global, g));
         }
         if !self.setup.immediates.is_empty() {
             let rows = self.setup.immediates.len() as u32;
@@ -214,6 +269,7 @@ impl Lift<'_> {
             });
             self.resources.immediate = Some((global, rows));
         }
+        Ok(())
     }
 
     /// A read of element `index` of the array global `g` (`len` elements; `None`: sized at run time), zero when out of
@@ -466,7 +522,23 @@ impl Lift<'_> {
 
     pub(super) fn resource_info(&mut self, ins: &Instruction) -> Result<()> {
         let slot = ins.operands[2].indices[0].base;
-        let (image, t) = self.texture(slot)?;
+        // a typed unordered-access view has one level and a size queried without one
+        let (image, t) = if matches!(ins.operands[2].register, crate::decode::Register::Uav) {
+            let (g, v) = self.view(slot)?;
+            (
+                g,
+                Texture {
+                    slot,
+                    dim: v.dim,
+                    arrayed: v.arrayed,
+                    multi: true,
+                    kind: v.kind,
+                    depth: false,
+                },
+            )
+        } else {
+            self.texture(slot)?
+        };
         let mask = self.dest_mask(&ins.operands[0]);
         let mip = self.read(&ins.operands[1], 1, Kind::U)?;
         let g = self.b.global_ptr(image);
@@ -551,6 +623,9 @@ impl Lift<'_> {
     }
 
     pub(super) fn load_raw(&mut self, ins: &Instruction) -> Result<()> {
+        if !matches!(ins.operands[2].register, crate::decode::Register::Texture) {
+            return self.load_memory(ins, &[&ins.operands[1]], &ins.operands[2]);
+        }
         let slot = ins.operands[2].indices[0].base;
         let Some((g, Buffer::Words { .. })) = self.resources.buffers.get(&slot).copied() else {
             return self.refuse(format!("t{slot} is not a raw buffer"));
@@ -564,6 +639,10 @@ impl Lift<'_> {
     }
 
     pub(super) fn load_structured(&mut self, ins: &Instruction) -> Result<()> {
+        if !matches!(ins.operands[3].register, crate::decode::Register::Texture) {
+            let ops = &ins.operands;
+            return self.load_memory(ins, &[&ops[1], &ops[2]], &ops[3]);
+        }
         let slot = ins.operands[3].indices[0].base;
         let Some((g, Buffer::Words { stride })) = self.resources.buffers.get(&slot).copied() else {
             return self.refuse(format!("t{slot} is not a structured buffer"));

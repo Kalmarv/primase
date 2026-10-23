@@ -47,71 +47,6 @@ impl Lift<'_> {
         Ok(())
     }
 
-    /// An atomic function on the word `pointer` names, the old value as the result of the integer type `scalar`.
-    fn atomic(&mut self, pointer: Handle<E>, fun: AtomicFunction, value: Val, scalar: naga::Scalar) -> Val {
-        let kind = kind_of_atomic(scalar);
-        let value = self.b.bitcast_to(value, kind);
-        let ty = self.b.ty_of(kind, 1);
-        let result = self.b.result_expr(E::AtomicResult {
-            ty,
-            comparison: false,
-        });
-        self.b.push(Statement::Atomic {
-            pointer,
-            fun,
-            value: value.expr,
-            result: Some(result),
-        });
-        Val {
-            expr: result,
-            kind,
-            width: 1,
-        }
-    }
-
-    /// A compare-and-swap: the old value and whether the swap happened.
-    fn compare_exchange(
-        &mut self,
-        pointer: Handle<E>,
-        compare: Val,
-        value: Val,
-        scalar: naga::Scalar,
-    ) -> (Val, Val) {
-        let kind = kind_of_atomic(scalar);
-        let compare = self.b.bitcast_to(compare, kind);
-        let value = self.b.bitcast_to(value, kind);
-        let ty = self
-            .b
-            .module
-            .generate_predeclared_type(naga::PredeclaredType::AtomicCompareExchangeWeakResult(scalar));
-        let result = self.b.result_expr(E::AtomicResult { ty, comparison: true });
-        self.b.push(Statement::Atomic {
-            pointer,
-            fun: AtomicFunction::Exchange {
-                compare: Some(compare.expr),
-            },
-            value: value.expr,
-            result: Some(result),
-        });
-        let old = Val {
-            expr: self.b.app(E::AccessIndex {
-                base: result,
-                index: 0,
-            }),
-            kind,
-            width: 1,
-        };
-        let exchanged = Val {
-            expr: self.b.app(E::AccessIndex {
-                base: result,
-                index: 1,
-            }),
-            kind: Kind::B,
-            width: 1,
-        };
-        (old, exchanged)
-    }
-
     /// The atomic function of an LLVM `atomicrmw` operation.
     fn rmw_function(&self, op: u64) -> Result<AtomicFunction> {
         Ok(match op {
@@ -152,7 +87,7 @@ impl Lift<'_> {
         let fun = self.rmw_function(op)?;
         let (target, scalar) = self.atomic_target(pointer)?;
         let v = self.scalar(value)?;
-        let old = self.atomic(target, fun, v, scalar);
+        let old = self.b.atomic(target, fun, v, scalar);
         self.define_result(inst.result, Lv::Scalar(old))
     }
 
@@ -165,7 +100,7 @@ impl Lift<'_> {
     ) -> Result<()> {
         let (target, scalar) = self.atomic_target(pointer)?;
         let (c, v) = (self.scalar(compare)?, self.scalar(value)?);
-        let (old, exchanged) = self.compare_exchange(target, c, v, scalar);
+        let (old, exchanged) = self.b.compare_exchange(target, c, v, scalar);
         self.define_result(inst.result, Lv::Agg(vec![Lv::Scalar(old), Lv::Scalar(exchanged)]))
     }
 
@@ -254,7 +189,19 @@ impl Lift<'_> {
         Ok(())
     }
 
-    /// `AtomicBinOp(handle, op, index, offset, unused, value)` on an unordered-access buffer: the old value.
+    /// Whether word (or, for a typed buffer, element) `word` is inside the buffer `g`.
+    fn buffer_word_inside(&mut self, g: Handle<naga::GlobalVariable>, word: Val) -> Val {
+        let pointer = self.b.global_ptr(g);
+        let length = Val {
+            expr: self.b.app(E::ArrayLength(pointer)),
+            kind: Kind::U,
+            width: 1,
+        };
+        self.b.binary(Bo::Less, word, length)
+    }
+
+    /// `AtomicBinOp(handle, op, index, offset, unused, value)` on an unordered-access buffer: the old value, zero when
+    /// the word is past the end of the buffer (the operation does nothing there, as in D3D).
     pub(super) fn buffer_atomic(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
         let resource = self.handle(args[1], 1)?;
         let g = self.global_of(resource);
@@ -271,17 +218,17 @@ impl Lift<'_> {
             ATOMIC_EXCHANGE => AtomicFunction::Exchange { compare: None },
             other => return self.refuse(format!("atomic operation {other}")),
         };
-        let (word, _) = self.uav_word(resource, args[3], args[4])?;
+        let (word, kind) = self.uav_word(resource, args[3], args[4])?;
         let Some(scalar) = self.resources.atomic.get(&resource).copied() else {
             return self.refuse("an atomic operation on a buffer the lifter did not make atomic");
         };
-        let pointer = self.b.global_ptr(g);
-        let element = self.b.app(E::Access {
-            base: pointer,
-            index: word.expr,
-        });
         let value = self.scalar(args[6])?;
-        let old = self.atomic(element, fun, value, scalar);
+        let inside = self.buffer_word_inside(g, word);
+        let typed = matches!(kind, BufferKind::Typed(_));
+        let old = self.b.atomic_inside(inside, kind_of_atomic(scalar), |b| {
+            let element = b.buffer_word(g, word, typed);
+            b.atomic(element, fun, value, scalar)
+        });
         self.define_result(inst.result, Lv::Scalar(old))
     }
 
@@ -289,17 +236,17 @@ impl Lift<'_> {
     pub(super) fn buffer_compare_exchange(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
         let resource = self.handle(args[1], 1)?;
         let g = self.global_of(resource);
-        let (word, _) = self.uav_word(resource, args[2], args[3])?;
+        let (word, kind) = self.uav_word(resource, args[2], args[3])?;
         let Some(scalar) = self.resources.atomic.get(&resource).copied() else {
             return self.refuse("an atomic operation on a buffer the lifter did not make atomic");
         };
-        let pointer = self.b.global_ptr(g);
-        let element = self.b.app(E::Access {
-            base: pointer,
-            index: word.expr,
-        });
         let (compare, value) = (self.scalar(args[5])?, self.scalar(args[6])?);
-        let (old, _) = self.compare_exchange(element, compare, value, scalar);
+        let inside = self.buffer_word_inside(g, word);
+        let typed = matches!(kind, BufferKind::Typed(_));
+        let old = self.b.atomic_inside(inside, kind_of_atomic(scalar), |b| {
+            let element = b.buffer_word(g, word, typed);
+            b.compare_exchange(element, compare, value, scalar).0
+        });
         self.define_result(inst.result, Lv::Scalar(old))
     }
 }

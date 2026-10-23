@@ -1,4 +1,4 @@
-//! Lifting a Shader Model 4 or 5 program (pixel or vertex) to primase's shader representation
+//! Lifting a Shader Model 4 or 5 program (pixel, vertex or compute) to primase's shader representation
 //! ([`primase_shader::Program`]).
 //!
 //! A DXBC register is four untyped 32-bit lanes, so the body keeps every register as a `vec4<u32>` local and each
@@ -20,6 +20,7 @@
 //!   views are not lifted`); nothing is approximated silently, and what is approximated is a note on the program.
 
 mod body;
+mod compute;
 mod io;
 mod operands;
 mod resources;
@@ -65,13 +66,12 @@ pub fn lift(bytes: &[u8]) -> Result<Program> {
             2 => "gs",
             3 => "hs",
             4 => "ds",
-            5 => "cs",
             _ => "",
         };
         if !kind.is_empty() {
             return Err(error(
                 0,
-                format!("{kind} programs are outside the lifted stages (ps, vs)"),
+                format!("{kind} programs are outside the lifted stages (ps, vs, cs)"),
             ));
         }
     }
@@ -79,15 +79,25 @@ pub fn lift(bytes: &[u8]) -> Result<Program> {
     let stage = match decoded.kind {
         crate::decode::ProgramType::Pixel => Stage::Pixel,
         crate::decode::ProgramType::Vertex => Stage::Vertex,
+        crate::decode::ProgramType::Compute => Stage::Compute,
         other => {
             return Err(error(
                 0,
-                format!("{} programs are outside the lifted stages (ps, vs)", other.name()),
+                format!(
+                    "{} programs are outside the lifted stages (ps, vs, cs)",
+                    other.name()
+                ),
             ));
         }
     };
     let setup = setup::Setup::new(bytes, &decoded, stage)?;
     let mut lift = Lift::new(&decoded, stage, setup)?;
+    if stage == Stage::Compute {
+        lift.b.workgroup_size = lift
+            .setup
+            .workgroup
+            .ok_or_else(|| error(0, "a compute program that declares no thread group size"))?;
+    }
     lift.prologue()?;
     lift.body()?;
     lift.finish(decoded.target())
@@ -121,6 +131,8 @@ struct Lift<'a> {
     outputs: BTreeMap<u32, Handle<LocalVariable>>,
     /// `x<n>[i]`: the local and its length.
     indexable: BTreeMap<u32, (Handle<LocalVariable>, u32)>,
+    /// `vThreadID`, `vThreadGroupID`, `vThreadIDInGroup` and `vThreadIDInGroupFlattened`, by the system value each is.
+    ids: BTreeMap<primase_shader::SystemValue, Handle<LocalVariable>>,
     /// `vPrim`, `vCoverage`, `oDepth` and `oMask`, lane 0.
     primitive_id: Option<Handle<LocalVariable>>,
     input_coverage: Option<Handle<LocalVariable>>,
@@ -152,6 +164,7 @@ impl<'a> Lift<'a> {
         }
         let stage = match self.stage {
             Stage::Vertex => naga::ShaderStage::Vertex,
+            Stage::Compute => naga::ShaderStage::Compute,
             _ => naga::ShaderStage::Fragment,
         };
         let module = self.b.finish(
@@ -161,6 +174,7 @@ impl<'a> Lift<'a> {
             self.result_type,
             self.setup.early_depth_test,
         );
+        let limit_notes = primase_shader::compute_limit_notes(&module);
         Ok(Program {
             module,
             stage: self.stage,
@@ -176,7 +190,7 @@ impl<'a> Lift<'a> {
                 lifter_version: LIFTER_VERSION,
                 source_hash: None,
             },
-            notes: self.notes.into_iter().collect(),
+            notes: self.notes.into_iter().chain(limit_notes).collect(),
         })
     }
 }

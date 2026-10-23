@@ -354,6 +354,7 @@ impl<'m> Lift<'m> {
             self.result_type,
             early,
         );
+        let limit_notes = primase_shader::compute_limit_notes(&module);
         Ok(Program {
             module,
             stage,
@@ -369,7 +370,7 @@ impl<'m> Lift<'m> {
                 lifter_version: LIFTER_VERSION,
                 source_hash: None,
             },
-            notes: self.notes.into_iter().collect(),
+            notes: self.notes.into_iter().chain(limit_notes).collect(),
         })
     }
 }

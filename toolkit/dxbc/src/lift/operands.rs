@@ -108,6 +108,22 @@ impl Lift<'_> {
                 let p = self.b.local_ptr(local);
                 Ok(self.b.load(p, Kind::U, 4))
             }
+            Register::ThreadId
+            | Register::ThreadGroupId
+            | Register::ThreadIdInGroup
+            | Register::ThreadIdInGroupFlattened => {
+                let system = match op.register {
+                    Register::ThreadId => primase_shader::SystemValue::DispatchThreadId,
+                    Register::ThreadGroupId => primase_shader::SystemValue::GroupId,
+                    Register::ThreadIdInGroup => primase_shader::SystemValue::GroupThreadId,
+                    _ => primase_shader::SystemValue::GroupIndex,
+                };
+                let Some(&local) = self.ids.get(&system) else {
+                    return self.refuse(format!("{:?} is used but not declared", op.register));
+                };
+                let p = self.b.local_ptr(local);
+                Ok(self.b.load(p, Kind::U, 4))
+            }
             other => self.refuse(format!("a source operand of register type {other:?}")),
         }
     }

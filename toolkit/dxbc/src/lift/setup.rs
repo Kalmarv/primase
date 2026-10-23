@@ -40,6 +40,38 @@ pub(crate) enum Declaration {
     },
     /// A typed unordered-access texture view.
     View(View),
+    /// An unordered-access view of a buffer: raw, structured or typed.
+    UavBuffer(UavBuffer),
+}
+
+/// An unordered-access buffer view `u<slot>`, with the access the program makes of it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UavBuffer {
+    pub slot: u32,
+    pub kind: UavKind,
+    pub load: bool,
+    pub store: bool,
+    /// The integer type its atomic operations have, when it has any.
+    pub atomic: Option<naga::Scalar>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UavKind {
+    Raw,
+    Structured {
+        stride: u32,
+    },
+    /// A typed buffer: four lanes of this kind per element.
+    Typed(Kind),
+}
+
+/// Thread-group shared memory `g<register>`: its size in words, the element stride of a structured one in bytes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Shared {
+    pub register: u32,
+    pub words: u32,
+    pub stride: Option<u32>,
+    pub atomic: Option<naga::Scalar>,
 }
 
 /// A typed unordered-access view `u<slot>` of a texture, with the access the program makes of it.
@@ -73,6 +105,11 @@ pub(crate) struct Setup {
     /// Parallel to `interface.resources`.
     pub declarations: Vec<Declaration>,
     pub immediates: Vec<[u32; 4]>,
+    pub shared: Vec<Shared>,
+    /// A compute program's thread group size.
+    pub workgroup: Option<[u32; 3]>,
+    /// The compute ids the program declares it reads.
+    pub ids: BTreeSet<SystemValue>,
     pub indexable: Vec<(u32, u32)>,
     pub temps: u32,
     /// The lanes of each input register the program declares it reads.
@@ -96,6 +133,9 @@ impl Setup {
             early_depth_test: false,
             declarations: Vec::new(),
             immediates: Vec::new(),
+            shared: Vec::new(),
+            workgroup: None,
+            ids: BTreeSet::new(),
             indexable: Vec::new(),
             temps: 0,
             declared_inputs: BTreeMap::new(),
@@ -165,6 +205,18 @@ impl Setup {
                     }
                     Register::PrimitiveId => primitive_id = true,
                     Register::InputCoverage => input_coverage = true,
+                    Register::ThreadId => {
+                        setup.ids.insert(SystemValue::DispatchThreadId);
+                    }
+                    Register::ThreadGroupId => {
+                        setup.ids.insert(SystemValue::GroupId);
+                    }
+                    Register::ThreadIdInGroup => {
+                        setup.ids.insert(SystemValue::GroupThreadId);
+                    }
+                    Register::ThreadIdInGroupFlattened => {
+                        setup.ids.insert(SystemValue::GroupIndex);
+                    }
                     other => return Err(at(format!("a declared input of register type {other:?}"))),
                 },
                 Declared::Output { operand, .. } => match operand.register {
@@ -267,8 +319,17 @@ impl Setup {
                         5 => (ImageDimension::D3, false),
                         7 => (ImageDimension::D1, true),
                         8 => (ImageDimension::D2, true),
-                        // a typed buffer view: an instruction that uses one is refused
-                        _ => continue,
+                        1 => {
+                            setup.declarations.push(Declaration::UavBuffer(UavBuffer {
+                                slot: *slot,
+                                kind: UavKind::Typed(kind),
+                                load: false,
+                                store: false,
+                                atomic: None,
+                            }));
+                            continue;
+                        }
+                        _ => return Err(at(format!("unordered-access view dimension {dimension}"))),
                     };
                     setup.declarations.push(Declaration::View(View {
                         slot: *slot,
@@ -279,8 +340,47 @@ impl Setup {
                         store: false,
                     }));
                 }
-                // refused where an instruction uses one
-                Declared::UavRaw { .. } | Declared::UavStructured { .. } => {}
+                Declared::UavRaw { slot, .. } => setup.declarations.push(Declaration::UavBuffer(UavBuffer {
+                    slot: *slot,
+                    kind: UavKind::Raw,
+                    load: false,
+                    store: false,
+                    atomic: None,
+                })),
+                Declared::UavStructured { slot, stride, .. } => {
+                    setup.declarations.push(Declaration::UavBuffer(UavBuffer {
+                        slot: *slot,
+                        kind: UavKind::Structured {
+                            stride: (*stride).max(4),
+                        },
+                        load: false,
+                        store: false,
+                        atomic: None,
+                    }))
+                }
+                Declared::ThreadGroup(size) => setup.workgroup = Some(*size),
+                Declared::GroupSharedRaw { register, bytes } => setup.shared.push(Shared {
+                    register: *register,
+                    words: bytes.div_ceil(4),
+                    stride: None,
+                    atomic: None,
+                }),
+                Declared::GroupSharedStructured {
+                    register,
+                    stride,
+                    count,
+                } => {
+                    let words = stride
+                        .div_ceil(4)
+                        .checked_mul(*count)
+                        .ok_or_else(|| at("thread-group memory too large".into()))?;
+                    setup.shared.push(Shared {
+                        register: *register,
+                        words,
+                        stride: Some(*stride),
+                        atomic: None,
+                    });
+                }
                 Declared::Other { opcode, .. } => {
                     return Err(at(format!(
                         "{} ({opcode}) is not lifted",
@@ -309,6 +409,89 @@ impl Setup {
                     v.store |= store;
                     v.load |= !store;
                 }
+            }
+        }
+        // the access the program makes of each unordered-access buffer and of thread-group memory, and the integer
+        // type of the atomic operations that reach them
+        for ins in &decoded.instructions {
+            let name = ins.name();
+            let (resource, load, store, atomic) = match name {
+                "ld_raw" => (3, true, false, None),
+                "ld_structured" => (4, true, false, None),
+                "ld_uav_typed" => (3, true, false, None),
+                "store_raw" | "store_structured" | "store_uav_typed" => (1, false, true, None),
+                n if n.starts_with("atomic_") => (
+                    1,
+                    true,
+                    true,
+                    Some(if matches!(n, "atomic_imax" | "atomic_imin") {
+                        naga::Scalar::I32
+                    } else {
+                        naga::Scalar::U32
+                    }),
+                ),
+                n if n.starts_with("imm_atomic_")
+                    && !matches!(n, "imm_atomic_alloc" | "imm_atomic_consume") =>
+                {
+                    (
+                        2,
+                        true,
+                        true,
+                        Some(if matches!(n, "imm_atomic_imax" | "imm_atomic_imin") {
+                            naga::Scalar::I32
+                        } else {
+                            naga::Scalar::U32
+                        }),
+                    )
+                }
+                _ => continue,
+            };
+            // the resource operand is the one after the destination (and the addresses of a load, which come first)
+            let operand = match name {
+                "ld_raw" => 2,
+                "ld_structured" => 3,
+                "ld_uav_typed" => 2,
+                n if n.starts_with("imm_atomic_") => 1,
+                _ => 0,
+            };
+            let _ = resource;
+            let Some(op) = ins.operands.get(operand) else {
+                continue;
+            };
+            let index = op.indices.first().map_or(0, |i| i.base);
+            match op.register {
+                Register::Uav => {
+                    for d in &mut setup.declarations {
+                        if let Declaration::UavBuffer(b) = d
+                            && b.slot == index
+                        {
+                            b.load |= load;
+                            b.store |= store;
+                            if let Some(a) = atomic {
+                                // a signed minimum or maximum makes the buffer's atomics signed
+                                b.atomic = Some(match (b.atomic, a) {
+                                    (Some(naga::Scalar::I32), _) | (_, naga::Scalar::I32) => {
+                                        naga::Scalar::I32
+                                    }
+                                    _ => naga::Scalar::U32,
+                                });
+                            }
+                        }
+                    }
+                }
+                Register::GroupSharedMemory => {
+                    for g in &mut setup.shared {
+                        if g.register == index
+                            && let Some(a) = atomic
+                        {
+                            g.atomic = Some(match (g.atomic, a) {
+                                (Some(naga::Scalar::I32), _) | (_, naga::Scalar::I32) => naga::Scalar::I32,
+                                _ => naga::Scalar::U32,
+                            });
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         // a texture compared against a reference is a depth image
@@ -452,6 +635,18 @@ impl Setup {
                 ScalarType::Uint,
             ));
         }
+        // a compute program's ids are system inputs the signature does not list
+        for id in setup.ids.clone() {
+            let (name, width) = match id {
+                SystemValue::DispatchThreadId => ("SV_DispatchThreadID", 3),
+                SystemValue::GroupId => ("SV_GroupID", 3),
+                SystemValue::GroupThreadId => ("SV_GroupThreadID", 3),
+                _ => ("SV_GroupIndex", 1),
+            };
+            let mut v = special(name, id, ScalarType::Uint);
+            v.value.width = width;
+            interface.inputs.push(v);
+        }
         // outputs: a stage's depth hint is a plain depth output in the module
         setup.interface = interface;
 
@@ -542,6 +737,30 @@ impl Setup {
                         },
                     },
                     format!("u{}", v.slot),
+                ),
+                Declaration::UavBuffer(b) => (
+                    D3dClass::UnorderedAccess,
+                    b.slot,
+                    ResourceKind::Storage {
+                        target: StorageTarget::Buffer(match b.kind {
+                            UavKind::Raw => BufferKind::Raw,
+                            UavKind::Structured { stride } => BufferKind::Structured { stride },
+                            UavKind::Typed(kind) => BufferKind::Typed(Value {
+                                scalar: match kind {
+                                    Kind::I => ScalarType::Sint,
+                                    Kind::U => ScalarType::Uint,
+                                    _ => ScalarType::Float,
+                                },
+                                width: 4,
+                            }),
+                        }),
+                        access: match (b.load, b.store) {
+                            (true, true) => Access::ReadWrite,
+                            (false, true) => Access::Write,
+                            _ => Access::Read,
+                        },
+                    },
+                    format!("u{}", b.slot),
                 ),
                 Declaration::Sampler { slot, comparison } => (
                     D3dClass::Sampler,
