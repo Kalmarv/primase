@@ -61,6 +61,17 @@ fn every_placed_part_is_accounted_for() -> Result<()> {
         };
         let mut world = World::default();
         let report = sekiro::read_game_area(&install, map, &decoder, &options, &mut world)?;
+        // every material its material binary defines is linked to its shader's bundle, unless the install holds none
+        for (e, m) in world.iter::<primase_fromsoft::materials::Material>() {
+            if m.definition.is_some() && !report.missing_shader_bundles.contains(&m.shader) {
+                assert!(
+                    world.has::<primase_fromsoft::sekiro::source::MaterialShader>(e),
+                    "{map}: material {} (shader {}) has no fromsoft.material_shader",
+                    m.mtd,
+                    m.shader
+                );
+            }
+        }
         let offsets: BTreeMap<String, [f64; 2]> = Game::EldenRing.parent_maps(map).into_iter().collect();
         let mut names = vec![map];
         names.extend(report.parent_maps.iter().map(String::as_str));

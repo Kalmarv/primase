@@ -721,7 +721,8 @@ pub fn read_game_area(
                 if let Some(layered) = &m.layered {
                     world.insert(e, layered.clone());
                 }
-                if matches!(m.definition, Some(materials::Definition::Mtd(_))) {
+                // linked to the bundle of the shader its definition (an MTD or a material binary) names, as read above
+                if m.definition.is_some() {
                     material_shaders.push((e, m.shader.clone()));
                 }
                 world.insert(e, m);
