@@ -6,7 +6,9 @@ use primase_anvil::components::{
     AnvilMesh, AnvilRig, AnvilRigOccurrence, AnvilSkin, AnvilSkinned, RigBone, StoredMeshBone, StoredRig,
     StoredSkin, VertexAttributes,
 };
-use primase_anvil::passes::{LowerAnvilLods, LowerAnvilMesh, LowerAnvilRig, LowerAnvilSkin, Static16Normal};
+use primase_anvil::passes::{
+    LowerAnvilLods, LowerAnvilMesh, LowerAnvilRig, LowerAnvilSkin, OwnTransform, Static16Normal,
+};
 use primase_anvil::read::archive::Archive;
 use primase_anvil::read::listing::Kind;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -126,7 +128,9 @@ fn lower(w: &mut World) -> Result<(), String> {
             Box::new(LowerAnvilMesh {
                 static16_normal: Static16Normal::Omit,
             }),
-            Box::new(LowerAnvilRig { compose_own: false }),
+            Box::new(LowerAnvilRig {
+                own_transform: OwnTransform::Refuse,
+            }),
             Box::new(LowerAnvilSkin),
         ],
     };
@@ -302,7 +306,9 @@ fn real_skeleton_components_place_bind_and_lower() {
                     static16_normal: Static16Normal::Omit,
                 }),
                 Box::new(LowerAnvilLods),
-                Box::new(LowerAnvilRig { compose_own: true }),
+                Box::new(LowerAnvilRig {
+                    own_transform: OwnTransform::Compose,
+                }),
                 Box::new(LowerAnvilSkin),
             ],
         };

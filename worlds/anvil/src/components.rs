@@ -1291,3 +1291,72 @@ impl Component for AnvilSkinned {
         out.push(self.occurrence);
     }
 }
+
+/// How a track's key times are stored ([`crate::read::animation`]: the tag's remainder over 3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Times {
+    /// A u8 for each key after the first (the first is at 0).
+    U8(Vec<u8>),
+    /// A u16 for each key after the first.
+    U16(Vec<u16>),
+    /// A bit mask of the frames that hold a key, with its marker byte's top two bits (`mode`: 1, 2 or 3).
+    Mask { mode: u8, mask: Vec<u8> },
+}
+
+/// One track of an Animation as stored: its block's tag (`3 * kind + w`), its size field, the key count, the times and
+/// the values (`keys` of the kind's width, as bytes). The bone it drives is the clip's mapping at its position.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredTrack {
+    pub tag: u8,
+    /// The block's `a` field, its in-memory size (within 8 of the stored payload's length on every clip).
+    pub size: u32,
+    pub keys: u32,
+    pub times: Times,
+    pub values: Vec<u8>,
+}
+
+/// An Animation's `AnimTrackEvent` array as stored: the count and the elements' bytes (not read).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredEvents {
+    pub count: u32,
+    pub bytes: Vec<u8>,
+}
+
+/// An Animation's `TTECLAnimation` object, its four arrays as stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredEcl {
+    pub id: u64,
+    pub animation: Vec<u8>,
+    pub words: Vec<u32>,
+    pub halves: Vec<u16>,
+    pub bytes: Vec<u8>,
+}
+
+/// An Animation resource's body as stored ([`crate::read::animation`] for what each field is).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredAnimation {
+    /// `Length` (f32).
+    pub length: f32,
+    /// `F4F597FF`: varies by clip.
+    pub id_hash: u32,
+    /// `322B96B8`: 0 on every clip.
+    pub f2: u32,
+    /// `556E9166` and `251905D9`: empty on every clip.
+    pub arrays: [Vec<u16>; 2],
+    /// The four booleans (`1F4DA15F`, `93847F6A`, `ABC2D4B8`, `0D7D1D50`).
+    pub flags: [u8; 4],
+    pub events: StoredEvents,
+    /// The `AnimTrackData` object's id (0 on every clip) and its `567530C5`.
+    pub track_data_id: u64,
+    pub track_data_hash: u32,
+    /// Each track's bone: the CRC-32 of its name (0 for the root's), the mappings in the tracks' order.
+    pub mappings: Vec<u32>,
+    /// `66A6DC91`.
+    pub track_data_tail: u16,
+    pub ecl: Option<StoredEcl>,
+    /// `B832D26F`, a byte buffer (empty on every clip).
+    pub buffer: Vec<u8>,
+    /// `CB4E5F18`.
+    pub cb4e: u32,
+    pub tracks: Vec<StoredTrack>,
+}

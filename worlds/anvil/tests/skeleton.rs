@@ -189,6 +189,12 @@ fn an_own_transform_is_composed_into_the_roots_or_refused() {
         panic!("not a TRS");
     };
     assert_eq!(translation, [10.0, 0.0, 0.0]);
+    // ignored: the root's rest as stored
+    let s = lowered(own, SourceFrame::WORLD, "ignore").expect("ignored");
+    let Rest::Trs { translation, .. } = s.joints[0].rest else {
+        panic!("not a TRS");
+    };
+    assert_eq!(translation, [0.0, 0.0, 0.0]);
     // the child's rest is its parent's space and keeps
     let Rest::Trs { translation, .. } = s.joints[1].rest else {
         panic!("not a TRS");

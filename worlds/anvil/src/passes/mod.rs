@@ -28,7 +28,7 @@ pub use resolve_shaders::{
     shading_class,
 };
 pub use select::{CollisionOnly, Keep, Overlap, SelectAnvilEntities};
-pub use skeleton::{LowerAnvilRig, LowerAnvilSkeleton};
+pub use skeleton::{LowerAnvilRig, LowerAnvilSkeleton, OwnTransform};
 pub use skin::LowerAnvilSkin;
 pub use splat::{Splat, SplatUv};
 pub use water::{LowerAnvilWater, Shore};

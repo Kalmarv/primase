@@ -318,3 +318,55 @@ fn class_ids_are_index_ids_and_resolve() {
     // the Material's other 64-bit value at body+3 resolves to no entry of this forge
     assert_eq!(f.find(0x01C3_C9ED_9E7E), None);
 }
+
+/// A resource block of the given file header bytes (after the name) and payload (class id, extension and body).
+fn resource_block(type_id: u32, name: &str, file_header: &[u8], payload: &[u8]) -> Vec<u8> {
+    let mut b = type_id.to_le_bytes().to_vec();
+    b.extend(u32::try_from(payload.len()).expect("a test length").to_le_bytes());
+    b.extend(u32::try_from(name.len()).expect("a test length").to_le_bytes());
+    b.extend(name.as_bytes());
+    b.extend(file_header);
+    b.extend(payload);
+    b
+}
+
+#[test]
+fn a_file_header_of_1_is_followed_by_a_table_of_12_byte_rows() {
+    let mut payload = 0x01D7_F412_6B45u64.to_le_bytes().to_vec();
+    payload.extend(0x0FA3_067Fu32.to_le_bytes());
+    payload.extend([9, 8, 7]);
+    // the table: 02 00 00, two rows
+    let mut header = vec![1, 2, 0, 0];
+    header.extend(2u32.to_le_bytes());
+    header.extend([[0xAAu8; 12], [0xBB; 12]].concat());
+    let r = Resource::parse(&resource_block(0x0FA3_067F, "clip", &header, &payload)).unwrap();
+    assert_eq!(
+        (
+            r.file_header,
+            r.header_rows.clone(),
+            r.class_id,
+            r.extension,
+            r.body.clone()
+        ),
+        (
+            1,
+            vec![[0xAA; 12], [0xBB; 12]],
+            0x01D7_F412_6B45,
+            0x0FA3_067F,
+            vec![9, 8, 7]
+        )
+    );
+    // a file header of 0 has no table
+    let r = Resource::parse(&resource_block(0x0FA3_067F, "clip", &[0], &payload)).unwrap();
+    assert_eq!((r.file_header, r.header_rows.len()), (0, 0));
+    // the table's tag bytes, a row count the block can't hold, and a payload length off the block are refused
+    let mut wrong = header.clone();
+    wrong[1] = 3;
+    assert!(Resource::parse(&resource_block(0x0FA3_067F, "clip", &wrong, &payload)).is_err());
+    let mut many = header.clone();
+    many[4..8].copy_from_slice(&1000u32.to_le_bytes());
+    assert!(Resource::parse(&resource_block(0x0FA3_067F, "clip", &many, &payload)).is_err());
+    let mut long = resource_block(0x0FA3_067F, "clip", &header, &payload);
+    long.push(0);
+    assert!(Resource::parse(&long).is_err());
+}

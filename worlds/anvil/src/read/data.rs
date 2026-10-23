@@ -121,8 +121,13 @@ pub struct Resource {
     /// CRC-32 of the type's name.
     pub type_id: u32,
     pub name: String,
-    /// The byte after the name (observed 0).
+    /// The byte after the name: 0 (1,292,246 resources of the six forges' census) or 1 (9,091: every Animation, the
+    /// one AnimTrackBuiltinTracksTable and three of 0x8DEEB8AD), which a table follows ([`Resource::header_rows`]).
     pub file_header: u8,
+    /// With file header 1: the table between it and the payload, as stored: the bytes `02 00 00`, the row count (u32)
+    /// and that many rows of 12 bytes. Their meaning isn't read (on an Animation: pairs of a hash and a count, the
+    /// registry's object-type hashes among them). Empty with file header 0.
+    pub header_rows: Vec<[u8; 12]>,
     pub class_id: u64,
     /// Observed equal to the type id.
     pub extension: u32,
@@ -324,7 +329,8 @@ pub fn read_entry(payload: &[u8], max_decoded: usize) -> Result<Entry, Error> {
 
 impl Resource {
     /// A resource block's decoded bytes: type id (u32), payload length (i32), name length (i32), the name, one byte
-    /// (observed 0), then the payload (class id u64, extension u32, the body), which must end the block exactly.
+    /// (0, or 1 and the table `02 00 00`, a row count and that many 12-byte rows), then the payload (class id u64,
+    /// extension u32, the body), which must end the block exactly.
     pub fn parse(data: &[u8]) -> Result<Resource, Error> {
         let bad = |m: String| Error::Resource(m);
         let type_id = u32_at(data, 0, "resource type")?;
@@ -339,7 +345,29 @@ impl Resource {
         let file_header = *take(data, header_at, 1, "resource file header")?
             .first()
             .ok_or(bad("no file header byte".into()))?;
-        let payload_at = header_at.checked_add(1).ok_or(bad("offset overflows".into()))?;
+        let mut payload_at = header_at.checked_add(1).ok_or(bad("offset overflows".into()))?;
+        let mut header_rows = Vec::new();
+        if file_header == 1 {
+            if take(data, payload_at, 3, "resource header table")? != [2, 0, 0] {
+                return Err(bad("file header 1 without the table's bytes 02 00 00".into()));
+            }
+            let count_at = payload_at.checked_add(3).ok_or(bad("offset overflows".into()))?;
+            let rows = usize::try_from(u32_at(data, count_at, "resource header table rows")?)
+                .map_err(|_| bad("row count past this machine".into()))?;
+            let mut at = count_at.checked_add(4).ok_or(bad("offset overflows".into()))?;
+            for _ in 0..rows.min(data.len()) {
+                let row = take(data, at, 12, "resource header table row")?;
+                header_rows.push(<[u8; 12]>::try_from(row).map_err(|_| bad("a row of 12 bytes".into()))?);
+                at = at.checked_add(12).ok_or(bad("offset overflows".into()))?;
+            }
+            if header_rows.len() != rows {
+                return Err(bad(format!(
+                    "{rows} header rows in a block of {} bytes",
+                    data.len()
+                )));
+            }
+            payload_at = at;
+        }
         let payload_len =
             usize::try_from(payload_len).map_err(|_| bad("payload length past this machine".into()))?;
         let end = payload_at
@@ -365,6 +393,7 @@ impl Resource {
             type_id,
             name,
             file_header,
+            header_rows,
             class_id,
             extension,
             body: body.to_vec(),

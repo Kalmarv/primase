@@ -1,4 +1,4 @@
-//! `lower-anvil-skeleton{own-transform=compose|refuse}`: a Skeleton ([`AnvilSkeleton`]) becomes a `core.skeleton`.
+//! `lower-anvil-skeleton{own-transform=compose|refuse|ignore}`: a Skeleton ([`AnvilSkeleton`]) becomes a `core.skeleton`.
 //!
 //! - **Joints** (read): one per bone, listed in the skeleton's order, its [`JointId`] the bone's position there, its
 //!   parent the bone whose object id the bone's parent pointer names (a bone the skeleton doesn't hold is an error,
@@ -9,9 +9,15 @@
 //!   hexadecimal digits (`07c159a2` is "Head"): provenance, as the core says a name is, not identity.
 //! - **The skeleton's own transform** (stored, its place in the rig not established): `own-transform=compose` puts it in
 //!   front of each root bone's rest (a root's parent space being the skeleton's), `refuse` is an error where it isn't
-//!   the identity. 16 of the 361 skeletons the Riders Republic census read through this field have one that isn't.
+//!   the identity, `ignore` leaves it out. 16 of the 361 skeletons the Riders Republic census read through this field
+//!   have one that isn't. What the data says: a human rig's (`MAD_CHR_Skel_U`: 0.964 up and a quarter turn about z) is
+//!   not in its bones' stored global transforms, nor in the mesh bind poses (a mesh's `InitialMatrixInverse` equals the
+//!   inverse of the bone's stored rest world matrix on every bone of 22 of 118 mesh and rig pairs with one, and of none
+//!   when it is composed), and its root bone's own local position already holds the 0.964 that a clip's root track
+//!   replaces (on the three clips looked at, 0.84 to 0.93 up), so composing it would count it twice. The choice stays
+//!   the program's.
 //!
-//! `lower-anvil-rig{own-transform=compose|refuse}`: the same for a SkeletonComponent's rig ([`AnvilRig`]: its main
+//! `lower-anvil-rig{own-transform=compose|refuse|ignore}`: the same for a SkeletonComponent's rig ([`AnvilRig`]: its main
 //! Skeleton's and addons' bones joined by name), joints in the rig's order, the main Skeleton's own transform the rig's.
 //!
 //! Left out, counted: the pose groups (SkeletonPoses of SkeletonPoseBones, kept as bytes), the IKData, the Reflex
@@ -23,18 +29,29 @@ use primase_core::{Component, World};
 
 use crate::components::{AnvilRig, AnvilSkeleton};
 
+/// What a pass does with a skeleton's own position and rotation (see the module documentation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnTransform {
+    /// Composed in front of each root's rest.
+    Compose,
+    /// An error where it isn't the identity.
+    Refuse,
+    /// Left out.
+    Ignore,
+}
+
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LowerAnvilSkeleton {
-    /// Whether a skeleton's own position and rotation are composed into its roots' rests.
-    pub compose_own: bool,
+    /// What is done with a skeleton's own position and rotation.
+    pub own_transform: OwnTransform,
 }
 
 impl LowerAnvilSkeleton {
-    /// From its options: `own-transform=compose|refuse`, required.
+    /// From its options: `own-transform=compose|refuse|ignore`, required.
     pub fn from_options(o: &Options) -> Result<LowerAnvilSkeleton, String> {
         Ok(LowerAnvilSkeleton {
-            compose_own: own_transform_option(o)?,
+            own_transform: own_transform_option(o)?,
         })
     }
 }
@@ -67,19 +84,19 @@ struct RawJoint {
 }
 
 /// The joints of `raw` in its order, the own transform (`position` and `rotation`) composed in front of each root's rest
-/// where `compose_own`, refused where it isn't the identity and not composed.
+/// or left out, or refused where it isn't the identity, as `own` says.
 fn joints_of(
     raw: &[RawJoint],
     position: [f32; 4],
     rotation: [f32; 4],
-    compose_own: bool,
+    own: OwnTransform,
 ) -> Result<Vec<Joint>, String> {
     let own_position = [position[0], position[1], position[2]];
     let own_rotation = rotation.map(f64::from);
     let identity = own_position.iter().all(|&v| v.abs() < 1e-6)
         && own_rotation[..3].iter().all(|&v| v.abs() < 1e-6)
         && (own_rotation[3] - 1.0).abs() < 1e-4;
-    if !identity && !compose_own {
+    if !identity && own == OwnTransform::Refuse {
         return Err(format!(
             "a skeleton's own position {own_position:?} and rotation {rotation:?} aren't the identity and \
              own-transform=refuse"
@@ -95,7 +112,7 @@ fn joints_of(
                 .transpose()?;
             let mut translation = r.translation;
             let mut rot = r.rotation;
-            if parent.is_none() && compose_own && !identity {
+            if parent.is_none() && own == OwnTransform::Compose && !identity {
                 let moved = rotate(own_rotation, translation.map(f64::from));
                 translation = std::array::from_fn(|k| (f64::from(own_position[k]) + moved[k]) as f32);
                 rot = mul(own_rotation, rot.map(f64::from)).map(|v| v as f32);
@@ -114,16 +131,26 @@ fn joints_of(
         .collect()
 }
 
+/// The option's value for `own`.
+fn own_transform_name(own: OwnTransform) -> &'static str {
+    match own {
+        OwnTransform::Compose => "compose",
+        OwnTransform::Refuse => "refuse",
+        OwnTransform::Ignore => "ignore",
+    }
+}
+
 /// The `own-transform` option, required.
-fn own_transform_option(o: &Options) -> Result<bool, String> {
+fn own_transform_option(o: &Options) -> Result<OwnTransform, String> {
     if let Some(k) = o.keys().find(|k| k.as_str() != "own-transform") {
         return Err(format!("unknown option {k}"));
     }
     match o.get("own-transform").map(String::as_str) {
-        Some("compose") => Ok(true),
-        Some("refuse") => Ok(false),
-        Some(v) => Err(format!("own-transform={v} is not compose or refuse")),
-        None => Err("own-transform is required: own-transform=compose|refuse".to_owned()),
+        Some("compose") => Ok(OwnTransform::Compose),
+        Some("refuse") => Ok(OwnTransform::Refuse),
+        Some("ignore") => Ok(OwnTransform::Ignore),
+        Some(v) => Err(format!("own-transform={v} is not compose, refuse or ignore")),
+        None => Err("own-transform is required: own-transform=compose|refuse|ignore".to_owned()),
     }
 }
 
@@ -134,7 +161,7 @@ impl Pass for LowerAnvilSkeleton {
     fn options(&self) -> Options {
         Options::from([(
             "own-transform".to_owned(),
-            if self.compose_own { "compose" } else { "refuse" }.to_owned(),
+            own_transform_name(self.own_transform).to_owned(),
         )])
     }
     fn requires(&self) -> &[&'static str] {
@@ -178,7 +205,7 @@ impl Pass for LowerAnvilSkeleton {
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            let joints = joints_of(&raw, skeleton.position, skeleton.rotation, self.compose_own)?;
+            let joints = joints_of(&raw, skeleton.position, skeleton.rotation, self.own_transform)?;
             log.count("bones lowered to joints", joints.len() as u64);
             let poses: usize = skeleton.pose_groups.iter().map(|g| g.poses.len()).sum();
             if poses > 0 {
@@ -207,15 +234,15 @@ impl Pass for LowerAnvilSkeleton {
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LowerAnvilRig {
-    /// Whether the main Skeleton's own position and rotation are composed into the roots' rests.
-    pub compose_own: bool,
+    /// What is done with the main Skeleton's own position and rotation.
+    pub own_transform: OwnTransform,
 }
 
 impl LowerAnvilRig {
-    /// From its options: `own-transform=compose|refuse`, required.
+    /// From its options: `own-transform=compose|refuse|ignore`, required.
     pub fn from_options(o: &Options) -> Result<LowerAnvilRig, String> {
         Ok(LowerAnvilRig {
-            compose_own: own_transform_option(o)?,
+            own_transform: own_transform_option(o)?,
         })
     }
 }
@@ -227,7 +254,7 @@ impl Pass for LowerAnvilRig {
     fn options(&self) -> Options {
         Options::from([(
             "own-transform".to_owned(),
-            if self.compose_own { "compose" } else { "refuse" }.to_owned(),
+            own_transform_name(self.own_transform).to_owned(),
         )])
     }
     fn requires(&self) -> &[&'static str] {
@@ -272,7 +299,7 @@ impl Pass for LowerAnvilRig {
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            let joints = joints_of(&raw, position, rotation, self.compose_own)?;
+            let joints = joints_of(&raw, position, rotation, self.own_transform)?;
             log.count("rigs lowered", 1);
             log.count("bones lowered to joints", joints.len() as u64);
             log.omit(
