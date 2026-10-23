@@ -678,12 +678,14 @@ fn the_pass_chooses_the_vertex_permutation_by_the_primitives_streams() {
             name: "M[Multiple]_Gbuf.vpo".into(),
             stage: ShaderStage::Vertex,
             code: Arc::from(VERTEX_PROGRAM),
+            format: ShaderFormat::Dxbc,
         }];
         if with_skin {
             programs.push(ShaderProgram {
                 name: "M[Multiple]_Gbuf_Skin.vpo".into(),
                 stage: ShaderStage::Vertex,
                 code: Arc::from(SKIN_PROGRAM),
+                format: ShaderFormat::Dxbc,
             });
         }
         let bundle = world.spawn();
