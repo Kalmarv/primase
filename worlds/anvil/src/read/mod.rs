@@ -2,6 +2,7 @@
 
 pub mod animation;
 pub mod archive;
+pub mod build_table;
 pub mod component_types;
 pub mod convert;
 pub mod data;

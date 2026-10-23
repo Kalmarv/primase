@@ -1400,6 +1400,94 @@ pub enum Values {
     Quaternions(Vec<[f32; 4]>),
 }
 
+/// A link as a BuildTable stores one: a tag byte (0 or 1) and the u64 ClassID it names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildLink {
+    pub tag: u8,
+    pub id: u64,
+}
+
+/// A typed value of a BuildTable: a column's declared one and each row's property (`read::build_table` for what each
+/// field is). `value` holds the bytes of the kind `kind & 0x3F` ([`BuildValue::reference`], [`BuildValue::link`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuildValue {
+    /// The class the value refers to (a reference's or link's target), or 0.
+    pub class: u32,
+    /// The u16 before the kind and the u16 after it, as stored.
+    pub before: u16,
+    pub after: u16,
+    /// The registry's field kind, flags included (`0x1C` a reference, `0x12` a link, `0x02000014` a pointer).
+    pub kind: u32,
+    pub value: Vec<u8>,
+}
+
+/// One node of a column's `PropertyPath`: its 41 bytes of fields as stored and the solver it points to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PathNode {
+    pub fields: Vec<u8>,
+    /// The solver object: its class and its body as stored (none where the pointer is null).
+    pub solver: Option<(u32, Vec<u8>)>,
+}
+
+/// A BuildTable's column (`BuildColumn`): what a row's property of this column sets.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuildColumn {
+    pub id: u64,
+    /// The `ApplyPassBitField`'s object id and its byte.
+    pub apply_id: u64,
+    pub apply_bits: u8,
+    /// The `PropertyPath`'s nodes and its two bytes (`DA663376` and `WholeArray`).
+    pub path: Vec<PathNode>,
+    pub path_bytes: [u8; 2],
+    /// The three u32 fields after the path (`2AC53EC4`, `40B8B662`, `A51AC878`): the first is the column's number,
+    /// 1 to the column count, that rows' properties name.
+    pub fields: [u32; 3],
+    /// The column's pointer to a BuildTable (its own table on 32,250 of 32,289).
+    pub table: BuildLink,
+    /// The two u32 before the declared value (1 and 0x2CECF817 on every column).
+    pub header: [u32; 2],
+    /// The value the column declares: the class and kind its rows' properties have.
+    pub declared: BuildValue,
+}
+
+/// A BuildTable's property of one row: the column's number and the value.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuildProperty {
+    pub column: u32,
+    pub value: BuildValue,
+}
+
+/// A BuildTable's row (`BuildRow`): kept as stored, weight and condition included; nothing here picks a row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuildRow {
+    pub id: u64,
+    pub table: BuildLink,
+    pub weight: f32,
+    /// The `BuildTag`'s hash (the gender conditions 0x0B27268E and 0xE2B60126 on the rider tables).
+    pub condition: u32,
+    /// The `BuildTags`' object id.
+    pub tags_id: u64,
+    pub properties: Vec<BuildProperty>,
+}
+
+/// A `DynamicResources` object: the resources a row's properties name, as links.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuildResources {
+    pub id: u64,
+    pub links: Vec<BuildLink>,
+}
+
+/// A BuildTable resource body as stored (`read::build_table`): the engine's customization and settings table. RRAS
+/// calls it a Selector; the meaning of a row's properties is its claim.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredBuildTable {
+    pub columns: Vec<BuildColumn>,
+    pub rows: Vec<BuildRow>,
+    /// The four bytes between the rows and the resources, as stored.
+    pub flags: [u8; 4],
+    pub resources: Vec<BuildResources>,
+}
+
 /// An Animation read for a rig (`anvil.clip`), on an entity named for it: the clip as stored and the rig it drives (the
 /// entity holding its `core.skeleton`), in the source's frame (`frame`, as the reader was given it). Each track names
 /// its bone by the CRC-32 of the bone's name; the rig's joints are named by that hash. `lower-anvil-clips` makes a
