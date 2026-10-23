@@ -45,10 +45,11 @@ use crate::components::{
     AnvilGrass, AnvilGrassModel, AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides,
     AnvilMesh, AnvilRig, AnvilRigOccurrence, AnvilSkeleton, AnvilSkinned, AnvilWater, BoundTexture,
     ClipCandidate, CollisionMaterialRef, DataLayerAction, DeferredDecal, GrassSystemSetup, LibraryClip,
-    MaterialBinding, MaterialValue, ShapeGeometry, TextureFrom,
+    MaterialBinding, MaterialValue, ShapeGeometry, StoredBuildTable, TextureFrom,
 };
 use crate::read::animation::{ANIMATION, StoredAnimation};
 use crate::read::archive::{Archive, At};
+use crate::read::build_table::{BUILD_TABLE, FEMALE, MALE};
 use crate::read::ddecal::{
     DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, STATIC_DDECAL, StoredDecalModel, StoredDeferredDecals,
 };
@@ -416,6 +417,63 @@ pub struct Placer<'a> {
     refused_levels: HashSet<(u64, u8)>,
 }
 
+/// Which row of a rider part table is taken: the table's rows are conditioned on a tag hash, and the male and female
+/// hashes are the two the rider's tables have ([`MALE`], [`FEMALE`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gender {
+    Male,
+    Female,
+}
+
+impl Gender {
+    /// The condition of the rows this gender takes.
+    pub fn condition(self) -> u32 {
+        match self {
+            Gender::Male => MALE,
+            Gender::Female => FEMALE,
+        }
+    }
+}
+
+/// A rider to put together ([`Placer::place_rider`]); every field is the caller's choice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RiderSpec {
+    /// The occurrence's name.
+    pub name: String,
+    /// The rig's base Skeletons' ClassIDs, the main one first (a part's addon Skeleton is added to them).
+    pub skeletons: Vec<u64>,
+    /// The row each part table takes.
+    pub gender: Gender,
+    /// The part tables' ClassIDs (BuildTables whose rows name a mesh, its addon Skeleton and its material tables).
+    pub parts: Vec<u64>,
+}
+
+/// A part of a rider as its table states it, and what became of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RiderPart {
+    /// The part table's ClassID and its entry's name.
+    pub table: u64,
+    pub name: String,
+    /// The row's first Mesh link, its Skeleton links, its LODSelector links (not placed: the Mesh is the part's
+    /// highest-detail form, the selector its lower levels) and its BuildTable links (the materials and addons tables).
+    pub mesh: Option<u64>,
+    pub skeletons: Vec<u64>,
+    pub selectors: Vec<u64>,
+    pub tables: Vec<u64>,
+    /// The placement of the mesh, following the rider's rig occurrence.
+    pub placement: Option<Entity>,
+    /// Why the part isn't placed.
+    pub refused: Option<String>,
+}
+
+/// A rider placed: its rig, the occurrence of it, and each part.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RiderPlaced {
+    pub rig: Option<Entity>,
+    pub occurrence: Option<Entity>,
+    pub parts: Vec<RiderPart>,
+}
+
 impl<'a> Placer<'a> {
     /// The placer placing instanced Entities' collision as `choice` states ([`InstancedCollision::Skip`] by default).
     /// The placer reading each mesh's Materials too ([`AnvilMaterial`], their textures as core textures), linked
@@ -649,9 +707,15 @@ impl<'a> Placer<'a> {
         let key: Vec<u64> = std::iter::once(main.id)
             .chain(sc.addons.iter().map(|a| a.id))
             .collect();
+        self.rig_of(key, placed)
+    }
+
+    /// The entity holding the rig of the Skeletons `key` names (the main one first), read once.
+    fn rig_of(&mut self, key: Vec<u64>, placed: &mut Placed) -> Option<Entity> {
         if let Some(&e) = self.rigs.get(&key) {
             return e;
         }
+        let main = key.first().copied().unwrap_or(0);
         let e = match self.read_rig(&key) {
             Ok(e) => {
                 if self.clip_candidates {
@@ -660,7 +724,7 @@ impl<'a> Placer<'a> {
                 Some(e)
             }
             Err(why) => {
-                placed.refused.push((main.id, format!("rig: {why}")));
+                placed.refused.push((main, format!("rig: {why}")));
                 None
             }
         };
@@ -1293,6 +1357,17 @@ impl<'a> Placer<'a> {
     /// counted in [`Placed::impostor_levels`]). Its Materials are read where the placer reads them
     /// ([`Placer::with_materials`]). `None` where no level of it could be read (recorded in `placed`).
     pub fn place_object(&mut self, at: At, placed: &mut Placed) -> Result<Option<Entity>, Error> {
+        self.place_object_following(at, None, placed)
+    }
+
+    /// [`Placer::place_object`], the placement following the rig occurrence `occurrence` where one is given
+    /// ([`AnvilSkinned`]).
+    fn place_object_following(
+        &mut self,
+        at: At,
+        occurrence: Option<Entity>,
+        placed: &mut Placed,
+    ) -> Result<Option<Entity>, Error> {
         let (id, found) = {
             let forge = self
                 .archive
@@ -1334,8 +1409,157 @@ impl<'a> Placer<'a> {
             },
         );
         self.world.insert(p, self.frame.transform(&Transform::IDENTITY));
+        if let Some(occurrence) = occurrence {
+            self.world.insert(p, AnvilSkinned { occurrence });
+        }
         placed.placements.push(p);
         Ok(Some(p))
+    }
+
+    /// A rider put together from the parts `spec` chooses (see [`RiderSpec`]): each part table's row for the gender
+    /// names the part's mesh, its addon Skeleton and the tables of its materials and addons; the rig is the Skeletons
+    /// `spec` gives and the parts' addons; each part's mesh is placed following one occurrence of that rig. A part
+    /// that can't be placed is refused with its reason in [`RiderPart::refused`] (and in `placed`); nothing is
+    /// chosen for the caller.
+    pub fn place_rider(&mut self, spec: &RiderSpec, placed: &mut Placed) -> RiderPlaced {
+        let mut parts: Vec<RiderPart> = spec
+            .parts
+            .iter()
+            .map(|&table| self.resolve_part(table, spec.gender))
+            .collect();
+        let mut key = spec.skeletons.clone();
+        for part in parts.iter().filter(|p| p.refused.is_none()) {
+            for &s in &part.skeletons {
+                if !key.contains(&s) {
+                    key.push(s);
+                }
+            }
+        }
+        let Some(rig) = self.rig_of(key, placed) else {
+            for part in &mut parts {
+                part.refused
+                    .get_or_insert_with(|| "the rig can't be read".to_owned());
+            }
+            return RiderPlaced {
+                rig: None,
+                occurrence: None,
+                parts,
+            };
+        };
+        let joints: HashSet<u32> = self
+            .world
+            .get::<AnvilRig>(rig)
+            .map(|r| r.rig.bones.iter().map(|b| b.name_hash).collect())
+            .unwrap_or_default();
+        let occurrence = self.world.spawn();
+        self.world.insert(occurrence, Name(spec.name.clone()));
+        self.world.insert(occurrence, AnvilRigOccurrence { rig });
+        self.world
+            .insert(occurrence, self.frame.transform(&Transform::IDENTITY));
+        for part in &mut parts {
+            if part.refused.is_some() {
+                continue;
+            }
+            match self.place_part(part, occurrence, &joints, placed) {
+                Ok(p) => part.placement = p,
+                Err(why) => part.refused = Some(why),
+            }
+            if let Some(why) = &part.refused {
+                placed.refused.push((part.table, format!("rider part: {why}")));
+            }
+        }
+        RiderPlaced {
+            rig: Some(rig),
+            occurrence: Some(occurrence),
+            parts,
+        }
+    }
+
+    /// What the part table `table` states for `gender`: its row's mesh, Skeletons, selectors and tables.
+    fn resolve_part(&mut self, table: u64, gender: Gender) -> RiderPart {
+        let mut part = RiderPart {
+            table,
+            name: String::new(),
+            mesh: None,
+            skeletons: Vec::new(),
+            selectors: Vec::new(),
+            tables: Vec::new(),
+            placement: None,
+            refused: None,
+        };
+        let found = (|| -> Result<(), String> {
+            let at = self.archive.find(table).ok_or("the table is in no forge")?;
+            part.name = self.name(at).unwrap_or_default();
+            let r = self.archive.resource(at).map_err(|e| e.to_string())?;
+            if r.type_id != BUILD_TABLE {
+                return Err(format!("type {:#010x}, not a BuildTable", r.type_id));
+            }
+            let t = StoredBuildTable::parse(&r.body).map_err(|e| e.to_string())?;
+            let mut rows = t.rows_with(gender.condition());
+            let (Some(row), None) = (rows.next(), rows.next()) else {
+                return Err(format!(
+                    "no single row for the condition {:#010x}",
+                    gender.condition()
+                ));
+            };
+            for (_, id) in row.links().map_err(|e| e.to_string())? {
+                let Some(at) = self.archive.find(id) else {
+                    continue;
+                };
+                let type_id = self
+                    .archive
+                    .forge(at.forge)
+                    .and_then(|f| f.names.get(at.entry))
+                    .map(|n| n.type_id);
+                match type_id {
+                    Some(MESH) if part.mesh.is_none() => part.mesh = Some(id),
+                    Some(LOD_SELECTOR) => part.selectors.push(id),
+                    Some(SKELETON) => part.skeletons.push(id),
+                    Some(BUILD_TABLE) => part.tables.push(id),
+                    _ => {}
+                }
+            }
+            Ok(())
+        })();
+        if let Err(why) = found {
+            part.refused = Some(why);
+        }
+        part
+    }
+
+    /// The placement of `part`'s mesh following `occurrence`, once every bone a vertex weights is a joint of the rig
+    /// (`joints`).
+    fn place_part(
+        &mut self,
+        part: &RiderPart,
+        occurrence: Entity,
+        joints: &HashSet<u32>,
+        placed: &mut Placed,
+    ) -> Result<Option<Entity>, String> {
+        let Some(mesh) = part.mesh else {
+            return Err("its row names no Mesh".to_owned());
+        };
+        let at = self.archive.find(mesh).ok_or("its Mesh is in no forge")?;
+        let r = self.archive.resource(at).map_err(|e| e.to_string())?;
+        let stored = StoredMesh::parse(&r.body).map_err(|e| e.to_string())?;
+        let bones = stored.bones().map_err(|e| e.to_string())?;
+        if let Some(skin) = stored.skin().map_err(|e| e.to_string())? {
+            let weighted = skin.weighted_slots(bones.len());
+            let missing: Vec<u32> = bones
+                .iter()
+                .zip(&weighted)
+                .filter(|(b, w)| **w && !joints.contains(&b.bone_id))
+                .map(|(b, _)| b.bone_id)
+                .collect();
+            if let Some(first) = missing.first() {
+                return Err(format!(
+                    "its Mesh weights {} bones the rig has no joint for (the first {first:08x})",
+                    missing.len()
+                ));
+            }
+        }
+        self.place_object_following(at, Some(occurrence), placed)
+            .map_err(|e| e.to_string())
     }
 
     /// The Entity or EntityGroup at `at` placed into the world: one placement per Visual with something to show, or per

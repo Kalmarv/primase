@@ -272,6 +272,40 @@ impl<'a> Cursor<'a> {
     }
 }
 
+/// The condition (a `BuildTag` hash) of the rows of the rider's part tables that hold the male parts: every part
+/// table's male row names a mesh whose name has `_M_` in it and the female row one with `_F_` (tests/rider.rs).
+/// RRAssetStudio reads the pair as gender conditions; the hashes are the tag descriptors' ids.
+pub const MALE: u32 = 0x0B27_268E;
+/// The condition of the female rows (see [`MALE`]).
+pub const FEMALE: u32 = 0xE2B6_0126;
+
+impl StoredBuildTable {
+    /// The rows whose condition is `condition`, in stored order.
+    pub fn rows_with(&self, condition: u32) -> impl Iterator<Item = &BuildRow> {
+        self.rows.iter().filter(move |r| r.condition == condition)
+    }
+}
+
+impl BuildRow {
+    /// The resources this row's properties name, as (column number, ClassID): the links (kind `0x12`) and the
+    /// non-null references (kind `0x1C`), in stored order. Properties of other kinds are not listed.
+    pub fn links(&self) -> Result<Vec<(u32, u64)>, Error> {
+        let mut out = Vec::new();
+        for p in &self.properties {
+            match p.value.kind & 0x3F {
+                0x12 => out.push((p.column, p.value.link()?.id)),
+                0x1C => {
+                    if let Some(r) = p.value.reference()? {
+                        out.push((p.column, r.id));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(out)
+    }
+}
+
 impl BuildValue {
     /// The reference this value holds (kind `0x1C`): `None` for the null form.
     pub fn reference(&self) -> Result<Option<Reference>, Error> {

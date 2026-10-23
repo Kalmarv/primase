@@ -333,6 +333,21 @@ impl StoredSkin {
         let n = self.influences.max(1);
         self.slots.chunks_exact(n).zip(self.weights.chunks_exact(n))
     }
+
+    /// Which of `bones` slots some vertex gives a nonzero weight (a slot past `bones` is not counted).
+    pub fn weighted_slots(&self, bones: usize) -> Vec<bool> {
+        let mut weighted = vec![false; bones];
+        for (slots, weights) in self.vertices() {
+            for (&slot, &weight) in slots.iter().zip(weights) {
+                if weight != 0
+                    && let Some(w) = weighted.get_mut(usize::from(slot))
+                {
+                    *w = true;
+                }
+            }
+        }
+        weighted
+    }
 }
 
 /// A Mesh body's compiled buffers, as stored.
