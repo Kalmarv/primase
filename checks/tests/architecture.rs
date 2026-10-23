@@ -1593,6 +1593,11 @@ fn passes_registered() {
 
 // ---- writers take the world read-only ----
 
+/// Words in the names of a writer's public entry points (`write_file`, `MapSink::part`, `TilePlan::finish`, ...).
+const WRITER_WORDS: &[&str] = &[
+    "write", "prepare", "build", "part", "finish", "encode", "save", "emit", "export", "sink",
+];
+
 #[test]
 fn writers_read_only() {
     let mut found = BTreeSet::new();
@@ -1609,16 +1614,26 @@ fn writers_read_only() {
                 let Some(Tok::Ident(name)) = t.get(i + 2) else {
                     continue;
                 };
-                if !(name.contains("write") || name.contains("prepare")) {
+                if !WRITER_WORDS.iter().any(|w| name.contains(w)) {
                     continue;
                 }
                 let mut j = i + 3;
                 while j < t.len() && !punct(&t[j], '{') && !punct(&t[j], ';') {
-                    if punct(&t[j], '&')
-                        && t.get(j + 1).is_some_and(|x| ident(x, "mut"))
-                        && t.get(j + 2).is_some_and(|x| ident(x, "World"))
-                    {
-                        found.insert(format!("{file}: {name} takes &mut World"));
+                    if punct(&t[j], '&') && t.get(j + 1).is_some_and(|x| ident(x, "mut")) {
+                        // the type's last path segment: `World`, `primase_core::World`, `crate::World`
+                        let mut k = j + 2;
+                        let mut last = None;
+                        while let Some(x) = t.get(k) {
+                            match x {
+                                Tok::Ident(s) => last = Some(s.as_str()),
+                                Tok::Punct(':') => {}
+                                _ => break,
+                            }
+                            k += 1;
+                        }
+                        if last == Some("World") {
+                            found.insert(format!("{file}: {name} takes &mut World"));
+                        }
                     }
                     j += 1;
                 }
