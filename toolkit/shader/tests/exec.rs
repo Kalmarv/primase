@@ -735,3 +735,89 @@ fn a_resource_array_is_written_and_its_count_is_checked() {
         "{problems:?}"
     );
 }
+
+/// A pixel program over `uv` (TEXCOORD0, two lanes) whose `SV_Target0` is what `build` makes of the lanes.
+fn program_of(build: impl FnOnce(&mut Builder, Val, Val) -> Val) -> Program {
+    let mut b = Builder::new();
+    let f2 = b.ty_of(Kind::F, 2);
+    let uv = b.app(naga::Expression::FunctionArgument(0));
+    let uv = val(uv, Kind::F, 2);
+    let (x, y) = (b.lane(uv, 0), b.lane(uv, 1));
+    let colour = build(&mut b, x, y);
+    let out_ty = result_type(&mut b);
+    let out = b.app(naga::Expression::Compose {
+        ty: out_ty,
+        components: vec![colour.expr],
+    });
+    b.push(naga::Statement::Return { value: Some(out) });
+    let module = b.finish(
+        "main",
+        naga::ShaderStage::Fragment,
+        vec![argument("TEXCOORD0", f2)],
+        Some(out_ty),
+        false,
+    );
+    Program {
+        module,
+        stage: Stage::Pixel,
+        entry: "main".into(),
+        interface: Interface {
+            stage: Stage::Pixel,
+            inputs: vec![varying("TEXCOORD", 2, 0x3)],
+            outputs: vec![target()],
+            resources: Vec::new(),
+        },
+        bindings: Vec::new(),
+        conventions: Conventions::D3D,
+        modes: D3dModes::ALL,
+        provenance: provenance(),
+        notes: Vec::new(),
+    }
+}
+
+/// The inverse trigonometric and hyperbolic functions, the fused multiply-add and the float remainder, against the
+/// values f64 gives rounded once (and C's fmod: the sign of the dividend).
+#[test]
+fn trigonometry_fma_and_the_float_remainder() {
+    use naga::MathFunction as Mf;
+    let run = |program: Program, x: f32, y: f32| {
+        let shader = ProgramShader::new(program).unwrap();
+        lanes(
+            shader
+                .execute(&[bits([x, y, 0.0, 0.0])], &[], &mut Unused)
+                .unwrap()
+                .outputs[0],
+        )
+    };
+    let unary = program_of(|b, x, _| {
+        let f = |b: &mut Builder, fun| b.math(fun, &[x]);
+        let parts = [Mf::Acos, Mf::Asin, Mf::Atan, Mf::Tan].map(|fun| f(b, fun));
+        b.compose(&parts)
+    });
+    let hyperbolic = program_of(|b, x, _| {
+        let parts = [Mf::Sinh, Mf::Cosh, Mf::Tanh, Mf::Sinh].map(|fun| b.math(fun, &[x]));
+        b.compose(&parts)
+    });
+    let x = 0.3f32;
+    let want = |f: fn(f64) -> f64| f(x as f64) as f32;
+    assert_eq!(
+        run(unary, x, 0.0),
+        [want(f64::acos), want(f64::asin), want(f64::atan), want(f64::tan)]
+    );
+    assert_eq!(
+        run(hyperbolic, x, 0.0),
+        [want(f64::sinh), want(f64::cosh), want(f64::tanh), want(f64::sinh)]
+    );
+    let remainder = program_of(|b, x, y| {
+        let rem = b.binary(naga::BinaryOperator::Modulo, x, y);
+        let neg = b.unary(naga::UnaryOperator::Negate, x);
+        let rem_neg = b.binary(naga::BinaryOperator::Modulo, neg, y);
+        let z = b.lit_f(0.5);
+        let fused = b.math(Mf::Fma, &[x, y, z]);
+        b.compose(&[rem, rem_neg, fused, z])
+    });
+    assert_eq!(
+        run(remainder, 5.5, 2.0),
+        [1.5, -1.5, 5.5f32.mul_add(2.0, 0.5), 0.5]
+    );
+}
