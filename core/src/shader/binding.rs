@@ -6,6 +6,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::{Interface, Label, ResourceId, ResourceKind, Shader, Stage};
+use crate::TextureLayers;
 use crate::components::{Semantic, Texture, TextureFile};
 use crate::json::JsonError;
 use crate::pbr::Filters;
@@ -270,7 +271,8 @@ impl FrameTexture {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextureSource {
-    /// A texture entity (`core.texture` or `core.texture_file`), with the sampler state stored with it.
+    /// A texture entity (`core.texture`, `core.texture_layers` or `core.texture_file`), with the sampler state stored
+    /// with it.
     Texture { texture: Entity, sampler: SamplerState },
     /// No texture; the slot reads this value everywhere, and why.
     Default { value: [f32; 4], why: String },
@@ -858,7 +860,8 @@ impl StageBinding {
             )));
         }
         for (n, t) in self.textures.iter().enumerate() {
-            let Some(ResourceKind::Texture { dim, .. }) = interface.resource(t.resource).map(|r| &r.kind)
+            let Some(ResourceKind::Texture { dim, arrayed, .. }) =
+                interface.resource(t.resource).map(|r| &r.kind)
             else {
                 return Err(at(format!("resource {} is not a texture", t.resource.0)));
             };
@@ -885,13 +888,25 @@ impl StageBinding {
             {
                 return Err(at(format!("resource {} is not a sampler", s.0)));
             }
-            if let TextureSource::Texture { texture, .. } = &t.source
-                && !(w.has::<Texture>(*texture) || w.has::<TextureFile>(*texture))
-            {
-                return Err(at(format!(
-                    "texture slot {} binds an entity that is neither core.texture nor core.texture_file",
-                    t.resource.0
-                )));
+            if let TextureSource::Texture { texture, .. } = &t.source {
+                if !(w.has::<Texture>(*texture)
+                    || w.has::<TextureLayers>(*texture)
+                    || w.has::<TextureFile>(*texture))
+                {
+                    return Err(at(format!(
+                        "texture slot {} binds an entity that is neither core.texture, core.texture_layers nor core.texture_file",
+                        t.resource.0
+                    )));
+                }
+                // a texture of several images is read as the dimension its shape is
+                if let Some(layers) = w.get::<TextureLayers>(*texture)
+                    && layers.shape.dimension() != (*dim, *arrayed)
+                {
+                    return Err(at(format!(
+                        "texture slot {} is a {dim:?} resource (arrayed {arrayed}) and binds a {:?} texture",
+                        t.resource.0, layers.shape
+                    )));
+                }
             }
         }
         Ok(())
@@ -1366,6 +1381,48 @@ mod tests {
         assert_eq!(b.verify(m, &w), Ok(()));
         assert_eq!(FrameTexture::LightProbeVolume.dim(), TextureDim::D3);
         assert_eq!(FrameTexture::ShadowMap.dim(), TextureDim::D2);
+    }
+
+    /// A texture of several images fits a slot read as the dimension its shape is, and no other.
+    #[test]
+    fn a_layered_texture_fits_the_slot_of_its_shape() {
+        use crate::{TexFormat, TextureLayers, TextureShape};
+        let layers = |shape: TextureShape| TextureLayers {
+            shape,
+            width: 1,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![(0..shape.layers_at(0)).map(|_| vec![0; 4]).collect()],
+            color_space: crate::ColorSpace::Linear,
+            role: crate::TexRole::Other,
+            normal: None,
+        };
+        let (mut w, s, t, m) = world();
+        let b = w.get::<ShaderBinding>(m).unwrap().clone();
+        w.remove::<TextureFile>(t);
+        // the fixture's slot is a plain 2D texture: no layered shape is that
+        for shape in [
+            TextureShape::Array { layers: 2 },
+            TextureShape::Cube { cubes: 1 },
+            TextureShape::Volume { depth: 1 },
+        ] {
+            w.insert(t, layers(shape));
+            let why = b.verify(m, &w).unwrap_err();
+            assert!(
+                why.contains("is a D2 resource (arrayed false) and binds"),
+                "{why}"
+            );
+        }
+        // the slot read as an arrayed 2D texture takes an array and nothing else
+        let Kind::Texture { arrayed, .. } = &mut w.get_mut::<Shader>(s).unwrap().interface.resources[1].kind
+        else {
+            panic!("the fixture's second resource is a texture");
+        };
+        *arrayed = true;
+        w.insert(t, layers(TextureShape::Array { layers: 3 }));
+        assert_eq!(b.verify(m, &w), Ok(()));
+        w.insert(t, layers(TextureShape::Cube { cubes: 2 }));
+        assert!(b.verify(m, &w).is_err());
     }
 
     /// A variant key names a field, describes each part once, and describes one variant the same way on all its stages.

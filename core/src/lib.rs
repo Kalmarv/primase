@@ -61,6 +61,8 @@ pub use priority::{DROP_OPTIONAL, DropOptional, Priority};
 pub mod state;
 pub mod summary;
 pub mod texformat;
+mod texture_layers;
+pub use texture_layers::{TextureLayers, TextureShape};
 pub mod translate;
 pub mod world;
 

@@ -28,6 +28,7 @@ use crate::shader::{Shader, ShaderBinding};
 use crate::skeleton::Skeleton;
 use crate::skin::Skin;
 use crate::state::{Condition, PrimitiveCondition, StateAssignment, StateAxis, StateOverride};
+use crate::texture_layers::TextureLayers;
 use crate::vertex_color::VertexColor;
 use crate::world::{Component, Resource};
 
@@ -58,7 +59,8 @@ declared! {
     components: Collider, Heightfield, Name, Source, Transform, Instance, Shadows, Mesh, Texture, Light, Collision,
         TextureFile, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, Marker, Curve, MaterialUsage,
         PbrMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, Skin, Morphs, RigInstance,
-        RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding;
+        RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding,
+        TextureLayers;
     resources: PartScope, PartitionPlan, Environment, StateAssignment, Surfaces, Threads,
 }
 

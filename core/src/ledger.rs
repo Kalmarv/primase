@@ -9,8 +9,8 @@
 //! something out without saying so, or says so wrongly), never a reason to change content to satisfy the count.
 //!
 //! - **Placements**: entities with a `core.instance`. Exact: each one despawned, or that lost its instance, is a drop.
-//! - **Textures**: entities with a `core.texture` or a `core.texture_file`. Exact, by entity: loading a file into
-//!   pixels keeps the entity and is no drop; a texture despawned or left with neither is one.
+//! - **Textures**: entities with a `core.texture`, a `core.texture_layers` or a `core.texture_file`. Exact, by entity:
+//!   loading a file into pixels keeps the entity and is no drop; a texture despawned or left with none is one.
 //! - **Primitives**: the primitives of a `core.mesh`. Exact through [`World::rebuild_primitives`]: a source primitive
 //!   none of the rebuilt ones comes from is a drop. Meshes are told apart by identity ([`Mesh::new`] makes a new one; a
 //!   clone, an in-place edit and [`World::apply_linear`] keep it), never by their primitive count, and followed by it:
@@ -37,6 +37,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::TextureLayers;
 use crate::asset::Asset;
 use crate::clip::ClipBinding;
 use crate::components::{Instance, Mesh, Texture, TextureFile, Topology};
@@ -87,7 +88,7 @@ pub fn held(w: &World, e: Entity) -> Vec<(Measure, u64)> {
     if w.has::<Instance>(e) {
         out.push((Measure::Placements, 1));
     }
-    if w.has::<Texture>(e) || w.has::<TextureFile>(e) {
+    if w.has::<Texture>(e) || w.has::<TextureLayers>(e) || w.has::<TextureFile>(e) {
         out.push((Measure::Textures, 1));
     }
     if let Some(m) = w.get::<Mesh>(e) {
@@ -241,6 +242,7 @@ pub(crate) struct Before {
 impl Before {
     pub(crate) fn take(w: &World) -> Self {
         let mut textures: BTreeSet<Entity> = w.iter::<Texture>().map(|(e, _)| e).collect();
+        textures.extend(w.iter::<TextureLayers>().map(|(e, _)| e));
         textures.extend(w.iter::<TextureFile>().map(|(e, _)| e));
         Before {
             placements: w.iter::<Instance>().map(|(e, _)| e).collect(),
@@ -258,7 +260,7 @@ impl Before {
         let textures = self
             .textures
             .iter()
-            .filter(|&&e| !w.has::<Texture>(e) && !w.has::<TextureFile>(e))
+            .filter(|&&e| !w.has::<Texture>(e) && !w.has::<TextureLayers>(e) && !w.has::<TextureFile>(e))
             .count() as u64;
         let (mut primitives, mut tris) = (0u64, 0u64);
         let after: BTreeMap<Entity, (u64, Vec<u64>)> = w
