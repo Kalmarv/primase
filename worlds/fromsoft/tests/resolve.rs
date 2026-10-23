@@ -882,6 +882,7 @@ fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
         flags: 0,
         gxmd_key: 0,
         ca_param_block_size: 0,
+        ca_param_components: 0,
         unknown_30: 0,
         unknown_40: 0,
         unknown_50: 0,
