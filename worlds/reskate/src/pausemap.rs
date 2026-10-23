@@ -113,16 +113,6 @@ pub enum Paint<'a> {
     },
 }
 
-/// An sRGB byte value (as a float) in linear light.
-fn linear(c: f32) -> f32 {
-    let c = c / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
 /// One triangle's paint: its colour at barycentric weights.
 struct Painter<'a> {
     paint: &'a Paint<'a>,
@@ -185,7 +175,9 @@ impl<'a> Painter<'a> {
                 let uv = [0, 1].map(|c| (0..3).map(|k| b[k] * self.uv[k][c]).sum::<f32>());
                 let texel = pyramid.sample(uv, self.footprint, *wrap);
                 std::array::from_fn(|c| {
-                    f32::from(primase_image::linear_to_srgb8_f32(linear(texel[c]) * factor[c]))
+                    f32::from(primase_image::linear_to_srgb8_f32(
+                        primase_image::srgb_to_linear_f32(texel[c] / 255.0) * factor[c],
+                    ))
                 })
             }
         };

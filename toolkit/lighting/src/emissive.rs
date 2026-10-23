@@ -287,14 +287,6 @@ struct Decoded {
     mean: [f64; 3],
 }
 
-fn srgb_to_linear(c: f64) -> f64 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
 impl Decoded {
     /// The texel at `(u, v)` as linear RGB, wrapped as `wrap` says, nearest.
     fn sample(&self, uv: [f32; 2], wrap: [Wrap; 2]) -> [f64; 3] {
@@ -321,8 +313,11 @@ impl Decoded {
     }
 
     fn texel(&self, b: u8) -> f64 {
-        let v = f64::from(b) / 255.0;
-        if self.srgb { srgb_to_linear(v) } else { v }
+        if self.srgb {
+            primase_image::srgb8_to_linear(b)
+        } else {
+            f64::from(b) / 255.0
+        }
     }
 
     fn decode(t: &Texture, e: Entity) -> Result<Decoded, String> {

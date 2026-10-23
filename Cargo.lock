@@ -1274,6 +1274,7 @@ name = "primase-lighting"
 version = "0.1.0"
 dependencies = [
  "primase-core",
+ "primase-image",
  "primase-meshops",
  "primase-texcodec",
 ]

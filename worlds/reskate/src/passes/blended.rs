@@ -40,6 +40,7 @@ use primase_core::{
     DrawLayer, DrawOrder, Entity, MaterialUsage, MaterialVariants, Mesh, Name, Semantic, Stream, Texture,
     Topology, World,
 };
+use primase_image::srgb8_to_linear_f32;
 use primase_texcodec::{Decoder, TexDecoder};
 
 /// Which blended materials become cutouts.
@@ -170,16 +171,6 @@ fn kept_blended(w: &World, e: Entity) -> Option<&'static str> {
         Some("water")
     } else {
         None
-    }
-}
-
-/// An sRGB byte in linear light (the IEC 61966-2-1 curve).
-fn linear(b: u8) -> f32 {
-    let c = f32::from(b) / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
     }
 }
 
@@ -440,8 +431,13 @@ fn judge(
         .map(|(p, _)| p)
         .collect();
     let n = base.len().max(1) as f64;
-    let mean: [f32; 3] =
-        std::array::from_fn(|c| (base.iter().map(|p| f64::from(linear(p[c]))).sum::<f64>() / n) as f32);
+    let mean: [f32; 3] = std::array::from_fn(|c| {
+        (base
+            .iter()
+            .map(|p| f64::from(srgb8_to_linear_f32(p[c])))
+            .sum::<f64>()
+            / n) as f32
+    });
     Ok(Judged {
         uniform: Some((
             m.base_color[3] * f32::from(alpha) / 255.0,
@@ -951,7 +947,7 @@ mod tests {
         frost().run(&mut w, &mut PassLog::default()).unwrap();
         let mat = w.get::<PbrMaterial>(m).unwrap();
         assert_eq!(mat.alpha_mode, AlphaMode::Opaque);
-        let island = linear(200);
+        let island = srgb8_to_linear_f32(200);
         assert!((mat.base_color[0] - (0.35 * island + 0.65 * 0.8)).abs() < 1e-5);
         // unplaced: the whole atlas, varying
         let mut w = World::new();
