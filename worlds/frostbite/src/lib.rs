@@ -22,6 +22,7 @@ pub mod geometry;
 pub mod inputlayout;
 pub mod lookup;
 pub mod meshset;
+pub mod passes;
 pub mod permutation;
 mod read;
 pub mod texture;
