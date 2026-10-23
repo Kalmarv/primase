@@ -226,9 +226,10 @@ impl Track {
         let mut out = [0.0f32; 4];
         let mut n = 0usize;
         for (i, c) in self.channels.iter().enumerate() {
-            let part: Vec<f32> = match c {
-                Channel::StaticQuaternion(v) => vec![v[0], v[1], v[2], root_of_rest(*v)],
-                Channel::StaticVector3(v) => v.to_vec(),
+            // the values the channel supplies, at most four, without an allocation (this runs for every frame)
+            let (part, count): ([f32; 4], usize) = match c {
+                Channel::StaticQuaternion(v) => ([v[0], v[1], v[2], root_of_rest(*v)], 4),
+                Channel::StaticVector3(v) => ([v[0], v[1], v[2], 0.0], 3),
                 Channel::Cached { .. } => {
                     if n < 4 {
                         return Err(err(
@@ -236,11 +237,11 @@ impl Track {
                             "a cached component in a track of fewer than four stored ones",
                         ));
                     }
-                    Vec::new()
+                    ([0.0; 4], 0)
                 }
-                _ => vec![scalar(i)?],
+                _ => ([scalar(i)?, 0.0, 0.0, 0.0], 1),
             };
-            for v in part {
+            for v in part.into_iter().take(count) {
                 if let Some(slot) = out.get_mut(n) {
                     *slot = v;
                     n = n.saturating_add(1);
