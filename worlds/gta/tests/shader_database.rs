@@ -130,3 +130,83 @@ fn programs_become_shader_entities_and_effects_name_them() {
         .collect();
     assert_eq!(entities.len(), 3);
 }
+
+/// A material's shader names its effect by the joaat of the effect's lowercase name: the materials with such a name are
+/// linked to that effect, any other is left out and counted by its name, and two effects of one hash link nothing.
+#[test]
+fn a_material_joins_the_effect_its_name_hashes_to() {
+    use primase_gta::components::{GtaMaterialEffect, GtaShader};
+    use primase_gta::read::shaders::join_materials;
+
+    let vs = fixture("vertex.dxil");
+    let groups = [
+        vec![("VS_a_Wrapped", vs)],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    ];
+    let lists = || [vec![0], vec![], vec![], vec![], vec![], vec![]];
+    let effects = [("Default", lists()), ("default_tnt", lists())];
+    let bytes = database(groups, &effects);
+    let db = sgd2::parse(&bytes).unwrap();
+    let mut w = World::new();
+    let table = add_shader_database(&mut w, &db);
+    let material = |w: &mut World, name: u32| {
+        let m = w.spawn();
+        w.insert(
+            m,
+            GtaShader {
+                drawable: "a.ydr".into(),
+                index: 0,
+                name,
+                preset: 0,
+                render_bucket: 0,
+                bucket_mask: 0,
+                params: Vec::new(),
+            },
+        );
+        m
+    };
+    let hash = |n: &str| primase_hash::joaat(n.as_bytes());
+    let a = material(&mut w, hash("default"));
+    let b = material(&mut w, hash("default"));
+    let c = material(&mut w, hash("default_tnt"));
+    let d = material(&mut w, hash("nothing_like_it"));
+    let join = join_materials(&mut w, &table.effects);
+    assert_eq!((join.joined, join.effects_used), (3, 2));
+    assert_eq!(join.unjoined.get(&hash("nothing_like_it")), Some(&1));
+    assert!(join.ambiguous.is_empty());
+    // the effect's name is matched in lowercase
+    assert_eq!(w.get::<GtaMaterialEffect>(a).unwrap().effect, table.effects[0]);
+    assert_eq!(w.get::<GtaMaterialEffect>(b).unwrap().effect, table.effects[0]);
+    assert_eq!(w.get::<GtaMaterialEffect>(c).unwrap().effect, table.effects[1]);
+    assert!(w.get::<GtaMaterialEffect>(d).is_none());
+    assert!(w.verify_components().is_empty());
+
+    // two effects with one name hash: the name does not say which, so nothing is linked
+    let twice = database(
+        [
+            vec![("VS_a_Wrapped", fixture("vertex.dxil"))],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ],
+        &[("same", lists()), ("SAME", lists())],
+    );
+    let db = sgd2::parse(&twice).unwrap();
+    let mut w = World::new();
+    let table = add_shader_database(&mut w, &db);
+    let m = material(&mut w, hash("same"));
+    let join = join_materials(&mut w, &table.effects);
+    assert_eq!((join.joined, join.ambiguous.len()), (0, 1));
+    assert_eq!(join.unjoined.get(&hash("same")), Some(&1));
+    assert!(w.get::<GtaMaterialEffect>(m).is_none());
+}

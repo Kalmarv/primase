@@ -8,7 +8,7 @@
 //! | LOD form | `core.mesh` and [`GtaSources`] (one of the drawable's coarser LODs), [`GtaBlendStreams`] likewise, unplaced |
 //! | material | [`GtaShader`] (one per drawable and shader) |
 //! | texture | `core.texture`, `core.name`, `core.source` |
-//! | effect | [`GtaEffect`] (the programs a drawable's shader name selects) |
+//! | effect | [`GtaEffect`] (the programs a drawable's shader name selects), [`GtaMaterialEffect`] (a material's effect) |
 //! | shader program | `core.shader`, `core.name` |
 
 pub mod collision;
@@ -262,6 +262,32 @@ impl Component for GtaEffect {
     }
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.programs.iter().filter_map(|p| p.shader));
+    }
+}
+
+/// The effect of the shader database a drawable's shader selects, on the material entity that holds the
+/// [`GtaShader`]: the effect whose name hashes (joaat, lowercase) to the shader's `name`. The effect's programs are the
+/// ones its [`GtaEffect`] names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct GtaMaterialEffect {
+    pub effect: Entity,
+}
+
+impl Component for GtaMaterialEffect {
+    const NAME: &'static str = "gta.material_effect";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.effect);
+    }
+    fn verify(&self, _e: Entity, w: &primase_core::World) -> Result<(), String> {
+        if w.has::<GtaEffect>(self.effect) {
+            Ok(())
+        } else {
+            Err(format!("{:?} is no gta.effect", self.effect))
+        }
     }
 }
 

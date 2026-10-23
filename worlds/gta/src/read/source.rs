@@ -21,6 +21,10 @@ use crate::read::assets::{AssetReport, LightsReport, Lookup, Lookups, attach_ass
 use crate::read::collision::{BoundsReport, attach_map_bounds};
 use crate::read::gtxd::TextureParents;
 use crate::read::region::{Region, RegionReport, States, archive_sets, read_region};
+use crate::read::shaders::{EffectJoin, ShaderTable, add_shader_database, join_materials};
+
+/// The file name of the Enhanced shader database.
+const SHADER_DATABASE: &str = "sga_win32_60_final.awc";
 
 /// What reading a region did.
 #[derive(Clone, Debug)]
@@ -77,6 +81,37 @@ impl GtaSource {
     /// The opened install: its archives and their files ([`Install::listing`]).
     pub fn install(&self) -> &Install {
         &self.story.install
+    }
+
+    /// The Enhanced shader database of the install ([`crate::read::shaders`]: its programs as `core.shader` entities and
+    /// its effects as `gta.effect`) added to `w`, and every material of `w` linked to its effect
+    /// ([`crate::read::shaders::join_materials`]). The database is the install's `sga_win32_60_final.awc` of the
+    /// `fxdb` folder, found by the listing; an install with none, or with several, is an error. Reads and lifts the
+    /// interface of about 11,000 programs: call it once per world.
+    pub fn add_shader_database(&self, w: &mut World) -> Result<(ShaderTable, EffectJoin)> {
+        let mut found = self
+            .install()
+            .listing()
+            .filter(|f| f.name.eq_ignore_ascii_case(SHADER_DATABASE) && f.path.contains("\\fxdb\\"));
+        let file = found.next().ok_or_else(|| {
+            crate::invalid(
+                "shader database",
+                0,
+                format!("no {SHADER_DATABASE} in the install"),
+            )
+        })?;
+        if found.next().is_some() {
+            return Err(crate::invalid(
+                "shader database",
+                0,
+                format!("more than one {SHADER_DATABASE} in the install"),
+            ));
+        }
+        let bytes = self.install().binary(file.file, self.keys())?;
+        let db = crate::rage::sgd2::parse(&bytes)?;
+        let table = add_shader_database(w, &db);
+        let join = join_materials(w, &table.effects);
+        Ok((table, join))
     }
 
     pub(crate) fn keys(&self) -> &Keys {
