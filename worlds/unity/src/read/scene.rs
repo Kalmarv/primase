@@ -154,6 +154,18 @@ pub struct SceneJoint {
     pub scale: [f64; 3],
 }
 
+/// An Animator component: the GameObject it animates (its Transform is the root of the paths its clips name), the
+/// controller that lists its clips and its avatar; a null pointer is `None`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Animator {
+    pub animator: ObjRef,
+    pub game_object: i64,
+    pub path: String,
+    pub controller: Option<ObjRef>,
+    pub avatar: Option<ObjRef>,
+    pub enabled: bool,
+}
+
 /// A skinned renderer's bones: the Transforms (path ids in the renderer's file) its mesh's bone slots name, in slot
 /// order, and its root bone; a null entry stays `None`.
 #[derive(Clone, Debug, PartialEq)]
@@ -516,6 +528,63 @@ impl Scene {
             rotation: n.trs.1,
             scale: n.trs.2,
         }))
+    }
+
+    /// The names of the GameObjects from the child of Transform `root` down to Transform `tp` joined by `/` (empty
+    /// for `root` itself): a path as an Animator's clips name their targets. `None` when `root` is not `tp` or one of
+    /// its ancestors.
+    pub fn path_below(&self, tp: i64, root: i64) -> Option<String> {
+        let mut names = Vec::new();
+        let mut t = tp;
+        while t != root {
+            let n = self.nodes.get(&t)?;
+            names.push(
+                self.game_objects
+                    .get(&n.game_object)
+                    .map_or("", |g| g.name.as_str()),
+            );
+            if n.father == 0 || names.len() > self.nodes.len() {
+                return None;
+            }
+            t = n.father;
+        }
+        names.reverse();
+        Some(names.join("/"))
+    }
+
+    /// The Animators of the file, in the order of its object table.
+    pub fn animators(&self, player: &Player) -> Result<Vec<Animator>> {
+        let file = self.file.as_str();
+        let r = |pid: i64| ObjRef {
+            file: file.to_owned(),
+            path_id: pid,
+        };
+        let mut out = Vec::new();
+        for o in &player.file(file)?.objects {
+            if player.class_name(&r(o.path_id)) != Some("Animator") {
+                continue;
+            }
+            let a = player.decode(&r(o.path_id))?;
+            let go = path_id(&a, "m_GameObject")?;
+            let Some(tp) = self.transform_of(go) else {
+                continue;
+            };
+            let pointer = |k: &str| -> Result<Option<ObjRef>> {
+                a.get(k)
+                    .map(|p| player.resolve(file, p))
+                    .transpose()
+                    .map(Option::flatten)
+            };
+            out.push(Animator {
+                animator: r(o.path_id),
+                game_object: go,
+                path: self.path(tp),
+                controller: pointer("m_Controller")?,
+                avatar: pointer("m_Avatar")?,
+                enabled: a.get("m_Enabled").is_none_or(flag_value),
+            });
+        }
+        Ok(out)
     }
 
     /// A Transform's local matrix.

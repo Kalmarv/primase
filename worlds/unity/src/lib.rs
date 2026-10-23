@@ -55,8 +55,8 @@ pub use read::typetree::TypeTree;
 pub use read::value::Value;
 pub use read::version::UnityVersion;
 pub use read::{
-    asset, convert, level, listing, material, mesh, player, program, resource, scene, serialized, terrain,
-    texture, tpk, typetree, value, version,
+    asset, clip, convert, level, listing, material, mesh, player, program, resource, scene, serialized,
+    terrain, texture, tpk, typetree, value, version,
 };
 
 /// Registers the Unity passes by name: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,

@@ -2,6 +2,7 @@
 //! resources beside them, and the objects read from them.
 
 pub mod asset;
+pub mod clip;
 pub mod convert;
 pub mod level;
 pub mod listing;

@@ -38,9 +38,9 @@ use serde::Serialize;
 use primase_core::skin::SUM_TOLERANCE;
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{
-    Binding, BindingId, Deformation, Entity, Influences, Instance, Joint, JointId, LodForm, Lods,
-    MaterialVariants, Mesh, Name, Rest, RigInstance, ShadowCast, Shadows, Skeleton, Skin, SkinInstance, Slot,
-    Source, Transform, WeightRule, World,
+    Binding, BindingId, ClipBinding, Deformation, Entity, Influences, Instance, Joint, JointId, LodForm,
+    Lods, MaterialVariants, Mesh, Name, Rest, RigInstance, ShadowCast, Shadows, Skeleton, Skin, SkinInstance,
+    Slot, Source, Transform, WeightRule, World,
 };
 
 use crate::components::{
@@ -49,6 +49,7 @@ use crate::components::{
     UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture, UnityTree,
     UnityTreeInstance,
 };
+use crate::read::clip::{ClipData, controller_clips, path_hash};
 use crate::read::material::{ShaderData, UnityMaterialData};
 use crate::read::mesh::{MeshSkin, SkinWeights, UnityMeshData};
 use crate::read::player::{ObjRef, Player, QualityLevel};
@@ -138,6 +139,12 @@ pub struct LevelReport {
     pub skinned_renderers: usize,
     pub skeletons: usize,
     pub joints: usize,
+    /// Animators with a controller that animate a skeleton read, the clips made for them (a clip per skeleton it
+    /// moves), their bindings to rigs and the joint channels in them.
+    pub animators: usize,
+    pub clips: usize,
+    pub clip_bindings: usize,
+    pub clip_channels: usize,
     /// RenderSettings names a sun (`unity.render_settings` holds it when it is a light read).
     pub sun_named: bool,
     /// Colliders read: those that collide, and those that do not by reason (inactive or disabled, trigger,
@@ -197,6 +204,15 @@ struct SkinBuild {
     bindings: Vec<(Entity, Vec<JointId>)>,
 }
 
+/// What [`build_rigs`] made: per renderer its rig, each joint's Transform with its skeleton, rig and joint, and the
+/// numbers of skeletons and joints.
+struct Rigs {
+    renderers: Vec<Option<RigOf>>,
+    of_joint: BTreeMap<i64, (Entity, Entity, JointId)>,
+    skeletons: usize,
+    joints: usize,
+}
+
 /// What [`build_rigs`] made for one skinned renderer: the skeleton and rig its bones are joints of, and the joint of
 /// each bone slot.
 type RigOf = (Entity, Entity, Vec<JointId>);
@@ -228,11 +244,7 @@ fn chain_of(scene: &Scene, joints: &mut BTreeMap<i64, SceneJoint>, t: i64) -> Re
 /// characters under one parent are not. Joints are in path id order (`JointId` their position), each with its local
 /// position, rotation and scale as stored, in the world frame; the rig sits where its top joint's parent does (the
 /// identity for a scene root). One entry per renderer, and the number of skeletons and joints made.
-fn build_rigs(
-    w: &mut World,
-    scene: &Scene,
-    skins: &[&RendererSkin],
-) -> Result<(Vec<Option<RigOf>>, usize, usize)> {
+fn build_rigs(w: &mut World, scene: &Scene, skins: &[&RendererSkin]) -> Result<Rigs> {
     let mut joints: BTreeMap<i64, SceneJoint> = BTreeMap::new();
     // each renderer's joint set
     let mut sets: Vec<Option<BTreeSet<i64>>> = Vec::with_capacity(skins.len());
@@ -355,7 +367,16 @@ fn build_rigs(
             None => None,
         });
     }
-    Ok((out, made.len(), joint_count))
+    let of_joint = made
+        .values()
+        .flat_map(|(skeleton, rig, id)| id.iter().map(move |(t, joint)| (*t, (*skeleton, *rig, *joint))))
+        .collect();
+    Ok(Rigs {
+        renderers: out,
+        of_joint,
+        skeletons: made.len(),
+        joints: joint_count,
+    })
 }
 
 /// What a renderer is in its scene's LODGroups.
@@ -664,6 +685,129 @@ impl Builder<'_> {
         for (what, n) in notices {
             *self.report.notices.entry(what.to_owned()).or_default() += n;
         }
+    }
+
+    /// The clips of every Animator of `scene` that has a controller and animates joints of the skeletons in `joint_of`
+    /// (a Transform's skeleton, rig and joint): each clip lowered for each skeleton its Animator holds (a joint's path
+    /// below the Animator's GameObject is its CRC-32, as a clip names its targets) as a `core.clip`, and bound to the
+    /// rig by a `core.clip_binding`. What a clip drives that is no joint, and clips that cannot be read, are counted in
+    /// the notices.
+    fn bind_clips(
+        &mut self,
+        w: &mut World,
+        scene: &Scene,
+        joint_of: &BTreeMap<i64, (Entity, Entity, JointId)>,
+    ) -> Result<()> {
+        let mut data: BTreeMap<ObjRef, Option<ClipData>> = BTreeMap::new();
+        let mut made: BTreeMap<(ObjRef, Entity), Option<Entity>> = BTreeMap::new();
+        let mut bound: BTreeSet<(Entity, Entity)> = BTreeSet::new();
+        let mut controllers: BTreeMap<ObjRef, Vec<ObjRef>> = BTreeMap::new();
+        for animator in scene.animators(self.player)? {
+            let Some(controller) = &animator.controller else {
+                continue;
+            };
+            let Some(tp) = scene.transform_of(animator.game_object) else {
+                continue;
+            };
+            // the joints below the Animator's GameObject, by skeleton, each by the hash of its path
+            let mut rigs: BTreeMap<Entity, (Entity, BTreeMap<u32, JointId>)> = BTreeMap::new();
+            for (&t, &(skeleton, rig, joint)) in joint_of {
+                let Some(path) = scene.path_below(t, tp) else {
+                    continue;
+                };
+                let hashes = &mut rigs.entry(skeleton).or_insert_with(|| (rig, BTreeMap::new())).1;
+                if hashes.insert(path_hash(&path), joint).is_some() {
+                    self.notice(
+                        "joints of an Animator's rig sharing a path (the clips drive the last)",
+                        1,
+                    );
+                }
+            }
+            if rigs.is_empty() {
+                self.notice(
+                    "Animators with a controller that animate no skinned skeleton (not bound)",
+                    1,
+                );
+                continue;
+            }
+            self.report.animators += 1;
+            if self.player.class_name(controller) != Some("AnimatorController") {
+                self.notice(
+                    "Animators whose controller is not an AnimatorController (clips not read)",
+                    1,
+                );
+                continue;
+            }
+            if !controllers.contains_key(controller) {
+                controllers.insert(controller.clone(), controller_clips(self.player, controller)?);
+            }
+            for clip in &controllers[controller] {
+                if !data.contains_key(clip) {
+                    let read = match ClipData::read(self.player, clip) {
+                        Ok(d) => Some(d),
+                        Err(crate::Error::Unsupported(why)) => {
+                            self.notice(&format!("animation clips not read: {why}"), 1);
+                            None
+                        }
+                        Err(e) => return Err(e),
+                    };
+                    data.insert(clip.clone(), read);
+                }
+                let Some(d) = &data[clip] else { continue };
+                for (&skeleton, (rig, hashes)) in &rigs {
+                    let entity = match made.get(&(clip.clone(), skeleton)) {
+                        Some(e) => *e,
+                        None => {
+                            let (lowered, report) =
+                                d.lower(&|hash| hashes.get(&hash).map(|j| (skeleton, *j)))?;
+                            for (kind, n) in &report.unresolved {
+                                self.notice(
+                                    &format!("animation clip {kind} curves of Transforms that are no joint of the rig"),
+                                    *n as u64,
+                                );
+                            }
+                            for (kind, n) in &report.not_lowered {
+                                self.notice(&format!("animation clip curves not lowered: {kind}"), *n as u64);
+                            }
+                            self.notice(
+                                "animation clip rotation keys renormalised to unit length",
+                                report.renormalised_keys as u64,
+                            );
+                            let entity = if report.channels == 0 {
+                                self.notice("animation clips that drive no joint of a rig (not made)", 1);
+                                None
+                            } else {
+                                let e = w.spawn();
+                                self.report.clips += 1;
+                                self.report.clip_channels += report.channels;
+                                w.insert(e, Name(d.name.clone()));
+                                w.insert(e, Source(format!("unity clip {}/{}", clip.file, clip.path_id)));
+                                w.insert(e, lowered);
+                                Some(e)
+                            };
+                            made.insert((clip.clone(), skeleton), entity);
+                            entity
+                        }
+                    };
+                    if let Some(clip_entity) = entity
+                        && bound.insert((clip_entity, *rig))
+                    {
+                        let e = w.spawn();
+                        w.insert(e, Name(format!("{} on {}", d.name, animator.path)));
+                        w.insert(
+                            e,
+                            ClipBinding {
+                                clip: clip_entity,
+                                rig: Some(*rig),
+                                meshes: Vec::new(),
+                            },
+                        );
+                        self.report.clip_bindings += 1;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Count what was read differently from how it is stored ([`LevelReport::notices`]).
@@ -1264,12 +1408,14 @@ pub fn read_level_with(
         }
     }
     let mut skinning: BTreeMap<ObjRef, Skinning> = BTreeMap::new();
+    let mut joint_of: BTreeMap<i64, (Entity, Entity, JointId)> = BTreeMap::new();
     if !candidates.is_empty() {
         let skins: Vec<&RendererSkin> = candidates.iter().map(|(_, s)| *s).collect();
-        let (made, skeletons, joints) = build_rigs(w, &scene, &skins)?;
-        b.report.skeletons = skeletons;
-        b.report.joints = joints;
-        for ((r, _), rig) in candidates.iter().zip(made) {
+        let made = build_rigs(w, &scene, &skins)?;
+        b.report.skeletons = made.skeletons;
+        b.report.joints = made.joints;
+        joint_of = made.of_joint;
+        for ((r, _), rig) in candidates.iter().zip(made.renderers) {
             match rig {
                 Some((skeleton, rig, joints)) => {
                     skinning.insert(
@@ -1612,6 +1758,10 @@ pub fn read_level_with(
                 bindings,
             },
         );
+    }
+    // the clips of the Animators that animate the skeletons made: a clip lowered for each skeleton, bound to its rig
+    if !joint_of.is_empty() {
+        b.bind_clips(w, &scene, &joint_of)?;
     }
     // colliders: the scene's, then the terrain trees'
     for c in scene.colliders_under(player, None)? {
