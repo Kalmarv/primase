@@ -50,4 +50,20 @@ impl Executable {
         })?;
         compile::compile(program, &info).map_err(error)
     }
+
+    /// Whether the program needs the other lanes of its 2 x 2 quad: it takes a screen derivative, or samples at an
+    /// implicit level of detail (`sample`, `sample_b`), whose footprint is the quad's. A program that does not runs
+    /// the same one invocation at a time as in a quad.
+    pub fn needs_quad(&self) -> bool {
+        self.ops.iter().any(|(_, op)| {
+            matches!(
+                op,
+                flat::Op::Deriv { .. }
+                    | flat::Op::Sample {
+                        level: flat::LevelOp::Auto | flat::LevelOp::Bias(_),
+                        ..
+                    }
+            )
+        })
+    }
 }

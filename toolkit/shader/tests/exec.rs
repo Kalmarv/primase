@@ -313,6 +313,8 @@ fn lanes(x: [u32; 4]) -> [f32; 4] {
 #[test]
 fn a_scalar_run_reads_the_derivatives_the_caller_states() {
     let shader = ProgramShader::new(derivative_program()).unwrap();
+    assert!(shader.needs_quad());
+    assert!(!ProgramShader::new(branch_program()).unwrap().needs_quad());
     assert_eq!(shader.input_count(), 1);
     assert_eq!(shader.constant_buffers(), &[(3, 1)]);
     let cb = [bits([2.0, 3.0, 0.0, 0.0])];

@@ -203,6 +203,11 @@ impl ProgramShader {
         &self.program
     }
 
+    /// Whether a caller that wants this program's exact results must run it as a quad ([`Executable::needs_quad`]).
+    pub fn needs_quad(&self) -> bool {
+        self.executable.needs_quad()
+    }
+
     /// The entry arguments for one invocation's input registers.
     fn arguments_of(&self, inputs: &[[u32; 4]]) -> Result<Vec<[u32; 4]>, Error> {
         if inputs.len() < self.input_count {
