@@ -2272,7 +2272,7 @@ impl LowerAnvilTerrain {
             for &gx in g.columns {
                 let mut at: Vec<(u8, f64)> = Vec::new();
                 let mut far = 0.0f64;
-                let corners = lookup.corners(x_of(gx), y_of(gy));
+                let corners = lookup.corners(x_of(gx), y_of(gy))?;
                 if layers.occlusion {
                     occlusion.push(
                         corners

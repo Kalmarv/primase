@@ -106,16 +106,21 @@ impl Levels {
     }
 
     /// Bilinear at `uv` of level `level`, in f64: weights `(1 - tx)(1 - ty)`, `tx (1 - ty)`, `(1 - tx) ty`, `tx ty`
-    /// summed in that order.
+    /// summed in that order. A coordinate that isn't finite or past an i32's range is refused.
     pub fn bilinear(
         &self,
         level: usize,
         uv: [f64; 2],
         address: [Address; 2],
         transfer: Transfer,
-    ) -> [f64; 4] {
+    ) -> Result<[f64; 4]> {
         let (w, h) = self.size(level);
         let (x, y) = (uv[0] * f64::from(w) - 0.5, uv[1] * f64::from(h) - 0.5);
+        if !x.is_finite() || !y.is_finite() || x.abs() >= 2147483520.0 || y.abs() >= 2147483520.0 {
+            return Err(Error::Invalid(
+                "sampled texture: nonfinite or excessive texel coordinate".into(),
+            ));
+        }
         let (fx, fy) = (x.floor(), y.floor());
         let (tx, ty) = (x - fx, y - fy);
         let (ix, iy) = (fx as i64, fy as i64);
@@ -135,7 +140,7 @@ impl Levels {
                     };
             }
         }
-        out
+        Ok(out)
     }
 
     /// Level `level` decoded once to f32 by `transfer`, for [`Decoded::bilinear`].
@@ -171,7 +176,7 @@ pub fn footprint_lod(width: u32, height: u32, gradients: [[f64; 2]; 2], bias: f6
 impl Levels {
     /// Trilinear at `uv`: the level of detail `lod` clamped to the stored levels, the bilinear values
     /// ([`Levels::bilinear`]) of the level below it and the next mixed by its fraction (`a + (b - a) f`); a level
-    /// of detail that isn't a number is refused.
+    /// of detail that isn't a number, or a coordinate [`Levels::bilinear`] refuses, is refused.
     pub fn trilinear(
         &self,
         uv: [f64; 2],
@@ -188,11 +193,11 @@ impl Levels {
         let lod = lod.clamp(0.0, last as f64);
         let below = lod.floor();
         let (l0, f) = (below as usize, lod - below);
-        let a = self.bilinear(l0, uv, address, transfer);
+        let a = self.bilinear(l0, uv, address, transfer)?;
         if f == 0.0 {
             return Ok(a);
         }
-        let b = self.bilinear((l0 + 1).min(last), uv, address, transfer);
+        let b = self.bilinear((l0 + 1).min(last), uv, address, transfer)?;
         Ok(std::array::from_fn(|c| a[c] + (b[c] - a[c]) * f))
     }
 }
@@ -270,16 +275,28 @@ mod tests {
         let l = Levels::one(2, 1, vec![0, 0, 0, 0, 255, 255, 255, 255]).unwrap();
         let wrap = [Address::Wrap; 2];
         let clamp = [Address::Clamp; 2];
-        assert_eq!(l.bilinear(0, [0.5, 0.5], wrap, Transfer::Stored), [0.5; 4]);
-        assert_eq!(l.bilinear(0, [0.25, 0.5], wrap, Transfer::Stored), [0.0; 4]);
-        assert_eq!(l.bilinear(0, [0.0, 0.5], wrap, Transfer::Stored), [0.5; 4]);
-        assert_eq!(l.bilinear(0, [0.0, 0.5], clamp, Transfer::Stored), [0.0; 4]);
+        assert_eq!(
+            l.bilinear(0, [0.5, 0.5], wrap, Transfer::Stored).unwrap(),
+            [0.5; 4]
+        );
+        assert_eq!(
+            l.bilinear(0, [0.25, 0.5], wrap, Transfer::Stored).unwrap(),
+            [0.0; 4]
+        );
+        assert_eq!(
+            l.bilinear(0, [0.0, 0.5], wrap, Transfer::Stored).unwrap(),
+            [0.5; 4]
+        );
+        assert_eq!(
+            l.bilinear(0, [0.0, 0.5], clamp, Transfer::Stored).unwrap(),
+            [0.0; 4]
+        );
         let d = l.decoded(0, Transfer::SrgbColour);
         let half = d.bilinear([0.5, 0.5], wrap).unwrap();
         assert!(half.iter().all(|c| (c - 0.5).abs() < 1e-6), "{half:?}");
         // a 50% grey texel: its sRGB colour decodes to linear 0.2158...; its alpha stays 128/255
         let g = Levels::one(1, 1, vec![128, 128, 128, 128]).unwrap();
-        let c = g.bilinear(0, [0.5, 0.5], wrap, Transfer::SrgbColour);
+        let c = g.bilinear(0, [0.5, 0.5], wrap, Transfer::SrgbColour).unwrap();
         assert!(
             (c[0] - crate::srgb_to_linear(128.0 / 255.0)).abs() < 1e-15
                 && (c[3] - 128.0 / 255.0).abs() < 1e-15
@@ -306,5 +323,24 @@ mod tests {
         let at = |lod| l.trilinear([0.5, 0.5], lod, wrap, Transfer::Stored).unwrap()[0];
         assert_eq!((at(-1.0), at(0.25), at(1.0), at(7.0)), (0.0, 0.25, 1.0, 1.0));
         assert!(l.trilinear([0.5, 0.5], f64::NAN, wrap, Transfer::Stored).is_err());
+    }
+
+    /// A coordinate that isn't finite, or whose texel is past an i32's range, is refused, never sampled (NaN texels)
+    /// and never an overflow: in both precisions.
+    #[test]
+    fn nonfinite_or_excessive_coordinates_are_refused() {
+        let l = Levels::one(2, 2, vec![10; 16]).unwrap();
+        let wrap = [Address::Wrap; 2];
+        for uv in [[f64::NAN, 0.5], [0.5, f64::INFINITY], [1e300, 0.5], [0.5, -1e12]] {
+            assert!(l.bilinear(0, uv, wrap, Transfer::Stored).is_err(), "{uv:?}");
+            assert!(l.trilinear(uv, 0.0, wrap, Transfer::Stored).is_err(), "{uv:?}");
+            assert!(
+                l.decoded(0, Transfer::Stored)
+                    .bilinear(uv.map(|v| v as f32), wrap)
+                    .is_err(),
+                "{uv:?}"
+            );
+        }
+        assert!(l.trilinear([1e8, -1e8], 0.0, wrap, Transfer::Stored).is_ok());
     }
 }

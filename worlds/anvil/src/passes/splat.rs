@@ -278,35 +278,38 @@ impl<'t> Lookup<'t> {
 
     /// The four material texels about `(x, y)` (source units) and their blend; `None` where the point's own node
     /// isn't read.
-    pub fn corners(&self, x: f64, y: f64) -> Option<Corners> {
+    pub fn corners(&self, x: f64, y: f64) -> Result<Option<Corners>, String> {
         let (gx, gy) = (
             (x - self.origin[0]) / self.texel,
             (y - self.origin[1]) / self.texel,
         );
         let (nx, ny) = (gx.div_euclid(128.0), gy.div_euclid(128.0));
         if !self.nodes.contains_key(&(ny as i64, nx as i64)) {
-            return None;
+            return Ok(None);
         }
         let (lx, ly) = (gx - nx * 128.0, gy - ny * 128.0);
-        let n = self.noise.bilinear(
-            0,
-            [lx / 128.0, ly / 128.0],
-            [Address::Wrap; 2],
-            self.noise_transfer,
-        );
+        let n = self
+            .noise
+            .bilinear(
+                0,
+                [lx / 128.0, ly / 128.0],
+                [Address::Wrap; 2],
+                self.noise_transfer,
+            )
+            .map_err(|e| e.to_string())?;
         let (qx, qy) = (gx + (2.0 * n[0] - 1.0) * 0.5, gy + (2.0 * n[1] - 1.0) * 0.5);
         let (cx, cy) = (qx.floor() as i64, qy.floor() as i64);
         let (fx, fy) = (qx - qx.floor() - 0.5, qy - qy.floor() - 0.5);
         let (sx, sy) = (if fx >= 0.0 { 1 } else { -1 }, if fy >= 0.0 { 1 } else { -1 });
         let weight = |f: f64| 1.0 / (1.0 + (self.k * (0.5 - f.abs())).exp());
         let corners = [(cx, cy), (cx + sx, cy), (cx, cy + sy), (cx + sx, cy + sy)];
-        Some(Corners {
+        Ok(Some(Corners {
             materials: corners.map(|(mx, my)| self.material(mx, my)),
             wx: weight(fx),
             wy: weight(fy),
             gx,
             gy,
-        })
+        }))
     }
 }
 
@@ -396,11 +399,11 @@ impl<'a> Baker<'a> {
         plane: DetailPlane,
         pixel: f64,
     ) -> Result<Option<Texel>, String> {
-        let Some(corners) = self.lookup.corners(x, y) else {
+        let Some(corners) = self.lookup.corners(x, y)? else {
             return Ok(None);
         };
         self.prepare(corners.materials.iter().flatten().copied())?;
-        Ok(Some(self.shade(corners, x, y, z, plane, pixel)))
+        Ok(Some(self.shade(corners, x, y, z, plane, pixel)?))
     }
 
     /// The materials `ms`' details decoded (each once over the baker's life).
@@ -412,7 +415,15 @@ impl<'a> Baker<'a> {
     }
 
     /// [`Baker::texel`] at `corners`, the point's, whose materials' details are prepared.
-    fn shade(&self, corners: Corners, x: f64, y: f64, z: f64, plane: DetailPlane, pixel: f64) -> Texel {
+    fn shade(
+        &self,
+        corners: Corners,
+        x: f64,
+        y: f64,
+        z: f64,
+        plane: DetailPlane,
+        pixel: f64,
+    ) -> Result<Texel, String> {
         let Corners {
             materials,
             wx,
@@ -421,14 +432,18 @@ impl<'a> Baker<'a> {
             gy,
         } = corners;
         let mut fell_back = false;
-        let mut at = |baker: &Self, coord: [f64; 2]| -> [[f64; 3]; 4] {
-            materials.map(|m| baker.colour_of(m, coord, (gx, gy), pixel, &mut fell_back))
+        let mut at = |baker: &Self, coord: [f64; 2]| -> Result<[[f64; 3]; 4], String> {
+            let mut out = [[0.0; 3]; 4];
+            for (o, m) in out.iter_mut().zip(materials) {
+                *o = baker.colour_of(m, coord, (gx, gy), pixel, &mut fell_back)?;
+            }
+            Ok(out)
         };
         let colours = match plane {
-            DetailPlane::Xy => at(self, [x, y]),
+            DetailPlane::Xy => at(self, [x, y])?,
             DetailPlane::Vertical { w } => {
-                let xz = (w < 1.0).then(|| at(self, [x, z]));
-                let yz = (w > 0.0).then(|| at(self, [y, z]));
+                let xz = (w < 1.0).then(|| at(self, [x, z])).transpose()?;
+                let yz = (w > 0.0).then(|| at(self, [y, z])).transpose()?;
                 match (xz, yz) {
                     (Some(a), Some(b)) => {
                         std::array::from_fn(|c| std::array::from_fn(|k| a[c][k] + (b[c][k] - a[c][k]) * w))
@@ -446,10 +461,10 @@ impl<'a> Baker<'a> {
             let o = self.lookup.occlusion(gx, gy);
             c = c.map(|v| v * o);
         }
-        Texel {
+        Ok(Texel {
             rgb: c.map(primase_image::linear_to_srgb8),
             tile_fallback: fell_back,
-        }
+        })
     }
 
     /// Material `m`'s colour (linear) with its detail sampled at `coord` (source units), or its far colour tile at the
@@ -461,7 +476,7 @@ impl<'a> Baker<'a> {
         (gx, gy): (f64, f64),
         pixel: f64,
         fell_back: &mut bool,
-    ) -> [f64; 3] {
+    ) -> Result<[f64; 3], String> {
         let detail = m.and_then(|m| self.details.get(&m)).and_then(Option::as_ref);
         match detail {
             Some(d) => {
@@ -473,13 +488,16 @@ impl<'a> Baker<'a> {
                 } else {
                     Transfer::Stored
                 };
-                let c = d.image.bilinear(
-                    mip,
-                    [coord[0] * d.g, coord[1] * d.g],
-                    [Address::Wrap; 2],
-                    transfer,
-                );
-                [c[0], c[1], c[2]]
+                let c = d
+                    .image
+                    .bilinear(
+                        mip,
+                        [coord[0] * d.g, coord[1] * d.g],
+                        [Address::Wrap; 2],
+                        transfer,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok([c[0], c[1], c[2]])
             }
             None => {
                 *fell_back = true;
@@ -487,7 +505,7 @@ impl<'a> Baker<'a> {
                     ColorSpace::Srgb => srgb8_to_linear(c),
                     _ => unorm(c),
                 };
-                [0, 1, 2].map(|k| {
+                Ok([0, 1, 2].map(|k| {
                     across(gx, gy, |tx, ty| {
                         let (n, i, j) = self.lookup.locate(tx, ty)?;
                         Some(decode(
@@ -496,7 +514,7 @@ impl<'a> Baker<'a> {
                                 .texel(0, j as i64, i as i64, [Address::Wrap; 2])[k],
                         ))
                     })
-                })
+                }))
             }
         }
     }
@@ -530,31 +548,48 @@ pub fn bake(
             let mut met = BTreeSet::new();
             for px in 0..width {
                 let (x, y) = at(px, py);
-                if let Some(c) = baker.lookup.corners(x, y) {
+                if let Some(c) = baker.lookup.corners(x, y)? {
                     met.extend(c.materials.iter().flatten().copied());
                 }
             }
-            met
+            Ok::<_, String>(met)
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .collect::<Result<Vec<_>, String>>()?;
         baker.prepare(met.into_iter().flatten().collect::<BTreeSet<u8>>())?;
         // each row shaded on its own (at most the stated threads rows at once), its counts added in row order
         let mut out = vec![0u8; width as usize * height as usize * 4];
-        let mut jobs: Vec<(Baked, &mut [u8])> = out
+        // each row's counts, and the error that stopped it (the first failing row's is the bake's)
+        let mut jobs: Vec<(Baked, Option<String>, &mut [u8])> = out
             .chunks_mut(width as usize * 4)
-            .map(|row| (Baked::default(), row))
+            .map(|row| (Baked::default(), None, row))
             .collect();
         let baker = &baker;
         parallel::rows_mut(threads, &mut jobs, 1, |py, job| {
-            let (baked, row) = &mut job[0];
+            let (baked, failed, row) = &mut job[0];
+            let shaded = |x: f64, y: f64| -> Result<Option<Texel>, String> {
+                match baker.lookup.corners(x, y)? {
+                    None => Ok(None),
+                    Some(corners) => baker
+                        .shade(corners, x, y, 0.0, DetailPlane::Xy, s.pixel)
+                        .map(Some),
+                }
+            };
             for px in 0..width {
                 baked.pixels += 1;
                 let (x, y) = at(px, py as u32);
-                let Some(corners) = baker.lookup.corners(x, y) else {
-                    baked.outside += 1;
-                    continue;
+                let texel = match shaded(x, y) {
+                    Ok(Some(t)) => t,
+                    Ok(None) => {
+                        baked.outside += 1;
+                        continue;
+                    }
+                    Err(e) => {
+                        *failed = Some(e);
+                        return;
+                    }
                 };
-                let texel = baker.shade(corners, x, y, 0.0, DetailPlane::Xy, s.pixel);
                 if texel.tile_fallback {
                     baked.tile_fallback += 1;
                 }
@@ -564,8 +599,11 @@ pub fn bake(
             }
         })
         .map_err(|e| e.to_string())?;
+        if let Some(e) = jobs.iter().find_map(|(_, failed, _)| failed.clone()) {
+            return Err(e);
+        }
         let mut baked = Baked::default();
-        for (b, _) in &jobs {
+        for (b, _, _) in &jobs {
             baked.pixels += b.pixels;
             baked.outside += b.outside;
             baked.tile_fallback += b.tile_fallback;
