@@ -128,6 +128,7 @@ fn ray_generation() -> Program {
                     space: 0,
                 }),
                 counter_of: None,
+                layout: None,
             },
         }],
         facts: StageFacts::None,

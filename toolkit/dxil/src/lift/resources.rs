@@ -449,6 +449,7 @@ impl Lift<'_> {
                     name: format!("{name}.counter"),
                     d3d: None,
                     counter_of: Some(self.setup.interface.resources[view].id),
+                    layout: None,
                 },
             });
             self.setup.ranges.push(range);

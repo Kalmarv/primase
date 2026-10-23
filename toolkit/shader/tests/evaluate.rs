@@ -253,6 +253,7 @@ fn reflected(members: Vec<Member>) -> Reflected {
                         space: 0,
                     }),
                     counter_of: None,
+                    layout: None,
                 },
             }],
             facts: Default::default(),

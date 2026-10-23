@@ -1172,6 +1172,7 @@ impl Setup {
                         space: 0,
                     }),
                     counter_of: None,
+                    layout: None,
                 },
             });
         }

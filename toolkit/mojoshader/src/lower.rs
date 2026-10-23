@@ -1340,6 +1340,7 @@ impl Lower<'_> {
                         space: 0,
                     }),
                     counter_of: None,
+                    layout: None,
                 },
             });
             bindings.push((id, global));
@@ -1363,6 +1364,7 @@ impl Lower<'_> {
                         space: 0,
                     }),
                     counter_of: None,
+                    layout: None,
                 },
             });
             bindings.push((id, s.texture));
@@ -1379,6 +1381,7 @@ impl Lower<'_> {
                         space: 0,
                     }),
                     counter_of: None,
+                    layout: None,
                 },
             });
             bindings.push((id, s.sampler));

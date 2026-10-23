@@ -479,18 +479,20 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
         }
         bindings.push((p, binding));
     }
-    // the constant-buffer table: the layouts of cbuffers (type 0) by name; a structured buffer's element layout
-    // (type 3) and a tbuffer's (type 1: constants the program reads through a shader-resource register, as a typed
-    // buffer) are not retained, the vocabulary names them by their view
-    let mut layouts: Vec<(String, BufferLayout, bool)> = Vec::new();
+    // the constant-buffer table: the layouts of cbuffers (type 0) and of tbuffers (type 1: constants the program reads
+    // through a shader-resource register, as a typed buffer) by name, a tbuffer's kept as its resource's own layout; a
+    // structured buffer's element layout (type 3) is not retained, the vocabulary names it by its stride
+    // (name, layout, claimed by a binding, a tbuffer's)
+    let mut layouts: Vec<(String, BufferLayout, bool, bool)> = Vec::new();
     let offset = v.u32(4)? as usize;
     let mut budget = 65536;
     for i in v.table(offset, v.u32(0)? as usize, 24)? {
         let p = offset + i * 24;
         let name = v.string(v.u32(p)? as usize)?;
-        match v.u32(p + 20)? {
-            0 => {}
-            1 | 3 => continue,
+        let table = match v.u32(p + 20)? {
+            0 => false,
+            1 => true,
+            3 => continue,
             kind => {
                 return Err(error(
                     p / 4,
@@ -503,7 +505,7 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
                     ),
                 ));
             }
-        }
+        };
         let size = v.u32(p + 12)?;
         if size > 65536 {
             return Err(error(p / 4, "constant-buffer size exceeds bound"));
@@ -543,28 +545,42 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
         if layouts.iter().any(|(n, ..)| *n == name) {
             return Err(error(p / 4, format!("constant buffer {name} is listed twice")));
         }
-        layouts.push((name, BufferLayout { size, constants }, false));
+        layouts.push((name, BufferLayout { size, constants }, false, table));
     }
     let mut resources = Vec::new();
     for (i, (p, binding)) in bindings.iter().enumerate() {
         let fail = |detail: String| error(p / 4, detail);
-        let (kind, class) = if binding.kind == 0 {
-            let (_, layout, claimed) = layouts
+        let mut table_layout = None;
+        let (kind, class) = if binding.kind == 0 || binding.kind == 1 {
+            // a constant buffer takes a layout of type 0, a tbuffer one of type 1
+            let tbuffer = binding.kind == 1;
+            let (_, layout, claimed, _) = layouts
                 .iter_mut()
-                .find(|(name, ..)| *name == binding.name)
-                .ok_or_else(|| fail(format!("{}: a constant buffer without its layout", binding.name)))?;
+                .find(|(name, _, _, table)| *name == binding.name && *table == tbuffer)
+                .ok_or_else(|| {
+                    fail(format!(
+                        "{}: a {} without its layout",
+                        binding.name,
+                        if tbuffer { "tbuffer" } else { "constant buffer" }
+                    ))
+                })?;
             if std::mem::replace(claimed, true) {
                 return Err(fail(format!(
                     "{}: two bindings of one constant buffer",
                     binding.name
                 )));
             }
-            (
-                ResourceKind::ConstantBuffer {
-                    layout: layout.clone(),
-                },
-                D3dClass::ConstantBuffer,
-            )
+            if tbuffer {
+                table_layout = Some(layout.clone());
+                binding.kind().map_err(fail)?
+            } else {
+                (
+                    ResourceKind::ConstantBuffer {
+                        layout: layout.clone(),
+                    },
+                    D3dClass::ConstantBuffer,
+                )
+            }
         } else {
             binding.kind().map_err(fail)?
         };
@@ -580,10 +596,11 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
                     space: 0,
                 }),
                 counter_of: None,
+                layout: table_layout,
             },
         });
     }
-    if let Some((name, ..)) = layouts.iter().find(|(.., claimed)| !claimed) {
+    if let Some((name, ..)) = layouts.iter().find(|(_, _, claimed, _)| !claimed) {
         return Err(error(
             0,
             format!("constant buffer {name} has no resource binding"),

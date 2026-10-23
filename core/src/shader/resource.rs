@@ -234,6 +234,11 @@ pub struct ResourceProvenance {
     /// renderer binds it with the view, starting from the view's initial count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub counter_of: Option<ResourceId>,
+    /// The members the source states for a view that reads constants: a D3D `tbuffer`'s variables (a constant block read
+    /// through a shader-resource register, as a typed buffer). The resource's kind says how it is read; this is what it
+    /// holds, by name and offset, as a constant buffer's layout is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout: Option<BufferLayout>,
 }
 
 /// One bound resource.
@@ -367,6 +372,7 @@ mod tests {
                     space: 0,
                 }),
                 counter_of: None,
+                layout: None,
             },
         };
         assert_eq!(

@@ -67,6 +67,7 @@ fn rdef() -> Vec<u8> {
 fn checked_reflection_ranges_and_cycles() {
     let valid = rdef();
     let r = primase_dxbc::reflection(&fixture(&valid)).unwrap();
+    let r_of_valid = primase_dxbc::reflection(&fixture(&valid)).unwrap();
     let ResourceKind::ConstantBuffer { layout } = &r.resources[0].kind else {
         panic!("a constant buffer")
     };
@@ -98,7 +99,7 @@ fn checked_reflection_ranges_and_cycles() {
         assert!(message.contains(named), "{named}: {message}");
     }
     // a tbuffer (a layout of type 1 and its binding of type 1: constants read through a shader-resource register) is a
-    // typed buffer of four-lane rows, its layout not kept, as a structured buffer's is not
+    // typed buffer of four-lane rows that keeps its layout, its members as the reflection states them
     let mut tbuffer = valid.clone();
     set(&mut tbuffer, 80, 1);
     set(&mut tbuffer, 180, 1);
@@ -112,6 +113,18 @@ fn checked_reflection_ranges_and_cycles() {
     );
     let binding = r.resources[0].provenance.d3d.unwrap();
     assert_eq!((binding.class, binding.register), (D3dClass::ShaderResource, 0));
+    let kept = r.resources[0].provenance.layout.as_ref().unwrap();
+    assert_eq!(
+        (kept.size, kept.constants.len(), kept.constants[0].name.as_str()),
+        (16, 1, "v")
+    );
+    // a constant buffer keeps none beside its kind
+    assert!(r_of_valid.resources[0].provenance.layout.is_none());
+    // a tbuffer binding whose layout is a constant buffer's has no layout of its own
+    let mut bad = valid.clone();
+    set(&mut bad, 180, 1);
+    let message = primase_dxbc::reflection(&fixture(&bad)).unwrap_err().to_string();
+    assert!(message.contains("tbuffer without its layout"), "{message}");
     // a tbuffer layout whose binding is a constant buffer has no layout to bind
     let mut bad = valid.clone();
     set(&mut bad, 80, 1);

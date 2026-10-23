@@ -968,6 +968,7 @@ pub(crate) fn resource_of(
                 space: range.space,
             }),
             counter_of: None,
+            layout: None,
         },
     })
 }

@@ -161,6 +161,7 @@ fn program() -> Program {
                     name: "cb0".into(),
                     d3d: None,
                     counter_of: None,
+                    layout: None,
                 },
             }],
             facts: Default::default(),
