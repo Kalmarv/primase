@@ -51,6 +51,20 @@ pub enum ViewParameter {
     InverseViewProjection,
     /// Render target width and height in pixels.
     ViewportSize,
+    /// The previous frame's view-projection matrix (what a motion vector is measured against).
+    PreviousViewProjection,
+}
+
+/// A transform built from the drawn object's object-to-world matrix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectMatrix {
+    /// Object space to world space.
+    World,
+    /// Object space to view space.
+    WorldView,
+    /// Object space to clip space.
+    WorldViewProjection,
 }
 
 /// A value of the drawn object or instance.
@@ -62,6 +76,17 @@ pub enum ObjectParameter {
     World,
     InverseWorld,
     WorldViewProjection,
+    /// The object-to-view matrix.
+    WorldView,
+    /// The transform as the previous frame had it: the object's previous pose, the previous view and projection (what a
+    /// motion vector is measured from).
+    PreviousFrame(ObjectMatrix),
+    /// The transform in the engine's camera-relative form (the world with the camera at its origin): a program computes
+    /// its clip position, and its previous-frame position, from this or from the plain transform, the one the draw
+    /// supplies (by the engine's own name for it; no capture checks the translation).
+    CameraRelative(ObjectMatrix),
+    /// The previous frame's transform, with the previous frame's camera at the origin of world space.
+    CameraRelativePreviousFrame(ObjectMatrix),
     /// A colour the instance tints the surface with.
     InstanceColour,
     /// The scale (`xy`) and offset (`zw`) a model's texture coordinate set `n` is drawn with: the engine feeds one
@@ -160,6 +185,13 @@ pub struct SamplerState {
     /// Addressing along u, v and w.
     pub wrap: [Option<AddressMode>; 3],
     pub filters: Filters,
+    /// The most texels along the axis of anisotropy an anisotropic filter takes (1: none beyond the filters'), where
+    /// the source states an anisotropic filter.
+    pub max_anisotropy: Option<u8>,
+    /// The comparison a depth-comparison sampler makes of the reference against the texel, where the sampler is one.
+    pub compare: Option<Compare>,
+    /// Added to the mip level the hardware computes, where the source states a non-zero bias.
+    pub mip_lod_bias: Option<f32>,
 }
 
 /// An image of the frame being drawn that a program reads: the consumer supplies it from its own frame, as it supplies a view or
@@ -825,7 +857,7 @@ mod tests {
                         texture,
                         sampler: SamplerState {
                             wrap: [Some(AddressMode::Repeat); 3],
-                            filters: Filters::default(),
+                            ..SamplerState::default()
                         },
                     },
                 }],

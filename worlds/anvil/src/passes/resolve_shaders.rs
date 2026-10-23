@@ -36,7 +36,6 @@
 use std::collections::BTreeMap;
 
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::pbr::Filters;
 use primase_core::shader::{
     AlphaTest, Compare, ConstantBinding, ConstantRole, Cull, DepthState, InputBinding, InputRole, Interface,
     OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, ShaderBinding,
@@ -654,10 +653,7 @@ impl ResolveAnvilShaders {
                         bump("texture bindings bound", counts);
                         TextureSource::Texture {
                             texture,
-                            sampler: SamplerState {
-                                wrap: [None; 3],
-                                filters: Filters::default(),
-                            },
+                            sampler: SamplerState::default(),
                         }
                     }
                     None => match self.unset {
