@@ -32,8 +32,8 @@ use std::path::{Path, PathBuf};
 use primase_core::convert::{Notice, NoticeKind, Reader, Report as ConvertReport, Result as ConvertResult};
 use primase_core::{Asset, Entity, Name, Role, Source, World};
 
-use super::area::{material_definitions, shader_programs};
-use super::textures;
+use super::area::material_definitions;
+use super::{shaders, textures};
 use crate::components::models::{SkeletonOf, SourceModel};
 use crate::mtd::MaterialDefinition;
 use crate::sekiro::source;
@@ -49,24 +49,43 @@ pub struct CharacterReport {
     pub textures: usize,
     /// Members of the binders this reader does not read, by name.
     pub unread: Vec<String>,
+    /// Shaders its materials name whose bundle the install does not hold.
+    pub missing_shader_bundles: Vec<String>,
+    /// Shader bundles its materials bind whose metaparam is of a version the reader does not read.
+    pub unread_metaparams: Vec<String>,
 }
 
 impl CharacterReport {
     /// The read's notices: the members it did not read.
     pub fn notices(&self) -> Vec<Notice> {
-        if self.unread.is_empty() {
-            return Vec::new();
+        let mut out = Vec::new();
+        for (items, reason) in [
+            (
+                &self.unread,
+                "character files not read (Havok skeleton, cloth, animation binder)",
+            ),
+            (
+                &self.missing_shader_bundles,
+                "shaders materials name whose bundle the install does not hold",
+            ),
+            (
+                &self.unread_metaparams,
+                "shader bundles whose metaparam is of a version not read (programs kept, parameters not)",
+            ),
+        ] {
+            if !items.is_empty() {
+                out.push(items.iter().fold(
+                    Notice::new(
+                        "sekiro character",
+                        NoticeKind::Unsupported,
+                        reason,
+                        items.len() as u64,
+                    ),
+                    |n, name| n.example(name.clone()),
+                ));
+            }
         }
-        let mut n = Notice::new(
-            "sekiro character",
-            NoticeKind::Unsupported,
-            "character files not read (Havok skeleton, cloth, animation binder)",
-            self.unread.len() as u64,
-        );
-        for name in &self.unread {
-            n = n.example(name.clone());
-        }
-        vec![n]
+        out
     }
 }
 
@@ -212,6 +231,9 @@ struct Reading<'a> {
     materials: BTreeMap<String, Entity>,
     textures: source::Payloads,
     programs: source::Payloads,
+    bundles: shaders::Bundles,
+    /// Each material entity made and the shader its definition names.
+    material_shaders: Vec<(Entity, String)>,
 }
 
 impl<'a> Reading<'a> {
@@ -225,6 +247,8 @@ impl<'a> Reading<'a> {
             materials: BTreeMap::new(),
             textures: BTreeMap::new(),
             programs: BTreeMap::new(),
+            bundles: shaders::Bundles::default(),
+            material_shaders: Vec::new(),
         })
     }
 
@@ -368,11 +392,25 @@ impl<'a> Reading<'a> {
             .filter(|t| catalog.entries.contains_key(t))
             .collect();
         let payloads = catalog.load(archive, decoder, &wanted)?;
-        let programs = shader_programs(
-            archive,
-            decoder,
-            resolved.iter().filter_map(|m| m.layered.as_ref()),
-        )?;
+        let wanted_shaders: BTreeSet<String> = resolved
+            .iter()
+            .filter(|m| m.definition.is_some())
+            .map(|m| m.shader.clone())
+            .collect();
+        self.bundles.read(archive, decoder, &wanted_shaders)?;
+        let programs = self
+            .bundles
+            .layered_programs(resolved.iter().filter_map(|m| m.layered.as_ref()))?;
+        report.missing_shader_bundles = wanted_shaders
+            .iter()
+            .filter(|s| self.bundles.missing.contains(*s))
+            .cloned()
+            .collect();
+        report.unread_metaparams = wanted_shaders
+            .iter()
+            .filter(|s| self.bundles.unread_metaparams.contains(*s))
+            .cloned()
+            .collect();
         report.textures = payloads.len();
         Self::merge(&mut self.textures, payloads, "texture")?;
         Self::merge(&mut self.programs, programs, "shader program")?;
@@ -387,6 +425,9 @@ impl<'a> Reading<'a> {
                     w.insert(e, Name(m.mtd.clone()));
                     if let Some(layered) = &m.layered {
                         w.insert(e, layered.clone());
+                    }
+                    if m.definition.is_some() {
+                        self.material_shaders.push((e, m.shader.clone()));
                     }
                     w.insert(e, m);
                     self.materials.insert(identity, e);
@@ -429,6 +470,7 @@ impl<'a> Reading<'a> {
     fn finish(self, w: &mut World) {
         w.insert_resource(source::TexturePayloads(self.textures));
         w.insert_resource(source::ShaderPrograms(self.programs));
+        self.bundles.spawn(w, &self.material_shaders);
     }
 }
 

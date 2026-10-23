@@ -271,8 +271,17 @@ converts frames; it does not lower:
 - placements are `core.instance` with their MSB transform, source label, shadow
   controls and, with states read, conditions;
 - every texture a kept material binds is kept as stored
-  (`fromsoft.texture_payloads`), and the G-buffer programs of its layered
-  materials (`fromsoft.shader_programs`);
+  (`fromsoft.texture_payloads`), the bundle of every shader a kept material's
+  definition names as an entity of its own (`fromsoft.shader_bundle`, named as
+  the shader: every vertex, hull, domain and pixel program the install's
+  `.shaderbdle` stores for it, for every pass the game draws it with, as DXBC
+  and under the file name that says the pass, plus the shader's `.metaparam`:
+  texture slots, the samplers each render pass binds per stage, the parameters
+  and their constant-buffer offsets) linked from the material by
+  `fromsoft.material_shader` (absent where the install holds no bundle of the
+  shader: the `GXFlver_*` shaders; `Report::missing_shader_bundles`), and the
+  G-buffer programs of its layered materials (`fromsoft.shader_programs`, for
+  the layer bake);
 - each high-resolution map collision file that MSB collision parts name, of every
   hit filter, is a `fromsoft.map_collision` entity: the naming parts (name, hit
   filter, clause with states read), every triangle in the world frame and its
@@ -557,8 +566,9 @@ periods must match before each image comparison.
 ### Material passes: layer bake and PBR lowering
 
 The reader keeps material data: each FLVER material's `fromsoft.material`, every
-texture a selected material binds (`fromsoft.texture_payloads`) and the G-buffer
-programs of its layered materials (`fromsoft.shader_programs`);
+texture a selected material binds (`fromsoft.texture_payloads`), the shader
+bundles of its materials (`fromsoft.shader_bundle`) and the G-buffer programs of
+its layered materials (`fromsoft.shader_programs`);
 `lower-fromsoft-geometry` gives a layered part's raw FLVER Byte4C UV members as
 `Color(n)` UNORM8 streams listed by `fromsoft.layer_inputs`. Two passes in
 `sekiro::passes` lower them:

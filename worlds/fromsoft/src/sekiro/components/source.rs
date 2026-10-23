@@ -479,3 +479,83 @@ pub struct ShaderPrograms(pub Payloads);
 impl Resource for ShaderPrograms {
     const NAME: &'static str = "fromsoft.shader_programs";
 }
+
+/// The stage a compiled shader program runs in, by its file's extension in the shader bundle (`.vpo`, `.hpo`, `.dpo`,
+/// `.ppo`); each is a DXBC container whose own shader type agrees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ShaderStage {
+    Vertex,
+    Hull,
+    Domain,
+    Pixel,
+}
+impl ShaderStage {
+    /// The stage a program file's extension (`vpo`, `hpo`, `dpo`, `ppo`) names.
+    pub fn from_extension(extension: &str) -> Option<ShaderStage> {
+        match extension {
+            "vpo" => Some(ShaderStage::Vertex),
+            "hpo" => Some(ShaderStage::Hull),
+            "dpo" => Some(ShaderStage::Domain),
+            "ppo" => Some(ShaderStage::Pixel),
+            _ => None,
+        }
+    }
+}
+
+/// One compiled program of a shader bundle: its file name as the bundle stores it, its stage and its DXBC container as
+/// stored. The name says which draw it serves, in the game's own words (`M[Multiple]_3_Gbuf.ppo`: the shader, its
+/// static switch, the G-buffer pass; `M[Multiple]_Gbuf_Skin@[cl].vpo`: the pass, skinned, cloth; `_[A]` an
+/// alpha-tested pixel program, `_FT` a tessellated vertex program). Nothing here chooses a program for a draw.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShaderProgram {
+    pub name: String,
+    pub stage: ShaderStage,
+    pub code: std::sync::Arc<[u8]>,
+}
+
+/// A shader's bundle (`<shader>.shaderbdle` of `/shader/shaderbdle.shaderbdlebnd.dcx`) on an entity of its own, named as
+/// the shader (`M[Multiple]`): every program it stores, in its order, for every pass the game draws the shader with
+/// (forward, depth, shadow, velocity, G-buffer...), and the shader's parameter definition (`parameters`, `None` where
+/// the bundle's metaparam is of a version the reader does not read: `Report::unread_metaparams` names them). A
+/// material's `fromsoft.material_shader` names its bundle. Not serialised.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShaderBundle {
+    pub name: String,
+    pub programs: Vec<ShaderProgram>,
+    pub parameters: Option<crate::metaparam::Metaparam>,
+}
+impl ShaderBundle {
+    /// The program stored under `name`.
+    pub fn program(&self, name: &str) -> Option<&ShaderProgram> {
+        self.programs.iter().find(|p| p.name == name)
+    }
+    /// The programs of one stage, in stored order.
+    pub fn stage(&self, stage: ShaderStage) -> impl Iterator<Item = &ShaderProgram> {
+        self.programs.iter().filter(move |p| p.stage == stage)
+    }
+}
+impl Component for ShaderBundle {
+    const NAME: &'static str = "fromsoft.shader_bundle";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+    fn payload_bytes(&self) -> u64 {
+        self.programs.iter().map(|p| p.code.len() as u64).sum()
+    }
+}
+
+/// On a material entity (`fromsoft.material`): the bundle entity of the shader its definition names. Absent where the
+/// material has no definition, or the install holds no bundle of that shader (`Report::missing_shader_bundles`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MaterialShader(pub Entity);
+impl Component for MaterialShader {
+    const NAME: &'static str = "fromsoft.material_shader";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.0);
+    }
+}

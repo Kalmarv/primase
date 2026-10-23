@@ -1,6 +1,6 @@
 //! Reading one Sekiro area ([`read_area`]): its placed models, materials, texture files, layered-shader programs,
 //! collision files and bodies, lights, hang edges and spawn points, selected and in the world frame, as source records.
-use super::{collision, extras, objects, shadows, states, textures};
+use super::{collision, extras, objects, shaders, shadows, states, textures};
 use crate::sekiro::source;
 use crate::{
     Archive, Binder, Result,
@@ -67,8 +67,15 @@ pub struct Report {
     pub materials: usize,
     /// Texture files kept as source payloads.
     pub textures: usize,
-    /// Layered-shader programs kept.
+    /// Layered-shader programs kept (`fromsoft.shader_programs`).
     pub shader_programs: usize,
+    /// Shader bundles kept (`fromsoft.shader_bundle`), and the programs in them by stage.
+    pub shader_bundles: usize,
+    pub bundle_programs: BTreeMap<source::ShaderStage, usize>,
+    /// Shaders a material names whose bundle the install does not hold.
+    pub missing_shader_bundles: Vec<String>,
+    /// Bundles kept without their parameter definition: its metaparam is of a version the reader does not read.
+    pub unread_metaparams: Vec<String>,
     /// Distinct placed models (`obj/<model>`, `<area>/<model>`) the archive does not hold.
     pub missing_models: Vec<String>,
     /// With `states: Event`: the rules read and the parts decided or left at their default.
@@ -98,6 +105,18 @@ impl Report {
             out.push(listed(
                 "placed models not found in the archive",
                 &self.missing_models,
+            ));
+        }
+        if !self.missing_shader_bundles.is_empty() {
+            out.push(listed(
+                "shaders materials name whose bundle the install does not hold",
+                &self.missing_shader_bundles,
+            ));
+        }
+        if !self.unread_metaparams.is_empty() {
+            out.push(listed(
+                "shader bundles whose metaparam is of a version not read (programs kept, parameters not)",
+                &self.unread_metaparams,
             ));
         }
         if !self.collision.missing_files.is_empty() {
@@ -286,8 +305,9 @@ fn select_placements(
 /// distant-backdrop class) and the material entity of each of its FLVER materials (`fromsoft.material_slots`, each
 /// holding `fromsoft.material`); an object prototype also its collision bodies (`fromsoft.object_collision`).
 /// Placements are `core.instance` with their MSB transform, source label, shadow controls and, with states read,
-/// conditions. Every texture a kept material binds is kept as stored (`fromsoft.texture_payloads`), and the G-buffer
-/// programs of its layered materials (`fromsoft.shader_programs`). Each map collision file the MSB's collision parts
+/// conditions. Every texture a kept material binds is kept as stored (`fromsoft.texture_payloads`), the bundle of every
+/// shader a kept material names with all its programs (`fromsoft.shader_bundle`, linked by `fromsoft.material_shader`)
+/// and the G-buffer programs of its layered materials (`fromsoft.shader_programs`). Each map collision file the MSB's collision parts
 /// name is a `fromsoft.map_collision` entity; lights are `fromsoft.light` records where they stand; hang edges and
 /// spawn points are `fromsoft.area_extras`; what the read covered is `fromsoft.read_scope`.
 /// A model's posed box in the world frame (the file frame's z reversed), `[min, max]` metres: the extent the read's
@@ -436,6 +456,7 @@ pub fn read_area(
     prototypes.retain(|key, _| used.contains(key));
 
     let mut wanted = BTreeSet::new();
+    let mut wanted_shaders = BTreeSet::new();
     let mut layered = Vec::new();
     for proto in prototypes.values() {
         for m in &proto.materials {
@@ -446,10 +467,15 @@ pub fn read_area(
                 }
             }
             layered.extend(m.layered.as_ref());
+            if m.definition.is_some() {
+                wanted_shaders.insert(m.shader.clone());
+            }
         }
     }
     let payloads = catalog.load(&archive, decoder, &wanted)?;
-    let programs = shader_programs(&archive, decoder, layered.into_iter())?;
+    let mut bundles = shaders::Bundles::default();
+    bundles.read(&archive, decoder, &wanted_shaders)?;
+    let programs = bundles.layered_programs(layered.into_iter())?;
     report.textures = payloads.len();
     report.shader_programs = programs.len();
 
@@ -466,6 +492,7 @@ pub fn read_area(
     };
     let mut proto_entities = BTreeMap::new();
     let mut material_entities = BTreeMap::new();
+    let mut material_shaders = Vec::new();
     for (key, proto) in prototypes {
         let mut slots = Vec::with_capacity(proto.materials.len());
         for m in proto.materials {
@@ -477,6 +504,9 @@ pub fn read_area(
                 world.insert(e, Name(m.mtd.clone()));
                 if let Some(layered) = &m.layered {
                     world.insert(e, layered.clone());
+                }
+                if m.definition.is_some() {
+                    material_shaders.push((e, m.shader.clone()));
                 }
                 world.insert(e, m);
                 material_entities.insert(identity, e);
@@ -505,6 +535,15 @@ pub fn read_area(
     }
     world.insert_resource(source::TexturePayloads(payloads));
     world.insert_resource(source::ShaderPrograms(programs));
+    bundles.spawn(&mut world, &material_shaders);
+    report.shader_bundles = bundles.bundles.len();
+    for b in bundles.bundles.values() {
+        for p in &b.programs {
+            *report.bundle_programs.entry(p.stage).or_default() += 1;
+        }
+    }
+    report.missing_shader_bundles = bundles.missing.iter().cloned().collect();
+    report.unread_metaparams = bundles.unread_metaparams.iter().cloned().collect();
     for (key, index, transform) in selected {
         let part = &layout.parts[index];
         let (prototype, far) = proto_entities[&key];
@@ -539,47 +578,6 @@ pub fn read_area(
     report.area = area;
     *destination = world;
     Ok(report)
-}
-
-/// The G-buffer programs of the given layered materials, from the installed shader bundles.
-pub(super) fn shader_programs<'a>(
-    archive: &Archive,
-    decoder: &Decoder<'_>,
-    materials: impl Iterator<Item = &'a materials::LayeredMaterial>,
-) -> Result<source::Payloads> {
-    let wanted = materials
-        .map(materials::LayeredMaterial::program_name)
-        .collect::<Result<BTreeSet<_>>>()?;
-    let mut programs = BTreeMap::new();
-    if wanted.is_empty() {
-        return Ok(programs);
-    }
-    let outer = Binder::read(
-        &archive.read("/shader/shaderbdle.shaderbdlebnd.dcx", decoder)?,
-        decoder,
-    )?;
-    let leaf = |name: Option<&str>| {
-        name.unwrap_or("")
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or("")
-            .to_owned()
-    };
-    for file in outer.files {
-        if !matches!(
-            leaf(file.name.as_deref()).as_str(),
-            "M[Multiple].shaderbdle" | "M[MultipleGround].shaderbdle" | "M[Multiple]_Emissive.shaderbdle"
-        ) {
-            continue;
-        }
-        for shader in Binder::read(&file.bytes, decoder)?.files {
-            let name = leaf(shader.name.as_deref());
-            if wanted.contains(&name) {
-                programs.insert(name, shader.bytes.into());
-            }
-        }
-    }
-    Ok(programs)
 }
 
 #[cfg(test)]
