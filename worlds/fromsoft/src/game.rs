@@ -68,6 +68,32 @@ impl Game {
         }
     }
 
+    /// The binders holding the game's material binaries (Elden Ring's); none for a game whose materials are MTDs.
+    pub fn material_binders(self) -> &'static [&'static str] {
+        match self {
+            Game::Sekiro => &[],
+            Game::EldenRing => crate::elden::MATERIAL_BINDERS,
+        }
+    }
+
+    /// Texture packages every map of the game binds, read whole (Elden Ring's system and decal textures; Sekiro's are
+    /// part of its area texture discovery).
+    pub fn common_textures(self) -> &'static [&'static str] {
+        match self {
+            Game::Sekiro => &[],
+            Game::EldenRing => crate::elden::COMMON_TEXTURES,
+        }
+    }
+
+    /// The package holding the texture `stem`, where the game names packages after their textures (Elden Ring's
+    /// assets); `None` otherwise.
+    pub fn texture_package(self, stem: &str) -> Option<String> {
+        match self {
+            Game::Sekiro => None,
+            Game::EldenRing => crate::elden::texture_package(stem),
+        }
+    }
+
     /// Whether a map model belongs to the game's distant-backdrop series (Sekiro's `m9xxxxx`).
     pub fn far_model(self, model: &str) -> bool {
         match self {

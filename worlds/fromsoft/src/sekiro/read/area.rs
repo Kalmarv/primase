@@ -95,6 +95,10 @@ pub struct Report {
     pub undefined_materials: usize,
     /// Placed object prototypes whose collision the read does not read yet (Elden Ring's asset collision binders).
     pub object_collision_not_read: usize,
+    /// Materials defined by material binaries whose shader bundles (Shader Model 6 programs) the read does not read yet.
+    pub shader_bundles_not_read: usize,
+    /// Texture packages read whole because a material names one of their textures (Elden Ring's asset packages).
+    pub texture_packages: usize,
     /// With `states: Event`: the rules read and the parts decided or left at their default.
     pub states: Option<states::Report>,
     /// Placements of the models in `missing_models`.
@@ -199,6 +203,11 @@ impl Report {
                 self.object_collision_not_read,
                 NoticeKind::Unsupported,
                 "placed asset prototypes whose collision binder is not read yet",
+            ),
+            (
+                self.shader_bundles_not_read,
+                NoticeKind::Unsupported,
+                "materials defined by material binaries whose shader bundles are not read yet",
             ),
             (
                 usize::from(self.extras.spawn_points_not_read),
@@ -378,6 +387,33 @@ pub(super) fn material_definitions(
     Ok(definitions)
 }
 
+/// Every material binary of `game`'s material binders, by the stem of its name (the `.matxml` stem its FLVER
+/// materials name): the first binder holding a name gives it.
+fn material_binaries(
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    game: Game,
+) -> Result<BTreeMap<String, materials::Definition>> {
+    let mut definitions = BTreeMap::new();
+    for path in game.material_binders() {
+        if !archive.contains(path) {
+            continue;
+        }
+        for f in Binder::read(&archive.read(path, decoder)?, decoder)?.files {
+            let name = f.name.as_deref().unwrap_or("");
+            if !name.to_ascii_lowercase().ends_with(".matbin") {
+                continue;
+            }
+            let material = crate::matbin::Material::read(&decoder.decode_if_dcx(&f.bytes)?)
+                .map_err(|e| invalid("material binary", 0, format!("{name}: {e}")))?;
+            definitions
+                .entry(materials::stem(name))
+                .or_insert(materials::Definition::Matbin(material));
+        }
+    }
+    Ok(definitions)
+}
+
 pub fn read_area(
     install: impl AsRef<Path>,
     area: &str,
@@ -436,15 +472,27 @@ pub fn read_game_area(
     let archive = install.open()?;
     let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
     let mut report = Report::default();
-    // Sekiro's material definitions (MTD) and texture catalog; Elden Ring's material binaries and the packages they
-    // bind are not read yet (counted as undefined materials)
-    let (mut catalog, definitions) = match game {
-        Game::Sekiro => (
+    // the definitions materials resolve against (Sekiro's MTDs, or the game's material binaries), and the texture
+    // catalog: Sekiro's area discovery, or the game's common packages, then the packages its materials name
+    let (mut catalog, definitions) = if game.material_binders().is_empty() {
+        let definitions = material_definitions(&archive, decoder)?
+            .into_iter()
+            .map(|(stem, d)| (stem, materials::Definition::Mtd(d)))
+            .collect::<BTreeMap<_, _>>();
+        (
             textures::Catalog::discover(&archive, decoder, &area[..3])?,
-            material_definitions(&archive, decoder)?,
-        ),
-        Game::EldenRing => (textures::Catalog::default(), BTreeMap::new()),
+            definitions,
+        )
+    } else {
+        let mut catalog = textures::Catalog::default();
+        for path in game.common_textures() {
+            if archive.contains(path) {
+                catalog.add(&archive.read(path, decoder)?)?;
+            }
+        }
+        (catalog, material_binaries(&archive, decoder, game)?)
     };
+    let mut texture_packages = BTreeSet::new();
     let object = game.object_prefix();
     let mut placements = Vec::new();
     let mut requests = BTreeSet::new();
@@ -560,11 +608,38 @@ pub fn read_game_area(
         }
         let model =
             Model::read(&f.bytes).map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")))?;
+        // the packages named after the textures the model's materials name, read once each
+        for m in &model.materials {
+            let defined = definitions.get(&materials::stem(&m.mtd));
+            let paths = defined
+                .map(|d| {
+                    d.textures()
+                        .into_iter()
+                        .map(|t| t.1.to_owned())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+                .into_iter()
+                .chain(m.textures.iter().map(|t| t.path.clone()));
+            for path in paths {
+                let stem = materials::stem(&path);
+                if path.trim().is_empty() || catalog.entries.contains_key(&stem) {
+                    continue;
+                }
+                if let Some(package) = game.texture_package(&stem)
+                    && texture_packages.insert(package.clone())
+                    && archive.contains(&package)
+                {
+                    catalog.add(&archive.read(&package, decoder)?)?;
+                    report.texture_packages += 1;
+                }
+            }
+        }
         let materials = model
             .materials
             .iter()
             .map(|m| {
-                materials::resolve(m, definitions.get(&materials::stem(&m.mtd)), |n| {
+                materials::resolve_definition(m, definitions.get(&materials::stem(&m.mtd)), game, |n| {
                     catalog.entries.contains_key(n)
                 })
             })
@@ -616,8 +691,13 @@ pub fn read_game_area(
                 }
             }
             layered.extend(m.layered.as_ref());
-            if m.definition.is_some() {
-                wanted_shaders.insert(m.shader.clone());
+            // the shader bundles of MTD-defined materials (Shader Model 5); a material binary's are Shader Model 6
+            match &m.definition {
+                Some(materials::Definition::Mtd(_)) => {
+                    wanted_shaders.insert(m.shader.clone());
+                }
+                Some(materials::Definition::Matbin(_)) => report.shader_bundles_not_read += 1,
+                None => {}
             }
         }
     }
@@ -654,7 +734,7 @@ pub fn read_game_area(
                 if let Some(layered) = &m.layered {
                     world.insert(e, layered.clone());
                 }
-                if m.definition.is_some() {
+                if matches!(m.definition, Some(materials::Definition::Mtd(_))) {
                     material_shaders.push((e, m.shader.clone()));
                 }
                 world.insert(e, m);

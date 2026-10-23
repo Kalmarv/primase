@@ -67,9 +67,33 @@ pub(crate) fn parent_tiles(tile: &str) -> Vec<(String, [f64; 2])> {
         .collect()
 }
 
+/// The binders holding Elden Ring's material binaries, in the order a material name is looked up: the base game's,
+/// its two later additions', SpeedTree's.
+pub(crate) const MATERIAL_BINDERS: &[&str] = &[
+    "/material/allmaterial.matbinbnd.dcx",
+    "/material/allmaterial_dlc01.matbinbnd.dcx",
+    "/material/allmaterial_dlc02.matbinbnd.dcx",
+    "/material/speedtree.matbinbnd.dcx",
+];
+
+/// The texture packages every map can bind: the system and decal textures.
+pub(crate) const COMMON_TEXTURES: &[&str] = &["/other/systex.tpf.dcx", "/other/decaltex.tpf.dcx"];
+
+/// The package of an asset texture `aetNNN_MMM_<suffix>`: `/asset/aet/aetNNN/aetNNN_MMM.tpf.dcx` (its full
+/// resolution; the `_l` package beside it holds the low one). `None` for another name.
+pub(crate) fn texture_package(stem: &str) -> Option<String> {
+    let group = stem
+        .get(..6)
+        .filter(|g| g.starts_with("aet") && g[3..].bytes().all(|b| b.is_ascii_digit()))?;
+    let id = stem
+        .get(7..10)
+        .filter(|id| stem.as_bytes().get(6) == Some(&b'_') && id.bytes().all(|b| b.is_ascii_digit()))?;
+    Some(format!("/asset/aet/{group}/{group}_{id}.tpf.dcx"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{asset_model, parent_tiles};
+    use super::{asset_model, parent_tiles, texture_package};
 
     /// Hand-worked: tile 39_54 is cell (1, 0) of the 512 m tile 19_27 (centre offset -128 + 256 = +128 in x, -128 in
     /// z) and cell (3, 2) of the 1024 m tile 09_13 (x: 3 * 256 + 128 - 512 = 384, z: 2 * 256 + 128 - 512 = 128).
@@ -84,6 +108,20 @@ mod tests {
         );
         assert!(parent_tiles("m14_00_00_00").is_empty());
         assert!(parent_tiles("m60_19_27_01").is_empty());
+    }
+
+    #[test]
+    fn texture_packages() {
+        assert_eq!(
+            texture_package("aet007_310_a").as_deref(),
+            Some("/asset/aet/aet007/aet007_310.tpf.dcx")
+        );
+        assert_eq!(
+            texture_package("aet000_124_n_l").as_deref(),
+            Some("/asset/aet/aet000/aet000_124.tpf.dcx")
+        );
+        assert!(texture_package("aat000_fabric_01_a").is_none());
+        assert!(texture_package("systex_dummy").is_none());
     }
 
     #[test]
