@@ -14,7 +14,7 @@
 //!   `ResetPosition`'s forward (Unity's +Z, the core transform's -Z column), so `raise-skate` gives it the game's own
 //!   yaw (level2's start Unity 172.9341 is scene 7.0659), `core.name` its GameObject's.
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Marker, Name, Transform, World};
 
 use crate::components::SkatebirdResetPosition;
@@ -42,21 +42,9 @@ fn number(k: &str, v: &str) -> Result<f64, String> {
 }
 
 impl PlaceSkatebirdMarkers {
-    /// From its options, every one required: `fallback` (`x,y,z,yaw` or `none`), `drop`, `margin` and
-    /// `play-max-extent` (metres, 0 or more), `travel` (a count).
-    pub fn from_options(o: &Options) -> Result<PlaceSkatebirdMarkers, String> {
-        const KEYS: [&str; 5] = ["fallback", "drop", "margin", "travel", "play-max-extent"];
-        if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let get = |k: &str| {
-            o.get(k).map(String::as_str).ok_or_else(|| {
-                format!(
-                    "{k} is required: fallback=x,y,z,yaw|none, drop=M, margin=M, travel=N, play-max-extent=M"
-                )
-            })
-        };
-        let fallback = match get("fallback")? {
+    /// From its declared options.
+    fn from_given(g: &Given) -> Result<PlaceSkatebirdMarkers, String> {
+        let fallback = match g.required("fallback") {
             "none" => None,
             v => {
                 let n = (v.split(','))
@@ -68,13 +56,13 @@ impl PlaceSkatebirdMarkers {
                 Some(([x, y, z], yaw))
             }
         };
-        let travel = get("travel")?;
+        let travel = g.required("travel");
         let pass = PlaceSkatebirdMarkers {
             fallback,
-            drop: number("drop", get("drop")?)?,
-            margin: number("margin", get("margin")?)?,
+            drop: number("drop", g.required("drop"))?,
+            margin: number("margin", g.required("margin"))?,
             travel: travel.parse().map_err(|_| format!("travel={travel}: a count"))?,
-            play_max_extent: number("play-max-extent", get("play-max-extent")?)?,
+            play_max_extent: number("play-max-extent", g.required("play-max-extent"))?,
         };
         pass.check()?;
         Ok(pass)
@@ -93,6 +81,37 @@ impl PlaceSkatebirdMarkers {
         Ok(())
     }
 }
+
+/// `place-skatebird-markers`' declaration ([`primase_core::pass::PassRegistry::add`]): every option is the program's,
+/// stated.
+pub const PLACE_SKATEBIRD_MARKERS: PassSpec = PassSpec {
+    name: "place-skatebird-markers",
+    options: &[
+        OptionSpec::required(
+            "fallback",
+            "0,1.189,0,7.0659",
+            "the spawn of a level without a starting point: x,y,z (core frame, metres),yaw (degrees), or none to refuse \
+             one",
+        ),
+        OptionSpec::required(
+            "drop",
+            "0.05",
+            "metres, 0 or more: how far above the fallback a surface may be and still be the one it drops to",
+        ),
+        OptionSpec::required(
+            "margin",
+            "10",
+            "metres, 0 or more: how far around the play space a travel point may lie",
+        ),
+        OptionSpec::required("travel", "5", "the travel points in all, a count"),
+        OptionSpec::required(
+            "play-max-extent",
+            "100",
+            "metres, 0 or more: a collision soup wider than this on an axis is not play space",
+        ),
+    ],
+    make: |g| Ok(Box::new(PlaceSkatebirdMarkers::from_given(g)?)),
+};
 
 /// A point: its name, position (core frame) and yaw (degrees, 0 facing +Z, 90 +X).
 #[derive(Clone, Debug, PartialEq)]
@@ -385,9 +404,9 @@ mod tests {
     #[test]
     fn every_option_is_stated() {
         let o = pass(Some(([0.0, 1.189, 0.0], 7.0659))).options();
-        assert_eq!(PlaceSkatebirdMarkers::from_options(&o).unwrap().options(), o);
+        assert_eq!(PLACE_SKATEBIRD_MARKERS.instance(&o).unwrap().options(), o);
         let mut missing = o.clone();
         missing.remove("travel");
-        assert!(PlaceSkatebirdMarkers::from_options(&missing).is_err());
+        assert!(PLACE_SKATEBIRD_MARKERS.instance(&missing).is_err());
     }
 }

@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 use primase_core::World;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 
 use crate::components::{SkatebirdRole, SkatebirdScript, SkatebirdUnder};
 
@@ -21,20 +21,27 @@ pub struct OmitSkatebirdMissionProps {
 }
 
 impl OmitSkatebirdMissionProps {
-    /// From its options: `roles`, required, role words joined by `+` ([`SkatebirdRole::word`]).
-    pub fn from_options(o: &Options) -> Result<OmitSkatebirdMissionProps, String> {
-        if let Some(k) = o.keys().find(|k| k.as_str() != "roles") {
-            return Err(format!("unknown option {k}"));
-        }
-        let text = o
-            .get("roles")
-            .ok_or("roles is required: role words joined by + (collectible, enable_one_at_random, mission_giver, birb_decorator, unlocking_collectible, player_board, camera)")?;
-        let roles = (text.split('+'))
+    /// From its declared options: `roles`, role words joined by `+` ([`SkatebirdRole::word`]).
+    fn from_given(g: &Given) -> Result<OmitSkatebirdMissionProps, String> {
+        let roles = (g.required("roles").split('+'))
             .map(|w| SkatebirdRole::of_word(w).ok_or_else(|| format!("roles: unknown role {w}")))
             .collect::<Result<BTreeSet<_>, _>>()?;
         Ok(OmitSkatebirdMissionProps { roles })
     }
 }
+
+/// `omit-skatebird-mission-props`' declaration ([`primase_core::pass::PassRegistry::add`]): the roles are the
+/// program's, stated.
+pub const OMIT_SKATEBIRD_MISSION_PROPS: PassSpec = PassSpec {
+    name: "omit-skatebird-mission-props",
+    options: &[OptionSpec::required(
+        "roles",
+        "collectible+mission_giver+birb_decorator+unlocking_collectible+player_board+camera",
+        "the roles whose scripts' entities are left out, joined by + (collectible, enable_one_at_random, \
+         mission_giver, birb_decorator, unlocking_collectible, player_board, camera)",
+    )],
+    make: |g| Ok(Box::new(OmitSkatebirdMissionProps::from_given(g)?)),
+};
 
 /// The group a script belongs to: the part after a `Missions - <level>` or `Unlocks` root, else the root.
 fn mission(s: &SkatebirdScript) -> &str {
@@ -138,7 +145,7 @@ mod tests {
         );
         let plain = place(&mut w, "bed", Vec::new());
         let o = Options::from([("roles".to_owned(), "collectible+mission_giver".to_owned())]);
-        let pass = OmitSkatebirdMissionProps::from_options(&o).unwrap();
+        let pass = OMIT_SKATEBIRD_MISSION_PROPS.instance(&o).unwrap();
         assert_eq!(pass.options(), o);
         let mut log = PassLog::default();
         pass.run(&mut w, &mut log).unwrap();
@@ -156,8 +163,8 @@ mod tests {
             "{:?}",
             log.counts
         );
-        assert!(OmitSkatebirdMissionProps::from_options(&Options::new()).is_err());
+        assert!(OMIT_SKATEBIRD_MISSION_PROPS.instance(&Options::new()).is_err());
         let unknown = Options::from([("roles".to_owned(), "npc".to_owned())]);
-        assert!(OmitSkatebirdMissionProps::from_options(&unknown).is_err());
+        assert!(OMIT_SKATEBIRD_MISSION_PROPS.instance(&unknown).is_err());
     }
 }

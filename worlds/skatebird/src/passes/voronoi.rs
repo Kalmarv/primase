@@ -38,7 +38,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use primase_core::parallel::Threads;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World};
 use primase_image::linear_to_srgb;
@@ -243,8 +243,8 @@ fn slot(texture: Entity, m: &UnityMaterial, property: &str, cells: u32) -> Textu
 type Omitted = String;
 
 /// The `Bumped Specular Voronoi` materials baked (module documentation), with the program's stated variant (`keywords`,
-/// `tier`), block (`cells`) and resolution (`max_texels`). Made only by [`LowerSkatebirdVoronoi::new`] or
-/// [`LowerSkatebirdVoronoi::from_options`], which check them: its fields are private, read through its accessors.
+/// `tier`), block (`cells`) and resolution (`max_texels`). Made only by [`LowerSkatebirdVoronoi::new`] or from options
+/// ([`LOWER_SKATEBIRD_VORONOI`]), which check them: its fields are private, read through its accessors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LowerSkatebirdVoronoi {
     keywords: Vec<String>,
@@ -299,26 +299,14 @@ impl LowerSkatebirdVoronoi {
         self.max_texels
     }
 
-    /// From options `keywords` (`;`-separated, possibly empty), `tier`, `cells` and `max-texels`, all required.
-    pub fn from_options(o: &Options) -> Result<Self, String> {
-        const KEYS: [&str; 4] = ["keywords", "tier", "cells", "max-texels"];
-        if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let get = |k: &str| {
-            o.get(k).ok_or_else(|| {
-                format!(
-                    "{k} is required: keywords (the renderer's keywords, ;-separated), tier, cells (K) and \
-                     max-texels are the program's choices"
-                )
-            })
-        };
+    /// From its declared options, through [`LowerSkatebirdVoronoi::new`].
+    fn from_given(g: &Given) -> Result<Self, String> {
         let number = |k: &str| -> Result<u32, String> {
-            get(k)?
-                .parse()
-                .map_err(|_| format!("{k}={}: a whole number expected", o[k]))
+            let v = g.required(k);
+            v.parse().map_err(|_| format!("{k}={v}: a whole number expected"))
         };
-        let keywords = get("keywords")?
+        let keywords = g
+            .required("keywords")
             .split(';')
             .map(str::trim)
             .filter(|k| !k.is_empty())
@@ -526,6 +514,27 @@ impl LowerSkatebirdVoronoi {
     }
 }
 
+/// `lower-skatebird-voronoi`'s declaration ([`primase_core::pass::PassRegistry::add`]): the variant, block and
+/// resolution are the program's choices, every option required.
+pub const LOWER_SKATEBIRD_VORONOI: PassSpec = PassSpec {
+    name: "lower-skatebird-voronoi",
+    options: &[
+        OptionSpec::required(
+            "keywords",
+            "DIRECTIONAL",
+            "the renderer's keywords the variant is stated with, joined by ; (possibly none)",
+        ),
+        OptionSpec::required("tier", "3", "the hardware tier the variant is stated in"),
+        OptionSpec::required("cells", "2", "K: cells a side of the baked block, at least 2"),
+        OptionSpec::required(
+            "max-texels",
+            "1024",
+            "the most texels per cell, at least 1; (cells + 1) x max-texels is at most 4096",
+        ),
+    ],
+    make: |g| Ok(Box::new(LowerSkatebirdVoronoi::from_given(g)?)),
+};
+
 impl Pass for LowerSkatebirdVoronoi {
     fn name(&self) -> &'static str {
         "lower-skatebird-voronoi"
@@ -679,29 +688,24 @@ mod tests {
             ("cells", "2"),
             ("max-texels", "1024"),
         ];
-        let pass = LowerSkatebirdVoronoi::from_options(&o(&all)).unwrap();
-        assert_eq!(
-            pass,
-            LowerSkatebirdVoronoi::new(vec!["DIRECTIONAL".into()], 3, 2, 1024).unwrap()
-        );
+        let make = |o: &Options| LOWER_SKATEBIRD_VORONOI.instance(o);
+        let pass = LowerSkatebirdVoronoi::new(vec!["DIRECTIONAL".into()], 3, 2, 1024).unwrap();
+        assert_eq!(make(&o(&all)).unwrap().options(), pass.options());
         assert_eq!(
             (pass.keywords(), pass.tier(), pass.cells(), pass.max_texels()),
             (&["DIRECTIONAL".to_owned()][..], 3, 2, 1024)
         );
-        assert_eq!(
-            LowerSkatebirdVoronoi::from_options(&pass.options()).unwrap(),
-            pass
-        );
+        assert_eq!(pass.options(), o(&all));
         for missing in 0..all.len() {
             let mut fewer = all.to_vec();
             fewer.remove(missing);
-            assert!(LowerSkatebirdVoronoi::from_options(&o(&fewer)).is_err());
+            assert!(make(&o(&fewer)).is_err());
         }
         let with = |k: &str, v: &str| {
             let mut changed = all.to_vec();
             changed.retain(|(key, _)| *key != k);
             changed.push((k, v));
-            LowerSkatebirdVoronoi::from_options(&o(&changed))
+            make(&o(&changed))
         };
         assert!(with("cells", "1").is_err());
         assert!(with("max-texels", "0").is_err());
@@ -711,6 +715,11 @@ mod tests {
         assert!(LowerSkatebirdVoronoi::new(Vec::new(), 0, 2, u32::MAX).is_err());
         assert!(with("tier", "x").is_err());
         assert!(with("extra", "1").is_err());
-        assert!(with("keywords", "").unwrap().keywords().is_empty());
+        assert_eq!(
+            with("keywords", "").unwrap().options(),
+            LowerSkatebirdVoronoi::new(Vec::new(), 3, 2, 1024)
+                .unwrap()
+                .options()
+        );
     }
 }

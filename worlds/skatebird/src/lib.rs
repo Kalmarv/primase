@@ -23,39 +23,17 @@ pub use read::{
     MarkersReport, ScriptedReport, SkatebirdReader, read_markers, read_scripted, read_voronoi_programs,
 };
 
-/// Registers SkateBIRD's passes by name: `lower-skatebird-voronoi`, whose options (`keywords`, `tier`, `cells`,
-/// `max-texels`) are the program's choices, without defaults; `omit-skatebird-mission-props`, whose `roles` are too;
-/// `place-skatebird-markers`, every option stated.
+/// Registers SkateBIRD's passes by their declarations: `lower-skatebird-voronoi`, whose options (`keywords`, `tier`,
+/// `cells`, `max-texels`) are the program's choices, without defaults; `omit-skatebird-mission-props`, whose `roles`
+/// are too; `place-skatebird-markers`, every option stated.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    reg.register_requiring(
-        "place-skatebird-markers",
-        |o| Ok(Box::new(passes::PlaceSkatebirdMarkers::from_options(o)?)),
-        &[
-            ("fallback", "0,1.189,0,7.0659"),
-            ("drop", "0.05"),
-            ("margin", "10"),
-            ("travel", "5"),
-            ("play-max-extent", "100"),
-        ],
-    );
-    reg.register_requiring(
-        "omit-skatebird-mission-props",
-        |o| Ok(Box::new(passes::OmitSkatebirdMissionProps::from_options(o)?)),
-        &[(
-            "roles",
-            "collectible+mission_giver+birb_decorator+unlocking_collectible+player_board+camera",
-        )],
-    );
-    reg.register_requiring(
-        "lower-skatebird-voronoi",
-        |o| Ok(Box::new(passes::voronoi::LowerSkatebirdVoronoi::from_options(o)?)),
-        &[
-            ("keywords", "DIRECTIONAL"),
-            ("tier", "3"),
-            ("cells", "2"),
-            ("max-texels", "1024"),
-        ],
-    );
+    for spec in [
+        &passes::PLACE_SKATEBIRD_MARKERS,
+        &passes::OMIT_SKATEBIRD_MISSION_PROPS,
+        &passes::LOWER_SKATEBIRD_VORONOI,
+    ] {
+        reg.add(spec);
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -68,3 +46,27 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[cfg(test)]
+mod tests {
+    use primase_core::pass::{Options, PassRegistry};
+
+    /// The crate registers exactly these passes by their declarations, each made only with its options and saying
+    /// what it takes.
+    #[test]
+    fn the_skatebird_passes_register_by_name() {
+        let mut reg = PassRegistry::new();
+        super::register(&mut reg);
+        let names = [
+            "lower-skatebird-voronoi",
+            "omit-skatebird-mission-props",
+            "place-skatebird-markers",
+        ];
+        assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        for name in names {
+            assert!(reg.requires_options(name), "{name}");
+            assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");
+            assert!(reg.make(name, &Options::new()).is_err(), "{name}");
+        }
+    }
+}
