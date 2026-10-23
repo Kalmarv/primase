@@ -263,7 +263,7 @@ fn stage(directory: &[primase_dxcontainer::Chunk<'_>]) -> Result<Stage> {
 
 /// Read a container's ISGN/OSGN signatures alone, for a container whose RDEF was stripped (as some engines ship
 /// them): no resources, so the caller states the constant layout from its own records. Interpolation is the
-/// program's to state: [`crate::Shader::parse_stripped`] reads it from the declarations.
+/// program's to state: [`crate::lift`] reads it from the declarations.
 pub fn signatures(bytes: &[u8]) -> Result<Interface> {
     let directory = crate::parts(bytes)?;
     let stage = stage(&directory)?;

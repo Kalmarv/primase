@@ -1,6 +1,6 @@
 //! The token-level decoder of Shader Model 4 and 5 programs: any stage's version token, declarations as typed
 //! records, and instructions as an opcode, its control bits, its extended tokens and its operands. It decides nothing
-//! about what a consumer supports: [`crate::Program`] (the bounded evaluator) and [`crate::lift`] each refuse, by name,
+//! about what a consumer supports: [`crate::lift`] refuses, by name,
 //! what they cannot use. A token it cannot read at all (an operand register type it has no name for, a truncated
 //! instruction) is an error naming the word.
 

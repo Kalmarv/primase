@@ -829,8 +829,8 @@ pub fn module(chunks: &[Chunk<'_>], kind: &[u8; 4]) -> Result<Option<Module>> {
     Module::read(&blocks).map(Some)
 }
 
-/// The interface of a DXIL container read alone, without checking that its program is within the evaluated subset
-/// ([`crate::Shader::parse`] does): stage, varyings with interpolation and resources.
+/// The interface of a DXIL container read alone, without lifting its program ([`crate::lift`] does): stage,
+/// varyings with interpolation and resources.
 pub fn interface(container: &[u8]) -> Result<Interface> {
     let chunks = crate::parts(container)?;
     let program = module(&chunks, b"DXIL")?.ok_or_else(|| error(0, "no DXIL part"))?;

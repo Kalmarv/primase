@@ -970,7 +970,6 @@ dependencies = [
  "primase-shader",
  "primase-testdata",
  "serde_json",
- "thiserror",
 ]
 
 [[package]]
@@ -992,7 +991,6 @@ dependencies = [
  "primase-shader",
  "primase-testdata",
  "serde_json",
- "thiserror",
 ]
 
 [[package]]

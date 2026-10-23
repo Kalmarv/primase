@@ -1,15 +1,13 @@
 //! Shader Model 6 (DXIL) programs: the container is the DXBC format (`primase-dxcontainer`); the LLVM bitcode in its `DXIL`
 //! part is read by a bounded bitstream reader of our own (`bitstream`, `module`), the reflection (`reflection`, `rdat`), the
-//! lifter to `primase_shader::Program` (`lift`, every stage a DXIL container holds) and the older bounded pixel-program
-//! evaluator implementing [`primase_shader::PixelShader`] (`Shader`). Sampling belongs to the caller of the evaluator.
+//! lifter to `primase_shader::Program` (`lift`, every stage a DXIL container holds). A lifted program is run by
+//! `primase_shader::exec`.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 pub mod bitstream;
-mod evaluate;
 mod lift;
 pub mod module;
 pub mod rdat;
 pub mod reflection;
-pub use evaluate::{Census, Shader};
 pub use lift::{LIFTER_VERSION, lift};
 pub use reflection::interface;
 

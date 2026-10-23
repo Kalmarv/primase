@@ -1,13 +1,13 @@
-# Bounded DXIL evaluation
+# DXIL: reading and lifting
 
-`Shader::parse` reads a Shader Model 6 container and checks its program against the evaluated subset;
-`Shader` implements `primase_shader::PixelShader`, so a caller written against that trait (such as
-`primase_shader::evaluate`) evaluates SM5 (`primase-dxbc`) and SM6 programs alike. Sampling is the caller's callback, as in
-`primase-dxbc`: a scalar evaluation has no derivatives.
+Shader Model 6 containers. `module` reads the LLVM bitcode of the `DXIL` part (our own bounded bitstream reader),
+`reflection` the signatures, resources and constant-buffer layouts, and `lift` turns a program of any stage into a
+`primase_shader::Program`; running one is `primase_shader::exec`'s (`ProgramShader` for a pixel or vertex program).
+Sampling belongs to the caller of an execution.
 
 ## Reading
 
-- Container (`chunks`): the DXBC directory format; SM6 parts are not 4-byte aligned. Parts lie inside the
+- Container (`primase-dxcontainer`): the DXBC directory format; SM6 parts are not 4-byte aligned. Parts lie inside the
   container, do not overlap, and each kind appears once. The digest is not verified (not an authenticity check).
 - Program (`program`): the `DXIL` part's header (program version, size, `DXIL` magic, DXIL version, bitcode
   offset and size); the `STAT` reflection part has the same header.
@@ -17,9 +17,9 @@
   considered; it sizes allocations from untrusted lengths.)
 - Module (`module`): LLVM 3.7 IR as DXIL stores it, relative value ids (module version 1): types, globals and
   functions, constants (no constant expressions), metadata (strings, values, nodes, named nodes), value names and
-  function bodies. Instructions: binary operators, casts, comparisons, select, extractvalue, insertvalue, call,
-  phi, ret and forward-only branches; any other record is refused by name (`getelementptr`, `alloca`, `load`,
-  `store`, `switch`, backward branches as loops, ...).
+  function bodies. Instructions: binary operators, casts, comparisons, select, extractvalue and insertvalue, vector
+  element and shuffle operations, call, phi, ret, branches, switch, unreachable, alloca, load and store; any other
+  record is refused by name.
 - A function body names only what the function has: every value an instruction reads is one of the function's (an
   earlier one, or a later one a phi or a loop reads), every branch target and phi predecessor a block of it, every
   instruction in a block, and a call has as many arguments as its callee has parameters. The lifter then reads an
@@ -31,28 +31,12 @@
   matrix annotations) from `dx.typeAnnotations`, named from the `STAT` module when present (the program's own
   metadata has no names), mapped into primase's interface vocabulary (`primase_shader::Interface`).
 
-## Evaluation
+## Lifting
 
-The entry function runs block by block along the taken branches; a phi takes the value of the block control came
-from; at most 2^20 instructions run. `dx.op` operations evaluated: LoadInput, StoreOutput, FAbs, Saturate, IsNaN,
-IsInf, IsFinite, Cos, Sin, Exp, Frc, Log, Sqrt, Rsqrt, Round_ne/ni/pi/z, FMax, FMin, IMax, IMin, UMax, UMin, FMad,
-IMad, UMad, Dot2/3/4, CreateHandle, CBufferLoadLegacy and Sample (2D, implicit LOD, no offsets or clamp). Others
-(SampleLevel, SampleBias, derivatives, Discard, ...) are refused by name when the shader is parsed;
-`Shader::census` lists every instruction and operation a program uses and what is refused.
-
-Numerical choices, as `primase-dxbc` states them: f32 arithmetic with the host's nearest-even rounding and
-subnormal results flushed to zero (sign kept); FMad a separately rounded multiply then add; Dot2/3/4 lane-order
-products and sequential additions, each rounded; float-to-unsigned truncates toward zero and clamps (NaN to 0);
-Saturate maps NaN to 0. Half and double values are outside the subset.
-
-Inputs are signature registers of four lanes, constant buffers are rows of four lanes by bind slot, textures are
-identified by bind slot. A missing input, buffer of the wrong size, undeclared handle, out-of-range index or an
-undefined value used in arithmetic is an error; no partial output is returned.
-
-`Shader::execute_marked` also returns, per output register, the lanes whose value depends on an operation Direct3D
-leaves to the implementation within a tolerance (Exp, Log, Sin, Cos, Rsqrt); every other lane is exact under the
-choices above. `Shader::passthrough_vertex_shader` writes the HLSL of a vertex shader that feeds the program, for
-running it on a rasterizer.
+`lift(container)` lifts a program of any stage a DXIL container holds. The interface lists every element of the
+container's signatures, `used` where the program reads or writes a cell of it (the program's own reading: the compiler's
+masks are not what is stored). Inputs are signature registers of four lanes, constant buffers rows of four lanes by
+bind slot. An operation's arguments are read by position after one check of their count (`src/lift/dxop.rs`).
 
 ## Gates
 
@@ -65,8 +49,14 @@ running it on a rasterizer.
   operations) rendered by Microsoft's WARP rasterizer (Direct3D 12) through a separate oracle program (`tools.warp`;
   its vertex shader compiled with `tools.dxc`) and executed on the same inputs: lanes must agree bit for bit, the
   float lanes of the fixture that uses `exp2`, `log2` and `rsqrt` within 1e-5 relative.
-- Real data (Elden Ring's G-buffer pixel programs, read by the Elden Ring reader): of 2,110, 2,031 are inside
-  the subset (37 refused for loops, 42 for `alloca`), and each one's instruction count and calls equal `dxc -dumpbin`'s;
-  evaluated against WARP on two cases each (inputs and constants from the program's reflection, uniform textures),
-  of 81,240 output lanes, the 30,968 marked ones agree within 5.7e-6 relative and the others bit for bit, except 12 that
-  are NaN in both with different payloads (Direct3D leaves NaN payloads unspecified; the comparison now accepts them).
+- Real data: `tests/lift_corpus.rs` lifts a folder of real containers (`oracles.corpus.skate/shaders`, `elden/shaders`),
+  validates and writes each and prints the refusals by reason.
+
+## Retired evaluator: what it established
+
+The bounded pixel-program interpreter (`Shader`, with `execute_marked` and `census`) was removed once the executor ran
+everything it did. On Elden Ring's G-buffer pixel programs (read by the Elden Ring reader) it covered 2,031 of 2,110 (37
+refused for loops, 42 for `alloca`), and each one's instruction count and calls equalled `dxc -dumpbin`'s; evaluated
+against WARP on two cases each (inputs and constants from the program's reflection, uniform textures), of 81,240 output
+lanes the 30,968 whose value depends on `Exp`, `Log`, `Sin`, `Cos` or `Rsqrt` agreed within 5.7e-6 relative and the others
+bit for bit, except 12 that are NaN in both with different payloads (Direct3D leaves NaN payloads unspecified).

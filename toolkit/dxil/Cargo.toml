@@ -9,7 +9,6 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-thiserror.workspace = true
 primase-bytes.workspace = true
 primase-dxcontainer.workspace = true
 primase-shader.workspace = true
