@@ -1,4 +1,4 @@
-use primase_havok::ConvexCore;
+use primase_havok::{ConvexCore, MAX_PLANES, MAX_VERTICES};
 fn cube(radius: f32) -> ConvexCore {
     ConvexCore {
         vertices: vec![
@@ -415,4 +415,40 @@ fn rounded_bounds_are_stated_and_a_radius_of_0_is_the_core() {
     for bad in [0., -1., f64::NAN, f64::INFINITY] {
         assert!(cube(0.1).rounded_triangles(bad).is_err());
     }
+}
+
+/// The tangent planes of a unit sphere in `n` directions (a polytope of `n` faces), with the directions as vertices.
+fn sphere(n: usize) -> ConvexCore {
+    let planes: Vec<[f32; 4]> = (0..n)
+        .map(|i| {
+            let y = 1.0 - 2.0 * (i as f64 + 0.5) / n as f64;
+            let r = (1.0 - y * y).sqrt();
+            let a = i as f64 * 2.399_963_229_728_653;
+            [(r * a.cos()) as f32, y as f32, (r * a.sin()) as f32, -1.0]
+        })
+        .collect();
+    ConvexCore {
+        vertices: planes.iter().map(|p| [p[0], p[1], p[2]]).collect(),
+        faces: vec![vec![0, 1, 2]; n],
+        planes,
+        radius: 0.0,
+    }
+}
+
+/// The half-space intersection is cubic in the plane count, so a core with more planes or vertices than Sekiro's
+/// shapes could ever have (150 and 152 in its objects) is refused before any of it is done; one with a few
+/// hundred still tessellates.
+#[test]
+fn a_core_with_more_planes_or_vertices_than_the_cap_is_refused() {
+    let triangles = sphere(128).expanded_triangles().unwrap();
+    assert!(triangles.len() >= 124);
+    let e = sphere(MAX_PLANES + 1)
+        .expanded_triangles()
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("more than the"), "{e}");
+    let mut many_vertices = cube(0.0);
+    many_vertices.vertices = vec![[0.0; 3]; MAX_VERTICES + 1];
+    let e = many_vertices.expanded_triangles().unwrap_err().to_string();
+    assert!(e.contains("more than the"), "{e}");
 }

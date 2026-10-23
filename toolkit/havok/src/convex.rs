@@ -1,5 +1,14 @@
 use crate::{Result, Value, invalid};
 
+/// The most vertices a convex core may hold. Every stage of the tessellation is superlinear in the count (the plane
+/// intersections cubic, the hull and the flat-shape test not far from it), and a file states it freely; Sekiro's own
+/// shapes have at most 152 of them (177 convex shapes of its objects), and Havok's polytope indices are bytes. This is
+/// twice a byte's range: a judgement, not a limit the format states.
+pub const MAX_VERTICES: usize = 512;
+/// The most planes a convex core may hold (a polytope of [`MAX_VERTICES`] vertices has at most twice that many faces;
+/// Sekiro's objects have at most 150). The intersection of half-spaces takes 2.4 s at this many, 27.8 s at twice.
+pub const MAX_PLANES: usize = 512;
+
 /// Stored polytope core. Radius expansion is a tessellation policy, not the
 /// rounded surface of a Havok convex shape (notably at capsule corners). An
 /// `hknpConvexShape` stores its vertices only: its faces and planes are those of
@@ -15,6 +24,15 @@ impl ConvexCore {
     pub fn read(shape: Value<'_, '_>) -> Result<Self> {
         let radius = shape.field("convexRadius")?.float()?;
         let stored = shape.field("vertices")?.array()?;
+        if stored.len() > MAX_VERTICES {
+            return Err(invalid(
+                shape.offset,
+                format!(
+                    "{} convex vertices, more than the {MAX_VERTICES} read",
+                    stored.len()
+                ),
+            ));
+        }
         let mut vertices = Vec::with_capacity(stored.len());
         for i in 0..stored.len() {
             let v = stored.get(i)?.vector::<4>()?;
@@ -38,6 +56,12 @@ impl ConvexCore {
             return Ok(core);
         }
         let stored = shape.field("planes")?.array()?;
+        if stored.len() > MAX_PLANES {
+            return Err(invalid(
+                shape.offset,
+                format!("{} convex planes, more than the {MAX_PLANES} read", stored.len()),
+            ));
+        }
         let mut planes = Vec::with_capacity(stored.len());
         for i in 0..stored.len() {
             planes.push(stored.get(i)?.vector::<4>()?);
@@ -121,6 +145,16 @@ impl ConvexCore {
         Ok(core)
     }
     fn validate(&self) -> Result<()> {
+        if self.vertices.len() > MAX_VERTICES || self.planes.len() > MAX_PLANES {
+            return Err(invalid(
+                0,
+                format!(
+                    "{} convex vertices and {} planes, more than the {MAX_VERTICES} and {MAX_PLANES} read",
+                    self.vertices.len(),
+                    self.planes.len()
+                ),
+            ));
+        }
         if !self.radius.is_finite()
             || self.radius < 0.
             || self

@@ -5,7 +5,7 @@
 pub mod animation;
 mod convex;
 mod mesh;
-pub use convex::ConvexCore;
+pub use convex::{ConvexCore, MAX_PLANES, MAX_VERTICES};
 mod section;
 pub mod spline;
 pub mod world;
