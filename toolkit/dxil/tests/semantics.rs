@@ -918,7 +918,8 @@ mod stage_functions {
                 "SV_PrimitiveID" => Some(vec![[0, 0, 0, 0]]),
                 _ => None,
             });
-            assert_eq!(lanes(out["SV_Position0"], 4), [6.375, 8.125, 9.375, 1.0], "{v}");
+            // x: 0.5 + 1 + 1.75 + 2 + 0.5 + 0.625; y: 1 + 1.25 + 2 + 2.5 + 0.5 + 0.625; z: 1.5 + 1.5 + 2.25 + 3 + 1.125
+            assert_eq!(lanes(out["SV_Position0"], 4), [6.375, 7.875, 9.375, 1.0], "{v}");
             assert_eq!(lanes(out["COLOR0"], 4), [0.5, 0.25, 0.25, 1.0], "{v}");
         }
     }
