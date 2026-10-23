@@ -12,6 +12,9 @@
 //!   sampler paths `N:\GR\data\Model\parts\tex\...`) are in `parts/common_body.tpf`, which every character reads: none
 //!   of them is unavailable on `c2200` (its backface and silhouette shells name only `AAT100_Crystal_*`) and `c2010`
 //!   (the fur cards' strand map is `AAT500_Hair_02_a`).
+//! - E4: the textures of the assets a character's materials bind (`aet210_112_a`: the package
+//!   `asset/aet/aet210/aet210_112.tpf` the game names after the texture) are read: every `aet` binding of `c8100`, `c8101`
+//!   and `c8110` that has a package in the archives is available.
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
@@ -165,6 +168,44 @@ fn the_parts_folder_textures_of_a_character_are_found_in_the_common_body_package
             }
         }
         assert!(parts > 0, "{id} binds no parts folder texture");
+    }
+    Ok(())
+}
+
+/// E4: a texture named for an asset is read from that asset's package.
+#[test]
+fn the_asset_textures_a_character_binds_are_read_from_their_packages() -> Result<()> {
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let archive = install.open()?;
+    for id in ["c8100", "c8101", "c8110"] {
+        let mut w = World::new();
+        read_character_with(&install, id, &decoder, CharacterOptions::default(), &mut w)?;
+        let mut assets = 0;
+        for (_, m) in w.iter::<Material>() {
+            for (kind, b) in &m.bindings {
+                let Some(package) = Game::EldenRing.texture_package(&b.texture) else {
+                    continue;
+                };
+                if archive.contains(&package) {
+                    assets += 1;
+                    assert!(
+                        b.available,
+                        "{id}: {kind} binds {}, whose package {package} was not read",
+                        b.texture
+                    );
+                }
+            }
+        }
+        assert!(assets > 0, "{id} binds no asset texture");
     }
     Ok(())
 }

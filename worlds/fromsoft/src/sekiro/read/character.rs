@@ -9,7 +9,9 @@
 //! texture path: Sekiro's c1010's bodies use `c1019_body_merge`, whose textures are in `chr/c1019.texbnd`, a character
 //! with no model), the packages every character shares ([`crate::Game::character_shared_textures`]: Sekiro's
 //! `parts/common_body.tpf` (hair, fabric, metal, seams, `FC_A_0000_*`) and `other/systex.tpf`; Elden Ring's
-//! `parts/common_body.tpf` (`AAT100_*`, `AAT500_*`), `other/systex.tpf` and `other/decaltex.tpf`). A part's materials also bind the full-resolution
+//! `parts/common_body.tpf` (`AAT100_*`, `AAT500_*`), `other/systex.tpf` and `other/decaltex.tpf`) and, where the game names
+//! packages after their textures ([`crate::Game::texture_package`]: Elden Ring's `aet210_112_a` is in
+//! `asset/aet/aet210/aet210_112.tpf`), the package of each texture no source above held. A part's materials also bind the full-resolution
 //! textures of the parts they were authored for (a `_l` part holds `_l` copies): the part's full sibling
 //! (`parts/bd_m_9120.partsbnd` for `bd_m_9120_l`) and the other parts its texture paths name (`fc_m_0200` for the face
 //! `fc_m_0220_l`). Each asset is:
@@ -430,6 +432,36 @@ impl<'a> Reading<'a> {
             if textures::has(archive, shared) {
                 catalog.add(&archive.read(shared, decoder)?)?;
             }
+        }
+        // a material may bind a texture of an asset (Elden Ring's `aet210_112_a`), which the game keeps in the package
+        // named for it: read the packages of the names no source above held
+        let mut packages = BTreeSet::new();
+        for m in &model.materials {
+            let defined: Vec<String> = definitions
+                .get(&materials::stem(&m.mtd))
+                .map(|d| {
+                    d.textures()
+                        .into_iter()
+                        .map(|(_, path, _)| path.to_owned())
+                        .collect()
+                })
+                .unwrap_or_default();
+            for path in defined
+                .iter()
+                .map(String::as_str)
+                .chain(m.textures.iter().map(|t| t.path.as_str()))
+            {
+                let stem = materials::stem(path);
+                if !catalog.entries.contains_key(&stem)
+                    && let Some(package) = self.game.texture_package(&stem)
+                    && textures::has(archive, &package)
+                {
+                    packages.insert(package);
+                }
+            }
+        }
+        for package in &packages {
+            catalog.add(&archive.read(package, decoder)?)?;
         }
         for f in &binder.files {
             let member_name = f.name.as_deref().unwrap_or("");
