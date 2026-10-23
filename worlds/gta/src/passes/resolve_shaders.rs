@@ -9,7 +9,10 @@
 //!   `wdcascade_draw` the cascaded shadow pass, `cube_draw` the cube-map pass, and each lists the programs it runs
 //!   (the vertex and the pixel program, or the vertex program alone of a depth-only pass). Which technique a draw uses
 //!   (its pass, its vertex format, its alpha mode) is the draw's choice, not the material's, so `technique` is a
-//!   required option. An effect without that technique, with several passes in it, with a tessellated pass (the hull
+//!   required option. Where the technique asked for is a G-buffer pass (`deferred_<S>`) and the effect has none, the
+//!   material takes the pass the engine draws it with ([`fallback_technique`], from the effect's own technique names and
+//!   the material's stored render bucket): the alpha-clip G-buffer pass `deferredalphaclip_<S>` for a cutout material,
+//!   the forward pass `<S>` for any other, counted. An effect without that technique, with several passes in it, with a tessellated pass (the hull
 //!   and domain stages are not bound), a compute pass or with no technique table (the post-processing and lighting
 //!   effects) leaves its materials unbound, by name.
 //! - **Render state.** The pass names a record of each of the effect's tables ([`GtaPass::rasterizer`], `depth_stencil`
@@ -51,7 +54,8 @@
 //!   exponent (where the program stores each as a square root, the exponent over 512), z the Fresnel term, target 3's
 //!   z the emission (where the program writes one) and target 4 the motion vector; every other lane, and every
 //!   output of another family or of a program that writes fewer targets, is `Unknown` by its index (the lanes'
-//!   contents are in [`gbuffer`]'s table).
+//!   contents are in [`gbuffer`]'s table), but for the one target of a forward-lit `PS_Textured_Zero|Four|Eight`
+//!   program, the finished `Colour`.
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Options, Pass, PassLog};
@@ -78,6 +82,14 @@ use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
 /// The pixel program family whose targets the pass names roles for (`PS_DeferredTextured` and its alpha-clipped and
 /// sub-sample variants: [`gbuffer`] has the layout and how it was checked).
 const GBUFFER_FAMILY: &str = "PS_DeferredTextured";
+
+/// The forward-lit pixel programs of the shared `Textured` family: `Zero`, `Four` and `Eight` name the number of dynamic
+/// lights the program lights with, and each writes the one colour target (`tests/technique_survey.rs`: the `draw`
+/// technique of every effect runs `PS_Textured_Eight`, as its `lightweight8_draw` does).
+const FORWARD_PROGRAMS: [&str; 3] = ["PS_Textured_Zero", "PS_Textured_Four", "PS_Textured_Eight"];
+
+/// The render bucket of the cutout (alpha-tested) materials ([`crate::passes::lower::draw_order`]).
+const CUTOUT_BUCKET: u8 = 3;
 
 /// The D3D12 comparison function as the vocabulary's.
 pub(super) fn compare(f: u8) -> Option<Compare> {
@@ -235,6 +247,11 @@ struct Chosen {
     vertex: Entity,
     /// The pixel program's G-buffer stores, where its family has a layout.
     writes: Option<Result<GBufferWrites, String>>,
+    /// The pixel program is one of the forward-lit programs, whose one target is the finished colour.
+    forward: bool,
+    /// The technique the pass was selected from, where it is not the one asked for: what the engine draws a material with
+    /// whose effect has no such pass, and why that one.
+    fallback: Option<&'static str>,
 }
 
 /// What a texture parameter with no texture becomes.
@@ -295,6 +312,27 @@ pub fn split_program_name(name: &str) -> Option<(&str, &str)> {
     let rest = name.strip_suffix("_Wrapped")?;
     let (stem, hash) = rest.rsplit_once('_')?;
     (hash.len() == 8 && hash.bytes().all(|b| b.is_ascii_hexdigit())).then_some((stem, hash))
+}
+
+/// The technique to draw a material with where its effect has no G-buffer pass `deferred_<S>` (the one asked for), and
+/// the reason, from the effect's own technique names and the material's stored render bucket. The effects without a
+/// `deferred_draw` are the ones the engine does not draw in the G-buffer pass; of the 146 of the shader database, all
+/// that have a cutout-bucket material have a `deferredalphaclip_<S>` pass, which writes the same five targets as
+/// `deferred_<S>` with the same state, and every other has the forward pass `<S>` (`draw`, `drawskinned`), whose pixel
+/// program lights with up to eight lights (`tests/technique_survey.rs`). A cutout material takes the alpha-clip pass or
+/// none; any other takes the forward pass if the effect has it. Only a request for a G-buffer pass has a fallback.
+pub fn fallback_technique(
+    techniques: &GtaEffectTechniques,
+    requested: &str,
+    bucket: u8,
+) -> Option<(String, &'static str)> {
+    let suffix = requested.strip_prefix("deferred_")?;
+    let has = |name: &str| techniques.techniques.iter().any(|t| t.name == name);
+    if bucket == CUTOUT_BUCKET {
+        let name = format!("deferredalphaclip_{suffix}");
+        return has(&name).then_some((name, "the alpha-clip G-buffer pass of the cutout bucket"));
+    }
+    has(suffix).then(|| (suffix.to_owned(), "the forward pass"))
 }
 
 /// The pass of the technique `name` of an effect: its one pass, if it has one, with a vertex program and no
@@ -469,6 +507,7 @@ impl ResolveGtaShaders {
         shader: Entity,
         vertex_bound: bool,
         writes: Option<&Result<GBufferWrites, String>>,
+        forward: bool,
         sample_uses: &mut BTreeMap<Entity, Result<SamplerUses, String>>,
         constant_reads: &mut BTreeMap<Entity, Result<ConstantReads, String>>,
         counts: &mut Counts,
@@ -581,7 +620,7 @@ impl ResolveGtaShaders {
             })
             .collect();
         let outputs = if stage == Stage::Pixel {
-            output_bindings(interface, writes, counts)
+            output_bindings(interface, writes, forward, counts)
         } else {
             Vec::new()
         };
@@ -602,6 +641,7 @@ impl ResolveGtaShaders {
 fn output_bindings(
     interface: &primase_core::shader::Interface,
     writes: Option<&Result<GBufferWrites, String>>,
+    forward: bool,
     counts: &mut Counts,
 ) -> Vec<OutputBinding> {
     // a DXIL program's colour outputs are system values (`SV_Target<n>`)
@@ -628,6 +668,7 @@ fn output_bindings(
             None
         }
     };
+    let one_colour = targets.len() == 1 && targets.iter().all(|v| v.label.index == 0 && v.value.width == 4);
     let mut outputs = Vec::new();
     for v in targets {
         let full: u8 = ((1u16 << v.value.width) - 1) as u8;
@@ -692,8 +733,12 @@ fn output_bindings(
                 lanes(0b0100, OutputRole::Emission);
                 lanes(0b1011, OutputRole::Unknown(3));
             }
+            (None, 0) if forward && one_colour => lanes(0b1111, OutputRole::Colour),
             (_, n) => lanes(0b1111, OutputRole::Unknown(n)),
         }
+    }
+    if forward && one_colour {
+        counts.add("forward pixel stages (PS_Textured_Zero, Four, Eight): target 0 is the finished colour");
     }
     if let Some(w) = layout {
         if w.normal_zero {
@@ -1043,15 +1088,25 @@ impl Pass for ResolveGtaShaders {
             .collect();
         let mut counts = Counts::default();
         // per effect: the programs chosen, or why not
-        let mut chosen: BTreeMap<Entity, Result<Chosen, String>> = BTreeMap::new();
+        let mut chosen: BTreeMap<(Entity, String), Result<Chosen, String>> = BTreeMap::new();
         let mut bound: Vec<(Entity, ShaderBinding)> = Vec::new();
         // per program: the samplers its samples read through (lifting the program is the cost)
         let mut sample_uses: BTreeMap<Entity, Result<SamplerUses, String>> = BTreeMap::new();
         // per program: the constant-buffer words it reads
         let mut constant_reads: BTreeMap<Entity, Result<ConstantReads, String>> = BTreeMap::new();
         for (material, shader, effect_entity) in materials {
+            // the technique asked for, or where the effect has none of that name the one its material is drawn with
+            let (technique, fallback) = match world.get::<GtaEffectTechniques>(effect_entity) {
+                Some(t) if !t.techniques.iter().any(|t| t.name == self.technique) => {
+                    match fallback_technique(t, &self.technique, shader.render_bucket) {
+                        Some((name, why)) => (name, Some(why)),
+                        None => (self.technique.clone(), None),
+                    }
+                }
+                _ => (self.technique.clone(), None),
+            };
             let picked = chosen
-                .entry(effect_entity)
+                .entry((effect_entity, technique.clone()))
                 .or_insert_with(|| {
                     let effect = world
                         .get::<GtaEffect>(effect_entity)
@@ -1059,7 +1114,7 @@ impl Pass for ResolveGtaShaders {
                     let techniques = world
                         .get::<GtaEffectTechniques>(effect_entity)
                         .ok_or_else(|| format!("the effect has no technique table ({})", effect.name))?;
-                    let pass = select_pass(techniques, &self.technique)
+                    let pass = select_pass(techniques, &technique)
                         .map_err(|why| format!("{why} ({})", effect.name))?;
                     let vertex =
                         pass.vertex.as_ref().and_then(|p| p.shader).ok_or_else(|| {
@@ -1067,16 +1122,20 @@ impl Pass for ResolveGtaShaders {
                         })?;
                     let pixel = match &pass.pixel {
                         None => None,
-                        Some(p) => Some((
-                            p.shader.ok_or_else(|| {
-                                format!("the pixel program {} has no interface ({})", p.name, effect.name)
-                            })?,
-                            split_program_name(&p.name)
-                                .is_some_and(|(stem, _)| stem.starts_with(GBUFFER_FAMILY)),
-                        )),
+                        Some(p) => {
+                            let stem = split_program_name(&p.name).map(|(stem, _)| stem);
+                            Some((
+                                p.shader.ok_or_else(|| {
+                                    format!("the pixel program {} has no interface ({})", p.name, effect.name)
+                                })?,
+                                stem.is_some_and(|s| s.starts_with(GBUFFER_FAMILY)),
+                                stem.is_some_and(|s| FORWARD_PROGRAMS.contains(&s)),
+                            ))
+                        }
                     };
+                    let forward = pixel.is_some_and(|(_, _, forward)| forward);
                     // the G-buffer's roles are read from the program's own stores
-                    let writes = pixel.and_then(|(entity, gbuffer_family)| {
+                    let writes = pixel.and_then(|(entity, gbuffer_family, _)| {
                         gbuffer_family.then(|| {
                             world
                                 .get::<Shader>(entity)
@@ -1089,9 +1148,11 @@ impl Pass for ResolveGtaShaders {
                     Ok(Chosen {
                         state,
                         notes,
-                        pixel: pixel.map(|(entity, _)| entity),
+                        pixel: pixel.map(|(entity, _, _)| entity),
                         vertex,
                         writes,
+                        forward,
+                        fallback,
                     })
                 })
                 .clone();
@@ -1101,6 +1162,8 @@ impl Pass for ResolveGtaShaders {
                 pixel,
                 vertex,
                 writes,
+                forward,
+                fallback,
             } = match picked {
                 Ok(pair) => pair,
                 Err(why) => {
@@ -1131,6 +1194,7 @@ impl Pass for ResolveGtaShaders {
                     e,
                     true,
                     writes.as_ref(),
+                    forward,
                     &mut sample_uses,
                     &mut constant_reads,
                     &mut counts,
@@ -1147,6 +1211,12 @@ impl Pass for ResolveGtaShaders {
                 continue;
             }
             counts.add("materials bound");
+            if let Some(why) = fallback {
+                counts.add(&format!(
+                    "materials bound to {technique}, {why}: the effect has no technique {}",
+                    self.technique
+                ));
+            }
             for note in &notes {
                 counts.add(&format!("render state: {note}"));
             }
@@ -1261,6 +1331,34 @@ mod tests {
             blend: Vec::new(),
             samplers: Vec::new(),
         }
+    }
+
+    /// An effect that lacks `deferred_<S>` is drawn by its alpha-clip G-buffer pass where the material is in the cutout
+    /// bucket and the effect has one, by its forward pass `<S>` where the material is in any other bucket and the effect
+    /// has one, and by none otherwise; a technique that is not a G-buffer pass has no fallback.
+    #[test]
+    fn a_material_whose_effect_has_no_g_buffer_pass_takes_the_engines_other_pass() {
+        let mut t = techniques();
+        t.techniques.retain(|t| t.name != "deferred_draw");
+        let pass = |t: &GtaEffectTechniques, name: &str, bucket: u8| {
+            fallback_technique(t, name, bucket).map(|(n, _)| n)
+        };
+        // the forward pass of the effect's name, for the buckets that are not the cutout's
+        t.techniques.push(technique("draw", Vec::new()));
+        assert_eq!(pass(&t, "deferred_draw", 1).as_deref(), Some("draw"));
+        assert_eq!(pass(&t, "deferred_draw", 6).as_deref(), Some("draw"));
+        // a cutout material takes the alpha-clip pass or none
+        assert_eq!(pass(&t, "deferred_draw", CUTOUT_BUCKET), None);
+        t.techniques.push(technique("deferredalphaclip_draw", Vec::new()));
+        assert_eq!(
+            pass(&t, "deferred_draw", CUTOUT_BUCKET).as_deref(),
+            Some("deferredalphaclip_draw")
+        );
+        assert_eq!(pass(&t, "deferred_draw", 0).as_deref(), Some("draw"));
+        // the skinned pass has its own suffix; a technique that is not a G-buffer pass has no fallback
+        assert_eq!(pass(&t, "deferred_drawskinned", 1), None);
+        assert_eq!(pass(&t, "lightweight0_draw", 1), None);
+        assert_eq!(pass(&t, "wdcascade_draw", 1), None);
     }
 
     #[test]
