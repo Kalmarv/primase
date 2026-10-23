@@ -617,7 +617,7 @@ pub const DECLARED: &[Declared] = &[
         status: Status::Blocked,
         gate: true,
         about: r#"loose Havok 2016.2 tagfiles, matching compendium, and optional independent `.hkx.soup` oracle files; schema in toolkit/havok/README.md"#,
-        source: r#"the game's own tagfiles; the `.hkx.soup` oracle needs an independent reader (Havoc or HKLib thin dump)"#,
+        source: r#"the game's own tagfiles; the `.hkx.soup` oracle has no independent producer: Sekiro's Havok 2016.2 compressed meshes have no third-party decoder (HKLib refuses SDK 20160200; Havoc gives the mesh tree as stored, undecoded; Smithbox's decoder needs HKLib's 2018 objects)"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Sekiro, "object-hkx"),
@@ -817,10 +817,10 @@ pub const DECLARED: &[Declared] = &[
     },
     Declared {
         query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "objects"),
-        status: Status::Blocked,
+        status: Status::Live,
         gate: true,
-        about: r#"main-HKX body fixtures for reference bd77fcb, decoded by an independent Havok reader; worlds/fromsoft/tests/object_collision.rs"#,
-        source: r#"the existing fixtures were decoded by our earlier C# exporter, not independently; replacement: a thin dump through Havoc (SoulsAssetPipeline d11caf9)"#,
+        about: r#"the game's object main .hkx files (179, castle) with Havoc's reading of each (`<name>.hkx.json`: every object, its class and fields as stored, floats as bits); bodies, shape classes, convex cores and poses checked exactly, compressed meshes counted as uncovered; worlds/fromsoft/tests/object_collision.rs"#,
+        source: r#"independent: Havoc (SoulsAssetPipeline d11caf9), through a thin dump harness kept with the private oracle tools (`havok-json` mode); no independent decoder reads Sekiro's compressed meshes (HKLib supports Havok 2018 only)"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "parts"),
