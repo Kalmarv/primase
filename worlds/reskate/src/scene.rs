@@ -408,7 +408,6 @@ pub struct Scene<'a> {
     /// Ground frame, `None`: the box of everything.
     pub region: Option<[f64; 4]>,
     pub surfaces: SurfaceTable,
-    surf_map: Vec<usize>,
     pub textures: BTreeMap<String, TexDef<'a>>,
     /// Material keys in the scene's order, with their entity's component.
     pub materials: HashMap<String, SkateMaterial>,
@@ -1052,7 +1051,6 @@ impl<'a> Scene<'a> {
             generator: sc.generator.clone(),
             region: sc.region.map(|g| g.map(f64::from)),
             surfaces,
-            surf_map,
             textures,
             materials,
             vertex_blend,
@@ -1096,10 +1094,6 @@ impl<'a> Scene<'a> {
     pub fn surf(&self, b: u8) -> u8 {
         b
     }
-
-    pub fn surf_count(&self) -> usize {
-        self.surf_map.len()
-    }
 }
 
 /// A prototype's primitive as the reference reads it, the world's own streams (borrowed): positions, normals (None:
@@ -1115,7 +1109,7 @@ pub struct ProtoPrim<'a> {
 }
 
 /// The writer's view of a `core.mesh` primitive (positions, normals, first texture coordinates, triangle indices).
-pub fn proto_prim(pr: &primase_core::Primitive) -> ProtoPrim<'_> {
+fn proto_prim(pr: &primase_core::Primitive) -> ProtoPrim<'_> {
     let pos = pr.positions().unwrap_or(&[]).as_flattened();
     let nv = pos.len() / 3;
     let nrm = match pr.streams.get(&Semantic::Normal) {
@@ -1531,11 +1525,6 @@ pub fn material_of<'w>(
         })?
         .clone();
     mat.id(scene, mats, tex, &key)
-}
-
-/// Hand out the kinds' name.
-pub fn class_of(c: MaterialClass) -> VClass {
-    class(c)
 }
 
 /// A prototype's key when its description gives none: FNV-1a (seed 0x811C9DC5, multiplier 0x01000193) over the id's UTF-16LE

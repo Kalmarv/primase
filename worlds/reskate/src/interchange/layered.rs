@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
-pub(crate) struct Syntax {
+struct Syntax {
     layers: Value,
     weights: Value,
 }

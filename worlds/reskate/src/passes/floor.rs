@@ -79,10 +79,6 @@ impl PrepareReskateFloor {
         self.stub_below
     }
 
-    pub fn pinned_floor(&self) -> Option<f32> {
-        self.floor
-    }
-
     /// From its options (`min_height` and `stub_below` required, `floor` optional), through the same constructors.
     pub fn from_options(o: &Options) -> Result<PrepareReskateFloor, String> {
         let number = |k: &str| -> Result<Option<f32>, String> {
@@ -154,7 +150,7 @@ fn select_floor(lows: &[f32], pinned: Option<f32>) -> Option<f32> {
 
 /// What the floor is measured on of what `owned` owns: per placement the map draws, the lowest point of each of its
 /// parts; and, when there are none, per world collision soup, of each of its triangles.
-fn measure(w: &World, owned: &Owned) -> SkateFloorSummary {
+fn measure(w: &World, owned: &Owned) -> Result<SkateFloorSummary, String> {
     let mut lows: BTreeMap<u64, Vec<f32>> = BTreeMap::new();
     for (e, i) in w
         .iter::<Instance>()
@@ -178,6 +174,7 @@ fn measure(w: &World, owned: &Owned) -> SkateFloorSummary {
         for (e, t) in world_soups(w) {
             let Some(k) = owned.key(e) else { continue };
             let c = w.get::<Collision>(e).expect("listed");
+            super::check_soup(&format!("{e:?}'s collision"), c, w.get::<SkateRock>(e))?;
             let v: Vec<f32> = c
                 .triangles
                 .iter()
@@ -190,7 +187,7 @@ fn measure(w: &World, owned: &Owned) -> SkateFloorSummary {
             soup_lows.insert(k, v);
         }
     }
-    SkateFloorSummary { lows, soup_lows }
+    Ok(SkateFloorSummary { lows, soup_lows })
 }
 
 /// The world's collision soups (no placed prototype's), each with the transform that puts it in scene space.
@@ -278,10 +275,10 @@ impl Pass for PrepareReskateFloor {
                          decide-reskate-floor)"
                     )
                 })?;
-                self.decide(&measure(w, &Owned::all()))
+                self.decide(&measure(w, &Owned::all())?)
             }
         };
-        self.apply(w, log, &decision);
+        self.apply(w, log, &decision)?;
         Ok(())
     }
 }
@@ -303,7 +300,7 @@ impl PrepareReskateFloor {
 
     /// `decision` applied to the world: the parts below the cutoff left out, every coordinate lifted, the plan
     /// recorded.
-    fn apply(&self, w: &mut World, log: &mut PassLog, decision: &SkateFloorDecision) {
+    fn apply(&self, w: &mut World, log: &mut PassLog, decision: &SkateFloorDecision) -> Result<(), String> {
         // the scene's own floor statement (min_height) is the program's to apply: this pass applied its choice
         if let Some(scene) = w.resource_mut::<SkateScene>() {
             scene.min_height = None;
@@ -317,7 +314,7 @@ impl PrepareReskateFloor {
                 placements_removed: 0,
                 parts_removed: 0,
             });
-            return;
+            return Ok(());
         };
         let lift = decision.lift;
         // the placements the map draws and their parts' height spans
@@ -353,6 +350,7 @@ impl PrepareReskateFloor {
         let mut triangles_removed = 0u64;
         for (e, t) in &soups {
             let c = w.get::<Collision>(*e).expect("listed");
+            super::check_soup(&format!("{e:?}'s collision"), c, w.get::<SkateRock>(*e))?;
             let y = |i: u32| t.apply(c.positions[i as usize])[1];
             let hull = w
                 .get::<SkateCollision>(*e)
@@ -372,20 +370,15 @@ impl PrepareReskateFloor {
             }
             triangles_removed += cut as u64;
             let mut c = c.clone();
-            let rock = w.get::<SkateRock>(*e).cloned();
-            let mut k = keep.iter();
-            c.surfaces.retain(|_| *k.next().expect("one per triangle"));
-            let mut k = keep.iter();
-            c.triangles.retain(|_| *k.next().expect("one per triangle"));
+            let mut rock = w.get::<SkateRock>(*e).cloned();
+            super::keep_triangles(&mut c, rock.as_mut(), &keep);
             if c.triangles.is_empty() {
                 w.remove::<Collision>(*e);
                 w.remove::<SkateRock>(*e);
                 log.count("world collision soups wholly below the cutoff, removed", 1);
                 continue;
             }
-            if let Some(mut rock) = rock {
-                let mut k = keep.iter();
-                rock.0.retain(|_| *k.next().expect("one per triangle"));
+            if let Some(rock) = rock {
                 w.insert(*e, rock);
             }
             w.insert(*e, c);
@@ -409,6 +402,7 @@ impl PrepareReskateFloor {
             placements_removed,
             parts_removed,
         });
+        Ok(())
     }
 
     /// Every coordinate of the map moved up by `lift`.
@@ -494,7 +488,7 @@ impl Pass for SummarizeReskateFloor {
         &["skate.floor_summary"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let summary = measure(w, &Owned::of(w));
+        let summary = measure(w, &Owned::of(w))?;
         log.count("placements measured", summary.lows.len() as u64);
         log.count("world collision soups measured", summary.soup_lows.len() as u64);
         w.insert_resource(summary);

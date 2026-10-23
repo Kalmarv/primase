@@ -175,6 +175,7 @@ impl Pass for ClipReskateRegion {
             .collect();
         for e in soups {
             let c = w.get::<Collision>(e).expect("listed");
+            super::check_soup(&format!("{e:?}'s collision"), c, w.get::<SkateRock>(e))?;
             let t = if w.has::<SkateCollision>(e) {
                 Transform::IDENTITY
             } else {
@@ -216,20 +217,15 @@ impl Pass for ClipReskateRegion {
             }
             log.count("world collision triangles outside the region, cut", cut as u64);
             let mut c = w.get::<Collision>(e).expect("listed").clone();
-            let rock = w.get::<SkateRock>(e).cloned();
-            let mut k = keep.iter();
-            c.surfaces.retain(|_| *k.next().expect("one per triangle"));
-            let mut k = keep.iter();
-            c.triangles.retain(|_| *k.next().expect("one per triangle"));
+            let mut rock = w.get::<SkateRock>(e).cloned();
+            super::keep_triangles(&mut c, rock.as_mut(), &keep);
             if c.triangles.is_empty() {
                 w.remove::<Collision>(e);
                 w.remove::<SkateRock>(e);
                 log.count("world collision soups wholly outside the region, removed", 1);
                 continue;
             }
-            if let Some(mut rock) = rock {
-                let mut k = keep.iter();
-                rock.0.retain(|_| *k.next().expect("one per triangle"));
+            if let Some(rock) = rock {
                 w.insert(e, rock);
             }
             w.insert(e, c);

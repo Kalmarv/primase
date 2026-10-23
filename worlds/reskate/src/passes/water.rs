@@ -148,7 +148,7 @@ pub fn prepare_reskate_water(o: &Options) -> Result<Box<dyn Pass>, String> {
 }
 
 /// Sutherland-Hodgman, one step: `p` cut at `k` along x (or y), keeping the side above (or below) it.
-pub(crate) fn clip_half(p: &[(f32, f32)], along_y: bool, k: f32, keep_above: bool) -> Vec<(f32, f32)> {
+fn clip_half(p: &[(f32, f32)], along_y: bool, k: f32, keep_above: bool) -> Vec<(f32, f32)> {
     let mut o = Vec::with_capacity(p.len() + 1);
     for i in 0..p.len() {
         let (a, b) = (p[i], p[(i + 1) % p.len()]);

@@ -7,10 +7,10 @@ use crate::{Result, bad};
 
 const W: &str = "EBX carry";
 /// The object id bits of an instance's `Flags` (the low bits of its GUID).
-pub const OBJECT_ID_MASK: u32 = 0x01FF_FFFF;
+const OBJECT_ID_MASK: u32 = 0x01FF_FFFF;
 
 /// The EFIX type slot of `doc`'s type `descriptor`, added when the document has none (ReSkate's `ensure_fixup_type`).
-pub fn ensure_fixup_type(doc: &mut Document, descriptor: usize) -> Result<u16> {
+fn ensure_fixup_type(doc: &mut Document, descriptor: usize) -> Result<u16> {
     let t = doc
         .types
         .get(descriptor)
@@ -26,7 +26,7 @@ pub fn ensure_fixup_type(doc: &mut Document, descriptor: usize) -> Result<u16> {
 }
 
 /// Every pointer inside `v`, mutably.
-pub fn walk_pointers(v: &mut Value, f: &mut dyn FnMut(&mut Pointer)) {
+fn walk_pointers(v: &mut Value, f: &mut dyn FnMut(&mut Pointer)) {
     match v {
         Value::Pointer(p) => f(p),
         Value::Object(o) => o.fields.iter_mut().for_each(|x| walk_pointers(&mut x.value, f)),

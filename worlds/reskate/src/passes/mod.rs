@@ -35,6 +35,54 @@ pub use blend_budget::{
     FinalizeReskateBlendBudget, PlanReskateBlendBudget, finalize_reskate_blend_budget,
     plan_reskate_blend_budget,
 };
+/// Whether a soup (and its rock flags) can be cut by triangle: one surface and one rock flag per triangle, every index a
+/// vertex. A pass runs on a world it may not have verified, so what it indexes it checks, naming the entity.
+pub(crate) fn check_soup(
+    what: &str,
+    c: &primase_core::Collision,
+    rock: Option<&crate::components::SkateRock>,
+) -> Result<(), String> {
+    if c.surfaces.len() != c.triangles.len() {
+        return Err(format!(
+            "{what}: {} surfaces for {} triangles",
+            c.surfaces.len(),
+            c.triangles.len()
+        ));
+    }
+    if let Some(r) = rock
+        && r.0.len() != c.triangles.len()
+    {
+        return Err(format!(
+            "{what}: {} rock flags for {} triangles",
+            r.0.len(),
+            c.triangles.len()
+        ));
+    }
+    let vertices = c.positions.len();
+    if let Some(i) = c.triangles.iter().flatten().find(|&&i| i as usize >= vertices) {
+        return Err(format!("{what}: a triangle names vertex {i} of {vertices}"));
+    }
+    Ok(())
+}
+
+/// Keep the triangles of `c` (its surfaces and `rock` flags with them) that `keep` marks, one mark per triangle; the soup was
+/// checked with [`check_soup`].
+pub(crate) fn keep_triangles(
+    c: &mut primase_core::Collision,
+    rock: Option<&mut crate::components::SkateRock>,
+    keep: &[bool],
+) {
+    fn cut<T>(list: &mut Vec<T>, keep: &[bool]) {
+        let mut marks = keep.iter();
+        list.retain(|_| marks.next().copied().unwrap_or(false));
+    }
+    cut(&mut c.surfaces, keep);
+    cut(&mut c.triangles, keep);
+    if let Some(r) = rock {
+        cut(&mut r.0, keep);
+    }
+}
+
 pub use blend_order::{PrepareReskateBlendOrder, prepare_reskate_blend_order};
 pub use blended::{
     BlendedSelection, PrepareReskateBlendedSurfaces, UniformAlpha, prepare_reskate_blended_surfaces,

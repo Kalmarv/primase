@@ -93,7 +93,7 @@ fn accessor(
     values: impl Iterator<Item = f32>,
     count: usize,
     components: usize,
-) -> usize {
+) -> Result<usize> {
     while !bin.len().is_multiple_of(4) {
         bin.push(0)
     }
@@ -101,13 +101,17 @@ fn accessor(
     for v in values {
         bin.extend_from_slice(&v.to_le_bytes());
     }
-    let views = doc["bufferViews"].as_array_mut().expect("writer views");
+    let views = doc["bufferViews"]
+        .as_array_mut()
+        .ok_or_else(|| Error::Invalid("the document has no bufferViews array".into()))?;
     let view = views.len();
     views.push(json!({"buffer":0,"byteOffset":offset,"byteLength":bin.len()-offset,"target":34962}));
-    let accessors = doc["accessors"].as_array_mut().expect("writer accessors");
+    let accessors = doc["accessors"]
+        .as_array_mut()
+        .ok_or_else(|| Error::Invalid("the document has no accessors array".into()))?;
     let index = accessors.len();
     accessors.push(json!({"bufferView":view,"componentType":5126,"count":count,"type":if components==3{"VEC3"}else{"VEC4"}}));
-    index
+    Ok(index)
 }
 /// The glTF writer's shadow extras key.
 const SHADOWS: &str = "primase.shadows";
@@ -198,12 +202,14 @@ pub(super) fn apply(input: Document, enabled: bool) -> Result<(Document, u64)> {
             group.iter().flat_map(|g| g.2.translation),
             n,
             3,
-        );
-        let rotation = accessor(&mut doc, &mut bin, group.iter().flat_map(|g| g.2.rotation), n, 4);
-        let scale = accessor(&mut doc, &mut bin, group.iter().flat_map(|g| g.2.scale), n, 3);
+        )?;
+        let rotation = accessor(&mut doc, &mut bin, group.iter().flat_map(|g| g.2.rotation), n, 4)?;
+        let scale = accessor(&mut doc, &mut bin, group.iter().flat_map(|g| g.2.scale), n, 3)?;
         let instances:Vec<_>=group.iter().map(|(i,key,_)|json!({"entity":key,"name":nodes[*i].get("name"),"extras":nodes[*i].get("extras")})).collect();
         let shadows = nodes[first]["extras"].get(SHADOWS).cloned();
-        let node = nodes[first].as_object_mut().expect("writer node");
+        let node = nodes[first]
+            .as_object_mut()
+            .ok_or_else(|| Error::Invalid(format!("node {first} is not an object")))?;
         for key in ["matrix", "translation", "rotation", "scale"] {
             node.remove(key);
         }

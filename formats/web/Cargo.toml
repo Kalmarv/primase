@@ -10,6 +10,8 @@ publish.workspace = true
 
 [features]
 default = []
+# the small public scene of `fixture` (literal geometry and pixels), for examples and gates: not part of the library
+fixture = []
 ktx2 = ["dep:basisu_c_sys", "dep:primase-image", "dep:primase-cache"]
 
 [dependencies]
@@ -37,4 +39,4 @@ workspace = true
 
 [[example]]
 name = "synthetic_tiles"
-required-features = ["ktx2"]
+required-features = ["ktx2", "fixture"]

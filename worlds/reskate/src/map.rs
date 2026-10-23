@@ -506,7 +506,7 @@ fn append_core(a: &mut Acc, p: &SrcPart, s: Option<&Placement>, origin: Vec3, on
 }
 
 /// Studio stores a mesh section with 16-bit indices.
-pub const MAX_SECTION_VERTS: usize = 60000;
+const MAX_SECTION_VERTS: usize = 60000;
 
 /// The GLB primitives of merged parts, in the order of their material names.
 /// The part of material `mat`, made on its first use in the mesh.
@@ -1007,11 +1007,7 @@ impl MapWriter {
 
     /// The cells `keys` laid out now, from the soups and props they hold (taken out): each leaf packed as the plan
     /// says into the mesh files and the collision's objects, or given to `visit` (nothing written).
-    pub(crate) fn lay_cells(
-        &mut self,
-        keys: &BTreeSet<CellKey>,
-        visit: Option<&mut LeafVisit<'_>>,
-    ) -> Result<()> {
+    fn lay_cells(&mut self, keys: &BTreeSet<CellKey>, visit: Option<&mut LeafVisit<'_>>) -> Result<()> {
         let surf = self.surfaces.clone();
         let off = self.off;
         let mut collision = Collision::new(&surf, off.x, off.y, off.z, self.o.limit);

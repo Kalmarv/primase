@@ -6,9 +6,9 @@
 
 pub const MAGIC: [u8; 4] = *b"SKST";
 pub const VERSION: u32 = 1;
-pub const PLACEMENT_SIZE: usize = 76;
-pub const LIGHT_SIZE: usize = 92;
-pub const CURVE_SIZE: usize = 20;
+const PLACEMENT_SIZE: usize = 76;
+const LIGHT_SIZE: usize = 92;
+const CURVE_SIZE: usize = 20;
 
 /// Placement flags.
 pub mod flags {

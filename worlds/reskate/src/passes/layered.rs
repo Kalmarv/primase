@@ -66,7 +66,7 @@ struct ColourCarried {
 
 /// What an overlay draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum OverlayLayer {
+enum OverlayLayer {
     /// The layer of this slot (`>= 1`; slot 0 is the base).
     Slot(usize),
     /// Black, for weight that sums below one.
@@ -75,7 +75,7 @@ pub enum OverlayLayer {
 
 /// One overlay: its triangles (indices into the primitive's vertices) and an opacity per vertex.
 #[derive(Clone, Debug, PartialEq)]
-pub struct OverlayPart {
+struct OverlayPart {
     pub layer: OverlayLayer,
     pub indices: Vec<u32>,
     pub opacity: Vec<f32>,
@@ -145,7 +145,7 @@ pub fn opacities(
 /// triangles where some corner's written opacity is above zero (none: the overlay is left out). With
 /// [`OverlayLimit::One`] each triangle keeps only its strongest overlay, with the two-layer opacities (see the
 /// module doc); `positions` give the area of the triangles that lose one.
-pub fn overlay_parts(
+fn overlay_parts(
     weights: &[[f32; 4]],
     slots: usize,
     indices: &[u32],

@@ -18,6 +18,7 @@ mod spanning;
 pub use images::{IMAGE_DIR, ImageFiles};
 pub use meshes::{MESH_DIR, MeshFiles};
 pub use spanning::{LocalBox, PIVOT_MARGIN, Spans, spanning};
+#[cfg(feature = "fixture")]
 pub mod fixture;
 #[cfg(feature = "ktx2")]
 pub mod ktx2;
@@ -106,10 +107,10 @@ impl TileSize {
     }
 }
 /// The deepest [`Subcell::level`] a cell is split to.
-pub const MAX_SUBCELL_LEVEL: u8 = 8;
+const MAX_SUBCELL_LEVEL: u8 = 8;
 
 /// The default bound of the PNG encodings a tile set holds between tiles ([`Options::image_memory`]), 256 MiB.
-pub const DEFAULT_IMAGE_MEMORY: usize = 256 << 20;
+const DEFAULT_IMAGE_MEMORY: usize = 256 << 20;
 impl Options {
     /// Tiles of `tile_size`, GPU-instanced and compressed, images as PNG, no viewer records, no byte budget, no
     /// camera, geometry in the tile GLBs (format 2.x).
@@ -281,14 +282,29 @@ pub struct OverBudget {
     pub bytes: u64,
     pub reason: &'static str,
 }
+/// The document's `nodes` array, or an error when the writer's document has none.
+fn nodes_mut(doc: &mut serde_json::Value) -> Result<&mut Vec<serde_json::Value>> {
+    doc["nodes"]
+        .as_array_mut()
+        .ok_or_else(|| Error::Invalid("the document has no nodes array".into()))
+}
+
+/// The first scene's root nodes, or an error when the writer's document has none.
+fn scene_roots_mut(doc: &mut serde_json::Value) -> Result<&mut Vec<serde_json::Value>> {
+    doc["scenes"][0]["nodes"]
+        .as_array_mut()
+        .ok_or_else(|| Error::Invalid("the document's first scene has no nodes array".into()))
+}
+
 /// Add `name` to a glTF document's `extensionsUsed` and `extensionsRequired`, keeping the extensions already there.
 pub(crate) fn require_extension(doc: &mut serde_json::Value, name: &str) {
     for key in ["extensionsUsed", "extensionsRequired"] {
         if !doc[key].is_array() {
             doc[key] = serde_json::json!([]);
         }
-        let list = doc[key].as_array_mut().expect("array");
-        if !list.iter().any(|v| v == name) {
+        if let Some(list) = doc[key].as_array_mut()
+            && !list.iter().any(|v| v == name)
+        {
             list.push(serde_json::json!(name));
         }
     }
@@ -789,7 +805,9 @@ pub fn plan_with_geometry(
     // its transform is degenerate, is what its cell's world holds when the cell is written
     let mut filed = BTreeSet::new();
     for (&e, &prototype) in &placements {
-        let t = *world.get::<Transform>(e).expect("a placement has a transform");
+        let t = *world
+            .get::<Transform>(e)
+            .ok_or_else(|| Error::Invalid(format!("placement {e:?} has no transform")))?;
         let kind = t.classify();
         if matches!(kind, TransformKind::Mirrored | TransformKind::Sheared) {
             return Err(Error::Invalid(format!(
@@ -1167,7 +1185,9 @@ impl TilePlan {
                     });
                 }
                 if standalone_collision(world, e, &placements) {
-                    let c = world.get::<Collision>(e).expect("standalone collision");
+                    let c = world.get::<Collision>(e).ok_or_else(|| {
+                        Error::Invalid(format!("{e:?} is a standalone collision without one"))
+                    })?;
                     let t = world.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY);
                     if let Some(item) = collision::record(world, e, c, t)? {
                         let n = self.number(e, Collision::NAME);
@@ -1182,7 +1202,9 @@ impl TilePlan {
             };
             let elements = pieces.get(&e).cloned();
             let variant = world.get::<Instance>(e).map_or(0, |i| i.variant);
-            let transform = *world.get::<Transform>(e).expect("a placement has a transform");
+            let transform = *world
+                .get::<Transform>(e)
+                .ok_or_else(|| Error::Invalid(format!("placement {e:?} has no transform")))?;
             match transform.classify() {
                 TransformKind::Degenerate => {
                     self.skipped += u64::from(owner);
@@ -1401,10 +1423,12 @@ impl TilePlan {
             },
             bytes: measured,
         });
-        let children = self.children(cell, sub, cw, content)?;
-        if children.len() == 1 && level + 1 < MAX_SUBCELL_LEVEL {
+        let mut children = self.children(cell, sub, cw, content)?.into_iter();
+        if children.len() == 1
+            && level + 1 < MAX_SUBCELL_LEVEL
+            && let Some((k, c)) = children.next()
+        {
             // all of it in one child: the same content, as large; split further without writing it
-            let (k, c) = children.into_iter().next().expect("one child");
             return self.emit(cell, Some(k), cw, c, true, out);
         }
         for (k, c) in children {
@@ -1757,7 +1781,7 @@ impl TilePlan {
                     }
                 })
                 .collect();
-            let index = doc["nodes"].as_array().expect("nodes").len();
+            let index = nodes_mut(&mut doc)?.len();
             let value = if item.kind == "collision" {
                 let record = collision_index;
                 collision_index += 1;
@@ -1769,14 +1793,9 @@ impl TilePlan {
             let mut extras = serde_json::Map::new();
             extras.insert("web.viewer".into(), json!({"version":1,"value":value}));
             extras.extend(cw.components.get(i).cloned().unwrap_or_default());
-            doc["nodes"]
-                .as_array_mut()
-                .expect("nodes")
+            nodes_mut(&mut doc)?
                 .push(json!({"name":format!("Viewer_{safe}_{i}"),"extras":{"primase":extras}}));
-            doc["scenes"][0]["nodes"]
-                .as_array_mut()
-                .expect("roots")
-                .push(json!(index));
+            scene_roots_mut(&mut doc)?.push(json!(index));
         }
         if !lights.is_empty() {
             const LIGHTS: &str = "KHR_lights_punctual";
@@ -1794,16 +1813,13 @@ impl TilePlan {
                     c[0][0], c[0][1], c[0][2], 0.0, c[1][0], c[1][1], c[1][2], 0.0, c[2][0], c[2][1],
                     c[2][2], 0.0, c[3][0], c[3][1], c[3][2], 1.0,
                 ];
-                let index = doc["nodes"].as_array().expect("nodes").len();
-                doc["nodes"].as_array_mut().expect("nodes").push(json!({
+                let index = nodes_mut(&mut doc)?.len();
+                nodes_mut(&mut doc)?.push(json!({
                     "name": name,
                     "matrix": primase_core::json::f32s_value(&matrix).map_err(|e| Error::Invalid(format!("light {name}: {e}")))?,
                     "extensions": {LIGHTS: {"light": objects.len()}},
                 }));
-                doc["scenes"][0]["nodes"]
-                    .as_array_mut()
-                    .expect("roots")
-                    .push(json!(index));
+                scene_roots_mut(&mut doc)?.push(json!(index));
                 objects.push(object);
                 for k in 0..3 {
                     min[k] = min[k].min(f64::from(c[3][k]));

@@ -11,10 +11,10 @@ use crate::model::MapObject;
 use crate::scene::{SnapMode, SnapSpec, SurfaceTable, WaterQuad};
 use primase_meshops::vector::Vec3;
 
-pub const SRC_TILE: f32 = 256.0;
-pub const MAX_HALF_EDGES_PER_METRE: f32 = 600.0;
-pub const MIN_CELL: f32 = 8.0;
-pub const MAX_PIECE_TRIS: usize = 20000;
+const SRC_TILE: f32 = 256.0;
+const MAX_HALF_EDGES_PER_METRE: f32 = 600.0;
+const MIN_CELL: f32 = 8.0;
+const MAX_PIECE_TRIS: usize = 20000;
 pub const MAX_PIECE_VERTS: usize = 65535;
 
 /// World triangles filed under one cell: loose or indexed, ground triangles first.
@@ -34,18 +34,6 @@ pub struct TileData {
 pub trait CollisionWorld: std::fmt::Debug {
     fn cells(&self) -> Vec<(i32, i32)>;
     fn cell(&self, tx: i32, ty: i32) -> Option<TileData>;
-}
-
-/// No world collision.
-#[derive(Debug)]
-pub struct NoWorld;
-impl CollisionWorld for NoWorld {
-    fn cells(&self) -> Vec<(i32, i32)> {
-        Vec::new()
-    }
-    fn cell(&self, _: i32, _: i32) -> Option<TileData> {
-        None
-    }
 }
 
 /// World-space collision triangles of placed props, per source tile.
@@ -71,7 +59,7 @@ impl PropSoup {
 }
 
 /// The 256 m cell a placed prop's collision is filed in: the one its pivot `p` (writer frame) stands in, whole.
-pub(crate) fn prop_cell(p: Vec3) -> (i32, i32) {
+fn prop_cell(p: Vec3) -> (i32, i32) {
     ((p.x / SRC_TILE).floor() as i32, (p.y / SRC_TILE).floor() as i32)
 }
 

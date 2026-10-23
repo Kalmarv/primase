@@ -7,48 +7,68 @@ const EXT: &str = "EXT_meshopt_compression";
 fn err(message: impl ToString) -> Error {
     Error::Invalid(message.to_string())
 }
-fn number(v: &Value) -> usize {
-    v.as_u64().expect("writer integer") as usize
+/// A non-negative integer of the document, or an error naming what it was read as.
+fn number(v: &Value) -> Result<usize> {
+    v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| {
+        err(format!(
+            "{v} is not a non-negative integer where the writer's document has one"
+        ))
+    })
 }
 fn align(bin: &mut Vec<u8>) {
     while !bin.len().is_multiple_of(4) {
         bin.push(0);
     }
 }
-fn stride(a: &Value) -> usize {
-    let channels = match a["type"].as_str().expect("writer accessor type") {
-        "SCALAR" => 1,
-        "VEC2" => 2,
-        "VEC3" => 3,
-        "VEC4" => 4,
-        _ => unreachable!("writer accessor type"),
-    };
-    channels
-        * match number(&a["componentType"]) {
-            5120 | 5121 => 1,
-            5122 | 5123 => 2,
-            5125 | 5126 => 4,
-            _ => unreachable!("writer component"),
+fn stride(a: &Value) -> Result<usize> {
+    let channels = match a["type"].as_str() {
+        Some("SCALAR") => 1,
+        Some("VEC2") => 2,
+        Some("VEC3") => 3,
+        Some("VEC4") => 4,
+        other => {
+            return Err(err(format!(
+                "accessor type {other:?} is not one the writer writes"
+            )));
         }
+    };
+    let component = match number(&a["componentType"])? {
+        5120 | 5121 => 1,
+        5122 | 5123 => 2,
+        5125 | 5126 => 4,
+        c => {
+            return Err(err(format!(
+                "accessor component type {c} is not one the writer writes"
+            )));
+        }
+    };
+    Ok(channels * component)
 }
-fn data(doc: &Value, bin: &[u8], index: usize) -> Vec<u8> {
+fn data(doc: &Value, bin: &[u8], index: usize) -> Result<Vec<u8>> {
     let a = &doc["accessors"][index];
-    let view = &doc["bufferViews"][number(&a["bufferView"])];
+    let view = &doc["bufferViews"][number(&a["bufferView"])?];
     let offset =
         view["byteOffset"].as_u64().unwrap_or(0) as usize + a["byteOffset"].as_u64().unwrap_or(0) as usize;
-    let width = stride(a);
+    let width = stride(a)?;
     let step = view["byteStride"].as_u64().map_or(width, |v| v as usize);
-    (0..number(&a["count"]))
-        .flat_map(|i| bin[offset + i * step..offset + i * step + width].iter().copied())
-        .collect()
+    let count = number(&a["count"])?;
+    let mut out = Vec::with_capacity(count * width);
+    for i in 0..count {
+        let at = offset + i * step;
+        out.extend_from_slice(
+            bin.get(at..at + width)
+                .ok_or_else(|| err(format!("accessor {index} element {i} runs past the buffer")))?,
+        );
+    }
+    Ok(out)
 }
-fn floats(doc: &Value, bin: &[u8], index: usize) -> Vec<f32> {
-    data(doc, bin, index)
+fn floats(doc: &Value, bin: &[u8], index: usize) -> Result<Vec<f32>> {
+    Ok(data(doc, bin, index)?
         .as_chunks::<4>()
         .0
         .iter()
         .map(|v| f32::from_le_bytes(*v))
-        .collect()
+        .collect())
 }
 fn encode<const N: usize>(bytes: &[u8]) -> Result<Vec<u8>>
 where
@@ -200,35 +220,46 @@ fn stored(doc: &Value, bin: &[u8], site: Site) -> Result<Stored> {
             }
         }
         Site::Instance { index, streams } => {
-            let value =
-                |stream: usize, k: usize| f64::from(instance_value(doc, bin, streams[stream], index, k));
+            let value = |stream: usize| -> Result<[f64; 4]> {
+                let mut v = [0.0; 4];
+                for (k, x) in v.iter_mut().enumerate() {
+                    *x = f64::from(instance_value(doc, bin, streams[stream], index, k)?);
+                }
+                Ok(v)
+            };
+            let (t, r, s) = (value(0)?, value(1)?, value(2)?);
             Stored::Trs {
-                t: std::array::from_fn(|k| value(0, k)),
-                r: std::array::from_fn(|k| value(1, k)),
-                s: std::array::from_fn(|k| value(2, k)),
+                t: [t[0], t[1], t[2]],
+                r,
+                s: [s[0], s[1], s[2]],
             }
         }
     })
 }
 
 /// Byte offset of component `k` of element `index` of a tightly packed f32 accessor.
-fn element(doc: &Value, accessor: usize, index: usize, k: usize) -> usize {
+fn element(doc: &Value, accessor: usize, index: usize, k: usize) -> Result<usize> {
     let a = &doc["accessors"][accessor];
-    let view = &doc["bufferViews"][number(&a["bufferView"])];
-    let width = stride(a);
-    view["byteOffset"].as_u64().unwrap_or(0) as usize
+    let view = &doc["bufferViews"][number(&a["bufferView"])?];
+    let width = stride(a)?;
+    Ok(view["byteOffset"].as_u64().unwrap_or(0) as usize
         + a["byteOffset"].as_u64().unwrap_or(0) as usize
         + index * width
-        + k * 4
+        + k * 4)
 }
 
-fn instance_value(doc: &Value, bin: &[u8], accessor: usize, index: usize, k: usize) -> f32 {
-    let at = element(doc, accessor, index, k);
-    f32::from_le_bytes([bin[at], bin[at + 1], bin[at + 2], bin[at + 3]])
+fn instance_value(doc: &Value, bin: &[u8], accessor: usize, index: usize, k: usize) -> Result<f32> {
+    let at = element(doc, accessor, index, k)?;
+    let bytes = bin.get(at..at + 4).ok_or_else(|| {
+        err(format!(
+            "instance stream {accessor} element {index} runs past the buffer"
+        ))
+    })?;
+    Ok(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
 /// Write `value` at `site` (f32 values, see [`Stored::compose`]): the node's JSON, or the instance streams in `bin`.
-fn store(doc: &mut Value, bin: &mut [u8], site: Site, value: &Stored) {
+fn store(doc: &mut Value, bin: &mut [u8], site: Site, value: &Stored) -> Result<()> {
     match (site, value) {
         (Site::Matrix { node }, Stored::Matrix(m)) => doc["nodes"][node]["matrix"] = json!(m),
         (Site::Trs { node }, Stored::Trs { t, s, .. }) => {
@@ -238,13 +269,20 @@ fn store(doc: &mut Value, bin: &mut [u8], site: Site, value: &Stored) {
         (Site::Instance { index, streams }, Stored::Trs { t, s, .. }) => {
             for (accessor, values) in [(streams[0], t), (streams[2], s)] {
                 for (k, v) in values.iter().enumerate() {
-                    let at = element(doc, accessor, index, k);
-                    bin[at..at + 4].copy_from_slice(&(*v as f32).to_le_bytes());
+                    let at = element(doc, accessor, index, k)?;
+                    bin.get_mut(at..at + 4)
+                        .ok_or_else(|| {
+                            err(format!(
+                                "instance stream {accessor} element {index} runs past the buffer"
+                            ))
+                        })?
+                        .copy_from_slice(&(*v as f32).to_le_bytes());
                 }
             }
         }
-        _ => unreachable!("a site keeps its kind"),
+        _ => return Err(err("a site's stored numbers are not of its kind")),
     }
+    Ok(())
 }
 
 /// The frame of `values`: centred on their bounding box, with one uniform step (uniform decoding keeps normals)
@@ -335,8 +373,11 @@ fn positions(doc: &mut Value, bin: &mut [u8]) -> Result<Positions> {
     let mut accessors_of = vec![Vec::new(); meshes];
     let mut first_mesh = BTreeMap::<usize, usize>::new();
     for (m, accessors) in accessors_of.iter_mut().enumerate() {
-        for p in doc["meshes"][m]["primitives"].as_array().expect("primitives") {
-            let a = number(&p["attributes"]["POSITION"]);
+        for p in doc["meshes"][m]["primitives"]
+            .as_array()
+            .ok_or_else(|| err(format!("meshes[{m}] has no primitives array")))?
+        {
+            let a = number(&p["attributes"]["POSITION"])?;
             if !accessors.contains(&a) {
                 accessors.push(a);
             }
@@ -362,7 +403,7 @@ fn positions(doc: &mut Value, bin: &mut [u8]) -> Result<Positions> {
                     .ok_or_else(|| err(format!("instanced node lacks its {name} stream")))
             };
             let streams = [stream("TRANSLATION")?, stream("ROTATION")?, stream("SCALE")?];
-            for index in 0..number(&doc["accessors"][streams[0]]["count"]) {
+            for index in 0..number(&doc["accessors"][streams[0]]["count"])? {
                 sites_of[m].push(Site::Instance { index, streams });
             }
         } else if n.get("matrix").is_some() {
@@ -385,8 +426,8 @@ fn positions(doc: &mut Value, bin: &mut [u8]) -> Result<Positions> {
         accessors.dedup();
         let values: BTreeMap<usize, Vec<[f32; 3]>> = accessors
             .iter()
-            .map(|&a| (a, floats(doc, bin, a).as_chunks::<3>().0.to_vec()))
-            .collect();
+            .map(|&a| Ok((a, floats(doc, bin, a)?.as_chunks::<3>().0.to_vec())))
+            .collect::<Result<_>>()?;
         let all: Vec<[f32; 3]> = values.values().flatten().copied().collect();
         let f = frame(&all);
         let q: BTreeMap<usize, Vec<[i16; 3]>> = values
@@ -423,7 +464,7 @@ fn positions(doc: &mut Value, bin: &mut [u8]) -> Result<Positions> {
             continue;
         }
         for (site, after) in &composed {
-            store(doc, bin, *site, after);
+            store(doc, bin, *site, after)?;
         }
         out.max_local_error = out.max_local_error.max(local);
         out.max_world_error = out.max_world_error.max(world);
@@ -450,10 +491,19 @@ pub(super) fn apply(input: Document) -> Result<(Document, Quantized)> {
         bin: mut source,
     } = input;
     let mut kinds = BTreeMap::<usize, String>::new();
-    for mesh in doc["meshes"].as_array().expect("writer meshes") {
-        for p in mesh["primitives"].as_array().expect("primitives") {
-            for (name, a) in p["attributes"].as_object().expect("attributes") {
-                kinds.insert(number(a), name.clone());
+    for mesh in doc["meshes"]
+        .as_array()
+        .ok_or_else(|| err("the document has no meshes array"))?
+    {
+        for p in mesh["primitives"]
+            .as_array()
+            .ok_or_else(|| err("a mesh has no primitives array"))?
+        {
+            for (name, a) in p["attributes"]
+                .as_object()
+                .ok_or_else(|| err("a primitive has no attributes object"))?
+            {
+                kinds.insert(number(a)?, name.clone());
             }
         }
     }
@@ -463,23 +513,30 @@ pub(super) fn apply(input: Document) -> Result<(Document, Quantized)> {
     let mut views = Vec::new();
     let mut fallback = 0usize;
     let mut quantized = Quantized::default();
-    for a in 0..old["accessors"].as_array().expect("accessors").len() {
+    for a in 0..old["accessors"]
+        .as_array()
+        .ok_or_else(|| err("the document has no accessors array"))?
+        .len()
+    {
         let original = &old["accessors"][a];
-        let count = number(&original["count"]);
-        let old_view = &old["bufferViews"][number(&original["bufferView"])];
+        let count = number(&original["count"])?;
+        let old_view = &old["bufferViews"][number(&original["bufferView"])?];
         let is_vertex = old_view["target"] == 34962;
         let name = kinds.get(&a).map(String::as_str).unwrap_or("");
-        let mut raw = data(&old, &source, a);
-        let mut step = stride(original);
+        let mut raw = data(&old, &source, a)?;
+        let mut step = stride(original)?;
         let mut accessor = original.clone();
-        accessor.as_object_mut().expect("accessor").remove("byteOffset");
+        accessor
+            .as_object_mut()
+            .ok_or_else(|| err(format!("accessors[{a}] is not an object")))?
+            .remove("byteOffset");
         if original["componentType"] == 5126
             && ((name == "POSITION" && placed.quantized.contains_key(&a))
                 || name == "NORMAL"
                 || name == "TANGENT"
                 || name.starts_with("TEXCOORD_"))
         {
-            let values = floats(&old, &source, a);
+            let values = floats(&old, &source, a)?;
             let uv = name.starts_with("TEXCOORD_");
             if !uv || values.iter().all(|v| (0. ..=1.).contains(v)) {
                 let components = step / 4;
@@ -540,9 +597,9 @@ pub(super) fn apply(input: Document) -> Result<(Document, Quantized)> {
     }
     if let Some(images) = doc.get_mut("images").and_then(Value::as_array_mut) {
         for image in images {
-            let view = &old["bufferViews"][number(&image["bufferView"])];
-            let start = number(&view["byteOffset"]);
-            let length = number(&view["byteLength"]);
+            let view = &old["bufferViews"][number(&image["bufferView"])?];
+            let start = number(&view["byteOffset"])?;
+            let length = number(&view["byteLength"])?;
             align(&mut bin);
             image["bufferView"] = json!(views.len());
             views.push(json!({"buffer":0,"byteOffset":bin.len(),"byteLength":length}));
@@ -568,4 +625,56 @@ pub(super) fn apply(input: Document) -> Result<(Document, Quantized)> {
         "uv_bits": 16,
     });
     Ok((Document::new(doc, bin), quantized))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message<T>(r: Result<T>) -> String {
+        match r {
+            Ok(_) => String::from("ok"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    /// A document the writer did not make is an error naming the field, not a panic of an `expect`.
+    #[test]
+    fn a_document_that_is_not_the_writers_is_an_error() {
+        assert_eq!(number(&json!(7)).unwrap(), 7);
+        assert!(message(number(&json!("7"))).contains("not a non-negative integer"));
+        assert!(message(number(&json!(-1))).contains("not a non-negative integer"));
+        assert_eq!(
+            stride(&json!({"type": "VEC3", "componentType": 5126})).unwrap(),
+            12
+        );
+        assert!(message(stride(&json!({"type": "VEC9", "componentType": 5126}))).contains("accessor type"));
+        assert!(
+            message(stride(&json!({"type": "VEC3", "componentType": 5124}))).contains("component type 5124")
+        );
+        assert!(message(stride(&json!({"componentType": 5126}))).contains("accessor type None"));
+    }
+
+    /// An accessor whose elements run past the buffer, and an instance stream that does.
+    #[test]
+    fn an_accessor_past_the_buffer_is_an_error() {
+        let doc = json!({
+            "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+            "bufferViews": [{"buffer": 0, "byteLength": 36}],
+        });
+        assert_eq!(data(&doc, &[0; 36], 0).unwrap().len(), 36);
+        assert!(message(data(&doc, &[0; 30], 0)).contains("runs past the buffer"));
+        assert!(message(instance_value(&doc, &[0; 8], 0, 1, 0)).contains("runs past the buffer"));
+        let mut bin = [0u8; 8];
+        let site = Site::Instance {
+            index: 0,
+            streams: [0, 0, 0],
+        };
+        let stored = Stored::Trs {
+            t: [0.0; 3],
+            r: [0.0, 0.0, 0.0, 1.0],
+            s: [1.0; 3],
+        };
+        assert!(message(store(&mut doc.clone(), &mut bin, site, &stored)).contains("runs past the buffer"));
+    }
 }

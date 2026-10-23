@@ -934,10 +934,6 @@ impl RaiseSkate {
     pub fn new(options: RaiseOptions) -> RaiseSkate {
         RaiseSkate { options }
     }
-
-    pub fn raise_options(&self) -> &RaiseOptions {
-        &self.options
-    }
 }
 
 /// `raise-skate` from its options (a [`primase_core::pass::PassFactory`]).

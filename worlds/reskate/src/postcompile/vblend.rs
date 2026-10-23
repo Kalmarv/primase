@@ -6,7 +6,7 @@
 //!   with a mask-shaped dissolve; green, blue and alpha have no effect; a constant `r` is plain opacity. Exactly
 //!   (0, 0, 0, 0) is a "no vertex colour" value that draws fully opaque, so opacity is written as
 //!   [`decal_opacity`] and a decal section never receives [`NO_VERTEX_COLOUR`];
-//! - the two-texture-set world-object row (stock key [`TWOSET_DONOR`], programs 413, 2332, 2608, 3000): the
+//! - the two-texture-set world-object row (stock key 0x872decc2be711a7f, stone planters of San Vansterdam, used by 1934 sections, the most common two-set row, programs 413, 2332, 2608, 3000): the
 //!   sub-material index (usage 51, `.x`) picks the texture set per triangle (1: the second set, 0: the first), not
 //!   interpolated; `Color0` does not blend between the sets.
 //!
@@ -48,16 +48,13 @@ const W: &str = "vertex blend";
 /// The stock decal material whose program and texture-set rows decal sections take: hvac decals of San
 /// Vansterdam (336 sections use its row).
 pub const DECAL_DONOR: u64 = 0xca7a_fe63_5959_dd1e;
-/// The stock two-texture-set world-object material: stone planters of San Vansterdam (its row is used by 1934
-/// sections, the most common two-set row).
-pub const TWOSET_DONOR: u64 = 0x872d_ecc2_be71_1a7f;
 
 /// The decal row's opacity encoding, shared with the passes ([`crate::decal`]).
 pub use crate::decal::{NO_VERTEX_COLOUR, decal_opacity};
 
 /// The stored layout Studio writes for the surfaces a retarget takes (`TexCoord0` as `uv`: [`format::HALF2`], or
 /// [`format::HALF4`] for a `vertex_blend` material), and the stock layout it writes.
-pub(crate) fn studio_layout(uv: u8) -> [Element; 3] {
+fn studio_layout(uv: u8) -> [Element; 3] {
     [
         Element {
             usage: usage::POSITION,
@@ -492,7 +489,7 @@ pub(crate) struct Bundle {
 }
 
 /// Every TOC of the Patch with its bundles, `Some` for each bundle the Patch places.
-pub(crate) type PatchBundles = Vec<(String, toc::Toc, Vec<Option<Bundle>>)>;
+type PatchBundles = Vec<(String, toc::Toc, Vec<Option<Bundle>>)>;
 
 pub(crate) fn patch_bundles(src: &Source) -> Result<PatchBundles> {
     let mut tocs = Vec::new();

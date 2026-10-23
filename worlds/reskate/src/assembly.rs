@@ -380,7 +380,7 @@ impl MeshSource for Meshes<'_, '_> {
 
 /// The writer's options for the scene `s`: its encoding `a` and the choices `c` it still makes; the region and the
 /// pause picture are the caller's to set. Refuses placements split by tile.
-pub(crate) fn writer_options(s: &Scene, a: &EncodingOptions) -> Result<WriterOptions> {
+fn writer_options(s: &Scene, a: &EncodingOptions) -> Result<WriterOptions> {
     if s.placements.iter().any(|p| p.split) {
         return Err(Error::Unsupported("placements split by tile (flag 32)".into()));
     }
@@ -810,12 +810,7 @@ pub(crate) fn lay_part(
 /// The writer's region for a prepared world (its scene `s`, its `placements`): the region the scene states; else the
 /// content's, the whole map's merged over every part when given (`skate.content_bounds`), else these placements'. A
 /// part of a map in several (`in_parts`) without either is refused.
-pub(crate) fn map_region(
-    world: &World,
-    s: &Scene,
-    placements: &[Placement],
-    in_parts: bool,
-) -> Result<[f64; 4]> {
+fn map_region(world: &World, s: &Scene, placements: &[Placement], in_parts: bool) -> Result<[f64; 4]> {
     if let Some(r) = s.region {
         return Ok(r);
     }
@@ -832,7 +827,7 @@ pub(crate) fn map_region(
 
 /// The map's instancing by prototype key, its placements merged over every part (`skate.instance_counts`): `None` when
 /// not given and the world is the whole map; a part of a map in several (`in_parts`) without them is refused.
-pub(crate) fn map_counts(world: &World, s: &Scene, in_parts: bool) -> Result<Option<HashMap<u32, i64>>> {
+fn map_counts(world: &World, s: &Scene, in_parts: bool) -> Result<Option<HashMap<u32, i64>>> {
     let Some(c) = world.resource::<crate::components::SkateInstanceCounts>() else {
         return if in_parts {
             Err(Error::Scene(
@@ -857,12 +852,7 @@ pub(crate) fn map_counts(world: &World, s: &Scene, in_parts: bool) -> Result<Opt
 /// The writer's options for a prepared world (its scene `s`) encoded as `a`: the encoding's, the apron its region
 /// clip recorded, the pause picture (when encoding: a count draws none, it adds no object), checked against the
 /// settings its markers were snapped for. The region is the caller's to set.
-pub(crate) fn part_options(
-    world: &World,
-    s: &Scene,
-    a: &EncodingOptions,
-    encode: bool,
-) -> Result<WriterOptions> {
+fn part_options(world: &World, s: &Scene, a: &EncodingOptions, encode: bool) -> Result<WriterOptions> {
     let mut o = writer_options(s, a)?;
     o.apron = apron_of(world, s)?;
     if encode {
@@ -1140,7 +1130,7 @@ pub(crate) fn cell_layout(s: &Scene, o: &WriterOptions) -> SkateCellLayout {
 /// One collision cell's content from its shares, every part's (the order they come in does not matter: the cell lays
 /// its soups out in the scene's order and its props by tile). A soup two parts both write (one key) is laid out once;
 /// shared differently, it is refused.
-pub(crate) fn cell_content(shares: &[&SkateCellShare]) -> Result<CellContent> {
+fn cell_content(shares: &[&SkateCellShare]) -> Result<CellContent> {
     let mut c = CellContent::default();
     let mut seen: BTreeMap<u64, &crate::components::CellSoup> = BTreeMap::new();
     for share in shares {

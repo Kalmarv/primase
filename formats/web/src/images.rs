@@ -72,7 +72,9 @@ pub fn externalize(input: Document) -> Result<(Document, ImageFiles)> {
         let name = image_name(mime, &bytes)?;
         image_views.insert(v, ());
         let mut image = image.clone();
-        let o = image.as_object_mut().expect("image object");
+        let o = image
+            .as_object_mut()
+            .ok_or_else(|| invalid("an image that is not an object"))?;
         o.remove("bufferView");
         o.insert("uri".into(), json!(name));
         new_images.push(image);

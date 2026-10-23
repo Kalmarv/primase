@@ -18,11 +18,11 @@
 use crate::{Rd, Result, bad, capacity};
 
 const W: &str = "meshset";
-pub const SECTION_SIZE: usize = 384;
+const SECTION_SIZE: usize = 384;
 pub const DECL_SIZE: usize = 100;
 pub const DECL_AT: usize = 0x70;
 pub const DECL2_AT: usize = 0xd4;
-pub const KEY_AT: usize = 0x138;
+const KEY_AT: usize = 0x138;
 /// The LOD record pointers (u64) lie from 0x30 up to the LOD count at 0xb4.
 pub const MAX_LODS: usize = (0xb4 - 0x30) / 8;
 
@@ -33,7 +33,6 @@ pub mod usage {
     pub const COLOR1: u8 = 31;
     pub const TEXCOORD0: u8 = 33;
     pub const TEXCOORD1: u8 = 34;
-    pub const RADIOSITY: u8 = 42;
     pub const SUBMATERIAL: u8 = 51;
     pub const TANGENT_SPACE: u8 = 52;
 }
@@ -145,7 +144,7 @@ impl Section {
                 .sum::<usize>()
     }
     /// One past the section's last vertex byte.
-    pub fn vertex_end(&self) -> usize {
+    fn vertex_end(&self) -> usize {
         self.vertex_offset as usize + self.decl.stride() * self.vertices as usize
     }
 }

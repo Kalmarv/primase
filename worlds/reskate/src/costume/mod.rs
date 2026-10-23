@@ -20,7 +20,7 @@ pub use primase_frostbite::{Error, Result};
 /// The user string Studio gives the entries it adds for a costume.
 pub const ADDITION: &str = "reskate-cosmetic-addition";
 /// The root type of an appearance preset.
-pub const PRESET: &str = "AppearanceShaderExpressionPreset";
+const PRESET: &str = "AppearanceShaderExpressionPreset";
 
 /// The costume's presets (see the module documentation): each entry's index and its document, read.
 pub fn costume_presets(m: &Fbmod, oodle: Option<&Oodle>) -> Result<Vec<(usize, Document)>> {

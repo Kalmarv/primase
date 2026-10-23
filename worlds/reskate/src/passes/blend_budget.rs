@@ -140,7 +140,7 @@ pub(crate) fn plan(
 /// The plan of a map written in parts by `mode`, from its merged summary `summary` (its parts' content with their
 /// collision cells apart, and its tiles with a chain form) and its collision cells' counts `cells`: the map's other
 /// cull IDs are the parts' and the cells' summed.
-pub(crate) fn plan_parts(
+fn plan_parts(
     summary: &SkateMapSummary,
     cells: &SkateCellCounts,
     mode: BlendBudgetMode,

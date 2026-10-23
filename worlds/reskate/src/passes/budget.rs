@@ -23,8 +23,8 @@ use primase_core::{Entity, Instance, MaterialVariants, Mesh, Texture, Topology, 
 
 use super::Owned;
 use crate::components::{SkateBaseFactor, SkateMaterial, SkateTexture, SkateTextureWeights};
-use crate::exact_sum::ExactSum;
 use crate::texture::{TexSource, mean_color};
+use primase_exactsum::ExactSum;
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]

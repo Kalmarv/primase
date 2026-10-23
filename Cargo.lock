@@ -996,6 +996,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-exactsum"
+version = "0.1.0"
+
+[[package]]
 name = "primase-examples"
 version = "0.1.0"
 dependencies = [
@@ -1185,6 +1189,7 @@ dependencies = [
  "primase-compress",
  "primase-core",
  "primase-dds",
+ "primase-exactsum",
  "primase-frostbite",
  "primase-glb",
  "primase-gltf",

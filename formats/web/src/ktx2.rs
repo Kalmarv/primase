@@ -191,7 +191,7 @@ fn alpha_pixels(reference: &[u8], decoded: &[u8], policy: &AlphaPolicy) -> Resul
             count += n;
             count >= (pixels * 99).div_ceil(100)
         })
-        .expect("nonempty pixels");
+        .ok_or_else(|| invalid("an image without pixels"))?;
     if policy.blend {
         accepted &= p99 <= 8;
     }
@@ -474,7 +474,7 @@ impl TextureEncoder {
             } else {
                 texture
                     .as_object_mut()
-                    .expect("writer texture object")
+                    .ok_or_else(|| invalid("a texture that is not an object"))?
                     .remove("source");
                 texture["extensions"]["KHR_texture_basisu"] = json!({"source":image_index});
             }
@@ -488,7 +488,9 @@ impl TextureEncoder {
                 if doc.get(field).is_none() {
                     doc[field] = json!([]);
                 }
-                let extensions = doc[field].as_array_mut().expect("writer extensions array");
+                let extensions = doc[field]
+                    .as_array_mut()
+                    .ok_or_else(|| invalid(format!("{field} is not an array")))?;
                 if !extensions.iter().any(|e| e == "KHR_texture_basisu") {
                     extensions.push(json!("KHR_texture_basisu"));
                 }
@@ -760,7 +762,7 @@ pub(crate) fn prepare_image(
             .map_err(invalid)?;
             near_zero = filtered.near_zero_to_flat;
             let primase_image::Samples::U8(pixels) = filtered.image.samples else {
-                unreachable!()
+                return Err(invalid("a resized normal map lost its 8 bits"));
             };
             rgba = pixels;
         } else {
@@ -907,7 +909,7 @@ pub fn encode_rgba8(width: u32, height: u32, rgba: &[u8], srgb: bool) -> Result<
             .get(48..52)
             .ok_or_else(|| invalid("KTX2 DFD offset"))?
             .try_into()
-            .expect("four bytes"),
+            .map_err(|_| invalid("KTX2 DFD offset"))?,
     ) as usize;
     *encoded
         .get_mut(dfd + 13)

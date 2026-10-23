@@ -5,7 +5,7 @@
 //! pixels, cut-out visibility changed for fewer than 0.1% of pixels at each material's cutoff, blended alpha p99
 //! within 8 levels, and per-role codec quality. Runs on the synthetic fixture always, and on a real export
 //! (`oracles.baseline.sekiro/ktx2-tiles`) when configured, against the bounds the README states.
-#![cfg(feature = "ktx2")]
+#![cfg(all(feature = "ktx2", feature = "fixture"))]
 #![allow(clippy::unwrap_used)]
 use basisu::{DecodeFlags, TargetFormat, Transcoder};
 use serde_json::{Value, json};

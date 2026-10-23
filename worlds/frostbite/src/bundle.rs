@@ -171,9 +171,6 @@ impl Manifest {
     pub fn chunk_file(&self, i: usize) -> usize {
         1 + self.ebx.len() + self.res.len() + i
     }
-    pub fn ebx_file(&self, i: usize) -> usize {
-        1 + i
-    }
 }
 
 /// Whether `m` has a manifest's header (declared size and salted magic, either endianness).

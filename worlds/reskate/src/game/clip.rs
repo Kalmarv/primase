@@ -24,9 +24,9 @@ use super::eclipse;
 use super::rig::{DofTarget, Imports, SkateAnimRig};
 
 /// The resource type of an ECLP animation.
-pub const ECLP_RESOURCE: u32 = 0x4088_BF7E;
+const ECLP_RESOURCE: u32 = 0x4088_BF7E;
 /// `EclipseAnimationAsset.CodecType` of an ECLP animation (`ECLP`).
-pub const ECLP_CODEC: u64 = 0x4543_4C50;
+const ECLP_CODEC: u64 = 0x4543_4C50;
 
 /// One track of a clip as stored: its DOF, key frames and values (`width` a key: 4 a rotation, 3 a vector, 1 a
 /// scalar).

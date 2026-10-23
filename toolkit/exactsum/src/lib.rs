@@ -3,6 +3,7 @@
 //! to the nearest `f64` when read, ties to even (as Python's `math.fsum`). A decision made over the parts of a map
 //! (a texture's weight summed over every placement) is then the same whatever order the parts arrive in, and the same
 //! as over the whole map at once. Finite terms only.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 /// See the module documentation.
 #[derive(Clone, Debug, Default)]

@@ -100,7 +100,7 @@ impl FieldType {
 }
 
 /// The category nibble of an encoded type (`FieldCategory`); only `Array` (4) changes how a field is read.
-pub const CATEGORY_ARRAY: u16 = 4;
+const CATEGORY_ARRAY: u16 = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FieldDescriptor {
@@ -296,12 +296,5 @@ impl Document {
     pub fn type_name(&self, i: usize) -> Option<&str> {
         let d = self.instances.get(i)?.descriptor?;
         self.types.get(d).map(|t| t.name.as_str())
-    }
-
-    /// Indices of the instances whose type is named `name` (ASCII case-insensitive).
-    pub fn instances_of(&self, name: &str) -> Vec<usize> {
-        (0..self.instances.len())
-            .filter(|&i| self.type_name(i).is_some_and(|n| n.eq_ignore_ascii_case(name)))
-            .collect()
     }
 }

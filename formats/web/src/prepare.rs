@@ -374,23 +374,44 @@ fn bindings(w: &World) -> Vec<(Entity, Slot, Entity)> {
     out
 }
 
+/// The error of an entity a pass listed from the world and then did not find in it.
+fn unbound(what: &str, e: Entity) -> String {
+    format!("{what} of {e:?} was listed from the world and is not in it")
+}
+
 /// Bind `slot` of `material` to `texture`.
-fn rebind(w: &mut World, material: Entity, slot: Slot, texture: Entity) {
+fn rebind(w: &mut World, material: Entity, slot: Slot, texture: Entity) -> Result<(), String> {
     if let Slot::Mask { .. } | Slot::Height { .. } = slot {
-        let mut l = w.get::<LayeredMaterial>(material).expect("bound").clone();
+        let mut l = w
+            .get::<LayeredMaterial>(material)
+            .ok_or_else(|| unbound("the layered material", material))?
+            .clone();
         let s = match slot {
             Slot::Mask { channel, source } => {
-                sources_mut(&mut l.weights.channels.as_mut().expect("bound")[channel]).swap_remove(source)
+                let channels = l
+                    .weights
+                    .channels
+                    .as_mut()
+                    .and_then(|c| c.get_mut(channel))
+                    .ok_or_else(|| unbound("the weight channel", material))?;
+                sources_mut(channels).swap_remove(source)
             }
-            Slot::Height { slot } => &mut l.weights.heights[slot],
-            _ => unreachable!("a layered slot"),
+            Slot::Height { slot } => l
+                .weights
+                .heights
+                .get_mut(slot)
+                .ok_or_else(|| unbound("the height slot", material))?,
+            _ => return Err(format!("{slot:?} is not a layered slot")),
         };
         if let Source::Mask { texture: r, .. } = s {
             r.texture = texture;
         }
         w.insert(material, l);
     } else {
-        let mut p = w.get::<PbrMaterial>(material).expect("bound").clone();
+        let mut p = w
+            .get::<PbrMaterial>(material)
+            .ok_or_else(|| unbound("the material", material))?
+            .clone();
         for (s, r) in pbr_slots(&mut p) {
             if s == slot
                 && let Some(r) = r
@@ -400,6 +421,7 @@ fn rebind(w: &mut World, material: Entity, slot: Slot, texture: Entity) {
         }
         w.insert(material, p);
     }
+    Ok(())
 }
 
 impl Pass for PrepareWebTextures {
@@ -464,17 +486,17 @@ impl PrepareWebTextures {
         policies: &BTreeMap<Entity, AlphaPolicy>,
         t: Entity,
         role: Role,
-    ) -> primase_cache::Key {
+    ) -> Result<primase_cache::Key, String> {
         let name = w.get::<Name>(t).map(|n| n.0.as_str());
         let policy = policies.get(&t).cloned().unwrap_or_default();
-        let texture = w.get::<Texture>(t).expect("bound");
-        crate::ktx2::preparation_key(
+        let texture = w.get::<Texture>(t).ok_or_else(|| unbound("the texture", t))?;
+        Ok(crate::ktx2::preparation_key(
             texture,
             role,
             self.caps_for(name).get(role),
             self.budget(role),
             &policy,
-        )
+        ))
     }
 
     /// Texture `t` prepared as `role`: a pure function of the texture, its name's cap, the role's budget and its alpha
@@ -488,7 +510,7 @@ impl PrepareWebTextures {
     ) -> Result<Made, String> {
         let name = w.get::<Name>(t).map(|n| n.0.as_str());
         let policy = policies.get(&t).cloned().unwrap_or_default();
-        let texture = w.get::<Texture>(t).expect("bound");
+        let texture = w.get::<Texture>(t).ok_or_else(|| unbound("the texture", t))?;
         let mut made = PassLog::default();
         let job = crate::ktx2::Preparation {
             role,
@@ -531,7 +553,11 @@ impl PrepareWebTextures {
                     continue;
                 }
                 let copy = w.spawn();
-                w.insert(copy, w.get::<Texture>(t).expect("bound").clone());
+                let original = w
+                    .get::<Texture>(t)
+                    .ok_or_else(|| unbound("the texture", t))?
+                    .clone();
+                w.insert(copy, original);
                 if let Some(Name(n)) = w.get::<Name>(t).cloned() {
                     w.insert(copy, Name(format!("{n}~{}", role.key())));
                 }
@@ -543,7 +569,7 @@ impl PrepareWebTextures {
             if let Some(&copy) = of_role.get(&(t, slot.role()))
                 && copy != t
             {
-                rebind(w, material, slot, copy);
+                rebind(w, material, slot, copy)?;
             }
         }
         // the alpha a colour image must keep: the materials that cut it out or blend it
@@ -555,7 +581,9 @@ impl PrepareWebTextures {
             let Some(&t) = of_role.get(&(t, Role::Colour)) else {
                 continue;
             };
-            let p = w.get::<PbrMaterial>(material).expect("bound");
+            let p = w
+                .get::<PbrMaterial>(material)
+                .ok_or_else(|| unbound("the material", material))?;
             let policy = policies.entry(t).or_default();
             match p.alpha_mode {
                 AlphaMode::Blend => policy.blend = true,
@@ -578,8 +606,9 @@ impl PrepareWebTextures {
         } else {
             let held = |t: Entity, role: Role| {
                 self.memo.as_ref().is_some_and(|m| {
-                    let input = self.input(w, &policies, t, role);
-                    m.lock().is_ok_and(|m| m.holds(&input))
+                    // a texture that is not there is `make`'s error to report
+                    self.input(w, &policies, t, role)
+                        .is_ok_and(|input| m.lock().is_ok_and(|m| m.holds(&input)))
                 })
             };
             let jobs: Vec<(&(Entity, Role), &Entity)> = of_role
@@ -603,7 +632,10 @@ impl PrepareWebTextures {
                 let name = w.get::<Name>(t).map(|n| n.0.clone());
                 let cap = self.caps_for(name.as_deref()).get(role);
                 let policy = policies.get(&t).cloned().unwrap_or_default();
-                let texture = w.get::<Texture>(t).expect("bound").clone();
+                let texture = w
+                    .get::<Texture>(t)
+                    .ok_or_else(|| unbound("the texture", t))?
+                    .clone();
                 let budget = self.budget(role);
                 let input = crate::ktx2::preparation_key(&texture, role, cap, budget, &policy);
                 let held = match &self.memo {

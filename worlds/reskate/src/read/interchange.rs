@@ -357,7 +357,7 @@ impl Files<'_> {
     }
 }
 
-pub(crate) fn sha256_file(path: &Path) -> Result<String> {
+fn sha256_file(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
     let bytes = std::fs::read(path).map_err(|source| Error::Io {
         path: path.to_owned(),

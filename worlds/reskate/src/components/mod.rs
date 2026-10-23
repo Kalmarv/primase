@@ -794,13 +794,13 @@ impl primase_core::summary::Summary for SkateLightsSummary {
 pub struct SkateTextureWeights {
     pub max: usize,
     pub aux_weight: f64,
-    pub contributions: BTreeMap<(String, u64), crate::exact_sum::ExactSum>,
+    pub contributions: BTreeMap<(String, u64), primase_exactsum::ExactSum>,
 }
 
 impl SkateTextureWeights {
     /// Each texture's weight: its placements' contributions summed exactly.
-    pub fn totals(&self) -> BTreeMap<String, crate::exact_sum::ExactSum> {
-        let mut out: BTreeMap<String, crate::exact_sum::ExactSum> = BTreeMap::new();
+    pub fn totals(&self) -> BTreeMap<String, primase_exactsum::ExactSum> {
+        let mut out: BTreeMap<String, primase_exactsum::ExactSum> = BTreeMap::new();
         for ((t, _), s) in &self.contributions {
             out.entry(t.clone()).or_default().merge(s);
         }

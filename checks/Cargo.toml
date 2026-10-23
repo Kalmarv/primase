@@ -18,7 +18,7 @@ primase-lighting.workspace = true
 primase-meshops.workspace = true
 primase-reskate.workspace = true
 primase-unity.workspace = true
-primase-web.workspace = true
+primase-web = { workspace = true, features = ["fixture"] }
 primase-compress.workspace = true
 primase-testdata.workspace = true
 toml.workspace = true

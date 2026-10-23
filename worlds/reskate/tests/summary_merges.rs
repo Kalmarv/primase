@@ -8,11 +8,11 @@ use std::collections::BTreeSet;
 use std::fmt::Debug;
 
 use primase_core::summary::Summary;
+use primase_exactsum::ExactSum;
 use primase_reskate::components::{
     CellsCounted, ChainCandidate, OverlayGrouping, RankedLight, SharedContent, SkateContentBounds,
     SkateFloorSummary, SkateLightsSummary, SkateMapSummary, SkateSpawnSummary, SkateTextureWeights,
 };
-use primase_reskate::exact_sum::ExactSum;
 
 /// Every order of `parts` merged left to right, and two groupings, equal.
 fn merges_alike<S: Summary + Debug>(parts: [S; 4]) {

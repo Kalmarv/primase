@@ -27,7 +27,7 @@ use primase_core::{Entity, MaterialVariants, Mesh, Name, Primitive, Semantic, St
 
 /// Colours a primitive splits into at most; past it, one mean tint. 32 keeps palette gradients of 9 to 23 colours
 /// (GTA's trees and palms) exact while bounding the material copies a primitive can make.
-pub const MAX_COLOURS: usize = 32;
+const MAX_COLOURS: usize = 32;
 
 /// A primitive's `COLOR_0` colour per vertex, linear 0..1 as exact u16 steps (`None`: none, or white everywhere).
 fn colours(p: &Primitive) -> Result<Option<Vec<[u16; 3]>>, String> {

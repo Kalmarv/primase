@@ -25,9 +25,9 @@ use primase_meshops::vector::Vec3;
 pub const LIFT_STEP: f32 = 0.0002;
 /// The largest step [`lift_step`] widens to: the top of a chain then sits at most `MAX_RANK` x 2.5 mm = 1 cm off its
 /// surface. Past it (or a translation that is not finite) a tile keeps its chain overlays in its mesh.
-pub const MAX_LIFT_STEP: f32 = 0.0025;
+const MAX_LIFT_STEP: f32 = 0.0025;
 /// The highest chain rank ([`crate::passes::layered::VertexBlend::chain_rank`]: slots 1..=3, the darkening 4).
-pub const MAX_RANK: u8 = 4;
+const MAX_RANK: u8 = 4;
 /// The padding triangles' legs, in metres (shorter where the box is thinner).
 const PAD: f32 = 0.01;
 
@@ -81,7 +81,7 @@ impl Geometry {
 }
 
 /// A triangle's dominant axis in the writer's frame: 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z (degenerate: +z).
-pub fn dominant_axis(g: &Geometry, t: &[u32; 3]) -> u8 {
+fn dominant_axis(g: &Geometry, t: &[u32; 3]) -> u8 {
     let [a, b, c] = t.map(|i| g.vertex(i));
     let n = (b - a).cross(c - a);
     let m = [n.x, n.y, n.z];
@@ -109,7 +109,7 @@ pub fn axis_vector(axis: u8) -> Vec3 {
 }
 
 /// A part's triangles grouped by [`dominant_axis`], each group with only the vertices it draws (in first use order).
-pub fn split_by_axis(g: &Geometry) -> BTreeMap<u8, Geometry> {
+fn split_by_axis(g: &Geometry) -> BTreeMap<u8, Geometry> {
     let nv = g.pos.len() / 3;
     let mut out: BTreeMap<u8, (Geometry, Vec<u32>)> = BTreeMap::new();
     for t in g.idx.as_chunks::<3>().0 {
@@ -133,9 +133,9 @@ pub fn split_by_axis(g: &Geometry) -> BTreeMap<u8, Geometry> {
     out.into_iter().map(|(k, (h, _))| (k, h)).collect()
 }
 
-/// How far inside its cell a piece cut by [`split_by_cell`] stays, in metres: geometry on a border could count as
+/// How far inside its cell a piece cut by `split_by_cell` stays, in metres: geometry on a border could count as
 /// both cells', and an object reaching into a second cell is cut again by Studio.
-pub const CELL_INSET: f32 = 0.0005;
+const CELL_INSET: f32 = 0.0005;
 
 /// A polygon vertex while clipping a triangle: its barycentric weights on the source triangle and its position in
 /// the grid's frame (x, y).
@@ -177,7 +177,8 @@ fn clip_edge(poly: &[ClipVertex], along_y: bool, k: f32, keep_above: bool) -> Ve
 /// (200 m, from a world corner at -4800 m) or any grid dividing them. Per cell (column, row): the triangles inside
 /// it, and those crossing a border clipped to it, every vertex at least [`CELL_INSET`] inside; a clipped vertex's
 /// normal, UV and blend weight are interpolated from its triangle's. The count is of the triangles that were clipped.
-pub fn split_by_cell(g: &Geometry, origin: Vec3, cell: f32) -> (BTreeMap<(i32, i32), Geometry>, usize) {
+#[cfg(test)]
+fn split_by_cell(g: &Geometry, origin: Vec3, cell: f32) -> (BTreeMap<(i32, i32), Geometry>, usize) {
     let (cells, clipped) = split_by_cell_counted(g, origin, cell);
     (cells.into_iter().map(|(k, (h, _))| (k, h)).collect(), clipped)
 }
@@ -434,7 +435,7 @@ pub fn lift(rank: u8, step: f32) -> f32 {
 /// The step for objects translated to `t` (writer frame) and lifted along `axis`: [`LIFT_STEP`], doubled until the
 /// lifted translations, as the f32 the map stores, are distinct, in rank order, and in front of `t` (far from the
 /// origin an f32 cannot hold 0.2 mm). `None` when `t` is not finite or the step would pass [`MAX_LIFT_STEP`].
-pub fn lift_step(t: Vec3, axis: u8) -> Option<f32> {
+fn lift_step(t: Vec3, axis: u8) -> Option<f32> {
     if ![t.x, t.y, t.z].iter().all(|x| x.is_finite()) {
         return None;
     }
