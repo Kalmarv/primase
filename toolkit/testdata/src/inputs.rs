@@ -752,6 +752,14 @@ pub const VARIABLES: &[Variable] = &[
         source: "",
     },
     Variable {
+        name: "PRIMASE_ANVIL_BAKE_DIGEST",
+        kind: Kind::Switch,
+        gate: false,
+        about: r#"optional: the digest the baked Riders Republic Materials of `worlds/anvil/tests/bake_digest.rs` must have (printed by an earlier run)"#,
+        status: Status::Live,
+        source: "",
+    },
+    Variable {
         name: "PRIMASE_SKATE_MASK_ORACLE",
         kind: Kind::Input,
         gate: true,

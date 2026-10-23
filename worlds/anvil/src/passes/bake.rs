@@ -66,7 +66,7 @@ use primase_core::{
     TexRole, Texture, VertexColor, World,
 };
 use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
-use primase_shader::{Constants, Grid, Input, Invocation, Layout, Lod, evaluate_raw_with};
+use primase_shader::{Constants, Grid, Input, Invocation, Layout, Lod, PixelShader, evaluate_raw_with};
 
 use super::material::{ShaderUv, uv_transform};
 use crate::components::{
@@ -584,7 +584,9 @@ fn decode_normal(o1: [f32; 3]) -> ([f64; 3], u8) {
 impl BakeAnvilMaterial {
     /// Run `program` for `m` (whose recipe is `recipe`) over the texture square.
     fn bake(&self, w: &World, m: &AnvilMaterial, recipe: &Recipe, program: &[u8]) -> Result<Baked, String> {
-        let shader = primase_dxbc::Shader::parse_stripped(program).map_err(|e| e.to_string())?;
+        let shader =
+            primase_shader::exec::ProgramShader::new(primase_dxbc::lift(program).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
         let rows = material_rows(m)?;
         if let Some(r) = recipe.rows.iter().find(|r| !rows.contains_key(r)) {
             return Err(format!(
@@ -635,9 +637,7 @@ impl BakeAnvilMaterial {
                 ));
             }
         }
-        let buffers: Vec<(u32, u32)> = shader
-            .program
-            .constant_buffers()
+        let buffers: Vec<(u32, u32)> = PixelShader::constant_buffers(&shader)
             .iter()
             .map(|&(slot, n)| (slot, n.saturating_mul(4)))
             .collect();
