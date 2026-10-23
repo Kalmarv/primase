@@ -20,6 +20,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

@@ -51,6 +51,36 @@ impl Executable {
         compile::compile(program, &info).map_err(error)
     }
 
+    /// The textures and the samplers the program's compiled code samples, loads from or asks the size of (an operation
+    /// nothing reads is not in it): the resources a caller must bind for a run that may reach any path.
+    pub fn sampled(
+        &self,
+    ) -> (
+        std::collections::BTreeSet<crate::ResourceId>,
+        std::collections::BTreeSet<crate::ResourceId>,
+    ) {
+        let (mut textures, mut samplers) = (
+            std::collections::BTreeSet::new(),
+            std::collections::BTreeSet::new(),
+        );
+        for (_, op) in &self.ops {
+            match op {
+                flat::Op::Sample { tex, smp, .. } => {
+                    textures.insert(*tex);
+                    samplers.insert(*smp);
+                }
+                flat::Op::Texel {
+                    tex, storage: false, ..
+                }
+                | flat::Op::Query { tex, .. } => {
+                    textures.insert(*tex);
+                }
+                _ => {}
+            }
+        }
+        (textures, samplers)
+    }
+
     /// Whether the program needs the other lanes of its 2 x 2 quad: it takes a screen derivative, or samples at an
     /// implicit level of detail (`sample`, `sample_b`), whose footprint is the quad's. A program that does not runs
     /// the same one invocation at a time as in a quad.

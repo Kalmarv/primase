@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use super::{Backend, Executable, ImageLoad, ImageQuery, ImageSample, ImageStore, Runner, Scratch, error};
 use crate::{
     AtomicAdd, BufferKind, D3dClass, Error, Execution, Interface, PixelShader, Program, ResourceId,
-    ResourceKind, Sampler, Stage, StorageTarget, Store, SystemValue,
+    ResourceKind, Sampler, Stage, StorageTarget, Store, SystemValue, TextureDim,
 };
 use std::sync::Mutex;
 
@@ -150,6 +150,8 @@ impl ProgramShader {
         }
         let mut constants = Vec::new();
         let (mut textures, mut samplers) = (Vec::new(), Vec::new());
+        // the textures and samplers the compiled code reaches, not every one the program declares
+        let (sampled_textures, sampled_samplers) = executable.sampled();
         let mut slots = BTreeMap::new();
         let mut buffers = BTreeMap::new();
         for r in &interface.resources {
@@ -168,10 +170,16 @@ impl ProgramShader {
                     })?;
                     constants.push((binding.register, r.id, rows));
                 }
-                ResourceKind::Texture { .. } if binding.class == D3dClass::ShaderResource => {
+                // the 2D textures (and arrays of them) the code reaches: what `Sampler::sample` answers, and what the
+                // evaluators' `textures()` always listed; a volume or a cube is reached through `sample_image`
+                ResourceKind::Texture {
+                    dim: TextureDim::D2, ..
+                } if binding.class == D3dClass::ShaderResource && sampled_textures.contains(&r.id) => {
                     textures.push(binding.register);
                 }
-                ResourceKind::Sampler { .. } => samplers.push(binding.register),
+                ResourceKind::Sampler { .. } if sampled_samplers.contains(&r.id) => {
+                    samplers.push(binding.register);
+                }
                 ResourceKind::Buffer(kind)
                 | ResourceKind::Storage {
                     target: StorageTarget::Buffer(kind),

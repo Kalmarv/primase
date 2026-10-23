@@ -26,7 +26,7 @@ use crate::{Result, invalid};
 /// A program bound to its layout.
 #[derive(Debug)]
 pub struct Bound {
-    pub shader: primase_dxbc::Shader,
+    pub shader: primase_shader::exec::ProgramShader,
     pub layout: Layout,
     /// Each texture parameter's slot (`t<n>`), by property name.
     pub textures: BTreeMap<String, u32>,
@@ -48,9 +48,10 @@ fn words(shape: Shape, array_size: u32) -> u32 {
 /// Bind variant `p` of shader `name`: its program read without reflection, the layout of every field of a buffer the
 /// program reads, and its texture slots. A field named twice is an error.
 pub fn bind(name: &str, p: &UnityProgramVariant) -> Result<Bound> {
-    let shader = primase_dxbc::Shader::parse_stripped(&p.code)
+    let program = primase_dxbc::lift(&p.code).map_err(|e| invalid(format!("program of {name}: {e}")))?;
+    let shader = primase_shader::exec::ProgramShader::new(program)
         .map_err(|e| invalid(format!("program of {name}: {e}")))?;
-    let read = shader.program.constant_buffers().to_vec();
+    let read = primase_shader::PixelShader::constant_buffers(&shader).to_vec();
     let mut layout = Layout {
         buffers: read.iter().map(|&(slot, rows)| (slot, rows * 4)).collect(),
         fields: BTreeMap::new(),

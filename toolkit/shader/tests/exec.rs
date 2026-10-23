@@ -377,7 +377,8 @@ impl Sampler for Recording {
 #[test]
 fn a_volume_sample_reaches_a_sampler_that_answers_it_and_is_refused_by_one_that_does_not() {
     let shader = ProgramShader::new(volume_program()).unwrap();
-    assert_eq!(shader.textures(), &[2]);
+    // a volume is reached through sample_image: textures() lists the planes Sampler::sample answers
+    assert_eq!(shader.textures(), &[] as &[u32]);
     assert_eq!(shader.samplers(), &[1]);
     let inputs = [bits([0.1, 0.2, 0.3, 0.0])];
     let mut sampler = Recording::default();
