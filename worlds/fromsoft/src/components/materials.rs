@@ -1,5 +1,6 @@
-//! A source material as the reader resolved it from its FLVER entry and MTD (`fromsoft.material`), its layered
-//! definition (`fromsoft.layered_material`) and its bindings: what the source states, no choice made.
+//! A source material as the reader resolved it from its FLVER entry and definition (an MTD or a material binary:
+//! `fromsoft.material`), its layered definition (`fromsoft.layered_material`) and its bindings: what the source states,
+//! no choice made.
 use crate::{
     flver,
     mtd::{MaterialDefinition, Value},
@@ -34,6 +35,75 @@ impl SkipClass {
     /// The class an option word names.
     pub fn from_word(word: &str) -> Option<SkipClass> {
         SkipClass::ALL.into_iter().find(|c| c.word() == word)
+    }
+}
+
+/// A material's definition as its game stores it: an MTD (Sekiro) or a material binary (MATBIN, Elden Ring).
+/// Serialized as the stored record itself (untagged), so an MTD material's identity record is what it always was.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(untagged)]
+pub enum Definition {
+    Mtd(MaterialDefinition),
+    Matbin(crate::matbin::Material),
+}
+impl Definition {
+    /// The shader's path as stored (`.spx` / `.fx`).
+    pub fn shader(&self) -> &str {
+        match self {
+            Definition::Mtd(d) => &d.shader,
+            Definition::Matbin(m) => &m.shader,
+        }
+    }
+    /// The MTD, for what only an MTD states (its layered shaders' switches and SAT parameters).
+    pub fn mtd(&self) -> Option<&MaterialDefinition> {
+        match self {
+            Definition::Mtd(d) => Some(d),
+            Definition::Matbin(_) => None,
+        }
+    }
+    pub fn mtd_mut(&mut self) -> Option<&mut MaterialDefinition> {
+        match self {
+            Definition::Mtd(d) => Some(d),
+            Definition::Matbin(_) => None,
+        }
+    }
+    /// The first integer of parameter `name`, where the definition stores it as integers.
+    pub fn int(&self, name: &str) -> Option<i32> {
+        match self {
+            Definition::Mtd(d) => d
+                .parameters
+                .iter()
+                .find(|p| p.name == name)
+                .and_then(|p| match &p.value {
+                    Value::Int(x) => x.first().copied(),
+                    _ => None,
+                }),
+            Definition::Matbin(m) => match m.param(name)? {
+                crate::matbin::Value::Int(x) => Some(*x),
+                crate::matbin::Value::Int2(x) => Some(x[0]),
+                _ => None,
+            },
+        }
+    }
+    /// Every texture the definition declares: its slot name (an MTD's texture kind, a material binary's sampler type),
+    /// its path as stored and its UV set (an MTD's UV number; a material binary states none: 1).
+    pub fn textures(&self) -> Vec<(&str, &str, i32)> {
+        match self {
+            Definition::Mtd(d) => d
+                .textures
+                .iter()
+                .map(|t| (t.kind.as_str(), t.path.as_str(), t.uv_number))
+                .collect(),
+            Definition::Matbin(m) => m
+                .samplers
+                .iter()
+                .map(|s| (s.kind.as_str(), s.path.as_str(), 1))
+                .collect(),
+        }
+    }
+    /// Whether the definition declares a texture slot named `kind`.
+    pub fn declares(&self, kind: &str) -> bool {
+        self.textures().iter().any(|t| t.0 == kind)
     }
 }
 
@@ -82,9 +152,9 @@ impl Component for LayeredMaterial {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Material {
     pub mtd: String,
-    /// Original definition, including non-layered shader parameters. Absence is
+    /// Original definition (an MTD or a material binary), including non-layered shader parameters. Absence is
     /// explicit; runtime shader constants must not be guessed from slot names.
-    pub definition: Option<MaterialDefinition>,
+    pub definition: Option<Definition>,
     /// Raw, uninterpreted source GX records, included in material identity.
     pub gx: Vec<flver::GxItem>,
     pub shader: String,
@@ -135,8 +205,8 @@ impl Component for Material {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// 4: no `two_sided` (sidedness is the face sets' `fromsoft.face_cull`). 5: the source's facts only (each
     /// binding's availability); the preview textures, the tiling and the name-based surface are the passes'
-    /// ([`crate::preview`]).
-    const VERSION: u32 = 5;
+    /// ([`crate::preview`]). 6: the definition may be a material binary ([`Definition`]; an MTD serializes as before).
+    const VERSION: u32 = 6;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
         primase_core::json::to_value(self).map(Some)
     }

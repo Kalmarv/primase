@@ -301,7 +301,9 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
             e,
             Material {
                 mtd: "layered.mtd".into(),
-                definition: layered.as_ref().map(|l| l.definition.clone()),
+                definition: layered
+                    .as_ref()
+                    .map(|l| primase_fromsoft::materials::Definition::Mtd(l.definition.clone())),
                 gx: Vec::new(),
                 shader: "M[Multiple]".into(),
                 class: "opaque".into(),

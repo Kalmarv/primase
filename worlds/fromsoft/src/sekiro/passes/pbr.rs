@@ -196,20 +196,20 @@ fn simple(shader: &str) -> bool {
 }
 fn binding<'a>(m: &'a Material, role: &str) -> Option<&'a Binding> {
     let d = m.definition.as_ref()?;
-    d.textures
-        .iter()
-        .filter(|t| t.kind.contains(role))
-        .find_map(|t| m.bindings.get(&t.kind))
+    d.textures()
+        .into_iter()
+        .filter(|t| t.0.contains(role))
+        .find_map(|t| m.bindings.get(t.0))
 }
 
 fn normal_binding<'a>(m: &'a Material, preview: &Preview) -> Option<&'a Binding> {
     let name = preview.normal.as_ref()?;
     m.definition
         .as_ref()?
-        .textures
-        .iter()
-        .filter(|t| t.kind.contains("NormalMap"))
-        .filter_map(|t| m.bindings.get(&t.kind))
+        .textures()
+        .into_iter()
+        .filter(|t| t.0.contains("NormalMap"))
+        .filter_map(|t| m.bindings.get(t.0))
         .find(|b| &b.texture == name)
 }
 
@@ -575,11 +575,15 @@ fn lower_materials(
         }
         // A static parameter may exist only in a subset of shader permutations;
         // retaining all definitions lets later policies establish its consumer.
-        if m.definition.as_ref().is_some_and(|d| {
-            d.parameters
-                .iter()
-                .any(|v| matches!(&v.value,Value::Float(x) if x.iter().any(|f|!f.is_finite())))
-        }) {
+        if m.definition
+            .as_ref()
+            .and_then(crate::materials::Definition::mtd)
+            .is_some_and(|d| {
+                d.parameters
+                    .iter()
+                    .any(|v| matches!(&v.value,Value::Float(x) if x.iter().any(|f|!f.is_finite())))
+            })
+        {
             return Err(invalid("Sekiro PBR", 0, "nonfinite source parameter"));
         }
         if !baked {

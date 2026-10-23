@@ -244,7 +244,7 @@ fn baked_bindings_and_factors_are_authoritative() {
     let mut m = source("M[Multiple]");
     m.layered = Some(materials::LayeredMaterial {
         mtd: m.mtd.clone(),
-        definition: m.definition.clone().unwrap(),
+        definition: m.definition.as_ref().and_then(|d| d.mtd()).cloned().unwrap(),
         bindings: m.bindings.clone(),
     });
     world.insert(e, m);
@@ -277,7 +277,7 @@ fn baked_emission_presence_controls_missing_radiance_diagnostic() {
         let mut m = source("M[Multiple]_Emissive");
         m.layered = Some(materials::LayeredMaterial {
             mtd: m.mtd.clone(),
-            definition: m.definition.clone().unwrap(),
+            definition: m.definition.as_ref().and_then(|d| d.mtd()).cloned().unwrap(),
             bindings: m.bindings.clone(),
         });
         world.insert(e, m);
@@ -324,9 +324,14 @@ fn selected_normal_identity_controls_both_transforms() {
     let e = world.spawn();
     let mut m = source("MetallicTex");
     let kind = "Texture2D_3_NormalMap";
-    let mut slot = m.definition.as_ref().unwrap().textures[1].clone();
+    let mut slot = m.definition.as_ref().and_then(|d| d.mtd()).unwrap().textures[1].clone();
     slot.kind = kind.into();
-    m.definition.as_mut().unwrap().textures.push(slot);
+    m.definition
+        .as_mut()
+        .and_then(|d| d.mtd_mut())
+        .unwrap()
+        .textures
+        .push(slot);
     m.bindings.insert(
         kind.into(),
         materials::Binding {

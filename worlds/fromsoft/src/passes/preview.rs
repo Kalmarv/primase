@@ -58,9 +58,7 @@ pub fn preview(m: &Material) -> Preview {
     let rank = |(slot, texture, kind): &(u32, &String, &String)| {
         (
             *slot,
-            !m.definition
-                .as_ref()
-                .is_some_and(|d| d.textures.iter().any(|t| t.kind == **kind)),
+            !m.definition.as_ref().is_some_and(|d| d.declares(kind)),
             (*texture).clone(),
             (*kind).clone(),
         )
