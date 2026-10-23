@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 
 use primase_core::Entity;
+use primase_core::asset::{Asset, Role};
 use primase_core::clip::{Clip, ClipTarget, Property};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::skeleton::{Rest, Skeleton};
@@ -140,6 +141,12 @@ fn clips_lower_onto_a_peds_skeleton() {
     );
     assert_eq!(w.iter::<GtaAnimation>().count(), 0);
     assert_eq!(w.iter::<Clip>().count(), animations);
+    // the clips are members of the ped's asset, whose rig the skeleton is
+    let (_, asset) = w.iter::<Asset>().next().expect("the ped's asset");
+    assert_eq!(
+        asset.members.iter().filter(|m| m.1 == Role::Clip).count(),
+        animations
+    );
 
     // the meaning against the rest pose
     let rest: BTreeMap<u32, ([f32; 3], [f32; 4])> = w

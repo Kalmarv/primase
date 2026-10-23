@@ -15,6 +15,7 @@
 //! animation's own looping is not known.
 use std::collections::BTreeSet;
 
+use primase_core::asset::{Asset, Role};
 use primase_core::clip::{
     Channel, Clip, ClipTarget, Extrapolation, Interpolation, Property, RootMotion, RootSpace,
 };
@@ -128,12 +129,16 @@ impl Pass for LowerGtaClips {
     fn removes(&self) -> &[&'static str] {
         &["gta.animation"]
     }
+    fn modifies(&self) -> &[&'static str] {
+        &["core.asset"]
+    }
     fn approximates(&self) -> &'static str {
         "holds the end values (an animation's looping is not known); a track of another number than 0, 1, 2, 5, 6 is a control"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let animations: Vec<(Entity, GtaAnimation)> =
             w.iter::<GtaAnimation>().map(|(e, a)| (e, a.clone())).collect();
+        let mut made: Vec<(Entity, Entity)> = Vec::new();
         for (e, a) in animations {
             let skeleton = a.skeleton;
             let core = w
@@ -235,6 +240,25 @@ impl Pass for LowerGtaClips {
                 },
             );
             log.count("clips made", 1);
+            made.push((e, skeleton));
+        }
+        // a clip of an asset's rig is a member of the asset
+        let assets: Vec<Entity> = w.iter::<Asset>().map(|(a, _)| a).collect();
+        for asset in assets {
+            let Some(members) = w.get_mut::<Asset>(asset).map(|a| &mut a.members) else {
+                continue;
+            };
+            let rigs: Vec<Entity> = members
+                .iter()
+                .filter(|(_, r)| *r == Role::Rig)
+                .map(|(m, _)| *m)
+                .collect();
+            for (clip, skeleton) in &made {
+                if rigs.contains(skeleton) {
+                    members.push((*clip, Role::Clip));
+                    log.count("clips added to their rig's asset", 1);
+                }
+            }
         }
         Ok(())
     }
