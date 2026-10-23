@@ -1361,6 +1361,45 @@ pub struct StoredAnimation {
     pub tracks: Vec<StoredTrack>,
 }
 
+/// Why an Animation body or a track's values can't be read (`read::animation` names it `Error`).
+#[derive(Debug, thiserror::Error)]
+pub enum AnimationError {
+    #[error("animation body: {have} bytes, shorter than its {what} at {at}")]
+    Short {
+        what: &'static str,
+        at: usize,
+        have: usize,
+    },
+    #[error("animation {what}: {found:#x} at {at}, not {read}")]
+    Value {
+        what: &'static str,
+        at: usize,
+        found: u64,
+        read: &'static str,
+    },
+    #[error("animation track {track}: tag {tag:#04x} is kind {kind}, whose value width isn't read")]
+    Kind { track: usize, tag: u8, kind: u8 },
+    #[error("animation track {track}: {why}")]
+    Track { track: usize, why: String },
+    #[error("animation tracks of kind {kind}: their values aren't read")]
+    Unread { kind: u8 },
+    #[error("animation track values: {0}")]
+    Values(String),
+    #[error("animation body: {0} bytes after its last track")]
+    Trailing(usize),
+    #[error("animation events: no AnimTrackData after the {0} events")]
+    NoTrackData(u32),
+}
+
+/// A track's values decoded ([`StoredTrack::values`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Values {
+    /// Kind 9: translations.
+    Vec3(Vec<[f32; 3]>),
+    /// Kinds 3, 4, 5, 7 and 8: unit quaternions `[x, y, z, w]`, the component the format leaves out the positive root.
+    Quaternions(Vec<[f32; 4]>),
+}
+
 /// An Animation read for a rig (`anvil.clip`), on an entity named for it: the clip as stored and the rig it drives (the
 /// entity holding its `core.skeleton`), in the source's frame (`frame`, as the reader was given it). Each track names
 /// its bone by the CRC-32 of the bone's name; the rig's joints are named by that hash. `lower-anvil-clips` makes a

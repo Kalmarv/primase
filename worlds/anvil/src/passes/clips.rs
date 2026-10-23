@@ -29,8 +29,7 @@ use primase_core::rig::RigInstance;
 use primase_core::skeleton::{JointId, Rest, Skeleton};
 use primase_core::{Component, Entity, World};
 
-use crate::components::{AnvilClip, AnvilClipBinding, StoredAnimation};
-use crate::read::animation::{Error, Values};
+use crate::components::{AnimationError, AnvilClip, AnvilClipBinding, StoredAnimation, Values};
 
 /// How a clip's keys are interpolated and what it does outside them (see the module documentation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,7 +106,7 @@ fn lower(
     for (track, &hash) in animation.tracks.iter().zip(&animation.mappings) {
         let values = match track.values() {
             Ok(v) => v,
-            Err(Error::Unread { kind }) => {
+            Err(AnimationError::Unread { kind }) => {
                 log.omit(&format!("tracks of kind {kind}, whose values aren't read"), 1);
                 continue;
             }

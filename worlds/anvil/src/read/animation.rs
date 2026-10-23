@@ -67,7 +67,9 @@
     clippy::cast_possible_truncation
 )]
 
-pub use crate::components::{StoredAnimation, StoredEcl, StoredEvents, StoredTrack, Times};
+pub use crate::components::{
+    AnimationError as Error, StoredAnimation, StoredEcl, StoredEvents, StoredTrack, Times, Values,
+};
 
 /// A record type: the CRC-32 of `Animation`.
 pub const ANIMATION: u32 = 0x0FA3_067F;
@@ -75,36 +77,6 @@ pub const ANIMATION: u32 = 0x0FA3_067F;
 const ANIM_TRACK_DATA: u32 = 0x0181_EFE8;
 const MAPPING: u32 = 0x653C_AA76;
 const TTECL_ANIMATION: u32 = 0xAC69_2A57;
-
-/// Why an Animation body can't be read.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("animation body: {have} bytes, shorter than its {what} at {at}")]
-    Short {
-        what: &'static str,
-        at: usize,
-        have: usize,
-    },
-    #[error("animation {what}: {found:#x} at {at}, not {read}")]
-    Value {
-        what: &'static str,
-        at: usize,
-        found: u64,
-        read: &'static str,
-    },
-    #[error("animation track {track}: tag {tag:#04x} is kind {kind}, whose value width isn't read")]
-    Kind { track: usize, tag: u8, kind: u8 },
-    #[error("animation track {track}: {why}")]
-    Track { track: usize, why: String },
-    #[error("animation tracks of kind {kind}: their values aren't read")]
-    Unread { kind: u8 },
-    #[error("animation track values: {0}")]
-    Values(String),
-    #[error("animation body: {0} bytes after its last track")]
-    Trailing(usize),
-    #[error("animation events: no AnimTrackData after the {0} events")]
-    NoTrackData(u32),
-}
 
 /// The value width in bytes of a track class (`kind`, a tag over 3): the widths the census of Riders Republic's clips
 /// settles (each by blocks that read to the body's last byte); `None` for a kind not seen.
@@ -118,15 +90,6 @@ pub fn value_width(kind: u8) -> Option<usize> {
         16 | 18 => 1,
         _ => return None,
     })
-}
-
-/// A track's values decoded ([`StoredTrack::values`]).
-#[derive(Clone, Debug, PartialEq)]
-pub enum Values {
-    /// Kind 9: translations.
-    Vec3(Vec<[f32; 3]>),
-    /// Kinds 3, 4, 5, 7 and 8: unit quaternions `[x, y, z, w]`, the component the format leaves out the positive root.
-    Quaternions(Vec<[f32; 4]>),
 }
 
 /// A u8 or u16 key time's unit: 60 to the second.

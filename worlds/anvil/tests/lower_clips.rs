@@ -17,7 +17,7 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::rig::RigInstance;
 use primase_core::skeleton::{Joint, JointId, Rest, Skeleton};
-use primase_core::{Entity, Name, World};
+use primase_core::{Entity, Name, Transform, World};
 use primase_testdata::{Game, install};
 
 fn floats(v: &[f32]) -> Vec<u8> {
@@ -36,7 +36,7 @@ fn track(tag: u8, keys: u32, times: Times, values: Vec<u8>) -> StoredTrack {
 
 /// A clip of 1.0 s over the rig's joint `0xA` and the root: tracks, in order, the joint's translation (three keys at 0,
 /// 0.5 and 1.0 s), its rotation (the identity, one key), the root's translation and rotation (one key each), a bone
-/// the rig lacks, and a track of the unread kind 5.
+/// the rig lacks, and a track of the unread kind 25.
 fn animation() -> StoredAnimation {
     StoredAnimation {
         length: 1.0,
@@ -66,7 +66,7 @@ fn animation() -> StoredAnimation {
             track(27, 1, Times::U8(vec![]), floats(&[0.0, 0.0, 0.0])),
             track(24, 1, Times::U8(vec![]), floats(&[0.0, 0.0, 0.0])),
             track(27, 1, Times::U8(vec![]), floats(&[9.0, 9.0, 9.0])),
-            track(15, 1, Times::U8(vec![]), vec![0; 8]),
+            track(75, 1, Times::U8(vec![]), vec![0; 8]),
         ],
     }
 }
@@ -98,6 +98,12 @@ fn built(frame: SourceFrame) -> Built {
     );
     let occurrence = w.spawn();
     w.insert(occurrence, RigInstance { skeleton: rig });
+    w.insert(
+        occurrence,
+        Transform {
+            cols: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]],
+        },
+    );
     let clip = w.spawn();
     w.insert(clip, Name("walk".to_owned()));
     w.insert(
