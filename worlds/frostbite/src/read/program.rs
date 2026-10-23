@@ -473,6 +473,7 @@ impl Source<'_> {
                 depot,
                 programs,
                 texture_set,
+                textures: Vec::new(),
                 unresolved,
             },
         );

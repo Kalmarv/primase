@@ -29,9 +29,12 @@
 //!   to the extent the shader declares for the buffer. Adjacent `Unknown` constants of one reason are one constant
 //!   over their bytes, the parameter names dropped (the group on the permutation entity names every parameter): on the
 //!   census sample the engine's lists were 205,208 constants in 1,916 stages and are 3,248 runs.
-//! - **Textures.** Every texture is `Missing`: the depot block holds a texture reference (two GUIDs) for the slots the
-//!   sets name, and linking it to a texture asset is not done here. The log counts the slots by whether the sets name
-//!   them and the block holds a reference.
+//! - **Textures.** A slot the binding sets name is the depot block's parameter of that name, and the parameter's link
+//!   ([`FrostbiteMaterial::textures`], made by [`Source::resolve_textures`](crate::folder::Source::resolve_textures))
+//!   gives the texture entity: `Texture` with the default sampler state (the sampler is not decoded). A slot with no
+//!   such link is `Missing`, and the log counts the slots by why: the sets name no entry for the slot, the block holds
+//!   no reference for the name, the reference was not resolved (the reader step did not run), or the link states why
+//!   it leads nowhere.
 //! - **Outputs.** The pixel stage's render targets are `Unknown` by index.
 //! - **State.** Not decoded: the default (nothing stated).
 
@@ -40,15 +43,15 @@ use std::collections::BTreeSet;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::shader::{
     ConstantBinding, ConstantRole, D3dClass, InputBinding, InputRole, Interface, KeyPart, OutputBinding,
-    OutputRole, RenderState, ResourceId, ResourceKind, Shader, ShaderBinding, Stage, StageBinding,
-    SystemValue, TextureBinding, TextureSource, VariantKey,
+    OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, ShaderBinding, Stage,
+    StageBinding, SystemValue, TextureBinding, TextureSource, VariantKey,
 };
 use primase_core::{Component, Entity, Semantic, World};
 
 use crate::binding::{Bindings, Group};
 use crate::components::{
     FrostbiteBindings, FrostbiteInputLayout, FrostbiteMaterial, FrostbitePermutation, FrostbiteProgram,
-    MaterialDepot,
+    MaterialDepot, MaterialTexture, TextureLink,
 };
 use crate::depot;
 use crate::inputlayout::{Found, InputLayout, dxgi_components};
@@ -175,6 +178,7 @@ fn bind_material(world: &World, m: &FrostbiteMaterial, log: &mut PassLog) -> Res
                     bindings.as_ref(),
                     layout,
                     m.depot.as_ref(),
+                    &m.textures,
                     i > 0,
                     log,
                 );
@@ -202,6 +206,7 @@ fn stage_binding(
     bindings: Option<&Bindings<'_>>,
     layout: Option<&InputLayout>,
     depot: Option<&MaterialDepot>,
+    links: &[MaterialTexture],
     vertex_bound: bool,
     log: &mut PassLog,
 ) -> StageBinding {
@@ -246,24 +251,11 @@ fn stage_binding(
                 let named = (b.space == 0)
                     .then(|| bindings.and_then(|s| s.resource(b.register)))
                     .flatten();
-                log.count(
-                    match (named, depot) {
-                        (None, _) => "texture slots no binding set entry names, left Missing",
-                        (Some((group, i)), Some(d))
-                            if d.parameters.iter().any(|p| {
-                                p.name == group.params[i].name && p.texture_ref(&d.block.data).is_some()
-                            }) =>
-                        {
-                            "texture slots the material's depot block holds a reference for (not linked to a texture asset), left Missing"
-                        }
-                        _ => "texture slots the sets name and the material's depot block holds no reference for, left Missing",
-                    },
-                    1,
-                );
+                let source = texture_source(named, depot, links, log);
                 textures.push(TextureBinding {
                     resource: r.id,
                     sampler: None,
-                    source: TextureSource::Missing,
+                    source,
                 });
             }
             _ => {}
@@ -297,6 +289,56 @@ fn stage_binding(
         constants,
         textures,
         outputs,
+    }
+}
+
+/// What the texture slot the binding sets name as `named` (a group and the index of its parameter) samples: the
+/// texture of the material's link for the parameter's name, else `Missing`, the log counting why.
+fn texture_source(
+    named: Option<(&Group, usize)>,
+    depot: Option<&MaterialDepot>,
+    links: &[MaterialTexture],
+    log: &mut PassLog,
+) -> TextureSource {
+    let Some((group, i)) = named else {
+        log.count("texture slots no binding set entry names, left Missing", 1);
+        return TextureSource::Missing;
+    };
+    let name = group.params[i].name;
+    match links.iter().find(|t| t.name == name).map(|t| &t.link) {
+        Some(TextureLink::Texture(texture)) => {
+            log.count(
+                "texture slots bound to the texture of the depot block's reference",
+                1,
+            );
+            TextureSource::Texture {
+                texture: *texture,
+                sampler: SamplerState::default(),
+            }
+        }
+        Some(TextureLink::Missing(why)) => {
+            log.count(
+                &format!("texture slots left Missing, the reference leads nowhere: {why}"),
+                1,
+            );
+            TextureSource::Missing
+        }
+        None => {
+            let held = depot.is_some_and(|d| {
+                d.parameters
+                    .iter()
+                    .any(|p| p.name == name && p.texture_ref(&d.block.data).is_some())
+            });
+            log.count(
+                if held {
+                    "texture slots the depot block holds a reference for, not resolved (the texture step did not run), left Missing"
+                } else {
+                    "texture slots the sets name and the material's depot block holds no reference for, left Missing"
+                },
+                1,
+            );
+            TextureSource::Missing
+        }
     }
 }
 
@@ -632,6 +674,58 @@ mod tests {
         assert_eq!(
             log.counts["constant buffer bytes no placed parameter covers, Unknown"],
             3
+        );
+    }
+
+    #[test]
+    fn a_texture_slot_samples_the_texture_its_parameters_link_leads_to() {
+        let g = group(&[
+            (0xC1, TEXTURE, 0, 0),
+            (0xC2, TEXTURE, 1, 0),
+            (0xC3, TEXTURE, 2, 0),
+        ]);
+        let d = material();
+        let links = [
+            MaterialTexture {
+                name: 0xC1,
+                guid: [1; 16],
+                link: TextureLink::Texture(Entity::from_index(9)),
+            },
+            MaterialTexture {
+                name: 0xC2,
+                guid: [2; 16],
+                link: TextureLink::Missing("texture format 31".into()),
+            },
+        ];
+        let mut log = PassLog::default();
+        assert_eq!(
+            texture_source(Some((&g, 0)), Some(&d), &links, &mut log),
+            TextureSource::Texture {
+                texture: Entity::from_index(9),
+                sampler: SamplerState::default()
+            }
+        );
+        // a link that leads nowhere, a parameter with no link (the step did not run), a slot no entry names
+        for (named, why) in [
+            (
+                Some((&g, 1)),
+                "texture slots left Missing, the reference leads nowhere: texture format 31",
+            ),
+            (
+                Some((&g, 2)),
+                "texture slots the sets name and the material's depot block holds no reference for, left Missing",
+            ),
+            (None, "texture slots no binding set entry names, left Missing"),
+        ] {
+            assert_eq!(
+                texture_source(named, Some(&d), &links, &mut log),
+                TextureSource::Missing
+            );
+            assert_eq!(log.counts[why], 1);
+        }
+        assert_eq!(
+            log.counts["texture slots bound to the texture of the depot block's reference"],
+            1
         );
     }
 

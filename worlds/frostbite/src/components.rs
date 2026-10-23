@@ -409,7 +409,28 @@ pub struct FrostbiteMaterial {
     pub programs: Vec<Entity>,
     /// The streamable texture set the key's lookup row names, and its resource name where a bundle holds it.
     pub texture_set: Option<(u64, Option<String>)>,
+    /// What each texture parameter of the depot block leads to, in the block's order, once
+    /// [`Source::resolve_textures`](crate::folder::Source::resolve_textures) has run (empty before it).
+    pub textures: Vec<MaterialTexture>,
     pub unresolved: Vec<String>,
+}
+
+/// A texture parameter of a material's depot block: its name hash, the GUID the block holds for it (the file GUID of
+/// a texture asset) and where the GUID led.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaterialTexture {
+    pub name: u64,
+    pub guid: [u8; 16],
+    pub link: TextureLink,
+}
+
+/// Where a texture parameter's GUID led.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TextureLink {
+    /// The texture entity of the world (a `core.texture` with its `frostbite.texture` header).
+    Texture(Entity),
+    /// Nowhere, and why (the reason without the name of any entry: the material's `unresolved` has that).
+    Missing(String),
 }
 
 /// The depot block of a material key ([`FrostbiteMaterial::depot`]).
@@ -426,6 +447,23 @@ impl Component for FrostbiteMaterial {
     const GEOMETRY: Geometry = Geometry::None;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(&self.programs);
+        out.extend(self.textures.iter().filter_map(|t| match t.link {
+            TextureLink::Texture(e) => Some(e),
+            TextureLink::Missing(_) => None,
+        }));
+    }
+    fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
+        for t in &self.textures {
+            if let TextureLink::Texture(e) = t.link
+                && !(w.get::<primase_core::Texture>(e).is_some() && w.get::<FrostbiteTexture>(e).is_some())
+            {
+                return Err(format!(
+                    "texture parameter {:#018x} names an entity that is not a frostbite texture",
+                    t.name
+                ));
+            }
+        }
+        Ok(())
     }
     fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
         let depot = self.depot.as_ref().map(|d| {
@@ -447,6 +485,14 @@ impl Component for FrostbiteMaterial {
             "depot": depot,
             "programs": self.programs.len(),
             "texture_set": self.texture_set.as_ref().map(|(id, name)| json!({ "id": id.to_string(), "resource": name })),
+            "textures": self.textures.iter().map(|t| json!({
+                "name": format!("{:#018x}", t.name),
+                "guid": hex(&t.guid),
+                "texture": match &t.link {
+                    TextureLink::Texture(e) => json!(e.index()),
+                    TextureLink::Missing(why) => json!({ "missing": why }),
+                },
+            })).collect::<Vec<_>>(),
             "unresolved": self.unresolved,
         })))
     }
@@ -607,5 +653,44 @@ impl Component for FrostbiteInputLayout {
                 "last": e.last,
             })).collect::<Vec<_>>(),
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn material(textures: Vec<MaterialTexture>) -> FrostbiteMaterial {
+        FrostbiteMaterial {
+            key: 1,
+            depot: None,
+            programs: Vec::new(),
+            texture_set: None,
+            textures,
+            unresolved: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_texture_link_must_lead_to_a_frostbite_texture() {
+        let mut w = World::new();
+        let plain = w.spawn();
+        let link = |link| MaterialTexture {
+            name: 0xC1,
+            guid: [3; 16],
+            link,
+        };
+        let m = material(vec![link(TextureLink::Missing("why".into()))]);
+        assert_eq!(m.verify(plain, &w), Ok(()));
+        let m = material(vec![link(TextureLink::Texture(plain))]);
+        assert!(
+            m.verify(plain, &w)
+                .unwrap_err()
+                .contains("not a frostbite texture")
+        );
+        // the entities a material links are the ones it references, a missing link none
+        let mut out = Vec::new();
+        m.references(&mut out);
+        assert_eq!(out, [plain]);
     }
 }

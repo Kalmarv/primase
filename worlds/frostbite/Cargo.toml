@@ -23,6 +23,7 @@ thiserror.workspace = true
 primase-compress = { workspace = true, features = ["reference-decoder"] }
 primase-shader.workspace = true
 primase-testdata.workspace = true
+primase-texcodec.workspace = true
 
 [lints]
 workspace = true

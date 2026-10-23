@@ -89,6 +89,11 @@ impl Bundle {
         ebx.chain(res).chain(chunks)
     }
 
+    /// EBX document `i` of the manifest, as an entry.
+    pub fn ebx(&self, i: usize) -> Listed {
+        self.listed(Kind::Ebx, i, &self.manifest.ebx[i], self.first + i)
+    }
+
     /// Resource `i` of the manifest, as an entry.
     pub fn resource(&self, i: usize) -> Listed {
         let m = &self.manifest;

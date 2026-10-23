@@ -30,7 +30,7 @@ pub mod texture;
 pub mod toc;
 
 pub use read::cas_codec::Cas;
-pub use read::{entry, folder, listing, program};
+pub use read::{entry, folder, listing, program, textures};
 
 /// Resource type of a MeshSet.
 pub const MESHSET: u32 = 0x49B1_56D4;

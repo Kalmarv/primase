@@ -1180,6 +1180,7 @@ dependencies = [
  "primase-dxil",
  "primase-shader",
  "primase-testdata",
+ "primase-texcodec",
  "serde",
  "serde_json",
  "sha1",
