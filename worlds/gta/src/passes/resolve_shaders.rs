@@ -1,16 +1,18 @@
-//! `resolve-gta-shaders{pixel=NAME,skinned=yes|no,unset-textures=white|leave}`: a drawable's material bound to its
+//! `resolve-gta-shaders{pixel=NAME,vertex=NAME,unset-textures=white|leave}`: a drawable's material bound to its
 //! effect's programs, as `core.shader_binding` on the material's entity. The programs are the `core.shader` entities
 //! of the shader database ([`crate::read::shaders`]); what they read comes from the database's own tables
 //! ([`crate::rage::sgd2_table`]) and the material's stored parameters.
 //!
 //! - **Programs.** An effect lists every permutation of its programs; the draw picks one by pass and vertex format.
 //!   `pixel` names the pixel program family by its name without the permutation hash (`PS_DeferredTextured`: the
-//!   G-buffer pass; `PS_DeferredTextured_AlphaClipC`: its alpha-clipped variant); each of the effect's programs of
-//!   that name has a hash suffix shared with its vertex program (`PS_DeferredTextured_0174add1_Wrapped` and
-//!   `VS_TransformD_0174add1_Wrapped`), and `skinned` chooses between the vertex programs that read bone weights
-//!   (`VS_TransformSkinD_f146f347_Wrapped`) and those that do not. The tessellated vertex programs (`..._PNTri_...`,
-//!   which feed hull and domain programs) are not chosen. An effect with no such pair, or with several, leaves its
-//!   materials unbound, by name; the draw's choice among permutations is the program's to state, not this pass's.
+//!   G-buffer pass; `PS_DeferredTextured_AlphaClipC`: its alpha-clipped variant), and `vertex` the vertex program
+//!   family drawn with it (`VS_TransformD`: the G-buffer pass of an unskinned mesh; `VS_TransformSkinD`: of a skinned
+//!   one; `VS_TransformCube` is the same programs' cube-map reflection pass, which writes a different interpolant
+//!   and shares the pixel program). Which pass and which vertex format a draw is in is the draw's, not the
+//!   material's, so both are options. Each of the effect's pixel programs of the family has a hash suffix shared with
+//!   its vertex program (`PS_DeferredTextured_0174add1_Wrapped` and `VS_TransformD_0174add1_Wrapped`); the
+//!   tessellated vertex programs (`..._PNTri_...`, which feed hull and domain programs) are other families. An effect
+//!   with no such pair, or with several, leaves its materials unbound, by name.
 //! - **Constants.** Each constant buffer a program declares is the table record at its register and space; each
 //!   constant of the record is bound at its byte offset (a constant past the end of the buffer the program declares is
 //!   one it does not read, and is left out, counted). A constant the effect renames (its parameter records:
@@ -22,23 +24,40 @@
 //!   counted as an approximation; `leave`: `Missing`), and a texture with no second name (the engine's) is `Missing`.
 //!   Samplers are bindless in the programs (an unbounded array indexed at run time): none is bound.
 //! - **Inputs and outputs.** The vertex stage's inputs are the mesh streams their semantics name (terrain weights are
-//!   `COLOR1`); the pixel stage's are the vertex stage's. Every output is `Unknown` by its index: the pass states no
-//!   G-buffer layout it has not read.
+//!   `COLOR1`); the pixel stage's are the vertex stage's. The outputs of a `PS_DeferredTextured*` program that writes
+//!   the four G-buffer targets have the roles [`gbuffer`] states: target 0's xyz the albedo, target 1's xyz the world
+//!   normal (where the program stores it biased by 0.5), target 3's z the emission (where the program writes one);
+//!   every other lane, and every output of another family or of a program that writes fewer targets, is `Unknown` by
+//!   its index (the lanes' contents are in [`gbuffer`]'s table; the vocabulary has no role for them).
 use std::collections::BTreeMap;
 
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{
-    ConstantBinding, ConstantRole, D3dClass, InputBinding, InputRole, ObjectParameter, OutputBinding,
-    OutputRole, RenderState, ResourceKind, SamplerState, Shader, ShaderBinding, Stage, StageBinding,
-    TextureBinding, TextureSource, ViewParameter,
+    ConstantBinding, ConstantRole, D3dClass, InputBinding, InputRole, NormalEncoding, NormalSpace,
+    ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceKind, SamplerState, Shader,
+    ShaderBinding, Stage, StageBinding, SystemValue, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
 
+use super::gbuffer::{self, GBufferWrites};
 use crate::components::{
     GtaEffect, GtaEffectParameters, GtaEffectProgram, GtaMaterialEffect, GtaParam, GtaShader, GtaShaderTable,
     GtaStage,
 };
 use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
+
+/// The pixel program family whose targets the pass names roles for (`PS_DeferredTextured` and its alpha-clipped and
+/// sub-sample variants: [`gbuffer`] has the layout and how it was checked).
+const GBUFFER_FAMILY: &str = "PS_DeferredTextured";
+
+/// The programs an effect's materials are bound to.
+#[derive(Clone)]
+struct Chosen {
+    pixel: Entity,
+    vertex: Entity,
+    /// The pixel program's G-buffer stores, where its family has a layout.
+    writes: Option<Result<GBufferWrites, String>>,
+}
 
 /// What a texture parameter with no texture becomes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,22 +70,22 @@ pub enum UnsetTexture {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolveGtaShaders {
     pixel: String,
-    skinned: bool,
+    vertex: String,
     unset: UnsetTexture,
 }
 
 impl ResolveGtaShaders {
-    pub fn new(pixel: &str, skinned: bool, unset: UnsetTexture) -> Self {
+    pub fn new(pixel: &str, vertex: &str, unset: UnsetTexture) -> Self {
         ResolveGtaShaders {
             pixel: pixel.to_owned(),
-            skinned,
+            vertex: vertex.to_owned(),
             unset,
         }
     }
 
     /// From its options (all three required), through [`ResolveGtaShaders::new`].
     pub fn from_options(o: &Options) -> Result<Self, String> {
-        let (mut pixel, mut skinned, mut unset) = (None, None, None);
+        let (mut pixel, mut vertex, mut unset) = (None, None, None);
         for (k, v) in o {
             match k.as_str() {
                 "pixel" => {
@@ -75,12 +94,11 @@ impl ResolveGtaShaders {
                     }
                     pixel = Some(v.clone());
                 }
-                "skinned" => {
-                    skinned = Some(match v.as_str() {
-                        "yes" => true,
-                        "no" => false,
-                        _ => return Err(format!("skinned={v} is not yes or no")),
-                    });
+                "vertex" => {
+                    if v.is_empty() || !v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                        return Err(format!("vertex={v:?} is not a program name without its hash"));
+                    }
+                    vertex = Some(v.clone());
                 }
                 "unset-textures" => {
                     unset = Some(match v.as_str() {
@@ -95,7 +113,9 @@ impl ResolveGtaShaders {
         Ok(Self {
             pixel: pixel
                 .ok_or("pixel is required: the pixel program family drawn with (PS_DeferredTextured...)")?,
-            skinned: skinned.ok_or("skinned is required: whether the vertex program reads bone weights")?,
+            vertex: vertex.ok_or(
+                "vertex is required: the vertex program family drawn with it (VS_TransformD, VS_TransformSkinD...)",
+            )?,
             unset: unset
                 .ok_or("unset-textures is required: what a texture parameter with no texture reads")?,
         })
@@ -110,11 +130,11 @@ pub fn split_program_name(name: &str) -> Option<(&str, &str)> {
 }
 
 /// The pixel program of `pixel` family and its vertex program, among an effect's programs: the one pair whose names
-/// share a permutation hash, the vertex program reading bone weights as `skinned` says and not tessellated.
+/// share a permutation hash, the vertex program of `vertex` family.
 pub fn select_programs<'a>(
     programs: &'a [GtaEffectProgram],
     pixel: &str,
-    skinned: bool,
+    vertex: &str,
 ) -> Result<(&'a GtaEffectProgram, &'a GtaEffectProgram), String> {
     let mut pairs = Vec::new();
     for p in programs
@@ -134,15 +154,14 @@ pub fn select_programs<'a>(
             let Some((vstem, vhash)) = split_program_name(&v.name) else {
                 continue;
             };
-            if vhash == hash && !vstem.contains("PNTri") && vstem.contains("Skin") == skinned {
+            if vhash == hash && vstem == vertex {
                 pairs.push((p, v));
             }
         }
     }
     match pairs.as_slice() {
         [] => Err(format!(
-            "the effect has no {pixel} program with a{} untessellated vertex program of its hash",
-            if skinned { " skinned" } else { "n unskinned" }
+            "the effect has no {pixel} program with a {vertex} vertex program of its hash"
         )),
         [one] => Ok(*one),
         many => Err(format!(
@@ -265,6 +284,7 @@ impl ResolveGtaShaders {
         stage: Stage,
         shader: Entity,
         vertex_bound: bool,
+        writes: Option<&Result<GBufferWrites, String>>,
         counts: &mut Counts,
     ) -> Result<StageBinding, String> {
         let program = world
@@ -352,17 +372,11 @@ impl ResolveGtaShaders {
                 },
             })
             .collect();
-        let mut outputs = Vec::new();
-        if stage == Stage::Pixel {
-            for v in interface.outputs.iter().filter(|v| v.system.is_none()) {
-                let full: u8 = ((1u16 << v.value.width) - 1) as u8;
-                outputs.push(OutputBinding {
-                    label: v.label.clone(),
-                    lanes: full,
-                    role: OutputRole::Unknown(v.label.index),
-                });
-            }
-        }
+        let outputs = if stage == Stage::Pixel {
+            output_bindings(interface, writes, counts)
+        } else {
+            Vec::new()
+        };
         Ok(StageBinding {
             stage,
             shader,
@@ -372,6 +386,83 @@ impl ResolveGtaShaders {
             outputs,
         })
     }
+}
+
+/// The outputs of a pixel program with their roles: the G-buffer's where the program is of the family and writes its
+/// four targets, `Unknown` by index otherwise.
+fn output_bindings(
+    interface: &primase_core::shader::Interface,
+    writes: Option<&Result<GBufferWrites, String>>,
+    counts: &mut Counts,
+) -> Vec<OutputBinding> {
+    // a DXIL program's colour outputs are system values (`SV_Target<n>`)
+    let targets: Vec<_> = interface
+        .outputs
+        .iter()
+        .filter(|v| matches!(v.system, None | Some(SystemValue::Target(_))))
+        .collect();
+    let four = targets.len() >= 4 && targets.iter().take(4).all(|v| v.value.width == 4);
+    let layout = match writes {
+        None => None,
+        Some(Err(why)) => {
+            counts.add(&format!(
+                "pixel stages whose output stores could not be read (outputs Unknown by index): {why}"
+            ));
+            None
+        }
+        Some(Ok(w)) if four => {
+            counts.add("pixel stages with the G-buffer layout of the family");
+            Some(w)
+        }
+        Some(Ok(_)) => {
+            counts.add("pixel stages of the family writing fewer than four targets of four lanes (outputs Unknown by index)");
+            None
+        }
+    };
+    let mut outputs = Vec::new();
+    for v in targets {
+        let full: u8 = ((1u16 << v.value.width) - 1) as u8;
+        let mut lanes = |lanes: u8, role: OutputRole| {
+            let lanes = lanes & full;
+            if lanes != 0 {
+                outputs.push(OutputBinding {
+                    label: v.label.clone(),
+                    lanes,
+                    role,
+                });
+            }
+        };
+        match (layout, v.label.index) {
+            (Some(_), 0) => {
+                lanes(0b0111, OutputRole::Albedo);
+                lanes(0b1000, OutputRole::Unknown(0));
+            }
+            (Some(w), 1) if w.normal_biased => {
+                lanes(
+                    0b0111,
+                    OutputRole::Normal {
+                        encoding: NormalEncoding::XyzUnorm,
+                        space: NormalSpace::World,
+                    },
+                );
+                lanes(0b1000, OutputRole::Unknown(1));
+            }
+            (Some(w), 3) if w.emission_written => {
+                lanes(0b0100, OutputRole::Emission);
+                lanes(0b1011, OutputRole::Unknown(3));
+            }
+            (_, n) => lanes(0b1111, OutputRole::Unknown(n)),
+        }
+    }
+    if let Some(w) = layout {
+        if !w.normal_biased {
+            counts.add("G-buffer pixel stages whose target 1 is not stored as a biased value (Unknown)");
+        }
+        if w.emission_written {
+            counts.add("G-buffer pixel stages that write an emission");
+        }
+    }
+    outputs
 }
 
 /// The role of one constant of a program's buffer.
@@ -480,10 +571,7 @@ impl Pass for ResolveGtaShaders {
     fn options(&self) -> Options {
         Options::from([
             ("pixel".to_owned(), self.pixel.clone()),
-            (
-                "skinned".to_owned(),
-                if self.skinned { "yes" } else { "no" }.to_owned(),
-            ),
+            ("vertex".to_owned(), self.vertex.clone()),
             (
                 "unset-textures".to_owned(),
                 match self.unset {
@@ -514,7 +602,7 @@ impl Pass for ResolveGtaShaders {
             .collect();
         let mut counts = Counts::default();
         // per effect: the programs chosen, or why not
-        let mut chosen: BTreeMap<Entity, Result<(Entity, Entity), String>> = BTreeMap::new();
+        let mut chosen: BTreeMap<Entity, Result<Chosen, String>> = BTreeMap::new();
         let mut bound: Vec<(Entity, ShaderBinding)> = Vec::new();
         for (material, shader, effect_entity) in materials {
             let picked = chosen
@@ -523,15 +611,28 @@ impl Pass for ResolveGtaShaders {
                     let effect = world
                         .get::<GtaEffect>(effect_entity)
                         .ok_or_else(|| "a material's effect entity without its effect".to_owned())?;
-                    let (p, v) = select_programs(&effect.programs, &self.pixel, self.skinned)
+                    let (p, v) = select_programs(&effect.programs, &self.pixel, &self.vertex)
                         .map_err(|why| format!("{} ({})", why, effect.name))?;
-                    Ok((
-                        p.shader.ok_or("a pixel program without an entity")?,
-                        v.shader.ok_or("a vertex program without an entity")?,
-                    ))
+                    let pixel = p.shader.ok_or("a pixel program without an entity")?;
+                    // the G-buffer's roles are read from the program's own stores
+                    let writes = self.pixel.starts_with(GBUFFER_FAMILY).then(|| {
+                        world
+                            .get::<Shader>(pixel)
+                            .ok_or_else(|| "a pixel program without its shader".to_owned())
+                            .and_then(|s| gbuffer::writes(&s.bytecode))
+                    });
+                    Ok(Chosen {
+                        pixel,
+                        vertex: v.shader.ok_or("a vertex program without an entity")?,
+                        writes,
+                    })
                 })
                 .clone();
-            let (pixel, vertex) = match picked {
+            let Chosen {
+                pixel,
+                vertex,
+                writes,
+            } = match picked {
                 Ok(pair) => pair,
                 Err(why) => {
                     counts.add(&format!("materials left unbound: {why}"));
@@ -550,7 +651,7 @@ impl Pass for ResolveGtaShaders {
             let mut stages = Vec::new();
             let mut failed = None;
             for (stage, e) in [(Stage::Vertex, vertex), (Stage::Pixel, pixel)] {
-                match self.stage_binding(world, &inputs, stage, e, true, &mut counts) {
+                match self.stage_binding(world, &inputs, stage, e, true, writes.as_ref(), &mut counts) {
                     Ok(s) => stages.push(s),
                     Err(why) => {
                         failed = Some(why);
@@ -603,7 +704,7 @@ mod tests {
     }
 
     /// An effect with a plain unskinned pair, a plain skinned pair, an alpha-clipped unskinned pair, a tessellated
-    /// vertex program of the plain hash, and a forward pass.
+    /// and a cube-map vertex program of the plain hash, and a forward pass.
     fn effect() -> Vec<GtaEffectProgram> {
         use GtaStage::{Pixel as P, Vertex as V};
         vec![
@@ -611,6 +712,7 @@ mod tests {
             program(P, "PS_Textured_Zero_7903a05e_Wrapped"),
             program(V, "VS_TransformD_0174add1_Wrapped"),
             program(V, "VS_northVertexInputBump_PNTri_0174add1_Wrapped"),
+            program(V, "VS_TransformCube_0174add1_Wrapped"),
             program(P, "PS_DeferredTextured_0174add1_Wrapped"),
             program(V, "VS_TransformSkinD_f146f347_Wrapped"),
             program(P, "PS_DeferredTextured_f146f347_Wrapped"),
@@ -630,47 +732,52 @@ mod tests {
         assert_eq!(split_program_name("PS_X_0174add_Wrapped"), None);
     }
 
-    /// The pixel family, skinned or not, picks the one pair that shares a hash; the tessellated vertex program of the
-    /// same hash is not chosen; a family or a skin the effect lacks, and two fits, are named.
+    /// The pixel and vertex families pick the one pair that shares a hash; the tessellated and cube-map vertex programs
+    /// of the same hash are other families; a family the effect lacks, and two fits, are named.
     #[test]
-    fn a_pair_is_chosen_by_family_hash_and_skin() {
+    fn a_pair_is_chosen_by_family_and_hash() {
         let programs = effect();
-        let (p, v) = select_programs(&programs, "PS_DeferredTextured", false).unwrap();
+        let names = |p: &str, v: &str| {
+            select_programs(&programs, p, v).map(|(p, v)| (p.name.clone(), v.name.clone()))
+        };
         assert_eq!(
-            (p.name.as_str(), v.name.as_str()),
+            names("PS_DeferredTextured", "VS_TransformD").unwrap(),
             (
-                "PS_DeferredTextured_0174add1_Wrapped",
-                "VS_TransformD_0174add1_Wrapped"
+                "PS_DeferredTextured_0174add1_Wrapped".to_owned(),
+                "VS_TransformD_0174add1_Wrapped".to_owned()
             )
         );
-        let (p, v) = select_programs(&programs, "PS_DeferredTextured", true).unwrap();
+        // the cube-map pass shares the pixel program
         assert_eq!(
-            (p.name.as_str(), v.name.as_str()),
+            names("PS_DeferredTextured", "VS_TransformCube").unwrap().1,
+            "VS_TransformCube_0174add1_Wrapped"
+        );
+        assert_eq!(
+            names("PS_DeferredTextured", "VS_TransformSkinD").unwrap(),
             (
-                "PS_DeferredTextured_f146f347_Wrapped",
-                "VS_TransformSkinD_f146f347_Wrapped"
+                "PS_DeferredTextured_f146f347_Wrapped".to_owned(),
+                "VS_TransformSkinD_f146f347_Wrapped".to_owned()
             )
         );
-        let (p, v) = select_programs(&programs, "PS_DeferredTextured_AlphaClip2", false).unwrap();
         assert_eq!(
-            (p.name.as_str(), v.name.as_str()),
+            names("PS_DeferredTextured_AlphaClip2", "VS_TransformD").unwrap(),
             (
-                "PS_DeferredTextured_AlphaClip2_672703e2_Wrapped",
-                "VS_TransformD_672703e2_Wrapped"
+                "PS_DeferredTextured_AlphaClip2_672703e2_Wrapped".to_owned(),
+                "VS_TransformD_672703e2_Wrapped".to_owned()
             )
         );
         assert!(
-            select_programs(&programs, "PS_DeferredTextured_AlphaClip2", true)
+            names("PS_DeferredTextured_AlphaClip2", "VS_TransformSkinD")
                 .unwrap_err()
-                .contains("skinned")
+                .contains("VS_TransformSkinD vertex program")
         );
-        assert!(select_programs(&programs, "PS_DeferredVehicleTextured", false).is_err());
+        assert!(names("PS_DeferredVehicleTextured", "VS_TransformD").is_err());
         // two permutations of the family that fit
         let mut two = effect();
         two.push(program(GtaStage::Vertex, "VS_TransformD_aaaaaaaa_Wrapped"));
         two.push(program(GtaStage::Pixel, "PS_DeferredTextured_aaaaaaaa_Wrapped"));
         assert!(
-            select_programs(&two, "PS_DeferredTextured", false)
+            select_programs(&two, "PS_DeferredTextured", "VS_TransformD")
                 .unwrap_err()
                 .contains("2 PS_DeferredTextured permutations")
         );
@@ -712,21 +819,21 @@ mod tests {
         assert!(
             ResolveGtaShaders::from_options(&o(&[
                 ("pixel", "PS Deferred"),
-                ("skinned", "no"),
+                ("vertex", "VS_TransformD"),
                 ("unset-textures", "white")
             ]))
             .is_err()
         );
         let p = ResolveGtaShaders::from_options(&o(&[
             ("pixel", "PS_DeferredTextured"),
-            ("skinned", "yes"),
+            ("vertex", "VS_TransformSkinD"),
             ("unset-textures", "leave"),
         ]))
         .unwrap();
         assert_eq!(
             p,
-            ResolveGtaShaders::new("PS_DeferredTextured", true, UnsetTexture::Leave)
+            ResolveGtaShaders::new("PS_DeferredTextured", "VS_TransformSkinD", UnsetTexture::Leave)
         );
-        assert_eq!(p.options()["skinned"], "yes");
+        assert_eq!(p.options()["vertex"], "VS_TransformSkinD");
     }
 }

@@ -16,6 +16,7 @@ primase-image.workspace = true
 primase-meshops.workspace = true
 primase-texcodec.workspace = true
 indexmap.workspace = true
+naga.workspace = true
 thiserror.workspace = true
 aes.workspace = true
 sha1.workspace = true

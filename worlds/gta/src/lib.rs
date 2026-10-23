@@ -59,7 +59,7 @@ pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) 
 /// `gta-leave-out-interiors`,
 /// `lower-gta-lights{hour,x0,y0,x1,y1}`, `gta-select-collision{detail}`, `lower-gta-collision{x0,y0,x1,y1,foliage,river}`,
 /// `lower-gta-embedded-collision{foliage,river}` (their `foliage` and `river` required),
-/// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1}`, `lower-gta-water` and `resolve-gta-shaders{pixel,skinned,
+/// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1}`, `lower-gta-water` and `resolve-gta-shaders{pixel,vertex,
 /// unset-textures}` (all three required).
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     use primase_core::pass::{Options, Pass};
@@ -122,7 +122,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         Ok(Box::new(passes::water::SelectGtaWater::from_options(o)?))
     });
     reg.register("lower-gta-water", |o| none(o, passes::water::LowerGtaWater));
-    // which permutation of an effect a draw uses is the program's choice: no default
+    // which permutation of an effect a draw uses (its pass, its vertex format) is the draw's choice: no default
     reg.register_requiring(
         "resolve-gta-shaders",
         |o| {
@@ -132,7 +132,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         },
         &[
             ("pixel", "PS_DeferredTextured"),
-            ("skinned", "no"),
+            ("vertex", "VS_TransformD"),
             ("unset-textures", "white"),
         ],
     );
@@ -191,7 +191,7 @@ mod tests {
                 Some(
                     [
                         ("pixel", "PS_DeferredTextured"),
-                        ("skinned", "no"),
+                        ("vertex", "VS_TransformD"),
                         ("unset-textures", "white"),
                     ]
                     .into_iter()
