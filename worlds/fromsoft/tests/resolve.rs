@@ -28,6 +28,8 @@ mod common;
 /// The addressing the albedo's FLVER record stores: repeat along u, mirrored repeat along v.
 const GRASS_ADDRESS: [Option<AddressMode>; 2] = [Some(AddressMode::Repeat), Some(AddressMode::Mirror)];
 const PROGRAM: &[u8] = include_bytes!("fixtures/layered.dxbc");
+/// layered.dxbc with a `SAT_MtdParam` array after its named parameters (tests/fixtures/layered_sat.hlsl).
+const SAT_PROGRAM: &[u8] = include_bytes!("fixtures/layered_sat.dxbc");
 const VERTEX_PROGRAM: &[u8] = include_bytes!("fixtures/layered_vs.dxbc");
 const SKIN_PROGRAM: &[u8] = include_bytes!("fixtures/layered_skin_vs.dxbc");
 
@@ -129,6 +131,34 @@ fn constants(
         .collect();
     out.sort_by(|a, b| (&a.0, a.2).cmp(&(&b.0, b.2)));
     out
+}
+
+/// A program that carries a `SAT_MtdParam` array beside its named `<shader>_snp_*` parameters (Sekiro's programs do)
+/// binds the named ones as the same program without the array does: reading parameters from the array at the
+/// metaparam's start words is for programs that name none (Elden Ring's).
+#[test]
+fn a_program_with_a_sat_array_keeps_its_named_parameters() {
+    let named = |bytes: &[u8]| {
+        let shader = executor(bytes);
+        let program = World::default().spawn();
+        let resolution = resolve(
+            &shader,
+            program,
+            &material().view(),
+            primase_fromsoft::Game::Sekiro,
+            None,
+            Unbound::Preview,
+            &mut |_, _| Ok(None),
+        )
+        .unwrap();
+        constants(&resolution.stage, &shader)
+            .into_iter()
+            .filter(|c| c.1.starts_with("M_Multiple__snp_"))
+            .collect::<Vec<_>>()
+    };
+    let plain = named(PROGRAM);
+    assert_eq!(plain.len(), 3);
+    assert_eq!(named(SAT_PROGRAM), plain);
 }
 
 #[test]

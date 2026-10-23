@@ -603,16 +603,15 @@ pub fn resolve(
             }),
         _ => None,
     });
-    // the material's own parameters, of a program that names each as a field (Sekiro's `<shader>_snp_*` constants)
-    let names: Vec<&String> = if sat.is_some() {
-        Vec::new()
-    } else {
-        layout
-            .fields
-            .keys()
-            .filter(|n| n.starts_with(&prefix) && !n.ends_with("_PADDING"))
-            .collect()
-    };
+    // the material's own parameters, of a program that names each as a field (Sekiro's `<shader>_snp_*` constants).
+    // Sekiro's programs carry a `SAT_MtdParam` array beside them: the array is read only by a program that names none
+    // (Elden Ring's, whose members are `<shader>_snp_<switch>_*`, not this prefix)
+    let names: Vec<&String> = layout
+        .fields
+        .keys()
+        .filter(|n| n.starts_with(&prefix) && !n.ends_with("_PADDING"))
+        .collect();
+    let sat = sat.filter(|_| names.is_empty());
     for name in names {
         let field = layout.fields[name];
         let Some(param) = material.definition.parameter(name) else {
