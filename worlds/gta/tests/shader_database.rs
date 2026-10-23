@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 //! The shader database in the world: a database written by hand around two fixture programs (a vertex and a pixel
-//! program compiled from this repository's own HLSL) and a compute stand-in the world has no stage for.
+//! program compiled from this repository's own HLSL) and a geometry stand-in the world has no facts for.
 use std::path::Path;
 
 use primase_core::shader::{Shader, ShaderFormat, Stage};
@@ -58,7 +58,7 @@ fn database(groups: [Vec<(&str, Vec<u8>)>; 8], effects: &[(&str, [Vec<u32>; 6])]
 fn programs_become_shader_entities_and_effects_name_them() {
     let vs = fixture("vertex.dxil");
     let ps = fixture("blend.dxil");
-    // a compute stand-in: a container the world has no stage for (its bytes are never read)
+    // a geometry stand-in: a container the world has no facts for (its bytes are never read)
     let mut cs = b"DXBC".to_vec();
     cs.extend([0u8; 20]);
     cs.extend(40u32.to_le_bytes());
@@ -66,15 +66,15 @@ fn programs_become_shader_entities_and_effects_name_them() {
     let groups = [
         vec![("VS_a_Wrapped", vs)],
         vec![("PS_a_Wrapped", ps.clone()), ("PS_b_Wrapped", ps)],
+        vec![("GS_a_Wrapped", cs)],
         vec![],
         vec![],
         vec![],
-        vec![("CS_a_Wrapped", cs)],
         vec![],
         vec![],
     ];
     let effects = [
-        ("default", [vec![0], vec![0, 1], vec![], vec![], vec![], vec![0]]),
+        ("default", [vec![0], vec![0, 1], vec![0], vec![], vec![], vec![]]),
         ("other", [vec![0], vec![1], vec![], vec![], vec![], vec![]]),
     ];
     let bytes = database(groups, &effects);
@@ -98,10 +98,10 @@ fn programs_become_shader_entities_and_effects_name_them() {
             (GtaStage::Vertex, "VS_a_Wrapped"),
             (GtaStage::Pixel, "PS_a_Wrapped"),
             (GtaStage::Pixel, "PS_b_Wrapped"),
-            (GtaStage::Compute, "CS_a_Wrapped"),
+            (GtaStage::Geometry, "GS_a_Wrapped"),
         ]
     );
-    // the compute program is named without an entity; the others have theirs, with the container as stored
+    // the geometry program is named without an entity; the others have theirs, with the container as stored
     assert_eq!(default.programs[3].shader, None);
     for p in &default.programs[..3] {
         let e = p.shader.unwrap();

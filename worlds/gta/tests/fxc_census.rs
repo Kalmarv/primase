@@ -105,7 +105,7 @@ fn every_effect_of_the_install() {
 
 /// GTA V Enhanced's shader database: `PRIMASE_GTA_SHADER_DB`, the `sga_win32_60_final.awc` file (or its `_init`
 /// sibling) as the install stores it after decryption and decompression. Every group and effect is read to the end
-/// of the file; every program's container is checked and every vertex, pixel and compute program lifted (DXIL), validated and
+/// of the file; every program's container is checked and every program lifted (DXIL), validated and
 /// written as WGSL; the effects' program lists are checked to name programs of the right stage.
 #[test]
 fn the_enhanced_shader_database() {
@@ -140,10 +140,8 @@ fn the_enhanced_shader_database() {
     let mut refused: BTreeMap<String, usize> = BTreeMap::new();
     let mut invalid = Vec::new();
     let mut unrunnable: BTreeMap<String, usize> = BTreeMap::new();
-    let mut kinds: BTreeMap<(usize, u32), usize> = BTreeMap::new();
     // per group: programs, lifted
     let mut tally: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
-    let mut other_ops: BTreeMap<(usize, String), usize> = BTreeMap::new();
     for (g, stage) in sgd2::GROUP_STAGES.iter().enumerate() {
         for program in &db.groups[g] {
             programs += 1;
@@ -154,49 +152,29 @@ fn the_enhanced_shader_database() {
                 "{}: not a DXIL container",
                 program.name
             );
-            if std::env::var_os("OPS").is_some()
-                && matches!(stage, Some(ProgramStage::Compute))
-                && let Ok((_, calls)) = primase_dxil::operations(program.container)
-            {
-                for (name, n) in calls {
-                    *other_ops.entry((g, name)).or_default() += n;
-                }
-            }
-            if !matches!(
-                stage,
-                Some(ProgramStage::Vertex | ProgramStage::Pixel | ProgramStage::Compute)
-            ) {
-                // the stages with no lifter yet: which kind the container is, and the operations they call
-                let (kind, calls) = match primase_dxil::operations(program.container) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        *other_ops
-                            .entry((g, format!("UNREADABLE {}", primase_dxil::refusal_reason(&e))))
-                            .or_default() += 1;
-                        continue;
-                    }
-                };
-                *kinds.entry((g, kind)).or_default() += 1;
-                for (name, n) in calls {
-                    *other_ops.entry((g, name)).or_default() += n;
-                }
+            // a geometry program (none in this database) or a group of an unknown stage is not lifted
+            if !matches!(stage, Some(s) if *s != ProgramStage::Geometry) {
+                tally.entry(g).or_default().0 += 1;
+                *refused.entry("a stage with no lifter".into()).or_default() += 1;
                 continue;
             }
             tally.entry(g).or_default().0 += 1;
             match primase_dxil::lift(program.container) {
-                Err(e) => {
-                    if std::env::var_os("SHOW").is_some_and(|k| e.detail.contains(&*k.to_string_lossy())) {
-                        println!("SHOW {}: {}", program.name, e.detail);
-                    }
-                    *refused.entry(primase_dxil::refusal_reason(&e)).or_default() += 1
-                }
+                Err(e) => *refused.entry(primase_dxil::refusal_reason(&e)).or_default() += 1,
                 Ok(p) => {
                     lifted += 1;
                     tally.entry(g).or_default().1 += 1;
                     match p.validate() {
                         Err(problems) => invalid.push(format!("{}: {problems:?}", program.name)),
                         Ok(_) => {
-                            if let Err(e) = primase_shader::emit::wgsl(&p) {
+                            // a program of a stage with no WGSL stage is written as its functions
+                            let written =
+                                if primase_shader::stage_functions(&p.interface).is_ok_and(|f| f.is_some()) {
+                                    primase_shader::emit::wgsl_functions(&p)
+                                } else {
+                                    primase_shader::emit::wgsl(&p)
+                                };
+                            if let Err(e) = written {
                                 invalid.push(format!("{}: {e}", program.name));
                             }
                             // the executor compiles it too, or refuses it by name
@@ -210,7 +188,7 @@ fn the_enhanced_shader_database() {
         }
     }
     println!(
-        "{programs} programs, {lifted} vertex, pixel and compute programs lifted, {} refused",
+        "{programs} programs, {lifted} lifted, {} refused",
         refused.values().sum::<usize>()
     );
     let mut reasons: Vec<_> = refused.iter().collect();
@@ -218,14 +196,7 @@ fn the_enhanced_shader_database() {
     for (reason, n) in reasons.iter().take(40) {
         println!("  refused {n:5}  {reason}");
     }
-    println!("KINDS (group, program kind): {kinds:?}");
     println!("LIFTED per group (programs, lifted): {tally:?}");
-    for ((g, name), n) in other_ops.iter().filter(|((_, name), _)| {
-        name.starts_with("UNREADABLE")
-            || (std::env::var_os("OPS").is_some() && (name.contains("wave") || name.contains("quad")))
-    }) {
-        println!("  group {g}: {n} {name}");
-    }
     for (reason, n) in &unrunnable {
         println!("  not executable {n:5}  {reason}");
     }

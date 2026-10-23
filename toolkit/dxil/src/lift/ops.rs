@@ -220,6 +220,12 @@ impl Lift<'_> {
             68 | 139 => self.buffer_load(inst, args),
             72 => self.get_dimensions(inst, args),
             69 | 140 => self.buffer_store(args),
+            103 => self.load_output_control_point(inst, args),
+            104 => self.load_patch_constant(inst, args),
+            105 => self.domain_location(inst, args),
+            106 => self.store_patch_constant(args),
+            107 => self.patch_id(inst, "SV_OutputControlPointID"),
+            108 => self.patch_id(inst, "SV_PrimitiveID"),
             78 => self.buffer_atomic(inst, args),
             79 => self.buffer_compare_exchange(inst, args),
             80 => self.barrier(args),
@@ -331,23 +337,22 @@ impl Lift<'_> {
                 element.name
             ));
         };
-        let io = self.setup.io.clone();
-        let index = io
-            .arguments
-            .iter()
-            .position(|item| item.varyings[0] == varying)
-            .expect("every kept varying has an argument");
-        let primase_shader::IoType::Value(carried) = io.arguments[index].ty else {
-            return self.refuse("an array-typed input");
-        };
-        // one expression per argument: it is a pre-emitted one, readable from any block
-        let expr = match self.argument_exprs.get(&index) {
-            Some(&e) => e,
-            None => {
-                let e = self.b.app(E::FunctionArgument(index as u32));
-                self.argument_exprs.insert(index, e);
-                e
+        let (index, ty) = self.input_argument(varying)?;
+        let expr = self.argument_expr(index);
+        // a control point is one element of an array argument: the one the call's vertex index names
+        let (expr, carried) = match ty {
+            primase_shader::IoType::Value(carried) => (expr, carried),
+            primase_shader::IoType::Array(carried, _) => {
+                let point = self.uint(args[4])?;
+                (
+                    self.b.app(E::Access {
+                        base: expr,
+                        index: point.expr,
+                    }),
+                    carried,
+                )
             }
+            primase_shader::IoType::ClipDistances(_) => return self.refuse("an array-typed input"),
         };
         let value = Val {
             expr,
@@ -387,14 +392,7 @@ impl Lift<'_> {
         let primase_shader::IoType::Value(carried) = io.arguments[index].ty else {
             return self.refuse("an array-typed input");
         };
-        let expr = match self.argument_exprs.get(&index) {
-            Some(&e) => e,
-            None => {
-                let e = self.b.app(E::FunctionArgument(index as u32));
-                self.argument_exprs.insert(index, e);
-                e
-            }
-        };
+        let expr = self.argument_expr(index);
         Ok(Val {
             expr,
             kind: Kind::of(carried.scalar),
@@ -452,6 +450,9 @@ impl Lift<'_> {
 
     /// Pack the output registers into the result and return it.
     pub(super) fn epilogue(&mut self) -> Result<()> {
+        if self.sig.is_some() {
+            return self.function_epilogue();
+        }
         let Some(result) = self.result_type else {
             self.b.push(Statement::Return { value: None });
             return Ok(());

@@ -1,6 +1,6 @@
-//! The Enhanced shader database in the world: one `core.shader` entity per vertex and pixel program (the container as
-//! stored, its interface read from it) and one [`GtaEffect`] per effect naming its programs. The programs of the other
-//! stages stay named in the effect with no entity: a `core.shader` has no stage for them yet.
+//! The Enhanced shader database in the world: one `core.shader` entity per vertex, pixel, hull, domain and compute program (the container as
+//! stored, its interface read from it) and one [`GtaEffect`] per effect naming its programs. A geometry program stays
+//! named in the effect with no entity: a `core.shader` has no facts for it yet.
 //!
 //! The database is read by [`crate::rage::sgd2`] from bytes; where the install keeps those bytes is the caller's
 //! ([`crate::read::source::GtaSource::add_shader_database`] finds the file in the install's listing).
@@ -23,9 +23,9 @@ use crate::rage::sgd2::{self, Sgd2};
 pub struct ShaderTable {
     /// The `gta.effect` entities, in the database's order.
     pub effects: Vec<Entity>,
-    /// The vertex and pixel programs made into `core.shader` entities.
+    /// The programs made into `core.shader` entities.
     pub shaders: usize,
-    /// The vertex and pixel programs whose interface could not be read, by the reason: left without an entity.
+    /// The programs whose interface could not be read, by the reason: left without an entity.
     pub unread: Vec<(String, String)>,
 }
 
@@ -63,28 +63,32 @@ pub fn add_shader_database(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
         let mut made = Vec::with_capacity(programs.len());
         for program in programs {
             let entity = match stage {
-                Some(ProgramStage::Vertex | ProgramStage::Pixel) => {
-                    match primase_dxil::interface(program.container) {
-                        Ok(interface) => {
-                            let e = w.spawn();
-                            w.insert(e, Name(program.name.to_owned()));
-                            w.insert(
-                                e,
-                                Shader {
-                                    format: ShaderFormat::Dxil,
-                                    bytecode: program.container.to_vec(),
-                                    interface,
-                                },
-                            );
-                            table.shaders += 1;
-                            Some(e)
-                        }
-                        Err(reason) => {
-                            table.unread.push((program.name.to_owned(), reason.to_string()));
-                            None
-                        }
+                Some(
+                    ProgramStage::Vertex
+                    | ProgramStage::Pixel
+                    | ProgramStage::Compute
+                    | ProgramStage::Domain
+                    | ProgramStage::Hull,
+                ) => match primase_dxil::interface(program.container) {
+                    Ok(interface) => {
+                        let e = w.spawn();
+                        w.insert(e, Name(program.name.to_owned()));
+                        w.insert(
+                            e,
+                            Shader {
+                                format: ShaderFormat::Dxil,
+                                bytecode: program.container.to_vec(),
+                                interface,
+                            },
+                        );
+                        table.shaders += 1;
+                        Some(e)
                     }
-                }
+                    Err(reason) => {
+                        table.unread.push((program.name.to_owned(), reason.to_string()));
+                        None
+                    }
+                },
                 _ => None,
             };
             made.push(entity);

@@ -3,7 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_shader::{EntryIo, Interface, Resource, ResourceId, ResourceKind, Stage, SystemValue, entry_io};
+use primase_shader::{
+    EntryIo, Interface, Resource, ResourceId, ResourceKind, Stage, StageFacts, SystemValue, entry_io,
+};
 
 use crate::module::{Constant, Function, Module, Op, Value, ValueId};
 use crate::reflection::{self, Element, Range};
@@ -58,19 +60,29 @@ pub(crate) struct Setup {
     pub io: EntryIo,
     pub input_elements: Vec<Element>,
     pub output_elements: Vec<Element>,
+    /// A hull or domain program's patch-constant signature elements.
+    pub patch_elements: Vec<Element>,
+    /// The functions of a program of a stage with no entry point (see [`primase_shader::stage_functions`]).
+    pub sigs: Option<Vec<primase_shader::FunctionSig>>,
     /// The kept resources' ranges, parallel to `interface.resources`.
     pub ranges: Vec<Range>,
     pub notes: BTreeSet<String>,
 }
 
 impl Setup {
-    pub(super) fn new(chunks: &[Chunk<'_>], m: &Module, entry: &Function) -> Result<Self> {
+    /// The setup of a program whose instructions are those of `functions` (the entry function, and a hull program's
+    /// patch-constant function).
+    pub(super) fn new(chunks: &[Chunk<'_>], m: &Module, functions: &[&Function]) -> Result<Self> {
         let named = reflection::module(chunks, b"STAT")?;
         let mut interface = reflection::reflection(chunks, m, named.as_ref())?;
-        if !matches!(interface.stage, Stage::Pixel | Stage::Vertex | Stage::Compute) {
-            return Err(error(0, "only pixel, vertex and compute programs are lifted"));
+        if !matches!(
+            interface.stage,
+            Stage::Pixel | Stage::Vertex | Stage::Compute | Stage::Hull | Stage::Domain
+        ) {
+            return Err(error(0, "geometry programs are not lifted"));
         }
         let (input_elements, output_elements) = reflection::elements(m)?;
+        let patch_elements = reflection::patch_elements(m)?;
         let program_ranges: Vec<Range> = reflection::ranges(m)?.into_iter().map(|r| r.0).collect();
         if program_ranges.len() != interface.resources.len() {
             return Err(error(
@@ -81,96 +93,103 @@ impl Setup {
         // which cells of the signatures and which ranges the instructions use
         let mut cells_in: BTreeSet<(u32, u8)> = BTreeSet::new();
         let mut cells_out: BTreeSet<(u32, u8)> = BTreeSet::new();
+        let mut cells_patch: BTreeSet<(u32, u8)> = BTreeSet::new();
         let mut system_out: BTreeSet<u8> = BTreeSet::new();
         let mut used_ranges: BTreeSet<(u8, u32)> = BTreeSet::new();
         let mut used_bindings: BTreeSet<(u8, u32, u32)> = BTreeSet::new();
         // the system inputs the program reads that the signature does not list: the sample index and, in a compute
         // program, the invocation's ids
         let mut system_inputs: BTreeSet<SystemValue> = BTreeSet::new();
-        for inst in &entry.instructions {
-            let Op::Call { function, args } = &inst.op else {
-                continue;
-            };
-            let Some(code) = dx_opcode(m, entry, *function, args) else {
-                continue;
-            };
-            let konst = |n: usize| args.get(n).and_then(|&a| const_int(m, entry, a));
-            match code {
-                4 | 5 => {
-                    let output = code == 5;
-                    let list = if output { &output_elements } else { &input_elements };
-                    let Some(id) = konst(1) else {
-                        return Err(error(inst.at, "a signature element named by a computed id"));
-                    };
-                    let e = list
-                        .iter()
-                        .find(|e| i64::from(e.id) == id)
-                        .ok_or_else(|| error(inst.at, format!("signature element {id}")))?;
-                    if !e.placed {
-                        if output {
-                            system_out.insert(e.system_value);
-                            continue;
+        for entry in functions.iter().copied() {
+            for inst in &entry.instructions {
+                let Op::Call { function, args } = &inst.op else {
+                    continue;
+                };
+                let Some(code) = dx_opcode(m, entry, *function, args) else {
+                    continue;
+                };
+                let konst = |n: usize| args.get(n).and_then(|&a| const_int(m, entry, a));
+                match code {
+                    // LoadInput, StoreOutput, LoadOutputControlPoint, LoadPatchConstant, StorePatchConstant
+                    4 | 5 | 103 | 104 | 106 => {
+                        let list = match code {
+                            4 => &input_elements,
+                            5 | 103 => &output_elements,
+                            _ => &patch_elements,
+                        };
+                        let Some(id) = konst(1) else {
+                            return Err(error(inst.at, "a signature element named by a computed id"));
+                        };
+                        let e = list
+                            .iter()
+                            .find(|e| i64::from(e.id) == id)
+                            .ok_or_else(|| error(inst.at, format!("signature element {id}")))?;
+                        if !e.placed {
+                            if code == 5 {
+                                system_out.insert(e.system_value);
+                                continue;
+                            }
+                            return Err(error(
+                                inst.at,
+                                format!("input element {} is not placed in a register", e.name),
+                            ));
                         }
-                        return Err(error(
-                            inst.at,
-                            format!("input element {} is not placed in a register", e.name),
-                        ));
-                    }
-                    let (rows, columns) = match (konst(2), konst(3)) {
-                        (Some(r), Some(c)) => (r..r + 1, c..c + 1),
-                        (Some(r), None) => (r..r + 1, 0..i64::from(e.columns)),
-                        (None, Some(c)) => (0..i64::from(e.rows), c..c + 1),
-                        (None, None) => (0..i64::from(e.rows), 0..i64::from(e.columns)),
-                    };
-                    for r in rows {
-                        for c in columns.clone() {
-                            let cell = (e.row + r as u32, e.column + c as u8);
-                            if output {
-                                cells_out.insert(cell);
-                            } else {
-                                cells_in.insert(cell);
+                        let (rows, columns) = match (konst(2), konst(3)) {
+                            (Some(r), Some(c)) => (r..r + 1, c..c + 1),
+                            (Some(r), None) => (r..r + 1, 0..i64::from(e.columns)),
+                            (None, Some(c)) => (0..i64::from(e.rows), c..c + 1),
+                            (None, None) => (0..i64::from(e.rows), 0..i64::from(e.columns)),
+                        };
+                        for r in rows {
+                            for c in columns.clone() {
+                                let cell = (e.row + r as u32, e.column + c as u8);
+                                match code {
+                                    4 => cells_in.insert(cell),
+                                    5 | 103 => cells_out.insert(cell),
+                                    _ => cells_patch.insert(cell),
+                                };
                             }
                         }
                     }
-                }
-                57 => {
-                    if let (Some(class), Some(id)) = (konst(1), konst(2)) {
-                        used_ranges.insert((class as u8, id as u32));
-                    } else {
-                        return Err(error(inst.at, "a handle of a computed range"));
+                    57 => {
+                        if let (Some(class), Some(id)) = (konst(1), konst(2)) {
+                            used_ranges.insert((class as u8, id as u32));
+                        } else {
+                            return Err(error(inst.at, "a handle of a computed range"));
+                        }
                     }
+                    // SampleIndex: the pixel's sample number, which the input signature does not list
+                    90 => {
+                        system_inputs.insert(SystemValue::SampleIndex);
+                    }
+                    // ThreadId, GroupId, ThreadIdInGroup, FlattenedThreadIdInGroup
+                    93 => {
+                        system_inputs.insert(SystemValue::DispatchThreadId);
+                    }
+                    94 => {
+                        system_inputs.insert(SystemValue::GroupId);
+                    }
+                    95 => {
+                        system_inputs.insert(SystemValue::GroupThreadId);
+                    }
+                    96 => {
+                        system_inputs.insert(SystemValue::GroupIndex);
+                    }
+                    // IsFirstLane, LaneIndex and PrefixBitCount read the lane's number; LaneCount the wave's size
+                    110 | 111 | 136 => {
+                        system_inputs.insert(SystemValue::LaneIndex);
+                    }
+                    112 => {
+                        system_inputs.insert(SystemValue::LaneCount);
+                    }
+                    217 => {
+                        let Some((class, lower, space)) = binding_of(m, entry, args[1]) else {
+                            return Err(error(inst.at, "a handle of a binding that is not constant"));
+                        };
+                        used_bindings.insert((class, lower, space));
+                    }
+                    _ => {}
                 }
-                // SampleIndex: the pixel's sample number, which the input signature does not list
-                90 => {
-                    system_inputs.insert(SystemValue::SampleIndex);
-                }
-                // ThreadId, GroupId, ThreadIdInGroup, FlattenedThreadIdInGroup
-                93 => {
-                    system_inputs.insert(SystemValue::DispatchThreadId);
-                }
-                94 => {
-                    system_inputs.insert(SystemValue::GroupId);
-                }
-                95 => {
-                    system_inputs.insert(SystemValue::GroupThreadId);
-                }
-                96 => {
-                    system_inputs.insert(SystemValue::GroupIndex);
-                }
-                // IsFirstLane, LaneIndex and PrefixBitCount read the lane's number; LaneCount the wave's size
-                110 | 111 | 136 => {
-                    system_inputs.insert(SystemValue::LaneIndex);
-                }
-                112 => {
-                    system_inputs.insert(SystemValue::LaneCount);
-                }
-                217 => {
-                    let Some((class, lower, space)) = binding_of(m, entry, args[1]) else {
-                        return Err(error(inst.at, "a handle of a binding that is not constant"));
-                    };
-                    used_bindings.insert((class, lower, space));
-                }
-                _ => {}
             }
         }
         // the signature varyings that cover a used cell, and the system outputs the program writes
@@ -192,6 +211,20 @@ impl Setup {
         let none = BTreeSet::new();
         interface.inputs.retain(|v| keeps(v, &cells_in, &none));
         interface.outputs.retain(|v| keeps(v, &cells_out, &system_out));
+        match &mut interface.facts {
+            StageFacts::Hull(h) => h.patch_constants.retain(|v| keeps(v, &cells_patch, &none)),
+            StageFacts::Domain(d) => d.patch_constants.retain(|v| keeps(v, &cells_patch, &none)),
+            _ => {}
+        }
+        // a vertex program that writes no position feeds a tessellator (or a stream-output stage): it is functions
+        if interface.stage == Stage::Vertex
+            && !interface
+                .outputs
+                .iter()
+                .any(|v| v.system == Some(SystemValue::ClipPosition))
+        {
+            interface.facts = StageFacts::VertexWithoutPosition;
+        }
         for system in system_inputs {
             if interface.inputs.iter().any(|v| v.system == Some(system)) {
                 continue;
@@ -250,12 +283,22 @@ impl Setup {
             ranges.push(range);
         }
         interface.resources = resources;
-        let io = entry_io(&interface).map_err(|detail| error(0, detail))?;
+        let sigs = primase_shader::stage_functions(&interface).map_err(|detail| error(0, detail))?;
+        let io = match sigs {
+            // the functions of such a program carry no bindings: no entry point to describe
+            Some(_) => EntryIo {
+                arguments: Vec::new(),
+                results: Vec::new(),
+            },
+            None => entry_io(&interface).map_err(|detail| error(0, detail))?,
+        };
         Ok(Setup {
             interface,
             io,
+            sigs,
             input_elements,
             output_elements,
+            patch_elements,
             ranges,
             notes: BTreeSet::new(),
         })

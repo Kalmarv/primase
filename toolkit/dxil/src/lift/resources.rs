@@ -30,6 +30,8 @@ pub(super) struct Resources {
     pub(super) atomic: BTreeMap<usize, naga::Scalar>,
     /// The table of D3D's standard sample positions, made when a program asks for one.
     sample_positions: Option<Handle<GlobalVariable>>,
+    /// The globals are made (a program of several functions makes them once).
+    pub(super) globals_made: bool,
 }
 
 /// D3D's standard sample positions in sixteenths of a pixel from its centre (x right, y down), for 1, 2, 4, 8 and 16
@@ -126,37 +128,42 @@ impl Lift<'_> {
         let mut depth = BTreeSet::new();
         let mut views: BTreeMap<usize, (bool, bool)> = BTreeMap::new();
         let mut atomic: BTreeMap<usize, naga::Scalar> = BTreeMap::new();
-        for inst in &self.f.instructions {
-            let Op::Call { function, args } = &inst.op else {
-                continue;
-            };
-            let Some(code) = dx_opcode(self.m, self.f, *function, args) else {
-                continue;
-            };
-            let handle = args.get(1).and_then(|&a| self.handle_of(a));
-            let Some(r) = handle else { continue };
-            match code {
-                64 | 65 | 74 => {
-                    depth.insert(r);
-                }
-                66 | 68 | 139 => {
-                    if matches!(self.setup.kind(r), ResourceKind::Storage { .. }) {
-                        views.entry(r).or_default().0 = true;
+        let original = self.f;
+        for f in self.functions.clone() {
+            self.f = f;
+            for inst in &f.instructions {
+                let Op::Call { function, args } = &inst.op else {
+                    continue;
+                };
+                let Some(code) = dx_opcode(self.m, self.f, *function, args) else {
+                    continue;
+                };
+                let handle = args.get(1).and_then(|&a| self.handle_of(a));
+                let Some(r) = handle else { continue };
+                match code {
+                    64 | 65 | 74 => {
+                        depth.insert(r);
                     }
-                }
-                67 | 69 | 140 => views.entry(r).or_default().1 = true,
-                // atomics read and write; a signed min or max (4, 5) makes the buffer's atomics signed
-                78 | 79 => {
-                    views.insert(r, (true, true));
-                    let signed = code == 78 && matches!(const_int(self.m, self.f, args[2]), Some(4 | 5));
-                    let entry = atomic.entry(r).or_insert(naga::Scalar::U32);
-                    if signed {
-                        *entry = naga::Scalar::I32;
+                    66 | 68 | 139 => {
+                        if matches!(self.setup.kind(r), ResourceKind::Storage { .. }) {
+                            views.entry(r).or_default().0 = true;
+                        }
                     }
+                    67 | 69 | 140 => views.entry(r).or_default().1 = true,
+                    // atomics read and write; a signed min or max (4, 5) makes the buffer's atomics signed
+                    78 | 79 => {
+                        views.insert(r, (true, true));
+                        let signed = code == 78 && matches!(const_int(self.m, self.f, args[2]), Some(4 | 5));
+                        let entry = atomic.entry(r).or_insert(naga::Scalar::U32);
+                        if signed {
+                            *entry = naga::Scalar::I32;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
+        self.f = original;
         self.resources.depth = depth;
         self.resources.views = views;
         self.resources.atomic = atomic;

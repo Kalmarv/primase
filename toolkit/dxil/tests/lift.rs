@@ -34,8 +34,17 @@ fn every_fixture_lifts() {
                             .collect::<Vec<_>>()
                             .join("; ")
                     ));
-                } else if let Err(e) = primase_shader::emit::wgsl(&p) {
-                    failures.push(format!("{name}: wgsl: {e}"));
+                } else {
+                    // a program of a stage with no WGSL stage is written as its functions
+                    let written = if primase_shader::stage_functions(&p.interface).is_ok_and(|f| f.is_some())
+                    {
+                        primase_shader::emit::wgsl_functions(&p)
+                    } else {
+                        primase_shader::emit::wgsl(&p)
+                    };
+                    if let Err(e) = written {
+                        failures.push(format!("{name}: wgsl: {e}"));
+                    }
                 }
             }
         }

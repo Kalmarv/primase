@@ -1047,10 +1047,11 @@ impl Module {
                         if version != Some(1) {
                             return Err(error(b.at, "only relative value ids (module version 1)"));
                         }
-                        // Bodies are stored in reverse order of their definitions.
-                        let value = bodies
-                            .pop()
-                            .ok_or_else(|| error(b.at, "function body without a definition"))?;
+                        // Bodies are stored in the order of their definitions (a hull program has two).
+                        if bodies.is_empty() {
+                            return Err(error(b.at, "function body without a definition"));
+                        }
+                        let value = bodies.remove(0);
                         // A body's values are its own; the next body numbers from the module's values again.
                         let f = m.read_function(b, value)?;
                         m.functions.push(f);

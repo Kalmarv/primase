@@ -66,6 +66,17 @@ fn system_from_number(
     use SystemValue::*;
     Ok(Some(match (stage, output, value) {
         (_, _, 0) => return Ok(None),
+        // between a vertex program, a hull program and a domain program the signatures carry plain varyings (a
+        // position the vertex program wrote is one the hull program reads), and the tessellation factors are named by
+        // their semantic
+        (Stage::Hull | Stage::Domain, false, _) | (Stage::Hull, true, _) | (Stage::Domain, true, 11..=16) => {
+            return Ok(None);
+        }
+        (Stage::Domain, true, 1) => ClipPosition,
+        (Stage::Domain, true, 2) => ClipDistance,
+        (Stage::Domain, true, 3) => CullDistance,
+        (Stage::Domain, true, 4) => RenderTargetArrayIndex,
+        (Stage::Domain, true, 5) => ViewportArrayIndex,
         (Stage::Vertex, true, 1) => ClipPosition,
         (Stage::Pixel, false, 1) => FragCoord,
         (Stage::Vertex, true, 2) | (Stage::Pixel, false, 2) => ClipDistance,
@@ -114,6 +125,10 @@ fn number_of_name(name: &str) -> Option<u32> {
         "depthlessequal" => 68,
         "stencilref" => 69,
         "innercoverage" => 70,
+        // the tessellation factors of a hull program's patch (the triangle's; the numbers differ by domain, the
+        // semantic does not)
+        "tessfactor" => 13,
+        "insidetessfactor" => 14,
         _ => return None,
     })
 }

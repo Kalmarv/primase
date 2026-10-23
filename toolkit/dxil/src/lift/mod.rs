@@ -17,13 +17,14 @@ mod memory;
 mod ops;
 mod resources;
 mod setup;
+mod stages;
 mod values;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use naga::{Handle, LocalVariable};
 use primase_shader::build::{Builder, Kind, Val};
-use primase_shader::{Conventions, D3dModes, Program, Provenance, ShaderFormat, Stage};
+use primase_shader::{Conventions, D3dModes, Program, Provenance, ShaderFormat, Stage, StageFacts};
 
 use crate::module::{Function, Module, Op, Type, TypeId, ValueId};
 use crate::{Error, Result, error};
@@ -51,44 +52,63 @@ pub fn lift(container: &[u8]) -> Result<Program> {
         .find(|f| f.value == entry_value)
         .ok_or_else(|| error(0, "the entry point has no body"))?;
     // ray queries are not a thing a Program carries
-    if module
-        .functions
-        .iter()
-        .flat_map(|f| &f.instructions)
-        .any(|i| matches!(&i.op, Op::Call { function, .. } if module.name(*function).is_some_and(|n| n.starts_with("dx.op.allocateRayQuery"))))
-    {
+    if module.functions.iter().flat_map(|f| &f.instructions).any(|i| {
+        matches!(&i.op, Op::Call { function, .. }
+                if module.name(*function).is_some_and(|n| n.starts_with("dx.op.allocateRayQuery")))
+    }) {
         return Err(error(0, "ray queries are not lifted"));
     }
-    let setup = setup::Setup::new(&chunks, &module, entry)?;
-    if part.program_version >> 16 == 1
-        && !setup
-            .interface
-            .outputs
-            .iter()
-            .any(|v| v.system == Some(primase_shader::SystemValue::ClipPosition))
-    {
-        return Err(error(
-            0,
-            "a vertex program that writes no position (it feeds a tessellator, which a Program has no stage for)",
-        ));
-    }
+    // a hull program is two functions: the control-point phase (the entry) and the patch-constant function
+    let patch_constant = if part.program_version >> 16 == 3 {
+        let state = crate::reflection::hull_state(&module)?;
+        Some(
+            module
+                .functions
+                .iter()
+                .find(|f| f.value == state.patch_constant)
+                .ok_or_else(|| error(0, "the patch-constant function has no body"))?,
+        )
+    } else {
+        None
+    };
+    let mut functions = vec![entry];
+    functions.extend(patch_constant);
+    let setup = setup::Setup::new(&chunks, &module, &functions)?;
     let target = format!(
         "{}_{}_{}",
         match part.program_version >> 16 {
             0 => "ps",
-            5 => "cs",
-            _ => "vs",
+            1 => "vs",
+            3 => "hs",
+            4 => "ds",
+            _ => "cs",
         },
         (part.program_version >> 4) & 15,
         part.program_version & 15
     );
-    let mut lift = Lift::new(&module, entry, setup)?;
+    let mut lift = Lift::new(&module, entry, functions, setup)?;
     if lift.setup.interface.stage == Stage::Compute {
         lift.b.workgroup_size = crate::reflection::num_threads(&module)?
             .ok_or_else(|| error(0, "a compute program that states no thread group size"))?;
     }
-    lift.run()?;
-    lift.finish(target)
+    match lift.setup.sigs.clone() {
+        None => {
+            lift.run()?;
+            lift.finish(target)
+        }
+        Some(sigs) => {
+            for sig in &sigs {
+                let f = if sig.name == "patch_constant" {
+                    patch_constant
+                        .ok_or_else(|| error(0, "a patch-constant function in a program that has none"))?
+                } else {
+                    entry
+                };
+                lift.run_function(f, sig)?;
+            }
+            lift.finish_functions(target)
+        }
+    }
 }
 
 /// A translated LLVM value.
@@ -137,6 +157,10 @@ enum Stored {
 pub(crate) struct Lift<'m> {
     pub(crate) m: &'m Module,
     pub(crate) f: &'m Function,
+    /// Every function whose instructions the lift reads: the entry's, and a hull program's patch-constant function.
+    functions: Vec<&'m Function>,
+    /// The function of a program of a stage with no entry point being lifted.
+    sig: Option<primase_shader::FunctionSig>,
     pub(crate) b: Builder,
     pub(super) setup: setup::Setup,
     /// The slot of each local value (arguments and instruction results), by `v - f.first`.
@@ -165,7 +189,12 @@ impl<'m> Lift<'m> {
         Err(error(self.at, detail))
     }
 
-    fn new(m: &'m Module, f: &'m Function, setup: setup::Setup) -> Result<Self> {
+    fn new(
+        m: &'m Module,
+        f: &'m Function,
+        functions: Vec<&'m Function>,
+        setup: setup::Setup,
+    ) -> Result<Self> {
         let mut blocks = vec![Vec::new(); f.blocks];
         for (i, inst) in f.instructions.iter().enumerate() {
             blocks[inst.block].push(i);
@@ -173,6 +202,8 @@ impl<'m> Lift<'m> {
         let mut lift = Lift {
             m,
             f,
+            functions,
+            sig: None,
             b: Builder::new(),
             notes: setup.notes.clone(),
             setup,
@@ -338,6 +369,80 @@ impl<'m> Lift<'m> {
         self.declare_memory()?;
         self.define_phis()?;
         self.structure_and_lower()
+    }
+
+    /// Lift one function of a program of a stage with no entry point as the module's function `sig`.
+    fn run_function(&mut self, f: &'m Function, sig: &primase_shader::FunctionSig) -> Result<()> {
+        // the per-function state: values, blocks, output registers, the argument expressions
+        self.f = f;
+        let mut blocks = vec![Vec::new(); f.blocks];
+        for (i, inst) in f.instructions.iter().enumerate() {
+            blocks[inst.block].push(i);
+        }
+        self.blocks = blocks;
+        self.slots = vec![None; f.locals.len()];
+        self.cross = vec![false; f.locals.len()];
+        self.outputs.clear();
+        self.depth = None;
+        self.coverage = None;
+        self.argument_exprs.clear();
+        self.analyse_uses();
+        self.sig = Some(sig.clone());
+        let decl = self.b.declare_function(sig).map_err(|detail| error(0, detail))?;
+        // the registers its results are made of
+        let u4 = self.b.ty_of(Kind::U, 4);
+        for v in self.result_varyings() {
+            if let Some(d3d) = v.provenance.d3d
+                && d3d.register != u32::MAX
+                && !self.outputs.contains_key(&d3d.register)
+            {
+                let local = self.b.local(&format!("o{}", d3d.register), u4);
+                self.outputs.insert(d3d.register, local);
+            }
+        }
+        self.result_type = decl.result;
+        if self.resources.globals_made {
+            // the globals are the module's: made with the first function
+        } else {
+            self.declare_resources()?;
+            self.declare_memory()?;
+            self.resources.globals_made = true;
+        }
+        self.define_phis()?;
+        self.structure_and_lower()?;
+        self.b.end_function(sig.name, decl);
+        Ok(())
+    }
+
+    /// The varyings the current function's result is made of: the outputs, or a hull program's patch constants.
+    pub(super) fn result_varyings(&self) -> Vec<primase_shader::Varying> {
+        match (&self.sig, &self.setup.interface.facts) {
+            (Some(sig), StageFacts::Hull(h)) if sig.name == "patch_constant" => h.patch_constants.clone(),
+            _ => self.setup.interface.outputs.clone(),
+        }
+    }
+
+    fn finish_functions(self, target: String) -> Result<Program> {
+        let stage = self.setup.interface.stage;
+        let module = self.b.finish_functions();
+        let limit_notes = primase_shader::compute_limit_notes(&module);
+        Ok(Program {
+            module,
+            stage,
+            entry: "main".into(),
+            interface: self.setup.interface,
+            bindings: self.resources.bound,
+            conventions: Conventions::D3D,
+            modes: D3dModes::ALL,
+            provenance: Provenance {
+                format: ShaderFormat::Dxil,
+                target,
+                lifter: "primase-dxil".into(),
+                lifter_version: LIFTER_VERSION,
+                source_hash: None,
+            },
+            notes: self.notes.into_iter().chain(limit_notes).collect(),
+        })
     }
 
     fn finish(self, target: String) -> Result<Program> {

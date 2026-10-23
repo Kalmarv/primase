@@ -151,6 +151,10 @@ fn location(stage: Stage, output: bool, v: &Varying, at: u32) -> Binding {
 pub struct FnItem {
     pub name: String,
     pub ty: IoType,
+    /// The varying it carries, by index: into the interface's inputs, outputs or (a hull program's patch-constant
+    /// result and a domain program's patch-constant arguments) the patch constants, as the function says; `None`
+    /// for the ids the pipeline supplies.
+    pub varying: Option<usize>,
 }
 
 /// A function of a program that has no entry point: its name, arguments and result members (a structure `Out` when
@@ -176,26 +180,31 @@ pub fn stage_functions(interface: &Interface) -> Result<Option<Vec<FunctionSig>>
     let stage = interface.stage;
     let values = |list: &[Varying], output: bool| -> Vec<FnItem> {
         list.iter()
-            .map(|v| FnItem {
+            .enumerate()
+            .map(|(i, v)| FnItem {
                 name: varying_name(&v.label),
                 ty: IoType::Value(carried(stage, output, v)),
+                varying: Some(i),
             })
             .collect()
     };
     let arrays = |list: &[Varying], output: bool, prefix: &str, n: u32| -> Vec<FnItem> {
         list.iter()
-            .map(|v| FnItem {
+            .enumerate()
+            .map(|(i, v)| FnItem {
                 name: format!("{prefix}{}", varying_name(&v.label)),
                 ty: IoType::Array(carried(stage, output, v), n),
+                varying: Some(i),
             })
             .collect()
     };
     let scalar = |name: &str, width: u8, scalar: ScalarType| FnItem {
         name: name.into(),
         ty: IoType::Value(Value { scalar, width }),
+        varying: None,
     };
     Ok(match (&interface.stage, &interface.facts) {
-        (Stage::Vertex, StageFacts::VertexForTessellation) => Some(vec![FunctionSig {
+        (Stage::Vertex, StageFacts::VertexWithoutPosition) => Some(vec![FunctionSig {
             name: "main",
             arguments: values(&interface.inputs, false),
             result: values(&interface.outputs, true),

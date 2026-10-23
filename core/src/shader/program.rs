@@ -139,7 +139,7 @@ mod tests {
             (Box::new(|i| i.resources[0].count = 0), "no bindings"),
             // facts of another stage, or a hull program without its patch
             (
-                Box::new(|i| i.facts = StageFacts::VertexForTessellation),
+                Box::new(|i| i.facts = StageFacts::VertexWithoutPosition),
                 "Pixel program with",
             ),
             (Box::new(|i| i.stage = Stage::Hull), "without its patch facts"),

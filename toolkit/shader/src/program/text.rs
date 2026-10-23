@@ -98,7 +98,7 @@ pub(super) fn text(p: &Program) -> Result<String, Error> {
     );
     match &p.interface.facts {
         StageFacts::None => {}
-        StageFacts::VertexForTessellation => {
+        StageFacts::VertexWithoutPosition => {
             let _ = writeln!(out, "// feeds a tessellator: functions, no entry point");
         }
         StageFacts::Hull(h) => {

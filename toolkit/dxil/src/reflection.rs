@@ -8,8 +8,9 @@ use crate::{Chunk, Result, error};
 use primase_shader::d3d;
 use primase_shader::{
     Access, BufferKind, BufferLayout, Constant as BufferConstant, ConstantType, D3dBinding, D3dClass,
-    Interface, Majorness, Member, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType,
-    ScalarType, Stage, StorageTarget, TextureDim, Value as Lanes, Varying,
+    DomainFacts, HullFacts, Interface, Majorness, Member, Partitioning, Resource, ResourceId, ResourceKind,
+    ResourceProvenance, SampleType, ScalarType, Stage, StageFacts, StorageTarget, TessDomain, TessTopology,
+    TextureDim, Value as Lanes, Varying,
 };
 
 /// One signature element of the entry point: its id (the `sigId` loadInput and storeOutput name), its first
@@ -134,13 +135,101 @@ pub fn num_threads(m: &Module) -> Result<Option<[u32; 3]>> {
 
 /// The entry point's input and output elements, by id.
 pub fn elements(m: &Module) -> Result<(Vec<Element>, Vec<Element>)> {
+    let [inputs, outputs, _] = signature_lists(m)?;
+    Ok((inputs, outputs))
+}
+
+/// A hull or domain program's patch-constant elements, by id.
+pub fn patch_elements(m: &Module) -> Result<Vec<Element>> {
+    let [_, _, patch] = signature_lists(m)?;
+    Ok(patch)
+}
+
+/// What a hull program's entry point states about its patch (the properties' tag 3): the patch-constant function, the
+/// control-point counts, the tessellator's domain, partitioning and output primitive and the largest factor.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HullState {
+    pub patch_constant: crate::module::ValueId,
+    pub input_control_points: u32,
+    pub output_control_points: u32,
+    pub domain: u32,
+    pub partitioning: u32,
+    pub output_primitive: u32,
+    pub max_tess_factor: f32,
+}
+
+/// The value of a properties tag of the entry point, if the entry point states it.
+fn entry_property(m: &Module, wanted: i64) -> Result<Option<&[Option<MetadataId>]>> {
+    let entries = named(m, "dx.entryPoints").ok_or_else(|| error(0, "no dx.entryPoints"))?;
+    let [entry] = entries else {
+        return Err(error(0, "not exactly one entry point"));
+    };
+    let entry = node(m, *entry, "entry point")?;
+    let Some(properties) = entry.get(4).copied().flatten() else {
+        return Ok(None);
+    };
+    for pair in node(m, properties, "entry point properties")?.chunks(2) {
+        let [tag, value] = pair else {
+            return Err(error(0, "entry point properties: a tag without a value"));
+        };
+        if int(m, *tag, "property tag")? == wanted {
+            return Ok(Some(node(
+                m,
+                value.ok_or_else(|| error(0, "a property without a value"))?,
+                "property",
+            )?));
+        }
+    }
+    Ok(None)
+}
+
+/// A hull program's patch state.
+pub fn hull_state(m: &Module) -> Result<HullState> {
+    let state = entry_property(m, 3)?.ok_or_else(|| error(0, "a hull program without its patch state"))?;
+    let small = |k: usize| -> Result<u32> {
+        u32::try_from(int(m, state.get(k).copied().flatten(), "hull state")?)
+            .map_err(|_| error(0, "hull state field"))
+    };
+    let patch_constant = match state.first().copied().flatten().and_then(|i| m.metadata.get(i)) {
+        Some(Metadata::Value { value, .. }) => *value,
+        _ => return Err(error(0, "a hull program without its patch-constant function")),
+    };
+    let max = match state.get(6).copied().flatten().and_then(|i| m.metadata.get(i)) {
+        Some(Metadata::Value { value, .. }) => match m.values.get(*value) {
+            Some(Value::Constant(Constant::Float(bits))) => f32::from_bits(*bits as u32),
+            _ => return Err(error(0, "the maximum tessellation factor is not a float")),
+        },
+        _ => return Err(error(0, "hull state without a maximum tessellation factor")),
+    };
+    Ok(HullState {
+        patch_constant,
+        input_control_points: small(1)?,
+        output_control_points: small(2)?,
+        domain: small(3)?,
+        partitioning: small(4)?,
+        output_primitive: small(5)?,
+        max_tess_factor: max,
+    })
+}
+
+/// A domain program's patch state (tag 2): the tessellator domain and the input control point count.
+pub fn domain_state(m: &Module) -> Result<(u32, u32)> {
+    let state = entry_property(m, 2)?.ok_or_else(|| error(0, "a domain program without its patch state"))?;
+    let small = |k: usize| -> Result<u32> {
+        u32::try_from(int(m, state.get(k).copied().flatten(), "domain state")?)
+            .map_err(|_| error(0, "domain state field"))
+    };
+    Ok((small(0)?, small(1)?))
+}
+
+fn signature_lists(m: &Module) -> Result<[Vec<Element>; 3]> {
     let entries = named(m, "dx.entryPoints").ok_or_else(|| error(0, "no dx.entryPoints"))?;
     let [entry] = entries else {
         return Err(error(0, "not exactly one entry point"));
     };
     let entry = node(m, *entry, "entry point")?;
     let Some(signatures) = operand(entry, 2, "entry point")? else {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok([Vec::new(), Vec::new(), Vec::new()]);
     };
     let signatures = node(m, signatures, "signatures")?;
     let list = |i: usize| -> Result<Vec<Element>> {
@@ -193,7 +282,7 @@ pub fn elements(m: &Module) -> Result<(Vec<Element>, Vec<Element>)> {
             })
             .collect()
     };
-    Ok((list(0)?, list(1)?))
+    Ok([list(0)?, list(1)?, list(2)?])
 }
 
 /// A resource's tag list (alternating tag and value): the element type (tag 0) and the structured stride (tag 1).
@@ -599,7 +688,7 @@ fn sample_type(scalar: ScalarType) -> SampleType {
 }
 
 /// The program module of a container's part of this kind (`DXIL`, or `STAT` for the reflection module), if it has one.
-pub(crate) fn module(chunks: &[Chunk<'_>], kind: &[u8; 4]) -> Result<Option<Module>> {
+pub fn module(chunks: &[Chunk<'_>], kind: &[u8; 4]) -> Result<Option<Module>> {
     let Some(c) = chunks.iter().find(|c| &c.kind == kind) else {
         return Ok(None);
     };
@@ -617,6 +706,15 @@ pub fn interface(container: &[u8]) -> Result<Interface> {
     reflection(&chunks, &program, named.as_ref())
 }
 
+fn tess_domain(code: u32) -> Result<TessDomain> {
+    match code {
+        1 => Ok(TessDomain::Isoline),
+        2 => Ok(TessDomain::Triangle),
+        3 => Ok(TessDomain::Quad),
+        other => Err(error(0, format!("tessellator domain {other} is not mapped"))),
+    }
+}
+
 /// The interface of a container: stage, signatures, resources, and each pixel input's interpolation from the entry
 /// point's signature metadata. `program` is the DXIL module; `named` the STAT part's reflection module when the
 /// container has one.
@@ -626,6 +724,8 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
         match crate::program(part(b"DXIL").ok_or_else(|| error(0, "no DXIL part"))?)?.program_version >> 16 {
             0 => Stage::Pixel,
             1 => Stage::Vertex,
+            3 => Stage::Hull,
+            4 => Stage::Domain,
             5 => Stage::Compute,
             kind => return Err(error(0, format!("program kind {kind} is not mapped"))),
         };
@@ -756,21 +856,73 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
                 && (e.row..e.row + e.rows).contains(&d3d.register)
                 && u32::from(d3d.mask) & lanes == u32::from(d3d.mask)
         });
-        if let Some(e) = found.filter(|e| e.interpolation != 0) {
+        // only a pixel program's inputs are interpolated
+        if let Some(e) = found.filter(|e| e.interpolation != 0 && stage == Stage::Pixel) {
             input.interp = Some(
                 d3d::interpolation(u32::from(e.interpolation))
                     .map_err(|detail| error(0, format!("{}{}: {detail}", e.name, e.index)))?,
             );
         }
     }
+    let patch = |output: bool| -> Result<Vec<Varying>> {
+        Ok(part(b"PSG1")
+            .map(|p| signature(p, stage, output))
+            .transpose()?
+            .unwrap_or_default())
+    };
+    let facts = match stage {
+        Stage::Hull => {
+            let h = hull_state(program)?;
+            StageFacts::Hull(HullFacts {
+                domain: tess_domain(h.domain)?,
+                partitioning: match h.partitioning {
+                    1 => Partitioning::Integer,
+                    2 => Partitioning::Pow2,
+                    3 => Partitioning::FractionalOdd,
+                    4 => Partitioning::FractionalEven,
+                    other => {
+                        return Err(error(
+                            0,
+                            format!("tessellator partitioning {other} is not mapped"),
+                        ));
+                    }
+                },
+                topology: match h.output_primitive {
+                    1 => TessTopology::Point,
+                    2 => TessTopology::Line,
+                    3 => TessTopology::TriangleCw,
+                    4 => TessTopology::TriangleCcw,
+                    other => {
+                        return Err(error(
+                            0,
+                            format!("tessellator output primitive {other} is not mapped"),
+                        ));
+                    }
+                },
+                input_control_points: h.input_control_points,
+                output_control_points: h.output_control_points,
+                max_tess_factor_bits: h.max_tess_factor.to_bits(),
+                patch_constants: patch(true)?,
+            })
+        }
+        Stage::Domain => {
+            let (domain, input_control_points) = domain_state(program)?;
+            StageFacts::Domain(DomainFacts {
+                domain: tess_domain(domain)?,
+                input_control_points,
+                patch_constants: patch(false)?,
+            })
+        }
+        _ => StageFacts::None,
+    };
     Ok(Interface {
         stage,
         inputs,
+        facts,
         outputs: part(b"OSG1")
             .map(|p| signature(p, stage, true))
             .transpose()?
             .unwrap_or_default(),
         resources,
-        facts: Default::default(),
     })
 }

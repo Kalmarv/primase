@@ -212,9 +212,9 @@ pub struct DomainFacts {
 pub enum StageFacts {
     #[default]
     None,
-    /// A vertex program whose outputs feed a hull program: it writes no clip-space position, so the program is a
-    /// function (`main`) and not an entry point.
-    VertexForTessellation,
+    /// A vertex program that writes no clip-space position: its outputs feed a hull program (or a stream-output
+    /// stage), so the program is a function (`main`) and not an entry point.
+    VertexWithoutPosition,
     Hull(HullFacts),
     Domain(DomainFacts),
 }
@@ -265,7 +265,7 @@ impl Interface {
             (Stage::Domain, StageFacts::Domain(d)) => {
                 patch("domain", d.input_control_points, &d.patch_constants)
             }
-            (Stage::Vertex, StageFacts::VertexForTessellation) => Ok(()),
+            (Stage::Vertex, StageFacts::VertexWithoutPosition) => Ok(()),
             (Stage::Hull | Stage::Domain, _) => {
                 Err(format!("a {:?} program without its patch facts", self.stage))
             }
