@@ -41,7 +41,14 @@
 //!   `LowestShaderConfig` and a hash, no blend, rasterizer or depth-stencil record). The engine composes the state per
 //!   pass from the Material's flags (docs/shaders.md §6.2: "applied by one method that switches on six pass kinds"),
 //!   which is the part mapped here. Not stated, so `None`: the blend (the notes infer source alpha over inverse source
-//!   alpha for the deferred decals and do not establish it), the fill and the winding.
+//!   alpha for the deferred decals and do not establish it), the fill and the winding. A census of the 432 template
+//!   bodies of the six forges (outside the code frames) holds this: between the last code frame and the first
+//!   permutation record there are 0 bytes in 432 of 432 (no pipeline-state object), the 59 bytes after the last record
+//!   are the same length in 432 of 432 (the two colours and the category), and the 135 distinct registry classes found
+//!   in the heads are all material-graph nodes, lighting and shade-constant sources and the compiled-template
+//!   structure; none is a pipeline-state class (`SerializedPSODB`, `PSOEntry*`, `PSOBlob`: 0 of 432), a blend,
+//!   rasterizer or depth-stencil one (`OperatorBlendFloats` and its kin blend values in the graph). The graph's own
+//!   bytes are not parsed whole, so this is a census of classes and gaps, not an account of every byte.
 //!
 //! Inputs of the pixel stage are the vertex stage's outputs by label (`Previous`) where it is bound, else `Unknown`;
 //! the vertex stage's are mesh streams by their semantic name.
