@@ -171,6 +171,44 @@ impl Compressor for Oodle {
     }
 }
 
+/// oozextract, the second Kraken decoder the tests hold the DLL to, behind one boundary: its refusals and its panics
+/// (its decoder asserts where it should refuse) both come back as a [`second_decoder::Failure`], so a corrupt or
+/// unsupported stream is a named test error and never a panic inside a gate.
+#[cfg(test)]
+mod second_decoder {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    #[derive(Debug, thiserror::Error)]
+    pub(super) enum Failure {
+        #[error("oozextract refused the stream: {0}")]
+        Refused(oozextract::OozError),
+        #[error("oozextract panicked instead of refusing the stream (an upstream defect): {0}")]
+        Panicked(String),
+        #[error("oozextract wrote {written} bytes, expected {expected}")]
+        Short { written: usize, expected: usize },
+    }
+    /// The `expected` bytes oozextract decodes from `input`.
+    pub(super) fn decode(input: &[u8], expected: usize) -> Result<Vec<u8>, Failure> {
+        let mut out = vec![0; expected];
+        let written = catch_unwind(AssertUnwindSafe(|| {
+            oozextract::Extractor::new().read_from_slice(input, &mut out)
+        }))
+        .map_err(|payload| {
+            Failure::Panicked(
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_owned())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "a panic without a message".to_owned()),
+            )
+        })?
+        .map_err(Failure::Refused)?;
+        if written != expected {
+            return Err(Failure::Short { written, expected });
+        }
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::disallowed_methods,
@@ -201,10 +239,7 @@ mod tests {
                 let compressed = dll.compress(&src)?;
                 report.compare_bytes(format!("dll/{n}"), &dll.decompress(&compressed, n)?, &src);
                 if n != 0 {
-                    let mut other = vec![0; n];
-                    let got = oozextract::Extractor::new().read_from_slice(&compressed, &mut other)?;
-                    assert_eq!(got, n);
-                    report.compare_bytes(format!("ooz/{n}"), &other, &src);
+                    report.compare_bytes(format!("ooz/{n}"), &second_decoder::decode(&compressed, n)?, &src);
                 }
                 let cas = crate::cas::Cas { oodle: Some(&dll) };
                 let framed = cas.compress(&src)?;
@@ -224,9 +259,7 @@ mod tests {
                         let reference = if block.kind == 0 {
                             block.payload.to_vec()
                         } else {
-                            let mut out = vec![0; block.decoded_size];
-                            oozextract::Extractor::new().read_from_slice(block.payload, &mut out)?;
-                            out
+                            second_decoder::decode(block.payload, block.decoded_size)?
                         };
                         let cas = crate::cas::Cas { oodle: Some(&dll) };
                         report.compare_bytes(
@@ -242,6 +275,32 @@ mod tests {
         }
         Ok(())
     }
+
+    /// Two independent 256 KiB Kraken quanta, concatenated: oozextract up to 0.5.5 kept the first quantum's output
+    /// base after the second's decoder restart and refused (or panicked on) the whole stream; 0.5.6 decodes it, and
+    /// both decoders must agree.
+    #[test]
+    fn concatenated_quanta_restart_their_decoder() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let Some(path) = tool(Tool::Oodle6) else {
+            return Ok(());
+        };
+        // SAFETY: explicitly configured trusted version-6 game library.
+        let dll = unsafe { Oodle::load(path, Version::V6)? };
+        let mut raw = Vec::new();
+        let mut encoded = Vec::new();
+        for j in 0..2 {
+            let part: Vec<_> = (0..262144)
+                .map(|i| ((i * 17 + i / 256 + j) % 251) as u8)
+                .collect();
+            let compressed = dll.compress(&part)?;
+            assert_eq!(second_decoder::decode(&compressed, part.len())?, part);
+            raw.extend(part);
+            encoded.extend(compressed);
+        }
+        assert_eq!(dll.decompress(&encoded, raw.len())?, raw);
+        assert_eq!(second_decoder::decode(&encoded, raw.len())?, raw);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -254,10 +313,105 @@ mod dcx_gate {
     use super::*;
     use primase_core::gate::{GateReport, Tolerance};
     use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
-    /// Test-only container adapter following SoulsFormats DCX.DecompressDCXKRAK.
-    /// Production container parsing belongs in the future FromSoft world crate.
+    type BoxError = Box<dyn std::error::Error>;
+    /// The quanta oozextract 0.5.6 refuses in `corpus.sekiro/dcx`, by file and quantum: its single-symbol Huffman
+    /// defect ([`super::upstream_defect`]). The gate accepts a refusal there, of the quantum and of its file's whole
+    /// stream, and nowhere else.
+    pub(super) const SINGLE_SYMBOL_HUFFMAN: &[(&str, usize)] = &[("0000000001b70e4e.dcx", 13)];
+    /// Kraken's output quantum: each starts a fresh decoder.
+    pub(super) const QUANTUM: usize = 262144;
+    /// One quantum of a KRAK payload: its bytes (header included), its output size, and whether it is stored.
+    pub(super) struct Quantum<'a> {
+        pub bytes: &'a [u8],
+        pub size: usize,
+        pub stored: bool,
+    }
+    /// Test-only container adapter following SoulsFormats DCX.DecompressDCXKRAK: the payload and its decoded size.
+    /// Production container parsing belongs in the FromSoft world crate.
+    pub(super) fn krak_payload(b: &[u8]) -> std::result::Result<(usize, &[u8]), BoxError> {
+        if b.get(40..44) != Some(b"KRAK") {
+            return Err("unsupported DCX".into());
+        }
+        let u32be = |o: usize| -> std::result::Result<u32, BoxError> {
+            Ok(u32::from_be_bytes(
+                b.get(o..o + 4).ok_or("short DCX")?.try_into()?,
+            ))
+        };
+        for (o, v) in [
+            (0, 0x44435800),
+            (4, 0x11000),
+            (8, 0x18),
+            (12, 0x24),
+            (16, 0x44),
+            (20, 0x4c),
+            (24, 0x44435300),
+            (36, 0x44435000),
+            (44, 0x20),
+            (52, 0),
+            (56, 0),
+            (60, 0),
+            (64, 0x10100),
+            (68, 0x44434100),
+            (72, 8),
+        ] {
+            if u32be(o)? != v {
+                return Err(format!("DCX header at {o:#x}").into());
+            }
+        }
+        if ![0x06000000, 0x09000000].contains(&u32be(48)?) {
+            return Err("DCX level".into());
+        }
+        let expected = u32be(28)? as usize;
+        let size = u32be(32)? as usize;
+        let src = b.get(76..76 + size).ok_or("short DCX payload")?;
+        if b[76 + size..].iter().any(|&v| v != 0) || b.len() - 76 - size >= 16 {
+            return Err("DCX padding".into());
+        }
+        Ok((expected, src))
+    }
+    /// The payload's quanta, each independent (a decoder restart, no checksum): a Kraken block (`8c 06` and a
+    /// three-byte compressed-size header) or a stored one (`cc 06` and the quantum's bytes as they are).
+    pub(super) fn quanta(src: &[u8], expected: usize) -> std::result::Result<Vec<Quantum<'_>>, BoxError> {
+        let mut out = Vec::new();
+        let mut pos = 0;
+        for i in 0..expected.div_ceil(QUANTUM) {
+            let start = pos;
+            let size = (expected - i * QUANTUM).min(QUANTUM);
+            let stored = match src.get(pos..pos + 2) {
+                Some([0x8c, 0x06]) => false,
+                Some([0xcc, 0x06]) => true,
+                _ => return Err("gate requires independent Kraken or stored quantum, no checksum".into()),
+            };
+            pos += 2;
+            if stored {
+                pos += size;
+            } else {
+                let header = src.get(pos..pos + 3).ok_or("short quantum header")?;
+                let v =
+                    (usize::from(header[0]) << 16) | (usize::from(header[1]) << 8) | usize::from(header[2]);
+                pos += 3;
+                pos += if v & 0x3ffff == 0x3ffff {
+                    if v >> 18 != 1 {
+                        return Err("unknown quantum special header".into());
+                    }
+                    1
+                } else {
+                    (v & 0x3ffff) + 1
+                };
+            }
+            out.push(Quantum {
+                bytes: src.get(start..pos).ok_or("short quantum payload")?,
+                size,
+                stored,
+            });
+        }
+        if pos != src.len() {
+            return Err("trailing quantum bytes".into());
+        }
+        Ok(out)
+    }
     #[test]
-    fn loose_krak_dcx() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn loose_krak_dcx() -> std::result::Result<(), BoxError> {
         let Some(root) = oracle(OracleSet::Corpus, Game::Sekiro, "dcx") else {
             return Ok(());
         };
@@ -281,95 +435,49 @@ mod dcx_gate {
         }
         files.sort();
         let mut report = GateReport::new("loose KRAK DCX DLL6 vs oozextract", Tolerance::Exact);
-        let mut blocked = 0;
         let mut quantums = GateReport::new("independent KRAK quantums vs oozextract", Tolerance::Exact);
+        let mut stored = GateReport::new("stored KRAK quantums vs their bytes", Tolerance::Exact);
         let mut roundtrips =
             GateReport::new("DCX decoded bytes DLL compression roundtrips", Tolerance::Exact);
+        let mut pinned = Vec::new();
         for file in files {
+            let name = file
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_owned();
             let b = std::fs::read(&file)?;
-            if b.get(40..44) != Some(b"KRAK") {
-                return Err(format!("unsupported DCX {}", file.display()).into());
-            }
-            let u32be = |o: usize| -> std::result::Result<u32, Box<dyn std::error::Error>> {
-                Ok(u32::from_be_bytes(
-                    b.get(o..o + 4).ok_or("short DCX")?.try_into()?,
-                ))
-            };
-            for (o, v) in [
-                (0, 0x44435800),
-                (4, 0x11000),
-                (8, 0x18),
-                (12, 0x24),
-                (16, 0x44),
-                (20, 0x4c),
-                (24, 0x44435300),
-                (36, 0x44435000),
-                (44, 0x20),
-                (52, 0),
-                (56, 0),
-                (60, 0),
-                (64, 0x10100),
-                (68, 0x44434100),
-                (72, 8),
-            ] {
-                if u32be(o)? != v {
-                    return Err(format!("DCX header at {o:#x}").into());
-                }
-            }
-            if ![0x06000000, 0x09000000].contains(&u32be(48)?) {
-                return Err("DCX level".into());
-            }
-            let expected = u32be(28)? as usize;
-            let size = u32be(32)? as usize;
-            let src = b.get(76..76 + size).ok_or("short DCX payload")?;
-            if b[76 + size..].iter().any(|&v| v != 0) || b.len() - 76 - size >= 16 {
-                return Err("DCX padding".into());
-            }
+            let (expected, src) = krak_payload(&b).map_err(|e| format!("{}: {e}", file.display()))?;
             let got = dll.decompress(src, expected)?;
-            let mut other = vec![0; expected];
-            match oozextract::Extractor::new().read_from_slice(src, &mut other) {
-                Ok(_) => report.compare_bytes(file.display().to_string(), &got, &other),
-                Err(e) => {
-                    if expected <= 262144 {
-                        return Err(e.into());
-                    }
-                    blocked += 1;
-                    eprintln!(
-                        "DLL only, whole-stream second decoder blocked by upstream restart defect: {}",
-                        file.display()
+            let quanta = quanta(src, expected).map_err(|e| format!("{}: {e}", file.display()))?;
+            for (i, (quantum, reference)) in quanta.iter().zip(got.chunks(QUANTUM)).enumerate() {
+                if quantum.stored {
+                    stored.compare_bytes(
+                        format!("{}/quantum/{i}", file.display()),
+                        &quantum.bytes[2..],
+                        reference,
                     );
                 }
-            }
-            // Independent restarts permit an independent oracle for each quantum,
-            // even while upstream mishandles the complete concatenated stream.
-            let mut pos = 0;
-            for (i, reference) in got.chunks(262144).enumerate() {
-                let start = pos;
-                if src.get(pos..pos + 2) != Some(&[0x8c, 0x06]) {
-                    return Err("gate requires independent Kraken quantum, no checksum".into());
-                }
-                pos += 2;
-                let header = src.get(pos..pos + 3).ok_or("short quantum header")?;
-                let v =
-                    (usize::from(header[0]) << 16) | (usize::from(header[1]) << 8) | usize::from(header[2]);
-                pos += 3;
-                let length = if v & 0x3ffff == 0x3ffff {
-                    if v >> 18 != 1 {
-                        return Err("unknown quantum special header".into());
+                match second_decoder::decode(quantum.bytes, quantum.size) {
+                    Ok(decoded) => {
+                        quantums.compare_bytes(format!("{}/quantum/{i}", file.display()), &decoded, reference)
                     }
-                    1
-                } else {
-                    (v & 0x3ffff) + 1
-                };
-                pos += length;
-                let quantum = src.get(start..pos).ok_or("short quantum payload")?;
-                let mut decoded = vec![0; reference.len()];
-                let written = oozextract::Extractor::new().read_from_slice(quantum, &mut decoded)?;
-                assert_eq!(written, reference.len());
-                quantums.compare_bytes(format!("{}/quantum/{i}", file.display()), reference, &decoded);
+                    Err(second_decoder::Failure::Refused(_))
+                        if SINGLE_SYMBOL_HUFFMAN.contains(&(&name, i)) =>
+                    {
+                        pinned.push(format!("{name}/quantum/{i}"))
+                    }
+                    Err(e) => return Err(format!("{}/quantum/{i}: {e}", file.display()).into()),
+                }
             }
-            if pos != src.len() {
-                return Err("trailing quantum bytes".into());
+            match second_decoder::decode(src, expected) {
+                Ok(other) => report.compare_bytes(file.display().to_string(), &got, &other),
+                Err(second_decoder::Failure::Refused(_))
+                    if SINGLE_SYMBOL_HUFFMAN.iter().any(|(pin, _)| *pin == name) =>
+                {
+                    pinned.push(name.clone())
+                }
+                Err(e) => return Err(format!("{}: {e}", file.display()).into()),
             }
             let encoded = dll.compress(&got)?;
             roundtrips.compare_bytes(
@@ -379,9 +487,10 @@ mod dcx_gate {
             );
         }
         println!(
-            "{quantums}\n{roundtrips}\nDLL only, whole-stream second decoder blocked by upstream defect: {blocked}"
+            "{quantums}\n{stored}\n{roundtrips}\nDLL only, oozextract's pinned single-symbol Huffman defect: {pinned:?}"
         );
         quantums.assert_passed();
+        stored.assert_passed();
         roundtrips.assert_passed();
         println!("{report}");
         report.assert_passed();
@@ -390,42 +499,58 @@ mod dcx_gate {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "test I/O: real-data gates"
+)]
 mod upstream_defect {
+    use super::dcx_gate::{QUANTUM, SINGLE_SYMBOL_HUFFMAN, krak_payload, quanta};
+    use super::second_decoder::{Failure, decode};
     use super::*;
-    /// oozextract 0.5.5 fails at the second independent 256 KiB Kraken quantum:
-    /// it keeps the global output base despite restart_decoder=true. Both quanta
-    /// work individually and the native DLL decodes their concatenation exactly.
-    /// A future oracle fix intentionally fails the final assertion so this known
-    /// defect can be removed and the whole-stream gate made unconditional again.
+    use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
+    /// oozextract 0.5.6 refuses a Huffman byte chunk (chunk type 2 or 4) whose code lengths name a single symbol: having
+    /// filled the output with that symbol, `decode_bytes_type12` returns `src - src_end`, 0 when the code-length
+    /// header ends the chunk, where its caller requires the chunk's size ("Expected 0 == 3 for chunk type 4"). The C
+    /// ooz it ports has the same return (kraken.cpp, Kraken_DecodeBytes_Type12). The game's Oodle 6 decodes the
+    /// chunk; with that return made the chunk's size, oozextract equals the DLL on every file of `corpus.sekiro/dcx`,
+    /// whole and per quantum. A fix upstream fails the final assertion: then empty
+    /// [`super::dcx_gate::SINGLE_SYMBOL_HUFFMAN`] and remove this test.
     #[test]
-    fn oozextract_055_kraken_restart_keeps_global_output_base()
+    fn oozextract_056_single_symbol_huffman_chunk_reports_no_bytes_used()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let Some(path) = primase_testdata::tool(primase_testdata::Tool::Oodle6) else {
+        let Some(root) = oracle(OracleSet::Corpus, Game::Sekiro, "dcx") else {
+            return Ok(());
+        };
+        let Some(path) = tool(Tool::Oodle6) else {
             return Ok(());
         };
         // SAFETY: explicitly configured trusted version-6 game library.
         let dll = unsafe { Oodle::load(path, Version::V6)? };
-        let mut raw = Vec::new();
-        let mut encoded = Vec::new();
-        for j in 0..2 {
-            let part: Vec<_> = (0..262144)
-                .map(|i| ((i * 17 + i / 256 + j) % 251) as u8)
-                .collect();
-            let compressed = dll.compress(&part)?;
-            let mut other = vec![0; part.len()];
-            oozextract::Extractor::new().read_from_slice(&compressed, &mut other)?;
-            assert_eq!(other, part);
-            raw.extend(part);
-            encoded.extend(compressed);
+        for &(name, i) in SINGLE_SYMBOL_HUFFMAN {
+            let bytes = std::fs::read(root.join(name))?;
+            let (expected, src) = krak_payload(&bytes)?;
+            let reference = dll.decompress(src, expected)?;
+            let quantum = quanta(src, expected)?
+                .into_iter()
+                .nth(i)
+                .ok_or("no such quantum")?;
+            let reference = &reference[i * QUANTUM..i * QUANTUM + quantum.size];
+            assert_eq!(
+                dll.decompress(quantum.bytes, quantum.size)?,
+                reference,
+                "{name}/quantum/{i}: the DLL alone"
+            );
+            match decode(quantum.bytes, quantum.size) {
+                Err(Failure::Refused(e))
+                    if e.message.as_deref() == Some("Expected 0 == 3 for chunk type 4") => {}
+                Err(other) => return Err(format!("{name}/quantum/{i}: a different failure: {other}").into()),
+                Ok(decoded) => {
+                    assert_eq!(decoded, reference, "{name}/quantum/{i}");
+                    panic!("upstream defect fixed: empty SINGLE_SYMBOL_HUFFMAN and remove this test");
+                }
+            }
         }
-        assert_eq!(dll.decompress(&encoded, raw.len())?, raw);
-        let mut other = vec![0; raw.len()];
-        assert!(
-            oozextract::Extractor::new()
-                .read_from_slice(&encoded, &mut other)
-                .is_err(),
-            "upstream defect fixed: remove known-defect handling and require whole-stream agreement"
-        );
         Ok(())
     }
 }

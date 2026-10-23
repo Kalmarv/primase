@@ -28,6 +28,8 @@ oracle set. Its `general/codecs.tsv` supports `lz4`, `deflate`, `zlib`, and
 makes it from game streams the `corpus_*` example programs cut (Sekiro's DFLT
 envelopes, skate.'s zlib CAS blocks, Riders Republic's LZ4 terrain blocks, GTA
 V's raw deflate archive files), decoded by Python's zlib and the lz4 package. Oodle cross-checks use oozextract only as
-a development dependency. Its 0.5.5 Kraken restart defect has a synthetic
-regression test; DCX checks report blocked whole-stream comparisons separately
-from per-quantum comparisons and native round trips.
+a development dependency, behind one boundary that makes its refusals and its
+panics named test errors. The DCX check compares the whole stream and every
+256 KiB quantum (Kraken or stored) with the DLL. Its one pinned refusal is
+0.5.6's single-symbol Huffman chunk (`dcx_gate::SINGLE_SYMBOL_HUFFMAN`), held by
+an upstream-defect test that fails once upstream fixes it.
