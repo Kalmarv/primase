@@ -7,7 +7,6 @@ use std::path::Path;
 
 use primase_core::parallel::Threads;
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
-use primase_hash::{content_bytes, content_finish, content_string, content_word};
 use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::pausemap::{PYRAMID_TOP, Pyramid};
@@ -24,8 +23,16 @@ impl Hash64 {
     pub fn new() -> Self {
         Hash64(HASH_SEED)
     }
+    /// One word: Murmur3 constants, rotl31 for the word and rotl27 for the state, then state * 5 + 0x52DCE729 (wrapping u64).
     pub fn word(&mut self, w: u64) -> &mut Self {
-        self.0 = content_word(self.0, w);
+        let k = w
+            .wrapping_mul(0x87c3_7b91_1142_53d5)
+            .rotate_left(31)
+            .wrapping_mul(0x4cf5_ad43_2745_937f);
+        self.0 = (self.0 ^ k)
+            .rotate_left(27)
+            .wrapping_mul(5)
+            .wrapping_add(0x52dc_e729);
         self
     }
     /// `Add(int)` / `Add(uint)`: the value as a 32-bit unsigned word.
@@ -35,16 +42,32 @@ impl Hash64 {
     pub fn uint(&mut self, v: u32) -> &mut Self {
         self.word(u64::from(v))
     }
+    /// The UTF-16 length, then one word per UTF-16 code unit.
     pub fn string(&mut self, s: &str) -> &mut Self {
-        self.0 = content_string(self.0, s);
+        self.word(s.encode_utf16().count() as u64);
+        for unit in s.encode_utf16() {
+            self.word(u64::from(unit));
+        }
         self
     }
+    /// The byte length, then the bytes as little-endian 8-byte words, the last zero-padded.
     pub fn bytes(&mut self, b: &[u8]) -> &mut Self {
-        self.0 = content_bytes(self.0, b);
+        self.word(b.len() as u64);
+        for part in b.chunks(8) {
+            let mut word = [0; 8];
+            word[..part.len()].copy_from_slice(part);
+            self.word(u64::from_le_bytes(word));
+        }
         self
     }
+    /// The final avalanche: xor-shift 33, multiply FF51AFD7ED558CCD, xor-shift 33, multiply C4CEB9FE1A85EC53, xor-shift 33.
     pub fn value(&self) -> u64 {
-        content_finish(self.0)
+        let mut h = self.0;
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        h ^ (h >> 33)
     }
 }
 

@@ -841,7 +841,7 @@ impl<'a> Scene<'a> {
                 }),
                 name: world.get::<Name>(e).map_or_else(|| p.id.clone(), |n| n.0.clone()),
                 col_mode: mode_of(p.collision.as_ref().and_then(|c| c.mode)),
-                key: p.key.unwrap_or_else(|| primase_hash::prototype_key(&p.id)),
+                key: p.key.unwrap_or_else(|| prototype_key(&p.id)),
                 foliage: p.foliage == Some(true),
                 ground: p.ground == Some(true),
                 collision,
@@ -1538,10 +1538,27 @@ pub fn class_of(c: MaterialClass) -> VClass {
     class(c)
 }
 
+/// A prototype's key when its description gives none: FNV-1a (seed 0x811C9DC5, multiplier 0x01000193) over the id's UTF-16LE
+/// bytes, without a terminator, as the reference scene writer computes it.
+fn prototype_key(id: &str) -> u32 {
+    id.encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .fold(0x811c_9dc5u32, |h, c| {
+            (h ^ u32::from(c)).wrapping_mul(0x0100_0193)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::components::{MaterialClass, SkateMaterial, SkateScene};
+
+    /// Values from the reference scene writer's C# method.
+    #[test]
+    fn a_prototype_key_is_fnv1a_over_utf16le() {
+        assert_eq!(prototype_key("A😀é"), 0x5ed8_3406);
+        assert_eq!(prototype_key("hello"), 0xc345_7ef7);
+    }
 
     #[test]
     fn out_of_range_placement_priority_is_refused() {
