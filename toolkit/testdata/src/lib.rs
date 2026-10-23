@@ -238,6 +238,42 @@ pub fn debug(key: &str) -> Option<String> {
     load().debug(&environment, key)
 }
 
+/// How much a heavy real-data test covers (`[run] gate`): a smoke sample on every batch, or everything (the overnight
+/// gate).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Depth {
+    /// A sample, drawn with [`seed`]: the default.
+    Smoke,
+    /// The whole input.
+    Full,
+}
+
+/// `[run] gate`: [`Depth::Full`] for `full`, else [`Depth::Smoke`].
+pub fn depth() -> Depth {
+    if load().gate.as_deref() == Some("full") {
+        Depth::Full
+    } else {
+        Depth::Smoke
+    }
+}
+
+/// The seed a smoke sample is drawn with: `[run] seed` when given (to rerun one sample exactly), else the day (days
+/// since 1970-01-01, UTC), so the sample rotates and its coverage accumulates across runs. A test prints the seed it
+/// used and names it in its failures.
+pub fn seed() -> u64 {
+    load().seed.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() / 86_400)
+    })
+}
+
+/// The threads a heavy real-data test's work may use (`[run] threads`, one by default): what a test states for its
+/// world (`core.threads`), so a machine opts into the load. Work whose result is the same on any count only.
+pub fn threads() -> std::num::NonZeroUsize {
+    load().threads.unwrap_or(std::num::NonZeroUsize::MIN)
+}
+
 /// The bytes of a real-data input file, for a unit test inside a library crate, which has no file access of its own:
 /// the file a query resolved, or one its input names.
 pub fn read_input(path: impl AsRef<Path>) -> std::io::Result<Vec<u8>> {
@@ -387,6 +423,9 @@ mod tests {
             "[installs]\nsekiro2 = 'x'",
             "[tools]\nwarp = 3",
             "[run]\nrequire = 'yes'",
+            "[run]\ngate = 'quick'",
+            "[run]\nseed = 'today'",
+            "[run]\nthreads = '0'",
             "[oracles]\nsoulsformats = 'x'",
             "not valid = [",
             "[installs]\nsekiro = 'x'\nPRIMASE_SEKIRO_DIR = 'y'",
@@ -402,6 +441,18 @@ mod tests {
         )
         .unwrap_err();
         assert!(unreadable.to_string().contains("gone.toml"));
+    }
+
+    /// `[run] gate` and `[run] seed` are read as given; unset, a run is a smoke run drawn with the day's seed.
+    #[test]
+    fn the_gate_depth_and_seed_are_read() {
+        let c = config(&[], Some("[run]\ngate = 'full'\nseed = '20384'\nthreads = '6'\n")).unwrap();
+        assert_eq!(
+            (c.gate.as_deref(), c.seed, c.threads.map(|t| t.get())),
+            (Some("full"), Some(20384), Some(6))
+        );
+        let unset = config(&[], Some("[run]\nrequire = 'gate'\n")).unwrap();
+        assert_eq!((unset.gate, unset.seed, unset.threads), (None, None, None));
     }
 
     #[test]

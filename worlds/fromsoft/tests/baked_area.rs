@@ -8,75 +8,86 @@ use primase_fromsoft::{dcx::Decoder, sekiro};
 use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
 use std::collections::BTreeMap;
 mod common;
-#[test]
-fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(install) = install(Game::Sekiro) else {
-        return Ok(());
-    };
-    let Some(dll) = tool(Tool::Oodle6) else {
-        return Ok(());
-    };
-    let Some(reference) = oracle(OracleSet::Baseline, Game::Sekiro, "scene") else {
-        return Ok(());
-    };
-    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(reference.join("scene.json"))?)?;
-    let dll = common::oodle(dll)?;
-    let read = |reverse: bool| -> Result<(World, sekiro::Report, RunReport), Box<dyn std::error::Error>> {
-        let mut world = World::default();
-        let report = sekiro::read_area(
-            &install,
-            "m11_01",
-            &Decoder {
-                oodle: Some(&dll),
-                max_output: 1024 * 1024 * 1024,
-            },
-            &sekiro::Options {
-                region: Some(sekiro::Region {
-                    rect: serde_json::from_value(manifest["region"].clone())?,
-                    margin: 30.0,
-                }),
-                ..Default::default()
-            },
-            &mut world,
-        )?;
-        if reverse {
-            respawn_materials_reversed(&mut world);
-        }
-        let run = common::run(
-            &mut world,
-            &format!(
-                "{}, resolve-fromsoft-shaders{{unbound-textures=preview}}, bake-fromsoft-layers{{max-size=512,sample-time=0}}, lower-fromsoft-materials{{layers=preview}}",
-                common::LEGACY_GEOMETRY
-            ),
-        )?;
-        Ok((world, report, run))
-    };
-    let (world, report, run) = read(false)?;
-    let bake = &run.steps[run.steps.len() - 2].log;
+/// One read and bake of `region` of m11_01, its layers baked at most `max_size` pixels on an edge, its source
+/// materials spawned in reverse when `reverse`.
+fn bake(
+    install: &std::path::Path,
+    dll: &primase_compress::oodle::Oodle,
+    region: [f32; 4],
+    max_size: u32,
+    reverse: bool,
+) -> Result<(World, sekiro::Report, RunReport), Box<dyn std::error::Error>> {
+    let mut world = World::default();
+    let report = sekiro::read_area(
+        install,
+        "m11_01",
+        &Decoder {
+            oodle: Some(dll),
+            max_output: 1024 * 1024 * 1024,
+        },
+        &sekiro::Options {
+            region: Some(sekiro::Region {
+                rect: region,
+                margin: 30.0,
+            }),
+            ..Default::default()
+        },
+        &mut world,
+    )?;
+    // the bake's rows on the threads the configuration allows: the same bake on any count
+    world.insert_resource(common::threads());
+    if reverse {
+        respawn_materials_reversed(&mut world);
+    }
+    let run = common::run(
+        &mut world,
+        &format!(
+            "{}, resolve-fromsoft-shaders{{unbound-textures=preview}}, bake-fromsoft-layers{{max-size={max_size},sample-time=0}}, lower-fromsoft-materials{{layers=preview}}",
+            common::LEGACY_GEOMETRY
+        ),
+    )?;
+    Ok((world, report, run))
+}
+
+/// What every region's bake holds, whatever region (`at` names it in a failure): each drawn primitive's material
+/// lowered, two-sided exactly where its face set does not cull; the source classes carried as usage and draw order,
+/// and counted by the lowering; baked textures within the size cap `max_size`; and the same names, textures,
+/// materials and parts when the source materials are spawned in reverse. Returns (water, foliage, decal) counts.
+fn region_holds(
+    install: &std::path::Path,
+    dll: &primase_compress::oodle::Oodle,
+    region: [f32; 4],
+    max_size: u32,
+    at: &str,
+) -> Result<(RunReport, [u64; 3]), Box<dyn std::error::Error>> {
+    let (world, report, run) = bake(install, dll, region, max_size, false)?;
+    let bake_log = &run.steps[run.steps.len() - 2].log;
     let pbr = &run.steps[run.steps.len() - 1].log;
     println!(
-        "bake {bake:?}; PBR {pbr:?}; prototypes {}, placements {}",
+        "{at}: bake {bake_log:?}; PBR {pbr:?}; prototypes {}, placements {}",
         report.prototypes, report.placements
     );
-    assert_eq!(bake.counts["source materials baked"], 290);
-    assert_eq!(bake.counts["bake groups"], 208);
-    assert_eq!(
-        bake.counts["bake groups with gloss"]
-            + bake.counts.get("bake groups without gloss").copied().unwrap_or(0),
-        208
-    );
-    assert_eq!(
-        bake.counts["bake groups with emission"]
-            + bake
-                .counts
-                .get("bake groups without emission")
-                .copied()
-                .unwrap_or(0),
-        208
-    );
+    for (what, total) in [
+        ("gloss", "bake groups with gloss"),
+        ("emission", "bake groups with emission"),
+    ] {
+        let groups = bake_log.counts.get("bake groups").copied().unwrap_or(0);
+        let with = bake_log.counts.get(total).copied().unwrap_or(0);
+        let without = bake_log
+            .counts
+            .get(&total.replace("with", "without"))
+            .copied()
+            .unwrap_or(0);
+        assert_eq!(
+            with + without,
+            groups,
+            "{at}: bake groups with and without {what}"
+        );
+    }
     assert!(
         !pbr.approximations
-            .contains_key("layered material lowered from its main-layer preview; layers not baked")
+            .contains_key("layered material lowered from its main-layer preview; layers not baked"),
+        "{at}"
     );
     // every drawn primitive's material is lowered, and as sided as its face set: two-sided exactly where the source
     // face set does not cull back faces
@@ -84,19 +95,19 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
     for (e, mesh) in world.iter::<Mesh>() {
         let cull = world
             .get::<FaceCull>(e)
-            .ok_or("a mesh without fromsoft.face_cull")?;
+            .ok_or_else(|| format!("{at}: a mesh without fromsoft.face_cull"))?;
         for (primitive, &cull) in mesh.primitives().iter().zip(&cull.primitives) {
             if let Some(material) = primitive.material {
                 let pbr = world
                     .get::<PbrMaterial>(material)
-                    .ok_or("a drawn material not lowered")?;
-                assert_eq!(pbr.double_sided, !cull);
+                    .ok_or_else(|| format!("{at}: a drawn material not lowered"))?;
+                assert_eq!(pbr.double_sided, !cull, "{at}");
                 sided[usize::from(pbr.double_sided)] += 1;
             }
         }
     }
     println!(
-        "primitives drawing single-sided {}, two-sided {}; split {:?}, single {:?}, two {:?}",
+        "{at}: primitives drawing single-sided {}, two-sided {}; split {:?}, single {:?}, two {:?}",
         sided[0],
         sided[1],
         pbr.counts.get("materials split by face-set cull"),
@@ -117,13 +128,6 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
         .iter::<DrawOrder>()
         .filter(|(_, d)| d.layer == DrawLayer::Decal)
         .count() as u64;
-    println!(
-        "water {}, leaves {}, decals {}",
-        usage(MaterialUsage::Water),
-        usage(MaterialUsage::Foliage),
-        decals
-    );
-    let (water, foliage, decal_count) = (usage(MaterialUsage::Water), usage(MaterialUsage::Foliage), decals);
     // the lowering counts what it lowered; a material it split by face-set cull has a copy that carries the same
     let copies = |c: &str| {
         world
@@ -137,59 +141,124 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
             })
             .count() as u64
     };
-    assert_eq!(usage(MaterialUsage::Water), class("water"));
-    assert_eq!(usage(MaterialUsage::Foliage), class("leaves"));
-    assert_eq!(decals, class("decal"));
+    let counted = |k: &str| pbr.counts.get(k).copied().unwrap_or(0);
+    assert_eq!(usage(MaterialUsage::Water), class("water"), "{at}");
+    assert_eq!(usage(MaterialUsage::Foliage), class("leaves"), "{at}");
+    assert_eq!(decals, class("decal"), "{at}");
     assert_eq!(
         world.iter::<MaterialUsage>().count() as u64,
-        class("water") + class("leaves")
+        class("water") + class("leaves"),
+        "{at}"
     );
-    assert_eq!(world.iter::<DrawOrder>().count() as u64, class("decal"));
+    assert_eq!(world.iter::<DrawOrder>().count() as u64, class("decal"), "{at}");
     assert_eq!(
-        pbr.counts["materials of class water given their usage"] + copies("water"),
-        class("water")
-    );
-    assert_eq!(
-        pbr.counts["materials of class leaves given their usage"] + copies("leaves"),
-        class("leaves")
+        counted("materials of class water given their usage") + copies("water"),
+        class("water"),
+        "{at}"
     );
     assert_eq!(
-        pbr.counts["materials of class decal given their draw order"] + copies("decal"),
-        class("decal")
+        counted("materials of class leaves given their usage") + copies("leaves"),
+        class("leaves"),
+        "{at}"
+    );
+    assert_eq!(
+        counted("materials of class decal given their draw order") + copies("decal"),
+        class("decal"),
+        "{at}"
     );
     for (entity, texture) in world.iter::<Texture>() {
         if world
             .get::<Name>(entity)
             .is_some_and(|n| n.0.starts_with("bake_"))
         {
-            assert!(texture.width <= 512 && texture.height <= 512);
+            assert!(texture.width <= max_size && texture.height <= max_size, "{at}");
         }
     }
+    let counts = [usage(MaterialUsage::Water), usage(MaterialUsage::Foliage), decals];
 
     // names follow the source, not the order entities were spawned in: the source materials spawned in reverse give
     // the same names, the same textures under them, the same materials and the same parts drawing them
     let first = Output::of(&world);
     let alike = first.alike_variants();
     println!(
-        "bake variants: {}; sharing their content with another variant: {} (in {} sets)",
+        "{at}: bake variants: {}; sharing their content with another variant: {} (in {} sets)",
         first.materials.keys().filter(|n| n.contains("_source_")).count(),
         alike.iter().map(Vec::len).sum::<usize>(),
         alike.len()
     );
     drop(world);
-    let (reversed, _, _) = read(true)?;
+    let (reversed, _, _) = bake(install, dll, region, max_size, true)?;
     let second = Output::of(&reversed);
-    assert_eq!(first.textures.len(), second.textures.len());
+    assert_eq!(first.textures.len(), second.textures.len(), "{at}");
     for (name, textures) in &first.textures {
-        assert_eq!(Some(textures), second.textures.get(name), "textures named {name}");
+        assert_eq!(
+            Some(textures),
+            second.textures.get(name),
+            "{at}: textures named {name}"
+        );
     }
-    assert_eq!(first.materials, second.materials);
-    assert_eq!(first.parts, second.parts);
+    assert_eq!(first.materials, second.materials, "{at}");
+    assert_eq!(first.parts, second.parts, "{at}");
+    Ok((run, counts))
+}
+
+/// The baseline scene's region of m11_01, baked as the conversion bakes it, holds what any region's bake holds
+/// ([`region_holds`]). The smoke gate ([`primase_testdata::depth`]) bakes a sample of the region's cells
+/// ([`common::cells`]: [`SMOKE_CELLS`] of nine, drawn with [`primase_testdata::seed`], printed and named in every
+/// failure) at [`SMOKE_MAX_SIZE`], so it checks nothing that depends on the resolution (the baked pixels, which
+/// variants share their content); the full gate bakes the whole region at the conversion's 512 and checks its
+/// counts, as measured.
+#[test]
+fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(install) = install(Game::Sekiro) else {
+        return Ok(());
+    };
+    let Some(dll) = tool(Tool::Oodle6) else {
+        return Ok(());
+    };
+    let Some(reference) = oracle(OracleSet::Baseline, Game::Sekiro, "scene") else {
+        return Ok(());
+    };
+    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(reference.join("scene.json"))?)?;
+    let region: [f32; 4] = serde_json::from_value(manifest["region"].clone())?;
+    let dll = common::oodle(dll)?;
+    if primase_testdata::depth() == primase_testdata::Depth::Smoke {
+        let seed = primase_testdata::seed();
+        let cells = common::cells(region);
+        let sample = common::sample(seed, cells.len(), SMOKE_CELLS);
+        println!(
+            "smoke: {SMOKE_CELLS} of {} cells of the region, seed {seed} (rerun with [run] seed = '{seed}'): {sample:?}",
+            cells.len()
+        );
+        for k in sample {
+            region_holds(
+                &install,
+                &dll,
+                cells[k],
+                SMOKE_MAX_SIZE,
+                &format!("seed {seed}, cell {k} {:?}", cells[k]),
+            )?;
+        }
+        return Ok(());
+    }
+    let (run, counts) = region_holds(&install, &dll, region, 512, "the whole region")?;
+    let bake = &run.steps[run.steps.len() - 2].log;
+    let pbr = &run.steps[run.steps.len() - 1].log;
+    assert_eq!(bake.counts["source materials baked"], 290);
+    assert_eq!(bake.counts["bake groups"], 208);
     // 79 leaves materials lowered, and 3 two-sided copies of them (face sets that don't cull, split off): 82 drawn
     assert_eq!(pbr.counts["materials of class leaves given their usage"], 79);
-    assert_eq!((water, foliage, decal_count), (1, 82, 4));
+    assert_eq!(counts, [1, 82, 4]);
     Ok(())
 }
+
+/// The cells of the region a smoke gate bakes.
+const SMOKE_CELLS: usize = 2;
+
+/// The smoke gate's bake size cap. A cell holds most of the region's materials (the centre one 1,121 of its 1,632 baked
+/// textures), so a bake costs about what its groups' pixels cost, nearly all of it the programs' evaluation: what a
+/// region's bake must hold does not depend on the resolution, and a 128 cap evaluates a sixteenth of the pixels.
+const SMOKE_MAX_SIZE: u32 = 128;
 
 /// Every source material moved to a new entity, the last first, and every reference to it with it: the same world,
 /// its source materials spawned in the opposite order.

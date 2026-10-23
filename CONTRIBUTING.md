@@ -302,6 +302,7 @@ root = 'D:/placeholder/oracles'   # <root>/<set>/<game>/<file>
 root = 'D:/placeholder/scratch'
 [run]
 require = 'gate'
+gate = 'smoke'                    # or 'full'
 ```
 
 An install, keys or a tool is its key's path; a file in an install is below it; an oracle set's file is
@@ -309,7 +310,12 @@ An install, keys or a tool is its key's path; a file in an install is below it; 
 (a typo must not skip quietly). A query whose key is not configured prints one `SKIP` line naming the test and the key
 and returns `None`. `[run] require = 'gate'` makes every input the landing gate must have fail instead (the `gate`
 column below: a blocked file always is one), `'all'` every input: use them when running the real-data tests a
-change affects, so a skipped affected test counts as a failure, not a pass. A configured path that does not exist
+change affects, so a skipped affected test counts as a failure, not a pass. `[run] gate` says how much the heavy real-data tests cover
+(`primase_testdata::depth`): `'smoke'` (the default) a sample, drawn with `primase_testdata::seed` (`[run] seed` when
+given, to rerun one sample exactly, else the day's, so coverage accumulates across runs; the test prints it and names it
+in its failures), for every batch; `'full'` everything, for the overnight gate. `[run] threads` (one by default) is
+how many threads a heavy test's work may use, stated in its world as `core.threads` (`primase_testdata::threads`): a
+machine opts into the load, and only work whose result is the same on any count reads it. A configured path that does not exist
 fails: a configured input that is gone is never a skip. The one exception is an oracle set the machine does not hold:
 with no `<oracles.root>/<set>` folder (in a root that exists) the set counts as not configured there, so a machine
 can keep only the sets it has; a file missing inside a set that is there fails (a typo or a broken tree). A file in an install or an oracle set must be declared

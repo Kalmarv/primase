@@ -35,6 +35,12 @@ pub fn run(world: &mut World, pipeline: &str) -> Result<RunReport, Box<dyn std::
     Ok(report)
 }
 
+/// The threads the configuration lets a heavy test's work use (`[run] threads`), as the world states them
+/// (`core.threads`).
+pub fn threads() -> primase_core::parallel::Threads {
+    primase_core::parallel::Threads::new(primase_testdata::threads().get()).expect("at least one thread")
+}
+
 /// The caller's trusted version-6 Oodle library.
 #[allow(unsafe_code)]
 pub fn oodle(path: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
@@ -148,4 +154,40 @@ pub fn bits(v: &serde_json::Value) -> Result<u32, Box<dyn std::error::Error>> {
 pub fn bits3(v: &serde_json::Value) -> Result<[u32; 3], Box<dyn std::error::Error>> {
     let a = v.as_array().ok_or("vector")?;
     Ok([bits(&a[0])?, bits(&a[1])?, bits(&a[2])?])
+}
+
+/// The cells a smoke gate samples of a region `[west, south, east, north]` (metres): a 3 by 3 grid of equal cells,
+/// west to east, then south to north.
+pub fn cells(region: [f32; 4]) -> Vec<[f32; 4]> {
+    let [w, s, e, n] = region;
+    let (dx, dy) = ((e - w) / 3.0, (n - s) / 3.0);
+    (0..3)
+        .flat_map(|row| {
+            (0..3).map(move |col| {
+                let (x, y) = (w + col as f32 * dx, s + row as f32 * dy);
+                [x, y, x + dx, y + dy]
+            })
+        })
+        .collect()
+}
+
+/// `n` distinct indices of `0..count` drawn with `seed` (splitmix64), in the order drawn: the same seed, the same
+/// sample.
+pub fn sample(seed: u64, count: usize, n: usize) -> Vec<usize> {
+    let mut state = seed;
+    let mut next = || {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    let mut picked = Vec::new();
+    while picked.len() < n.min(count) {
+        let k = (next() % count as u64) as usize;
+        if !picked.contains(&k) {
+            picked.push(k);
+        }
+    }
+    picked
 }

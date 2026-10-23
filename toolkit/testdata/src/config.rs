@@ -13,6 +13,9 @@
 //! root = 'D:/placeholder/scratch'
 //! [run]
 //! require = 'gate'                  # or 'all': an unset input fails instead of skipping
+//! gate = 'smoke'                    # or 'full': how much the heavy real-data tests cover (smoke by default)
+//! seed = '20384'                     # the smoke sample's seed (the day's by default), to rerun one exactly
+//! threads = '1'                     # the threads a heavy real-data test's work may use (one by default)
 //! ```
 //!
 //! Every section and key is optional; an unknown section or key is an error (a typo must not skip quietly). For one
@@ -33,6 +36,12 @@ pub(crate) struct Config {
     pub roots: BTreeMap<String, PathBuf>,
     /// `[run] require`: `gate` or `all`.
     pub require: Option<String>,
+    /// `[run] gate`: `smoke` or `full`.
+    pub gate: Option<String>,
+    /// `[run] seed`: a smoke sample's seed.
+    pub seed: Option<u64>,
+    /// `[run] threads`: the threads a heavy real-data test's work may use.
+    pub threads: Option<std::num::NonZeroUsize>,
     /// What older `PRIMASE_*` names gave, by the query key they stand for ([`crate::legacy`]), with the old name.
     pub legacy: BTreeMap<String, (OsString, &'static str)>,
 }
@@ -59,7 +68,7 @@ fn section_keys(section: &str) -> Option<Vec<&'static str>> {
         "tools" => Some(of(TOOLS, "tools.")),
         "oracles" => Some(vec!["root"]),
         "scratch" => Some(vec!["root"]),
-        "run" => Some(vec!["require"]),
+        "run" => Some(vec!["require", "gate", "seed", "threads"]),
         _ => None,
     }
 }
@@ -139,10 +148,26 @@ impl Config {
                     .as_str()
                     .ok_or_else(|| invalid(format!("{section}.{key} is not a string")))?;
                 if section == "run" {
-                    if !matches!(value, "gate" | "all") {
-                        return Err(invalid(format!("run.require = '{value}': 'gate' or 'all'")));
+                    match key.as_str() {
+                        "require" if matches!(value, "gate" | "all") => self.require = Some(value.to_owned()),
+                        "require" => {
+                            return Err(invalid(format!("run.require = '{value}': 'gate' or 'all'")));
+                        }
+                        "gate" if matches!(value, "smoke" | "full") => self.gate = Some(value.to_owned()),
+                        "gate" => return Err(invalid(format!("run.gate = '{value}': 'smoke' or 'full'"))),
+                        "seed" => {
+                            self.seed = Some(
+                                value
+                                    .parse()
+                                    .map_err(|_| invalid(format!("run.seed = '{value}': a whole number")))?,
+                            )
+                        }
+                        _ => {
+                            self.threads = Some(value.parse().map_err(|_| {
+                                invalid(format!("run.threads = '{value}': a whole number, at least 1"))
+                            })?)
+                        }
                     }
-                    self.require = Some(value.to_owned());
                 } else {
                     self.roots
                         .insert(format!("{section}.{key}"), PathBuf::from(value));
@@ -161,7 +186,8 @@ impl Config {
 }
 
 /// Check `text` as a configuration file in the structured format (the example file's check): its sections and keys
-/// known, its values strings, `[run] require` one of `gate` and `all`. The older flat map is refused.
+/// known, its values strings, `[run] require` one of `gate` and `all`, `[run] gate` one of `smoke` and `full`, `[run]
+/// seed` a whole number, `[run] threads` a whole number from 1. The older flat map is refused.
 pub fn validate(text: &str) -> Result<(), ConfigError> {
     let path = Path::new("(text)");
     let flat =

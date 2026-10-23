@@ -24,3 +24,10 @@ root = 'D:/placeholder/scratch'
 [run]
 # 'gate': every input the landing gate must have fails when missing; 'all': every input
 require = 'gate'
+# how much the heavy tests cover: 'smoke' (a sample, by default) or 'full' (the overnight gate)
+gate = 'smoke'
+# the smoke sample's seed: unset, the day's, so coverage accumulates; set it to rerun one sample exactly
+# seed = '20384'
+# the threads a heavy real-data test's work may use (the bakes' core.threads): unset, one, as light as the serial
+# run; its results are the same on any count
+# threads = '4'
