@@ -1,18 +1,19 @@
 //! Area-weighted static layer grouping over an area whose geometry `lower-fromsoft-geometry` lowered: each layered
 //! part keeps its raw per-vertex shader inputs (`fromsoft.layer_inputs`); grouping and baking are the bake pass's.
 use crate::layer_bake::grouping::{self, Features};
-use crate::sekiro::source::{LayerInputs, Payloads, PrototypeSource, ShaderPrograms, TexturePayloads};
+use crate::sekiro::source::{LayerInputs, Payloads, PrototypeSource, TexturePayloads};
 use crate::{Result, invalid, materials::Material};
-use primase_core::{Instance, Mesh, Semantic, Stream, World};
+use primase_core::shader::{Shader as ShaderProgram, ShaderBinding, Stage, StageBinding};
+use primase_core::{Entity, Instance, Mesh, Semantic, Stream, World};
 use primase_meshops::vector::Vec3;
 use std::{collections::BTreeMap, sync::Arc};
 
-/// Prepared bake inventory over the source programs and texture files it borrows; each worker may prepare one
-/// material at a time, keeping decoded pixel memory bounded.
+/// Prepared bake inventory over the texture files it borrows; each worker may prepare one material at a time, keeping
+/// decoded pixel memory bounded. A group's program, constants and textures are its material's `core.shader_binding`
+/// (`resolve-fromsoft-shaders`), read from the world when the group is prepared.
 #[derive(Debug)]
 pub struct AreaBake<'a> {
     pub groups: Vec<MaterialGroups>,
-    shaders: &'a Payloads,
     payloads: &'a Payloads,
 }
 /// Nothing, for a world without the resource.
@@ -20,52 +21,94 @@ static EMPTY: Payloads = BTreeMap::new();
 impl<'a> AreaBake<'a> {
     /// Group the layered parts of a world's placed prototypes by bake inputs, over the world's own source data.
     pub fn from_world(world: &'a World) -> Result<Self> {
-        let shaders = world.resource::<ShaderPrograms>().map_or(&EMPTY, |s| &s.0);
         let payloads = world.resource::<TexturePayloads>().map_or(&EMPTY, |p| &p.0);
-        Self::with_sources(world, shaders, payloads)
+        Self::with_sources(world, payloads)
     }
-    /// The same over source data held apart from `world`.
-    pub fn with_sources(world: &World, shaders: &'a Payloads, payloads: &'a Payloads) -> Result<Self> {
+    /// The same over texture files held apart from `world`.
+    pub fn with_sources(world: &World, payloads: &'a Payloads) -> Result<Self> {
         let mut groups = groups(world)?;
         for group in &mut groups {
             let material = group.material.layered.as_ref().expect("layered group");
-            let prepared =
-                crate::layer_bake::Prepared::new(program(shaders, material)?, material, 0., |_, _| Ok(None))?;
-            group.period = prepared.period;
-            group.period_exact = prepared.period_exact;
+            let (shader, _) = Self::bound(world, group)?;
+            (group.period, group.period_exact) =
+                crate::layer_bake::sampled_period(&shader.interface, material)?;
         }
-        Ok(Self {
-            groups,
-            shaders,
-            payloads,
-        })
+        Ok(Self { groups, payloads })
+    }
+    /// A group's program and its pixel stage binding, from its material entity.
+    fn bound(world: &World, group: &MaterialGroups) -> Result<(primase_dxbc::Shader, StageBinding)> {
+        let binding = world.get::<ShaderBinding>(group.entity).ok_or_else(|| {
+            invalid(
+                "area bake",
+                0,
+                "a layered material without core.shader_binding (resolve-fromsoft-shaders runs first)",
+            )
+        })?;
+        let stage = binding
+            .stage(Stage::Pixel)
+            .ok_or_else(|| invalid("area bake", 0, "a layered material without a pixel stage binding"))?;
+        let program = world.get::<ShaderProgram>(stage.shader).ok_or_else(|| {
+            invalid(
+                "area bake",
+                0,
+                "a pixel stage whose shader entity has no core.shader",
+            )
+        })?;
+        let shader = primase_dxbc::Shader {
+            program: primase_dxbc::Program::parse(&program.bytecode)
+                .map_err(|e| invalid("layer DXBC", e.word * 4, e.detail))?,
+            interface: program.interface.clone(),
+        };
+        Ok((shader, stage.clone()))
     }
     /// A group's program bound to its materials' inputs, sampled at `sample_time` seconds.
-    pub fn prepare(&self, group: usize, sample_time: f32) -> Result<crate::layer_bake::Prepared> {
+    pub fn prepare(
+        &self,
+        world: &World,
+        group: usize,
+        sample_time: f32,
+    ) -> Result<crate::layer_bake::Prepared> {
+        use primase_core::Texture;
         use primase_texcodec::TexDecoder;
-        let material = self
+        let g = self
             .groups
             .get(group)
-            .and_then(|g| g.material.layered.as_ref())
             .ok_or_else(|| invalid("area bake", group, "group index"))?;
-        crate::layer_bake::Prepared::new(
-            program(self.shaders, material)?,
+        let material = g
+            .material
+            .layered
+            .as_ref()
+            .ok_or_else(|| invalid("area bake", group, "group index"))?;
+        let (shader, stage) = Self::bound(world, g)?;
+        let view = |t: &Texture, srgb: bool| -> Result<Arc<crate::layer_bake::BaseMipBilinearWrap>> {
+            let level = t
+                .levels
+                .first()
+                .ok_or_else(|| invalid("area bake pixels", 0, "a texture without a base mip"))?;
+            let pixels = primase_texcodec::Decoder::default()
+                .decode_rgba8(t.format, t.width, t.height, level)
+                .map_err(|e| invalid("area bake pixels", 0, e))?;
+            Ok(Arc::new(crate::layer_bake::BaseMipBilinearWrap::new(
+                t.width, t.height, &pixels, srgb,
+            )?))
+        };
+        crate::layer_bake::Prepared::from_binding(
+            shader,
+            &stage,
             material,
-            sample_time,
+            &crate::layer_bake::FrozenFrame::static_bake(sample_time),
+            |entity: Entity, srgb| {
+                let t = world.get::<Texture>(entity).ok_or_else(|| {
+                    invalid("area bake", group, "a bound texture entity without core.texture")
+                })?;
+                view(t, srgb)
+            },
             |name, srgb| {
                 let Some(bytes) = self.payloads.get(name) else {
                     return Ok(None);
                 };
                 let texture = primase_dds::read(bytes).map_err(|e| invalid("area bake DDS", 0, e))?;
-                let pixels = primase_texcodec::Decoder::default()
-                    .decode_rgba8(texture.format, texture.width, texture.height, &texture.levels[0])
-                    .map_err(|e| invalid("area bake pixels", 0, e))?;
-                Ok(Some(Arc::new(crate::layer_bake::BaseMipBilinearWrap::new(
-                    texture.width,
-                    texture.height,
-                    &pixels,
-                    srgb,
-                )?)))
+                view(&texture, srgb).map(Some)
             },
         )
     }
@@ -73,6 +116,9 @@ impl<'a> AreaBake<'a> {
 
 #[derive(Debug, serde::Serialize)]
 pub struct MaterialGroups {
+    /// The first material entity of the group, whose `core.shader_binding` the group's bake uses (the group's
+    /// materials differ at most in raw GX, which no binding reads).
+    pub entity: Entity,
     pub material: Material,
     pub centers: Vec<Features>,
     pub parts: Vec<PartGroups>,
@@ -84,14 +130,6 @@ pub struct PartGroups {
     pub prototype: String,
     pub part: usize,
     pub assignments: Vec<usize>,
-}
-
-fn program<'a>(programs: &'a Payloads, material: &crate::materials::LayeredMaterial) -> Result<&'a [u8]> {
-    let name = material.program_name()?;
-    programs
-        .get(&name)
-        .map(|b| &b[..])
-        .ok_or_else(|| invalid("layer shader", 0, format!("missing {name}")))
 }
 
 // This is the static bake-input equivalence relation, not source-material
@@ -184,13 +222,13 @@ pub fn groups(world: &World) -> Result<Vec<MaterialGroups>> {
         let mut weights = Vec::new();
         let mut spans = Vec::new();
         let mut first = None;
+        let mut first_entity = None;
         for (id, e, part) in parts {
             let primitive = &world.get::<Mesh>(*e).expect("listed prototype").primitives()[*part];
-            let material = primitive
-                .material
-                .and_then(|m| world.get::<Material>(m))
-                .expect("layered part");
+            let material_entity = primitive.material.expect("layered part");
+            let material = world.get::<Material>(material_entity).expect("layered part");
             first.get_or_insert_with(|| material.clone());
+            first_entity.get_or_insert(material_entity);
             let layer = vertex_inputs(primitive, material.shader.starts_with("M[MultipleGround]"))?;
             let positions = primitive
                 .positions()
@@ -222,6 +260,7 @@ pub fn groups(world: &World) -> Result<Vec<MaterialGroups>> {
         }
         let groups = grouping::cluster(&features, &weights)?;
         output.push(MaterialGroups {
+            entity: first_entity.expect("nonempty group"),
             material: first.expect("nonempty group"),
             centers: groups.centers,
             period: [1.; 2],

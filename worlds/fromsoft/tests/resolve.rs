@@ -383,3 +383,56 @@ fn the_unbound_textures_option_is_required_and_named() {
         .to_string();
     assert!(e.contains("not preview or leave"), "{e}");
 }
+
+/// The bake reads the binding: a frozen frame gives the engine's roles their values, the material's words reach the
+/// program, and what is left is counted. The fixture writes the sum of its frame constants to the second output's x,
+/// so the frozen time and exposure show in the bake's gloss: 0 (colour slot) + 1.5 (time) + 0 (time of day, left at
+/// zero) + 1 (unit exposure).
+#[test]
+fn the_bake_binds_a_frozen_frame_to_the_roles() {
+    use primase_fromsoft::layer_bake::{BaseMipBilinearWrap, FrozenFrame, Inputs, Prepared};
+    let shader = primase_dxbc::Shader::parse(PROGRAM).unwrap();
+    let mut world = World::default();
+    let (program, grass) = (world.spawn(), world.spawn());
+    let layered = material();
+    let stage = resolve(&shader, program, &layered, Unbound::Preview, &mut |stem, _| {
+        Ok((stem == "grass_a").then_some(grass))
+    })
+    .unwrap()
+    .stage;
+    let view = || -> primase_fromsoft::Result<_> {
+        Ok(std::sync::Arc::new(BaseMipBilinearWrap::new(
+            2, 2, &[200; 16], true,
+        )?))
+    };
+    let prepared = Prepared::from_binding(
+        shader,
+        &stage,
+        &layered,
+        &FrozenFrame::static_bake(1.5),
+        |_, srgb| {
+            assert!(srgb, "the albedo is the only bound texture");
+            view()
+        },
+        |_, _| Ok(None),
+    )
+    .unwrap();
+    for (policy, count) in [
+        ("global time at the program's sample time", 1),
+        ("unit pre-exposure for static material bake", 1),
+        ("time of day left at frozen zero", 1),
+        ("missing SAT parameter left at frozen zero", 1),
+        ("preview default for missing NormalMap binding", 1),
+        ("opaque alpha because main albedo is missing", 1),
+        // 96 words are read: 44 of the engine's (all set but the time of day) and 52 of the material's (two
+        // registers' tiling, the scale, the colour with its padding lane)
+        (
+            "buffer words left at frozen zero (including padding and unused fields)",
+            1 + 38,
+        ),
+    ] {
+        assert_eq!(prepared.policies.get(policy), Some(&count), "{policy}");
+    }
+    let bake = prepared.bake(2, [1.; 2], Inputs::default()).unwrap();
+    assert_eq!(bake.gloss, Some(vec![2.5; 4]));
+}

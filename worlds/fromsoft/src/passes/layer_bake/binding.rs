@@ -1,10 +1,12 @@
 use super::BaseMipBilinearWrap;
-use crate::{Result, invalid, materials::LayeredMaterial, mtd::Value};
-use primase_dxbc::Shader;
-use primase_shader::{
-    Constants, Field, Grid, Input, Interface, Invocation, Lane, Layout, Resource, ResourceKind, Texture,
-    TextureDim, evaluate_raw,
+use super::resolve::{self, Unbound, resolve, textures_of};
+use crate::{Result, invalid, materials::LayeredMaterial};
+use primase_core::Entity;
+use primase_core::shader::{
+    ConstantRole, FrameParameter, ObjectParameter, StageBinding, TextureSource, ViewParameter,
 };
+use primase_dxbc::Shader;
+use primase_shader::{Constants, Grid, Input, Interface, Invocation, Lane, Layout, Texture, evaluate_raw};
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Frozen per-vertex input for one baked layer-weight group. Choosing groups
@@ -78,39 +80,67 @@ fn dxbc(e: primase_dxbc::Error) -> crate::Error {
 fn evaluation(e: primase_shader::Error) -> crate::Error {
     invalid("layer bake", e.at, e.detail)
 }
-/// The texture resources of a program's interface.
-fn textures_of(interface: &Interface) -> impl Iterator<Item = &Resource> {
-    interface
-        .resources
-        .iter()
-        .filter(|r| matches!(r.kind, ResourceKind::Texture { .. }))
+
+/// What a static bake freezes of the engine's per-view, per-frame and per-object values: the roles a binding states
+/// ([`ConstantRole`]) and never values. These are the bake's choices, reported as policies when a binding reads them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrozenFrame {
+    /// Seconds of global time (`Frame(Time)`), which scrolls some layers' texture coordinates.
+    pub time: f32,
+    /// `Frame(Exposure)`: material radiance is baked at unit exposure, not a runtime camera's pre-exposure.
+    pub exposure: f32,
+    /// `Frame(AlbedoTint)`: white.
+    pub albedo_tint: [f32; 4],
+    /// `Frame(ColourSlot)`: the first.
+    pub colour_slot: f32,
+    /// `View(CameraPosition)`: overhead.
+    pub camera_position: [f32; 4],
+    /// `View(InverseViewProjection)`: zero but for the last element.
+    pub inverse_view_projection: [f32; 16],
+    /// `Object(World)`: identity, as three rows of four.
+    pub world: [f32; 12],
+    /// `Object(InstanceColour)`: white.
+    pub instance_colour: [f32; 4],
 }
-fn slot_name(kind: &str) -> Option<(u32, &str)> {
-    let rest = kind.rsplit_once("Texture2D_")?.1;
-    let (slot, role) = rest.split_once('_')?;
-    Some((slot.parse().ok()?, role.split('_').next()?))
-}
-fn declared_role(material: &LayeredMaterial, slot: u32) -> Result<&str> {
-    let mut role = None;
-    for texture in &material.definition.textures {
-        if let Some((index, found)) = slot_name(&texture.kind)
-            && index == slot
-        {
-            if role.is_some_and(|r| r != found) {
-                return Err(invalid("layer binding", 0, "conflicting declared texture roles"));
-            }
-            role = Some(found);
+impl FrozenFrame {
+    /// The static bake's frame, its global time `time` seconds.
+    pub fn static_bake(time: f32) -> Self {
+        let mut inverse_view_projection = [0.; 16];
+        inverse_view_projection[15] = 1.;
+        Self {
+            time,
+            exposure: 1.,
+            albedo_tint: [1.; 4],
+            colour_slot: 0.,
+            camera_position: [0., 1000., 0., 1.],
+            inverse_view_projection,
+            world: [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.],
+            instance_colour: [1.; 4],
         }
     }
-    Ok(role.unwrap_or("?"))
 }
+
+/// The program's common repeat over the UV scales of the texture slots it samples that the material binds, and
+/// whether it is exact ([`super::period::common_period`]).
+pub(crate) fn sampled_period(interface: &Interface, material: &LayeredMaterial) -> Result<([f32; 2], bool)> {
+    let slots = resolve::slots(material)?;
+    let sampled_scales: Vec<_> = textures_of(interface)
+        .filter_map(|r| resolve::texture_slot(r).ok())
+        .filter_map(|slot| slots.get(&slot).map(|(_, b)| b.scale))
+        .collect();
+    let main_scale = slots
+        .get(&8)
+        .map(|(_, b)| b.scale)
+        .or_else(|| sampled_scales.first().copied())
+        .unwrap_or([1.; 2]);
+    super::period::common_period(&sampled_scales, main_scale)
+}
+
 impl Prepared {
-    /// Frozen-frame preview binding: caller supplies decoded views by texture
-    /// name and sRGB flag. Missing slots use explicitly counted preview defaults;
-    /// no missing resource is silently supplied by the generic interpreter.
-    /// A program that reads the global time (`FC_GlobalTime`, which scrolls
-    /// some layers' texture coordinates) is sampled at `sample_time` seconds,
-    /// counted; the time of day stays at frozen zero, counted where reflected.
+    /// Frozen-frame preview binding of a layered material straight from its source: resolves the program's binding
+    /// ([`resolve`], unbound slots given their counted preview colours) and binds it ([`Prepared::from_binding`]).
+    /// The caller supplies decoded views by texture name and sRGB flag. A program that reads the global time
+    /// (`FC_GlobalTime`, which scrolls some layers' texture coordinates) is sampled at `sample_time` seconds.
     pub fn new(
         bytes: &[u8],
         material: &LayeredMaterial,
@@ -118,6 +148,53 @@ impl Prepared {
         mut image: impl FnMut(&str, bool) -> Result<Option<Arc<BaseMipBilinearWrap>>>,
     ) -> Result<Self> {
         let shader = Shader::parse(bytes).map_err(dxbc)?;
+        // the textures stand as entities of a scratch world, each with the view the caller decoded
+        let mut scratch = primase_core::World::default();
+        let program = scratch.spawn();
+        let mut views: BTreeMap<Entity, Arc<BaseMipBilinearWrap>> = BTreeMap::new();
+        let mut known: BTreeMap<(String, bool), Option<Entity>> = BTreeMap::new();
+        let resolution = resolve(&shader, program, material, Unbound::Preview, &mut |stem, srgb| {
+            let key = (stem.to_owned(), srgb);
+            if let Some(found) = known.get(&key) {
+                return Ok(*found);
+            }
+            let found = image(stem, srgb)?.map(|view| {
+                let e = scratch.spawn();
+                views.insert(e, view);
+                e
+            });
+            known.insert(key, found);
+            Ok(found)
+        })?;
+        Self::from_binding(
+            shader,
+            &resolution.stage,
+            material,
+            &FrozenFrame::static_bake(sample_time),
+            |texture, _| {
+                views
+                    .get(&texture)
+                    .cloned()
+                    .ok_or_else(|| invalid("layer binding", 0, "a texture the caller did not supply"))
+            },
+            image,
+        )
+    }
+
+    /// The bake of a layered material from its pixel stage's binding (`core.shader_binding`): the constants as their
+    /// roles say (the material's own words as stored, the engine's values from `frame`, counted when a policy
+    /// applies, an unknown one left at zero, counted by its reason), each texture slot as bound (`texture` decodes a
+    /// texture entity, `true` for the sRGB colour layers; a default is its constant), and the outputs by their roles.
+    /// The material source gives what a shader does not read: the main albedo's alpha (`stem` decodes a texture file
+    /// by name), the shader family the bake supports and the sampled layers' UV scales.
+    pub fn from_binding(
+        shader: Shader,
+        stage: &StageBinding,
+        material: &LayeredMaterial,
+        frame: &FrozenFrame,
+        mut texture: impl FnMut(Entity, bool) -> Result<Arc<BaseMipBilinearWrap>>,
+        mut stem: impl FnMut(&str, bool) -> Result<Option<Arc<BaseMipBilinearWrap>>>,
+    ) -> Result<Self> {
         let (program, interface) = (&shader.program, &shader.interface);
         let leaf = material
             .definition
@@ -132,7 +209,9 @@ impl Prepared {
         ) {
             return Err(invalid("layer binding", 0, "unsupported layered shader family"));
         }
-        let prefix = format!("{}_snp_", family.replace(['[', ']'], "_"));
+        if !frame.time.is_finite() {
+            return Err(invalid("layer binding", 0, "nonfinite sample time"));
+        }
         let mut policies = BTreeMap::from([
             (
                 "frozen identity world, white instance colour and overhead camera".into(),
@@ -152,201 +231,103 @@ impl Prepared {
             .map(|&(slot, rows)| (slot, rows as usize * 4))
             .collect();
         let mut constants = Constants::new(&layout);
-        // a field's words from `word` on, those inside a buffer the program reads (the program reads no others)
-        let mut set = |name: &str, word: usize, values: &[f32]| {
-            if let Some(&Field {
-                buffer: slot,
-                offset: at,
-                ..
-            }) = layout.fields.get(name)
-                && let Some(&n) = words.get(&slot)
-            {
-                let start = at as usize + word;
-                let bits: Vec<u32> = values
-                    .iter()
-                    .take(n.saturating_sub(start))
-                    .map(|v| v.to_bits())
-                    .collect();
-                if !bits.is_empty() {
-                    constants
-                        .set_words(slot, start as u32, &bits)
-                        .expect("words inside a buffer the program reads");
+        for c in &stage.constants {
+            let slot =
+                resolve::register(interface.resource(c.resource).ok_or_else(|| {
+                    invalid("layer binding", 0, "a constant of a resource the shader lacks")
+                })?)?;
+            let bits = |values: &[f32]| -> Vec<u32> { values.iter().map(|v| v.to_bits()).collect() };
+            let mut values = match &c.role {
+                ConstantRole::Material(words) => words.clone(),
+                ConstantRole::View(ViewParameter::CameraPosition) => bits(&frame.camera_position),
+                ConstantRole::View(ViewParameter::InverseViewProjection) => {
+                    bits(&frame.inverse_view_projection)
                 }
-            }
-        };
-        let mut slots = BTreeMap::new();
-        // Numeric-slot ties prefer the MTD declaration, retaining other bindings
-        // in the source LayeredMaterial for later policies.
-        for (kind, binding) in &material.bindings {
-            if !binding.scale.iter().all(|v| v.is_finite()) {
-                return Err(invalid("layer binding", 0, "nonfinite texture scale"));
-            }
-            if let Some((slot, role)) = slot_name(kind) {
-                let declared = material.definition.textures.iter().any(|t| t.kind == *kind);
-                if !slots.contains_key(&slot) || declared {
-                    slots.insert(slot, (role, binding));
+                ConstantRole::Object(ObjectParameter::World) => bits(&frame.world),
+                ConstantRole::Object(ObjectParameter::InstanceColour) => bits(&frame.instance_colour),
+                ConstantRole::Frame(FrameParameter::AlbedoTint) => bits(&frame.albedo_tint),
+                ConstantRole::Frame(FrameParameter::ColourSlot) => bits(&[frame.colour_slot]),
+                ConstantRole::Frame(FrameParameter::Time) => {
+                    policies.insert("global time at the program's sample time".into(), 1);
+                    bits(&[frame.time])
                 }
-            }
-        }
-        let mut textures = BTreeMap::new();
-        let sampled_scales: Vec<_> = textures_of(interface)
-            .filter_map(|r| r.provenance.name.rsplit_once("Texture2D_")?.1.parse::<u32>().ok())
-            .filter_map(|slot| slots.get(&slot).map(|(_, b)| b.scale))
-            .collect();
-        let main_scale = slots
-            .get(&8)
-            .map(|(_, b)| b.scale)
-            .or_else(|| sampled_scales.first().copied())
-            .unwrap_or([1.; 2]);
-        let (period, period_exact) = super::period::common_period(&sampled_scales, main_scale)?;
-        let mut cache = BTreeMap::<(String, bool), Option<Arc<BaseMipBilinearWrap>>>::new();
-        let mut largest_colour_dimension = 0;
-        for resource in textures_of(interface) {
-            let ResourceKind::Texture {
-                dim,
-                arrayed,
-                multisampled,
-                ..
-            } = resource.kind
-            else {
-                unreachable!("textures_of yields textures")
-            };
-            if resource.count != 1 || dim != TextureDim::D2 || arrayed || multisampled {
-                return Err(invalid(
-                    "layer binding",
-                    0,
-                    "only individual Texture2D resources are supported",
-                ));
-            }
-            let register = resource
-                .provenance
-                .d3d
-                .ok_or_else(|| invalid("layer binding", 0, "a texture without a D3D register"))?
-                .register;
-            let slot = resource
-                .provenance
-                .name
-                .rsplit_once("Texture2D_")
-                .and_then(|(_, s)| s.parse::<u32>().ok())
-                .ok_or_else(|| {
-                    invalid(
+                ConstantRole::Frame(FrameParameter::Exposure) => {
+                    policies.insert("unit pre-exposure for static material bake".into(), 1);
+                    bits(&[frame.exposure])
+                }
+                ConstantRole::Frame(FrameParameter::TimeOfDay) => {
+                    policies.insert("time of day left at frozen zero".into(), 1);
+                    continue;
+                }
+                ConstantRole::Unknown { why } => {
+                    *policies.entry(why.clone()).or_default() += 1;
+                    continue;
+                }
+                other => {
+                    return Err(invalid(
                         "layer binding",
                         0,
-                        format!("unrecognized texture binding {}", resource.provenance.name),
-                    )
-                })?;
-            // A declared slot retains its semantic role even without a path.
-            // In particular an unbound normal uses the named flat-normal
-            // preview default, not the unknown-resource zero default.
-            let fallback_role = declared_role(material, slot)?;
-            let (role, binding) = slots
+                        format!("no frozen value for {other:?}"),
+                    ));
+                }
+            };
+            // the words inside a buffer the program reads (it reads no others)
+            let Some(&n) = words.get(&slot) else {
+                continue;
+            };
+            let start = c.offset as usize / 4;
+            values.truncate((c.size as usize / 4).min(n.saturating_sub(start)));
+            if !values.is_empty() {
+                constants
+                    .set_words(slot, start as u32, &values)
+                    .expect("words inside a buffer the program reads");
+            }
+        }
+        let slots = resolve::slots(material)?;
+        let (period, period_exact) = sampled_period(interface, material)?;
+        let mut textures = BTreeMap::new();
+        let mut cache = BTreeMap::<(Entity, bool), Arc<BaseMipBilinearWrap>>::new();
+        let mut largest_colour_dimension = 0;
+        for bound in &stage.textures {
+            let resource = interface
+                .resource(bound.resource)
+                .ok_or_else(|| invalid("layer binding", 0, "a texture the shader lacks"))?;
+            let register = resolve::register(resource)?;
+            let slot = resolve::texture_slot(resource)?;
+            let role = slots
                 .get(&slot)
-                .map_or((fallback_role, None), |(role, b)| (*role, Some(*b)));
-            let mut source = None;
-            if let Some(b) = binding {
-                let key = (b.texture.clone(), role == "AlbedoMap");
-                if !cache.contains_key(&key) {
-                    cache.insert(key.clone(), image(&key.0, key.1)?);
+                .map_or_else(|| resolve::declared_role(material, slot), |(role, _)| Ok(*role))?;
+            let source = match &bound.source {
+                TextureSource::Texture { texture: entity, .. } => {
+                    let key = (*entity, role == "AlbedoMap");
+                    let image = match cache.entry(key) {
+                        std::collections::btree_map::Entry::Occupied(found) => found.into_mut(),
+                        std::collections::btree_map::Entry::Vacant(slot) => {
+                            slot.insert(texture(key.0, key.1)?)
+                        }
+                    };
+                    if key.1 {
+                        largest_colour_dimension = largest_colour_dimension
+                            .max(*image.dimensions().iter().max().expect("two axes") as u32);
+                    }
+                    Texture::Image(image.clone() as Arc<dyn primase_shader::Image>)
                 }
-                source = cache[&key]
-                    .clone()
-                    .map(|t| Texture::Image(t as Arc<dyn primase_shader::Image>));
-                if role == "AlbedoMap"
-                    && let Some(t) = &cache[&key]
-                {
-                    largest_colour_dimension =
-                        largest_colour_dimension.max(*t.dimensions().iter().max().expect("two axes") as u32);
+                TextureSource::Default { value, why } => {
+                    *policies.entry(why.clone()).or_default() += 1;
+                    Texture::Constant(*value)
                 }
-                set(
-                    "FC_TextureTilingScale",
-                    register as usize * 4,
-                    &[b.scale[0], b.scale[1], 0., 0.],
-                );
-            } else {
-                set("FC_TextureTilingScale", register as usize * 4, &[1., 1., 0., 0.]);
-            }
-            if source.is_none() {
-                *policies
-                    .entry(format!("preview default for missing {role} binding"))
-                    .or_default() += 1;
-                source = Some(Texture::Constant(match role {
-                    "AlbedoMap" => [0.5, 0.5, 0.5, 1.],
-                    "NormalMap" => [0.5, 0.5, 1., 1.],
-                    _ => [0.; 4],
-                }));
-            }
-            textures.insert(register, source.expect("explicit default"));
+                TextureSource::Missing => continue,
+            };
+            textures.insert(register, source);
         }
         for &slot in program.textures() {
             if !textures.contains_key(&slot) {
                 return Err(invalid(
                     "layer binding",
                     0,
-                    format!("t{slot} has no named resource"),
+                    format!("t{slot} has no texture bound"),
                 ));
             }
-        }
-        set("FC_DifMapMulCol", 0, &[1.; 4]);
-        set("mWorld", 0, &[1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.]);
-        set("aColor", 0, &[1.; 4]);
-        set("FC_ColorSlotNo", 0, &[0.]);
-        set(
-            "FC_MatrixInvViewProj",
-            0,
-            &[0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1.],
-        );
-        set("SC_RenderCameraPos", 0, &[0., 1000., 0., 1.]);
-        if !sample_time.is_finite() {
-            return Err(invalid("layer binding", 0, "nonfinite sample time"));
-        }
-        set("FC_GlobalTime", 0, &[sample_time]);
-        if layout.fields.contains_key("FC_GlobalTime") {
-            policies.insert("global time at the program's sample time".into(), 1);
-        }
-        if layout.fields.contains_key("FC_TimeOfDay") {
-            policies.insert("time of day left at frozen zero".into(), 1);
-        }
-        // Material radiance is baked at unit exposure, not a runtime camera's
-        // pre-exposure. Otherwise zero-initialized constants suppress emission.
-        set("SC_PreExposure", 0, &[1.]);
-        if layout.fields.contains_key("SC_PreExposure") {
-            policies.insert("unit pre-exposure for static material bake".into(), 1);
-        }
-        for name in layout
-            .fields
-            .keys()
-            .filter(|n| n.starts_with(&prefix) && !n.ends_with("_PADDING"))
-        {
-            let Some(param) = material.definition.parameters.iter().find(|p| p.name == *name) else {
-                *policies
-                    .entry("missing SAT parameter left at frozen zero".into())
-                    .or_default() += 1;
-                continue;
-            };
-            let mut values = match &param.value {
-                Value::Bool(b) => vec![u8::from(*b) as f32],
-                Value::Int(v) => v.iter().map(|&i| i as f32).collect(),
-                Value::Float(v) => v.clone(),
-            };
-            if name.contains("_color_") {
-                let intensity = material
-                    .definition
-                    .parameters
-                    .iter()
-                    .find(|p| p.name == format!("{name}-Intensity"))
-                    .and_then(|p| match &p.value {
-                        Value::Float(v) => v.first().copied(),
-                        _ => None,
-                    })
-                    .unwrap_or(1.);
-                for v in values.iter_mut().take(3) {
-                    *v *= intensity;
-                }
-                if values.len() == 3 {
-                    values.push(1.);
-                }
-            }
-            set(name, 0, &values);
         }
         policies.insert(
             "buffer words left at frozen zero (including padding and unused fields)".into(),
@@ -357,26 +338,24 @@ impl Prepared {
             .filter(|(_, (role, _))| *role == "AlbedoMap")
             .min_by_key(|(slot, _)| (**slot != 8, **slot));
         let mut alpha = None;
-        if let Some((_, (_, binding))) = main {
-            let key = (binding.texture.clone(), true);
-            if !cache.contains_key(&key) {
-                cache.insert(key.clone(), image(&key.0, true)?);
-            }
-            if let Some(t) = cache[&key].clone() {
-                alpha = Some((
-                    t,
-                    if binding.scale.iter().all(|&v| v > 0.) {
-                        binding.scale
-                    } else {
-                        [1.; 2]
-                    },
-                ));
-            }
+        let mut alpha_bytes = 0;
+        if let Some((_, (_, binding))) = main
+            && let Some(t) = stem(&binding.texture, true)?
+        {
+            alpha_bytes = t.decoded_bytes();
+            alpha = Some((
+                t,
+                if binding.scale.iter().all(|&v| v > 0.) {
+                    binding.scale
+                } else {
+                    [1.; 2]
+                },
+            ));
         }
         if alpha.is_none() {
             policies.insert("opaque alpha because main albedo is missing".into(), 1);
         }
-        let decoded_bytes = cache.values().flatten().map(|t| t.decoded_bytes()).sum();
+        let decoded_bytes = cache.values().map(|t| t.decoded_bytes()).sum::<usize>() + alpha_bytes;
         Ok(Self {
             shader,
             constants,

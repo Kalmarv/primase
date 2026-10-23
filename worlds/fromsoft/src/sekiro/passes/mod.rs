@@ -20,6 +20,7 @@ pub mod pbr;
 pub(super) mod reflectance;
 pub mod resolve_shaders;
 pub mod settings;
+pub use crate::layer_bake::resolve::Unbound;
 use crate::rigid::ApplyRigidSkinning;
 pub use crate::sekiro::components::lowered::UvTiling;
 pub use bake::BakeFromSoftLayers;

@@ -120,6 +120,7 @@ fn main() -> Result<()> {
             Box::new(LowerFromSoftGeometry { pose: Pose::Rigid, uv_tiling: Tiling::Apply, winding: Winding::Normals,
                 degenerates: Degenerates::Drop, leave_out: skip, blocker_cards: Cards::Record }),
             Box::new(SelectLod { choice: LodChoice::Finest }),
+            Box::new(ResolveFromSoftShaders::new(Unbound::Preview)),
             Box::new(BakeFromSoftLayers::new(PixelCap::new(512)?, Seconds::new(0.0)?)),
             Box::new(LowerFromSoftMaterials::new(None)),
             Box::new(LowerFromSoftLights::new(Factor::new(1.0)?, Fraction::new(0.15)?).with_min_range(Metres::new(0.5)?)),

@@ -137,7 +137,7 @@ pub(super) fn assemble(
     let mut replaced_materials = BTreeSet::new();
     let mut variants = BTreeMap::new();
     for (group_index, group) in bake.groups.iter().enumerate() {
-        let prepared = bake.prepare(group_index, sample_time)?;
+        let prepared = bake.prepare(world, group_index, sample_time)?;
         let size = prepared.bake_size(max_size)?;
         let mut templates = Vec::new();
         for (level, center) in group.centers.iter().enumerate() {

@@ -3,12 +3,14 @@ use super::settings::{PixelCap, Seconds};
 use crate::materials::{self, Material};
 use crate::sekiro::source::{LayerInputs, PrototypeSource};
 use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::shader::ShaderBinding;
 use primase_core::{Component, Entity, Instance, Lods, Mesh, World};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// `bake-fromsoft-layers{max-size=N,sample-time=S}`: bake the static layered materials of the placed lowered
 /// prototypes (a `fromsoft.material` with a layered definition, drawn by primitives carrying `fromsoft.layer_inputs`)
-/// into core PBR from the source programs and texture files the reader kept. Each material group's triangles are
+/// into core PBR from each material's `core.shader_binding` (`resolve-fromsoft-shaders` first: its program, constants and
+/// textures) and the texture files the reader kept. Each material group's triangles are
 /// reduced to their mean inputs, clustered into at most three constant levels, and each level's shader evaluated
 /// into albedo, normal, gloss (ORM) and HDR emission images at the group's reference size capped at `max-size`, sampled
 /// from base mips with bilinear wrapping in a static frame (unit pre-exposure, fixed camera, the global time at
@@ -72,7 +74,7 @@ impl Pass for BakeFromSoftLayers {
         ])
     }
     fn requires(&self) -> &[&'static str] {
-        &[Material::NAME, LayerInputs::NAME]
+        &[Material::NAME, LayerInputs::NAME, ShaderBinding::NAME]
     }
     fn provides(&self) -> &[&'static str] {
         &[
@@ -96,7 +98,7 @@ impl Pass for BakeFromSoftLayers {
         "layer inputs as constant per-triangle levels; base-mip bilinear-wrap sampling; static frame at the sample time"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
-        use crate::sekiro::source::{ShaderPrograms, TexturePayloads};
+        use crate::sekiro::source::TexturePayloads;
         // the meshes it bakes: placed source prototypes'; inputs elsewhere are refused (a form) or left (unplaced)
         let placed: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
         let forms: BTreeSet<Entity> = world
@@ -121,25 +123,19 @@ impl Pass for BakeFromSoftLayers {
         }
         // lent read-only while the world changes, then put back as they were: borrowed, not written
         let none = BTreeMap::new();
-        let result = world.resource_scope::<ShaderPrograms, _>(|world, shaders| {
-            world.resource_scope::<TexturePayloads, _>(|world, payloads| {
-                let bake = super::layers::AreaBake::with_sources(
-                    world,
-                    shaders.map_or(&none, |s| &s.0),
-                    payloads.map_or(&none, |p| &p.0),
-                )?;
-                let prototypes: BTreeMap<String, Entity> = world
-                    .iter::<PrototypeSource>()
-                    .map(|(e, s)| (s.id.clone(), e))
-                    .collect();
-                super::bake_assembly::assemble(
-                    &bake,
-                    &prototypes,
-                    self.max_size.get(),
-                    self.sample_time.get(),
-                    world,
-                )
-            })
+        let result = world.resource_scope::<TexturePayloads, _>(|world, payloads| {
+            let bake = super::layers::AreaBake::with_sources(world, payloads.map_or(&none, |p| &p.0))?;
+            let prototypes: BTreeMap<String, Entity> = world
+                .iter::<PrototypeSource>()
+                .map(|(e, s)| (s.id.clone(), e))
+                .collect();
+            super::bake_assembly::assemble(
+                &bake,
+                &prototypes,
+                self.max_size.get(),
+                self.sample_time.get(),
+                world,
+            )
         });
         let (report, baked) = result.map_err(|e| e.to_string())?;
         // counted after the split: a part baked at k levels gives k primitives' streams
