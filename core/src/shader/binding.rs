@@ -104,6 +104,12 @@ pub enum ObjectParameter {
     MatrixBase,
     /// The instance's user clip plane (the vertex program's clip distance against it).
     ClipPlane,
+    /// Row `n` (0 or 1) of an animated affine transform of the first texture coordinate set, three values each:
+    /// `u' = dot(row 0, (u, v, 1))`, `v' = dot(row 1, (u, v, 1))`. Some models animate their textures this way.
+    TextureTransformRow(u8),
+    /// Where along the rows of a palette texture the instance's tint selects (x): the v the program samples the
+    /// palette at, the u being a vertex colour.
+    PaletteCoordinate,
     /// Whether the draw fades by the camera's distance, dithered (a flag the engine sets per draw): a program that reads it
     /// keeps a fragment where `distance * CameraFadeInverseRange - CameraFadeEnd` is not below the dither noise.
     CameraFadeEnabled,
@@ -132,6 +138,13 @@ pub enum FrameParameter {
     Exposure,
     /// An index into a palette of colours a draw selects from.
     ColourSlot,
+    /// The direction the dominant directional light travels (xyz): a surface is lit by `saturate(dot(normal, -xyz))`.
+    LightDirection,
+    /// The colour (rgb) of that light.
+    LightColour,
+    /// The colour (xyz) of the directional ambient light; its w scales the ambient terms a vertex carries, growing from
+    /// 1 (no change) with distance.
+    DirectionalAmbientColour,
 }
 
 /// What a constant of a buffer stands for.

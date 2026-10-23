@@ -55,10 +55,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
-    DepthState, Fill, InputBinding, InputRole, Interface, NormalEncoding, NormalSpace, ObjectMatrix,
-    ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState,
-    ScalarEncoding, Shader, ShaderBinding, Stage, StageBinding, Stencil, StencilFace, StencilOp, SystemValue,
-    TargetState, TextureBinding, TextureSource, ViewParameter,
+    DepthState, Fill, FrameParameter, InputBinding, InputRole, Interface, NormalEncoding, NormalSpace,
+    ObjectMatrix, ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind,
+    SamplerState, ScalarEncoding, Shader, ShaderBinding, Stage, StageBinding, Stencil, StencilFace,
+    StencilOp, SystemValue, TargetState, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
 
@@ -350,6 +350,13 @@ pub fn engine_role(name: &str) -> Option<ConstantRole> {
         )),
         "gViewInverse" => ConstantRole::View(ViewParameter::InverseView),
         "gPrevViewProj" => ConstantRole::View(ViewParameter::PreviousViewProjection),
+        "globalScreenSize" => ConstantRole::View(ViewParameter::ViewportSize),
+        "gDirectionalLight" => ConstantRole::Frame(FrameParameter::LightDirection),
+        "gDirectionalColour" => ConstantRole::Frame(FrameParameter::LightColour),
+        "gDirectionalAmbientColour" => ConstantRole::Frame(FrameParameter::DirectionalAmbientColour),
+        "globalAnimUV0" => ConstantRole::Object(ObjectParameter::TextureTransformRow(0)),
+        "globalAnimUV1" => ConstantRole::Object(ObjectParameter::TextureTransformRow(1)),
+        "tintPaletteSelector" => ConstantRole::Object(ObjectParameter::PaletteCoordinate),
         _ => return None,
     })
 }
@@ -690,6 +697,29 @@ fn output_bindings(
     outputs
 }
 
+/// Why an engine constant the programs read has no role, where the programs show something about it (what the vertex
+/// programs do with its lanes: `tests/engine_use.rs`).
+pub fn engine_reason(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "globalScalars2" => {
+            "engine frame scalars: lane y divides the clip depth of a see-through fade (VS_Transform_SeeThrough) and lane z is subtracted from a squared-distance fade of the vertex colour (VS_TransformD); no game-free meaning established"
+        }
+        "globalScalars" => {
+            "engine frame scalars: lanes y and z are passed on to the pixel stage (VS_decalFx); no game-free meaning established"
+        }
+        "gClothVertexStride" => {
+            "lane z: where non-zero, the vertex position is read from a structured buffer at (z * vertex index) >> 2 instead of the mesh stream (the cloth programs); that buffer is not in the vocabulary"
+        }
+        "gUIHDRParams" => {
+            "lanes x and y read by the same twelve cloth-capable vertex programs as gClothVertexStride; no game-free meaning established"
+        }
+        n if n.starts_with("gDynamicSamplerIndex_") => {
+            "a word of the sampler-heap index buffer (see sampler_use): the engine writes the heap index of the sampler it names; the state of a static sampler is stated on the texture binding"
+        }
+        _ => return None,
+    })
+}
+
 /// The role of one constant of a program's buffer.
 fn constant_role(
     inputs: &Inputs<'_>,
@@ -731,6 +761,16 @@ fn constant_role(
             }
         };
     }
+    // a constant the effect does not rename is the material's where the material stores a value under the program's own
+    // name (the hash is of the lowercase name, so `bumpiness` is the material's `Bumpiness`)
+    if let Some(GtaParam::Floats(v)) = inputs.param(c.name) {
+        counts.add(&format!(
+            "material parameters stored under the program's own name, bound to the material's stored words (constant buffer space {space})"
+        ));
+        let mut words = bits(v);
+        words.truncate(usize::try_from(bytes / 4).unwrap_or(0));
+        return ConstantRole::Material(words);
+    }
     match name.and_then(engine_role) {
         Some(role) => {
             counts.add("engine constants with a role");
@@ -739,10 +779,13 @@ fn constant_role(
         None => {
             counts.add("engine constants without a role, Unknown");
             ConstantRole::Unknown {
-                why: format!(
-                    "engine constant {}: no role resolved",
-                    name.unwrap_or("(unnamed)")
-                ),
+                why: match name.and_then(engine_reason) {
+                    Some(reason) => format!("engine constant {}: {reason}", name.unwrap_or_default()),
+                    None => format!(
+                        "engine constant {}: no role resolved",
+                        name.unwrap_or("(unnamed)")
+                    ),
+                },
             }
         }
     }
@@ -1472,7 +1515,21 @@ mod tests {
             engine_role("gPrevViewProj"),
             Some(ConstantRole::View(ViewParameter::PreviousViewProjection))
         );
-        assert_eq!(engine_role("gDirectionalLight"), None);
+        assert_eq!(
+            engine_role("gDirectionalLight"),
+            Some(ConstantRole::Frame(FrameParameter::LightDirection))
+        );
+        assert_eq!(
+            engine_role("globalScreenSize"),
+            Some(ConstantRole::View(ViewParameter::ViewportSize))
+        );
+        assert_eq!(
+            engine_role("globalAnimUV1"),
+            Some(ConstantRole::Object(ObjectParameter::TextureTransformRow(1)))
+        );
+        assert_eq!(engine_role("globalScalars2"), None);
+        assert!(engine_reason("globalScalars2").is_some());
+        assert_eq!(engine_role("gSomethingElse"), None);
     }
 
     #[test]
