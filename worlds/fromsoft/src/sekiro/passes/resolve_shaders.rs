@@ -4,7 +4,7 @@ use crate::layer_bake::resolve::{Unbound, render_state, resolve, resolve_vertex}
 use crate::materials::Material;
 use crate::metaparam::Metaparam;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::shader::{Interface, Shader, ShaderBinding, ShaderFormat};
 use primase_core::{ColorSpace, Component, Entity, Mesh, Name, Semantic, TexRole, Texture, World};
 use primase_shader_exec::PixelShader;
@@ -49,25 +49,22 @@ impl ResolveFromSoftShaders {
     pub fn unbound(&self) -> Unbound {
         self.unbound
     }
-
-    /// From its options (`unbound-textures` is required), through [`ResolveFromSoftShaders::new`].
-    pub fn from_options(o: &Options) -> Result<Self, String> {
-        let mut unbound = None;
-        for (k, v) in o {
-            unbound = match (k.as_str(), v.as_str()) {
-                ("unbound-textures", "preview") => Some(Unbound::Preview),
-                ("unbound-textures", "leave") => Some(Unbound::Leave),
-                ("unbound-textures", v) => {
-                    return Err(format!("unbound-textures={v} is not preview or leave"));
-                }
-                _ => return Err(format!("unknown option {k}")),
-            };
-        }
-        Ok(Self::new(unbound.ok_or(
-            "unbound-textures is required: what a texture slot with no texture reads is the program's choice",
-        )?))
-    }
 }
+
+/// `resolve-fromsoft-shaders`' declaration ([`primase_core::pass::PassRegistry::add`]): what a texture slot with no
+/// texture reads is the program's.
+pub const RESOLVE_FROMSOFT_SHADERS: PassSpec = PassSpec {
+    name: "resolve-fromsoft-shaders",
+    options: &[OptionSpec::choice::<Unbound>(
+        "unbound-textures",
+        "a texture slot with no texture reads a stated colour for its role (counted), or is left missing",
+    )],
+    make: |g| {
+        Ok(Box::new(ResolveFromSoftShaders::new(
+            g.choice("unbound-textures"),
+        )))
+    },
+};
 
 /// How the primitives of a world draw each material: `(unskinned, skinned)`, a primitive being skinned when it carries
 /// joint indices and weights (`Joints(0)` and `Weights(0)`): the mesh's own data, not a guess from a name.
@@ -111,14 +108,7 @@ impl Pass for ResolveFromSoftShaders {
         "resolve-fromsoft-shaders"
     }
     fn options(&self) -> Options {
-        Options::from([(
-            "unbound-textures".to_owned(),
-            match self.unbound {
-                Unbound::Preview => "preview",
-                Unbound::Leave => "leave",
-            }
-            .to_owned(),
-        )])
+        Options::from([("unbound-textures".to_owned(), self.unbound.text().to_owned())])
     }
     fn requires(&self) -> &[&'static str] {
         &[Material::NAME]

@@ -2,7 +2,7 @@
 use super::settings::{PixelCap, Seconds};
 use crate::materials::{self, Material};
 use crate::sekiro::source::{LayerInputs, PrototypeSource};
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::shader::ShaderBinding;
 use primase_core::{Component, Entity, Instance, Lods, Mesh, World};
 use std::collections::{BTreeMap, BTreeSet};
@@ -44,24 +44,33 @@ impl BakeFromSoftLayers {
         self.sample_time
     }
 
-    /// From its options (both required), through [`BakeFromSoftLayers::new`].
-    pub fn from_options(o: &Options) -> Result<Self, String> {
-        let mut max_size = None;
-        let mut sample_time = None;
-        for (k, v) in o {
-            match k.as_str() {
-                "max-size" => max_size = Some(PixelCap::parse(k, v)?),
-                "sample-time" => sample_time = Some(Seconds::parse(k, v)?),
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
+    /// From its declared options, through [`BakeFromSoftLayers::new`].
+    fn from_given(g: &Given) -> Result<Self, String> {
         Ok(BakeFromSoftLayers::new(
-            max_size.ok_or("max-size is required: the baked images' largest edge is the program's choice")?,
-            sample_time
-                .ok_or("sample-time is required: the frame of the animated layers is the program's choice")?,
+            PixelCap::parse("max-size", g.required("max-size"))?,
+            Seconds::parse("sample-time", g.required("sample-time"))?,
         ))
     }
 }
+
+/// `bake-fromsoft-layers`' declaration ([`primase_core::pass::PassRegistry::add`]): the baked images' largest edge
+/// and the frame of the animated layers are the program's.
+pub const BAKE_FROMSOFT_LAYERS: PassSpec = PassSpec {
+    name: "bake-fromsoft-layers",
+    options: &[
+        OptionSpec::required(
+            "max-size",
+            "512",
+            "pixels, 1 to 4096: the baked images' largest edge",
+        ),
+        OptionSpec::required(
+            "sample-time",
+            "0",
+            "seconds: the frame the animated layers are baked at",
+        ),
+    ],
+    make: |g| Ok(Box::new(BakeFromSoftLayers::from_given(g)?)),
+};
 
 impl Pass for BakeFromSoftLayers {
     fn name(&self) -> &'static str {

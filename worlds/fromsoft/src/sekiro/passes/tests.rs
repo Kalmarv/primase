@@ -584,17 +584,49 @@ fn object_collision_is_skipped_where_no_placed_model_has_collision() {
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v.to_owned()))
     .collect();
-    let pass = super::object_collision::LowerFromSoftObjectCollision::from_options(&options).unwrap();
+    let pass = super::object_collision::LOWER_FROMSOFT_OBJECT_COLLISION
+        .instance(&options)
+        .unwrap();
     let mut world = World::new();
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
-        .run_part(
-            &mut world,
-            &Pipeline {
-                passes: vec![Box::new(pass)],
-            },
-            &mut report,
-        )
+        .run_part(&mut world, &Pipeline { passes: vec![pass] }, &mut report)
         .unwrap();
     assert_eq!(report.steps[0].skipped, ["fromsoft.object_collision"]);
+}
+
+/// The crate registers exactly these passes by their declarations: those with required options are made only with
+/// them, and every one says what it takes.
+#[test]
+fn the_fromsoft_passes_register_by_name() {
+    let mut reg = PassRegistry::new();
+    super::register(&mut reg);
+    let names = [
+        "bake-fromsoft-layers",
+        "drop-fromsoft-far",
+        "drop-fromsoft-texture-transforms",
+        "fromsoft-apply-rigid-skinning",
+        "lower-fromsoft-collision",
+        "lower-fromsoft-extras",
+        "lower-fromsoft-geometry",
+        "lower-fromsoft-lights",
+        "lower-fromsoft-materials",
+        "lower-fromsoft-object-collision",
+        "raise-fromsoft-display-masks",
+        "resolve-fromsoft-shaders",
+        "select-fromsoft-outfit",
+    ];
+    assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+    let free = [
+        "drop-fromsoft-far",
+        "drop-fromsoft-texture-transforms",
+        "fromsoft-apply-rigid-skinning",
+        "lower-fromsoft-extras",
+        "lower-fromsoft-materials",
+        "raise-fromsoft-display-masks",
+    ];
+    for name in names {
+        assert_eq!(reg.requires_options(name), !free.contains(&name), "{name}");
+        assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");
+    }
 }

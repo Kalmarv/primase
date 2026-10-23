@@ -3,7 +3,7 @@
 //! shader, so each interpretation is a named, counted assumption and the power's calibration is the program's.
 use super::settings::{Factor, Fraction, Metres};
 use crate::sekiro::source::{LightKind, LightSource};
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Light, Transform, World};
 
 /// Options: `candela-per-power` (required: candela per unit of the stored diffuse power; no default, it is a
@@ -49,28 +49,42 @@ impl LowerFromSoftLights {
         self.spot_blend
     }
 
-    /// From its options, through [`LowerFromSoftLights::new`] and its setter.
-    pub fn from_options(o: &Options) -> Result<Self, String> {
-        let candela = o
-            .get("candela-per-power")
-            .ok_or("candela-per-power is required: the program calibrates BTL power")?;
-        let blend = o.get("spot-blend").ok_or(
-            "spot-blend is required: BTL's cone falloff is not established, the blend is the program's",
-        )?;
+    /// From its declared options, through [`LowerFromSoftLights::new`] and its setter.
+    fn from_given(g: &Given) -> Result<Self, String> {
         let mut pass = Self::new(
-            Factor::parse("candela-per-power", candela)?,
-            Fraction::parse("spot-blend", blend)?,
+            Factor::parse("candela-per-power", g.required("candela-per-power"))?,
+            Fraction::parse("spot-blend", g.required("spot-blend"))?,
         );
-        for (k, v) in o {
-            pass = match k.as_str() {
-                "candela-per-power" | "spot-blend" => pass,
-                "min-range" => pass.with_min_range(Metres::parse(k, v)?),
-                _ => return Err(format!("unknown option {k}")),
-            };
+        if let Some(v) = g.optional("min-range") {
+            pass = pass.with_min_range(Metres::parse("min-range", v)?);
         }
         Ok(pass)
     }
 }
+
+/// `lower-fromsoft-lights`' declaration ([`primase_core::pass::PassRegistry::add`]): BTL power's calibration and the
+/// cone's falloff are the program's.
+pub const LOWER_FROMSOFT_LIGHTS: PassSpec = PassSpec {
+    name: "lower-fromsoft-lights",
+    options: &[
+        OptionSpec::required(
+            "candela-per-power",
+            "1",
+            "at least 0: the candela of one unit of BTL power, the program's calibration",
+        ),
+        OptionSpec::required(
+            "spot-blend",
+            "0.15",
+            "0 to 1: a spot cone's blend (BTL's cone falloff is not established)",
+        ),
+        OptionSpec::optional(
+            "min-range",
+            "0",
+            "metres, at least 0: the least range a light gets (default 0)",
+        ),
+    ],
+    make: |g| Ok(Box::new(LowerFromSoftLights::from_given(g)?)),
+};
 
 impl Pass for LowerFromSoftLights {
     fn name(&self) -> &'static str {

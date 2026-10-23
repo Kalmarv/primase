@@ -1,6 +1,6 @@
 //! `lower-fromsoft-extras`: the area extras the reader kept (`fromsoft.area_extras`) as core curves and markers.
 use crate::sekiro::source::{AreaExtras, SpawnRotation};
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Component, Curve, Marker, Name, Resource, Source, Transform, World};
 
 /// `lower-fromsoft-extras`: the area's extras (`fromsoft.area_extras`, taken out) as core records in source order:
@@ -10,6 +10,13 @@ use primase_core::{Component, Curve, Marker, Name, Resource, Source, Transform, 
 /// spawn and naming markers for players are a program's.
 #[derive(Clone, Copy, Debug)]
 pub struct LowerFromSoftExtras;
+
+/// `lower-fromsoft-extras`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by the game's own rule.
+pub const LOWER_FROMSOFT_EXTRAS: PassSpec = PassSpec {
+    name: "lower-fromsoft-extras",
+    options: &[],
+    make: |_| Ok(Box::new(LowerFromSoftExtras)),
+};
 
 impl Pass for LowerFromSoftExtras {
     fn name(&self) -> &'static str {

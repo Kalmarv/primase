@@ -8,7 +8,7 @@ use crate::pose::{ID, affine_point, affine_vector, bone_matrices, normal_matrix}
 pub use crate::pose::{posed_bounds, posed_positions};
 use primase_core::{
     Component, World,
-    pass::{Pass, PassLog},
+    pass::{Pass, PassLog, PassSpec},
 };
 
 /// The FLVER models by their former path.
@@ -18,6 +18,13 @@ pub use crate::components::models::*;
 /// model stays; a later pass or the program removes what it no longer needs).
 #[derive(Debug)]
 pub struct ApplyRigidSkinning;
+/// `fromsoft-apply-rigid-skinning`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, static meshes posed by their bones as the game draws them.
+pub const FROMSOFT_APPLY_RIGID_SKINNING: PassSpec = PassSpec {
+    name: "fromsoft-apply-rigid-skinning",
+    options: &[],
+    make: |_| Ok(Box::new(ApplyRigidSkinning)),
+};
+
 impl Pass for ApplyRigidSkinning {
     fn name(&self) -> &'static str {
         "fromsoft-apply-rigid-skinning"

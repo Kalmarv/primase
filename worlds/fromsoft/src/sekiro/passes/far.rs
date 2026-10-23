@@ -1,6 +1,6 @@
 //! `drop-fromsoft-far`: the distant-backdrop prototypes and their placements dropped by name.
 use crate::sekiro::source::PrototypeSource;
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Instance, World};
 use std::collections::BTreeSet;
 
@@ -9,6 +9,13 @@ use std::collections::BTreeSet;
 /// nothing else changes.
 #[derive(Clone, Copy, Debug)]
 pub struct DropFromSoftFar;
+
+/// `drop-fromsoft-far`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, what it drops is the game's own.
+pub const DROP_FROMSOFT_FAR: PassSpec = PassSpec {
+    name: "drop-fromsoft-far",
+    options: &[],
+    make: |_| Ok(Box::new(DropFromSoftFar)),
+};
 
 impl Pass for DropFromSoftFar {
     fn name(&self) -> &'static str {

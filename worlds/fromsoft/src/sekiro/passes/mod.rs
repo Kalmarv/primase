@@ -22,13 +22,12 @@ pub(super) mod reflectance;
 pub mod resolve_shaders;
 pub mod settings;
 pub use crate::layer_bake::resolve::Unbound;
-use crate::rigid::ApplyRigidSkinning;
 pub use crate::sekiro::components::lowered::UvTiling;
 pub use bake::BakeFromSoftLayers;
 pub use far::DropFromSoftFar;
 pub use geometry::{Cards, Degenerates, LowerFromSoftGeometry, Pose, SpeedTreeFrame, Tiling, Winding};
 pub use materials::{DropFromSoftTextureTransforms, LowerFromSoftMaterials};
-use primase_core::pass::{Options, Pass, PassRegistry};
+use primase_core::pass::PassRegistry;
 pub use resolve_shaders::ResolveFromSoftShaders;
 
 /// A condition holding when any of the clauses holds; None (always present) when any input is None.
@@ -60,84 +59,25 @@ pub(crate) fn condition_key(c: &primase_core::state::Condition) -> String {
         .join("|")
 }
 
-/// `pass`, which takes no options: an option is refused.
-fn without_options(options: &Options, pass: impl Pass + 'static) -> Result<Box<dyn Pass>, String> {
-    if let Some(k) = options.keys().next() {
-        return Err(format!("unknown option {k}"));
-    }
-    Ok(Box::new(pass))
-}
-
-/// Register the FromSoft area passes by name.
+/// Register the FromSoft area passes by their declarations.
 pub fn register(registry: &mut PassRegistry) {
-    registry.register("fromsoft-apply-rigid-skinning", |o| {
-        without_options(o, ApplyRigidSkinning)
-    });
-    registry.register_requiring(
-        "lower-fromsoft-geometry",
-        |o| Ok(Box::new(LowerFromSoftGeometry::from_options(o)?)),
-        &[
-            ("pose", "rigid"),
-            ("uv-tiling", "apply"),
-            ("winding", "normals"),
-            ("degenerates", "drop"),
-            ("leave-out", "sky+light-volume+shadow+billboard"),
-            ("blocker-cards", "record"),
-            ("speedtree-frame", "program"),
-        ],
-    );
-    outfits::register(registry);
-    registry.register("drop-fromsoft-far", |o| without_options(o, DropFromSoftFar));
-    registry.register_requiring(
-        "resolve-fromsoft-shaders",
-        |o| Ok(Box::new(ResolveFromSoftShaders::from_options(o)?)),
-        &[("unbound-textures", "preview")],
-    );
-    registry.register_requiring(
-        "bake-fromsoft-layers",
-        |o| Ok(Box::new(BakeFromSoftLayers::from_options(o)?)),
-        &[("max-size", "512"), ("sample-time", "0")],
-    );
-    registry.register("drop-fromsoft-texture-transforms", |o| {
-        without_options(o, DropFromSoftTextureTransforms::new())
-    });
-    registry.register("lower-fromsoft-materials", |o| {
-        Ok(Box::new(LowerFromSoftMaterials::from_options(o)?))
-    });
-    registry.register_requiring(
-        "lower-fromsoft-collision",
-        |o| Ok(Box::new(collision::LowerFromSoftCollision::from_options(o)?)),
-        &[
-            ("hit-filters", "8+27"),
-            ("water", "22+36"),
-            ("leave-out", "29+40"),
-            ("reach", "50"),
-        ],
-    );
-    registry.register_requiring(
-        "lower-fromsoft-object-collision",
-        |o| {
-            Ok(Box::new(
-                object_collision::LowerFromSoftObjectCollision::from_options(o)?,
-            ))
-        },
-        &[
-            ("resolution", "high"),
-            ("convex", "tessellate"),
-            ("leave-out", "22+29+36+40"),
-            ("leave-out-motion", "2"),
-            ("convex-surface", "render"),
-            ("reach", "50"),
-        ],
-    );
-    registry.register("lower-fromsoft-extras", |o| {
-        without_options(o, extras::LowerFromSoftExtras)
-    });
-    registry.register_requiring(
-        "lower-fromsoft-lights",
-        |o| Ok(Box::new(lights::LowerFromSoftLights::from_options(o)?)),
-        &[("candela-per-power", "1"), ("spot-blend", "0.15")],
-    );
+    for spec in [
+        &crate::rigid::FROMSOFT_APPLY_RIGID_SKINNING,
+        &geometry::LOWER_FROMSOFT_GEOMETRY,
+        &outfits::RAISE_FROMSOFT_DISPLAY_MASKS,
+        &outfits::SELECT_FROMSOFT_OUTFIT,
+        &far::DROP_FROMSOFT_FAR,
+        &resolve_shaders::RESOLVE_FROMSOFT_SHADERS,
+        &bake::BAKE_FROMSOFT_LAYERS,
+        &materials::DROP_FROMSOFT_TEXTURE_TRANSFORMS,
+        &materials::LOWER_FROMSOFT_MATERIALS,
+        &collision::LOWER_FROMSOFT_COLLISION,
+        &object_collision::LOWER_FROMSOFT_OBJECT_COLLISION,
+        &extras::LOWER_FROMSOFT_EXTRAS,
+        &lights::LOWER_FROMSOFT_LIGHTS,
+    ] {
+        registry.add(spec);
+    }
 }
 
 #[cfg(test)]

@@ -33,6 +33,11 @@ pub enum Unbound {
     Leave,
 }
 
+impl primase_core::pass::Choice for Unbound {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("preview", Unbound::Preview), ("leave", Unbound::Leave)];
+}
+
 /// Whether the material names a texture kind exactly as a program resource: the fixed-function (`GXFlver_*`) programs
 /// call their textures `g_DiffuseTexture`, `g_SpecularTexture`, `g_BumpmapTexture`, as the material's own kinds, not by
 /// numbered slot.

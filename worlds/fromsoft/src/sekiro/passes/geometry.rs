@@ -16,7 +16,7 @@ use crate::sekiro::source::{
     FaceCull, LayerInputs, MaterialShader, MaterialSlots, MeshMasks, PrototypeSource, ShaderBundle,
     ShaderStage,
 };
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::world::Resource;
 use primase_core::{
     Asset, Binding, BindingId, Component, Deformation, Entity, Influences, Instance, LodForm, Lods, Mesh,
@@ -32,7 +32,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// v4.xyzw, r0.xxxx`. A vertex whose four weights are all zero is left with the zero matrix (Elden Ring's c3000 has 743).
 pub const SKIN_WEIGHT_FLOOR: f32 = 0.001;
 
-/// A two-way choice of `lower-fromsoft-geometry` with its option words.
+/// A two-way choice of `lower-fromsoft-geometry`, a [`Choice`] of its option words.
 macro_rules! choice {
     ($(#[$doc:meta])* $name:ident { $(#[$da:meta])* $a:ident = $wa:literal, $(#[$db:meta])* $b:ident = $wb:literal $(,)? }) => {
         $(#[$doc])*
@@ -43,21 +43,8 @@ macro_rules! choice {
             $(#[$db])*
             $b,
         }
-        impl $name {
-            /// Its option word.
-            pub fn word(self) -> &'static str {
-                match self {
-                    Self::$a => $wa,
-                    Self::$b => $wb,
-                }
-            }
-            fn parse(key: &str, value: &str) -> Result<Self, String> {
-                match value {
-                    $wa => Ok(Self::$a),
-                    $wb => Ok(Self::$b),
-                    _ => Err(format!("{key}={value} is not {} or {}", $wa, $wb)),
-                }
-            }
+        impl Choice for $name {
+            const VALUES: &'static [(&'static str, Self)] = &[($wa, Self::$a), ($wb, Self::$b)];
         }
     };
 }
@@ -149,45 +136,25 @@ pub struct LowerFromSoftGeometry {
 }
 
 impl LowerFromSoftGeometry {
-    /// From its options, every one required.
-    pub fn from_options(o: &Options) -> Result<Self, String> {
-        const KEYS: [&str; 7] = [
-            "pose",
-            "uv-tiling",
-            "winding",
-            "degenerates",
-            "leave-out",
-            "blocker-cards",
-            "speedtree-frame",
-        ];
-        if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let get = |k: &str| {
-            o.get(k).map(String::as_str).ok_or_else(|| {
-                format!(
-                    "{k} is required: pose=rigid|stored, uv-tiling=keep|apply, winding=stored|normals, \
-                     degenerates=keep|drop, leave-out= (sky+light-volume+shadow+billboard, empty for none), \
-                     blocker-cards=draw|record, speedtree-frame=program|authored"
-                )
-            })
-        };
+    /// From its declared options.
+    fn from_given(g: &Given) -> Result<Self, String> {
         let mut leave_out = BTreeSet::new();
-        for class in get("leave-out")?.split('+').filter(|c| !c.is_empty()) {
+        for class in g.required("leave-out").split('+').filter(|c| !c.is_empty()) {
             leave_out.insert(materials::SkipClass::from_word(class).ok_or_else(|| {
                 format!("leave-out class {class} is not sky, light-volume, shadow or billboard")
             })?);
         }
         Ok(LowerFromSoftGeometry {
-            pose: Pose::parse("pose", get("pose")?)?,
-            uv_tiling: Tiling::parse("uv-tiling", get("uv-tiling")?)?,
-            winding: Winding::parse("winding", get("winding")?)?,
-            degenerates: Degenerates::parse("degenerates", get("degenerates")?)?,
+            pose: g.choice("pose"),
+            uv_tiling: g.choice("uv-tiling"),
+            winding: g.choice("winding"),
+            degenerates: g.choice("degenerates"),
             leave_out,
-            blocker_cards: Cards::parse("blocker-cards", get("blocker-cards")?)?,
-            speedtree_frame: SpeedTreeFrame::parse("speedtree-frame", get("speedtree-frame")?)?,
+            blocker_cards: g.choice("blocker-cards"),
+            speedtree_frame: g.choice("speedtree-frame"),
         })
     }
+
     fn input(&self) -> &'static str {
         match self.pose {
             Pose::Rigid => RigidModel::NAME,
@@ -195,6 +162,45 @@ impl LowerFromSoftGeometry {
         }
     }
 }
+
+/// `lower-fromsoft-geometry`'s declaration ([`primase_core::pass::PassRegistry::add`]): every choice is the
+/// program's, stated.
+pub const LOWER_FROMSOFT_GEOMETRY: PassSpec = PassSpec {
+    name: "lower-fromsoft-geometry",
+    options: &[
+        OptionSpec::choice::<Pose>(
+            "pose",
+            "the posed model fromsoft-apply-rigid-skinning made, or the stored one",
+        ),
+        OptionSpec::choice::<Tiling>(
+            "uv-tiling",
+            "UV0 kept, or multiplied by the material's tiling (recorded as fromsoft.uv_tiling)",
+        ),
+        OptionSpec::choice::<Winding>(
+            "winding",
+            "a part's winding as stored, or reversed where its stored normals oppose it on balance",
+        ),
+        OptionSpec::choice::<Degenerates>(
+            "degenerates",
+            "triangles of doubled area squared at most 1e-14 kept, or dropped (counted)",
+        ),
+        OptionSpec::required(
+            "leave-out",
+            "sky+light-volume+shadow+billboard",
+            "material source classes whose meshes are not lowered, joined by + (sky, light-volume, shadow, \
+             billboard; empty for none)",
+        ),
+        OptionSpec::choice::<Cards>(
+            "blocker-cards",
+            "interior blocker cards drawn, or their level-0 parts recorded in fromsoft.blocker_cards",
+        ),
+        OptionSpec::choice::<SpeedTreeFrame>(
+            "speedtree-frame",
+            "a SpeedTree mesh's normal and tangent from the members its program reads, or its layout's pair",
+        ),
+    ],
+    make: |g| Ok(Box::new(LowerFromSoftGeometry::from_given(g)?)),
+};
 
 /// The input indices (`TEXCOORD<n>`) of the normal and the tangent a SpeedTree material's G-buffer vertex program
 /// (`<shader>_Gbuf.vpo` of its bundle) reads: its last two `TEXCOORD` inputs, which each of Elden Ring's SpeedTree
@@ -637,15 +643,15 @@ impl Pass for LowerFromSoftGeometry {
     fn options(&self) -> Options {
         let leave_out: Vec<&str> = self.leave_out.iter().map(|c| c.word()).collect();
         Options::from([
-            ("pose".to_owned(), self.pose.word().to_owned()),
-            ("uv-tiling".to_owned(), self.uv_tiling.word().to_owned()),
-            ("winding".to_owned(), self.winding.word().to_owned()),
-            ("degenerates".to_owned(), self.degenerates.word().to_owned()),
+            ("pose".to_owned(), self.pose.text().to_owned()),
+            ("uv-tiling".to_owned(), self.uv_tiling.text().to_owned()),
+            ("winding".to_owned(), self.winding.text().to_owned()),
+            ("degenerates".to_owned(), self.degenerates.text().to_owned()),
             ("leave-out".to_owned(), leave_out.join("+")),
-            ("blocker-cards".to_owned(), self.blocker_cards.word().to_owned()),
+            ("blocker-cards".to_owned(), self.blocker_cards.text().to_owned()),
             (
                 "speedtree-frame".to_owned(),
-                self.speedtree_frame.word().to_owned(),
+                self.speedtree_frame.text().to_owned(),
             ),
         ])
     }

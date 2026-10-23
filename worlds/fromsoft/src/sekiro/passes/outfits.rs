@@ -390,11 +390,6 @@ impl Pass for SelectFromSoftOutfit {
     }
 }
 
-pub(super) fn register(registry: &mut primase_core::pass::PassRegistry) {
-    registry.add(&RAISE_FROMSOFT_DISPLAY_MASKS);
-    registry.add(&SELECT_FROMSOFT_OUTFIT);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

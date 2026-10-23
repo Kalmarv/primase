@@ -373,6 +373,11 @@ pub enum Layers {
     Preview,
 }
 
+impl primase_core::pass::Choice for Layers {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("preserve", Layers::Preserve), ("preview", Layers::Preview)];
+}
+
 /// Lower static source materials to core PBR without serializing through a
 /// consumer dialect. A missing required DDS is an error. Baked variants must
 /// carry PBR base/normal bindings; these are never replaced by source layers.

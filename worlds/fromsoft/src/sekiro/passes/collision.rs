@@ -4,7 +4,7 @@
 use super::settings::{HitClass, HitFilters, Metres, joined};
 use crate::sekiro::source::{CollisionSource, MapCollision, ReadScope};
 use primase_core::convert::PartScope;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::state::{Clause, Condition};
 use primase_core::{Collision, Component, Entity, Name, Surfaces, Transform, World, world::Resource};
 use std::collections::{BTreeMap, BTreeSet};
@@ -154,24 +154,13 @@ enum ClassChoice {
 }
 
 impl LowerFromSoftCollision {
-    /// From its options, every one required.
-    pub fn from_options(o: &Options) -> std::result::Result<Self, String> {
-        if let Some(k) = o
-            .keys()
-            .find(|k| !["hit-filters", "water", "leave-out", "reach"].contains(&k.as_str()))
-        {
-            return Err(format!("unknown option {k}"));
-        }
-        let get = |k: &str| {
-            o.get(k).map(String::as_str).ok_or_else(|| {
-                format!("{k} is required: hit-filters=, water=, leave-out= (classes joined by +, empty for none), reach=N|none")
-            })
-        };
+    /// From its declared options.
+    fn from_given(g: &Given) -> std::result::Result<Self, String> {
         Ok(LowerFromSoftCollision {
-            hit_filters: HitFilters::parse("hit-filters", get("hit-filters")?)?,
-            water: HitClass::parse_set("water", get("water")?)?,
-            leave_out: HitClass::parse_set("leave-out", get("leave-out")?)?,
-            reach: Metres::parse_or_none("reach", get("reach")?)?,
+            hit_filters: HitFilters::parse("hit-filters", g.required("hit-filters"))?,
+            water: HitClass::parse_set("water", g.required("water"))?,
+            leave_out: HitClass::parse_set("leave-out", g.required("leave-out"))?,
+            reach: Metres::parse_or_none("reach", g.required("reach"))?,
         })
     }
 
@@ -186,6 +175,36 @@ impl LowerFromSoftCollision {
             .collect())
     }
 }
+
+/// `lower-fromsoft-collision`'s declaration ([`primase_core::pass::PassRegistry::add`]): every choice is the
+/// program's, stated.
+pub const LOWER_FROMSOFT_COLLISION: PassSpec = PassSpec {
+    name: "lower-fromsoft-collision",
+    options: &[
+        OptionSpec::required(
+            "hit-filters",
+            "8+27",
+            "the hit filters whose collision parts are lowered as ground, joined by + (at least one)",
+        ),
+        OptionSpec::required(
+            "water",
+            "22+36",
+            "HitMtrl classes (0 to 99) lowered into separate water soups, joined by + (empty for none)",
+        ),
+        OptionSpec::required(
+            "leave-out",
+            "29+40",
+            "HitMtrl classes (0 to 99) not lowered (counted), joined by + (empty for none)",
+        ),
+        OptionSpec::required(
+            "reach",
+            "50",
+            "metres, at least 0: the triangles whose centre lies further outside the read region are left out \
+             (counted), or none for no crop",
+        ),
+    ],
+    make: |g| Ok(Box::new(LowerFromSoftCollision::from_given(g)?)),
+};
 
 impl Pass for LowerFromSoftCollision {
     fn name(&self) -> &'static str {
@@ -392,13 +411,14 @@ mod tests {
     #[test]
     fn the_program_chooses_filters_classes_and_reach_and_other_filters_stay_as_source() {
         let mut w = world();
-        let pass = LowerFromSoftCollision::from_options(&Options::from([
-            ("hit-filters".into(), "8".into()),
-            ("water".into(), "22".into()),
-            ("leave-out".into(), "29".into()),
-            ("reach".into(), "50".into()),
-        ]))
-        .unwrap();
+        let pass = LOWER_FROMSOFT_COLLISION
+            .instance(&Options::from([
+                ("hit-filters".into(), "8".into()),
+                ("water".into(), "22".into()),
+                ("leave-out".into(), "29".into()),
+                ("reach".into(), "50".into()),
+            ]))
+            .unwrap();
         let mut log = PassLog::default();
         pass.run(&mut w, &mut log).unwrap();
         assert_eq!(
@@ -437,18 +457,19 @@ mod tests {
             ])
         };
         let mut w = world();
-        let pass = LowerFromSoftCollision::from_options(&options("", "")).unwrap();
+        let pass = LOWER_FROMSOFT_COLLISION.instance(&options("", "")).unwrap();
         assert_eq!(pass.options(), options("", ""));
         pass.run(&mut w, &mut PassLog::default()).unwrap();
         assert_eq!(soups(&w)["game"].len(), 6);
         assert!(w.iter::<MapCollision>().next().is_none());
         // every option is the program's to state; a class cannot be both water and left out
-        assert!(LowerFromSoftCollision::from_options(&Options::new()).is_err());
+        assert!(LOWER_FROMSOFT_COLLISION.instance(&Options::new()).is_err());
         assert!(
-            LowerFromSoftCollision::from_options(&Options::from([("hit-filters".into(), "8".into())]))
+            LOWER_FROMSOFT_COLLISION
+                .instance(&Options::from([("hit-filters".into(), "8".into())]))
                 .is_err()
         );
-        let both = LowerFromSoftCollision::from_options(&options("22", "22")).unwrap();
+        let both = LOWER_FROMSOFT_COLLISION.instance(&options("22", "22")).unwrap();
         let err = both.run(&mut world(), &mut PassLog::default()).unwrap_err();
         assert!(err.contains("both water and left out"), "{err}");
     }

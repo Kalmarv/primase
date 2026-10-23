@@ -2,7 +2,7 @@
 use crate::materials::{LayeredMaterial, Material};
 use crate::sekiro::components::lowered::UvTiling;
 use crate::sekiro::source::LayerInputs;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, UvTransform};
 use primase_core::{Component, DrawOrder, Entity, MaterialUsage, Mesh, VertexColor, World};
 use std::collections::BTreeMap;
@@ -34,21 +34,17 @@ impl LowerFromSoftMaterials {
     pub fn layers(&self) -> Option<super::pbr::Layers> {
         self.layers
     }
-
-    /// From its options, through [`LowerFromSoftMaterials::new`].
-    pub fn from_options(o: &Options) -> Result<Self, String> {
-        let mut layers = None;
-        for (k, v) in o {
-            layers = match (k.as_str(), v.as_str()) {
-                ("layers", "preserve") => Some(super::pbr::Layers::Preserve),
-                ("layers", "preview") => Some(super::pbr::Layers::Preview),
-                ("layers", v) => return Err(format!("layers={v} is not preserve or preview")),
-                _ => return Err(format!("unknown option {k}")),
-            };
-        }
-        Ok(Self::new(layers))
-    }
 }
+
+/// `lower-fromsoft-materials`' declaration ([`primase_core::pass::PassRegistry::add`]).
+pub const LOWER_FROMSOFT_MATERIALS: PassSpec = PassSpec {
+    name: "lower-fromsoft-materials",
+    options: &[OptionSpec::optional_choice::<super::pbr::Layers>(
+        "layers",
+        "a layered material left as source data for a later bake, or lowered from its main layer's preview textures",
+    )],
+    make: |g| Ok(Box::new(LowerFromSoftMaterials::new(g.optional_choice("layers")))),
+};
 
 impl Pass for LowerFromSoftMaterials {
     fn name(&self) -> &'static str {
@@ -57,14 +53,7 @@ impl Pass for LowerFromSoftMaterials {
     fn options(&self) -> Options {
         match self.layers {
             None => Options::new(),
-            Some(l) => Options::from([(
-                "layers".to_owned(),
-                match l {
-                    super::pbr::Layers::Preserve => "preserve",
-                    super::pbr::Layers::Preview => "preview",
-                }
-                .to_owned(),
-            )]),
+            Some(l) => Options::from([("layers".to_owned(), l.text().to_owned())]),
         }
     }
     fn requires(&self) -> &[&'static str] {
@@ -134,6 +123,13 @@ impl DropFromSoftTextureTransforms {
         DropFromSoftTextureTransforms
     }
 }
+
+/// `drop-fromsoft-texture-transforms`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, which transforms it drops is the target's need.
+pub const DROP_FROMSOFT_TEXTURE_TRANSFORMS: PassSpec = PassSpec {
+    name: "drop-fromsoft-texture-transforms",
+    options: &[],
+    make: |_| Ok(Box::new(DropFromSoftTextureTransforms::new())),
+};
 
 impl Pass for DropFromSoftTextureTransforms {
     fn name(&self) -> &'static str {

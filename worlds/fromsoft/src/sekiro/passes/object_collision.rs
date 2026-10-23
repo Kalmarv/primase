@@ -7,7 +7,7 @@ use crate::pose::FRAME;
 use crate::pose::posed;
 use crate::sekiro::source::{MaterialSlots, ObjectBodies, ObjectBody, ObjectGeometry, Resolution};
 use crate::{components::models::SourceModel, materials::Material};
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::state::Condition;
 use primase_core::{
     Collision, Component, Entity, Instance, Name, Surfaces, Transform, World, world::Resource,
@@ -79,6 +79,13 @@ pub enum ConvexSurface {
     Render,
 }
 
+impl Choice for ConvexSurface {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("default", ConvexSurface::Default),
+        ("render", ConvexSurface::Render),
+    ];
+}
+
 /// Which of a prototype's stored collision files `lower-fromsoft-object-collision` places.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResolutionChoice {
@@ -88,14 +95,12 @@ pub enum ResolutionChoice {
     HighElseLow,
 }
 
-impl ResolutionChoice {
-    fn word(self) -> &'static str {
-        match self {
-            ResolutionChoice::High => "high",
-            ResolutionChoice::Low => "low",
-            ResolutionChoice::HighElseLow => "high-else-low",
-        }
-    }
+impl Choice for ResolutionChoice {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("high", ResolutionChoice::High),
+        ("low", ResolutionChoice::Low),
+        ("high-else-low", ResolutionChoice::HighElseLow),
+    ];
 }
 
 /// What `lower-fromsoft-object-collision` makes of convex bodies (box, polytope, capsule), which a triangle soup
@@ -169,40 +174,10 @@ pub struct LowerFromSoftObjectCollision {
 }
 
 impl LowerFromSoftObjectCollision {
-    /// From its options, every one required.
-    pub fn from_options(o: &Options) -> std::result::Result<Self, String> {
-        const KEYS: [&str; 6] = [
-            "resolution",
-            "convex",
-            "leave-out",
-            "leave-out-motion",
-            "convex-surface",
-            "reach",
-        ];
-        if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let get = |k: &str| {
-            o.get(k).map(String::as_str).ok_or_else(|| {
-                format!(
-                    "{k} is required: resolution=high|low|high-else-low, convex=tessellate|rounded:<metres>|leave-out, leave-out=, leave-out-motion= (joined by +, empty \
-                     for none), convex-surface=default|render, reach=N|none"
-                )
-            })
-        };
-        let resolution = match get("resolution")? {
-            "high" => ResolutionChoice::High,
-            "low" => ResolutionChoice::Low,
-            "high-else-low" => ResolutionChoice::HighElseLow,
-            v => return Err(format!("resolution={v} is not high, low or high-else-low")),
-        };
-        let convex = ConvexBodies::parse(get("convex")?)?;
-        let convex_surface = match get("convex-surface")? {
-            "default" => ConvexSurface::Default,
-            "render" => ConvexSurface::Render,
-            v => return Err(format!("convex-surface={v} is not default or render")),
-        };
-        let leave_out_motion = get("leave-out-motion")?
+    /// From its declared options.
+    fn from_given(g: &Given) -> std::result::Result<Self, String> {
+        let leave_out_motion = g
+            .required("leave-out-motion")
             .split('+')
             .filter(|m| !m.is_empty())
             .map(|m| {
@@ -211,12 +186,12 @@ impl LowerFromSoftObjectCollision {
             })
             .collect::<std::result::Result<_, _>>()?;
         Ok(LowerFromSoftObjectCollision {
-            resolution,
-            convex,
-            leave_out: HitClass::parse_set("leave-out", get("leave-out")?)?,
+            resolution: g.choice("resolution"),
+            convex: ConvexBodies::parse(g.required("convex"))?,
+            leave_out: HitClass::parse_set("leave-out", g.required("leave-out"))?,
             leave_out_motion,
-            convex_surface,
-            reach: Metres::parse_or_none("reach", get("reach")?)?,
+            convex_surface: g.choice("convex-surface"),
+            reach: Metres::parse_or_none("reach", g.required("reach"))?,
         })
     }
 
@@ -277,21 +252,55 @@ impl LowerFromSoftObjectCollision {
     }
 }
 
+/// `lower-fromsoft-object-collision`'s declaration ([`primase_core::pass::PassRegistry::add`]): every choice is the
+/// program's, stated.
+pub const LOWER_FROMSOFT_OBJECT_COLLISION: PassSpec = PassSpec {
+    name: "lower-fromsoft-object-collision",
+    options: &[
+        OptionSpec::choice::<ResolutionChoice>(
+            "resolution",
+            "which stored collision files are placed: the high-resolution ones, the low, or the high where there is one",
+        ),
+        OptionSpec::required(
+            "convex",
+            "tessellate",
+            "convex bodies tessellated, rounded:<metres> (within that error, above 0), or leave-out",
+        ),
+        OptionSpec::required(
+            "leave-out",
+            "22+29+36+40",
+            "HitMtrl classes (0 to 99) not lowered (counted), joined by + (empty for none)",
+        ),
+        OptionSpec::required(
+            "leave-out-motion",
+            "2",
+            "stored motion types whose bodies are not lowered (counted), joined by + (empty for none)",
+        ),
+        OptionSpec::choice::<ConvexSurface>(
+            "convex-surface",
+            "a convex body's surface the default one, or that of the prototype's largest colliding render area",
+        ),
+        OptionSpec::required(
+            "reach",
+            "50",
+            "metres, at least 0: the triangles whose centre lies further outside the read region are left out \
+             (counted), or none for no crop",
+        ),
+    ],
+    make: |g| Ok(Box::new(LowerFromSoftObjectCollision::from_given(g)?)),
+};
+
 impl Pass for LowerFromSoftObjectCollision {
     fn name(&self) -> &'static str {
         "lower-fromsoft-object-collision"
     }
     fn options(&self) -> Options {
-        let surface = match self.convex_surface {
-            ConvexSurface::Default => "default",
-            ConvexSurface::Render => "render",
-        };
         Options::from([
-            ("resolution".to_owned(), self.resolution.word().to_owned()),
+            ("resolution".to_owned(), self.resolution.text().to_owned()),
             ("convex".to_owned(), self.convex.word()),
             ("leave-out".to_owned(), joined(&self.leave_out)),
             ("leave-out-motion".to_owned(), joined(&self.leave_out_motion)),
-            ("convex-surface".to_owned(), surface.to_owned()),
+            ("convex-surface".to_owned(), self.convex_surface.text().to_owned()),
             ("reach".to_owned(), Metres::text_or_none(self.reach)),
         ])
     }
@@ -550,7 +559,7 @@ mod tests {
     }
 
     /// The pass from `options` over every other option stated as nothing left out, the default surface and no reach.
-    fn pass(options: &[(&str, &str)]) -> LowerFromSoftObjectCollision {
+    fn pass(options: &[(&str, &str)]) -> Box<dyn Pass> {
         let mut o = Options::from(
             [
                 ("resolution", "high"),
@@ -562,7 +571,7 @@ mod tests {
             .map(|(k, v)| (k.to_owned(), v.to_owned())),
         );
         o.extend(options.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
-        LowerFromSoftObjectCollision::from_options(&o).unwrap()
+        LOWER_FROMSOFT_OBJECT_COLLISION.instance(&o).unwrap()
     }
 
     #[test]
@@ -639,7 +648,7 @@ mod tests {
         for bad in ["rounded:0", "rounded:-1", "rounded:", "round"] {
             let mut o = pass(&[("convex", "tessellate")]).options();
             o.insert("convex".to_owned(), bad.to_owned());
-            assert!(LowerFromSoftObjectCollision::from_options(&o).is_err(), "{bad}");
+            assert!(LOWER_FROMSOFT_OBJECT_COLLISION.instance(&o).is_err(), "{bad}");
         }
 
         // convex=leave-out, motion type 2 and class 29 left out by choice, counted
@@ -659,7 +668,7 @@ mod tests {
         assert!(log.approximations.keys().all(|k| !k.contains("tessellated")));
 
         // the convex choice is the program's; the render inference needs the prototype's model
-        assert!(LowerFromSoftObjectCollision::from_options(&Options::new()).is_err());
+        assert!(LOWER_FROMSOFT_OBJECT_COLLISION.instance(&Options::new()).is_err());
         let (mut w, _, _) = world();
         let err = pass(&[("convex", "tessellate"), ("convex-surface", "render")])
             .run(&mut w, &mut PassLog::default())
