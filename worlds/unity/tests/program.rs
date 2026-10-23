@@ -1,7 +1,8 @@
 //! Compiled-program gate against an independent reader (`oracles.unitypy.sledding/shader-programs.json`, JSON:
 //! `shaders`, each `file`, `path_id`, `name` and `passes[subshader][pass]`: `variants` (each `group`, `blob_index`,
-//! `keywords`, `gpu_program_type`, `requirements` and `code`, the sha256 of its D3D11 code or null) and `parameters`
-//! (`constant_buffers` each `name`, `slot`, `size`, `fields` by offset; `textures`; `samplers`)), for the player
+//! `keywords`, `gpu_program_type`, `requirements`, `parameter_blob` (the blob entry of a 2021.2 player variant's own
+//! parameters, from the pass's `m_ParameterBlobIndices`) and `code`, the sha256 of its D3D11 code or null) and
+//! `parameters` (`constant_buffers` each `name`, `slot`, `size`, `fields` by offset; `textures`; `samplers`)), for the player
 //! `installs.sledding/Sledding Game_Data` read with `tools.unity_tpk`: every shader's programs exactly, every variant's
 //! code bytes.
 
@@ -167,6 +168,14 @@ fn all_stages(label: &str, data: &std::path::Path, tpk: &std::path::Path, oracle
                 .enumerate()
                 {
                     let p = pass.stage(stage);
+                    // a dump made before the oracle emitted `parameter_blob` (the stage dumps are separate files from
+                    // `shader-programs.json`, which does) has no such key: ours is dropped from the comparison there,
+                    // and compared as soon as the dump carries it
+                    let blobs = expected[key]["variants"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|v| v.get("parameter_blob").is_some());
                     let vs: Vec<Json> = p
                         .variants
                         .iter()
@@ -186,6 +195,9 @@ fn all_stages(label: &str, data: &std::path::Path, tpk: &std::path::Path, oracle
                                 }
                             });
                             j["code"] = json!(hash);
+                            if !blobs {
+                                j.as_object_mut().unwrap().remove("parameter_blob");
+                            }
                             j
                         })
                         .collect();
