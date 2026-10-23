@@ -452,7 +452,6 @@ pub fn buffer_constants(
 /// through an sRGB decode is another number, which the oracle did not observe.
 fn default_colour(name: &str, linear: bool) -> Option<[f32; 4]> {
     const GREY: f32 = 127.0 / 255.0;
-    const FALLBACK: f32 = 128.0 / 255.0;
     Some(match name {
         "white" => [1.0; 4],
         "black" => [0.0; 4],
@@ -462,6 +461,15 @@ fn default_colour(name: &str, linear: bool) -> Option<[f32; 4]> {
         "bump" => [GREY, GREY, 1.0, 1.0],
         _ => [FALLBACK; 4],
     })
+}
+
+/// The engine's fallback for a default texture name that is empty or no default: 128/255 (the oracle's `none` and
+/// `notadefault` properties).
+const FALLBACK: f32 = 128.0 / 255.0;
+
+/// Whether `name` is valued as the engine's fallback ([`default_colour`]): an empty name or one that is no default.
+fn is_fallback(name: &str) -> bool {
+    default_colour(name, false) == Some([FALLBACK; 4])
 }
 
 /// Unity's `BlendMode` as the vocabulary's factor; `None` for `SrcAlphaSaturate`.
@@ -1122,10 +1130,10 @@ fn resolve_texture(
         (false, _) => match defaults.iter().find(|(p, _)| p == name) {
             Some((_, d)) => match default_colour(d, linear) {
                 Some(value) => {
-                    let named = if d.is_empty() {
-                        "empty name, the engine's fallback"
+                    let named = if is_fallback(d) {
+                        format!("{d:?}, no default name: the engine's fallback")
                     } else {
-                        d
+                        d.clone()
                     };
                     bump(format!(
                         "unset texture properties, bound the shader's default ({named})"
