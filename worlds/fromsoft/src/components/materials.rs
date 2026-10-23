@@ -242,6 +242,8 @@ pub struct Material {
     /// Raw, uninterpreted source GX records, included in material identity.
     pub gx: Vec<flver::GxItem>,
     pub shader: String,
+    /// The surface class: `opaque`, `cutout` (alpha tested), `leaves`, `alpha` (blended, `g_BlendMode` 2), `additive`
+    /// (Elden Ring's `g_BlendMode` 4: added to what is behind it), `decal`, `water`.
     pub class: String,
     /// The source class of a material the game draws as something other than a surface ([`SkipClass`]); a
     /// program chooses whether to leave such meshes out.

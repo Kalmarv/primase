@@ -229,9 +229,13 @@ pub fn resolve_definition(
     });
     match class {
         Some(Class::Skip(skip @ (SkipClass::Sky | SkipClass::LightVolume))) => m.skip = Some(skip),
-        // an additive blend draws a light volume whatever else the family's name says
-        _ if blend == 4 => m.skip = Some(SkipClass::LightVolume),
+        // Sekiro: an additive blend draws a light volume whatever else the family's name says
+        _ if blend == 4 && game == Game::Sekiro => m.skip = Some(SkipClass::LightVolume),
         Some(Class::Skip(skip)) => m.skip = Some(skip),
+        // Elden Ring: an additive blend is a surface drawn over what is behind it (a character's emissive overlay: c2200's
+        // `C[c2200]_Body` and `_Wing`, with an albedo of their own), not a volume; the light volumes are the shaders
+        // its table names
+        _ if blend == 4 => m.class = "additive".into(),
         Some(Class::Water) => m.class = "water".into(),
         Some(Class::Decal) => m.class = "decal".into(),
         Some(Class::Leaves) => {

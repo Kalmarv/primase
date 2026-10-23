@@ -96,7 +96,7 @@ pub fn named_surface(m: &Material) -> (String, bool) {
 
 /// Name-based collision-surface approximation, explicitly a lowering policy.
 pub fn surface(mtd: &str, albedo: &str, class: &str) -> (String, bool) {
-    if matches!(class, "leaves" | "decal" | "alpha" | "water") {
+    if matches!(class, "leaves" | "decal" | "alpha" | "additive" | "water") {
         return ("default".into(), false);
     }
     let text = format!("{mtd} {albedo}").to_lowercase();

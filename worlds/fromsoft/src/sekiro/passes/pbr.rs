@@ -477,7 +477,7 @@ fn lower_materials(
             }
             p.alpha_mode = match m.class.as_str() {
                 "leaves" | "cutout" => AlphaMode::Mask { cutoff: m.cutoff },
-                "alpha" | "decal" | "water" => AlphaMode::Blend,
+                "alpha" | "additive" | "decal" | "water" => AlphaMode::Blend,
                 _ => AlphaMode::Opaque,
             };
         }
@@ -585,6 +585,18 @@ fn lower_materials(
             })
         {
             return Err(invalid("Sekiro PBR", 0, "nonfinite source parameter"));
+        }
+        if !baked && m.class == "additive" {
+            // pbr states no additive blend: the surface glows with its own colour and is blended over what is behind it
+            // (a binding of the game's own program states the true blend in its render state)
+            if p.base_color_texture.is_some() {
+                p.emissive = [1.; 3];
+                p.emissive_texture = p.base_color_texture;
+            }
+            log.approximate(
+                "additive blend (g_BlendMode 4) lowered as the base colour's emission, alpha blended",
+                1,
+            );
         }
         if !baked {
             world.insert(e, Name(pv.albedo.clone().unwrap_or_else(|| m.mtd.clone())));

@@ -357,6 +357,75 @@ fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() 
     assert_eq!(log.counts["materials of class decal given their draw order"], 1);
 }
 
+/// `g_BlendMode` 4 is a light volume in Sekiro's table and, in Elden Ring's, a surface drawn added to what is behind it
+/// (c2200's emissive body and wing overlays); lowered, it glows with its own colour and is blended, counted.
+#[test]
+fn an_additive_blend_is_a_light_volume_in_sekiro_and_an_additive_surface_in_elden_ring() {
+    use crate::Game;
+    use primase_core::pass::{PassManager, Pipeline, RunReport};
+    use primase_core::pbr::AlphaMode;
+    let resolve = |game: Game, shader: &str, blend: i32| {
+        materials::resolve_definition(
+            &crate::flver::Material {
+                name: "fixture".into(),
+                mtd: "fixture.mtd".into(),
+                gx: vec![],
+                textures: vec![],
+            },
+            Some(&materials::Definition::Mtd(crate::mtd::MaterialDefinition {
+                shader: shader.into(),
+                description: String::new(),
+                parameters: vec![crate::mtd::Parameter {
+                    name: "g_BlendMode".into(),
+                    value: crate::mtd::Value::Int(vec![blend]),
+                }],
+                textures: vec![],
+                block_lengths: vec![],
+            })),
+            game,
+            |_| false,
+        )
+    };
+    let sekiro = resolve(Game::Sekiro, "M[ARSN].spx", 4);
+    assert_eq!(sekiro.skip, Some(materials::SkipClass::LightVolume));
+    let elden = resolve(Game::EldenRing, "C[c2200]_Body.spx", 4);
+    assert_eq!((elden.skip, elden.class.as_str()), (None, "additive"));
+    // the light shafts of its table stay volumes, and a blend mode other than 4 is as before
+    let shaft = resolve(Game::EldenRing, "M[LightShaft].spx", 4);
+    assert_eq!(shaft.skip, Some(materials::SkipClass::LightVolume));
+    assert_eq!(resolve(Game::EldenRing, "C[c2200]_Body.spx", 2).class, "alpha");
+
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, elden);
+    let mesh = world.spawn();
+    world.insert(mesh, Mesh::new(vec![primitive(e)]));
+    world.insert(
+        mesh,
+        FaceCull {
+            primitives: vec![true],
+        },
+    );
+    let mut report = RunReport::default();
+    PassManager::new(PassRegistry::new())
+        .run(
+            &mut world,
+            &Pipeline {
+                passes: vec![Box::new(LowerFromSoftMaterials::new(None))],
+            },
+            &mut report,
+        )
+        .unwrap();
+    let pbr = world.get::<primase_core::pbr::PbrMaterial>(e).unwrap();
+    assert_eq!(pbr.alpha_mode, AlphaMode::Blend);
+    // no texture was bound in this fixture: nothing to glow with
+    assert_eq!(pbr.emissive, [0.; 3]);
+    assert!(
+        report.steps[0].log.approximations["additive blend (g_BlendMode 4) lowered as the base colour's emission, alpha blended"]
+            == 1
+    );
+}
+
 #[test]
 fn a_lowered_material_is_as_sided_as_the_face_sets_drawing_it_and_split_when_they_differ() {
     use primase_core::pass::{PassManager, Pipeline, RunReport};
