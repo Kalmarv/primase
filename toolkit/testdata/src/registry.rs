@@ -546,14 +546,14 @@ pub const DECLARED: &[Declared] = &[
         status: Status::Live,
         gate: false,
         about: r#"a folder (searched recursively) of the DXIL containers of Elden Ring's Shader Model 6 shader bundles (one file per container), lifted, validated and written as WGSL, the refusals counted by reason with an example program; toolkit/dxil/tests/lift_corpus.rs"#,
-        source: r#"the user's own install: the containers read from its shader bundles"#,
+        source: r#"the user's own install: the containers of its `/shader/*.shaderbnd.dcx` binders, worlds/fromsoft/examples/corpus_elden_shaders.rs"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::General, "codecs.tsv"),
         status: Status::Live,
         gate: true,
         about: r#"TSV: codec, compressed path, oracle decoded path (tab-separated)"#,
-        source: r#"game data with a third-party decoder's output"#,
+        source: r#"independent: the games' own streams (Sekiro's DFLT DCX envelopes, skate.'s zlib CAS blocks, Riders Republic's terrain LZ4 blocks, cut by the corpus_* example programs) decoded by Python's zlib and the lz4 package 4.4.5, toolkit/compress/tests/oracles/codecs.py"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::General, "dxbc"),
@@ -574,7 +574,7 @@ pub const DECLARED: &[Declared] = &[
         status: Status::Live,
         gate: false,
         about: r#"GTA V Enhanced's shader database (`sga_win32_60_final.awc`, magic `SGD2`, from update/update2.rpf `common/shaders/fxdb`) as the install stores it after decryption and decompression: every program and effect is read, every program lifted; worlds/gta/tests/fxc_census.rs"#,
-        source: r#"the user's own install: the file extracted from its archive"#,
+        source: r#"the user's own install: the file extracted from its archive, worlds/gta/examples/corpus_gta_shader_database.rs"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Riders, "shaders"),
@@ -588,7 +588,7 @@ pub const DECLARED: &[Declared] = &[
         status: Status::Live,
         gate: true,
         about: r#"folder recursively containing loose KRAK DCX files"#,
-        source: r#"the game's own files, extracted from the user's install"#,
+        source: r#"the game's own files from the user's install: worlds/fromsoft/examples/corpus_sekiro_dcx.rs (KRAK envelopes as stored, the first 256 in hash order up to 4 MiB)"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok"),
@@ -616,7 +616,7 @@ pub const DECLARED: &[Declared] = &[
         status: Status::Live,
         gate: true,
         about: r#"directory of indexed individual `.casblock` frames"#,
-        source: r#"the game's own CAS frames, cut from the user's install"#,
+        source: r#"the game's own CAS frames from the user's install: worlds/reskate/examples/corpus_skate_cas.rs (one Oodle block per frame, 16 entries per superbundle TOC)"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Skate, "ebx"),
@@ -630,7 +630,7 @@ pub const DECLARED: &[Declared] = &[
         status: Status::Live,
         gate: false,
         about: r#"a folder (searched recursively) of the DXIL containers of skate.'s CompiledBytecode resources (one file per container), lifted, validated and written as WGSL, the refusals counted by reason with an example program; toolkit/dxil/tests/lift_corpus.rs"#,
-        source: r#"the user's own install: the containers read from its superbundles' CompiledBytecode resources"#,
+        source: r#"the user's own install: the containers of its superbundles' CompiledBytecode resources, worlds/reskate/examples/corpus_skate_shaders.rs"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Sledding, "shaders"),
