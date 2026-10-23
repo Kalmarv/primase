@@ -253,7 +253,7 @@ impl Lift<'_> {
             .unwrap_or(naga::Scalar::U32);
         let value = self.scalar(args[6])?;
         let value = self.b.bitcast_to(value, kind_of_atomic(scalar));
-        let image = self.b.global_ptr(self.global_of(resource));
+        let (_, image) = self.handle_expr(args[1], 1)?;
         self.b.push(Statement::ImageAtomic {
             image,
             coordinate: coordinate.expr,
@@ -344,7 +344,7 @@ impl Lift<'_> {
         self.b.result_expr(E::SubgroupOperationResult { ty })
     }
 
-    fn collective(
+    pub(super) fn collective(
         &mut self,
         op: naga::SubgroupOperation,
         scan: naga::CollectiveOperation,

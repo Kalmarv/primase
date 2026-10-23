@@ -184,6 +184,9 @@ pub(super) fn text(p: &Program) -> Result<String, Error> {
                 let _ = write!(out, " space{}", b.space);
             }
         }
+        if let Some(c) = r.provenance.counter_of {
+            let _ = write!(out, " counter_of={}", c.0);
+        }
         out.push('\n');
     }
     out.push_str(&wgsl);

@@ -9,6 +9,12 @@ use super::{Lift, Lv};
 use crate::Result;
 use crate::module::{Instruction, ValueId};
 
+/// A field of naga's `RayDesc`, by member index.
+const RAY_FLAGS: u32 = 0;
+const RAY_T_MIN: u32 = 2;
+const RAY_ORIGIN: u32 = 4;
+const RAY_DIRECTION: u32 = 5;
+
 /// A field of naga's `RayIntersection`, by member index.
 const KIND: u32 = 0;
 const T: u32 = 1;
@@ -24,9 +30,9 @@ const WORLD_TO_OBJECT: u32 = 10;
 
 impl Lift<'_> {
     /// The query a handle value names.
-    fn ray_query(&mut self, v: ValueId) -> Result<(Handle<LocalVariable>, u32)> {
+    fn ray_query(&mut self, v: ValueId) -> Result<(Handle<LocalVariable>, u32, Handle<LocalVariable>)> {
         match self.get(v)? {
-            Lv::RayQuery(local, flags) => Ok((local, flags)),
+            Lv::RayQuery(local, flags, ray) => Ok((local, flags, ray)),
             _ => self.refuse("a ray query operation on something that is not a ray query"),
         }
     }
@@ -40,13 +46,15 @@ impl Lift<'_> {
             .insert("ray queries need the RAY_QUERY capability of the device".into());
         let ty = self.b.ty(naga::TypeInner::RayQuery { vertex_return: false });
         let local = self.b.local("ray_query", ty);
-        self.define_result(inst.result, Lv::RayQuery(local, flags))
+        let ray_ty = self.b.module.generate_ray_desc_type();
+        let ray = self.b.local("ray", ray_ty);
+        self.define_result(inst.result, Lv::RayQuery(local, flags, ray))
     }
 
     /// The ray query operations: `TraceRayInline` (179), `Proceed` (180), `Abort` (181), the confirmed hits (182, 183)
     /// and the state of the candidate or committed intersection (184 to 215).
     pub(super) fn ray_query_op(&mut self, inst: &Instruction, code: u64, args: &[ValueId]) -> Result<()> {
-        let (local, declared) = self.ray_query(args[1])?;
+        let (local, declared, ray) = self.ray_query(args[1])?;
         let query = self.b.local_ptr(local);
         match code {
             179 => {
@@ -83,6 +91,12 @@ impl Lift<'_> {
                         origin.expr,
                         direction.expr,
                     ],
+                });
+                // the ray is kept for the queries about it
+                let kept = self.b.local_ptr(ray);
+                self.b.push(Statement::Store {
+                    pointer: kept,
+                    value: descriptor,
                 });
                 self.b.push(Statement::RayQuery {
                     query,
@@ -128,7 +142,7 @@ impl Lift<'_> {
                 });
                 Ok(())
             }
-            _ => self.ray_query_state(inst, code, args, query),
+            _ => self.ray_query_state(inst, code, args, query, ray),
         }
     }
 
@@ -139,6 +153,7 @@ impl Lift<'_> {
         code: u64,
         args: &[ValueId],
         query: Handle<E>,
+        ray: Handle<LocalVariable>,
     ) -> Result<()> {
         let committed = matches!(code, 184 | 188 | 189 | 192 | 194 | 200 | 207..=212 | 215);
         // the structure the intersection is
@@ -160,7 +175,25 @@ impl Lift<'_> {
                     Ok,
                 )
         };
+        // one field of the ray the query was traced with: RayDesc's flags, t_min, origin or direction
+        let traced = |lift: &mut Self, index: u32, kind: Kind, width: u8| {
+            let ptr = lift.b.local_ptr(ray);
+            let field = lift.b.app(E::AccessIndex { base: ptr, index });
+            lift.b.load(field, kind, width)
+        };
         let value = match code {
+            195 => traced(self, RAY_FLAGS, Kind::U, 1),
+            198 => traced(self, RAY_T_MIN, Kind::F, 1),
+            196 | 197 => {
+                let n = component(self, 2)?;
+                let vector = traced(
+                    self,
+                    if code == 196 { RAY_ORIGIN } else { RAY_DIRECTION },
+                    Kind::F,
+                    3,
+                );
+                self.b.lane(vector, n as u8)
+            }
             // the status of the committed hit: nothing (0), a triangle (1) or a procedural primitive (2), as naga's kind
             184 => field(self, KIND, Kind::U, 1),
             // the candidate: a non-opaque triangle (0) or a procedural primitive (1); naga's kind is 1 and 3

@@ -160,6 +160,7 @@ fn program() -> Program {
                 provenance: ResourceProvenance {
                     name: "cb0".into(),
                     d3d: None,
+                    counter_of: None,
                 },
             }],
             facts: Default::default(),

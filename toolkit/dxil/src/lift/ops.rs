@@ -84,6 +84,11 @@ impl Lift<'_> {
                 };
                 scalar!(r)
             }
+            31..=33 if self.is_wide(args[1]) => {
+                let a = self.wide(args[1])?;
+                let r = self.bits_wide(code, a)?;
+                scalar!(r)
+            }
             30 | 31 => {
                 let x = self.uint(args[1])?;
                 let r = self.b.math(
@@ -213,6 +218,7 @@ impl Lift<'_> {
             57 => self.create_handle(inst, args),
             216 => self.annotate_handle(inst, args),
             217 => self.create_handle_from_binding(inst, args),
+            218 => self.create_handle_from_heap(inst, args),
             59 => self.cbuffer_load(inst, args),
             60..=65 | 73 | 74 => self.sample(inst, code, args),
             66 => self.texture_load(inst, args),
@@ -220,6 +226,7 @@ impl Lift<'_> {
             68 | 139 => self.buffer_load(inst, args),
             72 => self.get_dimensions(inst, args),
             69 | 140 => self.buffer_store(args),
+            70 => self.buffer_update_counter(inst, args),
             178 => self.allocate_ray_query(inst, args),
             179..=215 => self.ray_query_op(inst, code, args),
             103 => self.load_output_control_point(inst, args),
@@ -372,22 +379,46 @@ impl Lift<'_> {
         self.define_result(inst.result, Lv::Scalar(r))
     }
 
+    /// The lane number of a thread group laid out in more than one dimension, which WebGPU gives no built-in for
+    /// (naga rejects `subgroup_invocation_id` there): the rank of the invocation among the subgroup's invocations at
+    /// the start of the program. At the start no invocation has diverged or returned, so every invocation of the
+    /// subgroup that exists is active, and the exclusive count of the active invocations below this one is its index in
+    /// the subgroup. D3D leaves the numbering of a wave's lanes to the hardware just as WebGPU leaves a subgroup's
+    /// order to the device, so the subgroup's own order is a lane numbering as valid as any. Compute has no helper
+    /// invocations. The one assumption: a subgroup the thread group fills only in part has its existing invocations at
+    /// the lowest lanes, as every device that fills subgroups in order does.
+    pub(super) fn lane_at_start(&mut self) {
+        if !self.setup.lane_by_rank {
+            return;
+        }
+        self.notes.insert(
+            "the lane number of a thread group laid out in more than one dimension (WebGPU gives such a group no \
+             lane-number built-in) is the invocation's rank among its subgroup's invocations when the program starts: \
+             every invocation that exists is active then, so the exclusive count of active invocations is the index in \
+             the subgroup, which is as valid a numbering as the hardware's own that D3D leaves open; a subgroup the \
+             thread group fills only in part is assumed to have its invocations at the lowest lanes"
+                .into(),
+        );
+        let one = self.b.lit_u(1);
+        let rank = self.collective(
+            naga::SubgroupOperation::Add,
+            naga::CollectiveOperation::ExclusiveScan,
+            one,
+        );
+        let ty = self.b.ty_of(Kind::U, 1);
+        let local = self.b.local("lane", ty);
+        let p = self.b.local_ptr(local);
+        self.b.store(p, rank);
+        self.lane = Some(local);
+    }
+
     /// The value of the input varying that carries a system value the signature does not list.
     pub(super) fn system_input(&mut self, system: SystemValue) -> Result<Val> {
-        // WebGPU gives a lane number only to a thread group laid out along x
-        if system == SystemValue::LaneIndex && self.setup.interface.stage == primase_shader::Stage::Compute {
-            let [_, y, z] = self.b.workgroup_size;
-            if y != 1 || z != 1 {
-                // Kept refused: naga rejects `subgroup_invocation_id` with a multi-dimensional workgroup, and WebGPU does not
-                // say how such a workgroup divides into subgroups, so `local_invocation_index % subgroup_size` would be a
-                // guess at the device's layout (D3D's own mapping is hardware's too). `subgroupExclusiveAdd(1)` is the
-                // rank among the active lanes, not the lane, wherever lanes are inactive.
-                return self.refuse(
-                    "a wave lane index in a thread group that is not along x alone (naga rejects the lane-number \
-                     built-in with a multi-dimensional workgroup, and WebGPU does not say how one divides into \
-                     subgroups)",
-                );
-            }
+        if system == SystemValue::LaneIndex
+            && let Some(lane) = self.lane
+        {
+            let p = self.b.local_ptr(lane);
+            return Ok(self.b.load(p, Kind::U, 1));
         }
         let io = self.setup.io.clone();
         let Some(index) = io

@@ -10,7 +10,8 @@ use naga::{
 };
 use primase_shader::build::{Kind, Val, component};
 use primase_shader::{
-    Access, BufferKind, ResourceId, ResourceKind, SampleType, ScalarType, StorageTarget, TextureDim,
+    Access, BufferKind, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType,
+    StorageTarget, TextureDim,
 };
 
 use super::setup::{binding_of, const_int, dx_opcode};
@@ -28,6 +29,10 @@ pub(super) struct Resources {
     views: BTreeMap<usize, (bool, bool)>,
     /// The unordered-access buffers an atomic operation reaches, and the integer type their atomics have.
     pub(super) atomic: BTreeMap<usize, naga::Scalar>,
+    /// The unordered-access buffers whose counter the program updates.
+    counted: BTreeSet<usize>,
+    /// The hidden counter of such a buffer: its resource's global.
+    counters: BTreeMap<usize, Handle<GlobalVariable>>,
     /// The table of D3D's standard sample positions, made when a program asks for one.
     sample_positions: Option<Handle<GlobalVariable>>,
     /// The globals are made (a program of several functions makes them once).
@@ -119,6 +124,7 @@ impl Lift<'_> {
             }
             // a handle annotated with its properties is the same handle
             216 => self.handle_of(args[1]),
+            218 => self.setup.heap.get(&v).copied(),
             _ => None,
         }
     }
@@ -128,6 +134,7 @@ impl Lift<'_> {
         let mut depth = BTreeSet::new();
         let mut views: BTreeMap<usize, (bool, bool)> = BTreeMap::new();
         let mut atomic: BTreeMap<usize, naga::Scalar> = BTreeMap::new();
+        let mut counted = BTreeSet::new();
         let original = self.f;
         for f in self.functions.clone() {
             self.f = f;
@@ -150,6 +157,9 @@ impl Lift<'_> {
                         }
                     }
                     67 | 69 | 140 => views.entry(r).or_default().1 = true,
+                    70 => {
+                        counted.insert(r);
+                    }
                     // atomics read and write; a signed min or max (4, 5) makes the buffer's atomics signed
                     78 | 79 => {
                         views.insert(r, (true, true));
@@ -167,6 +177,7 @@ impl Lift<'_> {
         self.resources.depth = depth;
         self.resources.views = views;
         self.resources.atomic = atomic;
+        self.resources.counted = counted;
     }
 
     pub(super) fn declare_resources(&mut self) -> Result<()> {
@@ -345,10 +356,21 @@ impl Lift<'_> {
                             ..
                         }
                 );
+                let images = matches!(
+                    resource.kind,
+                    ResourceKind::Storage {
+                        target: StorageTarget::Image { .. },
+                        ..
+                    }
+                );
                 self.notes.insert(if buffers {
                     "a resource array is a binding array: it needs STORAGE_BUFFER_BINDING_ARRAY (with non-uniform \
                      indexing), each element a structure holding the buffer's words, and an unbounded one is sized by \
                      the bound data"
+                        .into()
+                } else if images {
+                    "a resource array is a binding array: it needs STORAGE_TEXTURE_BINDING_ARRAY (with non-uniform \
+                     indexing), and an unbounded one is sized by the bound data"
                         .into()
                 } else {
                     "a resource array is a binding array: it needs TEXTURE_AND_SAMPLER_BINDING_ARRAY (with non-uniform \
@@ -401,7 +423,94 @@ impl Lift<'_> {
             self.resources.bound.push((resource.id, g));
             self.resources.globals.push(g);
         }
+        self.declare_counters();
         Ok(())
+    }
+
+    /// The hidden counter of each unordered-access buffer whose counter the program updates: a resource of its own
+    /// (one raw read-write buffer, `counter_of` the view), a buffer of its own in WebGPU, group 4 at the view's binding.
+    fn declare_counters(&mut self) {
+        for view in self.resources.counted.clone() {
+            let range = self.setup.ranges[view];
+            let name = self.setup.interface.resources[view].provenance.name.clone();
+            let id = ResourceId(self.setup.interface.resources.len() as u32);
+            self.setup.interface.resources.push(Resource {
+                id,
+                kind: ResourceKind::Storage {
+                    target: StorageTarget::Buffer(BufferKind::Raw),
+                    access: Access::ReadWrite,
+                },
+                count: 1,
+                provenance: ResourceProvenance {
+                    name: format!("{name}.counter"),
+                    d3d: None,
+                    counter_of: Some(self.setup.interface.resources[view].id),
+                },
+            });
+            self.setup.ranges.push(range);
+            let atomic = self.b.ty(TypeInner::Atomic(naga::Scalar::U32));
+            let ty = self.b.ty(TypeInner::Array {
+                base: atomic,
+                size: ArraySize::Dynamic,
+                stride: 4,
+            });
+            let binding = if range.space == 0 {
+                range.lower
+            } else {
+                (range.space << 16) | range.lower
+            };
+            let g = self.b.global(GlobalVariable {
+                name: Some(format!("u{}_counter", range.lower)),
+                space: AddressSpace::Storage {
+                    access: StorageAccess::LOAD | StorageAccess::STORE,
+                },
+                binding: Some(ResourceBinding { group: 4, binding }),
+                ty,
+                init: None,
+                memory_decorations: Default::default(),
+            });
+            self.resources.bound.push((id, g));
+            self.resources.globals.push(g);
+            self.resources.counters.insert(view, g);
+        }
+    }
+
+    /// `BufferUpdateCounter(handle, increment)`: add 1 or subtract 1 from the view's counter. An increment gives the
+    /// counter as it was (`IncrementCounter`), a decrement as it is after (`DecrementCounter`), as D3D's append and
+    /// consume instructions do.
+    pub(super) fn buffer_update_counter(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
+        let view = self.handle_resource(args[1], 1)?;
+        let Some(&counter) = self.resources.counters.get(&view) else {
+            return self.refuse("a counter update of a view the scan did not find");
+        };
+        let Some(step) = const_int(self.m, self.f, args[2]) else {
+            return self.refuse("a counter updated by a step that is not constant");
+        };
+        if step != 1 && step != -1 {
+            return self.refuse(format!("a counter updated by {step}"));
+        }
+        self.notes.insert(
+            "an unordered-access view's hidden counter is a buffer of its own (the resource marked counter_of), bound \
+             with the view and started at its initial count"
+                .into(),
+        );
+        let global = self.b.global_ptr(counter);
+        let zero = self.b.lit_u(0);
+        let slot = self.b.app(E::Access {
+            base: global,
+            index: zero.expr,
+        });
+        let amount = self.b.lit_u(step as u32);
+        let old = self
+            .b
+            .atomic(slot, naga::AtomicFunction::Add, amount, naga::Scalar::U32);
+        let result = if step == 1 {
+            old
+        } else {
+            let one = self.b.lit_u(1);
+            self.b.binary(Bo::Subtract, old, one)
+        };
+        self.define_result(inst.result, Lv::Scalar(result))
     }
 
     pub(super) fn texture_shape(&self, resource: usize) -> Result<(TextureDim, bool, bool, Kind, bool)> {
@@ -568,6 +677,38 @@ impl Lift<'_> {
                 class,
                 resource,
                 element,
+            },
+        )
+    }
+
+    /// `CreateHandleFromHeap(index, sampler heap, non-uniform)`: an element of the unbounded array the annotation
+    /// makes of the heap's descriptors of that kind.
+    pub(super) fn create_handle_from_heap(&mut self, inst: &Instruction, args: &[ValueId]) -> Result<()> {
+        let Some((handle, _)) = inst.result else {
+            return self.refuse("a heap handle without a result");
+        };
+        let Some(&resource) = self.setup.heap.get(&handle) else {
+            return self.refuse("a heap handle the setup did not find");
+        };
+        self.notes.insert(
+            "a descriptor heap's resources are carried as one unbounded binding array for each kind of view the \
+             program annotates them as, in a register space of its own: the renderer binds a heap's descriptors of \
+             that kind"
+                .into(),
+        );
+        let class = match self.setup.kind(resource) {
+            ResourceKind::Sampler { .. } => 3,
+            ResourceKind::ConstantBuffer { .. } => 2,
+            ResourceKind::Storage { .. } => 1,
+            _ => 0,
+        };
+        let index = self.uint(args[1])?;
+        self.define_result(
+            inst.result,
+            Lv::Handle {
+                class,
+                resource,
+                element: Some(index),
             },
         )
     }
@@ -739,7 +880,7 @@ impl Lift<'_> {
     pub(super) fn sample(&mut self, inst: &Instruction, code: u64, args: &[ValueId]) -> Result<()> {
         let (resource, image) = self.handle_expr(args[1], 0)?;
         let (_, smp) = self.handle_expr(args[2], 3)?;
-        let (dim, arrayed, multi, _, depth) = self.texture_shape(resource)?;
+        let (dim, arrayed, multi, sample_kind, depth) = self.texture_shape(resource)?;
         if multi {
             return self.refuse("a sample of a multisampled texture");
         }
@@ -838,9 +979,10 @@ impl Lift<'_> {
             depth_ref,
             clamp_to_edge: false,
         });
+        // a gather of an integer texture returns integers
         let mut r = Val {
             expr,
-            kind: Kind::F,
+            kind: sample_kind,
             width: if depth && gather.is_none() { 1 } else { 4 },
         };
         if r.width == 1 {
@@ -944,7 +1086,7 @@ impl Lift<'_> {
 
     /// `TextureStore(uav, x, y, z, v0..v3, mask)`.
     pub(super) fn texture_store(&mut self, args: &[ValueId]) -> Result<()> {
-        let resource = self.handle(args[1], 1)?;
+        let (resource, image) = self.handle_expr(args[1], 1)?;
         let (dim, arrayed, _, kind, _) = self.texture_shape(resource)?;
         if const_int(self.m, self.f, args[9]) != Some(15) {
             return self.refuse("a store through a view with a partial write mask");
@@ -956,7 +1098,6 @@ impl Lift<'_> {
             lanes.push(self.b.bitcast_to(v, kind));
         }
         let value = self.b.compose(&lanes);
-        let image = self.b.global_ptr(self.global_of(resource));
         self.b.push(naga::Statement::ImageStore {
             image,
             coordinate: coordinate.expr,

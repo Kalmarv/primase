@@ -64,6 +64,17 @@ pub enum Constant {
         base: ValueId,
         indices: Vec<ValueId>,
     },
+    /// A constant cast of a module value (to the type of the constant).
+    Cast {
+        op: CastOp,
+        value: ValueId,
+    },
+    /// A constant binary operation on module values.
+    Binary {
+        op: BinaryOp,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -365,6 +376,7 @@ impl Module {
     fn read_constants(&mut self, block: &Block) -> Result<()> {
         let mut ty: Option<TypeId> = None;
         for r in block.records() {
+            let id = |v: u64| usize::try_from(v).map_err(|_| error(r.at, "value id"));
             if r.code == 1 {
                 ty = Some(self.ty(op(r, 0)?, r.at)?);
                 continue;
@@ -390,12 +402,22 @@ impl Module {
                     if !rest.is_empty() || pairs.is_empty() {
                         return Err(error(r.at, "constant getelementptr operands"));
                     }
-                    let id = |v: u64| usize::try_from(v).map_err(|_| error(r.at, "value id"));
                     Constant::Gep {
                         base: id(pairs[0][1])?,
                         indices: pairs[1..].iter().map(|p| id(p[1])).collect::<Result<_>>()?,
                     }
                 }
+                // CE_BINOP: [opcode, lhs, rhs, flags?]
+                10 => Constant::Binary {
+                    op: binary(op(r, 0)?, r.at)?,
+                    lhs: id(op(r, 1)?)?,
+                    rhs: id(op(r, 2)?)?,
+                },
+                // CE_CAST: [opcode, operand type, operand]
+                11 => Constant::Cast {
+                    op: cast(op(r, 0)?, r.at)?,
+                    value: id(op(r, 2)?)?,
+                },
                 other => {
                     return Err(error(
                         r.at,

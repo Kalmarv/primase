@@ -50,6 +50,8 @@ pub struct Range {
     pub element: Option<u32>,
     /// A structured SRV's or UAV's element stride in bytes, where its tags state one.
     pub stride: Option<u32>,
+    /// An unordered-access view with a hidden counter (an append or consume buffer, `IncrementCounter`).
+    pub counter: bool,
 }
 
 fn node<'a>(m: &'a Module, id: MetadataId, at: &str) -> Result<&'a [Option<MetadataId>]> {
@@ -354,6 +356,10 @@ pub fn ranges(m: &Module) -> Result<Vec<(Range, String, Option<TypeId>)>> {
                         .map_err(|_| error(0, "register space"))?,
                     element,
                     stride,
+                    // a UAV's record states whether it has a counter after the shape and the coherence
+                    counter: class == 1
+                        && r.get(8).copied().flatten().is_some()
+                        && int(m, operand(r, 8, at)?, at)? != 0,
                 },
                 string(m, operand(r, 2, at)?),
                 ty,
@@ -713,6 +719,132 @@ fn tess_domain(code: u32) -> Result<TessDomain> {
     }
 }
 
+/// The resource a range of the module's resource lists declares, numbered `id`: `name` and `ty` are the record's
+/// variable name and handle type.
+pub(crate) fn resource_of(
+    id: ResourceId,
+    range: &Range,
+    name: String,
+    ty: Option<TypeId>,
+    source: &Module,
+) -> Result<Resource> {
+    let (kind, class) = match range.class {
+        0 | 1 => {
+            let uav = range.class == 1;
+            let kind = match view(range, &name, ty, source)? {
+                View::Texture {
+                    dim,
+                    arrayed,
+                    multisampled,
+                    scalar,
+                } if !uav => ResourceKind::Texture {
+                    dim,
+                    arrayed,
+                    multisampled,
+                    sample: sample_type(scalar),
+                },
+                View::Texture {
+                    multisampled: true, ..
+                } => {
+                    return Err(error(0, format!("{name}: a multisampled unordered-access view")));
+                }
+                View::Texture {
+                    dim, arrayed, scalar, ..
+                } => ResourceKind::Storage {
+                    target: StorageTarget::Image {
+                        dim,
+                        arrayed,
+                        sample: sample_type(scalar),
+                    },
+                    access: Access::ReadWrite,
+                },
+                View::AccelerationStructure if !uav => ResourceKind::AccelerationStructure,
+                View::AccelerationStructure => {
+                    return Err(error(
+                        0,
+                        format!("{name}: an unordered-access acceleration structure"),
+                    ));
+                }
+                View::Buffer(buffer) if !uav => ResourceKind::Buffer(buffer),
+                View::Buffer(buffer) => ResourceKind::Storage {
+                    target: StorageTarget::Buffer(buffer),
+                    access: Access::ReadWrite,
+                },
+            };
+            (
+                kind,
+                if uav {
+                    D3dClass::UnorderedAccess
+                } else {
+                    D3dClass::ShaderResource
+                },
+            )
+        }
+        2 => {
+            let constants = match ty {
+                Some(t) => {
+                    let names = fields(source, t)?;
+                    let elements = match source.types.get(t) {
+                        Some(Type::Struct { elements, .. }) => elements.clone(),
+                        _ => Vec::new(),
+                    };
+                    names
+                        .into_iter()
+                        .zip(elements)
+                        .map(|(note, e)| {
+                            Ok(BufferConstant {
+                                ty: constant_type(source, e, note.hint(), 0)?,
+                                name: note.name,
+                                offset: note.offset,
+                                default: None,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                }
+                None => Vec::new(),
+            };
+            (
+                ResourceKind::ConstantBuffer {
+                    layout: BufferLayout {
+                        size: range.extra,
+                        constants,
+                    },
+                },
+                D3dClass::ConstantBuffer,
+            )
+        }
+        _ => (
+            ResourceKind::Sampler {
+                comparison: match range.extra {
+                    0 => false,
+                    1 => true,
+                    other => {
+                        return Err(error(0, format!("{name}: sampler kind {other} is not mapped")));
+                    }
+                },
+            },
+            D3dClass::Sampler,
+        ),
+    };
+    if range.count == 0 {
+        return Err(error(0, format!("{name}: a range of no bindings")));
+    }
+    Ok(Resource {
+        id,
+        kind,
+        count: range.count,
+        provenance: ResourceProvenance {
+            name,
+            d3d: Some(D3dBinding {
+                class,
+                register: range.lower,
+                space: range.space,
+            }),
+            counter_of: None,
+        },
+    })
+}
+
 /// The interface of a container: stage, signatures, resources, and each pixel input's interpolation from the entry
 /// point's signature metadata. `program` is the DXIL module; `named` the STAT part's reflection module when the
 /// container has one.
@@ -730,120 +862,7 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
     let source = named.unwrap_or(program);
     let mut resources = Vec::new();
     for (i, (range, name, ty)) in ranges(source)?.into_iter().enumerate() {
-        let (kind, class) = match range.class {
-            0 | 1 => {
-                let uav = range.class == 1;
-                let kind = match view(&range, &name, ty, source)? {
-                    View::Texture {
-                        dim,
-                        arrayed,
-                        multisampled,
-                        scalar,
-                    } if !uav => ResourceKind::Texture {
-                        dim,
-                        arrayed,
-                        multisampled,
-                        sample: sample_type(scalar),
-                    },
-                    View::Texture {
-                        multisampled: true, ..
-                    } => {
-                        return Err(error(0, format!("{name}: a multisampled unordered-access view")));
-                    }
-                    View::Texture {
-                        dim, arrayed, scalar, ..
-                    } => ResourceKind::Storage {
-                        target: StorageTarget::Image {
-                            dim,
-                            arrayed,
-                            sample: sample_type(scalar),
-                        },
-                        access: Access::ReadWrite,
-                    },
-                    View::AccelerationStructure if !uav => ResourceKind::AccelerationStructure,
-                    View::AccelerationStructure => {
-                        return Err(error(
-                            0,
-                            format!("{name}: an unordered-access acceleration structure"),
-                        ));
-                    }
-                    View::Buffer(buffer) if !uav => ResourceKind::Buffer(buffer),
-                    View::Buffer(buffer) => ResourceKind::Storage {
-                        target: StorageTarget::Buffer(buffer),
-                        access: Access::ReadWrite,
-                    },
-                };
-                (
-                    kind,
-                    if uav {
-                        D3dClass::UnorderedAccess
-                    } else {
-                        D3dClass::ShaderResource
-                    },
-                )
-            }
-            2 => {
-                let constants = match ty {
-                    Some(t) => {
-                        let names = fields(source, t)?;
-                        let elements = match source.types.get(t) {
-                            Some(Type::Struct { elements, .. }) => elements.clone(),
-                            _ => Vec::new(),
-                        };
-                        names
-                            .into_iter()
-                            .zip(elements)
-                            .map(|(note, e)| {
-                                Ok(BufferConstant {
-                                    ty: constant_type(source, e, note.hint(), 0)?,
-                                    name: note.name,
-                                    offset: note.offset,
-                                    default: None,
-                                })
-                            })
-                            .collect::<Result<Vec<_>>>()?
-                    }
-                    None => Vec::new(),
-                };
-                (
-                    ResourceKind::ConstantBuffer {
-                        layout: BufferLayout {
-                            size: range.extra,
-                            constants,
-                        },
-                    },
-                    D3dClass::ConstantBuffer,
-                )
-            }
-            _ => (
-                ResourceKind::Sampler {
-                    comparison: match range.extra {
-                        0 => false,
-                        1 => true,
-                        other => {
-                            return Err(error(0, format!("{name}: sampler kind {other} is not mapped")));
-                        }
-                    },
-                },
-                D3dClass::Sampler,
-            ),
-        };
-        if range.count == 0 {
-            return Err(error(0, format!("{name}: a range of no bindings")));
-        }
-        resources.push(Resource {
-            id: ResourceId(i as u32),
-            kind,
-            count: range.count,
-            provenance: ResourceProvenance {
-                name,
-                d3d: Some(D3dBinding {
-                    class,
-                    register: range.lower,
-                    space: range.space,
-                }),
-            },
-        });
+        resources.push(resource_of(ResourceId(i as u32), &range, name, ty, source)?);
     }
     let mut inputs = part(b"ISG1")
         .map(|p| signature(p, stage, false))

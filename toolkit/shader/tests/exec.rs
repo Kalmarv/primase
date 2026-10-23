@@ -174,6 +174,7 @@ fn derivative_program() -> Program {
                         register: 3,
                         space: 0,
                     }),
+                    counter_of: None,
                 },
             }],
             facts: Default::default(),
@@ -256,6 +257,7 @@ fn volume_program() -> Program {
                 register,
                 space: 0,
             }),
+            counter_of: None,
         },
     };
     Program {
@@ -621,6 +623,7 @@ fn array_program() -> Program {
                 register: 0,
                 space: 0,
             }),
+            counter_of: None,
         },
     };
     Program {

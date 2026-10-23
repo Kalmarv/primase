@@ -13,10 +13,12 @@ impl Lift<'_> {
     pub(crate) fn constant(&mut self, c: &Constant, ty: TypeId) -> Result<Lv> {
         let kind = |lift: &Self| lift.kind_of_type(ty);
         Ok(match c {
+            Constant::Integer(i) if self.is_wide_type(ty) => self.wide_constant(*i as u64),
+            Constant::Null | Constant::Undef if self.is_wide_type(ty) => self.wide_constant(0),
             Constant::Integer(i) => match self.m.types.get(ty) {
                 Some(Type::Integer(1)) => Lv::Scalar(self.b.lit_b(i & 1 != 0)),
                 Some(Type::Integer(32)) => Lv::Scalar(self.b.lit_u(*i as u32)),
-                Some(Type::Integer(16)) => Lv::Scalar(self.b.lit_u(*i as u32 & 0xffff)),
+                Some(Type::Integer(w @ 2..=31)) => Lv::Scalar(self.b.lit_u(*i as u32 & ((1u32 << w) - 1))),
                 _ => return kind(self).map(|_| unreachable!("an integer constant of another type")),
             },
             Constant::Float(bits) => match self.m.types.get(ty) {
@@ -43,6 +45,37 @@ impl Lift<'_> {
             Constant::Gep { base, indices } => {
                 let (base, indices) = (*base, indices.clone());
                 self.constant_gep(base, &indices)?
+            }
+            // a constant cast keeps a pointer (a module global seen as another type), else it is the cast made
+            Constant::Cast { op, value } if self.is_wide(*value) || self.is_wide_type(ty) => {
+                self.cast_wide(*op, *value, ty)?
+            }
+            Constant::Binary { op, lhs, rhs } if self.is_wide(*lhs) => {
+                let (a, b) = (self.wide(*lhs)?, self.wide(*rhs)?);
+                let r = self.binary_wide(*op, a, b)?;
+                self.pair(r)
+            }
+            Constant::Cast { op, value } => {
+                if *op == CastOp::BitCast
+                    && let Lv::Pointer(p) = self.get(*value)?
+                {
+                    return Ok(Lv::Pointer(p));
+                }
+                let v = self.scalar(*value)?;
+                let from = self.narrow_width(*value);
+                if from.is_some() || self.narrow_width_of_type(ty).is_some() {
+                    Lv::Scalar(self.cast_narrow(*op, v, from, ty)?)
+                } else {
+                    Lv::Scalar(self.cast(*op, v, ty)?)
+                }
+            }
+            Constant::Binary { op, lhs, rhs } => {
+                let (a, b) = (self.scalar(*lhs)?, self.scalar(*rhs)?);
+                let r = match self.narrow_width(*lhs) {
+                    Some(w) => self.binary_narrow(*op, a, b, w)?,
+                    None => self.binary(*op, a, b)?,
+                };
+                Lv::Scalar(r)
             }
             other => return self.refuse(format!("a constant of this form ({other:?})")),
         })
@@ -176,14 +209,30 @@ impl Lift<'_> {
                 continue;
             };
             self.at = inst.at;
-            let kind = self.kind_of_type(ty)?;
-            let t = self.b.ty_of(kind, 1);
-            let local = self.b.local(&format!("phi{}", v - self.f.first), t);
-            self.slots[v - self.f.first] = Some(Slot::Stored(Stored::Scalar {
-                local,
-                kind,
-                width: 1,
-            }));
+            let name = format!("phi{}", v - self.f.first);
+            let t = self.b.ty_of(Kind::U, 1);
+            let stored = if self.is_wide_type(ty) {
+                let (lo, hi) = (
+                    self.b.local(&format!("{name}_lo"), t),
+                    self.b.local(&format!("{name}_hi"), t),
+                );
+                let word = |local| Stored::Scalar {
+                    local,
+                    kind: Kind::U,
+                    width: 1,
+                };
+                Stored::Agg(vec![word(lo), word(hi)])
+            } else {
+                let kind = self.kind_of_type(ty)?;
+                let t = self.b.ty_of(kind, 1);
+                let local = self.b.local(&name, t);
+                Stored::Scalar {
+                    local,
+                    kind,
+                    width: 1,
+                }
+            };
+            self.slots[v - self.f.first] = Some(Slot::Stored(stored));
         }
         Ok(())
     }
@@ -199,17 +248,34 @@ impl Lift<'_> {
             let Some((value, _)) = incoming.iter().find(|(_, b)| *b == from) else {
                 return self.refuse("a phi without a value for one of its predecessors");
             };
-            let value = self.scalar(*value)?;
+            let value = if self.is_wide(*value) {
+                let (lo, hi) = self.wide(*value)?;
+                vec![lo, hi]
+            } else {
+                vec![self.scalar(*value)?]
+            };
             pending.push((v, value));
         }
-        for (v, value) in pending {
-            let Some(Slot::Stored(Stored::Scalar { local, kind, .. })) = self.slots[v - self.f.first].clone()
-            else {
-                return self.refuse("a phi without its local");
+        for (v, values) in pending {
+            let locals = match self.slots[v - self.f.first].clone() {
+                Some(Slot::Stored(Stored::Scalar { local, kind, .. })) => vec![(local, kind)],
+                Some(Slot::Stored(Stored::Agg(words))) => {
+                    let mut locals = Vec::new();
+                    for word in words {
+                        let Stored::Scalar { local, kind, .. } = word else {
+                            return self.refuse("a phi without its local");
+                        };
+                        locals.push((local, kind));
+                    }
+                    locals
+                }
+                _ => return self.refuse("a phi without its local"),
             };
-            let value = self.b.bitcast_to(value, kind);
-            let p = self.b.local_ptr(local);
-            self.b.store(p, value);
+            for ((local, kind), value) in locals.into_iter().zip(values) {
+                let value = self.b.bitcast_to(value, kind);
+                let p = self.b.local_ptr(local);
+                self.b.store(p, value);
+            }
         }
         Ok(())
     }
@@ -218,6 +284,12 @@ impl Lift<'_> {
         self.at = inst.at;
         let result = inst.result;
         match &inst.op {
+            Op::Binary { op, lhs, rhs } if self.is_wide(*lhs) => {
+                let (a, b) = (self.wide(*lhs)?, self.wide(*rhs)?);
+                let r = self.binary_wide(*op, a, b)?;
+                let r = self.pair(r);
+                self.define_result(result, r)
+            }
             Op::Binary { op, lhs, rhs } => {
                 let (mut a, mut b) = (self.scalar(*lhs)?, self.scalar(*rhs)?);
                 // an integer operation on a value carried as a float (memory of one kind read as another) is on its bits
@@ -231,12 +303,18 @@ impl Lift<'_> {
                     a = self.b.bitcast_to(a, Kind::U);
                     b = self.b.bitcast_to(b, Kind::U);
                 }
-                let r = if self.is_sixteen(*lhs) {
-                    self.binary_sixteen(*op, a, b)?
-                } else {
-                    self.binary(*op, a, b)?
+                let r = match self.narrow_width(*lhs) {
+                    Some(w) => self.binary_narrow(*op, a, b, w)?,
+                    None => self.binary(*op, a, b)?,
                 };
                 self.define_result(result, Lv::Scalar(r))
+            }
+            Op::Cast { op, value }
+                if self.is_wide(*value) || result.is_some_and(|(_, t)| self.is_wide_type(t)) =>
+            {
+                let to = result.map(|(_, t)| t).expect("a cast has a result");
+                let r = self.cast_wide(*op, *value, to)?;
+                self.define_result(result, r)
             }
             Op::Cast { op, value } => {
                 // a pointer cast (dxc casts a local array to bytes for its lifetime markers) keeps the pointer
@@ -247,23 +325,41 @@ impl Lift<'_> {
                 }
                 let v = self.scalar(*value)?;
                 let to = result.map(|(_, t)| t).expect("a cast has a result");
-                let r = if self.is_sixteen(*value) || matches!(self.m.types.get(to), Some(Type::Integer(16)))
-                {
-                    self.cast_sixteen(*op, v, self.is_sixteen(*value), to)?
+                let from = self.narrow_width(*value);
+                let r = if from.is_some() || self.narrow_width_of_type(to).is_some() {
+                    self.cast_narrow(*op, v, from, to)?
                 } else {
                     self.cast(*op, v, to)?
                 };
                 self.define_result(result, Lv::Scalar(r))
             }
+            Op::Compare { predicate, lhs, rhs } if self.is_wide(*lhs) => {
+                let (a, b) = (self.wide(*lhs)?, self.wide(*rhs)?);
+                let r = self.compare_wide(*predicate, a, b)?;
+                self.define_result(result, Lv::Scalar(r))
+            }
             Op::Compare { predicate, lhs, rhs } => {
                 let (mut a, mut b) = (self.scalar(*lhs)?, self.scalar(*rhs)?);
-                // a signed comparison of 16-bit integers is on their sign extensions
-                if self.is_sixteen(*lhs) && (38..=41).contains(predicate) {
-                    a = self.sign_extend_sixteen(a);
-                    b = self.sign_extend_sixteen(b);
+                // a signed comparison of narrow integers is on their sign extensions
+                if let Some(w) = self.narrow_width(*lhs)
+                    && (38..=41).contains(predicate)
+                {
+                    a = self.sign_extend_narrow(a, w);
+                    b = self.sign_extend_narrow(b, w);
                 }
                 let r = self.compare(*predicate, a, b)?;
                 self.define_result(result, Lv::Scalar(r))
+            }
+            Op::Select {
+                condition,
+                then,
+                otherwise,
+            } if self.is_wide(*then) => {
+                let c = self.scalar(*condition)?;
+                let (t, o) = (self.wide(*then)?, self.wide(*otherwise)?);
+                let r = self.select_wide(c, t, o);
+                let r = self.pair(r);
+                self.define_result(result, r)
             }
             Op::Select {
                 condition,
@@ -445,82 +541,100 @@ impl Lift<'_> {
         })
     }
 
-    /// Whether a value is a 16-bit integer.
-    fn is_sixteen(&self, v: ValueId) -> bool {
+    /// The width of a value that is an integer narrower than 32 bits and wider than a boolean (16 bits for a half's
+    /// sibling, 4 for a bit-field cut by the compiler), which is carried as the 32-bit unsigned integer of its bits,
+    /// zero-extended.
+    pub(super) fn narrow_width(&self, v: ValueId) -> Option<u32> {
         let ty = if v < self.f.first {
             self.m.value_types.get(v).copied()
         } else {
             self.f.local_types.get(v - self.f.first).copied()
         };
-        matches!(ty.and_then(|t| self.m.types.get(t)), Some(Type::Integer(16)))
+        self.narrow_width_of_type(ty?)
     }
 
-    /// The low 16 bits of a 32-bit value, zero-extended: a 16-bit integer's carried form.
-    fn mask_sixteen(&mut self, v: Val) -> Val {
+    pub(super) fn narrow_width_of_type(&self, ty: TypeId) -> Option<u32> {
+        match self.m.types.get(ty) {
+            Some(Type::Integer(w @ 2..=31)) => Some(*w),
+            _ => None,
+        }
+    }
+
+    /// The low `width` bits of a 32-bit value, zero-extended: a narrow integer's carried form.
+    pub(super) fn mask_narrow(&mut self, v: Val, width: u32) -> Val {
         let v = self.b.bitcast_to(v, Kind::U);
-        let mask = self.b.lit_u(0xffff);
+        let mask = self.b.lit_u((1u32 << width) - 1);
         self.b.binary(Bo::And, v, mask)
     }
 
-    /// The sign extension of a carried 16-bit integer to 32 bits, as the same bits.
-    fn sign_extend_sixteen(&mut self, v: Val) -> Val {
+    /// The sign extension of a carried narrow integer to 32 bits, as the same bits.
+    pub(super) fn sign_extend_narrow(&mut self, v: Val, width: u32) -> Val {
         let v = self.b.bitcast_to(v, Kind::U);
-        let sixteen = self.b.lit_u(16);
-        let high = self.b.binary(Bo::ShiftLeft, v, sixteen);
+        let shift = self.b.lit_u(32 - width);
+        let high = self.b.binary(Bo::ShiftLeft, v, shift);
         let signed = self.b.bitcast(high, Kind::I);
-        let back = self.b.binary(Bo::ShiftRight, signed, sixteen);
+        let back = self.b.binary(Bo::ShiftRight, signed, shift);
         self.b.bitcast(back, Kind::U)
     }
 
-    /// A binary operation on 16-bit integers: the 32-bit operation, signed ones on sign extensions, the result cut
-    /// back to 16 bits.
-    fn binary_sixteen(&mut self, op: BinaryOp, a: Val, b: Val) -> Result<Val> {
+    /// A binary operation on narrow integers: the 32-bit operation, signed ones on sign extensions, the result cut
+    /// back to the width.
+    fn binary_narrow(&mut self, op: BinaryOp, a: Val, b: Val, width: u32) -> Result<Val> {
         let (a, b) = (self.b.bitcast_to(a, Kind::U), self.b.bitcast_to(b, Kind::U));
         let (a, b) = if matches!(op, BinaryOp::AShr | BinaryOp::SDiv | BinaryOp::SRem) {
-            (self.sign_extend_sixteen(a), b)
+            (self.sign_extend_narrow(a, width), b)
         } else {
             (a, b)
         };
         let b = if matches!(op, BinaryOp::SDiv | BinaryOp::SRem) {
-            self.sign_extend_sixteen(b)
+            self.sign_extend_narrow(b, width)
         } else {
             b
         };
         let r = self.binary(op, a, b)?;
-        Ok(self.mask_sixteen(r))
+        Ok(self.mask_narrow(r, width))
     }
 
-    /// A cast from or to a 16-bit integer.
-    fn cast_sixteen(&mut self, op: CastOp, v: Val, from_sixteen: bool, to: TypeId) -> Result<Val> {
+    /// A cast from a narrow integer (of width `from`) or to one (the type `to`).
+    fn cast_narrow(&mut self, op: CastOp, v: Val, from: Option<u32>, to: TypeId) -> Result<Val> {
         let v = if v.kind == Kind::F {
             v
         } else {
             self.b.bitcast_to(v, Kind::U)
         };
-        Ok(match (op, from_sixteen) {
-            (CastOp::ZExt, true) => v,
-            (CastOp::SExt, true) => self.sign_extend_sixteen(v),
-            (CastOp::Trunc, false) => self.mask_sixteen(v),
-            (CastOp::UiToFp, true) => self.b.convert(v, Kind::F),
-            (CastOp::SiToFp, true) => {
-                let s = self.sign_extend_sixteen(v);
+        let target = self.narrow_width_of_type(to);
+        Ok(match (op, from, target) {
+            (CastOp::ZExt, Some(_), _) => v,
+            (CastOp::SExt, Some(w), _) => {
+                let extended = self.sign_extend_narrow(v, w);
+                match target {
+                    Some(t) => self.mask_narrow(extended, t),
+                    None => extended,
+                }
+            }
+            (CastOp::Trunc, _, Some(t)) => self.mask_narrow(v, t),
+            (CastOp::UiToFp, Some(_), _) => self.b.convert(v, Kind::F),
+            (CastOp::SiToFp, Some(w), _) => {
+                let s = self.sign_extend_narrow(v, w);
                 let i = self.b.bitcast_to(s, Kind::I);
                 self.b.convert(i, Kind::F)
             }
-            (CastOp::FpToUi, false) => {
+            (CastOp::FpToUi, None, Some(t)) => {
                 let u = self.b.d3d_float_to_uint(v);
-                self.mask_sixteen(u)
+                self.mask_narrow(u, t)
             }
-            (CastOp::FpToSi, false) => {
+            (CastOp::FpToSi, None, Some(t)) => {
                 let i = self.b.d3d_float_to_int(v);
                 let u = self.b.bitcast(i, Kind::U);
-                self.mask_sixteen(u)
+                self.mask_narrow(u, t)
             }
-            (CastOp::BitCast, _) => {
+            (CastOp::BitCast, _, _) => {
                 let kind = self.kind_of_type(to)?;
                 self.b.bitcast_to(v, kind)
             }
-            (other, _) => return self.refuse(format!("the cast {other:?} of a 16-bit integer")),
+            // a truncation to a boolean
+            (CastOp::Trunc, Some(_), None) => self.cast(op, v, to)?,
+            (other, ..) => return self.refuse(format!("the cast {other:?} of a narrow integer")),
         })
     }
 

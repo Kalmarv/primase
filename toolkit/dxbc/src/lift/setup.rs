@@ -1062,6 +1062,7 @@ impl Setup {
                         register,
                         space: 0,
                     }),
+                    counter_of: None,
                 },
             });
         }

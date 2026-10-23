@@ -67,6 +67,12 @@ pub(crate) struct Setup {
     /// The kept resources' ranges, parallel to `interface.resources`.
     pub ranges: Vec<Range>,
     pub notes: BTreeSet<String>,
+    /// A thread group laid out in more than one dimension has no lane-number built-in in WebGPU: the lane is made at
+    /// the start of the program (see `Lift::lane_at_start`).
+    pub lane_by_rank: bool,
+    /// The resources of descriptor-heap handles (`ResourceDescriptorHeap[i]`): the interface resource of each
+    /// `CreateHandleFromHeap` call's result.
+    pub heap: BTreeMap<ValueId, usize>,
 }
 
 impl Setup {
@@ -225,6 +231,10 @@ impl Setup {
         {
             interface.facts = StageFacts::VertexWithoutPosition;
         }
+        // WebGPU gives a lane number only to a thread group laid out along x
+        let multi_dimensional = interface.stage == Stage::Compute
+            && crate::reflection::num_threads(m)?.is_some_and(|[_, y, z]| y != 1 || z != 1);
+        let lane_by_rank = multi_dimensional && system_inputs.remove(&SystemValue::LaneIndex);
         for system in system_inputs {
             if interface.inputs.iter().any(|v| v.system == Some(system)) {
                 continue;
@@ -268,17 +278,20 @@ impl Setup {
                     ResourceKind::Texture { .. }
                         | ResourceKind::Sampler { .. }
                         | ResourceKind::Buffer(_)
-                        | ResourceKind::Storage {
-                            target: primase_shader::StorageTarget::Buffer(_),
-                            ..
-                        }
+                        | ResourceKind::Storage { .. }
                 )
             {
                 return Err(error(
                     0,
                     format!(
-                        "{}: arrays of resources other than textures, samplers and buffers (a range of {}) are not lifted",
-                        original.provenance.name, original.count
+                        "{}: arrays of resources other than textures, samplers, buffers and storage ({}, a range of {}) are not lifted",
+                        original.provenance.name,
+                        match &original.kind {
+                            ResourceKind::ConstantBuffer { .. } => "constant buffers",
+                            ResourceKind::AccelerationStructure => "acceleration structures",
+                            _ => "resources",
+                        },
+                        original.count
                     ),
                 ));
             }
@@ -288,6 +301,7 @@ impl Setup {
             });
             ranges.push(range);
         }
+        let heap = heap_resources(m, functions, &mut resources, &mut ranges)?;
         interface.resources = resources;
         let sigs = primase_shader::stage_functions(&interface).map_err(|detail| error(0, detail))?;
         let io = match sigs {
@@ -307,6 +321,8 @@ impl Setup {
             patch_elements,
             ranges,
             notes: BTreeSet::new(),
+            lane_by_rank,
+            heap,
         })
     }
 
@@ -332,6 +348,114 @@ impl Setup {
     pub(super) fn kind(&self, resource: usize) -> &ResourceKind {
         &self.interface.resources[resource].kind
     }
+}
+
+/// The register space the descriptor heaps' resources are numbered in: apart from every space a program declares.
+const HEAP_SPACE: u32 = 0x8000;
+
+/// The resources the program makes handles for from a descriptor heap (Shader Model 6.6 `ResourceDescriptorHeap` and
+/// `SamplerDescriptorHeap`). A heap is untyped, so the resource is what the annotation of the handle says it is: one
+/// unbounded array of that kind of view, in a register space of its own, indexed by the program's index. The same
+/// annotation shares one resource. Appended to `resources` and `ranges`; the result maps each call's result to its
+/// resource.
+fn heap_resources(
+    m: &Module,
+    functions: &[&Function],
+    resources: &mut Vec<Resource>,
+    ranges: &mut Vec<Range>,
+) -> Result<BTreeMap<ValueId, usize>> {
+    let mut made: BTreeMap<(u8, i64, i64), usize> = BTreeMap::new();
+    let mut handles = BTreeMap::new();
+    for f in functions.iter().copied() {
+        for inst in &f.instructions {
+            let (Op::Call { function, args }, Some((handle, _))) = (&inst.op, inst.result) else {
+                continue;
+            };
+            if dx_opcode(m, f, *function, args) != Some(218) {
+                continue;
+            }
+            let sampler = const_int(m, f, args[2]) == Some(1);
+            // the annotation that says what the descriptor is: its properties, two constant words
+            let properties = functions.iter().copied().find_map(|g| {
+                g.instructions.iter().find_map(|i| {
+                    let Op::Call { function, args } = &i.op else {
+                        return None;
+                    };
+                    if dx_opcode(m, g, *function, args) != Some(216) || args[1] != handle {
+                        return None;
+                    }
+                    let value = if args[2] < g.first {
+                        m.values.get(args[2])?
+                    } else {
+                        g.locals.get(args[2] - g.first)?
+                    };
+                    match value {
+                        Value::Constant(Constant::Aggregate(items)) => Some((
+                            const_int(m, g, *items.first()?)?,
+                            const_int(m, g, *items.get(1)?)?,
+                        )),
+                        Value::Constant(Constant::Null) => Some((0, 0)),
+                        _ => None,
+                    }
+                })
+            });
+            let Some((first, second)) = properties else {
+                return Err(error(
+                    inst.at,
+                    "a descriptor from a heap that the program does not annotate with its properties",
+                ));
+            };
+            // the properties' words: the resource kind in the low byte; a view is an unordered-access one by 0x1000, a
+            // comparison sampler by 0x8000; the second word is a typed view's component type (low byte) and lanes, a
+            // structured buffer's stride, a constant buffer's size
+            let kind = first & 0xff;
+            let class = match (sampler || kind == 14, kind) {
+                (true, _) => 3,
+                (_, 13) => 2,
+                _ if first & 0x1000 != 0 => 1,
+                _ => 0,
+            };
+            let index = match made.get(&(class, first, second)) {
+                Some(&i) => i,
+                None => {
+                    let n = made.len() as u32;
+                    let range = Range {
+                        class,
+                        id: u32::MAX - n,
+                        lower: n,
+                        count: Resource::UNBOUNDED,
+                        extra: match class {
+                            3 => u32::from(first & 0x8000 != 0),
+                            2 => {
+                                u32::try_from(second).map_err(|_| error(inst.at, "a constant buffer size"))?
+                            }
+                            _ => kind as u32,
+                        },
+                        space: HEAP_SPACE,
+                        element: (class < 2 && kind != 11 && kind != 12).then_some((second & 0xff) as u32),
+                        stride: (kind == 12).then_some(second as u32),
+                        counter: false,
+                    };
+                    let id = ResourceId(resources.len() as u32);
+                    let name = if class == 3 {
+                        "SamplerDescriptorHeap"
+                    } else {
+                        "ResourceDescriptorHeap"
+                    };
+                    let mut resource = reflection::resource_of(id, &range, name.into(), None, m)
+                        .map_err(|e| error(inst.at, e.to_string()))?;
+                    // a heap's descriptors have no register of the source's own
+                    resource.provenance.d3d = None;
+                    resources.push(resource);
+                    ranges.push(range);
+                    made.insert((class, first, second), resources.len() - 1);
+                    resources.len() - 1
+                }
+            };
+            handles.insert(handle, index);
+        }
+    }
+    Ok(handles)
 }
 
 fn cell(list: &[primase_shader::Varying], register: u32, lane: u8) -> Option<(usize, u8)> {

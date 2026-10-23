@@ -1,7 +1,8 @@
 //! Lifting a Shader Model 6 pixel or vertex program (DXIL) to primase's shader representation
 //! ([`primase_shader::Program`]), with the same conventions as the DXBC lift (`primase-dxbc`): varyings unpacked from
 //! D3D registers, resources as module globals (constant buffer `cb<n>` a uniform `array<vec4<u32>, rows>` in group 0,
-//! textures and buffer views group 1, samplers group 2, typed texture views group 3, binding = register), D3D's
+//! textures and buffer views group 1, samplers group 2, typed texture views group 3, the hidden counters of unordered-access
+//! views group 4, binding = register), D3D's
 //! results written out as operations ([`primase_shader::D3dModes`]).
 //!
 //! What differs is the source. A DXIL function is LLVM's: values in static single assignment form over basic blocks.
@@ -20,6 +21,7 @@ mod resources;
 mod setup;
 mod stages;
 mod values;
+mod wide;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -120,8 +122,9 @@ pub(crate) enum Lv {
         element: Option<Val>,
     },
     Pointer(memory::Ptr),
-    /// An inline ray tracing query (see [`rayquery`]).
-    RayQuery(Handle<LocalVariable>, u32),
+    /// An inline ray tracing query (see [`rayquery`]): the query, the flags it is declared with, and the local that
+    /// keeps the ray it is traced with (naga's query does not give the ray back).
+    RayQuery(Handle<LocalVariable>, u32, Handle<LocalVariable>),
 }
 
 /// Where a value lives once defined: as the expressions of its block, or in locals when another block reads it.
@@ -169,6 +172,8 @@ pub(crate) struct Lift<'m> {
     outputs: BTreeMap<u32, Handle<LocalVariable>>,
     depth: Option<Handle<LocalVariable>>,
     coverage: Option<Handle<LocalVariable>>,
+    /// The lane number of a thread group with no lane-number built-in, made at the start of the program.
+    lane: Option<Handle<LocalVariable>>,
     resources: resources::Resources,
     memory: memory::Memory,
     arguments: Vec<naga::FunctionArgument>,
@@ -209,6 +214,7 @@ impl<'m> Lift<'m> {
             outputs: BTreeMap::new(),
             depth: None,
             coverage: None,
+            lane: None,
             resources: resources::Resources::default(),
             memory: memory::Memory::default(),
             arguments: Vec::new(),
@@ -328,8 +334,9 @@ impl<'m> Lift<'m> {
             // a half is computed as a float and rounded to a half where it is made (see `Lift::quantized`)
             Some(Type::Float | Type::Half) => Ok(Kind::F),
             Some(Type::Integer(1)) => Ok(Kind::B),
-            // a 16-bit integer is carried as the 32-bit unsigned integer of its bits, zero-extended
-            Some(Type::Integer(16 | 32)) => Ok(Kind::U),
+            // an integer narrower than 32 bits (16 for a half's sibling, 4 for a bit-field) is carried as the 32-bit
+            // unsigned integer of its bits, zero-extended
+            Some(Type::Integer(2..=32)) => Ok(Kind::U),
             Some(Type::Integer(n)) => self.refuse(format!("{n}-bit integers are not lifted")),
             Some(Type::Double) => self.refuse("double-precision floats are not lifted"),
             other => self.refuse(format!("a value of type {other:?}")),
@@ -364,6 +371,7 @@ impl<'m> Lift<'m> {
         }
         self.declare_resources()?;
         self.declare_memory()?;
+        self.lane_at_start();
         self.define_phis()?;
         self.structure_and_lower()
     }

@@ -142,6 +142,7 @@ fn program(size: [u32; 3]) -> Program {
                         register: 0,
                         space: 0,
                     }),
+                    counter_of: None,
                 },
             }],
             facts: Default::default(),

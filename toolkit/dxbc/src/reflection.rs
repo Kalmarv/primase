@@ -571,6 +571,7 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
                     register: binding.register,
                     space: 0,
                 }),
+                counter_of: None,
             },
         });
     }

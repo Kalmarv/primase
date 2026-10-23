@@ -144,6 +144,35 @@ impl Builder {
             reject: Block::new(),
         });
     }
+    /// Open `for i in 0..count { .. }` as a loop (not unrolled): what is appended until [`Self::end_repeat`] is its
+    /// body, and the value returned is `i`, read at the top of each pass.
+    pub fn begin_repeat(&mut self, count: u32) -> (Val, Handle<LocalVariable>) {
+        let ty = self.ty_of(Kind::U, 1);
+        let counter = self.local("i", ty);
+        let ptr = self.local_ptr(counter);
+        let zero = self.lit_u(0);
+        self.store(ptr, zero);
+        self.blocks.push(Block::new());
+        let i = self.load(ptr, Kind::U, 1);
+        let limit = self.lit_u(count);
+        let done = self.binary(BinaryOperator::GreaterEqual, i, limit);
+        self.when(done, |b| b.push(Statement::Break));
+        (i, counter)
+    }
+    /// Close the loop [`Self::begin_repeat`] opened: count the pass and go round.
+    pub fn end_repeat(&mut self, counter: Handle<LocalVariable>) {
+        let ptr = self.local_ptr(counter);
+        let again = self.load(ptr, Kind::U, 1);
+        let one = self.lit_u(1);
+        let next = self.binary(BinaryOperator::Add, again, one);
+        self.store(ptr, next);
+        let inner = self.blocks.pop().expect("the loop body opened by begin_repeat");
+        self.push(Statement::Loop {
+            body: inner,
+            continuing: Block::new(),
+            break_if: None,
+        });
+    }
     pub fn push(&mut self, s: Statement) {
         self.blocks
             .last_mut()

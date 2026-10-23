@@ -30,7 +30,7 @@ impl fmt::Display for Problem {
 /// The capabilities programs may use: WGSL's baseline and what a D3D program can need beyond it (clip distances,
 /// per-sample shading, the primitive index, cube array textures, half-float packing for `f16tof32`/`f32tof16`, forced
 /// early depth tests, arrays of textures and samplers indexed by a computed, possibly divergent, index, and subgroup
-/// (wave) operations in compute and pixel programs, atomic operations on storage textures, arrays of storage buffers, ray queries). A consumer that cannot provide one refuses the program that
+/// (wave) operations in compute and pixel programs, atomic operations on storage textures, arrays of storage buffers and storage textures, ray queries). A consumer that cannot provide one refuses the program that
 /// needs it; nothing outside this list is ever produced.
 ///
 /// A compute program's thread group is validated against D3D's limits (1024 invocations, 1024 along x and y, 64 along
@@ -48,7 +48,9 @@ pub const CAPABILITIES: naga::valid::Capabilities = naga::valid::Capabilities::C
     .union(naga::valid::Capabilities::TEXTURE_ATOMIC)
     .union(naga::valid::Capabilities::RAY_QUERY)
     .union(naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY)
-    .union(naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY_NON_UNIFORM_INDEXING);
+    .union(naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY_NON_UNIFORM_INDEXING)
+    .union(naga::valid::Capabilities::STORAGE_TEXTURE_BINDING_ARRAY)
+    .union(naga::valid::Capabilities::STORAGE_TEXTURE_BINDING_ARRAY_NON_UNIFORM_INDEXING);
 
 /// Check `program`: naga's validation of its module, then the program rules. Every problem found is returned.
 pub fn validate(program: &Program) -> Result<naga::valid::ModuleInfo, Vec<Problem>> {
@@ -417,11 +419,13 @@ fn resources(p: &Program, problems: &mut Vec<Problem>) {
             && !(buffer
                 || matches!(
                     r.kind,
-                    ResourceKind::Texture { .. } | ResourceKind::Sampler { .. }
+                    ResourceKind::Texture { .. }
+                        | ResourceKind::Sampler { .. }
+                        | ResourceKind::Storage { .. }
                 ))
         {
             fail(format!(
-                "resource {id}: only textures, samplers and buffers are carried as arrays (count {})",
+                "resource {id}: only textures, samplers, buffers and storage are carried as arrays (count {})",
                 r.count
             ));
         }
@@ -546,6 +550,42 @@ fn resources(p: &Program, problems: &mut Vec<Problem>) {
     let ids: BTreeSet<_> = p.interface.resources.iter().map(|r| r.id).collect();
     if ids.len() != p.interface.resources.len() {
         fail("resource ids repeat".into());
+    }
+    // a counter belongs to a storage buffer, and is a raw read-write buffer without a binding of the source's
+    for r in &p.interface.resources {
+        let Some(owner) = r.provenance.counter_of else {
+            continue;
+        };
+        let owner_is_storage = p.interface.resources.iter().any(|o| {
+            o.id == owner
+                && matches!(
+                    o.kind,
+                    ResourceKind::Storage {
+                        target: StorageTarget::Buffer(_),
+                        ..
+                    }
+                )
+        });
+        if !owner_is_storage {
+            fail(format!(
+                "resource {} is the counter of resource {}, which is not a storage buffer",
+                r.id.0, owner.0
+            ));
+        }
+        if r.provenance.d3d.is_some()
+            || !matches!(
+                r.kind,
+                ResourceKind::Storage {
+                    target: StorageTarget::Buffer(BufferKind::Raw),
+                    access: Access::ReadWrite,
+                }
+            )
+        {
+            fail(format!(
+                "resource {}: a counter is a raw read-write buffer with no D3D binding",
+                r.id.0
+            ));
+        }
     }
     for (id, _) in &p.bindings {
         if !ids.contains(id) {

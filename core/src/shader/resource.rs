@@ -229,6 +229,11 @@ pub struct ResourceProvenance {
     /// The name the source gives it (`Texture2D_8`, a constant buffer's name).
     pub name: String,
     pub d3d: Option<D3dBinding>,
+    /// The resource this one is the hidden counter of: an unordered-access view's 32-bit counter (D3D's append and
+    /// consume buffers, `IncrementCounter`), a buffer of its own in WebGPU. It has no D3D binding of its own; the
+    /// renderer binds it with the view, starting from the view's initial count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counter_of: Option<ResourceId>,
 }
 
 /// One bound resource.
@@ -361,6 +366,7 @@ mod tests {
                     register: 8,
                     space: 0,
                 }),
+                counter_of: None,
             },
         };
         assert_eq!(

@@ -86,12 +86,25 @@ impl Lift<'_> {
     fn root_global(&self, v: ValueId) -> Option<ValueId> {
         let mut v = v;
         loop {
-            if v < self.f.first {
-                return match self.m.values.get(v)? {
-                    Value::Global { .. } => Some(v),
-                    Value::Constant(Constant::Gep { base, .. }) => self.root_global(*base),
-                    _ => None,
-                };
+            // a module value, or a constant of the function's own constants block
+            let value = if v < self.f.first {
+                self.m.values.get(v)
+            } else {
+                self.f.locals.get(v - self.f.first)
+            };
+            match value {
+                Some(Value::Global { .. }) if v < self.f.first => return Some(v),
+                Some(Value::Constant(Constant::Gep { base, .. })) => {
+                    v = *base;
+                    continue;
+                }
+                Some(Value::Constant(Constant::Cast { value, .. })) => {
+                    v = *value;
+                    continue;
+                }
+                Some(Value::Constant(_)) => return None,
+                _ if v < self.f.first => return None,
+                _ => {}
             }
             let inst = self
                 .f
