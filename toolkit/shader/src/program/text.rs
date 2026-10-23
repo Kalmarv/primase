@@ -92,6 +92,9 @@ pub(super) fn text(p: &Program) -> Result<String, Error> {
         "// d3d divide_by_zero={} float_to_int={} min_max_nan={} saturate_nan={} flush_denormals={}",
         m.divide_by_zero, m.float_to_int, m.min_max_nan, m.saturate_nan, m.flush_denormals
     );
+    for note in &p.notes {
+        let _ = writeln!(out, "// note {note}");
+    }
     for v in &p.interface.inputs {
         varying(&mut out, "input", v);
     }

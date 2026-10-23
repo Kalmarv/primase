@@ -964,6 +964,7 @@ dependencies = [
 name = "primase-dxbc"
 version = "0.1.0"
 dependencies = [
+ "naga",
  "primase-hash",
  "primase-shader",
  "primase-testdata",

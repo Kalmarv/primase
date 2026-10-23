@@ -103,15 +103,46 @@ impl View<'_> {
         }
     }
 }
-/// A signature chunk's record layout: `ISGN`/`OSGN` (name, index, system value, component type, register, masks),
+/// One element of a signature as stored, before any mapping to the vocabulary.
+#[derive(Clone, Debug)]
+pub struct SignatureElement {
+    pub name: String,
+    pub index: u32,
+    /// `D3D_NAME`.
+    pub system_value: u32,
+    /// `D3D_REGISTER_COMPONENT_TYPE`.
+    pub component_type: u32,
+    pub register: u32,
+    pub mask: u8,
+    pub read_write_mask: u8,
+    /// Where the record starts, in words of the chunk.
+    pub at: usize,
+}
+impl SignatureElement {
+    /// The element in the vocabulary, or the reason it is not mapped.
+    pub fn varying(&self, stage: Stage, output: bool) -> Result<Varying> {
+        let element = d3d::Element {
+            name: &self.name,
+            index: self.index,
+            system_value: self.system_value,
+            component_type: self.component_type,
+            register: self.register,
+            mask: self.mask,
+            read_write_mask: self.read_write_mask,
+        };
+        d3d::varying(stage, output, &element).map_err(|detail| error(self.at, detail))
+    }
+}
+
+/// A signature chunk's records. Layouts: `ISGN`/`OSGN` (name, index, system value, component type, register, masks),
 /// `ISG1`/`OSG1` (a stream and a minimum precision besides) and `OSG5` (a stream besides).
-fn signature(bytes: &[u8], kind: &[u8; 4], stage: Stage, output: bool) -> Result<Vec<Varying>> {
+fn signature_elements_of(bytes: &[u8], kind: &[u8; 4]) -> Result<Vec<SignatureElement>> {
     let v = View(bytes);
     let count = v.u32(0)? as usize;
     if v.u32(4)? != 8 {
         return Err(error(1, "unsupported signature directory offset"));
     }
-    // words before the name offset, and the record size
+    // bytes before the name offset, and the record size
     let (skip, record) = match kind {
         b"ISG1" | b"OSG1" => (4, 32),
         b"OSG5" => (4, 28),
@@ -122,20 +153,46 @@ fn signature(bytes: &[u8], kind: &[u8; 4], stage: Stage, output: bool) -> Result
         let p = 8 + i * record;
         let q = p + skip;
         let lanes = v.bytes(q + 20, 4)?;
-        let name = v.string(v.u32(q)? as usize)?;
-        let element = d3d::Element {
-            name: &name,
+        result.push(SignatureElement {
+            name: v.string(v.u32(q)? as usize)?,
             index: v.u32(q + 4)?,
             system_value: v.u32(q + 8)?,
             component_type: v.u32(q + 12)?,
             register: v.u32(q + 16)?,
             mask: lanes[0],
             read_write_mask: lanes[1],
-        };
-        result.push(d3d::varying(stage, output, &element).map_err(|detail| error(p / 4, detail))?);
+            at: p / 4,
+        });
     }
     Ok(result)
 }
+
+fn signature(bytes: &[u8], kind: &[u8; 4], stage: Stage, output: bool) -> Result<Vec<Varying>> {
+    signature_elements_of(bytes, kind)?
+        .iter()
+        .map(|e| e.varying(stage, output))
+        .collect()
+}
+
+/// A container's input and output signature elements as stored, and its stage: for a consumer that maps only the
+/// elements it uses ([`signatures`] maps all and refuses the container for one it cannot map, used or not).
+pub fn signature_elements(bytes: &[u8]) -> Result<(Stage, Vec<SignatureElement>, Vec<SignatureElement>)> {
+    let directory = chunks(bytes)?;
+    let stage = stage(&directory)?;
+    let read = |tags: &[&[u8; 4]]| -> Result<Vec<SignatureElement>> {
+        let tag = tags
+            .iter()
+            .find(|t| directory.iter().any(|c| &&c.kind == *t))
+            .unwrap_or(&tags[0]);
+        signature_elements_of(chunk(&directory, tag)?, tag)
+    };
+    Ok((
+        stage,
+        read(&[b"ISGN", b"ISG1"])?,
+        read(&[b"OSGN", b"OSG1", b"OSG5"])?,
+    ))
+}
+
 /// The signature in whichever of these chunks the container has.
 fn signature_of(
     directory: &[crate::Chunk<'_>],
@@ -362,10 +419,15 @@ impl Binding {
 pub fn reflection(bytes: &[u8]) -> Result<Interface> {
     let directory = chunks(bytes)?;
     let get = |tag: &[u8; 4]| chunk(&directory, tag);
+    let program_stage = stage(&directory)?;
     let v = View(get(b"RDEF")?);
-    // SM5.0 pixel shader and RD11 record-size directory.
-    if v.u32(16)? != 0xffff0500 || v.bytes(28, 4)? != b"RD11" {
-        return Err(error(4, "expected SM5.0 pixel RDEF"));
+    // SM5.0 pixel or vertex shader and RD11 record-size directory.
+    let target = match program_stage {
+        Stage::Pixel => 0xffff_0500,
+        _ => 0xfffe_0500,
+    };
+    if v.u32(16)? != target || v.bytes(28, 4)? != b"RD11" {
+        return Err(error(4, "expected SM5.0 pixel or vertex RDEF"));
     }
     for (i, size) in [60, 24, 32, 40, 36, 12].into_iter().enumerate() {
         if v.u32(32 + i * 4)? != size {
@@ -507,9 +569,9 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
         ));
     }
     Ok(Interface {
-        stage: Stage::Pixel,
-        inputs: signature(get(b"ISGN")?, b"ISGN", Stage::Pixel, false)?,
-        outputs: signature(get(b"OSGN")?, b"OSGN", Stage::Pixel, true)?,
+        stage: program_stage,
+        inputs: signature_of(&directory, &[b"ISGN", b"ISG1"], program_stage, false)?,
+        outputs: signature_of(&directory, &[b"OSGN", b"OSG1", b"OSG5"], program_stage, true)?,
         resources,
     })
 }

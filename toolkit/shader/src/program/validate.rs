@@ -4,14 +4,11 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use naga::{AddressSpace, Binding, BuiltIn, ImageClass, ScalarKind, ShaderStage, TypeInner};
+use naga::{AddressSpace, ImageClass, ScalarKind, ShaderStage, TypeInner};
 
 use super::Program;
-use crate::Stage;
-use crate::{
-    Access, BufferKind, ResourceKind, SampleType, ScalarType, StorageTarget, SystemValue, TextureDim, Value,
-    Varying,
-};
+use super::io::{IoType, entry_io};
+use crate::{Access, BufferKind, ResourceKind, SampleType, ScalarType, StorageTarget, TextureDim, Value};
 
 /// One rule a program broke.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,21 +27,33 @@ impl fmt::Display for Problem {
     }
 }
 
-/// The capabilities programs may use: those WebGPU's WGSL has without extensions, so that anything that passes
-/// can be written as WGSL.
-fn capabilities() -> naga::valid::Capabilities {
-    naga::valid::Capabilities::empty()
-}
+/// The capabilities programs may use: WGSL's baseline and the optional WebGPU features a D3D program can need
+/// (clip distances, per-sample shading, the primitive index, cube array textures). A consumer that cannot enable
+/// one refuses the program that needs it; nothing outside this list is ever produced.
+pub const CAPABILITIES: naga::valid::Capabilities = naga::valid::Capabilities::CLIP_DISTANCES
+    .union(naga::valid::Capabilities::MULTISAMPLED_SHADING)
+    .union(naga::valid::Capabilities::PRIMITIVE_INDEX)
+    .union(naga::valid::Capabilities::CUBE_ARRAY_TEXTURES);
 
 /// Check `program`: naga's validation of its module, then the program rules. Every problem found is returned.
 pub fn validate(program: &Program) -> Result<naga::valid::ModuleInfo, Vec<Problem>> {
     let mut problems = Vec::new();
-    let info = match naga::valid::Validator::new(naga::valid::ValidationFlags::all(), capabilities())
+    let info = match naga::valid::Validator::new(naga::valid::ValidationFlags::all(), CAPABILITIES)
         .validate(&program.module)
     {
         Ok(info) => Some(info),
         Err(e) => {
-            problems.push(Problem::Module(e.as_inner().to_string()));
+            {
+                // naga's error says where in a chain of sources; keep all of it
+                let mut text = e.as_inner().to_string();
+                let mut source = std::error::Error::source(e.as_inner());
+                while let Some(inner) = source {
+                    text.push_str(": ");
+                    text.push_str(&inner.to_string());
+                    source = inner.source();
+                }
+                problems.push(Problem::Module(text));
+            }
             None
         }
     };
@@ -79,107 +88,6 @@ fn is_value(inner: &TypeInner, v: Value) -> bool {
     }
 }
 
-/// The value the module carries for a varying: the interface's own, except where the pipeline fixes it. A built-in has
-/// its API type (a front-facing flag is a bool, the position four floats, an index a u32) and a pixel stage's colour
-/// output always has four lanes (D3D lets a target element be narrower than its render target, WebGPU does not).
-pub(crate) fn carried(stage: Stage, output: bool, v: &Varying) -> Value {
-    let (scalar, width) = match v.system {
-        Some(SystemValue::ClipPosition | SystemValue::FragCoord) => (ScalarType::Float, 4),
-        Some(SystemValue::FrontFacing) => (ScalarType::Bool, 1),
-        Some(
-            SystemValue::VertexIndex
-            | SystemValue::InstanceIndex
-            | SystemValue::PrimitiveIndex
-            | SystemValue::SampleIndex
-            | SystemValue::Coverage,
-        ) => (ScalarType::Uint, 1),
-        Some(SystemValue::Depth) => (ScalarType::Float, 1),
-        Some(SystemValue::Target(_)) if stage == Stage::Pixel && output => (v.value.scalar, 4),
-        _ => (v.value.scalar, v.value.width),
-    };
-    Value { scalar, width }
-}
-
-/// The binding a system value has as an input or output of `stage`; `None` for one the module cannot carry.
-fn builtin(stage: Stage, output: bool, system: SystemValue) -> Option<BuiltIn> {
-    use SystemValue::*;
-    Some(match (stage, output, system) {
-        (Stage::Vertex, true, ClipPosition) | (Stage::Pixel, false, FragCoord) => {
-            BuiltIn::Position { invariant: false }
-        }
-        (Stage::Pixel, false, FrontFacing) => BuiltIn::FrontFacing,
-        (Stage::Vertex, false, VertexIndex) => BuiltIn::VertexIndex,
-        (Stage::Vertex, false, InstanceIndex) => BuiltIn::InstanceIndex,
-        (Stage::Pixel, false, PrimitiveIndex) => BuiltIn::PrimitiveIndex,
-        (Stage::Pixel, false, SampleIndex) => BuiltIn::SampleIndex,
-        (Stage::Pixel, _, Coverage) => BuiltIn::SampleMask,
-        (Stage::Pixel, true, Depth) => BuiltIn::FragDepth,
-        _ => return None,
-    })
-}
-
-fn interpolation(v: &Varying) -> (Option<naga::Interpolation>, Option<naga::Sampling>) {
-    let Some(i) = v.interp else {
-        return (None, None);
-    };
-    (
-        Some(match i.mode {
-            crate::InterpMode::Perspective => naga::Interpolation::Perspective,
-            crate::InterpMode::Linear => naga::Interpolation::Linear,
-            crate::InterpMode::Flat => naga::Interpolation::Flat,
-        }),
-        match i.sampling {
-            crate::InterpSampling::Center => None,
-            crate::InterpSampling::Centroid => Some(naga::Sampling::Centroid),
-            crate::InterpSampling::Sample => Some(naga::Sampling::Sample),
-        },
-    )
-}
-
-/// The binding a varying must have. `location` is the next free `@location`, used up when the varying takes one.
-/// `Err` says why the module cannot carry it.
-pub(crate) fn binding_of(
-    stage: Stage,
-    output: bool,
-    v: &Varying,
-    location: &mut u32,
-) -> Result<Binding, String> {
-    match v.system {
-        Some(SystemValue::Target(n)) if stage == Stage::Pixel && output => Ok(Binding::Location {
-            location: n,
-            interpolation: None,
-            sampling: None,
-            blend_src: None,
-            per_primitive: false,
-        }),
-        Some(system) => builtin(stage, output, system)
-            .map(Binding::BuiltIn)
-            .ok_or_else(|| {
-                format!(
-                    "{:?} as a {stage:?} {} has no built-in binding",
-                    system,
-                    if output { "output" } else { "input" }
-                )
-            }),
-        None => {
-            let (interpolation, sampling) = if stage == Stage::Pixel && !output {
-                interpolation(v)
-            } else {
-                (None, None)
-            };
-            let at = *location;
-            *location += 1;
-            Ok(Binding::Location {
-                location: at,
-                interpolation,
-                sampling,
-                blend_src: None,
-                per_primitive: false,
-            })
-        }
-    }
-}
-
 fn interface(p: &Program, problems: &mut Vec<Problem>) {
     let mut fail = |m: String| problems.push(Problem::Program(m));
     let [entry] = p.module.entry_points.as_slice() else {
@@ -206,82 +114,6 @@ fn interface(p: &Program, problems: &mut Vec<Problem>) {
         ));
         return;
     }
-    let function = &entry.function;
-    let types = &p.module.types;
-
-    // inputs: one argument each
-    if function.arguments.len() != p.interface.inputs.len() {
-        fail(format!(
-            "{} entry arguments for {} input varyings",
-            function.arguments.len(),
-            p.interface.inputs.len()
-        ));
-    }
-    let mut location = 0;
-    for (v, arg) in p.interface.inputs.iter().zip(&function.arguments) {
-        let name = Program::varying_name(&v.label);
-        if arg.name.as_deref() != Some(name.as_str()) {
-            fail(format!("input {name}: the argument is named {:?}", arg.name));
-        }
-        if !is_value(&types[arg.ty].inner, carried(p.stage, false, v)) {
-            fail(format!(
-                "input {name}: the argument's type is not {:?}",
-                carried(p.stage, false, v)
-            ));
-        }
-        match binding_of(p.stage, false, v, &mut location) {
-            Ok(want) if arg.binding.as_ref() != Some(&want) => {
-                fail(format!(
-                    "input {name}: binding {:?}, expected {want:?}",
-                    arg.binding
-                ));
-            }
-            Ok(_) => {}
-            Err(e) => fail(format!("input {name}: {e}")),
-        }
-    }
-
-    // outputs: the members of the result structure
-    let mut location = 0;
-    match (&function.result, p.interface.outputs.is_empty()) {
-        (None, true) => {}
-        (None, false) => fail("outputs declared but the entry point returns nothing".into()),
-        (Some(_), true) => fail("the entry point returns a value but the interface has no outputs".into()),
-        (Some(result), false) => match &types[result.ty].inner {
-            TypeInner::Struct { members, .. } => {
-                if members.len() != p.interface.outputs.len() {
-                    fail(format!(
-                        "{} result members for {} output varyings",
-                        members.len(),
-                        p.interface.outputs.len()
-                    ));
-                }
-                for (v, m) in p.interface.outputs.iter().zip(members) {
-                    let name = Program::varying_name(&v.label);
-                    if m.name.as_deref() != Some(name.as_str()) {
-                        fail(format!("output {name}: the member is named {:?}", m.name));
-                    }
-                    if !is_value(&types[m.ty].inner, carried(p.stage, true, v)) {
-                        fail(format!(
-                            "output {name}: the member's type is not {:?}",
-                            carried(p.stage, true, v)
-                        ));
-                    }
-                    match binding_of(p.stage, true, v, &mut location) {
-                        Ok(want) if m.binding.as_ref() != Some(&want) => {
-                            fail(format!(
-                                "output {name}: binding {:?}, expected {want:?}",
-                                m.binding
-                            ));
-                        }
-                        Ok(_) => {}
-                        Err(e) => fail(format!("output {name}: {e}")),
-                    }
-                }
-            }
-            _ => fail("the entry point's result is not a structure".into()),
-        },
-    }
     // labels are unique within a direction
     for (what, list) in [("input", &p.interface.inputs), ("output", &p.interface.outputs)] {
         let mut seen = BTreeSet::new();
@@ -293,6 +125,78 @@ fn interface(p: &Program, problems: &mut Vec<Problem>) {
                 ));
             }
         }
+    }
+    let io = match entry_io(&p.interface) {
+        Ok(io) => io,
+        Err(e) => return fail(e),
+    };
+    let function = &entry.function;
+    let types = &p.module.types;
+    let matches_type = |ty: &IoType, handle| match ty {
+        IoType::Value(v) => is_value(&types[handle].inner, *v),
+        IoType::ClipDistances(n) => matches!(
+            &types[handle].inner,
+            TypeInner::Array { base, size: naga::ArraySize::Constant(len), .. }
+                if len.get() == *n && types[*base].inner == TypeInner::Scalar(naga::Scalar::F32)
+        ),
+    };
+
+    // inputs: one argument each
+    if function.arguments.len() != io.arguments.len() {
+        fail(format!(
+            "{} entry arguments for {} input varyings",
+            function.arguments.len(),
+            io.arguments.len()
+        ));
+    }
+    for (item, arg) in io.arguments.iter().zip(&function.arguments) {
+        let name = &item.name;
+        if arg.name.as_deref() != Some(name.as_str()) {
+            fail(format!("input {name}: the argument is named {:?}", arg.name));
+        }
+        if !matches_type(&item.ty, arg.ty) {
+            fail(format!("input {name}: the argument's type is not {:?}", item.ty));
+        }
+        if arg.binding.as_ref() != Some(&item.binding) {
+            fail(format!(
+                "input {name}: binding {:?}, expected {:?}",
+                arg.binding, item.binding
+            ));
+        }
+    }
+
+    // outputs: the members of the result structure
+    match (&function.result, io.results.is_empty()) {
+        (None, true) => {}
+        (None, false) => fail("outputs declared but the entry point returns nothing".into()),
+        (Some(_), true) => fail("the entry point returns a value but the interface has no outputs".into()),
+        (Some(result), false) => match &types[result.ty].inner {
+            TypeInner::Struct { members, .. } => {
+                if members.len() != io.results.len() {
+                    fail(format!(
+                        "{} result members for {} outputs",
+                        members.len(),
+                        io.results.len()
+                    ));
+                }
+                for (item, m) in io.results.iter().zip(members) {
+                    let name = &item.name;
+                    if m.name.as_deref() != Some(name.as_str()) {
+                        fail(format!("output {name}: the member is named {:?}", m.name));
+                    }
+                    if !matches_type(&item.ty, m.ty) {
+                        fail(format!("output {name}: the member's type is not {:?}", item.ty));
+                    }
+                    if m.binding.as_ref() != Some(&item.binding) {
+                        fail(format!(
+                            "output {name}: binding {:?}, expected {:?}",
+                            m.binding, item.binding
+                        ));
+                    }
+                }
+            }
+            _ => fail("the entry point's result is not a structure".into()),
+        },
     }
 }
 

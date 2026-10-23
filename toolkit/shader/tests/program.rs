@@ -173,6 +173,7 @@ fn program() -> Program {
             lifter_version: 0,
             source_hash: None,
         },
+        notes: vec![],
     }
 }
 

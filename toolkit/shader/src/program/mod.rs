@@ -21,16 +21,19 @@
 //! order, named the same way (no result at all when there are no outputs). A varying with a [`SystemValue`] has the
 //! matching built-in binding; every other varying has a `@location` numbered 0, 1, ... in interface order (system
 //! values do not use up locations), and a pixel input carries the interpolation the interface states. A pixel
-//! stage's `Target(n)` output is `@location(n)`.
+//! stage's `Target(n)` output is `@location(n)`. A vertex stage's `ClipDistance` outputs are one member, the
+//! built-in array of all their lanes ([`entry_io`] is the one statement of all this).
 //!
 //! Resources are module globals with a binding, matched to [`Interface::resources`] through [`Program::bindings`]. A
 //! constant buffer is a uniform `array<vec4<u32>, N>` of D3D's registers' lanes as raw words (a program reads them as
 //! the type its instruction implies, with a bitcast), so a buffer holds the bytes its layout describes whatever the
 //! packing rules were.
 
+mod io;
 mod text;
 mod validate;
 
+pub use io::{EntryIo, IoItem, IoType, entry_io};
 pub use validate::{Problem, validate};
 
 use naga::{Handle, Module};
@@ -134,6 +137,9 @@ pub struct Program {
     pub conventions: Conventions,
     pub modes: D3dModes,
     pub provenance: Provenance,
+    /// What the lifter approximated or could not state exactly, each once and sorted (`min-precision operands computed
+    /// at 32 bits`): the program means what its body says, and a consumer shows these beside it.
+    pub notes: Vec<String>,
 }
 
 /// What can go wrong building, checking or writing a program.
@@ -156,7 +162,7 @@ impl Program {
     /// The name the entry point's argument or the result structure's member for a varying has: the label's name
     /// followed by its index.
     pub fn varying_name(label: &crate::Label) -> String {
-        format!("{}{}", label.name, label.index)
+        io::varying_name(label)
     }
 
     /// Check the program: naga's validation of the module, then ours (the interface against the entry point, the

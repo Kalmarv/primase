@@ -4,11 +4,13 @@
 
 pub mod decode;
 mod evaluate;
+mod lift;
 mod opcodes;
 mod program;
 mod reflection;
 pub use decode::{Index, decode};
 pub use evaluate::{RegisterValue, Trace};
+pub use lift::{LIFTER_VERSION, lift, refusal_reason};
 pub use primase_shader::{
     AtomicAdd, Execution, Interface, Load, Lod, PixelShader, Resource, Sample, Sampler, Store, Varying,
 };
@@ -16,7 +18,7 @@ pub use program::{
     Dimension, InputDeclaration, Instruction, Operand, Program, Register, ResourceDeclaration, ReturnType,
     Selection,
 };
-pub use reflection::{reflection, signatures};
+pub use reflection::{SignatureElement, reflection, signature_elements, signatures};
 
 #[derive(Debug, thiserror::Error)]
 #[error("DXBC at word {word}: {detail}")]

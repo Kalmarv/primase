@@ -31,8 +31,8 @@ pub use primase_core::shader::{
 mod periodic;
 pub use periodic::evaluate_periodic;
 pub use program::{
-    ClipDepth, Conventions, D3dModes, Error as ProgramError, Origin, Problem, Program, Provenance,
-    VERSION as PROGRAM_VERSION,
+    ClipDepth, Conventions, D3dModes, EntryIo, Error as ProgramError, IoItem, IoType, Origin, Problem,
+    Program, Provenance, VERSION as PROGRAM_VERSION, entry_io,
 };
 
 /// How a sample request picks its level of detail.

@@ -156,7 +156,10 @@ pub fn varying(stage: Stage, output: bool, e: &Element<'_>) -> Result<Varying, S
             }
             Some(s)
         }
-        None if named => Some(system_from_name(stage, output, e.name, e.index).map_err(at)?),
+        // the compiler states an output's system value (SV_Target, SV_Depth) by name alone; an input whose stored
+        // D3D_NAME is undefined is a plain varying whatever its semantic is called (Unity's pixel programs carry an
+        // `SV_InstanceID` that way)
+        None if named && output => Some(system_from_name(stage, output, e.name, e.index).map_err(at)?),
         None => None,
     };
     let written = e.mask & !e.read_write_mask;
