@@ -1041,3 +1041,59 @@ mod image_atomics {
         }
     }
 }
+
+
+mod buffer_arrays {
+    use super::*;
+    use primase_shader::D3dClass;
+    use std::collections::BTreeMap;
+
+    /// `buffer_arrays.hlsl`: one group of 4 with which = 1. Thread i writes bufs[1][i] = n1 * 100 + i, where n1 is the
+    /// word count of bufs[1] (6 here); adds i + 1 to bufs[2][0] (10 in all); and copies raws[1][i] to bufs[2][4 + i].
+    #[test]
+    fn arrays_of_buffers_are_read_written_measured_and_added_to() {
+        for v in BOTH {
+            let (program, exe) = lifted(&fixture("buffer_arrays", v));
+            let find = |class: D3dClass, register: u32| {
+                program
+                    .interface
+                    .resources
+                    .iter()
+                    .find(|r| {
+                        r.provenance
+                            .d3d
+                            .is_some_and(|d| d.class == class && d.register == register)
+                    })
+                    .unwrap_or_else(|| panic!("{v}: no {class:?} {register}"))
+                    .id
+            };
+            let (bufs, raws, select) = (
+                find(D3dClass::UnorderedAccess, 0),
+                find(D3dClass::ShaderResource, 0),
+                find(D3dClass::ConstantBuffer, 0),
+            );
+            let mut elements = BTreeMap::from([
+                ((bufs, 0), vec![0u32; 4]),
+                ((bufs, 1), vec![0u32; 6]),
+                ((bufs, 2), vec![0u32; 8]),
+                ((raws, 0), vec![10, 20, 30, 40]),
+                ((raws, 1), vec![11, 21, 31, 41]),
+            ]);
+            let mut resources = Resources::default();
+            resources.constants.insert(select, vec![[1, 0, 0, 0]]);
+            let bound = exe.bind_resources(&resources).unwrap();
+            exe.dispatch_elements(
+                &bound,
+                &mut NoBackend,
+                &mut BTreeMap::new(),
+                &mut elements,
+                [1, 1, 1],
+                32,
+            )
+            .unwrap_or_else(|e| panic!("{v}: {e}"));
+            assert_eq!(elements[&(bufs, 0)], [0; 4], "{v}");
+            assert_eq!(elements[&(bufs, 1)], [600, 601, 602, 603, 0, 0], "{v}");
+            assert_eq!(elements[&(bufs, 2)], [10, 0, 0, 0, 11, 21, 31, 41], "{v}");
+        }
+    }
+}
