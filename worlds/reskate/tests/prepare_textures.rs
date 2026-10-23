@@ -367,3 +367,23 @@ fn the_writer_writes_textures_as_prepared() {
         .unwrap();
     assert_eq!((big["w"].as_u64(), big["h"].as_u64()), (Some(512), Some(512)));
 }
+
+/// A base texture whose level cannot be decoded keeps its material's tint, counted (as the pass's documentation says),
+/// and the rest of the pass runs: it is not an error of the whole map.
+#[test]
+fn a_texture_that_cannot_be_decoded_keeps_its_tint() {
+    let mut w = World::new();
+    let broken = texture(&mut w, "broken", 4, [200, 100, 50, 255]);
+    w.get_mut::<Texture>(broken).unwrap().levels = vec![vec![1, 2, 3]];
+    let fine = texture(&mut w, "fine", 4, [50, 50, 50, 255]);
+    let (a, b) = (
+        material(&mut w, "a", Some(broken), Some([255, 128, 128])),
+        material(&mut w, "b", Some(fine), Some([255, 128, 128])),
+    );
+    let mut log = PassLog::default();
+    PrepareReskateTextures.run(&mut w, &mut log).unwrap();
+    assert_eq!(w.get::<SkateMaterial>(a).unwrap().tint, Some([255, 128, 128]));
+    assert_eq!(w.get::<SkateMaterial>(a).unwrap().base, Some(broken));
+    assert_eq!(w.get::<SkateMaterial>(b).unwrap().tint, None);
+    assert_eq!(log.counts["material tints kept: base texture not decodable"], 1);
+}

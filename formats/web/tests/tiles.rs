@@ -2122,3 +2122,41 @@ fn state_conditions_are_resolved_before_tiles_are_written() {
         .unwrap();
     assert_eq!(write(&w, &plain()).unwrap().index.tiles[0].placements, 1);
 }
+
+/// A light whose transform is sheared is not written (a glTF node matrix must decompose into translation, rotation and
+/// scale), and the tile set says so; a rigid light beside it is.
+#[test]
+fn a_sheared_light_is_left_out_and_reported() {
+    use primase_core::{Light, LightKind};
+    let mut w = World::new();
+    for (x, sheared) in [(5.0f32, false), (6.0, true)] {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Light {
+                kind: LightKind::Point,
+                color: [1.0; 3],
+                intensity: 1.0,
+                range: None,
+                cast_shadows: None,
+            },
+        );
+        let skew = if sheared { 0.5 } else { 0.0 };
+        w.insert(
+            e,
+            Transform {
+                cols: [[1., 0., 0.], [skew, 1., 0.], [0., 0., 1.], [x, 3.0, 0.0]],
+            },
+        );
+    }
+    let set = write(&w, &plain()).unwrap();
+    let lights: u64 = set.index.tiles.iter().map(|t| t.lights).sum();
+    assert_eq!(lights, 1);
+    assert!(
+        set.notices
+            .iter()
+            .any(|n| n.reason.contains("sheared transform") && n.count == 1),
+        "{:?}",
+        set.notices
+    );
+}

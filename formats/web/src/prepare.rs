@@ -598,94 +598,97 @@ impl PrepareWebTextures {
         // a world (or part) without textures has nothing to prepare: counted as such
         log.count("textures prepared", 0);
         let mut prepared = w.remove_resource::<PreparedImages>().unwrap_or_default();
-        // the preparations the memo does not hold now, made up front on the world's threads (`core.threads`): pure, so
-        // each is the one the loop below would make where it makes one (it takes it from here, else makes it then)
+        // the preparations the memo does not hold, made ahead on the world's threads (`core.threads`) a batch at a time:
+        // pure, so each is the one the loop would make where it makes one (it takes it from the batch, else makes it
+        // then). A batch is two preparations per thread, so what is held at once (each with its PNG, its texture and its
+        // encoding) is bounded by the threads, not by the world's textures.
         let threads = Threads::of(w);
-        let mut ahead = if threads.get() < 2 {
-            BTreeMap::new()
-        } else {
-            let held = |t: Entity, role: Role| {
-                self.memo.as_ref().is_some_and(|m| {
-                    // a texture that is not there is `make`'s error to report
-                    self.input(w, &policies, t, role)
-                        .is_ok_and(|input| m.lock().is_ok_and(|m| m.holds(&input)))
-                })
-            };
-            let jobs: Vec<(&(Entity, Role), &Entity)> = of_role
-                .iter()
-                .filter(|&(&(_, role), &t)| !held(t, role))
-                .collect();
-            {
-                crate::ktx2::init();
-                let made = primase_core::parallel::map(threads, &jobs, |_, &(&(_, role), &t)| {
-                    self.make(w, &policies, t, role)
-                })
-                .map_err(|e| e.to_string())?;
-                jobs.into_iter()
-                    .map(|(&k, _)| k)
-                    .zip(made)
-                    .collect::<BTreeMap<_, _>>()
-            }
-        };
+        let batch = if threads.get() < 2 { 1 } else { 2 * threads.get() };
+        let entries: Vec<((Entity, Role), Entity)> = of_role.iter().map(|(&k, &t)| (k, t)).collect();
         let result = (|| -> Result<(), String> {
-            for (&(texture_entity, role), &t) in &of_role {
-                let name = w.get::<Name>(t).map(|n| n.0.clone());
-                let cap = self.caps_for(name.as_deref()).get(role);
-                let policy = policies.get(&t).cloned().unwrap_or_default();
-                let texture = w
-                    .get::<Texture>(t)
-                    .ok_or_else(|| unbound("the texture", t))?
-                    .clone();
-                let budget = self.budget(role);
-                let input = crate::ktx2::preparation_key(&texture, role, cap, budget, &policy);
-                let held = match &self.memo {
-                    Some(m) => m.lock().map_err(|_| "web texture memo poisoned")?.get(&input),
-                    None => None,
+            for chunk in entries.chunks(batch) {
+                let mut ahead = if threads.get() < 2 {
+                    BTreeMap::new()
+                } else {
+                    let held = |t: Entity, role: Role| {
+                        self.memo.as_ref().is_some_and(|m| {
+                            // a texture that is not there is `make`'s error to report
+                            self.input(w, &policies, t, role)
+                                .is_ok_and(|input| m.lock().is_ok_and(|m| m.holds(&input)))
+                        })
+                    };
+                    let jobs: Vec<&((Entity, Role), Entity)> =
+                        chunk.iter().filter(|&&((_, role), t)| !held(t, role)).collect();
+                    crate::ktx2::init();
+                    let made = primase_core::parallel::map(threads, &jobs, |_, &&((_, role), t)| {
+                        self.make(w, &policies, t, role)
+                    })
+                    .map_err(|e| e.to_string())?;
+                    jobs.into_iter()
+                        .map(|&(k, _)| k)
+                        .zip(made)
+                        .collect::<BTreeMap<_, _>>()
                 };
-                let (texture, key, image, made) = match held {
-                    Some((png, key, image, made)) => {
-                        log.count("texture preparations remembered", 1);
-                        let texture = if png.is_empty() {
-                            texture
-                        } else {
-                            let pixels = primase_image::read_png(&png).map_err(|e| e.to_string())?.image;
-                            let primase_image::Samples::U8(rgba) = pixels.samples else {
-                                return Err("a remembered web texture is not RGBA8".into());
+                for &((texture_entity, role), t) in chunk {
+                    let name = w.get::<Name>(t).map(|n| n.0.clone());
+                    let cap = self.caps_for(name.as_deref()).get(role);
+                    let policy = policies.get(&t).cloned().unwrap_or_default();
+                    let texture = w
+                        .get::<Texture>(t)
+                        .ok_or_else(|| unbound("the texture", t))?
+                        .clone();
+                    let budget = self.budget(role);
+                    let input = crate::ktx2::preparation_key(&texture, role, cap, budget, &policy);
+                    let held = match &self.memo {
+                        Some(m) => m.lock().map_err(|_| "web texture memo poisoned")?.get(&input),
+                        None => None,
+                    };
+                    let (texture, key, image, made) = match held {
+                        Some((png, key, image, made)) => {
+                            log.count("texture preparations remembered", 1);
+                            let texture = if png.is_empty() {
+                                texture
+                            } else {
+                                let pixels = primase_image::read_png(&png).map_err(|e| e.to_string())?.image;
+                                let primase_image::Samples::U8(rgba) = pixels.samples else {
+                                    return Err("a remembered web texture is not RGBA8".into());
+                                };
+                                Texture {
+                                    width: pixels.width,
+                                    height: pixels.height,
+                                    format: primase_core::TexFormat::Rgba8Unorm,
+                                    levels: vec![rgba],
+                                    ..texture
+                                }
                             };
-                            Texture {
-                                width: pixels.width,
-                                height: pixels.height,
-                                format: primase_core::TexFormat::Rgba8Unorm,
-                                levels: vec![rgba],
-                                ..texture
-                            }
-                        };
-                        (texture, key, image, made)
-                    }
-                    None => {
-                        let (prepared, image, png, key, made) = match ahead.remove(&(texture_entity, role)) {
-                            Some(made) => made?,
-                            None => self.make(w, &policies, t, role)?,
-                        };
-                        if let Some(m) = &self.memo {
-                            log.count("texture preparations not remembered, made", 1);
-                            // left as stored: the digest is all there is to keep
-                            let kept = if prepared == texture { Vec::new() } else { png };
-                            let evicted = m
-                                .lock()
-                                .map_err(|_| "web texture memo poisoned")?
-                                .put(input, (kept, key, image.clone(), made.clone()));
-                            log.count("texture preparations dropped from memory", evicted);
+                            (texture, key, image, made)
                         }
-                        (prepared, key, image, made)
+                        None => {
+                            let (prepared, image, png, key, made) =
+                                match ahead.remove(&(texture_entity, role)) {
+                                    Some(made) => made?,
+                                    None => self.make(w, &policies, t, role)?,
+                                };
+                            if let Some(m) = &self.memo {
+                                log.count("texture preparations not remembered, made", 1);
+                                // left as stored: the digest is all there is to keep
+                                let kept = if prepared == texture { Vec::new() } else { png };
+                                let evicted = m
+                                    .lock()
+                                    .map_err(|_| "web texture memo poisoned")?
+                                    .put(input, (kept, key, image.clone(), made.clone()));
+                                log.count("texture preparations dropped from memory", evicted);
+                            }
+                            (prepared, key, image, made)
+                        }
+                    };
+                    log.absorb(made);
+                    if prepared.0.insert((key, role), image).is_some() {
+                        log.count("images of the same pixels and role prepared again", 1);
                     }
-                };
-                log.absorb(made);
-                if prepared.0.insert((key, role), image).is_some() {
-                    log.count("images of the same pixels and role prepared again", 1);
+                    w.insert(t, texture);
+                    log.count("textures prepared", 1);
                 }
-                w.insert(t, texture);
-                log.count("textures prepared", 1);
             }
             Ok(())
         })();

@@ -64,9 +64,12 @@ fn tinted(w: &World, base: Entity, tint: [u8; 3]) -> Result<Option<TintedCopy>, 
         .map_or_else(|| st.key.clone(), |n| n.0.clone());
     let src = TexSource::from_texture(&name, tex, st.source_format.as_deref(), st.source_size)
         .map_err(|e| e.to_string())?;
+    // levels that cannot be decoded (a corrupt one included) keep the tint, counted by the caller: the writer reports the
+    // texture unwritten
     let Some(mut rgba) = src
         .decode(0, tex.width, tex.height)
-        .map_err(|e| e.to_string())?
+        .ok()
+        .flatten()
         .filter(|px| px.len() >= tex.width as usize * tex.height as usize * 4)
     else {
         return Ok(None);

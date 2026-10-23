@@ -14,7 +14,7 @@
 //! The map writer used to make both choices itself (omit, cutout) while it built its meshes; the writer now writes the
 //! prepared materials and triangles as given.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::ledger::Measure;
 use primase_core::pass::{Options, Pass, PassLog};
@@ -92,7 +92,12 @@ fn over(uv: &[[f32; 2]], t: [u32; 3]) -> Result<bool, String> {
 /// The cutout twin of material `m` (made once, `twins`): the same entity's components, its skate.material keyed
 /// anew, class cutout with an alpha mask, its cutoff, sidedness and domain the cutout class's; named as the original
 /// is labelled (its name, else its key), so the map names it as it named the writer's own cutout form.
-fn twin(w: &mut World, twins: &mut BTreeMap<Entity, Entity>, m: Entity) -> Result<Entity, String> {
+fn twin(
+    w: &mut World,
+    twins: &mut BTreeMap<Entity, Entity>,
+    taken: &mut BTreeSet<String>,
+    m: Entity,
+) -> Result<Entity, String> {
     if let Some(&t) = twins.get(&m) {
         return Ok(t);
     }
@@ -101,13 +106,9 @@ fn twin(w: &mut World, twins: &mut BTreeMap<Entity, Entity>, m: Entity) -> Resul
         .cloned()
         .ok_or("a material without skate.material")?;
     let t = w.duplicate(m).ok_or("a material entity that is not alive")?;
-    let taken: Vec<String> = w
-        .iter::<SkateMaterial>()
-        .map(|(_, s)| s.key.to_lowercase())
-        .collect();
     let mut key = format!("{}_cutout", original.key);
     let mut n = 2;
-    while taken.contains(&key.to_lowercase()) {
+    while !taken.insert(key.to_lowercase()) {
         key = format!("{}_cutout{n}", original.key);
         n += 1;
     }
@@ -185,6 +186,11 @@ impl Pass for PrepareReskateUvRepeats {
             .filter(|&e| w.has::<crate::components::SkatePrototype>(e))
             .collect();
         let mut twins: BTreeMap<Entity, Entity> = BTreeMap::new();
+        // the material keys in use, lower-cased: a twin's is made against them once, not by a scan per twin
+        let mut taken: BTreeSet<String> = w
+            .iter::<SkateMaterial>()
+            .map(|(_, s)| s.key.to_lowercase())
+            .collect();
         let (mut omitted, mut masked) = (0u64, 0u64);
         for e in meshes {
             let n = w.get::<Mesh>(e).map_or(0, |m| m.primitives().len());
@@ -243,7 +249,7 @@ impl Pass for PrepareReskateUvRepeats {
                             w.get::<SkateMaterial>(m).is_some_and(|s| cut_at_repeats(s).1)
                         };
                         if let Some(m) = material.filter(|&m| blended(w, m)) {
-                            let t = twin(w, &mut twins, m)?;
+                            let t = twin(w, &mut twins, &mut taken, m)?;
                             let mesh = w.get_mut::<Mesh>(e).expect("listed");
                             *mesh.primitive_mut(i).expect("in range").material_mut() = Some(t);
                         }
@@ -251,7 +257,7 @@ impl Pass for PrepareReskateUvRepeats {
                             variants.iter().copied().filter(|&m| blended(w, m)).collect();
                         let mapped: Vec<(Entity, Entity)> = blended_variants
                             .into_iter()
-                            .map(|m| twin(w, &mut twins, m).map(|t| (m, t)))
+                            .map(|m| twin(w, &mut twins, &mut taken, m).map(|t| (m, t)))
                             .collect::<Result<_, _>>()?;
                         if let Some(v) = w.get_mut::<MaterialVariants>(e)
                             && let Some(row) = v.0.get_mut(i)

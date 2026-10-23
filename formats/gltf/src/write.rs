@@ -151,6 +151,12 @@ pub struct WriteOptions {
     /// each texture's PNG taken from it when it holds one of the same content, else encoded and kept. `None`: each
     /// write encodes its own. The same bytes either way.
     pub images: Option<ImageMemo>,
+    /// The caller has verified the world's components ([`World::verify_components`]) and left it unchanged since: the
+    /// writer does not verify them again. By default it does, at its entry: it indexes by what the verifiers state
+    /// (morph deltas one per vertex, clip values per key, joints' parents in their skeleton), and a world that breaks
+    /// them is an [`Error::World`], not an index out of range. A tiled writer that writes many documents of one world
+    /// verifies it once.
+    pub verified: bool,
 }
 
 /// PNG encodings of textures' level 0, kept between writes that share it ([`WriteOptions::images`]): by the texture's
@@ -283,6 +289,9 @@ pub struct WriteReport {
     /// Mirrored placements, written with their negative-determinant matrix (glTF then reverses the winding).
     pub placements_mirrored: u64,
     pub placements_degenerate_skipped: u64,
+    /// Lights not written because their transform is sheared: a glTF node matrix must decompose into translation,
+    /// rotation and scale, and `bake-nonrigid` has no geometry of a light's to bake it into.
+    pub lights_sheared_skipped: u64,
     /// Placements whose prototype has no `core.mesh` (nothing to draw).
     pub placements_without_mesh: u64,
     /// Placements (as `placements` counts them) not written because their prototype has levels of detail
@@ -398,13 +407,14 @@ impl fmt::Display for WriteReport {
         writeln!(
             f,
             "placements {}: mirrored {}, degenerate skipped {}, without mesh {}, with levels of detail (not \
-             written) {}; prototypes unplaced {}",
+             written) {}; prototypes unplaced {}; lights sheared (not written) {}",
             self.placements,
             self.placements_mirrored,
             self.placements_degenerate_skipped,
             self.placements_without_mesh,
             self.placements_with_lods,
-            self.prototypes_unplaced
+            self.prototypes_unplaced,
+            self.lights_sheared_skipped
         )?;
         writeln!(
             f,
@@ -510,6 +520,14 @@ pub fn write(world: &World, options: &WriteOptions) -> Result<(Vec<u8>, WriteRep
 /// [`write`] as a [`Document`], for a caller that changes it further before assembling the GLB once
 /// (`WriteReport::glb_bytes` is then 0).
 pub fn write_document(world: &World, options: &WriteOptions) -> Result<(Document, WriteReport)> {
+    if !options.verified
+        && let Some((name, entity, detail)) = world.verify_components().into_iter().next()
+    {
+        return Err(Error::World {
+            entity,
+            detail: format!("{name}: {detail}"),
+        });
+    }
     let mut w = Writer {
         world,
         options,
@@ -666,7 +684,9 @@ struct Writer<'w> {
     material_index: BTreeMap<Entity, Option<(usize, BTreeSet<u8>)>>,
     texture_index: BTreeMap<(Entity, [Wrap; 2], Filters), usize>,
     image_of_entity: BTreeMap<Entity, Option<usize>>,
-    image_by_hash: BTreeMap<[u8; 32], usize>,
+    /// By the PNG's digest and whether the texture is data: an image tagged `primase.role` data is not shared with a
+    /// colour texture of the same pixels, which a consumer may encode lossily.
+    image_by_hash: BTreeMap<([u8; 32], bool), usize>,
     /// By wrap and whether the texture is data (sampled nearest, without mips).
     sampler_index: BTreeMap<([Wrap; 2], Filters, bool), usize>,
     /// A written texture slot has a transform (`KHR_texture_transform` is used).
@@ -767,6 +787,15 @@ impl Writer<'_> {
                 .as_ref()
                 .is_some_and(|s| !s.lights.contains(&e))
             {
+                continue;
+            }
+            // a node matrix must decompose into translation, rotation and scale: a sheared light is not written
+            if world
+                .get::<Transform>(e)
+                .is_some_and(|t| t.classify() == TransformKind::Sheared)
+            {
+                self.report.lights_sheared_skipped += 1;
+                self.handled.insert(e);
                 continue;
             }
             let mut node = Map::new();
@@ -1847,7 +1876,11 @@ impl Writer<'_> {
             });
         };
         let hash: [u8; 32] = Sha256::digest(&bytes).into();
-        let index = match self.image_by_hash.get(&hash) {
+        let data = self
+            .world
+            .get::<Texture>(e)
+            .is_some_and(|t| t.role == primase_core::TexRole::Data);
+        let index = match self.image_by_hash.get(&(hash, data)) {
             Some(&i) => i,
             None => {
                 let view = self.buffers.view(&bytes, None);
@@ -1856,7 +1889,7 @@ impl Writer<'_> {
                 self.report.images += 1;
                 self.report.image_bytes += bytes.len() as u64;
                 let i = self.images.len() - 1;
-                self.image_by_hash.insert(hash, i);
+                self.image_by_hash.insert((hash, data), i);
                 i
             }
         };
@@ -2447,7 +2480,7 @@ fn wrap_code(w: Wrap) -> u32 {
 }
 
 /// A light's `KHR_lights_punctual` object without its name (defaults left out: white, intensity 1, no range; a
-/// directional light has no range). An error for a non-finite value.
+/// directional light has no range). An error for a non-finite value, or a spot's cones outside glTF's ranges.
 pub fn punctual_light(l: &Light) -> std::result::Result<Value, String> {
     let finite = |xs: &[f32]| f32s_value(xs).map_err(|_| format!("non-finite material factor {xs:?}"));
     let mut o = Map::new();
@@ -2458,6 +2491,19 @@ pub fn punctual_light(l: &Light) -> std::result::Result<Value, String> {
             inner_cone,
             outer_cone,
         } => {
+            // the glTF ranges: 0 <= inner < pi / 2, 0 < outer <= pi / 2, and core's own rule that the inner is not past
+            // the outer (equal is a hard edge)
+            let half_pi = std::f32::consts::FRAC_PI_2;
+            let in_range = 0.0 <= inner_cone
+                && inner_cone <= outer_cone
+                && outer_cone <= half_pi
+                && outer_cone > 0.0
+                && inner_cone < half_pi;
+            if !in_range {
+                return Err(format!(
+                    "spot cones {inner_cone} and {outer_cone}: glTF needs 0 <= inner <= outer <= pi / 2, outer above 0"
+                ));
+            }
             let cones = finite(&[inner_cone, outer_cone])?;
             o.insert(
                 "spot".into(),

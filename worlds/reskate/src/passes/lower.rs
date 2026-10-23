@@ -251,10 +251,17 @@ impl Pass for LowerSkateLights {
     }
 }
 
-/// One light; an error for a non-finite or zero direction.
+/// One light; an error for a non-finite or zero direction, or a spot wider than a half space (or none).
 pub fn lower_light(l: &SkateLight) -> Result<(Light, Transform), String> {
     let kind = if l.spot {
         let outer = l.spot_size / 2.0;
+        // core's spot is a cone of at most pi / 2 (a half angle: 180 degrees across) and more than nothing
+        if !(outer > 0.0 && outer <= std::f32::consts::FRAC_PI_2) {
+            return Err(format!(
+                "a spot light of {} radians across: core's cone is more than 0 and at most pi",
+                l.spot_size
+            ));
+        }
         LightKind::Spot {
             inner_cone: outer * (1.0 - l.spot_blend.clamp(0.0, 1.0)),
             outer_cone: outer,

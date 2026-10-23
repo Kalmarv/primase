@@ -287,6 +287,10 @@ impl Pass for BudgetReskateTextures {
             mat.normal = mat.normal.filter(|t| keep.contains(t));
             mat.mask = mat.mask.filter(|t| keep.contains(t));
             if let Some(base) = mat.base.filter(|t| !keep.contains(t)) {
+                if !(w.has::<Texture>(base) && w.has::<SkateTexture>(base)) {
+                    // no pixels to take a mean of: mid-grey, said so
+                    log.count("base textures not loaded: their mean colour taken as mid-grey", 1);
+                }
                 factor = Some(mean_factor(w, base)?);
                 mat.base = None;
                 mat.tint = None;

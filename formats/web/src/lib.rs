@@ -657,30 +657,40 @@ fn collides(world: &World, e: Entity) -> bool {
 
 /// `world`'s placements, each with its prototype: its instances, and its meshes placed as themselves (their own
 /// prototype).
-fn placements(world: &World) -> BTreeMap<Entity, Entity> {
-    let mut out: BTreeMap<Entity, Entity> = world.iter::<Instance>().map(|(e, i)| (e, i.prototype)).collect();
+fn placements(world: &World) -> Placements {
+    let mut of: BTreeMap<Entity, Entity> = world.iter::<Instance>().map(|(e, i)| (e, i.prototype)).collect();
     for (e, _) in world.iter::<Mesh>() {
         if !world.has::<Instance>(e) && world.has::<Transform>(e) {
-            out.insert(e, e);
+            of.insert(e, e);
         }
     }
-    out
+    let prototypes = of.values().copied().collect();
+    Placements { of, prototypes }
+}
+
+/// A world's placements ([`placements`]): each with its prototype, and the set of prototypes placed (so that asking
+/// whether an entity is placed by one is a lookup, not a scan of every placement).
+struct Placements {
+    of: BTreeMap<Entity, Entity>,
+    prototypes: BTreeSet<Entity>,
+}
+
+impl Placements {
+    /// Whether `e` is neither a placement nor placed by one.
+    fn unplaced(&self, e: Entity) -> bool {
+        !self.of.contains_key(&e) && !self.prototypes.contains(&e)
+    }
 }
 
 /// Whether `e` holds collision of its own, placed by its own transform: a soup with triangles that is not a
 /// placement and that none of `placements` places.
-fn standalone_collision(world: &World, e: Entity, placements: &BTreeMap<Entity, Entity>) -> bool {
-    collides(world, e) && unplaced(e, placements)
+fn standalone_collision(world: &World, e: Entity, placements: &Placements) -> bool {
+    collides(world, e) && placements.unplaced(e)
 }
 
 /// Whether `e` holds a parametric collider of its own, placed by its own transform (left out, reported).
-fn standalone_collider(world: &World, e: Entity, placements: &BTreeMap<Entity, Entity>) -> bool {
-    world.has::<primase_core::Collider>(e) && unplaced(e, placements)
-}
-
-/// Whether `e` is neither a placement nor placed by one of `placements`.
-fn unplaced(e: Entity, placements: &BTreeMap<Entity, Entity>) -> bool {
-    !placements.contains_key(&e) && !placements.values().any(|&p| p == e)
+fn standalone_collider(world: &World, e: Entity, placements: &Placements) -> bool {
+    world.has::<primase_core::Collider>(e) && placements.unplaced(e)
 }
 
 /// Whether `prototype` has other forms to choose from (`core.lods` listing any): the writer chooses none.
@@ -693,6 +703,9 @@ fn has_forms(world: &World, prototype: Entity) -> bool {
 /// What a tile leaves out of a placement whose prototype has other forms ([`has_forms`]).
 const WITH_FORMS: &str =
     "placements whose prototype has levels of detail (core.lods), not written: select-lod chooses a form";
+/// What a tile leaves out of a light whose transform is sheared.
+const SHEARED_LIGHT: &str = "lights with a sheared transform, not written: a glTF node matrix must decompose into translation, \
+                             rotation and scale";
 /// What a tile leaves out of a parametric collider.
 const COLLIDER: &str = "parametric colliders (core.collider), not written as collision records: the viewer draws \
                         collision from triangles (tessellate-colliders makes them)";
@@ -761,7 +774,7 @@ pub fn plan_with_geometry(
     }
     let placements = placements(world);
     for e in &options.split_by_tile {
-        if !placements.contains_key(e) {
+        if !placements.of.contains_key(e) {
             return Err(Error::Invalid(format!("split marker {e:?} is not a placement")));
         }
     }
@@ -804,7 +817,7 @@ pub fn plan_with_geometry(
     // every placement owned by one cell, as a placement (its first role): what it draws or collides with, and whether
     // its transform is degenerate, is what its cell's world holds when the cell is written
     let mut filed = BTreeSet::new();
-    for (&e, &prototype) in &placements {
+    for (&e, &prototype) in &placements.of {
         let t = *world
             .get::<Transform>(e)
             .ok_or_else(|| Error::Invalid(format!("placement {e:?} has no transform")))?;
@@ -1175,14 +1188,24 @@ impl TilePlan {
                     if transform.cols[3].iter().any(|v| !v.is_finite()) {
                         return Err(Error::Invalid(format!("light {e:?} without a finite position")));
                     }
-                    content.lights.push(cw.lights.len());
-                    cw.lights.push(SceneLight {
-                        name: world
-                            .get::<Name>(e)
-                            .map_or_else(|| format!("light_{}", e.index()), |n| n.0.clone()),
-                        light: light.clone(),
-                        transform,
-                    });
+                    // a node matrix must decompose into translation, rotation and scale: a sheared light is not written
+                    if transform.classify() == TransformKind::Sheared {
+                        self.omit(
+                            NoticeKind::Unsupported,
+                            SHEARED_LIGHT.into(),
+                            1,
+                            &entity_name(world, e),
+                        );
+                    } else {
+                        content.lights.push(cw.lights.len());
+                        cw.lights.push(SceneLight {
+                            name: world
+                                .get::<Name>(e)
+                                .map_or_else(|| format!("light_{}", e.index()), |n| n.0.clone()),
+                            light: light.clone(),
+                            transform,
+                        });
+                    }
                 }
                 if standalone_collision(world, e, &placements) {
                     let c = world.get::<Collision>(e).ok_or_else(|| {
@@ -1197,7 +1220,7 @@ impl TilePlan {
             }
             // as a placement (an instance, or a mesh with a transform): drawn, whole or the elements the cell holds,
             // and its owner writes its prototype's collision through its transform
-            let Some(&prototype) = placements.get(&e) else {
+            let Some(&prototype) = placements.of.get(&e) else {
                 continue;
             };
             let elements = pieces.get(&e).cloned();
@@ -1624,6 +1647,8 @@ impl TilePlan {
                         group_by: primase_gltf::GroupBy::None,
                         selection: Some(selection),
                         images: Some(self.images_memo.clone()),
+                        // the cell's world was verified when the cell was written
+                        verified: true,
                         ..Default::default()
                     },
                 )?;
