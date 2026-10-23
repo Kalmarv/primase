@@ -4,12 +4,19 @@
 //! and run on [`ProgramShader`]; every lane both write must agree bit for bit (the fixtures use no transcendental).
 //!
 //! The fixtures are the control-flow and memory ones the DXIL evaluator cannot run (flow, loops, switch, arrays, bits;
-//! default and -Od builds). Needs `PRIMASE_WARP` (the oracle program), `PRIMASE_DXC` (for the oracle's vertex shader)
+//! default and -Od builds), the resource arrays (textures of different sizes in space 1, samplers in space 2) and the
+//! pixel operations a texture load at an offset and the half conversions need. Needs `PRIMASE_WARP` (the oracle program), `PRIMASE_DXC` (for the oracle's vertex shader)
 //! and `PRIMASE_WARP_SCRATCH` (a folder). The vertex shader is generated from the container's interface
 //! ([`primase_dxil::interface`]): every input varying read from `cbuffer Case : register(b0, space1) { uint4 r[32]; }`,
 //! row by register.
-use primase_shader::exec::ProgramShader;
-use primase_shader::{Interface, InterpMode, InterpSampling, PixelShader, Sample, ScalarType, SystemValue};
+use primase_shader::exec::{
+    Backend, Element, Executable, ImageLoad, ImageQuery, ImageSample, ProgramShader, QueryKind, Resources,
+    Runner,
+};
+use primase_shader::{
+    D3dClass, Interface, InterpMode, InterpSampling, PixelShader, Program, ResourceId, Sample, ScalarType,
+    SystemValue,
+};
 use primase_testdata::real_data;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -96,16 +103,8 @@ fn vertex_hlsl(interface: &Interface) -> String {
         .iter()
         .any(|v| v.system == Some(SystemValue::FragCoord))
     {
-        fields.insert_str(
-            0,
-            "    float4 position : SV_Position;
-",
-        );
-        body.insert_str(
-            0,
-            "    o.position = float4(p, 0.5, 1.0);
-",
-        );
+        fields.insert_str(0, "    float4 position : SV_Position;\n");
+        body.insert_str(0, "    o.position = float4(p, 0.5, 1.0);\n");
     }
     format!(
         "cbuffer Case : register(b0, space1) {{ uint4 r[32]; }};\n\
@@ -119,14 +118,57 @@ struct Case {
     name: String,
     inputs: BTreeMap<u32, [u32; 4]>,
     buffers: BTreeMap<u32, Vec<[u32; 4]>>,
+    /// The oracle's `texture` lines, as written after the keyword.
+    textures: Vec<String>,
 }
 
+/// What the executor makes of a case: per output member, its four lanes and a mask of those written.
+type Ours = Result<Vec<([u32; 4], u8)>, String>;
+
+/// The executor's run of a program with no resources but its constant buffers.
+fn plain(program: &Program, c: &Case) -> Ours {
+    let shader = ProgramShader::new(program.clone()).unwrap();
+    let position = program
+        .interface
+        .inputs
+        .iter()
+        .find(|v| v.system == Some(SystemValue::FragCoord))
+        .and_then(|v| v.provenance.d3d)
+        .map(|d| d.register);
+    let mut inputs = vec![[0u32; 4]; shader.input_count().max(1)];
+    for (r, w) in &c.inputs {
+        if let Some(slot) = inputs.get_mut(*r as usize) {
+            *slot = *w;
+        }
+    }
+    if let Some(p) = position {
+        inputs[p as usize] = [0.5f32, 0.5, 0.5, 1.0].map(f32::to_bits);
+    }
+    let refs: Vec<(u32, &[[u32; 4]])> = c.buffers.iter().map(|(s, v)| (*s, v.as_slice())).collect();
+    let mut sampler = |_: Sample| Err("no textures in these fixtures".to_owned());
+    let e = shader
+        .execute(&inputs, &refs, &mut sampler)
+        .map_err(|e| e.to_string())?;
+    Ok(program
+        .interface
+        .outputs
+        .iter()
+        .map(|v| {
+            let r = v.provenance.d3d.unwrap().register as usize;
+            (e.outputs[r], e.output_masks[r])
+        })
+        .collect())
+}
+
+/// Render `cases` of the container on WARP and compare every lane the executor writes, as `ours` makes it of the lifted
+/// program (its output members in the order of the interface's outputs).
 fn compare(
     container: &Path,
     cases: &[Case],
     dxc: &Path,
     warp: &Path,
     scratch: &Path,
+    ours: &dyn Fn(&Program, &Case) -> Ours,
 ) -> (usize, Vec<String>) {
     let bytes = std::fs::read(container).unwrap();
     let program = primase_dxil::lift(&bytes).unwrap();
@@ -164,16 +206,8 @@ fn compare(
         "dxc: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let shader = ProgramShader::new(program.clone()).unwrap();
-    let position = program
-        .interface
-        .inputs
-        .iter()
-        .find(|v| v.system == Some(SystemValue::FragCoord))
-        .and_then(|v| v.provenance.d3d)
-        .map(|d| d.register);
     let mut text = String::new();
-    let mut ours = BTreeMap::new();
+    let mut ran = BTreeMap::new();
     for c in cases {
         text.push_str(&format!(
             "case {}\napi d3d12\nps {}\nvs {}\nfront 1\n",
@@ -190,22 +224,14 @@ fn compare(
                 text.push_str(&format!("row {}\n", hex(row)));
             }
         }
+        for t in &c.textures {
+            text.push_str(&format!("texture {t}\n"));
+        }
         for (r, kind) in &targets {
             text.push_str(&format!("target {r} {kind}\n"));
         }
         text.push_str("end\n");
-        let mut inputs = vec![[0u32; 4]; shader.input_count().max(1)];
-        for (r, w) in &c.inputs {
-            if let Some(slot) = inputs.get_mut(*r as usize) {
-                *slot = *w;
-            }
-        }
-        if let Some(p) = position {
-            inputs[p as usize] = [0.5f32, 0.5, 0.5, 1.0].map(f32::to_bits);
-        }
-        let refs: Vec<(u32, &[[u32; 4]])> = c.buffers.iter().map(|(s, v)| (*s, v.as_slice())).collect();
-        let mut sampler = |_: Sample| Err("no textures in these fixtures".to_owned());
-        ours.insert(c.name.clone(), shader.execute(&inputs, &refs, &mut sampler));
+        ran.insert(c.name.clone(), ours(&program, c));
     }
     let cases_file = scratch.join(format!("{stem}.lifted.cases.txt"));
     let results = scratch.join(format!("{stem}.lifted.warp.jsonl"));
@@ -228,7 +254,7 @@ fn compare(
             mismatches.push(format!("{name}: WARP error {e}"));
             continue;
         }
-        let execution = match &ours[name] {
+        let execution = match &ran[name] {
             Ok(e) => e,
             Err(e) => {
                 mismatches.push(format!("{name}: executor error {e}"));
@@ -237,12 +263,13 @@ fn compare(
         };
         for (k, (reg, _)) in targets.iter().enumerate() {
             for lane in 0..4 {
-                if execution.output_masks[*reg as usize] & (1 << lane) == 0 {
+                let (values, mask) = execution[k];
+                if mask & (1 << lane) == 0 {
                     continue;
                 }
                 let warp_bits =
                     u32::from_str_radix(v["targets"][k][lane].as_str().unwrap_or(""), 16).unwrap();
-                let our_bits = execution.outputs[*reg as usize][lane];
+                let our_bits = values[lane];
                 lanes += 1;
                 if f32::from_bits(our_bits).is_nan() && f32::from_bits(warp_bits).is_nan() {
                     continue;
@@ -275,6 +302,7 @@ fn lifted_fixtures_agree_with_warp() {
         name: name.to_owned(),
         inputs: BTreeMap::from([(1, [f(t[0]), f(t[1]), 0, 0])]),
         buffers: BTreeMap::from([(0, vec![a.map(f32::to_bits), n.map(|x| x as u32)])]),
+        textures: Vec::new(),
     };
     let flow = [
         case("flow0", [1.0, 4.0, 2.0, 3.0], [5, 1, 0, 2], [2.0, 0.25]),
@@ -303,6 +331,7 @@ fn lifted_fixtures_agree_with_warp() {
             name: name.to_owned(),
             inputs: BTreeMap::from([(1, [0, 0, 0, 0])]),
             buffers: BTreeMap::from([(0, rows)]),
+            textures: Vec::new(),
         }
     };
     let arrays = [
@@ -316,6 +345,7 @@ fn lifted_fixtures_agree_with_warp() {
         name: name.to_owned(),
         inputs: BTreeMap::new(),
         buffers: BTreeMap::from([(0, vec![f4.map(f32::to_bits), u4, i4.map(|x| x as u32)])]),
+        textures: Vec::new(),
     };
     let bits = [
         bits_case(
@@ -355,12 +385,183 @@ fn lifted_fixtures_agree_with_warp() {
                     name: format!("{}{}", c.name, variant.replace('.', "_")),
                     inputs: c.inputs.clone(),
                     buffers: c.buffers.clone(),
+                    textures: Vec::new(),
                 })
                 .collect();
-            let (lanes, mismatches) = compare(&container, &named, &dxc, &warp, &scratch);
+            let (lanes, mismatches) = compare(&container, &named, &dxc, &warp, &scratch, &plain);
             total += lanes;
             all.extend(mismatches);
         }
+    }
+    println!("{total} output lanes compared with WARP, {} differ", all.len());
+    for m in &all {
+        println!("MISMATCH {m}");
+    }
+    assert!(total > 0 && all.is_empty());
+}
+
+/// The resource of a class at a register, by its D3D binding.
+fn resource_at(program: &Program, register: u32, class: D3dClass) -> ResourceId {
+    program
+        .interface
+        .resources
+        .iter()
+        .find(|r| {
+            r.provenance
+                .d3d
+                .is_some_and(|d| d.register == register && d.class == class)
+        })
+        .unwrap_or_else(|| panic!("no {class:?} at {register}"))
+        .id
+}
+
+/// Run a lifted pixel program once on the executor with `constants` in its constant buffer 0, the entry arguments
+/// `args` and `backend` for its images; every output member with the lanes of its width marked written.
+fn run_with_backend(
+    program: &Program,
+    constants: Vec<[u32; 4]>,
+    args: &[[u32; 4]],
+    backend: &mut dyn Backend,
+) -> Ours {
+    let exe = Executable::new(program).map_err(|e| e.to_string())?;
+    let mut resources = Resources::default();
+    resources
+        .constants
+        .insert(resource_at(program, 0, D3dClass::ConstantBuffer), constants);
+    let bound = exe.bind_resources(&resources)?;
+    let mut runner = Runner::<1>::new(&exe, &bound, backend, None);
+    let [out] = runner.run([args])?;
+    Ok(program
+        .interface
+        .outputs
+        .iter()
+        .zip(out.values)
+        .map(|(v, values)| (values, (1u8 << v.value.width) - 1))
+        .collect())
+}
+
+/// The textures of `resource_arrays.hlsl` as the oracle is given them: texture `i` of the array (t0 to t3 in space 1)
+/// is 2 << i by 1 << i texels of the value i + 1 in every lane, the single texture (t8) is 32 by 64.
+struct Sized {
+    array: ResourceId,
+}
+impl Backend for Sized {
+    fn sample(&mut self, r: ImageSample<Element>) -> Result<[f32; 4], String> {
+        assert_eq!(r.texture.id, self.array);
+        Ok([(r.texture.index + 1) as f32; 4])
+    }
+    fn load(&mut self, r: ImageLoad<Element>) -> Result<[u32; 4], String> {
+        assert_eq!(r.texture.id, self.array);
+        // a load outside the texture reads zeros
+        let (w, h) = (2 << r.texture.index, 1 << r.texture.index);
+        Ok(if r.texel[0] < w && r.texel[1] < h {
+            [f((r.texture.index + 1) as f32); 4]
+        } else {
+            [0; 4]
+        })
+    }
+    fn query(&mut self, r: ImageQuery<Element>) -> Result<[u32; 4], String> {
+        assert_eq!(r.kind, QueryKind::Size);
+        Ok(if r.texture.id == self.array {
+            [2 << r.texture.index, 1 << r.texture.index, 1, 0]
+        } else {
+            [32, 64, 1, 0]
+        })
+    }
+}
+
+/// `pixel_ops.hlsl`'s `img` is a ramp: texel (x, y) is (x, y, 0, 1).
+struct Ramp;
+impl Backend for Ramp {
+    fn sample(&mut self, _: ImageSample<Element>) -> Result<[f32; 4], String> {
+        Err("no sampling in this fixture".into())
+    }
+    fn load(&mut self, r: ImageLoad<Element>) -> Result<[u32; 4], String> {
+        Ok([f(r.texel[0] as f32), f(r.texel[1] as f32), 0, f(1.0)])
+    }
+    // the sample count of the multisampled texture, which only the sample position (not compared) depends on
+    fn query(&mut self, _: ImageQuery<Element>) -> Result<[u32; 4], String> {
+        Ok([4, 0, 0, 0])
+    }
+}
+
+#[test]
+fn lifted_resource_arrays_and_pixel_operations_agree_with_warp() {
+    let (Some(dxc), Some(warp), Some(scratch)) = (
+        real_data("PRIMASE_DXC"),
+        real_data("PRIMASE_WARP"),
+        real_data("PRIMASE_WARP_SCRATCH"),
+    ) else {
+        return;
+    };
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let hexf = |x: f32| format!("{:08x}", x.to_bits());
+    let uniform = |x: f32| format!("{0} {0} {0} {0}", hexf(x));
+    // Select { uint2 which; float2 uv; }; texture i of the array in space 1 at t(i), the single one at t8
+    let arrays = |name: &str, which: [u32; 2]| Case {
+        name: name.to_owned(),
+        inputs: BTreeMap::new(),
+        buffers: BTreeMap::from([(0, vec![[which[0], which[1], f(0.25), f(0.75)]])]),
+        textures: (0..4u32)
+            .map(|i| format!("{i}:1 {} {}x{}", uniform((i + 1) as f32), 2 << i, 1 << i))
+            .chain([format!("8 {} 32x64", uniform(1.0))])
+            .collect(),
+    };
+    // Values { float h; uint packed; }; img (t0) is a 16 by 16 ramp
+    let ops = |name: &str, h: f32, packed: u32| Case {
+        name: name.to_owned(),
+        inputs: BTreeMap::new(),
+        buffers: BTreeMap::from([(0, vec![[f(h), packed, 0, 0]])]),
+        textures: vec![format!("0 {} 16x16 ramp", uniform(0.0))],
+    };
+    let (mut total, mut all) = (0, Vec::new());
+    for variant in ["", ".od", ".66"] {
+        let tag = variant.replace('.', "_");
+        let named = |cases: Vec<Case>| -> Vec<Case> {
+            cases
+                .into_iter()
+                .map(|c| Case {
+                    name: format!("{}{tag}", c.name),
+                    ..c
+                })
+                .collect()
+        };
+        // tex[which.x] with smp[which.y]; the load of tex[which.x + 1] at (1, 2) is out of range for textures 0 and 1
+        let cases = named(vec![
+            arrays("arrays_1_3", [1, 3]),
+            arrays("arrays_2_0", [2, 0]),
+            arrays("arrays_0_2", [0, 2]),
+            arrays("arrays_2_3", [2, 3]),
+        ]);
+        let container = dir.join(format!("resource_arrays{variant}.dxil"));
+        let (lanes, mismatches) = compare(&container, &cases, &dxc, &warp, &scratch, &|program, c| {
+            let mut backend = Sized {
+                array: resource_at(program, 0, D3dClass::ShaderResource),
+            };
+            run_with_backend(
+                program,
+                c.buffers[&0].clone(),
+                &[[f(0.5), f(0.5), f(0.5), f(1.0)]],
+                &mut backend,
+            )
+        });
+        total += lanes;
+        all.extend(mismatches);
+        // the offset load and the half conversions; the sample index and its position need a multisampled target
+        let cases = named(vec![
+            ops("ops0", 1.5, 0x4000),
+            ops("ops1", -0.375, 0x3c00),
+            ops("ops2", 65504.0, 0xc400),
+        ]);
+        let container = dir.join(format!("pixel_ops{variant}.dxil"));
+        let (lanes, mismatches) = compare(&container, &cases, &dxc, &warp, &scratch, &|program, c| {
+            let mut out = run_with_backend(program, c.buffers[&0].clone(), &[[0, 0, 0, 0]], &mut Ramp)?;
+            // Target1's x and y are the sample's position: not compared
+            out[1].1 &= 0b1100;
+            Ok(out)
+        });
+        total += lanes;
+        all.extend(mismatches);
     }
     println!("{total} output lanes compared with WARP, {} differ", all.len());
     for m in &all {
