@@ -256,6 +256,22 @@ pub(super) fn frozen_words(
 /// interior, a hook on its D3D11 contexts) found the vertex program's `cbTexScroll` to be that, in all 40,744 layered
 /// draws (33 vertex programs, 61 pixel programs) over 88 frames; no scrolling model (water, flags) was in view, so the
 /// value of an animated model is not observed.
+///
+/// Where a scroll is stored, if anywhere: the vertex programs read the buffer as `uv = stored_uv / 2048 * scroll.xy +
+/// scroll.zw` for set `n` (layered programs sets 0 and 1, the GXFlver ones set 0), and a FLVER material can carry GX items
+/// for it: `GX20`..`GX34` ("Texture Scroll": per texture type, Albedo1/2, Reflectance1/2, Shininess1/2, Normal1/2,
+/// DetailNormal1/2, Displacement1/2, Emissive1/2, BlendMask, a U and a V speed and one unknown float; names from Smithbox's
+/// `GX_Item_Descriptors.json`) and `GX07` (water: the normal and diffuse scroll speeds among its fields). A scan of every
+/// named binder and FLVER of the install (14,459 FLVERs, 43,435 materials) found them zero everywhere except twelve items on
+/// four map pieces, all GXFlver-family shaders: `m25_00_00_00_906000` (and its `_S` level of detail) materials `03` and `04`
+/// (`M[A]_al`, GX20 V -0.03 and -0.05), `m17_00_00_00_106000` (and `_S`) `01 - Default` (`M[A]_al_NoLight`, GX20 U and V
+/// 0.005), `m20_00_00_00_920000` `川` (`M[ARSN]`, GX20 [0, -0.08] and GX26 [0, -0.04]) and `m25_00_00_00_300010` `川` and `滝`
+/// (`M[ARSN]_Water_3normaltet`, GX07). No layered material carries a scroll item (layered materials carry GX00 and GX04
+/// only), so for everything a layer bake reads the identity is the right value. That the engine writes offset = speed x time
+/// into the buffer from these items is an inference from their names and from GXFlver materials being their only carriers;
+/// it is not confirmed: no capture has seen one of the four pieces drawn (it needs the game at m17_00, m20_00 or m25_00).
+/// The SAT shaders that visibly scroll (`M[Flow]_Water`, `Character_AMSN_Scroll*`) do it inside the program from their MTD
+/// `float2` parameters and `FC_GlobalTime`, which is a material source already bound.
 pub const TEXTURE_SCROLL_POLICY: &str = "texture scroll frozen to the identity: 40,744 layered draws in a Sekiro capture all identity; animated models unobserved";
 
 /// What a static bake freezes of the engine's per-view, per-frame and per-object values: the roles a binding states
