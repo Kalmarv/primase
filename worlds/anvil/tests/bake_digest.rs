@@ -8,12 +8,12 @@
 
 use std::collections::BTreeMap;
 
-use primase_anvil::passes::BakeAnvilMaterial;
+use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
 use primase_anvil::read::archive::Archive;
 use primase_anvil::read::material::MATERIAL;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Texture, World};
 use primase_testdata::{Game, install};
@@ -58,21 +58,22 @@ fn the_baked_materials_of_the_usnat_forge() {
             }
         }
     }
-    let pass = BakeAnvilMaterial::from_options(&Options::from(
-        [
-            ("size", "64"),
-            ("normal-green", "up"),
-            ("shader-uv", "texcoord"),
-            ("mip-bias", "0"),
-            ("terrain-ao", "0.5"),
-            ("sun-elevation", "30"),
-            ("view-cosine", "0.7"),
-            ("camera-distance", "1000000"),
-            ("unset", "white"),
-        ]
-        .map(|(k, v)| (k.to_owned(), v.to_owned())),
-    ))
-    .unwrap();
+    let pass = BAKE_ANVIL_MATERIAL
+        .instance(&Options::from(
+            [
+                ("size", "64"),
+                ("normal-green", "up"),
+                ("shader-uv", "texcoord"),
+                ("mip-bias", "0"),
+                ("terrain-ao", "0.5"),
+                ("sun-elevation", "30"),
+                ("view-cosine", "0.7"),
+                ("camera-distance", "1000000"),
+                ("unset", "white"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned())),
+        ))
+        .unwrap();
     let mut log = PassLog::default();
     let started = std::time::Instant::now();
     pass.run(&mut w, &mut log).unwrap();

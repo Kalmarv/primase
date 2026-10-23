@@ -6,12 +6,12 @@
 use primase_anvil::components::{
     AnvilGrass, AnvilGrassModel, AnvilTerrain, AnvilTerrainGroups, GrassSystemSetup, GroupTile, TerrainTile,
 };
-use primase_anvil::passes::{CellPoint, Density, LowerAnvilGrass};
+use primase_anvil::passes::LOWER_ANVIL_GRASS;
 use primase_anvil::read::grass::{
     GrassModelSettings, StoredGrassGroup, StoredGrassLibrary, StoredGrassModel, StoredGrassRule,
 };
 use primase_core::frame::SourceFrame;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, PassLog};
 use primase_core::{Entity, Instance, Name, Transform, World};
 
 /// The terrain node's row and column: 64 m nodes from -8192, so its corner is (-3648, 1088).
@@ -168,7 +168,7 @@ fn options(seed: u64, max: u64) -> Options {
 
 fn run(seed: u64, max: u64) -> Result<(World, PassLog, Entity, Entity), String> {
     let (mut w, setup, placement) = world();
-    let pass = LowerAnvilGrass::from_options(&options(seed, max))?;
+    let pass = LOWER_ANVIL_GRASS.instance(&options(seed, max))?;
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log)?;
     Ok((w, log, setup, placement))
@@ -237,15 +237,11 @@ fn every_option_is_required() {
     for key in full.keys() {
         let mut some = full.clone();
         some.remove(key);
-        let error = LowerAnvilGrass::from_options(&some).map(|_| ()).expect_err(key);
+        let error = LOWER_ANVIL_GRASS.instance(&some).map(|_| ()).expect_err(key);
         assert!(error.contains(key.as_str()), "{key}: {error}");
     }
-    let pass = LowerAnvilGrass::from_options(&full).expect("options");
+    let pass = LOWER_ANVIL_GRASS.instance(&full).expect("options");
     assert_eq!(pass.options(), full);
-    assert_eq!(
-        (pass.sample, pass.density),
-        (CellPoint::Corner, Density::PerSample)
-    );
     assert!(pass.approximates().starts_with("grass placed by a stand-in"));
 }
 
@@ -269,7 +265,7 @@ fn a_tiling_count_over_the_ceiling_is_refused_naming_the_rule() {
     w.insert(e, AnvilGrass { setup, library: lib });
     let mut o = options(1, 100);
     o.insert("tiling".to_owned(), "rule".to_owned());
-    let pass = LowerAnvilGrass::from_options(&o).expect("options");
+    let pass = LOWER_ANVIL_GRASS.instance(&o).expect("options");
     let error = pass
         .run(&mut w, &mut PassLog::default())
         .expect_err("over the ceiling");

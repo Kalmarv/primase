@@ -5,12 +5,12 @@
 use std::collections::BTreeSet;
 
 use primase_anvil::components::{AnvilLayout, AnvilMaterial, AnvilMesh, VertexAttributes};
-use primase_anvil::passes::{LowerAnvilMesh, MESH_LAYOUT_FIELD, ResolveAnvilShaders, Static16Normal};
+use primase_anvil::passes::{LowerAnvilMesh, MESH_LAYOUT_FIELD, RESOLVE_ANVIL_SHADERS, Static16Normal};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::mesh::MESH;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
-use primase_core::pass::{Options, Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
+use primase_core::pass::{Options, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::shader::{ShaderBinding, Stage};
 use primase_core::{Component, Entity, Mesh, World};
 use primase_testdata::{Game, install};
@@ -154,7 +154,7 @@ fn the_same_vertex_stages_are_bound_before_and_after_lowering() {
         );
     }
     let options = Options::from([("unset-textures".to_owned(), "white".to_owned())]);
-    let resolve = ResolveAnvilShaders::from_options(&options).expect("options");
+    let resolve = RESOLVE_ANVIL_SHADERS.instance(&options).expect("options");
 
     let mut before = placed_world(&mut archive, &meshes);
     resolve

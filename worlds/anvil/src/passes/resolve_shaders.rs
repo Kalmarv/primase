@@ -65,7 +65,7 @@
 //! the vertex stage's are mesh streams by their semantic name.
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::shader::{
     AlphaTest, Compare, ConstantBinding, ConstantRole, Cull, DepthState, FrameParameter, InputBinding,
     InputRole, Interface, NormalEncoding, NormalSpace, ObjectMatrix, ObjectParameter, Occluded,
@@ -90,6 +90,11 @@ pub enum UnsetTexture {
     Leave,
 }
 
+impl Choice for UnsetTexture {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("white", UnsetTexture::White), ("leave", UnsetTexture::Leave)];
+}
+
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResolveAnvilShaders {
@@ -100,33 +105,18 @@ impl ResolveAnvilShaders {
     pub fn new(unset: UnsetTexture) -> Self {
         ResolveAnvilShaders { unset }
     }
-
-    /// From its option (required), through [`ResolveAnvilShaders::new`].
-    pub fn from_options(o: &Options) -> Result<Self, String> {
-        let mut unset = None;
-        for (k, v) in o {
-            match k.as_str() {
-                "unset-textures" => {
-                    unset = Some(match v.as_str() {
-                        "white" => UnsetTexture::White,
-                        "leave" => UnsetTexture::Leave,
-                        _ => return Err(format!("unset-textures={v} is not white or leave")),
-                    });
-                }
-                "vertex-layout" => {
-                    return Err(
-                        "vertex-layout is gone: each mesh's vertex stage is bound by its own layout (anvil.layout.kind)"
-                            .into(),
-                    );
-                }
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        Ok(Self::new(unset.ok_or(
-            "unset-textures is required: what a texture binding with no texture reads is the program's choice",
-        )?))
-    }
 }
+
+/// `resolve-anvil-shaders`' declaration ([`primase_core::pass::PassRegistry::add`]): what a texture binding with no
+/// texture reads is the program's. (The vertex layout is no option: each mesh's own decides, `anvil.layout.kind`.)
+pub const RESOLVE_ANVIL_SHADERS: PassSpec = PassSpec {
+    name: "resolve-anvil-shaders",
+    options: &[OptionSpec::choice::<UnsetTexture>(
+        "unset-textures",
+        "a texture binding with no texture reads white (counted), or is left missing",
+    )],
+    make: |g| Ok(Box::new(ResolveAnvilShaders::new(g.choice("unset-textures")))),
+};
 
 /// The G-buffer pass's number, in the key's bits 22 to 29.
 const GBUFFER: u32 = 1;
@@ -611,14 +601,7 @@ impl Pass for ResolveAnvilShaders {
         "resolve-anvil-shaders"
     }
     fn options(&self) -> Options {
-        Options::from([(
-            "unset-textures".to_owned(),
-            match self.unset {
-                UnsetTexture::White => "white",
-                UnsetTexture::Leave => "leave",
-            }
-            .to_owned(),
-        )])
+        Options::from([("unset-textures".to_owned(), self.unset.text().to_owned())])
     }
     fn requires(&self) -> &[&'static str] {
         &[AnvilMaterial::NAME, AnvilShaders::NAME]
@@ -1135,14 +1118,17 @@ mod tests {
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect::<Options>()
         };
-        assert!(ResolveAnvilShaders::from_options(&o(&[])).is_err());
-        assert!(ResolveAnvilShaders::from_options(&o(&[("unset-textures", "white")])).is_ok());
+        let make = |pairs: &[(&str, &str)]| RESOLVE_ANVIL_SHADERS.instance(&o(pairs));
+        assert!(make(&[]).is_err());
+        assert!(make(&[("unset-textures", "white")]).is_ok());
         // the vertex layout is no option: each mesh's own decides
-        let gone =
-            ResolveAnvilShaders::from_options(&o(&[("unset-textures", "white"), ("vertex-layout", "2")]));
-        assert!(gone.unwrap_err().contains("vertex-layout is gone"));
-        let p = ResolveAnvilShaders::from_options(&o(&[("unset-textures", "leave")])).unwrap();
-        assert_eq!(p, ResolveAnvilShaders::new(UnsetTexture::Leave));
+        let gone = make(&[("unset-textures", "white"), ("vertex-layout", "2")]);
+        assert!(gone.err().unwrap().contains("unknown option vertex-layout"));
+        let p = make(&[("unset-textures", "leave")]).unwrap();
+        assert_eq!(
+            p.options(),
+            ResolveAnvilShaders::new(UnsetTexture::Leave).options()
+        );
         assert!(!p.options().contains_key("vertex-layout"));
     }
 }

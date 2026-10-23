@@ -4,12 +4,12 @@
 //! from the same sampled texels with the sun 30 degrees up and the eye at 0.7 to the normal (the colour's mix `f` not
 //! 0), the parallax march seeing the surface straight on.
 use primase_anvil::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialValue};
-use primase_anvil::passes::BakeAnvilMaterial;
+use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
@@ -110,21 +110,22 @@ fn ice_albedo(surface: [f64; 3], deep: [f64; 3], n: [f64; 3], light_falloff: f64
 }
 
 fn bake(w: &mut World) -> PassLog {
-    let pass = BakeAnvilMaterial::from_options(&Options::from(
-        [
-            ("size", "64"),
-            ("normal-green", "up"),
-            ("shader-uv", "texcoord"),
-            ("mip-bias", "0"),
-            ("terrain-ao", "0.5"),
-            ("sun-elevation", "30"),
-            ("view-cosine", "0.7"),
-            ("camera-distance", "1000000"),
-            ("unset", "white"),
-        ]
-        .map(|(k, v)| (k.to_owned(), v.to_owned())),
-    ))
-    .expect("options");
+    let pass = BAKE_ANVIL_MATERIAL
+        .instance(&Options::from(
+            [
+                ("size", "64"),
+                ("normal-green", "up"),
+                ("shader-uv", "texcoord"),
+                ("mip-bias", "0"),
+                ("terrain-ao", "0.5"),
+                ("sun-elevation", "30"),
+                ("view-cosine", "0.7"),
+                ("camera-distance", "1000000"),
+                ("unset", "white"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned())),
+        ))
+        .expect("options");
     let mut log = PassLog::default();
     pass.run(w, &mut log).expect("run");
     println!("{log:?}");

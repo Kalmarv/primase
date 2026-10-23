@@ -84,7 +84,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::shader::NormalEncoding;
 use primase_core::{
@@ -96,7 +96,7 @@ use primase_shader_exec::{
     Grid, Input, Invocation, Layout, Lod, PixelShader, evaluate::Constants, evaluate_raw_with,
 };
 
-use super::material::{ShaderUv, uv_transform};
+use super::material::{Green, NORMAL_GREEN, SHADER_UV, ShaderUv, UNSET, Unset, uv_transform};
 use crate::components::{
     AnvilMaterial, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags, MaterialValue,
 };
@@ -508,58 +508,31 @@ pub struct BakeAnvilMaterial {
 }
 
 impl BakeAnvilMaterial {
-    /// From its options, all required.
-    pub fn from_options(o: &Options) -> Result<BakeAnvilMaterial, String> {
-        let known = [
-            "size",
-            "normal-green",
-            "shader-uv",
-            "mip-bias",
-            "terrain-ao",
-            "sun-elevation",
-            "view-cosine",
-            "camera-distance",
-            "unset",
-            "skin-tone",
-        ];
-        if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let usage = "size=N, normal-green=up|down, shader-uv=texcoord|one-minus-v, mip-bias=X, terrain-ao=X, sun-elevation=DEG, view-cosine=X, camera-distance=M, unset=white";
-        let get = |k: &str| {
-            o.get(k)
-                .map(String::as_str)
-                .ok_or_else(|| format!("{k} is required: {usage}"))
-        };
-        let size: u32 = get("size")?
+    /// From its declared options.
+    fn from_given(g: &Given) -> Result<BakeAnvilMaterial, String> {
+        let size: u32 = g
+            .required("size")
             .parse()
             .map_err(|_| "size is a whole number".to_owned())?;
         if !(2..=4096).contains(&size) || !size.is_multiple_of(2) {
             return Err(format!("size {size}: even, 2 to 4096"));
         }
-        let normal_green = match get("normal-green")? {
-            "up" => NormalGreen::Up,
-            "down" => NormalGreen::Down,
-            v => return Err(format!("normal-green={v} is not up or down")),
-        };
-        let shader_uv = match get("shader-uv")? {
-            "texcoord" => ShaderUv::TexCoord,
-            "one-minus-v" => ShaderUv::OneMinusV,
-            v => return Err(format!("shader-uv={v} is not texcoord or one-minus-v")),
-        };
-        let mip_bias: f32 = get("mip-bias")?
+        let mip_bias: f32 = g
+            .required("mip-bias")
             .parse()
             .map_err(|_| "mip-bias is a number".to_owned())?;
         if !mip_bias.is_finite() {
             return Err("mip-bias is finite".to_owned());
         }
-        let terrain_ao: f32 = get("terrain-ao")?
+        let terrain_ao: f32 = g
+            .required("terrain-ao")
             .parse()
             .map_err(|_| "terrain-ao is a number".to_owned())?;
         if !(0.0..=1.0).contains(&terrain_ao) {
             return Err(format!("terrain-ao {terrain_ao}: within 0 and 1"));
         }
-        let sun_elevation: f32 = get("sun-elevation")?
+        let sun_elevation: f32 = g
+            .required("sun-elevation")
             .parse()
             .map_err(|_| "sun-elevation is a number".to_owned())?;
         if !(-90.0..=90.0).contains(&sun_elevation) {
@@ -567,23 +540,21 @@ impl BakeAnvilMaterial {
                 "sun-elevation {sun_elevation}: within -90 and 90 degrees"
             ));
         }
-        match get("unset")? {
-            "white" => {}
-            v => return Err(format!("unset={v}: only white is read")),
-        }
-        let view_cosine: f32 = get("view-cosine")?
+        let view_cosine: f32 = g
+            .required("view-cosine")
             .parse()
             .map_err(|_| "view-cosine is a number".to_owned())?;
         if !(view_cosine > 0.0 && view_cosine <= 1.0) {
             return Err(format!("view-cosine {view_cosine}: above 0, at most 1"));
         }
-        let camera_distance: f32 = get("camera-distance")?
+        let camera_distance: f32 = g
+            .required("camera-distance")
             .parse()
             .map_err(|_| "camera-distance is a number".to_owned())?;
         if !(camera_distance.is_finite() && camera_distance > 0.0) {
             return Err(format!("camera-distance {camera_distance}: finite and above 0"));
         }
-        let skin_tone = match o.get("skin-tone") {
+        let skin_tone = match g.optional("skin-tone") {
             None => None,
             Some(v) => {
                 let bytes: Vec<u8> = v
@@ -600,8 +571,8 @@ impl BakeAnvilMaterial {
         Ok(BakeAnvilMaterial {
             skin_tone,
             size,
-            normal_green,
-            shader_uv,
+            normal_green: g.choice::<Green>("normal-green").normal_green(),
+            shader_uv: g.choice("shader-uv"),
             mip_bias,
             terrain_ao,
             sun_elevation,
@@ -610,6 +581,49 @@ impl BakeAnvilMaterial {
         })
     }
 }
+
+/// `bake-anvil-material`'s declaration ([`primase_core::pass::PassRegistry::add`]): the bake's size and the view it
+/// stands in for are the program's, every option required but `skin-tone`.
+pub const BAKE_ANVIL_MATERIAL: PassSpec = PassSpec {
+    name: "bake-anvil-material",
+    options: &[
+        OptionSpec::required(
+            "size",
+            "512",
+            "pixels a side, even, 2 to 4096: the baked textures' size",
+        ),
+        NORMAL_GREEN,
+        SHADER_UV,
+        OptionSpec::required("mip-bias", "0", "finite: the bake's sampling mip bias"),
+        OptionSpec::required(
+            "terrain-ao",
+            "0.5",
+            "within 0 and 1: the terrain occlusion the bake stands in for",
+        ),
+        OptionSpec::required(
+            "sun-elevation",
+            "45",
+            "degrees, within -90 and 90: the sun's elevation the bake stands in for",
+        ),
+        OptionSpec::required(
+            "view-cosine",
+            "0.7",
+            "above 0, at most 1: the view angle's cosine the bake stands in for",
+        ),
+        OptionSpec::required(
+            "camera-distance",
+            "1000000",
+            "finite and above 0: the camera distance the bake stands in for",
+        ),
+        UNSET,
+        OptionSpec::optional(
+            "skin-tone",
+            "200,160,130",
+            "R,G,B bytes: the skin colour; without it MAD_CHR_Skin Materials are not baked",
+        ),
+    ],
+    make: |g| Ok(Box::new(BakeAnvilMaterial::from_given(g)?)),
+};
 
 /// A Material's property values at the `cb3` rows its template binds them (a row the template binds nothing at
 /// absent): a scalar in `.x`, a vector as stored, a UV transform's 8 floats `su, sv, tu, tv`, speeds, `t`, rotation
@@ -1055,26 +1069,15 @@ impl Pass for BakeAnvilMaterial {
             ("size".to_owned(), self.size.to_string()),
             (
                 "normal-green".to_owned(),
-                match self.normal_green {
-                    NormalGreen::Up => "up",
-                    NormalGreen::Down => "down",
-                }
-                .to_owned(),
+                Green::of(self.normal_green).text().to_owned(),
             ),
-            (
-                "shader-uv".to_owned(),
-                match self.shader_uv {
-                    ShaderUv::TexCoord => "texcoord",
-                    ShaderUv::OneMinusV => "one-minus-v",
-                }
-                .to_owned(),
-            ),
+            ("shader-uv".to_owned(), self.shader_uv.text().to_owned()),
             ("mip-bias".to_owned(), self.mip_bias.to_string()),
             ("terrain-ao".to_owned(), self.terrain_ao.to_string()),
             ("sun-elevation".to_owned(), self.sun_elevation.to_string()),
             ("view-cosine".to_owned(), self.view_cosine.to_string()),
             ("camera-distance".to_owned(), self.camera_distance.to_string()),
-            ("unset".to_owned(), "white".to_owned()),
+            ("unset".to_owned(), Unset::White.text().to_owned()),
         ]);
         if let Some([r, g, b]) = self.skin_tone {
             o.insert("skin-tone".to_owned(), format!("{r},{g},{b}"));

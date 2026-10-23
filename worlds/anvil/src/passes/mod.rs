@@ -18,28 +18,29 @@ mod skin;
 mod splat;
 mod water;
 mod world_uv;
-pub use bake::{BakeAnvilMaterial, gbuffer_pixel_key};
-pub use clips::LowerAnvilClips;
-pub use decals::{Family, FamilyRule, LowerAnvilDecals, TerrainDecals, family};
-pub use grass::{Density, LowerAnvilGrass};
-pub use listed::{Coarse, SelectAnvilListed};
+pub use bake::{BAKE_ANVIL_MATERIAL, BakeAnvilMaterial, gbuffer_pixel_key};
+pub use clips::{LOWER_ANVIL_CLIPS, LowerAnvilClips};
+pub use decals::{Family, FamilyRule, LOWER_ANVIL_DECALS, LowerAnvilDecals, TerrainDecals, family};
+pub use grass::{Density, LOWER_ANVIL_GRASS, LowerAnvilGrass};
+pub use listed::{Coarse, SELECT_ANVIL_LISTED, SelectAnvilListed};
 pub use material::{
-    AlphaChoice, Decals1Cutout, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo, world_uv_rows,
+    AlphaChoice, Decals1Cutout, Emission, LOWER_ANVIL_MATERIAL, LowerAnvilMaterial, ShaderUv,
+    fake_river_albedo, world_uv_rows,
 };
 pub use resolve_shaders::{
-    MESH_LAYOUT_FIELD, ResolveAnvilShaders, UnsetTexture, gbuffer_key, gbuffer_vertex_key,
-    material_constants, render_state, shading_class,
+    MESH_LAYOUT_FIELD, RESOLVE_ANVIL_SHADERS, ResolveAnvilShaders, UnsetTexture, gbuffer_key,
+    gbuffer_vertex_key, material_constants, render_state, shading_class,
 };
-pub use select::{CollisionOnly, Keep, Overlap, SelectAnvilEntities};
-pub use select_clips::SelectAnvilClips;
-pub use skeleton::{LowerAnvilRig, LowerAnvilSkeleton, OwnTransform};
-pub use skin::LowerAnvilSkin;
+pub use select::{CollisionOnly, Keep, Overlap, SELECT_ANVIL_ENTITIES, SelectAnvilEntities};
+pub use select_clips::{SELECT_ANVIL_CLIPS, SelectAnvilClips};
+pub use skeleton::{LOWER_ANVIL_RIG, LOWER_ANVIL_SKELETON, LowerAnvilRig, LowerAnvilSkeleton, OwnTransform};
+pub use skin::{LOWER_ANVIL_SKIN, LowerAnvilSkin};
 pub use splat::{Splat, SplatUv};
-pub use water::{LowerAnvilWater, Shore};
-pub use world_uv::LowerAnvilWorldUv;
+pub use water::{LOWER_ANVIL_WATER, LowerAnvilWater, Shore};
+pub use world_uv::{LOWER_ANVIL_WORLD_UV, LowerAnvilWorldUv};
 
 use primase_core::layered::{Layer, LayerWeights, LayeredMaterial, WeightMapping};
-use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassRegistry, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::world::Resource;
@@ -66,6 +67,13 @@ pub enum SurfaceBy {
     One,
 }
 
+impl Choice for SurfaceBy {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("collision-material", SurfaceBy::CollisionMaterial),
+        ("one", SurfaceBy::One),
+    ];
+}
+
 /// `lower-anvil-collision{by=collision-material|one,surface=NAME}`: every MeshShape's geometry ([`AnvilMeshShape`])
 /// becomes `core.collision` on its prototype, each triangle of the surface its CollisionMaterial's entry name names
 /// (`by=collision-material`; `surface` where it has none) or every triangle of `surface` (`by=one`). A surface named
@@ -77,24 +85,15 @@ pub struct LowerAnvilCollision {
 }
 
 impl LowerAnvilCollision {
-    /// From its options: `by` and `surface`, required.
-    pub fn from_options(o: &Options) -> Result<LowerAnvilCollision, String> {
-        if let Some(k) = o.keys().find(|k| !["by", "surface"].contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
+    /// From its declared options: `surface` not empty.
+    fn from_given(g: &Given) -> Result<LowerAnvilCollision, String> {
+        let surface = g.required("surface");
+        if surface.is_empty() {
+            return Err("surface=NAME is not empty: the surface of what has no CollisionMaterial (or every surface, by=one)".into());
         }
-        let by = match o.get("by").map(String::as_str) {
-            Some("collision-material") => SurfaceBy::CollisionMaterial,
-            Some("one") => SurfaceBy::One,
-            Some(v) => return Err(format!("by={v} is not collision-material or one")),
-            None => return Err("by=collision-material|one is required".to_owned()),
-        };
-        let surface = o
-            .get("surface")
-            .filter(|s| !s.is_empty())
-            .ok_or("surface=NAME is required: the surface of what has no CollisionMaterial (or every surface, by=one)")?;
         Ok(LowerAnvilCollision {
-            by,
-            surface: surface.clone(),
+            by: g.choice("by"),
+            surface: surface.to_owned(),
         })
     }
 
@@ -107,13 +106,33 @@ impl LowerAnvilCollision {
     }
 }
 
+/// `by` and `surface`, as `lower-anvil-collision` and `lower-anvil-shapes` take them.
+const SURFACE_OPTIONS: [OptionSpec; 2] = [
+    OptionSpec::choice::<SurfaceBy>(
+        "by",
+        "each triangle's surface named by its CollisionMaterial's entry, or every triangle's by surface",
+    ),
+    OptionSpec::required(
+        "surface",
+        "rr-diagnostic-unknown",
+        "the surface of what has no CollisionMaterial (by=collision-material), or of everything (by=one)",
+    ),
+];
+
+/// `lower-anvil-collision`'s declaration ([`PassRegistry::add`]): both options are the program's.
+pub const LOWER_ANVIL_COLLISION: PassSpec = PassSpec {
+    name: "lower-anvil-collision",
+    options: &SURFACE_OPTIONS,
+    make: |g| Ok(Box::new(LowerAnvilCollision::from_given(g)?)),
+};
+
 impl Pass for LowerAnvilCollision {
     fn name(&self) -> &'static str {
         "lower-anvil-collision"
     }
     fn options(&self) -> Options {
         Options::from([
-            ("by".to_owned(), by_text(self.by).to_owned()),
+            ("by".to_owned(), self.by.text().to_owned()),
             ("surface".to_owned(), self.surface.clone()),
         ])
     }
@@ -182,23 +201,19 @@ pub struct LowerAnvilShapes {
     pub surface: String,
 }
 
-impl LowerAnvilShapes {
-    /// From its options: `by` and `surface`, required.
-    pub fn from_options(o: &Options) -> Result<LowerAnvilShapes, String> {
-        LowerAnvilCollision::from_options(o).map(|c| LowerAnvilShapes {
+/// `lower-anvil-shapes`' declaration ([`PassRegistry::add`]): both options are the program's, as
+/// `lower-anvil-collision`'s.
+pub const LOWER_ANVIL_SHAPES: PassSpec = PassSpec {
+    name: "lower-anvil-shapes",
+    options: &SURFACE_OPTIONS,
+    make: |g| {
+        let c = LowerAnvilCollision::from_given(g)?;
+        Ok(Box::new(LowerAnvilShapes {
             by: c.by,
             surface: c.surface,
-        })
-    }
-}
-
-/// `by`'s option text.
-fn by_text(by: SurfaceBy) -> &'static str {
-    match by {
-        SurfaceBy::CollisionMaterial => "collision-material",
-        SurfaceBy::One => "one",
-    }
-}
+        }))
+    },
+};
 
 impl Pass for LowerAnvilShapes {
     fn name(&self) -> &'static str {
@@ -206,7 +221,7 @@ impl Pass for LowerAnvilShapes {
     }
     fn options(&self) -> Options {
         Options::from([
-            ("by".to_owned(), by_text(self.by).to_owned()),
+            ("by".to_owned(), self.by.text().to_owned()),
             ("surface".to_owned(), self.surface.clone()),
         ])
     }
@@ -272,6 +287,10 @@ pub enum Combine {
     Any,
 }
 
+impl Choice for Combine {
+    const VALUES: &'static [(&'static str, Self)] = &[("all", Combine::All), ("any", Combine::Any)];
+}
+
 /// `lower-anvil-data-layers{combine=all|any}`: DataLayers become world state. Each DataLayer a placement's actions
 /// name becomes a global on/off axis (key `anvil.datalayer.<its name>`, or its ClassID in hex where unnamed; class
 /// `datalayer`; no default: which layers a world has on isn't read), and each placement with actions a condition: an
@@ -283,34 +302,27 @@ pub struct LowerAnvilDataLayers {
     pub combine: Combine,
 }
 
-impl LowerAnvilDataLayers {
-    /// From its options: `combine`, required.
-    pub fn from_options(o: &Options) -> Result<LowerAnvilDataLayers, String> {
-        if let Some(k) = o.keys().find(|k| k.as_str() != "combine") {
-            return Err(format!("unknown option {k}"));
-        }
-        let combine = match o.get("combine").map(String::as_str) {
-            Some("all") => Combine::All,
-            Some("any") => Combine::Any,
-            Some(v) => return Err(format!("combine={v} is not all or any")),
-            None => {
-                return Err("combine=all|any is required: how a placement's several actions combine isn't established".into());
-            }
-        };
-        Ok(LowerAnvilDataLayers { combine })
-    }
-}
+/// `lower-anvil-data-layers`' declaration ([`PassRegistry::add`]): how a placement's actions combine isn't
+/// established, so the program states it.
+pub const LOWER_ANVIL_DATA_LAYERS: PassSpec = PassSpec {
+    name: "lower-anvil-data-layers",
+    options: &[OptionSpec::choice::<Combine>(
+        "combine",
+        "a placement's several DataLayerActions all holding, or any",
+    )],
+    make: |g| {
+        Ok(Box::new(LowerAnvilDataLayers {
+            combine: g.choice("combine"),
+        }))
+    },
+};
 
 impl Pass for LowerAnvilDataLayers {
     fn name(&self) -> &'static str {
         "lower-anvil-data-layers"
     }
     fn options(&self) -> Options {
-        let combine = match self.combine {
-            Combine::All => "all",
-            Combine::Any => "any",
-        };
-        Options::from([("combine".to_owned(), combine.to_owned())])
+        Options::from([("combine".to_owned(), self.combine.text().to_owned())])
     }
     fn requires(&self) -> &[&'static str] {
         &[AnvilDataLayers::NAME]
@@ -384,6 +396,11 @@ pub enum Static16Normal {
     Omit,
 }
 
+impl Choice for Static16Normal {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("p", Static16Normal::P), ("omit", Static16Normal::Omit)];
+}
+
 /// `lower-anvil-mesh{static16-normal=p|omit}`: every Mesh's buffers ([`AnvilMesh`]) become a core mesh on its
 /// prototype: one triangle primitive with no material, or, where the reader read its Materials, a primitive per stored
 /// range, of the vertices its triangles use, drawn with the range's Material entity. Its streams are the attributes the
@@ -400,21 +417,20 @@ pub struct LowerAnvilMesh {
     pub static16_normal: Static16Normal,
 }
 
-impl LowerAnvilMesh {
-    /// From its options, every one required.
-    pub fn from_options(o: &Options) -> Result<LowerAnvilMesh, String> {
-        if let Some(k) = o.keys().find(|k| k.as_str() != "static16-normal") {
-            return Err(format!("unknown option {k}"));
-        }
-        let static16_normal = match o.get("static16-normal").map(String::as_str) {
-            Some("p") => Static16Normal::P,
-            Some("omit") => Static16Normal::Omit,
-            Some(v) => return Err(format!("static16-normal={v} is not p or omit")),
-            None => return Err("static16-normal is required: static16-normal=p|omit".into()),
-        };
-        Ok(LowerAnvilMesh { static16_normal })
-    }
-}
+/// `lower-anvil-mesh`' declaration ([`PassRegistry::add`]): a static16 mesh's normal is not established, so the
+/// program states it.
+pub const LOWER_ANVIL_MESH: PassSpec = PassSpec {
+    name: "lower-anvil-mesh",
+    options: &[OptionSpec::choice::<Static16Normal>(
+        "static16-normal",
+        "a static16 mesh's normal from its P bytes, or none",
+    )],
+    make: |g| {
+        Ok(Box::new(LowerAnvilMesh {
+            static16_normal: g.choice("static16-normal"),
+        }))
+    },
+};
 
 /// `v` at unit length (`None` for a zero vector).
 fn unit_length(v: [f32; 3]) -> Option<[f32; 3]> {
@@ -429,11 +445,7 @@ impl Pass for LowerAnvilMesh {
     fn options(&self) -> Options {
         Options::from([(
             "static16-normal".to_owned(),
-            match self.static16_normal {
-                Static16Normal::P => "p",
-                Static16Normal::Omit => "omit",
-            }
-            .to_owned(),
+            self.static16_normal.text().to_owned(),
         )])
     }
     fn requires(&self) -> &[&'static str] {
@@ -635,6 +647,13 @@ fn gather(stream: &Stream, keep: &[u32]) -> Stream {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LowerAnvilLods;
 
+/// `lower-anvil-lods`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by the game's own rule.
+pub const LOWER_ANVIL_LODS: PassSpec = PassSpec {
+    name: "lower-anvil-lods",
+    options: &[],
+    make: |_| Ok(Box::new(LowerAnvilLods)),
+};
+
 impl Pass for LowerAnvilLods {
     fn name(&self) -> &'static str {
         "lower-anvil-lods"
@@ -687,6 +706,11 @@ pub enum CellPoint {
     Centre,
 }
 
+impl Choice for CellPoint {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("corner", CellPoint::Corner), ("centre", CellPoint::Centre)];
+}
+
 /// A ground lowering's stated choices: its rectangle, step, height offset and where a sample lies in its cell.
 struct Ground {
     rect: [f64; 4],
@@ -695,21 +719,34 @@ struct Ground {
     sample: CellPoint,
 }
 
-/// `o`'s ground options, `rect`, `step`, `offset` and `sample`, all required, besides which only `extra` names are
-/// taken; `usage` lists them for a missing one.
-fn ground_options(o: &Options, extra: &[&str], usage: &str) -> Result<Ground, String> {
-    if let Some(k) = o
-        .keys()
-        .find(|k| !["rect", "step", "offset", "sample"].contains(&k.as_str()) && !extra.contains(&k.as_str()))
-    {
-        return Err(format!("unknown option {k}"));
-    }
-    let get = |k: &str| {
-        o.get(k)
-            .map(String::as_str)
-            .ok_or_else(|| format!("{k} is required: {usage}"))
-    };
-    let rect: Vec<f64> = get("rect")?
+/// A ground lowering's `rect` (x0,y0,x1,y1, in the grid's own units).
+pub(crate) const RECT: OptionSpec = OptionSpec::required(
+    "rect",
+    "-64,-64,64,64",
+    "x0,y0,x1,y1 in the source's units, x0 < x1 and y0 < y1: the part of the ground lowered",
+);
+/// A ground lowering's `step`.
+pub(crate) const STEP: OptionSpec =
+    OptionSpec::required("step", "1", "every step-th column and row, at least 1");
+/// A terrain ground's `range`.
+pub(crate) const RANGE: OptionSpec = OptionSpec::required(
+    "range",
+    "1",
+    "above 0: a height value's metres are range x 2^(level - 28) (not stored as such)",
+);
+/// A ground lowering's `offset`.
+pub(crate) const OFFSET: OptionSpec =
+    OptionSpec::required("offset", "0", "metres added to every height (not stored)");
+/// A ground lowering's `sample`.
+pub(crate) const SAMPLE: OptionSpec = OptionSpec::choice::<CellPoint>(
+    "sample",
+    "where a sample lies in its cell: its corner or its centre",
+);
+
+/// The ground options ([`RECT`], [`STEP`], [`OFFSET`], [`SAMPLE`]) of a declaration that has them.
+fn ground_options(g: &Given) -> Result<Ground, String> {
+    let rect: Vec<f64> = g
+        .required("rect")
         .split(',')
         .map(|v| {
             v.trim()
@@ -723,28 +760,25 @@ fn ground_options(o: &Options, extra: &[&str], usage: &str) -> Result<Ground, St
     if !(x0.is_finite() && y0.is_finite() && x1 > x0 && y1 > y0) {
         return Err(format!("rect {x0},{y0},{x1},{y1}: x0 < x1 and y0 < y1"));
     }
-    let step: u32 = get("step")?
+    let step: u32 = g
+        .required("step")
         .parse()
         .map_err(|_| "step is a whole number".to_owned())?;
     if step == 0 {
         return Err("step is at least 1".to_owned());
     }
-    let offset: f64 = get("offset")?
+    let offset: f64 = g
+        .required("offset")
         .parse()
         .map_err(|_| "offset is a number".to_owned())?;
     if !offset.is_finite() {
         return Err(format!("offset {offset}: a finite number"));
     }
-    let sample = match get("sample")? {
-        "corner" => CellPoint::Corner,
-        "centre" => CellPoint::Centre,
-        v => return Err(format!("sample={v} is not corner or centre")),
-    };
     Ok(Ground {
         rect: [x0, y0, x1, y1],
         step,
         offset,
-        sample,
+        sample: g.choice("sample"),
     })
 }
 
@@ -762,13 +796,9 @@ pub struct LowerAnvilFloor {
 }
 
 impl LowerAnvilFloor {
-    /// From its options: `rect=x0,y0,x1,y1`, `step=N`, `offset=METRES`, `sample=corner|centre`, all required.
-    pub fn from_options(o: &Options) -> Result<LowerAnvilFloor, String> {
-        let g = ground_options(
-            o,
-            &[],
-            "rect=x0,y0,x1,y1, step=N, offset=METRES (not stored), sample=corner|centre",
-        )?;
+    /// From its declared options.
+    fn from_given(g: &Given) -> Result<LowerAnvilFloor, String> {
+        let g = ground_options(g)?;
         Ok(LowerAnvilFloor {
             rect: g.rect,
             step: g.step,
@@ -791,16 +821,21 @@ impl LowerAnvilFloor {
     }
 }
 
+/// `lower-anvil-floor`'s declaration ([`PassRegistry::add`]): the offset isn't stored and the rounding isn't read, so
+/// every option is the program's.
+pub const LOWER_ANVIL_FLOOR: PassSpec = PassSpec {
+    name: "lower-anvil-floor",
+    options: &[RECT, STEP, OFFSET, SAMPLE],
+    make: |g| Ok(Box::new(LowerAnvilFloor::from_given(g)?)),
+};
+
 impl Pass for LowerAnvilFloor {
     fn name(&self) -> &'static str {
         "lower-anvil-floor"
     }
     fn options(&self) -> Options {
         let [x0, y0, x1, y1] = self.rect;
-        let sample = match self.sample {
-            CellPoint::Corner => "corner",
-            CellPoint::Centre => "centre",
-        };
+        let sample = self.sample.text();
         Options::from([
             ("rect".to_owned(), format!("{x0},{y0},{x1},{y1}")),
             ("step".to_owned(), self.step.to_string()),
@@ -1252,189 +1287,123 @@ const TERRAIN_CORE: u32 = 128;
 const TERRAIN_BLOCKS: usize = 33;
 
 impl LowerAnvilTerrain {
-    /// From its options: `rect=x0,y0,x1,y1`, `step=N`, `range=METRES`, `offset=METRES`, `sample=corner|centre`, all
-    /// required.
-    pub fn from_options(o: &Options) -> Result<LowerAnvilTerrain, String> {
-        let usage = concat!(
-            "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES (neither stored as such), sample=corner|centre, ",
-            "colour=srgb|linear, collision=none|collision-material|one, surface=NAME unless collision=none, ",
-            "ground=tile|splat|layers (with splat-k=K, splat-px=UNITS (splat), splat-uv=FACTOR|over-tile-size, splat-noise=raw|srgb, ",
-            "splat-occlusion=block-8|none (splat, layers), layers-base=tile|bake and layers-detail=F in (0, 1] (layers; ",
-            "splat-px with layers-base=bake)), pieces=whole|per-node (per-node with ground=splat or layers), ",
-            "normals=near-camera|none, steep=none|chart (chart with ground=splat, pieces=per-node, steep-threshold=DEGREES and steep-max-atlas=PIXELS)"
-        );
-        let splat_keys = [
-            "splat-k",
-            "splat-px",
-            "splat-uv",
-            "splat-noise",
-            "splat-occlusion",
-            "layers-base",
-            "layers-detail",
-        ];
-        let mut known = vec![
-            "range",
-            "colour",
-            "collision",
-            "surface",
-            "ground",
-            "pieces",
-            "normals",
-            "steep",
-            "steep-threshold",
-            "steep-max-atlas",
-        ];
-        known.extend(splat_keys);
-        let g = ground_options(o, &known, usage)?;
-        let get = |k: &str| {
-            o.get(k)
-                .map(String::as_str)
-                .ok_or_else(|| format!("{k} is required: {usage}"))
+    /// From its declared options: the splat, layers and steep options only with the choices that take them.
+    fn from_given(g: &Given) -> Result<LowerAnvilTerrain, String> {
+        let ground_options = ground_options(g)?;
+        let given = |k: &str| g.optional(k).is_some();
+        let needed = |k: &str, with: &str| {
+            g.optional(k)
+                .ok_or_else(|| format!("{k} is required with {with}"))
         };
-        let number = |k: &str| -> Result<f64, String> {
-            let v: f64 = get(k)?.parse().map_err(|_| format!("{k} is a number"))?;
+        let number = |k: &str, with: &str| -> Result<f64, String> {
+            let v: f64 = needed(k, with)?.parse().map_err(|_| format!("{k} is a number"))?;
             if v.is_finite() && v > 0.0 {
                 Ok(v)
             } else {
                 Err(format!("{k} {v}: a positive number"))
             }
         };
-        let ground = match get("ground")? {
-            "tile" => {
-                if let Some(k) = splat_keys.iter().find(|k| o.contains_key(**k)) {
+        let uv = |with: &str| -> Result<SplatUv, String> {
+            Ok(match needed("splat-uv", with)? {
+                "over-tile-size" => SplatUv::OverTileSize,
+                _ => SplatUv::Factor(number("splat-uv", with)?),
+            })
+        };
+        let word = |k: &str, with: &str| -> Result<(), String> { needed(k, with).map(|_| ()) };
+        let ground = match g.choice::<GroundKind>("ground") {
+            GroundKind::Tile => {
+                if let Some(k) = SPLAT_KEYS.iter().find(|k| given(k)) {
                     return Err(format!("{k} is only taken with ground=splat or layers"));
                 }
                 GroundColour::Tile
             }
-            "splat" => GroundColour::Splat(Splat {
-                k: {
-                    if let Some(k) = ["layers-base", "layers-detail"]
-                        .iter()
-                        .find(|k| o.contains_key(**k))
-                    {
-                        return Err(format!("{k} is only taken with ground=layers"));
-                    }
-                    number("splat-k")?
-                },
-                pixel: number("splat-px")?,
-                uv: match get("splat-uv")? {
-                    "over-tile-size" => SplatUv::OverTileSize,
-                    _ => SplatUv::Factor(number("splat-uv")?),
-                },
-                noise_srgb: match get("splat-noise")? {
-                    "raw" => false,
-                    "srgb" => true,
-                    v => return Err(format!("splat-noise={v} is not raw or srgb")),
-                },
-                occlusion: match get("splat-occlusion")? {
-                    "block-8" => true,
-                    "none" => false,
-                    v => return Err(format!("splat-occlusion={v} is not block-8 or none")),
-                },
-            }),
-            "layers" => {
-                let base = match get("layers-base")? {
-                    "tile" => {
-                        if o.contains_key("splat-px") {
+            GroundKind::Splat => {
+                if let Some(k) = ["layers-base", "layers-detail"].iter().find(|k| given(k)) {
+                    return Err(format!("{k} is only taken with ground=layers"));
+                }
+                word("splat-noise", "ground=splat")?;
+                word("splat-occlusion", "ground=splat")?;
+                GroundColour::Splat(Splat {
+                    k: number("splat-k", "ground=splat")?,
+                    pixel: number("splat-px", "ground=splat")?,
+                    uv: uv("ground=splat")?,
+                    noise_srgb: g.optional_choice("splat-noise") == Some(SplatNoise::Srgb),
+                    occlusion: g.optional_choice("splat-occlusion") == Some(SplatOcclusion::Block8),
+                })
+            }
+            GroundKind::Layers => {
+                let base = match g.optional_choice::<LayersBaseKind>("layers-base") {
+                    Some(LayersBaseKind::Tile) => {
+                        if given("splat-px") {
                             return Err("splat-px is only taken with ground=splat or layers-base=bake".into());
                         }
                         LayersBase::Tile
                     }
-                    "bake" => LayersBase::Bake {
-                        pixel: number("splat-px")?,
+                    Some(LayersBaseKind::Bake) => LayersBase::Bake {
+                        pixel: number("splat-px", "layers-base=bake")?,
                     },
-                    v => return Err(format!("layers-base={v} is not tile or bake")),
+                    None => return Err("layers-base is required with ground=layers".into()),
                 };
-                let detail = number("layers-detail")?;
+                let detail = number("layers-detail", "ground=layers")?;
                 if detail > 1.0 {
                     return Err(format!("layers-detail {detail}: a number in (0, 1]"));
                 }
+                word("splat-noise", "ground=layers")?;
+                word("splat-occlusion", "ground=layers")?;
                 GroundColour::Layers(TerrainLayers {
                     base,
                     detail,
-                    k: number("splat-k")?,
-                    uv: match get("splat-uv")? {
-                        "over-tile-size" => SplatUv::OverTileSize,
-                        _ => SplatUv::Factor(number("splat-uv")?),
-                    },
-                    noise_srgb: match get("splat-noise")? {
-                        "raw" => false,
-                        "srgb" => true,
-                        v => return Err(format!("splat-noise={v} is not raw or srgb")),
-                    },
-                    occlusion: match get("splat-occlusion")? {
-                        "block-8" => true,
-                        "none" => false,
-                        v => return Err(format!("splat-occlusion={v} is not block-8 or none")),
-                    },
+                    k: number("splat-k", "ground=layers")?,
+                    uv: uv("ground=layers")?,
+                    noise_srgb: g.optional_choice("splat-noise") == Some(SplatNoise::Srgb),
+                    occlusion: g.optional_choice("splat-occlusion") == Some(SplatOcclusion::Block8),
                 })
             }
-            v => return Err(format!("ground={v} is not tile, splat or layers")),
         };
-        let collision = match o.get("collision").map(String::as_str) {
-            Some("none") => None,
-            Some("collision-material") => Some(SurfaceBy::CollisionMaterial),
-            Some("one") => Some(SurfaceBy::One),
-            Some(v) => return Err(format!("collision={v} is not none, collision-material or one")),
-            None => return Err(format!("collision is required: {usage}")),
+        let collision = match g.choice::<TerrainCollision>("collision") {
+            TerrainCollision::None => None,
+            TerrainCollision::CollisionMaterial => Some(SurfaceBy::CollisionMaterial),
+            TerrainCollision::One => Some(SurfaceBy::One),
         };
-        let surface = match (collision, o.get("surface").filter(|s| !s.is_empty())) {
+        let surface = match (collision, g.optional("surface").filter(|s| !s.is_empty())) {
             (None, None) => String::new(),
-            (_, Some(s)) => s.clone(),
-            (Some(_), None) => return Err(format!("surface is required with collision: {usage}")),
+            (_, Some(s)) => s.to_owned(),
+            (Some(_), None) => return Err("surface is required with collision other than none".into()),
         };
-        let colour = match o.get("colour").map(String::as_str) {
-            Some("srgb") => ColorSpace::Srgb,
-            Some("linear") => ColorSpace::Linear,
-            Some(v) => return Err(format!("colour={v} is not srgb or linear")),
-            None => return Err(format!("colour is required: {usage}")),
+        let colour = match g.choice::<Colour>("colour") {
+            Colour::Srgb => ColorSpace::Srgb,
+            Colour::Linear => ColorSpace::Linear,
         };
-        let pieces = match get("pieces")? {
-            "whole" => Pieces::Whole,
-            "per-node" if !matches!(ground, GroundColour::Tile) => Pieces::PerNode,
-            "per-node" => {
-                return Err(
-                    "pieces=per-node needs ground=splat or layers (a node's colour tile is sample-centred: it doesn't cover its \
-                     last squares)"
-                        .into(),
-                );
-            }
-            v => return Err(format!("pieces={v} is not whole or per-node")),
-        };
-        let range: f64 = o
-            .get("range")
-            .ok_or_else(|| format!("range is required: {usage}"))?
+        let pieces = g.choice::<Pieces>("pieces");
+        if pieces == Pieces::PerNode && matches!(ground, GroundColour::Tile) {
+            return Err(
+                "pieces=per-node needs ground=splat or layers (a node's colour tile is sample-centred: it doesn't cover its \
+                 last squares)"
+                    .into(),
+            );
+        }
+        let range: f64 = g
+            .required("range")
             .parse()
             .map_err(|_| "range is a number".to_owned())?;
         if !(range.is_finite() && range > 0.0) {
             return Err(format!("range {range}: a positive number"));
         }
-        let normals = match o.get("normals").map(String::as_str) {
-            Some("near-camera") => GroundNormals::NearCamera,
-            Some("none") => GroundNormals::None,
-            Some(v) => return Err(format!("normals={v}: near-camera or none")),
-            None => return Err(format!("normals is required: {usage}")),
-        };
-        let steep = match o.get("steep").map(String::as_str) {
-            Some("none") => {
-                if let Some(k) = ["steep-threshold", "steep-max-atlas"]
-                    .iter()
-                    .find(|k| o.contains_key(**k))
-                {
+        let steep = match g.choice::<SteepKind>("steep") {
+            SteepKind::None => {
+                if let Some(k) = ["steep-threshold", "steep-max-atlas"].iter().find(|k| given(k)) {
                     return Err(format!("{k} goes with steep=chart only"));
                 }
                 Steep::None
             }
-            Some("chart") => {
+            SteepKind::Chart => {
                 if !matches!((ground, pieces), (GroundColour::Splat(_), Pieces::PerNode)) {
                     return Err(
                         "steep=chart needs ground=splat and pieces=per-node (a chart atlas per node)"
                             .to_owned(),
                     );
                 }
-                let v = get("steep-threshold").map_err(|_| {
-                    format!("steep=chart needs steep-threshold=DEGREES and steep-max-atlas=PIXELS: {usage}")
-                })?;
+                let v = needed("steep-threshold", "steep=chart")?;
                 let threshold: f64 = v
                     .parse()
                     .map_err(|_| format!("steep-threshold={v} is not a number"))?;
@@ -1443,9 +1412,7 @@ impl LowerAnvilTerrain {
                         "steep-threshold={v}: degrees from the horizontal, 0 < T < 90"
                     ));
                 }
-                let v = get("steep-max-atlas").map_err(|_| {
-                    format!("steep=chart needs steep-threshold=DEGREES and steep-max-atlas=PIXELS: {usage}")
-                })?;
+                let v = needed("steep-max-atlas", "steep=chart")?;
                 let max_atlas: u32 = v
                     .parse()
                     .map_err(|_| format!("steep-max-atlas={v}: a whole number of pixels"))?;
@@ -1454,25 +1421,236 @@ impl LowerAnvilTerrain {
                 }
                 Steep::Chart { threshold, max_atlas }
             }
-            Some(v) => return Err(format!("steep={v}: none or chart")),
-            None => return Err(format!("steep is required: {usage}")),
         };
         Ok(LowerAnvilTerrain {
-            rect: g.rect,
-            step: g.step,
+            rect: ground_options.rect,
+            step: ground_options.step,
             range,
-            offset: g.offset,
-            sample: g.sample,
+            offset: ground_options.offset,
+            sample: ground_options.sample,
             colour,
             collision,
             surface,
             ground,
             pieces,
-            normals,
+            normals: g.choice("normals"),
             steep,
         })
     }
 }
+
+/// `splat-noise`'s word for whether the noise is decoded as sRGB.
+fn noise_text(srgb: bool) -> &'static str {
+    if srgb { SplatNoise::Srgb } else { SplatNoise::Raw }.text()
+}
+
+/// `splat-occlusion`'s word for whether the colour is multiplied by the occlusion.
+fn occlusion_text(occlusion: bool) -> &'static str {
+    if occlusion {
+        SplatOcclusion::Block8
+    } else {
+        SplatOcclusion::None
+    }
+    .text()
+}
+
+/// The options only `ground=splat` or `ground=layers` takes.
+const SPLAT_KEYS: [&str; 7] = [
+    "splat-k",
+    "splat-px",
+    "splat-uv",
+    "splat-noise",
+    "splat-occlusion",
+    "layers-base",
+    "layers-detail",
+];
+
+/// Option `colour`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Colour {
+    Srgb,
+    Linear,
+}
+
+impl Choice for Colour {
+    const VALUES: &'static [(&'static str, Self)] = &[("srgb", Colour::Srgb), ("linear", Colour::Linear)];
+}
+
+/// Option `collision`: none, or the surfaces as [`SurfaceBy`] names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerrainCollision {
+    None,
+    CollisionMaterial,
+    One,
+}
+
+impl Choice for TerrainCollision {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("none", TerrainCollision::None),
+        ("collision-material", TerrainCollision::CollisionMaterial),
+        ("one", TerrainCollision::One),
+    ];
+}
+
+/// Option `ground`: [`GroundColour`]'s kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GroundKind {
+    Tile,
+    Splat,
+    Layers,
+}
+
+impl Choice for GroundKind {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("tile", GroundKind::Tile),
+        ("splat", GroundKind::Splat),
+        ("layers", GroundKind::Layers),
+    ];
+}
+
+/// Option `splat-noise`: the noise decoded as stored, or as sRGB.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SplatNoise {
+    Raw,
+    Srgb,
+}
+
+impl Choice for SplatNoise {
+    const VALUES: &'static [(&'static str, Self)] = &[("raw", SplatNoise::Raw), ("srgb", SplatNoise::Srgb)];
+}
+
+/// Option `splat-occlusion`: the colour times `0.5 + block 8`, or not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SplatOcclusion {
+    Block8,
+    None,
+}
+
+impl Choice for SplatOcclusion {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("block-8", SplatOcclusion::Block8),
+        ("none", SplatOcclusion::None),
+    ];
+}
+
+/// Option `layers-base`: [`LayersBase`]'s kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LayersBaseKind {
+    Tile,
+    Bake,
+}
+
+impl Choice for LayersBaseKind {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("tile", LayersBaseKind::Tile), ("bake", LayersBaseKind::Bake)];
+}
+
+/// Option `steep`: [`Steep`]'s kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SteepKind {
+    None,
+    Chart,
+}
+
+impl Choice for SteepKind {
+    const VALUES: &'static [(&'static str, Self)] = &[("none", SteepKind::None), ("chart", SteepKind::Chart)];
+}
+
+impl Choice for GroundNormals {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("near-camera", GroundNormals::NearCamera),
+        ("none", GroundNormals::None),
+    ];
+}
+
+impl Choice for Pieces {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("whole", Pieces::Whole), ("per-node", Pieces::PerNode)];
+}
+
+/// `lower-anvil-terrain`'s declaration ([`PassRegistry::add`]): every choice the game's data doesn't settle is the
+/// program's; the splat, layers and steep options only with the choices that take them.
+pub const LOWER_ANVIL_TERRAIN: PassSpec = PassSpec {
+    name: "lower-anvil-terrain",
+    options: &[
+        RECT,
+        STEP,
+        RANGE,
+        OFFSET,
+        SAMPLE,
+        OptionSpec::choice::<Colour>("colour", "the colour tiles' encoding: sRGB or linear"),
+        OptionSpec::choice::<TerrainCollision>(
+            "collision",
+            "the ground's collision: none, its surfaces named by CollisionMaterial, or all of one surface",
+        ),
+        OptionSpec::optional(
+            "surface",
+            "rr-diagnostic-unknown",
+            "the surface where no CollisionMaterial names one (or of every square, collision=one); required with \
+             collision",
+        ),
+        OptionSpec::choice::<GroundKind>(
+            "ground",
+            "the colour drawn: the far colour tiles, the near colour baked, or the near colour as detail layers",
+        ),
+        OptionSpec::optional(
+            "splat-k",
+            "0.5",
+            "the near colour blend's k, above 0 (ground=splat or layers)",
+        ),
+        OptionSpec::optional(
+            "splat-px",
+            "1",
+            "source units a baked pixel, above 0 (ground=splat, or layers with layers-base=bake)",
+        ),
+        OptionSpec::optional(
+            "splat-uv",
+            "1",
+            "the detail uv: a factor above 0, or over-tile-size (ground=splat or layers)",
+        ),
+        OptionSpec::optional_choice::<SplatNoise>(
+            "splat-noise",
+            "the noise decoded as stored or as sRGB (ground=splat or layers)",
+        ),
+        OptionSpec::optional_choice::<SplatOcclusion>(
+            "splat-occlusion",
+            "the colour times 0.5 + block 8, or not (ground=splat or layers)",
+        ),
+        OptionSpec::optional_choice::<LayersBaseKind>(
+            "layers-base",
+            "what the details lie over: the far colour tiles, or the near colour baked (ground=layers)",
+        ),
+        OptionSpec::optional(
+            "layers-detail",
+            "1",
+            "each detail layer's weight times this, in (0, 1] (ground=layers)",
+        ),
+        OptionSpec::choice::<Pieces>(
+            "pieces",
+            "one primitive over the rectangle, or one per terrain node (per-node with ground=splat or layers)",
+        ),
+        OptionSpec::choice::<GroundNormals>(
+            "normals",
+            "the pixel program's near-camera normal at each sample, or none (a writer makes its own)",
+        ),
+        OptionSpec::choice::<SteepKind>(
+            "steep",
+            "steep triangles in the top-down texture, or in a chart atlas per node (chart with ground=splat and \
+             pieces=per-node)",
+        ),
+        OptionSpec::optional(
+            "steep-threshold",
+            "45",
+            "degrees from the horizontal, 0 < T < 90: what is steep (steep=chart)",
+        ),
+        OptionSpec::optional(
+            "steep-max-atlas",
+            "4096",
+            "pixels a side, 16 to 65536: an atlas's greatest side (steep=chart)",
+        ),
+    ],
+    make: |g| Ok(Box::new(LowerAnvilTerrain::from_given(g)?)),
+};
 
 impl Pass for LowerAnvilTerrain {
     fn name(&self) -> &'static str {
@@ -1480,10 +1658,7 @@ impl Pass for LowerAnvilTerrain {
     }
     fn options(&self) -> Options {
         let [x0, y0, x1, y1] = self.rect;
-        let sample = match self.sample {
-            CellPoint::Corner => "corner",
-            CellPoint::Centre => "centre",
-        };
+        let sample = self.sample.text();
         Options::from([
             ("rect".to_owned(), format!("{x0},{y0},{x1},{y1}")),
             ("step".to_owned(), self.step.to_string()),
@@ -1493,48 +1668,41 @@ impl Pass for LowerAnvilTerrain {
             (
                 "colour".to_owned(),
                 match self.colour {
-                    ColorSpace::Srgb => "srgb",
-                    ColorSpace::Linear => "linear",
+                    ColorSpace::Srgb => Colour::Srgb,
+                    ColorSpace::Linear => Colour::Linear,
                 }
+                .text()
                 .to_owned(),
             ),
             (
                 "collision".to_owned(),
-                self.collision.map_or("none", by_text).to_owned(),
+                match self.collision {
+                    None => TerrainCollision::None,
+                    Some(SurfaceBy::CollisionMaterial) => TerrainCollision::CollisionMaterial,
+                    Some(SurfaceBy::One) => TerrainCollision::One,
+                }
+                .text()
+                .to_owned(),
             ),
         ])
         .into_iter()
         .chain((!self.surface.is_empty()).then(|| ("surface".to_owned(), self.surface.clone())))
         .chain([
-            (
-                "pieces".to_owned(),
-                match self.pieces {
-                    Pieces::Whole => "whole",
-                    Pieces::PerNode => "per-node",
-                }
-                .to_owned(),
-            ),
-            (
-                "normals".to_owned(),
-                match self.normals {
-                    GroundNormals::NearCamera => "near-camera",
-                    GroundNormals::None => "none",
-                }
-                .to_owned(),
-            ),
+            ("pieces".to_owned(), self.pieces.text().to_owned()),
+            ("normals".to_owned(), self.normals.text().to_owned()),
         ])
         .chain(match self.steep {
-            Steep::None => vec![("steep".to_owned(), "none".to_owned())],
+            Steep::None => vec![("steep".to_owned(), SteepKind::None.text().to_owned())],
             Steep::Chart { threshold, max_atlas } => vec![
-                ("steep".to_owned(), "chart".to_owned()),
+                ("steep".to_owned(), SteepKind::Chart.text().to_owned()),
                 ("steep-threshold".to_owned(), threshold.to_string()),
                 ("steep-max-atlas".to_owned(), max_atlas.to_string()),
             ],
         })
         .chain(match self.ground {
-            GroundColour::Tile => vec![("ground".to_owned(), "tile".to_owned())],
+            GroundColour::Tile => vec![("ground".to_owned(), GroundKind::Tile.text().to_owned())],
             GroundColour::Splat(s) => vec![
-                ("ground".to_owned(), "splat".to_owned()),
+                ("ground".to_owned(), GroundKind::Splat.text().to_owned()),
                 ("splat-k".to_owned(), s.k.to_string()),
                 ("splat-px".to_owned(), s.pixel.to_string()),
                 (
@@ -1544,25 +1712,23 @@ impl Pass for LowerAnvilTerrain {
                         SplatUv::OverTileSize => "over-tile-size".to_owned(),
                     },
                 ),
-                (
-                    "splat-noise".to_owned(),
-                    if s.noise_srgb { "srgb" } else { "raw" }.to_owned(),
-                ),
+                ("splat-noise".to_owned(), noise_text(s.noise_srgb).to_owned()),
                 (
                     "splat-occlusion".to_owned(),
-                    if s.occlusion { "block-8" } else { "none" }.to_owned(),
+                    occlusion_text(s.occlusion).to_owned(),
                 ),
             ],
             GroundColour::Layers(l) => {
                 let mut v = vec![
-                    ("ground".to_owned(), "layers".to_owned()),
+                    ("ground".to_owned(), GroundKind::Layers.text().to_owned()),
                     ("layers-detail".to_owned(), l.detail.to_string()),
                     (
                         "layers-base".to_owned(),
                         match l.base {
-                            LayersBase::Tile => "tile",
-                            LayersBase::Bake { .. } => "bake",
+                            LayersBase::Tile => LayersBaseKind::Tile,
+                            LayersBase::Bake { .. } => LayersBaseKind::Bake,
                         }
+                        .text()
                         .to_owned(),
                     ),
                     ("splat-k".to_owned(), l.k.to_string()),
@@ -1573,13 +1739,10 @@ impl Pass for LowerAnvilTerrain {
                             SplatUv::OverTileSize => "over-tile-size".to_owned(),
                         },
                     ),
-                    (
-                        "splat-noise".to_owned(),
-                        if l.noise_srgb { "srgb" } else { "raw" }.to_owned(),
-                    ),
+                    ("splat-noise".to_owned(), noise_text(l.noise_srgb).to_owned()),
                     (
                         "splat-occlusion".to_owned(),
-                        if l.occlusion { "block-8" } else { "none" }.to_owned(),
+                        occlusion_text(l.occlusion).to_owned(),
                     ),
                 ];
                 if let LayersBase::Bake { pixel } = l.base {
@@ -2832,170 +2995,83 @@ pub(crate) fn placed_at(origin: [f32; 3]) -> Transform {
     }
 }
 
-/// Register Anvil's passes by name.
+/// Register Anvil's passes by their declarations.
 pub fn register(reg: &mut PassRegistry) {
-    reg.register_requiring(
-        "resolve-anvil-shaders",
-        |o| Ok(Box::new(ResolveAnvilShaders::from_options(o)?)),
-        &[("unset-textures", "white")],
-    );
-    reg.register_requiring(
-        "lower-anvil-collision",
-        |o| Ok(Box::new(LowerAnvilCollision::from_options(o)?)),
-        &[("by", "one"), ("surface", "rr-diagnostic-unknown")],
-    );
-    reg.register_requiring(
-        "lower-anvil-shapes",
-        |o| Ok(Box::new(LowerAnvilShapes::from_options(o)?)),
-        &[("by", "one"), ("surface", "rr-diagnostic-unknown")],
-    );
-    reg.register("lower-anvil-lods", |_| Ok(Box::new(LowerAnvilLods)));
-    reg.register("lower-anvil-world-uv", |_| Ok(Box::new(LowerAnvilWorldUv)));
-    reg.register_requiring(
-        "select-anvil-listed",
-        |o| Ok(Box::new(SelectAnvilListed::from_options(o)?)),
-        &[("coarse", "keep")],
-    );
-    reg.register_requiring(
-        "select-anvil-entities",
-        |o| Ok(Box::new(SelectAnvilEntities::from_options(o)?)),
-        &[
-            ("hidden", "drop"),
-            ("phantom", "drop"),
-            ("water-collision", "drop"),
-            ("collision-only", "drop"),
-        ],
-    );
-    reg.register_requiring(
-        "lower-anvil-material",
-        |o| Ok(Box::new(LowerAnvilMaterial::from_options(o)?)),
-        &[
-            ("normal-green", "up"),
-            ("alpha", "opaque"),
-            ("unset", "white"),
-            ("shader-uv", "texcoord"),
-            ("emissive-exposure", "1"),
-            ("underground-view", "0.5"),
-            ("fake-river-s", "0"),
-            ("decals1-cutout", "surface"),
-        ],
-    );
-    reg.register_requiring(
-        "bake-anvil-material",
-        |o| Ok(Box::new(BakeAnvilMaterial::from_options(o)?)),
-        &[
-            ("size", "512"),
-            ("normal-green", "up"),
-            ("shader-uv", "texcoord"),
-            ("mip-bias", "0"),
-            ("terrain-ao", "0.5"),
-            ("sun-elevation", "45"),
-            ("view-cosine", "0.7"),
-            ("camera-distance", "1000000"),
-            ("unset", "white"),
-        ],
-    );
-    reg.register_requiring(
-        "lower-anvil-water",
-        |o| Ok(Box::new(LowerAnvilWater::from_options(o)?)),
-        &[
-            ("rect", "-64,-64,64,64"),
-            ("depth", "3:2,4:1,5:0.5,6:0.5"),
-            ("river-depth", "1"),
-            ("colour-max", "0.15"),
-            ("roughness", "0.05"),
-            ("shore", "coverage"),
-        ],
-    );
-    reg.register_requiring(
-        "lower-anvil-decals",
-        |o| Ok(Box::new(LowerAnvilDecals::from_options(o)?)),
-        &[
-            ("rect", "-64,-64,64,64"),
-            ("step", "1"),
-            ("range", "1"),
-            ("offset", "0"),
-            ("sample", "corner"),
-            ("family", "write-gbuffer-roughness"),
-            ("cutoff", "0.4"),
-            ("lift", "0.01"),
-            ("terrain-family", "out"),
-        ],
-    );
-    reg.register_requiring(
-        "lower-anvil-grass",
-        |o| Ok(Box::new(LowerAnvilGrass::from_options(o)?)),
-        &[
-            ("rect", "-64,-64,64,64"),
-            ("range", "1"),
-            ("offset", "0"),
-            ("sample", "corner"),
-            ("seed", "0"),
-            ("density", "per-sample"),
-            ("tiling", "rule"),
-            ("scale", "rule"),
-            ("height-scale", "rule"),
-            ("tilt", "none"),
-            ("normal", "terrain"),
-            ("max-plants", "1000000"),
-        ],
-    );
-    reg.register_requiring(
-        "lower-anvil-skeleton",
-        |o| Ok(Box::new(LowerAnvilSkeleton::from_options(o)?)),
-        &[("own-transform", "refuse")],
-    );
-    reg.register_requiring(
-        "lower-anvil-rig",
-        |o| Ok(Box::new(LowerAnvilRig::from_options(o)?)),
-        &[("own-transform", "refuse")],
-    );
-    reg.register_requiring(
-        "lower-anvil-clips",
-        |o| Ok(Box::new(LowerAnvilClips::from_options(o)?)),
-        &[("interpolation", "linear"), ("extrapolation", "hold")],
-    );
-    reg.register_requiring(
-        "select-anvil-clips",
-        |o| Ok(Box::new(SelectAnvilClips::from_options(o)?)),
-        &[("min-coverage", "0.9"), ("max-clips", "16")],
-    );
-    reg.register_requiring("lower-anvil-skin", |_| Ok(Box::new(LowerAnvilSkin)), &[]);
-    reg.register_requiring(
-        "lower-anvil-data-layers",
-        |o| Ok(Box::new(LowerAnvilDataLayers::from_options(o)?)),
-        &[("combine", "all")],
-    );
-    reg.register_requiring(
-        "lower-anvil-floor",
-        |o| Ok(Box::new(LowerAnvilFloor::from_options(o)?)),
-        &[
-            ("rect", "-64,-64,64,64"),
-            ("step", "1"),
-            ("offset", "0"),
-            ("sample", "corner"),
-        ],
-    );
-    reg.register_requiring(
-        "lower-anvil-terrain",
-        |o| Ok(Box::new(LowerAnvilTerrain::from_options(o)?)),
-        &[
-            ("rect", "-64,-64,64,64"),
-            ("step", "1"),
-            ("range", "1"),
-            ("offset", "0"),
-            ("sample", "corner"),
-            ("colour", "srgb"),
-            ("ground", "tile"),
-            ("collision", "none"),
-            ("pieces", "whole"),
-            ("normals", "near-camera"),
-            ("steep", "none"),
-        ],
-    );
-    reg.register_requiring(
-        "lower-anvil-mesh",
-        |o| Ok(Box::new(LowerAnvilMesh::from_options(o)?)),
-        &[("static16-normal", "p")],
-    );
+    for spec in [
+        &RESOLVE_ANVIL_SHADERS,
+        &LOWER_ANVIL_COLLISION,
+        &LOWER_ANVIL_SHAPES,
+        &LOWER_ANVIL_LODS,
+        &LOWER_ANVIL_WORLD_UV,
+        &SELECT_ANVIL_LISTED,
+        &SELECT_ANVIL_ENTITIES,
+        &LOWER_ANVIL_MATERIAL,
+        &BAKE_ANVIL_MATERIAL,
+        &LOWER_ANVIL_WATER,
+        &LOWER_ANVIL_DECALS,
+        &LOWER_ANVIL_GRASS,
+        &LOWER_ANVIL_SKELETON,
+        &LOWER_ANVIL_RIG,
+        &LOWER_ANVIL_CLIPS,
+        &SELECT_ANVIL_CLIPS,
+        &LOWER_ANVIL_SKIN,
+        &LOWER_ANVIL_DATA_LAYERS,
+        &LOWER_ANVIL_FLOOR,
+        &LOWER_ANVIL_TERRAIN,
+        &LOWER_ANVIL_MESH,
+    ] {
+        reg.add(spec);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The crate registers exactly these passes by their declarations: those with required options are made only with
+    /// them, and every one says what it takes.
+    #[test]
+    fn the_anvil_passes_register_by_name() {
+        let mut reg = PassRegistry::new();
+        register(&mut reg);
+        let names = [
+            "bake-anvil-material",
+            "lower-anvil-clips",
+            "lower-anvil-collision",
+            "lower-anvil-data-layers",
+            "lower-anvil-decals",
+            "lower-anvil-floor",
+            "lower-anvil-grass",
+            "lower-anvil-lods",
+            "lower-anvil-material",
+            "lower-anvil-mesh",
+            "lower-anvil-rig",
+            "lower-anvil-shapes",
+            "lower-anvil-skeleton",
+            "lower-anvil-skin",
+            "lower-anvil-terrain",
+            "lower-anvil-water",
+            "lower-anvil-world-uv",
+            "resolve-anvil-shaders",
+            "select-anvil-clips",
+            "select-anvil-entities",
+            "select-anvil-listed",
+        ];
+        assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        let free = ["lower-anvil-lods", "lower-anvil-skin", "lower-anvil-world-uv"];
+        for name in names {
+            assert_eq!(reg.requires_options(name), !free.contains(&name), "{name}");
+            assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");
+            assert_eq!(
+                reg.make(name, &Options::new()).is_err(),
+                !free.contains(&name),
+                "{name}"
+            );
+        }
+        assert!(
+            reg.describe("lower-anvil-floor")
+                .unwrap()
+                .starts_with("lower-anvil-floor{rect*,step*,offset*,sample*}\n")
+        );
+    }
 }

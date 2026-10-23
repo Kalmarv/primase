@@ -47,14 +47,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
 use primase_core::{
     ColorSpace, Component, DrawLayer, DrawOrder, Entity, Instance, Mesh, Name, NormalBasis, NormalConvention,
     NormalGreen, NormalX, NormalZ, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology, World,
 };
 
-use super::{CellPoint, GroundGrid, ground_options, local_origin, placed_at};
+use super::{
+    CellPoint, GroundGrid, OFFSET, RANGE, RECT, SAMPLE, STEP, ground_options, local_origin, placed_at,
+};
 use crate::components::{AnvilDecalModel, AnvilDeferredDecals, AnvilTerrain, AnvilTextureMap, DeferredDecal};
 
 /// See the module documentation.
@@ -100,6 +102,23 @@ pub enum FamilyRule {
     WriteGBufferRoughness,
 }
 
+impl Choice for FamilyRule {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("write-gbuffer-roughness", FamilyRule::WriteGBufferRoughness)];
+}
+
+/// Option `terrain-family`: [`TerrainDecals`]' kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerrainFamily {
+    Out,
+    Blend,
+}
+
+impl Choice for TerrainFamily {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("out", TerrainFamily::Out), ("blend", TerrainFamily::Blend)];
+}
+
 /// A DDecalModel's family by `family=write-gbuffer-roughness`: its `WriteGBufferRoughness` (body byte 49, its flag 7)
 /// 1, the box family; 0, the terrain family; `None` otherwise.
 pub fn family(m: &AnvilDecalModel) -> Option<Family> {
@@ -111,56 +130,32 @@ pub fn family(m: &AnvilDecalModel) -> Option<Family> {
 }
 
 impl LowerAnvilDecals {
-    /// From its options, all required: the ground's (`rect`, `step`, `range`, `offset`, `sample`: those of the
-    /// `lower-anvil-terrain` it lies on), `family`, `cutoff` and `lift`.
-    pub fn from_options(o: &Options) -> Result<LowerAnvilDecals, String> {
-        let usage = "rect=x0,y0,x1,y1, step=N, range=METRES, offset=METRES, sample=corner|centre (the ground's, as \
-                     lower-anvil-terrain's), family=write-gbuffer-roughness, cutoff=X (ref / scale), lift=UNITS, \
-                     terrain-family=out|blend (with terrain-steps=N)";
-        let g = ground_options(
-            o,
-            &[
-                "range",
-                "family",
-                "cutoff",
-                "lift",
-                "terrain-family",
-                "terrain-steps",
-            ],
-            usage,
-        )?;
+    /// From its declared options: `terrain-steps` only with `terrain-family=blend`.
+    fn from_given(g: &Given) -> Result<LowerAnvilDecals, String> {
+        let ground = ground_options(g)?;
         let number = |k: &str| -> Result<f64, String> {
-            let v: f64 = o
-                .get(k)
-                .ok_or_else(|| format!("{k} is required: {usage}"))?
-                .parse()
-                .map_err(|_| format!("{k} is a number"))?;
+            let v: f64 = g.required(k).parse().map_err(|_| format!("{k} is a number"))?;
             if v.is_finite() && v >= 0.0 {
                 Ok(v)
             } else {
                 Err(format!("{k} {v}: finite and at least 0"))
             }
         };
-        let family = match o.get("family").map(String::as_str) {
-            Some("write-gbuffer-roughness") => FamilyRule::WriteGBufferRoughness,
-            Some(v) => return Err(format!("family={v} is not write-gbuffer-roughness")),
-            None => return Err(format!("family is required: {usage}")),
-        };
         let range = number("range")?;
         if range <= 0.0 {
             return Err(format!("range {range}: above 0"));
         }
-        let terrain = match o.get("terrain-family").map(String::as_str) {
-            Some("out") => {
-                if o.contains_key("terrain-steps") {
+        let terrain = match g.choice::<TerrainFamily>("terrain-family") {
+            TerrainFamily::Out => {
+                if g.optional("terrain-steps").is_some() {
                     return Err("terrain-steps is only taken with terrain-family=blend".into());
                 }
                 TerrainDecals::Out
             }
-            Some("blend") => {
-                let steps: u32 = o
-                    .get("terrain-steps")
-                    .ok_or_else(|| format!("terrain-steps is required with terrain-family=blend: {usage}"))?
+            TerrainFamily::Blend => {
+                let steps: u32 = g
+                    .optional("terrain-steps")
+                    .ok_or("terrain-steps is required with terrain-family=blend")?
                     .parse()
                     .map_err(|_| "terrain-steps is a whole number".to_owned())?;
                 if !(1..=65535).contains(&steps) {
@@ -168,22 +163,50 @@ impl LowerAnvilDecals {
                 }
                 TerrainDecals::Blend { steps }
             }
-            Some(v) => return Err(format!("terrain-family={v} is not out or blend")),
-            None => return Err(format!("terrain-family is required: {usage}")),
         };
         Ok(LowerAnvilDecals {
-            rect: g.rect,
-            step: g.step,
+            rect: ground.rect,
+            step: ground.step,
             range,
-            offset: g.offset,
-            sample: g.sample,
-            family,
+            offset: ground.offset,
+            sample: ground.sample,
+            family: g.choice("family"),
             cutoff: number("cutoff")?,
             lift: number("lift")?,
             terrain,
         })
     }
 }
+
+/// `lower-anvil-decals`' declaration ([`primase_core::pass::PassRegistry::add`]): the ground's options are those of
+/// the `lower-anvil-terrain` it lies on; every choice is the program's.
+pub const LOWER_ANVIL_DECALS: PassSpec = PassSpec {
+    name: "lower-anvil-decals",
+    options: &[
+        RECT,
+        STEP,
+        RANGE,
+        OFFSET,
+        SAMPLE,
+        OptionSpec::choice::<FamilyRule>("family", "which models are of the box family"),
+        OptionSpec::required("cutoff", "0.4", "the alpha test's ref / scale, at least 0"),
+        OptionSpec::required(
+            "lift",
+            "0.01",
+            "source units, at least 0: how far the decals lie above the ground, along the source's up",
+        ),
+        OptionSpec::choice::<TerrainFamily>(
+            "terrain-family",
+            "the terrain family's decals left out (counted), or blended over the ground",
+        ),
+        OptionSpec::optional(
+            "terrain-steps",
+            "255",
+            "1 to 65535: the blended factors quantised to 1 / steps (terrain-family=blend)",
+        ),
+    ],
+    make: |g| Ok(Box::new(LowerAnvilDecals::from_given(g)?)),
+};
 
 /// A point in the source frame, f64.
 type P = [f64; 3];
@@ -472,30 +495,20 @@ impl Pass for LowerAnvilDecals {
             ("step".to_owned(), self.step.to_string()),
             ("range".to_owned(), self.range.to_string()),
             ("offset".to_owned(), self.offset.to_string()),
-            (
-                "sample".to_owned(),
-                match self.sample {
-                    CellPoint::Corner => "corner",
-                    CellPoint::Centre => "centre",
-                }
-                .to_owned(),
-            ),
-            (
-                "family".to_owned(),
-                match self.family {
-                    FamilyRule::WriteGBufferRoughness => "write-gbuffer-roughness",
-                }
-                .to_owned(),
-            ),
+            ("sample".to_owned(), self.sample.text().to_owned()),
+            ("family".to_owned(), self.family.text().to_owned()),
             ("cutoff".to_owned(), self.cutoff.to_string()),
             ("lift".to_owned(), self.lift.to_string()),
         ]);
         match self.terrain {
             TerrainDecals::Out => {
-                o.insert("terrain-family".to_owned(), "out".to_owned());
+                o.insert("terrain-family".to_owned(), TerrainFamily::Out.text().to_owned());
             }
             TerrainDecals::Blend { steps } => {
-                o.insert("terrain-family".to_owned(), "blend".to_owned());
+                o.insert(
+                    "terrain-family".to_owned(),
+                    TerrainFamily::Blend.text().to_owned(),
+                );
                 o.insert("terrain-steps".to_owned(), steps.to_string());
             }
         }

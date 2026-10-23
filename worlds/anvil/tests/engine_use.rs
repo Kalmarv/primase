@@ -9,14 +9,14 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_anvil::passes::ResolveAnvilShaders;
+use primase_anvil::passes::RESOLVE_ANVIL_SHADERS;
 use primase_anvil::read::convert::{
     AnvilOptions, AnvilReader, CellSelection, Edition, ForgeFile, GridSelection, Levels,
 };
 use primase_anvil::read::placements::{InstancedCollision, InstancedLevels};
 use primase_core::convert::Reader;
 use primase_core::frame::SourceFrame;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, PassLog};
 use primase_core::shader::{Shader, ShaderBinding, Stage};
 use primase_core::{Instance, World};
 use primase_shader::ConstantReads;
@@ -58,11 +58,12 @@ fn how_the_programs_read_the_engine_buffers() {
     let (read, _) = reader.read().unwrap();
     let roots: BTreeSet<_> = read.iter::<Instance>().map(|(e, _)| e).collect();
     let (mut world, _): (World, _) = reader.load(&read, &roots).unwrap();
-    let pass = ResolveAnvilShaders::from_options(&Options::from([(
-        "unset-textures".to_owned(),
-        "white".to_owned(),
-    )]))
-    .unwrap();
+    let pass = RESOLVE_ANVIL_SHADERS
+        .instance(&Options::from([(
+            "unset-textures".to_owned(),
+            "white".to_owned(),
+        )]))
+        .unwrap();
     pass.run(&mut world, &mut PassLog::default()).unwrap();
     let used: BTreeSet<_> = world
         .iter::<ShaderBinding>()

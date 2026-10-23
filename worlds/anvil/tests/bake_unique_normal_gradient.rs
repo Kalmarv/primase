@@ -4,13 +4,13 @@
 //! the same sampled texels with the camera far (the medium albedo): the bake runs the game's program, the oracle the
 //! formulas.
 use primase_anvil::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialValue};
-use primase_anvil::passes::BakeAnvilMaterial;
+use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
 use primase_anvil::passes::formulas::{sat, tint};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
@@ -109,21 +109,22 @@ fn unique_normal_gradient_bakes_as_the_notes_formulas() {
         .iter()
         .map(|&e| w.get::<AnvilMaterial>(e).expect("material").clone())
         .collect();
-    let pass = BakeAnvilMaterial::from_options(&Options::from(
-        [
-            ("size", "64"),
-            ("normal-green", "up"),
-            ("shader-uv", "texcoord"),
-            ("mip-bias", "0"),
-            ("terrain-ao", "0.5"),
-            ("sun-elevation", "45"),
-            ("view-cosine", "0.7"),
-            ("camera-distance", "1000000"),
-            ("unset", "white"),
-        ]
-        .map(|(k, v)| (k.to_owned(), v.to_owned())),
-    ))
-    .expect("options");
+    let pass = BAKE_ANVIL_MATERIAL
+        .instance(&Options::from(
+            [
+                ("size", "64"),
+                ("normal-green", "up"),
+                ("shader-uv", "texcoord"),
+                ("mip-bias", "0"),
+                ("terrain-ao", "0.5"),
+                ("sun-elevation", "45"),
+                ("view-cosine", "0.7"),
+                ("camera-distance", "1000000"),
+                ("unset", "white"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned())),
+        ))
+        .expect("options");
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log).expect("run");
     println!("{log:?}");

@@ -25,7 +25,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, Pass, PassLog, PassSpec};
 use primase_core::rig::{RigInstance, SkinInstance};
 use primase_core::skeleton::{JointId, Skeleton};
 use primase_core::skin::{Binding, BindingId, Deformation, Influences, Skin, Slot, WeightRule};
@@ -83,6 +83,13 @@ fn weighted_slots(palette: &AnvilPalette) -> Result<Vec<bool>, String> {
     }
     Ok(weighted)
 }
+
+/// `lower-anvil-skin`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by the game's own rule.
+pub const LOWER_ANVIL_SKIN: PassSpec = PassSpec {
+    name: "lower-anvil-skin",
+    options: &[],
+    make: |_| Ok(Box::new(LowerAnvilSkin)),
+};
 
 impl Pass for LowerAnvilSkin {
     fn name(&self) -> &'static str {

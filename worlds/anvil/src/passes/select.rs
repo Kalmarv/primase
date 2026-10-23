@@ -31,7 +31,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Name, World};
 
 use crate::components::{AnvilBounds, AnvilCollisionFilter, AnvilCollisionOnly, AnvilEntityState};
@@ -41,6 +41,26 @@ use crate::components::{AnvilBounds, AnvilCollisionFilter, AnvilCollisionOnly, A
 pub enum Keep {
     Keep,
     Drop,
+}
+
+impl Choice for Keep {
+    const VALUES: &'static [(&'static str, Self)] = &[("keep", Keep::Keep), ("drop", Keep::Drop)];
+}
+
+/// Option `collision-only`: [`CollisionOnly`]'s kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CollisionOnlyKind {
+    Keep,
+    Drop,
+    Overlap,
+}
+
+impl Choice for CollisionOnlyKind {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("keep", CollisionOnlyKind::Keep),
+        ("drop", CollisionOnlyKind::Drop),
+        ("overlap", CollisionOnlyKind::Overlap),
+    ];
 }
 
 /// The program's three numbers for `collision-only=overlap` (none read from the game).
@@ -78,45 +98,24 @@ pub struct SelectAnvilEntities {
 }
 
 impl SelectAnvilEntities {
-    /// From its options: all required; `collision-only-overlap`, `-max-ratio` and `-min-extent` with
-    /// `collision-only=overlap` only, and all three then.
-    pub fn from_options(o: &Options) -> Result<SelectAnvilEntities, String> {
-        let known = [
-            "hidden",
-            "phantom",
-            "water-collision",
-            "collision-only",
-            "collision-only-overlap",
-            "collision-only-max-ratio",
-            "collision-only-min-extent",
-        ];
-        if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let usage = "hidden=keep|drop, phantom=keep|drop, water-collision=keep|drop, \
-                     collision-only=keep|drop|overlap (overlap with collision-only-overlap=F, 0 < F <= 1, \
-                     collision-only-max-ratio=R, R >= 1, collision-only-min-extent=M, M > 0 metres)";
-        let get = |k: &str| match o.get(k).map(String::as_str) {
-            Some("keep") => Ok(Keep::Keep),
-            Some("drop") => Ok(Keep::Drop),
-            Some(v) => Err(format!("{k}={v}: keep or drop")),
-            None => Err(format!("{k} is required: {usage}")),
-        };
-        let given = OVERLAP_OPTIONS.iter().any(|k| o.contains_key(*k));
-        let collision_only = match o.get("collision-only").map(String::as_str) {
-            Some("keep") if !given => CollisionOnly::Keep,
-            Some("drop") if !given => CollisionOnly::Drop,
-            Some("keep" | "drop") => {
+    /// From its declared options: the three `collision-only-*` numbers with `collision-only=overlap` only, and all
+    /// three then.
+    fn from_given(g: &Given) -> Result<SelectAnvilEntities, String> {
+        let given = OVERLAP_OPTIONS.iter().any(|k| g.optional(k).is_some());
+        let collision_only = match g.choice::<CollisionOnlyKind>("collision-only") {
+            CollisionOnlyKind::Keep if !given => CollisionOnly::Keep,
+            CollisionOnlyKind::Drop if !given => CollisionOnly::Drop,
+            CollisionOnlyKind::Keep | CollisionOnlyKind::Drop => {
                 return Err(format!(
                     "{} go with collision-only=overlap only",
                     OVERLAP_OPTIONS.join(", ")
                 ));
             }
-            Some("overlap") => {
+            CollisionOnlyKind::Overlap => {
                 let number = |k: &str, ok: fn(f64) -> bool, rule: &str| -> Result<f64, String> {
-                    let v = o
-                        .get(k)
-                        .ok_or_else(|| format!("collision-only=overlap needs {k}: {usage}"))?;
+                    let v = g
+                        .optional(k)
+                        .ok_or_else(|| format!("collision-only=overlap needs {k}"))?;
                     let n = v.parse::<f64>().map_err(|_| format!("{k}={v} is not a number"))?;
                     if n.is_finite() && ok(n) {
                         Ok(n)
@@ -134,17 +133,52 @@ impl SelectAnvilEntities {
                     min_extent: number("collision-only-min-extent", |m| m > 0.0, "metres, M > 0")?,
                 })
             }
-            Some(v) => return Err(format!("collision-only={v}: keep, drop or overlap")),
-            None => return Err(format!("collision-only is required: {usage}")),
         };
         Ok(SelectAnvilEntities {
-            hidden: get("hidden")?,
-            phantom: get("phantom")?,
-            water_collision: get("water-collision")?,
+            hidden: g.choice("hidden"),
+            phantom: g.choice("phantom"),
+            water_collision: g.choice("water-collision"),
             collision_only,
         })
     }
 }
+
+/// `select-anvil-entities`' declaration ([`primase_core::pass::PassRegistry::add`]): which placements stay is the
+/// program's, every option required (the three `collision-only-*` numbers with `collision-only=overlap`).
+pub const SELECT_ANVIL_ENTITIES: PassSpec = PassSpec {
+    name: "select-anvil-entities",
+    options: &[
+        OptionSpec::choice::<Keep>("hidden", "the placements whose IsHidden is set kept, or dropped"),
+        OptionSpec::choice::<Keep>(
+            "phantom",
+            "the placements whose IsPhantom is set kept, or dropped",
+        ),
+        OptionSpec::choice::<Keep>(
+            "water-collision",
+            "collision placed from a RigidBody that is a water surface kept, or dropped",
+        ),
+        OptionSpec::choice::<CollisionOnlyKind>(
+            "collision-only",
+            "collision placed for an owner without a visual kept, dropped, or kept inside a visual's box",
+        ),
+        OptionSpec::optional(
+            "collision-only-overlap",
+            "0.5",
+            "0 < F <= 1: the fraction of a shape's box inside a visual's that keeps it (collision-only=overlap)",
+        ),
+        OptionSpec::optional(
+            "collision-only-max-ratio",
+            "100",
+            "R >= 1: the most times a visual's box volume may be the shape's to count (collision-only=overlap)",
+        ),
+        OptionSpec::optional(
+            "collision-only-min-extent",
+            "0.1",
+            "metres, above 0: the least a box's side is taken to be (collision-only=overlap)",
+        ),
+    ],
+    make: |g| Ok(Box::new(SelectAnvilEntities::from_given(g)?)),
+};
 
 /// The options that go with `collision-only=overlap` only.
 const OVERLAP_OPTIONS: [&str; 3] = [
@@ -152,13 +186,6 @@ const OVERLAP_OPTIONS: [&str; 3] = [
     "collision-only-max-ratio",
     "collision-only-min-extent",
 ];
-
-fn word(k: Keep) -> &'static str {
-    match k {
-        Keep::Keep => "keep",
-        Keep::Drop => "drop",
-    }
-}
 
 /// `b`'s volume, each side at least `min_extent`.
 fn volume(b: &AnvilBounds, min_extent: f64) -> f64 {
@@ -186,21 +213,30 @@ impl Pass for SelectAnvilEntities {
     }
     fn options(&self) -> Options {
         let mut o = Options::from([
-            ("hidden".to_owned(), word(self.hidden).to_owned()),
-            ("phantom".to_owned(), word(self.phantom).to_owned()),
+            ("hidden".to_owned(), self.hidden.text().to_owned()),
+            ("phantom".to_owned(), self.phantom.text().to_owned()),
             (
                 "water-collision".to_owned(),
-                word(self.water_collision).to_owned(),
+                self.water_collision.text().to_owned(),
             ),
         ]);
         match self.collision_only {
-            CollisionOnly::Keep => o.insert("collision-only".to_owned(), "keep".to_owned()),
-            CollisionOnly::Drop => o.insert("collision-only".to_owned(), "drop".to_owned()),
+            CollisionOnly::Keep => o.insert(
+                "collision-only".to_owned(),
+                CollisionOnlyKind::Keep.text().to_owned(),
+            ),
+            CollisionOnly::Drop => o.insert(
+                "collision-only".to_owned(),
+                CollisionOnlyKind::Drop.text().to_owned(),
+            ),
             CollisionOnly::Overlap(v) => {
                 o.insert("collision-only-overlap".to_owned(), v.fraction.to_string());
                 o.insert("collision-only-max-ratio".to_owned(), v.max_ratio.to_string());
                 o.insert("collision-only-min-extent".to_owned(), v.min_extent.to_string());
-                o.insert("collision-only".to_owned(), "overlap".to_owned())
+                o.insert(
+                    "collision-only".to_owned(),
+                    CollisionOnlyKind::Overlap.text().to_owned(),
+                )
             }
         };
         o

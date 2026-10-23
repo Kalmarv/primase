@@ -5,7 +5,8 @@
 //! (y, z), its mix weight 1 on a face looking along x); the collision is the whole ground's either way.
 use primase_anvil::components::{AnvilTerrain, TerrainDetail, TerrainTile};
 use primase_anvil::passes::{
-    CellPoint, GroundColour, GroundNormals, LowerAnvilTerrain, Pieces, Splat, SplatUv, Steep, SurfaceBy,
+    CellPoint, GroundColour, GroundNormals, LOWER_ANVIL_TERRAIN, LowerAnvilTerrain, Pieces, Splat, SplatUv,
+    Steep, SurfaceBy,
 };
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, Pass, PassLog};
@@ -334,10 +335,13 @@ fn the_options_state_the_threshold_and_refuse_what_cannot_chart() {
     let with = |extra: &[(&str, &str)]| {
         let mut o: Options = base.iter().cloned().collect();
         o.extend(extra.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
-        LowerAnvilTerrain::from_options(&o)
+        LOWER_ANVIL_TERRAIN.instance(&o)
     };
-    assert!(with(&[]).unwrap_err().contains("steep is required"));
-    assert_eq!(with(&[("steep", "none")]).unwrap().steep, Steep::None);
+    assert!(with(&[]).err().unwrap().contains("steep is required"));
+    assert_eq!(
+        with(&[("steep", "none")]).unwrap().options(),
+        pass(Steep::None).options()
+    );
     for k in [("steep-threshold", "60"), ("steep-max-atlas", "4096")] {
         assert!(with(&[("steep", "none"), k]).is_err(), "{k:?}");
     }
@@ -349,21 +353,24 @@ fn the_options_state_the_threshold_and_refuse_what_cannot_chart() {
     assert_eq!(
         chart(&[("steep-threshold", "60"), ("steep-max-atlas", "4096")])
             .unwrap()
-            .steep,
-        Steep::Chart {
+            .options(),
+        pass(Steep::Chart {
             threshold: 60.0,
             max_atlas: 4096
-        }
+        })
+        .options()
     );
     // each of the two numbers is needed with chart
     assert!(
         chart(&[("steep-max-atlas", "4096")])
-            .unwrap_err()
+            .err()
+            .unwrap()
             .contains("steep-threshold")
     );
     assert!(
         chart(&[("steep-threshold", "60")])
-            .unwrap_err()
+            .err()
+            .unwrap()
             .contains("steep-max-atlas")
     );
     for bad in ["0", "90", "-5", "x"] {
@@ -389,8 +396,10 @@ fn the_options_state_the_threshold_and_refuse_what_cannot_chart() {
     let mut o: Options = base.iter().filter(|(k, _)| k != "pieces").cloned().collect();
     o.extend(whole.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
     assert!(
-        LowerAnvilTerrain::from_options(&o)
-            .unwrap_err()
+        LOWER_ANVIL_TERRAIN
+            .instance(&o)
+            .err()
+            .unwrap()
             .contains("pieces=per-node")
     );
     // the options round-trip
@@ -398,7 +407,10 @@ fn the_options_state_the_threshold_and_refuse_what_cannot_chart() {
         threshold: 55.0,
         max_atlas: 1024,
     });
-    assert_eq!(LowerAnvilTerrain::from_options(&p.options()).unwrap(), p);
+    assert_eq!(
+        LOWER_ANVIL_TERRAIN.instance(&p.options()).unwrap().options(),
+        p.options()
+    );
 }
 
 /// The splat bake on the world's stated threads (`core.threads`, its rows shaded in parallel) makes the serial

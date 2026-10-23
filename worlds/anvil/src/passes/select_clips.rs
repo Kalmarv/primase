@@ -23,7 +23,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::rig::RigInstance;
 use primase_core::{Component, Entity, Name, World};
 
@@ -39,27 +39,16 @@ pub struct SelectAnvilClips {
 }
 
 impl SelectAnvilClips {
-    /// From its options, both required.
-    pub fn from_options(o: &Options) -> Result<SelectAnvilClips, String> {
-        if let Some(k) = o
-            .keys()
-            .find(|k| !["min-coverage", "max-clips"].contains(&k.as_str()))
-        {
-            return Err(format!("unknown option {k}"));
-        }
-        let usage = "min-coverage=F (0 < F <= 1), max-clips=N (N >= 1)";
-        let coverage = o
-            .get("min-coverage")
-            .ok_or_else(|| format!("min-coverage is required: {usage}"))?;
+    /// From its declared options.
+    fn from_given(g: &Given) -> Result<SelectAnvilClips, String> {
+        let coverage = g.required("min-coverage");
         let min_coverage = coverage
             .parse::<f64>()
             .map_err(|_| format!("min-coverage={coverage} is not a number"))?;
         if !(min_coverage.is_finite() && min_coverage > 0.0 && min_coverage <= 1.0) {
             return Err(format!("min-coverage={coverage}: a fraction, 0 < F <= 1"));
         }
-        let max = o
-            .get("max-clips")
-            .ok_or_else(|| format!("max-clips is required: {usage}"))?;
+        let max = g.required("max-clips");
         let max_clips = max
             .parse::<usize>()
             .map_err(|_| format!("max-clips={max} is not a whole number"))?;
@@ -72,6 +61,21 @@ impl SelectAnvilClips {
         })
     }
 }
+
+/// `select-anvil-clips`' declaration ([`primase_core::pass::PassRegistry::add`]): the minimum coverage and the cap
+/// are the program's.
+pub const SELECT_ANVIL_CLIPS: PassSpec = PassSpec {
+    name: "select-anvil-clips",
+    options: &[
+        OptionSpec::required(
+            "min-coverage",
+            "0.9",
+            "0 < F <= 1: the least fraction of a clip's tracks that fit a rig's joints",
+        ),
+        OptionSpec::required("max-clips", "16", "at least 1: the most clips a rig keeps"),
+    ],
+    make: |g| Ok(Box::new(SelectAnvilClips::from_given(g)?)),
+};
 
 /// The fraction of `c`'s clip's joint-driving tracks that `c` covers.
 fn coverage(c: &ClipCandidate) -> f64 {

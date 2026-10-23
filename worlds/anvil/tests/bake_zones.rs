@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use primase_anvil::components::{AnvilMaterial, MaterialBinding, MaterialValue};
-use primase_anvil::passes::BakeAnvilMaterial;
+use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
 use primase_anvil::read::archive::Archive;
 use primase_anvil::read::build_table::BUILD_TABLE;
 use primase_anvil::read::placements::{
@@ -12,7 +12,7 @@ use primase_anvil::read::placements::{
 };
 use primase_anvil::read::skeleton::SKELETON;
 use primase_core::frame::SourceFrame;
-use primase_core::pass::{Options, Pass, PassLog, PassManager, PassRegistry, RunReport};
+use primase_core::pass::{Options, PassLog, PassManager, PassRegistry, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Name, Texture, World};
 use primase_image::sampling::{Address, Levels};
@@ -159,7 +159,7 @@ fn a_zones_material_bakes_to_the_notes_formula() {
 
     let mut o = options();
     o.insert("size".into(), size.to_string());
-    let pass = BakeAnvilMaterial::from_options(&o).expect("options");
+    let pass = BAKE_ANVIL_MATERIAL.instance(&o).expect("options");
     let mut log = PassLog::default();
     pass.run(&mut w, &mut log).expect("bake");
     assert!(
@@ -359,7 +359,7 @@ fn a_skin_material_bakes_with_the_chosen_tone_as_its_tint() {
         if let Some([r, g, b]) = skin {
             o.insert("skin-tone".into(), format!("{r},{g},{b}"));
         }
-        let pass = BakeAnvilMaterial::from_options(&o).expect("options");
+        let pass = BAKE_ANVIL_MATERIAL.instance(&o).expect("options");
         assert_eq!(pass.options().contains_key("skin-tone"), skin.is_some());
         let mut log = PassLog::default();
         pass.run(&mut w, &mut log).expect("bake");

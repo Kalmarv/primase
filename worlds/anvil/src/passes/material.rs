@@ -165,7 +165,7 @@ use std::collections::BTreeMap;
 
 use primase_core::layered::{Channel, Composition, Layer, LayerWeights, Source, WeightMapping};
 use primase_core::parallel::Threads;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
     ColorSpace, Component, DrawLayer, DrawOrder, Entity, LayeredMaterial, MaterialVariants, Mesh, MeshFile,
@@ -198,6 +198,62 @@ pub enum ShaderUv {
     OneMinusV,
 }
 
+impl Choice for ShaderUv {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("texcoord", ShaderUv::TexCoord),
+        ("one-minus-v", ShaderUv::OneMinusV),
+    ];
+}
+
+/// Option `normal-green`: which way the normal maps' green points ([`NormalGreen`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Green {
+    Up,
+    Down,
+}
+
+impl Choice for Green {
+    const VALUES: &'static [(&'static str, Self)] = &[("up", Green::Up), ("down", Green::Down)];
+}
+
+impl Green {
+    pub(crate) fn of(green: NormalGreen) -> Green {
+        match green {
+            NormalGreen::Up => Green::Up,
+            NormalGreen::Down => Green::Down,
+        }
+    }
+
+    pub(crate) fn normal_green(self) -> NormalGreen {
+        match self {
+            Green::Up => NormalGreen::Up,
+            Green::Down => NormalGreen::Down,
+        }
+    }
+}
+
+/// Option `unset`: what an unset texture samples, the one reading established.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unset {
+    White,
+}
+
+impl Choice for Unset {
+    const VALUES: &'static [(&'static str, Self)] = &[("white", Unset::White)];
+}
+
+/// `normal-green`, as the material lowerings take it.
+pub(crate) const NORMAL_GREEN: OptionSpec =
+    OptionSpec::choice::<Green>("normal-green", "which way the normal maps' green points");
+/// `shader-uv`, as the material lowerings take it.
+pub(crate) const SHADER_UV: OptionSpec = OptionSpec::choice::<ShaderUv>(
+    "shader-uv",
+    "the shader's texture coordinates: the mesh's TexCoord(0), or (u, 1 - v)",
+);
+/// `unset`, as the material lowerings take it.
+pub(crate) const UNSET: OptionSpec =
+    OptionSpec::choice::<Unset>("unset", "what an unset texture samples (only white is read)");
+
 /// The pass (see the module documentation). The textures it derives are worked on the world's stated threads
 /// (`core.threads`, [`primase_core::parallel`]): the same texels on any count.
 #[derive(Clone, Debug, PartialEq)]
@@ -225,41 +281,38 @@ pub enum Decals1Cutout {
     Surface,
 }
 
+impl Choice for Decals1Cutout {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("decal", Decals1Cutout::Decal),
+        ("surface", Decals1Cutout::Surface),
+    ];
+}
+
+/// Option `alpha`: [`AlphaChoice`]'s kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Alpha {
+    Opaque,
+    Mask,
+    Prelude,
+}
+
+impl Choice for Alpha {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("opaque", Alpha::Opaque),
+        ("mask", Alpha::Mask),
+        ("prelude", Alpha::Prelude),
+    ];
+}
+
 impl LowerAnvilMaterial {
-    /// From its options: `normal-green`, `alpha` (and `alpha-cutoff` with `mask`), `unset=white`, `shader-uv`,
-    /// `emissive-exposure`, all required.
-    pub fn from_options(o: &Options) -> Result<LowerAnvilMaterial, String> {
-        let known = [
-            "normal-green",
-            "alpha",
-            "alpha-cutoff",
-            "unset",
-            "shader-uv",
-            "emissive-exposure",
-            "underground-view",
-            "fake-river-s",
-            "decals1-cutout",
-        ];
-        if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let usage = "normal-green=up|down, alpha=opaque|mask (with alpha-cutoff=X)|prelude, unset=white, \
-                     shader-uv=texcoord|one-minus-v, emissive-exposure=X, underground-view=X (0 to 1), fake-river-s=S, \
-                     decals1-cutout=decal|surface";
-        let get = |k: &str| {
-            o.get(k)
-                .map(String::as_str)
-                .ok_or_else(|| format!("{k} is required: {usage}"))
-        };
-        let normal_green = match get("normal-green")? {
-            "up" => NormalGreen::Up,
-            "down" => NormalGreen::Down,
-            v => return Err(format!("normal-green={v} is not up or down")),
-        };
-        let alpha = match get("alpha")? {
-            "opaque" => AlphaChoice::Opaque,
-            "mask" => {
-                let c: f32 = get("alpha-cutoff")?
+    /// From its declared options: `alpha-cutoff` with `alpha=mask`.
+    fn from_given(g: &Given) -> Result<LowerAnvilMaterial, String> {
+        let alpha = match g.choice::<Alpha>("alpha") {
+            Alpha::Opaque => AlphaChoice::Opaque,
+            Alpha::Mask => {
+                let c: f32 = g
+                    .optional("alpha-cutoff")
+                    .ok_or("alpha-cutoff is required with alpha=mask")?
                     .parse()
                     .map_err(|_| "alpha-cutoff is a number".to_owned())?;
                 if !(0.0..=1.0).contains(&c) {
@@ -267,19 +320,10 @@ impl LowerAnvilMaterial {
                 }
                 AlphaChoice::Mask(c)
             }
-            "prelude" => AlphaChoice::Prelude,
-            v => return Err(format!("alpha={v} is not opaque, mask or prelude")),
+            Alpha::Prelude => AlphaChoice::Prelude,
         };
-        match get("unset")? {
-            "white" => {}
-            v => return Err(format!("unset={v}: only white is read")),
-        }
-        let shader_uv = match get("shader-uv")? {
-            "texcoord" => ShaderUv::TexCoord,
-            "one-minus-v" => ShaderUv::OneMinusV,
-            v => return Err(format!("shader-uv={v} is not texcoord or one-minus-v")),
-        };
-        let emissive_exposure: f64 = get("emissive-exposure")?
+        let emissive_exposure: f64 = g
+            .required("emissive-exposure")
             .parse()
             .map_err(|_| "emissive-exposure is a number".to_owned())?;
         if !(emissive_exposure.is_finite() && emissive_exposure > 0.0) {
@@ -288,7 +332,7 @@ impl LowerAnvilMaterial {
             ));
         }
         let number = |k: &str| -> Result<f64, String> {
-            let v: f64 = get(k)?.parse().map_err(|_| format!("{k} is a number"))?;
+            let v: f64 = g.required(k).parse().map_err(|_| format!("{k} is a number"))?;
             if v.is_finite() {
                 Ok(v)
             } else {
@@ -300,22 +344,57 @@ impl LowerAnvilMaterial {
             return Err(format!("underground-view {underground_view}: within 0 and 1"));
         }
         let fake_river_s = number("fake-river-s")?;
-        let decals1_cutout = match get("decals1-cutout")? {
-            "decal" => Decals1Cutout::Decal,
-            "surface" => Decals1Cutout::Surface,
-            v => return Err(format!("decals1-cutout={v} is not decal or surface")),
-        };
         Ok(LowerAnvilMaterial {
-            normal_green,
+            normal_green: g.choice::<Green>("normal-green").normal_green(),
             alpha,
-            shader_uv,
+            shader_uv: g.choice("shader-uv"),
             emissive_exposure,
             underground_view,
             fake_river_s,
-            decals1_cutout,
+            decals1_cutout: g.choice("decals1-cutout"),
         })
     }
 }
+
+/// `lower-anvil-material`'s declaration ([`primase_core::pass::PassRegistry::add`]): each reading the game doesn't
+/// establish is the program's, every option required (`alpha-cutoff` with `alpha=mask`).
+pub const LOWER_ANVIL_MATERIAL: PassSpec = PassSpec {
+    name: "lower-anvil-material",
+    options: &[
+        NORMAL_GREEN,
+        OptionSpec::choice::<Alpha>(
+            "alpha",
+            "every Material opaque, masked at alpha-cutoff, or as its prelude states",
+        ),
+        OptionSpec::optional(
+            "alpha-cutoff",
+            "0.5",
+            "within 0 and 1: the mask's cutoff (alpha=mask)",
+        ),
+        UNSET,
+        SHADER_UV,
+        OptionSpec::required(
+            "emissive-exposure",
+            "1",
+            "finite and above 0: the engine's exposure the emission is divided by (its texture isn't read)",
+        ),
+        OptionSpec::required(
+            "underground-view",
+            "0.5",
+            "within 0 and 1: the view term x of MAD_SHD_UNLIT_UndergroundBox's gradient",
+        ),
+        OptionSpec::required(
+            "fake-river-s",
+            "0",
+            "finite: MAD_Tex1_FakeRiver's s (its program's COLOR0.x) for the whole Material",
+        ),
+        OptionSpec::choice::<Decals1Cutout>(
+            "decals1-cutout",
+            "a Decals1 cutout drawn in the decal layer, or as a cutout surface",
+        ),
+    ],
+    make: |g| Ok(Box::new(LowerAnvilMaterial::from_given(g)?)),
+};
 
 /// A texel's channels as the shader samples them: red, green and blue made linear where the texture is sampled as
 /// sRGB, alpha as stored.
@@ -1114,43 +1193,25 @@ impl Pass for LowerAnvilMaterial {
         let mut o = Options::from([
             (
                 "normal-green".to_owned(),
-                match self.normal_green {
-                    NormalGreen::Up => "up",
-                    NormalGreen::Down => "down",
-                }
-                .to_owned(),
+                Green::of(self.normal_green).text().to_owned(),
             ),
-            ("unset".to_owned(), "white".to_owned()),
-            (
-                "shader-uv".to_owned(),
-                match self.shader_uv {
-                    ShaderUv::TexCoord => "texcoord",
-                    ShaderUv::OneMinusV => "one-minus-v",
-                }
-                .to_owned(),
-            ),
+            ("unset".to_owned(), Unset::White.text().to_owned()),
+            ("shader-uv".to_owned(), self.shader_uv.text().to_owned()),
             ("emissive-exposure".to_owned(), self.emissive_exposure.to_string()),
             ("underground-view".to_owned(), self.underground_view.to_string()),
             ("fake-river-s".to_owned(), self.fake_river_s.to_string()),
-            (
-                "decals1-cutout".to_owned(),
-                match self.decals1_cutout {
-                    Decals1Cutout::Decal => "decal",
-                    Decals1Cutout::Surface => "surface",
-                }
-                .to_owned(),
-            ),
+            ("decals1-cutout".to_owned(), self.decals1_cutout.text().to_owned()),
         ]);
         match self.alpha {
             AlphaChoice::Opaque => {
-                o.insert("alpha".to_owned(), "opaque".to_owned());
+                o.insert("alpha".to_owned(), Alpha::Opaque.text().to_owned());
             }
             AlphaChoice::Mask(c) => {
-                o.insert("alpha".to_owned(), "mask".to_owned());
+                o.insert("alpha".to_owned(), Alpha::Mask.text().to_owned());
                 o.insert("alpha-cutoff".to_owned(), c.to_string());
             }
             AlphaChoice::Prelude => {
-                o.insert("alpha".to_owned(), "prelude".to_owned());
+                o.insert("alpha".to_owned(), Alpha::Prelude.text().to_owned());
             }
         }
         o
@@ -2800,21 +2861,19 @@ mod tests {
             ]
             .map(|(k, v)| (k.to_owned(), v.to_owned())),
         );
-        let err = LowerAnvilMaterial::from_options(&o).unwrap_err();
+        let err = LOWER_ANVIL_MATERIAL.instance(&o).err().unwrap();
         assert!(err.contains("decals1-cutout is required"), "{err}");
         o.insert("decals1-cutout".into(), "yes".into());
         assert!(
-            LowerAnvilMaterial::from_options(&o)
-                .unwrap_err()
-                .contains("not decal or surface")
+            LOWER_ANVIL_MATERIAL
+                .instance(&o)
+                .err()
+                .unwrap()
+                .contains("decals1-cutout=yes is none of decal or surface")
         );
-        for (v, want) in [
-            ("decal", Decals1Cutout::Decal),
-            ("surface", Decals1Cutout::Surface),
-        ] {
+        for v in ["decal", "surface"] {
             o.insert("decals1-cutout".into(), v.into());
-            let pass = LowerAnvilMaterial::from_options(&o).unwrap();
-            assert_eq!(pass.decals1_cutout, want);
+            let pass = LOWER_ANVIL_MATERIAL.instance(&o).unwrap();
             assert_eq!(pass.options()["decals1-cutout"], v);
         }
     }

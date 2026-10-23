@@ -2,10 +2,10 @@
 //! pose group of one pose, and `lower-anvil-skeleton` on it: joints with their parents, rests and the hash names, the
 //! frame conversion, the skeleton's own transform composed or refused.
 use primase_anvil::components::AnvilSkeleton;
-use primase_anvil::passes::LowerAnvilSkeleton;
+use primase_anvil::passes::LOWER_ANVIL_SKELETON;
 use primase_anvil::read::skeleton::StoredSkeleton;
 use primase_core::frame::SourceFrame;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, PassLog};
 use primase_core::skeleton::{JointId, Rest, Skeleton};
 use primase_core::{Component, World};
 
@@ -132,7 +132,7 @@ fn lowered(own: ([f32; 4], [f32; 4]), frame: SourceFrame, own_transform: &str) -
             skeleton: StoredSkeleton::parse(&skeleton(own)).expect("skeleton"),
         },
     );
-    let pass = LowerAnvilSkeleton::from_options(&Options::from([(
+    let pass = LOWER_ANVIL_SKELETON.instance(&Options::from([(
         "own-transform".to_owned(),
         own_transform.to_owned(),
     )]))?;
@@ -234,9 +234,10 @@ fn an_own_transform_replaces_the_roots_rest() {
 
 #[test]
 fn the_option_is_required() {
-    assert!(LowerAnvilSkeleton::from_options(&Options::new()).is_err());
+    assert!(LOWER_ANVIL_SKELETON.instance(&Options::new()).is_err());
     assert!(
-        LowerAnvilSkeleton::from_options(&Options::from([("own-transform".to_owned(), "x".to_owned())]))
+        LOWER_ANVIL_SKELETON
+            .instance(&Options::from([("own-transform".to_owned(), "x".to_owned())]))
             .is_err()
     );
 }

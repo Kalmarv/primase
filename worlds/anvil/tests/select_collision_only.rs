@@ -4,7 +4,7 @@
 //! ratio times its volume, sides taken at no less than the stated extent) and goes otherwise; every decision is counted and each owner listed in
 //! the log by its name; the marks and the visual placements' bounds are gone afterwards.
 use primase_anvil::components::{AnvilBounds, AnvilCollisionOnly};
-use primase_anvil::passes::{CollisionOnly, Keep, Overlap, SelectAnvilEntities};
+use primase_anvil::passes::{CollisionOnly, Keep, Overlap, SELECT_ANVIL_ENTITIES, SelectAnvilEntities};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Entity, Name, World};
 
@@ -218,16 +218,16 @@ fn the_option_is_required_and_checked() {
     let with = |extra: &[(&str, &str)]| {
         let mut p = base.to_vec();
         p.extend_from_slice(extra);
-        SelectAnvilEntities::from_options(&opts(&p))
+        SELECT_ANVIL_ENTITIES.instance(&opts(&p))
     };
-    assert!(with(&[]).unwrap_err().contains("collision-only is required"));
+    assert!(with(&[]).err().unwrap().contains("collision-only is required"));
     assert_eq!(
-        with(&[("collision-only", "keep")]).unwrap().collision_only,
-        CollisionOnly::Keep
+        with(&[("collision-only", "keep")]).unwrap().options(),
+        select(CollisionOnly::Keep).options()
     );
     assert_eq!(
-        with(&[("collision-only", "drop")]).unwrap().collision_only,
-        CollisionOnly::Drop
+        with(&[("collision-only", "drop")]).unwrap().options(),
+        select(CollisionOnly::Drop).options()
     );
     let all = [
         ("collision-only", "overlap"),
@@ -235,21 +235,22 @@ fn the_option_is_required_and_checked() {
         ("collision-only-max-ratio", "40"),
         ("collision-only-min-extent", "0.05"),
     ];
-    assert_eq!(with(&all).unwrap().collision_only, overlap(0.5));
+    assert_eq!(with(&all).unwrap().options(), select(overlap(0.5)).options());
     // each of the three is needed with overlap, and each is refused without it
     for missing in 1..4 {
         let mut some = all.to_vec();
         let (k, _) = some.remove(missing);
-        let err = with(&some).unwrap_err();
+        let err = with(&some).err().unwrap();
         assert!(err.contains(&format!("needs {k}")), "{err}");
     }
     assert!(
         with(&[("collision-only", "overlap")])
-            .unwrap_err()
+            .err()
+            .unwrap()
             .contains("needs collision-only-overlap")
     );
     for (k, v) in &all[1..] {
-        let err = with(&[("collision-only", "keep"), (k, v)]).unwrap_err();
+        let err = with(&[("collision-only", "keep"), (k, v)]).err().unwrap();
         assert!(err.contains("overlap only"), "{err}");
         assert!(with(&[("collision-only", "drop"), (k, v)]).is_err());
     }
@@ -272,5 +273,8 @@ fn the_option_is_required_and_checked() {
     assert!(with(&[("collision-only", "sometimes")]).is_err());
     // the options round-trip
     let p = with(&all).unwrap();
-    assert_eq!(SelectAnvilEntities::from_options(&p.options()).unwrap(), p);
+    assert_eq!(
+        SELECT_ANVIL_ENTITIES.instance(&p.options()).unwrap().options(),
+        p.options()
+    );
 }

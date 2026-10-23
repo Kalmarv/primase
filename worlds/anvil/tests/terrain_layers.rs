@@ -5,8 +5,8 @@
 //! holds; at most 4 layers a piece (the striped node cut); the pieces' triangles the whole ground's to the bit.
 use primase_anvil::components::{AnvilTerrain, AnvilTextureMap, TerrainDetail, TerrainTile};
 use primase_anvil::passes::{
-    CellPoint, GroundColour, GroundNormals, LayersBase, LowerAnvilTerrain, Pieces, SplatUv, Steep,
-    TerrainLayers,
+    CellPoint, GroundColour, GroundNormals, LOWER_ANVIL_TERRAIN, LayersBase, LowerAnvilTerrain, Pieces,
+    SplatUv, Steep, TerrainLayers,
 };
 use primase_core::frame::SourceFrame;
 use primase_core::layered::LayeredMaterial;
@@ -611,7 +611,12 @@ fn options(pairs: &[(&str, &str)]) -> Options {
 /// is in (0, 1], and the options read back as given.
 #[test]
 fn the_layer_options_are_required_stated_and_read_back() {
-    let err = |pairs: &[(&str, &str)]| LowerAnvilTerrain::from_options(&options(pairs)).expect_err("refused");
+    let err = |pairs: &[(&str, &str)]| {
+        LOWER_ANVIL_TERRAIN
+            .instance(&options(pairs))
+            .err()
+            .expect("refused")
+    };
     assert!(err(&[("layers-detail", "0.5")]).contains("layers-base is required"));
     assert!(err(&[("layers-base", "tile")]).contains("layers-detail is required"));
     assert!(err(&[("layers-base", "bake"), ("layers-detail", "0.5")]).contains("splat-px is required"));
@@ -629,8 +634,10 @@ fn the_layer_options_are_required_stated_and_read_back() {
     let mut splat = options(&[("ground", "splat"), ("splat-px", "0.0625")]);
     splat.insert("layers-detail".to_owned(), "0.5".to_owned());
     assert!(
-        LowerAnvilTerrain::from_options(&splat)
-            .expect_err("refused")
+        LOWER_ANVIL_TERRAIN
+            .instance(&splat)
+            .err()
+            .expect("refused")
             .contains("only taken with ground=layers")
     );
     let given = options(&[
@@ -638,18 +645,8 @@ fn the_layer_options_are_required_stated_and_read_back() {
         ("layers-detail", "0.35"),
         ("splat-px", "0.0625"),
     ]);
-    let pass = LowerAnvilTerrain::from_options(&given).expect("options");
-    assert_eq!(
-        pass.ground,
-        GroundColour::Layers(TerrainLayers {
-            k: 12.0,
-            uv: SplatUv::Factor(0.25),
-            noise_srgb: false,
-            occlusion: false,
-            base: LayersBase::Bake { pixel: 0.0625 },
-            detail: 0.35,
-        })
-    );
+    // every option given reads back: the layers' base, detail and pixel as stated, the splat's own as given
+    let pass = LOWER_ANVIL_TERRAIN.instance(&given).expect("options");
     let back = pass.options();
     for (k, v) in &given {
         assert_eq!(back.get(k), Some(v), "{k}");

@@ -10,7 +10,7 @@ use primase_anvil::components::{
 };
 use primase_anvil::passes::{
     LowerAnvilClips, LowerAnvilLods, LowerAnvilMesh, LowerAnvilRig, LowerAnvilSkin, OwnTransform,
-    SelectAnvilClips, Static16Normal,
+    SELECT_ANVIL_CLIPS, SelectAnvilClips, Static16Normal,
 };
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::listing::Kind;
@@ -84,17 +84,11 @@ fn world(c: Vec<ClipCandidate>) -> (World, Entity, [Entity; 2]) {
 }
 
 fn select(w: &mut World, o: &Options) -> Result<RunReport, String> {
-    let pass = SelectAnvilClips::from_options(o)?;
+    let pass = SELECT_ANVIL_CLIPS.instance(o)?;
     let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
     let mut report = RunReport::default();
     manager
-        .run(
-            w,
-            &Pipeline {
-                passes: vec![Box::new(pass)],
-            },
-            &mut report,
-        )
+        .run(w, &Pipeline { passes: vec![pass] }, &mut report)
         .map_err(|e| format!("{e:#}"))?;
     Ok(report)
 }
@@ -187,13 +181,16 @@ fn a_rig_with_no_occurrence_gets_no_clips() {
 
 #[test]
 fn both_options_are_required_and_checked() {
-    assert!(SelectAnvilClips::from_options(&Options::new()).is_err());
+    assert!(SELECT_ANVIL_CLIPS.instance(&Options::new()).is_err());
     assert!(
-        SelectAnvilClips::from_options(&Options::from([("min-coverage".to_owned(), "0.5".to_owned())]))
+        SELECT_ANVIL_CLIPS
+            .instance(&Options::from([("min-coverage".to_owned(), "0.5".to_owned())]))
             .is_err()
     );
     assert!(
-        SelectAnvilClips::from_options(&Options::from([("max-clips".to_owned(), "3".to_owned())])).is_err()
+        SELECT_ANVIL_CLIPS
+            .instance(&Options::from([("max-clips".to_owned(), "3".to_owned())]))
+            .is_err()
     );
     for (f, n) in [
         ("0", "3"),
@@ -204,12 +201,12 @@ fn both_options_are_required_and_checked() {
         ("0.5", "-1"),
         ("0.5", "2.5"),
     ] {
-        assert!(SelectAnvilClips::from_options(&options(f, n)).is_err(), "{f} {n}");
+        assert!(SELECT_ANVIL_CLIPS.instance(&options(f, n)).is_err(), "{f} {n}");
     }
     let mut extra = options("0.5", "3");
     extra.insert("cap".to_owned(), "3".to_owned());
-    assert!(SelectAnvilClips::from_options(&extra).is_err());
-    assert!(SelectAnvilClips::from_options(&options("0.5", "3")).is_ok());
+    assert!(SELECT_ANVIL_CLIPS.instance(&extra).is_err());
+    assert!(SELECT_ANVIL_CLIPS.instance(&options("0.5", "3")).is_ok());
 }
 
 /// Real Entities that place a rig, given the library's clips: the candidates measured per rig, then the clips chosen

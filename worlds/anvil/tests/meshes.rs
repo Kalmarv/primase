@@ -5,14 +5,14 @@ use std::fs::File;
 use std::path::Path;
 
 use primase_anvil::components::AnvilMesh;
-use primase_anvil::passes::{LowerAnvilMesh, Static16Normal};
+use primase_anvil::passes::{LOWER_ANVIL_MESH, LowerAnvilMesh, Static16Normal};
 use primase_anvil::read::data::{Resource, read_entry};
 use primase_anvil::read::forge::Forge;
 use primase_anvil::read::mesh::{self, StoredMesh};
 use primase_anvil::read::meshes::{Error, read_meshes};
 use primase_anvil::read::shapes::MAX_RECORD;
 use primase_core::frame::SourceFrame;
-use primase_core::pass::{Options, PassManager, PassRegistry, Pipeline, RunReport};
+use primase_core::pass::{Options, Pass, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Instance, Mesh, Semantic, Stream, World};
 use primase_testdata::{Game, install_file};
 
@@ -281,20 +281,17 @@ fn the_lowering_states_its_one_choice() {
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect()
     };
-    assert_eq!(
-        LowerAnvilMesh::from_options(&o(&[("static16-normal", "p")])),
-        Ok(LowerAnvilMesh {
-            static16_normal: Static16Normal::P
-        })
-    );
-    assert_eq!(
-        LowerAnvilMesh::from_options(&o(&[("static16-normal", "omit")])).map(|l| l.static16_normal),
-        Ok(Static16Normal::Omit)
-    );
-    assert!(LowerAnvilMesh::from_options(&o(&[])).is_err());
-    assert!(LowerAnvilMesh::from_options(&o(&[("static16-normal", "q")])).is_err());
+    let make = |kv: &[(&str, &str)]| LOWER_ANVIL_MESH.instance(&o(kv));
+    for (word, static16_normal) in [("p", Static16Normal::P), ("omit", Static16Normal::Omit)] {
+        assert_eq!(
+            make(&[("static16-normal", word)]).unwrap().options(),
+            LowerAnvilMesh { static16_normal }.options()
+        );
+    }
+    assert!(make(&[]).is_err());
+    assert!(make(&[("static16-normal", "q")]).is_err());
     // the readings the engine's declarations settled are no longer options
-    assert!(LowerAnvilMesh::from_options(&o(&[("static16-normal", "p"), ("uv-divisor", "2048")])).is_err());
+    assert!(make(&[("static16-normal", "p"), ("uv-divisor", "2048")]).is_err());
 }
 
 /// The entry's body parsed as stored.

@@ -30,7 +30,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, Wrap};
 use primase_core::{
     ColorSpace, Component, Instance, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture,
@@ -52,6 +52,10 @@ pub enum Shore {
     None,
 }
 
+impl Choice for Shore {
+    const VALUES: &'static [(&'static str, Self)] = &[("coverage", Shore::Coverage), ("none", Shore::None)];
+}
+
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerAnvilWater {
@@ -67,20 +71,10 @@ pub struct LowerAnvilWater {
 }
 
 impl LowerAnvilWater {
-    /// From its options: `depth=L:D,...` (every level a lake's patches have), `colour-max`, `roughness`, `shore`, all
-    /// required.
-    pub fn from_options(o: &Options) -> Result<LowerAnvilWater, String> {
-        let known = ["rect", "depth", "river-depth", "colour-max", "roughness", "shore"];
-        if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let usage = "rect=x0,y0,x1,y1, depth=LEVEL:METRES,..., river-depth=METRES, colour-max=X, roughness=R, shore=coverage|none";
-        let get = |k: &str| {
-            o.get(k)
-                .map(String::as_str)
-                .ok_or_else(|| format!("{k} is required: {usage}"))
-        };
-        let rect: Vec<f64> = get("rect")?
+    /// From its declared options.
+    fn from_given(g: &Given) -> Result<LowerAnvilWater, String> {
+        let rect: Vec<f64> = g
+            .required("rect")
             .split(',')
             .map(|v| v.trim().parse::<f64>())
             .collect::<Result<_, _>>()
@@ -92,7 +86,7 @@ impl LowerAnvilWater {
             return Err(format!("rect {rect:?}: finite, x0 < x1 and y0 < y1"));
         }
         let mut depth = BTreeMap::new();
-        for item in get("depth")?.split(',') {
+        for item in g.required("depth").split(',') {
             let (level, metres) = item
                 .split_once(':')
                 .ok_or_else(|| format!("depth item {item:?} is not LEVEL:METRES"))?;
@@ -107,7 +101,7 @@ impl LowerAnvilWater {
             depth.insert(level, metres);
         }
         let number = |k: &str| -> Result<f64, String> {
-            let v: f64 = get(k)?.parse().map_err(|_| format!("{k} is a number"))?;
+            let v: f64 = g.required(k).parse().map_err(|_| format!("{k} is a number"))?;
             if v.is_finite() && v >= 0.0 {
                 Ok(v)
             } else {
@@ -126,21 +120,46 @@ impl LowerAnvilWater {
         if roughness > 1.0 {
             return Err(format!("roughness {roughness}: at most 1"));
         }
-        let shore = match get("shore")? {
-            "coverage" => Shore::Coverage,
-            "none" => Shore::None,
-            v => return Err(format!("shore={v} is not coverage or none")),
-        };
         Ok(LowerAnvilWater {
             rect,
             depth,
             river_depth,
             colour_max,
             roughness: roughness as f32,
-            shore,
+            shore: g.choice("shore"),
         })
     }
 }
+
+/// `lower-anvil-water`'s declaration ([`primase_core::pass::PassRegistry::add`]): each value the game doesn't
+/// establish is the program's, every option required.
+pub const LOWER_ANVIL_WATER: PassSpec = PassSpec {
+    name: "lower-anvil-water",
+    options: &[
+        OptionSpec::required(
+            "rect",
+            "-64,-64,64,64",
+            "x0,y0,x1,y1 in source units, finite, x0 < x1 and y0 < y1: the patches drawn",
+        ),
+        OptionSpec::required(
+            "depth",
+            "3:2,4:1,5:0.5,6:0.5",
+            "LEVEL:METRES,...: a lake's depth at each level its patches have, above 0",
+        ),
+        OptionSpec::required("river-depth", "1", "metres, above 0: a river's depth"),
+        OptionSpec::required(
+            "colour-max",
+            "0.15",
+            "0 to 1: the greatest channel of the water colour (its reflectance at 1 m)",
+        ),
+        OptionSpec::required("roughness", "0.05", "0 to 1: the water's roughness"),
+        OptionSpec::choice::<Shore>(
+            "shore",
+            "the opacity times the Params atlas's coverage (its alpha), or not faded",
+        ),
+    ],
+    make: |g| Ok(Box::new(LowerAnvilWater::from_given(g)?)),
+};
 
 /// The water texture of `params` (its RGBA8 texels, `width` wide) at depth `d`: colour the type's hue, alpha its
 /// opacity (times the coverage where `shore` says).
@@ -199,14 +218,7 @@ impl Pass for LowerAnvilWater {
             ("river-depth".to_owned(), self.river_depth.to_string()),
             ("colour-max".to_owned(), self.colour_max.to_string()),
             ("roughness".to_owned(), self.roughness.to_string()),
-            (
-                "shore".to_owned(),
-                match self.shore {
-                    Shore::Coverage => "coverage",
-                    Shore::None => "none",
-                }
-                .to_owned(),
-            ),
+            ("shore".to_owned(), self.shore.text().to_owned()),
         ])
     }
     // no `requires`: a world may hold lakes, river Materials, both or neither

@@ -32,7 +32,7 @@
 //! Left out, counted: the pose groups (SkeletonPoses of SkeletonPoseBones, kept as bytes), the IKData, the Reflex
 //! constraints, the global transforms (derivable from the local ones), each bone's mirror, flags, kinds and hash lists.
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::skeleton::{Joint, JointId, Rest, Skeleton};
 use primase_core::{Component, World};
 
@@ -51,20 +51,50 @@ pub enum OwnTransform {
     Ignore,
 }
 
+impl Choice for OwnTransform {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("replace", OwnTransform::Replace),
+        ("compose", OwnTransform::Compose),
+        ("refuse", OwnTransform::Refuse),
+        ("ignore", OwnTransform::Ignore),
+    ];
+}
+
+/// `own-transform`, as `lower-anvil-skeleton` and `lower-anvil-rig` take it.
+const OWN_TRANSFORM: [OptionSpec; 1] = [OptionSpec::choice::<OwnTransform>(
+    "own-transform",
+    "a skeleton's own position and rotation: the root's rest, composed in front of it, refused unless the \
+     identity, or left out",
+)];
+
+/// `lower-anvil-skeleton`'s declaration ([`primase_core::pass::PassRegistry::add`]): what becomes of a skeleton's own
+/// transform is the program's.
+pub const LOWER_ANVIL_SKELETON: PassSpec = PassSpec {
+    name: "lower-anvil-skeleton",
+    options: &OWN_TRANSFORM,
+    make: |g| {
+        Ok(Box::new(LowerAnvilSkeleton {
+            own_transform: g.choice("own-transform"),
+        }))
+    },
+};
+
+/// `lower-anvil-rig`'s declaration ([`primase_core::pass::PassRegistry::add`]): as `lower-anvil-skeleton`'s.
+pub const LOWER_ANVIL_RIG: PassSpec = PassSpec {
+    name: "lower-anvil-rig",
+    options: &OWN_TRANSFORM,
+    make: |g| {
+        Ok(Box::new(LowerAnvilRig {
+            own_transform: g.choice("own-transform"),
+        }))
+    },
+};
+
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LowerAnvilSkeleton {
     /// What is done with a skeleton's own position and rotation.
     pub own_transform: OwnTransform,
-}
-
-impl LowerAnvilSkeleton {
-    /// From its options: `own-transform=replace|compose|refuse|ignore`, required.
-    pub fn from_options(o: &Options) -> Result<LowerAnvilSkeleton, String> {
-        Ok(LowerAnvilSkeleton {
-            own_transform: own_transform_option(o)?,
-        })
-    }
 }
 
 type Quat = [f64; 4];
@@ -146,42 +176,12 @@ fn joints_of(
         .collect()
 }
 
-/// The option's value for `own`.
-fn own_transform_name(own: OwnTransform) -> &'static str {
-    match own {
-        OwnTransform::Replace => "replace",
-        OwnTransform::Compose => "compose",
-        OwnTransform::Refuse => "refuse",
-        OwnTransform::Ignore => "ignore",
-    }
-}
-
-/// The `own-transform` option, required.
-fn own_transform_option(o: &Options) -> Result<OwnTransform, String> {
-    if let Some(k) = o.keys().find(|k| k.as_str() != "own-transform") {
-        return Err(format!("unknown option {k}"));
-    }
-    match o.get("own-transform").map(String::as_str) {
-        Some("replace") => Ok(OwnTransform::Replace),
-        Some("compose") => Ok(OwnTransform::Compose),
-        Some("refuse") => Ok(OwnTransform::Refuse),
-        Some("ignore") => Ok(OwnTransform::Ignore),
-        Some(v) => Err(format!(
-            "own-transform={v} is not replace, compose, refuse or ignore"
-        )),
-        None => Err("own-transform is required: own-transform=replace|compose|refuse|ignore".to_owned()),
-    }
-}
-
 impl Pass for LowerAnvilSkeleton {
     fn name(&self) -> &'static str {
         "lower-anvil-skeleton"
     }
     fn options(&self) -> Options {
-        Options::from([(
-            "own-transform".to_owned(),
-            own_transform_name(self.own_transform).to_owned(),
-        )])
+        Options::from([("own-transform".to_owned(), self.own_transform.text().to_owned())])
     }
     fn requires(&self) -> &[&'static str] {
         &[AnvilSkeleton::NAME]
@@ -257,24 +257,12 @@ pub struct LowerAnvilRig {
     pub own_transform: OwnTransform,
 }
 
-impl LowerAnvilRig {
-    /// From its options: `own-transform=replace|compose|refuse|ignore`, required.
-    pub fn from_options(o: &Options) -> Result<LowerAnvilRig, String> {
-        Ok(LowerAnvilRig {
-            own_transform: own_transform_option(o)?,
-        })
-    }
-}
-
 impl Pass for LowerAnvilRig {
     fn name(&self) -> &'static str {
         "lower-anvil-rig"
     }
     fn options(&self) -> Options {
-        Options::from([(
-            "own-transform".to_owned(),
-            own_transform_name(self.own_transform).to_owned(),
-        )])
+        Options::from([("own-transform".to_owned(), self.own_transform.text().to_owned())])
     }
     fn requires(&self) -> &[&'static str] {
         &[AnvilRig::NAME]

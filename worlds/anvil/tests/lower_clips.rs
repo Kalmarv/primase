@@ -6,8 +6,8 @@ use primase_anvil::components::{
     AnvilClip, AnvilClipBinding, StoredAnimation, StoredEvents, StoredTrack, Times,
 };
 use primase_anvil::passes::{
-    LowerAnvilClips, LowerAnvilLods, LowerAnvilMesh, LowerAnvilRig, LowerAnvilSkin, OwnTransform,
-    Static16Normal,
+    LOWER_ANVIL_CLIPS, LowerAnvilClips, LowerAnvilLods, LowerAnvilMesh, LowerAnvilRig, LowerAnvilSkin,
+    OwnTransform, Static16Normal,
 };
 use primase_anvil::read::archive::Archive;
 use primase_anvil::read::listing::Kind;
@@ -186,14 +186,14 @@ fn the_interpolation_and_extrapolation_are_the_programs_and_required() {
             .iter()
             .all(|c| c.interpolation == Interpolation::Step)
     );
-    assert!(LowerAnvilClips::from_options(&Options::new()).is_err());
+    assert!(LOWER_ANVIL_CLIPS.instance(&Options::new()).is_err());
     let one = Options::from([("interpolation".to_owned(), "linear".to_owned())]);
-    assert!(LowerAnvilClips::from_options(&one).is_err());
+    assert!(LOWER_ANVIL_CLIPS.instance(&one).is_err());
     let bad = Options::from([
         ("interpolation".to_owned(), "cubic".to_owned()),
         ("extrapolation".to_owned(), "hold".to_owned()),
     ]);
-    assert!(LowerAnvilClips::from_options(&bad).is_err());
+    assert!(LOWER_ANVIL_CLIPS.instance(&bad).is_err());
 }
 
 #[test]

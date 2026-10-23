@@ -47,10 +47,10 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Instance, Name, Transform, World};
 
-use super::{CellPoint, TERRAIN_CORE, TERRAIN_TILE};
+use super::{CellPoint, OFFSET, RECT, SAMPLE, TERRAIN_CORE, TERRAIN_TILE};
 use crate::components::{
     AnvilGrass, AnvilGrassModel, AnvilTerrain, AnvilTerrainGroups, GroupTile, TerrainTile,
 };
@@ -62,6 +62,46 @@ pub enum Density {
     PerSample,
     /// A count per square metre.
     PerSquareMetre,
+}
+
+impl Choice for Density {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("per-sample", Density::PerSample),
+        ("per-square-metre", Density::PerSquareMetre),
+    ];
+}
+
+/// Options `tiling` and `scale`: the rule's, or one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuleOrOne {
+    Rule,
+    One,
+}
+
+impl Choice for RuleOrOne {
+    const VALUES: &'static [(&'static str, Self)] = &[("rule", RuleOrOne::Rule), ("one", RuleOrOne::One)];
+}
+
+/// Options `height-scale` and `tilt`: the rule's, or none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuleOrNone {
+    Rule,
+    None,
+}
+
+impl Choice for RuleOrNone {
+    const VALUES: &'static [(&'static str, Self)] = &[("rule", RuleOrNone::Rule), ("none", RuleOrNone::None)];
+}
+
+/// Option `normal`: a plant's up the ground's normal, or up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlantUp {
+    Terrain,
+    Up,
+}
+
+impl Choice for PlantUp {
+    const VALUES: &'static [(&'static str, Self)] = &[("terrain", PlantUp::Terrain), ("up", PlantUp::Up)];
 }
 
 /// See the module documentation.
@@ -87,34 +127,10 @@ pub struct LowerAnvilGrass {
 }
 
 impl LowerAnvilGrass {
-    /// From its options, all required (see the module documentation).
-    pub fn from_options(o: &Options) -> Result<LowerAnvilGrass, String> {
-        let known = [
-            "rect",
-            "range",
-            "offset",
-            "sample",
-            "seed",
-            "density",
-            "tiling",
-            "scale",
-            "height-scale",
-            "tilt",
-            "normal",
-            "max-plants",
-        ];
-        if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let usage = "rect=x0,y0,x1,y1, range=METRES, offset=METRES, sample=corner|centre, seed=N, \
-                     density=per-sample|per-square-metre, tiling=rule|one, scale=rule|one, height-scale=rule|none, \
-                     tilt=none|rule, normal=terrain|up, max-plants=N";
-        let get = |k: &str| {
-            o.get(k)
-                .map(String::as_str)
-                .ok_or_else(|| format!("{k} is required: {usage}"))
-        };
-        let rect: Vec<f64> = get("rect")?
+    /// From its declared options.
+    fn from_given(g: &Given) -> Result<LowerAnvilGrass, String> {
+        let rect: Vec<f64> = g
+            .required("rect")
             .split(',')
             .map(|v| v.trim().parse::<f64>())
             .collect::<Result<_, _>>()
@@ -126,7 +142,7 @@ impl LowerAnvilGrass {
             return Err(format!("rect {rect:?}: finite, x0 < x1 and y0 < y1"));
         }
         let finite = |k: &str| -> Result<f64, String> {
-            let v: f64 = get(k)?.parse().map_err(|_| format!("{k} is a number"))?;
+            let v: f64 = g.required(k).parse().map_err(|_| format!("{k} is a number"))?;
             if v.is_finite() {
                 Ok(v)
             } else {
@@ -135,32 +151,12 @@ impl LowerAnvilGrass {
         };
         let range = finite("range")?;
         let offset = finite("offset")?;
-        let sample = match get("sample")? {
-            "corner" => CellPoint::Corner,
-            "centre" => CellPoint::Centre,
-            v => return Err(format!("sample={v} is not corner or centre")),
-        };
-        let seed: u64 = get("seed")?
+        let seed: u64 = g
+            .required("seed")
             .parse()
             .map_err(|_| "seed is a whole number".to_owned())?;
-        let density = match get("density")? {
-            "per-sample" => Density::PerSample,
-            "per-square-metre" => Density::PerSquareMetre,
-            v => return Err(format!("density={v} is not per-sample or per-square-metre")),
-        };
-        let choice = |k: &str, yes: &str, no: &str| -> Result<bool, String> {
-            match get(k)? {
-                v if v == yes => Ok(true),
-                v if v == no => Ok(false),
-                v => Err(format!("{k}={v} is not {yes} or {no}")),
-            }
-        };
-        let tiling = choice("tiling", "rule", "one")?;
-        let scale = choice("scale", "rule", "one")?;
-        let height_scale = choice("height-scale", "rule", "none")?;
-        let tilt = choice("tilt", "rule", "none")?;
-        let normal_terrain = choice("normal", "terrain", "up")?;
-        let max_plants: u64 = get("max-plants")?
+        let max_plants: u64 = g
+            .required("max-plants")
             .parse()
             .map_err(|_| "max-plants is a whole number".to_owned())?;
         if max_plants == 0 {
@@ -170,17 +166,58 @@ impl LowerAnvilGrass {
             rect,
             range,
             offset,
-            sample,
+            sample: g.choice("sample"),
             seed,
-            density,
-            tiling,
-            scale,
-            height_scale,
-            tilt,
-            normal_terrain,
+            density: g.choice("density"),
+            tiling: g.choice::<RuleOrOne>("tiling") == RuleOrOne::Rule,
+            scale: g.choice::<RuleOrOne>("scale") == RuleOrOne::Rule,
+            height_scale: g.choice::<RuleOrNone>("height-scale") == RuleOrNone::Rule,
+            tilt: g.choice::<RuleOrNone>("tilt") == RuleOrNone::Rule,
+            normal_terrain: g.choice::<PlantUp>("normal") == PlantUp::Terrain,
             max_plants,
         })
     }
+}
+
+/// `lower-anvil-grass`' declaration ([`primase_core::pass::PassRegistry::add`]): the plants are not stored, so every
+/// choice of the stand-in scatter is the program's.
+pub const LOWER_ANVIL_GRASS: PassSpec = PassSpec {
+    name: "lower-anvil-grass",
+    options: &[
+        RECT,
+        OptionSpec::required(
+            "range",
+            "1",
+            "the terrain's height range, finite: as lower-anvil-terrain's",
+        ),
+        OFFSET,
+        SAMPLE,
+        OptionSpec::required("seed", "0", "the scatter's seed, a whole number"),
+        OptionSpec::choice::<Density>(
+            "density",
+            "a rule's Density as a probability per candidate and sample, or a count per square metre",
+        ),
+        OptionSpec::choice::<RuleOrOne>(
+            "tiling",
+            "a rule's TilingLogCount multiplies its candidates (4^count), or one",
+        ),
+        OptionSpec::choice::<RuleOrOne>("scale", "a rule's scale range applies, or one"),
+        OptionSpec::choice::<RuleOrNone>("height-scale", "a rule's height scale applies, or none"),
+        OptionSpec::choice::<RuleOrNone>("tilt", "a rule's tilt applies, or none"),
+        OptionSpec::choice::<PlantUp>("normal", "a plant's up follows the ground's normal, or is up"),
+        OptionSpec::required("max-plants", "1000000", "the most plants made, at least 1"),
+    ],
+    make: |g| Ok(Box::new(LowerAnvilGrass::from_given(g)?)),
+};
+
+/// `tiling`'s and `scale`'s word for whether the rule's applies.
+fn rule_or_one(rule: bool) -> &'static str {
+    if rule { RuleOrOne::Rule } else { RuleOrOne::One }.text()
+}
+
+/// `height-scale`'s and `tilt`'s word for whether the rule's applies.
+fn rule_or_none(rule: bool) -> &'static str {
+    if rule { RuleOrNone::Rule } else { RuleOrNone::None }.text()
 }
 
 /// splitmix64's output function.
@@ -300,33 +337,30 @@ impl Pass for LowerAnvilGrass {
     }
     fn options(&self) -> Options {
         let [x0, y0, x1, y1] = self.rect;
-        let pick = |b: bool, yes: &str, no: &str| if b { yes } else { no }.to_owned();
         Options::from([
             ("rect".to_owned(), format!("{x0},{y0},{x1},{y1}")),
             ("range".to_owned(), self.range.to_string()),
             ("offset".to_owned(), self.offset.to_string()),
-            (
-                "sample".to_owned(),
-                match self.sample {
-                    CellPoint::Corner => "corner",
-                    CellPoint::Centre => "centre",
-                }
-                .to_owned(),
-            ),
+            ("sample".to_owned(), self.sample.text().to_owned()),
             ("seed".to_owned(), self.seed.to_string()),
+            ("density".to_owned(), self.density.text().to_owned()),
+            ("tiling".to_owned(), rule_or_one(self.tiling).to_owned()),
+            ("scale".to_owned(), rule_or_one(self.scale).to_owned()),
             (
-                "density".to_owned(),
-                match self.density {
-                    Density::PerSample => "per-sample",
-                    Density::PerSquareMetre => "per-square-metre",
+                "height-scale".to_owned(),
+                rule_or_none(self.height_scale).to_owned(),
+            ),
+            ("tilt".to_owned(), rule_or_none(self.tilt).to_owned()),
+            (
+                "normal".to_owned(),
+                if self.normal_terrain {
+                    PlantUp::Terrain
+                } else {
+                    PlantUp::Up
                 }
+                .text()
                 .to_owned(),
             ),
-            ("tiling".to_owned(), pick(self.tiling, "rule", "one")),
-            ("scale".to_owned(), pick(self.scale, "rule", "one")),
-            ("height-scale".to_owned(), pick(self.height_scale, "rule", "none")),
-            ("tilt".to_owned(), pick(self.tilt, "rule", "none")),
-            ("normal".to_owned(), pick(self.normal_terrain, "terrain", "up")),
             ("max-plants".to_owned(), self.max_plants.to_string()),
         ])
     }

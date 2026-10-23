@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use primase_core::clip::{
     Channel, Clip, ClipBinding, ClipTarget, Extrapolation, Interpolation, Property, RootMotion, RootSpace,
 };
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::rig::RigInstance;
 use primase_core::skeleton::{JointId, Rest, Skeleton};
 use primase_core::{Component, Entity, World};
@@ -38,33 +38,52 @@ pub struct LowerAnvilClips {
     pub extrapolation: Extrapolation,
 }
 
-impl LowerAnvilClips {
-    /// From its options, both required.
-    pub fn from_options(o: &Options) -> Result<LowerAnvilClips, String> {
-        if let Some(k) = o
-            .keys()
-            .find(|k| !["interpolation", "extrapolation"].contains(&k.as_str()))
-        {
-            return Err(format!("unknown option {k}"));
-        }
-        let interpolation = match o.get("interpolation").map(String::as_str) {
-            Some("linear") => Interpolation::Linear,
-            Some("step") => Interpolation::Step,
-            Some(v) => return Err(format!("interpolation={v} is not linear or step")),
-            None => return Err("interpolation is required: interpolation=linear|step".to_owned()),
-        };
-        let extrapolation = match o.get("extrapolation").map(String::as_str) {
-            Some("hold") => Extrapolation::Hold,
-            Some("loop") => Extrapolation::Loop,
-            Some(v) => return Err(format!("extrapolation={v} is not hold or loop")),
-            None => return Err("extrapolation is required: extrapolation=hold|loop".to_owned()),
-        };
-        Ok(LowerAnvilClips {
-            interpolation,
-            extrapolation,
-        })
-    }
+/// Option `interpolation`: between keys, linearly or stepped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Between {
+    Linear,
+    Step,
 }
+
+impl Choice for Between {
+    const VALUES: &'static [(&'static str, Self)] = &[("linear", Between::Linear), ("step", Between::Step)];
+}
+
+/// Option `extrapolation`: outside the keys, held or looped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outside {
+    Hold,
+    Loop,
+}
+
+impl Choice for Outside {
+    const VALUES: &'static [(&'static str, Self)] = &[("hold", Outside::Hold), ("loop", Outside::Loop)];
+}
+
+/// `lower-anvil-clips`' declaration ([`primase_core::pass::PassRegistry::add`]): the engine's interpolation and
+/// extrapolation aren't read, so the program states both.
+pub const LOWER_ANVIL_CLIPS: PassSpec = PassSpec {
+    name: "lower-anvil-clips",
+    options: &[
+        OptionSpec::choice::<Between>("interpolation", "between keys: linear, or the key before held"),
+        OptionSpec::choice::<Outside>(
+            "extrapolation",
+            "outside the keys: the end keys held, or the clip looped",
+        ),
+    ],
+    make: |g| {
+        Ok(Box::new(LowerAnvilClips {
+            interpolation: match g.choice::<Between>("interpolation") {
+                Between::Linear => Interpolation::Linear,
+                Between::Step => Interpolation::Step,
+            },
+            extrapolation: match g.choice::<Outside>("extrapolation") {
+                Outside::Hold => Extrapolation::Hold,
+                Outside::Loop => Extrapolation::Loop,
+            },
+        }))
+    },
+};
 
 /// A root-motion curve: its interpolation, key times and flattened values.
 type Curve = (Interpolation, Vec<f32>, Vec<f32>);
@@ -180,17 +199,19 @@ impl Pass for LowerAnvilClips {
             (
                 "interpolation".to_owned(),
                 match self.interpolation {
-                    Interpolation::Step => "step",
-                    _ => "linear",
+                    Interpolation::Step => Between::Step,
+                    _ => Between::Linear,
                 }
+                .text()
                 .to_owned(),
             ),
             (
                 "extrapolation".to_owned(),
                 match self.extrapolation {
-                    Extrapolation::Loop => "loop",
-                    Extrapolation::Hold => "hold",
+                    Extrapolation::Loop => Outside::Loop,
+                    Extrapolation::Hold => Outside::Hold,
                 }
+                .text()
                 .to_owned(),
             ),
         ])

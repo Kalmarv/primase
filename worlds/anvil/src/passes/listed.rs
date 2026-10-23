@@ -21,7 +21,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Instance, Transform, World};
 
 use crate::components::{AnvilBounds, AnvilCollisionFilter, AnvilListed};
@@ -43,21 +43,33 @@ pub struct SelectAnvilListed {
     pub coarse: Coarse,
 }
 
+/// Option `coarse`: [`Coarse`]'s kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CoarseKind {
+    Keep,
+    Drop,
+    Overlap,
+}
+
+impl Choice for CoarseKind {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("keep", CoarseKind::Keep),
+        ("drop", CoarseKind::Drop),
+        ("overlap", CoarseKind::Overlap),
+    ];
+}
+
 impl SelectAnvilListed {
-    /// From its options: `coarse` (required), and `rect` with `coarse=overlap` only (required there).
-    pub fn from_options(o: &Options) -> Result<SelectAnvilListed, String> {
-        if let Some(k) = o.keys().find(|k| !["coarse", "rect"].contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let usage = "coarse=keep|drop|overlap (overlap with rect=x0,y0,x1,y1)";
-        let coarse = match o.get("coarse").map(String::as_str) {
-            Some("keep") if !o.contains_key("rect") => Coarse::Keep,
-            Some("drop") if !o.contains_key("rect") => Coarse::Drop,
-            Some("keep" | "drop") => return Err("rect goes with coarse=overlap only".to_owned()),
-            Some("overlap") => {
-                let rect = o
-                    .get("rect")
-                    .ok_or_else(|| format!("coarse=overlap needs rect: {usage}"))?;
+    /// From its declared options: `rect` with `coarse=overlap` only, and required there.
+    fn from_given(g: &Given) -> Result<SelectAnvilListed, String> {
+        let coarse = match (g.choice::<CoarseKind>("coarse"), g.optional("rect")) {
+            (CoarseKind::Keep, None) => Coarse::Keep,
+            (CoarseKind::Drop, None) => Coarse::Drop,
+            (CoarseKind::Keep | CoarseKind::Drop, Some(_)) => {
+                return Err("rect goes with coarse=overlap only".to_owned());
+            }
+            (CoarseKind::Overlap, None) => return Err("coarse=overlap needs rect".to_owned()),
+            (CoarseKind::Overlap, Some(rect)) => {
                 let v: Vec<f64> = rect
                     .split(',')
                     .map(|v| {
@@ -74,12 +86,28 @@ impl SelectAnvilListed {
                 }
                 Coarse::Overlap([x0, y0, x1, y1])
             }
-            Some(v) => return Err(format!("coarse={v}: keep, drop or overlap")),
-            None => return Err(format!("coarse is required: {usage}")),
         };
         Ok(SelectAnvilListed { coarse })
     }
 }
+
+/// `select-anvil-listed`'s declaration ([`primase_core::pass::PassRegistry::add`]): what becomes of what only a coarser
+/// level lists is the program's.
+pub const SELECT_ANVIL_LISTED: PassSpec = PassSpec {
+    name: "select-anvil-listed",
+    options: &[
+        OptionSpec::choice::<CoarseKind>(
+            "coarse",
+            "the placements only a coarser level lists kept, dropped, or kept where they reach rect",
+        ),
+        OptionSpec::optional(
+            "rect",
+            "-64,-64,64,64",
+            "x0,y0,x1,y1 on the game's ground axes (metres), finite, x0 < x1 and y0 < y1 (coarse=overlap)",
+        ),
+    ],
+    make: |g| Ok(Box::new(SelectAnvilListed::from_given(g)?)),
+};
 
 impl Pass for SelectAnvilListed {
     fn name(&self) -> &'static str {
@@ -87,10 +115,10 @@ impl Pass for SelectAnvilListed {
     }
     fn options(&self) -> Options {
         match self.coarse {
-            Coarse::Keep => Options::from([("coarse".to_owned(), "keep".to_owned())]),
-            Coarse::Drop => Options::from([("coarse".to_owned(), "drop".to_owned())]),
+            Coarse::Keep => Options::from([("coarse".to_owned(), CoarseKind::Keep.text().to_owned())]),
+            Coarse::Drop => Options::from([("coarse".to_owned(), CoarseKind::Drop.text().to_owned())]),
             Coarse::Overlap([x0, y0, x1, y1]) => Options::from([
-                ("coarse".to_owned(), "overlap".to_owned()),
+                ("coarse".to_owned(), CoarseKind::Overlap.text().to_owned()),
                 ("rect".to_owned(), format!("{x0},{y0},{x1},{y1}")),
             ]),
         }

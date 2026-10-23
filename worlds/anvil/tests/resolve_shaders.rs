@@ -10,13 +10,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_anvil::components::{AnvilMaterial, AnvilMesh};
-use primase_anvil::passes::{MESH_LAYOUT_FIELD, ResolveAnvilShaders};
+use primase_anvil::passes::{MESH_LAYOUT_FIELD, RESOLVE_ANVIL_SHADERS};
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::mesh::MESH;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, PassLog};
 use primase_core::shader::{ShaderBinding, Stage};
 use primase_core::{Component, Entity, World};
 use primase_testdata::{Game, install};
@@ -97,7 +97,8 @@ fn a_materials_vertex_stages_are_its_meshes_layouts() {
     }
     let layouts = layouts_of(&w);
     let mut log = PassLog::default();
-    ResolveAnvilShaders::from_options(&options())
+    RESOLVE_ANVIL_SHADERS
+        .instance(&options())
         .expect("options")
         .run(&mut w, &mut log)
         .expect("run");
@@ -193,7 +194,8 @@ fn a_sample_of_every_template_is_bound_or_left_with_a_reason() {
         placed.refused.len()
     );
     let mut log = PassLog::default();
-    ResolveAnvilShaders::from_options(&options())
+    RESOLVE_ANVIL_SHADERS
+        .instance(&options())
         .expect("options")
         .run(&mut w, &mut log)
         .expect("run");

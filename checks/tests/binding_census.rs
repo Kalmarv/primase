@@ -199,7 +199,7 @@ fn gta_vespucci() {
 #[test]
 fn rr_scenes() {
     use primase_anvil::components::AnvilMaterial;
-    use primase_anvil::passes::ResolveAnvilShaders;
+    use primase_anvil::passes::RESOLVE_ANVIL_SHADERS;
     use primase_anvil::read::convert::{
         AnvilOptions, AnvilReader, CellSelection, Edition, ForgeFile, GridSelection, Levels,
     };
@@ -257,7 +257,8 @@ fn rr_scenes() {
         let materials = world.iter::<AnvilMaterial>().count();
         let options = Options::from([("unset-textures".to_owned(), "white".to_owned())]);
         let mut log = PassLog::default();
-        ResolveAnvilShaders::from_options(&options)
+        RESOLVE_ANVIL_SHADERS
+            .instance(&options)
             .unwrap()
             .run(&mut world, &mut log)
             .unwrap();

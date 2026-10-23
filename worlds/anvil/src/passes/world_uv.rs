@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Component, Entity, Instance, LodForm, Lods, MaterialVariants, Mesh, Semantic, Stream, Transform, World,
 };
@@ -104,6 +104,13 @@ fn rewrite(w: &mut World, e: Entity, t: &Transform, log: &mut PassLog) -> Result
     }
     Ok(())
 }
+
+/// `lower-anvil-world-uv`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by the game's own rule.
+pub const LOWER_ANVIL_WORLD_UV: PassSpec = PassSpec {
+    name: "lower-anvil-world-uv",
+    options: &[],
+    make: |_| Ok(Box::new(LowerAnvilWorldUv)),
+};
 
 impl Pass for LowerAnvilWorldUv {
     fn name(&self) -> &'static str {
