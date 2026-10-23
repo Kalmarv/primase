@@ -29,6 +29,30 @@
 //! times. Then `b` values of the kind's width. Measured on the 9,087 clips: every block of every clip reads so, each
 //! clip's blocks ending at its body's last byte.
 //!
+//! **Key times** ([`StoredTrack::times`]): a u8 or u16 time is a whole number of 1/60 s from the clip's start (the last
+//! is the clip's `Length` times 60 on 4,617 of 5,361 u8 tracks and 1,451 of 5,011 u16 tracks of a sample of clips; the
+//! others end early); a mask's set bits are frames of 1/30 s (bit 0 is the first key's, on every one of 3,683 sampled
+//! tracks, and the last bit is `Length` times 30 on 3,063 of them).
+//!
+//! **Values** ([`StoredTrack::values`]) of the kinds read. Each decode is checked by the spike of exact matches
+//! (`1 - |dot| < 1e-6`) of first keys against the mapped bone's stored local rotation, which no other reading of the
+//! same bytes gives:
+//! - kind 9: three f32, a translation (a first key equals the mapped bone's stored local position on 25,940 of 38,122
+//!   sampled tracks, the others being animated away from rest);
+//! - kind 8: the quaternion's x, y and z as f32, w the positive root that makes it unit;
+//! - kind 3: a little-endian u32, three 10-bit fields, from the top after the index: bits 30 and 31 the index of the
+//!   component left out, bits 20 to 29, 10 to 19 and 0 to 9 the three others in the order of their components, each
+//!   `(v / 1023 * 2 - 1) / sqrt(2)`; the left-out component is the positive root that makes it unit;
+//! - kind 4: three u16 words, the low 15 bits of each a component, `(v / 32767 * 2 - 1) / sqrt(2)`, in the order of
+//!   their components; the index of the one left out is bit 15 of the first word (high) and the second (low), bit 15 of
+//!   the third its sign (0 on all 84,886 keys of the sample: a clip that sets it is refused);
+//! - kind 7: a u16 whose low 15 bits are z of a rotation about z alone, the same scale, w the positive root (bit 15 is
+//!   set on 9% of keys and makes no difference to the match: left unread).
+//!
+//! Kinds 5 and 25 (8 bytes), 21 and 22 (4), 16, 17 and 18 (1 or 2 bytes) are not read: kind 5's fields sit in 20 bits
+//! at bytes 1 to 3 and 4 to 6 (a quaternion of two comparable halves and a third whose bits lie in the first and last
+//! byte), which no smallest-three reading of the 64 bits matches.
+//!
 //! Where the `AnimTrackEvent` array isn't empty its elements' length isn't read: the `AnimTrackData` object's start
 //! is found as the first place after the count where a pointer's header with the type 0x0181EFE8 is followed by
 //! mappings of the type 0x653CAA76 for the count they state.
@@ -67,6 +91,10 @@ pub enum Error {
     Kind { track: usize, tag: u8, kind: u8 },
     #[error("animation track {track}: {why}")]
     Track { track: usize, why: String },
+    #[error("animation tracks of kind {kind}: their values aren't read")]
+    Unread { kind: u8 },
+    #[error("animation track values: {0}")]
+    Values(String),
     #[error("animation body: {0} bytes after its last track")]
     Trailing(usize),
     #[error("animation events: no AnimTrackData after the {0} events")]
@@ -87,7 +115,157 @@ pub fn value_width(kind: u8) -> Option<usize> {
     })
 }
 
+/// A track's values decoded ([`StoredTrack::values`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Values {
+    /// Kind 9: translations.
+    Vec3(Vec<[f32; 3]>),
+    /// Kinds 3, 4, 7 and 8: unit quaternions `[x, y, z, w]`, the component the format leaves out the positive root.
+    Quaternions(Vec<[f32; 4]>),
+}
+
+/// A u8 or u16 key time's unit: 60 to the second.
+pub const TIME_TICKS_PER_SECOND: f32 = 60.0;
+/// A mask frame's unit: 30 to the second.
+pub const MASK_FRAMES_PER_SECOND: f32 = 30.0;
+
+/// The unit quaternion whose components other than `omitted` are `kept` (in the order of their indices) and whose
+/// `omitted` one is the positive root that makes it unit.
+fn smallest_three(omitted: u8, kept: [f32; 3]) -> [f32; 4] {
+    let root = (1.0 - kept.iter().map(|c| c * c).sum::<f32>()).max(0.0).sqrt();
+    let [a, b, c] = kept;
+    match omitted {
+        0 => [root, a, b, c],
+        1 => [a, root, b, c],
+        2 => [a, b, root, c],
+        _ => [a, b, c, root],
+    }
+}
+
+/// A packed component of `bits` bits: `(v / (2^bits - 1) * 2 - 1) / sqrt(2)`.
+fn component(v: u16, max: f32) -> f32 {
+    (f32::from(v) / max * 2.0 - 1.0) * std::f32::consts::FRAC_1_SQRT_2
+}
+
 impl StoredTrack {
+    /// The key times in seconds, one for each key: the first key of a u8 or u16 track is at 0, the others at their
+    /// stored time over [`TIME_TICKS_PER_SECOND`]; a mask's keys are at the frames of its set bits over
+    /// [`MASK_FRAMES_PER_SECOND`].
+    pub fn times(&self) -> Vec<f32> {
+        match &self.times {
+            Times::U8(t) => std::iter::once(0.0)
+                .chain(t.iter().map(|&t| f32::from(t) / TIME_TICKS_PER_SECOND))
+                .collect(),
+            Times::U16(t) => std::iter::once(0.0)
+                .chain(t.iter().map(|&t| f32::from(t) / TIME_TICKS_PER_SECOND))
+                .collect(),
+            Times::Mask { mask, .. } => mask
+                .iter()
+                .enumerate()
+                .flat_map(|(i, byte)| (0..8usize).map(move |bit| (i, bit, *byte)))
+                .filter(|&(_, bit, byte)| (byte >> bit) & 1 == 1)
+                .filter_map(|(i, bit, _)| u16::try_from(i.saturating_mul(8).saturating_add(bit)).ok())
+                .map(|frame| f32::from(frame) / MASK_FRAMES_PER_SECOND)
+                .collect(),
+        }
+    }
+
+    /// The values of the kinds read (see the module documentation); [`Error::Unread`] for another kind.
+    pub fn values(&self) -> Result<Values, Error> {
+        let keys = usize::try_from(self.keys).unwrap_or(usize::MAX);
+        let counted = |n: usize| {
+            if n == keys {
+                Ok(())
+            } else {
+                Err(Error::Values(format!("{n} values for {keys} keys")))
+            }
+        };
+        match self.kind() {
+            9 => {
+                let v = self.values.as_chunks::<12>().0;
+                counted(v.len())?;
+                Ok(Values::Vec3(
+                    v.iter()
+                        .map(|b| {
+                            let [x0, x1, x2, x3, y0, y1, y2, y3, z0, z1, z2, z3] = *b;
+                            [
+                                f32::from_le_bytes([x0, x1, x2, x3]),
+                                f32::from_le_bytes([y0, y1, y2, y3]),
+                                f32::from_le_bytes([z0, z1, z2, z3]),
+                            ]
+                        })
+                        .collect(),
+                ))
+            }
+            8 => {
+                let v = self.values.as_chunks::<12>().0;
+                counted(v.len())?;
+                Ok(Values::Quaternions(
+                    v.iter()
+                        .map(|b| {
+                            let [x0, x1, x2, x3, y0, y1, y2, y3, z0, z1, z2, z3] = *b;
+                            let kept = [
+                                f32::from_le_bytes([x0, x1, x2, x3]),
+                                f32::from_le_bytes([y0, y1, y2, y3]),
+                                f32::from_le_bytes([z0, z1, z2, z3]),
+                            ];
+                            smallest_three(3, kept)
+                        })
+                        .collect(),
+                ))
+            }
+            3 => {
+                let v = self.values.as_chunks::<4>().0;
+                counted(v.len())?;
+                Ok(Values::Quaternions(
+                    v.iter()
+                        .map(|b| {
+                            let u = u32::from_le_bytes(*b);
+                            let field = |shift: u32| u16::try_from((u >> shift) & 1023).unwrap_or(0);
+                            let kept = [20, 10, 0].map(|s| component(field(s), 1023.0));
+                            smallest_three(u8::try_from(u >> 30).unwrap_or(3), kept)
+                        })
+                        .collect(),
+                ))
+            }
+            4 => {
+                let v = self.values.as_chunks::<6>().0;
+                counted(v.len())?;
+                v.iter()
+                    .map(|b| {
+                        let [a0, a1, b0, b1, c0, c1] = *b;
+                        let words = [
+                            u16::from_le_bytes([a0, a1]),
+                            u16::from_le_bytes([b0, b1]),
+                            u16::from_le_bytes([c0, c1]),
+                        ];
+                        let [w0, w1, w2] = words;
+                        if w2 >> 15 != 0 {
+                            return Err(Error::Values("a kind 4 value with its sign bit set".into()));
+                        }
+                        let omitted = u8::try_from(((w0 >> 15) << 1) | (w1 >> 15)).unwrap_or(3);
+                        let kept = words.map(|w| component(w & 0x7FFF, 32767.0));
+                        Ok(smallest_three(omitted, kept))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(Values::Quaternions)
+            }
+            7 => {
+                let v = self.values.as_chunks::<2>().0;
+                counted(v.len())?;
+                Ok(Values::Quaternions(
+                    v.iter()
+                        .map(|b| {
+                            let z = component(u16::from_le_bytes(*b) & 0x7FFF, 32767.0);
+                            [0.0, 0.0, z, (1.0 - z * z).max(0.0).sqrt()]
+                        })
+                        .collect(),
+                ))
+            }
+            kind => Err(Error::Unread { kind }),
+        }
+    }
+
     /// The track class: the tag over 3.
     pub fn kind(&self) -> u8 {
         self.tag.checked_div(3).unwrap_or(0)
@@ -497,6 +675,97 @@ mod tests {
             }
         );
         assert_eq!(t3.values, [1, 0, 2, 0, 3, 0]);
+    }
+
+    fn track(tag: u8, times: Times, values: &[u8]) -> StoredTrack {
+        let width = value_width(tag / 3).expect("a kind read");
+        StoredTrack {
+            tag,
+            size: 0,
+            keys: u32::try_from(values.len().checked_div(width).expect("a width")).expect("count"),
+            times,
+            values: values.to_vec(),
+        }
+    }
+
+    fn close(a: &[f32], b: &[f32], tolerance: f32) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tolerance)
+    }
+
+    #[test]
+    fn values_of_each_kind_read_decode_to_the_bones_stored_rotations() {
+        // each fixture is the first key of a track against the stored local rotation of the bone it drives, where the
+        // two agree (docs: the census of the clips)
+        let kind =
+            |tag: u8, bytes: &[u8]| match track(tag, Times::U8(vec![]), bytes).values().expect("values") {
+                Values::Quaternions(q) => q.first().copied().expect("a key"),
+                Values::Vec3(_) => panic!("vectors"),
+            };
+        // kind 4 (tag 12): the identity, and a rotation
+        assert!(close(
+            &kind(12, &[0xFF, 0xBF, 0xFF, 0xBF, 0xFF, 0x3F]),
+            &[0.0, 0.0, 0.0, 1.0],
+            1e-4
+        ));
+        assert!(close(
+            &kind(12, &[0x21, 0xBB, 0xDD, 0xC0, 0xDF, 0x4F]),
+            &[-0.053793, 0.009598, 0.175388, 0.982982],
+            1e-4
+        ));
+        assert!(close(
+            &kind(12, &[0xBF, 0x92, 0xBE, 0x92, 0xBE, 0x12]),
+            &[-0.5, -0.5, -0.5, 0.5],
+            1e-4
+        ));
+        // kind 3 (tag 9): a 10-bit rotation
+        assert!(close(
+            &kind(9, &[0x01, 0x3A, 0xA6, 0xD8]),
+            &[-0.16247, -0.156476, 0.003176, 0.974222],
+            2e-3
+        ));
+        // kind 7 (tag 21): a rotation about z
+        assert!(close(
+            &kind(21, &[0x4A, 0x36]),
+            &[0.0, 0.0, -0.107253, 0.994232],
+            1e-4
+        ));
+        // kind 8 (tag 24): x, y, z as f32
+        let half: Vec<u8> = [0.5f32, 0.5, 0.5].iter().flat_map(|v| v.to_le_bytes()).collect();
+        assert!(close(&kind(24, &half), &[0.5, 0.5, 0.5, 0.5], 1e-6));
+        // kind 9 (tag 27): a translation
+        let t: Vec<u8> = [1.0f32, 2.0, 3.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+        assert_eq!(
+            track(27, Times::U8(vec![]), &t).values().expect("values"),
+            Values::Vec3(vec![[1.0, 2.0, 3.0]])
+        );
+        // a kind not read, and a sign bit set
+        assert!(matches!(
+            track(15, Times::U8(vec![]), &[0; 8]).values(),
+            Err(Error::Unread { kind: 5 })
+        ));
+        assert!(
+            track(12, Times::U8(vec![]), &[0, 0, 0, 0, 0, 0x80])
+                .values()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn key_times_are_sixtieths_of_a_second_or_frames_of_a_thirtieth() {
+        let u8s = track(27, Times::U8(vec![30, 60]), &[0; 36]);
+        assert_eq!(u8s.times(), [0.0, 0.5, 1.0]);
+        let u16s = track(28, Times::U16(vec![120]), &[0; 24]);
+        assert_eq!(u16s.times(), [0.0, 2.0]);
+        // frames 0, 2 and 9
+        let mask = track(
+            29,
+            Times::Mask {
+                mode: 1,
+                mask: vec![0b0000_0101, 0b0000_0010],
+            },
+            &[0; 36],
+        );
+        assert_eq!(mask.times(), [0.0, 2.0 / 30.0, 9.0 / 30.0]);
     }
 
     #[test]

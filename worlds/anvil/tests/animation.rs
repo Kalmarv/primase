@@ -66,3 +66,137 @@ fn every_animation_reads_to_its_last_byte() {
         [3, 4, 5, 7, 8, 9, 16, 17, 18, 21, 22, 25].into()
     );
 }
+
+/// Every track of a kind read decodes, its quaternions are unit, its times rise within the clip, and the first key of
+/// each rotation kind equals the stored local rotation of the bone it drives where the bone has one rotation in every
+/// Skeleton that holds it (the spike that tells each decode from its alternatives).
+#[test]
+fn the_values_and_times_of_every_track_of_a_kind_read_decode() {
+    use std::collections::{HashMap, HashSet};
+
+    use primase_anvil::read::animation::Values;
+    use primase_anvil::read::listing::Kind;
+    use primase_anvil::read::skeleton::StoredSkeleton;
+
+    let Some(dir) = install(Game::Riders) else {
+        return;
+    };
+    let forges = [
+        "DataPC.forge",
+        "DataPC_patch_01.forge",
+        "DataPC_MAD_USNAT.forge",
+        "DataPC_MAD_USNAT_patch_01.forge",
+        "DataPC_MAD_WhiteRoom.forge",
+    ];
+    let mut archive = Archive::open(&forges.map(|f| dir.join(f))).expect("archive");
+    // each bone's stored local rotations over the Skeletons that hold it
+    let skeletons: Vec<At> = archive
+        .listing()
+        .filter(|(_, l)| l.kind == Some(Kind::Skeleton))
+        .map(|(forge, l)| At {
+            forge,
+            entry: l.entry,
+        })
+        .collect();
+    let mut rests: HashMap<u32, HashSet<[i32; 4]>> = HashMap::new();
+    let mut rest_of: HashMap<u32, [f32; 4]> = HashMap::new();
+    for at in skeletons {
+        let s = StoredSkeleton::parse(&archive.resource(at).expect("skeleton").body).expect("skeleton");
+        for b in &s.bones {
+            let key = b.local_rotation.map(|v| (v * 1e5).round() as i32);
+            rests.entry(b.name_hash).or_default().insert(key);
+            rest_of.insert(b.name_hash, b.local_rotation);
+        }
+    }
+    let animations: Vec<At> = (0..forges.len())
+        .flat_map(|forge| {
+            archive
+                .forge(forge)
+                .expect("forge")
+                .names
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| n.type_id == ANIMATION)
+                .map(move |(entry, _)| At { forge, entry })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut decoded: BTreeMap<u8, u64> = BTreeMap::new();
+    let mut unread: BTreeMap<u8, u64> = BTreeMap::new();
+    let mut not_unit = 0u64;
+    let mut late = 0u64;
+    let mut not_rising = 0u64;
+    let mut matched: BTreeMap<u8, (u64, u64)> = BTreeMap::new();
+    for at in animations {
+        let body = archive.resource(at).expect("resource").body;
+        let a = StoredAnimation::parse(&body).expect("animation");
+        for (t, hash) in a.tracks.iter().zip(&a.mappings) {
+            let times = t.times();
+            if times.windows(2).any(|w| w[0] >= w[1]) {
+                not_rising += 1;
+            }
+            if times
+                .last()
+                .is_some_and(|&last| last > a.length + 1.0 / 30.0 + 1e-3)
+            {
+                late += 1;
+            }
+            let values = match t.values() {
+                Ok(v) => v,
+                Err(primase_anvil::read::animation::Error::Unread { kind }) => {
+                    *unread.entry(kind).or_default() += 1;
+                    continue;
+                }
+                Err(e) => panic!("{e}"),
+            };
+            *decoded.entry(t.kind()).or_default() += 1;
+            let Values::Quaternions(q) = values else {
+                continue;
+            };
+            not_unit += u64::try_from(
+                q.iter()
+                    .filter(|q| (q.iter().map(|v| v * v).sum::<f32>().sqrt() - 1.0).abs() > 1e-3)
+                    .count(),
+            )
+            .expect("count");
+            let one_rest = rests.get(hash).is_some_and(|r| r.len() == 1);
+            if let (true, Some(rest), Some(first)) = (one_rest, rest_of.get(hash), q.first()) {
+                let dot: f32 = first.iter().zip(rest).map(|(a, b)| a * b).sum();
+                let e = matched.entry(t.kind()).or_default();
+                e.1 += 1;
+                e.0 += u64::from(1.0 - dot.abs() < 1e-5);
+            }
+        }
+    }
+    println!(
+        "decoded tracks by kind {decoded:?}; unread {unread:?}; quaternions not unit {not_unit}; tracks whose last \
+         time is past the clip's Length {late}; times not rising {not_rising}; first keys equal to the bone's stored \
+         rotation (matches, tracks with one such rotation) by kind {matched:?}"
+    );
+    assert_eq!(
+        decoded,
+        BTreeMap::from([(3, 56_316), (4, 91_519), (7, 36_916), (8, 20_595), (9, 310_926)])
+    );
+    assert_eq!(
+        unread,
+        BTreeMap::from([
+            (5, 153_187),
+            (16, 706_403),
+            (17, 51),
+            (18, 4_066),
+            (21, 8_697),
+            (22, 7_908),
+            (25, 8)
+        ])
+    );
+    assert_eq!((not_unit, late, not_rising), (0, 0, 0));
+    assert_eq!(
+        matched,
+        BTreeMap::from([
+            (3, (6_341, 34_228)),
+            (4, (1_493, 6_871)),
+            (7, (3_178, 17_817)),
+            (8, (364, 1_019))
+        ])
+    );
+}
