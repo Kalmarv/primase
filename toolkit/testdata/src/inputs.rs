@@ -736,6 +736,22 @@ pub const VARIABLES: &[Variable] = &[
         source: "",
     },
     Variable {
+        name: "PRIMASE_SKATEBIRD_VORONOI_LEVEL",
+        kind: Kind::Switch,
+        gate: false,
+        about: r#"optional: the SkateBIRD level the Voronoi bake test bakes (default `level1`); worlds/skatebird/tests/voronoi.rs"#,
+        status: Status::Live,
+        source: "",
+    },
+    Variable {
+        name: "PRIMASE_SKATEBIRD_VORONOI_DIGEST",
+        kind: Kind::Switch,
+        gate: false,
+        about: r#"optional: the digest of the maps the Voronoi bake test must produce (printed by an earlier run); worlds/skatebird/tests/voronoi.rs"#,
+        status: Status::Live,
+        source: "",
+    },
+    Variable {
         name: "PRIMASE_SKATE_MASK_ORACLE",
         kind: Kind::Input,
         gate: true,
