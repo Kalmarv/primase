@@ -4,6 +4,11 @@
 //! bit-exact match of every stream and index list. Each mesh is also encoded alone by primase-glb's single-mesh
 //! encoder, which must write what the writer writes for it as an unplaced prototype without materials, byte for byte
 //! but the generator (each names its crate). The configured folder must yield at least one model.
+//!
+//! A skinned model's `JOINTS_n`/`WEIGHTS_n` streams are not part of the mesh-alone round trip: glTF holds them only
+//! with a skin (the writer and the encoder both leave them out of a mesh placed without a rig, counted), so the
+//! re-written mesh must equal the original without them, and the primitives whose skin streams were left out are
+//! counted in the report.
 
 // Test code: helpers outside #[test] functions unwrap too (clippy.toml allows it only inside them).
 #![allow(clippy::unwrap_used)]
@@ -11,7 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use primase_core::gate::{GateReport, Tolerance};
-use primase_core::{Mesh, Name, Transform, World};
+use primase_core::{Mesh, Name, Primitive, Semantic, Transform, World};
 use primase_glb::Gltf;
 use primase_gltf::{GroupBy, WriteOptions, write};
 use primase_testdata::{Game, OracleSet, Query, expect_found, resolve};
@@ -30,9 +35,21 @@ fn model(dir: &Path) -> Result<Gltf, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Every mesh of each model folder's document read, re-written and read back, and encoded alone.
-fn census(models: &[PathBuf], gate: &mut GateReport) -> (u64, u64) {
-    let (mut meshes, mut triangles) = (0u64, 0u64);
+/// A primitive's streams as the mesh-alone round trip keeps them: without joints and weights, which glTF holds only
+/// with a skin.
+fn kept_streams(p: &Primitive) -> String {
+    let kept: std::collections::BTreeMap<_, _> = p
+        .streams
+        .iter()
+        .filter(|(s, _)| !matches!(s, Semantic::Joints(_) | Semantic::Weights(_)))
+        .collect();
+    format!("{kept:?}")
+}
+
+/// Every mesh of each model folder's document read, re-written and read back, and encoded alone: the meshes, their
+/// triangles and the primitives whose skin streams the round trip leaves out.
+fn census(models: &[PathBuf], gate: &mut GateReport) -> (u64, u64, u64) {
+    let (mut meshes, mut triangles, mut skinned) = (0u64, 0u64, 0u64);
     for dir in models {
         let item = dir.display().to_string();
         let gltf = match model(dir) {
@@ -67,6 +84,15 @@ fn census(models: &[PathBuf], gate: &mut GateReport) -> (u64, u64) {
             }
         }
         meshes += originals.len() as u64;
+        skinned += originals
+            .iter()
+            .flat_map(|m| m.primitives())
+            .filter(|p| {
+                p.streams
+                    .keys()
+                    .any(|s| matches!(s, Semantic::Joints(_) | Semantic::Weights(_)))
+            })
+            .count() as u64;
         let options = WriteOptions {
             group_by: GroupBy::None,
             ..WriteOptions::default()
@@ -85,7 +111,11 @@ fn census(models: &[PathBuf], gate: &mut GateReport) -> (u64, u64) {
             let got: Mesh = back.read_mesh(i).unwrap().to_mesh();
             let same = got.primitives().len() == want.primitives().len()
                 && got.primitives().iter().zip(want.primitives()).all(|(a, b)| {
-                    format!("{:?}", a.streams) == format!("{:?}", b.streams)
+                    kept_streams(a) == kept_streams(b)
+                        && !a
+                            .streams
+                            .keys()
+                            .any(|s| matches!(s, Semantic::Joints(_) | Semantic::Weights(_)))
                         && a.indices == b.indices
                         && a.topology == b.topology
                 });
@@ -96,7 +126,7 @@ fn census(models: &[PathBuf], gate: &mut GateReport) -> (u64, u64) {
             }
         }
     }
-    (meshes, triangles)
+    (meshes, triangles, skinned)
 }
 
 /// primase-glb's single-mesh encoder against the writer's GLB of `mesh` as the only, unplaced prototype (its
@@ -153,9 +183,9 @@ fn khronos_meshes_read_and_round_trip() {
     models.sort();
     expect_found(samples, "model folders", models.len());
     let mut gate = GateReport::new(format!("glb census {}", root.display()), Tolerance::Exact);
-    let (meshes, triangles) = census(&models, &mut gate);
+    let (meshes, triangles, skinned) = census(&models, &mut gate);
     println!(
-        "{gate}\n  {} models, {meshes} meshes, {triangles} triangles",
+        "{gate}\n  {} models, {meshes} meshes, {triangles} triangles, {skinned} primitives with skin streams left out",
         models.len()
     );
     gate.assert_passed();
