@@ -1212,13 +1212,13 @@ impl Pass for BakeAnvilMaterial {
             log.count(&format!("{} Materials baked", template), 1);
             if recipe.zones {
                 log.approximate(
-                    "MAD_CHR_5Zones Materials baked with the mud layer left out (HideDirt 1, a runtime dirt state), the                      engine-bound detail array flat and no decal where the Material binds none",
+                    "MAD_CHR_5Zones Materials baked with the mud layer left out (HideDirt 1, a runtime dirt state), the engine-bound detail array flat and no decal where the Material binds none",
                     1,
                 );
             }
             if recipe.skin {
                 log.approximate(
-                    "MAD_CHR_Skin Materials baked with the chosen skin-tone as the tint where the tone mask is high and                      the engine's record otherwise stated (white where it is low, the facial hair the tone, exponent 1,                      no metalness or translucency byte, no vertex occlusion): the engine's own conversion from a tone                      to the record is not read",
+                    "MAD_CHR_Skin Materials baked with the chosen skin-tone as the tint where the tone mask is high and the engine's record otherwise stated (white where it is low, the facial hair the tone, exponent 1, no metalness or translucency byte, no vertex occlusion): the engine's own conversion from a tone to the record is not read",
                     1,
                 );
             }
