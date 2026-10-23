@@ -2,6 +2,7 @@
 //! Type indices are one-based; zero denotes a null type or object reference.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod animation;
 mod convex;
 mod mesh;
 pub use convex::ConvexCore;

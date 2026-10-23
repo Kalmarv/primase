@@ -41,6 +41,13 @@ impl<'t, 'a> Array<'t, 'a> {
     pub fn is_empty(self) -> bool {
         self.count == 0
     }
+    /// The bytes of an array of bytes, as stored.
+    pub fn raw(self) -> Result<&'a [u8]> {
+        if self.stride != 1 {
+            return Err(invalid(self.offset, "expected an array of bytes"));
+        }
+        self.tag.bytes(self.offset, self.count)
+    }
     pub fn get(self, index: usize) -> Result<Value<'t, 'a>> {
         if index >= self.count {
             return Err(invalid(self.offset, "array index out of bounds"));
