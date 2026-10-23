@@ -239,6 +239,46 @@ impl ConvexCore {
         }
         Ok(triangles)
     }
+    /// The rounded surface Havok gives a convex shape, the core's vertices swept by a sphere of the convex radius,
+    /// within `max_error` metres: the convex hull of every core vertex plus every vertex of a sphere polyhedron
+    /// inscribed in the radius ([`sphere_directions`], refined until each face lies within `max_error` of the
+    /// sphere). Every hull vertex lies on the true surface, so the hull lies inside the shape, and no point of the
+    /// shape is further than `max_error` from it (before f32 rounding). A core of no radius is its own polytope
+    /// ([`ConvexCore::expanded_triangles`]). Triangles wind counter-clockwise from outside.
+    pub fn rounded_triangles(&self, max_error: f64) -> Result<Vec<[[f32; 3]; 3]>> {
+        self.validate()?;
+        if !(max_error.is_finite() && max_error > 0.) {
+            return Err(invalid(
+                0,
+                "the rounded surface's error bound must be a positive length",
+            ));
+        }
+        if self.radius == 0. {
+            return self.expanded_triangles();
+        }
+        let radius = f64::from(self.radius);
+        let directions = sphere_directions(radius, max_error)?;
+        let mut points = Vec::with_capacity(self.vertices.len() * directions.len());
+        for v in &self.vertices {
+            let v = v.map(f64::from);
+            for d in &directions {
+                points.push(std::array::from_fn(|k| v[k] + radius * d[k]));
+            }
+        }
+        let scale = points.iter().flatten().fold(1f64, |m, x| m.max(x.abs()));
+        let faces = hull(&points, 1e-12 * scale)?;
+        let mut triangles = Vec::with_capacity(faces.len());
+        for f in faces {
+            let output = f.map(|i| points[i].map(|x| x as f32));
+            let rounded = output.map(|p| p.map(f64::from));
+            let area = cross(sub(rounded[1], rounded[0]), sub(rounded[2], rounded[0]));
+            // f32 rounding may collapse a sliver: no zero-area triangle is emitted
+            if dot(area, area) > 0. {
+                triangles.push(output);
+            }
+        }
+        Ok(triangles)
+    }
     /// A core that is a point (a sphere's centre: one vertex, no planes): the cube of half-edge `radius` around it,
     /// the sharp approximation the offset half-spaces give every core (a capsule a box around its segment), twelve
     /// triangles wound counter-clockwise from outside. `None` for a core with planes; an error for a point of no
@@ -423,6 +463,99 @@ fn flat_polygon(points: &[[f64; 3]]) -> Result<Option<([f64; 3], Vec<usize>)>> {
     Ok(Some((normal, hull)))
 }
 
+/// The most subdivisions [`sphere_directions`] makes (163,842 directions).
+const MAX_SPHERE_LEVEL: u32 = 7;
+
+/// Unit directions of a sphere polyhedron (an icosahedron, each triangle split in four and projected onto the sphere,
+/// as often as needed) whose every face, scaled to `radius`, lies within `max_error` of the sphere: a face whose
+/// vertices are at angle `a` from its normal lies `radius * (1 - cos a)` inside the sphere at its centre.
+fn sphere_directions(radius: f64, max_error: f64) -> Result<Vec<[f64; 3]>> {
+    let t = (1. + 5f64.sqrt()) / 2.;
+    let mut points: Vec<[f64; 3]> = [
+        [-1., t, 0.],
+        [1., t, 0.],
+        [-1., -t, 0.],
+        [1., -t, 0.],
+        [0., -1., t],
+        [0., 1., t],
+        [0., -1., -t],
+        [0., 1., -t],
+        [t, 0., -1.],
+        [t, 0., 1.],
+        [-t, 0., -1.],
+        [-t, 0., 1.],
+    ]
+    .map(unit)
+    .to_vec();
+    let mut faces: Vec<[usize; 3]> = vec![
+        [0, 11, 5],
+        [0, 5, 1],
+        [0, 1, 7],
+        [0, 7, 10],
+        [0, 10, 11],
+        [1, 5, 9],
+        [5, 11, 4],
+        [11, 10, 2],
+        [10, 7, 6],
+        [7, 1, 8],
+        [3, 9, 4],
+        [3, 4, 2],
+        [3, 2, 6],
+        [3, 6, 8],
+        [3, 8, 9],
+        [4, 9, 5],
+        [2, 4, 11],
+        [6, 2, 10],
+        [8, 6, 7],
+        [9, 8, 1],
+    ];
+    for level in 0..=MAX_SPHERE_LEVEL {
+        // the deepest face: its plane's distance from the centre is the cosine of its vertices' angle to its normal
+        let depth = faces
+            .iter()
+            .map(|f| {
+                let n = unit(cross(
+                    sub(points[f[1]], points[f[0]]),
+                    sub(points[f[2]], points[f[0]]),
+                ));
+                radius * (1. - dot(n, points[f[0]]).abs())
+            })
+            .fold(0f64, f64::max);
+        if depth <= max_error {
+            return Ok(points);
+        }
+        if level == MAX_SPHERE_LEVEL {
+            break;
+        }
+        let mut midpoints = std::collections::BTreeMap::<(usize, usize), usize>::new();
+        let mut midpoint = |a: usize, b: usize, points: &mut Vec<[f64; 3]>| {
+            *midpoints.entry((a.min(b), a.max(b))).or_insert_with(|| {
+                points.push(unit(std::array::from_fn(|k| points[a][k] + points[b][k])));
+                points.len() - 1
+            })
+        };
+        let mut next = Vec::with_capacity(faces.len() * 4);
+        for [a, b, c] in faces {
+            let (ab, bc, ca) = (
+                midpoint(a, b, &mut points),
+                midpoint(b, c, &mut points),
+                midpoint(c, a, &mut points),
+            );
+            next.extend([[a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]]);
+        }
+        faces = next;
+    }
+    Err(invalid(
+        0,
+        format!(
+            "a rounded surface of radius {radius} within {max_error} needs more than {MAX_SPHERE_LEVEL} subdivisions"
+        ),
+    ))
+}
+fn unit(v: [f64; 3]) -> [f64; 3] {
+    let length = dot(v, v).sqrt();
+    v.map(|x| x / length)
+}
 /// 0.01 mm, or four f32 units in the last place at the vertex's magnitude when that is coarser (shapes far from their
 /// body's origin cannot be rounded to f32 more closely).
 fn plane_bound(p: [f64; 3]) -> f64 {

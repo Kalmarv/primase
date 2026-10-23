@@ -460,14 +460,16 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   `leave-out=` take HitMtrl classes (an ID modulo 100), `reach=N` crops N metres
   around the read region (every option required: empty classes for none, `reach=none`). The records it lowered are consumed; files only other
   filters' parts name stay as source.
-- `lower-fromsoft-object-collision{resolution=high|low|high-else-low,convex=tessellate|leave-out}` places every
+- `lower-fromsoft-object-collision{resolution=high|low|high-else-low,convex=tessellate|rounded:<metres>|leave-out}` places every
   placed object prototype's bodies of the files of the chosen resolution (a prototype
   without one is counted; extern shape instances are convex bodies of their own) with each placement into an `objects` soup
   (`objects_state<n>` for conditioned placements), at their stored pose whatever
   their motion type (counted). A soup cannot hold a rounded shape, so `convex`
   is required: `tessellate` gives a convex body the intersection of its planes
   offset by its radius (sharp where Havok rounds, a capsule a box around its
-  segment; both counted), `leave-out` drops it (counted). Every option is required: `leave-out=`,
+  segment, a sphere a cube; both counted), `rounded:<metres>` its rounded surface
+  (the core swept by its radius) within that error (inside the shape, counted),
+  `leave-out` drops it (counted). Every option is required: `leave-out=`,
   `leave-out-motion=` (stored motion types), `reach=N` and
   `convex-surface=default|render` (render: the surface of the prototype's largest
   colliding render area, measured on its stored level-0 face sets) are the

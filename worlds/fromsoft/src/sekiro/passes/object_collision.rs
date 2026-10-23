@@ -100,25 +100,49 @@ impl ResolutionChoice {
 
 /// What `lower-fromsoft-object-collision` makes of convex bodies (box, polytope, capsule), which a triangle soup
 /// cannot hold as stored.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ConvexBodies {
     /// Triangles of the intersection of the core's planes offset by the radius: sharp where the shape is rounded, a
-    /// capsule a box around its segment. Counted as approximations.
+    /// capsule a box around its segment, a sphere a cube. Counted as approximations.
     Tessellate,
+    /// The rounded surface within the stated error ([`primase_havok::ConvexCore::rounded_triangles`]: inside the
+    /// shape, no point of it further away than the error): `rounded:<metres>`, the error more than 0. Counted.
+    Rounded(Metres),
     /// Not lowered, counted.
     LeaveOut,
 }
 
 impl ConvexBodies {
-    fn word(self) -> &'static str {
+    fn word(self) -> String {
         match self {
-            ConvexBodies::Tessellate => "tessellate",
-            ConvexBodies::LeaveOut => "leave-out",
+            ConvexBodies::Tessellate => "tessellate".to_owned(),
+            ConvexBodies::Rounded(error) => format!("rounded:{error}"),
+            ConvexBodies::LeaveOut => "leave-out".to_owned(),
+        }
+    }
+    /// The value a `convex=` option states.
+    fn parse(text: &str) -> std::result::Result<Self, String> {
+        match text {
+            "tessellate" => Ok(ConvexBodies::Tessellate),
+            "leave-out" => Ok(ConvexBodies::LeaveOut),
+            _ => match text.strip_prefix("rounded:") {
+                Some(error) => {
+                    let error = Metres::parse("convex=rounded", error)?;
+                    if error.get() > 0. {
+                        Ok(ConvexBodies::Rounded(error))
+                    } else {
+                        Err("convex=rounded: the error bound must be more than 0 metres".to_owned())
+                    }
+                }
+                None => Err(format!(
+                    "convex={text} is not tessellate, rounded:<metres> or leave-out"
+                )),
+            },
         }
     }
 }
 
-/// `lower-fromsoft-object-collision{convex=tessellate|leave-out}`: every placed object prototype's bodies
+/// `lower-fromsoft-object-collision{convex=tessellate|rounded:<metres>|leave-out}`: every placed object prototype's bodies
 /// (`fromsoft.object_collision`, of the files of the chosen resolution) through each placement's transform, at their stored pose whatever their motion type
 /// (not interpreted), as one `objects` soup, a placement present only in some world states into an
 /// `objects_state<n>` soup with its condition; the bodies of the placed prototypes consumed, unplaced ones' kept.
@@ -132,7 +156,7 @@ impl ConvexBodies {
 /// 100) not lowered, counted; `leave_out_motion`, stored motion types whose bodies are not lowered, counted;
 /// `convex_surface` ([`ConvexSurface`]); `reach`, leaving out, counted, the triangles whose centre lies more than that
 /// many metres outside the read region (`fromsoft.read_scope`), or `None` for no crop. Options, all required:
-/// `resolution=high|low|high-else-low`, `convex=tessellate|leave-out`, `leave-out=` classes and `leave-out-motion=` types joined by `+` (empty: none),
+/// `resolution=high|low|high-else-low`, `convex=tessellate|rounded:<metres>|leave-out`, `leave-out=` classes and `leave-out-motion=` types joined by `+` (empty: none),
 /// `convex-surface=default|render`, `reach=N|none`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerFromSoftObjectCollision {
@@ -161,7 +185,7 @@ impl LowerFromSoftObjectCollision {
         let get = |k: &str| {
             o.get(k).map(String::as_str).ok_or_else(|| {
                 format!(
-                    "{k} is required: resolution=high|low|high-else-low, convex=tessellate|leave-out, leave-out=, leave-out-motion= (joined by +, empty \
+                    "{k} is required: resolution=high|low|high-else-low, convex=tessellate|rounded:<metres>|leave-out, leave-out=, leave-out-motion= (joined by +, empty \
                      for none), convex-surface=default|render, reach=N|none"
                 )
             })
@@ -172,11 +196,7 @@ impl LowerFromSoftObjectCollision {
             "high-else-low" => ResolutionChoice::HighElseLow,
             v => return Err(format!("resolution={v} is not high, low or high-else-low")),
         };
-        let convex = match get("convex")? {
-            "tessellate" => ConvexBodies::Tessellate,
-            "leave-out" => ConvexBodies::LeaveOut,
-            v => return Err(format!("convex={v} is not tessellate or leave-out")),
-        };
+        let convex = ConvexBodies::parse(get("convex")?)?;
         let convex_surface = match get("convex-surface")? {
             "default" => ConvexSurface::Default,
             "render" => ConvexSurface::Render,
@@ -222,8 +242,11 @@ impl LowerFromSoftObjectCollision {
                 let det = c[0][0] * (c[1][1] * c[2][2] - c[2][1] * c[1][2])
                     - c[1][0] * (c[0][1] * c[2][2] - c[2][1] * c[0][2])
                     + c[2][0] * (c[0][1] * c[1][2] - c[1][1] * c[0][2]);
-                let mut triangles: Vec<[[f32; 3]; 3]> = core
-                    .expanded_triangles()
+                let stored = match self.convex {
+                    ConvexBodies::Rounded(error) => core.rounded_triangles(f64::from(error.get())),
+                    _ => core.expanded_triangles(),
+                };
+                let mut triangles: Vec<[[f32; 3]; 3]> = stored
                     .map_err(|e| format!("body {}: {e}", body.name))?
                     .into_iter()
                     .map(|t| t.map(|v| posed(c, v)))
@@ -232,12 +255,20 @@ impl LowerFromSoftObjectCollision {
                 if det > 0. {
                     triangles.iter_mut().for_each(|t| t.swap(1, 2));
                 }
-                log.approximate(
-                    "convex bodies tessellated as their offset planes' intersection, sharp where rounded",
-                    1,
-                );
-                if capsule.is_some() {
-                    log.approximate("capsules tessellated as boxes around their segment", 1);
+                match self.convex {
+                    ConvexBodies::Rounded(error) => log.approximate(
+                        &format!("convex bodies tessellated as their rounded surface within {error} m"),
+                        1,
+                    ),
+                    _ => {
+                        log.approximate(
+                            "convex bodies tessellated as their offset planes' intersection, sharp where rounded",
+                            1,
+                        );
+                        if capsule.is_some() {
+                            log.approximate("capsules tessellated as boxes around their segment", 1);
+                        }
+                    }
                 }
                 let n = triangles.len();
                 Ok(Some((triangles, vec![-1; n])))
@@ -257,7 +288,7 @@ impl Pass for LowerFromSoftObjectCollision {
         };
         Options::from([
             ("resolution".to_owned(), self.resolution.word().to_owned()),
-            ("convex".to_owned(), self.convex.word().to_owned()),
+            ("convex".to_owned(), self.convex.word()),
             ("leave-out".to_owned(), joined(&self.leave_out)),
             ("leave-out-motion".to_owned(), joined(&self.leave_out_motion)),
             ("convex-surface".to_owned(), surface.to_owned()),
@@ -284,7 +315,7 @@ impl Pass for LowerFromSoftObjectCollision {
         &[Surfaces::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "bodies at their stored pose, their motion type not interpreted; with convex=tessellate, convex bodies as their offset planes' intersection (capsules as boxes); triangles without a HitMtrl, and classes without a known surface, as the default surface; with convex-surface=render, convex bodies' surface inferred from the render geometry"
+        "bodies at their stored pose, their motion type not interpreted; with convex=tessellate, convex bodies as their offset planes' intersection (capsules as boxes); with convex=rounded:<metres>, as their rounded surface within that error; triangles without a HitMtrl, and classes without a known surface, as the default surface; with convex-surface=render, convex bodies' surface inferred from the render geometry"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let crop = crop(world, self.reach)?;
@@ -577,6 +608,34 @@ mod tests {
             .map(|p| p[0])
             .fold(f32::NEG_INFINITY, f32::max);
         assert!((x - 10.75).abs() < 1e-5, "{x}");
+
+        // convex=rounded:0.01: the capsule's rounded surface reaches out by its radius less at most the error
+        let (mut w, _, _) = world();
+        let mut log = PassLog::default();
+        let rounded = pass(&[("convex", "rounded:0.01")]);
+        assert_eq!(rounded.options()["convex"], "rounded:0.01");
+        rounded.run(&mut w, &mut log).unwrap();
+        assert_eq!(
+            log.approximations["convex bodies tessellated as their rounded surface within 0.01 m"],
+            2
+        );
+        assert!(
+            !log.approximations
+                .contains_key("capsules tessellated as boxes around their segment")
+        );
+        let soup = w.iter::<Collision>().next().unwrap().1;
+        let x = soup
+            .positions
+            .iter()
+            .skip(9)
+            .map(|p| p[0])
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!((10.74..=10.75 + 1e-5).contains(&x), "{x}");
+        for bad in ["rounded:0", "rounded:-1", "rounded:", "round"] {
+            let mut o = pass(&[("convex", "tessellate")]).options();
+            o.insert("convex".to_owned(), bad.to_owned());
+            assert!(LowerFromSoftObjectCollision::from_options(&o).is_err(), "{bad}");
+        }
 
         // convex=leave-out, motion type 2 and class 29 left out by choice, counted
         let (mut w, _, _) = world();

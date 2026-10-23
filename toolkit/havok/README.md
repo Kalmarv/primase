@@ -42,7 +42,12 @@ polytope approximation, not the rounded Havok surface. Capsule cores yield
 box approximations; a sphere's core is its centre (one vertex, no planes), tessellated as
 the cube of half-edge radius around it, the same sharp approximation. A core of zero thickness (two
 opposite planes whose offsets agree within the plane bound, every vertex on them)
-is a polygon: its two faces offset by the radius. An `hknpConvexShape` stores
+is a polygon: its two faces offset by the radius. `rounded_triangles(max_error)` is
+the rounded surface Havok gives the shape (the core swept by a sphere of the convex
+radius) within a stated error: the hull of every core vertex plus every vertex of an
+icosphere inscribed in the radius, subdivided until each of its faces lies within the
+error of the sphere; every output vertex is on the true surface, so the result lies
+inside the shape and within the error of every point of it. An `hknpConvexShape` stores
 vertices only: its core is their hull (one triangle a face), or, for vertices within
 the plane bound of one plane, their convex polygon as two faces.
 

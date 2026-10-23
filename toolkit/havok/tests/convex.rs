@@ -331,3 +331,88 @@ fn a_sphere_is_the_cube_of_its_radius_around_its_centre() {
     none.radius = 0.;
     assert!(none.expanded_triangles().is_err());
 }
+/// Checks a rounded surface of `core` against its true shape (the core swept by its radius): every vertex on the
+/// surface (its distance to the core's vertices' hull is the radius, measured here as the support of each face's normal),
+/// every face facing out and lying between `radius - error` and `radius` from the core.
+fn check_rounded(core: &ConvexCore, triangles: &[[[f32; 3]; 3]], error: f64) {
+    let r = f64::from(core.radius);
+    for tri in triangles {
+        let n = normal_of(tri).map(f64::from);
+        let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        assert!(length > 0.);
+        let n = n.map(|x| x / length);
+        let plane: f64 = (0..3).map(|k| n[k] * f64::from(tri[0][k])).sum();
+        // the core's support along the face's normal
+        let support = core
+            .vertices
+            .iter()
+            .map(|v| (0..3).map(|k| n[k] * f64::from(v[k])).sum::<f64>())
+            .fold(f64::NEG_INFINITY, f64::max);
+        let distance = plane - support;
+        assert!(distance <= r + 1e-5, "face outside the shape: {distance} > {r}");
+        assert!(
+            distance >= r - error - 1e-5,
+            "face deeper than the bound: {distance} < {r} - {error}"
+        );
+    }
+}
+#[test]
+fn a_rounded_sphere_lies_within_its_bound() {
+    let c = ConvexCore {
+        vertices: vec![[1., 2., 3.]],
+        planes: Vec::new(),
+        faces: Vec::new(),
+        radius: 0.5,
+    };
+    for error in [0.05, 0.01, 0.001] {
+        let t = c.rounded_triangles(error).unwrap();
+        check_rounded(&c, &t, error);
+        // every vertex on the sphere
+        for v in t.iter().flatten() {
+            let d: f64 = (0..3)
+                .map(|k| (f64::from(v[k]) - f64::from(c.vertices[0][k])).powi(2))
+                .sum();
+            assert!((d.sqrt() - 0.5).abs() < 1e-6);
+        }
+    }
+    // a finer bound gives more triangles
+    assert!(c.rounded_triangles(0.001).unwrap().len() > c.rounded_triangles(0.05).unwrap().len());
+}
+#[test]
+fn a_rounded_capsule_and_box_lie_within_their_bound() {
+    // a capsule stored as Sekiro stores one: a thin box around its segment (2.1 mm), radius 0.2079
+    let (h, y0, y1) = (0.0021f32, -0.193_376_78f32, -0.049_176_82f32);
+    let mut vertices = Vec::new();
+    for y in [y0, y1] {
+        for x in [-h, h] {
+            for z in [-h, h] {
+                vertices.push([x, y, z]);
+            }
+        }
+    }
+    let capsule = ConvexCore {
+        vertices,
+        planes: Vec::new(),
+        faces: Vec::new(),
+        radius: 0.2079,
+    };
+    let t = capsule.rounded_triangles(0.005).unwrap();
+    check_rounded(&capsule, &t, 0.005);
+    // a unit cube core with a radius of 0.1: a rounded box
+    let mut rounded = cube(0.1);
+    rounded.planes.clear();
+    rounded.faces.clear();
+    let t = rounded.rounded_triangles(0.01).unwrap();
+    check_rounded(&rounded, &t, 0.01);
+}
+#[test]
+fn rounded_bounds_are_stated_and_a_radius_of_0_is_the_core() {
+    let c = cube(0.);
+    assert_eq!(
+        c.rounded_triangles(0.01).unwrap().len(),
+        c.expanded_triangles().unwrap().len()
+    );
+    for bad in [0., -1., f64::NAN, f64::INFINITY] {
+        assert!(cube(0.1).rounded_triangles(bad).is_err());
+    }
+}
