@@ -300,7 +300,9 @@ An install, keys or a tool is its key's path; a file in an install is below it; 
 and returns `None`. `[run] require = 'gate'` makes every input the landing gate must have fail instead (the `gate`
 column below: a blocked file always is one), `'all'` every input: use them when running the real-data tests a
 change affects, so a skipped affected test counts as a failure, not a pass. A configured path that does not exist
-fails: a configured input that is gone is never a skip. A file in an install or an oracle set must be declared
+fails: a configured input that is gone is never a skip. The one exception is an oracle set the machine does not hold:
+with no `<oracles.root>/<set>` folder (in a root that exists) the set counts as not configured there, so a machine
+can keep only the sets it has; a file missing inside a set that is there fails (a typo or a broken tree). A file in an install or an oracle set must be declared
 (the declared files below): asking for an undeclared one fails, so its relative path is a literal the architecture
 check can see. A configured input that yields nothing fails through `expect_found`. Values are literal: no expansion
 and no relative-path rewriting, so use absolute paths and TOML literal strings (single quotes) for Windows

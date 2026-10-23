@@ -80,36 +80,103 @@ fn configured(config: &Config, query: Query) -> Option<PathBuf> {
         return Some(PathBuf::from(value));
     }
     let (key, rel) = query.root()?;
-    config.roots.get(&key).map(|root| root.join(rel))
+    // an install, a tool or keys configured as a file is that file: joining an empty path would add a separator
+    config.roots.get(&key).map(|root| {
+        if rel.as_os_str().is_empty() {
+            root.clone()
+        } else {
+            root.join(rel)
+        }
+    })
 }
 
-/// Resolve `query` to an existing path, or skip: unset prints one SKIP line naming the test and the configuration key,
-/// unless the configuration's `[run] require` is `all`, or `gate` and the entry is one the landing gate must have (a
-/// blocked file always is); set but missing always fails, and so does an undeclared file.
-#[track_caller]
-pub fn resolve(query: Query) -> Option<PathBuf> {
-    let gate = gate_of(query);
-    let config = load();
+/// What [`resolve`] does with a query: the path, a skip or a failure, with why.
+#[derive(Debug, PartialEq)]
+enum Decision {
+    Found(PathBuf),
+    /// Not configured on this machine (and not required): the reason the SKIP line gives.
+    Skip(String),
+    Fail(String),
+    /// A retired name: never set, nothing said.
+    Retired,
+}
+
+/// The decision for `query` under `config`: a configured path that exists is found and one that does not fails, except
+/// an oracle file whose set this machine does not hold (no `<oracles.root>/<set>` folder in a root that exists): that
+/// set is not configured here, as an unset key is. What is not configured skips, or fails where `[run] require` needs it (`all`, or `gate`
+/// and `gate` says the landing gate must have it).
+fn decide(config: &Config, query: Query, gate: bool) -> Decision {
     let require = match config.require.as_deref() {
         Some("all") => true,
         Some("gate") => gate,
         _ => false,
     };
-    match (query, configured(&config, query)) {
-        (_, Some(path)) if path.exists() => Some(path),
-        (_, Some(path)) => panic!("{} = {} is set but does not exist", query.key(), path.display()),
-        (Query::Retired, None) => None,
-        (_, None) if require => panic!("{} is not configured and [run] require needs it", query.key()),
-        (_, None) => {
+    if query == Query::Retired {
+        return Decision::Retired;
+    }
+    let file = || {
+        config
+            .file
+            .as_ref()
+            .map_or_else(|| "PRIMASE_DATA unset".to_owned(), |f| f.display().to_string())
+    };
+    let unset = match (query, configured(config, query)) {
+        (_, None) => format!("{} not configured in {}", query.key(), file()),
+        (Query::Oracle(set, ..), Some(path)) if !config.legacy.contains_key(&query.key()) => {
+            let root = config.roots.get("oracles.root");
+            if let Some(root) = root.filter(|r| !r.exists()) {
+                return Decision::Fail(format!(
+                    "oracles.root = {} is set but does not exist",
+                    root.display()
+                ));
+            }
+            match root.map(|r| r.join(set.key())) {
+                Some(folder) if !folder.exists() => format!(
+                    "oracles.{} not on this machine: no {}",
+                    set.key(),
+                    folder.display()
+                ),
+                _ if path.exists() => return Decision::Found(path),
+                _ => {
+                    return Decision::Fail(format!(
+                        "{} = {} is set but does not exist",
+                        query.key(),
+                        path.display()
+                    ));
+                }
+            }
+        }
+        (_, Some(path)) if path.exists() => return Decision::Found(path),
+        (_, Some(path)) => {
+            return Decision::Fail(format!(
+                "{} = {} is set but does not exist",
+                query.key(),
+                path.display()
+            ));
+        }
+    };
+    if require {
+        Decision::Fail(format!("{unset}, and [run] require needs it"))
+    } else {
+        Decision::Skip(unset)
+    }
+}
+
+/// Resolve `query` to an existing path, or skip: what is not configured prints one SKIP line naming the test and the
+/// configuration key, unless the configuration's `[run] require` is `all`, or `gate` and the entry is one the landing
+/// gate must have (a blocked file always is). An oracle set this machine does not hold (no `<oracles.root>/<set>`
+/// folder) counts as not configured; a configured path that does not exist fails (inside a set that is there: a typo
+/// or a broken tree), and so does an undeclared file.
+#[track_caller]
+pub fn resolve(query: Query) -> Option<PathBuf> {
+    let gate = gate_of(query);
+    match decide(&load(), query, gate) {
+        Decision::Found(path) => Some(path),
+        Decision::Fail(why) => panic!("{why}"),
+        Decision::Retired => None,
+        Decision::Skip(why) => {
             let test = std::thread::current().name().unwrap_or("?").to_owned();
-            let file = config
-                .file
-                .as_ref()
-                .map_or_else(|| "PRIMASE_DATA unset".to_owned(), |f| f.display().to_string());
-            eprintln!(
-                "primase-testdata: SKIP {test} ({} not configured in {file})",
-                query.key()
-            );
+            eprintln!("primase-testdata: SKIP {test} ({why})");
             None
         }
     }
@@ -206,6 +273,51 @@ mod tests {
         Config::load(&|name| env.get(name).map(OsString::from), |_| {
             Ok(text.unwrap_or_default().to_owned())
         })
+    }
+
+    /// A tool, keys or an install configured as a file is that path exactly: no separator after it (a path ending in
+    /// one names a folder, so a file's never exists; PathBuf's comparison ignores it, the string does not).
+    #[test]
+    fn a_key_configured_as_a_file_is_that_path() {
+        let c = config(&[], Some("[tools]\nunity_tpk = 'data/typetrees.tpk'\n")).unwrap();
+        let tpk = configured(&c, Query::Tool(Tool::UnityTpk)).unwrap();
+        assert_eq!(tpk.as_os_str(), "data/typetrees.tpk");
+    }
+
+    /// An oracle set this machine does not hold skips (or fails where required); a file missing inside a set that is
+    /// there fails; a file that is there is found.
+    #[test]
+    fn an_absent_oracle_set_skips_and_a_missing_file_in_a_present_one_fails() {
+        let root = std::env::temp_dir().join(format!("primase-testdata-sets-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("corpus").join("general")).unwrap();
+        std::fs::write(root.join("corpus").join("general").join("codecs.tsv"), b"").unwrap();
+        let text = format!("[oracles]\nroot = '{}'\n", root.display());
+        let c = config(&[], Some(&text)).unwrap();
+        let codecs = Query::Oracle(OracleSet::Corpus, Game::General, "codecs.tsv");
+        let typo = Query::Oracle(OracleSet::Corpus, Game::Sekiro, "dcx");
+        let elsewhere = Query::Oracle(OracleSet::CodeWalker, Game::Gta, "listing.jsonl");
+        assert_eq!(
+            decide(&c, codecs, true),
+            Decision::Found(root.join("corpus/general/codecs.tsv"))
+        );
+        assert!(matches!(decide(&c, typo, false), Decision::Fail(why) if why.contains("does not exist")));
+        assert!(
+            matches!(decide(&c, elsewhere, false), Decision::Skip(why) if why.contains("oracles.codewalker not on this machine"))
+        );
+        let required = config(&[], Some(&format!("{text}[run]\nrequire = 'all'\n"))).unwrap();
+        assert!(
+            matches!(decide(&required, elsewhere, false), Decision::Fail(why) if why.contains("require"))
+        );
+        // a root that is gone is a configuration that is wrong, not sets this machine lacks
+        let gone = config(
+            &[],
+            Some(&format!("[oracles]\nroot = '{}'\n", root.join("gone").display())),
+        )
+        .unwrap();
+        assert!(
+            matches!(decide(&gone, elsewhere, false), Decision::Fail(why) if why.contains("oracles.root"))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
