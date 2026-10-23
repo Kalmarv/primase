@@ -96,7 +96,7 @@ fn vespucci(m: &PassManager, passes: &str) -> Result<Option<World>> {
     })?;
     let select = m.registry.parse(&format!(
         "resolve-state{{assign=gta.map:online;gta.hour:12}}, gta-select-region{{{RECT},min_size=0.5,max_priority=3}}, \
-         lower-gta-lights{{hour=every,{RECT}}}, gta-select-collision{{detail=plain}}, \
+         lower-gta-lights{{hour=every,candela-per-unit=1771,{RECT}}}, gta-select-collision{{detail=plain}}, \
          lower-gta-collision{{{RECT},foliage=leave-out,river=leave-out}}, lower-gta-surfaces, \
          gta-select-water{{{RECT},clip=kept}}, place-spawn{{at=centre}}"
     ))?;

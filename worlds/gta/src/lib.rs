@@ -57,7 +57,7 @@ pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) 
 /// Registers the GTA passes by name: `gta-pose-fragments`, `lower-gta-skin`, `lower-gta-clips`, `lower-gta-pbr{night}` (`night` required), `gta-winding`, `gta-tint`, `gta-terrain-layers`,
 /// `gta-vertex-colours`, `gta-select-region{x0,y0,x1,y1,max_priority,min_size}`, `gta-select-stand-ins{levels,x0,y0,x1,y1}`,
 /// `gta-leave-out-interiors`,
-/// `lower-gta-lights{hour,x0,y0,x1,y1}` (`hour` required), `gta-select-collision{detail}` (`detail` required), `lower-gta-collision{x0,y0,x1,y1,foliage,river}`,
+/// `lower-gta-lights{hour,candela-per-unit,x0,y0,x1,y1}` (`hour` and `candela-per-unit` required), `gta-select-collision{detail}` (`detail` required), `lower-gta-collision{x0,y0,x1,y1,foliage,river}`,
 /// `lower-gta-embedded-collision{foliage,river}` (their `foliage` and `river` required),
 /// `lower-gta-surfaces`, `gta-select-water{x0,y0,x1,y1,clip}` (`clip` required), `lower-gta-water` and `resolve-gta-shaders{technique,
 /// unset-textures}` (both required).
@@ -143,11 +143,11 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         },
         &[("technique", "deferred_draw"), ("unset-textures", "white")],
     );
-    // which hour's lights are drawn is the caller's choice: no default
+    // which hour's lights are drawn, and their calibration, are the caller's choices: no defaults
     reg.register_requiring(
         "lower-gta-lights",
         |o| Ok(Box::new(passes::lights::LowerGtaLights::from_options(o)?)),
-        &[("hour", "every")],
+        &[("hour", "every"), ("candela-per-unit", "1771")],
     );
     reg.register("gta-leave-out-interiors", |o| {
         Ok(Box::new(passes::interiors::LeaveOutInteriors::from_options(o)?))
@@ -214,15 +214,20 @@ mod tests {
                         .collect(),
                 )
             } else {
-                [
-                    ("lower-gta-pbr", ("night", "false")),
-                    ("gta-select-water", ("clip", "region")),
-                    ("lower-gta-lights", ("hour", "every")),
-                    ("gta-select-collision", ("detail", "plain")),
-                ]
-                .into_iter()
-                .find(|(n, _)| *n == name)
-                .map(|(_, (k, v))| [(k.to_owned(), v.to_owned())].into_iter().collect())
+                let required: [(&str, &[(&str, &str)]); 4] = [
+                    ("lower-gta-pbr", &[("night", "false")]),
+                    ("gta-select-water", &[("clip", "region")]),
+                    (
+                        "lower-gta-lights",
+                        &[("hour", "every"), ("candela-per-unit", "1771")],
+                    ),
+                    ("gta-select-collision", &[("detail", "plain")]),
+                ];
+                required.into_iter().find(|(n, _)| *n == name).map(|(_, o)| {
+                    o.iter()
+                        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                        .collect()
+                })
             };
             assert_eq!(reg.requires_options(name), required.is_some(), "{name}");
             let options = match required {
@@ -289,11 +294,20 @@ mod tests {
             )
         };
         let pipelines = [
-            select("assign=gta.map:online;gta.hour:12", "hour=every,"),
+            select(
+                "assign=gta.map:online;gta.hour:12",
+                "hour=every,candela-per-unit=1771,",
+            ),
             part("finest", "false"),
-            select("assign=gta.map:online;gta.hour:22", "hour=22,"),
+            select(
+                "assign=gta.map:online;gta.hour:22",
+                "hour=22,candela-per-unit=1771,",
+            ),
             part("1", "true"),
-            select("assign=gta.map:story,keep=gta.hour", "hour=state,"),
+            select(
+                "assign=gta.map:story,keep=gta.hour",
+                "hour=state,candela-per-unit=1771,",
+            ),
             part("finest", "state"),
         ];
         for text in pipelines {

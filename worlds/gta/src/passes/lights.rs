@@ -1,4 +1,4 @@
-//! `lower-gta-lights{hour,x0,y0,x1,y1}`: every placement's light records ([`GtaLights`] on its prototype) as
+//! `lower-gta-lights{hour,candela-per-unit,x0,y0,x1,y1}`: every placement's light records ([`GtaLights`] on its prototype) as
 //! placed `core.light` entities, each with its record as `gta.light` (its hours among them): the required `hour` says
 //! which, every light (`hour=every`), only those on at an hour (`hour=0`-`23`), or, with `hour=state` (the hour kept as
 //! state), every light with its hours as a `core.condition` on the global `gta.hour` axis ([`crate::components::state::hour_axis`], made when the region has none; a light
@@ -18,8 +18,9 @@
 //! - kind: point; spot with cones from the record's inner and outer angles (degrees; the outer at most 89.5°);
 //!   capsule as a point (its length left out: approximated, counted);
 //! - colour: the sRGB bytes in linear light;
-//! - intensity: the record's intensity times [`CANDELA_PER_GTA_UNIT`], GTA's lights against its own sun (see there;
-//!   UNVERIFIED, counted per light); a target that needs another scale applies it in its own pass;
+//! - intensity: the record's intensity times the required `candela-per-unit`, the caller's calibration
+//!   ([`LowerGtaLights::candela_per_unit`] gives what GTA's own sun suggests, unverified; counted per light); a target
+//!   that needs another scale applies it in its own pass;
 //! - range: falloff times the placement's scale (at least 0.5 m). GTA's light ends there in a window,
 //!   s / ((1 - k) s + k) on s = 1 - (d / range)^2, not inverse-square; the record's falloff and falloff exponent stay
 //!   in `gta.light` (the exponent's mapping to k is not read);
@@ -50,6 +51,18 @@ pub enum LightHours {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerGtaLights {
     pub hours: LightHours,
+    /// Candela per unit of GTA's light intensity (option `candela-per-unit`, required, finite and above 0): the
+    /// caller's calibration, as GTA's light intensity has no stated unit.
+    ///
+    /// What GTA's own sun suggests, 1771, measured from the extrasunny noon timecycle and not read at run time: GTA's
+    /// deferred point and sun lights both draw G x light x albedo x N.L (its own pixel shaders, `PS_pointCM_standard`
+    /// and `PS_directional_just_dir`, run on WARP), so a light compares to the sun in one scale: the noon sun
+    /// (timecycle `light_dir_col` x `light_dir_mult`: luminance 0.8823 x 64 = 56.47) taken as 100,000 lux makes one
+    /// GTA unit 1,771 lux, a light's candela its intensity x 1,771 lux at 1 m (where its window is about 1).
+    /// UNVERIFIED, two assumptions: that the game writes colour x intensity into the light's constants with no further
+    /// factor (CodeWalker doubles it; the game's own code is not read), and the 100,000 lux sun. GTA reference shots at
+    /// night decide.
+    pub candela_per_unit: f32,
     /// The lights inside it; `None`: every light of the placements.
     pub region: Option<GroundRect>,
 }
@@ -57,7 +70,7 @@ pub struct LowerGtaLights {
 impl LowerGtaLights {
     pub fn from_options(o: &Options) -> Result<LowerGtaLights, String> {
         for k in o.keys() {
-            if !["hour", "x0", "y0", "x1", "y1"].contains(&k.as_str()) {
+            if !["hour", "candela-per-unit", "x0", "y0", "x1", "y1"].contains(&k.as_str()) {
                 return Err(format!("unknown option {k}"));
             }
         }
@@ -74,8 +87,23 @@ impl LowerGtaLights {
                 );
             }
         };
+        let candela_per_unit = match o.get("candela-per-unit") {
+            Some(v) => v
+                .parse::<f32>()
+                .ok()
+                .filter(|c| c.is_finite() && *c > 0.0)
+                .ok_or_else(|| format!("candela-per-unit: {v} is not a finite number above 0"))?,
+            None => {
+                return Err(
+                    "candela-per-unit is required (candela per unit of GTA's light intensity, above 0): \
+                            the calibration is the caller's"
+                        .into(),
+                );
+            }
+        };
         Ok(LowerGtaLights {
             hours,
+            candela_per_unit,
             region: GroundRect::from_options(o)?,
         })
     }
@@ -85,15 +113,6 @@ impl LowerGtaLights {
 fn posed(pose: &Pose, v: [f32; 3], w: f32) -> [f32; 3] {
     pose.map(|r| r[0] * v[0] + r[1] * v[1] + r[2] * v[2] + r[3] * w)
 }
-
-/// Candela per unit of GTA's light intensity. GTA's deferred point and sun lights both draw G x light x albedo x N.L
-/// (its own pixel shaders, `PS_pointCM_standard` and `PS_directional_just_dir`, run on WARP), so a light compares to
-/// the sun in one scale: the extrasunny noon sun (timecycle `light_dir_col` x `light_dir_mult`: luminance
-/// 0.8823 x 64 = 56.47) taken as 100,000 lux makes one GTA unit 1,771 lux, a light's candela its intensity x 1,771 lux
-/// at 1 m (where its window is about 1). UNVERIFIED, two assumptions: that the game writes colour x intensity into
-/// the light's constants with no further factor (CodeWalker doubles it; the game's own code is not read), and the
-/// 100,000 lux sun. GTA reference shots at night decide.
-pub const CANDELA_PER_GTA_UNIT: f32 = 1771.0;
 
 fn linear(c: u8) -> f32 {
     primase_image::srgb_to_linear(f64::from(c) / 255.0) as f32
@@ -111,6 +130,7 @@ impl Pass for LowerGtaLights {
             LightHours::State => "state".to_string(),
         };
         o.insert("hour".to_string(), hour);
+        o.insert("candela-per-unit".to_string(), self.candela_per_unit.to_string());
         if let Some(r) = self.region {
             r.insert_options(&mut o);
         }
@@ -128,8 +148,8 @@ impl Pass for LowerGtaLights {
         ]
     }
     fn approximates(&self) -> &'static str {
-        "GTA's light intensity as candela by its sun (x 1,771: unverified, assumes colour x intensity with no factor \
-         and a 100,000 lux noon sun); its windowed falloff as a range; capsules as points"
+        "GTA's light intensity as candela at the caller's candela-per-unit (GTA's own scale is not stated); its \
+         windowed falloff as a range; capsules as points"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let mut made = Vec::new();
@@ -219,7 +239,7 @@ impl Pass for LowerGtaLights {
                 let light = Light {
                     kind,
                     color: l.colour.map(linear),
-                    intensity: l.intensity.max(0.0) * CANDELA_PER_GTA_UNIT,
+                    intensity: l.intensity.max(0.0) * self.candela_per_unit,
                     range: Some((l.falloff * scale).max(0.5)),
                     cast_shadows: None,
                 };
@@ -228,11 +248,7 @@ impl Pass for LowerGtaLights {
                     log.count("lights with values that are not finite left out", 1);
                     continue;
                 }
-                log.approximate(
-                    "light intensity as candela by GTA's noon sun (x 1,771, unverified: colour x intensity with no \
-                     factor, a 100,000 lux sun)",
-                    1,
-                );
+                log.approximate("light intensity as candela at the caller's candela-per-unit", 1);
                 log.approximate("windowed falloff as a range", 1);
                 made.push((
                     e,
@@ -331,6 +347,7 @@ mod tests {
         let mut log = PassLog::default();
         super::LowerGtaLights {
             hours: super::LightHours::Every,
+            candela_per_unit: 1771.0,
             region: None,
         }
         .run(&mut w, &mut log)
@@ -342,7 +359,7 @@ mod tests {
         heights.sort_by(f32::total_cmp);
         assert_eq!(heights, vec![1.0, 7.0]);
         assert_eq!(log.counts.get("lights placed by their bone's pose"), Some(&1));
-        // intensity 1 by GTA's sun, range its falloff, both approximations counted per light
+        // intensity 1 at 1771 cd per unit, range its falloff, both approximations counted per light
         for (_, l) in w.iter::<Light>() {
             assert_eq!((l.intensity, l.range), (1771.0, Some(10.0)));
         }
@@ -350,7 +367,7 @@ mod tests {
         assert!(
             log.approximations
                 .iter()
-                .any(|(k, &n)| k.contains("x 1,771") && n == 2)
+                .any(|(k, &n)| k.contains("candela-per-unit") && n == 2)
         );
     }
 
@@ -387,6 +404,7 @@ mod tests {
         let mut log = PassLog::default();
         super::LowerGtaLights {
             hours: super::LightHours::State,
+            candela_per_unit: 1771.0,
             region: None,
         }
         .run(&mut w, &mut log)
@@ -402,36 +420,52 @@ mod tests {
         assert!(w.verify_components().is_empty(), "{:?}", w.verify_components());
     }
 
-    /// `hour` is required and names the lights: every one, those on at an hour, or every one under the hour as state;
-    /// the options a pass gives read back as the same pass.
+    /// `hour` and `candela-per-unit` are required: the hour names the lights (every one, those on at an hour, or every
+    /// one under the hour as state), the calibration their intensity. The options a pass gives read back as the same
+    /// pass.
     #[test]
-    fn the_hour_option_is_required_and_names_the_lights() {
+    fn the_hour_and_the_calibration_are_required() {
         use super::{LightHours, LowerGtaLights};
         use primase_core::pass::Options;
-        let lights = |v: Option<&str>| {
+        let lights = |hour: Option<&str>, candela: Option<&str>| {
             let mut o = Options::new();
-            if let Some(v) = v {
+            if let Some(v) = hour {
                 o.insert("hour".into(), v.into());
+            }
+            if let Some(v) = candela {
+                o.insert("candela-per-unit".into(), v.into());
             }
             LowerGtaLights::from_options(&o)
         };
         assert_eq!(
-            lights(None).unwrap_err(),
+            lights(None, Some("1771")).unwrap_err(),
             "hour is required (0-23, every or state): which lights are placed is the caller's choice"
         );
         assert_eq!(
-            lights(Some("noon")).unwrap_err(),
+            lights(Some("noon"), Some("1771")).unwrap_err(),
             "hour: noon is none of 0-23, every and state"
         );
-        assert!(lights(Some("24")).is_err());
+        assert!(lights(Some("24"), Some("1771")).is_err());
+        assert_eq!(
+            lights(Some("every"), None).unwrap_err(),
+            "candela-per-unit is required (candela per unit of GTA's light intensity, above 0): the calibration is \
+             the caller's"
+        );
+        for bad in ["0", "-1", "inf", "NaN", "bright"] {
+            assert_eq!(
+                lights(Some("every"), Some(bad)).unwrap_err(),
+                format!("candela-per-unit: {bad} is not a finite number above 0")
+            );
+        }
         let hour = crate::passes::rect::Hour::new(22).unwrap();
         for (v, hours) in [
             ("every", LightHours::Every),
             ("22", LightHours::At(hour)),
             ("state", LightHours::State),
         ] {
-            let pass = lights(Some(v)).unwrap();
-            assert_eq!(pass.hours, hours, "{v}");
+            let pass = lights(Some(v), Some("1771")).unwrap();
+            assert_eq!((pass.hours, pass.candela_per_unit), (hours, 1771.0), "{v}");
+            assert_eq!(pass.options()["candela-per-unit"], "1771", "{v}");
             assert_eq!(
                 LowerGtaLights::from_options(&pass.options()).unwrap(),
                 pass,

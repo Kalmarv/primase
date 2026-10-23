@@ -88,6 +88,7 @@ fn lights_written(in_selection: bool) -> usize {
         Pipeline {
             passes: vec![Box::new(LowerGtaLights {
                 hours: LightHours::Every,
+                candela_per_unit: 1771.0,
                 region: None,
             })],
         }
