@@ -14,7 +14,7 @@ use primase_core::{
 };
 use primase_reskate::EncodingOptions;
 use primase_reskate::components::{MarkerKind, Other, OverlayPiece, SkateMarker, SkateOverlayStack};
-use primase_reskate::passes::{PrepareReskateOverlays, RaiseOptions, prepare_reskate_overlays};
+use primase_reskate::passes::{PREPARE_RESKATE_OVERLAYS, PrepareReskateOverlays, RaiseOptions};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -332,9 +332,12 @@ fn the_overlay_options_round_trip_and_are_checked() {
             ("offset_y", "3"),
         ]),
     ] {
-        let pass = prepare_reskate_overlays(&given).unwrap();
+        let pass = PREPARE_RESKATE_OVERLAYS.instance(&given).unwrap();
         assert_eq!(
-            prepare_reskate_overlays(&pass.options()).unwrap().options(),
+            PREPARE_RESKATE_OVERLAYS
+                .instance(&pass.options())
+                .unwrap()
+                .options(),
             pass.options()
         );
     }
@@ -347,6 +350,6 @@ fn the_overlay_options_round_trip_and_are_checked() {
         o(&[("step", "0.004"), ("offset_x", "inf")]),
         o(&[("step", "0.004"), ("lift", "1")]),
     ] {
-        assert!(prepare_reskate_overlays(&bad).is_err(), "{bad:?}");
+        assert!(PREPARE_RESKATE_OVERLAYS.instance(&bad).is_err(), "{bad:?}");
     }
 }

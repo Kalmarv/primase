@@ -45,6 +45,7 @@
 //! Runtime: the in-game results and gates of this lowering are on ReSkate v2.1.0-pre (the latest release, the
 //! official runtime for it) with maps compiled by ReSkate Studio 20261012.
 
+use primase_core::pass::{Choice, OptionSpec, PassSpec};
 use primase_core::{Entity, Mesh, Semantic, VertexColor, World, uses_color0};
 
 pub use crate::components::layered::{BlendOpacity, VertexBlend};
@@ -368,38 +369,29 @@ impl LowerLayeredReskate {
     pub fn overlays(&self) -> OverlayLimit {
         self.overlays
     }
-
-    /// From its options: `overlays`, required: `all` or `one`.
-    pub fn from_options(o: &primase_core::pass::Options) -> Result<LowerLayeredReskate, String> {
-        if let Some(k) = o.keys().find(|k| k.as_str() != "overlays") {
-            return Err(format!("unknown option {k}"));
-        }
-        match o.get("overlays").map(String::as_str) {
-            Some("all") => Ok(LowerLayeredReskate::new(OverlayLimit::All)),
-            Some("one") => Ok(LowerLayeredReskate::new(OverlayLimit::One)),
-            Some(v) => Err(format!("overlays={v} is not all or one")),
-            None => Err("overlays is required: all (every layer, in slot order) or one".into()),
-        }
-    }
 }
 
-/// `lower-layered-reskate{overlays=all|one}` from its options (a [`primase_core::pass::PassFactory`]).
-pub fn lower_layered_reskate(
-    o: &primase_core::pass::Options,
-) -> Result<Box<dyn primase_core::pass::Pass>, String> {
-    Ok(Box::new(LowerLayeredReskate::from_options(o)?))
+impl Choice for OverlayLimit {
+    const VALUES: &'static [(&'static str, Self)] = &[("all", OverlayLimit::All), ("one", OverlayLimit::One)];
 }
+
+/// `lower-layered-reskate`'s declaration ([`primase_core::pass::PassRegistry::add`]): how many overlays a triangle may
+/// get is the program's, no default.
+pub const LOWER_LAYERED_RESKATE: PassSpec = PassSpec {
+    name: "lower-layered-reskate",
+    options: &[OptionSpec::choice::<OverlayLimit>(
+        "overlays",
+        "every layer, in slot order (all), or at most one, the strongest other layer over the base (one)",
+    )],
+    make: |g| Ok(Box::new(LowerLayeredReskate::new(g.choice("overlays")))),
+};
 
 impl primase_core::pass::Pass for LowerLayeredReskate {
     fn name(&self) -> &'static str {
         "lower-layered-reskate"
     }
     fn options(&self) -> primase_core::pass::Options {
-        let v = match self.overlays {
-            OverlayLimit::All => "all",
-            OverlayLimit::One => "one",
-        };
-        primase_core::pass::Options::from([("overlays".to_owned(), v.to_owned())])
+        primase_core::pass::Options::from([("overlays".to_owned(), self.overlays.text().to_owned())])
     }
     // the blends are optional: a map without them has nothing to lower
     fn requires(&self) -> &[&'static str] {
@@ -1027,10 +1019,10 @@ mod tests {
     fn options_name_the_overlay_limit_and_round_trip() {
         use primase_core::pass::Options;
         // the limit is required and always named
-        assert!(lower_layered_reskate(&Options::new()).is_err());
+        assert!(LOWER_LAYERED_RESKATE.instance(&Options::new()).is_err());
         for limit in [OverlayLimit::All, OverlayLimit::One] {
             let o = LowerLayeredReskate::new(limit).options();
-            assert_eq!(lower_layered_reskate(&o).unwrap().options(), o);
+            assert_eq!(LOWER_LAYERED_RESKATE.instance(&o).unwrap().options(), o);
         }
         let one = Options::from([("overlays".to_owned(), "one".to_owned())]);
         assert_eq!(LowerLayeredReskate::new(OverlayLimit::One).options(), one);
@@ -1038,14 +1030,16 @@ mod tests {
         assert_eq!(LowerLayeredReskate::new(OverlayLimit::All).options(), all);
         let bad = Options::from([("overlays".to_owned(), "two".to_owned())]);
         assert!(
-            lower_layered_reskate(&bad)
+            LOWER_LAYERED_RESKATE
+                .instance(&bad)
                 .err()
                 .unwrap()
-                .contains("not all or one")
+                .contains("overlays=two is none of all or one")
         );
         let unknown = Options::from([("limit".to_owned(), "one".to_owned())]);
         assert!(
-            lower_layered_reskate(&unknown)
+            LOWER_LAYERED_RESKATE
+                .instance(&unknown)
                 .err()
                 .unwrap()
                 .contains("unknown option limit")

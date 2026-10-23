@@ -16,7 +16,7 @@
 //! whole map goes through the same summary.
 
 use primase_core::convert::PartScope;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Instance, Transform, World};
 
 use crate::components::{MarkerKind, SkateMarker, SkateScene, SkateSpawnSummary, Snap, SnapMode};
@@ -111,32 +111,60 @@ impl PlaceReskateSpawn {
     }
 
     /// From its options (`at=centre`, or `east` and `north`), through the same constructors.
-    pub fn from_options(o: &Options) -> Result<PlaceReskateSpawn, String> {
-        let number = |k: &str, v: &str| v.parse::<f32>().map_err(|_| format!("{k}={v} is not a number"));
-        let (mut centre, mut east, mut north) = (false, None, None);
-        for (k, v) in o {
-            match k.as_str() {
-                "at" if v == "centre" => centre = true,
-                "at" => return Err(format!("at={v}: only at=centre (or east, north)")),
-                "east" => east = Some(number(k, v)?),
-                "north" => north = Some(number(k, v)?),
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        match (centre, east, north) {
-            (false, None, None) => Err("the spawn's place is required: at=centre, or east and north".into()),
-            (true, None, None) => Ok(PlaceReskateSpawn::centre()),
-            (false, Some(e), Some(n)) => PlaceReskateSpawn::at_ground(e, n),
-            (true, _, _) => Err("at=centre or east, north: not both".into()),
+    fn from_given(g: &Given) -> Result<PlaceReskateSpawn, String> {
+        let number = |k: &str| -> Result<Option<f32>, String> {
+            g.optional(k)
+                .map(|v| v.parse::<f32>().map_err(|_| format!("{k}={v} is not a number")))
+                .transpose()
+        };
+        match (
+            g.optional_choice::<SpawnAt>("at"),
+            number("east")?,
+            number("north")?,
+        ) {
+            (Some(SpawnAt::Centre), None, None) => Ok(PlaceReskateSpawn::centre()),
+            (Some(SpawnAt::Centre), _, Some(_)) => Err("at=centre or east, north: not both".into()),
+            (None, Some(e), Some(n)) => PlaceReskateSpawn::at_ground(e, n),
             _ => Err("east and north go together".into()),
         }
     }
 }
 
-/// [`PlaceReskateSpawn::from_options`] as a pass factory.
-pub fn place_reskate_spawn(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PlaceReskateSpawn::from_options(o)?))
+/// `place-reskate-spawn`'s `at`: the one place it names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpawnAt {
+    Centre,
 }
+
+impl Choice for SpawnAt {
+    const VALUES: &'static [(&'static str, Self)] = &[("centre", SpawnAt::Centre)];
+}
+
+/// `place-reskate-spawn`'s declaration ([`primase_core::pass::PassRegistry::add`]): where the spawn goes is the
+/// program's, no default.
+pub const PLACE_RESKATE_SPAWN: PassSpec = PassSpec {
+    name: "place-reskate-spawn",
+    options: &[
+        OptionSpec::one_of_choice::<SpawnAt>(
+            "place",
+            "at",
+            "centre: the centre of the scene's region, else of the box of its placements' ground positions",
+        ),
+        OptionSpec::one_of(
+            "place",
+            "east",
+            "0",
+            "metres, with north: the spawn's ground position",
+        ),
+        OptionSpec::optional(
+            "north",
+            "0",
+            "metres, with east: the spawn's ground position",
+            "required with east, not taken with at",
+        ),
+    ],
+    make: |g| Ok(Box::new(PlaceReskateSpawn::from_given(g)?)),
+};
 
 impl Pass for PlaceReskateSpawn {
     fn name(&self) -> &'static str {
@@ -228,13 +256,12 @@ impl Pass for PlaceReskateSpawn {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SummarizeReskateSpawn;
 
-/// [`SummarizeReskateSpawn`] as a pass factory: it takes no options.
-pub fn summarize_reskate_spawn(o: &Options) -> Result<Box<dyn Pass>, String> {
-    match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(SummarizeReskateSpawn)),
-    }
-}
+/// `summarize-reskate-spawn`'s declaration ([`primase_core::pass::PassRegistry::add`]): it takes no options.
+pub const SUMMARIZE_RESKATE_SPAWN: PassSpec = PassSpec {
+    name: "summarize-reskate-spawn",
+    options: &[],
+    make: |_| Ok(Box::new(SummarizeReskateSpawn)),
+};
 
 impl Pass for SummarizeReskateSpawn {
     fn name(&self) -> &'static str {

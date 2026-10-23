@@ -10,7 +10,7 @@
 //! each part's own lights (a summary for another cap is refused). A part that is not the whole and has no summary is
 //! refused. The whole map capped at once goes through the same summary.
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Entity, World};
 
 use super::Owned;
@@ -41,20 +41,13 @@ impl SelectReskateLights {
         self.cell
     }
 
-    /// From its options (`per_cell` and `cell`, both required), through [`SelectReskateLights::new`].
-    pub fn from_options(o: &Options) -> Result<SelectReskateLights, String> {
-        if let Some(k) = o.keys().find(|k| !["per_cell", "cell"].contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let per_cell = o
-            .get("per_cell")
-            .ok_or("per_cell is required: a light cap is the program's choice")?;
+    /// From its options, through [`SelectReskateLights::new`].
+    fn from_given(g: &Given) -> Result<SelectReskateLights, String> {
+        let per_cell = g.required("per_cell");
         let per_cell = per_cell
             .parse()
             .map_err(|_| format!("per_cell={per_cell} is not a count"))?;
-        let cell = o
-            .get("cell")
-            .ok_or("cell is required (metres): the cap's grouping is the program's choice")?;
+        let cell = g.required("cell");
         let cell = cell
             .parse()
             .map_err(|_| format!("cell={cell} is not a number of metres"))?;
@@ -62,10 +55,28 @@ impl SelectReskateLights {
     }
 }
 
-/// [`SelectReskateLights::from_options`] as a pass factory.
-pub fn select_reskate_lights(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(SelectReskateLights::from_options(o)?))
-}
+/// `per_cell` and `cell`, as `select-reskate-lights` and `summarize-reskate-lights` take them: the program's, no
+/// default.
+const CAP_OPTIONS: [OptionSpec; 2] = [
+    OptionSpec::required(
+        "per_cell",
+        "1",
+        "a count: the most lights kept in each cell (0 leaves out every light)",
+    ),
+    OptionSpec::required(
+        "cell",
+        "200",
+        "metres above 0: the edge of the ground cells the cap groups lights by",
+    ),
+];
+
+/// `select-reskate-lights`' declaration ([`primase_core::pass::PassRegistry::add`]): a light cap and its grouping are
+/// the program's, no default.
+pub const SELECT_RESKATE_LIGHTS: PassSpec = PassSpec {
+    name: "select-reskate-lights",
+    options: &CAP_OPTIONS,
+    make: |g| Ok(Box::new(SelectReskateLights::from_given(g)?)),
+};
 
 /// Light `l` as the cap ranks it, `id` naming it.
 fn ranked(l: &PlacedLight, id: u64) -> RankedLight {
@@ -185,12 +196,16 @@ impl SummarizeReskateLights {
     }
 }
 
-/// [`SummarizeReskateLights`] from [`SelectReskateLights::from_options`]'s options, as a pass factory.
-pub fn summarize_reskate_lights(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(SummarizeReskateLights(
-        SelectReskateLights::from_options(o)?,
-    )))
-}
+/// `summarize-reskate-lights`' declaration ([`primase_core::pass::PassRegistry::add`]): `select-reskate-lights`' cap.
+pub const SUMMARIZE_RESKATE_LIGHTS: PassSpec = PassSpec {
+    name: "summarize-reskate-lights",
+    options: &CAP_OPTIONS,
+    make: |g| {
+        Ok(Box::new(SummarizeReskateLights(SelectReskateLights::from_given(
+            g,
+        )?)))
+    },
+};
 
 impl Pass for SummarizeReskateLights {
     fn name(&self) -> &'static str {
@@ -298,11 +313,15 @@ mod tests {
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect()
         };
-        assert!(SelectReskateLights::from_options(&o(&[("per_cell", "8")])).is_err());
-        assert!(SelectReskateLights::from_options(&o(&[("cell", "200")])).is_err());
-        assert!(SelectReskateLights::from_options(&o(&[("per_cell", "8"), ("cell", "0")])).is_err());
+        assert!(SELECT_RESKATE_LIGHTS.instance(&o(&[("per_cell", "8")])).is_err());
+        assert!(SELECT_RESKATE_LIGHTS.instance(&o(&[("cell", "200")])).is_err());
+        assert!(
+            SELECT_RESKATE_LIGHTS
+                .instance(&o(&[("per_cell", "8"), ("cell", "0")]))
+                .is_err()
+        );
         assert!(SelectReskateLights::new(8, f32::NAN).is_err());
         let full = o(&[("per_cell", "8"), ("cell", "200")]);
-        assert_eq!(SelectReskateLights::from_options(&full).unwrap().options(), full);
+        assert_eq!(SELECT_RESKATE_LIGHTS.instance(&full).unwrap().options(), full);
     }
 }

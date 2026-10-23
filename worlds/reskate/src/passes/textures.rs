@@ -17,7 +17,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{ColorSpace, Entity, Name, TexFormat, TexRole, Texture, World};
 
 use crate::components::{FileRef, Other, SkateMaterial, SkateTexture};
@@ -107,6 +107,13 @@ fn tinted(w: &World, base: Entity, tint: [u8; 3]) -> Result<Option<TintedCopy>, 
     };
     Ok(Some((texture, skate, name)))
 }
+
+/// `prepare-reskate-textures`'s declaration ([`primase_core::pass::PassRegistry::add`]): it takes no options.
+pub const PREPARE_RESKATE_TEXTURES: PassSpec = PassSpec {
+    name: "prepare-reskate-textures",
+    options: &[],
+    make: |_| Ok(Box::new(PrepareReskateTextures)),
+};
 
 impl Pass for PrepareReskateTextures {
     fn name(&self) -> &'static str {

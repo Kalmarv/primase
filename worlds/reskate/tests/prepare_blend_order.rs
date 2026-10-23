@@ -19,8 +19,8 @@ use primase_reskate::components::{
 use primase_reskate::passes::SummarizeReskateMap;
 use primase_reskate::passes::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::passes::{
-    PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateOverlays, RaiseOptions,
-    plan_reskate_blend_budget, prepare_reskate_blend_order,
+    PLAN_RESKATE_BLEND_BUDGET, PREPARE_RESKATE_BLEND_ORDER, PlanReskateBlendBudget, PrepareReskateBlendOrder,
+    PrepareReskateOverlays, RaiseOptions,
 };
 
 fn tmp(name: &str) -> PathBuf {
@@ -336,9 +336,12 @@ fn the_blend_order_options_round_trip_and_are_checked() {
         o(&[("grid", "200")]),
         o(&[("grid", "0"), ("tile", "100"), ("limit", "2000")]),
     ] {
-        let pass = prepare_reskate_blend_order(&given).unwrap();
+        let pass = PREPARE_RESKATE_BLEND_ORDER.instance(&given).unwrap();
         assert_eq!(
-            prepare_reskate_blend_order(&pass.options()).unwrap().options(),
+            PREPARE_RESKATE_BLEND_ORDER
+                .instance(&pass.options())
+                .unwrap()
+                .options(),
             pass.options()
         );
     }
@@ -349,7 +352,7 @@ fn the_blend_order_options_round_trip_and_are_checked() {
         o(&[("grid", "200"), ("tile", "0")]),
         o(&[("grid", "200"), ("step", "0.004")]),
     ] {
-        assert!(prepare_reskate_blend_order(&bad).is_err(), "{bad:?}");
+        assert!(PREPARE_RESKATE_BLEND_ORDER.instance(&bad).is_err(), "{bad:?}");
     }
 }
 
@@ -571,7 +574,7 @@ fn the_budget_options_round_trip_and_are_checked() {
         pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect()
     };
     for given in [o(&[("objects", "pool")]), o(&[("objects", "12")])] {
-        let pass = plan_reskate_blend_budget(&given).unwrap();
+        let pass = PLAN_RESKATE_BLEND_BUDGET.instance(&given).unwrap();
         assert_eq!(pass.options(), given);
     }
     for bad in [
@@ -580,6 +583,6 @@ fn the_budget_options_round_trip_and_are_checked() {
         o(&[("objects", "all")]),
         o(&[("objects", "1"), ("grid", "200")]),
     ] {
-        assert!(plan_reskate_blend_budget(&bad).is_err(), "{bad:?}");
+        assert!(PLAN_RESKATE_BLEND_BUDGET.instance(&bad).is_err(), "{bad:?}");
     }
 }

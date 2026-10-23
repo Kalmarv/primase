@@ -26,7 +26,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Collision, Entity, Instance, Mesh, Transform, World};
 
 use super::Owned;
@@ -79,39 +79,46 @@ impl PrepareReskateFloor {
         self.stub_below
     }
 
-    /// From its options (`min_height` and `stub_below` required, `floor` optional), through the same constructors.
-    pub fn from_options(o: &Options) -> Result<PrepareReskateFloor, String> {
-        let number = |k: &str| -> Result<Option<f32>, String> {
-            o.get(k)
-                .map(|v| {
-                    v.parse::<f32>()
-                        .map_err(|_| format!("{k}={v} is not a number of metres"))
-                })
-                .transpose()
+    /// From its options, through the same constructors.
+    fn from_given(g: &Given) -> Result<PrepareReskateFloor, String> {
+        let metres = |k: &str, v: &str| -> Result<f32, String> {
+            v.parse::<f32>()
+                .map_err(|_| format!("{k}={v} is not a number of metres"))
         };
-        if let Some(k) = o
-            .keys()
-            .find(|k| !matches!(k.as_str(), "min_height" | "stub_below" | "floor"))
-        {
-            return Err(format!("unknown option {k}"));
-        }
-        let (Some(min_height), Some(stub_below)) = (number("min_height")?, number("stub_below")?) else {
-            return Err(
-                "min_height and stub_below are required: the floor's height and the cutoff below it".into(),
-            );
-        };
-        let pass = PrepareReskateFloor::new(min_height, stub_below)?;
-        match number("floor")? {
-            Some(f) => pass.with_pinned_floor(f),
+        let pass = PrepareReskateFloor::new(
+            metres("min_height", g.required("min_height"))?,
+            metres("stub_below", g.required("stub_below"))?,
+        )?;
+        match g.optional("floor") {
+            Some(v) => pass.with_pinned_floor(metres("floor", v)?),
             None => Ok(pass),
         }
     }
 }
 
-/// [`PrepareReskateFloor::from_options`] as a pass factory.
-pub fn prepare_reskate_floor(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PrepareReskateFloor::from_options(o)?))
-}
+/// `min_height`, `stub_below` and `floor`, as `prepare-reskate-floor` and `decide-reskate-floor` take them.
+const FLOOR_OPTIONS: [OptionSpec; 3] = [
+    OptionSpec::required("min_height", "0", "metres: the height the floor is lifted to"),
+    OptionSpec::required(
+        "stub_below",
+        "0",
+        "metres, 0 or more: geometry wholly more than this below the floor is left out",
+    ),
+    OptionSpec::optional(
+        "floor",
+        "0",
+        "metres: the floor pinned at this height",
+        "the floor measured from the map",
+    ),
+];
+
+/// `prepare-reskate-floor`'s declaration ([`primase_core::pass::PassRegistry::add`]): the floor is the program's, no
+/// default.
+pub const PREPARE_RESKATE_FLOOR: PassSpec = PassSpec {
+    name: "prepare-reskate-floor",
+    options: &FLOOR_OPTIONS,
+    make: |g| Ok(Box::new(PrepareReskateFloor::from_given(g)?)),
+};
 
 /// The height of local point `v` placed by `t`, as the map writer computes it in its frame (x, -z, y): the placement's
 /// origin height plus its axes' height components times the point's writer coordinates, summed in that order.
@@ -473,13 +480,12 @@ impl PrepareReskateFloor {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SummarizeReskateFloor;
 
-/// [`SummarizeReskateFloor`] as a pass factory: it takes no options.
-pub fn summarize_reskate_floor(o: &Options) -> Result<Box<dyn Pass>, String> {
-    match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(SummarizeReskateFloor)),
-    }
-}
+/// `summarize-reskate-floor`'s declaration ([`primase_core::pass::PassRegistry::add`]): it takes no options.
+pub const SUMMARIZE_RESKATE_FLOOR: PassSpec = PassSpec {
+    name: "summarize-reskate-floor",
+    options: &[],
+    make: |_| Ok(Box::new(SummarizeReskateFloor)),
+};
 
 impl Pass for SummarizeReskateFloor {
     fn name(&self) -> &'static str {
@@ -512,12 +518,13 @@ impl DecideReskateFloor {
     }
 }
 
-/// [`DecideReskateFloor`] from [`PrepareReskateFloor::from_options`]'s options, as a pass factory.
-pub fn decide_reskate_floor(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(DecideReskateFloor(PrepareReskateFloor::from_options(
-        o,
-    )?)))
-}
+/// `decide-reskate-floor`'s declaration ([`primase_core::pass::PassRegistry::add`]): `prepare-reskate-floor`'s
+/// settings.
+pub const DECIDE_RESKATE_FLOOR: PassSpec = PassSpec {
+    name: "decide-reskate-floor",
+    options: &FLOOR_OPTIONS,
+    make: |g| Ok(Box::new(DecideReskateFloor(PrepareReskateFloor::from_given(g)?))),
+};
 
 impl Pass for DecideReskateFloor {
     fn name(&self) -> &'static str {

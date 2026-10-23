@@ -32,8 +32,8 @@ pub mod vertex_alpha;
 pub mod water;
 
 pub use blend_budget::{
-    FinalizeReskateBlendBudget, PlanReskateBlendBudget, finalize_reskate_blend_budget,
-    plan_reskate_blend_budget,
+    FINALIZE_RESKATE_BLEND_BUDGET, FinalizeReskateBlendBudget, PLAN_RESKATE_BLEND_BUDGET,
+    PlanReskateBlendBudget,
 };
 /// Whether a soup (and its rock flags) can be cut by triangle: one surface and one rock flag per triangle, every index a
 /// vertex. A pass runs on a world it may not have verified, so what it indexes it checks, naming the entity.
@@ -83,58 +83,58 @@ pub(crate) fn keep_triangles(
     }
 }
 
-pub use blend_order::{PrepareReskateBlendOrder, prepare_reskate_blend_order};
+pub use blend_order::{PREPARE_RESKATE_BLEND_ORDER, PrepareReskateBlendOrder};
 pub use blended::{
-    BlendedSelection, PrepareReskateBlendedSurfaces, UniformAlpha, prepare_reskate_blended_surfaces,
+    BlendedSelection, PREPARE_RESKATE_BLENDED_SURFACES, PrepareReskateBlendedSurfaces, UniformAlpha,
 };
 pub use budget::{
-    BudgetReskateTextures, SummarizeReskateTextures, budget_reskate_textures, summarize_reskate_textures,
+    BUDGET_RESKATE_TEXTURES, BudgetReskateTextures, SUMMARIZE_RESKATE_TEXTURES, SummarizeReskateTextures,
 };
 pub use collision::{
-    PrepareReskateCellCollision, PrepareReskateCollision, ShareReskateCollision,
-    prepare_reskate_cell_collision, prepare_reskate_collision, share_reskate_collision,
+    PREPARE_RESKATE_CELL_COLLISION, PREPARE_RESKATE_COLLISION, PrepareReskateCellCollision,
+    PrepareReskateCollision, SHARE_RESKATE_COLLISION, ShareReskateCollision,
 };
 pub use floor::{
-    DecideReskateFloor, PrepareReskateFloor, SummarizeReskateFloor, decide_reskate_floor,
-    prepare_reskate_floor, summarize_reskate_floor,
+    DECIDE_RESKATE_FLOOR, DecideReskateFloor, PREPARE_RESKATE_FLOOR, PrepareReskateFloor,
+    SUMMARIZE_RESKATE_FLOOR, SummarizeReskateFloor,
 };
-pub use grind_curves::LowerReskateGrindCurves;
-pub use grinds::{PrepareReskateGrinds, prepare_reskate_grinds};
-pub use ground_markers::GroundReskateMarkers;
+pub use grind_curves::{LOWER_RESKATE_GRIND_CURVES, LowerReskateGrindCurves};
+pub use grinds::{PREPARE_RESKATE_GRINDS, PrepareReskateGrinds};
+pub use ground_markers::{GROUND_RESKATE_MARKERS, GroundReskateMarkers};
 pub use layered_lower::LowerLayeredPbr;
-pub use layout::{SummarizeReskateLayout, summarize_reskate_layout};
+pub use layout::{SUMMARIZE_RESKATE_LAYOUT, SummarizeReskateLayout};
 pub use lights::{
-    SelectReskateLights, SummarizeReskateLights, select_reskate_lights, summarize_reskate_lights,
+    SELECT_RESKATE_LIGHTS, SUMMARIZE_RESKATE_LIGHTS, SelectReskateLights, SummarizeReskateLights,
 };
-pub use overlays::{PrepareReskateOverlays, prepare_reskate_overlays};
+pub use overlays::{PREPARE_RESKATE_OVERLAYS, PrepareReskateOverlays};
 pub use pause_map::{
-    PauseColour, PauseDrawing, PauseExtent, PauseLeaveOut, PauseSource, PrepareReskatePauseMap,
-    SkatePauseImage, SkatePausePicture, prepare_reskate_pause_map,
+    PREPARE_RESKATE_PAUSE_MAP, PauseColour, PauseDrawing, PauseExtent, PauseLeaveOut, PauseSource,
+    PrepareReskatePauseMap, SkatePauseImage, SkatePausePicture,
 };
 pub use raise::{
-    LightCalibration, RaiseOptions, RaiseSkate, SKATE_LIGHT_SCALE, class_to_skate, raise_skate,
-    raise_skate_pass, studio_watts,
+    LightCalibration, RAISE_SKATE, RaiseOptions, RaiseSkate, SKATE_LIGHT_SCALE, class_to_skate, raise_skate,
+    studio_watts,
 };
-pub use region::{ClipReskateRegion, clip_reskate_region};
+pub use region::{CLIP_RESKATE_REGION, ClipReskateRegion};
 pub use sampling::{
-    PrepareReskateUvTransforms, PrepareReskateWrap, SamplingConflicts, prepare_reskate_uv_transforms,
-    prepare_reskate_wrap,
+    PREPARE_RESKATE_UV_TRANSFORMS, PREPARE_RESKATE_WRAP, PrepareReskateUvTransforms, PrepareReskateWrap,
+    SamplingConflicts,
 };
-pub use shadows::LowerReskateShadows;
+pub use shadows::{LOWER_RESKATE_SHADOWS, LowerReskateShadows};
 pub use snap::{
-    SnapReskateMarkers, SummarizeReskateInstances, SummarizeReskateWater, snap_reskate_markers,
-    summarize_reskate_instances, summarize_reskate_water,
+    SNAP_RESKATE_MARKERS, SUMMARIZE_RESKATE_INSTANCES, SUMMARIZE_RESKATE_WATER, SnapReskateMarkers,
+    SummarizeReskateInstances, SummarizeReskateWater,
 };
 pub use spawn::{
-    PlaceReskateSpawn, ReskateSpawnAt, SummarizeReskateSpawn, place_reskate_spawn, summarize_reskate_spawn,
+    PLACE_RESKATE_SPAWN, PlaceReskateSpawn, ReskateSpawnAt, SUMMARIZE_RESKATE_SPAWN, SummarizeReskateSpawn,
 };
-pub use summarize::{SummarizeReskateMap, summarize_reskate_map};
-pub use textures::{PrepareReskateTextures, tint_pixels};
-pub use unlit::{LowerReskateUnlit, UnlitAs, lower_reskate_unlit};
-pub use uv_repeats::{PrepareReskateUvRepeats, RepeatBlended, RepeatDecals, prepare_reskate_uv_repeats};
+pub use summarize::{SUMMARIZE_RESKATE_MAP, SummarizeReskateMap};
+pub use textures::{PREPARE_RESKATE_TEXTURES, PrepareReskateTextures, tint_pixels};
+pub use unlit::{LOWER_RESKATE_UNLIT, LowerReskateUnlit, UnlitAs};
+pub use uv_repeats::{PREPARE_RESKATE_UV_REPEATS, PrepareReskateUvRepeats, RepeatBlended, RepeatDecals};
 pub use water::{
-    OceanMaterials, PrepareReskateWater, SummarizeReskateContent, WaterExtent, prepare_reskate_water,
-    summarize_reskate_content,
+    OceanMaterials, PREPARE_RESKATE_WATER, PrepareReskateWater, SUMMARIZE_RESKATE_CONTENT,
+    SummarizeReskateContent, WaterExtent,
 };
 
 use std::collections::BTreeSet;

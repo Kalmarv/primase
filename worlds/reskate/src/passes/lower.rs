@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog, PassRegistry};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode as PbrAlpha, PbrMaterial, TextureRef, Wrap as PbrWrap};
 use primase_core::{
     ColorSpace, Entity, Instance, Light, LightKind, Name, NormalConvention, NormalGreen, NormalX, NormalZ,
@@ -13,27 +13,26 @@ use primase_core::{
 
 use crate::components::{AlphaMode, MaterialClass, SkateLight, SkateMaterial, SkateTexture, Wrap};
 
-/// Register the dialect's lowerings.
-pub(crate) fn register(reg: &mut PassRegistry) {
-    reg.register("lower-layered-pbr", |o: &Options| {
-        if let Some(k) = o.keys().next() {
-            return Err(format!("unknown option {k}"));
-        }
-        Ok(Box::new(super::LowerLayeredPbr))
-    });
-    reg.register("lower-skate-pbr", |o: &Options| {
-        if let Some(k) = o.keys().next() {
-            return Err(format!("unknown option {k}"));
-        }
-        Ok(Box::new(LowerSkatePbr))
-    });
-    reg.register("lower-skate-lights", |o: &Options| {
-        if let Some(k) = o.keys().next() {
-            return Err(format!("unknown option {k}"));
-        }
-        Ok(Box::new(LowerSkateLights))
-    });
-}
+/// `lower-layered-pbr`'s declaration ([`primase_core::pass::PassRegistry::add`]): it takes no options.
+pub const LOWER_LAYERED_PBR: PassSpec = PassSpec {
+    name: "lower-layered-pbr",
+    options: &[],
+    make: |_| Ok(Box::new(super::LowerLayeredPbr)),
+};
+
+/// `lower-skate-pbr`'s declaration ([`primase_core::pass::PassRegistry::add`]): it takes no options.
+pub const LOWER_SKATE_PBR: PassSpec = PassSpec {
+    name: "lower-skate-pbr",
+    options: &[],
+    make: |_| Ok(Box::new(LowerSkatePbr)),
+};
+
+/// `lower-skate-lights`' declaration ([`primase_core::pass::PassRegistry::add`]): it takes no options.
+pub const LOWER_SKATE_LIGHTS: PassSpec = PassSpec {
+    name: "lower-skate-lights",
+    options: &[],
+    make: |_| Ok(Box::new(LowerSkateLights)),
+};
 
 /// `skate.material` -> `pbr.material` with skate-scene v1's class defaults (see [`lower_material`]). A material that
 /// casts no shadow (`cast_shadows` false) states it per material, core per drawn entity: a placement drawing only such

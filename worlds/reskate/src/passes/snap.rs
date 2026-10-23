@@ -28,7 +28,7 @@ use std::path::Path;
 
 use primase_core::World;
 use primase_core::convert::PartScope;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_meshops::vector::Vec3;
 
 use super::Owned;
@@ -114,24 +114,13 @@ impl SnapReskateMarkers {
         &self.basis
     }
 
-    /// From its options (all optional, the writer's defaults otherwise), through the same setters.
-    pub fn from_options(o: &Options) -> Result<SnapReskateMarkers, String> {
+    /// From its options (each the writer's default when not given), through the same setters.
+    fn from_given(g: &Given) -> Result<SnapReskateMarkers, String> {
         let number = |k: &str| -> Result<Option<f64>, String> {
-            o.get(k)
+            g.optional(k)
                 .map(|v| v.parse::<f64>().map_err(|_| format!("{k}={v} is not a number")))
                 .transpose()
         };
-        let known = [
-            "limit",
-            "offset_x",
-            "offset_y",
-            "min_instances",
-            "min_instance_tris",
-            "max_render_edge",
-        ];
-        if let Some(k) = o.keys().find(|k| !known.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
         let mut pass = SnapReskateMarkers::for_default_encoding();
         if let Some(l) = number("limit")? {
             pass = pass.with_limit(l as f32)?;
@@ -143,7 +132,7 @@ impl SnapReskateMarkers {
         ];
         pass = pass.with_offset(offset)?;
         let count = |k: &str, d: i64| -> Result<i64, String> {
-            o.get(k).map_or(Ok(d), |v| {
+            g.optional(k).map_or(Ok(d), |v| {
                 v.parse::<i64>().map_err(|_| format!("{k}={v} is not a count"))
             })
         };
@@ -156,10 +145,25 @@ impl SnapReskateMarkers {
     }
 }
 
-/// [`SnapReskateMarkers::from_options`] as a pass factory.
-pub fn snap_reskate_markers(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(SnapReskateMarkers::from_options(o)?))
-}
+const SNAP_OPTIONS: [OptionSpec; 6] = {
+    use super::overlays::{LIMIT, MAX_RENDER_EDGE, MIN_INSTANCE_TRIS, MIN_INSTANCES, OFFSET_X, OFFSET_Y};
+    [
+        LIMIT,
+        OFFSET_X,
+        OFFSET_Y,
+        MIN_INSTANCES,
+        MIN_INSTANCE_TRIS,
+        MAX_RENDER_EDGE,
+    ]
+};
+
+/// `snap-reskate-markers`'s declaration ([`primase_core::pass::PassRegistry::add`]): the writer settings the collision
+/// depends on, each the writer's unless stated (the render tile is not one of them).
+pub const SNAP_RESKATE_MARKERS: PassSpec = PassSpec {
+    name: "snap-reskate-markers",
+    options: &SNAP_OPTIONS,
+    make: |g| Ok(Box::new(SnapReskateMarkers::from_given(g)?)),
+};
 
 impl Pass for SnapReskateMarkers {
     fn name(&self) -> &'static str {
@@ -425,13 +429,12 @@ impl SnapReskateMarkers {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SummarizeReskateInstances;
 
-/// [`SummarizeReskateInstances`] as a pass factory: it takes no options.
-pub fn summarize_reskate_instances(o: &Options) -> Result<Box<dyn Pass>, String> {
-    match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(SummarizeReskateInstances)),
-    }
-}
+/// `summarize-reskate-instances`'s declaration ([`primase_core::pass::PassRegistry::add`]): it takes no options.
+pub const SUMMARIZE_RESKATE_INSTANCES: PassSpec = PassSpec {
+    name: "summarize-reskate-instances",
+    options: &[],
+    make: |_| Ok(Box::new(SummarizeReskateInstances)),
+};
 
 impl Pass for SummarizeReskateInstances {
     fn name(&self) -> &'static str {
@@ -466,13 +469,12 @@ impl Pass for SummarizeReskateInstances {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SummarizeReskateWater;
 
-/// [`SummarizeReskateWater`] as a pass factory: it takes no options.
-pub fn summarize_reskate_water(o: &Options) -> Result<Box<dyn Pass>, String> {
-    match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(SummarizeReskateWater)),
-    }
-}
+/// `summarize-reskate-water`'s declaration ([`primase_core::pass::PassRegistry::add`]): it takes no options.
+pub const SUMMARIZE_RESKATE_WATER: PassSpec = PassSpec {
+    name: "summarize-reskate-water",
+    options: &[],
+    make: |_| Ok(Box::new(SummarizeReskateWater)),
+};
 
 impl Pass for SummarizeReskateWater {
     fn name(&self) -> &'static str {

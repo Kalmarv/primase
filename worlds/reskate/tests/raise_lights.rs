@@ -7,7 +7,7 @@ use primase_core::{Light, LightKind, Transform, World};
 use primase_reskate::{
     components::SkateLight,
     passes::lower::{LowerSkateLights, lower_light},
-    passes::{LightCalibration, RaiseOptions, raise_skate},
+    passes::{LightCalibration, RAISE_SKATE, RaiseOptions, raise_skate},
 };
 
 fn close(a: f32, b: f32) -> bool {
@@ -236,16 +236,23 @@ fn the_calibration_is_stated() {
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect()
     };
-    let e = RaiseOptions::from_options(&o(&[("name", "n")])).unwrap_err();
+    let e = RAISE_SKATE.instance(&o(&[("name", "n")])).err().unwrap();
     assert!(e.contains("light_scale is required"), "{e}");
-    assert!(RaiseOptions::from_options(&o(&[("name", "n"), ("light_scale", "bright")])).is_err());
+    assert!(
+        RAISE_SKATE
+            .instance(&o(&[("name", "n"), ("light_scale", "bright")]))
+            .is_err()
+    );
     for (given, calibration) in [
         ("standard", LightCalibration::Standard),
         ("0.0003007", LightCalibration::Scale(3.007e-4)),
     ] {
-        let r = RaiseOptions::from_options(&o(&[("name", "n"), ("light_scale", given)])).unwrap();
-        assert_eq!(r.lights(), calibration);
+        let made = RAISE_SKATE
+            .instance(&o(&[("name", "n"), ("light_scale", given)]))
+            .unwrap();
+        let r = RaiseOptions::new("n", calibration).unwrap();
+        assert_eq!(made.options(), r.options());
         assert_eq!(r.options()["light_scale"], given);
-        assert_eq!(RaiseOptions::from_options(&r.options()).unwrap(), r);
+        assert_eq!(RAISE_SKATE.instance(&r.options()).unwrap().options(), r.options());
     }
 }

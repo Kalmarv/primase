@@ -17,7 +17,7 @@
 //! and region, merged over every part).
 
 use primase_core::World;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 
 use crate::assembly::{EncodingOptions, blend_chains};
 use crate::components::SkateBlendChains;
@@ -54,22 +54,28 @@ impl PrepareReskateBlendOrder {
         self.grid
     }
 
-    /// From its options: `grid` required; the encoding's as `prepare-reskate-overlays` takes them.
-    pub fn from_options(o: &Options) -> Result<PrepareReskateBlendOrder, String> {
-        let mut rest = o.clone();
-        let grid = rest
-            .remove("grid")
-            .ok_or("grid is required (metres of the grid chain objects are cut on; 0: not cut)")?;
+    /// From its options: `grid`, and the encoding's as `prepare-reskate-overlays` takes them.
+    fn from_given(g: &Given) -> Result<PrepareReskateBlendOrder, String> {
+        let grid = g.required("grid");
         let grid: f32 = grid.parse().map_err(|_| format!("grid={grid} is not a number"))?;
-        let e = crate::passes::overlays::encoding_of(&rest)?;
+        let e = crate::passes::overlays::encoding_from(g)?;
         PrepareReskateBlendOrder::new(grid)?.for_encoding(&e)
     }
 }
 
-/// [`PrepareReskateBlendOrder::from_options`] as a pass factory.
-pub fn prepare_reskate_blend_order(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PrepareReskateBlendOrder::from_options(o)?))
-}
+const BLEND_ORDER_OPTIONS: [OptionSpec; 8] = crate::passes::overlays::with_encoding([OptionSpec::required(
+    "grid",
+    "0",
+    "metres, finite and 0 or more: the grid chain objects are cut on (0: not cut)",
+)]);
+
+/// `prepare-reskate-blend-order`'s declaration ([`primase_core::pass::PassRegistry::add`]): the grid is the program's,
+/// no default; the encoding the writer's unless stated.
+pub const PREPARE_RESKATE_BLEND_ORDER: PassSpec = PassSpec {
+    name: "prepare-reskate-blend-order",
+    options: &BLEND_ORDER_OPTIONS,
+    make: |g| Ok(Box::new(PrepareReskateBlendOrder::from_given(g)?)),
+};
 
 impl Pass for PrepareReskateBlendOrder {
     fn name(&self) -> &'static str {

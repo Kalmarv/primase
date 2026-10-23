@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::World;
 use primase_core::convert::PartScope;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 
 use crate::blend_order::take_chains;
 use crate::components::{
@@ -177,11 +177,6 @@ impl PlanReskateBlendBudget {
     pub fn mode(&self) -> BlendBudgetMode {
         self.mode
     }
-
-    /// From its options: `objects`, required: a count, or `pool`.
-    pub fn from_options(o: &Options) -> Result<PlanReskateBlendBudget, String> {
-        Ok(PlanReskateBlendBudget { mode: mode_of(o)? })
-    }
 }
 
 impl FinalizeReskateBlendBudget {
@@ -202,29 +197,26 @@ impl FinalizeReskateBlendBudget {
     pub fn mode(&self) -> BlendBudgetMode {
         self.mode
     }
-
-    /// From its options, as [`PlanReskateBlendBudget::from_options`].
-    pub fn from_options(o: &Options) -> Result<FinalizeReskateBlendBudget, String> {
-        Ok(FinalizeReskateBlendBudget { mode: mode_of(o)? })
-    }
 }
 
-/// The mode the options `o` state: `objects`, required: a count, or `pool`.
-fn mode_of(o: &Options) -> Result<BlendBudgetMode, String> {
-    if let Some(k) = o.keys().find(|k| k.as_str() != "objects") {
-        return Err(format!("unknown option {k}"));
-    }
-    match o.get("objects").map(String::as_str) {
-        None => {
-            Err("objects is required: a count of chain objects, or pool (the cull-ID pool's room)".into())
-        }
-        Some("pool") => Ok(BlendBudgetMode::Pool),
-        Some(v) => v
+/// The mode `objects` states: a count, or `pool`.
+fn mode_of(g: &Given) -> Result<BlendBudgetMode, String> {
+    match g.required("objects") {
+        "pool" => Ok(BlendBudgetMode::Pool),
+        v => v
             .parse::<usize>()
             .map(BlendBudgetMode::Objects)
             .map_err(|_| format!("objects={v}: a count, or pool")),
     }
 }
+
+/// `objects`, as both passes take it: the budget is the program's, no default.
+const OBJECTS: [OptionSpec; 1] = [OptionSpec::required(
+    "objects",
+    "pool",
+    "the most chain objects: a count, or pool (as many as the cull-ID pool has room for after the map's other \
+     objects)",
+)];
 
 /// The options stating `mode`.
 fn options_of(mode: BlendBudgetMode) -> Options {
@@ -268,15 +260,19 @@ fn record(w: &mut World, log: &mut PassLog, p: SkateBlendBudget) {
     w.insert_resource(p);
 }
 
-/// [`PlanReskateBlendBudget::from_options`] as a pass factory.
-pub fn plan_reskate_blend_budget(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PlanReskateBlendBudget::from_options(o)?))
-}
+/// `plan-reskate-blend-budget`'s declaration ([`primase_core::pass::PassRegistry::add`]).
+pub const PLAN_RESKATE_BLEND_BUDGET: PassSpec = PassSpec {
+    name: "plan-reskate-blend-budget",
+    options: &OBJECTS,
+    make: |g| Ok(Box::new(PlanReskateBlendBudget { mode: mode_of(g)? })),
+};
 
-/// [`FinalizeReskateBlendBudget::from_options`] as a pass factory.
-pub fn finalize_reskate_blend_budget(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(FinalizeReskateBlendBudget::from_options(o)?))
-}
+/// `finalize-reskate-blend-budget`'s declaration ([`primase_core::pass::PassRegistry::add`]).
+pub const FINALIZE_RESKATE_BLEND_BUDGET: PassSpec = PassSpec {
+    name: "finalize-reskate-blend-budget",
+    options: &OBJECTS,
+    make: |g| Ok(Box::new(FinalizeReskateBlendBudget { mode: mode_of(g)? })),
+};
 
 impl Pass for PlanReskateBlendBudget {
     fn name(&self) -> &'static str {

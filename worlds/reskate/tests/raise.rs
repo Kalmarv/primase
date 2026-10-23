@@ -1064,26 +1064,26 @@ fn raise_skate_pass_options() {
         ("map".to_owned(), "PUDDLE:default;SNOW:asphalt".to_owned()),
         ("unclassified".to_owned(), "default".to_owned()),
     ]);
-    let pass = passes::raise_skate_pass(&o).unwrap();
+    let pass = passes::RAISE_SKATE.instance(&o).unwrap();
     assert_eq!(
-        passes::raise_skate_pass(&pass.options()).unwrap().options(),
+        passes::RAISE_SKATE.instance(&pass.options()).unwrap().options(),
         pass.options()
     );
     // the name has no default
-    let Err(e) = passes::raise_skate_pass(&Options::new()) else {
+    let Err(e) = passes::RAISE_SKATE.instance(&Options::new()) else {
         panic!("raise-skate without a name");
     };
-    assert!(e.contains("name=N is required"), "{e}");
+    assert!(e.contains("name is required"), "{e}");
     let spawn: Options = [
         ("name".to_owned(), "m".to_owned()),
         ("light_scale".to_owned(), "standard".to_owned()),
         ("spawn".to_owned(), "centre".to_owned()),
     ]
     .into();
-    let Err(e) = passes::raise_skate_pass(&spawn) else {
+    let Err(e) = passes::RAISE_SKATE.instance(&spawn) else {
         panic!("spawn is not a raise-skate option");
     };
-    assert!(e.contains("place-spawn"), "{e}");
+    assert!(e.starts_with("unknown option spawn"), "{e}");
     for bad in [
         vec![("spawn_x", "1"), ("spawn_z", "1")],
         vec![("spawn_yaw", "180")],
@@ -1097,7 +1097,7 @@ fn raise_skate_pass_options() {
             .chain(&bad)
             .map(|&(k, v)| (k.to_owned(), v.to_owned()))
             .collect();
-        assert!(passes::raise_skate_pass(&o).is_err(), "{bad:?}");
+        assert!(passes::RAISE_SKATE.instance(&o).is_err(), "{bad:?}");
     }
 }
 

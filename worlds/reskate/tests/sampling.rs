@@ -11,7 +11,10 @@ use primase_core::{
     Entity, Instance, MaterialVariants, Mesh, Name, Primitive, Semantic, Stream, Topology, Transform, World,
 };
 use primase_meshops::{SpecializeMaterialVariants, UnusedVariants};
-use primase_reskate::passes::{PrepareReskateUvTransforms, PrepareReskateWrap, SamplingConflicts};
+use primase_reskate::passes::{
+    PREPARE_RESKATE_UV_TRANSFORMS, PREPARE_RESKATE_WRAP, PrepareReskateUvTransforms, PrepareReskateWrap,
+    SamplingConflicts,
+};
 
 fn run(w: &mut World, passes: Vec<Box<dyn Pass>>) -> Result<PassLog, String> {
     let mut report = RunReport::default();
@@ -256,22 +259,23 @@ fn slots_take_the_anchors_wrap_along_the_axis() {
 #[test]
 fn the_choices_are_required_and_printed() {
     let o = |kv: &[(&str, &str)]| -> Options { kv.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect() };
-    assert!(PrepareReskateUvTransforms::from_options(&o(&[("anchor", "base-colour")])).is_err());
-    assert!(PrepareReskateUvTransforms::from_options(&o(&[("conflicts", "adopt")])).is_err());
-    assert!(
-        PrepareReskateUvTransforms::from_options(&o(&[("anchor", "albedo"), ("conflicts", "adopt")]))
-            .is_err()
+    let uv = |kv: &[(&str, &str)]| PREPARE_RESKATE_UV_TRANSFORMS.instance(&o(kv));
+    assert!(uv(&[("anchor", "base-colour")]).is_err());
+    assert!(uv(&[("conflicts", "adopt")]).is_err());
+    assert!(uv(&[("anchor", "albedo"), ("conflicts", "adopt")]).is_err());
+    let p = uv(&[("anchor", "specular-colour"), ("conflicts", "refuse")]).unwrap();
+    let typed = PrepareReskateUvTransforms::new(TextureSlot::SpecularColor, SamplingConflicts::Refuse);
+    assert_eq!(p.options(), typed.options());
+    let wrap = |kv: &[(&str, &str)]| PREPARE_RESKATE_WRAP.instance(&o(kv));
+    assert!(wrap(&[("anchor", "normal")]).is_err());
+    assert!(wrap(&[("anchor", "normal"), ("axis", "w")]).is_err());
+    let p = wrap(&[("anchor", "normal"), ("axis", "v")]).unwrap();
+    assert_eq!(
+        p.options(),
+        PrepareReskateWrap::new(TextureSlot::Normal, 1).unwrap().options()
     );
-    let p = PrepareReskateUvTransforms::from_options(&o(&[
-        ("anchor", "specular-colour"),
-        ("conflicts", "refuse"),
-    ]))
-    .unwrap();
-    assert_eq!(p.anchor(), TextureSlot::SpecularColor);
-    assert_eq!(PrepareReskateUvTransforms::from_options(&p.options()).unwrap(), p);
-    assert!(PrepareReskateWrap::from_options(&o(&[("anchor", "normal")])).is_err());
-    assert!(PrepareReskateWrap::from_options(&o(&[("anchor", "normal"), ("axis", "w")])).is_err());
-    let p = PrepareReskateWrap::from_options(&o(&[("anchor", "normal"), ("axis", "v")])).unwrap();
-    assert_eq!((p.anchor(), p.axis()), (TextureSlot::Normal, 1));
-    assert_eq!(PrepareReskateWrap::from_options(&p.options()).unwrap(), p);
+    assert_eq!(
+        PREPARE_RESKATE_WRAP.instance(&p.options()).unwrap().options(),
+        p.options()
+    );
 }

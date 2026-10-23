@@ -10,7 +10,7 @@ use primase_core::{Collision, Entity, Surfaces, World};
 use primase_reskate::EncodingOptions;
 use primase_reskate::components::{MarkerKind, Other, SkateGrindCurve, SkateGrindPrism, SkateMarker};
 use primase_reskate::grind::PrismRules;
-use primase_reskate::passes::{PrepareReskateGrinds, RaiseOptions, prepare_reskate_grinds};
+use primase_reskate::passes::{PREPARE_RESKATE_GRINDS, PrepareReskateGrinds, RaiseOptions};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -233,9 +233,12 @@ fn the_grind_options_round_trip_and_are_checked() {
             ("corner_degrees", "45"),
         ]),
     ] {
-        let pass = prepare_reskate_grinds(&given).unwrap();
+        let pass = PREPARE_RESKATE_GRINDS.instance(&given).unwrap();
         assert_eq!(
-            prepare_reskate_grinds(&pass.options()).unwrap().options(),
+            PREPARE_RESKATE_GRINDS
+                .instance(&pass.options())
+                .unwrap()
+                .options(),
             pass.options()
         );
     }
@@ -250,6 +253,6 @@ fn the_grind_options_round_trip_and_are_checked() {
         o(&[("corner_degrees", "200")]),
         o(&[("radius", "0.03")]),
     ] {
-        assert!(prepare_reskate_grinds(&bad).is_err(), "{bad:?}");
+        assert!(PREPARE_RESKATE_GRINDS.instance(&bad).is_err(), "{bad:?}");
     }
 }

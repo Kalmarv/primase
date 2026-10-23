@@ -34,7 +34,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform, Wrap};
 use primase_core::{
     DrawLayer, DrawOrder, Entity, MaterialUsage, MaterialVariants, Mesh, Name, Semantic, Stream, Texture,
@@ -114,43 +114,31 @@ impl PrepareReskateBlendedSurfaces {
     }
 
     /// From its options: `cutoff`, `materials` (`all`, or names separated by `;`) and `uniform` (`cutout`, or `frost`
-    /// with `opacity` and `grey`), all required.
-    pub fn from_options(o: &Options) -> Result<PrepareReskateBlendedSurfaces, String> {
-        if let Some(k) = o.keys().find(|k| {
-            !matches!(
-                k.as_str(),
-                "cutoff" | "materials" | "uniform" | "opacity" | "grey"
-            )
-        }) {
-            return Err(format!("unknown option {k}"));
-        }
+    /// with `opacity` and `grey`).
+    fn from_given(g: &Given) -> Result<PrepareReskateBlendedSurfaces, String> {
         let number = |k: &str| -> Result<Option<f32>, String> {
-            o.get(k)
+            g.optional(k)
                 .map(|v| v.parse::<f32>().map_err(|_| format!("{k}={v} is not a number")))
                 .transpose()
         };
-        let cutoff = number("cutoff")?.ok_or("cutoff is required: the alpha a cutout surface draws above")?;
-        let selection = match o.get("materials").map(String::as_str) {
-            Some("all") => BlendedSelection::All,
-            Some(names) => BlendedSelection::Named(names.split(';').map(str::to_owned).collect()),
-            None => return Err("materials is required: all, or names separated by ;".into()),
+        let cutoff = g.required("cutoff");
+        let cutoff = cutoff
+            .parse::<f32>()
+            .map_err(|_| format!("cutoff={cutoff} is not a number"))?;
+        let selection = match g.required("materials") {
+            "all" => BlendedSelection::All,
+            names => BlendedSelection::Named(names.split(';').map(str::to_owned).collect()),
         };
         let (opacity, grey) = (number("opacity")?, number("grey")?);
-        let uniform = match (o.get("uniform").map(String::as_str), opacity, grey) {
-            (Some("cutout"), None, None) => UniformAlpha::Cutout,
-            (Some("cutout"), _, _) => {
+        let uniform = match (g.choice::<UniformKind>("uniform"), opacity, grey) {
+            (UniformKind::Cutout, None, None) => UniformAlpha::Cutout,
+            (UniformKind::Cutout, _, _) => {
                 return Err("opacity and grey are frost's: uniform=cutout takes neither".into());
             }
-            (Some("frost"), Some(opacity), Some(grey)) => UniformAlpha::Frost { opacity, grey },
-            (Some("frost"), _, _) => {
+            (UniformKind::Frost, Some(opacity), Some(grey)) => UniformAlpha::Frost { opacity, grey },
+            (UniformKind::Frost, _, _) => {
                 return Err(
                     "uniform=frost requires opacity (its least opacity) and grey (linear, 0..1)".into(),
-                );
-            }
-            (Some(v), _, _) => return Err(format!("uniform={v}: cutout or frost")),
-            (None, _, _) => {
-                return Err(
-                    "uniform is required: cutout or frost (a blended surface of uniform alpha below the cutoff)".into(),
                 );
             }
         };
@@ -158,10 +146,56 @@ impl PrepareReskateBlendedSurfaces {
     }
 }
 
-/// [`PrepareReskateBlendedSurfaces::from_options`] as a pass factory.
-pub fn prepare_reskate_blended_surfaces(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PrepareReskateBlendedSurfaces::from_options(o)?))
+/// `uniform`'s values: what [`UniformAlpha`] is, without frost's numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UniformKind {
+    Cutout,
+    Frost,
 }
+
+impl Choice for UniformKind {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("cutout", UniformKind::Cutout), ("frost", UniformKind::Frost)];
+}
+
+/// What no value of a frost setting means.
+const FROST_ONLY: &str = "required with uniform=frost, not taken with cutout";
+
+/// `prepare-reskate-blended-surfaces`' declaration ([`primase_core::pass::PassRegistry::add`]): which blended surfaces
+/// a map draws as cutouts, at what alpha, and what a uniform one below it becomes, are the program's, no default.
+pub const PREPARE_RESKATE_BLENDED_SURFACES: PassSpec = PassSpec {
+    name: "prepare-reskate-blended-surfaces",
+    options: &[
+        OptionSpec::required(
+            "cutoff",
+            "0.5",
+            "in (0, 1]: the alpha a cutout surface draws above",
+        ),
+        OptionSpec::required(
+            "materials",
+            "all",
+            "the blended materials drawn as cutouts: all, or their names separated by ;",
+        ),
+        OptionSpec::choice::<UniformKind>(
+            "uniform",
+            "what a blended surface of uniform alpha below the cutoff becomes: a cutout, or opaque frosted glass \
+             (frost, with opacity and grey)",
+        ),
+        OptionSpec::optional(
+            "opacity",
+            "0.35",
+            "in (0, 1]: frosted glass's least opacity",
+            FROST_ONLY,
+        ),
+        OptionSpec::optional(
+            "grey",
+            "0.8",
+            "linear, in [0, 1]: the grey frosted glass is drawn over",
+            FROST_ONLY,
+        ),
+    ],
+    make: |g| Ok(Box::new(PrepareReskateBlendedSurfaces::from_given(g)?)),
+};
 
 /// Why a blended material is not drawn as a cutout: drawn over a surface, or water; `None`: eligible.
 fn kept_blended(w: &World, e: Entity) -> Option<&'static str> {
@@ -464,10 +498,10 @@ impl Pass for PrepareReskateBlendedSurfaces {
         ]);
         match self.uniform {
             UniformAlpha::Cutout => {
-                o.insert("uniform".to_owned(), "cutout".to_owned());
+                o.insert("uniform".to_owned(), UniformKind::Cutout.text().to_owned());
             }
             UniformAlpha::Frost { opacity, grey } => {
-                o.insert("uniform".to_owned(), "frost".to_owned());
+                o.insert("uniform".to_owned(), UniformKind::Frost.text().to_owned());
                 o.insert("opacity".to_owned(), opacity.to_string());
                 o.insert("grey".to_owned(), grey.to_string());
             }
@@ -670,12 +704,13 @@ mod tests {
         let leaves = material(&mut w, "leaves", AlphaMode::Blend);
         let glass = material(&mut w, "glass", AlphaMode::Blend);
         let mut log = PassLog::default();
-        let pass = PrepareReskateBlendedSurfaces::from_options(&Options::from([
-            ("cutoff".to_owned(), "0.4".to_owned()),
-            ("materials".to_owned(), "leaves".to_owned()),
-            ("uniform".to_owned(), "cutout".to_owned()),
-        ]))
-        .unwrap();
+        let pass = PREPARE_RESKATE_BLENDED_SURFACES
+            .instance(&Options::from([
+                ("cutoff".to_owned(), "0.4".to_owned()),
+                ("materials".to_owned(), "leaves".to_owned()),
+                ("uniform".to_owned(), "cutout".to_owned()),
+            ]))
+            .unwrap();
         pass.run(&mut w, &mut log).unwrap();
         assert_eq!(mode(&w, leaves), AlphaMode::Mask { cutoff: 0.4 });
         assert_eq!(mode(&w, glass), AlphaMode::Blend);
@@ -702,77 +737,89 @@ mod tests {
                 .collect()
         };
         assert!(
-            PrepareReskateBlendedSurfaces::from_options(&o(&[("materials", "all"), ("uniform", "cutout")]))
+            PREPARE_RESKATE_BLENDED_SURFACES
+                .instance(&o(&[("materials", "all"), ("uniform", "cutout")]))
                 .is_err()
         );
         assert!(
-            PrepareReskateBlendedSurfaces::from_options(&o(&[("cutoff", "0.5"), ("uniform", "cutout")]))
+            PREPARE_RESKATE_BLENDED_SURFACES
+                .instance(&o(&[("cutoff", "0.5"), ("uniform", "cutout")]))
                 .is_err()
         );
         assert!(
-            PrepareReskateBlendedSurfaces::from_options(&o(&[("cutoff", "0.5"), ("materials", "all")]))
+            PREPARE_RESKATE_BLENDED_SURFACES
+                .instance(&o(&[("cutoff", "0.5"), ("materials", "all")]))
                 .is_err()
         );
         for bad in ["0", "1.5", "NaN"] {
             assert!(
-                PrepareReskateBlendedSurfaces::from_options(&o(&[
-                    ("cutoff", bad),
-                    ("materials", "all"),
-                    ("uniform", "cutout")
-                ]))
-                .is_err(),
+                PREPARE_RESKATE_BLENDED_SURFACES
+                    .instance(&o(&[
+                        ("cutoff", bad),
+                        ("materials", "all"),
+                        ("uniform", "cutout")
+                    ]))
+                    .is_err(),
                 "{bad}"
             );
         }
         assert!(
-            PrepareReskateBlendedSurfaces::from_options(&o(&[
-                ("cutoff", "0.5"),
-                ("materials", ""),
-                ("uniform", "cutout")
-            ]))
-            .is_err()
+            PREPARE_RESKATE_BLENDED_SURFACES
+                .instance(&o(&[("cutoff", "0.5"), ("materials", ""), ("uniform", "cutout")]))
+                .is_err()
         );
-        let p = PrepareReskateBlendedSurfaces::from_options(&o(&[
-            ("cutoff", "0.5"),
-            ("materials", "a;b"),
-            ("uniform", "cutout"),
-        ]))
-        .unwrap();
+        let p = PREPARE_RESKATE_BLENDED_SURFACES
+            .instance(&o(&[
+                ("cutoff", "0.5"),
+                ("materials", "a;b"),
+                ("uniform", "cutout"),
+            ]))
+            .unwrap();
         assert_eq!(
-            PrepareReskateBlendedSurfaces::from_options(&p.options()).unwrap(),
-            p
+            PREPARE_RESKATE_BLENDED_SURFACES
+                .instance(&p.options())
+                .unwrap()
+                .options(),
+            p.options()
         );
         assert_eq!(p.options()["materials"], "a;b");
         // frost takes opacity and grey, both, and cutout neither; each in range
         let frost = |extra: &[(&str, &str)]| {
             let mut kv = vec![("cutoff", "0.5"), ("materials", "all"), ("uniform", "frost")];
             kv.extend_from_slice(extra);
-            PrepareReskateBlendedSurfaces::from_options(&o(&kv))
+            PREPARE_RESKATE_BLENDED_SURFACES.instance(&o(&kv))
         };
         assert!(frost(&[("opacity", "0.35")]).is_err());
         assert!(frost(&[("grey", "0.8")]).is_err());
         assert!(frost(&[("opacity", "0"), ("grey", "0.8")]).is_err());
         assert!(frost(&[("opacity", "0.35"), ("grey", "1.5")]).is_err());
         assert!(
-            PrepareReskateBlendedSurfaces::from_options(&o(&[
-                ("cutoff", "0.5"),
-                ("materials", "all"),
-                ("uniform", "cutout"),
-                ("opacity", "0.35")
-            ]))
-            .is_err()
+            PREPARE_RESKATE_BLENDED_SURFACES
+                .instance(&o(&[
+                    ("cutoff", "0.5"),
+                    ("materials", "all"),
+                    ("uniform", "cutout"),
+                    ("opacity", "0.35")
+                ]))
+                .is_err()
         );
         let p = frost(&[("opacity", "0.35"), ("grey", "0.8")]).unwrap();
         assert_eq!(
-            p.uniform(),
-            UniformAlpha::Frost {
-                opacity: 0.35,
-                grey: 0.8
-            }
+            p.options(),
+            o(&[
+                ("cutoff", "0.5"),
+                ("materials", "all"),
+                ("uniform", "frost"),
+                ("opacity", "0.35"),
+                ("grey", "0.8")
+            ])
         );
         assert_eq!(
-            PrepareReskateBlendedSurfaces::from_options(&p.options()).unwrap(),
-            p
+            PREPARE_RESKATE_BLENDED_SURFACES
+                .instance(&p.options())
+                .unwrap()
+                .options(),
+            p.options()
         );
     }
 

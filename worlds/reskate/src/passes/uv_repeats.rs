@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::ledger::Measure;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Entity, MaterialVariants, Mesh, Name, Semantic, Stream, World};
 
 use crate::components::{AlphaMode, MaterialClass, SkateMaterial};
@@ -49,32 +49,40 @@ impl PrepareReskateUvRepeats {
     pub fn new(decals: RepeatDecals, blended: RepeatBlended) -> PrepareReskateUvRepeats {
         PrepareReskateUvRepeats { decals, blended }
     }
-
-    /// From its options: `decals=omit|keep` and `blended=cutout|keep`, both required.
-    pub fn from_options(o: &Options) -> Result<PrepareReskateUvRepeats, String> {
-        if let Some(k) = o.keys().find(|k| !["decals", "blended"].contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let decals = match o.get("decals").map(String::as_str) {
-            Some("omit") => RepeatDecals::Omit,
-            Some("keep") => RepeatDecals::Keep,
-            Some(v) => return Err(format!("decals={v}: omit or keep")),
-            None => return Err("decals is required: omit or keep".into()),
-        };
-        let blended = match o.get("blended").map(String::as_str) {
-            Some("cutout") => RepeatBlended::Cutout,
-            Some("keep") => RepeatBlended::Keep,
-            Some(v) => return Err(format!("blended={v}: cutout or keep")),
-            None => return Err("blended is required: cutout or keep".into()),
-        };
-        Ok(PrepareReskateUvRepeats::new(decals, blended))
-    }
 }
 
-/// [`PrepareReskateUvRepeats::from_options`] as a pass factory.
-pub fn prepare_reskate_uv_repeats(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PrepareReskateUvRepeats::from_options(o)?))
+impl Choice for RepeatDecals {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("omit", RepeatDecals::Omit), ("keep", RepeatDecals::Keep)];
 }
+
+impl Choice for RepeatBlended {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("cutout", RepeatBlended::Cutout), ("keep", RepeatBlended::Keep)];
+}
+
+/// `prepare-reskate-uv-repeats`' declaration ([`primase_core::pass::PassRegistry::add`]): what a map does with
+/// triangles over more texture repeats than Studio draws is the program's, no default.
+pub const PREPARE_RESKATE_UV_REPEATS: PassSpec = PassSpec {
+    name: "prepare-reskate-uv-repeats",
+    options: &[
+        OptionSpec::choice::<RepeatDecals>(
+            "decals",
+            "a primitive drawn only by repeating decals has those triangles left out (omit), or left for Studio to \
+             cut (keep)",
+        ),
+        OptionSpec::choice::<RepeatBlended>(
+            "blended",
+            "a repeating blended primitive with such a triangle is drawn alpha tested (cutout), or stays blended (keep)",
+        ),
+    ],
+    make: |g| {
+        Ok(Box::new(PrepareReskateUvRepeats::new(
+            g.choice("decals"),
+            g.choice("blended"),
+        )))
+    },
+};
 
 /// Whether the triangle `t` of texture coordinates `uv` spans more repeats than Studio draws.
 fn over(uv: &[[f32; 2]], t: [u32; 3]) -> Result<bool, String> {
@@ -137,22 +145,8 @@ impl Pass for PrepareReskateUvRepeats {
     }
     fn options(&self) -> Options {
         Options::from([
-            (
-                "decals".to_owned(),
-                match self.decals {
-                    RepeatDecals::Omit => "omit",
-                    RepeatDecals::Keep => "keep",
-                }
-                .to_owned(),
-            ),
-            (
-                "blended".to_owned(),
-                match self.blended {
-                    RepeatBlended::Cutout => "cutout",
-                    RepeatBlended::Keep => "keep",
-                }
-                .to_owned(),
-            ),
+            ("decals".to_owned(), self.decals.text().to_owned()),
+            ("blended".to_owned(), self.blended.text().to_owned()),
         ])
     }
     // materials and meshes are optional: a map without them has nothing to change

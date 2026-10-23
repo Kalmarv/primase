@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Entity, Instance, MaterialVariants, Mesh, Texture, Topology, Transform, World};
 
 use super::Owned;
@@ -65,35 +65,41 @@ impl BudgetReskateTextures {
         self.aux_weight
     }
 
-    /// From its options (`max` required), through [`BudgetReskateTextures::new`] and the same setter.
-    pub fn from_options(o: &Options) -> Result<BudgetReskateTextures, String> {
-        let max = o
-            .get("max")
-            .ok_or("max=N is required: the most textures the map draws")?;
+    /// From its options, through [`BudgetReskateTextures::new`] and the same setter.
+    fn from_given(g: &Given) -> Result<BudgetReskateTextures, String> {
+        let max = g.required("max");
         let max = max
             .parse::<usize>()
             .map_err(|_| format!("max={max} is not a number of textures"))?;
         let mut pass = BudgetReskateTextures::new(max)?;
-        for (k, v) in o {
-            match k.as_str() {
-                "max" => {}
-                "aux_weight" => {
-                    let w = v
-                        .parse::<f64>()
-                        .map_err(|_| format!("aux_weight={v} is not a number"))?;
-                    pass = pass.with_aux_weight(w)?;
-                }
-                _ => return Err(format!("unknown option {k}")),
-            }
+        if let Some(v) = g.optional("aux_weight") {
+            let w = v
+                .parse::<f64>()
+                .map_err(|_| format!("aux_weight={v} is not a number"))?;
+            pass = pass.with_aux_weight(w)?;
         }
         Ok(pass)
     }
 }
 
-/// [`BudgetReskateTextures::from_options`] as a pass factory.
-pub fn budget_reskate_textures(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(BudgetReskateTextures::from_options(o)?))
-}
+/// `max` and `aux_weight`, as `budget-reskate-textures` and `summarize-reskate-textures` take them.
+const BUDGET_OPTIONS: [OptionSpec; 2] = [
+    OptionSpec::required("max", "1", "1 or more: the most textures the map draws"),
+    OptionSpec::optional(
+        "aux_weight",
+        "0.25",
+        "finite, 0 or more: normal maps and masks weighed at this times their materials' area",
+        "0.25, the reference writer's",
+    ),
+];
+
+/// `budget-reskate-textures`' declaration ([`primase_core::pass::PassRegistry::add`]): the budget is the program's
+/// number, no default.
+pub const BUDGET_RESKATE_TEXTURES: PassSpec = PassSpec {
+    name: "budget-reskate-textures",
+    options: &BUDGET_OPTIONS,
+    make: |g| Ok(Box::new(BudgetReskateTextures::from_given(g)?)),
+};
 
 /// The world-space area of a primitive's triangles placed by `t`.
 fn placed_area(mesh_prim: &primase_core::Primitive, t: &Transform) -> f64 {
@@ -341,12 +347,17 @@ impl SummarizeReskateTextures {
     }
 }
 
-/// [`SummarizeReskateTextures`] from [`BudgetReskateTextures::from_options`]'s options, as a pass factory.
-pub fn summarize_reskate_textures(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(SummarizeReskateTextures(
-        BudgetReskateTextures::from_options(o)?,
-    )))
-}
+/// `summarize-reskate-textures`' declaration ([`primase_core::pass::PassRegistry::add`]): `budget-reskate-textures`'
+/// budget.
+pub const SUMMARIZE_RESKATE_TEXTURES: PassSpec = PassSpec {
+    name: "summarize-reskate-textures",
+    options: &BUDGET_OPTIONS,
+    make: |g| {
+        Ok(Box::new(SummarizeReskateTextures(
+            BudgetReskateTextures::from_given(g)?,
+        )))
+    },
+};
 
 impl Pass for SummarizeReskateTextures {
     fn name(&self) -> &'static str {

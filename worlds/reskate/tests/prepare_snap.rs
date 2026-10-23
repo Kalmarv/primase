@@ -10,7 +10,7 @@ use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Surfaces, World};
 use primase_reskate::EncodingOptions;
 use primase_reskate::components::{MarkerKind, Other, SkateMarker, SkateMarkerSnaps, Snap, SnapMode};
-use primase_reskate::passes::{RaiseOptions, SnapReskateMarkers, snap_reskate_markers};
+use primase_reskate::passes::{RaiseOptions, SNAP_RESKATE_MARKERS, SnapReskateMarkers};
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir()
@@ -229,15 +229,15 @@ fn the_snap_options_round_trip_and_are_checked() {
             ("max_render_edge", "60"),
         ]),
     ] {
-        let pass = snap_reskate_markers(&given).unwrap();
+        let pass = SNAP_RESKATE_MARKERS.instance(&given).unwrap();
         assert_eq!(
-            snap_reskate_markers(&pass.options()).unwrap().options(),
+            SNAP_RESKATE_MARKERS.instance(&pass.options()).unwrap().options(),
             pass.options()
         );
     }
     assert_eq!(
-        SnapReskateMarkers::from_options(&o(&[])).unwrap(),
-        SnapReskateMarkers::for_default_encoding()
+        SNAP_RESKATE_MARKERS.instance(&o(&[])).unwrap().options(),
+        SnapReskateMarkers::for_default_encoding().options()
     );
     for bad in [
         o(&[("limit", "20")]),
@@ -248,6 +248,6 @@ fn the_snap_options_round_trip_and_are_checked() {
         o(&[("max_render_edge", "-2")]),
         o(&[("snap", "street")]),
     ] {
-        assert!(snap_reskate_markers(&bad).is_err(), "{bad:?}");
+        assert!(SNAP_RESKATE_MARKERS.instance(&bad).is_err(), "{bad:?}");
     }
 }

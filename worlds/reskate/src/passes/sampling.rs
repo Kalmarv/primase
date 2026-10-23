@@ -19,7 +19,7 @@
 
 use std::collections::BTreeSet;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureSlot, UvTransform, Wrap};
 use primase_core::{Entity, LayeredMaterial, MaterialVariants, Mesh, MeshFile, Name, World};
 
@@ -33,40 +33,28 @@ const SLOTS: [(TextureSlot, &str); 7] = [
     (TextureSlot::SpecularColor, "specular-colour"),
 ];
 
-fn slot_of(v: &str) -> Result<TextureSlot, String> {
-    SLOTS
-        .iter()
-        .find(|(_, k)| *k == v)
-        .map(|(s, _)| *s)
-        .ok_or_else(|| {
-            format!(
-                "anchor={v}: one of {}",
-                SLOTS.iter().map(|(_, k)| *k).collect::<Vec<_>>().join(", ")
-            )
-        })
+/// A slot as `anchor` names it: [`TextureSlot`] is core's, so the choice is this crate's own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Anchor(TextureSlot);
+
+impl Choice for Anchor {
+    const VALUES: &'static [(&'static str, Self)] = &{
+        let mut values = [("", Anchor(TextureSlot::BaseColor)); SLOTS.len()];
+        let mut i = 0;
+        while i < SLOTS.len() {
+            values[i] = (SLOTS[i].1, Anchor(SLOTS[i].0));
+            i += 1;
+        }
+        values
+    };
 }
 
-fn slot_key(s: TextureSlot) -> &'static str {
-    SLOTS
-        .iter()
-        .find(|(x, _)| *x == s)
-        .map(|(_, k)| *k)
-        .expect("every slot listed")
-}
-
-/// The required `anchor` option, the other keys `others` allowed.
-fn anchor_option(o: &Options, others: &[&str]) -> Result<TextureSlot, String> {
-    if let Some(k) = o
-        .keys()
-        .find(|k| k.as_str() != "anchor" && !others.contains(&k.as_str()))
-    {
-        return Err(format!("unknown option {k}"));
-    }
-    match o.get("anchor") {
-        Some(v) => slot_of(v),
-        None => Err("anchor is required: the texture slot a material's other slots sample as".into()),
-    }
-}
+/// `anchor`, as both passes take it: the program's, no default.
+const ANCHOR: OptionSpec = OptionSpec::choice::<Anchor>(
+    "anchor",
+    "the texture slot a material's other slots sample as (a material without a texture there follows its first \
+     textured slot)",
+);
 
 fn name_of(w: &World, e: Entity) -> String {
     w.get::<Name>(e).map_or_else(|| format!("{e:?}"), |n| n.0.clone())
@@ -137,27 +125,32 @@ impl PrepareReskateUvTransforms {
         self.conflicts
     }
 
-    /// From its options: `anchor=<slot>` and `conflicts=adopt|refuse`, both required.
-    pub fn from_options(o: &Options) -> Result<PrepareReskateUvTransforms, String> {
-        let anchor = anchor_option(o, &["conflicts"])?;
-        let conflicts = match o.get("conflicts").map(String::as_str) {
-            Some("adopt") => SamplingConflicts::Adopt,
-            Some("refuse") => SamplingConflicts::Refuse,
-            Some(v) => return Err(format!("conflicts={v}: adopt or refuse")),
-            None => {
-                return Err(
-                    "conflicts is required: adopt or refuse (a slot tiling otherwise than its anchor)".into(),
-                );
-            }
-        };
-        Ok(PrepareReskateUvTransforms::new(anchor, conflicts))
+    /// From its options: `anchor=<slot>` and `conflicts=adopt|refuse`.
+    fn from_given(g: &Given) -> PrepareReskateUvTransforms {
+        PrepareReskateUvTransforms::new(g.choice::<Anchor>("anchor").0, g.choice("conflicts"))
     }
 }
 
-/// [`PrepareReskateUvTransforms::from_options`] as a pass factory.
-pub fn prepare_reskate_uv_transforms(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PrepareReskateUvTransforms::from_options(o)?))
+impl Choice for SamplingConflicts {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("adopt", SamplingConflicts::Adopt),
+        ("refuse", SamplingConflicts::Refuse),
+    ];
 }
+
+/// `prepare-reskate-uv-transforms`' declaration ([`primase_core::pass::PassRegistry::add`]): which slot a material's
+/// textures sample as, and what becomes of a slot that differs, are the program's, no default.
+pub const PREPARE_RESKATE_UV_TRANSFORMS: PassSpec = PassSpec {
+    name: "prepare-reskate-uv-transforms",
+    options: &[
+        ANCHOR,
+        OptionSpec::choice::<SamplingConflicts>(
+            "conflicts",
+            "a slot tiling otherwise than its anchor takes the anchor's, reported (adopt), or is an error (refuse)",
+        ),
+    ],
+    make: |g| Ok(Box::new(PrepareReskateUvTransforms::from_given(g))),
+};
 
 impl Pass for PrepareReskateUvTransforms {
     fn name(&self) -> &'static str {
@@ -165,15 +158,8 @@ impl Pass for PrepareReskateUvTransforms {
     }
     fn options(&self) -> Options {
         Options::from([
-            ("anchor".to_owned(), slot_key(self.anchor).to_owned()),
-            (
-                "conflicts".to_owned(),
-                match self.conflicts {
-                    SamplingConflicts::Adopt => "adopt",
-                    SamplingConflicts::Refuse => "refuse",
-                }
-                .to_owned(),
-            ),
+            ("anchor".to_owned(), Anchor(self.anchor).text().to_owned()),
+            ("conflicts".to_owned(), self.conflicts.text().to_owned()),
         ])
     }
     fn requires(&self) -> &[&'static str] {
@@ -295,25 +281,36 @@ impl PrepareReskateWrap {
         self.axis
     }
 
-    /// From its options: `anchor=<slot>` and `axis=u|v`, both required.
-    pub fn from_options(o: &Options) -> Result<PrepareReskateWrap, String> {
-        let anchor = anchor_option(o, &["axis"])?;
-        let axis = match o.get("axis").map(String::as_str) {
-            Some("u") => 0,
-            Some("v") => 1,
-            Some(v) => return Err(format!("axis={v}: u or v")),
-            None => {
-                return Err("axis is required: u or v (the anchor's wrap along it is every slot's)".into());
-            }
-        };
-        PrepareReskateWrap::new(anchor, axis)
+    /// From its options: `anchor=<slot>` and `axis=u|v`, through [`PrepareReskateWrap::new`].
+    fn from_given(g: &Given) -> Result<PrepareReskateWrap, String> {
+        PrepareReskateWrap::new(
+            g.choice::<Anchor>("anchor").0,
+            g.choice::<WrapAxis>("axis") as usize,
+        )
     }
 }
 
-/// [`PrepareReskateWrap::from_options`] as a pass factory.
-pub fn prepare_reskate_wrap(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PrepareReskateWrap::from_options(o)?))
+/// `axis`'s values, as [`PrepareReskateWrap`] counts them (0: u, 1: v).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WrapAxis {
+    U = 0,
+    V = 1,
 }
+
+impl Choice for WrapAxis {
+    const VALUES: &'static [(&'static str, Self)] = &[("u", WrapAxis::U), ("v", WrapAxis::V)];
+}
+
+/// `prepare-reskate-wrap`'s declaration ([`primase_core::pass::PassRegistry::add`]): the anchor and its axis are the
+/// program's, no default.
+pub const PREPARE_RESKATE_WRAP: PassSpec = PassSpec {
+    name: "prepare-reskate-wrap",
+    options: &[
+        ANCHOR,
+        OptionSpec::choice::<WrapAxis>("axis", "u or v: the anchor's wrap along it is every slot's"),
+    ],
+    make: |g| Ok(Box::new(PrepareReskateWrap::from_given(g)?)),
+};
 
 impl Pass for PrepareReskateWrap {
     fn name(&self) -> &'static str {
@@ -321,8 +318,11 @@ impl Pass for PrepareReskateWrap {
     }
     fn options(&self) -> Options {
         Options::from([
-            ("anchor".to_owned(), slot_key(self.anchor).to_owned()),
-            ("axis".to_owned(), ["u", "v"][self.axis].to_owned()),
+            ("anchor".to_owned(), Anchor(self.anchor).text().to_owned()),
+            (
+                "axis".to_owned(),
+                [WrapAxis::U, WrapAxis::V][self.axis].text().to_owned(),
+            ),
         ])
     }
     fn requires(&self) -> &[&'static str] {

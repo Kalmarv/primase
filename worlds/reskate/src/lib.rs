@@ -48,16 +48,15 @@ pub mod dialect {
 /// The preparation passes by their former path ([`crate::passes`]).
 pub mod prepare {
     pub use crate::passes::{
-        BudgetReskateTextures, ClipReskateRegion, OceanMaterials, PauseExtent, PauseSource,
-        PlaceReskateSpawn, PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateFloor,
-        PrepareReskateGrinds, PrepareReskateOverlays, PrepareReskatePauseMap, PrepareReskateTextures,
-        PrepareReskateWater, RaiseOptions, RaiseSkate, ReskateSpawnAt, SKATE_LIGHT_SCALE,
+        BUDGET_RESKATE_TEXTURES, BudgetReskateTextures, CLIP_RESKATE_REGION, ClipReskateRegion,
+        OceanMaterials, PLACE_RESKATE_SPAWN, PLAN_RESKATE_BLEND_BUDGET, PREPARE_RESKATE_BLEND_ORDER,
+        PREPARE_RESKATE_FLOOR, PREPARE_RESKATE_GRINDS, PREPARE_RESKATE_OVERLAYS, PREPARE_RESKATE_PAUSE_MAP,
+        PREPARE_RESKATE_WATER, PauseExtent, PauseSource, PlaceReskateSpawn, PlanReskateBlendBudget,
+        PrepareReskateBlendOrder, PrepareReskateFloor, PrepareReskateGrinds, PrepareReskateOverlays,
+        PrepareReskatePauseMap, PrepareReskateTextures, PrepareReskateWater, RAISE_SKATE, RaiseOptions,
+        RaiseSkate, ReskateSpawnAt, SELECT_RESKATE_LIGHTS, SKATE_LIGHT_SCALE, SNAP_RESKATE_MARKERS,
         SelectReskateLights, SkatePauseImage, SkatePausePicture, SnapReskateMarkers, WaterExtent,
-        budget_reskate_textures, class_to_skate, clip_reskate_region, place_reskate_spawn,
-        plan_reskate_blend_budget, prepare_reskate_blend_order, prepare_reskate_floor,
-        prepare_reskate_grinds, prepare_reskate_overlays, prepare_reskate_pause_map, prepare_reskate_water,
-        raise_skate, raise_skate_pass, select_reskate_lights, snap_reskate_markers, studio_watts,
-        tint_pixels,
+        class_to_skate, raise_skate, studio_watts, tint_pixels,
     };
 }
 
@@ -104,209 +103,65 @@ pub use write::map::{BuildReport, MapSink, target, write_map};
 /// The passes of the ReSkate target, by name: raising core data into the dialect, the target's lowerings, and the
 /// dialect's lowerings back to core.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
-    // the scene's name and the lights' calibration are the program's: no default
-    reg.register_requiring(
-        "raise-skate",
-        passes::raise_skate_pass,
-        &[("name", "n"), ("light_scale", "standard")],
-    );
-    passes::lower::register(reg);
-    // where the spawn goes is the program's: no default
-    reg.register_requiring(
-        "place-reskate-spawn",
-        passes::place_reskate_spawn,
-        &[("at", "centre")],
-    );
-    // which markers and how far above them the search starts are the program's: no default
-    reg.register_requiring(
-        "ground-reskate-markers",
-        |o| Ok(Box::new(passes::GroundReskateMarkers::from_options(o)?)),
-        &[("kinds", "spawn+travel"), ("above", "1")],
-    );
-    reg.register("snap-reskate-markers", passes::snap_reskate_markers);
-    // how the game interpolates between keys is not established: the program states it
-    reg.register_requiring(
-        "lower-skate-clips",
-        game::clip::lower_skate_clips,
-        &[("interpolation", "linear")],
-    );
-    // which curves grind, how thick, on what and which it leaves out are the program's: no default
-    reg.register_requiring(
-        "lower-reskate-grind-curves",
-        |o| Ok(Box::new(passes::LowerReskateGrindCurves::from_options(o)?)),
-        &[
-            ("kinds", "rail"),
-            ("radius", "0.03"),
-            ("surface", "metal_rail"),
-            ("leave-out", "nothing"),
-        ],
-    );
-    reg.register("prepare-reskate-grinds", passes::prepare_reskate_grinds);
-    // the step is the program's: no default
-    reg.register_requiring(
-        "prepare-reskate-overlays",
-        passes::prepare_reskate_overlays,
-        &[("step", "0")],
-    );
-    // which water a map draws and how far is the program's: no default
-    reg.register_requiring(
-        "prepare-reskate-water",
-        passes::prepare_reskate_water,
-        &[("extent", "none")],
-    );
-    // the pause-map picture, its size, extent and drawing, are the program's: no default
-    reg.register_requiring(
-        "prepare-reskate-pause-map",
-        passes::prepare_reskate_pause_map,
-        &[
-            ("from", "geometry"),
-            ("height", "9"),
-            ("extent", "content"),
-            ("leave-out", "nothing"),
-            ("colour", "mean"),
-        ],
-    );
-    // a light cap and its grouping are the program's: no default
-    reg.register_requiring(
-        "select-reskate-lights",
-        passes::select_reskate_lights,
-        &[("per_cell", "1"), ("cell", "200")],
-    );
-    // which blended surfaces a map draws as cutouts, at what alpha, and what a uniform one below it becomes, are the
-    // program's: no default
-    reg.register_requiring(
-        "prepare-reskate-blended-surfaces",
-        passes::prepare_reskate_blended_surfaces,
-        &[("cutoff", "0.5"), ("materials", "all"), ("uniform", "cutout")],
-    );
-    // which slot a material's textures sample as, and what becomes of a slot that differs, are the program's: no default
-    reg.register_requiring(
-        "prepare-reskate-uv-transforms",
-        passes::prepare_reskate_uv_transforms,
-        &[("anchor", "base-colour"), ("conflicts", "adopt")],
-    );
-    reg.register_requiring(
-        "prepare-reskate-wrap",
-        passes::prepare_reskate_wrap,
-        &[("anchor", "base-colour"), ("axis", "u")],
-    );
-    // the lit form an unlit material takes is the program's: no default
-    reg.register_requiring(
-        "lower-reskate-unlit",
-        passes::lower_reskate_unlit,
-        &[("as", "matte")],
-    );
-    // shadow casting as core states it (core.shadows), lowered to skate's per-material flag
-    reg.register("lower-reskate-shadows", |o| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(passes::LowerReskateShadows)),
-    });
-    // what a map does with triangles over more texture repeats than Studio draws is the program's: no default
-    reg.register_requiring(
-        "prepare-reskate-uv-repeats",
-        passes::prepare_reskate_uv_repeats,
-        &[("decals", "omit"), ("blended", "cutout")],
-    );
-    // how the collision is written is the program's: no default
-    reg.register_requiring(
-        "prepare-reskate-collision",
-        passes::prepare_reskate_collision,
-        &[("surfaces", "coalesce"), ("weld", "mm")],
-    );
-    // a part's collision per cell, for a map in parts (the gather traversal), for the encoding given
-    reg.register("share-reskate-collision", passes::share_reskate_collision);
-    // a collision cell of a map in parts planned (the group pipeline): the choices are the program's, no default
-    reg.register_requiring(
-        "prepare-reskate-cell-collision",
-        passes::prepare_reskate_cell_collision,
-        &[("surfaces", "coalesce"), ("weld", "mm")],
-    );
-    // the map's summary, for the encoding given (the writer's defaults unless stated)
-    reg.register("summarize-reskate-map", passes::summarize_reskate_map);
-    // the budget is the program's: no default
-    reg.register_requiring(
-        "plan-reskate-blend-budget",
-        passes::plan_reskate_blend_budget,
-        &[("objects", "pool")],
-    );
-    reg.register_requiring(
-        "finalize-reskate-blend-budget",
-        passes::finalize_reskate_blend_budget,
-        &[("objects", "pool")],
-    );
-    // the grid is the program's: no default
-    reg.register_requiring(
-        "prepare-reskate-blend-order",
-        passes::prepare_reskate_blend_order,
-        &[("grid", "0")],
-    );
-    // the floor is the program's: no default
-    reg.register_requiring(
-        "prepare-reskate-floor",
-        passes::prepare_reskate_floor,
-        &[("min_height", "0"), ("stub_below", "0")],
-    );
-    // a map in parts: the marker snaps' inputs over every part (which prototypes are instanced, the water)
-    reg.register("summarize-reskate-instances", passes::summarize_reskate_instances);
-    reg.register("summarize-reskate-water", passes::summarize_reskate_water);
-    // a map in parts: what each part lays out, for the map sink
-    reg.register_requiring(
-        "summarize-reskate-layout",
-        passes::summarize_reskate_layout,
-        &[("tile", "200")],
-    );
-    // a map in parts: its spawn placed once, from what every part holds
-    reg.register("summarize-reskate-spawn", passes::summarize_reskate_spawn);
-    // a map in parts: its content's extent measured over every part
-    reg.register("summarize-reskate-content", passes::summarize_reskate_content);
-    // a map in parts: its textures weighed over every part (with budget-reskate-textures's budget)
-    reg.register_requiring(
-        "summarize-reskate-textures",
-        passes::summarize_reskate_textures,
-        &[("max", "1")],
-    );
-    // a map in parts: its lights capped over every part (with select-reskate-lights's cap)
-    reg.register_requiring(
-        "summarize-reskate-lights",
-        passes::summarize_reskate_lights,
-        &[("per_cell", "1"), ("cell", "200")],
-    );
-    // a map in parts: its floor measured on every part, decided once (with prepare-reskate-floor's settings)
-    reg.register("summarize-reskate-floor", passes::summarize_reskate_floor);
-    reg.register_requiring(
-        "decide-reskate-floor",
-        passes::decide_reskate_floor,
-        &[("min_height", "0"), ("stub_below", "0")],
-    );
-    // the region is the program's: no default
-    reg.register_requiring(
-        "clip-reskate-region",
-        passes::clip_reskate_region,
-        &[("x0", "0"), ("y0", "0"), ("x1", "1"), ("y1", "1"), ("apron", "0")],
-    );
-    // the budget is the program's number: no default
-    reg.register_requiring(
-        "budget-reskate-textures",
-        passes::budget_reskate_textures,
-        &[("max", "1")],
-    );
-    reg.register("prepare-reskate-textures", |o| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(passes::PrepareReskateTextures)),
-    });
-    // how many overlays a triangle may get is the program's: no default
-    reg.register_requiring(
-        "lower-layered-reskate",
-        passes::layered::lower_layered_reskate,
-        &[("overlays", "all")],
-    );
-    reg.register("lower-tint-reskate", |o| {
-        Ok(Box::new(passes::tint::LowerTintReskate::from_options(o)?))
-    });
-    reg.register("lower-vertex-alpha-reskate", |o| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(passes::vertex_alpha::LowerVertexAlphaReskate)),
-    });
+    use passes::*;
+    for spec in [
+        &RAISE_SKATE,
+        &lower::LOWER_LAYERED_PBR,
+        &lower::LOWER_SKATE_PBR,
+        &lower::LOWER_SKATE_LIGHTS,
+        &PLACE_RESKATE_SPAWN,
+        &GROUND_RESKATE_MARKERS,
+        &SNAP_RESKATE_MARKERS,
+        &game::clip::LOWER_SKATE_CLIPS,
+        &LOWER_RESKATE_GRIND_CURVES,
+        &PREPARE_RESKATE_GRINDS,
+        &PREPARE_RESKATE_OVERLAYS,
+        &PREPARE_RESKATE_WATER,
+        &PREPARE_RESKATE_PAUSE_MAP,
+        &SELECT_RESKATE_LIGHTS,
+        &PREPARE_RESKATE_BLENDED_SURFACES,
+        &PREPARE_RESKATE_UV_TRANSFORMS,
+        &PREPARE_RESKATE_WRAP,
+        &LOWER_RESKATE_UNLIT,
+        // shadow casting as core states it (core.shadows), lowered to skate's per-material flag
+        &LOWER_RESKATE_SHADOWS,
+        &PREPARE_RESKATE_UV_REPEATS,
+        &PREPARE_RESKATE_COLLISION,
+        // a part's collision per cell, for a map in parts (the gather traversal), for the encoding given
+        &SHARE_RESKATE_COLLISION,
+        // a collision cell of a map in parts planned (the group pipeline)
+        &PREPARE_RESKATE_CELL_COLLISION,
+        // the map's summary, for the encoding given (the writer's defaults unless stated)
+        &SUMMARIZE_RESKATE_MAP,
+        &PLAN_RESKATE_BLEND_BUDGET,
+        &FINALIZE_RESKATE_BLEND_BUDGET,
+        &PREPARE_RESKATE_BLEND_ORDER,
+        &PREPARE_RESKATE_FLOOR,
+        // a map in parts: the marker snaps' inputs over every part (which prototypes are instanced, the water)
+        &SUMMARIZE_RESKATE_INSTANCES,
+        &SUMMARIZE_RESKATE_WATER,
+        // a map in parts: what each part lays out, for the map sink
+        &SUMMARIZE_RESKATE_LAYOUT,
+        // a map in parts: its spawn placed once, from what every part holds
+        &SUMMARIZE_RESKATE_SPAWN,
+        // a map in parts: its content's extent measured over every part
+        &SUMMARIZE_RESKATE_CONTENT,
+        // a map in parts: its textures weighed over every part (with budget-reskate-textures's budget)
+        &SUMMARIZE_RESKATE_TEXTURES,
+        // a map in parts: its lights capped over every part (with select-reskate-lights's cap)
+        &SUMMARIZE_RESKATE_LIGHTS,
+        // a map in parts: its floor measured on every part, decided once (with prepare-reskate-floor's settings)
+        &SUMMARIZE_RESKATE_FLOOR,
+        &DECIDE_RESKATE_FLOOR,
+        &CLIP_RESKATE_REGION,
+        &BUDGET_RESKATE_TEXTURES,
+        &PREPARE_RESKATE_TEXTURES,
+        &layered::LOWER_LAYERED_RESKATE,
+        &tint::LOWER_TINT_RESKATE,
+        &vertex_alpha::LOWER_VERTEX_ALPHA_RESKATE,
+    ] {
+        reg.add(spec);
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -381,6 +236,98 @@ fn unsign_zeros(v: &mut serde_json::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The crate registers exactly these passes by their declarations: those with required options are made only with
+    /// them, and every one says what it takes.
+    #[test]
+    fn the_reskate_passes_register_by_name() {
+        use primase_core::pass::{Options, PassRegistry};
+        let mut reg = PassRegistry::new();
+        register(&mut reg);
+        let names = [
+            "budget-reskate-textures",
+            "clip-reskate-region",
+            "decide-reskate-floor",
+            "finalize-reskate-blend-budget",
+            "ground-reskate-markers",
+            "lower-layered-pbr",
+            "lower-layered-reskate",
+            "lower-reskate-grind-curves",
+            "lower-reskate-shadows",
+            "lower-reskate-unlit",
+            "lower-skate-clips",
+            "lower-skate-lights",
+            "lower-skate-pbr",
+            "lower-tint-reskate",
+            "lower-vertex-alpha-reskate",
+            "place-reskate-spawn",
+            "plan-reskate-blend-budget",
+            "prepare-reskate-blend-order",
+            "prepare-reskate-blended-surfaces",
+            "prepare-reskate-cell-collision",
+            "prepare-reskate-collision",
+            "prepare-reskate-floor",
+            "prepare-reskate-grinds",
+            "prepare-reskate-overlays",
+            "prepare-reskate-pause-map",
+            "prepare-reskate-textures",
+            "prepare-reskate-uv-repeats",
+            "prepare-reskate-uv-transforms",
+            "prepare-reskate-water",
+            "prepare-reskate-wrap",
+            "raise-skate",
+            "select-reskate-lights",
+            "share-reskate-collision",
+            "snap-reskate-markers",
+            "summarize-reskate-content",
+            "summarize-reskate-floor",
+            "summarize-reskate-instances",
+            "summarize-reskate-layout",
+            "summarize-reskate-lights",
+            "summarize-reskate-map",
+            "summarize-reskate-spawn",
+            "summarize-reskate-textures",
+            "summarize-reskate-water",
+        ];
+        assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        let free = [
+            "lower-layered-pbr",
+            "lower-reskate-shadows",
+            "lower-skate-lights",
+            "lower-skate-pbr",
+            "lower-tint-reskate",
+            "lower-vertex-alpha-reskate",
+            "prepare-reskate-grinds",
+            "prepare-reskate-textures",
+            "share-reskate-collision",
+            "snap-reskate-markers",
+            "summarize-reskate-content",
+            "summarize-reskate-floor",
+            "summarize-reskate-instances",
+            "summarize-reskate-map",
+            "summarize-reskate-spawn",
+            "summarize-reskate-water",
+        ];
+        for name in names {
+            assert_eq!(reg.requires_options(name), !free.contains(&name), "{name}");
+            assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");
+            assert_eq!(
+                reg.make(name, &Options::new()).is_err(),
+                !free.contains(&name),
+                "{name}"
+            );
+        }
+        assert!(
+            reg.describe("prepare-reskate-water")
+                .unwrap()
+                .starts_with("prepare-reskate-water{(extent|x0)*,y0,x1,y1,margin,ocean}\n")
+        );
+        assert!(
+            reg.describe("place-reskate-spawn")
+                .unwrap()
+                .starts_with("place-reskate-spawn{(at|east)*,north}\n")
+        );
+    }
 
     #[derive(serde::Serialize)]
     struct R {

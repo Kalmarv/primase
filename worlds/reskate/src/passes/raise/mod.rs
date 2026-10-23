@@ -59,7 +59,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::json::f32_decimal;
-use primase_core::pass::PassLog;
+use primase_core::pass::{Given, OptionSpec, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode as PbrAlpha, PbrMaterial, Wrap as PbrWrap};
 use primase_core::{
     Collision, ColorSpace, Entity, Instance, LayeredMaterial, Light, LightKind, MaterialUsage,
@@ -164,53 +164,35 @@ impl RaiseOptions {
         self.lights
     }
 
-    /// From `raise-skate`'s options (`name` and `light_scale=standard|S` required; `map=NAME:skate;...`,
-    /// `unclassified`), through [`RaiseOptions::new`] and the setters.
-    pub fn from_options(o: &primase_core::pass::Options) -> std::result::Result<RaiseOptions, String> {
-        let name = o
-            .get("name")
-            .ok_or("name=N is required: the scene's name, [A-Za-z0-9_-]+")?;
-        let lights = match o.get("light_scale").map(String::as_str) {
-            Some("standard") => LightCalibration::Standard,
-            Some(v) => LightCalibration::Scale(
+    /// From `raise-skate`'s options (`name`, `light_scale=standard|S`, `map=NAME:skate;...`, `unclassified`), through
+    /// [`RaiseOptions::new`] and the setters.
+    fn from_given(g: &Given) -> std::result::Result<RaiseOptions, String> {
+        let lights = match g.required("light_scale") {
+            "standard" => LightCalibration::Standard,
+            v => LightCalibration::Scale(
                 v.parse::<f64>()
                     .map_err(|_| format!("light_scale={v} is not standard or a number"))?,
             ),
-            None => {
-                return Err(
-                    "light_scale is required: standard (skate's fitted calibration) or a scale".into(),
-                );
-            }
         };
-        let mut options = RaiseOptions::new(name, lights)?;
-        for (k, v) in o {
-            match k.as_str() {
-                "name" | "light_scale" => {}
-                "spawn" | "spawn_x" | "spawn_z" | "spawn_yaw" => {
-                    return Err(format!(
-                        "{k}: the spawn is placed before the writer plans, at selection: \
-                         place-spawn{{at=centre | east=E,north=N[,yaw=DEGREES]}} (raise-skate raises it)"
-                    ));
-                }
-                "unclassified" => options = options.with_unclassified(v)?,
-                // the caller's map of source surface names onto skate surfaces: `map=NAME:skate;NAME:skate`
-                "map" => {
-                    let mut surfaces = BTreeMap::new();
-                    for pair in v.split(';').filter(|p| !p.is_empty()) {
-                        let (from, to) = pair
-                            .split_once(':')
-                            .ok_or_else(|| format!("map={v}: each entry is NAME:skate_surface"))?;
-                        surfaces.insert(from.to_owned(), to.to_owned());
-                    }
-                    options = options.with_surfaces(surfaces)?;
-                }
-                _ => return Err(format!("unknown option {k}")),
+        let mut options = RaiseOptions::new(g.required("name"), lights)?;
+        if let Some(v) = g.optional("unclassified") {
+            options = options.with_unclassified(v)?;
+        }
+        // the caller's map of source surface names onto skate surfaces: `map=NAME:skate;NAME:skate`
+        if let Some(v) = g.optional("map") {
+            let mut surfaces = BTreeMap::new();
+            for pair in v.split(';').filter(|p| !p.is_empty()) {
+                let (from, to) = pair
+                    .split_once(':')
+                    .ok_or_else(|| format!("map={v}: each entry is NAME:skate_surface"))?;
+                surfaces.insert(from.to_owned(), to.to_owned());
             }
+            options = options.with_surfaces(surfaces)?;
         }
         Ok(options)
     }
 
-    /// Every setting as `raise-skate`'s options ([`RaiseOptions::from_options`] reads them back).
+    /// Every setting as `raise-skate`'s options ([`RAISE_SKATE`] reads them back).
     pub fn options(&self) -> primase_core::pass::Options {
         let mut o = primase_core::pass::Options::from([
             ("name".to_owned(), self.name.clone()),
@@ -936,12 +918,34 @@ impl RaiseSkate {
     }
 }
 
-/// `raise-skate` from its options (a [`primase_core::pass::PassFactory`]).
-pub fn raise_skate_pass(
-    o: &primase_core::pass::Options,
-) -> std::result::Result<Box<dyn primase_core::pass::Pass>, String> {
-    Ok(Box::new(RaiseSkate::new(RaiseOptions::from_options(o)?)))
-}
+/// `raise-skate`'s declaration ([`primase_core::pass::PassRegistry::add`]): the scene's name and the lights'
+/// calibration are the program's, no default. The spawn is not raise-skate's: it is placed before the writer plans,
+/// at selection (`place-spawn`).
+pub const RAISE_SKATE: PassSpec = PassSpec {
+    name: "raise-skate",
+    options: &[
+        OptionSpec::required("name", "n", "the scene's name, [A-Za-z0-9_-]+"),
+        OptionSpec::required(
+            "light_scale",
+            "standard",
+            "the lights' calibration: standard (skate's fitted calibration), or a scale, finite and above 0",
+        ),
+        OptionSpec::optional(
+            "map",
+            "PUDDLE:default",
+            "the source's surface names onto skate surfaces, NAME:skate_surface separated by ; (it wins over the \
+             surface's class)",
+            "each surface's class decides its skate surface",
+        ),
+        OptionSpec::optional(
+            "unclassified",
+            "default",
+            "the skate surface of a surface with no class and no entry in map",
+            "an unclassified surface's triangles left out (reported)",
+        ),
+    ],
+    make: |g| Ok(Box::new(RaiseSkate::new(RaiseOptions::from_given(g)?))),
+};
 
 impl primase_core::pass::Pass for RaiseSkate {
     fn name(&self) -> &'static str {

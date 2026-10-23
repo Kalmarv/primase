@@ -14,7 +14,7 @@ use primase_reskate::EncodingOptions;
 use primase_reskate::components::{
     CollisionSurfaces, CollisionWeld, MarkerKind, Other, SkateCollisionPlan, SkateMarker, SkateScene,
 };
-use primase_reskate::passes::PrepareReskateCollision;
+use primase_reskate::passes::{PREPARE_RESKATE_COLLISION, PrepareReskateCollision};
 
 const CONCRETE: u16 = 1;
 const METAL: u16 = 3;
@@ -203,24 +203,33 @@ fn the_choices_are_required_and_printed() {
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect()
     };
-    assert!(PrepareReskateCollision::from_options(&o(&[("weld", "mm")])).is_err());
-    assert!(PrepareReskateCollision::from_options(&o(&[("surfaces", "coalesce")])).is_err());
-    assert!(PrepareReskateCollision::from_options(&o(&[("surfaces", "some"), ("weld", "mm")])).is_err());
+    assert!(PREPARE_RESKATE_COLLISION.instance(&o(&[("weld", "mm")])).is_err());
     assert!(
-        PrepareReskateCollision::from_options(&o(&[("surfaces", "exact"), ("weld", "mm"), ("grid", "1")]))
+        PREPARE_RESKATE_COLLISION
+            .instance(&o(&[("surfaces", "coalesce")]))
             .is_err()
     );
-    let p = PrepareReskateCollision::from_options(&o(&[
-        ("surfaces", "coalesce"),
-        ("weld", "mm"),
-        ("tile", "128"),
-    ]))
-    .unwrap();
+    assert!(
+        PREPARE_RESKATE_COLLISION
+            .instance(&o(&[("surfaces", "some"), ("weld", "mm")]))
+            .is_err()
+    );
+    assert!(
+        PREPARE_RESKATE_COLLISION
+            .instance(&o(&[("surfaces", "exact"), ("weld", "mm"), ("grid", "1")]))
+            .is_err()
+    );
+    let p = PREPARE_RESKATE_COLLISION
+        .instance(&o(&[("surfaces", "coalesce"), ("weld", "mm"), ("tile", "128")]))
+        .unwrap();
     let printed = p.options();
     assert_eq!(
         (printed["surfaces"].as_str(), printed["weld"].as_str()),
         ("coalesce", "mm")
     );
     assert_eq!(printed["tile"], "128");
-    assert_eq!(PrepareReskateCollision::from_options(&printed).unwrap(), p);
+    assert_eq!(
+        PREPARE_RESKATE_COLLISION.instance(&printed).unwrap().options(),
+        printed
+    );
 }

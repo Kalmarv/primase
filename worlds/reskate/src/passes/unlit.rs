@@ -6,7 +6,7 @@
 //! the light) is refused: skate-scene has no emissive surface the writer can write, so it would draw black; it is a
 //! form to add when the writer maps one. Each material lowered is reported by name as an approximation.
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, Shading};
 use primase_core::{Entity, Name, World};
 
@@ -31,41 +31,30 @@ impl LowerReskateUnlit {
     pub fn form(&self) -> UnlitAs {
         self.form
     }
-
-    /// From its options: `as=matte`, required (`emission` refused: module documentation).
-    pub fn from_options(o: &Options) -> Result<LowerReskateUnlit, String> {
-        if let Some(k) = o.keys().find(|k| k.as_str() != "as") {
-            return Err(format!("unknown option {k}"));
-        }
-        match o.get("as").map(String::as_str) {
-            Some("matte") => Ok(LowerReskateUnlit::new(UnlitAs::Matte)),
-            Some("emission") => Err(
-                "as=emission: skate-scene has no emissive surface the writer can write (it would draw black); as=matte"
-                    .into(),
-            ),
-            Some(v) => Err(format!("as={v}: matte")),
-            None => Err("as is required: matte (the base colour lit, fully rough)".into()),
-        }
-    }
 }
 
-/// [`LowerReskateUnlit::from_options`] as a pass factory.
-pub fn lower_reskate_unlit(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(LowerReskateUnlit::from_options(o)?))
+impl Choice for UnlitAs {
+    const VALUES: &'static [(&'static str, Self)] = &[("matte", UnlitAs::Matte)];
 }
+
+/// `lower-reskate-unlit`'s declaration ([`primase_core::pass::PassRegistry::add`]): the lit form an unlit material
+/// takes is the program's, no default.
+pub const LOWER_RESKATE_UNLIT: PassSpec = PassSpec {
+    name: "lower-reskate-unlit",
+    options: &[OptionSpec::choice::<UnlitAs>(
+        "as",
+        "the lit form: matte, the base colour lit, fully rough (emission is not offered: skate-scene has no emissive \
+         surface the writer can write, so it would draw black)",
+    )],
+    make: |g| Ok(Box::new(LowerReskateUnlit::new(g.choice("as")))),
+};
 
 impl Pass for LowerReskateUnlit {
     fn name(&self) -> &'static str {
         "lower-reskate-unlit"
     }
     fn options(&self) -> Options {
-        Options::from([(
-            "as".to_owned(),
-            match self.form {
-                UnlitAs::Matte => "matte",
-            }
-            .to_owned(),
-        )])
+        Options::from([("as".to_owned(), self.form.text().to_owned())])
     }
     fn requires(&self) -> &[&'static str] {
         &["pbr.material"]
@@ -151,15 +140,26 @@ mod tests {
         );
     }
 
-    /// The form is required and printed; emission is refused, naming why.
+    /// The form is required and printed; emission is refused, and the declaration says why.
     #[test]
     fn the_form_is_required_and_emission_refused() {
-        assert!(LowerReskateUnlit::from_options(&Options::new()).is_err());
-        assert!(LowerReskateUnlit::from_options(&Options::from([("as".into(), "glow".into())])).is_err());
-        let e =
-            LowerReskateUnlit::from_options(&Options::from([("as".into(), "emission".into())])).unwrap_err();
-        assert!(e.contains("no emissive surface"), "{e}");
-        let p = LowerReskateUnlit::from_options(&Options::from([("as".into(), "matte".into())])).unwrap();
-        assert_eq!(LowerReskateUnlit::from_options(&p.options()).unwrap(), p);
+        assert!(LOWER_RESKATE_UNLIT.instance(&Options::new()).is_err());
+        assert!(
+            LOWER_RESKATE_UNLIT
+                .instance(&Options::from([("as".into(), "glow".into())]))
+                .is_err()
+        );
+        let e = LOWER_RESKATE_UNLIT
+            .instance(&Options::from([("as".into(), "emission".into())]))
+            .err()
+            .unwrap();
+        assert_eq!(e, "as=emission is none of matte");
+        assert!(LOWER_RESKATE_UNLIT.describe().contains("no emissive surface"));
+        let p = LowerReskateUnlit::new(UnlitAs::Matte);
+        assert_eq!(p.options(), Options::from([("as".into(), "matte".into())]));
+        assert_eq!(
+            LOWER_RESKATE_UNLIT.instance(&p.options()).unwrap().options(),
+            p.options()
+        );
     }
 }

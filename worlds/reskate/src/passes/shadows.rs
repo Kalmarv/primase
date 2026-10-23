@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::components::{MaterialClass, SkateMaterial, SkatePrototype};
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{
     Component, Entity, Instance, Lods, MaterialVariants, Mesh, MeshFile, Name, ShadowCast, Shadows, World,
 };
@@ -294,6 +294,13 @@ fn cast_as(w: &mut World, wanted: &BTreeMap<Entity, bool>, log: &mut PassLog) ->
     }
     Ok(())
 }
+
+/// `lower-reskate-shadows`'s declaration ([`primase_core::pass::PassRegistry::add`]): it takes no options.
+pub const LOWER_RESKATE_SHADOWS: PassSpec = PassSpec {
+    name: "lower-reskate-shadows",
+    options: &[],
+    make: |_| Ok(Box::new(LowerReskateShadows)),
+};
 
 impl Pass for LowerReskateShadows {
     fn name(&self) -> &'static str {

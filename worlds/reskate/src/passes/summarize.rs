@@ -15,7 +15,7 @@
 
 use primase_core::World;
 use primase_core::convert::PartScope;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 
 use crate::assembly::{EncodingOptions, map_summary};
 use crate::components::{CellsCounted, SkateMapSummary};
@@ -39,25 +39,36 @@ impl SummarizeReskateMap {
         })
     }
 
-    /// From its options: the writer's grouping (`tile`, `min_instances`, `min_instance_tris`, `max_render_edge`,
-    /// `limit`, `offset_x`, `offset_y`) and `cull_ids`, each the encoding's default when not given.
-    pub fn from_options(o: &Options) -> Result<SummarizeReskateMap, String> {
-        let mut grouping = o.clone();
-        let cull_ids = match grouping.remove("cull_ids") {
+    /// From its options: the writer's grouping ([`super::overlays::encoding_from`]) and `cull_ids`.
+    fn from_given(g: &Given) -> Result<SummarizeReskateMap, String> {
+        let cull_ids = match g.optional("cull_ids") {
             Some(v) => v
                 .parse::<usize>()
                 .map_err(|_| format!("cull_ids={v} is not a count"))?,
             None => EncodingOptions::default().cull_ids,
         };
-        let e = super::overlays::encoding_of(&grouping)?;
+        let e = super::overlays::encoding_from(g)?;
         SummarizeReskateMap::for_encoding(&EncodingOptions { cull_ids, ..e })
     }
 }
 
-/// [`SummarizeReskateMap::from_options`] as a pass factory.
-pub fn summarize_reskate_map(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(SummarizeReskateMap::from_options(o)?))
-}
+/// `cull_ids`: the cull IDs the map may take.
+const CULL_IDS: OptionSpec = OptionSpec::optional(
+    "cull_ids",
+    "209715",
+    "a count: the cull IDs the map may take",
+    "209715, the writer's: 0.8 of ReSkate 2.1.0-pre's pool of 262144",
+);
+
+const SUMMARY_OPTIONS: [OptionSpec; 8] = super::overlays::with_encoding([CULL_IDS]);
+
+/// `summarize-reskate-map`'s declaration ([`primase_core::pass::PassRegistry::add`]): the encoding is the writer's
+/// unless stated.
+pub const SUMMARIZE_RESKATE_MAP: PassSpec = PassSpec {
+    name: "summarize-reskate-map",
+    options: &SUMMARY_OPTIONS,
+    make: |g| Ok(Box::new(SummarizeReskateMap::from_given(g)?)),
+};
 
 impl Pass for SummarizeReskateMap {
     fn name(&self) -> &'static str {
@@ -102,5 +113,23 @@ impl Pass for SummarizeReskateMap {
         log.count("tiles with a chain form", summary.chains.len() as u64);
         w.insert_resource(summary);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// What no `cull_ids` means is the writer's default, the value [`super::EncodingOptions::default`] holds.
+    #[test]
+    fn no_cull_ids_states_the_writers_default() {
+        let d = super::EncodingOptions::default().cull_ids;
+        assert_eq!(super::CULL_IDS.example(), d.to_string());
+        assert!(
+            super::CULL_IDS
+                .absent()
+                .unwrap()
+                .starts_with(&format!("{d}, the writer's")),
+            "{:?}",
+            super::CULL_IDS.absent()
+        );
     }
 }

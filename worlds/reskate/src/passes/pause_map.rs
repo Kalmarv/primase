@@ -33,7 +33,7 @@
 //! content extent merged over every part (`summarize-reskate-content`), recorded as a rectangle (whole metres, exact
 //! in the record's f32), so every part draws over the same extent; a part without it is refused.
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Resource, World};
 
 pub use crate::components::pause_map::{SkatePauseImage, SkatePausePicture};
@@ -114,57 +114,44 @@ impl PrepareReskatePauseMap {
     }
 
     /// From its options, through [`PrepareReskatePauseMap::new`]: `from=image`, or `from=geometry` with `height`,
-    /// `extent=region|content` (or `extent=collision` with `max-extent`) or `x0,y0,x1,y1`, `leave-out=shadowless|nothing|placements` (`placements` with
-    /// `prefixes`, separated by `;`) and `colour=mean|texture`.
-    pub fn from_options(o: &Options) -> Result<PrepareReskatePauseMap, String> {
-        const KEYS: [&str; 11] = [
-            "from",
-            "height",
-            "extent",
-            "max-extent",
-            "x0",
-            "y0",
-            "x1",
-            "y1",
-            "leave-out",
-            "colour",
-            "prefixes",
-        ];
-        if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
-        let source = match o.get("from").map(String::as_str) {
-            Some("image") => {
-                if let Some(k) = o.keys().find(|k| *k != "from") {
+    /// `extent=region|content` (or `extent=collision` with `max-extent`) or `x0,y0,x1,y1`,
+    /// `leave-out=shadowless|nothing|placements` (`placements` with `prefixes`, separated by `;`) and
+    /// `colour=mean|texture`.
+    fn from_given(g: &Given) -> Result<PrepareReskatePauseMap, String> {
+        let source = match g.choice::<PauseFrom>("from") {
+            PauseFrom::Image => {
+                let others = PREPARE_RESKATE_PAUSE_MAP.options.iter().map(OptionSpec::key);
+                if let Some(k) = others.filter(|k| *k != "from").find(|k| g.optional(k).is_some()) {
                     return Err(format!("from=image takes no {k}"));
                 }
                 PauseSource::Image
             }
-            Some("geometry") => {
-                let height = o
-                    .get("height")
+            PauseFrom::Geometry => {
+                let height = g
+                    .optional("height")
                     .ok_or("height is required (pixels) with from=geometry")?;
                 let height = height
                     .parse()
                     .map_err(|_| format!("height={height} is not a number of pixels"))?;
                 let num = |k: &str| -> Result<Option<f32>, String> {
-                    o.get(k)
+                    g.optional(k)
                         .map(|v| v.parse().map_err(|_| format!("{k}={v} is not a number")))
                         .transpose()
                 };
                 let rect = [num("x0")?, num("y0")?, num("x1")?, num("y1")?];
                 let max_extent = num("max-extent")?;
-                if max_extent.is_some() && o.get("extent").map(String::as_str) != Some("collision") {
+                let extent_kind = g.optional_choice::<ExtentKind>("extent");
+                if max_extent.is_some() && extent_kind != Some(ExtentKind::Collision) {
                     return Err("max-extent goes with extent=collision".into());
                 }
-                let extent = match (o.get("extent").map(String::as_str), rect) {
-                    (Some("collision"), [None, None, None, None]) => PauseExtent::Collision {
+                let extent = match (extent_kind, rect) {
+                    (Some(ExtentKind::Collision), [None, None, None, None]) => PauseExtent::Collision {
                         max_extent: max_extent
                             .filter(|m| m.is_finite() && *m > 0.0)
                             .ok_or("extent=collision requires max-extent (metres, above 0)")?,
                     },
-                    (Some("region"), [None, None, None, None]) => PauseExtent::Region,
-                    (Some("content"), [None, None, None, None]) => PauseExtent::Content,
+                    (Some(ExtentKind::Region), [None, None, None, None]) => PauseExtent::Region,
+                    (Some(ExtentKind::Content), [None, None, None, None]) => PauseExtent::Content,
                     (None, [Some(x0), Some(y0), Some(x1), Some(y1)]) => PauseExtent::Rect([x0, y0, x1, y1]),
                     _ => {
                         return Err(
@@ -173,21 +160,23 @@ impl PrepareReskatePauseMap {
                         );
                     }
                 };
-                let leave_out = match (o.get("leave-out").map(String::as_str), o.get("prefixes")) {
-                    (Some("shadowless"), None) => PauseLeaveOut::Shadowless,
-                    (Some("nothing"), None) => PauseLeaveOut::Nothing,
-                    (Some("placements"), Some(p)) => {
+                let leave_out = match (
+                    g.optional_choice::<LeaveOutKind>("leave-out"),
+                    g.optional("prefixes"),
+                ) {
+                    (Some(LeaveOutKind::Shadowless), None) => PauseLeaveOut::Shadowless,
+                    (Some(LeaveOutKind::Nothing), None) => PauseLeaveOut::Nothing,
+                    (Some(LeaveOutKind::Placements), Some(p)) => {
                         PauseLeaveOut::Placements(p.split(';').map(str::to_owned).collect())
                     }
-                    (Some("placements"), None) => {
+                    (Some(LeaveOutKind::Placements), None) => {
                         return Err(
                             "leave-out=placements requires prefixes (placement name prefixes, by ;)".into(),
                         );
                     }
-                    (Some("shadowless" | "nothing"), Some(_)) => {
+                    (Some(_), Some(_)) => {
                         return Err("prefixes are leave-out=placements' only".into());
                     }
-                    (Some(v), _) => return Err(format!("leave-out={v}: shadowless, placements or nothing")),
                     (None, _) => {
                         return Err(
                             "leave-out is required with from=geometry: shadowless (materials casting no shadow), \
@@ -196,29 +185,132 @@ impl PrepareReskatePauseMap {
                         );
                     }
                 };
-                let colour = match o.get("colour").map(String::as_str) {
-                    Some("mean") => PauseColour::Mean,
-                    Some("texture") => PauseColour::Texture,
-                    Some(v) => return Err(format!("colour={v}: mean or texture")),
-                    None => return Err("colour is required with from=geometry: mean or texture".into()),
-                };
+                let colour = g
+                    .optional_choice::<PauseColour>("colour")
+                    .ok_or("colour is required with from=geometry: mean or texture")?;
                 PauseSource::Geometry {
                     height,
                     extent,
                     drawing: PauseDrawing { leave_out, colour },
                 }
             }
-            Some(v) => return Err(format!("from={v}: image or geometry")),
-            None => return Err("from is required: image or geometry".into()),
         };
         PrepareReskatePauseMap::new(source)
     }
 }
 
-/// [`PrepareReskatePauseMap::from_options`] as a pass factory.
-pub fn prepare_reskate_pause_map(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PrepareReskatePauseMap::from_options(o)?))
+/// `from`'s values: where the picture comes from, without the geometry's settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PauseFrom {
+    Image,
+    Geometry,
 }
+
+impl Choice for PauseFrom {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("image", PauseFrom::Image), ("geometry", PauseFrom::Geometry)];
+}
+
+/// `extent`'s values: what [`PauseExtent`] is when it is not a rectangle, without its numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExtentKind {
+    Region,
+    Content,
+    Collision,
+}
+
+impl Choice for ExtentKind {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("region", ExtentKind::Region),
+        ("content", ExtentKind::Content),
+        ("collision", ExtentKind::Collision),
+    ];
+}
+
+/// `leave-out`'s values: what [`PauseLeaveOut`] is, without its prefixes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeaveOutKind {
+    Shadowless,
+    Placements,
+    Nothing,
+}
+
+impl Choice for LeaveOutKind {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("shadowless", LeaveOutKind::Shadowless),
+        ("placements", LeaveOutKind::Placements),
+        ("nothing", LeaveOutKind::Nothing),
+    ];
+}
+
+impl Choice for PauseColour {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("mean", PauseColour::Mean), ("texture", PauseColour::Texture)];
+}
+
+/// What no value of a setting of the picture drawn from the geometry means.
+const GEOMETRY_ONLY: &str = "required with from=geometry, not taken with from=image";
+
+/// What no bound of the picture's rectangle means.
+const RECT_ONLY: &str = "with from=geometry and no extent, all four required; not taken otherwise";
+
+/// `prepare-reskate-pause-map`'s declaration ([`primase_core::pass::PassRegistry::add`]): the picture, its size, extent
+/// and drawing, are the program's, no default.
+pub const PREPARE_RESKATE_PAUSE_MAP: PassSpec = PassSpec {
+    name: "prepare-reskate-pause-map",
+    options: &[
+        OptionSpec::choice::<PauseFrom>(
+            "from",
+            "the scene's own picture (image), or a top-down picture of the map's drawn geometry (geometry)",
+        ),
+        OptionSpec::optional(
+            "height",
+            "720",
+            "pixels, 9 to 4096: the height of the picture drawn from the geometry, 16:9",
+            GEOMETRY_ONLY,
+        ),
+        OptionSpec::optional_choice::<ExtentKind>(
+            "extent",
+            "what the picture is drawn over: the scene's stated region, the map's content bounds as the writer \
+             measures them, or the play space (collision, with max-extent)",
+            "with from=geometry, the rectangle x0, y0, x1, y1 gives instead; not taken with from=image",
+        ),
+        OptionSpec::optional(
+            "max-extent",
+            "100",
+            "metres above 0: the widest collision soup, on any axis, the play space counts",
+            "required with extent=collision, not taken otherwise",
+        ),
+        OptionSpec::optional(
+            "x0",
+            "0",
+            "metres east: the west edge of the ground rectangle drawn",
+            RECT_ONLY,
+        ),
+        OptionSpec::optional("y0", "0", "metres north: the rectangle's south edge", RECT_ONLY),
+        OptionSpec::optional("x1", "1", "metres east: the rectangle's east edge", RECT_ONLY),
+        OptionSpec::optional("y1", "1", "metres north: the rectangle's north edge", RECT_ONLY),
+        OptionSpec::optional_choice::<LeaveOutKind>(
+            "leave-out",
+            "the triangles left out of the picture: those whose material casts no shadow (shadowless), those of \
+             the placements named by prefixes (placements), or none (nothing)",
+            GEOMETRY_ONLY,
+        ),
+        OptionSpec::optional(
+            "prefixes",
+            "Level Bounds/Ceiling",
+            "the placement name prefixes leave-out=placements leaves out, separated by ;",
+            "required with leave-out=placements, not taken otherwise",
+        ),
+        OptionSpec::optional_choice::<PauseColour>(
+            "colour",
+            "each triangle in its material's base texture's mean colour (mean), or the texture sampled at each \
+             pixel (texture)",
+            GEOMETRY_ONLY,
+        ),
+    ],
+    make: |g| Ok(Box::new(PrepareReskatePauseMap::from_given(g)?)),
+};
 
 impl Pass for PrepareReskatePauseMap {
     fn name(&self) -> &'static str {
@@ -228,44 +320,34 @@ impl Pass for PrepareReskatePauseMap {
         let mut o = Options::new();
         match &self.source {
             PauseSource::Image => {
-                o.insert("from".into(), "image".into());
+                o.insert("from".into(), PauseFrom::Image.text().into());
             }
             PauseSource::Geometry {
                 height,
                 extent,
                 drawing,
             } => {
-                o.insert("from".into(), "geometry".into());
+                o.insert("from".into(), PauseFrom::Geometry.text().into());
                 o.insert("height".into(), height.to_string());
-                o.insert(
-                    "leave-out".into(),
-                    match &drawing.leave_out {
-                        PauseLeaveOut::Shadowless => "shadowless",
-                        PauseLeaveOut::Placements(_) => "placements",
-                        PauseLeaveOut::Nothing => "nothing",
-                    }
-                    .into(),
-                );
+                let leave_out = match &drawing.leave_out {
+                    PauseLeaveOut::Shadowless => LeaveOutKind::Shadowless,
+                    PauseLeaveOut::Placements(_) => LeaveOutKind::Placements,
+                    PauseLeaveOut::Nothing => LeaveOutKind::Nothing,
+                };
+                o.insert("leave-out".into(), leave_out.text().into());
                 if let PauseLeaveOut::Placements(p) = &drawing.leave_out {
                     o.insert("prefixes".into(), p.iter().cloned().collect::<Vec<_>>().join(";"));
                 }
-                o.insert(
-                    "colour".into(),
-                    match drawing.colour {
-                        PauseColour::Mean => "mean",
-                        PauseColour::Texture => "texture",
-                    }
-                    .into(),
-                );
+                o.insert("colour".into(), drawing.colour.text().into());
                 match extent {
                     PauseExtent::Region => {
-                        o.insert("extent".into(), "region".into());
+                        o.insert("extent".into(), ExtentKind::Region.text().into());
                     }
                     PauseExtent::Content => {
-                        o.insert("extent".into(), "content".into());
+                        o.insert("extent".into(), ExtentKind::Content.text().into());
                     }
                     PauseExtent::Collision { max_extent } => {
-                        o.insert("extent".into(), "collision".into());
+                        o.insert("extent".into(), ExtentKind::Collision.text().into());
                         o.insert("max-extent".into(), max_extent.to_string());
                     }
                     PauseExtent::Rect(r) => {
@@ -431,10 +513,7 @@ mod tests {
                 ("colour", "texture"),
             ]),
         ] {
-            assert_eq!(
-                PrepareReskatePauseMap::from_options(&good).unwrap().options(),
-                good
-            );
+            assert_eq!(PREPARE_RESKATE_PAUSE_MAP.instance(&good).unwrap().options(), good);
         }
         for bad in [
             o(&[]),
@@ -512,7 +591,7 @@ mod tests {
                 ("colour", "mean"),
             ]),
         ] {
-            assert!(PrepareReskatePauseMap::from_options(&bad).is_err(), "{bad:?}");
+            assert!(PREPARE_RESKATE_PAUSE_MAP.instance(&bad).is_err(), "{bad:?}");
         }
     }
 
@@ -585,7 +664,7 @@ mod tests {
             ("leave-out", "nothing"),
             ("colour", "mean"),
         ]);
-        let pass = PrepareReskatePauseMap::from_options(&opts).unwrap();
+        let pass = PREPARE_RESKATE_PAUSE_MAP.instance(&opts).unwrap();
         assert_eq!(pass.options(), opts);
         pass.run(&mut w, &mut PassLog::default()).unwrap();
         assert!(matches!(
@@ -595,7 +674,7 @@ mod tests {
         assert!(w.resource::<SkateScene>().is_none_or(|s| s.region.is_none()));
         let mut missing = opts.clone();
         missing.remove("max-extent");
-        assert!(PrepareReskatePauseMap::from_options(&missing).is_err());
+        assert!(PREPARE_RESKATE_PAUSE_MAP.instance(&missing).is_err());
     }
 
     /// From the geometry over the scene's region, its content or a rectangle; from the scene's own image, which must be

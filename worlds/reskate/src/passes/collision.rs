@@ -36,11 +36,38 @@
 use primase_core::World;
 use primase_core::convert::PartScope;
 use primase_core::ledger::Measure;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 
 use crate::assembly::{EncodingOptions, cell_plan, cell_shares, collision_plan};
 use crate::components::SkateCellLayout;
 use crate::components::{CollisionSurfaces, CollisionWeld, SkateCollisionPlan};
+
+use super::overlays::{encoding_from, with_encoding};
+
+impl Choice for CollisionSurfaces {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("coalesce", CollisionSurfaces::Coalesce),
+        ("exact", CollisionSurfaces::Exact),
+    ];
+}
+
+impl Choice for CollisionWeld {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("mm", CollisionWeld::Millimetre), ("exact", CollisionWeld::Exact)];
+}
+
+/// `surfaces` and `weld`, as `prepare-reskate-collision` and `prepare-reskate-cell-collision` take them: the program's,
+/// no default.
+const SURFACES_AND_WELD: [OptionSpec; 2] = [
+    OptionSpec::choice::<CollisionSurfaces>(
+        "surfaces",
+        "a leaf's minor surfaces written as its most common one (coalesce), or each triangle's kept (exact)",
+    ),
+    OptionSpec::choice::<CollisionWeld>(
+        "weld",
+        "corners within the same millimetre merged (mm), or only bit-identical ones (exact)",
+    ),
+];
 
 /// See the module documentation. Made by [`PrepareReskateCollision::new`]; from options by the same call.
 #[derive(Clone, Debug, PartialEq)]
@@ -66,31 +93,21 @@ impl PrepareReskateCollision {
         })
     }
 
-    /// From its options: `surfaces=coalesce|exact` and `weld=mm|exact`, both required, and the writer's grouping
-    /// (`tile`, `min_instances`, `min_instance_tris`, `max_render_edge`, `limit`, `offset_x`, `offset_y`), each the
-    /// encoding's default when not given.
-    pub fn from_options(o: &Options) -> Result<PrepareReskateCollision, String> {
-        let mut grouping = o.clone();
-        let surfaces = match grouping.remove("surfaces").as_deref() {
-            Some("coalesce") => CollisionSurfaces::Coalesce,
-            Some("exact") => CollisionSurfaces::Exact,
-            Some(v) => return Err(format!("surfaces={v}: coalesce or exact")),
-            None => return Err("surfaces is required: coalesce or exact".into()),
-        };
-        let weld = match grouping.remove("weld").as_deref() {
-            Some("mm") => CollisionWeld::Millimetre,
-            Some("exact") => CollisionWeld::Exact,
-            Some(v) => return Err(format!("weld={v}: mm or exact")),
-            None => return Err("weld is required: mm or exact".into()),
-        };
-        PrepareReskateCollision::new(surfaces, weld, &super::overlays::encoding_of(&grouping)?)
+    /// From its options: `surfaces` and `weld`, and the writer's grouping ([`encoding_from`]).
+    fn from_given(g: &Given) -> Result<PrepareReskateCollision, String> {
+        PrepareReskateCollision::new(g.choice("surfaces"), g.choice("weld"), &encoding_from(g)?)
     }
 }
 
-/// [`PrepareReskateCollision::from_options`] as a pass factory.
-pub fn prepare_reskate_collision(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PrepareReskateCollision::from_options(o)?))
-}
+const COLLISION_OPTIONS: [OptionSpec; 9] = with_encoding(SURFACES_AND_WELD);
+
+/// `prepare-reskate-collision`'s declaration ([`primase_core::pass::PassRegistry::add`]): the surfaces and weld are the
+/// program's, no default; the grouping the writer's unless stated.
+pub const PREPARE_RESKATE_COLLISION: PassSpec = PassSpec {
+    name: "prepare-reskate-collision",
+    options: &COLLISION_OPTIONS,
+    make: |g| Ok(Box::new(PrepareReskateCollision::from_given(g)?)),
+};
 
 /// The plan `plan` recorded, what it rewrites reported as approximations and what its weld collapses as dropped.
 fn record(w: &mut World, log: &mut PassLog, plan: SkateCollisionPlan, rewritten: crate::assembly::Rewritten) {
@@ -122,35 +139,30 @@ impl PrepareReskateCellCollision {
     pub fn new(surfaces: CollisionSurfaces, weld: CollisionWeld) -> PrepareReskateCellCollision {
         PrepareReskateCellCollision { surfaces, weld }
     }
-
-    /// From its options: `surfaces=coalesce|exact` and `weld=mm|exact`, both required.
-    pub fn from_options(o: &Options) -> Result<PrepareReskateCellCollision, String> {
-        if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "surfaces" | "weld")) {
-            return Err(format!("unknown option {k}"));
-        }
-        let p = PrepareReskateCollision::from_options(o)?;
-        Ok(PrepareReskateCellCollision::new(p.surfaces, p.weld))
-    }
 }
 
-/// [`PrepareReskateCellCollision::from_options`] as a pass factory.
-pub fn prepare_reskate_cell_collision(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PrepareReskateCellCollision::from_options(o)?))
-}
+/// `prepare-reskate-cell-collision`'s declaration ([`primase_core::pass::PassRegistry::add`]): the surfaces and weld
+/// are the program's, no default.
+pub const PREPARE_RESKATE_CELL_COLLISION: PassSpec = PassSpec {
+    name: "prepare-reskate-cell-collision",
+    options: &SURFACES_AND_WELD,
+    make: |g| {
+        Ok(Box::new(PrepareReskateCellCollision::new(
+            g.choice("surfaces"),
+            g.choice("weld"),
+        )))
+    },
+};
 
 impl Pass for PrepareReskateCellCollision {
     fn name(&self) -> &'static str {
         "prepare-reskate-cell-collision"
     }
     fn options(&self) -> Options {
-        let mut o = PrepareReskateCollision {
-            surfaces: self.surfaces,
-            weld: self.weld,
-            encoding: EncodingOptions::default(),
-        }
-        .options();
-        o.retain(|k, _| k == "surfaces" || k == "weld");
-        o
+        Options::from([
+            ("surfaces".to_owned(), self.surfaces.text().to_owned()),
+            ("weld".to_owned(), self.weld.text().to_owned()),
+        ])
     }
     fn requires(&self) -> &[&'static str] {
         &["skate.cell_layout", "skate.cell_share"]
@@ -190,18 +202,15 @@ impl ShareReskateCollision {
             encoding: super::overlays::grouping_only(encoding),
         })
     }
-
-    /// From its options: the writer's grouping (`tile`, `min_instances`, `min_instance_tris`, `max_render_edge`,
-    /// `limit`, `offset_x`, `offset_y`), each the encoding's default when not given.
-    pub fn from_options(o: &Options) -> Result<ShareReskateCollision, String> {
-        ShareReskateCollision::new(&super::overlays::encoding_of(o)?)
-    }
 }
 
-/// [`ShareReskateCollision::from_options`] as a pass factory.
-pub fn share_reskate_collision(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(ShareReskateCollision::from_options(o)?))
-}
+/// `share-reskate-collision`'s declaration ([`primase_core::pass::PassRegistry::add`]): the grouping is the writer's
+/// unless stated.
+pub const SHARE_RESKATE_COLLISION: PassSpec = PassSpec {
+    name: "share-reskate-collision",
+    options: &super::overlays::ENCODING,
+    make: |g| Ok(Box::new(ShareReskateCollision::new(&encoding_from(g)?)?)),
+};
 
 impl Pass for ShareReskateCollision {
     fn name(&self) -> &'static str {
@@ -255,22 +264,8 @@ impl Pass for PrepareReskateCollision {
     }
     fn options(&self) -> Options {
         let mut o = super::overlays::encoding_options(&self.encoding);
-        o.insert(
-            "surfaces".into(),
-            match self.surfaces {
-                CollisionSurfaces::Coalesce => "coalesce",
-                CollisionSurfaces::Exact => "exact",
-            }
-            .into(),
-        );
-        o.insert(
-            "weld".into(),
-            match self.weld {
-                CollisionWeld::Millimetre => "mm",
-                CollisionWeld::Exact => "exact",
-            }
-            .into(),
-        );
+        o.insert("surfaces".into(), self.surfaces.text().into());
+        o.insert("weld".into(), self.weld.text().into());
         o
     }
     fn requires(&self) -> &[&'static str] {

@@ -13,7 +13,7 @@ use primase_reskate::components::{
     FileRef, MarkerKind, MinHeight, Other, SkateFloorPlan, SkateGrindCurve, SkateLight, SkateMarker,
     SkatePartsOff, SkatePrototype, SkateScene, SkateWater,
 };
-use primase_reskate::passes::{PrepareReskateFloor, prepare_reskate_floor};
+use primase_reskate::passes::{PREPARE_RESKATE_FLOOR, PrepareReskateFloor};
 
 /// A part spanning heights `y0..y1` in its prototype.
 fn part(y0: f32, y1: f32) -> Primitive {
@@ -284,14 +284,15 @@ fn the_floor_options_are_required_and_checked() {
     let o = |pairs: &[(&str, &str)]| -> Options {
         pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect()
     };
-    let pass = prepare_reskate_floor(&o(&[
-        ("min_height", "100"),
-        ("stub_below", "250"),
-        ("floor", "-60"),
-    ]))
-    .unwrap();
+    let pass = PREPARE_RESKATE_FLOOR
+        .instance(&o(&[
+            ("min_height", "100"),
+            ("stub_below", "250"),
+            ("floor", "-60"),
+        ]))
+        .unwrap();
     assert_eq!(
-        prepare_reskate_floor(&pass.options()).unwrap().options(),
+        PREPARE_RESKATE_FLOOR.instance(&pass.options()).unwrap().options(),
         pass.options()
     );
     for bad in [
@@ -301,7 +302,7 @@ fn the_floor_options_are_required_and_checked() {
         o(&[("min_height", "100"), ("stub_below", "250"), ("floor", "inf")]),
         o(&[("min_height", "100"), ("stub_below", "250"), ("lift", "1")]),
     ] {
-        assert!(prepare_reskate_floor(&bad).is_err(), "{bad:?}");
+        assert!(PREPARE_RESKATE_FLOOR.instance(&bad).is_err(), "{bad:?}");
     }
 }
 

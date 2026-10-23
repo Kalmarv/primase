@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 
 use crate::components::SkateMaterial;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Entity, MaterialVariants, Mesh, Name, Primitive, Semantic, Stream, Topology, World};
 
 /// Colours a primitive splits into at most; past it, one mean tint. 32 keeps palette gradients of 9 to 23 colours
@@ -103,21 +103,25 @@ impl LowerTintReskate {
     pub fn copies(&self) -> Option<usize> {
         self.copies
     }
-
-    /// From its options: `copies=N`, optional.
-    pub fn from_options(o: &Options) -> Result<LowerTintReskate, String> {
-        let mut pass = LowerTintReskate::uncapped();
-        for (k, v) in o {
-            match k.as_str() {
-                "copies" => {
-                    pass = pass.with_copies(v.parse().map_err(|_| format!("copies={v} is not a count"))?)?;
-                }
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        Ok(pass)
-    }
 }
+
+/// `lower-tint-reskate`'s declaration ([`primase_core::pass::PassRegistry::add`]).
+pub const LOWER_TINT_RESKATE: PassSpec = PassSpec {
+    name: "lower-tint-reskate",
+    options: &[OptionSpec::optional(
+        "copies",
+        "64",
+        "1 or more: the most tinted material copies",
+        "uncapped: one copy per material and colour",
+    )],
+    make: |g| {
+        let pass = LowerTintReskate::uncapped();
+        Ok(Box::new(match g.optional("copies") {
+            Some(v) => pass.with_copies(v.parse().map_err(|_| format!("copies={v} is not a count"))?)?,
+            None => pass,
+        }))
+    },
+};
 
 impl Pass for LowerTintReskate {
     fn name(&self) -> &'static str {

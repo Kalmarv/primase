@@ -108,6 +108,19 @@ impl OptionSpec {
         }
     }
 
+    /// One of the options of `group`, of which a pipeline gives exactly one, whose value is one of `T`'s; the example
+    /// is the first. Read by [`Given::optional_choice`].
+    pub const fn one_of_choice<T: Choice>(group: &'static str, key: &'static str, doc: &'static str) -> Self {
+        OptionSpec {
+            key,
+            need: Need::OneOf(group),
+            example: T::VALUES[0].0,
+            doc,
+            absent: "",
+            values: Some(texts::<T>),
+        }
+    }
+
     /// A required option whose value is one of `T`'s; the example is the first.
     pub const fn choice<T: Choice>(key: &'static str, doc: &'static str) -> Self {
         OptionSpec {
@@ -577,6 +590,47 @@ mod tests {
         let pass = READ.instance(&options(&[("detail", "high")])).unwrap();
         assert_eq!(pass.options(), options(&[("detail", "high")]));
         assert_eq!(Detail::High.text(), "high");
+    }
+
+    /// A one-of choice is one of its group, refused outside its values, and read as its enum when given.
+    #[test]
+    fn a_one_of_choice_is_a_group_member_with_values() {
+        const SOURCE: PassSpec = PassSpec {
+            name: "source",
+            options: &[
+                OptionSpec::one_of_choice::<Detail>("source", "preset", "a preset detail"),
+                OptionSpec::one_of("source", "file", "d.txt", "a file stating the detail"),
+            ],
+            make: |g| {
+                let printed = match (g.optional_choice::<Detail>("preset"), g.optional("file")) {
+                    (Some(d), None) => options(&[("preset", d.text())]),
+                    (None, Some(f)) => options(&[("file", f)]),
+                    _ => unreachable!("the group gives one"),
+                };
+                Ok(Box::new(Toy(printed)))
+            },
+        };
+        SOURCE.validate();
+        assert_eq!(SOURCE.example(), options(&[("preset", "plain")]));
+        let pass = SOURCE.instance(&options(&[("preset", "high")])).unwrap();
+        assert_eq!(pass.options(), options(&[("preset", "high")]));
+        assert_eq!(
+            SOURCE.check(&options(&[("preset", "fine")])).unwrap_err(),
+            "preset=fine is none of plain or high"
+        );
+        assert_eq!(
+            SOURCE
+                .check(&options(&[("preset", "high"), ("file", "d.txt")]))
+                .unwrap_err(),
+            "only one of preset or file may be given"
+        );
+        assert!(
+            SOURCE
+                .describe()
+                .contains("\n  preset (one of source; plain | high; e.g. plain): a preset detail"),
+            "{}",
+            SOURCE.describe()
+        );
     }
 
     /// The text form marks required options and groups, and each option's line says its need, values and example.

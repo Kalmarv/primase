@@ -22,7 +22,7 @@
 
 use std::path::Path;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, World};
 
 use crate::assembly::{bounds, writer_placements};
@@ -53,6 +53,29 @@ pub enum OceanMaterials {
     Stated,
     /// Every water-class material that states nothing, too.
     All,
+}
+
+impl Choice for OceanMaterials {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("stated", OceanMaterials::Stated), ("all", OceanMaterials::All)];
+}
+
+/// `extent`'s values: what [`WaterExtent`] is when it is not a rectangle, without its margin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExtentKind {
+    None,
+    All,
+    Region,
+    Content,
+}
+
+impl Choice for ExtentKind {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("none", ExtentKind::None),
+        ("all", ExtentKind::All),
+        ("region", ExtentKind::Region),
+        ("content", ExtentKind::Content),
+    ];
 }
 
 /// See the module documentation. Made by [`PrepareReskateWater::new`]; from options by the same call.
@@ -95,13 +118,9 @@ impl PrepareReskateWater {
 
     /// From its options, through [`PrepareReskateWater::new`]: `extent=none`, `extent=all`, `extent=region` or
     /// `extent=content` with `margin`, or `x0,y0,x1,y1` with `margin`; `ocean=stated|all`.
-    pub fn from_options(o: &Options) -> Result<PrepareReskateWater, String> {
-        const KEYS: [&str; 7] = ["extent", "margin", "x0", "y0", "x1", "y1", "ocean"];
-        if let Some(k) = o.keys().find(|k| !KEYS.contains(&k.as_str())) {
-            return Err(format!("unknown option {k}"));
-        }
+    fn from_given(g: &Given) -> Result<PrepareReskateWater, String> {
         let num = |k: &str| -> Result<Option<f32>, String> {
-            o.get(k)
+            g.optional(k)
                 .map(|v| v.parse().map_err(|_| format!("{k}={v} is not a number")))
                 .transpose()
         };
@@ -111,41 +130,73 @@ impl PrepareReskateWater {
             })
         };
         let rect = [num("x0")?, num("y0")?, num("x1")?, num("y1")?];
-        let extent = match (o.get("extent").map(String::as_str), rect) {
-            (Some("none"), [None, None, None, None]) if !o.contains_key("margin") => WaterExtent::None,
-            (Some("all"), [None, None, None, None]) if !o.contains_key("margin") => WaterExtent::All,
-            (Some("region"), [None, None, None, None]) => WaterExtent::Region { margin: margin()? },
-            (Some("content"), [None, None, None, None]) => WaterExtent::Content { margin: margin()? },
-            (None, [Some(x0), Some(y0), Some(x1), Some(y1)]) => WaterExtent::Rect {
-                rect: [x0, y0, x1, y1],
-                margin: margin()?,
-            },
-            (Some(v), _) if !["none", "all", "region", "content"].contains(&v) => {
-                return Err(format!(
-                    "extent={v}: none, all, region or content (or x0, y0, x1, y1)"
-                ));
+        let extent = match g.optional_choice::<ExtentKind>("extent") {
+            Some(_) if rect.iter().any(Option::is_some) => {
+                return Err("x0, y0, x1, y1 are a rectangle's, in place of extent".into());
             }
-            _ => {
+            Some(ExtentKind::None | ExtentKind::All) if g.optional("margin").is_some() => {
                 return Err(
-                    "the extent is required: extent=none, extent=all, extent=region or extent=content with margin, \
-                     or x0, y0, x1, y1 with margin"
-                        .into(),
+                    "margin goes with a region, the content or a rectangle: not extent=none or all".into(),
                 );
             }
+            Some(ExtentKind::None) => WaterExtent::None,
+            Some(ExtentKind::All) => WaterExtent::All,
+            Some(ExtentKind::Region) => WaterExtent::Region { margin: margin()? },
+            Some(ExtentKind::Content) => WaterExtent::Content { margin: margin()? },
+            None => {
+                let [Some(x0), Some(y0), Some(x1), Some(y1)] = rect else {
+                    return Err("x0, y0, x1 and y1 go together: the rectangle's bounds".into());
+                };
+                WaterExtent::Rect {
+                    rect: [x0, y0, x1, y1],
+                    margin: margin()?,
+                }
+            }
         };
-        let ocean = match o.get("ocean").map(String::as_str) {
-            None | Some("stated") => OceanMaterials::Stated,
-            Some("all") => OceanMaterials::All,
-            Some(v) => return Err(format!("ocean={v}: stated or all")),
-        };
-        PrepareReskateWater::new(extent, ocean)
+        PrepareReskateWater::new(extent, g.optional_choice("ocean").unwrap_or_default())
     }
 }
 
-/// [`PrepareReskateWater::from_options`] as a pass factory.
-pub fn prepare_reskate_water(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PrepareReskateWater::from_options(o)?))
+/// A bound of `prepare-reskate-water`'s rectangle.
+const fn bound(key: &'static str, example: &'static str, doc: &'static str) -> OptionSpec {
+    OptionSpec::optional(key, example, doc, "required with x0, not taken with extent")
 }
+
+/// `prepare-reskate-water`'s declaration ([`primase_core::pass::PassRegistry::add`]): which water a map draws and how
+/// far is the program's, no default.
+pub const PREPARE_RESKATE_WATER: PassSpec = PassSpec {
+    name: "prepare-reskate-water",
+    options: &[
+        OptionSpec::one_of_choice::<ExtentKind>(
+            "extent",
+            "extent",
+            "every water surface left out (none) or kept as given (all), or those touching the scene's stated region \
+             (region) or the map's content as the writer measures it (content), clipped to it grown by margin",
+        ),
+        OptionSpec::one_of(
+            "extent",
+            "x0",
+            "0",
+            "metres east: the west edge of the ground rectangle the kept surfaces touch, with y0, x1 and y1",
+        ),
+        bound("y0", "0", "metres north: the rectangle's south edge"),
+        bound("x1", "1", "metres east: the rectangle's east edge"),
+        bound("y1", "1", "metres north: the rectangle's north edge"),
+        OptionSpec::optional(
+            "margin",
+            "400",
+            "metres, 0 or more: how far past the region, the content or the rectangle the kept outlines reach",
+            "required with extent=region, extent=content or a rectangle, not taken with none or all",
+        ),
+        OptionSpec::optional_choice::<OceanMaterials>(
+            "ocean",
+            "the water materials drawn as Studio's ocean: those that say so (stated), or every water-class one that \
+             states nothing too (all)",
+            "stated",
+        ),
+    ],
+    make: |g| Ok(Box::new(PrepareReskateWater::from_given(g)?)),
+};
 
 /// Sutherland-Hodgman, one step: `p` cut at `k` along x (or y), keeping the side above (or below) it.
 fn clip_half(p: &[(f32, f32)], along_y: bool, k: f32, keep_above: bool) -> Vec<(f32, f32)> {
@@ -221,17 +272,17 @@ impl Pass for PrepareReskateWater {
         let mut o = Options::new();
         match self.extent {
             WaterExtent::None => {
-                o.insert("extent".into(), "none".into());
+                o.insert("extent".into(), ExtentKind::None.text().into());
             }
             WaterExtent::All => {
-                o.insert("extent".into(), "all".into());
+                o.insert("extent".into(), ExtentKind::All.text().into());
             }
             WaterExtent::Region { margin } => {
-                o.insert("extent".into(), "region".into());
+                o.insert("extent".into(), ExtentKind::Region.text().into());
                 o.insert("margin".into(), margin.to_string());
             }
             WaterExtent::Content { margin } => {
-                o.insert("extent".into(), "content".into());
+                o.insert("extent".into(), ExtentKind::Content.text().into());
                 o.insert("margin".into(), margin.to_string());
             }
             WaterExtent::Rect { rect, margin } => {
@@ -241,14 +292,7 @@ impl Pass for PrepareReskateWater {
                 o.insert("margin".into(), margin.to_string());
             }
         }
-        o.insert(
-            "ocean".into(),
-            match self.ocean {
-                OceanMaterials::Stated => "stated",
-                OceanMaterials::All => "all",
-            }
-            .into(),
-        );
+        o.insert("ocean".into(), self.ocean.text().into());
         o
     }
     fn modifies(&self) -> &[&'static str] {
@@ -633,7 +677,7 @@ mod tests {
                 ("ocean", "stated"),
             ]),
         ] {
-            assert_eq!(PrepareReskateWater::from_options(&good).unwrap().options(), good);
+            assert_eq!(PREPARE_RESKATE_WATER.instance(&good).unwrap().options(), good);
         }
         for bad in [
             o(&[]),
@@ -651,7 +695,7 @@ mod tests {
             ]),
             o(&[("extent", "none"), ("ocean", "some")]),
         ] {
-            assert!(PrepareReskateWater::from_options(&bad).is_err(), "{bad:?}");
+            assert!(PREPARE_RESKATE_WATER.instance(&bad).is_err(), "{bad:?}");
         }
     }
 }
@@ -661,13 +705,12 @@ mod tests {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SummarizeReskateContent;
 
-/// [`SummarizeReskateContent`] as a pass factory: it takes no options.
-pub fn summarize_reskate_content(o: &Options) -> Result<Box<dyn Pass>, String> {
-    match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(SummarizeReskateContent)),
-    }
-}
+/// `summarize-reskate-content`'s declaration ([`primase_core::pass::PassRegistry::add`]): it takes no options.
+pub const SUMMARIZE_RESKATE_CONTENT: PassSpec = PassSpec {
+    name: "summarize-reskate-content",
+    options: &[],
+    make: |_| Ok(Box::new(SummarizeReskateContent)),
+};
 
 impl Pass for SummarizeReskateContent {
     fn name(&self) -> &'static str {

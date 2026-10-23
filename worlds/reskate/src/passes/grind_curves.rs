@@ -20,7 +20,7 @@
 
 use std::collections::BTreeSet;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Curve, Transform, World};
 use primase_meshops::collision_query::{Ground, at};
 
@@ -54,61 +54,36 @@ pub struct LowerReskateGrindCurves {
 }
 
 impl LowerReskateGrindCurves {
-    /// From its options, every one required: `kinds` (joined by `+`), `radius` (metres), `surface`, `leave-out`
-    /// (`nothing`, or `on-slopes` with `within` metres, `flat` and `share`).
-    pub fn from_options(o: &Options) -> Result<LowerReskateGrindCurves, String> {
-        if let Some(k) = o.keys().find(|k| {
-            ![
-                "kinds",
-                "radius",
-                "surface",
-                "leave-out",
-                "within",
-                "flat",
-                "share",
-            ]
-            .contains(&k.as_str())
-        }) {
-            return Err(format!("unknown option {k}"));
-        }
+    /// From its options: `kinds` (joined by `+`), `radius` (metres), `surface`, `leave-out` (`nothing`, or
+    /// `on-slopes` with `within` metres, `flat` and `share`).
+    fn from_given(g: &Given) -> Result<LowerReskateGrindCurves, String> {
         let number = |k: &str| -> Result<Option<f64>, String> {
-            o.get(k)
+            g.optional(k)
                 .map(|v| v.parse::<f64>().map_err(|_| format!("{k}={v} is not a number")))
                 .transpose()
         };
         let slopes = (number("within")?, number("flat")?, number("share")?);
-        let leave_out = match (o.get("leave-out").map(String::as_str), slopes) {
-            (Some("nothing"), (None, None, None)) => GrindLeaveOut::Nothing,
-            (Some("nothing"), _) => return Err("within, flat and share are leave-out=on-slopes' only".into()),
-            (Some("on-slopes"), (Some(within), Some(flat), Some(share))) => {
+        let leave_out = match (g.choice::<LeaveOutKind>("leave-out"), slopes) {
+            (LeaveOutKind::Nothing, (None, None, None)) => GrindLeaveOut::Nothing,
+            (LeaveOutKind::Nothing, _) => {
+                return Err("within, flat and share are leave-out=on-slopes' only".into());
+            }
+            (LeaveOutKind::OnSlopes, (Some(within), Some(flat), Some(share))) => {
                 GrindLeaveOut::OnSlopes { within, flat, share }
             }
-            (Some("on-slopes"), _) => {
+            (LeaveOutKind::OnSlopes, _) => {
                 return Err(
                     "leave-out=on-slopes needs within (metres), flat (0..1, 1 level) and share (0..1)".into(),
                 );
             }
-            (Some(v), _) => return Err(format!("leave-out={v}: nothing or on-slopes")),
-            (None, _) => {
-                return Err(
-                    "leave-out is required: nothing, or on-slopes with within, flat and share (curves resting on \
-                     sloped collision, a ramp's coping)"
-                        .into(),
-                );
-            }
         };
-        let get = |k: &str| {
-            o.get(k).map(String::as_str).ok_or_else(|| {
-                format!("{k} is required: kinds=rail+ledge+coping (some), radius=metres, surface=metal_rail|metal|metal_thin|concrete|wood")
-            })
-        };
-        let radius = get("radius")?;
+        let radius = g.required("radius");
         Ok(LowerReskateGrindCurves {
-            kinds: get("kinds")?.split('+').map(str::to_owned).collect(),
+            kinds: g.required("kinds").split('+').map(str::to_owned).collect(),
             radius: radius
                 .parse()
                 .map_err(|_| format!("radius {radius}: not a number of metres"))?,
-            surface: get("surface")?.to_owned(),
+            surface: g.required("surface").to_owned(),
             leave_out,
         })
     }
@@ -186,6 +161,73 @@ fn rests_on_slopes(ground: &Ground, samples: &[[f64; 3]], within: f64, flat: f64
     below > 0 && sloped as f64 >= share * below as f64
 }
 
+/// `leave-out`'s values: what [`GrindLeaveOut`] is, without its numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeaveOutKind {
+    Nothing,
+    OnSlopes,
+}
+
+impl Choice for LeaveOutKind {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("nothing", LeaveOutKind::Nothing),
+        ("on-slopes", LeaveOutKind::OnSlopes),
+    ];
+}
+
+/// An option of `leave-out=on-slopes`.
+const fn on_slopes(key: &'static str, example: &'static str, doc: &'static str) -> OptionSpec {
+    OptionSpec::optional(
+        key,
+        example,
+        doc,
+        "required with leave-out=on-slopes, not taken with nothing",
+    )
+}
+
+/// `lower-reskate-grind-curves`' declaration ([`primase_core::pass::PassRegistry::add`]): which curves grind, how thick,
+/// on what and which it leaves out are the program's, no default.
+pub const LOWER_RESKATE_GRIND_CURVES: PassSpec = PassSpec {
+    name: "lower-reskate-grind-curves",
+    options: &[
+        OptionSpec::required(
+            "kinds",
+            "rail",
+            "the curve kinds that grind (rail, ledge, coping), joined by +",
+        ),
+        OptionSpec::required(
+            "radius",
+            "0.03",
+            "metres, Studio's 0.005-0.25: the grind prism's radius",
+        ),
+        OptionSpec::required(
+            "surface",
+            "metal_rail",
+            "Studio's smooth-grind surface: metal_rail, metal, metal_thin, concrete or wood",
+        ),
+        OptionSpec::choice::<LeaveOutKind>(
+            "leave-out",
+            "every curve of the kinds grinds (nothing), or those resting on sloped collision are left out (on-slopes)",
+        ),
+        on_slopes(
+            "within",
+            "0.5",
+            "metres: how near the surface below a sample must be to hold it",
+        ),
+        on_slopes(
+            "flat",
+            "0.9",
+            "0..1, 1 level: the least vertical part of a level surface's normal",
+        ),
+        on_slopes(
+            "share",
+            "0.5",
+            "0..1: the least share of a curve's samples on slopes that leaves it out",
+        ),
+    ],
+    make: |g| Ok(Box::new(LowerReskateGrindCurves::from_given(g)?)),
+};
+
 impl Pass for LowerReskateGrindCurves {
     fn name(&self) -> &'static str {
         "lower-reskate-grind-curves"
@@ -201,9 +243,9 @@ impl Pass for LowerReskateGrindCurves {
         ])
         .into_iter()
         .chain(match self.leave_out {
-            GrindLeaveOut::Nothing => vec![("leave-out".to_owned(), "nothing".to_owned())],
+            GrindLeaveOut::Nothing => vec![("leave-out".to_owned(), LeaveOutKind::Nothing.text().to_owned())],
             GrindLeaveOut::OnSlopes { within, flat, share } => vec![
-                ("leave-out".to_owned(), "on-slopes".to_owned()),
+                ("leave-out".to_owned(), LeaveOutKind::OnSlopes.text().to_owned()),
                 ("within".to_owned(), within.to_string()),
                 ("flat".to_owned(), flat.to_string()),
                 ("share".to_owned(), share.to_string()),
@@ -300,9 +342,16 @@ mod tests {
             ("surface".to_owned(), "metal_rail".to_owned()),
             ("leave-out".to_owned(), "nothing".to_owned()),
         ]);
-        let pass = LowerReskateGrindCurves::from_options(&o).unwrap();
+        let made = LOWER_RESKATE_GRIND_CURVES.instance(&o).unwrap();
+        assert_eq!(made.options(), o);
+        made.run(&mut w, &mut PassLog::default()).unwrap();
+        let pass = LowerReskateGrindCurves {
+            kinds: BTreeSet::from(["rail".to_owned()]),
+            radius: 0.03,
+            surface: "metal_rail".into(),
+            leave_out: GrindLeaveOut::Nothing,
+        };
         assert_eq!(pass.options(), o);
-        pass.run(&mut w, &mut PassLog::default()).unwrap();
         let g = w.get::<SkateGrindCurve>(rail).expect("a grind curve");
         assert_eq!((g.kind, g.radius, g.surface, g.points.len()), (0, 0.03, 0, 2));
         assert!(w.get::<Curve>(rail).is_none());
@@ -323,7 +372,7 @@ mod tests {
         ] {
             assert!(bad.run(&mut World::new(), &mut PassLog::default()).is_err());
         }
-        assert!(LowerReskateGrindCurves::from_options(&Options::new()).is_err());
+        assert!(LOWER_RESKATE_GRIND_CURVES.instance(&Options::new()).is_err());
     }
 
     /// Over a 45-degree ramp with a level deck behind it: a rail along the ramp's lip (a coping) is left out and counted,
@@ -374,7 +423,7 @@ mod tests {
             ("flat".to_owned(), "0.95".to_owned()),
             ("share".to_owned(), "0.5".to_owned()),
         ]);
-        let pass = LowerReskateGrindCurves::from_options(&o).unwrap();
+        let pass = LOWER_RESKATE_GRIND_CURVES.instance(&o).unwrap();
         assert_eq!(pass.options(), o);
         let mut log = PassLog::default();
         pass.run(&mut w, &mut log).unwrap();
@@ -396,12 +445,13 @@ mod tests {
                 Some(v) => bad.insert(k.to_owned(), v.to_owned()),
                 None => bad.remove(k),
             };
-            let refused = LowerReskateGrindCurves::from_options(&bad)
+            let refused = LOWER_RESKATE_GRIND_CURVES
+                .instance(&bad)
                 .and_then(|p| p.run(&mut World::new(), &mut PassLog::default()));
             assert!(refused.is_err(), "{k}");
         }
         let mut nothing = o.clone();
         nothing.insert("leave-out".to_owned(), "nothing".to_owned());
-        assert!(LowerReskateGrindCurves::from_options(&nothing).is_err());
+        assert!(LOWER_RESKATE_GRIND_CURVES.instance(&nothing).is_err());
     }
 }

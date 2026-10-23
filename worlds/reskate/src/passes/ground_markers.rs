@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, World};
 
 use crate::components::{MarkerKind, Other, SkateMarker, Snap, SnapMode};
@@ -41,30 +41,39 @@ impl GroundReskateMarkers {
     pub fn above(&self) -> f64 {
         f64::from_bits(self.above)
     }
-    /// From its options (both required), through [`GroundReskateMarkers::new`].
-    pub fn from_options(o: &Options) -> Result<GroundReskateMarkers, String> {
-        let (mut kinds, mut above) = (None, None);
-        for (k, v) in o {
-            match k.as_str() {
-                "kinds" => {
-                    kinds = Some(
-                        v.split('+')
-                            .map(|w| {
-                                MarkerKind::parse(w).ok_or_else(|| format!("kinds: {w} is not a marker kind"))
-                            })
-                            .collect::<Result<BTreeSet<_>, _>>()?,
-                    )
-                }
-                "above" => above = Some(v.parse::<f64>().map_err(|_| format!("above={v} is not metres"))?),
-                k => return Err(format!("unknown option {k}")),
-            }
-        }
-        GroundReskateMarkers::new(
-            kinds.ok_or("ground-reskate-markers needs kinds=K+K...")?,
-            above.ok_or("ground-reskate-markers needs above=M")?,
-        )
+    /// From its options, through [`GroundReskateMarkers::new`].
+    fn from_given(g: &Given) -> Result<GroundReskateMarkers, String> {
+        let kinds = g
+            .required("kinds")
+            .split('+')
+            .map(|w| MarkerKind::parse(w).ok_or_else(|| format!("kinds: {w} is not a marker kind")))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let above = g.required("above");
+        let above = above
+            .parse::<f64>()
+            .map_err(|_| format!("above={above} is not metres"))?;
+        GroundReskateMarkers::new(kinds, above)
     }
 }
+
+/// `ground-reskate-markers`' declaration ([`primase_core::pass::PassRegistry::add`]): which markers and how far above
+/// them the search starts are the program's, no default.
+pub const GROUND_RESKATE_MARKERS: PassSpec = PassSpec {
+    name: "ground-reskate-markers",
+    options: &[
+        OptionSpec::required(
+            "kinds",
+            "spawn+travel",
+            "the marker kinds snapped down, joined by +",
+        ),
+        OptionSpec::required(
+            "above",
+            "1",
+            "metres, finite and 0 or more: above a marker's height the search down starts",
+        ),
+    ],
+    make: |g| Ok(Box::new(GroundReskateMarkers::from_given(g)?)),
+};
 
 impl Pass for GroundReskateMarkers {
     fn name(&self) -> &'static str {
@@ -187,16 +196,18 @@ mod tests {
     fn options_are_required_and_say_every_choice() {
         let pass =
             GroundReskateMarkers::new(BTreeSet::from([MarkerKind::Spawn, MarkerKind::Travel]), 1.0).unwrap();
-        assert_eq!(GroundReskateMarkers::from_options(&pass.options()), Ok(pass));
-        assert!(GroundReskateMarkers::from_options(&Options::new()).is_err());
+        let made = GROUND_RESKATE_MARKERS.instance(&pass.options()).unwrap();
+        assert_eq!(made.options(), pass.options());
+        assert!(GROUND_RESKATE_MARKERS.instance(&Options::new()).is_err());
         assert!(GroundReskateMarkers::new(BTreeSet::new(), 1.0).is_err());
         assert!(GroundReskateMarkers::new(BTreeSet::from([MarkerKind::Spawn]), -1.0).is_err());
         assert!(
-            GroundReskateMarkers::from_options(&Options::from([
-                ("kinds".into(), "spawn+boat".into()),
-                ("above".into(), "1".into())
-            ]))
-            .is_err()
+            GROUND_RESKATE_MARKERS
+                .instance(&Options::from([
+                    ("kinds".into(), "spawn+boat".into()),
+                    ("above".into(), "1".into())
+                ]))
+                .is_err()
         );
     }
 }

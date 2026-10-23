@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use primase_core::convert::PartScope;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Resource, World};
 
 use crate::assembly::writer_placements;
@@ -32,28 +32,28 @@ impl SummarizeReskateLayout {
         Ok(SummarizeReskateLayout { tile })
     }
 
-    /// From the pipeline text: `tile` (required: the writer's tile, its encoding's).
-    pub fn from_options(o: &Options) -> Result<SummarizeReskateLayout, String> {
-        if let Some(k) = o.keys().find(|k| k.as_str() != "tile") {
-            return Err(format!("unknown option {k}"));
-        }
-        let tile = o
-            .get("tile")
-            .ok_or("tile=T (the writer's tile, metres) is required")?
-            .parse::<f32>()
-            .map_err(|_| "tile=T: not a number".to_owned())?;
-        SummarizeReskateLayout::new(tile)
-    }
-
     pub fn tile(&self) -> f32 {
         self.tile
     }
 }
 
-/// [`SummarizeReskateLayout`] as a pass factory.
-pub fn summarize_reskate_layout(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(SummarizeReskateLayout::from_options(o)?))
-}
+/// `summarize-reskate-layout`'s declaration ([`primase_core::pass::PassRegistry::add`]): the writer's tile is the
+/// program's to state, its encoding's.
+pub const SUMMARIZE_RESKATE_LAYOUT: PassSpec = PassSpec {
+    name: "summarize-reskate-layout",
+    options: &[OptionSpec::required(
+        "tile",
+        "200",
+        "metres above 0: the writer's tile, its encoding's",
+    )],
+    make: |g| {
+        let tile = g.required("tile");
+        let tile = tile
+            .parse::<f32>()
+            .map_err(|_| format!("tile={tile}: not a number"))?;
+        Ok(Box::new(SummarizeReskateLayout::new(tile)?))
+    },
+};
 
 impl Pass for SummarizeReskateLayout {
     fn name(&self) -> &'static str {

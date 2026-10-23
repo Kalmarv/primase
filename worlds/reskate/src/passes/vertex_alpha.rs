@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::components::{MaterialClass, SkateMaterial};
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Entity, MaterialVariants, Mesh, Primitive, Semantic, Stream, World};
 
 use crate::passes::layered::{BlendOpacity, VertexBlend};
@@ -60,6 +60,13 @@ fn drawn_with(world: &World, e: Entity, i: usize, p: &Primitive) -> Vec<Entity> 
 /// `lower-vertex-alpha-reskate` (see the module documentation).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LowerVertexAlphaReskate;
+
+/// `lower-vertex-alpha-reskate`'s declaration ([`primase_core::pass::PassRegistry::add`]): it takes no options.
+pub const LOWER_VERTEX_ALPHA_RESKATE: PassSpec = PassSpec {
+    name: "lower-vertex-alpha-reskate",
+    options: &[],
+    make: |_| Ok(Box::new(LowerVertexAlphaReskate)),
+};
 
 impl Pass for LowerVertexAlphaReskate {
     fn name(&self) -> &'static str {

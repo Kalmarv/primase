@@ -10,7 +10,7 @@
 //! How the game evaluates between keys is not established (the M4 in-game check), so reading takes no choice: the
 //! lowering pass states one (`interpolation=linear`, rotations by slerp), reported as an approximation.
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Channel, Clip, ClipTarget, Component, Entity, Extrapolation, Interpolation, JsonError, Name, Property,
     Skeleton, World,
@@ -239,27 +239,39 @@ pub fn insert_clip(clip: SkateClip, world: &mut World) -> Entity {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LowerSkateClips;
 
-/// The pass factory.
-pub fn lower_skate_clips(o: &Options) -> Result<Box<dyn Pass>, String> {
-    match o.get("interpolation").map(String::as_str) {
-        Some("linear") => {}
-        Some(v) => return Err(format!("interpolation={v}: only linear is offered")),
-        None => {
-            return Err("interpolation=linear is required (the game's own rule is not established)".into());
-        }
-    }
-    if let Some(k) = o.keys().find(|k| *k != "interpolation") {
-        return Err(format!("unknown option {k}"));
-    }
-    Ok(Box::new(LowerSkateClips))
+/// How [`LowerSkateClips`] interpolates between keys: only linearly is offered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyInterpolation {
+    Linear,
 }
+
+impl Choice for KeyInterpolation {
+    const VALUES: &'static [(&'static str, Self)] = &[("linear", KeyInterpolation::Linear)];
+}
+
+/// `lower-skate-clips`' declaration ([`primase_core::pass::PassRegistry::add`]): how the game interpolates between
+/// keys is not established, so the program states it.
+pub const LOWER_SKATE_CLIPS: PassSpec = PassSpec {
+    name: "lower-skate-clips",
+    options: &[OptionSpec::choice::<KeyInterpolation>(
+        "interpolation",
+        "between keys (only linear is offered: the game's own rule is not established)",
+    )],
+    make: |g| {
+        let KeyInterpolation::Linear = g.choice("interpolation");
+        Ok(Box::new(LowerSkateClips))
+    },
+};
 
 impl Pass for LowerSkateClips {
     fn name(&self) -> &'static str {
         "lower-skate-clips"
     }
     fn options(&self) -> Options {
-        Options::from([("interpolation".to_owned(), "linear".to_owned())])
+        Options::from([(
+            "interpolation".to_owned(),
+            KeyInterpolation::Linear.text().to_owned(),
+        )])
     }
     fn requires(&self) -> &[&'static str] {
         &[SkateClip::NAME]

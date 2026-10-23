@@ -19,7 +19,7 @@
 
 use std::collections::BTreeSet;
 
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Collision, Entity, Instance, Transform, World};
 
 use crate::components::{
@@ -59,39 +59,31 @@ impl ClipReskateRegion {
     pub fn apron(&self) -> f32 {
         self.apron
     }
+}
 
-    /// From its options (all four bounds and the apron required), through [`ClipReskateRegion::new`].
-    pub fn from_options(o: &Options) -> Result<ClipReskateRegion, String> {
-        let mut b = [None; 5];
-        for (k, v) in o {
-            let i = match k.as_str() {
-                "x0" => 0,
-                "y0" => 1,
-                "x1" => 2,
-                "y1" => 3,
-                "apron" => 4,
-                _ => return Err(format!("unknown option {k}")),
-            };
-            b[i] = Some(
-                v.parse::<f32>()
-                    .map_err(|_| format!("{k}={v} is not a number of metres"))?,
-            );
-        }
-        let [Some(x0), Some(y0), Some(x1), Some(y1), Some(apron)] = b else {
-            return Err(
-                "x0, y0, x1, y1 and apron are required: the region's ground-frame bounds and the apron around it, \
-                 metres"
-                    .into(),
-            );
+/// `clip-reskate-region`'s declaration ([`primase_core::pass::PassRegistry::add`]): the region is the program's, no
+/// default.
+pub const CLIP_RESKATE_REGION: PassSpec = PassSpec {
+    name: "clip-reskate-region",
+    options: &[
+        OptionSpec::required("x0", "0", "metres east: the region's west bound"),
+        OptionSpec::required("y0", "0", "metres north: the region's south bound"),
+        OptionSpec::required("x1", "1", "metres east: the region's east bound (excluded)"),
+        OptionSpec::required("y1", "1", "metres north: the region's north bound (excluded)"),
+        OptionSpec::required("apron", "0", "metres, 0 or more: the apron around the region"),
+    ],
+    make: |g| {
+        let metres = |k: &str| -> Result<f32, String> {
+            let v = g.required(k);
+            v.parse::<f32>()
+                .map_err(|_| format!("{k}={v} is not a number of metres"))
         };
-        ClipReskateRegion::new([x0, y0, x1, y1], apron)
-    }
-}
-
-/// [`ClipReskateRegion::from_options`] as a pass factory.
-pub fn clip_reskate_region(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(ClipReskateRegion::from_options(o)?))
-}
+        Ok(Box::new(ClipReskateRegion::new(
+            [metres("x0")?, metres("y0")?, metres("x1")?, metres("y1")?],
+            metres("apron")?,
+        )?))
+    },
+};
 
 impl Pass for ClipReskateRegion {
     fn name(&self) -> &'static str {

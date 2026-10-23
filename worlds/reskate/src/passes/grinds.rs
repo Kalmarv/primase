@@ -9,7 +9,7 @@
 //! passes that move the curves (the floor).
 
 use primase_core::World;
-use primase_core::pass::{Options, Pass, PassLog};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_meshops::vector::Vec3;
 
 use crate::components::{SkateGrindCurve, SkateGrindPrism};
@@ -62,27 +62,62 @@ impl PrepareReskateGrinds {
         self.rules
     }
 
-    /// From its options (each optional, Studio's otherwise), through [`PrepareReskateGrinds::with_rules`].
-    pub fn from_options(o: &Options) -> Result<PrepareReskateGrinds, String> {
+    /// From its options (each Studio's when not given), through [`PrepareReskateGrinds::with_rules`].
+    fn from_given(g: &Given) -> Result<PrepareReskateGrinds, String> {
         let mut r = PrismRules::STUDIO;
-        for (k, v) in o {
-            let number = || v.parse::<f32>().map_err(|_| format!("{k}={v} is not a number"));
-            match k.as_str() {
-                "sides" => r.sides = v.parse().map_err(|_| format!("sides={v} is not a count"))?,
-                "tolerance" => r.tolerance = number()?,
-                "min_spacing" => r.min_spacing = number()?,
-                "corner_degrees" => r.corner_degrees = number()?,
-                _ => return Err(format!("unknown option {k}")),
-            }
+        let number = |k: &str| -> Result<Option<f32>, String> {
+            g.optional(k)
+                .map(|v| v.parse::<f32>().map_err(|_| format!("{k}={v} is not a number")))
+                .transpose()
+        };
+        if let Some(v) = g.optional("sides") {
+            r.sides = v.parse().map_err(|_| format!("sides={v} is not a count"))?;
+        }
+        if let Some(v) = number("tolerance")? {
+            r.tolerance = v;
+        }
+        if let Some(v) = number("min_spacing")? {
+            r.min_spacing = v;
+        }
+        if let Some(v) = number("corner_degrees")? {
+            r.corner_degrees = v;
         }
         PrepareReskateGrinds::studio().with_rules(r)
     }
 }
 
-/// [`PrepareReskateGrinds::from_options`] as a pass factory.
-pub fn prepare_reskate_grinds(o: &Options) -> Result<Box<dyn Pass>, String> {
-    Ok(Box::new(PrepareReskateGrinds::from_options(o)?))
-}
+/// `prepare-reskate-grinds`' declaration ([`primase_core::pass::PassRegistry::add`]): Studio's prism rules unless
+/// stated.
+pub const PREPARE_RESKATE_GRINDS: PassSpec = PassSpec {
+    name: "prepare-reskate-grinds",
+    options: &[
+        OptionSpec::optional(
+            "sides",
+            "8",
+            "a count, 3 to 64: the sides of a prism",
+            "8, Studio's",
+        ),
+        OptionSpec::optional(
+            "tolerance",
+            "0.003",
+            "metres, 0 or more: the simplification tolerance",
+            "0.003, Studio's",
+        ),
+        OptionSpec::optional(
+            "min_spacing",
+            "0.02",
+            "metres, 0 or more: the closest two kept points may be",
+            "0.02, Studio's",
+        ),
+        OptionSpec::optional(
+            "corner_degrees",
+            "75",
+            "degrees, 0-180: the corner between one segment and the next past which a run is split",
+            "75, Studio's",
+        ),
+    ],
+    make: |g| Ok(Box::new(PrepareReskateGrinds::from_given(g)?)),
+};
 
 impl Pass for PrepareReskateGrinds {
     fn name(&self) -> &'static str {
@@ -144,5 +179,33 @@ impl Pass for PrepareReskateGrinds {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What each rule's absence states is Studio's, the value [`PrismRules::STUDIO`] holds.
+    #[test]
+    fn the_rules_options_state_studios() {
+        let r = PrismRules::STUDIO;
+        for (key, value) in [
+            ("sides", r.sides.to_string()),
+            ("tolerance", r.tolerance.to_string()),
+            ("min_spacing", r.min_spacing.to_string()),
+            ("corner_degrees", r.corner_degrees.to_string()),
+        ] {
+            let spec = PREPARE_RESKATE_GRINDS
+                .options
+                .iter()
+                .find(|o| o.key() == key)
+                .unwrap();
+            assert_eq!(
+                spec.absent(),
+                Some(format!("{value}, Studio's").as_str()),
+                "{key}"
+            );
+        }
     }
 }

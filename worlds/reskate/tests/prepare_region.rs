@@ -6,7 +6,7 @@
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::{Collision, Entity, Instance, Transform, World};
 use primase_reskate::components::{SkatePlacement, SkateRock, SkateScene};
-use primase_reskate::passes::{ClipReskateRegion, clip_reskate_region};
+use primase_reskate::passes::{CLIP_RESKATE_REGION, ClipReskateRegion};
 
 /// A placement at scene (x, 0, z) of a prototype with nothing on it.
 fn place(w: &mut World, proto: Entity, x: f32, z: f32, clip: Option<bool>) -> Entity {
@@ -159,7 +159,7 @@ fn the_region_is_required_and_checked() {
         ("y1", "1"),
         ("apron", "30"),
     ]);
-    let pass = clip_reskate_region(&given).unwrap();
+    let pass = CLIP_RESKATE_REGION.instance(&given).unwrap();
     assert_eq!(pass.options(), given);
     for bad in [
         o(&[("x0", "0"), ("y0", "0"), ("x1", "1"), ("y1", "1")]),
@@ -194,6 +194,6 @@ fn the_region_is_required_and_checked() {
             ("z", "1"),
         ]),
     ] {
-        assert!(clip_reskate_region(&bad).is_err(), "{bad:?}");
+        assert!(CLIP_RESKATE_REGION.instance(&bad).is_err(), "{bad:?}");
     }
 }
