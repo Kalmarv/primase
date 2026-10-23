@@ -372,13 +372,122 @@ pub struct AlphaTest {
     pub reference: f32,
 }
 
-/// Fixed-function state as the source stores it; each `None` where it states none.
+/// A stencil operation (D3D12 and Vulkan have the same eight).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StencilOp {
+    Keep,
+    Zero,
+    Replace,
+    /// Increment, clamped at the maximum.
+    IncrementClamp,
+    /// Decrement, clamped at zero.
+    DecrementClamp,
+    Invert,
+    /// Increment, wrapping to zero.
+    IncrementWrap,
+    /// Decrement, wrapping to the maximum.
+    DecrementWrap,
+}
+
+/// What the stencil test does for one facing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct StencilFace {
+    /// On a failed stencil test.
+    pub fail: StencilOp,
+    /// On a passed stencil test and a failed depth test.
+    pub depth_fail: StencilOp,
+    /// On both passed.
+    pub pass: StencilOp,
+    pub compare: Compare,
+}
+
+/// An enabled stencil test (a disabled one is `None` in [`RenderState::stencil`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct Stencil {
+    pub read_mask: u8,
+    pub write_mask: u8,
+    pub front: StencilFace,
+    pub back: StencilFace,
+}
+
+/// What one render target does with a fragment: its blend and which channels it writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct TargetState {
+    /// `None` where the target is not blended.
+    pub blend: Option<Blend>,
+    /// The channels written: bit 0 red, 1 green, 2 blue, 3 alpha (`0xf` all).
+    pub write_mask: u8,
+}
+
+/// A depth bias, D3D12's three terms: `bias = constant * r + slope_scaled * max_slope`, limited to `clamp` when that
+/// is not zero (r the smallest resolvable depth difference).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct DepthBias {
+    pub constant: f32,
+    pub slope_scaled: f32,
+    pub clamp: f32,
+}
+
+/// How a triangle is filled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fill {
+    Solid,
+    Wireframe,
+}
+
+/// Fixed-function state as the source stores it; each `None` where it states none. D3D12-shaped: `blend` is render
+/// target 0's blend (what a consumer with one render target reads), and `targets` has every render target's blend
+/// and write mask where the source states them, with `targets[0]`'s blend equal to `blend` ([`ShaderBinding`]'s
+/// verification checks it).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct RenderState {
     pub blend: Option<Blend>,
     pub depth: Option<DepthState>,
     pub cull: Option<Cull>,
     pub alpha_test: Option<AlphaTest>,
+    /// Per render target, in order.
+    pub targets: [Option<TargetState>; 8],
+    /// The stencil test, where one is enabled.
+    pub stencil: Option<Stencil>,
+    pub depth_bias: Option<DepthBias>,
+    pub fill: Option<Fill>,
+    /// Whether counter-clockwise triangles are front faces.
+    pub front_counter_clockwise: Option<bool>,
+}
+
+impl RenderState {
+    /// The state is consistent: the write masks fit four channels, the bias is finite and the first target's blend
+    /// is `blend`.
+    pub fn verify(&self) -> Result<(), String> {
+        if let Some(a) = self.alpha_test
+            && !a.reference.is_finite()
+        {
+            return Err("the alpha test's reference is not finite".into());
+        }
+        for (i, t) in self.targets.iter().enumerate() {
+            if let Some(t) = t
+                && t.write_mask > 0xf
+            {
+                return Err(format!(
+                    "render target {i}'s write mask {:#x} is wider than four channels",
+                    t.write_mask
+                ));
+            }
+        }
+        if let Some(first) = self.targets[0]
+            && first.blend != self.blend
+        {
+            return Err("render target 0's blend is not the state's blend".into());
+        }
+        if let Some(b) = self.depth_bias
+            && !(b.constant.is_finite() && b.slope_scaled.is_finite() && b.clamp.is_finite())
+        {
+            return Err("the depth bias is not finite".into());
+        }
+        Ok(())
+    }
 }
 
 /// `core.shader_binding`, on a material entity: the shader programs it is drawn with, one per stage, what each reads
@@ -511,12 +620,7 @@ impl Component for ShaderBinding {
             }
             s.verify(w)?;
         }
-        if let Some(a) = self.state.alpha_test
-            && !a.reference.is_finite()
-        {
-            return Err("the alpha test's reference is not finite".into());
-        }
-        Ok(())
+        self.state.verify()
     }
     fn references(&self, out: &mut Vec<Entity>) {
         for s in &self.stages {
@@ -550,6 +654,45 @@ mod tests {
         assert_eq!(e.decode(0.5), 128.0);
         assert_eq!(ScalarEncoding::LINEAR.decode(0.25), 0.25);
         assert_eq!(ScalarEncoding::square_root_of(1.0).decode(0.5), 0.25);
+    }
+
+    #[test]
+    fn a_render_state_is_consistent() {
+        let eq = BlendEquation {
+            source: BlendFactor::SrcAlpha,
+            destination: BlendFactor::OneMinusSrcAlpha,
+            op: BlendOp::Add,
+        };
+        let blend = Blend {
+            colour: eq,
+            alpha: eq,
+        };
+        let mut state = RenderState::default();
+        assert_eq!(state.verify(), Ok(()));
+        // the first target's blend is the state's
+        state.targets[0] = Some(TargetState {
+            blend: Some(blend),
+            write_mask: 0xf,
+        });
+        assert!(state.verify().unwrap_err().contains("target 0's blend"));
+        state.blend = Some(blend);
+        assert_eq!(state.verify(), Ok(()));
+        // other targets are free; a mask is four channels
+        state.targets[3] = Some(TargetState {
+            blend: None,
+            write_mask: 0x1f,
+        });
+        assert!(state.verify().unwrap_err().contains("target 3's write mask"));
+        state.targets[3] = Some(TargetState {
+            blend: None,
+            write_mask: 0x8,
+        });
+        state.depth_bias = Some(DepthBias {
+            constant: 0.0,
+            slope_scaled: f32::NAN,
+            clamp: 0.0,
+        });
+        assert!(state.verify().unwrap_err().contains("depth bias"));
     }
 
     fn varying(name: &str, width: u8) -> Varying {

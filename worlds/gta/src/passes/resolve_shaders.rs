@@ -13,11 +13,12 @@
 //!   and domain stages are not bound), a compute pass or with no technique table (the post-processing and lighting
 //!   effects) leaves its materials unbound, by name.
 //! - **Render state.** The pass names a record of each of the effect's tables ([`GtaPass::rasterizer`], `depth_stencil`
-//!   and `blend`): the cull mode, the depth test and write, and the blend of render target 0 (colour and alpha
-//!   equations, in the vocabulary's factors: a blend of a factor it has none for, such as source alpha saturate, is
-//!   left `None` and counted). An effect without a table states none of it. The other render targets' blends and every
-//!   target's write mask (the vocabulary has one blend and no mask), the stencil, the polygon offset and the fill mode
-//!   are not carried; the alpha test is not a render state in GTA (the cutoff is a shader constant).
+//!   and `blend`): the cull mode, fill mode and winding; the depth test and write and the stencil test; and for every
+//!   render target its blend (colour and alpha equations, in the vocabulary's factors: a blend of a factor it has none
+//!   for, such as source alpha saturate, is left `None` and counted) and its write mask, `blend` being target 0's. An
+//!   effect without a table states none of it. Not carried: the polygon offset (the rasterizer record's float at +8,
+//!   non-zero on the two foam effects, which of the depth bias terms it is is not established); the alpha test is not a
+//!   render state in GTA (the cutoff is a shader constant).
 //! - **Constants.** Each constant buffer a program declares is the table record at its register and space; each
 //!   constant of the record is bound at its byte offset (a constant past the end of the buffer the program declares is
 //!   one it does not read, and is left out, counted). A constant the effect renames (its parameter records:
@@ -41,9 +42,10 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::shader::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
-    DepthState, InputBinding, InputRole, NormalEncoding, NormalSpace, ObjectParameter, OutputBinding,
+    DepthState, Fill, InputBinding, InputRole, NormalEncoding, NormalSpace, ObjectParameter, OutputBinding,
     OutputRole, RenderState, ResourceKind, SamplerState, ScalarEncoding, Shader, ShaderBinding, Stage,
-    StageBinding, SystemValue, TextureBinding, TextureSource, ViewParameter,
+    StageBinding, Stencil, StencilFace, StencilOp, SystemValue, TargetState, TextureBinding, TextureSource,
+    ViewParameter,
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
 
@@ -58,94 +60,148 @@ use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
 /// sub-sample variants: [`gbuffer`] has the layout and how it was checked).
 const GBUFFER_FAMILY: &str = "PS_DeferredTextured";
 
-/// The render state a pass names, from its effect's tables, and what could not be carried.
+/// The D3D12 comparison function as the vocabulary's.
+fn compare(f: u8) -> Option<Compare> {
+    Some(match f {
+        1 => Compare::Never,
+        2 => Compare::Less,
+        3 => Compare::Equal,
+        4 => Compare::LessEqual,
+        5 => Compare::Greater,
+        6 => Compare::NotEqual,
+        7 => Compare::GreaterEqual,
+        8 => Compare::Always,
+        _ => return None,
+    })
+}
+
+/// The D3D12 stencil operation as the vocabulary's.
+fn stencil_op(o: u8) -> Option<StencilOp> {
+    Some(match o {
+        1 => StencilOp::Keep,
+        2 => StencilOp::Zero,
+        3 => StencilOp::Replace,
+        4 => StencilOp::IncrementClamp,
+        5 => StencilOp::DecrementClamp,
+        6 => StencilOp::Invert,
+        7 => StencilOp::IncrementWrap,
+        8 => StencilOp::DecrementWrap,
+        _ => return None,
+    })
+}
+
+/// The D3D12 blend factor as the vocabulary's; `None` for the ones it has none for (source alpha saturate, the blend
+/// factor constants and the dual-source factors).
+fn blend_factor(f: u8) -> Option<BlendFactor> {
+    Some(match f {
+        1 => BlendFactor::Zero,
+        2 => BlendFactor::One,
+        3 => BlendFactor::SrcColour,
+        4 => BlendFactor::OneMinusSrcColour,
+        5 => BlendFactor::SrcAlpha,
+        6 => BlendFactor::OneMinusSrcAlpha,
+        7 => BlendFactor::DstAlpha,
+        8 => BlendFactor::OneMinusDstAlpha,
+        9 => BlendFactor::DstColour,
+        10 => BlendFactor::OneMinusDstColour,
+        _ => return None,
+    })
+}
+
+fn blend_op(o: u8) -> Option<BlendOp> {
+    Some(match o {
+        1 => BlendOp::Add,
+        2 => BlendOp::Subtract,
+        3 => BlendOp::ReverseSubtract,
+        4 => BlendOp::Min,
+        5 => BlendOp::Max,
+        _ => return None,
+    })
+}
+
+/// The render state a pass names, from its effect's tables, and what could not be carried (once each, in `notes`).
 fn render_state(t: &GtaEffectTechniques, pass: &GtaPass, notes: &mut Vec<&'static str>) -> RenderState {
-    let cull = t
-        .rasterizer
-        .get(usize::from(pass.rasterizer))
-        .and_then(|r| match r.cull {
+    let mut state = RenderState::default();
+    if let Some(r) = t.rasterizer.get(usize::from(pass.rasterizer)) {
+        state.cull = match r.cull {
             1 => Some(Cull::None),
             2 => Some(Cull::Front),
             3 => Some(Cull::Back),
             _ => None,
-        });
-    let compare = |f: u8| match f {
-        1 => Some(Compare::Never),
-        2 => Some(Compare::Less),
-        3 => Some(Compare::Equal),
-        4 => Some(Compare::LessEqual),
-        5 => Some(Compare::Greater),
-        6 => Some(Compare::NotEqual),
-        7 => Some(Compare::GreaterEqual),
-        8 => Some(Compare::Always),
-        _ => None,
-    };
-    let depth = t
-        .depth_stencil
-        .get(usize::from(pass.depth_stencil))
-        .and_then(|d| {
-            if d.depth_enable == 0 {
-                Some(DepthState {
-                    test: Compare::Always,
-                    write: false,
-                })
-            } else {
-                compare(d.depth_func).map(|test| DepthState {
-                    test,
-                    write: d.depth_write_mask == 1,
-                })
-            }
-        });
-    let factor = |f: u8| match f {
-        1 => Some(BlendFactor::Zero),
-        2 => Some(BlendFactor::One),
-        3 => Some(BlendFactor::SrcColour),
-        4 => Some(BlendFactor::OneMinusSrcColour),
-        5 => Some(BlendFactor::SrcAlpha),
-        6 => Some(BlendFactor::OneMinusSrcAlpha),
-        7 => Some(BlendFactor::DstAlpha),
-        8 => Some(BlendFactor::OneMinusDstAlpha),
-        9 => Some(BlendFactor::DstColour),
-        10 => Some(BlendFactor::OneMinusDstColour),
-        _ => None,
-    };
-    let op = |o: u8| match o {
-        1 => Some(BlendOp::Add),
-        2 => Some(BlendOp::Subtract),
-        3 => Some(BlendOp::ReverseSubtract),
-        4 => Some(BlendOp::Min),
-        5 => Some(BlendOp::Max),
-        _ => None,
-    };
-    let blend = t.blend.get(usize::from(pass.blend)).and_then(|b| {
-        let target = b.targets.first()?;
-        if target.enable == 0 {
-            notes.push("blend disabled on render target 0 (left None)");
-            return None;
+        };
+        state.fill = match r.fill {
+            2 => Some(Fill::Wireframe),
+            3 => Some(Fill::Solid),
+            _ => None,
+        };
+        state.front_counter_clockwise = Some(r.front_counter_clockwise == 1);
+        if r.offset != 0.0 {
+            notes.push("a polygon offset (the rasterizer record's float at +8) is not read (left None)");
         }
-        let equation = |s, d, o| {
-            Some(BlendEquation {
-                source: factor(s)?,
-                destination: factor(d)?,
-                op: op(o)?,
+    }
+    if let Some(d) = t.depth_stencil.get(usize::from(pass.depth_stencil)) {
+        state.depth = if d.depth_enable == 0 {
+            Some(DepthState {
+                test: Compare::Always,
+                write: false,
+            })
+        } else {
+            compare(d.depth_func).map(|test| DepthState {
+                test,
+                write: d.depth_write_mask == 1,
             })
         };
-        let colour = equation(target.src, target.dest, target.op);
-        let alpha = equation(target.src_alpha, target.dest_alpha, target.op_alpha);
-        match colour.zip(alpha) {
-            Some((colour, alpha)) => Some(Blend { colour, alpha }),
-            None => {
-                notes.push("a blend factor or operation outside the vocabulary (left None)");
+        if d.stencil_enable == 1 {
+            let face = |f: &crate::rage::sgd2_effect::StencilFace| {
+                Some(StencilFace {
+                    fail: stencil_op(f.fail_op)?,
+                    depth_fail: stencil_op(f.depth_fail_op)?,
+                    pass: stencil_op(f.pass_op)?,
+                    compare: compare(f.func)?,
+                })
+            };
+            state.stencil = face(&d.front).zip(face(&d.back)).map(|(front, back)| Stencil {
+                read_mask: d.stencil_read_mask,
+                write_mask: d.stencil_write_mask,
+                front,
+                back,
+            });
+        }
+    }
+    if let Some(b) = t.blend.get(usize::from(pass.blend)) {
+        for (i, target) in b.targets.iter().enumerate() {
+            let equation = |s, d, o| {
+                Some(BlendEquation {
+                    source: blend_factor(s)?,
+                    destination: blend_factor(d)?,
+                    op: blend_op(o)?,
+                })
+            };
+            let blend = if target.enable == 0 {
                 None
+            } else {
+                let both = equation(target.src, target.dest, target.op).zip(equation(
+                    target.src_alpha,
+                    target.dest_alpha,
+                    target.op_alpha,
+                ));
+                if both.is_none() {
+                    notes.push("a blend factor or operation outside the vocabulary (left None)");
+                }
+                both.map(|(colour, alpha)| Blend { colour, alpha })
+            };
+            if let Some(slot) = state.targets.get_mut(i) {
+                *slot = Some(TargetState {
+                    blend,
+                    write_mask: target.write_mask & 0xf,
+                });
             }
         }
-    });
-    RenderState {
-        blend,
-        depth,
-        cull,
-        alpha_test: None,
+        state.blend = state.targets[0].and_then(|t| t.blend);
     }
+    notes.sort_unstable();
+    notes.dedup();
+    state
 }
 
 /// The programs an effect's materials are bound to.
@@ -990,51 +1046,66 @@ mod tests {
     }
 
     /// A pass's render state is the records of its effect's tables it names, in the vocabulary's terms: the cull mode,
-    /// the depth test and write, render target 0's blend; a blend factor the vocabulary lacks, a disabled blend and an
-    /// effect without tables leave `None` (the first two with a note).
+    /// fill and winding; the depth test and write and the stencil; every render target's blend and write mask. A blend
+    /// factor the vocabulary lacks leaves that target's blend `None` (with a note), a disabled blend too (the mask kept),
+    /// and an effect without tables states none.
     #[test]
     fn a_passes_state_is_the_records_it_names() {
-        use crate::rage::sgd2_effect::{Blend as BlendRecord, DepthStencil, Rasterizer, StencilFace};
-        let face = StencilFace {
-            fail_op: 1,
-            depth_fail_op: 1,
-            pass_op: 1,
-            func: 8,
+        use crate::rage::sgd2_effect::{
+            Blend as BlendRecord, DepthStencil, Rasterizer, StencilFace as FaceRecord,
         };
-        let depth = |enable, write, func| DepthStencil {
+        let face = |func| FaceRecord {
+            fail_op: 1,
+            depth_fail_op: 2,
+            pass_op: 3,
+            func,
+        };
+        let depth = |enable, write, func, stencil| DepthStencil {
             depth_enable: enable,
             depth_write_mask: write,
             depth_func: func,
-            stencil_enable: 0,
-            stencil_read_mask: 0xff,
-            stencil_write_mask: 0xff,
-            front: face,
-            back: face,
+            stencil_enable: stencil,
+            stencil_read_mask: 0xf0,
+            stencil_write_mask: 0x0f,
+            front: face(8),
+            back: face(3),
             tail: [0; 10],
         };
-        let blend = |t: crate::rage::sgd2_effect::TargetBlend| BlendRecord {
-            head: [0; 4],
-            targets: [t; 8],
+        // render target 0 as given, the others opaque with the write mask 0
+        let blend = |t: crate::rage::sgd2_effect::TargetBlend| {
+            let mut targets = [crate::rage::sgd2_effect::TargetBlend {
+                write_mask: 0,
+                ..target(0, 2, 1)
+            }; 8];
+            targets[0] = t;
+            BlendRecord {
+                head: [0; 4],
+                targets,
+            }
         };
-        let rasterizer = |cull| Rasterizer {
-            fill: 3,
+        let rasterizer = |cull, fill, ccw| Rasterizer {
+            fill,
             cull,
-            front_counter_clockwise: 1,
+            front_counter_clockwise: ccw,
             offset: 0.0,
             raw: [0; 16],
         };
         let mut t = techniques();
-        t.rasterizer = vec![rasterizer(3), rasterizer(1)];
-        t.depth_stencil = vec![depth(1, 0, 5), depth(1, 1, 2), depth(0, 0, 8)];
+        t.rasterizer = vec![rasterizer(3, 3, 1), rasterizer(1, 2, 0)];
+        t.depth_stencil = vec![depth(1, 0, 5, 0), depth(1, 1, 2, 1), depth(0, 0, 8, 0)];
         t.blend = vec![target(1, 5, 6), target(0, 2, 1), target(1, 11, 6)]
             .into_iter()
             .map(blend)
             .collect();
         let mut p = pass(None, None, false);
         let mut notes = Vec::new();
-        // record 0 of each: back faces culled, depth tested GREATER without writing, source alpha over its inverse
+        // record 0 of each: back faces culled, solid, counter-clockwise fronts; depth tested GREATER without writing, no
+        // stencil; target 0 source alpha over its inverse with the colour channels written, the others opaque, unwritten
         let state = render_state(&t, &p, &mut notes);
-        assert_eq!(state.cull, Some(Cull::Back));
+        assert_eq!(
+            (state.cull, state.fill, state.front_counter_clockwise),
+            (Some(Cull::Back), Some(Fill::Solid), Some(true))
+        );
         assert_eq!(
             state.depth,
             Some(DepthState {
@@ -1042,6 +1113,7 @@ mod tests {
                 write: false
             })
         );
+        assert_eq!(state.stencil, None);
         let b = state.blend.unwrap();
         assert_eq!(
             (
@@ -1057,13 +1129,40 @@ mod tests {
                 BlendFactor::OneMinusSrcAlpha
             )
         );
+        assert_eq!(
+            state.targets[0],
+            Some(TargetState {
+                blend: state.blend,
+                write_mask: 7
+            })
+        );
+        assert_eq!(
+            state.targets[5],
+            Some(TargetState {
+                blend: None,
+                write_mask: 0
+            })
+        );
+        assert_eq!(state.targets.iter().flatten().count(), 8);
         assert!(notes.is_empty());
-        // record 1: no culling, depth LESS with writes, blending off; record 2: depth off, a factor outside the vocabulary
+        assert_eq!(
+            ShaderBinding {
+                stages: Vec::new(),
+                state
+            }
+            .state
+            .verify(),
+            Ok(())
+        );
+        // record 1: no culling, wireframe, clockwise fronts; depth LESS with writes and a stencil test; blending off
         p.rasterizer = 1;
         p.depth_stencil = 1;
         p.blend = 1;
         let state = render_state(&t, &p, &mut notes);
-        assert_eq!((state.cull, state.blend), (Some(Cull::None), None));
+        assert_eq!(
+            (state.cull, state.fill, state.front_counter_clockwise, state.blend),
+            (Some(Cull::None), Some(Fill::Wireframe), Some(false), None)
+        );
         assert_eq!(
             state.depth,
             Some(DepthState {
@@ -1071,6 +1170,26 @@ mod tests {
                 write: true
             })
         );
+        let stencil = state.stencil.unwrap();
+        assert_eq!((stencil.read_mask, stencil.write_mask), (0xf0, 0x0f));
+        assert_eq!(
+            stencil.front,
+            StencilFace {
+                fail: StencilOp::Keep,
+                depth_fail: StencilOp::Zero,
+                pass: StencilOp::Replace,
+                compare: Compare::Always
+            }
+        );
+        assert_eq!(stencil.back.compare, Compare::Equal);
+        assert_eq!(
+            state.targets[0],
+            Some(TargetState {
+                blend: None,
+                write_mask: 7
+            })
+        );
+        // record 2: depth off, a factor outside the vocabulary (its target left unblended, the mask kept)
         p.depth_stencil = 2;
         p.blend = 2;
         let state = render_state(&t, &p, &mut notes);
@@ -1081,8 +1200,17 @@ mod tests {
                 write: false
             })
         );
-        assert_eq!(state.blend, None);
-        assert_eq!(notes.len(), 2);
+        assert_eq!(
+            (state.blend, state.targets[0]),
+            (
+                None,
+                Some(TargetState {
+                    blend: None,
+                    write_mask: 7
+                })
+            )
+        );
+        assert_eq!(notes.len(), 1);
         // an effect without tables states none
         assert_eq!(
             render_state(&techniques(), &pass(None, None, false), &mut Vec::new()),

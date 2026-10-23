@@ -112,11 +112,28 @@ fn what_is_left_unknown_on_a_region() {
     let mut cull: BTreeMap<String, usize> = BTreeMap::new();
     let mut depth: BTreeMap<String, usize> = BTreeMap::new();
     let mut blend: BTreeMap<String, usize> = BTreeMap::new();
+    let mut masks: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut stenciled, mut wireframe, mut verified) = (0usize, 0usize, 0usize);
     let mut samplers_bound = 0usize;
     for (_, binding) in world.iter::<ShaderBinding>() {
         if binding.state == RenderState::default() {
             default_state += 1;
         }
+        binding.state.verify().unwrap();
+        verified += 1;
+        stenciled += usize::from(binding.state.stencil.is_some());
+        wireframe += usize::from(binding.state.fill == Some(primase_core::shader::Fill::Wireframe));
+        *masks
+            .entry(
+                binding
+                    .state
+                    .targets
+                    .iter()
+                    .map(|t| t.map_or("-".to_owned(), |t| format!("{:x}", t.write_mask)))
+                    .collect::<Vec<_>>()
+                    .join(""),
+            )
+            .or_default() += 1;
         *cull.entry(format!("{:?}", binding.state.cull)).or_default() += 1;
         *depth
             .entry(
@@ -223,7 +240,7 @@ fn what_is_left_unknown_on_a_region() {
         }
     }
     println!(
-        "render state left at the default: {default_state} of {bound}; samplers bound: {samplers_bound}; cull {cull:?}; depth {depth:?}; blend {blend:?}"
+        "render state left at the default: {default_state} of {bound}; samplers bound: {samplers_bound}; cull {cull:?}; depth {depth:?}; blend {blend:?}; {verified} states verify, {stenciled} with a stencil test, {wireframe} wireframe; write masks of the eight targets {masks:?}"
     );
     println!("output lanes left Unknown (stage target lanes: bindings):");
     for (k, n) in &outputs {
