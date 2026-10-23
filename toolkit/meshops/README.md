@@ -6,8 +6,8 @@ Outputs preserve deterministic traversal order; they do not
 implicitly change coordinate frames. Each function documents its exact rule.
 
 - `compact`: first-use vertex remapping, all attributes retained.
-- `weld_millimetres`: position-only grid weld, first representative retained,
-  f32 millimetre keys rounded to even, collapsed faces omitted.
+- `weld_quantized`: position-only grid weld of loose triangle corners, first representative retained,
+  f32 grid keys rounded to even, collapsed faces omitted.
 - `flat_normals`: duplicate face vertices and replace normals; degenerate faces
   use +Z. UVs are retained.
 - `transform`: inverse-transpose normals and mirrored winding, with the
@@ -50,9 +50,8 @@ and output-mesh records (the synthetic test supplies the operation parameters).
 its f32 tile count, then input and expected welded position/index arrays with
 scalar counts. No private source code or external assets are included.
 
-`weld_quantized` accepts loose triangle corners and a positive grid scale;
-`weld_millimetres` is the indexed, XY-origin variant with scale 1000.
-`weld_exact` merges only bit-identical corners and keeps every face.
+`weld_quantized` accepts loose triangle corners and a positive grid scale (the fixture's scale is 1000, its input
+expanded to corners). `weld_exact` merges only bit-identical corners and keeps every face.
 
 `vectors.bin` is an independent SharpDX vector-arithmetic fixture: u32 count,
 then 19 u32 float bit patterns per record (a[3], b[3], t, followed by length,

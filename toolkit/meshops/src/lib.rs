@@ -190,15 +190,8 @@ pub fn compact(mesh: &Mesh) -> Result<Mesh> {
     }
     Ok(out)
 }
-/// Position-only weld. Subtract origin.x/y (z is unchanged), multiply by 1000f,
-/// and round grid keys to even. Keep the first position at each key. Drop only
-/// duplicate-index triangles; retain vertices created by subsequently dropped faces.
-/// Keys outside signed 32-bit range are errors. Other attributes are not carried.
-pub fn weld_millimetres(mesh: &Mesh, origin_xy: [f32; 2]) -> Result<Mesh> {
-    weld_grid(mesh, origin_xy, 1000.)
-}
 /// Weld loose triangle corners using ties-to-even grid keys at the given positive
-/// scale, with no origin subtraction. First representatives and face order survive.
+/// scale. First representatives and face order survive; a face whose corners share a cell is dropped, its vertices kept.
 pub fn weld_quantized(corners: &[[f32; 3]], scale: f32) -> Result<Mesh> {
     if corners.len() > u32::MAX as usize {
         return Err(Error("too many corners".into()));
@@ -208,7 +201,7 @@ pub fn weld_quantized(corners: &[[f32; 3]], scale: f32) -> Result<Mesh> {
         indices: (0..corners.len() as u32).collect(),
         ..Mesh::default()
     };
-    weld_grid(&mesh, [0., 0.], scale)
+    weld_grid(&mesh, scale)
 }
 /// Weld loose triangle corners whose positions are bit-identical, keeping the first
 /// representative; every face survives, in order, a face with coincident corners
@@ -232,19 +225,17 @@ pub fn weld_exact(corners: &[[f32; 3]]) -> Result<Mesh> {
     }
     Ok(out)
 }
-fn weld_grid(mesh: &Mesh, origin_xy: [f32; 2], scale: f32) -> Result<Mesh> {
+fn weld_grid(mesh: &Mesh, scale: f32) -> Result<Mesh> {
     if !scale.is_finite() || scale <= 0. {
         return Err(Error("invalid weld grid scale".into()));
     }
     mesh.validate()?;
-    finite(&origin_xy)?;
     let mut out = Mesh::default();
     let mut map = BTreeMap::<[i32; 3], u32>::new();
     for tri in mesh.indices.as_chunks::<3>().0 {
         let mut idx = [0; 3];
         for k in 0..3 {
             let p = mesh.positions[tri[k] as usize];
-            let p = [p[0] - origin_xy[0], p[1] - origin_xy[1], p[2]];
             let mut key = [0; 3];
             for c in 0..3 {
                 let q = (p[c] * scale).round_ties_even();

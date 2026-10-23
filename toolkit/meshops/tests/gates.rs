@@ -142,7 +142,23 @@ fn reference_weld_and_uv_exact() {
     }
     let input = read(&mut words);
     let expected = read(&mut words);
-    let actual = weld_millimetres(&input, [0., 0.]).unwrap();
+    // the reference welds an indexed mesh; the corners of its faces, welded alike, give its vertices, and its faces are
+    // the welded ones whose three corners stayed distinct
+    let corners: Vec<[f32; 3]> = input
+        .indices
+        .iter()
+        .map(|&i| input.positions[i as usize])
+        .collect();
+    let mut actual = weld_quantized(&corners, 1000.).unwrap();
+    actual.indices = actual
+        .indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
+        .flatten()
+        .copied()
+        .collect();
     assert_eq!(actual.indices, expected.indices);
     assert_eq!(
         actual
