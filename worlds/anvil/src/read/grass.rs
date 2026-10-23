@@ -17,6 +17,17 @@ pub use crate::components::{
     GrassModelSettings, StoredGrassGroup, StoredGrassLibrary, StoredGrassModel, StoredGrassRule,
 };
 
+/// The four f32 after the LOD table in a model's 23 unnamed bytes (at 5, 9, 13 and 17): its LOD switch distances in
+/// metres, by the notes' reading by value.
+fn switch_distances(unnamed: &[u8; 23]) -> [f32; 4] {
+    [5usize, 9, 13, 17].map(|at| {
+        unnamed
+            .get(at..at.saturating_add(4))
+            .and_then(|w| <[u8; 4]>::try_from(w).ok())
+            .map_or(0.0, f32::from_le_bytes)
+    })
+}
+
 /// A record type: the CRC-32 of `GrassPatternLibrary`.
 pub const GRASS_PATTERN_LIBRARY: u32 = 0x463C_C1B8;
 /// A GrassModel's type, a GrassPattern's, a GrassPatternElement's and a BoundingVolume's.
@@ -140,7 +151,7 @@ impl StoredGrassLibrary {
         let mut models = Vec::with_capacity(n);
         for _ in 0..n {
             let id = c.object("GrassModel", GRASS_MODEL)?;
-            let settings = {
+            let mut settings = {
                 let f = |c: &mut Cursor<'_>| c.f32("GrassModel");
                 GrassModelSettings {
                     z_offset: f(&mut c)?,
@@ -155,8 +166,10 @@ impl StoredGrassLibrary {
                     imposter_shader_start_model_lod_index: c.array("GrassModel")?,
                     imposter_lookat_ratio: c.f32("GrassModel")?,
                     unnamed: c.array("GrassModel")?,
+                    switch_distances: [0.0; 4],
                 }
             };
+            settings.switch_distances = switch_distances(&settings.unnamed);
             let bounds_id = c.object("GrassModel bounds", BOUNDING_VOLUME)?;
             let mut bounds = [0.0f32; 6];
             for v in &mut bounds {

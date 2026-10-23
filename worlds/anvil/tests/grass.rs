@@ -71,7 +71,7 @@ fn the_whole_world_cell_holds_the_setup_and_the_46_models() {
     assert_eq!(setups.len(), 1);
     let grass = setups[0].1;
     assert_eq!(grass.setup.entities.len(), 46);
-    assert_eq!(grass.setup.visibility_distance(), Some(250));
+    assert_eq!(grass.setup.visibility_distance, Some(250));
     assert_eq!(grass.library.models.len(), 46);
     assert_eq!(grass.library.groups.len(), 190);
     assert_eq!(

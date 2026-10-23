@@ -1374,6 +1374,7 @@ impl<'a> Placer<'a> {
                                 id: setup.id,
                                 library: setup.library.map(|r| r.id),
                                 settings_id: setup.settings_id,
+                                visibility_distance: setup.visibility_distance(),
                                 settings: setup.settings.clone(),
                                 entities: setup.entities.clone(),
                             },

@@ -32,6 +32,7 @@ fn library() -> StoredGrassLibrary {
         imposter_shader_start_model_lod_index: [2, 3, 4],
         imposter_lookat_ratio: 1.0,
         unnamed: [0; 23],
+        switch_distances: [0.0; 4],
     };
     let rule = StoredGrassRule {
         id: 4,
@@ -70,6 +71,7 @@ fn setup() -> GrassSystemSetup {
         id: 0,
         library: None,
         settings_id: 0,
+        visibility_distance: None,
         settings: Vec::new(),
         entities: Vec::new(),
     }

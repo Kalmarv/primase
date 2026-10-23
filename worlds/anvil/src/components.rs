@@ -490,25 +490,11 @@ pub struct GrassModelSettings {
     /// `ImposterStartShaderModelLodIndex` and the two after it: three bytes.
     pub imposter_shader_start_model_lod_index: [u8; 3],
     pub imposter_lookat_ratio: f32,
-    /// The 23 bytes that follow: a LOD table of 5 bytes (`00 01 02 03 03`), four f32 and 2 bytes. The four f32 are the
-    /// model's LOD switch distances in metres by the notes' reading by value: (0, 10, 20, 40) on 26 models, (0, 5, 10,
-    /// 20) on 16 and (0, 20, 40, 80) on 4 (counted over the 46 models).
+    /// The 23 bytes that follow, as stored: a LOD table of 5 bytes (`00 01 02 03 03`), four f32 and 2 bytes.
     pub unnamed: [u8; 23],
-}
-
-impl GrassModelSettings {
-    /// The f32 at `at` of the 23 unnamed bytes, 0 where it lies outside them.
-    fn unnamed_f32(&self, at: usize) -> f32 {
-        self.unnamed
-            .get(at..at.saturating_add(4))
-            .and_then(|w| <[u8; 4]>::try_from(w).ok())
-            .map_or(0.0, f32::from_le_bytes)
-    }
-    /// The four f32 after the LOD table in the unnamed bytes: the model's LOD switch distances in metres, by the
-    /// notes' reading by value.
-    pub fn switch_distances(&self) -> [f32; 4] {
-        [5, 9, 13, 17].map(|at| self.unnamed_f32(at))
-    }
+    /// The four f32 of `unnamed`: the model's LOD switch distances in metres by the notes' reading by value: (0, 10, 20,
+    /// 40) on 26 models, (0, 5, 10, 20) on 16 and (0, 20, 40, 80) on 4 (counted over the 46 models).
+    pub switch_distances: [f32; 4],
 }
 
 /// One model of the library: its settings and its bounding volume.
@@ -573,24 +559,14 @@ pub struct GrassSystemSetup {
     pub library: Option<u64>,
     /// The inline GrassSettings object's id.
     pub settings_id: u64,
+    /// Its `GrassVisibilityDistance` in metres (a u16 after its three u32 and its BoundingVolume: 250 on both copies).
+    pub visibility_distance: Option<u16>,
     /// Its body as stored: WorldExtent, WorldMinZ and WorldMaxZ (u32), the WorldBoundingBox (a BoundingVolume), then
     /// `GrassVisibilityDistance` (a u16), 16 f32, four tables of 16 u16 (the LOD start distances by model class)
     /// and the run of floats and bytes the notes did not assign to field names (docs/grass.md §2.1).
     pub settings: Vec<u8>,
     /// ManagedEntities: the GrassVisual Entities' ids, in order (a model's number is its position).
     pub entities: Vec<u64>,
-}
-
-impl GrassSystemSetup {
-    /// The GrassSettings' `GrassVisibilityDistance` (metres: 250 on both copies), after its three u32 and its
-    /// BoundingVolume.
-    pub fn visibility_distance(&self) -> Option<u16> {
-        let at: usize = 12 + 8 + 4 + 24 + 4;
-        self.settings
-            .get(at..at.checked_add(2)?)
-            .and_then(|w| <[u8; 2]>::try_from(w).ok())
-            .map(u16::from_le_bytes)
-    }
 }
 
 /// The grass system's setup (`anvil.grass`): the GrassComponent of `SETUP_GrassUS_NAT` ([`GrassSystemSetup`]) and the

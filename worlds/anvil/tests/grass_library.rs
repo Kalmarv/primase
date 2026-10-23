@@ -74,7 +74,7 @@ fn a_library_reads_to_its_last_byte() {
         l.models[0].settings.imposter_shader_start_model_lod_index,
         [2, 3, 4]
     );
-    assert_eq!(l.models[0].settings.switch_distances(), [10.0, 20.0, 40.0, 0.0]);
+    assert_eq!(l.models[0].settings.switch_distances, [10.0, 20.0, 40.0, 0.0]);
     assert_eq!(l.models[0].bounds, [-1.0, -1.0, 0.0, 1.0, 1.0, 2.0]);
     assert_eq!(l.groups.len(), 2);
     assert_eq!(l.groups[0].rules.len(), 1);
