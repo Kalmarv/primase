@@ -159,9 +159,10 @@ subset checks) and the container's signatures and, where there is one, its RDEF 
 A register is four raw lanes (`vec4<u32>` locals); each instruction bitcasts to the type it implies. Varyings are
 unpacked from D3D registers (the register and lanes stay in provenance); only signature elements the program declares
 are in the interface. Resources are `cb<n>` uniform `array<vec4<u32>, rows>` (group 0), `t<n>` textures and buffer
-views (group 1), `s<n>` samplers (group 2), binding = slot. Reads out of range of a dynamically indexed buffer are
+views (group 1), `s<n>` samplers (group 2), typed texture views `u<n>` as storage images of four 32-bit lanes (group 3; the
+view's real format is the binding's, a note on the program says so), binding = slot. Reads out of range of a dynamically indexed buffer are
 zero, as in D3D. D3D's results are written out (`D3dModes::ALL`). Refused by name, with the instruction word: compute,
-geometry and tessellation programs, unordered-access views and atomics, `sample_info`, index ranges, a pixel input of
+geometry and tessellation programs, unordered-access buffer views (raw, structured, typed) and atomics, a store through a view with a partial write mask, `sample_info`, index ranges, a pixel input of
 `SV_RenderTargetArrayIndex`, a vertex program with no `SV_Position`, doubles, SM5.1 declarations.
 
 `tests/lift.rs` lifts our own HLSL fixture (`tests/fixtures/modes.hlsl`, fxc `/T ps_5_0`) and checks its interface,

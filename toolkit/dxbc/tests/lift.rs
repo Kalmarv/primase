@@ -150,3 +150,87 @@ fn a_destination_that_aliases_the_source_does_not_change_the_second_result() {
     );
     assert_eq!(base_of(sin), base_of(cos), "both read the one loaded source");
 }
+
+/// A typed unordered-access texture view, stored to and loaded from: `dcl_uav_typed_texture2d (float,float,float,
+/// float) u3; store_uav_typed u3.xyzw, r0.xyxx, r1.xyzw; ld_uav_typed r1.xyzw, r0.xyxx, u3.xyzw`. It lifts to a
+/// storage image of four 32-bit float lanes, read and written, bound as `u3`, and the instructions to an image store
+/// and an image load.
+#[test]
+fn a_typed_view_is_a_storage_image_stored_and_loaded() {
+    let temp_mask = |register: u32| [2 | 15 << 4 | 1 << 20, register];
+    let temp = |register: u32, swizzle: u32| [2 | 1 << 2 | swizzle << 4 | 1 << 20, register];
+    let view = |slot: u32, mask_or_swizzle: u32, swizzled: bool| {
+        [
+            2 | u32::from(swizzled) << 2 | mask_or_swizzle << 4 | 30 << 12 | 1 << 20,
+            slot,
+        ]
+    };
+    let xyxx = 0b00_00_01_00;
+    let xyzw = 0b11_10_01_00;
+    let declaration = [30 << 12 | 1 << 20, 3, 0x5555];
+    let store = [view(3, 15, false).as_slice(), &temp(0, xyxx), &temp(1, xyzw)].concat();
+    let load = [temp_mask(1).as_slice(), &temp(0, xyxx), &view(3, xyzw, true)].concat();
+    let container = pixel_container(&[
+        instruction(156 | 3 << 11, &declaration),
+        instruction(104, &[2]),
+        instruction(164, &store),
+        instruction(163, &load),
+        instruction(62, &[]),
+    ]);
+    let program = lift(&container).unwrap();
+    program.validate().unwrap_or_else(|p| panic!("{p:?}"));
+    let [resource] = program.interface.resources.as_slice() else {
+        panic!("{:?}", program.interface.resources)
+    };
+    assert_eq!(resource.provenance.name, "u3");
+    assert_eq!(
+        resource.provenance.d3d.map(|b| (b.class, b.register)),
+        Some((primase_shader::D3dClass::UnorderedAccess, 3))
+    );
+    assert_eq!(
+        resource.kind,
+        ResourceKind::Storage {
+            target: primase_shader::StorageTarget::Image {
+                dim: primase_shader::TextureDim::D2,
+                arrayed: false,
+                sample: primase_shader::SampleType::Float,
+            },
+            access: primase_shader::Access::ReadWrite,
+        }
+    );
+    let wgsl = primase_shader::emit::wgsl(&program).unwrap();
+    assert!(wgsl.contains("@group(3) @binding(3)"), "{wgsl}");
+    assert!(
+        wgsl.contains("texture_storage_2d<rgba32float,read_write>"),
+        "{wgsl}"
+    );
+    assert!(wgsl.contains("textureStore(u3_"), "{wgsl}");
+    assert!(wgsl.contains("textureLoad(u3_"), "{wgsl}");
+    assert!(
+        program
+            .notes
+            .iter()
+            .any(|n| n.contains("storage image of four 32-bit lanes"))
+    );
+}
+
+/// A store through a view with a partial write mask would keep the other lanes, which a store of four lanes cannot:
+/// refused by name rather than lanes lost.
+#[test]
+fn a_partial_write_mask_on_a_view_is_refused() {
+    let declaration = [30 << 12 | 1 << 20, 0, 0x4444];
+    let store = [
+        [2 | 1 << 4 | 30 << 12 | 1 << 20, 0],
+        [2 | 1 << 2 | 0b00_00_01_00 << 4 | 1 << 20, 0],
+        [2 | 1 << 2 | 0b11_10_01_00 << 4 | 1 << 20, 1],
+    ]
+    .concat();
+    let container = pixel_container(&[
+        instruction(156 | 3 << 11, &declaration),
+        instruction(104, &[2]),
+        instruction(164, &store),
+        instruction(62, &[]),
+    ]);
+    let e = lift(&container).unwrap_err();
+    assert!(e.detail.contains("partial write mask"), "{e}");
+}

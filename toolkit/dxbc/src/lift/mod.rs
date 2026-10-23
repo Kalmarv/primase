@@ -9,7 +9,8 @@
 //!   ([`primase_shader::entry_io`] says which), the D3D register packing undone by the prologue and epilogue and
 //!   kept in the interface's provenance.
 //! - **Resources** are module globals: constant buffer `cb<n>` as a uniform `array<vec4<u32>, rows>` (group 0, binding
-//!   n), textures and buffer views `t<n>` (group 1), samplers `s<n>` (group 2). A name and a layout come from the
+//!   n), textures and buffer views `t<n>` (group 1), samplers `s<n>` (group 2), typed texture views `u<n>` (group 3, a storage
+//!   image of four 32-bit lanes). A name and a layout come from the
 //!   container's reflection where it has one; a stripped program's resources are named by register.
 //! - **Behaviour** that differs from naga's or other APIs' is written out as operations
 //!   ([`primase_shader::build`]'s D3D functions), and [`primase_shader::D3dModes`] says so: division by zero,

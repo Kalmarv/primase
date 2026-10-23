@@ -11,7 +11,7 @@ use primase_shader::ResourceId;
 use primase_shader::build::{Kind, Val, component};
 
 use super::Lift;
-use super::setup::{Declaration, Texture};
+use super::setup::{Declaration, Texture, View};
 use crate::Result;
 use crate::decode::{Instruction, Operand, Selection};
 
@@ -32,6 +32,8 @@ pub(super) struct Resources {
     pub textures: BTreeMap<u32, (Handle<GlobalVariable>, Texture)>,
     pub samplers: BTreeMap<u32, Handle<GlobalVariable>>,
     pub buffers: BTreeMap<u32, (Handle<GlobalVariable>, Buffer)>,
+    /// Typed unordered-access views `u<n>`.
+    pub views: BTreeMap<u32, (Handle<GlobalVariable>, View)>,
     /// The immediate constant buffer and its rows.
     pub immediate: Option<(Handle<GlobalVariable>, u32)>,
 }
@@ -79,6 +81,29 @@ impl Lift<'_> {
                         comparison: *comparison,
                     });
                     (format!("s{slot}"), AddressSpace::Handle, 2, *slot, ty)
+                }
+                Declaration::View(v) => {
+                    // the view's own format is the binding's: the module carries four 32-bit lanes of the kind the
+                    // program loads and stores, the one format that holds any of them
+                    let format = match v.kind {
+                        Kind::I => naga::StorageFormat::Rgba32Sint,
+                        Kind::U => naga::StorageFormat::Rgba32Uint,
+                        _ => naga::StorageFormat::Rgba32Float,
+                    };
+                    let mut access = StorageAccess::empty();
+                    access.set(StorageAccess::LOAD, v.load || !v.store);
+                    access.set(StorageAccess::STORE, v.store);
+                    let ty = self.b.ty(TypeInner::Image {
+                        dim: v.dim,
+                        arrayed: v.arrayed,
+                        class: ImageClass::Storage { format, access },
+                    });
+                    self.notes.insert(
+                        "a typed unordered-access view is carried as a storage image of four 32-bit lanes: its \
+                         format is the binding's"
+                            .into(),
+                    );
+                    (format!("u{}", v.slot), AddressSpace::Handle, 3, v.slot, ty)
                 }
                 Declaration::TypedBuffer { slot } => {
                     let ty = self.b.ty(TypeInner::Array {
@@ -133,6 +158,9 @@ impl Lift<'_> {
                 }
                 Declaration::Sampler { slot, .. } => {
                     self.resources.samplers.insert(*slot, global);
+                }
+                Declaration::View(v) => {
+                    self.resources.views.insert(v.slot, (global, *v));
                 }
                 Declaration::TypedBuffer { slot } => {
                     self.resources.buffers.insert(*slot, (global, Buffer::Typed));
@@ -550,6 +578,77 @@ impl Lift<'_> {
         let word = self.b.binary(Bo::ShiftRight, byte, two);
         let result = self.load_words(g, word, &ins.operands[3], mask);
         self.write(&ins.operands[0], result, false)
+    }
+
+    fn view(&self, slot: u32) -> Result<(Handle<GlobalVariable>, View)> {
+        self.resources
+            .views
+            .get(&slot)
+            .copied()
+            .map_or_else(|| self.refuse(format!("u{slot} is not a typed texture view")), Ok)
+    }
+
+    /// The address lanes of a typed view's texel: its dimensions' coordinates, and an array layer after them.
+    fn view_address(&mut self, op: &Operand, v: &View) -> Result<(Val, Option<naga::Handle<E>>)> {
+        let n = match v.dim {
+            naga::ImageDimension::D1 => 1,
+            naga::ImageDimension::D2 => 2,
+            _ => 3,
+        };
+        let lanes: Vec<u8> = (0..n + u8::from(v.arrayed)).collect();
+        let all = self.read_lanes(op, &lanes, Kind::U)?;
+        let coordinate = if all.width == n {
+            all
+        } else {
+            let c: Vec<u8> = (0..n).collect();
+            self.b.swizzle(all, &c)
+        };
+        let layer = v.arrayed.then(|| self.b.lane(all, n).expr);
+        Ok((coordinate, layer))
+    }
+
+    /// `store_uav_typed u, address, value`: the texel's four lanes. D3D writes the lanes the view's mask names; a
+    /// partial mask would keep the others, which a store of four lanes cannot, so it is refused.
+    pub(super) fn store_view(&mut self, ins: &Instruction) -> Result<()> {
+        let slot = ins.operands[0].indices[0].base;
+        let (global, v) = self.view(slot)?;
+        if self.dest_mask(&ins.operands[0]) != 15 {
+            return self.refuse("a store to a view with a partial write mask");
+        }
+        let (coordinate, array_index) = self.view_address(&ins.operands[1], &v)?;
+        let value = self.read_lanes(&ins.operands[2], &[0, 1, 2, 3], v.kind)?;
+        let image = self.b.global_ptr(global);
+        self.b.push(naga::Statement::ImageStore {
+            image,
+            coordinate: coordinate.expr,
+            array_index,
+            value: value.expr,
+        });
+        Ok(())
+    }
+
+    /// `ld_uav_typed dest, address, u`.
+    pub(super) fn load_view(&mut self, ins: &Instruction) -> Result<()> {
+        let slot = ins.operands[2].indices[0].base;
+        let (global, v) = self.view(slot)?;
+        let mask = self.dest_mask(&ins.operands[0]);
+        let (coordinate, array_index) = self.view_address(&ins.operands[1], &v)?;
+        let image = self.b.global_ptr(global);
+        let expr = self.b.app(E::ImageLoad {
+            image,
+            coordinate: coordinate.expr,
+            array_index,
+            sample: None,
+            level: None,
+        });
+        let result = Val {
+            expr,
+            kind: v.kind,
+            width: 4,
+        };
+        let bits = self.b.bitcast(result, Kind::U);
+        let picked = self.pick(bits, &ins.operands[2], mask);
+        self.write(&ins.operands[0], picked, false)
     }
 
     fn notes_typed_buffer(&mut self) {

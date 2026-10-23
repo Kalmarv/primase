@@ -7,9 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use naga::ImageDimension;
 use primase_shader::build::Kind;
 use primase_shader::{
-    BufferKind, BufferLayout, D3dBinding, D3dClass, EntryIo, Interface, Label, Resource, ResourceId,
-    ResourceKind, ResourceProvenance, SampleType, ScalarType, Stage, SystemValue, TextureDim, Value, Varying,
-    VaryingProvenance, entry_io,
+    Access, BufferKind, BufferLayout, D3dBinding, D3dClass, EntryIo, Interface, Label, Resource, ResourceId,
+    ResourceKind, ResourceProvenance, SampleType, ScalarType, Stage, StorageTarget, SystemValue, TextureDim,
+    Value, Varying, VaryingProvenance, entry_io,
 };
 
 use crate::decode::{Declared, Decoded, Register, Selection};
@@ -38,6 +38,20 @@ pub(crate) enum Declaration {
         slot: u32,
         comparison: bool,
     },
+    /// A typed unordered-access texture view.
+    View(View),
+}
+
+/// A typed unordered-access view `u<slot>` of a texture, with the access the program makes of it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct View {
+    pub slot: u32,
+    pub dim: ImageDimension,
+    pub arrayed: bool,
+    /// What its loads return and its stores take in each lane.
+    pub kind: Kind,
+    pub load: bool,
+    pub store: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -235,8 +249,38 @@ impl Setup {
                         stride: *stride,
                     })
                 }
+                Declared::UavTyped {
+                    slot,
+                    dimension,
+                    returns,
+                    ..
+                } => {
+                    let kind = match returns[0] {
+                        1 | 2 | 5 => Kind::F,
+                        3 => Kind::I,
+                        4 | 6 => Kind::U,
+                        other => return Err(at(format!("unordered-access view return type {other}"))),
+                    };
+                    let (dim, arrayed) = match dimension {
+                        2 => (ImageDimension::D1, false),
+                        3 => (ImageDimension::D2, false),
+                        5 => (ImageDimension::D3, false),
+                        7 => (ImageDimension::D1, true),
+                        8 => (ImageDimension::D2, true),
+                        // a typed buffer view: an instruction that uses one is refused
+                        _ => continue,
+                    };
+                    setup.declarations.push(Declaration::View(View {
+                        slot: *slot,
+                        dim,
+                        arrayed,
+                        kind,
+                        load: false,
+                        store: false,
+                    }));
+                }
                 // refused where an instruction uses one
-                Declared::UavTyped { .. } | Declared::UavRaw { .. } | Declared::UavStructured { .. } => {}
+                Declared::UavRaw { .. } | Declared::UavStructured { .. } => {}
                 Declared::Other { opcode, .. } => {
                     return Err(at(format!(
                         "{} ({opcode}) is not lifted",
@@ -246,6 +290,27 @@ impl Setup {
             }
         }
         setup.declared_inputs = declared_inputs;
+        // the access the program makes of each typed view
+        for ins in &decoded.instructions {
+            let (operand, store) = match ins.opcode {
+                163 => (2, false),
+                164 => (0, true),
+                _ => continue,
+            };
+            let slot = ins
+                .operands
+                .get(operand)
+                .and_then(|o| o.indices.first())
+                .map_or(0, |i| i.base);
+            for d in &mut setup.declarations {
+                if let Declaration::View(v) = d
+                    && v.slot == slot
+                {
+                    v.store |= store;
+                    v.load |= !store;
+                }
+            }
+        }
         // a texture compared against a reference is a depth image
         for ins in &decoded.instructions {
             if matches!(ins.opcode, 70 | 71 | 126) {
@@ -451,6 +516,32 @@ impl Setup {
                     *slot,
                     ResourceKind::Buffer(BufferKind::Structured { stride: *stride }),
                     format!("t{slot}"),
+                ),
+                Declaration::View(v) => (
+                    D3dClass::UnorderedAccess,
+                    v.slot,
+                    ResourceKind::Storage {
+                        target: StorageTarget::Image {
+                            dim: match v.dim {
+                                ImageDimension::D1 => TextureDim::D1,
+                                ImageDimension::D2 => TextureDim::D2,
+                                ImageDimension::D3 => TextureDim::D3,
+                                ImageDimension::Cube => TextureDim::Cube,
+                            },
+                            arrayed: v.arrayed,
+                            sample: match v.kind {
+                                Kind::I => SampleType::Sint,
+                                Kind::U => SampleType::Uint,
+                                _ => SampleType::Float,
+                            },
+                        },
+                        access: match (v.load, v.store) {
+                            (true, true) => Access::ReadWrite,
+                            (false, true) => Access::Write,
+                            _ => Access::Read,
+                        },
+                    },
+                    format!("u{}", v.slot),
                 ),
                 Declaration::Sampler { slot, comparison } => (
                     D3dClass::Sampler,

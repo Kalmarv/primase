@@ -563,7 +563,9 @@ impl Lift<'_> {
             "resinfo" => self.resource_info(ins)?,
             "ld_structured" => self.load_structured(ins)?,
             "ld_raw" => self.load_raw(ins)?,
-            "store_uav_typed" | "store_raw" | "store_structured" | "ld_uav_typed" => {
+            "store_uav_typed" => self.store_view(ins)?,
+            "ld_uav_typed" => self.load_view(ins)?,
+            "store_raw" | "store_structured" => {
                 return self.refuse("unordered-access views are not lifted");
             }
             n if n.starts_with("atomic_") || n.starts_with("imm_atomic_") => {
