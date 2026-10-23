@@ -550,7 +550,7 @@ pub const DECLARED: &[Declared] = &[
         status: Status::Live,
         gate: false,
         about: r#"a folder (searched recursively) of the DXIL containers of Elden Ring's Shader Model 6 shader bundles (one file per container), lifted, validated and written as WGSL, the refusals counted by reason with an example program; toolkit/dxil/tests/lift_corpus.rs"#,
-        source: r#"the user's own install: the containers of its `/shader/*.shaderbnd.dcx` binders, worlds/fromsoft/examples/corpus_elden_shaders.rs"#,
+        source: r#"the user's own install: the containers of its `/shader/*.shaderbnd.dcx` binders and `/shader/*.shaderbdlebnd.dcx` bundles (ray-tracing `[rt]` bundles included), worlds/fromsoft/examples/corpus_elden_shaders.rs"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::General, "codecs.tsv"),
