@@ -13,6 +13,8 @@ package's decoding of it) and codecs.tsv, one `codec<TAB>input<TAB>reference` ro
 the TSV. A stream a decoder refuses, or whose decoding is not the size its header states, stops the script.
 
 uv run --no-project --with lz4==4.4.5 python -I toolkit/compress/tests/oracles/codecs.py <staging> <oracles.root>/corpus/general
+
+It runs on the Linux build machine over the staging folders copied there; its output is portable (relative paths).
 """
 
 import struct
