@@ -856,6 +856,11 @@ fn resize(width: u32, height: u32, rgba: &[u8], role: Role, w: u32, h: u32) -> (
     (w, h, out)
 }
 
+/// The encoder library set up, once per process: before encoders run on several threads.
+pub(crate) fn init() {
+    basisu_encoder_init();
+}
+
 /// Encode a single RGBA8 image with a complete, wrapping mip chain.
 /// Colour images use sRGB; masks and normals must pass `srgb = false`.
 pub fn encode_rgba8(width: u32, height: u32, rgba: &[u8], srgb: bool) -> Result<Vec<u8>> {

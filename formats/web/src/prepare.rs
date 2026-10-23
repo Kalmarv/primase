@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use primase_core::layered::{Channel, LayeredMaterial, Source};
+use primase_core::parallel::Threads;
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
 use primase_core::{Component, Entity, Name, Resource, TexRole, Texture, World};
@@ -156,6 +157,9 @@ impl Memo {
             bytes: 0,
             cap,
         }
+    }
+    fn holds(&self, key: &primase_cache::Key) -> bool {
+        self.entries.contains_key(key)
     }
     fn get(&self, key: &primase_cache::Key) -> Option<Remembered> {
         self.entries.get(key).map(|(r, _)| r.clone())
@@ -444,6 +448,62 @@ impl Pass for PrepareWebTextures {
         "textures snapped to a power of two within their role's cap; with a byte budget, images halved until their encoding fits"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        self.prepare(w, log)
+    }
+}
+
+/// A preparation made: the prepared texture, its image, the prepared texture's PNG and that PNG's digest, and what
+/// making it logged.
+type Made = (Texture, PreparedImage, Vec<u8>, [u8; 32], PassLog);
+
+impl PrepareWebTextures {
+    /// Texture `t`'s preparation input as `role` ([`crate::ktx2::preparation_key`]).
+    fn input(
+        &self,
+        w: &World,
+        policies: &BTreeMap<Entity, AlphaPolicy>,
+        t: Entity,
+        role: Role,
+    ) -> primase_cache::Key {
+        let name = w.get::<Name>(t).map(|n| n.0.as_str());
+        let policy = policies.get(&t).cloned().unwrap_or_default();
+        let texture = w.get::<Texture>(t).expect("bound");
+        crate::ktx2::preparation_key(
+            texture,
+            role,
+            self.caps_for(name).get(role),
+            self.budget(role),
+            &policy,
+        )
+    }
+
+    /// Texture `t` prepared as `role`: a pure function of the texture, its name's cap, the role's budget and its alpha
+    /// policy.
+    fn make(
+        &self,
+        w: &World,
+        policies: &BTreeMap<Entity, AlphaPolicy>,
+        t: Entity,
+        role: Role,
+    ) -> Result<Made, String> {
+        let name = w.get::<Name>(t).map(|n| n.0.as_str());
+        let policy = policies.get(&t).cloned().unwrap_or_default();
+        let texture = w.get::<Texture>(t).expect("bound");
+        let mut made = PassLog::default();
+        let job = crate::ktx2::Preparation {
+            role,
+            cap: self.caps_for(name).get(role),
+            policy: &policy,
+            budget: self.budget(role),
+        };
+        let (prepared, image) = crate::ktx2::prepare_image(texture, &job, &mut made)
+            .map_err(|e| format!("{}: {e}", name.unwrap_or("texture")))?;
+        let png = primase_image::texture_level_png(&prepared, 0).map_err(|e| e.to_string())?;
+        let key: [u8; 32] = Sha256::digest(&png).into();
+        Ok((prepared, image, png, key, made))
+    }
+
+    fn prepare(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         // each texture's roles, data textures and unloaded files aside
         let binds = bindings(w);
         let mut roles = BTreeMap::<Entity, BTreeSet<Role>>::new();
@@ -510,8 +570,36 @@ impl Pass for PrepareWebTextures {
         // a world (or part) without textures has nothing to prepare: counted as such
         log.count("textures prepared", 0);
         let mut prepared = w.remove_resource::<PreparedImages>().unwrap_or_default();
+        // the preparations the memo does not hold now, made up front on the world's threads (`core.threads`): pure, so
+        // each is the one the loop below would make where it makes one (it takes it from here, else makes it then)
+        let threads = Threads::of(w);
+        let mut ahead = if threads.get() < 2 {
+            BTreeMap::new()
+        } else {
+            let held = |t: Entity, role: Role| {
+                self.memo.as_ref().is_some_and(|m| {
+                    let input = self.input(w, &policies, t, role);
+                    m.lock().is_ok_and(|m| m.holds(&input))
+                })
+            };
+            let jobs: Vec<(&(Entity, Role), &Entity)> = of_role
+                .iter()
+                .filter(|&(&(_, role), &t)| !held(t, role))
+                .collect();
+            {
+                crate::ktx2::init();
+                let made = primase_core::parallel::map(threads, &jobs, |_, &(&(_, role), &t)| {
+                    self.make(w, &policies, t, role)
+                })
+                .map_err(|e| e.to_string())?;
+                jobs.into_iter()
+                    .map(|(&k, _)| k)
+                    .zip(made)
+                    .collect::<BTreeMap<_, _>>()
+            }
+        };
         let result = (|| -> Result<(), String> {
-            for (&(_, role), &t) in &of_role {
+            for (&(texture_entity, role), &t) in &of_role {
                 let name = w.get::<Name>(t).map(|n| n.0.clone());
                 let cap = self.caps_for(name.as_deref()).get(role);
                 let policy = policies.get(&t).cloned().unwrap_or_default();
@@ -543,18 +631,10 @@ impl Pass for PrepareWebTextures {
                         (texture, key, image, made)
                     }
                     None => {
-                        let mut made = PassLog::default();
-                        let job = crate::ktx2::Preparation {
-                            role,
-                            cap,
-                            policy: &policy,
-                            budget,
+                        let (prepared, image, png, key, made) = match ahead.remove(&(texture_entity, role)) {
+                            Some(made) => made?,
+                            None => self.make(w, &policies, t, role)?,
                         };
-                        let (prepared, image) = crate::ktx2::prepare_image(&texture, &job, &mut made)
-                            .map_err(|e| format!("{}: {e}", name.as_deref().unwrap_or("texture")))?;
-                        let png =
-                            primase_image::texture_level_png(&prepared, 0).map_err(|e| e.to_string())?;
-                        let key: [u8; 32] = Sha256::digest(&png).into();
                         if let Some(m) = &self.memo {
                             log.count("texture preparations not remembered, made", 1);
                             // left as stored: the digest is all there is to keep
@@ -903,6 +983,49 @@ mod tests {
         p.run(&mut w, &mut log).unwrap();
         assert_eq!(log.counts["texture preparations dropped from memory"], 4);
         assert!(!log.counts.contains_key("texture preparations remembered"));
+    }
+
+    /// On several threads (`core.threads`): every texture, the prepared images and the log (memo counts included) are
+    /// the one-thread run's, without a memo, with one filling and serving, and with one too small to hold anything.
+    #[test]
+    fn on_any_thread_count_the_preparations_are_the_serial_ones() {
+        let run = |threads: usize, memo: Option<usize>, runs: usize| {
+            let mut p = pass(&[
+                ("color", "512"),
+                ("normal", "512"),
+                ("mask", "256"),
+                ("color-bytes", "2000"),
+                ("mask-bytes", "1000"),
+            ]);
+            p.memo = memo.map(|cap| Arc::new(std::sync::Mutex::new(Memo::new(cap))));
+            let mut out = Vec::new();
+            for _ in 0..runs {
+                let (mut w, ..) = world();
+                let mut seed = 3u32;
+                let all: Vec<Entity> = w.iter::<Texture>().map(|(e, _)| e).collect();
+                for e in all {
+                    for b in &mut w.get_mut::<Texture>(e).unwrap().levels[0] {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 17;
+                        seed ^= seed << 5;
+                        *b = seed as u8;
+                    }
+                }
+                w.insert_resource(primase_core::parallel::Threads::new(threads).unwrap());
+                let mut log = PassLog::default();
+                p.run(&mut w, &mut log).unwrap();
+                let textures: Vec<(Entity, Texture)> =
+                    w.iter::<Texture>().map(|(e, t)| (e, t.clone())).collect();
+                out.push((textures, w.resource::<PreparedImages>().unwrap().clone(), log));
+            }
+            out
+        };
+        for (memo, runs) in [(None, 1), (Some(1 << 30), 2), (Some(1), 1)] {
+            let serial = run(1, memo, runs);
+            for n in [2, 4] {
+                assert!(run(n, memo, runs) == serial, "{n} threads, memo {memo:?}");
+            }
+        }
     }
 
     #[test]
