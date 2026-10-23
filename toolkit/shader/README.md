@@ -105,7 +105,7 @@ is the typed builder lifters share.
 
 ## Support ledger
 
-What the lifters make of every program of every corpus the project holds, counted by the census tests (`toolkit/dxbc/tests/lift_corpus.rs`, `toolkit/dxil/tests/lift_corpus.rs`, `worlds/gta/tests/fxc_census.rs`, `worlds/stuntboost/tests/effects.rs`) in one run on main `08b8fbe` plus the one-line executor fix in the commit that adds this section (without it the GTA census panics in `Executable::new`: a provenance index past the expressions). Release build, the corpora from the oracle tree (`oracles.corpus.<game>/shaders`) and the STUNTBOOST install's `Content/Effects`; the numbers are the tests' own output, recounted from that run. Lifted is `lift` returning a program; validated is `Program::validate`; written is `emit::wgsl` (or `wgsl_functions` for a stage with no entry point) succeeding; executable is `Executable::new` succeeding (function-form stages, ray tracing pipeline programs and procedural-primitive ray queries are refused by name there).
+What the lifters make of every program of every corpus the project holds, counted by the census tests (`toolkit/dxbc/tests/lift_corpus.rs`, `toolkit/dxil/tests/lift_corpus.rs`, `worlds/gta/tests/fxc_census.rs`, `worlds/stuntboost/tests/effects.rs`) in one run on main `08b8fbe` plus the one-line executor fix in the commit that adds this section (without it the GTA census panics in `Executable::new`: a provenance index past the expressions). Release build, the corpora from the oracle tree (`oracles.corpus.<game>/shaders`) and the STUNTBOOST install's `Content/Effects`; the numbers are the tests' own output, recounted from that run. Lifted is `lift` returning a program; validated is `Program::validate`; written is `emit::wgsl` (or `wgsl_functions` for a stage with no entry point) succeeding; executable is `Executable::new` succeeding. It does not take the function-form stages (hull, domain, geometry and tessellator-feeding vertex programs), which run as functions through `Executable::function`, nor ray tracing pipeline programs, mesh programs and procedural-primitive ray queries, which are refused by name; the column counts the programs `Executable::new` takes.
 
 | corpus (test) | programs | lifted | validated | written as WGSL | refused by the lift | executable |
 |---|---:|---:|---:|---:|---:|---:|
@@ -114,7 +114,7 @@ What the lifters make of every program of every corpus the project holds, counte
 | Unity player (DXBC, `sledding`) | 4,854 | 4,854 | 4,854 | 4,854 | 0 | 4,854 |
 | Sekiro (DXBC) | 432 | 432 | 432 | 432 | 0 | 432 |
 | Elden Ring (DXIL; 44,450 containers) | 44,450 | 44,450 | 44,450 | 44,441 | 0 | 43,985 |
-| skate. (DXIL; 19,445 containers) | 19,445 | 19,442 | 19,442 | 19,137 | 3 | 19,199 |
+| skate. (DXIL; 19,445 containers) | 19,445 | 19,443 | 19,443 | 19,138 | 2 | 19,199 |
 | STUNTBOOST (MojoShader GLSL in 18 effects) | 47 | 47 | 47 | 47 | 0 | not measured |
 
 Not measured: GTA V Legacy's `.fxc` effects (`oracles.corpus.gta/legacy-effects`; the folder is not on the machine that ran this) and the STUNTBOOST shaders on the executor.
@@ -125,7 +125,6 @@ Not measured: GTA V Legacy's `.fxc` effects (`oracles.corpus.gta/legacy-effects`
 |---:|---|---|---|
 | 2 | skate. | the old value of an atomic operation on a texture view (naga's image atomic returns none) | `235911bb-c5c8-bef5-9998-f3e2ea6597fb.dxil` |
 | 1 | Riders Republic | the same (`imm_atomic_umin`) | `1378.dxbc` |
-| 1 | skate. | mesh shader programs are not lifted | `9a0c446d-25d6-12c5-de1a-173f84c0ab09.dxil` |
 
 ### Lifted and validated but not written as WGSL
 
@@ -136,13 +135,13 @@ Not measured: GTA V Legacy's `.fxc` effects (`oracles.corpus.gta/legacy-effects`
 | 205 | skate. | a ray tracing pipeline program (172 ray generation, 16 closest-hit, 8 miss, 6 intersection, 3 any-hit) has no WGSL form: WebGPU has no ray tracing pipeline | `000e14b5-25b8-967b-532c-1b7f6c7e62cb.dxil` |
 | 9 | Elden Ring | the same (3 ray generation, 2 any-hit, 2 closest-hit, 2 miss) | `gxraytracing/GXRayGen.cpo` |
 
-### Not executable (the executor refuses them by name)
+### Not taken by `Executable::new`
 
 | count | corpus | reason |
 |---:|---|---|
-| 1,275 | GTA Enhanced | function-form stages (458 domain, 406 hull, 411 vertex programs that feed a tessellator) |
-| 26 | Riders Republic | function-form stages (9 domain, 9 hull, 7 geometry, 1 vertex) |
-| 465 | Elden Ring | function-form stages (150 domain, 136 hull, 33 geometry, 137 vertex) and 9 ray tracing pipeline programs |
-| 243 | skate. | 205 ray tracing pipeline programs (no pipeline to run them in), 38 ray queries that generate an intersection with a procedural primitive (scenes carry triangles only) |
+| 1,275 | GTA Enhanced | function-form stages, run as functions through `Executable::function` (458 domain, 406 hull, 411 vertex programs that feed a tessellator) |
+| 26 | Riders Republic | function-form stages, run as functions (9 domain, 9 hull, 7 geometry, 1 vertex) |
+| 465 | Elden Ring | function-form stages, run as functions (150 domain, 136 hull, 33 geometry, 137 vertex), and 9 ray tracing pipeline programs refused by name |
+| 244 | skate. | 205 ray tracing pipeline programs (no pipeline to run them in), 38 ray queries that generate an intersection with a procedural primitive (scenes carry triangles only), 1 mesh program (a whole thread group writes one meshlet) |
 
-The executable column is the program count less these.
+The executable column is the lifted program count less these. The skate. row was measured again after the mesh programs were lifted (main d67b1261's `dxil-mesh`); the other rows are as first measured.
