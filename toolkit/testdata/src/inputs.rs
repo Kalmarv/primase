@@ -243,7 +243,7 @@ pub const VARIABLES: &[Variable] = &[
         name: "PRIMASE_STUNTBOOST_DIR",
         kind: Kind::Input,
         gate: true,
-        about: r#"STUNTBOOST's install folder (Steam buildid 25832744: `Content/Models/Export` levels and their derived `Collision`/`Cuts` files); worlds/stuntboost/tests/oracle.rs"#,
+        about: r#"STUNTBOOST's install folder (Steam buildid 25832744: `Content/Models/Export` levels and their derived `Collision`/`Cuts` files, and its 30 glTF models); worlds/stuntboost/tests/oracle.rs, worlds/stuntboost/tests/models.rs (counts from the files' own JSON)"#,
         status: Status::Live,
         source: "the user's own install",
     },

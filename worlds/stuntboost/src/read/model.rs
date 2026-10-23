@@ -1,6 +1,13 @@
-//! One STUNTBOOST model from the install ([`read_model`]): a prop, a creature or an animated object, as the game
-//! stores it, through primase's glTF reader, so its skeleton, skin, morph targets and clips are read as they are for
-//! any glTF ([`primase_gltf::read`]).
+//! One STUNTBOOST model from the install ([`models`], [`model_gltf`], [`model_image`]): a prop, a creature or an
+//! animated object, as the game stores it. The world crate unwraps the files; reading the glTF into a world is the
+//! program's, through `primase-gltf`'s reader (a world crate does not depend on a format crate):
+//!
+//! ```ignore
+//! let gltf = primase_stuntboost::model_gltf(&install, "Dragonfly")?;
+//! primase_gltf::read_with_images(&gltf, "Export/Dragonfly.xnb", &mut world, &mut |uri| {
+//!     primase_stuntboost::model_image(&install, uri).map_err(|e| e.to_string())
+//! })?;
+//! ```
 //!
 //! Files (uncompressed XNB v5 under `Content/Models`): `Export/<Name>.xnb` (`BytingPipeline.GLTFReader`: the Blender
 //! exporter's glTF 2.0 JSON) with its buffer `Export/<buffer uri>.xnb` (`ArrayReader<Byte>`) and each image
@@ -18,7 +25,6 @@
 
 use std::path::Path;
 
-use primase_core::World;
 use primase_glb::Gltf;
 use primase_image::{Image, Samples};
 use primase_monogame::xnb::Xnb;
@@ -28,12 +34,6 @@ use crate::{Error, Result};
 
 /// The reader name of a glTF the game stores.
 const GLTF_READER: &str = "BytingPipeline.GLTFReader";
-
-/// What [`read_model`] read: the glTF reader's report (what it read and what it did not, by name).
-#[derive(Clone, Debug, PartialEq)]
-pub struct ModelReport {
-    pub gltf: primase_gltf::ReadReport,
-}
 
 /// Every model the install ships, by name in byte order: a file of `Content/Models/Export` that is not a level's part,
 /// a buffer or an image, and whose one object the glTF reader wrote. Each file is opened as far as its header.
@@ -64,9 +64,28 @@ pub fn models(install: &Path) -> Result<Vec<String>> {
     Ok(names.into_iter().collect())
 }
 
-/// An image file of the install as the PNG a glTF reader decodes (its largest level, RGBA8).
-fn png_of(path: &Path) -> Result<Vec<u8>> {
-    let (width, height, levels) = image_levels(path)?;
+/// Model `name` (`Dragonfly` for `Export/Dragonfly.xnb`) as the glTF document it stores, its buffers (each
+/// `Export/<buffer uri>.xnb`) read in.
+pub fn model_gltf(install: &Path, name: &str) -> Result<Gltf> {
+    let export = export_dir(install);
+    let text = string_of(&export.join(format!("{name}.xnb")), Some(GLTF_READER))?;
+    Ok(Gltf::from_gltf(text.as_bytes(), |_, uri| {
+        bytes_of(&export.join(format!("{uri}.xnb")), None).map_err(|e| e.to_string())
+    })?)
+}
+
+/// The image a model's document names by `uri` (relative to `Export`, as the document writes it), as the PNG file a glTF
+/// reader decodes: the install's `<uri with .xnb>` (QOI or `Texture2D`), its largest level, RGBA8. An image the install
+/// does not ship is an error naming the file.
+pub fn model_image(install: &Path, uri: &str) -> Result<Vec<u8>> {
+    let path = export_dir(install).join(uri).with_extension("xnb");
+    if !path.is_file() {
+        return Err(format(
+            &path.display().to_string(),
+            "the install does not ship this image",
+        ));
+    }
+    let (width, height, levels) = image_levels(&path)?;
     let rgba = levels
         .into_iter()
         .next()
@@ -78,32 +97,8 @@ fn png_of(path: &Path) -> Result<Vec<u8>> {
     })?)
 }
 
-/// Model `name` (`Dragonfly` for `Export/Dragonfly.xnb`) of the install at `install` into `w`, which must be empty, as
-/// one asset ([`primase_gltf::read`]'s: its skeletons, skins, morphs, placements and clips; `core.source` is
-/// `Export/<name>.xnb`). The images it names are read from the install's own files (an image the install does not ship
-/// is refused by name in the report, its slot left unbound).
-pub fn read_model(install: &Path, name: &str, w: &mut World) -> Result<ModelReport> {
-    let export = export_dir(install);
-    let file = format!("{name}.xnb");
-    let path = export.join(&file);
-    let text = string_of(&path, Some(GLTF_READER))?;
-    let gltf = Gltf::from_gltf(text.as_bytes(), |_, uri| {
-        bytes_of(&export.join(format!("{uri}.xnb")), None).map_err(|e| e.to_string())
-    })?;
-    let gltf = primase_gltf::read_with_images(&gltf, &format!("Export/{file}"), w, &mut |uri| {
-        let image = export.join(uri).with_extension("xnb");
-        if !image.is_file() {
-            return Err(format!("{} is not in the install", image.display()));
-        }
-        png_of(&image).map_err(|e| e.to_string())
-    })?;
-    Ok(ModelReport { gltf })
-}
-
 #[cfg(test)]
 mod tests {
-    use primase_core::{Clip, Skeleton};
-
     use super::*;
 
     fn seven_bit(mut n: usize, out: &mut Vec<u8>) {
@@ -234,30 +229,20 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Its skeleton, skin and clip are read as any glTF's are: two joints, a binding on the mesh, and the one clip
-    /// with one joint channel of two keys.
+    /// The document comes with its buffer read in: its skin has two joints and its animation one channel of two keys; a
+    /// file that is not a glTF the game wrote, and a model that is not shipped, are errors.
     #[test]
-    fn a_shipped_creature_reads_with_its_skeleton_skin_and_clip() {
+    fn a_shipped_creature_unwraps_to_its_document() {
         let dir = std::env::temp_dir().join(format!("primase-stuntboost-model-{}", std::process::id()));
         ship(&dir);
-        let mut w = World::new();
-        let r = read_model(&dir, "Bug", &mut w).unwrap();
-        assert_eq!(
-            (
-                r.gltf.skeletons,
-                r.gltf.joints,
-                r.gltf.bindings,
-                r.gltf.clips,
-                r.gltf.channels
-            ),
-            (1, 2, 1, 1, 1)
-        );
-        let skeleton = w.iter::<Skeleton>().next().map(|(_, s)| s).unwrap();
-        assert_eq!(skeleton.joints.len(), 2);
-        let clip = w.iter::<Clip>().next().map(|(_, c)| c).unwrap();
-        assert_eq!((clip.name.as_str(), clip.duration), ("rise", 1.0));
-        assert!(read_model(&dir, "Level_X_0", &mut World::new()).is_err());
-        assert!(read_model(&dir, "Missing", &mut World::new()).is_err());
+        let gltf = model_gltf(&dir, "Bug").unwrap();
+        assert_eq!(gltf.skins().unwrap()[0].joints, [0, 1]);
+        let animations = gltf.animations().unwrap();
+        assert_eq!(animations.len(), 1);
+        assert_eq!(animations[0].channels.len(), 1);
+        assert!(model_gltf(&dir, "BugCuts").is_err());
+        assert!(model_gltf(&dir, "Missing").is_err());
+        assert!(model_image(&dir, "../Resources/none.png").is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

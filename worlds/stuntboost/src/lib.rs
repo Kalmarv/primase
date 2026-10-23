@@ -21,7 +21,7 @@ pub mod passes;
 pub mod read;
 
 pub use passes::{Spawn, Start, spawns};
-pub use read::{LevelEntry, LevelReport, ModelReport, levels, models, read_level, read_model};
+pub use read::{LevelEntry, LevelReport, levels, model_gltf, model_image, models, read_level};
 
 /// Registers STUNTBOOST's passes by name; every option of each is the program's, without defaults.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
@@ -68,8 +68,6 @@ pub enum Error {
     Monogame(#[from] primase_monogame::xnb::Error),
     #[error(transparent)]
     Glb(#[from] primase_glb::Error),
-    #[error(transparent)]
-    Gltf(#[from] primase_gltf::Error),
     #[error(transparent)]
     Image(#[from] primase_image::Error),
     /// The level's files are not what the game ships.

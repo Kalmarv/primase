@@ -12,7 +12,6 @@ publish.workspace = true
 primase-core.workspace = true
 primase-monogame.workspace = true
 primase-glb.workspace = true
-primase-gltf.workspace = true
 primase-image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
