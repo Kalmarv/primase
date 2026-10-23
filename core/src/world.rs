@@ -40,6 +40,28 @@ impl fmt::Debug for Entity {
     }
 }
 
+/// A name the world cannot give to what is being inserted: it already belongs to something of another kind.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "{name} is {held}: a name is a typed component's, an opaque component's or a resource's, one kind of them"
+)]
+pub struct NameClash {
+    pub name: String,
+    /// What holds it (`a typed component's name`).
+    pub held: &'static str,
+}
+
+/// An entity id a world cannot take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum IdError {
+    #[error("entity {0:?} is not above every id already used")]
+    NotAscending(Entity),
+    #[error("entity {0:?} is the last id: the world cannot number another")]
+    Exhausted(Entity),
+    #[error("entity {0:?} is alive in this world already")]
+    Alive(Entity),
+}
+
 /// A typed component. `NAME` is namespaced and stable (`core.transform`, `skate.material`, `fromsoft.layered_material`):
 /// serialisation, pass declarations and reports use it, so renaming one is a format change.
 pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
@@ -532,7 +554,9 @@ trait AnyResource: Any + Send + Sync {
     fn debug(&self) -> &dyn fmt::Debug;
     fn verify(&self, w: &World) -> Result<(), String>;
     fn references(&self, out: &mut Vec<Entity>);
-    fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool);
+    /// Forget the references `keep` refuses; the first one still held afterwards, if any (the resource broke its
+    /// contract).
+    fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) -> Option<Entity>;
     fn clone_box(&self) -> Box<dyn AnyResource>;
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -557,15 +581,11 @@ impl<T: Resource> AnyResource for T {
     fn references(&self, out: &mut Vec<Entity>) {
         Resource::references(self, out);
     }
-    fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) {
+    fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) -> Option<Entity> {
         Resource::retain_references(self, keep);
         let mut left = Vec::new();
         Resource::references(self, &mut left);
-        debug_assert!(
-            left.into_iter().all(keep),
-            "{} keeps a reference it was told to forget",
-            T::NAME
-        );
+        left.into_iter().find(|&e| !keep(e))
     }
     fn clone_box(&self) -> Box<dyn AnyResource> {
         Box::new(self.clone())
@@ -665,22 +685,39 @@ impl World {
         Self::default()
     }
 
-    /// Every resource, copied, with its references to entities outside `alive` forgotten.
+    /// Every resource, copied, with its references to entities outside `alive` forgotten. A resource that keeps one
+    /// breaks the contract of [`Resource::retain_references`]: a bug, refused here (a part would refer to an entity it
+    /// lacks), in release as in debug.
     fn resources_for(&self, alive: &BTreeSet<Entity>) -> BTreeMap<TypeId, Box<dyn AnyResource>> {
         self.resources
             .iter()
             .map(|(k, v)| {
                 let mut r = v.clone_box();
-                r.retain_references(&|e| alive.contains(&e));
+                if let Some(e) = r.retain_references(&|e| alive.contains(&e)) {
+                    panic!(
+                        "{} keeps a reference to {e:?}, which it was told to forget",
+                        r.name()
+                    );
+                }
                 (*k, r)
             })
             .collect()
     }
 
-    /// Every resource forgets its references to the entities `gone` accepts.
-    fn forget_in_resources(&mut self, gone: impl Fn(Entity) -> bool) {
+    /// Every resource forgets its references to the entities `gone` accepts. A whole selection leaving
+    /// (`strict`: [`World::retain`]) checks the contract of [`Resource::retain_references`] in release too; one
+    /// entity leaving ([`World::despawn`], [`World::move_components`]) only in debug builds, where checking each would
+    /// cost a pass over every resource's references per entity (the verifier names a dangling reference either way).
+    fn forget_in_resources(&mut self, gone: impl Fn(Entity) -> bool, strict: bool) {
         for r in self.resources.values_mut() {
-            r.retain_references(&|e| !gone(e));
+            if let Some(e) = r.retain_references(&|e| !gone(e)) {
+                let broken = format!(
+                    "{} keeps a reference to {e:?}, which it was told to forget",
+                    r.name()
+                );
+                assert!(!strict, "{broken}");
+                debug_assert!(false, "{broken}");
+            }
         }
     }
 
@@ -692,15 +729,16 @@ impl World {
     }
 
     /// Spawn with an explicit id, for readers of serialised worlds that keep the file's ids. Ids must come in
-    /// ascending order (gaps allowed); panics on an id at or below one already handed out, so ids stay unique.
-    pub fn spawn_at(&mut self, e: Entity) -> Entity {
-        assert!(
-            e.0 >= self.next,
-            "entity {e:?} is not above every id already used"
-        );
+    /// ascending order (gaps allowed), so ids stay unique: an id at or below one already handed out, or the last id
+    /// (there is none to follow it), is an error and changes nothing.
+    pub fn spawn_at(&mut self, e: Entity) -> Result<Entity, IdError> {
+        if e.0 < self.next {
+            return Err(IdError::NotAscending(e));
+        }
+        let next = e.0.checked_add(1).ok_or(IdError::Exhausted(e))?;
         self.alive.insert(e);
-        self.next = e.0.checked_add(1).expect("more than u32::MAX entities");
-        e
+        self.next = next;
+        Ok(e)
     }
 
     /// Remove an entity and all its components. Returns false if it was not alive.
@@ -714,7 +752,7 @@ impl World {
         for col in self.opaque.values_mut() {
             col.remove(&e);
         }
-        self.forget_in_resources(|x| x == e);
+        self.forget_in_resources(|x| x == e, false);
         true
     }
 
@@ -757,7 +795,7 @@ impl World {
             }
         }
         self.alive.remove(&from);
-        self.forget_in_resources(|x| x == from);
+        self.forget_in_resources(|x| x == from, false);
         self.note_copy(from, to);
         Ok(true)
     }
@@ -1369,16 +1407,21 @@ impl World {
 
     /// Move every entity of `part` (a [`World::split_off`] of this world) back in, with its components; `part`'s
     /// resources are dropped. Ids the part spawned and despawned again were never alive here and are not reserved, so
-    /// a split, written and absorbed part leaves this world as it was. Panics if an entity of `part` is alive here.
-    pub fn absorb(&mut self, part: World) {
-        for e in &part.alive {
-            assert!(!self.alive.contains(e), "absorbing {e:?}, which is alive here");
+    /// a split, written and absorbed part leaves this world as it was. An entity of `part` that is alive here is an
+    /// error, and so is an id with none after it; either changes nothing.
+    pub fn absorb(&mut self, part: World) -> Result<(), IdError> {
+        if let Some(e) = part.alive.iter().find(|e| self.alive.contains(e)) {
+            return Err(IdError::Alive(*e));
         }
         // ids the part spawned and despawned again are not taken here: the next id stays this world's own,
         // unless the part brings back an entity at or above it
-        if let Some(last) = part.alive.last() {
-            self.next = self.next.max(last.0 + 1);
-        }
+        let next = match part.alive.last() {
+            Some(last) => self
+                .next
+                .max(last.0.checked_add(1).ok_or(IdError::Exhausted(*last))?),
+            None => self.next,
+        };
+        self.next = next;
         self.alive.extend(part.alive);
         for (k, col) in part.columns {
             match self.columns.get_mut(&k) {
@@ -1392,12 +1435,13 @@ impl World {
         for (k, mut col) in part.opaque {
             self.opaque.entry(k).or_default().append(&mut col);
         }
+        Ok(())
     }
 
     /// Despawn every entity outside `keep`: in place, what [`World::subset`] copies.
     pub fn retain(&mut self, keep: &BTreeSet<Entity>) {
         self.alive.retain(|e| keep.contains(e));
-        self.forget_in_resources(|e| !keep.contains(&e));
+        self.forget_in_resources(|e| !keep.contains(&e), true);
         for c in self.columns.values_mut() {
             c.retain(keep);
         }
@@ -1415,29 +1459,43 @@ impl World {
         self.alive.len()
     }
 
-    fn register<T: Component>(&mut self) -> &mut Column<T> {
+    /// Give component type `T` its name in this world, or say what holds it: another type, a resource or an opaque
+    /// component (the same answer whichever came first).
+    fn claim<T: Component>(&mut self) -> Result<(), NameClash> {
         let id = TypeId::of::<T>();
-        if let Some(&owner) = self.names.get(T::NAME) {
-            assert!(owner == id, "two component types share the name {:?}", T::NAME);
-        } else {
-            assert!(
-                !self.is_resource_name(T::NAME),
-                "{} is a resource's name: a name is a component's or a resource's, not both",
-                T::NAME
-            );
-            assert!(
-                !self.opaque.contains_key(T::NAME),
-                "{} is an opaque component's name: a name is typed or opaque, never both",
-                T::NAME
-            );
-            self.names.insert(T::NAME, id);
+        let clash = |held| NameClash {
+            name: T::NAME.to_owned(),
+            held,
+        };
+        match self.names.get(T::NAME) {
+            Some(&owner) if owner == id => return Ok(()),
+            Some(_) => return Err(clash("another component type's name")),
+            None => {}
         }
+        if self.is_resource_name(T::NAME) {
+            return Err(clash("a resource's name"));
+        }
+        if self.opaque.contains_key(T::NAME) {
+            return Err(clash("an opaque component's name"));
+        }
+        self.names.insert(T::NAME, id);
+        Ok(())
+    }
+
+    fn column_for<T: Component>(&mut self) -> &mut Column<T> {
         self.columns
-            .entry(id)
+            .entry(TypeId::of::<T>())
             .or_insert_with(|| Box::new(Column::<T>::default()))
             .as_any_mut()
             .downcast_mut::<Column<T>>()
             .expect("column type matches its TypeId")
+    }
+
+    fn register<T: Component>(&mut self) -> &mut Column<T> {
+        if let Err(clash) = self.claim::<T>() {
+            panic!("{clash}");
+        }
+        self.column_for::<T>()
     }
 
     /// Attach (or replace) a component. Panics if the entity is not alive: attaching to a dead entity is a bug.
@@ -1446,6 +1504,15 @@ impl World {
     pub fn insert<T: Component>(&mut self, e: Entity, value: T) -> Option<T> {
         assert!(self.alive.contains(&e), "insert {} on dead entity {e:?}", T::NAME);
         self.register::<T>().insert(e, value)
+    }
+
+    /// [`World::insert`] for a name that may be taken: a clash (another type, a resource or an opaque component holds
+    /// the name) is an error and changes nothing, whichever of the two came first. For a reader that puts what a file
+    /// names in the world; [`World::insert`] is for a name the program chose and a clash there is its bug.
+    pub fn try_insert<T: Component>(&mut self, e: Entity, value: T) -> Result<Option<T>, NameClash> {
+        assert!(self.alive.contains(&e), "insert {} on dead entity {e:?}", T::NAME);
+        self.claim::<T>()?;
+        Ok(self.column_for::<T>().insert(e, value))
     }
 
     pub fn remove<T: Component>(&mut self, e: Entity) -> Option<T> {
@@ -1734,19 +1801,27 @@ impl World {
 
     // ---- opaque components -------------------------------------------------------------------------------------
 
-    /// Attach a component this build does not model. Panics if a typed component owns the name: a reader that
-    /// knows the type must decode it.
-    pub fn insert_opaque(&mut self, e: Entity, name: &str, value: Opaque) -> Option<Opaque> {
+    /// Attach a component this build does not model. A name a typed component or a resource holds (in this world so
+    /// far) is an error and changes nothing: a reader that knows the type must decode it. A typed insert of a name
+    /// held here by an opaque component is refused the same way ([`World::try_insert`]).
+    pub fn insert_opaque(
+        &mut self,
+        e: Entity,
+        name: &str,
+        value: Opaque,
+    ) -> Result<Option<Opaque>, NameClash> {
         assert!(self.alive.contains(&e), "insert {name} on dead entity {e:?}");
-        assert!(
-            !self.names.contains_key(name),
-            "{name} is a typed component; decode it instead"
-        );
-        assert!(
-            !self.is_resource_name(name),
-            "{name} is a resource's name: a name is a component's or a resource's, not both"
-        );
-        self.opaque.entry(name.to_owned()).or_default().insert(e, value)
+        let clash = |held| NameClash {
+            name: name.to_owned(),
+            held,
+        };
+        if self.names.contains_key(name) {
+            return Err(clash("a typed component's name (decode it instead)"));
+        }
+        if self.is_resource_name(name) {
+            return Err(clash("a resource's name"));
+        }
+        Ok(self.opaque.entry(name.to_owned()).or_default().insert(e, value))
     }
 
     pub fn get_opaque(&self, e: Entity, name: &str) -> Option<&Opaque> {
@@ -1765,17 +1840,29 @@ impl World {
     // ---- resources ---------------------------------------------------------------------------------------------
 
     /// Insert (or replace) a resource. Panics if a component has its name: a name is a component's or a resource's,
-    /// not both, so pass declarations, which list both, stay unambiguous.
+    /// not both, so pass declarations, which list both, stay unambiguous. [`World::try_insert_resource`] refuses
+    /// instead.
     pub fn insert_resource<T: Resource>(&mut self, value: T) -> Option<T> {
-        assert!(
-            !self.is_component_name(T::NAME),
-            "{} is a component's name: a name is a component's or a resource's, not both",
-            T::NAME
-        );
-        let old = self.resources.insert(TypeId::of::<T>(), Box::new(value))?;
+        match self.try_insert_resource(value) {
+            Ok(old) => old,
+            Err(clash) => panic!("{clash}"),
+        }
+    }
+
+    /// [`World::insert_resource`] for a name that may be taken: a component's name is an error and changes nothing.
+    pub fn try_insert_resource<T: Resource>(&mut self, value: T) -> Result<Option<T>, NameClash> {
+        if self.is_component_name(T::NAME) {
+            return Err(NameClash {
+                name: T::NAME.to_owned(),
+                held: "a component's name",
+            });
+        }
+        let Some(old) = self.resources.insert(TypeId::of::<T>(), Box::new(value)) else {
+            return Ok(None);
+        };
         self.note_resource_write(T::NAME);
         let any: Box<dyn Any> = old;
-        any.downcast::<T>().ok().map(|b| *b)
+        Ok(any.downcast::<T>().ok().map(|b| *b))
     }
 
     pub fn resource<T: Resource>(&self) -> Option<&T> {
@@ -1820,17 +1907,19 @@ impl World {
         any.downcast::<T>().ok().map(|b| *b)
     }
 
-    /// As [`World::insert_resource`], for a resource this build does not model.
-    pub fn insert_opaque_resource(&mut self, name: &str, value: Opaque) -> Option<Opaque> {
-        assert!(
-            !self.is_component_name(name),
-            "{name} is a component's name: a name is a component's or a resource's, not both"
-        );
+    /// As [`World::try_insert_resource`], for a resource this build does not model: a component's name is an error.
+    pub fn insert_opaque_resource(&mut self, name: &str, value: Opaque) -> Result<Option<Opaque>, NameClash> {
+        if self.is_component_name(name) {
+            return Err(NameClash {
+                name: name.to_owned(),
+                held: "a component's name",
+            });
+        }
         let old = self.opaque_resources.insert(name.to_owned(), value);
         if old.is_some() {
             self.note_resource_write(name);
         }
-        old
+        Ok(old)
     }
 
     /// Names of every resource (typed and opaque), sorted.
@@ -2075,7 +2164,8 @@ mod tests {
                 version: 1,
                 data: OpaqueData::Bytes(vec![1]),
             },
-        );
+        )
+        .unwrap();
         assert!(w.remap_vertices(e, 0, &[1]).unwrap_err().contains("game.thing"));
         assert_eq!(w.get::<PerVertex>(e), Some(&PerVertex(vec![vec![23, 21]])));
     }
@@ -2120,7 +2210,8 @@ mod tests {
                 version: 1,
                 data: OpaqueData::Bytes(vec![1]),
             },
-        );
+        )
+        .unwrap();
         assert!(w.remove_mesh(e).unwrap_err().contains("game.thing"));
         assert!(w.has::<Mesh>(e) && w.has::<MaterialVariants>(e));
         w.remove_opaque(e, "game.thing");
@@ -2165,7 +2256,8 @@ mod tests {
                 version: 3,
                 data: OpaqueData::Bytes(vec![1, 2]),
             },
-        );
+        )
+        .unwrap();
         assert_eq!(w.iter2::<A, B>().map(|(e, ..)| e).collect::<Vec<_>>(), [e1]);
         assert!(w.entity_has_named(e1, "game.thing"));
         assert_eq!(w.component_names(), ["game.thing", "test.a", "test.b"]);
@@ -2202,7 +2294,7 @@ mod tests {
             version: 4,
             data: OpaqueData::Bytes(vec![3, 2, 1]),
         };
-        w.insert_opaque(from, "game.form", opaque.clone());
+        w.insert_opaque(from, "game.form", opaque.clone()).unwrap();
         assert!(!w.move_components(from, from).unwrap());
         assert!(!w.move_components(from, Entity::from_index(999)).unwrap());
         assert_eq!(w.get::<A>(from), Some(&A(9)), "a refused move changes nothing");
@@ -2222,7 +2314,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a component's or a resource's, not both")]
+    #[should_panic(expected = "one kind of them")]
     fn a_resource_cannot_take_a_component_name() {
         let mut w = World::new();
         let e = w.spawn();
@@ -2231,7 +2323,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a component's or a resource's, not both")]
+    #[should_panic(expected = "one kind of them")]
     fn a_component_cannot_take_a_resource_name() {
         let mut w = World::new();
         w.insert_resource(NamedLikeA);
@@ -2249,7 +2341,8 @@ mod tests {
                 version: 1,
                 data: OpaqueData::Bytes(vec![]),
             },
-        );
+        )
+        .unwrap();
         assert_eq!(w.resource_names(), ["game.settings", "test.r"]);
     }
 
@@ -2265,7 +2358,7 @@ mod tests {
             version: 4,
             data: OpaqueData::Bytes(vec![3, 2, 1]),
         };
-        w.insert_opaque(from, "game.form", opaque.clone());
+        w.insert_opaque(from, "game.form", opaque.clone()).unwrap();
         assert!(!w.copy_components(from, from));
         assert!(!w.copy_components(from, Entity::from_index(999)));
         assert!(w.copy_components(from, to));
@@ -2278,7 +2371,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "share the name")]
+    #[should_panic(expected = "another component type's name")]
     fn two_types_cannot_share_a_name() {
         let mut w = World::new();
         let e = w.spawn();
@@ -2314,7 +2407,8 @@ mod tests {
                 version: 1,
                 data: OpaqueData::Bytes(vec![9]),
             },
-        );
+        )
+        .unwrap();
         w.insert_opaque(
             e,
             "game.json",
@@ -2322,7 +2416,8 @@ mod tests {
                 version: 1,
                 data: OpaqueData::Json(serde_json::json!({"k": 1})),
             },
-        );
+        )
+        .unwrap();
         let got: Vec<(&str, u32, Option<serde_json::Value>)> = w
             .components_json(e)
             .unwrap()
@@ -2420,7 +2515,8 @@ mod tests {
                 version: 1,
                 data: OpaqueData::Bytes(vec![]),
             },
-        );
+        )
+        .unwrap();
         w.insert(e, A(1));
     }
 
@@ -2435,5 +2531,121 @@ mod tests {
         w.get_mut::<A>(e).unwrap().0 = 6;
         assert_eq!(w2.get::<A>(e), Some(&A(5)));
         assert_eq!(w2.resource::<R>(), Some(&R(2)));
+    }
+
+    fn opaque() -> Opaque {
+        Opaque {
+            version: 1,
+            data: OpaqueData::Bytes(vec![]),
+        }
+    }
+
+    /// A name a typed component, an opaque component and a resource could each take is one kind's: the second to
+    /// claim it is refused, an error, whichever came first.
+    #[test]
+    fn a_name_clash_is_an_error_whichever_claimed_it_first() {
+        // typed, then opaque
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, A(1));
+        let clash = w.insert_opaque(e, "test.a", opaque()).unwrap_err();
+        assert_eq!(clash.name, "test.a");
+        assert!(clash.held.contains("typed component"), "{clash}");
+        assert!(w.get_opaque(e, "test.a").is_none(), "a refusal changes nothing");
+        // opaque, then typed
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_opaque(e, "test.a", opaque()).unwrap();
+        let clash = w.try_insert(e, A(1)).unwrap_err();
+        assert!(clash.held.contains("opaque component"), "{clash}");
+        assert!(!w.has::<A>(e), "a refusal changes nothing");
+        // the same for a resource and a component
+        let mut w = World::new();
+        w.insert_resource(NamedLikeA);
+        let e = w.spawn();
+        assert!(w.try_insert(e, A(1)).unwrap_err().held.contains("resource"));
+        assert!(
+            w.insert_opaque(e, "test.a", opaque())
+                .unwrap_err()
+                .held
+                .contains("resource")
+        );
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, A(1));
+        assert!(
+            w.try_insert_resource(NamedLikeA)
+                .unwrap_err()
+                .held
+                .contains("component")
+        );
+        assert!(
+            w.insert_opaque_resource("test.a", opaque())
+                .unwrap_err()
+                .held
+                .contains("component")
+        );
+        // two types for one name
+        assert!(
+            w.try_insert(e, Same)
+                .unwrap_err()
+                .held
+                .contains("another component type")
+        );
+        // a free name is taken
+        assert_eq!(w.try_insert(e, B("x")).unwrap(), None);
+    }
+
+    /// Ids from a file: ascending, with gaps; one at or below one already used, or the last id, is an error.
+    #[test]
+    fn an_id_from_a_file_is_an_error_not_a_panic() {
+        let mut w = World::new();
+        assert_eq!(w.spawn_at(Entity::from_index(5)), Ok(Entity::from_index(5)));
+        assert_eq!(w.spawn(), Entity::from_index(6));
+        assert_eq!(
+            w.spawn_at(Entity::from_index(6)),
+            Err(IdError::NotAscending(Entity::from_index(6)))
+        );
+        assert_eq!(
+            w.spawn_at(Entity::from_index(2)),
+            Err(IdError::NotAscending(Entity::from_index(2)))
+        );
+        assert_eq!(w.entity_count(), 2, "a refusal changes nothing");
+        let last = Entity::from_index(u32::MAX);
+        assert_eq!(w.spawn_at(last), Err(IdError::Exhausted(last)));
+        assert!(!w.is_alive(last));
+        assert_eq!(w.spawn(), Entity::from_index(7));
+    }
+
+    /// A part with an entity alive in the world it is absorbed into is an error that changes nothing.
+    #[test]
+    fn absorbing_a_part_that_overlaps_is_an_error() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, A(1));
+        let part = w.clone();
+        let before = format!("{w:?}");
+        assert_eq!(w.absorb(part), Err(IdError::Alive(e)));
+        assert_eq!(format!("{w:?}"), before);
+    }
+
+    /// A resource that keeps a reference it was told to forget breaks its contract: caught in release when a whole
+    /// selection leaves, not only in debug builds.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Stubborn(Entity);
+    impl Resource for Stubborn {
+        const NAME: &'static str = "test.stubborn";
+        fn references(&self, out: &mut Vec<Entity>) {
+            out.push(self.0);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "keeps a reference")]
+    fn a_resource_that_keeps_a_reference_is_refused_when_a_selection_leaves() {
+        let mut w = World::new();
+        let (a, b) = (w.spawn(), w.spawn());
+        w.insert_resource(Stubborn(b));
+        w.retain(&BTreeSet::from([a]));
     }
 }

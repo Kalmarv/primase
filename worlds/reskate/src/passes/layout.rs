@@ -89,7 +89,11 @@ impl Pass for SummarizeReskateLayout {
         };
         sum.parts.insert(tag, roots);
         // writer_placements maps the scene's placements one to one
-        for (sp, p) in s.placements.iter().zip(writer_placements(&s, self.tile)) {
+        for (sp, p) in s
+            .placements
+            .iter()
+            .zip(writer_placements(&s, self.tile).map_err(|e| e.to_string())?)
+        {
             let e = sp.entity;
             if !owned.contains(e) {
                 continue;

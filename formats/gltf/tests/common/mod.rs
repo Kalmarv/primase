@@ -236,7 +236,8 @@ pub fn build(dir: &Path) -> Built {
             version: 1,
             data: OpaqueData::Json(json!({"class": "opaque", "base": "stone_d", "tint": [200, 40, 40]})),
         },
-    );
+    )
+    .unwrap();
     let mat_mask = w.spawn();
     w.insert(mat_mask, Name("fence".into()));
     w.insert(
@@ -257,7 +258,8 @@ pub fn build(dir: &Path) -> Built {
             version: 2,
             data: OpaqueData::Bytes(vec![1, 2, 3]),
         },
-    );
+    )
+    .unwrap();
     let mat_variant = w.spawn();
     w.insert(
         mat_variant,
@@ -423,7 +425,8 @@ pub fn build(dir: &Path) -> Built {
             version: 1,
             data: OpaqueData::Json(json!({"name": "test_scene", "region": [-10, -10, 10, 10]})),
         },
-    );
+    )
+    .unwrap();
 
     // lights: a spot placed and turned, an unplaced directional sun
     let spot = w.spawn();

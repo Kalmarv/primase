@@ -410,7 +410,8 @@ fn a_component_that_cannot_follow_is_refused_by_name() {
             version: 1,
             data: OpaqueData::Bytes(vec![1]),
         },
-    );
+    )
+    .unwrap();
     let e = run(&mut w, pass(&[("Floor_", "park"), ("Wall_", "room")], 0.01)).unwrap_err();
     assert!(e.contains("game.parts"), "{e}");
 }

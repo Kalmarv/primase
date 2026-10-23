@@ -161,7 +161,7 @@ mod tests {
         assert_eq!((sun_of(&part), sun_of(&split)), (None, Some(sun)));
         let part = split.split_off(&BTreeSet::from([sun]));
         assert_eq!(sun_of(&part), Some(sun));
-        split.absorb(part);
+        split.absorb(part).unwrap();
         assert!(split.verify_resources().is_empty());
     }
 

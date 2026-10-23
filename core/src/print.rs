@@ -511,7 +511,8 @@ mod tests {
                 version: 2,
                 data: OpaqueData::Json(serde_json::json!({"on": true})),
             },
-        );
+        )
+        .unwrap();
         let c = w.spawn();
         w.insert(c, mesh(5.));
         w

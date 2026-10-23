@@ -1201,14 +1201,35 @@ pub struct Tile {
     pub col: i32,
     pub row: i32,
 }
+
+/// A point or a tile size that has no tile.
+#[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
+#[error(
+    "no tile at ground point {ground:?} on a grid of {size} metres: the point and the size must be finite, the size \
+     positive and the tile within i32"
+)]
+pub struct TileError {
+    pub ground: [f32; 2],
+    pub size: f32,
+}
+
 impl Tile {
     /// The tile of a `size`-metre grid from the origin holding the ground point `g` (`[east, north]`):
     /// `(floor(east / size), floor(north / size))`, in f32. The one rule for every grid that has to agree on where
-    /// content stands: a writer's tiles, a partition aligned to them.
-    pub fn of(g: [f32; 2], size: f32) -> Tile {
-        Tile {
-            col: (g[0] / size).floor() as i32,
-            row: (g[1] / size).floor() as i32,
+    /// content stands: a writer's tiles, a partition aligned to them. A point or size that is not finite, a size that
+    /// is not positive, or a tile outside i32 is an error, never a saturated or zero tile.
+    pub fn of(g: [f32; 2], size: f32) -> Result<Tile, TileError> {
+        let bad = TileError { ground: g, size };
+        if !(size.is_finite() && size > 0.0) {
+            return Err(bad);
+        }
+        let axis = |v: f32| {
+            let t = (v / size).floor();
+            (t.is_finite() && t >= i32::MIN as f32 && t < i32::MAX as f32).then_some(t as i32)
+        };
+        match (axis(g[0]), axis(g[1])) {
+            (Some(col), Some(row)) => Ok(Tile { col, row }),
+            _ => Err(bad),
         }
     }
 }
@@ -1228,6 +1249,26 @@ impl Component for Tile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tile is the floor of the point over the size; a point or size that has none is an error, never a saturated tile.
+    #[test]
+    fn a_tile_of_a_point_that_has_none_is_an_error() {
+        assert_eq!(Tile::of([-0.5, 399.9], 200.0), Ok(Tile { col: -1, row: 1 }));
+        for (g, size) in [
+            ([f32::NAN, 0.0], 200.0),
+            ([0.0, f32::INFINITY], 200.0),
+            ([1.0, 1.0], 0.0),
+            ([1.0, 1.0], -5.0),
+            ([1.0, 1.0], f32::NAN),
+            ([1e30, 0.0], 200.0),
+        ] {
+            let e = Tile::of(g, size).unwrap_err();
+            assert_eq!(
+                (e.ground.map(f32::is_nan), e.size.is_nan()),
+                (g.map(f32::is_nan), size.is_nan())
+            );
+        }
+    }
 
     #[test]
     fn payload_bytes_count_streams_indices_levels_and_soups() {
@@ -1275,7 +1316,8 @@ mod tests {
                 version: 1,
                 data: crate::OpaqueData::Bytes(vec![0; 7]),
             },
-        );
+        )
+        .unwrap();
         assert_eq!(
             w.payload_bytes(),
             BTreeMap::from([("core.mesh", 216), ("core.texture", 84), ("game.blob", 7)])
@@ -1741,7 +1783,8 @@ mod tests {
                 version: 1,
                 data: OpaqueData::Json(json!(unrelated.index())),
             },
-        );
+        )
+        .unwrap();
         w.insert_resource(crate::Surfaces::default());
         let closure = w.closure([placement]);
         assert_eq!(
@@ -1801,7 +1844,7 @@ mod tests {
         assert_eq!(spawned, next);
         part.insert(spawned, Name("chunk".into()));
         part.despawn(spawned);
-        w.absorb(part);
+        w.absorb(part).unwrap();
         assert_eq!(format!("{w:?}"), before);
         assert_eq!(w.get::<Name>(texture), Some(&Name("albedo".into())));
         assert_eq!(w.spawn(), next, "the next id is unchanged");

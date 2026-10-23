@@ -90,7 +90,8 @@ fn duplicate_copies_every_component_shallowly() {
             version: 1,
             data: OpaqueData::Json(serde_json::json!({"a": 1})),
         },
-    );
+    )
+    .unwrap();
     let placement = w.spawn();
     w.insert(
         placement,
@@ -203,7 +204,8 @@ fn a_component_that_cannot_follow_leaves_the_entity_unchanged() {
             version: 1,
             data: OpaqueData::Bytes(vec![1]),
         },
-    );
+    )
+    .unwrap();
     let err = w.apply_linear(e, &Linear::mirror_x()).unwrap_err();
     assert_eq!(err, ["core.light", "game.thing"]);
     assert_eq!(w.get::<Mesh>(e), Some(&triangle()), "nothing changed");

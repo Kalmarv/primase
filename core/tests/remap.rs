@@ -222,7 +222,7 @@ fn opaque_components_refuse_a_primitive_change_before_anything_changes() {
         version: 1,
         data: OpaqueData::Bytes(vec![1, 2]),
     };
-    w.insert_opaque(e, "other.per_primitive", blob.clone());
+    w.insert_opaque(e, "other.per_primitive", blob.clone()).unwrap();
     for from in [vec![1, 0], vec![0, 0, 1], vec![1]] {
         let err = w.remap_primitives(e, &from).unwrap_err();
         assert!(err.contains("other.per_primitive"), "{err}");

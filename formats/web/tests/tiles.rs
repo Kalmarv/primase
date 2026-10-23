@@ -592,7 +592,8 @@ fn the_worlds_curves_and_markers_are_viewer_records() {
             version: 3,
             data: OpaqueData::Json(serde_json::json!({"surface": 4})),
         },
-    );
+    )
+    .unwrap();
     let spawn = w.spawn();
     let mut t = Transform::IDENTITY;
     t.cols[3] = [10., 2., -20.];

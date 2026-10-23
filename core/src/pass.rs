@@ -2348,7 +2348,8 @@ mod tests {
                 version: 1,
                 data: OpaqueData::Bytes(vec![]),
             },
-        );
+        )
+        .unwrap();
         w
     }
 

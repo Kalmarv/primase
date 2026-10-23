@@ -68,11 +68,11 @@ impl Default for EncodingOptions {
 }
 
 /// The scene's placements in the writer's frame (degenerate matrices left for the writer to count).
-pub(crate) fn writer_placements(s: &Scene, tile: f32) -> Vec<Placement> {
+pub(crate) fn writer_placements(s: &Scene, tile: f32) -> Result<Vec<Placement>, primase_core::TileError> {
     s.placements
         .iter()
         .enumerate()
-        .map(|(pi, p)| {
+        .map(|(pi, p)| -> Result<Placement, primase_core::TileError> {
             let m = &p.m;
             let proto = &s.protos[p.proto as usize];
             let mut pl = Placement {
@@ -93,10 +93,13 @@ pub(crate) fn writer_placements(s: &Scene, tile: f32) -> Vec<Placement> {
             // clipped as the placement says (clip-reskate-region marks them); the writer decides none
             pl.outside = p.clip.unwrap_or(false);
             // the tile it states, else the one its ground position stands in (the rule partition-grid{tile} aligns to)
-            let t = p.tile.unwrap_or_else(|| {
-                let t = primase_core::Tile::of([pl.pos.x, pl.pos.y], tile);
-                [t.col, t.row]
-            });
+            let t = match p.tile {
+                Some(t) => t,
+                None => {
+                    let t = primase_core::Tile::of([pl.pos.x, pl.pos.y], tile)?;
+                    [t.col, t.row]
+                }
+            };
             (pl.tx, pl.ty) = (t[0], t[1]);
             if let Some(r) = p.radius {
                 pl.radius = r;
@@ -110,7 +113,7 @@ pub(crate) fn writer_placements(s: &Scene, tile: f32) -> Vec<Placement> {
                 }
                 pl.radius = reach * pl.ex.length().max(pl.ey.length().max(pl.ez.length()));
             }
-            pl
+            Ok(pl)
         })
         .collect()
 }
@@ -762,7 +765,7 @@ pub(crate) fn read_part<'w>(
     let scene = Scene::from_world(world, dir)?;
     let mut o = part_options(world, &scene, a, encode)?;
     let cut = scene.region;
-    let placements = writer_placements(&scene, o.tile);
+    let placements = writer_placements(&scene, o.tile).map_err(|e| Error::Scene(e.to_string()))?;
     let in_parts = world
         .resource::<crate::components::SkateLayoutSummary>()
         .is_some();

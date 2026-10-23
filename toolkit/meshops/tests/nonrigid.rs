@@ -409,7 +409,8 @@ fn a_prototype_that_cannot_follow_keeps_its_placements_as_they_were() {
             version: 1,
             data: OpaqueData::Bytes(vec![0]),
         },
-    );
+    )
+    .unwrap();
     let mirrored = t([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]]);
     let e = place(&mut w, p, mirrored);
     let entities = w.entity_count();

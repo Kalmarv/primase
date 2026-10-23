@@ -133,7 +133,8 @@ fn a_mesh_it_cannot_change_is_not_recorded_as_changed() {
             version: 1,
             data: OpaqueData::Bytes(vec![1]),
         },
-    );
+    )
+    .unwrap();
     let mut log = PassLog::default();
     let err = OmitMateriallessPrimitives.run(&mut w, &mut log).unwrap_err();
     assert!(err.contains("game.parts"), "{err}");

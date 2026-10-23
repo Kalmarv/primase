@@ -438,7 +438,8 @@ fn a_material_without_pbr_is_reported_as_unsupported() {
             version: 1,
             data: OpaqueData::Json(serde_json::json!({"shader": "glass"})),
         },
-    );
+    )
+    .unwrap();
     let proto = w.iter::<Mesh>().map(|(e, _)| e).next().unwrap();
     *w.get_mut::<Mesh>(proto)
         .unwrap()

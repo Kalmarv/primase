@@ -301,7 +301,8 @@ mod tests {
                 version: 1,
                 data: OpaqueData::Json(json),
             },
-        );
+        )
+        .unwrap();
         let mut made = BTreeMapOf::new();
         let mut textures = Vec::new();
         for slot in slots {

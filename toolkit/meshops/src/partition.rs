@@ -178,21 +178,24 @@ impl PartitionGrid {
 
     /// The cell content stands in: by its position `p` `[east, north]`; aligned to tiles, by its tile (the one it
     /// states, `stated`, else the one `p` stands in), as a writer files it.
-    fn cell_of(&self, p: [f64; 2], stated: Option<Tile>) -> (i64, i64) {
+    fn cell_of(&self, p: [f64; 2], stated: Option<Tile>) -> Result<(i64, i64), String> {
         if let Some(t) = self.tile {
             // whole multiples (with_tile): the counts of tiles are exact
-            let tile = stated.unwrap_or_else(|| Tile::of([p[0] as f32, p[1] as f32], t as f32));
+            let tile = match stated {
+                Some(tile) => tile,
+                None => Tile::of([p[0] as f32, p[1] as f32], t as f32).map_err(|e| e.to_string())?,
+            };
             let per = (self.cell / t) as i64;
             let (o0, o1) = ((self.origin[0] / t) as i64, (self.origin[1] / t) as i64);
-            return (
+            return Ok((
                 (i64::from(tile.col) - o0).div_euclid(per),
                 (i64::from(tile.row) - o1).div_euclid(per),
-            );
+            ));
         }
-        (
+        Ok((
             ((p[0] - self.origin[0]) / self.cell).floor() as i64,
             ((p[1] - self.origin[1]) / self.cell).floor() as i64,
-        )
+        ))
     }
 
     /// Whether `p` is within `halo` of cell `c` (and not in it).
@@ -388,7 +391,10 @@ impl Pass for PartitionGrid {
                 continue;
             }
             cells
-                .entry(self.cell_of(p, w.get::<Tile>(e).copied()))
+                .entry(
+                    self.cell_of(p, w.get::<Tile>(e).copied())
+                        .map_err(|m| format!("{e:?}: {m}"))?,
+                )
                 .or_default()
                 .insert(e);
         }
@@ -840,7 +846,7 @@ mod tests {
         for (e, x) in placed {
             assert_eq!(
                 cell_of(e),
-                cell_of_tile(Tile::of([x, x], 200.0)),
+                cell_of_tile(Tile::of([x, x], 200.0).unwrap()),
                 "east = north = {x:e}"
             );
         }

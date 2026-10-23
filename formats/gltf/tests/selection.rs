@@ -67,7 +67,8 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
         version: 1,
         data: OpaqueData::Json(v),
     };
-    w.insert_opaque(proto, "test.prototype_note", opaque(json!("prototype")));
+    w.insert_opaque(proto, "test.prototype_note", opaque(json!("prototype")))
+        .unwrap();
     let placed: Vec<_> = (0..3)
         .map(|k| {
             let e = w.spawn();
@@ -85,7 +86,8 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
             e
         })
         .collect();
-    w.insert_opaque(placed[1], "test.z_after", opaque(json!("own")));
+    w.insert_opaque(placed[1], "test.z_after", opaque(json!("own")))
+        .unwrap();
     let lights: Vec<_> = (0..2)
         .map(|k| {
             let e = w.spawn();

@@ -480,7 +480,8 @@ mod tests {
                 version: 1,
                 data: crate::OpaqueData::Bytes(vec![1, 2, 3]),
             },
-        );
+        )
+        .unwrap();
         assert_eq!(w.verify_components(), vec![]);
         assert!(w.closure([root]).contains(&parts[1]));
     }

@@ -214,7 +214,8 @@ fn the_target_wants_a_cells_files_loaded_and_lods_chosen() {
             version: 1,
             data: OpaqueData::Json(serde_json::json!(1)),
         },
-    );
+    )
+    .unwrap();
     let t = primase_web::target();
     // the mesh is loaded beside its file; the texture is not
     assert!(t.illegal_entities(&w, MeshFile::NAME, Mode::Full).is_empty());

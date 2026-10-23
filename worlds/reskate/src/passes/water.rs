@@ -323,7 +323,10 @@ impl Pass for PrepareReskateWater {
                         // the writer's measure: the placements as it takes them (positions and box corners) and the
                         // soups
                         let s = Scene::from_world(w, Path::new("")).map_err(|e| e.to_string())?;
-                        (bounds(&s, &writer_placements(&s, 200.0)), margin)
+                        (
+                            bounds(&s, &writer_placements(&s, 200.0).map_err(|e| e.to_string())?),
+                            margin,
+                        )
                     }
                 }
             }
@@ -647,7 +650,8 @@ impl Pass for SummarizeReskateContent {
     fn run(&self, w: &mut World, _log: &mut PassLog) -> Result<(), String> {
         let s = Scene::from_world(w, Path::new("")).map_err(|e| e.to_string())?;
         let owned = super::Owned::of(w);
-        let b = crate::assembly::content_bounds(&s, &writer_placements(&s, 200.0), &|e| owned.contains(e));
+        let placements = writer_placements(&s, 200.0).map_err(|e| e.to_string())?;
+        let b = crate::assembly::content_bounds(&s, &placements, &|e| owned.contains(e));
         w.insert_resource(b);
         Ok(())
     }

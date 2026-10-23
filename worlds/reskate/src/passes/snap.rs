@@ -321,7 +321,7 @@ impl SnapReskateMarkers {
     ) -> Result<Snapped, String> {
         let b = &self.basis;
         // the placements as the writer takes them, its region and the region's apron
-        let placements = writer_placements(s, 200.0);
+        let placements = writer_placements(s, 200.0).map_err(|e| e.to_string())?;
         let region = s
             .region
             .unwrap_or_else(|| content.map_or_else(|| bounds(s, &placements), SkateContentBounds::extent));

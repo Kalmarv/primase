@@ -73,9 +73,10 @@ impl Domain {
 
     /// The mask of every value.
     fn full_mask(&self) -> u64 {
+        // a domain of more than 64 values is a verifier's error ([`StateAxis`]), not a shift past the word
         match self.len() {
-            64 => u64::MAX,
-            n => (1u64 << n) - 1,
+            n @ 0..=63 => (1u64 << n) - 1,
+            _ => u64::MAX,
         }
     }
 }
@@ -166,7 +167,8 @@ impl Clause {
         let mut rest = Vec::new();
         for l in &self.0 {
             match values.get(&l.axis) {
-                Some(&v) if l.values & (1u64 << v) == 0 => return None,
+                // a value past the mask's 64 bits is in no literal's set
+                Some(&v) if 1u64.checked_shl(v).is_none_or(|bit| l.values & bit == 0) => return None,
                 Some(_) => {}
                 None => rest.push(*l),
             }
@@ -790,10 +792,20 @@ impl Pass for ResolveState {
             if dropped > 0 {
                 w.rebuild_primitives(e, |mesh| {
                     let primitives = mesh.primitives();
-                    Ok((
-                        keep.iter().map(|&i| primitives[i].clone()).collect(),
-                        keep.clone(),
-                    ))
+                    // one condition per primitive is the verifier's rule, which an unverified world may break
+                    let kept = keep
+                        .iter()
+                        .map(|&i| {
+                            primitives.get(i).cloned().ok_or_else(|| {
+                                format!(
+                                    "{e:?}: {} primitive conditions for {} primitives",
+                                    pc.0.len(),
+                                    primitives.len()
+                                )
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok((kept, keep.clone()))
                 })?;
                 log.dropped(
                     Measure::Primitives,
@@ -951,6 +963,25 @@ impl Pass for SelectOutfit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A domain of more than 64 values (the verifier refuses it) and a value past the word are not a shift past it.
+    #[test]
+    fn a_domain_beyond_the_word_does_not_overflow_a_shift() {
+        let big = Domain::Enum((0..65).map(|i| format!("v{i}")).collect());
+        assert_eq!(big.full_mask(), u64::MAX);
+        assert_eq!(Domain::Bool.full_mask(), 0b11);
+        let mut w = World::new();
+        let axis = w.spawn();
+        let clause = Clause(vec![Literal {
+            axis,
+            values: u64::MAX,
+        }]);
+        assert_eq!(clause.reduce(&BTreeMap::from([(axis, 64)])), None);
+        assert_eq!(
+            clause.reduce(&BTreeMap::from([(axis, 63)])),
+            Some(Clause(Vec::new()))
+        );
+    }
     use crate::components::Name;
     use crate::pass::{Mode, PassManager, PassOptions, PassRegistry, Target};
 

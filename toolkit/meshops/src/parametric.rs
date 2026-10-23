@@ -64,7 +64,7 @@ impl Pass for TessellateColliders {
                         .get::<Heightfield>(e)
                         .ok_or_else(|| format!("{e:?}: a heightfield shape without core.heightfield"))?;
                     log.count("heightfields", 1);
-                    heightfield(field, c.surface)
+                    heightfield(field, c.surface).map_err(|m| format!("{e:?}: {m}"))?
                 }
                 shape => {
                     let (mesh, kind, exact) = shape_mesh(shape).map_err(|m| format!("{e:?}: {m}"))?;
@@ -120,10 +120,29 @@ fn shape_mesh(shape: &Shape) -> Result<(Mesh, &'static str, bool), String> {
     })
 }
 
+/// A collider's soup: positions, triangles and one surface a triangle.
+type Soup = (Vec<V>, Vec<[u32; 3]>, Vec<u16>);
+
 /// Positions, triangles (counter-clockwise seen from +Y) and surfaces of a heightfield: two triangles per cell that
 /// is not a hole, split along its diagonal.
-fn heightfield(f: &Heightfield, surface: u16) -> (Vec<V>, Vec<[u32; 3]>, Vec<u16>) {
+fn heightfield(f: &Heightfield, surface: u16) -> Result<Soup, String> {
     let (cols, rows) = (f.columns as usize, f.rows as usize);
+    // the verifier's rules, checked where they are indexed: a pass may run on a world nobody verified
+    let samples = cols.checked_mul(rows).filter(|&n| u32::try_from(n).is_ok());
+    if cols < 2 || rows < 2 || samples != Some(f.heights.len()) {
+        return Err(format!(
+            "a heightfield of {cols} x {rows} samples holds {} heights (at least 2 x 2, one each, indices within u32)",
+            f.heights.len()
+        ));
+    }
+    let cells = (cols - 1) * (rows - 1);
+    if f.holes.as_ref().is_some_and(|h| h.len() != cells)
+        || f.surfaces.as_ref().is_some_and(|s| s.len() != cells)
+    {
+        return Err(format!(
+            "holes or surfaces that are not one to each of the {cells} cells"
+        ));
+    }
     let positions = (0..rows)
         .flat_map(|r| {
             (0..cols).map(move |c| {
@@ -155,7 +174,7 @@ fn heightfield(f: &Heightfield, surface: u16) -> (Vec<V>, Vec<[u32; 3]>, Vec<u16
             surfaces.extend([s, s]);
         }
     }
-    (positions, triangles, surfaces)
+    Ok((positions, triangles, surfaces))
 }
 
 /// `flatten-curves{tolerance=M}`: every Bezier `core.curve` (one with tangents) as the polyline through points on it
@@ -232,7 +251,7 @@ impl Pass for FlattenCurves {
             .map(|(e, c)| (e, c.clone()))
             .collect();
         for (e, c) in curved {
-            let flat = flatten(&c, self.tolerance);
+            let flat = flatten(&c, self.tolerance).map_err(|m| format!("{e:?}: {m}"))?;
             log.approximate("Bezier curves flattened", 1);
             log.count("polyline points", flat.points.len() as u64);
             w.insert(e, flat);
@@ -301,11 +320,19 @@ fn split(p: [V; 4], t: f32) -> ([V; 4], [V; 4]) {
     ([p[0], a, d, m], [m, e, c, p[3]])
 }
 
-fn flatten(c: &Curve, tolerance: f32) -> Curve {
+fn flatten(c: &Curve, tolerance: f32) -> Result<Curve, String> {
     let Some(t) = &c.tangents else {
-        return c.clone();
+        return Ok(c.clone());
     };
     let n = c.points.len();
+    // the verifier's rules, checked where they are indexed: a pass may run on a world nobody verified
+    if n < 2 || t.len() != n || c.up.as_ref().is_some_and(|u| u.len() != n) {
+        return Err(format!(
+            "a curve of {n} points with {} tangent pairs and {:?} up directions (at least 2 points, one each)",
+            t.len(),
+            c.up.as_ref().map(Vec::len)
+        ));
+    }
     let segments = if c.closed { n } else { n - 1 };
     let (mut points, mut up) = (vec![c.points[0]], c.up.as_ref().map(|u| vec![u[0]]));
     for s in 0..segments {
@@ -326,11 +353,50 @@ fn flatten(c: &Curve, tolerance: f32) -> Curve {
             }
         }
     }
-    Curve {
+    Ok(Curve {
         kind: c.kind.clone(),
         points,
         closed: c.closed,
         tangents: None,
         up,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A heightfield or a curve a pass is given unverified is an error where it is indexed, not a panic.
+    #[test]
+    fn data_the_verifier_would_refuse_is_an_error_not_an_index_panic() {
+        let field = |columns, rows, heights: usize, holes: Option<usize>| Heightfield {
+            columns,
+            rows,
+            spacing: [1.0, 1.0],
+            heights: vec![0.0; heights],
+            holes: holes.map(|n| vec![false; n]),
+            surfaces: None,
+            diagonal: Diagonal::Main,
+        };
+        assert!(heightfield(&field(3, 3, 9, None), 0).is_ok());
+        for bad in [
+            field(0, 0, 0, None),
+            field(1, 4, 4, None),
+            field(3, 3, 8, None),
+            field(3, 3, 9, Some(3)),
+        ] {
+            assert!(heightfield(&bad, 0).is_err(), "{}x{}", bad.columns, bad.rows);
+        }
+        let curve = |points: usize, tangents: usize| Curve {
+            kind: "road".into(),
+            points: vec![[0.0; 3]; points],
+            closed: false,
+            tangents: Some(vec![[[0.0; 3]; 2]; tangents]),
+            up: None,
+        };
+        assert!(flatten(&curve(2, 2), 0.01).is_ok());
+        for bad in [curve(0, 0), curve(1, 1), curve(3, 2)] {
+            assert!(flatten(&bad, 0.01).is_err(), "{} points", bad.points.len());
+        }
     }
 }

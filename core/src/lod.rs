@@ -289,7 +289,8 @@ mod tests {
                 version: 1,
                 data: OpaqueData::Json(serde_json::json!({"lod": 1})),
             },
-        );
+        )
+        .unwrap();
         let nothing = w.spawn();
         w.insert(nothing, Name("nothing".into()));
         w.insert(
@@ -527,7 +528,7 @@ mod tests {
             data: OpaqueData::Bytes(vec![1]),
         };
         let (mut w, proto, forms) = world();
-        w.insert_opaque(proto, "game.thing", opaque());
+        w.insert_opaque(proto, "game.thing", opaque()).unwrap();
         let m = manager().with_pass_checks(true);
         let err = m
             .run(

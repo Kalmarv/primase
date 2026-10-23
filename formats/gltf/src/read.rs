@@ -352,7 +352,8 @@ pub fn read_with_images(
                     version: 1,
                     data: OpaqueData::Json(m.clone()),
                 },
-            );
+            )
+            .expect("gltf.material is no typed component's name");
             e
         })
     };
