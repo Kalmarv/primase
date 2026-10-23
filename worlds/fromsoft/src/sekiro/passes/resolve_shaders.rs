@@ -2,9 +2,10 @@
 //! `core.shader_binding`.
 use crate::layer_bake::resolve::{Unbound, render_state, resolve, resolve_vertex};
 use crate::materials::Material;
+use crate::metaparam::Metaparam;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::shader::{Shader, ShaderBinding, ShaderFormat};
+use primase_core::shader::{Interface, Shader, ShaderBinding, ShaderFormat};
 use primase_core::{ColorSpace, Component, Entity, Mesh, Name, Semantic, TexRole, Texture, World};
 use primase_shader_exec::PixelShader;
 use primase_shader_exec::ProgramShader;
@@ -205,8 +206,10 @@ fn run(
     let mut shaders: BTreeMap<String, (Entity, ProgramShader)> = BTreeMap::new();
     // the textures spawned, by stem and colour space
     let mut textures: BTreeMap<(String, bool), Entity> = BTreeMap::new();
-    // the vertex programs, each its own entity, by file name
-    let mut vertex_shaders: BTreeMap<String, Entity> = BTreeMap::new();
+    // the vertex programs, each its own entity with the interface read once, by file name
+    let mut vertex_shaders: BTreeMap<String, (Entity, Interface)> = BTreeMap::new();
+    // each bundle's parameter definition, taken once per bundle entity
+    let mut parameters: BTreeMap<Entity, Option<Metaparam>> = BTreeMap::new();
     let draws = draws(world);
     let mut tally: BTreeMap<&'static str, Tally> = BTreeMap::new();
     let mut policies: BTreeMap<String, u64> = BTreeMap::new();
@@ -217,28 +220,57 @@ fn run(
             (None, Some(view)) => view,
             (None, None) => unreachable!("a candidate has a definition"),
         };
-        let bundle = world
-            .get::<MaterialShader>(material_entity)
-            .and_then(|m| world.get::<ShaderBundle>(m.0))
-            .cloned();
+        // the shader's bundle, read where it is: a material takes from it only what is not taken yet (a program not read
+        // yet, the bundle's parameters once)
+        let bundle_entity = world.get::<MaterialShader>(material_entity).map(|m| m.0);
+        let bundle = bundle_entity.and_then(|e| world.get::<ShaderBundle>(e));
         // the game whose program it is: its bundle's (Sekiro's layered programs the reader kept are Sekiro's)
-        let game = bundle.as_ref().map_or(crate::Game::Sekiro, |b| b.game);
+        let game = bundle.map_or(crate::Game::Sekiro, |b| b.game);
         let name = material.pass_program();
         // the layered programs the reader kept (DXBC), else the one the shader's bundle holds under that name
-        let program = programs
-            .get(&name)
-            .map(|code| (ShaderFormat::Dxbc, code.clone()))
-            .or_else(|| {
-                bundle
-                    .as_ref()
-                    .and_then(|b| b.program(&name))
-                    .map(|p| (p.format, p.code.clone()))
-            });
-        let Some((format, bytes)) = program else {
-            t.without_program += 1;
-            continue;
+        let program = if shaders.contains_key(&name) {
+            None
+        } else {
+            let found = programs
+                .get(&name)
+                .map(|code| (ShaderFormat::Dxbc, code.clone()))
+                .or_else(|| {
+                    bundle
+                        .and_then(|b| b.program(&name))
+                        .map(|p| (p.format, p.code.clone()))
+                });
+            if found.is_none() {
+                t.without_program += 1;
+                continue;
+            }
+            found
         };
-        if !shaders.contains_key(&name) {
+        if let (Some(e), Some(b)) = (bundle_entity, bundle) {
+            parameters.entry(e).or_insert_with(|| b.parameters.clone());
+        }
+        // the G-buffer vertex program from the shader's bundle: the skinned permutation when every primitive that draws
+        // the material carries joint indices and weights, the unskinned one otherwise (a material drawn both ways has one
+        // binding, the unskinned, counted). `@[cl]` is the same program without clip-distance outputs: not needed
+        let (unskinned_draws, skinned_draws) = draws.get(&material_entity).copied().unwrap_or((0, 0));
+        let skin = skinned_draws > 0 && unskinned_draws == 0;
+        if skinned_draws > 0 && unskinned_draws > 0 {
+            t.mixed += 1;
+        }
+        // `<shader>_<pass>.vpo`; the fixed-function shaders spell the G-buffer's `_GBuf`
+        let vertex = bundle
+            .and_then(|b| {
+                [material.pass(), "GBuf"].iter().find_map(|g| {
+                    b.program(&format!("{}_{g}{}.vpo", b.name, if skin { "_Skin" } else { "" }))
+                })
+            })
+            .map(|p| (p.name.clone(), p.format, p.code.clone()));
+        if skin {
+            t.skinned += 1;
+            if vertex.is_none() && bundle.is_some() {
+                t.without_skin += 1;
+            }
+        }
+        if let Some((format, bytes)) = program {
             let parsed =
                 crate::layer_bake::program_executor(format, &bytes).map_err(|e| format!("{name}: {e}"))?;
             let entity = world.spawn();
@@ -254,36 +286,15 @@ fn run(
             shaders.insert(name.clone(), (entity, parsed));
         }
         let (shader_entity, parsed) = &shaders[&name];
-        let metaparam = bundle.as_ref().and_then(|b| b.parameters.clone());
-        // the G-buffer vertex program from the shader's bundle: the skinned permutation when every primitive that draws
-        // the material carries joint indices and weights, the unskinned one otherwise (a material drawn both ways has one
-        // binding, the unskinned, counted). `@[cl]` is the same program without clip-distance outputs: not needed
-        let (unskinned_draws, skinned_draws) = draws.get(&material_entity).copied().unwrap_or((0, 0));
-        let skin = skinned_draws > 0 && unskinned_draws == 0;
-        if skinned_draws > 0 && unskinned_draws > 0 {
-            t.mixed += 1;
-        }
-        // `<shader>_<pass>.vpo`; the fixed-function shaders spell the G-buffer's `_GBuf`
-        let vertex = bundle
-            .as_ref()
-            .and_then(|b| {
-                [material.pass(), "GBuf"].iter().find_map(|g| {
-                    b.program(&format!("{}_{g}{}.vpo", b.name, if skin { "_Skin" } else { "" }))
-                })
-            })
-            .map(|p| (p.name.clone(), p.format, p.code.clone()));
-        if skin {
-            t.skinned += 1;
-            if vertex.is_none() && bundle.is_some() {
-                t.without_skin += 1;
-            }
-        }
+        let metaparam = bundle_entity
+            .and_then(|e| parameters.get(&e))
+            .and_then(Option::as_ref);
         let resolution = resolve(
             parsed,
             *shader_entity,
             &material,
             game,
-            metaparam.as_ref(),
+            metaparam,
             unbound,
             &mut |stem: &str, srgb: bool| {
                 let key = (stem.to_owned(), srgb);
@@ -314,18 +325,18 @@ fn run(
         let mut stages = Vec::new();
         match vertex {
             Some((vertex_name, format, code)) => {
-                // the vertex program's interface: a DXBC program's reflection, a DXIL one's as the lifter reads it
-                let interface = match format {
-                    ShaderFormat::Dxbc => {
-                        primase_dxbc::reflection(&code).map_err(|e| format!("{vertex_name}: {e}"))?
-                    }
-                    _ => {
-                        primase_dxil::lift(&code)
-                            .map_err(|e| format!("{vertex_name}: {e}"))?
-                            .interface
-                    }
-                };
-                let entity = *vertex_shaders.entry(vertex_name.clone()).or_insert_with(|| {
+                if !vertex_shaders.contains_key(&vertex_name) {
+                    // the vertex program's interface: a DXBC program's reflection, a DXIL one's as the lifter reads it
+                    let interface = match format {
+                        ShaderFormat::Dxbc => {
+                            primase_dxbc::reflection(&code).map_err(|e| format!("{vertex_name}: {e}"))?
+                        }
+                        _ => {
+                            primase_dxil::lift(&code)
+                                .map_err(|e| format!("{vertex_name}: {e}"))?
+                                .interface
+                        }
+                    };
                     let entity = world.spawn();
                     world.insert(entity, Name(vertex_name.clone()));
                     world.insert(
@@ -336,9 +347,10 @@ fn run(
                             interface: interface.clone(),
                         },
                     );
-                    entity
-                });
-                stages.push(resolve_vertex(&interface, entity).map_err(|e| format!("{vertex_name}: {e}"))?);
+                    vertex_shaders.insert(vertex_name.clone(), (entity, interface));
+                }
+                let (entity, interface) = &vertex_shaders[&vertex_name];
+                stages.push(resolve_vertex(interface, *entity).map_err(|e| format!("{vertex_name}: {e}"))?);
             }
             None => t.without_vertex += 1,
         }
