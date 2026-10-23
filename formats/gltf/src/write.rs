@@ -785,7 +785,7 @@ impl Writer<'_> {
                         detail: "non-finite transform".into(),
                     });
                 }
-                node.insert("matrix".into(), f32s_value(&m));
+                node.insert("matrix".into(), f32s_value(&m)?);
             }
             node.insert("extensions".into(), json!({ LIGHTS: {"light": lights.len()} }));
             let extras = self.extras(e, CONSUMED_LIGHT)?;
@@ -1072,7 +1072,7 @@ impl Writer<'_> {
                     node.insert("skin".into(), json!(skin));
                 } else if c[..3] == Transform::IDENTITY.cols[..3] {
                     if c[3] != [0.0; 3] {
-                        node.insert("translation".into(), f32s_value(&c[3]));
+                        node.insert("translation".into(), f32s_value(&c[3])?);
                     }
                 } else {
                     let m = [
@@ -1085,7 +1085,7 @@ impl Writer<'_> {
                             detail: "non-finite transform".into(),
                         });
                     }
-                    node.insert("matrix".into(), f32s_value(&m));
+                    node.insert("matrix".into(), f32s_value(&m)?);
                 }
             }
         }
@@ -1318,7 +1318,7 @@ impl Writer<'_> {
         self.handled.insert(*prototype);
         let extras = match &morphs {
             Some(mo) => {
-                m.insert("weights".into(), f32s_value(&mo.defaults));
+                m.insert("weights".into(), f32s_value(&mo.defaults)?);
                 let mut e = match extras {
                     Some(Value::Object(e)) => e,
                     _ => Map::new(),
@@ -1519,7 +1519,7 @@ impl Writer<'_> {
                 detail: format!("non-finite material factor {xs:?}"),
             });
         }
-        Ok(f32s_value(xs))
+        Ok(f32s_value(xs)?)
     }
 
     /// `{"index", "texCoord"}` (and its transform as `KHR_texture_transform`) for a texture slot, or `None` when its
@@ -1970,7 +1970,7 @@ impl Writer<'_> {
                 }
                 SkinValues::WeightsF32(v) => {
                     self.buffers
-                        .float_accessor(v.as_flattened(), ElementType::Vec4, None, true)
+                        .float_accessor(v.as_flattened(), ElementType::Vec4, None, true)?
                 }
             };
             a.attributes.push((name, index));
@@ -2005,7 +2005,9 @@ impl Writer<'_> {
                 0.0, c[3][0], c[3][1], c[3][2], 1.0,
             ]);
         }
-        let accessor = self.buffers.float_accessor(&ibm, ElementType::Mat4, None, false);
+        let accessor = self
+            .buffers
+            .float_accessor(&ibm, ElementType::Mat4, None, false)?;
         self.skins.push(json!({
             "name": format!("{}.skin{}", self.name_of(prototype, "prototype"), binding.0),
             "joints": joints,
@@ -2060,22 +2062,28 @@ impl Writer<'_> {
                             ElementType::Vec3,
                             Some((lo.to_vec(), hi.to_vec())),
                             true,
-                        );
+                        )?;
                         target.insert("POSITION".into(), json!(index));
                         if prim.streams.contains_key(&Semantic::Normal)
                             && let Some(nd) = dense(&d.normals)
                         {
-                            let index =
-                                self.buffers
-                                    .float_accessor(nd.as_flattened(), ElementType::Vec3, None, true);
+                            let index = self.buffers.float_accessor(
+                                nd.as_flattened(),
+                                ElementType::Vec3,
+                                None,
+                                true,
+                            )?;
                             target.insert("NORMAL".into(), json!(index));
                         }
                         if prim.streams.contains_key(&Semantic::Tangent)
                             && let Some(td) = dense(&d.tangents)
                         {
-                            let index =
-                                self.buffers
-                                    .float_accessor(td.as_flattened(), ElementType::Vec3, None, true);
+                            let index = self.buffers.float_accessor(
+                                td.as_flattened(),
+                                ElementType::Vec3,
+                                None,
+                                true,
+                            )?;
                             target.insert("TANGENT".into(), json!(index));
                         }
                         targets[i].push(Value::Object(target));
@@ -2112,7 +2120,7 @@ impl Writer<'_> {
             .zip(&m.defaults)
             .map(|(id, d)| weights.0.iter().find(|(t, _)| t == id).map_or(*d, |(_, v)| *v))
             .collect();
-        Ok(Some(f32s_value(&values)))
+        Ok(Some(f32s_value(&values)?))
     }
 
     /// Every rig as a node tree: a root at its placement, a node per joint under its parent's, with the joint's local
@@ -2142,7 +2150,7 @@ impl Writer<'_> {
                 "matrix": f32s_value(&[
                     c[0][0], c[0][1], c[0][2], 0.0, c[1][0], c[1][1], c[1][2], 0.0, c[2][0], c[2][1], c[2][2], 0.0,
                     c[3][0], c[3][1], c[3][2], 1.0,
-                ]),
+                ])?,
             }));
             roots.push(root);
             self.rig_roots.insert(rig, root);
@@ -2153,13 +2161,13 @@ impl Writer<'_> {
                     Ok(t) => {
                         let f = |v: &[f64]| v.iter().map(|&x| x as f32).collect::<Vec<f32>>();
                         if t.translation != [0.0; 3] {
-                            node.insert("translation".into(), f32s_value(&f(&t.translation)));
+                            node.insert("translation".into(), f32s_value(&f(&t.translation))?);
                         }
                         if t.rotation != [0.0, 0.0, 0.0, 1.0] {
-                            node.insert("rotation".into(), f32s_value(&f(&t.rotation)));
+                            node.insert("rotation".into(), f32s_value(&f(&t.rotation))?);
                         }
                         if t.scale != [1.0; 3] {
-                            node.insert("scale".into(), f32s_value(&f(&t.scale)));
+                            node.insert("scale".into(), f32s_value(&f(&t.scale))?);
                         }
                     }
                     Err(_) => {
@@ -2169,7 +2177,7 @@ impl Writer<'_> {
                             f32s_value(&[
                                 c[0][0], c[0][1], c[0][2], 0.0, c[1][0], c[1][1], c[1][2], 0.0, c[2][0],
                                 c[2][1], c[2][2], 0.0, c[3][0], c[3][1], c[3][2], 1.0,
-                            ]),
+                            ])?,
                         );
                         self.matrix_joints.insert(nodes.len());
                     }
@@ -2208,19 +2216,19 @@ impl Writer<'_> {
         values: &[f32],
         kind: ElementType,
         interpolation: Interpolation,
-    ) -> Value {
+    ) -> Result<Value> {
         let lo = times.iter().copied().fold(f32::INFINITY, f32::min);
         let hi = times.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let input =
             self.buffers
-                .float_accessor(times, ElementType::Scalar, Some((vec![lo], vec![hi])), false);
-        let output = self.buffers.float_accessor(values, kind, None, false);
+                .float_accessor(times, ElementType::Scalar, Some((vec![lo], vec![hi])), false)?;
+        let output = self.buffers.float_accessor(values, kind, None, false)?;
         let interpolation = match interpolation {
             Interpolation::Step => "STEP",
             Interpolation::Linear => "LINEAR",
             Interpolation::Hermite => "CUBICSPLINE",
         };
-        json!({"input": input, "output": output, "interpolation": interpolation})
+        Ok(json!({"input": input, "output": output, "interpolation": interpolation}))
     }
 
     /// Every clip binding as an animation (see the module docs).
@@ -2261,7 +2269,7 @@ impl Writer<'_> {
                             Property::Scale => ("scale", ElementType::Vec3),
                             Property::Scalar => return Err(failed("a scalar channel on a joint".into())),
                         };
-                        samplers.push(self.sampler(&c.times, &c.values, kind, c.interpolation));
+                        samplers.push(self.sampler(&c.times, &c.values, kind, c.interpolation)?);
                         channels.push(
                             json!({"sampler": samplers.len() - 1, "target": {"node": node, "path": path}}),
                         );
@@ -2316,7 +2324,12 @@ impl Writer<'_> {
                         }
                     }
                 }
-                samplers.push(self.sampler(&first.times, &values, ElementType::Scalar, first.interpolation));
+                samplers.push(self.sampler(
+                    &first.times,
+                    &values,
+                    ElementType::Scalar,
+                    first.interpolation,
+                )?);
                 channels.push(
                     json!({"sampler": samplers.len() - 1, "target": {"node": node, "path": "weights"}}),
                 );
@@ -2436,13 +2449,7 @@ fn wrap_code(w: Wrap) -> u32 {
 /// A light's `KHR_lights_punctual` object without its name (defaults left out: white, intensity 1, no range; a
 /// directional light has no range). An error for a non-finite value.
 pub fn punctual_light(l: &Light) -> std::result::Result<Value, String> {
-    let finite = |xs: &[f32]| {
-        if xs.iter().any(|x| !x.is_finite()) {
-            Err(format!("non-finite material factor {xs:?}"))
-        } else {
-            Ok(f32s_value(xs))
-        }
-    };
+    let finite = |xs: &[f32]| f32s_value(xs).map_err(|_| format!("non-finite material factor {xs:?}"));
     let mut o = Map::new();
     let kind = match l.kind {
         LightKind::Point => "point",

@@ -45,6 +45,9 @@ pub enum Error {
     Glb { offset: usize, detail: String },
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
+    /// A number JSON cannot hold (a non-finite accessor bound).
+    #[error("{0}")]
+    Number(#[from] primase_core::json::JsonError),
     /// The glTF document breaks a rule the reader enforces, or a mesh one the encoder does; `item` is its JSON path
     /// (`meshes[2].primitives()[0]`).
     #[error("{item}: {detail}")]

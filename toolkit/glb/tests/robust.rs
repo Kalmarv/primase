@@ -155,14 +155,20 @@ fn a_root_listed_twice_is_refused() {
 #[test]
 fn a_float_accessor_is_named_by_its_element_type() {
     let mut b = Buffers::default();
-    let mat = b.float_accessor(&[0.0; 32], ElementType::Mat4, None, false);
-    let vec2 = b.float_accessor(&[0.0; 6], ElementType::Vec2, None, true);
-    let one = b.float_accessor(
-        &[0.0; 5],
-        ElementType::Scalar,
-        Some((vec![0.0], vec![1.0])),
-        false,
-    );
+    let mat = b
+        .float_accessor(&[0.0; 32], ElementType::Mat4, None, false)
+        .expect("finite");
+    let vec2 = b
+        .float_accessor(&[0.0; 6], ElementType::Vec2, None, true)
+        .expect("finite");
+    let one = b
+        .float_accessor(
+            &[0.0; 5],
+            ElementType::Scalar,
+            Some((vec![0.0], vec![1.0])),
+            false,
+        )
+        .expect("finite");
     assert_eq!(
         (
             b.accessors[mat]["type"].clone(),

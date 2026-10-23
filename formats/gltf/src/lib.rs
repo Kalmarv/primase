@@ -48,6 +48,9 @@ pub enum Error {
     /// The GLB could not be assembled (over glTF's 4 GiB limit), or the document not serialized.
     #[error(transparent)]
     Glb(#[from] primase_glb::Error),
+    /// A number JSON cannot hold.
+    #[error("{0}")]
+    Number(#[from] primase_core::json::JsonError),
     /// A world resource whose JSON view loses a value.
     #[error("{item}: {detail}")]
     Invalid { item: String, detail: String },

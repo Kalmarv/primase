@@ -554,7 +554,7 @@ fn manifests_need_only_plain_json() {
                 let direct: f32 = t.parse().expect("a JSON number");
                 let via = t.parse::<f64>().expect("a JSON number") as f32;
                 if direct.is_finite() {
-                    let decimal = primase_core::json::f32_decimal(direct);
+                    let decimal = primase_core::json::f32_decimal(direct).expect("a finite number");
                     let text = serde_json::to_string(&decimal).expect("finite number");
                     let parsed: serde_json::Value = serde_json::from_str(&text).expect("JSON number");
                     assert_eq!(

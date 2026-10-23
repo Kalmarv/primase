@@ -457,6 +457,9 @@ fn remove_not_present(w: &mut World, e: Entity, log: &mut PassLog, why: &str) {
 /// mesh used as another instance's prototype) leaves that reference dangling, and the verifier after the pass fails on
 /// it.
 ///
+/// An item the pipeline text form cannot carry back ([`crate::pass::carries`]: a ',' at the end, or one before an '=') is
+/// refused by name, so its text reads back as the same options.
+///
 /// `keep=key;key` leaves those axes unresolved, for a consumer that switches them itself (a time of day). An axis
 /// whose default is unknown and that nothing assigns stays unresolved the same way (counted, `axis <key> unresolved`):
 /// choosing a value for it would assert a state the source doesn't state. An unresolved axis stays, and so do the
@@ -529,11 +532,26 @@ pub fn resolve_state(o: &Options) -> Result<Box<dyn Pass>, String> {
     if let Some(k) = keep.iter().find(|k| assign.contains_key(*k)) {
         return Err(format!("{k} is both assigned and kept"));
     }
-    Ok(Box::new(ResolveState {
+    let pass = ResolveState {
         assign,
         assign_class,
         keep,
-    }))
+    };
+    // its text form must read back as it: the first item (in the order it is written) whose option the pipeline text
+    // cannot carry (a value ending in ',', a key or value with '=' after a comma) is refused by name
+    for (option, value) in pass.options() {
+        if crate::pass::carries(&value) {
+            continue;
+        }
+        let items: Vec<&str> = value.split(';').collect();
+        let item = (1..=items.len())
+            .find(|&n| !crate::pass::carries(&items[..n].join(";")))
+            .map_or(value.as_str(), |n| items[n - 1]);
+        return Err(format!(
+            "{option} item {item:?}: the pipeline text cannot carry it (a ',' at its end or before '=', or a brace)"
+        ));
+    }
+    Ok(Box::new(pass))
 }
 
 impl Pass for ResolveState {
@@ -1306,6 +1324,30 @@ mod tests {
             ("assign".to_owned(), "fromsoft.flag.8302:on".to_owned()),
         ]);
         assert!(resolve_state(&both).is_err());
+    }
+
+    /// An item the pipeline text cannot carry is refused by name; what is accepted prints as text that parses back to
+    /// the same options.
+    #[test]
+    fn resolve_state_refuses_what_its_text_form_cannot_carry() {
+        let opts = |k: &str, v: &str| Options::from([(k.to_owned(), v.to_owned())]);
+        for (option, value, item) in [
+            ("assign", "a:1,", "a:1,"),
+            ("assign", "a:1,b=2", "a:1,b=2"),
+            ("assign", "a:1,;b=c:2", "a:1,"),
+            ("keep", "a;z,", "z,"),
+        ] {
+            let error = resolve_state(&opts(option, value)).err().expect(value);
+            assert!(error.contains(&format!("{item:?}")), "{value}: {error}");
+        }
+        // a ',' with a part after it that holds no '=' is carried
+        assert!(resolve_state(&opts("keep", "k,;x")).is_ok());
+        let accepted = resolve_state(&opts("assign", "fromsoft.flag.8302:on;gta.ipl.x:off")).unwrap();
+        let text = crate::pass::pass_text(accepted.as_ref());
+        let mut r = PassRegistry::new();
+        crate::register(&mut r);
+        let again = r.parse(&text).unwrap();
+        assert_eq!(again.passes[0].options(), accepted.options());
     }
 
     #[test]

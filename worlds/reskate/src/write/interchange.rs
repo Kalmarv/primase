@@ -30,7 +30,7 @@ use crate::components::loaded::{image_fingerprint, mesh_fingerprint, texture_fin
 use crate::components::*;
 use crate::interchange::tables::{self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags};
 use crate::{Error, Result};
-use primase_core::json::{f32_value, f32s_value, f64_value};
+use primase_core::json::{JsonError, f32_value, f32s_value, f64_value};
 use serde_json::{Map, Value};
 
 /// What the writer did.
@@ -187,11 +187,27 @@ struct Writer<'a> {
     plan: Plan,
 }
 
-/// Builds a JSON object in order.
+/// Builds a JSON object in order. A number JSON cannot hold is kept as the object's first error, naming its key, and
+/// [`ObjB::done`] returns it.
 #[derive(Default)]
-struct ObjB(Map<String, Value>);
+struct ObjB(Map<String, Value>, Option<JsonError>);
 
 impl ObjB {
+    /// `v` under `k`, or its error.
+    fn put_num(&mut self, k: &str, v: std::result::Result<Value, JsonError>) {
+        match v {
+            Ok(v) => self.put(k, v),
+            Err(e) => {
+                self.1.get_or_insert(JsonError(format!("{k}: {e}")));
+            }
+        }
+    }
+    /// [`ObjB::put_num`] of `f(v)` when there is a `v`.
+    fn num<T>(&mut self, k: &str, v: Option<T>, f: impl FnOnce(T) -> std::result::Result<Value, JsonError>) {
+        if let Some(v) = v {
+            self.put_num(k, f(v));
+        }
+    }
     fn put(&mut self, k: &str, v: Value) {
         self.0.insert(k.to_owned(), v);
     }
@@ -205,8 +221,11 @@ impl ObjB {
             self.put(k, v.clone());
         }
     }
-    fn done(self) -> Value {
-        Value::Object(self.0)
+    fn done(self) -> std::result::Result<Value, JsonError> {
+        match self.1 {
+            Some(e) => Err(e),
+            None => Ok(Value::Object(self.0)),
+        }
     }
 }
 
@@ -215,7 +234,7 @@ fn text(s: &str) -> Value {
 }
 
 /// `{"file": path, "sha256": hash}`.
-fn file_object(path: &str, sha256: &str) -> Value {
+fn file_object(path: &str, sha256: &str) -> std::result::Result<Value, JsonError> {
     let mut o = ObjB::default();
     o.put("file", text(path));
     o.put("sha256", text(sha256));
@@ -288,22 +307,22 @@ impl Writer<'_> {
     }
 
     /// The reference as written: a string, `{"file", "sha256"}`, a list, or an object around them.
-    fn table_ref(&self, t: &TableRef, fields: Map<String, Value>) -> Value {
+    fn table_ref(&self, t: &TableRef, fields: Map<String, Value>) -> std::result::Result<Value, JsonError> {
         let item = |f: &FileRef| match &f.sha256 {
-            None => text(&f.path),
+            None => Ok(text(&f.path)),
             Some(h) => file_object(&f.path, h),
         };
         let mut o = ObjB::default();
         if t.list {
-            let inner = Value::Array(t.files.iter().map(item).collect());
+            let inner = Value::Array(t.files.iter().map(item).collect::<std::result::Result<_, _>>()?);
             if !t.object && fields.is_empty() {
-                return inner;
+                return Ok(inner);
             }
             o.put("file", inner);
         } else {
             let f = &t.files[0];
             if !t.object && fields.is_empty() && f.sha256.is_none() {
-                return text(&f.path);
+                return Ok(text(&f.path));
             }
             o.put("file", text(&f.path));
             o.opt("sha256", f.sha256.as_ref(), |x| text(x));
@@ -408,7 +427,7 @@ impl Writer<'_> {
         fields.opt("ground", r.ground, Value::Bool);
         fields.opt("region_cut", r.region_cut, Value::Bool);
         fields.other(&r.other);
-        Ok(self.table_ref(&table, fields.0))
+        Ok(self.table_ref(&table, fields.0)?)
     }
 
     fn manifest(&mut self) -> Result<Value> {
@@ -423,7 +442,7 @@ impl Writer<'_> {
         put("generator", scene.generator.as_ref().map(|x| text(x)));
         put("name", Some(text(&scene.name)));
         put("display_name", scene.display_name.as_ref().map(|x| text(x)));
-        put("region", scene.region.map(|r| f32s_value(&r)));
+        put("region", scene.region.map(|r| f32s_value(&r)).transpose()?);
         put(
             "surfaces",
             scene
@@ -433,37 +452,52 @@ impl Writer<'_> {
         );
         put(
             "streaming_distances",
-            scene.streaming_distances.as_ref().map(|s| {
-                let mut o = ObjB::default();
-                o.opt("near", s.near, f64_value);
-                o.opt("medium", s.medium, f64_value);
-                o.opt("far", s.far, f64_value);
-                o.other(&s.other);
-                o.done()
-            }),
+            scene
+                .streaming_distances
+                .as_ref()
+                .map(|s| -> std::result::Result<Value, JsonError> {
+                    let mut o = ObjB::default();
+                    o.num("near", s.near, f64_value);
+                    o.num("medium", s.medium, f64_value);
+                    o.num("far", s.far, f64_value);
+                    o.other(&s.other);
+                    o.done()
+                })
+                .transpose()?,
         );
         put(
             "texture_budget",
-            scene.texture_budget.as_ref().map(|s| {
-                let mut o = ObjB::default();
-                o.opt("max", s.max, f64_value);
-                o.opt("aux_weight", s.aux_weight, f64_value);
-                o.other(&s.other);
-                o.done()
-            }),
+            scene
+                .texture_budget
+                .as_ref()
+                .map(|s| -> std::result::Result<Value, JsonError> {
+                    let mut o = ObjB::default();
+                    o.num("max", s.max, f64_value);
+                    o.num("aux_weight", s.aux_weight, f64_value);
+                    o.other(&s.other);
+                    o.done()
+                })
+                .transpose()?,
         );
         put(
             "min_height",
-            scene.min_height.as_ref().map(|s| {
-                let mut o = ObjB::default();
-                o.opt("height", s.height, f64_value);
-                o.opt("stub_below", s.stub_below, f64_value);
-                o.opt("floor", s.floor, f64_value);
-                o.other(&s.other);
-                o.done()
-            }),
+            scene
+                .min_height
+                .as_ref()
+                .map(|s| -> std::result::Result<Value, JsonError> {
+                    let mut o = ObjB::default();
+                    o.num("height", s.height, f64_value);
+                    o.num("stub_below", s.stub_below, f64_value);
+                    o.num("floor", s.floor, f64_value);
+                    o.other(&s.other);
+                    o.done()
+                })
+                .transpose()?,
         );
-        put("max_render_edge", scene.max_render_edge.map(f64_value));
+        put(
+            "max_render_edge",
+            scene.max_render_edge.map(f64_value).transpose()?,
+        );
         let pause = match &scene.pause_map {
             None => None,
             Some(pm) => {
@@ -497,12 +531,12 @@ impl Writer<'_> {
                     "image",
                     match &image.sha256 {
                         None => text(&image.path),
-                        Some(h) => file_object(&image.path, h),
+                        Some(h) => file_object(&image.path, h)?,
                     },
                 );
-                o.put("bounds", f32s_value(&pm.bounds));
+                o.put_num("bounds", f32s_value(&pm.bounds));
                 o.other(&pm.other);
-                Some(o.done())
+                Some(o.done()?)
             }
         };
         let mut put = |k: &'static str, v: Option<Value>| known.push((k, v));
@@ -604,7 +638,7 @@ impl Writer<'_> {
             if tex_key.insert(e, t.key.clone()).is_some() || textures.0.iter().any(|(k, _)| *k == t.key) {
                 return Err(bad(format!("texture key '{}' twice", t.key)));
             }
-            textures.put(&t.key, o.done());
+            textures.put(&t.key, o.done()?);
         }
 
         // materials
@@ -634,11 +668,11 @@ impl Writer<'_> {
                 Value::Array(c.iter().map(|x| Value::from(*x)).collect())
             });
             o.opt("alpha", m.alpha, |a| text(a.as_str()));
-            o.opt("cutoff", m.cutoff, f64_value);
+            o.num("cutoff", m.cutoff, f64_value);
             o.opt("two_sided", m.two_sided, Value::Bool);
             o.opt("domain", m.domain, |d| text(d.as_str()));
-            o.opt("metallic", m.metallic, f64_value);
-            o.opt("roughness", m.roughness, f64_value);
+            o.num("metallic", m.metallic, f64_value);
+            o.num("roughness", m.roughness, f64_value);
             o.opt("wrap", m.wrap, |x| text(x.as_str()));
             o.opt("ocean", m.ocean, Value::Bool);
             o.opt("cast_shadows", m.cast_shadows, Value::Bool);
@@ -669,7 +703,7 @@ impl Writer<'_> {
                 return Err(bad(format!("material key '{}' twice (up to case)", m.key)));
             }
             mat_key.insert(e, m.key.clone());
-            materials.put(&m.key, o.done());
+            materials.put(&m.key, o.done()?);
         }
         let mkey = |e: Entity, what: &str| -> Result<Value> {
             mat_key
@@ -716,11 +750,11 @@ impl Writer<'_> {
                         }
                         vo.put(&k.to_string(), mkey(*m, what)?);
                     }
-                    po.put("variants", vo.done());
+                    po.put("variants", vo.done()?);
                 }
                 po.opt("source", part.source.as_ref(), Value::clone);
                 po.other(&part.other);
-                out.push(po.done());
+                out.push(po.done()?);
             }
             Ok(Value::Array(out))
         };
@@ -787,7 +821,7 @@ impl Writer<'_> {
                         "glb",
                         match &g.sha256 {
                             None => text(&g.path),
-                            Some(h) => file_object(&g.path, h),
+                            Some(h) => file_object(&g.path, h)?,
                         },
                     );
                     if index != 0 {
@@ -858,7 +892,7 @@ impl Writer<'_> {
                         if let Some(form) = w.get::<SkateForm>(f.form) {
                             fo.other(&form.other);
                         }
-                        forms.push(fo.done());
+                        forms.push(fo.done()?);
                     }
                     o.put("lods", Value::Array(forms));
                 }
@@ -873,7 +907,7 @@ impl Writer<'_> {
                 }
             }
             o.other(&p.other);
-            protos.push(o.done());
+            protos.push(o.done()?);
         }
 
         // placements
@@ -950,7 +984,7 @@ impl Writer<'_> {
                 None => (Self::whole(&t), vec![tables::write_placements(&recs)]),
             };
             let t = self.tables(&t, chunks)?;
-            Some(self.table_ref(&t, Map::new()))
+            Some(self.table_ref(&t, Map::new())?)
         } else {
             None
         };
@@ -1036,7 +1070,7 @@ impl Writer<'_> {
                 None => (Self::whole(&t), vec![tables::write_lights(&lrecs)]),
             };
             let t = self.tables(&t, chunks)?;
-            Some(self.table_ref(&t, Map::new()))
+            Some(self.table_ref(&t, Map::new())?)
         } else {
             None
         };
@@ -1073,7 +1107,7 @@ impl Writer<'_> {
                 at += n;
             }
             let t = self.tables(&t, chunks)?;
-            Some(self.table_ref(&t, Map::new()))
+            Some(self.table_ref(&t, Map::new())?)
         } else {
             None
         };
@@ -1083,35 +1117,43 @@ impl Writer<'_> {
             .iter::<SkateWater>()
             .map(|(_, wa)| {
                 let mut o = ObjB::default();
-                o.put(
+                o.put_num(
                     "corners",
-                    Value::Array(wa.corners.iter().map(|c| f32s_value(c)).collect()),
+                    wa.corners
+                        .iter()
+                        .map(|c| f32s_value(c))
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map(Value::Array),
                 );
-                o.opt("height", wa.height, f64_value);
+                o.num("height", wa.height, f64_value);
                 o.other(&wa.other);
                 o.done()
             })
-            .collect();
+            .collect::<std::result::Result<_, _>>()?;
         let markers: Vec<Value> = w
             .iter::<SkateMarker>()
             .map(|(e, m)| {
                 let mut o = ObjB::default();
                 o.put("kind", text(m.kind.as_str()));
                 o.opt("name", w.get::<Name>(e), |n| text(&n.0));
-                o.opt("position", m.position, |([x, z], y)| {
-                    Value::Array(vec![f32_value(x), y.map_or(Value::Null, f32_value), f32_value(z)])
+                o.num("position", m.position, |([x, z], y)| {
+                    Ok(Value::Array(vec![
+                        f32_value(x)?,
+                        y.map_or(Ok(Value::Null), f32_value)?,
+                        f32_value(z)?,
+                    ]))
                 });
-                o.opt("yaw", m.yaw, f64_value);
-                o.opt("m", m.m, |t| f32s_value(&t));
+                o.num("yaw", m.yaw, f64_value);
+                o.num("m", m.m, |t| f32s_value(&t));
                 o.opt("blueprint", m.blueprint.as_ref(), |x| text(x));
-                o.opt("snap", m.snap.as_ref(), snap_json);
-                o.opt("lift", m.lift, f64_value);
+                o.num("snap", m.snap.as_ref(), snap_json);
+                o.num("lift", m.lift, f64_value);
                 o.opt("shelter", m.shelter, Value::Bool);
                 o.opt("trainer", m.trainer, Value::Bool);
                 o.other(&m.other);
                 o.done()
             })
-            .collect();
+            .collect::<std::result::Result<_, _>>()?;
 
         let list =
             |items: Vec<Value>, k: &str| (!items.is_empty() || present(k)).then_some(Value::Array(items));
@@ -1120,11 +1162,15 @@ impl Writer<'_> {
         };
         known.push((
             "materials",
-            (!materials.0.is_empty() || present("materials")).then(|| materials.done()),
+            (!materials.0.is_empty() || present("materials"))
+                .then(|| materials.done())
+                .transpose()?,
         ));
         known.push((
             "textures",
-            (!textures.0.is_empty() || present("textures")).then(|| textures.done()),
+            (!textures.0.is_empty() || present("textures"))
+                .then(|| textures.done())
+                .transpose()?,
         ));
         known.push(("prototypes", list(protos, "prototypes")));
         known.push(("placements", placements));
@@ -1175,13 +1221,13 @@ impl Writer<'_> {
                 out.put(k, v.clone());
             }
         }
-        Ok(out.done())
+        Ok(out.done()?)
     }
 }
 
-fn snap_json(s: &Snap) -> Value {
+fn snap_json(s: &Snap) -> std::result::Result<Value, JsonError> {
     match s {
-        Snap::Mode(m) => text(m.as_str()),
+        Snap::Mode(m) => Ok(text(m.as_str())),
         Snap::Object {
             mode,
             above,
@@ -1195,13 +1241,13 @@ fn snap_json(s: &Snap) -> Value {
         } => {
             let mut o = ObjB::default();
             o.put("mode", text(mode.as_str()));
-            o.opt("above", *above, f64_value);
+            o.num("above", *above, f64_value);
             o.opt("from", from.as_ref(), |x| text(x));
-            o.opt("min_up", *min_up, f64_value);
-            o.opt("rings", rings.as_ref(), |r| f32s_value(r));
-            o.opt("directions", *directions, f64_value);
-            o.opt("max_above_ground", *max_above_ground, f64_value);
-            o.opt("headroom", *headroom, f64_value);
+            o.num("min_up", *min_up, f64_value);
+            o.num("rings", rings.as_ref(), |r| f32s_value(r));
+            o.num("directions", *directions, f64_value);
+            o.num("max_above_ground", *max_above_ground, f64_value);
+            o.num("headroom", *headroom, f64_value);
             o.other(other);
             o.done()
         }

@@ -325,6 +325,9 @@ pub enum Error {
         file: String,
         source: primase_core::JsonError,
     },
+    /// A number JSON cannot hold, in the scene the writer writes.
+    #[error("skate scene: {0}")]
+    Number(#[from] primase_core::JsonError),
     /// A scene manifest that is not JSON.
     #[error("{}: {source}", path.display())]
     Manifest {

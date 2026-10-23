@@ -1797,7 +1797,7 @@ impl TilePlan {
                 let index = doc["nodes"].as_array().expect("nodes").len();
                 doc["nodes"].as_array_mut().expect("nodes").push(json!({
                     "name": name,
-                    "matrix": primase_core::json::f32s_value(&matrix),
+                    "matrix": primase_core::json::f32s_value(&matrix).map_err(|e| Error::Invalid(format!("light {name}: {e}")))?,
                     "extensions": {LIGHTS: {"light": objects.len()}},
                 }));
                 doc["scenes"][0]["nodes"]

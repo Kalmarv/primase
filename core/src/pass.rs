@@ -442,6 +442,18 @@ impl fmt::Display for Pipeline {
     }
 }
 
+/// Whether the pipeline text form carries `value` as an option's value: [`PassRegistry::parse`] reads back exactly
+/// what [`pass_text`] writes. It does not for a value with a brace, with a comma-separated part after the first that
+/// is blank, holds `=` (it would start another option) or has whitespace at its ends, or with whitespace at the
+/// value's own ends. A pass whose options take text checks its values with this, so its text form reads back as it.
+pub fn carries(value: &str) -> bool {
+    parse_pipeline(&format!("p{{k={value}}}"))
+        .ok()
+        .and_then(|mut passes| passes.pop())
+        .and_then(|(_, options)| options.get("k").cloned())
+        .is_some_and(|v| v == value)
+}
+
 /// A pass with its options as pipeline text (`bake{size=512}`), as [`PassRegistry::parse`] reads it; what
 /// `core.provenance` records for the passes that derive an entity.
 pub fn pass_text(p: &dyn Pass) -> String {
@@ -2153,6 +2165,18 @@ fn order_passes(passes: &[Box<dyn Pass>], chosen: &BTreeSet<usize>) -> Result<Ve
 mod tests {
     use super::*;
     use crate::world::{Opaque, OpaqueData};
+
+    /// The text form carries a value with commas between non-blank parts that hold no '=' (`-64,-64,64,64`), and not one
+    /// whose part after a comma is blank (a trailing ','), holds '=', or has a brace.
+    #[test]
+    fn what_the_text_form_carries() {
+        for carried in ["", "512", "-64,-64,64,64", "3:2,4:1", "a:x;b:y", "k=1:v"] {
+            assert!(carries(carried), "{carried:?}");
+        }
+        for lost in ["a:x,", "a:1,;b=c:2", "a:1,b=2", "x{y}", " a", "a ", "a, b"] {
+            assert!(!carries(lost), "{lost:?}");
+        }
+    }
 
     #[test]
     fn option_values_with_commas_parse_as_display_writes_them() {

@@ -598,7 +598,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     for (e, m) in materials {
         let (mut class, alpha, cutoff) = match m.alpha_mode {
             PbrAlpha::Opaque => (MaterialClass::Opaque, AlphaMode::Opaque, None),
-            PbrAlpha::Mask { cutoff } => (MaterialClass::Cutout, AlphaMode::Mask, Some(f32_decimal(cutoff))),
+            PbrAlpha::Mask { cutoff } => (MaterialClass::Cutout, AlphaMode::Mask, Some(f32_decimal(cutoff)?)),
             PbrAlpha::Blend => (MaterialClass::Alpha, AlphaMode::Blend, None),
         };
         // what the source says the surface is (core.material_usage): water is skate's water class (Studio's ocean);
@@ -671,14 +671,17 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 } else {
                     foliage.then_some(Domain::Foliage)
                 },
-                metallic: mask.is_none().then(|| f32_decimal(m.metallic)),
-                roughness: mask.is_none().then(|| {
-                    // the reflectance skate cannot carry, folded (materials::fold_reflectance)
-                    let folded = materials::specular_f0(&m).map_or(f64::from(m.roughness), |f0| {
-                        materials::fold_reflectance(f64::from(m.roughness), f0)
-                    });
-                    f32_decimal(folded as f32)
-                }),
+                metallic: mask.is_none().then(|| f32_decimal(m.metallic)).transpose()?,
+                roughness: mask
+                    .is_none()
+                    .then(|| {
+                        // the reflectance skate cannot carry, folded (materials::fold_reflectance)
+                        let folded = materials::specular_f0(&m).map_or(f64::from(m.roughness), |f0| {
+                            materials::fold_reflectance(f64::from(m.roughness), f0)
+                        });
+                        f32_decimal(folded as f32)
+                    })
+                    .transpose()?,
                 wrap: w.map(|w| wrap(w[0])),
                 ocean: water.then_some(true),
                 // stated per drawn entity in core (core.shadows): not a material's

@@ -44,32 +44,47 @@ pub fn to_vec<T: Serialize + ?Sized>(v: &T, pretty: bool) -> Result<Vec<u8>, Jso
     Ok(out)
 }
 
-/// An f32 as a JSON number that reads back as the same f32: its shortest round-trip digits, held as the f64
-/// nearest them, which serde_json writes with those same digits (`0.1`, not the widened `0.10000000149011612`).
-/// Panics on a non-finite value: JSON has no NaN or infinity, so callers check first.
-pub fn f32_value(x: f32) -> Value {
-    Value::from(f32_decimal(x))
+/// An f32 as a JSON number that reads back as the same f32 where a reader parses the number as f64 and narrows it (as
+/// serde_json and most JSON readers do): [`f32_decimal`], which serde_json writes with its shortest f64 digits. A
+/// non-finite value is an error: JSON has no NaN or infinity.
+pub fn f32_value(x: f32) -> Result<Value, JsonError> {
+    Ok(Value::from(f32_decimal(x)?))
 }
 
-/// A finite f32's shortest round-trip decimal, represented as f64 for JSON fields
-/// whose schema stores f64. This avoids exposing the binary widening digits while
-/// preserving the original f32 bits when the emitted number is read back.
-/// Panics on non-finite input, like [`f32_value`].
-pub fn f32_decimal(x: f32) -> f64 {
-    assert!(x.is_finite(), "non-finite {x} reached JSON");
-    x.to_string()
-        .parse::<f64>()
-        .expect("the Display of a finite f32 is a decimal")
+/// A finite f32 as the f64 a JSON field holds, chosen so that the number written and read back as f64, then narrowed,
+/// is the same f32. That is its shortest round-trip decimal (`0.1`, not the widened `0.10000000149011612`) where the
+/// f64 nearest those digits narrows back to it; where it does not (the digits' f64 lies across an f32 rounding
+/// boundary, as for the bits `0x15ae43fd`: parsed straight to f32 the digits are exact, through f64 they round twice),
+/// the f32's own value, exactly, whose longer digits read back without loss. A non-finite value is an error.
+pub fn f32_decimal(x: f32) -> Result<f64, JsonError> {
+    if !x.is_finite() {
+        return Err(JsonError(format!("{x}: JSON has no non-finite numbers")));
+    }
+    let shortest: f64 = x
+        .to_string()
+        .parse()
+        .map_err(|e| JsonError(format!("{x}: its decimal does not read back: {e}")))?;
+    Ok(if (shortest as f32).to_bits() == x.to_bits() {
+        shortest
+    } else {
+        f64::from(x)
+    })
 }
 
-pub fn f32s_value(xs: &[f32]) -> Value {
-    Value::Array(xs.iter().map(|&x| f32_value(x)).collect())
+/// [`f32_value`] of each.
+pub fn f32s_value(xs: &[f32]) -> Result<Value, JsonError> {
+    xs.iter()
+        .map(|&x| f32_value(x))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Value::Array)
 }
 
-/// An f64 as a JSON number. Panics on a non-finite value (which `Value::from` would turn into `null`).
-pub fn f64_value(x: f64) -> Value {
-    assert!(x.is_finite(), "non-finite {x} reached JSON");
-    Value::from(x)
+/// An f64 as a JSON number; a non-finite value (which `Value::from` would turn into `null`) is an error.
+pub fn f64_value(x: f64) -> Result<Value, JsonError> {
+    if !x.is_finite() {
+        return Err(JsonError(format!("{x}: JSON has no non-finite numbers")));
+    }
+    Ok(Value::from(x))
 }
 
 /// Walks a value, failing at the first non-finite float.
@@ -149,6 +164,12 @@ impl<'a> ser::Serializer for &'a mut Check {
         Ok(())
     }
     fn serialize_u64(self, _: u64) -> Result<(), JsonError> {
+        Ok(())
+    }
+    fn serialize_i128(self, _: i128) -> Result<(), JsonError> {
+        Ok(())
+    }
+    fn serialize_u128(self, _: u128) -> Result<(), JsonError> {
         Ok(())
     }
     fn serialize_f32(self, v: f32) -> Result<(), JsonError> {
@@ -443,7 +464,7 @@ mod tests {
             if !f.is_finite() {
                 return;
             }
-            let text = serde_json::to_string(&f32_value(f)).unwrap();
+            let text = serde_json::to_string(&f32_value(f).unwrap()).unwrap();
             let back: Value = serde_json::from_str(&text).unwrap();
             let g = back.as_f64().unwrap() as f32;
             assert_eq!(g.to_bits(), bits, "{f:?} -> {text} -> {g:?}");
@@ -467,8 +488,29 @@ mod tests {
             x ^= x << 5;
             check(x);
         }
-        assert_eq!(serde_json::to_string(&f32_value(-0.0)).unwrap(), "-0.0");
-        assert_eq!(serde_json::to_string(&f32_value(0.1)).unwrap(), "0.1");
+        assert_eq!(serde_json::to_string(&f32_value(-0.0).unwrap()).unwrap(), "-0.0");
+        assert_eq!(serde_json::to_string(&f32_value(0.1).unwrap()).unwrap(), "0.1");
+        // the two the review found: their shortest digits round twice through f64, so their own value is written
+        for bits in [0x15ae_43fd, 0x95ae_43fd] {
+            check(bits);
+            let f = f32::from_bits(bits);
+            assert_eq!(f32_decimal(f).unwrap(), f64::from(f), "{bits:#x}");
+        }
+        assert!(
+            f32_value(f32::NAN).is_err()
+                && f32_decimal(f32::INFINITY).is_err()
+                && f64_value(f64::NAN).is_err()
+        );
+    }
+
+    /// 128-bit integers are numbers the check lets through, as serde_json writes them.
+    #[test]
+    fn wide_integers_pass_the_check() {
+        assert_eq!(to_value(&5i128).unwrap(), Value::from(5));
+        assert_eq!(
+            to_vec(&(u128::from(u64::MAX) + 1), false).unwrap(),
+            b"18446744073709551616"
+        );
     }
 
     /// Direct JSON text keeps f32 fields' own digits and refuses a non-finite value.
