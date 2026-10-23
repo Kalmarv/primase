@@ -160,11 +160,11 @@ fn whole_area_placements_in_both_directions() -> Result<()> {
     // convex bodies are read as their stored cores, a capsule with its segment: nothing tessellated by reading
     use primase_fromsoft::sekiro::source::{ObjectBodies, ObjectGeometry};
     for (_, bodies) in world.iter::<ObjectBodies>() {
-        for b in &bodies.bodies {
+        for b in bodies.bodies() {
             let capsule = b.shape == "hknpCapsuleShape";
             match &b.geometry {
                 ObjectGeometry::Convex { capsule: segment, .. } => {
-                    assert_eq!(segment.is_some(), capsule, "{} {}", bodies.file, b.name)
+                    assert_eq!(segment.is_some(), capsule, "{}", b.name)
                 }
                 ObjectGeometry::Mesh { .. } => assert!(b.shape.contains("CompressedMesh"), "{}", b.shape),
             }

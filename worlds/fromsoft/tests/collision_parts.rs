@@ -52,15 +52,18 @@ fn world() -> (World, [Entity; 4]) {
     w.insert(
         proto,
         ObjectBodies {
-            file: "o000001.hkx".into(),
-            bodies: vec![ObjectBody {
-                name: "body".into(),
-                motion_type: 0,
-                shape: "fsnpCustomParamCompressedMeshShape".into(),
-                geometry: ObjectGeometry::Mesh {
-                    triangles: vec![tri(0.)],
-                    materials: vec![111],
-                },
+            files: vec![primase_fromsoft::sekiro::source::ObjectCollisionFile {
+                file: "o000001.hkx".into(),
+                resolution: primase_fromsoft::sekiro::source::Resolution::High,
+                bodies: vec![ObjectBody {
+                    name: "body".into(),
+                    motion_type: 0,
+                    shape: "fsnpCustomParamCompressedMeshShape".into(),
+                    geometry: ObjectGeometry::Mesh {
+                        triangles: vec![tri(0.)],
+                        materials: vec![111],
+                    },
+                }],
             }],
         },
     );
@@ -154,6 +157,7 @@ fn convert(parts: &mut dyn PartSource) -> Vec<BTreeMap<String, Vec<Tri>>> {
                 reach: None,
             }),
             Box::new(LowerFromSoftObjectCollision {
+                resolution: primase_fromsoft::sekiro::objects::ResolutionChoice::High,
                 convex: ConvexBodies::Tessellate,
                 leave_out: BTreeSet::new(),
                 leave_out_motion: BTreeSet::new(),

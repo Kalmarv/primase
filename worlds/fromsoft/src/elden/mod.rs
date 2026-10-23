@@ -1,6 +1,6 @@
 //! Elden Ring's own rules: what differs from the other FromSoftware games and is not stated by the files themselves.
 use crate::bhd::{PathHash, RecordLayout};
-use crate::game::{ArchivePair, ArchiveSet, KeySource, ObjectModel};
+use crate::game::{ArchivePair, ArchiveSet, CollisionSource, KeySource, ObjectModel, Resolution};
 use crate::{Result, invalid};
 
 /// Data0 to Data3, the downloadable content's DLC and the sound archives `sd/sd` and `sd/sd_dlc02`, as the community
@@ -21,17 +21,25 @@ pub(crate) const ARCHIVES: ArchiveSet = ArchiveSet {
 };
 
 /// An asset model `AEGnnn_mmm`: its binder `/asset/aeg/aegnnn/aegnnn_mmm.geombnd.dcx` and FLVER member; its collision is
-/// in a binder of its own (`_l.geomhkxbnd`), not this one.
+/// in binders of its own, `aegnnn_mmm_h.geomhkxbnd.dcx` (high resolution, member `aegnnn_mmm_h.hkx`, a subset of the
+/// assets) and `aegnnn_mmm_l.geomhkxbnd.dcx` (low, `aegnnn_mmm_l.hkx`, every collidable asset).
 pub(crate) fn asset_model(model: &str) -> Result<ObjectModel> {
     let lower = model.to_ascii_lowercase();
     let group = lower
         .get(..6)
         .filter(|g| g.starts_with("aeg") && g[3..].bytes().all(|b| b.is_ascii_digit()))
         .ok_or_else(|| invalid("Elden Ring asset", 0, format!("asset model {model}")))?;
+    let collision = [("h", Resolution::High), ("l", Resolution::Low)]
+        .map(|(suffix, resolution)| CollisionSource {
+            binder: Some(format!("/asset/aeg/{group}/{lower}_{suffix}.geomhkxbnd.dcx")),
+            member: format!("{lower}_{suffix}.hkx"),
+            resolution,
+        })
+        .into();
     Ok(ObjectModel {
         binder: format!("/asset/aeg/{group}/{lower}.geombnd.dcx"),
         flver: format!("{lower}.flver"),
-        collision: None,
+        collision,
     })
 }
 
@@ -129,6 +137,11 @@ mod tests {
         let m = asset_model("AEG007_310").unwrap();
         assert_eq!(m.binder, "/asset/aeg/aeg007/aeg007_310.geombnd.dcx");
         assert_eq!(m.flver, "aeg007_310.flver");
+        assert_eq!(
+            m.collision[1].binder.as_deref(),
+            Some("/asset/aeg/aeg007/aeg007_310_l.geomhkxbnd.dcx")
+        );
+        assert_eq!(m.collision[0].member, "aeg007_310_h.hkx");
         assert!(asset_model("m000100").is_err());
     }
 }

@@ -1,9 +1,10 @@
-//! Object collision as the objects store it: each object prototype's main HKX bodies (`fromsoft.object_collision`),
-//! meshes as their posed triangles, convex shapes as their stored core and radius.
+//! Object collision as the objects store it: each object prototype's collision files (`fromsoft.object_collision`:
+//! Sekiro's main HKX, Elden Ring's `_h` and `_l` asset files) with their resolution, meshes as their posed triangles,
+//! convex shapes as their stored core and radius.
 use crate::collision::BodyGeometry;
 use crate::pose::FRAME;
 use crate::pose::pose_columns;
-use crate::sekiro::source::{ObjectBodies, ObjectBody, ObjectGeometry};
+use crate::sekiro::source::{ObjectBody, ObjectCollisionFile, ObjectGeometry, Resolution};
 use crate::{Result, collision};
 use std::collections::BTreeMap;
 
@@ -18,9 +19,13 @@ pub struct Report {
     pub bodies_by_shape: BTreeMap<String, usize>,
 }
 
-/// An object's main HKX `file` (decoded `bytes`) as its prototype's `fromsoft.object_collision`: every body as
-/// stored, in the prototype's space.
-pub fn bodies(file: &str, bytes: &[u8], report: &mut Report) -> Result<ObjectBodies> {
+/// An object's collision `file` (decoded `bytes`) of `resolution`: every body as stored, in the prototype's space.
+pub fn bodies(
+    file: &str,
+    resolution: Resolution,
+    bytes: &[u8],
+    report: &mut Report,
+) -> Result<ObjectCollisionFile> {
     let bodies = collision::read_bodies(bytes, None)?
         .into_iter()
         .map(|body| {
@@ -55,9 +60,9 @@ pub fn bodies(file: &str, bytes: &[u8], report: &mut Report) -> Result<ObjectBod
             }
         })
         .collect();
-    report.models_with_collision += 1;
-    Ok(ObjectBodies {
+    Ok(ObjectCollisionFile {
         file: file.to_owned(),
+        resolution,
         bodies,
     })
 }

@@ -93,8 +93,6 @@ pub struct Report {
     /// Materials whose definitions the read does not resolve yet (Elden Ring's material binaries): they keep their
     /// FLVER bindings only, and no texture is read for them.
     pub undefined_materials: usize,
-    /// Placed object prototypes whose collision the read does not read yet (Elden Ring's asset collision binders).
-    pub object_collision_not_read: usize,
     /// Materials defined by material binaries whose shader bundles (Shader Model 6 programs) the read does not read yet.
     pub shader_bundles_not_read: usize,
     /// Texture packages read whole because a material names one of their textures (Elden Ring's asset packages).
@@ -198,11 +196,6 @@ impl Report {
                 self.undefined_materials,
                 NoticeKind::Unsupported,
                 "materials whose definition (material binary) is not read yet: FLVER bindings only, no textures",
-            ),
-            (
-                self.object_collision_not_read,
-                NoticeKind::Unsupported,
-                "placed asset prototypes whose collision binder is not read yet",
             ),
             (
                 self.shader_bundles_not_read,
@@ -319,12 +312,12 @@ fn inside(bounds: &[[f32; 3]; 2], t: &Transform, o: &Options) -> bool {
 }
 
 /// A read model: the FLVER as stored, its resolved materials, its posed extent in the world frame, and for an object
-/// its main HKX's name and decoded bytes, if its binder holds one.
+/// its collision files' names, resolutions and decoded bytes.
 struct Prototype {
     model: Model,
     materials: Vec<materials::Material>,
     bounds: Option<[[f32; 3]; 2]>,
-    collision: Option<(String, Vec<u8>)>,
+    collision: Vec<(String, crate::game::Resolution, Vec<u8>)>,
 }
 
 /// Which placements (model key, transform) the read keeps, in order, by index; counted into `report` by why the
@@ -542,7 +535,7 @@ pub fn read_game_area(
     for key in requests {
         let (kind, model) = key.split_once('/').expect("constructed key");
         let is_object = kind == object;
-        let (path, leaf, collision_file) = if is_object {
+        let (path, leaf, collision_files) = if is_object {
             let o = game.object_model(model)?;
             (o.binder, o.flver, o.collision)
         } else {
@@ -557,7 +550,7 @@ pub fn read_game_area(
             (
                 format!("{}/{name}.mapbnd.dcx", game.map_folder(kind)),
                 format!("{name}.flver"),
-                None,
+                Vec::new(),
             )
         };
         if !archive.contains(&path) {
@@ -596,15 +589,29 @@ pub fn read_game_area(
             report.speedtree_models.push(key);
             continue;
         }
-        let collision = match &collision_file {
-            Some(file) => member(file, true)
-                .map(|f| decoder.decode_if_dcx(&f.bytes))
-                .transpose()?
-                .map(|bytes| (file.clone(), bytes)),
-            None => None,
-        };
-        if is_object && collision_file.is_none() {
-            report.object_collision_not_read += 1;
+        // each collision file where it is: a member of the model's binder, or of a binder of its own
+        let mut collision = Vec::new();
+        for source in &collision_files {
+            let bytes = match &source.binder {
+                None => member(&source.member, true)
+                    .map(|f| decoder.decode_if_dcx(&f.bytes))
+                    .transpose()?,
+                Some(path) if archive.contains(path) => Binder::read(&archive.read(path, decoder)?, decoder)?
+                    .files
+                    .into_iter()
+                    .find(|f| {
+                        let name = f.name.as_deref().unwrap_or("");
+                        let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
+                        let leaf = leaf.strip_suffix(".dcx").unwrap_or(leaf);
+                        leaf.eq_ignore_ascii_case(&source.member)
+                    })
+                    .map(|f| decoder.decode_if_dcx(&f.bytes))
+                    .transpose()?,
+                Some(_) => None,
+            };
+            if let Some(bytes) = bytes {
+                collision.push((source.member.clone(), source.resolution, bytes));
+            }
         }
         let model =
             Model::read(&f.bytes).map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")))?;
@@ -755,10 +762,17 @@ pub fn read_game_area(
         if key.starts_with(&format!("{object}/")) {
             report.object_collision.models += 1;
         }
-        if let Some((file, bytes)) = proto.collision {
-            let bodies = objects::bodies(&file, &bytes, &mut report.object_collision)
-                .map_err(|e| invalid("Sekiro object collision", 0, format!("{key}: {e}")))?;
-            world.insert(e, bodies);
+        if !proto.collision.is_empty() {
+            let files = proto
+                .collision
+                .iter()
+                .map(|(file, resolution, bytes)| {
+                    objects::bodies(file, *resolution, bytes, &mut report.object_collision)
+                        .map_err(|e| invalid("object collision", 0, format!("{key}: {file}: {e}")))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            report.object_collision.models_with_collision += 1;
+            world.insert(e, source::ObjectBodies { files });
         }
         proto_entities.insert(key, (e, far));
         report.prototypes += 1;

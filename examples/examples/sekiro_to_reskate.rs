@@ -14,7 +14,7 @@ use primase_fromsoft::sekiro::collision::LowerFromSoftCollision;
 use primase_fromsoft::sekiro::convert::AreaReader;
 use primase_fromsoft::sekiro::extras::LowerFromSoftExtras;
 use primase_fromsoft::sekiro::lights::LowerFromSoftLights;
-use primase_fromsoft::sekiro::objects::{ConvexBodies, ConvexSurface, LowerFromSoftObjectCollision};
+use primase_fromsoft::sekiro::objects::{ConvexBodies, ConvexSurface, LowerFromSoftObjectCollision, ResolutionChoice};
 use primase_fromsoft::sekiro::passes::{
     BakeFromSoftLayers, Cards, Degenerates, DropFromSoftFar, DropFromSoftTextureTransforms, LowerFromSoftGeometry,
     LowerFromSoftMaterials, Pose, ResolveFromSoftShaders, Tiling, Unbound, Winding,
@@ -54,7 +54,7 @@ fn main() -> Result<()> {
     let lower = Pipeline {
         passes: vec![
             Box::new(LowerFromSoftCollision { hit_filters, water: water.clone(), leave_out: leave_out.clone(), reach }),
-            Box::new(LowerFromSoftObjectCollision { convex: ConvexBodies::Tessellate, leave_out: &water | &leave_out,
+            Box::new(LowerFromSoftObjectCollision { resolution: ResolutionChoice::High, convex: ConvexBodies::Tessellate, leave_out: &water | &leave_out,
                 leave_out_motion: [2].into(), convex_surface: ConvexSurface::Render, reach }),
             Box::new(DropFromSoftFar),
             Box::new(ApplyRigidSkinning),

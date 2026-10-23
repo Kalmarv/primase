@@ -16,7 +16,7 @@ pub const LEGACY_GEOMETRY: &str = "drop-fromsoft-far, fromsoft-apply-rigid-skinn
 /// those classes left out, convex bodies tessellated as their offset planes and given the surface of their
 /// prototype's largest render area; both cropped 50 m around the read region. It runs before the geometry passes, which may despawn placements.
 pub const LEGACY_COLLISION: &str = "lower-fromsoft-collision{hit-filters=8+27,water=22+36,leave-out=29+40,reach=50}, \
-    lower-fromsoft-object-collision{convex=tessellate,leave-out=22+29+36+40,leave-out-motion=2,convex-surface=render,reach=50}";
+    lower-fromsoft-object-collision{resolution=high,convex=tessellate,leave-out=22+29+36+40,leave-out-motion=2,convex-surface=render,reach=50}";
 
 /// The FromSoft passes and `select-lod`.
 pub fn manager() -> PassManager {

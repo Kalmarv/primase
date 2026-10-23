@@ -119,6 +119,7 @@ pub fn register(registry: &mut PassRegistry) {
             ))
         },
         &[
+            ("resolution", "high"),
             ("convex", "tessellate"),
             ("leave-out", "22+29+36+40"),
             ("leave-out-motion", "2"),

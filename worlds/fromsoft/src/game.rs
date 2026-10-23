@@ -3,6 +3,7 @@
 //! own rules (its archive set, where it keeps its files) are data in that game's module (`sekiro`, `elden`), read
 //! through [`Game`] by the shared readers.
 use crate::bhd::{PathHash, RecordLayout};
+pub use crate::sekiro::source::Resolution;
 
 /// A FromSoftware game.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -46,14 +47,17 @@ impl Game {
         }
     }
 
-    /// A placed object's model: the binder holding it and its FLVER member, and the collision file the same binder
-    /// holds where the game keeps it there.
+    /// A placed object's model: the binder holding it and its FLVER member, and where its collision files are.
     pub fn object_model(self, model: &str) -> crate::Result<ObjectModel> {
         match self {
             Game::Sekiro => Ok(ObjectModel {
                 binder: format!("/obj/{model}.objbnd.dcx"),
                 flver: format!("{model}.flver"),
-                collision: Some(format!("{model}.hkx")),
+                collision: vec![CollisionSource {
+                    binder: None,
+                    member: format!("{model}.hkx"),
+                    resolution: Resolution::High,
+                }],
             }),
             Game::EldenRing => crate::elden::asset_model(model),
         }
@@ -108,8 +112,17 @@ impl Game {
 pub struct ObjectModel {
     pub binder: String,
     pub flver: String,
-    /// The collision file the same binder holds, where the game keeps it there.
-    pub collision: Option<String>,
+    /// Its collision files, each where the game keeps it.
+    pub collision: Vec<CollisionSource>,
+}
+
+/// One collision file of an object: the binder holding it (`None`: the model's own binder), its member's name and
+/// its resolution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CollisionSource {
+    pub binder: Option<String>,
+    pub member: String,
+    pub resolution: Resolution,
 }
 
 /// One BHD5/BDT pair of an install.

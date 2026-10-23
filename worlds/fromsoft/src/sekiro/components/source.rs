@@ -157,22 +157,46 @@ impl ObjectGeometry {
     }
 }
 
-/// An object prototype's collision file as stored (`fromsoft.object_collision`): every body of its main HKX, for
-/// `lower-fromsoft-object-collision` to place with each placement. A prototype whose binder has no such file has none.
+/// Which detail a stored collision file is: Sekiro's object HKX and Elden Ring's `_h` asset files are high, Elden
+/// Ring's `_l` asset files (which every collidable asset has) low.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Resolution {
+    High,
+    Low,
+}
+
+/// One stored collision file of an object prototype: its file name, its resolution and every body as stored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObjectCollisionFile {
+    /// The binder member's file name (`o000100.hkx`, `aeg007_310_l.hkx`).
+    pub file: String,
+    pub resolution: Resolution,
+    pub bodies: Vec<ObjectBody>,
+}
+
+/// An object prototype's collision as stored (`fromsoft.object_collision`): every collision file the game keeps for it,
+/// each with its resolution, for `lower-fromsoft-object-collision` to choose from and place with each placement. A
+/// prototype with no such file has none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectBodies {
-    /// The binder member's file name (`o000100.hkx`).
-    pub file: String,
-    pub bodies: Vec<ObjectBody>,
+    pub files: Vec<ObjectCollisionFile>,
+}
+impl ObjectBodies {
+    /// Every body of every file.
+    pub fn bodies(&self) -> impl Iterator<Item = &ObjectBody> {
+        self.files.iter().flat_map(|f| &f.bodies)
+    }
 }
 impl Component for ObjectBodies {
     const NAME: &'static str = "fromsoft.object_collision";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    /// 2: every stored collision file with its resolution (Sekiro's one main HKX is a high one).
+    const VERSION: u32 = 2;
     /// Prototype-space geometry, mapped as the prototype's mesh: mesh triangles moved (a reflection reversing their
     /// order), a convex body's map composed with the mapping.
     fn apply_linear(&self, l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
         let mut out = self.clone();
-        for body in &mut out.bodies {
+        for body in out.files.iter_mut().flat_map(|f| &mut f.bodies) {
             match &mut body.geometry {
                 ObjectGeometry::Mesh { triangles, .. } => {
                     for t in triangles {
@@ -191,8 +215,7 @@ impl Component for ObjectBodies {
     }
     /// 36 bytes per mesh triangle and 4 per material; a convex core's vertices and planes.
     fn payload_bytes(&self) -> u64 {
-        self.bodies
-            .iter()
+        self.bodies()
             .map(|b| match &b.geometry {
                 ObjectGeometry::Mesh { triangles, materials } => {
                     triangles.len() as u64 * 36 + materials.len() as u64 * 4
@@ -204,17 +227,19 @@ impl Component for ObjectBodies {
             .sum()
     }
     fn verify(&self, _e: Entity, _w: &primase_core::World) -> Result<(), String> {
-        for b in &self.bodies {
-            if let ObjectGeometry::Mesh { triangles, materials } = &b.geometry
-                && materials.len() != triangles.len()
-            {
-                return Err(format!(
-                    "{} body {}: {} materials for {} triangles",
-                    self.file,
-                    b.name,
-                    materials.len(),
-                    triangles.len()
-                ));
+        for f in &self.files {
+            for b in &f.bodies {
+                if let ObjectGeometry::Mesh { triangles, materials } = &b.geometry
+                    && materials.len() != triangles.len()
+                {
+                    return Err(format!(
+                        "{} body {}: {} materials for {} triangles",
+                        f.file,
+                        b.name,
+                        materials.len(),
+                        triangles.len()
+                    ));
+                }
             }
         }
         Ok(())

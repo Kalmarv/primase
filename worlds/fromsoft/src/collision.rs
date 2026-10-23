@@ -222,7 +222,7 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
                         }
                         BodyGeometry::Mesh(soup)
                     }
-                    "hknpBoxShape" | "hknpConvexPolytopeShape" | "hknpCapsuleShape" => {
+                    "hknpBoxShape" | "hknpConvexPolytopeShape" | "hknpCapsuleShape" | "hknpCylinderShape" => {
                         let capsule = if shape.type_name() == "hknpCapsuleShape" {
                             let end = |name: &str| -> Result<[f32; 3]> {
                                 let v = shape.field(name)?.vector::<4>()?;

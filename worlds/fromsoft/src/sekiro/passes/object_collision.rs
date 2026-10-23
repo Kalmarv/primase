@@ -5,7 +5,7 @@ use super::collision::{attach, beyond, crop, owned, push, surface_of};
 use super::settings::{HitClass, Metres, joined};
 use crate::pose::FRAME;
 use crate::pose::posed;
-use crate::sekiro::source::{MaterialSlots, ObjectBodies, ObjectBody, ObjectGeometry};
+use crate::sekiro::source::{MaterialSlots, ObjectBodies, ObjectBody, ObjectGeometry, Resolution};
 use crate::{components::models::SourceModel, materials::Material};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::state::Condition;
@@ -79,6 +79,25 @@ pub enum ConvexSurface {
     Render,
 }
 
+/// Which of a prototype's stored collision files `lower-fromsoft-object-collision` places.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolutionChoice {
+    High,
+    Low,
+    /// The high-resolution files where the prototype has one, else its low-resolution ones.
+    HighElseLow,
+}
+
+impl ResolutionChoice {
+    fn word(self) -> &'static str {
+        match self {
+            ResolutionChoice::High => "high",
+            ResolutionChoice::Low => "low",
+            ResolutionChoice::HighElseLow => "high-else-low",
+        }
+    }
+}
+
 /// What `lower-fromsoft-object-collision` makes of convex bodies (box, polytope, capsule), which a triangle soup
 /// cannot hold as stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,22 +119,24 @@ impl ConvexBodies {
 }
 
 /// `lower-fromsoft-object-collision{convex=tessellate|leave-out}`: every placed object prototype's bodies
-/// (`fromsoft.object_collision`) through each placement's transform, at their stored pose whatever their motion type
+/// (`fromsoft.object_collision`, of the files of the chosen resolution) through each placement's transform, at their stored pose whatever their motion type
 /// (not interpreted), as one `objects` soup, a placement present only in some world states into an
 /// `objects_state<n>` soup with its condition; the bodies of the placed prototypes consumed, unplaced ones' kept.
 /// Each triangle gets its HitMtrl class's surface (`default` without one, counted). In a part of a conversion
 /// (`core.part_scope`), only the placements its roots reach are lowered: a context placement's collision is its own
 /// part's.
 ///
-/// Every field is the program's choice, stated (no default): `convex`, what convex bodies become (a soup cannot hold a
+/// Every field is the program's choice, stated (no default): `resolution`, which stored files are placed
+/// ([`ResolutionChoice`]; a prototype with none of them is counted); `convex`, what convex bodies become (a soup cannot hold a
 /// rounded shape, so the program chooses its approximation); `leave_out`, HitMtrl classes (an ID's base value, modulo
 /// 100) not lowered, counted; `leave_out_motion`, stored motion types whose bodies are not lowered, counted;
 /// `convex_surface` ([`ConvexSurface`]); `reach`, leaving out, counted, the triangles whose centre lies more than that
 /// many metres outside the read region (`fromsoft.read_scope`), or `None` for no crop. Options, all required:
-/// `convex=tessellate|leave-out`, `leave-out=` classes and `leave-out-motion=` types joined by `+` (empty: none),
+/// `resolution=high|low|high-else-low`, `convex=tessellate|leave-out`, `leave-out=` classes and `leave-out-motion=` types joined by `+` (empty: none),
 /// `convex-surface=default|render`, `reach=N|none`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerFromSoftObjectCollision {
+    pub resolution: ResolutionChoice,
     pub convex: ConvexBodies,
     pub leave_out: BTreeSet<HitClass>,
     pub leave_out_motion: BTreeSet<u64>,
@@ -126,7 +147,8 @@ pub struct LowerFromSoftObjectCollision {
 impl LowerFromSoftObjectCollision {
     /// From its options, every one required.
     pub fn from_options(o: &Options) -> std::result::Result<Self, String> {
-        const KEYS: [&str; 5] = [
+        const KEYS: [&str; 6] = [
+            "resolution",
             "convex",
             "leave-out",
             "leave-out-motion",
@@ -139,10 +161,16 @@ impl LowerFromSoftObjectCollision {
         let get = |k: &str| {
             o.get(k).map(String::as_str).ok_or_else(|| {
                 format!(
-                    "{k} is required: convex=tessellate|leave-out, leave-out=, leave-out-motion= (joined by +, empty \
+                    "{k} is required: resolution=high|low|high-else-low, convex=tessellate|leave-out, leave-out=, leave-out-motion= (joined by +, empty \
                      for none), convex-surface=default|render, reach=N|none"
                 )
             })
+        };
+        let resolution = match get("resolution")? {
+            "high" => ResolutionChoice::High,
+            "low" => ResolutionChoice::Low,
+            "high-else-low" => ResolutionChoice::HighElseLow,
+            v => return Err(format!("resolution={v} is not high, low or high-else-low")),
         };
         let convex = match get("convex")? {
             "tessellate" => ConvexBodies::Tessellate,
@@ -163,6 +191,7 @@ impl LowerFromSoftObjectCollision {
             })
             .collect::<std::result::Result<_, _>>()?;
         Ok(LowerFromSoftObjectCollision {
+            resolution,
             convex,
             leave_out: HitClass::parse_set("leave-out", get("leave-out")?)?,
             leave_out_motion,
@@ -227,6 +256,7 @@ impl Pass for LowerFromSoftObjectCollision {
             ConvexSurface::Render => "render",
         };
         Options::from([
+            ("resolution".to_owned(), self.resolution.word().to_owned()),
             ("convex".to_owned(), self.convex.word().to_owned()),
             ("leave-out".to_owned(), joined(&self.leave_out)),
             ("leave-out-motion".to_owned(), joined(&self.leave_out_motion)),
@@ -285,7 +315,22 @@ impl Pass for LowerFromSoftObjectCollision {
                         .1
                 }
             };
-            for body in &bodies.bodies {
+            let has = |r: Resolution| bodies.files.iter().any(|f| f.resolution == r);
+            let wanted = match self.resolution {
+                ResolutionChoice::High => Resolution::High,
+                ResolutionChoice::Low => Resolution::Low,
+                ResolutionChoice::HighElseLow if has(Resolution::High) => Resolution::High,
+                ResolutionChoice::HighElseLow => Resolution::Low,
+            };
+            if !has(wanted) {
+                log.count(
+                    "placements whose prototype has no collision file of the chosen resolution",
+                    1,
+                );
+                continue;
+            }
+            let chosen = bodies.files.iter().filter(|f| f.resolution == wanted);
+            for body in chosen.flat_map(|f| &f.bodies) {
                 if self.leave_out_motion.contains(&body.motion_type) {
                     log.count(&format!("bodies of motion type {} left out", body.motion_type), 1);
                     continue;
@@ -416,26 +461,32 @@ mod tests {
         w.insert(
             placed,
             ObjectBodies {
-                file: "o000001.hkx".into(),
-                bodies: vec![
-                    mesh("static", 0, vec![104, 29]),
-                    mesh("moving", 2, vec![111]),
-                    convex("box", "hknpBoxShape", cube(0.05), None),
-                    convex(
-                        "capsule",
-                        "hknpCapsuleShape",
-                        cube(0.25),
-                        Some([[0., -0.5, 0.], [0., 0.5, 0.]]),
-                    ),
-                ],
+                files: vec![crate::sekiro::source::ObjectCollisionFile {
+                    file: "o000001.hkx".into(),
+                    resolution: Resolution::High,
+                    bodies: vec![
+                        mesh("static", 0, vec![104, 29]),
+                        mesh("moving", 2, vec![111]),
+                        convex("box", "hknpBoxShape", cube(0.05), None),
+                        convex(
+                            "capsule",
+                            "hknpCapsuleShape",
+                            cube(0.25),
+                            Some([[0., -0.5, 0.], [0., 0.5, 0.]]),
+                        ),
+                    ],
+                }],
             },
         );
         let unplaced = w.spawn();
         w.insert(
             unplaced,
             ObjectBodies {
-                file: "o000002.hkx".into(),
-                bodies: vec![convex("box", "hknpBoxShape", cube(0.), None)],
+                files: vec![crate::sekiro::source::ObjectCollisionFile {
+                    file: "o000002.hkx".into(),
+                    resolution: Resolution::High,
+                    bodies: vec![convex("box", "hknpBoxShape", cube(0.), None)],
+                }],
             },
         );
         let e = w.spawn();
@@ -466,6 +517,7 @@ mod tests {
     fn pass(options: &[(&str, &str)]) -> LowerFromSoftObjectCollision {
         let mut o = Options::from(
             [
+                ("resolution", "high"),
                 ("leave-out", ""),
                 ("leave-out-motion", ""),
                 ("convex-surface", "default"),
@@ -481,7 +533,7 @@ mod tests {
     fn the_read_keeps_every_body_and_the_program_chooses_what_becomes_collision() {
         // the convex shapes are their stored cores: nothing tessellated, the capsule's segment and radius kept
         let (w, placed, _) = world();
-        let bodies = &w.get::<ObjectBodies>(placed).unwrap().bodies;
+        let bodies: Vec<_> = w.get::<ObjectBodies>(placed).unwrap().bodies().cloned().collect();
         assert!(matches!(
             &bodies[3].geometry,
             ObjectGeometry::Convex { core, capsule: Some(_), .. } if core.radius == 0.25
@@ -511,7 +563,7 @@ mod tests {
             "the placed prototype's bodies were consumed"
         );
         assert_eq!(
-            w.get::<ObjectBodies>(unplaced).unwrap().bodies.len(),
+            w.get::<ObjectBodies>(unplaced).unwrap().bodies().count(),
             1,
             "the unplaced one's stay"
         );
