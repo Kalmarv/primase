@@ -1419,7 +1419,6 @@ mod ray_queries {
     }
 }
 
-
 mod uav_counter {
     use super::*;
     use primase_shader::D3dClass;
