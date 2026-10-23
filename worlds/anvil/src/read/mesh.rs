@@ -57,6 +57,8 @@ use std::ops::Range;
 pub const MESH: u32 = 0x415D_9568;
 /// The compiled mesh's marker: equals the CRC-32 of `CompiledMesh` (the name a label).
 pub const COMPILED_MESH: u32 = 0xFC9E_1595;
+/// A bone record's class: equals the CRC-32 of `MeshBone` (the name a label).
+pub const MESH_BONE: u32 = 0x9EF0_E7A1;
 /// The ranged layout's id at marker+13 (its name unknown).
 pub const RANGED: u32 = 0xC351_EE43;
 /// Where the compiled mesh starts in a body with no 81-byte records (20 bytes and the 41-byte bounds block).
@@ -106,6 +108,8 @@ pub enum Error {
     Stride([u32; 3]),
     #[error("Mesh range record {index}: {why}")]
     Record { index: usize, why: String },
+    #[error("Mesh bone record {index}: {why}")]
+    Bone { index: usize, why: String },
     #[error("Mesh {what}: {why}")]
     Buffer { what: &'static str, why: String },
     #[error("Mesh tail {what}: {why}")]
@@ -286,6 +290,77 @@ pub enum Layout {
     Inline(Inline),
 }
 
+/// One `MeshBone` of a Mesh's bone list: a bone the mesh's skin stream may name, as the 81-byte record stores it
+/// (an object id of 0, the class `MeshBone`, then the registry's three fields, `BoneID`, `InitialMatrixInverse` and
+/// `IsUsedBySubMeshes`; docs/registry-named-fields.md §4).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredMeshBone {
+    /// `BoneID`: by value the CRC-32 of the bone's name, the key of a skeleton's [`StoredBone::name_hash`].
+    pub bone_id: u32,
+    /// `InitialMatrixInverse`: a 4x4 as 16 f32 in four rows of x, y, z and w, the translation in the last row.
+    pub initial_matrix_inverse: [[f32; 4]; 4],
+    /// `IsUsedBySubMeshes`.
+    pub used_by_submeshes: bool,
+}
+
+impl StoredMeshBone {
+    /// An 81-byte record ([`StoredMesh::records_81`]); refused when its object id isn't 0, its class isn't `MeshBone`
+    /// or its last byte isn't a bool.
+    pub fn parse(record: &[u8; 81]) -> Result<StoredMeshBone, Error> {
+        let mut c = Cursor { b: record, at: 0 };
+        let id = u64::from_le_bytes(c.array("MeshBone id")?);
+        let class = c.u32("MeshBone class")?;
+        if id != 0 || class != MESH_BONE {
+            return Err(Error::Bone {
+                index: 0,
+                why: format!("object id {id} of class {class:#010x}, not 0 of MeshBone {MESH_BONE:#010x}"),
+            });
+        }
+        let bone_id = c.u32("MeshBone BoneID")?;
+        let mut initial_matrix_inverse = [[0.0; 4]; 4];
+        for row in &mut initial_matrix_inverse {
+            for v in row.iter_mut() {
+                *v = f32::from_le_bytes(c.array("MeshBone InitialMatrixInverse")?);
+            }
+        }
+        let [used] = c.array::<1>("MeshBone IsUsedBySubMeshes")?;
+        if used > 1 {
+            return Err(Error::Bone {
+                index: 0,
+                why: format!("IsUsedBySubMeshes is {used}, not a bool"),
+            });
+        }
+        Ok(StoredMeshBone {
+            bone_id,
+            initial_matrix_inverse,
+            used_by_submeshes: used == 1,
+        })
+    }
+}
+
+/// A mesh's skin as its skin stream stores it (the split layouts'): each vertex a record of `influences` bone slots
+/// (a byte each: positions in the mesh's bone list, [`StoredMesh::bones`]) and then as many weights (a byte each,
+/// summing to 255). Established on every one of Riders Republic's 29,174 meshes with bones (29,116 with 4 influences
+/// and 58 with 8; 39,795,423 vertices: tests/skin_binding.rs): the weights sum to 255 on every vertex, and every slot
+/// with a weight is below the bone count. A slot with no weight is kept as stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredSkin {
+    /// The slots and weights of a vertex each: 4 or 8.
+    pub influences: usize,
+    /// Each vertex's slots, in vertex order, `influences` a vertex.
+    pub slots: Vec<u8>,
+    /// Each vertex's weights, in the same order.
+    pub weights: Vec<u8>,
+}
+
+impl StoredSkin {
+    /// Each vertex's slots and weights.
+    pub fn vertices(&self) -> impl Iterator<Item = (&[u8], &[u8])> {
+        let n = self.influences.max(1);
+        self.slots.chunks_exact(n).zip(self.weights.chunks_exact(n))
+    }
+}
+
 /// A Mesh body's compiled buffers, as stored.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredMesh {
@@ -310,7 +385,7 @@ pub struct StoredMesh {
     /// layouts.
     pub positions_stream: Vec<u8>,
     /// The skin stream after it (a u32 length and the third stride's bytes per vertex), empty but in the split
-    /// layouts.
+    /// layouts. Skin only on a mesh with bone records ([`StoredMesh::skin`]).
     pub skin_stream: Vec<u8>,
     /// The indices (u16 in the ranged layout, u32 in the inline).
     pub indices: Vec<u32>,
@@ -832,6 +907,72 @@ impl StoredMesh {
             .collect())
     }
 
+    /// The mesh's bone list: each 81-byte record read as a [`StoredMeshBone`].
+    pub fn bones(&self) -> Result<Vec<StoredMeshBone>, Error> {
+        self.records_81
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                StoredMeshBone::parse(r).map_err(|e| match e {
+                    Error::Bone { why, .. } => Error::Bone { index: i, why },
+                    e => e,
+                })
+            })
+            .collect()
+    }
+
+    /// The mesh's skin ([`StoredSkin`]): none for a mesh without bone records, whatever its third stream holds (a
+    /// split-layout mesh without bones has one: the weights don't sum to 255 there). Refused, naming the vertex, where
+    /// the skin stream isn't whole records of 8 or 16 bytes a vertex, a vertex's weights don't sum to 255 or a
+    /// weighted slot is not below the bone count.
+    pub fn skin(&self) -> Result<Option<StoredSkin>, Error> {
+        let bad = |why: String| Error::Buffer {
+            what: "skin stream",
+            why,
+        };
+        let bones = self.records_81.len();
+        let vertices = self.vertices.len();
+        if bones == 0 {
+            return Ok(None);
+        }
+        if self.skin_stream.is_empty() {
+            return Err(bad(format!("none, for a mesh with {bones} bones")));
+        }
+        let stride = self.skin_stream.len().checked_div(vertices).unwrap_or(0);
+        if !matches!(stride, 8 | 16) || stride.saturating_mul(vertices) != self.skin_stream.len() {
+            return Err(bad(format!(
+                "{} bytes for {vertices} vertices and {bones} bones, not whole records of 8 or 16 bytes",
+                self.skin_stream.len()
+            )));
+        }
+        let influences = stride / 2;
+        let mut slots = Vec::with_capacity(self.skin_stream.len() / 2);
+        let mut weights = Vec::with_capacity(self.skin_stream.len() / 2);
+        for (v, record) in self.skin_stream.chunks_exact(stride).enumerate() {
+            let (s, w) = record.split_at(influences);
+            let sum = w.iter().fold(0u32, |a, &w| a.saturating_add(u32::from(w)));
+            if sum != 255 {
+                return Err(bad(format!("vertex {v}: weights sum to {sum}, not 255")));
+            }
+            if let Some((slot, _)) = s
+                .iter()
+                .zip(w)
+                .find(|&(&slot, &w)| w != 0 && usize::from(slot) >= bones)
+            {
+                return Err(bad(format!(
+                    "vertex {v}: slot {slot} with a weight, of {bones} bones"
+                )));
+            }
+            slots.extend_from_slice(s);
+            weights.extend_from_slice(w);
+        }
+        Ok(Some(StoredSkin {
+            influences,
+            slots,
+            weights,
+        }))
+    }
+
     /// The `MeshPrimitive` entries, one per range.
     pub fn primitives(&self) -> &[StoredPrimitive] {
         match &self.layout {
@@ -1265,6 +1406,106 @@ mod tests {
             StoredMesh::parse(&short),
             Err(Error::Marker { at: 142, .. })
         ));
+    }
+
+    /// An 81-byte bone record: object id 0, `MeshBone`, `BoneID`, a 4x4 matrix of rows (x, y, z, w) and the bool.
+    fn bone_record(bone_id: u32, matrix: [[f32; 4]; 4], used: u8) -> [u8; 81] {
+        let mut r = vec![0u8; 8];
+        r.extend(MESH_BONE.to_le_bytes());
+        r.extend(bone_id.to_le_bytes());
+        for v in matrix.iter().flatten() {
+            r.extend(v.to_le_bytes());
+        }
+        r.push(used);
+        r.try_into().expect("81 bytes")
+    }
+
+    #[test]
+    fn a_bone_record_reads_its_id_matrix_and_bool() {
+        let m = [
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [-1.468, 0.134, 0.005, 1.0],
+        ];
+        let b = StoredMeshBone::parse(&bone_record(0x462E_A286, m, 1)).expect("bone");
+        assert_eq!(b.bone_id, 0x462E_A286);
+        assert_eq!(b.initial_matrix_inverse, m);
+        assert!(b.used_by_submeshes);
+        let unused = StoredMeshBone::parse(&bone_record(1, m, 0)).expect("bone");
+        assert!(!unused.used_by_submeshes);
+    }
+
+    #[test]
+    fn a_bone_record_of_another_class_or_with_another_last_byte_is_refused_naming_its_position() {
+        let m = [[0.0; 4]; 4];
+        let mut b = ranged(3, &[0, 1, 2], &[(0, 0)], &[5]);
+        b[16] = 2;
+        let records = [bone_record(7, m, 1), bone_record(8, m, 2)].concat();
+        b.splice(RECORDS..RECORDS, records);
+        let mesh = StoredMesh::parse(&b).expect("parse");
+        match mesh.bones() {
+            Err(Error::Bone { index: 1, why }) => assert!(why.contains("not a bool"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        let mut wrong_class = bone_record(7, m, 1);
+        wrong_class[8] ^= 1;
+        assert!(matches!(
+            StoredMeshBone::parse(&wrong_class),
+            Err(Error::Bone { .. })
+        ));
+        let mut with_id = bone_record(7, m, 1);
+        with_id[0] = 1;
+        assert!(matches!(StoredMeshBone::parse(&with_id), Err(Error::Bone { .. })));
+    }
+
+    /// A mesh of 3 vertices with `bones` bone records and `skin` as its skin stream.
+    fn skinned(bones: usize, skin: &[u8]) -> StoredMesh {
+        let mut m = StoredMesh::parse(&ranged(3, &[0, 1, 2], &[(0, 0)], &[5])).expect("parse");
+        m.records_81 = vec![bone_record(1, [[0.0; 4]; 4], 1); bones];
+        m.skin_stream = skin.to_vec();
+        m
+    }
+
+    #[test]
+    fn a_skin_stream_reads_slots_then_weights_a_vertex() {
+        // 3 vertices of 4 influences: the weights sum to 255 and the slots with a weight are below the 3 bones; a
+        // slot without a weight may be anything
+        let skin = [
+            0, 1, 0, 0, 200, 55, 0, 0, //
+            2, 0, 0, 9, 255, 0, 0, 0, //
+            1, 2, 0, 0, 100, 100, 55, 0,
+        ];
+        let s = skinned(3, &skin).skin().expect("skin").expect("some");
+        assert_eq!(s.influences, 4);
+        let v: Vec<_> = s.vertices().collect();
+        assert_eq!(v[0], (&[0u8, 1, 0, 0][..], &[200u8, 55, 0, 0][..]));
+        assert_eq!(v[1], (&[2u8, 0, 0, 9][..], &[255u8, 0, 0, 0][..]));
+        assert_eq!(v.len(), 3);
+        assert_eq!(skinned(0, &[]).skin().expect("skin"), None);
+    }
+
+    #[test]
+    fn a_skin_stream_with_weights_off_255_a_weighted_slot_off_the_bones_or_no_stream_is_refused() {
+        let ok = [0u8, 0, 0, 0, 255, 0, 0, 0];
+        let three = [ok, ok, ok].concat();
+        assert!(skinned(1, &three).skin().is_ok());
+        // vertex 1's weights sum to 254
+        let mut sum = three.clone();
+        sum[12] = 254;
+        let e = skinned(1, &sum).skin().expect_err("sum").to_string();
+        assert!(e.contains("vertex 1") && e.contains("254"), "{e}");
+        // vertex 2's weighted slot 1 is not below 1 bone
+        let mut slot = three.clone();
+        slot[16] = 1;
+        let e = skinned(1, &slot).skin().expect_err("slot").to_string();
+        assert!(e.contains("vertex 2") && e.contains("slot 1"), "{e}");
+        // no stream for a mesh with bones, and a stream that isn't 8 or 16 bytes a vertex
+        assert!(skinned(1, &[]).skin().is_err());
+        // a mesh without bone records has no skin, whatever its third stream holds
+        assert_eq!(skinned(0, &[7u8; 24]).skin().expect("skin"), None);
+        assert!(skinned(1, &three[..23]).skin().is_err());
+        assert!(skinned(1, &[0u8; 12 * 3]).skin().is_err());
     }
 
     #[test]

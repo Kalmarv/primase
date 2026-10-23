@@ -61,6 +61,11 @@ pub const SPLASH_FX_INSTANCE_DATA: u32 = 0xB8B0_8A89;
 pub const GRASS_VISUAL: u32 = 0x8FA8_0D8D;
 /// A GrassComponent's type: the grass system's setup (a Visual, the library it names, its settings and its models).
 pub const GRASS_COMPONENT: u32 = 0xCB28_F06D;
+/// A SkeletonComponent's type: the CRC-32 of its name.
+pub const SKELETON_COMPONENT: u32 = 0x71FD_A747;
+/// An AnimTrackDefinition's type, and a WindForce's: the SkeletonComponent's embedded objects.
+const ANIM_TRACK_DEFINITION: u32 = 0xA803_7D53;
+const WIND_FORCE: u32 = 0xE7F9_A244;
 /// A GrassVisualInstance's type, and a GrassInstance's (the GrassComponent's).
 const GRASS_VISUAL_INSTANCE: u32 = 0xD456_9683;
 const GRASS_INSTANCE: u32 = 0x9C95_4A88;
@@ -261,6 +266,27 @@ impl GrassSetup {
     }
 }
 
+/// A SkeletonComponent as stored, read over its extent: the rig an Entity's meshes bind to. Its grammar, by the registry's
+/// serialised fields in the order the 146 bodies of Riders Republic hold them (56 bytes with no addon and no track, 10
+/// more for each addon, 20 more for each track): the head, the main Skeleton's reference, the addon Skeletons' (a u32
+/// count and that many references), the ExpressionPack's reference, the AnimTrackDefinitions (a u32 count and that many
+/// objects) and the embedded WindForce.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkeletonBinding {
+    /// The 4 bytes before the references: `00 01 00 00` on 134 of the bodies, `01 01 00 00` on 12.
+    pub head: [u8; 4],
+    /// The main Skeleton (the registry's `BC9C5810`, a Skeleton).
+    pub main: Option<Reference>,
+    /// The addon Skeletons (`408196BB`, an array of Skeleton references), in order.
+    pub addons: Vec<Reference>,
+    /// `ExpressionPack`.
+    pub expression_pack: Option<Reference>,
+    /// The AnimTrackDefinitions (`43845470`): each an embedded object's id and the 8 bytes after its type.
+    pub tracks: Vec<(u64, [u8; 8])>,
+    /// The embedded WindForce's id and its 12 bytes after its type.
+    pub wind_force: (u64, [u8; 12]),
+}
+
 /// A component: its id, type and body.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Component {
@@ -288,6 +314,8 @@ pub enum ComponentBody {
     GrassVisual(GrassVisual),
     /// A GrassComponent: the grass system's setup, read over its extent.
     GrassSetup(Box<GrassSetup>),
+    /// A SkeletonComponent: the rig an Entity's meshes bind to, read over its extent.
+    Skeleton(Box<SkeletonBinding>),
     /// A type stepped over by its length rule, its bytes kept as stored.
     Raw(Vec<u8>),
     /// A component whose bytes no rule here reads, kept as stored: its type has no length rule, or a rule of a type
@@ -654,6 +682,39 @@ impl Cursor<'_> {
             ranges,
             tail,
             model,
+        })
+    }
+    /// A SkeletonComponent's body: [`SkeletonBinding`].
+    fn skeleton_binding(&mut self) -> Result<SkeletonBinding, Error> {
+        let head = self.array::<4>("SkeletonComponent")?;
+        let main = self.reference()?;
+        let n = self.count("SkeletonComponent addon count", reference::LENGTH)?;
+        let mut addons = Vec::with_capacity(n);
+        for _ in 0..n {
+            let at = self.at;
+            addons.push(self.reference()?.ok_or(Error::Value {
+                what: "SkeletonComponent addon",
+                at,
+                found: 0,
+                read: "a reference to a Skeleton",
+            })?);
+        }
+        let expression_pack = self.reference()?;
+        let m = self.count("SkeletonComponent track count", 20)?;
+        let mut tracks = Vec::with_capacity(m);
+        for _ in 0..m {
+            let id = self.object("AnimTrackDefinition", ANIM_TRACK_DEFINITION)?;
+            tracks.push((id, self.array::<8>("AnimTrackDefinition")?));
+        }
+        let wind_id = self.object("WindForce", WIND_FORCE)?;
+        let wind_force = (wind_id, self.array::<12>("WindForce")?);
+        Ok(SkeletonBinding {
+            head,
+            main,
+            addons,
+            expression_pack,
+            tracks,
+            wind_force,
         })
     }
     /// A GrassComponent's body over the extent that ends at `end`: [`GrassSetup`]. The settings' run has no length
@@ -1296,6 +1357,7 @@ impl StoredEntity {
             | ComponentBody::RigidBody { .. }
             | ComponentBody::GrassVisual(_)
             | ComponentBody::GrassSetup(_)
+            | ComponentBody::Skeleton(_)
             | ComponentBody::Raw(_)
             | ComponentBody::Unread(_) => None,
         })
@@ -1385,6 +1447,11 @@ impl Cursor<'_> {
                 .ok()
                 .filter(|_| self.at == end)
                 .map(|g| ComponentBody::GrassSetup(Box::new(g))),
+            SKELETON_COMPONENT => self
+                .skeleton_binding()
+                .ok()
+                .filter(|_| self.at == end)
+                .map(|b| ComponentBody::Skeleton(Box::new(b))),
             _ => None,
         }
     }
