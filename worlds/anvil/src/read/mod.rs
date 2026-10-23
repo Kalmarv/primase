@@ -15,6 +15,7 @@ pub mod mesh;
 pub mod mesh_shape;
 pub mod meshes;
 pub mod mip;
+pub mod overview;
 pub mod placements;
 pub mod reference;
 pub mod shader_pack;

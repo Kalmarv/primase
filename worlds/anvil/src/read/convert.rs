@@ -23,9 +23,12 @@ use primase_core::{Entity, World};
 use crate::components::{AnvilListed, AnvilMesh, AnvilTerrain, ListedBy};
 use crate::read::archive::{Archive, At};
 use crate::read::entity::{ENTITY, ENTITY_GROUP, StoredEntityGroup};
-use crate::read::grid::{GridLayout, StoredGridCellDataBlock, StoredGridPartition, grid_descriptions};
+use crate::read::grid::{
+    GridDescription, GridLayout, StoredGridCellDataBlock, StoredGridPartition, grid_descriptions,
+};
 use crate::read::listing::Kind;
 use crate::read::material::TEXTURE_SET;
+use crate::read::overview::{self, Counts, GridOverview};
 use crate::read::placements::{InstancedCollision, InstancedLevels, Placed, Placer};
 use crate::read::terrain::{TerrainRead, read_terrain};
 use crate::read::tnl::TERRAIN_NODE_LAYER;
@@ -174,6 +177,11 @@ impl AnvilReader {
         })
     }
 
+    /// The World's grids with every cell of each, from the grid tables ([`overview::grids`]): what to select from.
+    pub fn grids(&mut self, counts: Counts) -> Result<Vec<GridOverview>> {
+        overview::grids(&mut self.archive, &self.options.forges, counts)
+    }
+
     /// The first entry, in the forges' order, of `kind` whose name `want` accepts.
     fn find(&self, kind: Kind, want: impl Fn(&str) -> bool) -> Option<At> {
         self.archive
@@ -186,27 +194,12 @@ impl AnvilReader {
     }
 
     fn name(&self, at: At) -> String {
-        self.archive
-            .forge(at.forge)
-            .and_then(|f| f.names.get(at.entry))
-            .map(|n| n.name.clone())
-            .unwrap_or_default()
+        entry_name(&self.archive, at)
     }
 
     /// The cells the selected grids list, in the selection's order.
     fn listings(&mut self) -> Result<Vec<CellList>> {
-        let world_at = self
-            .find(Kind::World, |_| true)
-            .ok_or("anvil: no World in the forges")?;
-        let words = self
-            .options
-            .forges
-            .get(world_at.forge)
-            .ok_or("anvil: the World's forge is not among the forges")?
-            .edition
-            .grid_layout_words();
-        let world = self.archive.resource(world_at)?;
-        let descriptions = grid_descriptions(&world.body, words)?;
+        let descriptions = world_descriptions(&mut self.archive, &self.options.forges)?;
         let mut out = Vec::new();
         for selection in self.options.grids.clone() {
             let mut found = false;
@@ -319,6 +312,38 @@ impl AnvilReader {
             },
         )?)
     }
+}
+
+/// The World's GridDescriptions: the first World in the forges' order, its layouts read with the u16 run its forge's
+/// edition states.
+pub(crate) fn world_descriptions(
+    archive: &mut Archive,
+    forges: &[ForgeFile],
+) -> Result<Vec<GridDescription>> {
+    let world_at = archive
+        .listing()
+        .find(|(_, l)| l.kind == Some(Kind::World))
+        .map(|(forge, l)| At {
+            forge,
+            entry: l.entry,
+        })
+        .ok_or("anvil: no World in the forges")?;
+    let words = forges
+        .get(world_at.forge)
+        .ok_or("anvil: the World's forge is not among the forges")?
+        .edition
+        .grid_layout_words();
+    let world = archive.resource(world_at)?;
+    Ok(grid_descriptions(&world.body, words)?)
+}
+
+/// An entry's name in the forge's name table.
+pub(crate) fn entry_name(archive: &Archive, at: At) -> String {
+    archive
+        .forge(at.forge)
+        .and_then(|f| f.names.get(at.entry))
+        .map(|n| n.name.clone())
+        .unwrap_or_default()
 }
 
 /// The cells of a grid (of `levels` levels and `cells` cells) whose squares overlap `rect` in a positive area, at the
