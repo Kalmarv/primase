@@ -535,6 +535,13 @@ pub const DECLARED: &[Declared] = &[
         source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
     },
     Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Elden, "shaders"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder (searched recursively) of the DXIL containers of Elden Ring's Shader Model 6 shader bundles (one file per container), lifted, validated and written as WGSL, the refusals counted by reason with an example program; toolkit/dxil/tests/lift_corpus.rs"#,
+        source: r#"the user's own install: the containers read from its shader bundles"#,
+    },
+    Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::General, "codecs.tsv"),
         status: Status::Live,
         gate: true,
@@ -610,6 +617,13 @@ pub const DECLARED: &[Declared] = &[
         gate: false,
         about: r#"a folder of EBX documents as the game wrote them, mirroring their asset paths (searched recursively); every field's value must survive a rewrite, and the byte layout is compared with the reference writer; worlds/frostbite/tests/ebx.rs"#,
         source: r#"the game's own EBX documents"#,
+    },
+    Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Skate, "shaders"),
+        status: Status::Live,
+        gate: false,
+        about: r#"a folder (searched recursively) of the DXIL containers of skate.'s CompiledBytecode resources (one file per container), lifted, validated and written as WGSL, the refusals counted by reason with an example program; toolkit/dxil/tests/lift_corpus.rs"#,
+        source: r#"the user's own install: the containers read from its superbundles' CompiledBytecode resources"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Sledding, "shaders"),
