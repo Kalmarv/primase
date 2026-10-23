@@ -12,7 +12,7 @@
 //! | 0 | w | a byte of the draw's state, from the engine's constants |
 //! | 1 | xyz | the world normal biased to 0 to 1 (`n * 0.5 + 0.5`) |
 //! | 2 | x | the specular intensity, stored as its square root |
-//! | 2 | y | the specular falloff over 512, stored as its square root |
+//! | 2 | y | the specular falloff over 512, stored as its square root (the lighting passes read `y * y * 512`) |
 //! | 2 | z | the Fresnel term |
 //! | 3 | x, y | the vertex colour's red and green, through constants (not given a role: the data names no meaning) |
 //! | 3 | z | the emission (the constant 0 where the effect has none) |
@@ -31,10 +31,14 @@ use primase_core::shader::{Interface, SystemValue};
 pub struct GBufferWrites {
     /// Target 1's x, y and z are each stored as `n * 0.5 + 0.5` (a product with a factor 0.5, plus 0.5).
     pub normal_biased: bool,
-    /// Target 2's x is stored as a square root.
-    pub specular_intensity_sqrt: bool,
-    /// Target 2's y is stored as a square root of an expression that has the factor 1/512.
-    pub specular_exponent_sqrt_over_512: bool,
+    /// Target 1's x, y and z are each the constant 0: the pass writes no normal.
+    pub normal_zero: bool,
+    /// Target 1's x, y and z are each stored as `floor(n * 128 + 128) / 256`, the fractional bits packed into w.
+    pub normal_floored: bool,
+    /// Target 2's x is stored as a square root, or as the constant 0 (zero in any encoding).
+    pub specular_intensity_encoded: bool,
+    /// Target 2's y is stored as a square root, or as the constant 0.
+    pub specular_exponent_encoded: bool,
     /// Target 2's z is written.
     pub fresnel_written: bool,
     /// Target 3's z is stored as something other than the constant 0.
@@ -200,88 +204,182 @@ pub fn writes(container: &[u8]) -> Result<GBufferWrites, String> {
         !values.is_empty() && values.iter().all(|v| test(*v))
     };
     let emission = lane(3, 2);
+    let r = Reading::new(function);
     Ok(GBufferWrites {
-        normal_biased: (0..3).all(|l| every(1, l, &|v| is_biased(function, v))),
-        specular_intensity_sqrt: every(2, 0, &|v| is_sqrt(function, v)),
-        specular_exponent_sqrt_over_512: every(2, 1, &|v| {
-            is_sqrt(function, v) && contains_literal(function, v, 1.0 / 512.0)
-        }),
+        normal_biased: (0..3).all(|l| every(1, l, &|v| r.is_biased(v))),
+        normal_floored: (0..3).all(|l| every(1, l, &|v| r.is_floored_byte(v))),
+        normal_zero: (0..3).all(|l| every(1, l, &|v| r.is_zero(v))),
+        specular_intensity_encoded: every(2, 0, &|v| r.is_sqrt(v) || r.is_zero(v)),
+        specular_exponent_encoded: every(2, 1, &|v| r.is_sqrt(v) || r.is_zero(v)),
         fresnel_written: !lane(2, 2).is_empty(),
-        emission_written: !emission.is_empty() && emission.iter().any(|v| !is_zero(function, *v)),
+        emission_written: !emission.is_empty() && emission.iter().any(|v| !r.is_zero(*v)),
         motion_written: !lane(4, 0).is_empty() && !lane(4, 1).is_empty(),
     })
 }
 
-/// The float a stored word is: the value under the bitcast the lifter writes every output word with.
-fn stored(function: &Function, value: Handle<Expression>) -> Option<&Expression> {
-    match function.expressions.try_get(value).ok()? {
-        Expression::As {
-            expr, convert: None, ..
-        } => function.expressions.try_get(*expr).ok(),
-        other => Some(other),
+/// A function and what is stored into its local variables as a whole (`v = value`), so that the load of a variable
+/// assigned once reads as the value assigned: the programs that compute a G-buffer lane before a conditional discard
+/// keep it in a variable.
+struct Reading<'a> {
+    function: &'a Function,
+    assigned: std::collections::BTreeMap<usize, Vec<Handle<Expression>>>,
+}
+
+impl<'a> Reading<'a> {
+    fn new(function: &'a Function) -> Self {
+        fn whole(
+            function: &Function,
+            block: &naga::Block,
+            out: &mut std::collections::BTreeMap<usize, Vec<Handle<Expression>>>,
+        ) {
+            for statement in block {
+                match statement {
+                    Statement::Store { pointer, value } => {
+                        if let Ok(Expression::LocalVariable(v)) = function.expressions.try_get(*pointer) {
+                            out.entry(v.index()).or_default().push(*value);
+                        }
+                    }
+                    Statement::Block(inner) => whole(function, inner, out),
+                    Statement::If { accept, reject, .. } => {
+                        whole(function, accept, out);
+                        whole(function, reject, out);
+                    }
+                    Statement::Switch { cases, .. } => {
+                        cases.iter().for_each(|c| whole(function, &c.body, out))
+                    }
+                    Statement::Loop { body, continuing, .. } => {
+                        whole(function, body, out);
+                        whole(function, continuing, out);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut assigned = std::collections::BTreeMap::new();
+        whole(function, &function.body, &mut assigned);
+        Self { function, assigned }
     }
-}
 
-fn is_literal(function: &Function, value: Handle<Expression>, x: f32) -> bool {
-    matches!(
-        function.expressions.try_get(value),
-        Ok(Expression::Literal(Literal::F32(v))) if v.to_bits() == x.to_bits()
-    )
-}
+    /// The expression a handle stands for: through the bit casts the lifter writes every output word with and the
+    /// loads of a local variable assigned once.
+    fn resolve(&self, value: Handle<Expression>) -> Handle<Expression> {
+        let mut at = value;
+        for _ in 0..16 {
+            match self.function.expressions.try_get(at) {
+                Ok(Expression::As {
+                    expr, convert: None, ..
+                }) => at = *expr,
+                Ok(Expression::Load { pointer }) => match self.function.expressions.try_get(*pointer) {
+                    Ok(Expression::LocalVariable(v)) => {
+                        match self.assigned.get(&v.index()).map(Vec::as_slice) {
+                            Some([only]) => at = *only,
+                            _ => return at,
+                        }
+                    }
+                    _ => return at,
+                },
+                _ => return at,
+            }
+        }
+        at
+    }
 
-/// The factors of a product (its `Multiply` tree's leaves).
-fn factors(function: &Function, value: Handle<Expression>, out: &mut Vec<Handle<Expression>>) {
-    match function.expressions.try_get(value) {
-        Ok(Expression::Binary {
+    fn expression(&self, value: Handle<Expression>) -> Option<&Expression> {
+        self.function.expressions.try_get(self.resolve(value)).ok()
+    }
+
+    fn is_literal(&self, value: Handle<Expression>, x: f32) -> bool {
+        matches!(
+            self.expression(value),
+            Some(Expression::Literal(Literal::F32(v))) if v.to_bits() == x.to_bits()
+        )
+    }
+
+    /// The factors of a product (its `Multiply` tree's leaves).
+    fn factors(&self, value: Handle<Expression>, out: &mut Vec<Handle<Expression>>) {
+        match self.expression(value) {
+            Some(Expression::Binary {
+                op: BinaryOperator::Multiply,
+                left,
+                right,
+            }) => {
+                self.factors(*left, out);
+                self.factors(*right, out);
+            }
+            _ => out.push(value),
+        }
+    }
+
+    /// `x * 0.5 + 0.5` (the literals on either side, `x` a product with a factor 0.5 or the `fma` of it).
+    fn is_biased(&self, value: Handle<Expression>) -> bool {
+        let half_factor = |product: Handle<Expression>| {
+            let mut leaves = Vec::new();
+            self.factors(product, &mut leaves);
+            leaves.iter().any(|f| self.is_literal(*f, 0.5))
+        };
+        match self.expression(value) {
+            Some(Expression::Binary {
+                op: BinaryOperator::Add,
+                left,
+                right,
+            }) => [(left, right), (right, left)]
+                .into_iter()
+                .any(|(bias, product)| self.is_literal(*bias, 0.5) && half_factor(*product)),
+            Some(Expression::Math {
+                fun: MathFunction::Fma,
+                arg,
+                arg1: Some(arg1),
+                arg2: Some(arg2),
+                ..
+            }) => {
+                self.is_literal(*arg2, 0.5)
+                    && (self.is_literal(*arg, 0.5) || self.is_literal(*arg1, 0.5) || half_factor(*arg))
+            }
+            _ => false,
+        }
+    }
+
+    /// `floor(x) * (1/256)`.
+    fn is_floored_byte(&self, value: Handle<Expression>) -> bool {
+        let Some(Expression::Binary {
             op: BinaryOperator::Multiply,
             left,
             right,
-        }) => {
-            factors(function, *left, out);
-            factors(function, *right, out);
-        }
-        _ => out.push(value),
-    }
-}
-
-/// `x * 0.5 + 0.5` (the literals on either side, `x` a product with a factor 0.5 or the `fma` of it).
-fn is_biased(function: &Function, value: Handle<Expression>) -> bool {
-    let half_factor = |product: Handle<Expression>| {
-        let mut leaves = Vec::new();
-        factors(function, product, &mut leaves);
-        leaves.iter().any(|f| is_literal(function, *f, 0.5))
-    };
-    match stored(function, value) {
-        Some(Expression::Binary {
-            op: BinaryOperator::Add,
-            left,
-            right,
-        }) => [(left, right), (right, left)]
-            .into_iter()
-            .any(|(bias, product)| is_literal(function, *bias, 0.5) && half_factor(*product)),
-        Some(Expression::Math {
-            fun: MathFunction::Fma,
-            arg,
-            arg1: Some(arg1),
-            arg2: Some(arg2),
-            ..
-        }) => {
-            is_literal(function, *arg2, 0.5)
-                && (is_literal(function, *arg, 0.5) || is_literal(function, *arg1, 0.5) || half_factor(*arg))
-        }
-        _ => false,
-    }
-}
-
-/// The square root of something.
-fn is_sqrt(function: &Function, value: Handle<Expression>) -> bool {
-    matches!(
-        stored(function, value),
-        Some(Expression::Math {
-            fun: MathFunction::Sqrt,
-            ..
+        }) = self.expression(value)
+        else {
+            return false;
+        };
+        [(left, right), (right, left)].into_iter().any(|(scale, floor)| {
+            self.is_literal(*scale, 1.0 / 256.0)
+                && matches!(
+                    self.expression(*floor),
+                    Some(Expression::Math {
+                        fun: MathFunction::Floor,
+                        ..
+                    })
+                )
         })
-    )
+    }
+
+    /// The square root of something.
+    fn is_sqrt(&self, value: Handle<Expression>) -> bool {
+        matches!(
+            self.expression(value),
+            Some(Expression::Math {
+                fun: MathFunction::Sqrt,
+                ..
+            })
+        )
+    }
+
+    /// The constant 0.
+    fn is_zero(&self, value: Handle<Expression>) -> bool {
+        match self.expression(value) {
+            Some(Expression::Literal(Literal::F32(v))) => v.to_bits() == 0,
+            Some(Expression::Literal(Literal::U32(v))) => *v == 0,
+            _ => false,
+        }
+    }
 }
 
 /// The expressions an expression is computed from.
@@ -308,33 +406,6 @@ fn operands(e: &Expression) -> Vec<Handle<Expression>> {
         Expression::Compose { components, .. } => components.clone(),
         Expression::Load { pointer } => vec![*pointer],
         _ => Vec::new(),
-    }
-}
-
-/// Whether the literal `x` occurs in the expression's computation.
-fn contains_literal(function: &Function, value: Handle<Expression>, x: f32) -> bool {
-    let mut seen = BTreeSet::new();
-    let mut work = vec![value];
-    while let Some(at) = work.pop() {
-        if !seen.insert(at.index()) {
-            continue;
-        }
-        if is_literal(function, at, x) {
-            return true;
-        }
-        if let Ok(e) = function.expressions.try_get(at) {
-            work.extend(operands(e));
-        }
-    }
-    false
-}
-
-/// The constant 0.
-fn is_zero(function: &Function, value: Handle<Expression>) -> bool {
-    match stored(function, value) {
-        Some(Expression::Literal(Literal::F32(v))) => v.to_bits() == 0,
-        Some(Expression::Literal(Literal::U32(v))) => *v == 0,
-        _ => false,
     }
 }
 

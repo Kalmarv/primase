@@ -452,7 +452,7 @@ fn output_bindings(
             (Some(w), 2) => {
                 lanes(
                     0b0001,
-                    if w.specular_intensity_sqrt {
+                    if w.specular_intensity_encoded {
                         OutputRole::SpecularIntensity {
                             encoding: ScalarEncoding::square_root_of(1.0),
                         }
@@ -462,7 +462,7 @@ fn output_bindings(
                 );
                 lanes(
                     0b0010,
-                    if w.specular_exponent_sqrt_over_512 {
+                    if w.specular_exponent_encoded {
                         OutputRole::SpecularExponent {
                             encoding: ScalarEncoding::square_root_of(512.0),
                         }
@@ -489,8 +489,18 @@ fn output_bindings(
         }
     }
     if let Some(w) = layout {
-        if !w.normal_biased {
-            counts.add("G-buffer pixel stages whose target 1 is not stored as a biased value (Unknown)");
+        if w.normal_zero {
+            counts.add("G-buffer pixel stages that write no normal (target 1 xyz the constant 0, Unknown)");
+        } else if w.normal_floored {
+            counts.add("G-buffer pixel stages whose target 1 is floor(128 n + 128) / 256 with the fractional bits in w (Unknown)");
+        } else if !w.normal_biased {
+            counts.add("G-buffer pixel stages whose target 1 is stored another way (Unknown)");
+        }
+        if !w.specular_intensity_encoded {
+            counts.add("G-buffer pixel stages whose target 2 x is not stored as a square root (Unknown)");
+        }
+        if !w.specular_exponent_encoded {
+            counts.add("G-buffer pixel stages whose target 2 y is not stored as a square root (Unknown)");
         }
         if w.emission_written {
             counts.add("G-buffer pixel stages that write an emission");

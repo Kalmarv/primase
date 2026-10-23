@@ -153,6 +153,9 @@ struct StaticText {
     intensity_sqrt: usize,
     exponent_sqrt: usize,
     fresnel: usize,
+    biased_read: usize,
+    floored_read: usize,
+    zero_read: usize,
     motion: usize,
     unread: BTreeMap<String, usize>,
     refused: BTreeMap<String, usize>,
@@ -281,15 +284,21 @@ fn the_deferred_programs_write_one_g_buffer() {
                     // the pass's own reading of the stores says the same as the text
                     match gbuffer::writes(&sh.bytecode) {
                         Ok(reads) => {
-                            static_text.intensity_sqrt += usize::from(reads.specular_intensity_sqrt);
-                            static_text.exponent_sqrt += usize::from(reads.specular_exponent_sqrt_over_512);
+                            static_text.intensity_sqrt += usize::from(reads.specular_intensity_encoded);
+                            static_text.exponent_sqrt += usize::from(reads.specular_exponent_encoded);
                             static_text.fresnel += usize::from(reads.fresnel_written);
                             static_text.motion += usize::from(reads.motion_written);
-                            assert_eq!(
-                                (reads.normal_biased, reads.emission_written),
-                                (biased, emission),
-                                "{stem} {effects:?}"
+                            // the text shows a lane stored from a plain expression; the reading also follows a
+                            // variable assigned once, so it finds at least what the text shows
+                            assert!(
+                                (!biased || reads.normal_biased) && (!reads.emission_written || emission),
+                                "{stem} {effects:?}: text {biased} {emission}, reading {} {}",
+                                reads.normal_biased,
+                                reads.emission_written
                             );
+                            static_text.biased_read += usize::from(reads.normal_biased);
+                            static_text.floored_read += usize::from(reads.normal_floored);
+                            static_text.zero_read += usize::from(reads.normal_zero);
                         }
                         Err(why) => *static_text.unread.entry(why).or_default() += 1,
                     }
@@ -410,12 +419,16 @@ fn the_deferred_programs_write_one_g_buffer() {
         static_text.emission_effects
     );
     println!(
-        "reads of target 2 and 4 over the {FIVE} programs: intensity stored as a square root {}, exponent as a square root with the factor 1/512 {}, Fresnel written {}, motion written {}; unread {:?}",
+        "reads of target 2 and 4 over the {FIVE} programs: intensity stored as a square root or 0 {}, exponent stored as a square root or 0 {}, Fresnel written {}, motion written {}; unread {:?}",
         static_text.intensity_sqrt,
         static_text.exponent_sqrt,
         static_text.fresnel,
         static_text.motion,
         static_text.unread
+    );
+    println!(
+        "target 1 of the {FIVE} programs, as the reading finds it: biased {}, floored {}, constant 0 {}, of {}",
+        static_text.biased_read, static_text.floored_read, static_text.zero_read, static_text.lifted
     );
     println!("not biased: {:#?}", static_text.odd);
     println!("target 3 z nonzero under stress, by effect: {emission:?}");
