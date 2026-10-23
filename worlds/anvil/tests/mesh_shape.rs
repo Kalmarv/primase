@@ -224,6 +224,12 @@ fn inconsistent_geometry_is_refused() {
         )
         .is_err()
     );
+    // counts the sections cannot hold are refused before room is made for them (each of the three allocated its
+    // count in records before the sections were looked at)
+    let le = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    assert!(with(COUNTS, le(&[4, 0x7FFF_FFFF, 5])).is_err());
+    assert!(with(COUNTS, le(&[4, 2, 0x7FFF_FFFF])).is_err());
+    assert!(with(COUNTS, le(&[0x7FFF_FFFF, 2, 5])).is_err());
     let mut missing = two_triangles();
     missing.retain(|(k, _)| *k != FACE_EDGES);
     assert!(shape(&missing).geometry().is_err());

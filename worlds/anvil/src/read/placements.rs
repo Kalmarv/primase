@@ -155,7 +155,17 @@ pub enum Error {
         #[source]
         source: crate::read::shape::Error,
     },
+    #[error("shape {id:#x}: {why}")]
+    ShapeNesting { id: u64, why: String },
 }
+
+/// The deepest reference lists inside reference lists a shape is read through. The lists seen hold shapes of one kind;
+/// a list may name itself or a list it is inside, and one named twice at each level doubles the parts.
+const MAX_SHAPE_NESTING: usize = 16;
+
+/// The most parts one shape may place: a reference list places the parts of each of its children, and the children
+/// may be lists that share their own.
+const MAX_SHAPE_PARTS: usize = 1 << 16;
 
 /// What an instanced Visual places at each instance: the caller's stated choice, as whether the game draws an
 /// object's other levels at its instances isn't read.
@@ -415,6 +425,8 @@ pub struct Placer<'a> {
     prototype_copies: HashMap<Entity, Entity>,
     /// Per shape id: what it places (see [`Placer::shape`]).
     shapes: HashMap<u64, Result<Parts, u32>>,
+    /// The shapes being read, outermost first: a reference list naming one of them is a loop.
+    shapes_open: Vec<u64>,
     /// The (object, level) pairs whose mesh was refused.
     refused_levels: HashSet<(u64, u8)>,
 }
@@ -577,6 +589,7 @@ impl<'a> Placer<'a> {
             prototypes: HashSet::new(),
             prototype_copies: HashMap::new(),
             shapes: HashMap::new(),
+            shapes_open: Vec::new(),
             refused_levels: HashSet::new(),
         }
     }
@@ -596,7 +609,27 @@ impl<'a> Placer<'a> {
         let parts = match self.shapes.get(&id) {
             Some(parts) => parts.clone(),
             None => {
-                let parts = match self.read_shape(id, placed) {
+                // a list inside itself, or nested past the limit, is refused and not kept: the shape it is inside is
+                // still being read, and answers for itself
+                let loops = if self.shapes_open.contains(&id) {
+                    Some("a reference list that names itself, or a list it is inside")
+                } else if self.shapes_open.len() >= MAX_SHAPE_NESTING {
+                    Some("reference lists nested too deep")
+                } else {
+                    None
+                };
+                if let Some(why) = loops {
+                    let e = Error::ShapeNesting {
+                        id,
+                        why: why.to_owned(),
+                    };
+                    placed.refused.push((id, e.to_string()));
+                    return Ok(Ok(Vec::new()));
+                }
+                self.shapes_open.push(id);
+                let read = self.read_shape(id, placed);
+                self.shapes_open.pop();
+                let parts = match read {
                     Ok(parts) => parts,
                     Err(e) => {
                         placed.refused.push((id, e.to_string()));
@@ -662,11 +695,19 @@ impl<'a> Placer<'a> {
                 for (child, m) in list.children.iter().zip(&list.matrices) {
                     let within = transform(m, 1.0);
                     match self.shape(child.id, placed)? {
-                        Ok(child_parts) => parts.extend(
-                            child_parts
-                                .into_iter()
-                                .map(|(e, local)| (e, Some(local.map_or(within, |l| compose(&within, &l))))),
-                        ),
+                        Ok(child_parts) => {
+                            if parts.len().saturating_add(child_parts.len()) > MAX_SHAPE_PARTS {
+                                return Err(Error::ShapeNesting {
+                                    id,
+                                    why: format!("places more than {MAX_SHAPE_PARTS} parts"),
+                                });
+                            }
+                            parts.extend(
+                                child_parts.into_iter().map(|(e, local)| {
+                                    (e, Some(local.map_or(within, |l| compose(&within, &l))))
+                                }),
+                            );
+                        }
                         Err(kind) => return Ok(Err(kind)),
                     }
                 }
@@ -2225,5 +2266,223 @@ impl<'a> Placer<'a> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    reason = "fixtures"
+)]
+mod shape_tests {
+    use super::*;
+    use crate::read::shape::{REFERENCE_LIST_SHAPE, SPHERE_SHAPE};
+
+    fn floats(v: &[f32]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    /// A sphere shape's body: its centre and radius, and a material reference.
+    fn sphere() -> Vec<u8> {
+        let mut b = vec![1, 0, 0, 0, 0];
+        b.extend(floats(&[1.0, 2.0, 3.0, 0.0, 0.5]));
+        b.extend([1, 1, 0x1D, 0x31, 0xF7, 0x74, 0, 0, 0, 0]);
+        b
+    }
+
+    /// A reference list's body: one child at the identity for each id.
+    fn list(children: &[u64]) -> Vec<u8> {
+        let n = u32::try_from(children.len()).unwrap();
+        let mut b = vec![1u8];
+        b.extend(0u32.to_le_bytes());
+        b.extend(n.to_le_bytes());
+        for c in children {
+            b.extend([1, 1]);
+            b.extend(c.to_le_bytes());
+        }
+        b.extend(n.to_le_bytes());
+        for _ in children {
+            for k in 0..16 {
+                b.extend((if k % 5 == 0 { 1.0f32 } else { 0.0 }).to_le_bytes());
+            }
+        }
+        b.extend(n.to_le_bytes());
+        for _ in children {
+            b.extend(floats(&[0.0; 4]));
+        }
+        b.extend(floats(&[0.0; 8]));
+        b
+    }
+
+    /// A data block of `data` as a forge stores it, the chunk left as it is.
+    fn block(data: &[u8]) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend(0x1004_FA99_57FB_AA33u64.to_le_bytes());
+        b.extend(2u16.to_le_bytes());
+        b.push(5);
+        b.extend([0u8; 4]);
+        b.extend(1u32.to_le_bytes());
+        b.extend((data.len() as u32).to_le_bytes());
+        b.extend((data.len() as u32).to_le_bytes());
+        b.extend(primase_hash::adler32(0, data).to_le_bytes());
+        b.extend(data);
+        b
+    }
+
+    /// An entry's payload: an empty metadata block and the resource of type `ty` with `body`.
+    fn payload(ty: u32, body: &[u8]) -> Vec<u8> {
+        let mut r = Vec::new();
+        r.extend(ty.to_le_bytes());
+        r.extend(u32::try_from(12 + body.len()).unwrap().to_le_bytes());
+        r.extend(0u32.to_le_bytes());
+        r.push(0);
+        r.extend(0u64.to_le_bytes());
+        r.extend(0u32.to_le_bytes());
+        r.extend(body);
+        [block(&[]), block(&r)].concat()
+    }
+
+    /// A version 27 forge holding `entries` (index id, type, payload) as `crate::read::forge`'s reader lays it.
+    fn forge(entries: &[(u64, u32, Vec<u8>)]) -> Vec<u8> {
+        const INDEX_TABLE: usize = 1142;
+        let n = entries.len();
+        let names = INDEX_TABLE + 20 * (n + 1);
+        let end = names + 192 * (n + 1);
+        let mut b = vec![0u8; end];
+        let put = |b: &mut Vec<u8>, at: usize, bytes: &[u8]| b[at..at + bytes.len()].copy_from_slice(bytes);
+        put(&mut b, 0, b"scimitar\0");
+        put(&mut b, 0x09, &27i32.to_le_bytes());
+        put(&mut b, 0x0D, &1050u64.to_le_bytes());
+        put(&mut b, 0x15, &16i64.to_le_bytes());
+        put(&mut b, 0x1D, &1i32.to_le_bytes());
+        put(&mut b, 1050, &(n as i32).to_le_bytes());
+        put(&mut b, 1054, &2i32.to_le_bytes());
+        put(&mut b, 1070, &(-1i64).to_le_bytes());
+        put(&mut b, 1078, &(n as i32 + 1).to_le_bytes());
+        put(&mut b, 1082, &1i32.to_le_bytes());
+        put(&mut b, 1086, &1094i64.to_le_bytes());
+        put(&mut b, 1094, &(n as i32).to_le_bytes());
+        put(&mut b, 1098, &2i32.to_le_bytes());
+        put(&mut b, 1102, &(INDEX_TABLE as i64).to_le_bytes());
+        put(&mut b, 1110, &(-1i64).to_le_bytes());
+        put(&mut b, 1118, &0i32.to_le_bytes());
+        put(&mut b, 1122, &(n as i32).to_le_bytes());
+        put(&mut b, 1126, &(names as i64).to_le_bytes());
+        put(&mut b, 1134, &(end as i64).to_le_bytes());
+        let mut at = end;
+        for (k, (id, ty, data)) in entries.iter().enumerate() {
+            let i = INDEX_TABLE + 20 * k;
+            put(&mut b, i, &(at as i64).to_le_bytes());
+            put(&mut b, i + 8, &id.to_le_bytes());
+            put(&mut b, i + 16, &(data.len() as i32).to_le_bytes());
+            let m = names + 192 * k;
+            put(&mut b, m, &(data.len() as i32).to_le_bytes());
+            put(
+                &mut b,
+                m + 4,
+                &(0x5E5E_0000_0000_0000u64 + k as u64 + 1).to_le_bytes(),
+            );
+            put(&mut b, m + 16, &ty.to_le_bytes());
+            put(&mut b, m + 28, &(k as i32 + 1).to_le_bytes());
+            put(&mut b, m + 40, &1_789_743_211i32.to_le_bytes());
+            put(&mut b, m + 44, format!("shape{k}").as_bytes());
+            put(&mut b, m + 172, &4i32.to_le_bytes());
+            at += data.len();
+        }
+        for (_, _, data) in entries {
+            b.extend(data);
+        }
+        b
+    }
+
+    /// What `shape(id)` places and what was refused, over a forge of `shapes` (id, type, body).
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test I/O: the archive opens a forge from a path"
+    )]
+    fn read(test: &str, shapes: &[(u64, u32, Vec<u8>)], id: u64) -> (Result<Parts, u32>, Vec<String>) {
+        let entries: Vec<(u64, u32, Vec<u8>)> = shapes
+            .iter()
+            .map(|(id, ty, body)| (*id, *ty, payload(*ty, body)))
+            .collect();
+        let dir = std::env::temp_dir().join(format!("primase-anvil-{test}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shapes.forge");
+        std::fs::write(&path, forge(&entries)).unwrap();
+        let mut archive = crate::read::archive::Archive::open(&[&path]).unwrap();
+        let mut world = World::new();
+        let mut placer = Placer::new(
+            &mut archive,
+            &mut world,
+            primase_core::frame::SourceFrame::WORLD,
+            InstancedLevels::Every,
+        );
+        let mut placed = Placed::default();
+        let parts = placer.shape(id, &mut placed).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        (parts, placed.refused.into_iter().map(|(_, why)| why).collect())
+    }
+
+    /// A list of lists of spheres places the spheres once each, the lists' transforms composed.
+    #[test]
+    fn nested_lists_place_their_spheres() {
+        let shapes = [
+            (10, REFERENCE_LIST_SHAPE, list(&[20, 20])),
+            (20, REFERENCE_LIST_SHAPE, list(&[30, 30])),
+            (30, SPHERE_SHAPE, sphere()),
+        ];
+        let (parts, refused) = read("nested", &shapes, 10);
+        assert_eq!(parts.unwrap().len(), 4);
+        assert!(refused.is_empty(), "{refused:?}");
+    }
+
+    /// A list that names itself, or two that name each other, is refused where the loop closes: the shapes are read, not
+    /// recursed through until the stack ends.
+    #[test]
+    fn a_list_naming_itself_or_a_list_it_is_inside_is_refused() {
+        let own = [(10, REFERENCE_LIST_SHAPE, list(&[10]))];
+        let (parts, refused) = read("self", &own, 10);
+        assert!(parts.unwrap().is_empty());
+        assert!(refused.iter().any(|r| r.contains("names itself")), "{refused:?}");
+        let pair = [
+            (10, REFERENCE_LIST_SHAPE, list(&[20, 30])),
+            (20, REFERENCE_LIST_SHAPE, list(&[10])),
+            (30, SPHERE_SHAPE, sphere()),
+        ];
+        let (parts, refused) = read("pair", &pair, 10);
+        // the loop adds nothing; the sphere beside it is placed
+        assert_eq!(parts.unwrap().len(), 1);
+        assert!(refused.iter().any(|r| r.contains("names itself")), "{refused:?}");
+    }
+
+    /// Lists that each name the next twice make 2^depth parts: refused at the nesting limit. And a flat pair of levels
+    /// of a few hundred each, which is past the limit of parts, is refused by that.
+    #[test]
+    fn lists_that_share_their_children_are_bounded() {
+        let mut deep: Vec<(u64, u32, Vec<u8>)> = (0..20u64)
+            .map(|k| (100 + k, REFERENCE_LIST_SHAPE, list(&[101 + k, 101 + k])))
+            .collect();
+        deep.push((120, SPHERE_SHAPE, sphere()));
+        let (parts, refused) = read("deep", &deep, 100);
+        assert!(
+            refused.iter().any(|r| r.contains("nested too deep")),
+            "{refused:?}"
+        );
+        // the nesting refusal empties the list it is in, so the answer is small whatever was nested
+        assert!(parts.unwrap().len() < 1 << 16);
+        let wide = [
+            (10, REFERENCE_LIST_SHAPE, list(&[20; 300])),
+            (20, REFERENCE_LIST_SHAPE, list(&[30; 300])),
+            (30, SPHERE_SHAPE, sphere()),
+        ];
+        let (parts, refused) = read("wide", &wide, 10);
+        assert!(parts.unwrap().is_empty());
+        assert!(
+            refused.iter().any(|r| r.contains("places more than 65536 parts")),
+            "{refused:?}"
+        );
     }
 }

@@ -337,8 +337,10 @@ impl MeshShape {
             .iter()
             .map(|p| p.map(f32::from_le_bytes))
             .collect();
+        // the section is checked to hold exactly its records before room is made for them
+        let stored_faces = records(FACES, f, 6)?;
         let mut faces = Vec::with_capacity(f);
-        for (k, c) in records(FACES, f, 6)?
+        for (k, c) in stored_faces
             .as_chunks::<2>()
             .0
             .as_chunks::<3>()
@@ -352,8 +354,10 @@ impl MeshShape {
             }
             faces.push(face);
         }
+        // the section is checked to hold exactly its records before room is made for them
+        let stored_face_edges = records(FACE_EDGES, f, 12)?;
         let mut face_edges = Vec::with_capacity(f);
-        for (k, c) in records(FACE_EDGES, f, 12)?
+        for (k, c) in stored_face_edges
             .as_chunks::<4>()
             .0
             .as_chunks::<3>()
@@ -370,8 +374,10 @@ impl MeshShape {
             }
             face_edges.push(e);
         }
+        // the section is checked to hold exactly its records before room is made for them
+        let stored_edge_faces = records(EDGE_FACES, x, 4)?;
         let mut edge_faces = Vec::with_capacity(x);
-        for (k, c) in records(EDGE_FACES, x, 4)?
+        for (k, c) in stored_edge_faces
             .as_chunks::<2>()
             .0
             .as_chunks::<2>()
