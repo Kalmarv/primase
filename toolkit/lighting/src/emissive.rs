@@ -658,7 +658,7 @@ impl Pass for EmissiveLights {
     fn options(&self) -> Options {
         self.0.to_options()
     }
-    fn part_may_lack_inputs(&self) -> bool {
+    fn may_lack_inputs(&self) -> bool {
         true
     }
     fn requires(&self) -> &[&'static str] {

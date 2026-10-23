@@ -1255,7 +1255,7 @@ impl Pass for ToyNeeds {
     fn name(&self) -> &'static str {
         "toy-needs"
     }
-    fn part_may_lack_inputs(&self) -> bool {
+    fn may_lack_inputs(&self) -> bool {
         self.1
     }
     fn requires(&self) -> &[&'static str] {
@@ -1296,10 +1296,11 @@ impl Pass for CapeOnFirst {
     }
 }
 
-/// A pass that opts in (part_may_lack_inputs) and finds none of its required names in a part has nothing to do there:
+/// A pass that opts in (may_lack_inputs) and finds none of its required names in a part has nothing to do there:
 /// the part run skips it, recorded on its step and counted per pass. A pass that does not opt in fails in the same
-/// part; partial presence fails; an opted-in pass skipped in every part fails the conversion as a whole run would;
-/// the selection (a whole-world run) stays strict.
+/// part; partial presence fails; an opted-in pass skipped in every part is recorded skipped in every part (the
+/// conversion goes on, as a whole run does); in the selection (a whole-world run) the same rule holds: a pass that does
+/// not opt in fails, one that opts in is skipped.
 #[test]
 fn a_part_with_none_of_a_passs_required_names_skips_it_recorded() {
     let (m, select, _) = manager("toy-select");
@@ -1366,24 +1367,56 @@ fn a_part_with_none_of_a_passs_required_names_skips_it_recorded() {
         "{e}"
     );
 
-    // opted in and skipped in every part: the conversion fails as a whole run would
+    // opted in and skipped in every part: the conversion goes on, the pass recorded skipped in each part
     let passes = Pipeline {
         passes: vec![Box::new(ToyPass), Box::new(ToyNeeds(&["toy.mantle"], true))],
     };
-    let e = failure(&select, &passes);
-    assert!(
-        e.contains("pass toy-needs requires `toy.mantle`, which the world does not have"),
-        "{e}"
-    );
+    let (w, written) = writer(target());
+    let report = convert_parts(&mut reader(2), &mut ToyParts::default(), w, &m, &select, &passes).unwrap();
+    events();
+    assert_eq!(written.borrow().len(), 2);
+    assert!(report.part_reports.iter().all(|p| {
+        p.explicit
+            .steps
+            .iter()
+            .any(|s| s.pass == "toy-needs" && s.skipped == ["toy.mantle"])
+    }));
 
-    // the selection is a whole-world run: strict even for a pass that opts in
-    let select = Pipeline {
-        passes: vec![Box::new(ToyNeeds(&["toy.cape"], true))],
+    // the selection is a whole-world run, under the same rule: a pass that does not opt in fails
+    let strict = Pipeline {
+        passes: vec![Box::new(ToyNeeds(&["toy.cape"], false))],
     };
-    let passes = Pipeline {
+    let only_toy = Pipeline {
         passes: vec![Box::new(ToyPass)],
     };
-    let e = failure(&select, &passes);
+    let e = failure(&strict, &only_toy);
+    assert!(
+        e.contains("requires `toy.cape`, which the world does not have"),
+        "{e}"
+    );
+}
+
+/// A whole-world run under the same rule as a part: a pass that opts in and finds none of its required names in the
+/// world (a read region with no lights) is skipped, recorded on its step and counted; one that does not opt in fails.
+#[test]
+fn a_whole_run_skips_an_opted_in_pass_without_its_inputs_recorded() {
+    let (m, _, _) = manager("toy-select");
+    let needs = |opted: bool| Pipeline {
+        passes: vec![Box::new(ToyNeeds(&["toy.cape"], opted))],
+    };
+    let mut report = primase_core::pass::RunReport::default();
+    m.run(&mut World::new(), &needs(true), &mut report).unwrap();
+    assert!(events().is_empty(), "the pass did not run");
+    assert_eq!(report.steps[0].skipped, ["toy.cape"]);
+    assert_eq!(report.steps[0].log.counts[primase_core::pass::SKIPPED], 1);
+    let e = m
+        .run(
+            &mut World::new(),
+            &needs(false),
+            &mut primase_core::pass::RunReport::default(),
+        )
+        .unwrap_err()
+        .to_string();
     assert!(
         e.contains("requires `toy.cape`, which the world does not have"),
         "{e}"

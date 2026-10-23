@@ -161,11 +161,12 @@ pub trait Pass: Send + Sync {
     fn options(&self) -> Options {
         Options::new()
     }
-    /// Whether a part run ([`PassManager::run_part`]) may skip it in a part that holds none of its required names: a
-    /// per-part lowering whose input a part may simply not have (a web tile of only a light has no materials) opts in.
-    /// Required names are prerequisites, so this is false unless the pass says otherwise: an absent name may be a
-    /// failed load or a wrong order, and a pass that summarizes, decides or plans never opts in.
-    fn part_may_lack_inputs(&self) -> bool {
+    /// Whether a run may skip it in a world (or a part) that holds none of its required names: a lowering whose input
+    /// the world may simply not have (a web tile of only a light has no materials, a read region no lights) opts in;
+    /// the step is recorded as skipped ([`StepReport::skipped`]). Required names are prerequisites, so this is false
+    /// unless the pass says otherwise: an absent name may be a failed load or a wrong order, and a pass that
+    /// summarizes, decides or plans never opts in.
+    fn may_lack_inputs(&self) -> bool {
         false
     }
     /// Names that must be present before it runs.
@@ -940,9 +941,8 @@ pub struct StepReport {
     /// record keeps what its log had noted until then, so its omissions and approximations still reach the report;
     /// `added` and `removed` are then empty (not checked).
     pub failed: Option<String>,
-    /// In a part run ([`PassManager::run_part`]), for a pass that opts in ([`Pass::part_may_lack_inputs`]), its required
-    /// names when none of them was in the part, so the pass did not run (its log counts it, [`SKIPPED`]); empty when it
-    /// ran.
+    /// For a pass that opts in ([`Pass::may_lack_inputs`]), its required names when none of them was in the world or
+    /// part, so the pass did not run (its log counts it, [`SKIPPED`]); empty when it ran.
     pub skipped: Vec<String>,
     /// How long the step took, by the wall clock (zero for a skipped step).
     pub time: StepTime,
@@ -1006,9 +1006,9 @@ impl RunReport {
     }
 }
 
-/// The count a pass skipped in a part run gets in its log ([`PassManager::run_part`]), so a conversion's totals give the
-/// skips per pass.
-pub const SKIPPED: &str = "parts holding none of its required names, skipped";
+/// The count a pass skipped for holding none of its required names gets in its log ([`Pass::may_lack_inputs`]), in a
+/// whole run or a part run, so a conversion's totals give the skips per pass.
+pub const SKIPPED: &str = "runs holding none of its required names, skipped";
 
 /// Why the planner chose a pass: the name to lower (or the missing required name) and the chain depth.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1226,16 +1226,16 @@ impl PassManager {
         report: &mut RunReport,
         instrument: &mut dyn Instrument,
     ) -> Result<()> {
-        self.run_with(w, pipeline, report, instrument, false)
+        self.run_with(w, pipeline, report, instrument)
     }
 
-    /// [`PassManager::run`] on one part of a conversion ([`crate::convert`]): a pass that opts in
-    /// ([`Pass::part_may_lack_inputs`]), requires names and finds none of them in the part has nothing to do there and is
+    /// [`PassManager::run`] on one part of a conversion ([`crate::convert`]), with the same rule as any run: a pass that
+    /// opts in ([`Pass::may_lack_inputs`]), requires names and finds none of them has nothing to do there and is
     /// skipped, recorded (its step's [`StepReport::skipped`], a [`SKIPPED`] count in its log). Any other pass whose
-    /// required names are absent fails as in a whole run, as does an opted-in pass whose part holds some of them but not
-    /// all; a pass that requires nothing always runs. Whole-world runs (a selection, a decision) stay strict.
+    /// required names are absent fails, as does an opted-in pass that finds some of them but not all; a pass that
+    /// requires nothing always runs.
     pub fn run_part(&self, w: &mut World, pipeline: &Pipeline, report: &mut RunReport) -> Result<()> {
-        self.run_with(w, pipeline, report, &mut NoInstrument, true)
+        self.run_with(w, pipeline, report, &mut NoInstrument)
     }
 
     fn run_with(
@@ -1244,14 +1244,12 @@ impl PassManager {
         pipeline: &Pipeline,
         report: &mut RunReport,
         instrument: &mut dyn Instrument,
-        part: bool,
     ) -> Result<()> {
         pipeline.check()?;
         for (index, p) in pipeline.passes.iter().enumerate() {
             let text = pass_text(p.as_ref());
             let absent = |r: &&str| !w.has_component_named(r) && !w.resource_names().contains(r);
-            if part && p.part_may_lack_inputs() && !p.requires().is_empty() && p.requires().iter().all(absent)
-            {
+            if p.may_lack_inputs() && !p.requires().is_empty() && p.requires().iter().all(absent) {
                 let mut log = PassLog::default();
                 log.count(SKIPPED, 1);
                 report.steps.push(StepReport {
@@ -2413,7 +2411,7 @@ mod tests {
             fn requires(&self) -> &[&'static str] {
                 &["toy.pbr"]
             }
-            fn part_may_lack_inputs(&self) -> bool {
+            fn may_lack_inputs(&self) -> bool {
                 true
             }
             fn run(&self, _: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {

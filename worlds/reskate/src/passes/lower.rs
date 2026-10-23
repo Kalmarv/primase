@@ -61,7 +61,7 @@ impl Pass for LowerSkatePbr {
         "lower-skate-pbr"
     }
     /// A part without skate materials (a tile of only a light) has nothing to lower.
-    fn part_may_lack_inputs(&self) -> bool {
+    fn may_lack_inputs(&self) -> bool {
         true
     }
     fn requires(&self) -> &[&'static str] {
@@ -214,7 +214,7 @@ impl Pass for LowerSkateLights {
         "lower-skate-lights"
     }
     /// A part without skate lights has nothing to lower.
-    fn part_may_lack_inputs(&self) -> bool {
+    fn may_lack_inputs(&self) -> bool {
         true
     }
     fn requires(&self) -> &[&'static str] {

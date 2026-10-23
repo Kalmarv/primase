@@ -107,7 +107,7 @@ impl Pass for PlaceAssets {
         "place-assets"
     }
     /// A part of a conversion may hold no asset (the content `partition-by-asset` puts outside them): nothing to place.
-    fn part_may_lack_inputs(&self) -> bool {
+    fn may_lack_inputs(&self) -> bool {
         true
     }
     fn requires(&self) -> &[&'static str] {

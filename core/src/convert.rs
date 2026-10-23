@@ -1234,7 +1234,6 @@ fn run(
                 report.summary_bytes += s.registry.retained(&summaries);
                 kept.push(summaries);
             }
-            skipped_in_every_part(&report.summarized.iter().collect::<Vec<_>>(), s.summarize)?;
             stages.enter("decide");
             let mut merged = merge(s.registry, manager, &kept)?;
             drop(kept);
@@ -1367,14 +1366,6 @@ fn run(
         parts.written(&part)?;
         report.parts += 1;
     }
-    skipped_in_every_part(
-        &report
-            .part_reports
-            .iter()
-            .map(|p| &p.explicit)
-            .collect::<Vec<_>>(),
-        passes,
-    )?;
     stages.enter("finish");
     report.reported.extend(writer.notices());
     let finished = writer.finish()?;
@@ -1442,7 +1433,6 @@ fn gather(
         g.spool.take(&mut part)?;
         kept.push(registry.take_summaries_made(&part, &handed));
     }
-    skipped_in_every_part(&report.gather_runs.iter().collect::<Vec<_>>(), g.gather)?;
     while let Some(mut group) = g.spool.next()? {
         let ordinal = report.groups.len();
         stages.enter(format!("group {ordinal}: load"));
@@ -1488,27 +1478,4 @@ fn merge(registry: &SummaryRegistry, manager: &PassManager, kept: &[World]) -> R
     } else {
         registry.merge(kept)?
     })
-}
-
-/// The error a whole run gives for a pass that every part of a conversion skipped ([`PassManager::run_part`]: none of
-/// its required names in any part): a recipe whose stage has nothing to work on anywhere fails as it would on the whole
-/// world. A pass skipped in some parts and run in others is a part with nothing to do. `runs` is each part's run of
-/// `pipeline`, its steps in the pipeline's order; no parts, no error.
-fn skipped_in_every_part(runs: &[&RunReport], pipeline: &Pipeline) -> Result<()> {
-    if runs.is_empty() {
-        return Ok(());
-    }
-    for (i, p) in pipeline.passes.iter().enumerate() {
-        let everywhere = runs
-            .iter()
-            .all(|r| r.steps.get(i).is_some_and(|s| !s.skipped.is_empty()));
-        if let (true, Some(name)) = (everywhere, p.requires().first()) {
-            return Err(crate::pass::Error::Missing {
-                pass: crate::pass::pass_text(p.as_ref()),
-                name: (*name).to_owned(),
-            }
-            .into());
-        }
-    }
-    Ok(())
 }

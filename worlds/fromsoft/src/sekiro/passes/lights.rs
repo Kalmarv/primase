@@ -86,6 +86,10 @@ impl Pass for LowerFromSoftLights {
     fn requires(&self) -> &[&'static str] {
         &[LightSource::NAME]
     }
+    /// A read region may hold no light records: nothing to lower, the step recorded as skipped.
+    fn may_lack_inputs(&self) -> bool {
+        true
+    }
     fn provides(&self) -> &[&'static str] {
         &[Light::NAME]
     }
