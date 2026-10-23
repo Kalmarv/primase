@@ -94,11 +94,9 @@ fn system_from_number(
     }))
 }
 
-/// The system value an `SV_` semantic name stands for in `stage`'s signature (the compiler states some, such as
-/// `SV_Target`, by name alone).
-fn system_from_name(stage: Stage, output: bool, name: &str, index: u32) -> Result<SystemValue, String> {
-    let key = name[3..].to_ascii_lowercase();
-    let number = match key.as_str() {
+/// The `D3D_NAME` an `SV_` semantic name stands for, if it is a system value of the graphics pipeline.
+fn number_of_name(name: &str) -> Option<u32> {
+    Some(match name[3..].to_ascii_lowercase().as_str() {
         "position" => 1,
         "clipdistance" => 2,
         "culldistance" => 3,
@@ -116,10 +114,8 @@ fn system_from_name(stage: Stage, output: bool, name: &str, index: u32) -> Resul
         "depthlessequal" => 68,
         "stencilref" => 69,
         "innercoverage" => 70,
-        _ => return Err(format!("system-value semantic {name} is not mapped")),
-    };
-    system_from_number(stage, output, number, index)?
-        .ok_or_else(|| format!("system-value semantic {name} is not mapped"))
+        _ => return None,
+    })
 }
 
 /// `D3D_REGISTER_COMPONENT_TYPE`.
@@ -148,7 +144,7 @@ pub fn varying(stage: Stage, output: bool, e: &Element<'_>) -> Result<Varying, S
     let named = e.name.len() > 3 && e.name.as_bytes()[..3].eq_ignore_ascii_case(b"SV_");
     let system = match system_from_number(stage, output, e.system_value, e.index).map_err(at)? {
         Some(s) => {
-            if named && system_from_name(stage, output, e.name, e.index).map_err(at)? != s {
+            if named && number_of_name(e.name) != Some(e.system_value) {
                 return Err(at(format!(
                     "the semantic disagrees with its stored D3D_NAME {}",
                     e.system_value
@@ -156,10 +152,19 @@ pub fn varying(stage: Stage, output: bool, e: &Element<'_>) -> Result<Varying, S
             }
             Some(s)
         }
-        // the compiler states an output's system value (SV_Target, SV_Depth) by name alone; an input whose stored
-        // D3D_NAME is undefined is a plain varying whatever its semantic is called (Unity's pixel programs carry an
-        // `SV_InstanceID` that way)
-        None if named && output => Some(system_from_name(stage, output, e.name, e.index).map_err(at)?),
+        // the compiler states some system values (SV_Target, SV_Depth) by name alone, with D3D_NAME undefined. A name
+        // that is no graphics system value (SV_GroupID) is refused. A name that is one, but none this stage takes in
+        // this direction, is refused for an output and is a plain varying for an input: the compiler did not make
+        // it a system value, and Unity's pixel programs carry an `SV_InstanceID` that way.
+        None if named => {
+            let number = number_of_name(e.name)
+                .ok_or_else(|| at(format!("system-value semantic {} is not mapped", e.name)))?;
+            match system_from_number(stage, output, number, e.index) {
+                Ok(system) => system,
+                Err(_) if !output => None,
+                Err(detail) => return Err(at(detail)),
+            }
+        }
         None => None,
     };
     let written = e.mask & !e.read_write_mask;
@@ -314,6 +319,17 @@ mod tests {
         assert_eq!(clip.system, Some(SystemValue::ClipPosition));
     }
 
+    /// An input whose D3D_NAME is undefined and whose semantic is a graphics system value that stage's inputs do not
+    /// have is a plain varying (Unity's pixel programs carry `SV_InstanceID` so); one a stage does take by name keeps
+    /// its system value.
+    #[test]
+    fn an_undefined_name_with_a_foreign_semantic_is_a_plain_input() {
+        let instance = varying(Stage::Pixel, false, &element("SV_InstanceID", 0, 1, 1)).unwrap();
+        assert_eq!(instance.system, None);
+        let position = varying(Stage::Pixel, false, &element("SV_Position", 0, 15, 15)).unwrap();
+        assert_eq!(position.system, Some(SystemValue::FragCoord));
+    }
+
     #[test]
     fn what_the_table_does_not_map_is_refused_by_name() {
         let refusal = |stage, output, e: Element<'_>| varying(stage, output, &e).unwrap_err();
@@ -324,6 +340,8 @@ mod tests {
         );
         assert!(refusal(Stage::Pixel, false, element("SV_IsFrontFace", 1, 1, 1)).contains("disagrees"));
         assert!(refusal(Stage::Pixel, false, element("SV_GroupID", 0, 1, 1)).contains("SV_GroupID"));
+        // a graphics system value no pixel stage outputs, named with its D3D_NAME undefined
+        assert!(refusal(Stage::Pixel, true, element("SV_InstanceID", 0, 1, 0)).contains("INSTANCE_ID"));
         assert!(refusal(Stage::Pixel, true, element("SV_Position", 1, 15, 0)).contains("POSITION"));
         let mut odd = element("TEXCOORD", 0, 15, 15);
         odd.component_type = 7;

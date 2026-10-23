@@ -419,14 +419,15 @@ impl Binding {
 pub fn reflection(bytes: &[u8]) -> Result<Interface> {
     let directory = chunks(bytes)?;
     let get = |tag: &[u8; 4]| chunk(&directory, tag);
-    let program_stage = stage(&directory)?;
     let v = View(get(b"RDEF")?);
-    // SM5.0 pixel or vertex shader and RD11 record-size directory.
-    let target = match program_stage {
-        Stage::Pixel => 0xffff_0500,
-        _ => 0xfffe_0500,
+    // SM5.0 pixel or vertex shader (the stage is the RDEF's own target, so reflection reads a container without
+    // its code) and RD11 record-size directory.
+    let program_stage = match v.u32(16)? {
+        0xffff_0500 => Stage::Pixel,
+        0xfffe_0500 => Stage::Vertex,
+        _ => return Err(error(4, "expected SM5.0 pixel or vertex RDEF")),
     };
-    if v.u32(16)? != target || v.bytes(28, 4)? != b"RD11" {
+    if v.bytes(28, 4)? != b"RD11" {
         return Err(error(4, "expected SM5.0 pixel or vertex RDEF"));
     }
     for (i, size) in [60, 24, 32, 40, 36, 12].into_iter().enumerate() {
