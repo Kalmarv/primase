@@ -2,7 +2,8 @@
 //! components ([`Material`]). Complete MTD parameters and resolved slots survive for a later layered bake.
 use crate::Game;
 pub use crate::components::materials::{
-    Binding, Definition, LayeredMaterial, Material, SkipClass, identity_digest,
+    Binding, Definition, DefinitionRef, LayeredMaterial, Material, MaterialView, ParameterValue, SkipClass,
+    identity_digest,
 };
 use crate::{
     flver,

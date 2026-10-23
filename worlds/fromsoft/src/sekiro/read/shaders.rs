@@ -80,6 +80,7 @@ impl Bundles {
                         shader.clone(),
                         ShaderBundle {
                             name: shader.clone(),
+                            game,
                             programs,
                             parameters: None,
                         },
@@ -254,6 +255,7 @@ fn bundle(
     }
     Ok(ShaderBundle {
         name: shader.to_owned(),
+        game,
         programs,
         parameters,
     })

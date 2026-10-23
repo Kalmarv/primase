@@ -692,6 +692,8 @@ pub struct ShaderProgram {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShaderBundle {
     pub name: String,
+    /// The game whose binders hold it: its programs' format and G-buffer layout are that game's.
+    pub game: crate::Game,
     pub programs: Vec<ShaderProgram>,
     pub parameters: Option<crate::metaparam::Metaparam>,
 }

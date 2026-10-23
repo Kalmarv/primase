@@ -7,7 +7,7 @@ pub use binding::{
     ALPHA_TEST_POLICY, BIND_POSE_POLICY, Bake, FrozenFrame, INSTANCE_DATA_POLICY, Inputs, Prepared, Programs,
     SECOND_UV_APPROXIMATION, TEXTURE_SCROLL_POLICY,
 };
-pub(crate) use binding::{executor, sampled_period};
+pub(crate) use binding::{executor, program_executor, sampled_period};
 pub use vertex::COLOUR1_POLICY;
 pub mod grouping;
 pub mod period;

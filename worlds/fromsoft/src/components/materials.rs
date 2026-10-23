@@ -134,96 +134,205 @@ pub struct LayeredMaterial {
     pub bindings: BTreeMap<String, Binding>,
 }
 impl LayeredMaterial {
-    /// The alpha test's reference, the first word of `g_AlphaRef` (an int pair; 0 where the material states none: no
-    /// alpha test).
+    /// The material as the binding rules read it ([`MaterialView`]).
+    pub fn view(&self) -> MaterialView<'_> {
+        MaterialView {
+            mtd: &self.mtd,
+            definition: DefinitionRef::Mtd(&self.definition),
+            bindings: &self.bindings,
+        }
+    }
+    /// [`MaterialView::alpha_reference`].
     pub fn alpha_reference(&self) -> i32 {
-        self.definition
-            .parameters
-            .iter()
-            .find(|p| p.name == "g_AlphaRef")
-            .and_then(|p| match &p.value {
-                Value::Int(v) => v.first().copied(),
-                _ => None,
-            })
-            .unwrap_or(0)
+        self.view().alpha_reference()
     }
-    /// The first integer of parameter `name` (an int vector), where the definition states it.
-    fn int_parameter(&self, name: &str) -> Option<i32> {
-        self.definition
-            .parameters
-            .iter()
-            .find(|p| p.name == name)
-            .and_then(|p| match &p.value {
-                Value::Int(v) => v.first().copied(),
-                _ => None,
-            })
-    }
-    /// `g_BlendMode`: 0 opaque, 2 alpha blended (the two the captured game's draws tell apart: the others, 3, 4 and 5,
-    /// are stated by a handful of materials and no draw of one was matched); 0 where the material states none.
+    /// `g_BlendMode` ([`MaterialView::blend_mode`]), 0 where the MTD states none.
     pub fn blend_mode(&self) -> i32 {
-        self.int_parameter("g_BlendMode").unwrap_or(0)
+        self.view().blend_mode().unwrap_or(0)
+    }
+    /// [`MaterialView::depth_write_disabled`].
+    pub fn depth_write_disabled(&self) -> bool {
+        self.view().depth_write_disabled()
+    }
+    /// [`MaterialView::program_name`].
+    pub fn program_name(&self) -> crate::Result<String> {
+        self.view().program_name()
+    }
+    /// [`MaterialView::is_forward`].
+    pub fn is_forward(&self) -> bool {
+        self.view().is_forward()
+    }
+    /// [`MaterialView::pass`].
+    pub fn pass(&self) -> &'static str {
+        self.view().pass()
+    }
+    /// [`MaterialView::gbuffer_program`].
+    pub fn gbuffer_program(&self) -> String {
+        self.view().gbuffer_program()
+    }
+    /// [`MaterialView::pass_program`].
+    pub fn pass_program(&self) -> String {
+        self.view().pass_program()
+    }
+}
+
+/// A definition's parameter value in one vocabulary, whichever record states it: an MTD's booleans, integer and float
+/// vectors, a material binary's typed scalars and vectors (a float3 colour's two further stored floats are not part of
+/// its value).
+#[derive(Clone, Debug, PartialEq)]
+pub enum ParameterValue {
+    Bool(bool),
+    Int(Vec<i32>),
+    Float(Vec<f32>),
+}
+
+/// The record that defines a material, borrowed: an MTD (Sekiro) or a material binary (Elden Ring).
+#[derive(Clone, Copy, Debug)]
+pub enum DefinitionRef<'a> {
+    Mtd(&'a MaterialDefinition),
+    Matbin(&'a crate::matbin::Material),
+}
+impl<'a> DefinitionRef<'a> {
+    /// The shader's path as stored.
+    pub fn shader(self) -> &'a str {
+        match self {
+            DefinitionRef::Mtd(d) => &d.shader,
+            DefinitionRef::Matbin(m) => &m.shader,
+        }
+    }
+    /// The shader's name: its path's last component without its extension (`M[AMSN_V]`).
+    pub fn shader_name(self) -> &'a str {
+        let leaf = self.shader().rsplit(['/', '\\']).next().unwrap_or("");
+        leaf.rsplit_once('.').map_or(leaf, |x| x.0)
+    }
+    /// Parameter `name`'s value, where the definition states it (a material binary's value stored shorter than its type
+    /// is not one).
+    pub fn parameter(self, name: &str) -> Option<ParameterValue> {
+        use crate::matbin::Value as B;
+        match self {
+            DefinitionRef::Mtd(d) => d
+                .parameters
+                .iter()
+                .find(|p| p.name == name)
+                .map(|p| match &p.value {
+                    Value::Bool(b) => ParameterValue::Bool(*b),
+                    Value::Int(v) => ParameterValue::Int(v.clone()),
+                    Value::Float(v) => ParameterValue::Float(v.clone()),
+                }),
+            DefinitionRef::Matbin(m) => Some(match m.param(name)? {
+                B::Bool(b) => ParameterValue::Bool(*b),
+                B::Int(x) => ParameterValue::Int(vec![*x]),
+                B::Int2(v) => ParameterValue::Int(v.to_vec()),
+                B::Float(x) => ParameterValue::Float(vec![*x]),
+                B::Float2(v) => ParameterValue::Float(v.to_vec()),
+                B::Float3(v, _) => ParameterValue::Float(v.to_vec()),
+                B::Float4(v) => ParameterValue::Float(v.to_vec()),
+                B::Float5(v) => ParameterValue::Float(v.to_vec()),
+                B::Truncated { .. } => return None,
+            }),
+        }
+    }
+    /// The texture slots the definition declares, by name: an MTD's texture kinds, a material binary's sampler names.
+    pub fn texture_kinds(self) -> Vec<&'a str> {
+        match self {
+            DefinitionRef::Mtd(d) => d.textures.iter().map(|t| t.kind.as_str()).collect(),
+            DefinitionRef::Matbin(m) => m.samplers.iter().map(|s| s.kind.as_str()).collect(),
+        }
+    }
+    /// Whether it declares a texture slot named `kind`.
+    pub fn declares(self, kind: &str) -> bool {
+        self.texture_kinds().contains(&kind)
+    }
+}
+impl Definition {
+    /// The definition, borrowed ([`DefinitionRef`]).
+    pub fn as_ref(&self) -> DefinitionRef<'_> {
+        match self {
+            Definition::Mtd(d) => DefinitionRef::Mtd(d),
+            Definition::Matbin(m) => DefinitionRef::Matbin(m),
+        }
+    }
+}
+
+/// A material as the binding rules read it, whichever record defines it: the name its FLVER gives its definition, the
+/// definition, and its texture bindings. A layered material's ([`LayeredMaterial::view`]) and any defined material's
+/// ([`Material::view`]).
+#[derive(Clone, Copy, Debug)]
+pub struct MaterialView<'a> {
+    pub mtd: &'a str,
+    pub definition: DefinitionRef<'a>,
+    pub bindings: &'a BTreeMap<String, Binding>,
+}
+impl MaterialView<'_> {
+    /// The first integer of parameter `name`, where the definition states it as integers.
+    fn int_parameter(&self, name: &str) -> Option<i32> {
+        match self.definition.parameter(name)? {
+            ParameterValue::Int(v) => v.first().copied(),
+            _ => None,
+        }
+    }
+    /// The alpha test's reference, the first word of `g_AlphaRef` (an int pair in both games' definitions; 0 where the
+    /// material states none: no alpha test).
+    pub fn alpha_reference(&self) -> i32 {
+        self.int_parameter("g_AlphaRef").unwrap_or(0)
+    }
+    /// `g_BlendMode` where the definition states it. For Sekiro's MTDs: 0 opaque, 2 alpha blended (the two the captured
+    /// game's draws tell apart: the others, 3, 4 and 5, are stated by a handful of materials and no draw of one was
+    /// matched).
+    pub fn blend_mode(&self) -> Option<i32> {
+        self.int_parameter("g_BlendMode")
     }
     /// `g_GX_bDisableDepthWrite`: whether the material is drawn without writing depth (false where it states none).
     pub fn depth_write_disabled(&self) -> bool {
-        self.definition
-            .parameters
-            .iter()
-            .find(|p| p.name == "g_GX_bDisableDepthWrite")
-            .is_some_and(|p| matches!(p.value, Value::Bool(true)))
+        matches!(
+            self.definition.parameter("g_GX_bDisableDepthWrite"),
+            Some(ParameterValue::Bool(true))
+        )
     }
     /// The G-buffer program file its shader and static switch select (`<shader>_<switch>_Gbuf.ppo`), the alpha-tested
     /// permutation (`<shader>_<switch>_Gbuf_[A].ppo`, the plain program with a discard against `FC_AlphaRef`) when the
-    /// material has an alpha reference. Read from the bundles: all 34 switches of each of the three layered shaders have both
-    /// (no plain program discards); in a capture of the running game the contents of the pixel stage's material buffer
-    /// for a plain program have `FC_AlphaRef.x` = -100 and the alpha-tested one's 0.502 = 128 / 255 of `g_AlphaRef`.
+    /// material has an alpha reference; refused without a switch. Read from the bundles: all 34 switches of each of the
+    /// three layered shaders have both (no plain program discards); in a capture of the running game the contents of the
+    /// pixel stage's material buffer for a plain program have `FC_AlphaRef.x` = -100 and the alpha-tested one's 0.502 =
+    /// 128 / 255 of `g_AlphaRef`.
     pub fn program_name(&self) -> crate::Result<String> {
-        if !self
-            .definition
-            .parameters
-            .iter()
-            .any(|p| p.name == "GXFT_SATStaticSwitch")
-        {
+        if self.definition.parameter("GXFT_SATStaticSwitch").is_none() {
             return Err(crate::invalid("layer shader", 0, "missing static switch"));
         }
         Ok(self.gbuffer_program())
     }
     /// Whether the game draws the material in its forward pass (blended, after the lighting) rather than the G-buffer pass:
-    /// `g_BlendMode` 2, the alpha-blended materials. The capture of the running game drew every one the MTDs could be matched
-    /// to (cloud and ground fog, the moon, the sky dome, GXFlver `_al`) with `<shader>_Fwd[_[A]].ppo` and every opaque
-    /// material with `_Gbuf`; the other blend modes (3, 4, 5) were matched to no draw and keep the G-buffer program.
+    /// an MTD's `g_BlendMode` 2, the alpha-blended materials. The capture of Sekiro running drew every one the MTDs could
+    /// be matched to (cloud and ground fog, the moon, the sky dome, GXFlver `_al`) with `<shader>_Fwd[_[A]].ppo` and
+    /// every opaque material with `_Gbuf`; the other blend modes (3, 4, 5) were matched to no draw and keep the G-buffer
+    /// program. A material binary's never is: what Elden Ring draws forward is not established, so its materials keep the
+    /// G-buffer program.
     pub fn is_forward(&self) -> bool {
-        self.blend_mode() == 2
+        matches!(self.definition, DefinitionRef::Mtd(_)) && self.blend_mode() == Some(2)
     }
     /// The pass the material is drawn in, as its programs' file names spell it: `Fwd` for a forward material, `Gbuf`.
     pub fn pass(&self) -> &'static str {
         if self.is_forward() { "Fwd" } else { "Gbuf" }
     }
     /// The G-buffer pixel program file the material's shader, its static switch where it states one and its alpha
-    /// reference select: `<shader>[_<switch>]_Gbuf[_[A]].ppo`. A layered shader has a switch (all 34 of each of the three
-    /// have their programs); the other SAT shaders of Sekiro state none and have one program (`<shader>_Gbuf.ppo`).
+    /// reference select: `<shader>[_<switch>]_Gbuf[_[A]].ppo`. A layered shader has a switch (all 34 of each of Sekiro's
+    /// three have their programs); the other SAT shaders of Sekiro state none and have one program (`<shader>_Gbuf.ppo`).
+    /// Elden Ring's names are of the same form: the switch partitions its 20,193 bundled materials exactly (13,342 state
+    /// none, 6,851 a numbered program).
     pub fn gbuffer_program(&self) -> String {
         self.program_in("Gbuf")
     }
-    /// The pixel program the material is drawn with ([`LayeredMaterial::pass`]'s): `<shader>[_<switch>]_<pass>[_[A]].ppo`.
+    /// The pixel program the material is drawn with ([`MaterialView::pass`]'s): `<shader>[_<switch>]_<pass>[_[A]].ppo`.
     /// Of a pass the engine also draws with shadow permutations (`FwdSdw`, `FwdSSdw`: a per-instance choice) the plain one.
     pub fn pass_program(&self) -> String {
         self.program_in(self.pass())
     }
     fn program_in(&self, pass: &str) -> String {
-        let leaf = self.definition.shader.rsplit(['/', '\\']).next().unwrap_or("");
-        let shader = leaf.rsplit_once('.').map_or(leaf, |x| x.0);
         let switch = self
-            .definition
-            .parameters
-            .iter()
-            .find(|p| p.name == "GXFT_SATStaticSwitch")
-            .and_then(|p| match &p.value {
-                Value::Int(v) => v.first().copied(),
-                _ => None,
-            })
+            .int_parameter("GXFT_SATStaticSwitch")
             .map_or(String::new(), |s| format!("_{s}"));
         let alpha = if self.alpha_reference() > 0 { "_[A]" } else { "" };
-        format!("{shader}{switch}_{pass}{alpha}.ppo")
+        format!("{}{switch}_{pass}{alpha}.ppo", self.definition.shader_name())
     }
 }
 impl Component for LayeredMaterial {
@@ -253,6 +362,14 @@ pub struct Material {
     pub layered: Option<LayeredMaterial>,
 }
 impl Material {
+    /// The material as the binding rules read it ([`MaterialView`]), where a definition defines it.
+    pub fn view(&self) -> Option<MaterialView<'_>> {
+        Some(MaterialView {
+            mtd: &self.mtd,
+            definition: self.definition.as_ref()?.as_ref(),
+            bindings: &self.bindings,
+        })
+    }
     /// The material with every binding's addressing as the engine samples it: an addressing the source does not state
     /// is repeat, the same as a stated repeat.
     pub fn with_effective_addressing(&self) -> Material {

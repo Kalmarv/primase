@@ -125,6 +125,27 @@ pub(crate) fn executor(bytecode: &[u8]) -> Result<ProgramShader> {
     ProgramShader::new(primase_dxbc::lift(bytecode).map_err(lifting)?).map_err(evaluation)
 }
 
+/// A program's container of `format` (a game's: [`crate::Game::shader_format`]) lifted and ready to run: DXBC
+/// ([`executor`]) or DXIL.
+pub(crate) fn program_executor(
+    format: primase_core::shader::ShaderFormat,
+    bytecode: &[u8],
+) -> Result<ProgramShader> {
+    use primase_core::shader::ShaderFormat;
+    match format {
+        ShaderFormat::Dxbc => executor(bytecode),
+        ShaderFormat::Dxil => {
+            ProgramShader::new(primase_dxil::lift(bytecode).map_err(|e| invalid("program lift", 0, e))?)
+                .map_err(evaluation)
+        }
+        other => Err(invalid(
+            "program lift",
+            0,
+            format!("a FromSoftware program of format {other:?}"),
+        )),
+    }
+}
+
 const IDENTITY: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
 
 /// An input's four lanes.
@@ -333,7 +354,7 @@ impl FrozenFrame {
 /// The program's common repeat over the UV scales of the texture slots it samples that the material binds, and
 /// whether it is exact ([`super::period::common_period`]).
 pub(crate) fn sampled_period(interface: &Interface, material: &LayeredMaterial) -> Result<([f32; 2], bool)> {
-    let slots = resolve::slots(material)?;
+    let slots = resolve::slots(&material.view())?;
     let sampled_scales: Vec<_> = textures_of(interface)
         .filter_map(|r| resolve::texture_slot(r).ok())
         .filter_map(|slot| slots.get(&slot).map(|(_, b)| b.scale))
@@ -363,10 +384,12 @@ impl Prepared {
         let program = scratch.spawn();
         let mut views: BTreeMap<Entity, Arc<BaseMipBilinearWrap>> = BTreeMap::new();
         let mut known: BTreeMap<(String, bool), Option<Entity>> = BTreeMap::new();
+        // the layer bake's materials are Sekiro's layered ones
         let resolution = resolve(
             &shader,
             program,
-            material,
+            &material.view(),
+            crate::Game::Sekiro,
             None,
             Unbound::Preview,
             &mut |stem, srgb| {
@@ -511,7 +534,7 @@ impl Prepared {
                     .expect("words inside a buffer the program reads");
             }
         }
-        let slots = resolve::slots(material)?;
+        let slots = resolve::slots(&material.view())?;
         let (period, period_exact) = sampled_period(interface, material)?;
         let mut textures = BTreeMap::new();
         let mut cache = BTreeMap::<(Entity, bool, [Option<AddressMode>; 2]), Arc<BaseMipBilinearWrap>>::new();
@@ -523,7 +546,7 @@ impl Prepared {
             let register = resolve::register(resource)?;
             // an engine texture (no material slot in its name) is a constant, as the binding states it Default
             if resolve::texture_slot(resource).is_err()
-                && !resolve::named_by_material(material, &resource.provenance.name)
+                && !resolve::named_by_material(&material.view(), &resource.provenance.name)
             {
                 match &bound.source {
                     TextureSource::Default { value, why } => {
@@ -548,7 +571,7 @@ impl Prepared {
                     }
                 }
             }
-            let (role, _) = resolve::role_and_binding(material, &slots, resource)?;
+            let (role, _) = resolve::role_and_binding(&material.view(), &slots, resource)?;
             let source = match &bound.source {
                 TextureSource::Texture {
                     texture: entity,

@@ -57,6 +57,7 @@ struct Prepared {
 fn prepare(shader: &str, name: &str, code: &[u8]) -> Result<Prepared> {
     let frame = program_frame(&ShaderBundle {
         name: shader.to_owned(),
+        game: Game::EldenRing,
         programs: vec![ShaderProgram {
             name: name.to_owned(),
             stage: ShaderStage::Vertex,

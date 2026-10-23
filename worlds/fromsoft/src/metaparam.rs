@@ -66,8 +66,8 @@ pub struct MtdParam {
     /// Offset of its first component in the constant buffer, in 32-bit components.
     pub start: u32,
     pub sequence_index: i32,
-    /// 0 bool, 1 float, 2 float2 (UV tiling), 3 float3, 4 float4, 12 colour in Sekiro's files (RGBA and an
-    /// intensity; the third-party reader of the format calls it 13).
+    /// 0 bool, 1 float, 2 float2 (UV tiling), 3 float3, 4 float4, a colour (RGBA and an intensity): 12 in Sekiro's
+    /// files, 13 in Elden Ring's ([`MtdParam::is_colour`]).
     pub value_type: u8,
     /// Set (stored 2) where the renderer reads the parameter and no shader does.
     pub not_shader_input: bool,
@@ -77,6 +77,14 @@ pub struct MtdParam {
     /// CRC-32 of the UTF-16 bytes of the parameter's name in the material definition.
     pub key: u32,
     pub default: [f32; 5],
+}
+
+impl MtdParam {
+    /// Whether it is a colour: four lanes and an intensity, the fifth (type 12 in Sekiro's metaparams, 13 in Elden
+    /// Ring's).
+    pub fn is_colour(&self) -> bool {
+        matches!(self.value_type, 12 | 13)
+    }
 }
 
 /// A shader's parameter definition.

@@ -83,6 +83,43 @@ impl Game {
         }
     }
 
+    /// The game's G-buffer as its deferred lighting decodes it: per render target, the lanes and what they hold. A material's
+    /// G-buffer pixel program writes target `n` and the lighting reads it as `g_GBuffer<n>Texture`; a lane no row names is
+    /// read by no lighting program and has no role. The world normal is `n * 0.5 + 0.50048876` (`0x3f002008`) in both games'
+    /// writers, decoded `x * 2 - 1` and normalised.
+    ///
+    /// - Sekiro: target 0 the world normal (`xyz`), 1 the gloss (`x`), 2 the albedo (`rgb`), 3 the reflectance (`rgb`) and
+    ///   4 the emission (`rgb`), in the lanes the layered programs write them.
+    /// - Elden Ring, from `GXLightAcc_DDirLight1.ppo` (the directional light, `gxrenderershader`): `g_GBuffer0Texture.xyz`
+    ///   the world normal; `g_GBuffer1Texture.x` the metallic (`F0 = lerp(0.04, albedo, x)`, the albedo
+    ///   `g_GBuffer2Texture.rgb`), `.y` the gloss (roughness `1 - 0.95 sqrt(k y)`, squared); `g_GBuffer2Texture.rgb` the
+    ///   albedo. `g_GBuffer1Texture.z` (read times 10) and `g_GBuffer2Texture.w` (read times 255, as an integer) are read
+    ///   for what is not established, and targets 3 and 4 by no lighting program.
+    pub fn gbuffer(self) -> Vec<(u32, u8, primase_core::shader::OutputRole)> {
+        use primase_core::shader::{NormalEncoding, NormalSpace, OutputRole};
+        let normal = OutputRole::Normal {
+            encoding: NormalEncoding::XyzBiased {
+                bias_bits: 0x3f00_2008,
+            },
+            space: NormalSpace::World,
+        };
+        match self {
+            Game::Sekiro => vec![
+                (0, 0b0111, normal),
+                (1, 0b0001, OutputRole::Gloss),
+                (2, 0b0111, OutputRole::Albedo),
+                (3, 0b0111, OutputRole::Reflectance),
+                (4, 0b0111, OutputRole::Emission),
+            ],
+            Game::EldenRing => vec![
+                (0, 0b0111, normal),
+                (1, 0b0001, OutputRole::Metallic),
+                (1, 0b0010, OutputRole::Gloss),
+                (2, 0b0111, OutputRole::Albedo),
+            ],
+        }
+    }
+
     /// The binders holding the game's shader bundles (`<shader>.shaderbdle` members), in the order a shader is looked up:
     /// Sekiro's one; Elden Ring's base game's, its two later additions' and SpeedTree's (a shader is in one of them).
     pub fn shader_binders(self) -> &'static [&'static str] {

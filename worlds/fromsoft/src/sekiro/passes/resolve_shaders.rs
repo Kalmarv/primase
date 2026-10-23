@@ -144,6 +144,42 @@ impl Pass for ResolveFromSoftShaders {
     }
 }
 
+/// Which record defines a candidate material, for the binding and its counts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// Sekiro's layered materials (their own definition and bindings).
+    Layered,
+    /// The other MTD-defined materials (Sekiro's SAT shaders without a static switch, the fixed-function ones).
+    Other,
+    /// Material binaries (Elden Ring's).
+    Binary,
+}
+impl Kind {
+    const ALL: [Kind; 3] = [Kind::Layered, Kind::Other, Kind::Binary];
+    fn word(self) -> &'static str {
+        match self {
+            Kind::Layered => "layered",
+            Kind::Other => "other",
+            Kind::Binary => "material binary",
+        }
+    }
+}
+
+/// Counts of one kind of material.
+#[derive(Default, Clone, Copy)]
+struct Tally {
+    bound: u64,
+    without_program: u64,
+    without_vertex: u64,
+    skinned: u64,
+    mixed: u64,
+    without_skin: u64,
+    blended: u64,
+    blend_unstated: u64,
+    without_depth_write: u64,
+    state_unstated: u64,
+}
+
 fn run(
     world: &mut World,
     programs: &Payloads,
@@ -151,27 +187,18 @@ fn run(
     unbound: Unbound,
     log: &mut PassLog,
 ) -> Result<(), String> {
-    // every material an MTD defines, as the definition and bindings the binding reads: a layered material's own, the
-    // others' (the SAT shaders without a static switch) as the same record, with whether it is layered
-    let candidates: Vec<(Entity, crate::materials::LayeredMaterial, bool)> = world
+    // every defined material, with the record that defines it: a layered material's own definition and bindings, the
+    // others' (an MTD's or a material binary's) as the material states them
+    let candidates: Vec<(Entity, Material, Kind)> = world
         .iter::<Material>()
         .filter_map(|(e, m)| {
-            match (
-                &m.layered,
-                m.definition.as_ref().and_then(crate::materials::Definition::mtd),
-            ) {
-                (Some(l), _) => Some((e, l.clone(), true)),
-                (None, Some(d)) => Some((
-                    e,
-                    crate::materials::LayeredMaterial {
-                        mtd: m.mtd.clone(),
-                        definition: d.clone(),
-                        bindings: m.bindings.clone(),
-                    },
-                    false,
-                )),
-                (None, None) => None,
-            }
+            let kind = match (&m.layered, &m.definition) {
+                (Some(_), _) => Kind::Layered,
+                (None, Some(crate::materials::Definition::Mtd(_))) => Kind::Other,
+                (None, Some(crate::materials::Definition::Matbin(_))) => Kind::Binary,
+                (None, None) => return None,
+            };
+            Some((e, m.clone(), kind))
         })
         .collect();
     // the programs read once, each its own entity
@@ -181,45 +208,45 @@ fn run(
     // the vertex programs, each its own entity, by file name
     let mut vertex_shaders: BTreeMap<String, Entity> = BTreeMap::new();
     let draws = draws(world);
-    // counted apart for the layered materials and the others: [layered, other]
-    #[derive(Default, Clone, Copy)]
-    struct Tally {
-        bound: u64,
-        without_program: u64,
-        without_vertex: u64,
-        skinned: u64,
-        mixed: u64,
-        without_skin: u64,
-        blended: u64,
-        blend_unstated: u64,
-        without_depth_write: u64,
-    }
-    let mut tally = [Tally::default(); 2];
+    let mut tally: BTreeMap<&'static str, Tally> = BTreeMap::new();
     let mut policies: BTreeMap<String, u64> = BTreeMap::new();
-    for (material_entity, material, is_layered) in candidates {
-        let t = &mut tally[usize::from(!is_layered)];
+    for (material_entity, source, kind) in candidates {
+        let t = tally.entry(kind.word()).or_default();
+        let material = match (&source.layered, source.view()) {
+            (Some(l), _) => l.view(),
+            (None, Some(view)) => view,
+            (None, None) => unreachable!("a candidate has a definition"),
+        };
+        let bundle = world
+            .get::<MaterialShader>(material_entity)
+            .and_then(|m| world.get::<ShaderBundle>(m.0))
+            .cloned();
+        // the game whose program it is: its bundle's (Sekiro's layered programs the reader kept are Sekiro's)
+        let game = bundle.as_ref().map_or(crate::Game::Sekiro, |b| b.game);
         let name = material.pass_program();
-        // the layered programs the reader kept, else the one the shader's bundle holds under that name
-        let bytes = programs.get(&name).cloned().or_else(|| {
-            world
-                .get::<MaterialShader>(material_entity)
-                .and_then(|m| world.get::<ShaderBundle>(m.0))
-                .and_then(|b| b.program(&name))
-                .map(|p| p.code.clone())
-        });
-        let Some(bytes) = bytes else {
+        // the layered programs the reader kept (DXBC), else the one the shader's bundle holds under that name
+        let program = programs
+            .get(&name)
+            .map(|code| (ShaderFormat::Dxbc, code.clone()))
+            .or_else(|| {
+                bundle
+                    .as_ref()
+                    .and_then(|b| b.program(&name))
+                    .map(|p| (p.format, p.code.clone()))
+            });
+        let Some((format, bytes)) = program else {
             t.without_program += 1;
             continue;
         };
-        let bytes = &bytes;
         if !shaders.contains_key(&name) {
-            let parsed = crate::layer_bake::executor(bytes).map_err(|e| format!("{name}: {e}"))?;
+            let parsed =
+                crate::layer_bake::program_executor(format, &bytes).map_err(|e| format!("{name}: {e}"))?;
             let entity = world.spawn();
             world.insert(entity, Name(name.clone()));
             world.insert(
                 entity,
                 Shader {
-                    format: ShaderFormat::Dxbc,
+                    format,
                     bytecode: bytes.to_vec(),
                     interface: PixelShader::interface(&parsed).clone(),
                 },
@@ -227,17 +254,38 @@ fn run(
             shaders.insert(name.clone(), (entity, parsed));
         }
         let (shader_entity, parsed) = &shaders[&name];
-        let metaparam = world
-            .get::<MaterialShader>(material_entity)
-            .and_then(|m| world.get::<ShaderBundle>(m.0))
-            .and_then(|b| b.parameters.clone());
+        let metaparam = bundle.as_ref().and_then(|b| b.parameters.clone());
+        // the G-buffer vertex program from the shader's bundle: the skinned permutation when every primitive that draws
+        // the material carries joint indices and weights, the unskinned one otherwise (a material drawn both ways has one
+        // binding, the unskinned, counted). `@[cl]` is the same program without clip-distance outputs: not needed
+        let (unskinned_draws, skinned_draws) = draws.get(&material_entity).copied().unwrap_or((0, 0));
+        let skin = skinned_draws > 0 && unskinned_draws == 0;
+        if skinned_draws > 0 && unskinned_draws > 0 {
+            t.mixed += 1;
+        }
+        // `<shader>_<pass>.vpo`; the fixed-function shaders spell the G-buffer's `_GBuf`
+        let vertex = bundle
+            .as_ref()
+            .and_then(|b| {
+                [material.pass(), "GBuf"].iter().find_map(|g| {
+                    b.program(&format!("{}_{g}{}.vpo", b.name, if skin { "_Skin" } else { "" }))
+                })
+            })
+            .map(|p| (p.name.clone(), p.format, p.code.clone()));
+        if skin {
+            t.skinned += 1;
+            if vertex.is_none() && bundle.is_some() {
+                t.without_skin += 1;
+            }
+        }
         let resolution = resolve(
             parsed,
             *shader_entity,
             &material,
+            game,
             metaparam.as_ref(),
             unbound,
-            &mut |stem, srgb| {
+            &mut |stem: &str, srgb: bool| {
                 let key = (stem.to_owned(), srgb);
                 if let Some(&e) = textures.get(&key) {
                     return Ok(Some(e));
@@ -263,42 +311,27 @@ fn run(
         for (policy, count) in resolution.policies {
             *policies.entry(policy).or_default() += count;
         }
-        // the G-buffer vertex program from the shader's bundle: the skinned permutation when every primitive that draws
-        // the material carries joint indices and weights, the unskinned one otherwise (a material drawn both ways has
-        // one binding, the unskinned, counted). `@[cl]` is the same program without clip-distance outputs: not needed
-        let (unskinned_draws, skinned_draws) = draws.get(&material_entity).copied().unwrap_or((0, 0));
-        let skin = skinned_draws > 0 && unskinned_draws == 0;
-        if skinned_draws > 0 && unskinned_draws > 0 {
-            t.mixed += 1;
-        }
-        let bundle = world
-            .get::<MaterialShader>(material_entity)
-            .and_then(|m| world.get::<ShaderBundle>(m.0));
-        // `<shader>_<pass>.vpo`; the fixed-function shaders spell the G-buffer's `_GBuf`
-        let vertex = bundle
-            .and_then(|b| {
-                [material.pass(), "GBuf"].iter().find_map(|g| {
-                    b.program(&format!("{}_{g}{}.vpo", b.name, if skin { "_Skin" } else { "" }))
-                })
-            })
-            .map(|p| (p.name.clone(), p.code.clone()));
-        if skin {
-            t.skinned += 1;
-            if vertex.is_none() && bundle.is_some() {
-                t.without_skin += 1;
-            }
-        }
         let mut stages = Vec::new();
         match vertex {
-            Some((vertex_name, code)) => {
-                let interface = primase_dxbc::reflection(&code).map_err(|e| format!("{vertex_name}: {e}"))?;
+            Some((vertex_name, format, code)) => {
+                // the vertex program's interface: a DXBC program's reflection, a DXIL one's as the lifter reads it
+                let interface = match format {
+                    ShaderFormat::Dxbc => {
+                        primase_dxbc::reflection(&code).map_err(|e| format!("{vertex_name}: {e}"))?
+                    }
+                    _ => {
+                        primase_dxil::lift(&code)
+                            .map_err(|e| format!("{vertex_name}: {e}"))?
+                            .interface
+                    }
+                };
                 let entity = *vertex_shaders.entry(vertex_name.clone()).or_insert_with(|| {
                     let entity = world.spawn();
                     world.insert(entity, Name(vertex_name.clone()));
                     world.insert(
                         entity,
                         Shader {
-                            format: ShaderFormat::Dxbc,
+                            format,
                             bytecode: code.to_vec(),
                             interface: interface.clone(),
                         },
@@ -310,21 +343,40 @@ fn run(
             None => t.without_vertex += 1,
         }
         stages.push(resolution.stage);
-        let state = render_state(&material);
-        match material.blend_mode() {
-            0 => {}
-            2 => t.blended += 1,
-            _ => t.blend_unstated += 1,
+        // the render state: what Sekiro's capture settles from an MTD ([`render_state`]); a material binary's is not
+        // established (Elden Ring is not run), so none is stated, counted
+        let state = match (&source.layered, &source.definition) {
+            (Some(l), _) => render_state(l),
+            (None, Some(crate::materials::Definition::Mtd(d))) => {
+                render_state(&crate::materials::LayeredMaterial {
+                    mtd: source.mtd.clone(),
+                    definition: d.clone(),
+                    bindings: source.bindings.clone(),
+                })
+            }
+            _ => {
+                t.state_unstated += 1;
+                Default::default()
+            }
+        };
+        if kind != Kind::Binary {
+            match material.blend_mode().unwrap_or(0) {
+                0 => {}
+                2 => t.blended += 1,
+                _ => t.blend_unstated += 1,
+            }
         }
         if state.depth.is_some_and(|d| !d.write) {
             t.without_depth_write += 1;
         }
         world.insert(material_entity, ShaderBinding { stages, state });
-        tally[usize::from(!is_layered)].bound += 1;
+        t.bound += 1;
     }
-    for (t, which) in tally.into_iter().zip(["layered", "other"]) {
-        // the other SAT materials' keys are counted only where there are some, the layered keys as ever
-        if which == "other" && t.bound + t.without_program == 0 {
+    for kind in Kind::ALL {
+        let which = kind.word();
+        let t = tally.get(which).copied().unwrap_or_default();
+        // the layered keys are counted as ever, the others only where there are some
+        if kind != Kind::Layered && t.bound + t.without_program == 0 {
             continue;
         }
         log.count(&format!("{which} materials bound"), t.bound);
@@ -374,6 +426,12 @@ fn run(
             log.count(
                 &format!("{which} materials that disable depth write (g_GX_bDisableDepthWrite)"),
                 t.without_depth_write,
+            );
+        }
+        if t.state_unstated > 0 {
+            log.count(
+                &format!("{which} materials with no render state stated (the game's is not established)"),
+                t.state_unstated,
             );
         }
         if t.without_skin > 0 {

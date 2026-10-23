@@ -138,7 +138,8 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
     let resolution = resolve(
         &shader,
         program,
-        &material(),
+        &material().view(),
+        primase_fromsoft::Game::Sekiro,
         None,
         Unbound::Preview,
         &mut |stem, srgb| {
@@ -277,7 +278,8 @@ fn leaving_unbound_slots_invents_nothing() {
     let resolution = resolve(
         &shader,
         program,
-        &material(),
+        &material().view(),
+        primase_fromsoft::Game::Sekiro,
         None,
         Unbound::Leave,
         &mut |_, _| Ok(None),
@@ -358,6 +360,7 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
     world.insert(
         bundle,
         ShaderBundle {
+            game: primase_fromsoft::Game::Sekiro,
             name: "M[Multiple]".into(),
             programs: vec![ShaderProgram {
                 name: "M[Multiple]_Gbuf.vpo".into(),
@@ -478,7 +481,8 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
     let stage = resolve(
         &shader,
         program,
-        &layered,
+        &layered.view(),
+        primase_fromsoft::Game::Sekiro,
         None,
         Unbound::Preview,
         &mut |stem, _| Ok((stem == "grass_a").then_some(grass)),
@@ -738,6 +742,7 @@ fn the_pass_chooses_the_vertex_permutation_by_the_primitives_streams() {
         world.insert(
             bundle,
             ShaderBundle {
+                game: primase_fromsoft::Game::Sekiro,
                 name: "M[Multiple]".into(),
                 programs,
                 parameters: None,
@@ -800,9 +805,15 @@ fn the_material_buffers_engine_named_fields_come_from_the_definition() {
     let shader = executor(MTD_PROGRAM);
     let program = World::default().spawn();
     let at = |layered: &LayeredMaterial| {
-        let stage = resolve(&shader, program, layered, None, Unbound::Preview, &mut |_, _| {
-            Ok(None)
-        })
+        let stage = resolve(
+            &shader,
+            program,
+            &layered.view(),
+            primase_fromsoft::Game::Sekiro,
+            None,
+            Unbound::Preview,
+            &mut |_, _| Ok(None),
+        )
         .unwrap()
         .stage;
         constants(&stage, &shader)
@@ -866,9 +877,15 @@ fn the_bake_freezes_the_alpha_test_off() {
         ("g_DiffuseMapColor", Value::Float(vec![1., 1., 1.])),
         ("g_AlphaRef", Value::Int(vec![128, 0])),
     ]);
-    let stage = resolve(&shader, program, &tested, None, Unbound::Preview, &mut |_, _| {
-        Ok(None)
-    })
+    let stage = resolve(
+        &shader,
+        program,
+        &tested.view(),
+        primase_fromsoft::Game::Sekiro,
+        None,
+        Unbound::Preview,
+        &mut |_, _| Ok(None),
+    )
     .unwrap()
     .stage;
     let prepared = Prepared::from_binding(
@@ -887,9 +904,15 @@ fn the_bake_freezes_the_alpha_test_off() {
     assert_eq!(prepared.policies.get(ALPHA_TEST_POLICY), Some(&1));
     // a material without a reference is not counted
     let plain = with_params(&[("g_AlphaRef", Value::Int(vec![0, 0]))]);
-    let stage = resolve(&shader, program, &plain, None, Unbound::Preview, &mut |_, _| {
-        Ok(None)
-    })
+    let stage = resolve(
+        &shader,
+        program,
+        &plain.view(),
+        primase_fromsoft::Game::Sekiro,
+        None,
+        Unbound::Preview,
+        &mut |_, _| Ok(None),
+    )
     .unwrap()
     .stage;
     let prepared = Prepared::from_binding(
@@ -943,7 +966,8 @@ fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
     let resolution = resolve(
         &shader,
         program,
-        &material(),
+        &material().view(),
+        primase_fromsoft::Game::Sekiro,
         Some(&metaparam),
         Unbound::Preview,
         &mut |_, _| Ok(None),
@@ -977,7 +1001,8 @@ fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
     let resolution = resolve(
         &shader,
         program,
-        &material(),
+        &material().view(),
+        primase_fromsoft::Game::Sekiro,
         Some(&by_ca),
         Unbound::Preview,
         &mut |_, _| Ok(None),
@@ -1033,6 +1058,7 @@ fn the_pass_binds_the_other_sat_materials_through_their_bundle() {
         dds(4, 4),
     )])));
     let bundle = |name: &str, program: &str| ShaderBundle {
+        game: primase_fromsoft::Game::Sekiro,
         name: name.into(),
         programs: vec![ShaderProgram {
             name: program.into(),
@@ -1117,7 +1143,8 @@ fn a_fixed_function_materials_textures_are_bound_by_their_kind_names() {
     let resolution = resolve(
         &shader,
         program,
-        &layered,
+        &layered.view(),
+        primase_fromsoft::Game::Sekiro,
         None,
         Unbound::Preview,
         &mut |stem, srgb| {
@@ -1252,7 +1279,8 @@ fn the_dither_and_camera_fade_fields_are_object_roles() {
     let resolution = resolve(
         &shader,
         program,
-        &material(),
+        &material().view(),
+        primase_fromsoft::Game::Sekiro,
         None,
         Unbound::Preview,
         &mut |_, _| Ok(None),
@@ -1295,7 +1323,8 @@ fn the_scene_depth_is_a_frame_texture() {
     let resolution = resolve(
         &shader,
         program,
-        &material(),
+        &material().view(),
+        primase_fromsoft::Game::Sekiro,
         None,
         Unbound::Preview,
         &mut |_, _| Ok(None),

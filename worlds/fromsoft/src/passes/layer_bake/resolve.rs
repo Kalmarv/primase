@@ -3,21 +3,20 @@
 //! numeric slot named twice prefers the texture the MTD declares), the material's SAT parameters and texture tiling
 //! as the constants' own words, the engine's per-view, per-frame and per-object values as roles (never values), and
 //! the G-buffer layout of the outputs.
-use crate::materials::{Binding, LayeredMaterial};
+use crate::materials::{Binding, LayeredMaterial, MaterialView, ParameterValue};
 use crate::metaparam::Metaparam;
-use crate::mtd::Value;
 use crate::{Result, invalid};
 use primase_core::Entity;
 use primase_core::shader::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, DepthState,
-    FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, NormalEncoding, NormalSpace,
-    ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Stage,
-    StageBinding, TargetState, TextureBinding, TextureSource, ViewParameter,
+    FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, ObjectParameter, OutputBinding,
+    OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Stage, StageBinding, TargetState,
+    TextureBinding, TextureSource, ViewParameter,
 };
 use primase_shader::{D3dClass, Interface, Resource, SystemValue};
 use primase_shader_exec::ProgramShader;
 use primase_shader_exec::{Layout, PixelShader};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The stream that carries a layered mesh's second stored vertex colour (the element the FLVER indexes 1, which the
 /// layered vertex programs read as `COLOR1`): `Color(0)` is the first colour of a glTF mesh and `Color(1)` to `Color(6)`
@@ -34,15 +33,11 @@ pub enum Unbound {
     Leave,
 }
 
-/// The G-buffer outputs the layered programs write, by render target: the world normal, the gloss (x only), the
-/// albedo, the reflectance and the emission.
-const NORMAL_BIAS_BITS: u32 = 0x3f00_2008;
-
 /// Whether the material names a texture kind exactly as a program resource: the fixed-function (`GXFlver_*`) programs
 /// call their textures `g_DiffuseTexture`, `g_SpecularTexture`, `g_BumpmapTexture`, as the material's own kinds, not by
 /// numbered slot.
-pub(crate) fn named_by_material(material: &LayeredMaterial, name: &str) -> bool {
-    material.bindings.contains_key(name) || material.definition.textures.iter().any(|t| t.kind == name)
+pub(crate) fn named_by_material(material: &MaterialView<'_>, name: &str) -> bool {
+    material.bindings.contains_key(name) || material.definition.declares(name)
 }
 
 /// The role a texture kind named without a slot number has, from its name: a diffuse texture is the albedo, a bump map the
@@ -61,7 +56,7 @@ fn kind_role(name: &str) -> &'static str {
 /// (a declared slot retains its role even without a path: an unbound normal gets the flat normal, not the zero of an
 /// unknown resource), for a fixed-function texture by the kind's own name.
 pub(crate) fn role_and_binding<'a>(
-    material: &'a LayeredMaterial,
+    material: &MaterialView<'a>,
     slots: &BTreeMap<u32, (&'a str, &'a Binding)>,
     resource: &Resource,
 ) -> Result<(&'a str, Option<&'a Binding>)> {
@@ -74,13 +69,7 @@ pub(crate) fn role_and_binding<'a>(
         }
         Err(_) => {
             let name = resource.provenance.name.as_str();
-            let kind = material
-                .definition
-                .textures
-                .iter()
-                .find(|t| t.kind == name)
-                .map_or(name, |t| t.kind.as_str());
-            (kind_role(kind), material.bindings.get(name))
+            (kind_role(name), material.bindings.get(name))
         }
     })
 }
@@ -92,19 +81,34 @@ pub const ENGINE_DITHER_TEXTURE: &str = "g_DitherTexture";
 /// linearised with `FC_DepthComputeParam`: view depth `-z / (x - depth)`): the frame's, bound as one.
 pub const ENGINE_SCENE_DEPTH_TEXTURE: &str = "g_DepthTexture";
 
-/// `<index>` and role of a texture kind named `…Texture2D_<index>_<Role>…`.
+/// `<index>` and role of a texture kind named `…Texture2D_<index>_<Role>…`: the first named segment after the index, past
+/// a blend shader's `GSBlendMap` prefix (`…Texture2D_2_GSBlendMap_AlbedoMap_1` is an albedo map, as both games' blend
+/// shaders name their slots; a slot named only `GSBlendMap` is the blend map) and past the empty segments of a kind such
+/// as `…Texture2D_2__DistortionDepth`.
+///
+/// The evidence is the files' formats: in Elden Ring's m14_00_00_00 the 96 `GSBlendMap_AlbedoMap` bindings all point at
+/// DX10 `*_SRGB` textures and the 57 DX10 `GSBlendMap_NormalMap` ones at linear textures, as the plain albedo and normal
+/// maps do; in Sekiro's m11_01 no binding changes role. No runtime capture confirms it yet (the Sekiro D3D11 capture
+/// records render-target and depth formats only, not the views a program samples).
 pub(crate) fn slot_name(kind: &str) -> Option<(u32, &str)> {
     let rest = kind.rsplit_once("Texture2D_")?.1;
-    let (slot, role) = rest.split_once('_')?;
-    Some((slot.parse().ok()?, role.split('_').next()?))
+    let (slot, roles) = rest.split_once('_')?;
+    let mut segments = roles.split('_').filter(|s| !s.is_empty());
+    let first = segments.next()?;
+    let role = if first == "GSBlendMap" {
+        segments.next().unwrap_or(first)
+    } else {
+        first
+    };
+    Some((slot.parse().ok()?, role))
 }
 
 /// The role a slot's declared texture has in the MTD, `?` if it declares none; two declarations that disagree are an
 /// error.
-pub(crate) fn declared_role(material: &LayeredMaterial, slot: u32) -> Result<&str> {
+pub(crate) fn declared_role<'a>(material: &MaterialView<'a>, slot: u32) -> Result<&'a str> {
     let mut role = None;
-    for texture in &material.definition.textures {
-        if let Some((index, found)) = slot_name(&texture.kind)
+    for kind in material.definition.texture_kinds() {
+        if let Some((index, found)) = slot_name(kind)
             && index == slot
         {
             if role.is_some_and(|r| r != found) {
@@ -118,14 +122,14 @@ pub(crate) fn declared_role(material: &LayeredMaterial, slot: u32) -> Result<&st
 
 /// The material's bindings by numeric slot, each with its role. A slot named by two texture kinds takes the one the
 /// MTD declares (the other bindings stay in the source material).
-pub(crate) fn slots(material: &LayeredMaterial) -> Result<BTreeMap<u32, (&str, &Binding)>> {
+pub(crate) fn slots<'a>(material: &MaterialView<'a>) -> Result<BTreeMap<u32, (&'a str, &'a Binding)>> {
     let mut slots = BTreeMap::new();
-    for (kind, binding) in &material.bindings {
+    for (kind, binding) in material.bindings {
         if !binding.scale.iter().all(|v| v.is_finite()) {
             return Err(invalid("layer binding", 0, "nonfinite texture scale"));
         }
         if let Some((slot, role)) = slot_name(kind) {
-            let declared = material.definition.textures.iter().any(|t| t.kind == *kind);
+            let declared = material.definition.declares(kind);
             if !slots.contains_key(&slot) || declared {
                 slots.insert(slot, (role, binding));
             }
@@ -231,26 +235,30 @@ pub fn render_state(material: &LayeredMaterial) -> RenderState {
     state
 }
 
-/// Bind the pixel program `shader` (entity `entity`) of a layered `material`. `metaparam` is the parameter definition of
-/// its shader's bundle, which states the default of a parameter the material does not. `texture` finds the entity of a
-/// texture by stem and colour space (`true`: sRGB, the albedo maps), or `None` when the reader holds no such file.
+/// Bind the pixel program `shader` (entity `entity`) of `material` (an MTD's or a material binary's, [`MaterialView`]),
+/// a program of `game` (its G-buffer layout: [`crate::Game::gbuffer`]). `metaparam` is the parameter definition of its
+/// shader's bundle, which states the default of a parameter the material does not, where each parameter sits in an
+/// array-addressed program, and each texture's uv group. `texture` finds the entity of a texture by stem and colour
+/// space (`true`: sRGB, the albedo maps), or `None` when the reader holds no such file.
+///
+/// A program's own layout says how it reads the material's parameters: Sekiro's name each one as a field
+/// (`<shader>_snp_*`), Elden Ring's read them from one array, `SAT_MtdParam`, where the metaparam places each at its
+/// start word in the buffer (absolute: the array starts at word 36 of the 156-byte `cbMtdParam` and the first
+/// parameter's start is 36).
 pub fn resolve(
     shader: &ProgramShader,
     entity: Entity,
-    material: &LayeredMaterial,
+    material: &MaterialView<'_>,
+    game: crate::Game,
     metaparam: Option<&Metaparam>,
     unbound: Unbound,
     texture: &mut dyn FnMut(&str, bool) -> Result<Option<Entity>>,
 ) -> Result<Resolution> {
     let interface = PixelShader::interface(shader);
-    let leaf = material
-        .definition
-        .shader
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or("");
-    let family = leaf.rsplit_once('.').map_or(leaf, |x| x.0);
-    let prefix = format!("{}_snp_", family.replace(['[', ']'], "_"));
+    let prefix = format!(
+        "{}_snp_",
+        material.definition.shader_name().replace(['[', ']'], "_")
+    );
     let layout = Layout::of(shader).map_err(|e| invalid("layer binding", e.at, e.detail))?;
     let buffer_of = |slot: u32| -> Option<(ResourceId, u32)> {
         interface.resources.iter().find_map(|r| match &r.kind {
@@ -346,21 +354,51 @@ pub fn resolve(
             ));
         }
         let (role, binding) = role_and_binding(material, &slots, resource)?;
-        let mut found = None;
-        if let Some(b) = binding {
-            found = texture(&b.texture, role == "AlbedoMap")?;
+        // the slot's tiling: the uv group's `<group>_CommonUV-UVParam` where the metaparam gives the slot a uv group and
+        // the definition states that parameter (Elden Ring's material binaries: the renderer reads it, no program does),
+        // else the binding's own stored scale (Sekiro's)
+        let group_scale = texture_slot(resource).ok().and_then(|slot| {
+            let group = &metaparam?
+                .textures
+                .iter()
+                .find(|t| u32::from(t.slot) == slot && !t.uv_group.is_empty())?
+                .uv_group;
+            match material
+                .definition
+                .parameter(&format!("{group}_CommonUV-UVParam"))?
+            {
+                ParameterValue::Float(v) if v.len() >= 2 => Some([v[0], v[1]]),
+                _ => None,
+            }
+        });
+        let found = match binding {
+            Some(b) => texture(&b.texture, role == "AlbedoMap")?,
+            None => None,
+        };
+        // the tiling: the uv group's, which the material states whether or not a texture is bound to the slot; else
+        // the binding's stored scale; else, for a preview, none
+        let scale = match (group_scale, binding) {
+            (Some(s), b) => {
+                if b.is_some_and(|b| b.scale != [1.; 2] && b.scale != s) {
+                    *policies
+                        .entry(
+                            "texture bindings whose stored scale is not their uv group's: the uv group's bound \
+                             (how the engine combines the two is not established)"
+                                .to_owned(),
+                        )
+                        .or_default() += 1;
+                }
+                Some(s)
+            }
+            (None, Some(b)) => Some(b.scale),
+            (None, None) => (unbound == Unbound::Preview).then_some([1.; 2]),
+        };
+        if let Some(scale) = scale {
             constant(
                 "FC_TextureTilingScale",
                 register as usize * 4,
                 16,
-                words(&[b.scale[0], b.scale[1], 0., 0.]),
-            )?;
-        } else if unbound == Unbound::Preview {
-            constant(
-                "FC_TextureTilingScale",
-                register as usize * 4,
-                16,
-                words(&[1., 1., 0., 0.]),
+                words(&[scale[0], scale[1], 0., 0.]),
             )?;
         }
         let source = match (found, unbound) {
@@ -414,9 +452,9 @@ pub fn resolve(
     // Sekiro's data). The captured contents of this buffer vary per material in exactly these fields
     // ((1, 0.9216, 0.9216, 0) beside (1, 1, 1, 0); 0.502 = 128 / 255 and -100 in FC_AlphaRef.x). Its z and w are a flag
     // the engine derives (0 or 1 in the capture) whose source is not established.
-    let definition_param = |name: &str| material.definition.parameters.iter().find(|p| p.name == name);
-    match definition_param("g_DiffuseMapColor").map(|p| &p.value) {
-        Some(Value::Float(v)) if v.len() >= 3 => {
+    let definition_param = |name: &str| material.definition.parameter(name);
+    match definition_param("g_DiffuseMapColor") {
+        Some(ParameterValue::Float(v)) if v.len() >= 3 => {
             constant("FC_DifMapMulCol", 0, 16, words(&[v[0], v[1], v[2], 0.]))?
         }
         _ => constant(
@@ -429,8 +467,8 @@ pub fn resolve(
             },
         )?,
     }
-    let reference = |word: usize| match definition_param("g_AlphaRef").map(|p| &p.value) {
-        Some(Value::Int(v)) => v.get(word).copied().filter(|&r| r > 0),
+    let reference = |word: usize| match definition_param("g_AlphaRef") {
+        Some(ParameterValue::Int(v)) => v.get(word).copied().filter(|&r| r > 0),
         _ => None,
     };
     constant(
@@ -444,8 +482,8 @@ pub fn resolve(
     )?;
     // the glow scale: read only in its w, into the emission target's alpha (all 34 programs that read it), which no bake
     // reads; the material's g_GlowScale where it states one (a four-float parameter), Unknown, by name, where it does not
-    match definition_param("g_GlowScale").map(|p| &p.value) {
-        Some(Value::Float(v)) if v.len() >= 4 => constant("FC_GlowScale", 0, 16, words(&v[..4]))?,
+    match definition_param("g_GlowScale") {
+        Some(ParameterValue::Float(v)) if v.len() >= 4 => constant("FC_GlowScale", 0, 16, words(&v[..4]))?,
         _ => constant(
             "FC_GlowScale",
             0,
@@ -544,27 +582,53 @@ pub fn resolve(
         4,
         ConstantRole::Frame(FrameParameter::Exposure),
     )?;
-    // the material's own parameters: the program's `<shader>_snp_*` constants
-    let names: Vec<&String> = layout
-        .fields
-        .keys()
-        .filter(|n| n.starts_with(&prefix) && !n.ends_with("_PADDING"))
-        .collect();
+    // the program's `SAT_MtdParam` (Elden Ring's): its buffer, the buffer's size and the words its members occupy. Each
+    // member is a component of a parameter the program reads (`<parameter>_<component>`, at the parameter's start word);
+    // a parameter it does not read is not a member
+    let sat = interface.resources.iter().find_map(|r| match &r.kind {
+        ResourceKind::ConstantBuffer { layout } => layout
+            .constants
+            .iter()
+            .find(|c| c.name == "SAT_MtdParam")
+            .map(|c| {
+                let read: BTreeSet<u32> =
+                    c.ty.members()
+                        .iter()
+                        .filter_map(|m| {
+                            let at = c.offset.checked_add(m.offset)?;
+                            Some(at / 4..at.checked_add(m.ty.size()?)?.div_ceil(4))
+                        })
+                        .flatten()
+                        .collect();
+                (r.id, layout.size, read)
+            }),
+        _ => None,
+    });
+    // the material's own parameters, of a program that names each as a field (Sekiro's `<shader>_snp_*` constants)
+    let names: Vec<&String> = if sat.is_some() {
+        Vec::new()
+    } else {
+        layout
+            .fields
+            .keys()
+            .filter(|n| n.starts_with(&prefix) && !n.ends_with("_PADDING"))
+            .collect()
+    };
     for name in names {
         let field = layout.fields[name];
-        let Some(param) = material.definition.parameters.iter().find(|p| p.name == *name) else {
+        let Some(param) = material.definition.parameter(name) else {
             // the shader bundle's metaparam states a default for every parameter it declares: the value of one the
             // material does not state. A colour's default is its four lanes and its intensity (the fifth), folded as
             // a stated colour's is: the first three times the intensity
             let default = metaparam.and_then(|m| m.mtd_params.iter().find(|p| p.name == *name));
             if let Some(p) = default {
                 let mut value = p.default;
-                if p.value_type == 12 {
+                if p.is_colour() {
                     for v in &mut value[..3] {
                         *v *= p.default[4];
                     }
                 }
-                let lanes = if p.value_type == 12 { 4 } else { value.len() };
+                let lanes = if p.is_colour() { 4 } else { value.len() };
                 let n = (field.words as usize).min(lanes);
                 *policies
                     .entry(
@@ -595,22 +659,13 @@ pub fn resolve(
             }
             continue;
         };
-        let mut values = match &param.value {
-            Value::Bool(b) => vec![u8::from(*b) as f32],
-            Value::Int(v) => v.iter().map(|&i| i as f32).collect(),
-            Value::Float(v) => v.clone(),
-        };
+        let mut values = floats(&param);
         if name.contains("_color_") {
-            let intensity = material
-                .definition
-                .parameters
-                .iter()
-                .find(|p| p.name == format!("{name}-Intensity"))
-                .and_then(|p| match &p.value {
-                    Value::Float(v) => v.first().copied(),
-                    _ => None,
-                })
-                .unwrap_or(1.);
+            let intensity = match material.definition.parameter(&format!("{name}-Intensity")) {
+                Some(ParameterValue::Float(v)) => v.first().copied(),
+                _ => None,
+            }
+            .unwrap_or(1.);
             for v in values.iter_mut().take(3) {
                 *v *= intensity;
             }
@@ -620,7 +675,85 @@ pub fn resolve(
         }
         constant(name, 0, values.len() as u32 * 4, words(&values))?;
     }
-    let outputs = output_bindings(interface, material.is_forward());
+    // a program that reads its parameters from `SAT_MtdParam`: each the metaparam declares as a shader input and the
+    // program reads (its start word a member's), at that word, the material's value (else the metaparam's default,
+    // counted), as many lanes as the program reads from there. A colour ([`Metaparam`]'s type 12 or 13) is its four lanes with the first three
+    // times its intensity, the fifth: a stated one where it states five lanes, the default's otherwise (counted)
+    if let (Some((resource, buffer_size, read)), Some(metaparam)) = (&sat, metaparam) {
+        let (resource, buffer_size) = (*resource, *buffer_size);
+        for p in metaparam.mtd_params.iter().filter(|p| !p.not_shader_input) {
+            if !read.contains(&p.start) {
+                *policies
+                    .entry("SAT parameters the program does not read (not in its SAT_MtdParam)".to_owned())
+                    .or_default() += 1;
+                continue;
+            }
+            let lanes = match p.value_type {
+                0 | 1 => 1,
+                2 => 2,
+                3 => 3,
+                4 | 12 | 13 => 4,
+                other => {
+                    return Err(invalid(
+                        "layer binding",
+                        0,
+                        format!("{}: parameter type {other} not read", p.name),
+                    ));
+                }
+            };
+            let mut value = match material.definition.parameter(&p.name) {
+                Some(v) => floats(&v),
+                None => {
+                    *policies
+                        .entry(
+                            "missing SAT parameter taken from the shader bundle's metaparam default"
+                                .to_owned(),
+                        )
+                        .or_default() += 1;
+                    p.default.to_vec()
+                }
+            };
+            if p.is_colour() {
+                let intensity = if value.len() >= 5 {
+                    value[4]
+                } else {
+                    *policies
+                        .entry(
+                            "colour parameter stated without its intensity: the metaparam default's"
+                                .to_owned(),
+                        )
+                        .or_default() += 1;
+                    p.default[4]
+                };
+                value.resize(4, 1.);
+                for v in &mut value[..3] {
+                    *v *= intensity;
+                }
+            }
+            let lanes = (0..lanes).take_while(|k| read.contains(&(p.start + k))).count();
+            value.truncate(lanes);
+            let start = u64::from(p.start) * 4;
+            let fit = u64::from(buffer_size)
+                .saturating_sub(start)
+                .min(value.len() as u64 * 4) as u32;
+            if fit == 0 {
+                return Err(invalid(
+                    "layer binding",
+                    0,
+                    format!("{}: start word {} beyond its buffer", p.name, p.start),
+                ));
+            }
+            value.truncate(fit as usize / 4);
+            constants.push(ConstantBinding {
+                resource,
+                offset: start as u32,
+                size: fit,
+                name: Some(p.name.clone()),
+                role: words(&value),
+            });
+        }
+    }
+    let outputs = output_bindings(interface, material.is_forward(), game);
     let inputs = interface
         .inputs
         .iter()
@@ -643,16 +776,11 @@ pub fn resolve(
     })
 }
 
-/// The G-buffer layout: render target 0 the world normal, 1 the gloss in x, 2 the albedo, 3 the reflectance and 4 the
-/// emission, in the lanes the layered programs write them; only those the program declares. A forward program's render
-/// target 0 is the finished colour (its target 1, drawn to a target the capture does not name, has no role).
-fn output_bindings(interface: &Interface, forward: bool) -> Vec<OutputBinding> {
-    let normal = OutputRole::Normal {
-        encoding: NormalEncoding::XyzBiased {
-            bias_bits: NORMAL_BIAS_BITS,
-        },
-        space: NormalSpace::World,
-    };
+/// The outputs' roles: of a G-buffer program the game's G-buffer layout ([`crate::Game::gbuffer`]), the lanes of each
+/// target the program declares; a forward program's render target 0 is the finished colour (its target 1, drawn to a
+/// target the capture does not name, has no role).
+fn output_bindings(interface: &Interface, forward: bool, game: crate::Game) -> Vec<OutputBinding> {
+    let layout = game.gbuffer();
     let mut out = Vec::new();
     for v in &interface.outputs {
         let Some(SystemValue::Target(n)) = v.system else {
@@ -662,26 +790,40 @@ fn output_bindings(interface: &Interface, forward: bool) -> Vec<OutputBinding> {
         if !v.used {
             continue;
         }
-        let (lanes, role) = match n {
-            0 if forward => (0b1111, OutputRole::Colour),
-            _ if forward => continue,
-            0 => (0b0111, normal),
-            1 => (0b0001, OutputRole::Gloss),
-            2 => (0b0111, OutputRole::Albedo),
-            3 => (0b0111, OutputRole::Reflectance),
-            4 => (0b0111, OutputRole::Emission),
-            _ => continue,
+        let lanes: Vec<(u8, OutputRole)> = if forward {
+            if n == 0 {
+                vec![(0b1111, OutputRole::Colour)]
+            } else {
+                Vec::new()
+            }
+        } else {
+            layout
+                .iter()
+                .filter(|(target, ..)| *target == n)
+                .map(|(_, lanes, role)| (*lanes, *role))
+                .collect()
         };
-        if u32::from(lanes) >> v.value.width != 0 {
-            continue;
+        for (lanes, role) in lanes {
+            if u32::from(lanes) >> v.value.width != 0 {
+                continue;
+            }
+            out.push(OutputBinding {
+                label: v.label.clone(),
+                lanes,
+                role,
+            });
         }
-        out.push(OutputBinding {
-            label: v.label.clone(),
-            lanes,
-            role,
-        });
     }
     out
+}
+
+/// A parameter's value as the floats a constant holds: a boolean 0 or 1, integers as floats.
+fn floats(value: &ParameterValue) -> Vec<f32> {
+    match value {
+        ParameterValue::Bool(b) => vec![f32::from(u8::from(*b))],
+        ParameterValue::Int(v) => v.iter().map(|&i| i as f32).collect(),
+        ParameterValue::Float(v) => v.clone(),
+    }
 }
 
 /// The Byte4C member and the lane of it that each of the eight bake inputs (four layer weights, the tint's red, green and
@@ -833,4 +975,24 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
         textures: Vec::new(),
         outputs: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slot_name;
+
+    /// Roles past a blend shader's `GSBlendMap` prefix and past empty segments; a slot named only `GSBlendMap` keeps it.
+    #[test]
+    fn slot_roles() {
+        for (kind, slot, role) in [
+            ("g_DetailBlend_Texture2D_2_GSBlendMap_AlbedoMap_1", 2, "AlbedoMap"),
+            ("g_DetailBlend_Texture2D_3_GSBlendMap", 3, "GSBlendMap"),
+            ("g_Water_Texture2D_2__DistortionDepth", 2, "DistortionDepth"),
+            ("g_DetailBlend_Texture2D_0_AlbedoMap_0", 0, "AlbedoMap"),
+        ] {
+            assert_eq!(slot_name(kind), Some((slot, role)), "{kind}");
+        }
+        assert_eq!(slot_name("g_Texture2D_x_AlbedoMap"), None);
+        assert_eq!(slot_name("AlbedoMap"), None);
+    }
 }
