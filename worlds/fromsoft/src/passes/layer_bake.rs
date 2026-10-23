@@ -13,5 +13,5 @@ pub mod grouping;
 pub mod period;
 pub mod resolve;
 mod state;
-pub use state::{AlphaState, PipelineState, PixelState, SlotTexture, TARGETS, VertexState};
+pub use state::{AlphaState, Encoded, PipelineState, PixelState, SCHEMA, SlotTexture, TARGETS, VertexState};
 mod vertex;

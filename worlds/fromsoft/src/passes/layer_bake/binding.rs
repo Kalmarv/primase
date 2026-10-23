@@ -1148,6 +1148,53 @@ mod tests {
         }
     }
 
+    /// A state survives its encoding: decoded and encoded again it is the same description and files, images,
+    /// constants and the alpha included, and the decoded pixel stage evaluates to the same bits.
+    #[test]
+    fn a_pipeline_state_round_trips_through_its_encoding() {
+        let mut state = prepared(true)
+            .pipeline_state(3, [1.5, 2.], Inputs::default())
+            .unwrap();
+        let texels: Vec<u8> = (0..2 * 3 * 4).map(|i| (i * 37 % 251) as u8).collect();
+        let image = Arc::new(
+            BaseMipBilinearWrap::addressed(2, 3, &texels, true, [Address::Clamp, Address::MirrorOnce])
+                .unwrap(),
+        );
+        state.pixel.textures.insert(4, SlotTexture::Image(image.clone()));
+        state
+            .pixel
+            .textures
+            .insert(6, SlotTexture::Constant([0.25, -1., 0.5, 1.]));
+        state.alpha = Some(AlphaState {
+            image,
+            scale: [2., 0.5],
+        });
+        let encoded = state.encode();
+        assert_eq!(encoded.files["t4.rgba"], texels);
+        let decoded = PipelineState::decode(&encoded).unwrap();
+        let again = decoded.encode();
+        assert_eq!(again.description, encoded.description);
+        assert_eq!(again.files, encoded.files);
+        let run = |s: &PipelineState| {
+            evaluate_raw_with(
+                Threads::ONE,
+                &ProgramShader::new(primase_dxbc::lift(&s.pixel.bytecode).unwrap()).unwrap(),
+                &s.pixel.constants,
+                &s.pixel.evaluated_textures(),
+                &s.pixel.evaluated_inputs(),
+                Grid {
+                    size: s.size,
+                    period: s.period,
+                },
+                &TARGETS,
+                Invocation::Scalar,
+            )
+            .unwrap()
+            .pixels
+        };
+        assert_eq!(run(&decoded), run(&state));
+    }
+
     #[test]
     fn emission_preserves_hdr_rgb_and_row_major_layout() {
         let present = prepared(true).bake(3, [4., 2.], Inputs::default()).unwrap();
