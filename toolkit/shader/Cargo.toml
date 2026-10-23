@@ -14,5 +14,10 @@ thiserror.workspace = true
 naga.workspace = true
 sha2.workspace = true
 
+[dev-dependencies]
+# The lifters, to run each fixture of tests/flow.rs through both bytecodes (a dev-dependency cycle cargo allows).
+primase-dxbc.workspace = true
+primase-dxil.workspace = true
+
 [lints]
 workspace = true

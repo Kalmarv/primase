@@ -1342,6 +1342,8 @@ version = "0.1.0"
 dependencies = [
  "naga",
  "primase-core",
+ "primase-dxbc",
+ "primase-dxil",
  "sha2",
  "thiserror",
 ]

@@ -2,10 +2,10 @@
 //!
 //! A [`Program`] is a `naga::Module` with the [`Interface`] a caller binds inputs, constants and textures by and what the module
 //! cannot say; [`Program::validate`] checks it, [`emit`] writes it as WGSL, [`build::Builder`] is the typed builder the lifters
-//! (`primase-dxbc`, `primase-dxil`, `primase-mojoshader`) share, and [`gate`] is their version gate. The vocabulary is
-//! [`primase_core::shader`], re-exported here: varyings by label, resources with explicit constant layouts, D3D's registers kept in
-//! provenance. The [`d3d`] module is where D3D's enum numbers and packing rules are mapped into it, for the readers of every
-//! bytecode.
+//! (`primase-dxbc`, `primase-dxil`, `primase-mojoshader`) share, [`gate`] is their version gate and [`flow`] says what a
+//! program's outputs are made of. The vocabulary is [`primase_core::shader`], re-exported here: varyings by label, resources
+//! with explicit constant layouts, D3D's registers kept in provenance. The [`d3d`] module is where D3D's enum numbers and
+//! packing rules are mapped into it, for the readers of every bytecode.
 //!
 //! Running a program is `primase-shader-exec`, which depends on this crate.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
@@ -13,6 +13,7 @@
 pub mod build;
 pub mod d3d;
 pub mod emit;
+pub mod flow;
 pub mod gate;
 mod limits;
 mod program;
