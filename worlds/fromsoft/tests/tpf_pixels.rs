@@ -36,11 +36,12 @@ fn area_pixels() -> Result<()> {
     let Some(root) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "tpf") else {
         return Ok(());
     };
+    // the worker's folder: DdsWorker.dll with the libraries it loads beside it
     let Some(csharp) = oracle(OracleSet::Scripts, Game::Sekiro, "dds") else {
         return Ok(());
     };
     let mut cs = Command::new("dotnet")
-        .arg(csharp)
+        .arg(csharp.join("DdsWorker.dll"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;

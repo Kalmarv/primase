@@ -96,8 +96,9 @@ Each texture records name/format/kind/mipmaps/flags, DDS size/SHA256 and, for ar
 2D images, width/height and decoded RGBA SHA256. Area DDS inputs reside at
 `area-dds/<uppercase-sha256>.dds`; none belong in the repository.
 
-The pixel gate additionally requires `oracles.scripts.sekiro/dds`, an explicitly
-trusted .NET assembly launched with `dotnet`. For each DDS path on stdin it
+The pixel gate additionally requires `oracles.scripts.sekiro/dds`, a folder holding
+an explicitly trusted .NET assembly, `DdsWorker.dll` (BCnEncoder.Net 2.2.1), with the
+libraries it loads, launched as `dotnet <folder>/DdsWorker.dll`. For each DDS path on stdin it
 writes a binary response to stdout: status byte (0 success), little-endian u64
 length, and that many RGBA8 bytes (UTF-8 error text for nonzero status). Diagnostics
 must go to stderr. It uses the independent C# decoder with BC1 punch-through
