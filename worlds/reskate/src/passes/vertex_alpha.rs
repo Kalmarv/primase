@@ -25,6 +25,10 @@ fn alpha(p: &Primitive) -> Result<Option<Vec<f32>>, String> {
         None => None,
         Some(Stream::U8x4(v)) => Some(v.iter().map(|c| f32::from(c[3]) / 255.0).collect()),
         Some(Stream::U16x4(v)) => Some(v.iter().map(|c| f32::from(c[3]) / 65535.0).collect()),
+        // `clamp` keeps NaN, which would reach the opacities: refused
+        Some(Stream::F32x4(v)) if v.iter().any(|c| !c[3].is_finite()) => {
+            return Err("COLOR_0 holds an alpha that is not finite".into());
+        }
         Some(Stream::F32x4(v)) => Some(v.iter().map(|c| c[3].clamp(0.0, 1.0)).collect()),
         // RGB colour: no alpha
         Some(Stream::F32x3(_)) => None,
@@ -236,6 +240,24 @@ mod tests {
         assert_eq!(log.counts["decal materials faded by vertex alpha"], 1);
         assert_eq!(log.counts["faded decal vertices"], 2);
     }
+    /// An alpha that is not a number is refused: `clamp` keeps NaN, which would reach the opacities.
+    #[test]
+    fn an_alpha_that_is_not_a_number_is_refused() {
+        let mut w = World::new();
+        let faded = decal(&mut w, MaterialClass::Decal);
+        let mesh = w.spawn();
+        let mut p = prim(faded, None);
+        p.streams.insert(
+            Semantic::Color(0),
+            Stream::F32x4(vec![[1.0, 1.0, 1.0, f32::NAN]; 3]),
+        );
+        w.insert(mesh, Mesh::new(vec![p]));
+        let e = LowerVertexAlphaReskate
+            .run(&mut w, &mut PassLog::default())
+            .unwrap_err();
+        assert!(e.contains("not finite"), "{e}");
+    }
+
     /// A decal reached only through a material variant fades too; a faded primitive whose colour is not white is
     /// counted (the decal row's Color0 carries the opacity, so the colour is not drawn).
     #[test]

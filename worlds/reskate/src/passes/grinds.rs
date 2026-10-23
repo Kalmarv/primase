@@ -16,6 +16,9 @@ use crate::components::{SkateGrindCurve, SkateGrindPrism};
 use crate::grind::{self, PrismRules, SURFACES};
 use crate::scene;
 
+/// The most sides a prism has: Studio's is 8, and a prism of a curve is `sides` vertices at every point of every run.
+pub const MAX_SIDES: usize = 64;
+
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrepareReskateGrinds {
@@ -30,7 +33,7 @@ impl PrepareReskateGrinds {
         }
     }
 
-    /// Other rules: 3 sides or more, a finite tolerance and spacing of 0 m or more, a corner of 0-180 degrees.
+    /// Other rules: 3 to [`MAX_SIDES`] sides, a finite tolerance and spacing of 0 m or more, a corner of 0-180 degrees.
     pub fn with_rules(mut self, rules: PrismRules) -> Result<PrepareReskateGrinds, String> {
         let PrismRules {
             sides,
@@ -38,8 +41,8 @@ impl PrepareReskateGrinds {
             min_spacing,
             corner_degrees,
         } = rules;
-        if sides < 3 {
-            return Err(format!("sides={sides}: a prism has 3 sides or more"));
+        if !(3..=MAX_SIDES).contains(&sides) {
+            return Err(format!("sides={sides}: a prism has from 3 to {MAX_SIDES} sides"));
         }
         if !(tolerance.is_finite() && tolerance >= 0.0) || !(min_spacing.is_finite() && min_spacing >= 0.0) {
             return Err(format!(

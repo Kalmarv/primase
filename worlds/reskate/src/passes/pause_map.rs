@@ -42,6 +42,10 @@ pub use crate::components::pause_map::{PauseColour, PauseDrawing, PauseLeaveOut}
 
 use crate::components::{SkateContentBounds, SkateScene};
 
+/// The tallest picture, in pixels: 4K's height (7281 wide at 16:9, 30 million pixels, a quarter of a gigabyte to draw).
+/// The writer allocates the picture and its depth for the height it is given.
+pub const MAX_HEIGHT: usize = 4096;
+
 /// What [`PrepareReskatePauseMap`] draws the picture over.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PauseExtent {
@@ -75,7 +79,7 @@ pub struct PrepareReskatePauseMap {
 }
 
 impl PrepareReskatePauseMap {
-    /// An error for a picture under 9 pixels high (16:9 needs a whole pixel across) or a rectangle that is not finite
+    /// An error for a picture under 9 pixels high (16:9 needs a whole pixel across) or over [`MAX_HEIGHT`] or a rectangle that is not finite
     /// with east0 < east1 and north0 < north1.
     pub fn new(source: PauseSource) -> Result<PrepareReskatePauseMap, String> {
         if let PauseSource::Geometry {
@@ -90,8 +94,8 @@ impl PrepareReskatePauseMap {
             {
                 return Err("leave-out=placements names no prefix (prefixes separated by ;)".into());
             }
-            if height < 9 {
-                return Err(format!("height {height}: at least 9 pixels"));
+            if !(9..=MAX_HEIGHT).contains(&height) {
+                return Err(format!("height {height}: from 9 to {MAX_HEIGHT} pixels"));
             }
             if let PauseExtent::Rect(r) = extent {
                 let [x0, y0, x1, y1] = r;
@@ -437,6 +441,21 @@ mod tests {
             o(&[("from", "image"), ("height", "10")]),
             o(&[("from", "geometry"), ("extent", "content")]),
             o(&[("from", "geometry"), ("height", "8"), ("extent", "content")]),
+            // a picture is allocated at its height: 4096 at most
+            o(&[
+                ("from", "geometry"),
+                ("height", "4097"),
+                ("extent", "content"),
+                ("leave-out", "nothing"),
+                ("colour", "mean"),
+            ]),
+            o(&[
+                ("from", "geometry"),
+                ("height", "18446744073709551615"),
+                ("extent", "content"),
+                ("leave-out", "nothing"),
+                ("colour", "mean"),
+            ]),
             o(&[("from", "geometry"), ("height", "100")]),
             o(&[("from", "geometry"), ("height", "100"), ("extent", "sea")]),
             o(&[("from", "drawing")]),

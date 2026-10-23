@@ -78,7 +78,8 @@ fn decompose(t: Transform) -> Option<Trs> {
             1. - 2. * (x * x + y * y),
         ],
     ];
-    if (0..3).any(|r| (0..3).any(|c| (rebuilt[r][c] - m[r][c]).abs() > 1e-6)) {
+    // written so that NaN fails it: a column of no length (m is 0 / 0) rebuilds nothing
+    if !(0..3).all(|r| (0..3).all(|c| (rebuilt[r][c] - m[r][c]).abs() <= 1e-6)) {
         return None;
     }
     Some(Trs {
@@ -259,4 +260,30 @@ pub(super) fn apply(input: Document, enabled: bool) -> Result<(Document, u64)> {
         doc["buffers"][0]["byteLength"] = json!(bin.len());
     }
     Ok((Document::new(doc, bin), count))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A rigid transform decomposes; a basis with a column of no length rebuilds nothing (its rotation is NaN, which
+    /// no comparison with `>` refuses), so it is not instanced.
+    #[test]
+    fn a_basis_of_no_length_is_not_a_rotation() {
+        let at = |cols| decompose(Transform { cols });
+        let turned = at([
+            [0.0, 1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [5.0, 6.0, 7.0],
+        ])
+        .unwrap();
+        assert_eq!(turned.scale, [1.0; 3]);
+        assert!(turned.rotation.iter().all(|v| v.is_finite()));
+        assert!(at([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0; 3], [5.0, 6.0, 7.0]]).is_none());
+        assert!(at([[0.0; 3], [0.0; 3], [0.0; 3], [5.0, 6.0, 7.0]]).is_none());
+        // a shear and a mirror have no such rotation either
+        assert!(at([[1.0, 0.0, 0.0], [0.5, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]]).is_none());
+        assert!(at([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]]).is_none());
+    }
 }

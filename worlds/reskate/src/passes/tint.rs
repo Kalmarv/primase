@@ -31,6 +31,15 @@ const MAX_COLOURS: usize = 32;
 
 /// A primitive's `COLOR_0` colour per vertex, linear 0..1 as exact u16 steps (`None`: none, or white everywhere).
 fn colours(p: &Primitive) -> Result<Option<Vec<[u16; 3]>>, String> {
+    // `as u16` makes NaN black: a colour that is not a number is refused, not tinted black
+    let finite = match p.streams.get(&Semantic::Color(0)) {
+        Some(Stream::F32x4(v)) => v.iter().flatten().all(|x| x.is_finite()),
+        Some(Stream::F32x3(v)) => v.iter().flatten().all(|x| x.is_finite()),
+        _ => true,
+    };
+    if !finite {
+        return Err("COLOR_0 holds a value that is not finite".into());
+    }
     let c: Vec<[u16; 3]> = match p.streams.get(&Semantic::Color(0)) {
         None => return Ok(None),
         Some(Stream::U8x4(v)) => v
@@ -455,6 +464,20 @@ mod tests {
         );
         assert_eq!(log.counts["tinted primitives split by colour"], 1);
         assert!(log.approximations.is_empty());
+    }
+
+    /// A colour that is not a number is refused, naming the mesh: `as u16` would make it black.
+    #[test]
+    fn a_colour_that_is_not_a_number_is_refused() {
+        let mut w = World::new();
+        let m = material(&mut w);
+        let mesh = w.spawn();
+        let nan = Stream::F32x4(vec![[1.0, f32::NAN, 0.5, 1.0]; 4]);
+        w.insert(mesh, Mesh::new(vec![quad(m, Some(nan))]));
+        let e = LowerTintReskate::uncapped()
+            .run(&mut w, &mut PassLog::default())
+            .unwrap_err();
+        assert!(e.contains("not finite"), "{e}");
     }
 
     /// `copies=1`: the split is the same, but only the first (material, colour) gets a copy; the other colour's

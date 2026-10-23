@@ -220,16 +220,19 @@ fn wrapped(i: i64, n: u32, wrap: Wrap) -> usize {
 /// the box's two and the triangle's three edge normals.
 fn overlaps(t: [[f32; 2]; 3], lo: [f32; 2], hi: [f32; 2]) -> bool {
     let corners = [lo, [hi[0], lo[1]], hi, [lo[0], hi[1]]];
-    let mut axes = vec![[1.0, 0.0], [0.0, 1.0]];
+    // the box's two axes and up to three edge normals
+    let mut axes = [[1.0, 0.0], [0.0, 1.0], [0.0; 2], [0.0; 2], [0.0; 2]];
+    let mut n = 2;
     for k in 0..3 {
         let (a, b) = (t[k], t[(k + 1) % 3]);
-        let n = [b[1] - a[1], a[0] - b[0]];
-        if n[0] != 0.0 || n[1] != 0.0 {
-            axes.push(n);
+        let normal = [b[1] - a[1], a[0] - b[0]];
+        if normal[0] != 0.0 || normal[1] != 0.0 {
+            axes[n] = normal;
+            n += 1;
         }
     }
-    axes.iter().all(|n| {
-        let dot = |p: &[f32; 2]| p[0] * n[0] + p[1] * n[1];
+    axes[..n].iter().all(|axis| {
+        let dot = |p: &[f32; 2]| p[0] * axis[0] + p[1] * axis[1];
         let (t0, t1) = t
             .iter()
             .map(dot)
@@ -246,13 +249,32 @@ fn overlaps(t: [[f32; 2]; 3], lo: [f32; 2], hi: [f32; 2]) -> bool {
     })
 }
 
+/// A coordinate, in texels, past which a triangle is not worked out: a texture is never this wide, and an `i64` texel
+/// index of it (plus the margin) cannot overflow.
+const FAR: f32 = 1.0e9;
+
 /// The texels of a `tw` x `th` level that triangle `t` (in that level's texel units) can sample, wrapped as `wrap`
 /// says: under nearest filtering each texel whose square the triangle touches; under linear filtering (`reach`) each
 /// texel a bilinear tap at a point of the triangle weighs, those whose square grown by half a texel on every side it
-/// touches. A triangle spanning the level both ways samples all of it.
-fn mark(covered: &mut [bool], (tw, th): (u32, u32), wrap: [Wrap; 2], t: [[f32; 2]; 3], reach: bool) {
-    let mut set =
-        |x: i64, y: i64| covered[wrapped(y, th, wrap[1]) * tw as usize + wrapped(x, tw, wrap[0])] = true;
+/// touches. A triangle spanning the level both ways samples all of it, and so does one that cannot be worked out: a
+/// coordinate that is not finite or is past [`FAR`] texels (it cannot say which texels it reaches). Marks them in
+/// `covered`, of which `uncovered` are not yet; returns how many it newly marked.
+fn mark(
+    covered: &mut [bool],
+    uncovered: usize,
+    (tw, th): (u32, u32),
+    wrap: [Wrap; 2],
+    t: [[f32; 2]; 3],
+    reach: bool,
+) -> usize {
+    let mut newly = 0;
+    let all = |covered: &mut [bool]| {
+        covered.iter_mut().for_each(|c| *c = true);
+        uncovered
+    };
+    if t.iter().flatten().any(|v| !v.is_finite() || v.abs() > FAR) {
+        return all(covered);
+    }
     let grow = if reach { 0.5 } else { 0.0 };
     let lo = [0, 1].map(|c| (t.iter().map(|q| q[c]).fold(f32::INFINITY, f32::min) - grow).floor() as i64 - 1);
     let hi =
@@ -261,17 +283,19 @@ fn mark(covered: &mut [bool], (tw, th): (u32, u32), wrap: [Wrap; 2], t: [[f32; 2
     if (span[0] >= i64::from(tw) + 2 && span[1] >= i64::from(th) + 2)
         || span[0].saturating_mul(span[1]) > 4 * i64::from(tw) * i64::from(th)
     {
-        covered.iter_mut().for_each(|c| *c = true);
-        return;
+        return all(covered);
     }
     for y in lo[1]..hi[1] {
         for x in lo[0]..hi[0] {
             let (x0, y0) = (x as f32 - grow, y as f32 - grow);
             if overlaps(t, [x0, y0], [x0 + 1.0 + 2.0 * grow, y0 + 1.0 + 2.0 * grow]) {
-                set(x, y);
+                let texel = &mut covered[wrapped(y, th, wrap[1]) * tw as usize + wrapped(x, tw, wrap[0])];
+                newly += usize::from(!*texel);
+                *texel = true;
             }
         }
     }
+    newly
 }
 
 /// Each stored level's texels (`sizes`, largest first) that the primitives `drawing` can sample through slot `r` (its
@@ -294,6 +318,8 @@ fn footprint(
         .enumerate()
         .map(|(k, &(lw, lh))| (k == 0 || !base_only).then(|| vec![false; lw as usize * lh as usize]))
         .collect();
+    // the texels of each level not yet covered: a level all covered is not worked on again
+    let mut uncovered: Vec<usize> = sizes.iter().map(|&(lw, lh)| lw as usize * lh as usize).collect();
     let mut any = false;
     for &(mesh, i) in drawing {
         let p = w.get::<Mesh>(mesh)?.primitives().get(i)?;
@@ -313,9 +339,12 @@ fn footprint(
             let t = [at(a)?, at(b)?, at(c)?];
             for (k, level) in covered.iter_mut().enumerate() {
                 let Some(level) = level else { continue };
+                if uncovered[k] == 0 {
+                    continue;
+                }
                 let (lw, lh) = sizes[k];
                 let s = t.map(|q| [q[0] * lw as f32, q[1] * lh as f32]);
-                mark(level, (lw, lh), r.wrap, s, reach);
+                uncovered[k] -= mark(level, uncovered[k], (lw, lh), r.wrap, s, reach);
             }
             any = true;
         }
@@ -946,17 +975,18 @@ mod tests {
         let thin = [[0.5, 0.5], [2.5, 0.5], [0.5, 0.6]];
         let set = |c: &[bool]| (0..c.len()).filter(|&i| c[i]).collect::<Vec<usize>>();
         let mut c = vec![false; 16];
-        mark(&mut c, (4, 4), [Wrap::Clamp; 2], thin, false);
+        assert_eq!(mark(&mut c, 16, (4, 4), [Wrap::Clamp; 2], thin, false), 3);
         assert_eq!(set(&c), [0, 1, 2]);
         // bilinear: column 3 (its grown square reaches 2.5) and row 1 (it reaches 0.5) too; columns and rows below 0
         // clamp onto 0
         let mut c = vec![false; 16];
-        mark(&mut c, (4, 4), [Wrap::Clamp; 2], thin, true);
+        assert_eq!(mark(&mut c, 16, (4, 4), [Wrap::Clamp; 2], thin, true), 8);
         assert_eq!(set(&c), (0..8).collect::<Vec<usize>>());
         // past the right edge, repeating: column 0 again
         let mut c = vec![false; 16];
         mark(
             &mut c,
+            16,
             (4, 4),
             [Wrap::Repeat; 2],
             [[4.2, 0.2], [4.6, 0.2], [4.2, 0.6]],
@@ -964,14 +994,85 @@ mod tests {
         );
         assert_eq!(set(&c), [0]);
         let mut c = vec![false; 16];
-        mark(
+        let newly = mark(
             &mut c,
+            16,
             (4, 4),
             [Wrap::Clamp; 2],
             [[-10.0, -10.0], [30.0, -10.0], [-10.0, 30.0]],
             true,
         );
         assert!(c.iter().all(|x| *x));
+        assert_eq!(newly, 16);
+    }
+
+    /// A coordinate that is not finite or is past FAR cannot say which texels it reaches: the whole level (it
+    /// overflowed an `i64` texel index, a panic with overflow checks and a wrapped span without), and the count of
+    /// texels newly marked is those that were not.
+    #[test]
+    fn a_coordinate_that_cannot_be_worked_out_covers_the_level() {
+        for far in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN, 1.0e30, -3.0e9] {
+            let mut c = vec![false; 16];
+            c[5] = true;
+            let newly = mark(
+                &mut c,
+                15,
+                (4, 4),
+                [Wrap::Repeat; 2],
+                [[0.5, 0.5], [far, 0.5], [0.5, 0.6]],
+                true,
+            );
+            assert!(c.iter().all(|x| *x), "{far}");
+            assert_eq!(newly, 15, "{far}");
+        }
+        // a level all covered is not worked on again: a triangle that would mark nothing new marks none
+        let mut c = vec![true; 16];
+        assert_eq!(
+            mark(
+                &mut c,
+                0,
+                (4, 4),
+                [Wrap::Clamp; 2],
+                [[0.5, 0.5], [1.5, 0.5], [0.5, 1.5]],
+                false
+            ),
+            0
+        );
+    }
+
+    /// A triangle with an infinite coordinate is judged over the whole texture (here two texels of different alpha:
+    /// varying), not a panic.
+    #[test]
+    fn an_infinite_coordinate_is_judged_over_the_whole_texture() {
+        let mut w = World::new();
+        let soft = texture(&mut w, [[255, 255, 255, 10], [255, 255, 255, 250]]);
+        let m = tinted(&mut w, "pane", [1.0; 4], Some(soft));
+        let p = w.spawn();
+        w.insert(
+            p,
+            Mesh::new(vec![primase_core::Primitive {
+                topology: Topology::Triangles,
+                streams: std::collections::BTreeMap::from([
+                    (
+                        Semantic::Position,
+                        Stream::F32x3(vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+                    ),
+                    (
+                        Semantic::TexCoord(0),
+                        Stream::F32x2(vec![[0.0, 0.0], [f32::INFINITY, 0.0], [0.0, 0.5]]),
+                    ),
+                ]),
+                indices: None,
+                material: Some(m),
+            }]),
+        );
+        let mut log = PassLog::default();
+        frost().run(&mut w, &mut log).unwrap();
+        assert_eq!(mode(&w, m), AlphaMode::Mask { cutoff: 0.5 });
+        assert_eq!(
+            log.counts["blended materials judged varying over the texels its primitives can sample: pane"],
+            1
+        );
     }
 
     /// A thin triangle whose base-level texels are all opaque, over a texture whose stored mip level 1 is half

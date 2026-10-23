@@ -242,6 +242,8 @@ fn the_grind_options_round_trip_and_are_checked() {
     assert_eq!(PrepareReskateGrinds::studio().rules(), PrismRules::STUDIO);
     for bad in [
         o(&[("sides", "2")]),
+        o(&[("sides", "65")]),
+        o(&[("sides", "18446744073709551615")]),
         o(&[("sides", "8.5")]),
         o(&[("tolerance", "-1")]),
         o(&[("min_spacing", "inf")]),

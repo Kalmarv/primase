@@ -358,7 +358,8 @@ impl Pass for PrepareReskateWater {
                 );
             }
             let cs = clip_rect(&q.corners, grown);
-            if cs.len() < 3 || signed_area2(&cs).abs() < 1.0 {
+            // the doc's, the count's and the tests' threshold is an area of 1 m2, and signed_area2 is twice the area
+            if cs.len() < 3 || signed_area2(&cs).abs() / 2.0 < 1.0 {
                 log.count("water surfaces left out: less than 1 m2 within the margin", 1);
                 w.despawn(e);
                 continue;
@@ -446,6 +447,37 @@ mod tests {
             .run(&mut w, &mut PassLog::default())
             .unwrap();
         assert_eq!(w.iter::<SkateWater>().count(), 0);
+    }
+
+    /// What is left with less than 1 m2 is left out, as the module documentation says (the area, not twice it): a strip
+    /// of 0.6 m2 goes, one of 1.2 m2 stays.
+    #[test]
+    fn what_is_left_with_less_than_a_square_metre_is_left_out() {
+        let mut w = World::new();
+        let strip = |w: &mut World, length: f32| {
+            water(
+                w,
+                &[
+                    [10.0, 10.0],
+                    [10.0 + length, 10.0],
+                    [10.0 + length, 11.0],
+                    [10.0, 11.0],
+                ],
+            )
+        };
+        let (small, large) = (strip(&mut w, 0.6), strip(&mut w, 1.2));
+        PrepareReskateWater::new(
+            WaterExtent::Rect {
+                rect: [0.0, 0.0, 100.0, 100.0],
+                margin: 0.0,
+            },
+            OceanMaterials::Stated,
+        )
+        .unwrap()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+        assert!(!w.is_alive(small), "0.6 m2 is less than 1 m2");
+        assert!(w.is_alive(large), "1.2 m2 is not");
     }
 
     /// extent=content measures the map as the writer does: world collision over east 0..512, north 0..256 (no
