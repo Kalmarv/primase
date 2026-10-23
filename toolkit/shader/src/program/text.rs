@@ -1,5 +1,5 @@
 //! The stable text form of a program, for a reader (the lab's program panel, a diff in review): a header with
-//! everything the module cannot say, then the module as WGSL.
+//! everything the module cannot say, then the module as WGSL (or, for a program WGSL cannot express, as naga's IR dump).
 
 use std::fmt::Write;
 
@@ -50,7 +50,16 @@ fn varying(out: &mut String, direction: &str, v: &Varying) {
 }
 
 pub(super) fn text(p: &Program) -> Result<String, Error> {
-    let wgsl = crate::emit::module_text(p)?;
+    // a program WGSL cannot express keeps its text form: the module as naga's own IR dump, labelled as not WGSL (a program that
+    // fails validation has none: that is an error of the program)
+    let wgsl = match crate::emit::module_text(p) {
+        Ok(wgsl) => wgsl,
+        Err(Error::Unsupported { detail, .. }) => format!(
+            "// the module below is naga's IR (Debug), not WGSL: wgsl cannot write this program ({detail})\n{:#?}\n",
+            p.module
+        ),
+        Err(e) => return Err(e),
+    };
     let mut out = String::new();
     let _ = writeln!(out, "// primase shader program v{}", super::VERSION);
     let _ = writeln!(

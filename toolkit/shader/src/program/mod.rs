@@ -43,7 +43,7 @@ use crate::{Interface, ResourceId, ShaderFormat, Stage};
 /// The version of the program representation: bumped when what a program means changes (a convention, a mode, how
 /// the module carries the interface). Each lifter's tests hash what it makes of its fixtures under this and its own version
 /// (`primase_shader::gate`), so a change that moves them without a bump of one of the two fails.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// Which way clip space's depth runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,7 +174,9 @@ impl Program {
     }
 
     /// The stable text form: a header stating the interface, resources, conventions, modes and provenance, then the
-    /// module as WGSL. The same program always gives the same text.
+    /// module as WGSL. A program WGSL cannot express (a texture atomic's old value, an exchange on a texture) is not lost to
+    /// its text: the module follows as naga's IR dump, under a line saying it is not WGSL and why. The same program always gives
+    /// the same text; one that fails validation has none.
     pub fn text(&self) -> Result<String, Error> {
         text::text(self)
     }

@@ -66,7 +66,7 @@ control flow, resources as globals; naga 30.0.1 is the IR: the release plus thre
 `validate()` runs naga's validator (with `CAPABILITIES`: WGSL's baseline plus clip distances, per-sample shading, the
 primitive index, cube array textures, half-float packing and forced early depth, which a consumer that cannot provide
 one refuses) and then ours: interface against entry point, resources against globals (kind, space, binding, layout
-size). `text()` is the stable text form (a header of everything above, then the module as WGSL) and `emit::wgsl`
+size). `text()` is the stable text form (a header of everything above, then the module as WGSL; for a program WGSL cannot express, a texture atomic's old value or an exchange, the module as naga's IR dump under a line that says it is not WGSL and why, so no lifted program is without a text form) and `emit::wgsl`
 writes WGSL by naga's backend; a writer that cannot express a program refuses it, never approximates. `build::Builder`
 is the typed builder lifters share. An operation asked of values that cannot do it (a vector of 2 lanes added to one of 3, a
 lane that is not there) does not panic: the builder records the first such fault and hands back a value of the shape it
