@@ -397,10 +397,26 @@ pub struct InputBinding {
     pub role: InputRole,
 }
 
+/// What picks one of several stages of one kind in a binding: the mesh-side field a consumer reads, named by the dialect
+/// component and field that holds it (`anvil.mesh.kind`), and the value that picks this stage. A consumer draws a mesh
+/// with the stage whose key names a field it has and whose value that field equals; a mesh whose value matches no stage
+/// is refused by name, not drawn with a first or default stage.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct VariantKey {
+    /// The component and field the mesh carries the key in, as `component.field` (`anvil.mesh.kind`).
+    pub field: String,
+    pub value: u32,
+}
+
 /// One shader program in a material, with the role of everything it reads and writes.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StageBinding {
     pub stage: Stage,
+    /// The variant of the draw this stage is for, where the source draws one material with different programs of a
+    /// stage depending on the mesh (its vertex layout, whether it is skinned): the key the mesh's own data must equal
+    /// ([`VariantKey`]). A binding holds one stage of each kind, or several of one kind each for a distinct value of one
+    /// key.
+    pub variant: Option<VariantKey>,
     /// The `core.shader` entity.
     pub shader: Entity,
     pub inputs: Vec<InputBinding>,
@@ -731,8 +747,21 @@ impl Component for ShaderBinding {
     }
     fn verify(&self, _e: Entity, w: &crate::World) -> Result<(), String> {
         for (i, s) in self.stages.iter().enumerate() {
-            if self.stages[..i].iter().any(|other| other.stage == s.stage) {
-                return Err(format!("the {:?} stage is bound twice", s.stage));
+            // a stage kind may repeat only under distinct values of one key
+            for other in self.stages[..i].iter().filter(|o| o.stage == s.stage) {
+                let distinct = match (&other.variant, &s.variant) {
+                    (Some(a), Some(b)) => a.field == b.field && a.value != b.value,
+                    _ => false,
+                };
+                if !distinct {
+                    return Err(match &s.variant {
+                        None => format!("the {:?} stage is bound twice", s.stage),
+                        Some(k) => format!(
+                            "the {:?} stage is bound twice for {} = {} (several need distinct values of one key)",
+                            s.stage, k.field, k.value
+                        ),
+                    });
+                }
             }
             s.verify(w)?;
         }
@@ -926,6 +955,7 @@ mod tests {
         ShaderBinding {
             stages: vec![StageBinding {
                 stage: Stage::Pixel,
+                variant: None,
                 shader,
                 inputs: vec![InputBinding {
                     label: Label {
@@ -1070,5 +1100,55 @@ mod tests {
             *texture = m;
         }
         assert!(b.verify(m, &w).unwrap_err().contains("neither core.texture"));
+    }
+
+    /// A stage kind repeats only under distinct values of one key: two pixel stages with keys `k = 1` and `k = 2` verify,
+    /// the same value twice, a key and no key, and two different fields do not.
+    #[test]
+    fn a_stage_repeats_only_under_distinct_values_of_one_key() {
+        let (w, _, _, m) = world();
+        let good = w.get::<ShaderBinding>(m).unwrap().clone();
+        let key = |field: &str, value: u32| {
+            Some(VariantKey {
+                field: field.to_owned(),
+                value,
+            })
+        };
+        let with = |a: Option<VariantKey>, b: Option<VariantKey>| {
+            let mut x = good.clone();
+            x.stages[0].variant = a;
+            let mut y = x.stages[0].clone();
+            y.variant = b;
+            x.stages.push(y);
+            x
+        };
+        assert_eq!(
+            with(key("g.mesh.kind", 1), key("g.mesh.kind", 2)).verify(m, &w),
+            Ok(())
+        );
+        let same = with(key("g.mesh.kind", 1), key("g.mesh.kind", 1))
+            .verify(m, &w)
+            .unwrap_err();
+        assert!(same.contains("g.mesh.kind = 1"), "{same}");
+        assert!(with(key("g.mesh.kind", 1), None).verify(m, &w).is_err());
+        assert!(with(None, key("g.mesh.kind", 1)).verify(m, &w).is_err());
+        assert!(
+            with(None, None)
+                .verify(m, &w)
+                .unwrap_err()
+                .contains("bound twice")
+        );
+        assert!(
+            with(key("g.mesh.kind", 1), key("g.mesh.other", 2))
+                .verify(m, &w)
+                .is_err()
+        );
+        // a third stage repeating the first one's value is refused though it differs from the second's (it is compared
+        // with every earlier stage of its kind)
+        let mut three = with(key("g.mesh.kind", 1), key("g.mesh.kind", 2));
+        let mut z = three.stages[0].clone();
+        z.variant = key("g.mesh.kind", 1);
+        three.stages.push(z);
+        assert!(three.verify(m, &w).is_err());
     }
 }

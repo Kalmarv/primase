@@ -731,6 +731,7 @@ impl ResolveUnityShaders {
         };
         StageBinding {
             stage,
+            variant: None,
             shader,
             inputs,
             constants,

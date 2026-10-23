@@ -572,6 +572,7 @@ impl ResolveGtaShaders {
         };
         Ok(StageBinding {
             stage,
+            variant: None,
             shader,
             inputs: in_roles,
             constants,

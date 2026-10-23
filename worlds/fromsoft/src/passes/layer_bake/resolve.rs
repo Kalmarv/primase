@@ -632,6 +632,7 @@ pub fn resolve(
     Ok(Resolution {
         stage: StageBinding {
             stage: Stage::Pixel,
+            variant: None,
             shader: entity,
             inputs,
             constants,
@@ -825,6 +826,7 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
     }
     Ok(StageBinding {
         stage: Stage::Vertex,
+        variant: None,
         shader: entity,
         inputs,
         constants,

@@ -1,14 +1,17 @@
-//! `resolve-anvil-shaders{unset-textures=white|leave,vertex-layout=none|N}`: the G-buffer programs of Anvil Materials as
+//! `resolve-anvil-shaders{unset-textures=white|leave}`: the G-buffer programs of Anvil Materials as
 //! `core.shader` entities and each Material's `core.shader_binding`, by the engine's rules (Riders Republic
 //! docs/material-spec.md §2, §6.2, §11, §12.2, §15.4). The one home of those rules for the binding; the existing
 //! `bake-anvil-material` still carries its own recipes until it is moved onto the binding.
 //!
 //! - **Program.** The Material's template permutation ([`AnvilShaders`], read with `Placer::with_shaders`) for the
 //!   G-buffer pass of a plain draw: the pixel key [`gbuffer_key`] composes from the Material's flags (a
-//!   Material that sets a flag the template's feature word gates is left unbound, naming it), and the vertex key of
-//!   `vertex-layout=N`, the vertex layout number of the meshes drawn with it (bits 17 to 21 of the key: the mesh's, not
-//!   the Material's, so the caller states it; `none` binds the pixel stage only). Each program's interface is lifted
-//!   from its DXBC (the containers are stripped of their resource definitions, so its resources are its declarations').
+//!   Material that sets a flag the template's feature word gates is left unbound, naming it), and a vertex key for each
+//!   vertex layout number (bits 17 to 21 of the key: the mesh's, not the Material's) of the meshes drawn with the
+//!   Material, read from the data: the `kind` of every `anvil.mesh` that lists the Material among its ranges' Materials.
+//!   A Material drawn with several layouts has a vertex stage for each, each a [`VariantKey`] (`anvil.mesh.kind` = the
+//!   layout) a consumer matches to the mesh it draws, refusing a mesh whose layout has no stage; a Material no mesh is
+//!   drawn with has the pixel stage only (counted). Each program's interface is lifted from its DXBC (the containers are
+//!   stripped of their resource definitions, so its resources are its declarations').
 //! - **Constants.** `cb3` is the Material's property vector: each of the template's bindings of the Material's
 //!   properties at the vec4 it states (a scalar its `.x`, a vector its four, a UV transform the two rows
 //!   `(su cos t, -su sin t, tu, 0)` and `(sv sin t, sv cos t, tv, 0)` where the speeds are 0, as the words of the
@@ -42,12 +45,12 @@ use primase_core::shader::{
     AlphaTest, Compare, ConstantBinding, ConstantRole, Cull, DepthState, InputBinding, InputRole, Interface,
     NormalEncoding, NormalSpace, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind,
     SamplerState, Shader, ShaderBinding, ShaderFormat, Stage, StageBinding, SystemValue, TextureBinding,
-    TextureDim, TextureSource, Varying,
+    TextureDim, TextureSource, VariantKey, Varying,
 };
 use primase_core::{ColorSpace, Component, Entity, Name, Semantic, Texture, World};
 
 use crate::components::{
-    AnvilMaterial, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags, MaterialValue,
+    AnvilMaterial, AnvilMesh, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags, MaterialValue,
 };
 
 /// What a texture binding with no texture becomes.
@@ -63,17 +66,16 @@ pub enum UnsetTexture {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResolveAnvilShaders {
     unset: UnsetTexture,
-    vertex_layout: Option<u32>,
 }
 
 impl ResolveAnvilShaders {
-    pub fn new(unset: UnsetTexture, vertex_layout: Option<u32>) -> Self {
-        ResolveAnvilShaders { unset, vertex_layout }
+    pub fn new(unset: UnsetTexture) -> Self {
+        ResolveAnvilShaders { unset }
     }
 
-    /// From its options (both required), through [`ResolveAnvilShaders::new`].
+    /// From its option (required), through [`ResolveAnvilShaders::new`].
     pub fn from_options(o: &Options) -> Result<Self, String> {
-        let (mut unset, mut layout) = (None, None);
+        let mut unset = None;
         for (k, v) in o {
             match k.as_str() {
                 "unset-textures" => {
@@ -84,21 +86,17 @@ impl ResolveAnvilShaders {
                     });
                 }
                 "vertex-layout" => {
-                    layout = Some(match v.as_str() {
-                        "none" => None,
-                        n => match n.parse::<u32>() {
-                            Ok(n) if n < 32 => Some(n),
-                            _ => return Err(format!("vertex-layout={v} is not none or a number below 32")),
-                        },
-                    });
+                    return Err(
+                        "vertex-layout is gone: each mesh's vertex stage is bound by its own layout (anvil.mesh.kind)"
+                            .into(),
+                    );
                 }
                 _ => return Err(format!("unknown option {k}")),
             }
         }
-        Ok(Self::new(
-            unset.ok_or("unset-textures is required: what a texture binding with no texture reads is the program's choice")?,
-            layout.ok_or("vertex-layout is required: the vertex layout number of the meshes drawn (bits 17 to 21 of the vertex key), or none")?,
-        ))
+        Ok(Self::new(unset.ok_or(
+            "unset-textures is required: what a texture binding with no texture reads is the program's choice",
+        )?))
     }
 }
 
@@ -396,20 +394,14 @@ impl Pass for ResolveAnvilShaders {
         "resolve-anvil-shaders"
     }
     fn options(&self) -> Options {
-        Options::from([
-            (
-                "unset-textures".to_owned(),
-                match self.unset {
-                    UnsetTexture::White => "white",
-                    UnsetTexture::Leave => "leave",
-                }
-                .to_owned(),
-            ),
-            (
-                "vertex-layout".to_owned(),
-                self.vertex_layout.map_or("none".to_owned(), |n| n.to_string()),
-            ),
-        ])
+        Options::from([(
+            "unset-textures".to_owned(),
+            match self.unset {
+                UnsetTexture::White => "white",
+                UnsetTexture::Leave => "leave",
+            }
+            .to_owned(),
+        )])
     }
     fn requires(&self) -> &[&'static str] {
         &[AnvilMaterial::NAME, AnvilShaders::NAME]
@@ -426,6 +418,13 @@ impl Pass for ResolveAnvilShaders {
             .map(|(e, m)| (e, m.clone()))
             .collect();
         let mut programs: BTreeMap<(Entity, bool, u32), Result<Entity, String>> = BTreeMap::new();
+        // the vertex layout number (`anvil.mesh.kind`) of every mesh drawn with each Material
+        let mut layouts_of: BTreeMap<Entity, std::collections::BTreeSet<u8>> = BTreeMap::new();
+        for (_, mesh) in world.iter::<AnvilMesh>() {
+            for material in mesh.material_entities.iter().flatten() {
+                layouts_of.entry(*material).or_default().insert(mesh.kind);
+            }
+        }
         let mut textures = Textures {
             spawned: BTreeMap::new(),
         };
@@ -453,79 +452,55 @@ impl Pass for ResolveAnvilShaders {
                     continue;
                 }
             };
-            let vertex_key = self.vertex_layout.map(|n| gbuffer_vertex_key(pixel_key, n));
-            let mut stages = Vec::new();
-            let mut pixel_shader = None;
-            for (is_vertex, key) in [(false, Some(pixel_key)), (true, vertex_key)] {
-                let Some(key) = key else { continue };
-                let entry = programs.entry((tables, is_vertex, key));
-                let found = match entry {
-                    std::collections::btree_map::Entry::Occupied(o) => o.get().clone(),
-                    std::collections::btree_map::Entry::Vacant(v) => {
-                        let bytes = world.get::<AnvilShaders>(tables).and_then(|t| {
-                            if is_vertex { t.vertex(key) } else { t.pixel(key) }.map(<[u8]>::to_vec)
-                        });
-                        let made = match bytes {
-                            None => Err(format!(
-                                "the template has no {} permutation for the G-buffer key",
-                                if is_vertex { "vertex" } else { "pixel" }
-                            )),
-                            Some(bytes) => match primase_dxbc::lift(&bytes) {
-                                Err(e) => Err(format!(
-                                    "a {} program the lifter refuses: {}",
-                                    if is_vertex { "vertex" } else { "pixel" },
-                                    e.group()
-                                )),
-                                Ok(program) => {
-                                    let e = world.spawn();
-                                    world.insert(
-                                        e,
-                                        Name(format!(
-                                            "{template}-{key:06x}.{}",
-                                            if is_vertex { "vs" } else { "ps" }
-                                        )),
-                                    );
-                                    world.insert(
-                                        e,
-                                        Shader {
-                                            format: ShaderFormat::Dxbc,
-                                            bytecode: bytes,
-                                            interface: program.interface,
-                                        },
-                                    );
-                                    Ok(e)
-                                }
-                            },
-                        };
-                        v.insert(made.clone());
-                        made
-                    }
-                };
-                match found {
-                    Ok(e) => {
-                        if is_vertex {
-                            stages.push((Stage::Vertex, e));
-                        } else {
-                            pixel_shader = Some(e);
-                        }
-                    }
-                    Err(why) if !is_vertex => {
-                        bump(&format!("materials left unbound: {why}"), 1, &mut counts);
-                        continue 'materials;
-                    }
+            // the vertex layouts of the meshes drawn with this material (bits 17 to 21 of the vertex key, from the data)
+            let layouts = layouts_of.get(&material).cloned().unwrap_or_default();
+            if layouts.is_empty() {
+                bump(
+                    "materials no mesh is drawn with: bound with the pixel stage only",
+                    1,
+                    &mut counts,
+                );
+            }
+            let pixel = match program(world, &mut programs, &template, tables, false, pixel_key) {
+                Ok(e) => e,
+                Err(why) => {
+                    bump(&format!("materials left unbound: {why}"), 1, &mut counts);
+                    continue 'materials;
+                }
+            };
+            let mut stages: Vec<(Stage, Option<VariantKey>, Entity)> = Vec::new();
+            for kind in layouts {
+                if kind >= 32 {
+                    bump(
+                        &format!(
+                            "meshes whose vertex layout number {kind} is past the key's five bits: no vertex stage bound"
+                        ),
+                        1,
+                        &mut counts,
+                    );
+                    continue;
+                }
+                let key = gbuffer_vertex_key(pixel_key, u32::from(kind));
+                match program(world, &mut programs, &template, tables, true, key) {
+                    Ok(e) => stages.push((
+                        Stage::Vertex,
+                        Some(VariantKey {
+                            field: MESH_LAYOUT_FIELD.to_owned(),
+                            value: u32::from(kind),
+                        }),
+                        e,
+                    )),
                     Err(why) => bump(
-                        &format!("materials whose vertex stage is left unbound: {why}"),
+                        &format!("vertex layouts whose vertex stage is left unbound: {why}"),
                         1,
                         &mut counts,
                     ),
                 }
             }
-            if let Some(p) = pixel_shader {
-                stages.push((Stage::Pixel, p));
-            }
-            let vertex_bound = stages.iter().any(|(s, _)| *s == Stage::Vertex);
+            let vertex_bound = !stages.is_empty();
+            stages.push((Stage::Pixel, None, pixel));
             let mut bound = Vec::new();
-            for (stage, shader) in stages {
+            for (stage, variant, shader) in stages {
                 let interface = world
                     .get::<Shader>(shader)
                     .map(|s| s.interface.clone())
@@ -536,6 +511,7 @@ impl Pass for ResolveAnvilShaders {
                     &m,
                     &template,
                     stage,
+                    variant,
                     shader,
                     &interface,
                     vertex_bound,
@@ -567,6 +543,57 @@ impl Pass for ResolveAnvilShaders {
     }
 }
 
+/// The mesh-side field a vertex stage's variant key names: the vertex layout number of the mesh (bits 17 to 21 of its
+/// vertex key).
+pub const MESH_LAYOUT_FIELD: &str = "anvil.mesh.kind";
+
+/// The `core.shader` entity of the template's `key` permutation of one stage, made once and kept in `programs`.
+fn program(
+    world: &mut World,
+    programs: &mut BTreeMap<(Entity, bool, u32), Result<Entity, String>>,
+    template: &str,
+    tables: Entity,
+    is_vertex: bool,
+    key: u32,
+) -> Result<Entity, String> {
+    if let Some(found) = programs.get(&(tables, is_vertex, key)) {
+        return found.clone();
+    }
+    let stage = if is_vertex { "vertex" } else { "pixel" };
+    let bytes = world
+        .get::<AnvilShaders>(tables)
+        .and_then(|t| if is_vertex { t.vertex(key) } else { t.pixel(key) }.map(<[u8]>::to_vec));
+    let made = match bytes {
+        None => Err(format!(
+            "the template has no {stage} permutation for the G-buffer key"
+        )),
+        Some(bytes) => match primase_dxbc::lift(&bytes) {
+            Err(e) => Err(format!("a {stage} program the lifter refuses: {}", e.group())),
+            Ok(program) => {
+                let e = world.spawn();
+                world.insert(
+                    e,
+                    Name(format!(
+                        "{template}-{key:06x}.{}",
+                        if is_vertex { "vs" } else { "ps" }
+                    )),
+                );
+                world.insert(
+                    e,
+                    Shader {
+                        format: ShaderFormat::Dxbc,
+                        bytecode: bytes,
+                        interface: program.interface,
+                    },
+                );
+                Ok(e)
+            }
+        },
+    };
+    programs.insert((tables, is_vertex, key), made.clone());
+    made
+}
+
 impl ResolveAnvilShaders {
     #[allow(clippy::too_many_arguments)]
     fn stage_binding(
@@ -576,6 +603,7 @@ impl ResolveAnvilShaders {
         m: &AnvilMaterial,
         template: &str,
         stage: Stage,
+        variant: Option<VariantKey>,
         shader: Entity,
         interface: &Interface,
         vertex_bound: bool,
@@ -603,7 +631,7 @@ impl ResolveAnvilShaders {
                     },
                     Stage::Pixel if vertex_bound => InputRole::Previous,
                     Stage::Pixel => InputRole::Unknown {
-                        why: "the vertex stage is not bound (vertex-layout=none)".into(),
+                        why: "the vertex stage is not bound (no mesh is drawn with the material)".into(),
                     },
                     _ => InputRole::Unknown {
                         why: "a stage this pass does not bind".into(),
@@ -697,6 +725,7 @@ impl ResolveAnvilShaders {
         }
         StageBinding {
             stage,
+            variant,
             shader,
             inputs,
             constants,
@@ -865,15 +894,14 @@ mod tests {
                 .collect::<Options>()
         };
         assert!(ResolveAnvilShaders::from_options(&o(&[])).is_err());
-        assert!(ResolveAnvilShaders::from_options(&o(&[("unset-textures", "white")])).is_err());
-        assert!(
-            ResolveAnvilShaders::from_options(&o(&[("unset-textures", "white"), ("vertex-layout", "40")]))
-                .is_err()
-        );
-        let p = ResolveAnvilShaders::from_options(&o(&[("unset-textures", "leave"), ("vertex-layout", "2")]))
-            .unwrap();
-        assert_eq!(p, ResolveAnvilShaders::new(UnsetTexture::Leave, Some(2)));
-        assert_eq!(p.options()["vertex-layout"], "2");
+        assert!(ResolveAnvilShaders::from_options(&o(&[("unset-textures", "white")])).is_ok());
+        // the vertex layout is no option: each mesh's own decides
+        let gone =
+            ResolveAnvilShaders::from_options(&o(&[("unset-textures", "white"), ("vertex-layout", "2")]));
+        assert!(gone.unwrap_err().contains("vertex-layout is gone"));
+        let p = ResolveAnvilShaders::from_options(&o(&[("unset-textures", "leave")])).unwrap();
+        assert_eq!(p, ResolveAnvilShaders::new(UnsetTexture::Leave));
+        assert!(!p.options().contains_key("vertex-layout"));
     }
 }
 
