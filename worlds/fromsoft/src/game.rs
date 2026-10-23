@@ -28,6 +28,62 @@ impl Game {
             Game::EldenRing => &crate::elden::ARCHIVES,
         }
     }
+
+    /// The archive folder holding a map's own files (map pieces, collision, light banks): Sekiro keeps them in
+    /// `/map/<map>`, Elden Ring in `/map/<mAA>/<map>`.
+    pub fn map_folder(self, map: &str) -> String {
+        match self {
+            Game::Sekiro => format!("/map/{map}"),
+            Game::EldenRing => format!("/map/{}/{map}", &map[..map.len().min(3)]),
+        }
+    }
+
+    /// The source-identity prefix of a placed object model (`obj/<model>` in Sekiro, `asset/<model>` in Elden Ring).
+    pub fn object_prefix(self) -> &'static str {
+        match self {
+            Game::Sekiro => "obj",
+            Game::EldenRing => "asset",
+        }
+    }
+
+    /// A placed object's model: the binder holding it and its FLVER member, and the collision file the same binder
+    /// holds where the game keeps it there.
+    pub fn object_model(self, model: &str) -> crate::Result<ObjectModel> {
+        match self {
+            Game::Sekiro => Ok(ObjectModel {
+                binder: format!("/obj/{model}.objbnd.dcx"),
+                flver: format!("{model}.flver"),
+                collision: Some(format!("{model}.hkx")),
+            }),
+            Game::EldenRing => crate::elden::asset_model(model),
+        }
+    }
+
+    /// The larger maps that also place `map`'s large assets (under names `<map>-<part>`, in their own frame), and
+    /// where `map`'s centre lies in each one's frame (source x, z): Elden Ring's open-world tiles; none elsewhere.
+    pub fn parent_maps(self, map: &str) -> Vec<(String, [f64; 2])> {
+        match self {
+            Game::Sekiro => Vec::new(),
+            Game::EldenRing => crate::elden::parent_tiles(map),
+        }
+    }
+
+    /// Whether a map model belongs to the game's distant-backdrop series (Sekiro's `m9xxxxx`).
+    pub fn far_model(self, model: &str) -> bool {
+        match self {
+            Game::Sekiro => model.starts_with("m9"),
+            Game::EldenRing => false,
+        }
+    }
+}
+
+/// Where a placed object's model is stored ([`Game::object_model`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObjectModel {
+    pub binder: String,
+    pub flver: String,
+    /// The collision file the same binder holds, where the game keeps it there.
+    pub collision: Option<String>,
 }
 
 /// One BHD5/BDT pair of an install.

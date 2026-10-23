@@ -109,6 +109,35 @@ impl Keys {
     }
 }
 
+/// A game's install: its folder, the game and the keys of its archives; what a reader opens.
+#[derive(Clone, Debug)]
+pub struct Install {
+    pub root: PathBuf,
+    pub game: Game,
+    pub keys: Keys,
+}
+impl Install {
+    /// A Sekiro install, with the published keys.
+    pub fn sekiro(root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            game: Game::Sekiro,
+            keys: Keys::published(Game::Sekiro).expect("Sekiro's keys are published"),
+        }
+    }
+    pub fn new(root: impl Into<PathBuf>, game: Game, keys: Keys) -> Self {
+        Self {
+            root: root.into(),
+            game,
+            keys,
+        }
+    }
+    /// Its archives.
+    pub fn open(&self) -> Result<Archive> {
+        Archive::open_game(&self.root, self.game, &self.keys)
+    }
+}
+
 #[derive(Debug)]
 pub struct IndexedEntry {
     pub shard: u8,

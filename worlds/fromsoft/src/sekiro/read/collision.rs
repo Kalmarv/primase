@@ -24,6 +24,9 @@ pub struct Report {
     pub triangles: usize,
     /// Triangles whose shape key binds no HitMtrl.
     pub unbound_triangles: usize,
+    /// Triangle-data rows beyond their shape's key table (Elden Ring stores some tables shorter than their data):
+    /// the triangles they would key bind no HitMtrl and are among `unbound_triangles`.
+    pub unkeyed_triangle_data: usize,
     /// Collision files the MSB's parts name that the area's binder does not hold.
     pub missing_files: Vec<String>,
     /// Bodies of the read files whose shape class has no decoder, by class: listed on their file, not read.
@@ -43,6 +46,7 @@ fn leaf(name: &str) -> String {
 pub fn read(
     archive: &Archive,
     decoder: &Decoder<'_>,
+    folder: &str,
     area: &str,
     layout: &MapLayout,
     mut states: Option<&mut super::states::States>,
@@ -72,7 +76,7 @@ pub fn read(
                 condition: states.as_deref_mut().and_then(|s| s.clause(part)),
             });
     }
-    let base = format!("/map/{area}/h{}", &area[1..]);
+    let base = format!("{folder}/h{}", &area[1..]);
     let binder = Binder::read_split(
         &archive.read(&format!("{base}.hkxbhd"), decoder)?,
         &archive.read(&format!("{base}.hkxbdt"), decoder)?,
@@ -113,6 +117,7 @@ pub fn read(
         report.files += 1;
         report.triangles += raw.triangles.len();
         report.unbound_triangles += raw.unmapped;
+        report.unkeyed_triangle_data += raw.unkeyed_triangle_data;
         for shape in &raw.unread_bodies {
             *report.unread_bodies.entry(shape.clone()).or_default() += 1;
         }

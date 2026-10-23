@@ -17,7 +17,7 @@ mod passes;
 mod pose;
 mod read;
 pub mod sekiro;
-pub use archive::{Archive, Keys, NameDictionary};
+pub use archive::{Archive, Install, Keys, NameDictionary};
 pub use binder::{Binder, BinderFile};
 pub use game::Game;
 mod components;

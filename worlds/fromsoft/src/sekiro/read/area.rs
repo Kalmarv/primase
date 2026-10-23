@@ -1,11 +1,15 @@
-//! Reading one Sekiro area ([`read_area`]): its placed models, materials, texture files, layered-shader programs,
-//! collision files and bodies, lights, hang edges and spawn points, selected and in the world frame, as source records.
+//! Reading one FromSoftware map ([`read_area`] for Sekiro, [`read_game_area`] for any game): its placed models,
+//! materials, texture files, layered-shader programs, collision files and bodies, lights, hang edges and spawn points,
+//! selected and in the world frame, as source records. What differs between the games and is not stated by their files
+//! (where a map keeps its files, how objects are found, tile parents) is [`crate::Game`]'s; what Elden Ring's read does
+//! not cover yet (material binaries and the textures they bind, asset collision, world states, spawn points, SpeedTree
+//! models) is in its notices.
 use super::{collision, extras, objects, shaders, shadows, states, textures};
 use crate::sekiro::source::{self, Region};
 use crate::{
-    Archive, Binder, Result,
+    Archive, Binder, Game, Install, Result,
     dcx::Decoder,
-    flver::Model,
+    flver::{Model, is_speedtree},
     invalid, materials,
     msb::{MapLayout, PartKind},
     mtd::MaterialDefinition,
@@ -26,6 +30,18 @@ pub struct Options {
     /// Which world states to bring in ([`states`]): none (default, every part present) or the event-flag rules of the
     /// block's script, as axes and conditions for `resolve-state`.
     pub states: StateClasses,
+    /// Whether the larger maps above the map (Elden Ring's open-world tiles: [`crate::Game::parent_maps`]) also place
+    /// their parts that belong to it: none (default: the map's own layout only) or included, moved into the map's frame.
+    pub parents: Parents,
+}
+/// Whether a read brings in the parts the larger maps above it place for it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Parents {
+    /// The map's own layout only.
+    #[default]
+    None,
+    /// Also the `<map>-<part>` parts of every larger map above it.
+    Include,
 }
 /// The state axis classes a read produces.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -66,8 +82,19 @@ pub struct Report {
     pub missing_shader_bundles: Vec<String>,
     /// Bundles kept without their parameter definition: its metaparam is of a version the reader does not read.
     pub unread_metaparams: Vec<String>,
-    /// Distinct placed models (`obj/<model>`, `<area>/<model>`) the archive does not hold.
+    /// Distinct placed models (`obj/<model>`, `asset/<model>`, `<map>/<model>`) the archive does not hold.
     pub missing_models: Vec<String>,
+    /// Distinct placed models stored as SpeedTree FLVERs, which the reader does not decode, and their placements.
+    pub speedtree_models: Vec<String>,
+    pub skipped_speedtree: usize,
+    /// The larger maps whose parts for this map were read (`parents: include`), and those parts.
+    pub parent_maps: Vec<String>,
+    pub parent_placements: usize,
+    /// Materials whose definitions the read does not resolve yet (Elden Ring's material binaries): they keep their
+    /// FLVER bindings only, and no texture is read for them.
+    pub undefined_materials: usize,
+    /// Placed object prototypes whose collision the read does not read yet (Elden Ring's asset collision binders).
+    pub object_collision_not_read: usize,
     /// With `states: Event`: the rules read and the parts decided or left at their default.
     pub states: Option<states::Report>,
     /// Placements of the models in `missing_models`.
@@ -95,6 +122,12 @@ impl Report {
             out.push(listed(
                 "placed models not found in the archive",
                 &self.missing_models,
+            ));
+        }
+        if !self.speedtree_models.is_empty() {
+            out.push(listed(
+                "SpeedTree models not decoded: their placements are not read",
+                &self.speedtree_models,
             ));
         }
         if !self.missing_shader_bundles.is_empty() {
@@ -151,6 +184,26 @@ impl Report {
                 self.skipped_empty,
                 NoticeKind::Unsupported,
                 "placements of models whose face sets use no vertex",
+            ),
+            (
+                self.skipped_speedtree,
+                NoticeKind::Unsupported,
+                "placements of SpeedTree models, not read",
+            ),
+            (
+                self.undefined_materials,
+                NoticeKind::Unsupported,
+                "materials whose definition (material binary) is not read yet: FLVER bindings only, no textures",
+            ),
+            (
+                self.object_collision_not_read,
+                NoticeKind::Unsupported,
+                "placed asset prototypes whose collision binder is not read yet",
+            ),
+            (
+                usize::from(self.extras.spawn_points_not_read),
+                NoticeKind::Unsupported,
+                "spawn points not read: the map layout's spawn region code is not known",
             ),
             (
                 usize::from(self.extras.missing_light_bank),
@@ -231,7 +284,7 @@ fn area_name(area: &str) -> Result<String> {
             _ => b.is_ascii_digit(),
         })
     {
-        return Err(invalid("Sekiro area", 0, "expected mNN_NN or mNN_NN_NN_NN"));
+        return Err(invalid("FromSoftware map", 0, "expected mNN_NN or mNN_NN_NN_NN"));
     }
     Ok(value)
 }
@@ -332,8 +385,37 @@ pub fn read_area(
     options: &Options,
     destination: &mut World,
 ) -> Result<Report> {
+    read_game_area(
+        &Install::sekiro(install.as_ref()),
+        area,
+        decoder,
+        options,
+        destination,
+    )
+}
+
+/// A placement the read considers: its model's key, the part as stored (from the map's layout or a larger map's),
+/// the map whose layout holds it, and the offset (source x, z) from that map's frame into the read map's.
+struct Placed {
+    key: String,
+    part: crate::msb::Part,
+    map: String,
+    offset: [f64; 2],
+}
+
+/// [`read_area`] for `install`'s game: what differs is [`crate::Game`]'s. Elden Ring's read does not resolve material
+/// binaries, read asset collision, world states or spawn points, or decode SpeedTree models yet; each is in the
+/// report's notices.
+pub fn read_game_area(
+    install: &Install,
+    area: &str,
+    decoder: &Decoder<'_>,
+    options: &Options,
+    destination: &mut World,
+) -> Result<Report> {
+    let game = install.game;
     if destination.entities().next().is_some() {
-        return Err(invalid("Sekiro area", 0, "destination must be empty"));
+        return Err(invalid("FromSoftware map", 0, "destination must be empty"));
     }
     if options.region.is_some_and(|Region { rect: r, margin }| {
         !(margin.is_finite() && margin >= 0.)
@@ -341,46 +423,101 @@ pub fn read_area(
             || r[0] >= r[2]
             || r[1] >= r[3]
     }) {
-        return Err(invalid("Sekiro area", 0, "invalid region"));
+        return Err(invalid("FromSoftware map", 0, "invalid region"));
+    }
+    if game != Game::Sekiro && options.states != StateClasses::None {
+        return Err(invalid(
+            "FromSoftware map",
+            0,
+            format!("{}: event-flag world states are not read yet", game.name()),
+        ));
     }
     let area = area_name(area)?;
-    let archive = Archive::open(install.as_ref())?;
+    let archive = install.open()?;
     let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
-    let mut catalog = textures::Catalog::discover(&archive, decoder, &area[..3])?;
-    let definitions = material_definitions(&archive, decoder)?;
     let mut report = Report::default();
+    // Sekiro's material definitions (MTD) and texture catalog; Elden Ring's material binaries and the packages they
+    // bind are not read yet (counted as undefined materials)
+    let (mut catalog, definitions) = match game {
+        Game::Sekiro => (
+            textures::Catalog::discover(&archive, decoder, &area[..3])?,
+            material_definitions(&archive, decoder)?,
+        ),
+        Game::EldenRing => (textures::Catalog::default(), BTreeMap::new()),
+    };
+    let object = game.object_prefix();
     let mut placements = Vec::new();
     let mut requests = BTreeSet::new();
-    for kind in [PartKind::MapPiece, PartKind::Object] {
-        for p in layout.parts.iter().filter(|p| p.kind == kind) {
-            let Some(model) = p.model.map(|i| layout.models[i].name.as_str()) else {
+    let mut maps = vec![(area.clone(), layout.clone(), [0.; 2], None)];
+    if options.parents == Parents::Include {
+        for (parent, offset) in game.parent_maps(&area) {
+            let path = format!("/map/mapstudio/{parent}.msb.dcx");
+            if !archive.contains(&path) {
                 continue;
-            };
-            let key = format!("{}/{model}", if kind == PartKind::Object { "obj" } else { &area });
-            requests.insert(key.clone());
-            placements.push((key, p));
+            }
+            let parent_layout = MapLayout::read(&archive.read(&path, decoder)?)?;
+            report.parent_maps.push(parent.clone());
+            maps.push((parent, parent_layout, offset, Some(format!("{area}-"))));
+        }
+    }
+    // map pieces, then objects (assets), each in layout order, the map's own before its parents'
+    for objects in [false, true] {
+        for (map, map_layout, offset, prefix) in &maps {
+            for p in &map_layout.parts {
+                let kind = match p.kind {
+                    PartKind::MapPiece if !objects => map.as_str(),
+                    PartKind::Object | PartKind::Asset if objects => object,
+                    _ => continue,
+                };
+                if prefix
+                    .as_ref()
+                    .is_some_and(|prefix| !p.name.starts_with(prefix.as_str()))
+                {
+                    continue;
+                }
+                let Some(model) = p.model.map(|i| map_layout.models[i].name.as_str()) else {
+                    continue;
+                };
+                let key = format!("{kind}/{model}");
+                requests.insert(key.clone());
+                report.parent_placements += usize::from(prefix.is_some());
+                placements.push(Placed {
+                    key,
+                    part: p.clone(),
+                    map: map.clone(),
+                    offset: *offset,
+                });
+            }
         }
     }
     let mut prototypes = BTreeMap::new();
     for key in requests {
         let (kind, model) = key.split_once('/').expect("constructed key");
-        let (path, leaf) = if kind == "obj" {
-            (format!("/obj/{model}.objbnd.dcx"), format!("{model}.flver"))
+        let is_object = kind == object;
+        let (path, leaf, collision_file) = if is_object {
+            let o = game.object_model(model)?;
+            (o.binder, o.flver, o.collision)
         } else {
             let name = format!(
-                "{area}_{}",
-                model
-                    .strip_prefix('m')
-                    .ok_or_else(|| invalid("Sekiro model", 0, "map model prefix"))?
+                "{kind}_{}",
+                model.strip_prefix('m').ok_or_else(|| invalid(
+                    "FromSoftware model",
+                    0,
+                    "map model prefix"
+                ))?
             );
-            (format!("/map/{area}/{name}.mapbnd.dcx"), format!("{name}.flver"))
+            (
+                format!("{}/{name}.mapbnd.dcx", game.map_folder(kind)),
+                format!("{name}.flver"),
+                None,
+            )
         };
-        if !textures::has(&archive, &path) {
+        if !archive.contains(&path) {
             report.missing_models.push(key);
             continue;
         }
         let binder = Binder::read(&archive.read(&path, decoder)?, decoder)?;
-        if kind == "obj" {
+        if is_object {
             for f in &binder.files {
                 if f.bytes.starts_with(b"TPF\0") {
                     catalog.add(&f.bytes)?;
@@ -395,23 +532,34 @@ pub fn read_area(
                     .unwrap_or("")
                     .rsplit(['/', '\\'])
                     .next()
-                    .is_some_and(|s| s == leaf || dcx && s.strip_suffix(".dcx") == Some(leaf))
+                    .is_some_and(|s| {
+                        s.eq_ignore_ascii_case(leaf)
+                            || dcx
+                                && s.strip_suffix(".dcx")
+                                    .is_some_and(|s| s.eq_ignore_ascii_case(leaf))
+                    })
             })
         };
         let Some(f) = member(&leaf, false) else {
             report.missing_models.push(key);
             continue;
         };
-        let collision = if kind == "obj" {
-            let file = format!("{model}.hkx");
-            member(&file, true)
+        if is_speedtree(&f.bytes) {
+            report.speedtree_models.push(key);
+            continue;
+        }
+        let collision = match &collision_file {
+            Some(file) => member(file, true)
                 .map(|f| decoder.decode_if_dcx(&f.bytes))
                 .transpose()?
-                .map(|bytes| (file, bytes))
-        } else {
-            None
+                .map(|bytes| (file.clone(), bytes)),
+            None => None,
         };
-        let model = Model::read(&f.bytes)?;
+        if is_object && collision_file.is_none() {
+            report.object_collision_not_read += 1;
+        }
+        let model =
+            Model::read(&f.bytes).map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")))?;
         let materials = model
             .materials
             .iter()
@@ -421,7 +569,8 @@ pub fn read_area(
                 })
             })
             .collect();
-        let bounds = world_bounds(&model).map_err(|e| invalid("Sekiro model", 0, format!("{key}: {e}")))?;
+        let bounds =
+            world_bounds(&model).map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")))?;
         prototypes.insert(
             key,
             Prototype {
@@ -432,14 +581,24 @@ pub fn read_area(
             },
         );
     }
+    let speedtree: BTreeSet<&String> = report.speedtree_models.iter().collect();
+    let skipped_speedtree = placements.iter().filter(|p| speedtree.contains(&p.key)).count();
+    placements.retain(|p| !speedtree.contains(&p.key));
+    report.skipped_speedtree = skipped_speedtree;
+    // a larger map's part moves into the read map's frame by its centre's offset there, in f64 rounded once
     let placed = placements
         .iter()
-        .map(|(key, p)| Ok((key.clone(), p.transform()?)))
+        .map(|p| {
+            let mut part = p.part.clone();
+            part.position[0] = (f64::from(part.position[0]) - p.offset[0]) as f32;
+            part.position[2] = (f64::from(part.position[2]) - p.offset[1]) as f32;
+            Ok((p.key.clone(), part.transform()?))
+        })
         .collect::<Result<Vec<_>>>()?;
     let bounds = prototypes.iter().map(|(k, p)| (k.clone(), p.bounds)).collect();
     let selected: Vec<(String, usize, Transform)> = select_placements(&placed, &bounds, options, &mut report)
         .into_iter()
-        .map(|i| (placed[i].0.clone(), placements[i].1.index, placed[i].1))
+        .map(|i| (placed[i].0.clone(), i, placed[i].1))
         .collect();
     let used: BTreeSet<&String> = selected.iter().map(|(key, _, _)| key).collect();
     prototypes.retain(|key, _| used.contains(key));
@@ -450,6 +609,7 @@ pub fn read_area(
     for proto in prototypes.values() {
         for m in &proto.materials {
             *report.shader_parts.entry(m.shader.clone()).or_default() += 1;
+            report.undefined_materials += usize::from(game != Game::Sekiro && m.definition.is_none());
             for b in m.bindings.values() {
                 if catalog.entries.contains_key(&b.texture) {
                     wanted.insert(b.texture.clone());
@@ -504,13 +664,15 @@ pub fn read_area(
             };
             slots.push(e);
         }
-        let far = key.starts_with(&format!("{area}/m9"));
+        let far = key
+            .strip_prefix(&format!("{area}/"))
+            .is_some_and(|model| game.far_model(model));
         let e = world.spawn();
         world.insert(e, Name(key.split_once('/').expect("key").1.to_owned()));
         world.insert(e, crate::components::models::SourceModel(proto.model));
         world.insert(e, source::MaterialSlots(slots));
         world.insert(e, source::PrototypeSource { id: key.clone(), far });
-        if key.starts_with("obj/") {
+        if key.starts_with(&format!("{object}/")) {
             report.object_collision.models += 1;
         }
         if let Some((file, bytes)) = proto.collision {
@@ -534,7 +696,7 @@ pub fn read_area(
     report.missing_shader_bundles = bundles.missing.iter().cloned().collect();
     report.unread_metaparams = bundles.unread_metaparams.iter().cloned().collect();
     for (key, index, transform) in selected {
-        let part = &layout.parts[index];
+        let Placed { part, map, .. } = &placements[index];
         let (prototype, far) = proto_entities[&key];
         let e = world.spawn();
         if let Some(s) = states.as_mut()
@@ -550,15 +712,25 @@ pub fn read_area(
             },
         );
         world.insert(e, transform);
-        world.insert(e, Source(format!("{area}:{}", part.name)));
+        world.insert(e, Source(format!("{map}:{}", part.name)));
         shadows::attach(&mut world, e, part.shadows, &mut report.shadows);
         report.placements += 1;
         report.far_placements += usize::from(far);
     }
-    report.collision = collision::read(&archive, decoder, &area, &layout, states.as_mut(), &mut world)?;
+    let folder = game.map_folder(&area);
+    report.collision = collision::read(
+        &archive,
+        decoder,
+        &folder,
+        &area,
+        &layout,
+        states.as_mut(),
+        &mut world,
+    )?;
     report.extras = extras::assemble(
         &archive,
         decoder,
+        &folder,
         &area,
         &layout,
         options.region.map(|r| r.rect),

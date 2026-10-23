@@ -24,6 +24,8 @@ pub struct Report {
     pub other_edges: std::collections::BTreeMap<String, usize>,
     pub missing_light_bank: bool,
     pub missing_edge_binder: bool,
+    /// The map layout's generation does not say which regions are spawn points: none read.
+    pub spawn_points_not_read: bool,
 }
 /// `parent` then `child`.
 fn compose(parent: &Transform, child: &Transform) -> Transform {
@@ -77,6 +79,7 @@ pub fn light_record(light: &crate::btl::Light, map: &Transform) -> Result<(Trans
 pub fn assemble(
     archive: &Archive,
     decoder: &Decoder<'_>,
+    folder: &str,
     area: &str,
     layout: &MapLayout,
     region: Option<[f32; 4]>,
@@ -97,7 +100,7 @@ pub fn assemble(
     let inside =
         |p: [f32; 3]| region.is_none_or(|r| p[0] >= r[0] && p[0] < r[2] && -p[2] >= r[1] && -p[2] < r[3]);
     let reflect = |p: [f32; 3]| [p[0], p[1], -p[2]];
-    let light_path = format!("/map/{area}/{area}_0000.btl.dcx");
+    let light_path = format!("{folder}/{area}_0000.btl.dcx");
     match archive.read(&light_path, decoder) {
         Err(Error::Missing(_)) => report.missing_light_bank = true,
         Err(e) => return Err(e),
@@ -116,7 +119,7 @@ pub fn assemble(
             }
         }
     }
-    let edge_path = format!("/map/{area}/{area}");
+    let edge_path = format!("{folder}/{area}");
     let mut hang_segments = vec![];
     match archive.read(&format!("{edge_path}.edgebhd"), decoder) {
         Err(Error::Missing(_)) => report.missing_edge_binder = true,
@@ -158,7 +161,13 @@ pub fn assemble(
     }
     report.hang_segments = hang_segments.len();
     let mut spawn_points = Vec::new();
-    for point in layout.spawn_points()? {
+    let points = if layout.generation.spawn_region.is_some() {
+        layout.spawn_points()?
+    } else {
+        report.spawn_points_not_read = true;
+        Vec::new()
+    };
+    for point in points {
         let position = reflect(point.position);
         if !inside(position) {
             report.spawn_points_outside_region += 1;

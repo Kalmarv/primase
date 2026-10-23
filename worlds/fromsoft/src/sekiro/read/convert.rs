@@ -14,7 +14,8 @@ use std::path::PathBuf;
 use primase_core::convert::{Notice, Reader, Report, Result};
 use primase_core::{Entity, World};
 
-use super::area::{Options, read_area};
+use super::area::{Options, read_game_area};
+use crate::Install;
 use crate::components::models::SourceModel;
 use crate::dcx::Decoder;
 use crate::materials::Material;
@@ -51,7 +52,7 @@ pub const EMITTED_NAMES: &[&str] = &[
 /// See the module documentation.
 #[derive(Debug)]
 pub struct AreaReader<'a> {
-    install: PathBuf,
+    install: Install,
     area: String,
     decoder: Decoder<'a>,
     options: Options,
@@ -68,8 +69,13 @@ impl<'a> AreaReader<'a> {
         decoder: Decoder<'a>,
         options: Options,
     ) -> AreaReader<'a> {
+        Self::of(Install::sekiro(install), area, decoder, options)
+    }
+
+    /// The map `area` of `install` (any game's: [`read_game_area`]), read as `options` says.
+    pub fn of(install: Install, area: &str, decoder: Decoder<'a>, options: Options) -> AreaReader<'a> {
         AreaReader {
-            install: install.into(),
+            install,
             area: area.to_owned(),
             decoder,
             options,
@@ -113,7 +119,7 @@ impl<'a> AreaReader<'a> {
 impl Reader for AreaReader<'_> {
     fn read(&mut self) -> Result<(World, Report)> {
         let mut world = World::new();
-        let r = read_area(
+        let r = read_game_area(
             &self.install,
             &self.area,
             &self.decoder,

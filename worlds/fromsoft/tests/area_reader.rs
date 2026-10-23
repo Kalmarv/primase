@@ -109,6 +109,7 @@ fn the_reader_declares_every_name_it_emits() {
                 margin: 30.0,
             }),
             states,
+            ..Default::default()
         };
         let mut reader = AreaReader::new(&root, "m11_01", decoder, options);
         let (world, _) = reader.read().unwrap();

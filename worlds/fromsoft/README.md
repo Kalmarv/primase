@@ -320,6 +320,24 @@ gate of archive texture discovery, which belongs to area assembly. Both require
 
 ## Area reading and its passes
 
+`sekiro::read_game_area(&Install, map, ...)` reads any game's map through the same read (`read_area` is Sekiro's,
+`AreaReader::of(install, ...)` the reader adapter's); an `Install` is the folder, its `Game` and its archive keys.
+What differs between the games and is not stated by their files is `Game`'s: where a map keeps its files
+(`map_folder`: Sekiro `/map/<map>`, Elden Ring `/map/<mAA>/<map>`), how a placed object's model is found
+(`object_model`: Sekiro's `/obj/<model>.objbnd.dcx` with its HKX, Elden Ring's `/asset/aeg/<group>/<model>.geombnd.dcx`)
+and source-identity prefix (`obj/`, `asset/`), the distant-backdrop series (Sekiro's `m9xxxxx`), and the larger maps
+above a map (`parent_maps`: Elden Ring's open-world tiles `mAA_XX_ZZ_00` sit in 512 m `_01` and 1024 m `_02` tiles,
+whose layouts place the small tile's big assets as `<tile>-<part>` in their own frame, the small tile's centre at
+`(i - (p << L)) * 256 + 128 - (256 << L) / 2` metres there). `Options::parents` (default `None`, the map's own layout)
+set to `Include` also reads those parts, moved into the map's frame by that offset. The map layout's generation says
+the rest (part kinds: Sekiro's objects, Elden Ring's assets; spawn regions).
+
+Elden Ring's read does not yet resolve material binaries (its materials keep their FLVER bindings, no texture is read),
+read asset collision binders, world states (`states: event` is refused) or spawn points, or decode SpeedTree models
+(their placements are left out, by model): each is in `Report::notices`. `tests/elden_area.rs` accounts for every map
+piece and asset part of the Academy of Raya Lucaria (m14_00_00_00) and of the Shaded Castle tile with its parents
+against SoulsFormatsNEXT's layouts, translations exact.
+
 `sekiro::read_area` reads a selected map into an empty `World`. It takes an
 install root, a trusted decoder and options; it never guesses paths, and a failed
 read leaves the destination unchanged. The read selects source records and
