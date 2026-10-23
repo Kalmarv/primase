@@ -41,9 +41,10 @@ use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{
     AnvilBounds, AnvilCollisionFilter, AnvilCollisionOnly, AnvilCollisionShape, AnvilDataLayers,
-    AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake, AnvilLodDistances, AnvilLods,
-    AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilWater, BoundTexture, CollisionMaterialRef,
-    DataLayerAction, DeferredDecal, MaterialBinding, MaterialValue, ShapeGeometry, TextureFrom,
+    AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake, AnvilGrass, AnvilGrassModel,
+    AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides, AnvilMesh, AnvilWater, BoundTexture,
+    CollisionMaterialRef, DataLayerAction, DeferredDecal, MaterialBinding, MaterialValue, ShapeGeometry,
+    TextureFrom,
 };
 use crate::read::archive::{Archive, At};
 use crate::read::ddecal::{
@@ -53,6 +54,7 @@ use crate::read::entity::{
     CollisionFilter, ComponentBody, ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, Slot,
     StoredEntity, StoredEntityGroup, Visual, query,
 };
+use crate::read::grass::{GRASS_PATTERN_LIBRARY, StoredGrassLibrary};
 use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use crate::read::material::{Payload, StoredMaterial, StoredTextureSet};
 use crate::read::mesh::{MATERIAL, MESH, StoredMesh, max_culling_distance};
@@ -234,6 +236,8 @@ pub struct Placed {
     pub lakes_unread: u64,
     /// The deferred decals: an entity per DDecalStaticInstancers item, holding its [`AnvilDeferredDecals`].
     pub deferred_decals: Vec<Entity>,
+    /// The grass setups: an entity each, holding its [`AnvilGrass`].
+    pub grass: Vec<Entity>,
     /// HoudiniDecalInstancerComponents whose body can't be read (recorded in `refused` too).
     pub deferred_decals_unread: u64,
     /// Entities and EntityGroups whose `IsHidden` or `IsPhantom` is set (UI, HUD and editor helpers, docs/placement.md
@@ -1147,10 +1151,28 @@ impl<'a> Placer<'a> {
                 })
                 .collect(),
         });
-        for (v, decal) in e
+        // a GrassVisual shows its model's Mesh once, at the owner's matrix: a Visual of that Mesh, marked below
+        let grass: Vec<(Visual, &crate::read::entity::GrassVisual)> = e
+            .components
+            .iter()
+            .filter_map(|c| match &c.body {
+                ComponentBody::GrassVisual(g) => Some((
+                    Visual {
+                        head: g.head,
+                        object: g.object,
+                        instance: Shown::Mesh(g.instance.clone()),
+                        tail: g.tail.clone(),
+                    },
+                    g,
+                )),
+                _ => None,
+            })
+            .collect();
+        for (v, decal, grass_model) in e
             .visuals()
-            .map(|v| (v, false))
-            .chain(e.decals().map(|v| (v, true)))
+            .map(|v| (v, false, None))
+            .chain(e.decals().map(|v| (v, true, None)))
+            .chain(grass.iter().map(|(v, g)| (v, false, Some(*g))))
         {
             let shows = shows(v, at)?;
             let fake = shows.fake;
@@ -1258,11 +1280,65 @@ impl<'a> Placer<'a> {
                     placed.fakes = placed.fakes.saturating_add(1);
                 }
                 self.world.insert(p, bounds);
+                if let Some(g) = grass_model {
+                    self.world.insert(
+                        p,
+                        AnvilGrassModel {
+                            model: g.model,
+                            ranges: g.ranges.clone(),
+                        },
+                    );
+                }
                 visual_placements = visual_placements.saturating_add(1);
                 placed.placements.push(p);
                 if decal {
                     placed.static_decals = placed.static_decals.saturating_add(1);
                 }
+            }
+        }
+        // the grass setup: the GrassComponent as stored and the library it names, on an entity of its own
+        for c in &e.components {
+            let ComponentBody::GrassSetup(setup) = &c.body else {
+                continue;
+            };
+            let Some(library) = setup.library else {
+                placed
+                    .refused
+                    .push((c.id, "GrassComponent names no library".to_owned()));
+                continue;
+            };
+            let parsed = self
+                .archive
+                .find(library.id)
+                .ok_or_else(|| "the library is in no forge".to_owned())
+                .and_then(|lat| self.archive.resource(lat).map_err(|e| e.to_string()))
+                .and_then(|r| {
+                    if r.type_id == GRASS_PATTERN_LIBRARY {
+                        StoredGrassLibrary::parse(&r.body).map_err(|e| e.to_string())
+                    } else {
+                        Err(format!("type {:#010x}, not a GrassPatternLibrary", r.type_id))
+                    }
+                });
+            match parsed {
+                Ok(library) => {
+                    let g = self.world.spawn();
+                    self.world.insert(g, Name(name.clone()));
+                    self.world.insert(
+                        g,
+                        AnvilGrass {
+                            setup: (**setup).clone(),
+                            library,
+                        },
+                    );
+                    if let Some(layers) = &layers {
+                        self.world.insert(g, layers.clone());
+                    }
+                    if let Some(s) = state {
+                        self.world.insert(g, s);
+                    }
+                    placed.grass.push(g);
+                }
+                Err(why) => placed.refused.push((library.id, format!("grass library: {why}"))),
             }
         }
         // lakes: each WaterComponent's patches and atlases, on an entity of its own

@@ -114,6 +114,8 @@ pub struct TerrainSelection {
     pub bank: Option<String>,
     /// The TextureSet of the splatting noise (`TerrainSplattingNoise_Set`), by entry name.
     pub noise: Option<String>,
+    /// Whether each node's grass rasters (slots 5 and 4) are read too ([`crate::components::AnvilTerrainGroups`]).
+    pub groups: bool,
 }
 
 /// What to read. Nothing here has a default: each is a choice the program makes.
@@ -310,6 +312,7 @@ impl AnvilReader {
                 frame: self.options.frame,
                 bank,
                 noise,
+                groups: t.groups,
             },
         )?)
     }
@@ -463,7 +466,7 @@ impl Reader for AnvilReader {
         let mut world = World::new();
         let mut placed = Placed::default();
         let mut refused: Vec<(u64, String)> = Vec::new();
-        let mut ranges: Vec<(usize, [usize; 4], usize)> = Vec::new();
+        let mut ranges: Vec<(usize, [usize; 5], usize)> = Vec::new();
         {
             let mut placer = Placer::new(
                 &mut self.archive,
@@ -478,6 +481,7 @@ impl Reader for AnvilReader {
                     placed.collisions.len(),
                     placed.lakes.len(),
                     placed.deferred_decals.len(),
+                    placed.grass.len(),
                 ];
                 if let Err(e) = placer.place(*at, &mut placed) {
                     refused.push((f.id, e.to_string()));
@@ -491,6 +495,7 @@ impl Reader for AnvilReader {
             placed.collisions.len(),
             placed.lakes.len(),
             placed.deferred_decals.len(),
+            placed.grass.len(),
         ];
         for (n, &(k, before, _)) in ranges.iter().enumerate() {
             let after = ranges.get(n + 1).map_or(ends, |r| r.1);
@@ -501,11 +506,12 @@ impl Reader for AnvilReader {
                 cells: f.cells.clone(),
                 reached_from: f.reached_from,
             };
-            let lists: [&[Entity]; 4] = [
+            let lists: [&[Entity]; 5] = [
                 &placed.placements,
                 &placed.collisions,
                 &placed.lakes,
                 &placed.deferred_decals,
+                &placed.grass,
             ];
             for (list, (b, a)) in lists.iter().zip(before.iter().zip(after)) {
                 for &e in &list[*b..a] {
@@ -641,7 +647,7 @@ impl Reader for AnvilReader {
 fn summary(p: &Placed) -> String {
     format!(
         "{} placements, {} collisions, {} lakes, {} deferred decal sets, {} static decals, {} fakes, {} water bodies, \
-         {} collision-only, {} hidden or phantom",
+         {} collision-only, {} hidden or phantom, {} grass setups",
         p.placements.len(),
         p.collisions.len(),
         p.lakes.len(),
@@ -650,7 +656,8 @@ fn summary(p: &Placed) -> String {
         p.fakes,
         p.water_bodies,
         p.collision_only,
-        p.hidden_or_phantom
+        p.hidden_or_phantom,
+        p.grass.len()
     )
 }
 

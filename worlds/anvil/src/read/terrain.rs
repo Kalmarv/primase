@@ -14,7 +14,9 @@ use primase_core::Entity;
 use primase_core::World;
 use primase_core::frame::SourceFrame;
 
-use crate::components::{AnvilTerrain, CollisionMaterialRef, TerrainDetail, TerrainTile};
+use crate::components::{
+    AnvilTerrain, AnvilTerrainGroups, CollisionMaterialRef, GroupTile, TerrainDetail, TerrainTile,
+};
 use crate::read::archive::{Archive, At};
 use crate::read::terrain_material::{
     StoredMaterialBank, StoredTerrainMaterial, TERRAIN_MATERIAL, TERRAIN_MATERIAL_BANK,
@@ -129,6 +131,8 @@ pub struct TerrainRead {
     /// The TextureSet of the splatting noise (`TerrainSplattingNoise_Set`, which the Terrain Entity names), where it is
     /// read: its slot 0 map.
     pub noise: Option<At>,
+    /// Whether the nodes' grass rasters (blocks 5 and 4: [`AnvilTerrainGroups`]) are read too.
+    pub groups: bool,
 }
 
 /// The nodes of the layer at `layer` that `what` names, as an entity holding their [`AnvilTerrain`].
@@ -169,8 +173,9 @@ pub fn read_terrain(
         }
         None => None,
     };
-    let order = what.bank.map(|_| tnl_code::hilbert());
+    let order = (what.bank.is_some() || what.groups).then(tnl_code::hilbert);
     let mut tiles = Vec::new();
+    let mut group_tiles = Vec::new();
     for item in items {
         let Some((level, row, column)) = node(item.position) else {
             continue;
@@ -206,14 +211,27 @@ pub fn read_terrain(
             tnl_code::tile(&chunk.blocks[1], false).map_err(|source| Error::Code { position, at, source })?;
         let block_8 =
             tnl_code::tile(&chunk.blocks[8], true).map_err(|source| Error::Code { position, at, source })?;
-        let material = match &order {
-            Some(order) => {
+        let material = match (&order, what.bank) {
+            (Some(order), Some(_)) => {
                 tnl_code::raster(&chunk.blocks[2], order)
                     .map_err(|source| Error::Code { position, at, source })?
                     .samples
             }
-            None => Vec::new(),
+            _ => Vec::new(),
         };
+        if let (Some(order), true) = (&order, what.groups) {
+            let raster = |block: usize| {
+                tnl_code::raster(&chunk.blocks[block], order)
+                    .map(|r| r.samples)
+                    .map_err(|source| Error::Code { position, at, source })
+            };
+            group_tiles.push(GroupTile {
+                row,
+                column,
+                group: raster(5)?,
+                weight: raster(4)?,
+            });
+        }
         tiles.push(TerrainTile {
             row,
             column,
@@ -250,6 +268,18 @@ pub fn read_terrain(
     }
     let details = read;
     let e = w.spawn();
+    if what.groups {
+        w.insert(
+            e,
+            AnvilTerrainGroups {
+                frame: what.frame,
+                level: what.level,
+                origin: what.origin,
+                side: what.side,
+                tiles: group_tiles,
+            },
+        );
+    }
     w.insert(
         e,
         AnvilTerrain {

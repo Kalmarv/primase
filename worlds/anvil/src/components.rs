@@ -2,6 +2,9 @@
 
 use primase_core::{Component, Entity, World};
 
+use crate::read::entity::GrassSetup;
+use crate::read::grass::StoredGrassLibrary;
+
 /// A MeshShape's triangle geometry ([`crate::read::mesh_shape::Geometry`]) on its prototype: positions converted into
 /// core's frame through the frame the reader was given (stated by the program, as the shape's units and frame are not
 /// established), faces as position-index triangles (reversed when that frame mirrors, so their fronts stay), and each
@@ -454,6 +457,70 @@ impl Component for AnvilDeferredDecals {
     }
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.model);
+    }
+}
+
+/// A placement of one grass model (`anvil.grass_model`): the placement of a GrassVisual's Mesh at its Entity's matrix,
+/// marked with the model's number (`GrassModelID`: the position in the setup's ManagedEntities and the library's
+/// models, which the library's rules name) and the u16 array its GrassVisualInstance stores. The grass instances are
+/// not stored: the engine creates them at run time from the library's rules and the terrain's group raster
+/// (docs/grass.md), so this placement is the model's one copy, a prototype for a pass that scatters it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnvilGrassModel {
+    pub model: u8,
+    pub ranges: Vec<u16>,
+}
+
+impl Component for AnvilGrassModel {
+    const NAME: &'static str = "anvil.grass_model";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
+/// The grass system's setup (`anvil.grass`): the GrassComponent of `SETUP_GrassUS_NAT` as stored, and the
+/// GrassPatternLibrary it names (its models' settings, its groups of rules and its material table), on an entity of its
+/// own.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilGrass {
+    pub setup: GrassSetup,
+    pub library: StoredGrassLibrary,
+}
+
+impl Component for AnvilGrass {
+    const NAME: &'static str = "anvil.grass";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+}
+
+/// One terrain node's grass rasters: its row (along y) and column (along x) at its level, and its 132 x 132 samples
+/// row by row of its slot 5 (the group of the library to use at each ground sample, 254: none) and slot 4 (the weight).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupTile {
+    pub row: u32,
+    pub column: u32,
+    /// Block 5 of the node: a group's number in the library, or 254 where the node names none. By the engine's
+    /// reading from the runtime image (docs/vegetation.md §3.4, docs/grass.md §3: slot 5 is the explicit raster of
+    /// the grass builder, matched by its values and by 67 of 67 values naming a non-empty group).
+    pub group: Vec<u8>,
+    /// Block 4 of the node: the weight raster (96 on every node the notes decoded).
+    pub weight: Vec<u8>,
+}
+
+/// The nodes of a terrain read ([`AnvilTerrain`]) with their grass rasters (`anvil.terrain_groups`), on the same entity:
+/// the node level, the quadtree square and the frame as [`AnvilTerrain`] holds them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilTerrainGroups {
+    pub frame: primase_core::frame::SourceFrame,
+    pub level: u32,
+    pub origin: [f64; 2],
+    pub side: f64,
+    pub tiles: Vec<GroupTile>,
+}
+
+impl Component for AnvilTerrainGroups {
+    const NAME: &'static str = "anvil.terrain_groups";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn payload_bytes(&self) -> u64 {
+        let bytes: usize = self.tiles.iter().map(|t| t.group.len() + t.weight.len()).sum();
+        u64::try_from(bytes).unwrap_or(u64::MAX)
     }
 }
 

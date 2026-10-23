@@ -49,6 +49,7 @@ fn the_campus_ground_reads_and_lowers() {
             frame: SourceFrame::WORLD,
             bank: Some(bank),
             noise: None,
+            groups: false,
         },
     )
     .expect("terrain");
@@ -197,6 +198,7 @@ fn the_campus_placements_stand_on_the_ground() {
         frame: SourceFrame::WORLD,
         bank: None,
         noise: None,
+        groups: false,
     };
     let g = read_terrain(&mut w, &mut archive, layer, read).expect("terrain");
     let t = w.get::<AnvilTerrain>(g).expect("tiles");

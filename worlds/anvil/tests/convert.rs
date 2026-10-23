@@ -184,6 +184,7 @@ fn a_rectangle_selects_its_cells_at_the_levels_stated() {
         layer: None,
         bank: Some("TMB_MAD".into()),
         noise: Some("TerrainSplattingNoise_Set".into()),
+        groups: false,
     };
     let mut reader = AnvilReader::open(&usnat(Levels::AllButCoarsest, Some(terrain))).unwrap();
     let (all, lines) = reader.read().unwrap();
