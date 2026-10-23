@@ -3,19 +3,24 @@
 //! resources by GUID ([`crate::permutation`]). The game resolves ids and names in every bundle loaded: a bundle with a
 //! database holds the permutations it adds and names the stock ones, which lie in another bundle (the game's
 //! configuration bundle in `globals.toc`, a level's root). A [`Scope`] is the bundles an id or a name is looked up in,
-//! the earlier first; one that none holds is an error naming it, not a skipped program.
+//! the earlier first; one that none holds is an error naming it, not a skipped program. [`Materials`] is what a
+//! scope's depots, program databases and texture lookups hold by material key, and [`Source::resolve_materials`]
+//! resolves a MeshSet's section keys through it.
 
 use std::collections::HashMap;
 
 use primase_core::shader::Shader;
-use primase_core::{Entity, World};
+use primase_core::{Entity, Name, World};
 
 use super::entry::spawn_entity;
 use super::folder::Source;
 use super::listing::{Bundle, Listed};
-use crate::components::{FrostbiteBytecode, FrostbitePermutation, FrostbiteProgram, FrostbitePrograms};
+use crate::components::{
+    FrostbiteBytecode, FrostbiteMaterial, FrostbiteMeshSet, FrostbitePermutation, FrostbiteProgram,
+    FrostbitePrograms, MaterialDepot,
+};
 use crate::permutation::{self, Permutation};
-use crate::{Error, Result, bytecode, lookup};
+use crate::{Error, Result, bytecode, depot, lookup};
 
 /// Bundles that ids and names are looked up in, with the index of what they hold built once: the permutations by type
 /// and id, the CompiledBytecode resources by name. Where two bundles hold the same id or name, the earlier wins.
@@ -33,7 +38,7 @@ impl<'a> Scope<'a> {
         for (b, bundle) in bundles.iter().enumerate() {
             for (i, a) in bundle.manifest.res.iter().enumerate() {
                 match a.rtype {
-                    permutation::RASTER | permutation::COMPUTE => {
+                    permutation::RASTER | permutation::COMPUTE | lookup::STREAMABLE_TEXTURE_SET => {
                         permutations
                             .entry((a.rtype, permutation::resource_id(&a.rmeta)))
                             .or_insert((b, i));
@@ -50,6 +55,18 @@ impl<'a> Scope<'a> {
             permutations,
             bytecode,
         }
+    }
+
+    /// The bundles, in lookup order.
+    pub fn bundles(&self) -> &'a [Bundle] {
+        self.bundles
+    }
+
+    /// The entry of the resource of type `rtype` with `id` in the first bundle of the scope that holds one (a
+    /// permutation or a streamable texture set).
+    pub fn resource_by_id(&self, rtype: u32, id: u64) -> Option<Listed> {
+        let &(b, i) = self.permutations.get(&(rtype, id))?;
+        Some(self.bundles[b].resource(i))
     }
 
     /// The bundle and entry of the permutation with `id`, a raster one first.
@@ -197,6 +214,18 @@ impl Source<'_> {
             ))
         })?;
         let db = self.read_database(home, database)?;
+        self.spawn_programs(scope, database, &db, material, w)
+    }
+
+    /// The programs of `material`'s row of `db` (read from `database`), as [`Source::read_material_program`].
+    fn spawn_programs(
+        &self,
+        scope: &Scope<'_>,
+        database: &Listed,
+        db: &FrostbitePrograms,
+        material: u64,
+        w: &mut World,
+    ) -> Result<Vec<Entity>> {
         let row = db.lookup.rows.get(&material).ok_or_else(|| {
             Error::Missing(format!(
                 "{}: no program row for material key {material:#018x}",
@@ -241,5 +270,175 @@ impl Source<'_> {
                 e
             })
             .collect())
+    }
+
+    /// What the scope's depots, program databases and texture lookups hold by material key. Reads each depot, database
+    /// and lookup of the scope's bundles once; where two hold a key the earlier bundle's wins.
+    pub fn materials(&self, scope: &Scope<'_>) -> Result<Materials> {
+        let mut m = Materials::default();
+        for bundle in scope.bundles() {
+            for (i, a) in bundle.manifest.res.iter().enumerate() {
+                let entry = match a.rtype {
+                    depot::RTYPE | lookup::PROGRAM_LOOKUP | lookup::TEXTURE_LOOKUP => bundle.resource(i),
+                    _ => continue,
+                };
+                match a.rtype {
+                    depot::RTYPE => {
+                        let payload = self.payload(entry.file, entry.size as usize)?;
+                        let d = depot::read(&payload, &a.rmeta).map_err(|e| {
+                            Error::Unsupported(format!("{} ({}): {e}", entry.name, entry.bundle))
+                        })?;
+                        let home = m.depots.len();
+                        for (key, block) in &d.entries {
+                            m.depot_keys.entry(*key).or_insert((home, *block));
+                        }
+                        m.depots.push((entry, d));
+                    }
+                    lookup::PROGRAM_LOOKUP => {
+                        let db = self.read_database(bundle, &entry)?;
+                        let home = m.databases.len();
+                        for key in db.lookup.rows.keys() {
+                            m.rows.entry(*key).or_insert(home);
+                        }
+                        m.databases.push((entry, db));
+                    }
+                    _ => {
+                        let payload = self.payload(entry.file, entry.size as usize)?;
+                        let rows = lookup::read_texture_sets(&payload).map_err(|e| {
+                            Error::Unsupported(format!("{} ({}): {e}", entry.name, entry.bundle))
+                        })?;
+                        for (key, set) in rows {
+                            m.texture_sets.entry(key).or_insert(set);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(m)
+    }
+
+    /// The material `key` as a new `frostbite.material` entity of `w`: the depot block it names, the programs of its
+    /// row (as [`Source::read_material_program`]) and its texture set. A part no bundle of the scope holds is named in
+    /// the material's `unresolved`; a permutation or program that a row names and the scope does not hold is an error.
+    pub fn resolve_material(
+        &self,
+        scope: &Scope<'_>,
+        materials: &Materials,
+        key: u64,
+        w: &mut World,
+    ) -> Result<Entity> {
+        let mut unresolved = Vec::new();
+        let depot = match materials.depot_keys.get(&key) {
+            Some(&(home, block)) => {
+                let (entry, d) = &materials.depots[home];
+                let b = d.blocks.get(block).ok_or_else(|| {
+                    Error::Missing(format!(
+                        "{}: key {key:#018x} names block {block} of {}",
+                        entry.name,
+                        d.blocks.len()
+                    ))
+                })?;
+                let parameters = depot::params(&b.data)
+                    .map_err(|e| Error::Unsupported(format!("{} key {key:#018x}: {e}", entry.name)))?;
+                Some(MaterialDepot {
+                    resource: entry.name.clone(),
+                    bundle: entry.bundle.clone(),
+                    block: b.clone(),
+                    parameters,
+                })
+            }
+            None => {
+                unresolved.push("depot: no ShaderBlockDepot of the scope holds the key".to_owned());
+                None
+            }
+        };
+        let programs = match materials.rows.get(&key) {
+            Some(&home) => {
+                let (database, db) = &materials.databases[home];
+                self.spawn_programs(scope, database, db, key, w)?
+            }
+            None => {
+                unresolved
+                    .push("programs: no program database of the scope has a row for the key".to_owned());
+                Vec::new()
+            }
+        };
+        let texture_set = match materials.texture_sets.get(&key) {
+            Some(&id) => Some((
+                id,
+                scope
+                    .resource_by_id(lookup::STREAMABLE_TEXTURE_SET, id)
+                    .map(|e| e.name),
+            )),
+            None => {
+                unresolved
+                    .push("texture set: no texture lookup of the scope has a row for the key".to_owned());
+                None
+            }
+        };
+        if let Some((id, None)) = &texture_set {
+            unresolved.push(format!("texture set {id}: in no bundle of the scope"));
+        }
+        let e = w.spawn();
+        w.insert(e, Name(format!("material {key:#018x}")));
+        w.insert(
+            e,
+            FrostbiteMaterial {
+                key,
+                depot,
+                programs,
+                texture_set,
+                unresolved,
+            },
+        );
+        Ok(e)
+    }
+
+    /// The materials of a MeshSet entity's section keys ([`Source::read_entry`] made it): one `frostbite.material`
+    /// entity for each distinct key, recorded in the MeshSet's `materials`. Entities made for earlier keys stay when
+    /// a later key's resolution is an error.
+    pub fn resolve_materials(
+        &self,
+        scope: &Scope<'_>,
+        materials: &Materials,
+        meshset: Entity,
+        w: &mut World,
+    ) -> Result<()> {
+        let mut set = w
+            .get::<FrostbiteMeshSet>(meshset)
+            .ok_or_else(|| Error::Unsupported("not a MeshSet entity".to_owned()))?
+            .clone();
+        let keys: std::collections::BTreeSet<u64> = (set.meshset.lods.iter())
+            .flat_map(|l| l.sections.iter().map(|s| s.key))
+            .collect();
+        for key in keys {
+            if let std::collections::btree_map::Entry::Vacant(slot) = set.materials.entry(key) {
+                slot.insert(self.resolve_material(scope, materials, key, w)?);
+            }
+        }
+        w.insert(meshset, set);
+        Ok(())
+    }
+}
+
+/// What a scope's depots, program databases and texture lookups hold by material key ([`Source::materials`]).
+#[derive(Debug, Default)]
+pub struct Materials {
+    /// Each depot read, with its entry.
+    depots: Vec<(Listed, depot::Depot)>,
+    /// Material key -> (depot, block).
+    depot_keys: HashMap<u64, (usize, usize)>,
+    /// Each program database read, with its entry.
+    databases: Vec<(Listed, FrostbitePrograms)>,
+    /// Material key -> the database that has a row for it.
+    rows: HashMap<u64, usize>,
+    /// Material key -> the id of its streamable texture set.
+    texture_sets: HashMap<u64, u64>,
+}
+
+impl Materials {
+    /// How many material keys have a depot block, a program row and a texture lookup row.
+    pub fn counts(&self) -> (usize, usize, usize) {
+        (self.depot_keys.len(), self.rows.len(), self.texture_sets.len())
     }
 }

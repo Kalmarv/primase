@@ -348,3 +348,107 @@ impl Component for FrostbitePrograms {
         (self.records.len() * crate::lookup::RECORD_LEN + self.lookup.head.len()) as u64
     }
 }
+
+/// A MeshSet read ([`crate::meshset`]): its LODs and sections as stored (vertex layouts, where each section's vertices
+/// and indices lie in its LOD's chunk, the section's material key), and the material of each distinct key where one
+/// was resolved ([`crate::program::Scope`]). The vertices themselves are not read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrostbiteMeshSet {
+    pub meshset: crate::meshset::MeshSet,
+    /// Each distinct section key's `frostbite.material` entity, once resolved.
+    pub materials: std::collections::BTreeMap<u64, Entity>,
+}
+
+impl Component for FrostbiteMeshSet {
+    const NAME: &'static str = "frostbite.meshset";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.materials.values());
+    }
+    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
+        let element = |e: &crate::meshset::Element| json!({ "usage": e.usage, "format": e.format, "offset": e.offset, "stream": e.stream });
+        let lods: Vec<Value> = (self.meshset.lods.iter())
+            .map(|l| {
+                json!({
+                    "chunk": hex(&l.chunk),
+                    "index_size": l.index_size,
+                    "index_bytes": l.index_bytes,
+                    "vertex_bytes": l.vertex_bytes,
+                    "sections": l.sections.iter().map(|s| json!({
+                        "key": format!("{:#018x}", s.key),
+                        "vertices": s.vertices,
+                        "primitives": s.primitives,
+                        "start_index": s.start_index,
+                        "vertex_offset": s.vertex_offset,
+                        "flags": s.flags,
+                        "stride": s.stride,
+                        "stored_declaration": s.decl.elements.iter().map(element).collect::<Vec<_>>(),
+                        "draw_declaration": s.draw_decl.elements.iter().map(element).collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        Ok(Some(json!({
+            "lods": lods,
+            "materials": self.materials.keys().map(|k| format!("{k:#018x}")).collect::<Vec<_>>(),
+        })))
+    }
+}
+
+/// A material key resolved the way the game resolves it: in the ShaderBlockDepots, the program database's rows and the
+/// streamable texture set lookup of the bundles loaded. What none of them held is named in `unresolved`; nothing is
+/// guessed in its place.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrostbiteMaterial {
+    pub key: u64,
+    /// The depot that holds the key: its resource name, the block the key names and the block's parameters.
+    pub depot: Option<MaterialDepot>,
+    /// The `frostbite.program` entities of the key's program row, in the row's order.
+    pub programs: Vec<Entity>,
+    /// The streamable texture set the key's lookup row names, and its resource name where a bundle holds it.
+    pub texture_set: Option<(u64, Option<String>)>,
+    pub unresolved: Vec<String>,
+}
+
+/// The depot block of a material key ([`FrostbiteMaterial::depot`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaterialDepot {
+    pub resource: String,
+    pub bundle: String,
+    pub block: crate::depot::Block,
+    pub parameters: Vec<Param>,
+}
+
+impl Component for FrostbiteMaterial {
+    const NAME: &'static str = "frostbite.material";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(&self.programs);
+    }
+    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
+        let depot = self.depot.as_ref().map(|d| {
+            let texture_slots: Vec<u16> = (d.parameters.iter())
+                .filter(|p| p.texture_ref(&d.block.data).is_some())
+                .map(Param::slot)
+                .collect();
+            json!({
+                "resource": d.resource,
+                "bundle": d.bundle,
+                "block_hash": format!("{:#018x}", d.block.hash),
+                "block_bytes": d.block.data.len(),
+                "parameters": d.parameters.len(),
+                "texture_slots": texture_slots,
+            })
+        });
+        Ok(Some(json!({
+            "key": format!("{:#018x}", self.key),
+            "depot": depot,
+            "programs": self.programs.len(),
+            "texture_set": self.texture_set.as_ref().map(|(id, name)| json!({ "id": id.to_string(), "resource": name })),
+            "unresolved": self.unresolved,
+        })))
+    }
+    fn payload_bytes(&self) -> u64 {
+        self.depot.as_ref().map_or(0, |d| d.block.data.len() as u64)
+    }
+}

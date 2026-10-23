@@ -4,11 +4,12 @@
 //! of `primase-frostbite` (re-exported as `fb`).
 
 pub mod map_folder;
-pub mod meshset;
 pub mod vblend;
 pub mod vbrecord;
 
 /// The Frostbite containers (`primase-frostbite`).
 pub use primase_frostbite as fb;
+pub(crate) use primase_frostbite::bad;
+/// The MeshSet resource reader, which lives with the engine's containers.
+pub use primase_frostbite::meshset;
 pub use primase_frostbite::{Error, Result};
-pub(crate) use primase_frostbite::{Rd, bad, capacity};

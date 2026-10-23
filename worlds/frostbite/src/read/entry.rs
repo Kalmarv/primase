@@ -12,10 +12,11 @@ use super::folder::Source;
 use super::listing::{Bundle, Listed};
 use crate::bundle::Kind;
 use crate::components::{
-    FrostbiteBytecode, FrostbiteDepot, FrostbiteEbx, FrostbiteEntry, FrostbitePrograms, FrostbiteTexture,
+    FrostbiteBytecode, FrostbiteDepot, FrostbiteEbx, FrostbiteEntry, FrostbiteMeshSet, FrostbitePrograms,
+    FrostbiteTexture,
 };
 use crate::texture::{self, Storage};
-use crate::{Error, Result, bytecode, depot, lookup, permutation};
+use crate::{Error, Result, bytecode, depot, lookup, meshset, permutation};
 
 /// The core layout of a Frostbite texture format ordinal (the colour formats the texture reader decodes: 18 and 20
 /// RGBA8, 23 and 24 BGRA8, 54-57 BC1, 58 and 59 BC2, 60 and 61 BC3, 66 and 67 BC7); `None` for any other.
@@ -76,6 +77,7 @@ impl Source<'_> {
             Depot(FrostbiteDepot),
             Bytecode(Vec<(Shader, FrostbiteBytecode)>),
             Programs(Box<FrostbitePrograms>),
+            MeshSet(Box<FrostbiteMeshSet>),
         }
         let read = match (entry.kind, entry.resource_type) {
             (Kind::Ebx, _) => Read::Ebx(Box::new(FrostbiteEbx {
@@ -103,6 +105,10 @@ impl Source<'_> {
             (Kind::Res, Some(lookup::PROGRAM_LOOKUP)) => {
                 Read::Programs(Box::new(self.read_database(bundle, entry)?))
             }
+            (Kind::Res, Some(crate::MESHSET)) => Read::MeshSet(Box::new(FrostbiteMeshSet {
+                meshset: meshset::read(&bytes()?).map_err(|e| unsupported(entry, e))?,
+                materials: Default::default(),
+            })),
             (Kind::Res, Some(t)) => {
                 return Err(unsupported(
                     entry,
@@ -136,6 +142,11 @@ impl Source<'_> {
                 vec![e]
             }
             Read::Programs(c) => {
+                let e = spawn(w, entry.name.clone());
+                w.insert(e, *c);
+                vec![e]
+            }
+            Read::MeshSet(c) => {
                 let e = spawn(w, entry.name.clone());
                 w.insert(e, *c);
                 vec![e]

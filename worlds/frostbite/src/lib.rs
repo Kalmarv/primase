@@ -17,6 +17,7 @@ pub mod depot;
 pub mod ebx;
 pub mod fbmod;
 pub mod lookup;
+pub mod meshset;
 pub mod permutation;
 mod read;
 pub mod texture;

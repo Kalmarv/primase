@@ -146,3 +146,6 @@ pub fn read_records(d: &[u8], meta: &[u8; 16]) -> Result<Vec<ProgramRecord>> {
         })
         .collect()
 }
+
+/// ExpressionShaderStreamableTextureSet: what a texture lookup row's value is the id of.
+pub const STREAMABLE_TEXTURE_SET: u32 = 0x7A63_0735;

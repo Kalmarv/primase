@@ -15,7 +15,7 @@
 //!   key (u64) +0x138. A section's stored streams lie one after another from its vertex offset, each
 //!   `stride * vertex count` bytes.
 
-use crate::postcompile::{Rd, Result, bad, capacity};
+use crate::{Rd, Result, bad, capacity};
 
 const W: &str = "meshset";
 pub const SECTION_SIZE: usize = 384;
