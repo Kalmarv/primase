@@ -20,7 +20,7 @@ use crate::components::StoredBuildTable;
 use crate::read::archive::{self, Archive};
 use crate::read::build_table::{self, BUILD_TABLE};
 use crate::read::material::TEXTURE_MAP;
-use crate::read::mesh::MESH;
+use crate::read::mesh::{MATERIAL, MESH};
 use crate::read::textures::read_texture_map;
 
 /// The table listing a character's slot tables.
@@ -337,6 +337,51 @@ fn slot_of(archive: &mut Archive, id: u64, in_default: bool) -> Result<Option<Ri
         parts,
         stated: stated_part,
     }))
+}
+
+/// The table listing the hair colours: one row per colour, the row's condition its tag.
+pub const HAIR_COLOURS: &str = "MAD_CHR_BODY_HAIRCUTS_Materials";
+/// The table listing the beard colours (the same colours' Materials, the beard's generic Materials replaced).
+pub const BEARD_COLOURS: &str = "MAD_CHR_BODY_BEARDS_Materials";
+
+/// A colour a colour table lists: its row's condition (the tag that names the row for `Variant::Row`), its weight as
+/// stored (population odds, no default) and the name of the Material the row's first column links.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Colour {
+    pub table: u64,
+    pub name: String,
+    pub condition: u32,
+    pub weight: f32,
+}
+
+/// The colours the table named `table_name` ([`HAIR_COLOURS`] or [`BEARD_COLOURS`]) lists, in stored order. A row that
+/// links no Material is left out.
+pub fn colours(archive: &mut Archive, table_name: &'static str) -> Result<Vec<Colour>, Error> {
+    let id = find_table(archive, table_name).ok_or(Error::NoTable(table_name))?;
+    let (t, _) = table(archive, id)?;
+    let mut out = Vec::new();
+    for row in &t.rows {
+        let first = row
+            .links()?
+            .into_iter()
+            .filter(|(_, link)| type_of(archive, *link) == Some(MATERIAL))
+            .min_by_key(|(column, _)| *column);
+        let Some((_, material)) = first else {
+            continue;
+        };
+        let name = archive
+            .find(material)
+            .and_then(|at| archive.forge(at.forge).and_then(|f| f.names.get(at.entry)))
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
+        out.push(Colour {
+            table: id,
+            name,
+            condition: row.condition,
+            weight: row.weight,
+        });
+    }
+    Ok(out)
 }
 
 /// The texture of the crowd's skin palette (`MAD_CHR_BULK`'s: the one skin palette the forges hold).

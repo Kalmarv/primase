@@ -16,6 +16,7 @@ use primase_anvil::read::meshes::anvil_mesh;
 use primase_anvil::read::placements::{
     Gender, InstancedLevels, Placed, Placer, RiderPartChoice, RiderSpec, Variant,
 };
+use primase_anvil::read::rider::{BEARD_COLOURS, HAIR_COLOURS, colours};
 use primase_anvil::read::skeleton::{SKELETON, StoredSkeleton};
 use primase_core::clip::{Clip, ClipBinding, Extrapolation, Interpolation};
 use primase_core::frame::SourceFrame;
@@ -523,4 +524,73 @@ fn a_variant_leaves_no_unplaced_mesh_and_the_same_part_can_be_placed_again() {
         .filter(|(e, _)| !w.iter::<Instance>().any(|(_, i)| i.prototype == *e))
         .collect();
     assert!(unplaced.is_empty(), "{} meshes nothing places", unplaced.len());
+}
+
+/// A hair or a beard part with a colour row replaces the generic Material its mesh names with that colour's: the
+/// pairs name a Material the part's mesh has, and the LOD generic (no mesh of the part names it) is paired too.
+#[test]
+fn a_colour_row_replaces_the_generic_material_a_hair_or_beard_mesh_names() {
+    let Some(mut archive) = open() else {
+        return;
+    };
+    let hair = colours(&mut archive, HAIR_COLOURS).expect("hair colours");
+    let beard = colours(&mut archive, BEARD_COLOURS).expect("beard colours");
+    let mut w = World::new();
+    for (part, colour, generic, effective) in [
+        (
+            "MAD_CHR_Hair_005_U_Full",
+            &hair[1],
+            "MAD_CHR_Hair_000_MF_ALL",
+            "MAD_CHR_HairCut_V002_Chatin",
+        ),
+        (
+            "MAD_CHR_Hair_005_U_Cut",
+            &hair[0],
+            "MAD_CHR_Hair_000_MF_ALL",
+            "MAD_CHR_HairCut_V001_Blond",
+        ),
+        (
+            "MAD_CHR_Beard_001_U_H000",
+            &beard[1],
+            "MAD_CHR_Beard_000_MF_ALL",
+            "MAD_CHR_HairCut_V002_Chatin",
+        ),
+    ] {
+        let table = id_of(&archive, BUILD_TABLE, part);
+        let described = Placer::new(
+            &mut archive,
+            &mut w,
+            SourceFrame::WORLD,
+            InstancedLevels::Selector,
+        )
+        .describe_part(
+            RiderPartChoice {
+                table,
+                variant: Variant::Row {
+                    table: colour.table,
+                    condition: colour.condition,
+                },
+            },
+            Gender::Male,
+        );
+        assert!(
+            described.refused.is_empty() && described.variant_refused.is_none(),
+            "{part}"
+        );
+        let pairs = described.variant.expect("a variant").pairs;
+        let generic = id_of(&archive, MATERIAL, generic);
+        let effective = id_of(&archive, MATERIAL, effective);
+        assert!(pairs.contains(&(generic, effective)), "{part}: {pairs:?}");
+        // a mesh of the part names the generic Material the pair replaces
+        let mut named = false;
+        for &m in &described.meshes {
+            let at = archive.find(m).expect("mesh");
+            let stored = StoredMesh::parse(&archive.resource(at).expect("mesh").body).expect("mesh");
+            named |= anvil_mesh(&stored, at.entry, m, SourceFrame::WORLD)
+                .expect("anvil mesh")
+                .materials
+                .contains(&generic);
+        }
+        assert!(named, "{part}");
+    }
 }

@@ -1,6 +1,6 @@
 //! The rider's slots, parts and variants as the customization BuildTables list them, on Riders Republic's forges.
 use primase_anvil::read::archive::Archive;
-use primase_anvil::read::rider::{RiderCatalog, rider_catalog, stated};
+use primase_anvil::read::rider::{BEARD_COLOURS, HAIR_COLOURS, RiderCatalog, colours, rider_catalog, stated};
 use primase_testdata::{Game, install};
 
 /// (slot key, parts, parts listing variants, parts whose variants state one) of every slot.
@@ -112,5 +112,38 @@ fn the_skin_palette_has_four_tones() {
     assert_eq!(
         tones,
         [[199, 144, 113], [102, 56, 29], [162, 100, 54], [185, 139, 105]]
+    );
+}
+
+/// The hair and beard colour tables list one row per colour, each row named by its own condition and linking the
+/// Material of that colour (the beards' table the same colours' Materials).
+#[test]
+fn the_colour_tables_list_a_material_per_row_and_name_the_row_by_its_condition() {
+    let Some(dir) = install(Game::Riders) else {
+        return;
+    };
+    let forges = [
+        "DataPC_MAD_USNAT_patch_01.forge",
+        "DataPC_MAD_USNAT.forge",
+        "DataPC_patch_01.forge",
+        "DataPC.forge",
+    ];
+    let mut archive = Archive::open(&forges.map(|f| dir.join(f))).expect("archive");
+    let hair = colours(&mut archive, HAIR_COLOURS).expect("hair colours");
+    let beard = colours(&mut archive, BEARD_COLOURS).expect("beard colours");
+    let distinct = |list: &[primase_anvil::read::rider::Colour]| {
+        let mut conditions: Vec<u32> = list.iter().map(|c| c.condition).collect();
+        conditions.sort_unstable();
+        conditions.dedup();
+        conditions.len()
+    };
+    // one hair condition is shared by two rows, which `Variant::Row` refuses
+    assert_eq!((hair.len(), distinct(&hair)), (50, 49));
+    assert_eq!((beard.len(), distinct(&beard)), (49, 49));
+    assert_eq!(hair[0].name, "MAD_CHR_HairCut_V001_Blond");
+    assert_eq!(beard[0].name, "MAD_CHR_HairCut_V001_Blond");
+    assert_eq!(
+        hair.last().map(|c| c.name.as_str()),
+        Some("MAD_CHR_HairCut_V047_BlackRed")
     );
 }

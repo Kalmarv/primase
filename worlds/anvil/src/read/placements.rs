@@ -461,6 +461,11 @@ pub enum Variant {
     /// tables read so far state 0.0). Refused where the part has no single materials table or the table states no
     /// single such row: the weights of other tables are population odds, not a default.
     Stated,
+    /// One row of a table the caller names, the row picked by its own condition (a colour's tag) instead of the gender:
+    /// the hair and beard colour tables ([`crate::read::rider::colours`]) list one row per colour, each linking the
+    /// Materials that replace the generic ones its columns' path nodes name. Refused where no single row has that
+    /// condition.
+    Row { table: u64, condition: u32 },
 }
 
 /// One part of a rider: its table and the materials it is drawn with, both the caller's choice.
@@ -1658,13 +1663,17 @@ impl<'a> Placer<'a> {
             Variant::Own => return Ok(None),
             Variant::Table(t) => t,
             Variant::Stated => self.stated_variant(part)?,
+            Variant::Row { table, .. } => table,
         };
         let (t, _) = self.build_table(table)?;
-        let mut rows = t.rows_with(gender.condition());
+        let condition = match variant {
+            Variant::Row { condition, .. } => condition,
+            _ => gender.condition(),
+        };
+        let mut rows = t.rows_with(condition);
         let (Some(row), None) = (rows.next(), rows.next()) else {
             return Err(format!(
-                "the variant table has no single row for the condition {:#010x}",
-                gender.condition()
+                "the variant table has no single row for the condition {condition:#010x}"
             ));
         };
         let links = row.links().map_err(|e| e.to_string())?;
