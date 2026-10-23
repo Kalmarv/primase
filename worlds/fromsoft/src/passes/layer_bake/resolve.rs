@@ -320,6 +320,19 @@ pub fn resolve(
             reference(1).map_or(0., |r| r as f32 / 255.),
         ]),
     )?;
+    // the glow scale: read only in its w, into the emission target's alpha (all 34 programs that read it), which no bake
+    // reads; the material's g_GlowScale where it states one (a four-float parameter), Unknown, by name, where it does not
+    match definition_param("g_GlowScale").map(|p| &p.value) {
+        Some(Value::Float(v)) if v.len() >= 4 => constant("FC_GlowScale", 0, 16, words(&v[..4]))?,
+        _ => constant(
+            "FC_GlowScale",
+            0,
+            16,
+            ConstantRole::Unknown {
+                why: "the material states no g_GlowScale: read only into the emission target's alpha".into(),
+            },
+        )?,
+    }
     constant(
         "FC_AlphaRef",
         2,
@@ -332,6 +345,13 @@ pub fn resolve(
     )?;
     // the engine's values: roles, whatever a consumer freezes them to
     constant("mWorld", 0, 48, ConstantRole::Object(ObjectParameter::World))?;
+    // the instance record's environment data word: it reaches only G-buffer alpha lanes ([`super::INSTANCE_DATA_POLICY`])
+    constant(
+        "envData",
+        0,
+        4,
+        ConstantRole::Object(ObjectParameter::EnvironmentData),
+    )?;
     constant(
         "aColor",
         0,
@@ -575,9 +595,25 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
         let ResourceKind::ConstantBuffer { layout } = &resource.kind else {
             continue;
         };
+        // every constant of the buffer, the members of a structure (the instance record, an array of them) by their own
+        // names at their own offsets in the first element, as the layout the evaluators use names them
+        let mut flat: Vec<(String, u32, Option<u32>)> = Vec::new();
         for c in &layout.constants {
-            let role = match c.name.as_str() {
+            match c.ty.members() {
+                [] => flat.push((c.name.clone(), c.offset, c.ty.size())),
+                members => flat.extend(
+                    members
+                        .iter()
+                        .map(|m| (m.name.clone(), c.offset + m.offset, m.ty.size())),
+                ),
+            }
+        }
+        for (name, offset, size) in flat {
+            let role = match name.as_str() {
                 "FC_MatrixView" => ConstantRole::View(ViewParameter::View),
+                // the instance record's own fields the vertex program reads
+                "matricesData" => ConstantRole::Object(ObjectParameter::MatrixBase),
+                "userClipPlane" => ConstantRole::Object(ObjectParameter::ClipPlane),
                 "FC_MatrixProj" => ConstantRole::View(ViewParameter::Projection),
                 "VC_MatrixViewProj" => ConstantRole::View(ViewParameter::ViewProjection),
                 "FC_MatrixInvView" => ConstantRole::View(ViewParameter::InverseView),
@@ -596,14 +632,12 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
                     None => continue,
                 },
             };
-            let size =
-                c.ty.size()
-                    .ok_or_else(|| invalid("layer binding", 0, format!("{} overflows", c.name)))?;
+            let size = size.ok_or_else(|| invalid("layer binding", 0, format!("{name} overflows")))?;
             constants.push(ConstantBinding {
                 resource: resource.id,
-                offset: c.offset,
+                offset,
                 size,
-                name: Some(c.name.clone()),
+                name: Some(name),
                 role,
             });
         }

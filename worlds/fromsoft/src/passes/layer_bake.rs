@@ -5,7 +5,7 @@ mod binding;
 pub(crate) use binding::OutputRgb;
 pub(crate) use binding::sampled_period;
 pub use binding::{
-    ALPHA_TEST_POLICY, BIND_POSE_POLICY, Bake, FrozenFrame, Inputs, Prepared, Programs,
+    ALPHA_TEST_POLICY, BIND_POSE_POLICY, Bake, FrozenFrame, INSTANCE_DATA_POLICY, Inputs, Prepared, Programs,
     SECOND_UV_APPROXIMATION, TEXTURE_SCROLL_POLICY,
 };
 pub use vertex::COLOUR1_POLICY;

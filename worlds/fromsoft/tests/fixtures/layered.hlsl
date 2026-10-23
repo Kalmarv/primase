@@ -14,6 +14,7 @@ cbuffer Engine : register(b0)
     float SC_PreExposure;
     float4 SC_RenderCameraPos;
     float4x4 FC_MatrixInvViewProj;
+    uint envData;
 };
 cbuffer Material : register(b1)
 {
@@ -51,7 +52,7 @@ Output main(Input i)
     float4 n = Texture2D_2.Sample(linear_wrap, uv1);
     float4 world = mWorld[0] + mWorld[1] + mWorld[2];
     float4 engine = FC_DifMapMulCol * aColor + world + SC_RenderCameraPos + mul(FC_MatrixInvViewProj, i.position);
-    float frame = FC_ColorSlotNo + FC_GlobalTime + FC_TimeOfDay + SC_PreExposure;
+    float frame = FC_ColorSlotNo + FC_GlobalTime + FC_TimeOfDay + SC_PreExposure + float(envData);
     float3 material = float3(M_Multiple__snp_scale, M_Multiple__snp_missing) + M_Multiple__snp_tint_color_0
         + M_Multiple__snp_PADDING;
     o.normal = float4(n.xyz * 0.5 + 0.5, 1);

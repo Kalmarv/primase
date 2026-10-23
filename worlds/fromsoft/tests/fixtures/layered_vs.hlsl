@@ -4,9 +4,15 @@
 // inputs by label) and the engine's constants by their own names (the texture scroll read as the real program does:
 // each set times `xy` over 2048, plus `zw`; the third and fourth unused). It computes nothing meaningful.
 //   fxc /T vs_5_0 /E main /Fo layered_vs.dxbc layered_vs.hlsl
+struct Instance
+{
+    float4 mWorld[3];
+    float4 userClipPlane;
+    uint4 matricesData;
+};
 cbuffer cbInstanceData : register(b4)
 {
-    float4 VC_InstanceData[4];
+    Instance VC_InstanceData[2];
 };
 cbuffer cbObjMatrix : register(b5)
 {
@@ -58,11 +64,11 @@ struct Output
 Output main(Input i)
 {
     Output o;
-    uint k = i.instance * 3;
+    uint k = (i.instance + VC_InstanceData[0].matricesData.x) * 3;
     float4 p = float4(i.position, 1);
     float4 w = float4(dot(VC_aObjMatrix[k], p), dot(VC_aObjMatrix[k + 1], p), dot(VC_aObjMatrix[k + 2], p), 1);
     o.clip = mul(VC_MatrixViewProj, w);
-    o.world = w + SC_CameraPos * FC_ScreenSize + mul(FC_MatrixView, w) * FC_ShadowColor + VC_InstanceData[i.instance & 3];
+    o.world = w + SC_CameraPos * FC_ScreenSize + mul(FC_MatrixView, w) * FC_ShadowColor + VC_InstanceData[i.instance & 1].userClipPlane;
     // the stored bytes as the real program decodes them: (byte - 127) / 127
     o.normal = float4((float3(i.normal.xyz) - 127.0) * 0.007874016, 0);
     o.tangent = float4((float3(i.tangent.xyz) - 127.0) * 0.007874016, (float(i.tangent.w) - 127.0) * 0.007874016);

@@ -166,6 +166,7 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
             64,
             View(ViewParameter::InverseViewProjection),
         ),
+        engine("envData", 176, 4, Object(ObjectParameter::EnvironmentData)),
         // the tiling of t2 (unbound: 1 by 1) and t8 (the declared binding's scale), a register's four words each
         material("FC_TextureTilingScale", 32, 16, bits(&[1., 1., 0., 0.])),
         material("FC_TextureTilingScale", 128, 16, bits(&[2., 3., 0., 0.])),
@@ -508,11 +509,15 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
         ("missing SAT parameter left at frozen zero", 1),
         ("preview default for missing NormalMap binding", 1),
         ("opaque alpha because main albedo is missing", 1),
-        // 96 words are read: 44 of the engine's (all set but the time of day) and 52 of the material's (two
-        // registers' tiling, the scale, the colour with its padding lane)
+        (
+            "instance record frozen to its zeros: environment data, matrix base and clip plane (the environment data reaches no baked lane)",
+            1,
+        ),
+        // the engine's buffer is 12 rows: 45 words set but the time of day, and the 3 padding words after the
+        // environment data; 52 of the material's are read (two registers' tiling, the scale, the colour with its padding lane)
         (
             "buffer words left at frozen zero (including padding and unused fields)",
-            1 + 38,
+            1 + 3 + 38,
         ),
     ] {
         assert_eq!(prepared.policies.get(policy), Some(&count), "{policy}");
@@ -612,7 +617,26 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
         );
     }
     assert_eq!(stage.unknown_constants().count(), 0);
-    assert_eq!(stage.constants.len(), 9);
+    // the instance record's fields the program reads, by their own names in the first element
+    assert_eq!(
+        named("matricesData"),
+        (
+            "cbInstanceData".to_owned(),
+            64,
+            16,
+            Object(ObjectParameter::MatrixBase)
+        )
+    );
+    assert_eq!(
+        named("userClipPlane"),
+        (
+            "cbInstanceData".to_owned(),
+            48,
+            16,
+            Object(ObjectParameter::ClipPlane)
+        )
+    );
+    assert_eq!(stage.constants.len(), 11);
     assert!(stage.outputs.is_empty() && stage.textures.is_empty());
 }
 
@@ -789,13 +813,23 @@ fn the_material_buffers_engine_named_fields_come_from_the_definition() {
         why: "the alpha test's flag the engine derives (zw of FC_AlphaRef): its source is not established"
             .into(),
     };
+    let no_glow = ConstantRole::Unknown {
+        why: "the material states no g_GlowScale: read only into the emission target's alpha".into(),
+    };
     assert_eq!(
         at(&tested),
         [
             ("FC_DifMapMulCol".to_owned(), 0, 16, bits(&[0.8, 0.6, 0.4, 0.])),
             ("FC_AlphaRef".to_owned(), 80, 8, bits(&[128. / 255., 64. / 255.])),
             ("FC_AlphaRef".to_owned(), 88, 8, flag.clone()),
+            ("FC_GlowScale".to_owned(), 144, 16, no_glow),
         ]
+    );
+    // a stated g_GlowScale is the buffer's
+    let glow = with_params(&[("g_GlowScale", Value::Float(vec![1., 1., 1., 0.5]))]);
+    assert_eq!(
+        at(&glow).last().unwrap(),
+        &("FC_GlowScale".to_owned(), 144, 16, bits(&[1., 1., 1., 0.5]))
     );
     // no alpha reference: the test never discards (-100); no diffuse colour: Unknown by name
     let plain = with_params(&[("g_AlphaRef", Value::Int(vec![0, 0]))]);

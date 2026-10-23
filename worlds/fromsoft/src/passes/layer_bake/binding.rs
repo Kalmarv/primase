@@ -132,6 +132,13 @@ fn lanes_of_input(input: &Input) -> [Lane; 4] {
     }
 }
 
+/// The policy a consumer counts when it freezes an instance's own record (environment data, matrix base, clip plane) to
+/// zero. By a data-flow reading of the 102 layered pixel programs (writes of a lane that depend on the word, control flow
+/// not followed), the environment data reaches only the alpha lane of the reflectance target in 68 and, in 34 more, also
+/// those of the normal and gloss targets: no lane a bake reads. The matrix base is the first matrix of the palette (the
+/// identity in a bake) and the clip plane, zero, clips nothing.
+pub const INSTANCE_DATA_POLICY: &str = "instance record frozen to its zeros: environment data, matrix base and clip plane (the environment data reaches no baked lane)";
+
 /// `FC_AlphaRef.x` of a program that does not test alpha: below any alpha (the engine's own value for a plain program).
 const ALPHA_TEST_OFF: f32 = -100.;
 
@@ -168,6 +175,18 @@ pub(super) fn frozen_words(
         ) => bits(&frame.view_matrix),
         ConstantRole::View(ViewParameter::ViewportSize) => bits(&frame.viewport_size),
         ConstantRole::Object(ObjectParameter::World) => bits(&frame.world),
+        ConstantRole::Object(ObjectParameter::EnvironmentData) => {
+            policies.insert(INSTANCE_DATA_POLICY.into(), 1);
+            vec![frame.environment_data]
+        }
+        ConstantRole::Object(ObjectParameter::MatrixBase) => {
+            policies.insert(INSTANCE_DATA_POLICY.into(), 1);
+            vec![frame.matrix_base, 0, 0, 0]
+        }
+        ConstantRole::Object(ObjectParameter::ClipPlane) => {
+            policies.insert(INSTANCE_DATA_POLICY.into(), 1);
+            bits(&frame.clip_plane)
+        }
         ConstantRole::Object(ObjectParameter::BonePalette) => {
             policies.insert(BIND_POSE_POLICY.into(), 1);
             // every joint's matrix the identity: the palette's words, as many as any buffer holds
@@ -236,6 +255,12 @@ pub struct FrozenFrame {
     pub instance_colour: [f32; 4],
     /// `Object(TextureScroll(n))`: the identity, scale one and offset zero ([`TEXTURE_SCROLL_POLICY`]).
     pub texture_scroll: [[f32; 4]; 4],
+    /// `Object(EnvironmentData)`: zero.
+    pub environment_data: u32,
+    /// `Object(MatrixBase)`: zero, the first matrix of the palette.
+    pub matrix_base: u32,
+    /// `Object(ClipPlane)`: zero, which clips nothing.
+    pub clip_plane: [f32; 4],
     /// `View(View)`, `Projection`, `ViewProjection`, `InverseView` and `InverseProjection`: the identity, so a vertex
     /// program's clip position is its camera-relative position.
     pub view_matrix: [f32; 16],
@@ -256,6 +281,9 @@ impl FrozenFrame {
             world: [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.],
             instance_colour: [1.; 4],
             texture_scroll: [[1., 1., 0., 0.]; 4],
+            environment_data: 0,
+            matrix_base: 0,
+            clip_plane: [0.; 4],
             view_matrix: IDENTITY,
             viewport_size: [1.; 4],
         }

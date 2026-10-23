@@ -71,6 +71,14 @@ pub enum ObjectParameter {
     /// the pose gives, in the engine's own palette order): what a skinning program blends by the vertex's joint indices
     /// and weights.
     BonePalette,
+    /// The instance's environment data word (an unsigned integer the engine writes per instance; the layered programs
+    /// scale it by 1/255 into the alpha lane of a G-buffer target).
+    EnvironmentData,
+    /// The index of the instance's first matrix in the object-matrix palette, which the vertex program adds to the
+    /// index it takes (the joint indices of a skinned vertex, the instance's own for a rigid one).
+    MatrixBase,
+    /// The instance's user clip plane (the vertex program's clip distance against it).
+    ClipPlane,
 }
 
 /// A value of the frame being drawn.

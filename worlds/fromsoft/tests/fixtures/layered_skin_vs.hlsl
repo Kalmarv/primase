@@ -3,9 +3,15 @@
 // inputs and VC_aObjMatrix as the joints' palette (three rows of four per joint) the program blends. It computes nothing
 // meaningful beyond the blend.
 //   fxc /T vs_5_0 /E main /Fo layered_skin_vs.dxbc layered_skin_vs.hlsl
+struct Instance
+{
+    float4 mWorld[3];
+    float4 userClipPlane;
+    uint4 matricesData;
+};
 cbuffer cbInstanceData : register(b4)
 {
-    float4 VC_InstanceData[4];
+    Instance VC_InstanceData[2];
 };
 cbuffer cbObjMatrix : register(b5)
 {
@@ -60,14 +66,14 @@ Output main(Input i)
 {
     Output o;
     float4 w = i.weights / max(dot(float4(1, 1, 1, 1), i.weights), 0.001);
-    uint4 b = i.joints * 3;
+    uint4 b = (i.joints + VC_InstanceData[0].matricesData.x) * 3;
     float4 p = float4(i.position, 1);
     float4 row0 = VC_aObjMatrix[b.x] * w.x + VC_aObjMatrix[b.y] * w.y + VC_aObjMatrix[b.z] * w.z + VC_aObjMatrix[b.w] * w.w;
     float4 row1 = VC_aObjMatrix[b.x + 1] * w.x + VC_aObjMatrix[b.y + 1] * w.y + VC_aObjMatrix[b.z + 1] * w.z + VC_aObjMatrix[b.w + 1] * w.w;
     float4 row2 = VC_aObjMatrix[b.x + 2] * w.x + VC_aObjMatrix[b.y + 2] * w.y + VC_aObjMatrix[b.z + 2] * w.z + VC_aObjMatrix[b.w + 2] * w.w;
     float4 world = float4(dot(p, row0), dot(p, row1), dot(p, row2), 1);
     o.clip = mul(VC_MatrixViewProj, world);
-    o.world = world + SC_CameraPos * FC_ScreenSize + mul(FC_MatrixView, world) * FC_ShadowColor + VC_InstanceData[i.instance & 3];
+    o.world = world + SC_CameraPos * FC_ScreenSize + mul(FC_MatrixView, world) * FC_ShadowColor + VC_InstanceData[i.instance & 1].userClipPlane;
     // the stored bytes as the real program decodes them: (byte - 127) / 127
     o.normal = float4((float3(i.normal.xyz) - 127.0) * 0.007874016, 0);
     o.tangent = float4((float3(i.tangent.xyz) - 127.0) * 0.007874016, (float(i.tangent.w) - 127.0) * 0.007874016);
