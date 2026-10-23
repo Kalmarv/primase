@@ -103,10 +103,10 @@ fn builtin(stage: Stage, output: bool, system: SystemValue) -> Option<naga::Buil
         (Stage::Pixel, false, PrimitiveIndex) => naga::BuiltIn::PrimitiveIndex,
         (Stage::Pixel, false, SampleIndex) => naga::BuiltIn::SampleIndex,
         (Stage::Pixel, _, Coverage) => naga::BuiltIn::SampleMask,
-        (Stage::Compute, false, GroupId) => naga::BuiltIn::WorkGroupId,
-        (Stage::Compute, false, GroupThreadId) => naga::BuiltIn::LocalInvocationId,
-        (Stage::Compute, false, DispatchThreadId) => naga::BuiltIn::GlobalInvocationId,
-        (Stage::Compute, false, GroupIndex) => naga::BuiltIn::LocalInvocationIndex,
+        (Stage::Compute | Stage::Mesh, false, GroupId) => naga::BuiltIn::WorkGroupId,
+        (Stage::Compute | Stage::Mesh, false, GroupThreadId) => naga::BuiltIn::LocalInvocationId,
+        (Stage::Compute | Stage::Mesh, false, DispatchThreadId) => naga::BuiltIn::GlobalInvocationId,
+        (Stage::Compute | Stage::Mesh, false, GroupIndex) => naga::BuiltIn::LocalInvocationIndex,
         (Stage::Compute | Stage::Pixel, false, LaneIndex) => naga::BuiltIn::SubgroupInvocationId,
         (Stage::Compute | Stage::Pixel, false, LaneCount) => naga::BuiltIn::SubgroupSize,
         // naga has no conservative-depth variants: the depth hints are not carried
@@ -327,10 +327,31 @@ pub fn stage_functions(interface: &Interface) -> Result<Option<Vec<FunctionSig>>
     })
 }
 
+/// The members of a mesh program's vertex type, one for each output varying, bound as a vertex program's outputs are.
+pub fn mesh_vertex_io(interface: &Interface) -> Result<Vec<IoItem>, String> {
+    let mut vertex = interface.clone();
+    vertex.stage = Stage::Vertex;
+    vertex.inputs.clear();
+    vertex.facts = StageFacts::None;
+    Ok(entry_io(&vertex)?.results)
+}
+
 /// The entry point's arguments and result members for `interface`. `Err` says why the module cannot carry it (a
 /// system value no stage binding exists for).
 pub fn entry_io(interface: &Interface) -> Result<EntryIo, String> {
     let stage = interface.stage;
+    // a mesh program takes a compute program's ids and returns nothing: what it writes is in the module's output
+    // variable, a member of its vertex type for each output varying (see [`mesh_vertex_io`])
+    if stage == Stage::Mesh {
+        let mut ids = interface.clone();
+        ids.stage = Stage::Compute;
+        ids.outputs.clear();
+        ids.facts = StageFacts::None;
+        return Ok(EntryIo {
+            arguments: entry_io(&ids)?.arguments,
+            results: Vec::new(),
+        });
+    }
     let mut io = EntryIo {
         arguments: Vec::new(),
         results: Vec::new(),

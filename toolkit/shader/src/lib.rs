@@ -28,17 +28,18 @@ pub use evaluate::{
 pub use primase_core::shader::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, D3dSignature,
     DomainFacts, GeometryFacts, GsInput, GsOutput, HitGroup, HitGroupKind, HullFacts, Interface, InterpMode,
-    InterpSampling, Interpolation, Label, Majorness, Member, Partitioning, RayTracingFacts, Resource,
-    ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType, ShaderFormat, Stage, StageFacts,
-    StorageTarget, Subobject, SystemValue, TessDomain, TessTopology, TextureDim, Value, Varying,
-    VaryingProvenance,
+    InterpSampling, Interpolation, Label, Majorness, Member, MeshFacts, MeshTopology, Partitioning,
+    RayTracingFacts, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType,
+    ShaderFormat, Stage, StageFacts, StorageTarget, Subobject, SystemValue, TessDomain, TessTopology,
+    TextureDim, Value, Varying, VaryingProvenance,
 };
 mod periodic;
 pub use limits::{WEBGPU_BASELINE, compute_limit_notes, interface_notes};
 pub use periodic::{evaluate_periodic, evaluate_periodic_with};
 pub use program::{
     ClipDepth, Conventions, D3dModes, EntryIo, Error as ProgramError, FnItem, FunctionSig, IoItem, IoType,
-    Origin, Problem, Program, Provenance, VERSION as PROGRAM_VERSION, entry_io, stage_functions,
+    Origin, Problem, Program, Provenance, VERSION as PROGRAM_VERSION, entry_io, mesh_vertex_io,
+    stage_functions,
 };
 
 /// How a sample request picks its level of detail.

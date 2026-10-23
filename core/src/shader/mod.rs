@@ -27,8 +27,9 @@ pub use binding::{
 };
 pub use interface::{
     D3dSignature, DomainFacts, GeometryFacts, GsInput, GsOutput, HitGroup, HitGroupKind, HullFacts,
-    Interface, InterpMode, InterpSampling, Interpolation, Label, Partitioning, RayTracingFacts, ScalarType,
-    StageFacts, Subobject, SystemValue, TessDomain, TessTopology, Value, Varying, VaryingProvenance,
+    Interface, InterpMode, InterpSampling, Interpolation, Label, MeshFacts, MeshTopology, Partitioning,
+    RayTracingFacts, ScalarType, StageFacts, Subobject, SystemValue, TessDomain, TessTopology, Value,
+    Varying, VaryingProvenance,
 };
 pub use program::Shader;
 pub use resource::{
@@ -69,6 +70,9 @@ pub enum Stage {
     Domain,
     /// A geometry program.
     Geometry,
+    /// A mesh program: a thread group that writes the vertices and primitives of one meshlet (see
+    /// [`StageFacts::Mesh`]); its outputs are the per-vertex varyings of the interface.
+    Mesh,
     /// A ray generation program: the start of a ray tracing dispatch, one invocation per dispatched ray position.
     RayGeneration,
     /// An intersection program: tests a ray against a procedural primitive and reports hits.

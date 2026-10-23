@@ -46,6 +46,12 @@ impl Executable {
     /// Check `program` (its module and its interface) and compile it. A construct the executor does not run (a
     /// 64-bit value, an atomic other than add, an image atomic) is refused here, by name.
     pub fn new(program: &Program) -> Result<Self, Error> {
+        if program.stage == crate::Stage::Mesh {
+            return Err(error(
+                "a Mesh program writes the vertices and primitives of a meshlet from a whole thread group: the \
+                 executor does not run mesh shaders",
+            ));
+        }
         if crate::stage_functions(&program.interface)
             .map_err(error)?
             .is_some()

@@ -80,6 +80,11 @@ fn system_from_number(
         (Stage::Geometry, true, 4) => RenderTargetArrayIndex,
         (Stage::Geometry, true, 5) => ViewportArrayIndex,
         (Stage::Geometry, true, 7) => PrimitiveIndex,
+        // a mesh program writes a vertex program's system values per vertex (its per-primitive ones are not carried)
+        (Stage::Mesh, false, _) => return Ok(None),
+        (Stage::Mesh, true, 1) => ClipPosition,
+        (Stage::Mesh, true, 2) => ClipDistance,
+        (Stage::Mesh, true, 3) => CullDistance,
         (Stage::Domain, true, 1) => ClipPosition,
         (Stage::Domain, true, 2) => ClipDistance,
         (Stage::Domain, true, 3) => CullDistance,

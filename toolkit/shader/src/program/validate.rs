@@ -30,7 +30,7 @@ impl fmt::Display for Problem {
 /// The capabilities programs may use: WGSL's baseline and what a D3D program can need beyond it (clip distances,
 /// per-sample shading, the primitive index, cube array textures, half-float packing for `f16tof32`/`f32tof16`, forced
 /// early depth tests, arrays of textures and samplers indexed by a computed, possibly divergent, index, and subgroup
-/// (wave) operations in compute and pixel programs, atomic operations on storage textures, arrays of storage buffers and storage textures, ray queries). A consumer that cannot provide one refuses the program that
+/// (wave) operations in compute and pixel programs, atomic operations on storage textures, arrays of storage buffers and storage textures, ray queries, mesh shaders). A consumer that cannot provide one refuses the program that
 /// needs it; nothing outside this list is ever produced.
 ///
 /// A compute program's thread group is validated against D3D's limits (1024 invocations, 1024 along x and y, 64 along
@@ -50,7 +50,8 @@ pub const CAPABILITIES: naga::valid::Capabilities = naga::valid::Capabilities::C
     .union(naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY)
     .union(naga::valid::Capabilities::STORAGE_BUFFER_BINDING_ARRAY_NON_UNIFORM_INDEXING)
     .union(naga::valid::Capabilities::STORAGE_TEXTURE_BINDING_ARRAY)
-    .union(naga::valid::Capabilities::STORAGE_TEXTURE_BINDING_ARRAY_NON_UNIFORM_INDEXING);
+    .union(naga::valid::Capabilities::STORAGE_TEXTURE_BINDING_ARRAY_NON_UNIFORM_INDEXING)
+    .union(naga::valid::Capabilities::MESH_SHADER);
 
 /// Check `program`: naga's validation of its module, then the program rules. Every problem found is returned.
 pub fn validate(program: &Program) -> Result<naga::valid::ModuleInfo, Vec<Problem>> {
@@ -297,6 +298,7 @@ fn interface(p: &Program, problems: &mut Vec<Problem>) {
         ShaderStage::Vertex => Some(crate::Stage::Vertex),
         ShaderStage::Fragment => Some(crate::Stage::Pixel),
         ShaderStage::Compute => Some(crate::Stage::Compute),
+        ShaderStage::Mesh => Some(crate::Stage::Mesh),
         _ => None,
     };
     if stage != Some(p.stage) || p.interface.stage != p.stage {
@@ -307,7 +309,7 @@ fn interface(p: &Program, problems: &mut Vec<Problem>) {
         return;
     }
     // a thread group is D3D's size: at most 1024 invocations, 1024 along x and y, 64 along z
-    if entry.stage == ShaderStage::Compute {
+    if matches!(entry.stage, ShaderStage::Compute | ShaderStage::Mesh) {
         let [x, y, z] = entry.workgroup_size;
         if x == 0
             || y == 0

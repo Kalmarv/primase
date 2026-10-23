@@ -63,6 +63,7 @@ pub(super) fn text(p: &Program) -> Result<String, Error> {
             Stage::Hull => "hull",
             Stage::Domain => "domain",
             Stage::Geometry => "geometry",
+            Stage::Mesh => "mesh",
             Stage::RayGeneration => "ray_generation",
             Stage::Intersection => "intersection",
             Stage::AnyHit => "any_hit",
@@ -143,6 +144,13 @@ pub(super) fn text(p: &Program) -> Result<String, Error> {
                 out,
                 "// geometry input={:?} output={:?} max_vertices={} instances={}",
                 g.input, g.output, g.max_vertices, g.instances
+            );
+        }
+        StageFacts::Mesh(m) => {
+            let _ = writeln!(
+                out,
+                "// mesh topology={:?} max_vertices={} max_primitives={}",
+                m.topology, m.max_vertices, m.max_primitives
             );
         }
         other => {

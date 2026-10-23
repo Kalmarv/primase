@@ -135,7 +135,8 @@ pub fn entry(m: &Module) -> Result<crate::module::ValueId> {
     }
 }
 
-/// The entry point's thread group size (`numthreads`): the value of the properties' tag 4. `None` when the entry
+/// The entry point's thread group size (`numthreads`): the value of the properties' tag 4 (a mesh program's, the first
+/// field of its state, tag 9). `None` when the entry
 /// point states none (every stage but compute).
 pub fn num_threads(m: &Module) -> Result<Option<[u32; 3]>> {
     let entry = &the_entry(m)?;
@@ -148,14 +149,23 @@ pub fn num_threads(m: &Module) -> Result<Option<[u32; 3]>> {
         let [tag, value] = pair else {
             return Err(error(0, "entry point properties: a tag without a value"));
         };
-        if int(m, *tag, "property tag")? != 4 {
+        let tag = int(m, *tag, "property tag")?;
+        if tag != 4 && tag != 9 {
             continue;
         }
-        let size = node(
+        let mut size = node(
             m,
             value.ok_or_else(|| error(0, "numthreads without a value"))?,
             "numthreads",
         )?;
+        // a mesh program states them first in its state
+        if tag == 9 {
+            size = node(
+                m,
+                operand(size, 0, "mesh state")?.ok_or_else(|| error(0, "a mesh state without numthreads"))?,
+                "numthreads",
+            )?;
+        }
         let axis = |k: usize| -> Result<u32> {
             u32::try_from(int(m, size.get(k).copied().flatten(), "numthreads")?)
                 .map_err(|_| error(0, "numthreads: an axis out of range"))
@@ -257,6 +267,38 @@ pub fn geometry_facts(m: &Module) -> Result<primase_shader::GeometryFacts> {
         },
         max_vertices: vertices,
         instances: instances.max(1),
+    })
+}
+
+/// What a mesh program's entry point states (the properties' tag 9): its thread group, the most vertices and primitives it
+/// writes, what its primitives are and the size of the payload it reads from a task program. A payload is refused by name.
+pub fn mesh_facts(m: &Module) -> Result<primase_shader::MeshFacts> {
+    use primase_shader::{MeshFacts, MeshTopology};
+    let state = entry_property(m, 9)?.ok_or_else(|| error(0, "a mesh program without its state"))?;
+    // a null field is zero
+    let field = |k: usize| -> Result<u32> {
+        match operand(state, k, "mesh state")? {
+            None => Ok(0),
+            some => u32::try_from(int(m, some, "mesh state")?).map_err(|_| error(0, "mesh state field")),
+        }
+    };
+    let (max_vertices, max_primitives, topology, payload) = (field(1)?, field(2)?, field(3)?, field(4)?);
+    if payload != 0 {
+        return Err(error(
+            0,
+            format!(
+                "a mesh program that reads a task payload of {payload} bytes (amplification programs are not lifted)"
+            ),
+        ));
+    }
+    Ok(MeshFacts {
+        topology: match topology {
+            1 => MeshTopology::Line,
+            2 => MeshTopology::Triangle,
+            other => return Err(error(0, format!("mesh output topology {other} is not mapped"))),
+        },
+        max_vertices,
+        max_primitives,
     })
 }
 
@@ -951,7 +993,7 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
         10 => Stage::ClosestHit,
         11 => Stage::Miss,
         12 => Stage::Callable,
-        13 => return Err(error(0, "mesh shader programs are not lifted")),
+        13 => Stage::Mesh,
         14 => return Err(error(0, "amplification shader programs are not lifted")),
         kind => return Err(error(0, format!("program kind {kind} is not mapped"))),
     };
@@ -1034,6 +1076,7 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
             })
         }
         Stage::Geometry => StageFacts::Geometry(geometry_facts(program)?),
+        Stage::Mesh => StageFacts::Mesh(mesh_facts(program)?),
         stage if stage.is_ray_tracing() => {
             let function = entry(program)?;
             let export = program

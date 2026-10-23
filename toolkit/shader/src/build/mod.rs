@@ -5,9 +5,11 @@
 mod atomic;
 pub mod behaviour;
 mod entry;
+mod mesh;
 pub mod structure;
 
 pub use entry::{EntryDecl, FunctionDecl};
+pub use mesh::MeshOutput;
 
 use naga::{
     BinaryOperator, Block, Expression, Function, GlobalVariable, Handle, Literal, LocalVariable,

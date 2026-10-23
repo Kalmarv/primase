@@ -15,6 +15,7 @@
 mod compute;
 mod flow;
 mod memory;
+mod mesh;
 mod ops;
 mod rayquery;
 mod raytracing;
@@ -77,6 +78,7 @@ pub fn lift(container: &[u8]) -> Result<Program> {
             0 => "ps",
             1 => "vs",
             2 => "gs",
+            13 => "ms",
             3 => "hs",
             4 => "ds",
             6..=12 => "lib",
@@ -86,7 +88,7 @@ pub fn lift(container: &[u8]) -> Result<Program> {
         part.program_version & 15
     );
     let mut lift = Lift::new(&module, entry, functions, setup)?;
-    if lift.setup.interface.stage == Stage::Compute {
+    if matches!(lift.setup.interface.stage, Stage::Compute | Stage::Mesh) {
         lift.b.workgroup_size = crate::reflection::num_threads(&module)?
             .ok_or_else(|| error(0, "a compute program that states no thread group size"))?;
     }
@@ -177,6 +179,8 @@ pub(crate) struct Lift<'m> {
     coverage: Option<Handle<LocalVariable>>,
     /// The lane number of a thread group with no lane-number built-in, made at the start of the program.
     lane: Option<Handle<LocalVariable>>,
+    /// A mesh program's output variable and facts.
+    mesh: Option<(primase_shader::build::MeshOutput, primase_shader::MeshFacts)>,
     /// A geometry program's emitted vertices so far.
     gs: Option<stages::GsState>,
     /// The ray tracing pipeline's operations the program calls.
@@ -222,6 +226,7 @@ impl<'m> Lift<'m> {
             depth: None,
             coverage: None,
             lane: None,
+            mesh: None,
             gs: None,
             operations: raytracing::Operations::default(),
             resources: resources::Resources::default(),
@@ -392,6 +397,9 @@ impl<'m> Lift<'m> {
                 _ => {}
             }
         }
+        if self.setup.interface.stage == Stage::Mesh {
+            self.start_mesh()?;
+        }
         self.declare_resources()?;
         self.declare_memory()?;
         self.lane_at_start();
@@ -526,17 +534,21 @@ impl<'m> Lift<'m> {
     fn finish(self, target: String) -> Result<Program> {
         let stage = self.setup.interface.stage;
         let early = false;
-        let module = self.b.finish(
-            "main",
-            match stage {
-                Stage::Vertex => naga::ShaderStage::Vertex,
-                Stage::Compute => naga::ShaderStage::Compute,
-                _ => naga::ShaderStage::Fragment,
-            },
-            self.arguments,
-            self.result_type,
-            early,
-        );
+        let module = if let Some((output, facts)) = &self.mesh {
+            self.b.finish_mesh(self.arguments, facts, output)
+        } else {
+            self.b.finish(
+                "main",
+                match stage {
+                    Stage::Vertex => naga::ShaderStage::Vertex,
+                    Stage::Compute => naga::ShaderStage::Compute,
+                    _ => naga::ShaderStage::Fragment,
+                },
+                self.arguments,
+                self.result_type,
+                early,
+            )
+        };
         let mut limit_notes = primase_shader::compute_limit_notes(&module);
         let interface = self.setup.interface.clone();
         limit_notes.extend(primase_shader::interface_notes(&interface));

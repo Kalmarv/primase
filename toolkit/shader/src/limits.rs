@@ -61,5 +61,12 @@ pub fn interface_notes(interface: &crate::Interface) -> Vec<String> {
                 .into(),
         );
     }
+    if interface.stage == crate::Stage::Mesh {
+        notes.push(
+            "a mesh program needs the device's mesh shader support (WebGPU's baseline has none): the vertices and \
+             primitives it writes are the module's output variable, and it reads no payload of a task program"
+                .into(),
+        );
+    }
     notes
 }

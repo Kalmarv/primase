@@ -276,6 +276,32 @@ pub struct GeometryFacts {
     pub instances: u32,
 }
 
+/// What a mesh program's primitives are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeshTopology {
+    Line,
+    Triangle,
+}
+impl MeshTopology {
+    /// How many vertex indices a primitive has.
+    pub fn indices(self) -> u32 {
+        match self {
+            Self::Line => 2,
+            Self::Triangle => 3,
+        }
+    }
+}
+
+/// What a mesh program states: what its primitives are and the most vertices and primitives it writes. Its thread group
+/// size is the entry point's, as a compute program's is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct MeshFacts {
+    pub topology: MeshTopology,
+    pub max_vertices: u32,
+    pub max_primitives: u32,
+}
+
 /// What a hit group runs for the geometry it is bound to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -360,6 +386,8 @@ pub enum StageFacts {
     Geometry(GeometryFacts),
     /// A ray tracing program of a library (see [`RayTracingFacts`]).
     RayTracing(RayTracingFacts),
+    /// A mesh program.
+    Mesh(MeshFacts),
 }
 
 /// What a program exposes: its stage, the varyings it takes and gives, and the resources it binds.
@@ -421,6 +449,16 @@ impl Interface {
             (Stage::Hull | Stage::Domain, _) => {
                 Err(format!("a {:?} program without its patch facts", self.stage))
             }
+            (Stage::Mesh, StageFacts::Mesh(m)) => {
+                if !(1..=256).contains(&m.max_vertices) || !(1..=256).contains(&m.max_primitives) {
+                    return Err(format!(
+                        "a mesh program of {} vertices and {} primitives",
+                        m.max_vertices, m.max_primitives
+                    ));
+                }
+                Ok(())
+            }
+            (Stage::Mesh, _) => Err("a mesh program without its facts".into()),
             (stage, StageFacts::RayTracing(r)) if stage.is_ray_tracing() => {
                 if r.export.is_empty() {
                     return Err(format!("a {stage:?} program that names no export"));

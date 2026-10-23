@@ -130,7 +130,13 @@ impl Setup {
         let mut interface = reflection::reflection(chunks, m, named.as_ref())?;
         if !matches!(
             interface.stage,
-            Stage::Pixel | Stage::Vertex | Stage::Compute | Stage::Hull | Stage::Domain | Stage::Geometry
+            Stage::Pixel
+                | Stage::Vertex
+                | Stage::Compute
+                | Stage::Hull
+                | Stage::Domain
+                | Stage::Geometry
+                | Stage::Mesh
         ) && !interface.stage.is_ray_tracing()
         {
             return Err(error(0, format!("{:?} programs are not lifted", interface.stage)));
@@ -168,11 +174,11 @@ impl Setup {
                 };
                 let konst = |n: usize| args.get(n).and_then(|&a| const_int(m, entry, a));
                 match code {
-                    // LoadInput, StoreOutput, LoadOutputControlPoint, LoadPatchConstant, StorePatchConstant
-                    4 | 5 | 103 | 104 | 106 => {
+                    // LoadInput, StoreOutput, LoadOutputControlPoint, LoadPatchConstant, StorePatchConstant, StoreVertexOutput
+                    4 | 5 | 103 | 104 | 106 | 171 => {
                         let list = match code {
                             4 => &input_elements,
-                            5 | 103 => &output_elements,
+                            5 | 103 | 171 => &output_elements,
                             _ => &patch_elements,
                         };
                         let Some(id) = konst(1) else {
@@ -183,7 +189,7 @@ impl Setup {
                             .find(|e| i64::from(e.id) == id)
                             .ok_or_else(|| error(inst.at, format!("signature element {id}")))?;
                         if !e.placed {
-                            if code == 5 {
+                            if code == 5 || code == 171 {
                                 system_out.insert(e.system_value);
                                 continue;
                             }
@@ -203,7 +209,7 @@ impl Setup {
                                 let cell = (e.row + r as u32, e.column + c as u8);
                                 match code {
                                     4 => cells_in.insert(cell),
-                                    5 | 103 => cells_out.insert(cell),
+                                    5 | 103 | 171 => cells_out.insert(cell),
                                     _ => cells_patch.insert(cell),
                                 };
                             }
