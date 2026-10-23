@@ -822,6 +822,9 @@ pub struct AnvilShaders {
     pub vertex: Vec<(u32, usize)>,
     /// The containers, each once: permutations that share a program share its index.
     pub programs: Vec<Vec<u8>>,
+    /// The body of the template's shader-state node as stored ([`crate::read::template::feature_node`]): the object's
+    /// byte, then the template's feature flags.
+    pub feature_node: Vec<u8>,
 }
 
 impl AnvilShaders {
@@ -829,6 +832,17 @@ impl AnvilShaders {
         let at = stage.binary_search_by_key(&key, |&(k, _)| k).ok()?;
         let &(_, program) = stage.get(at)?;
         self.programs.get(program).map(Vec::as_slice)
+    }
+
+    /// Whether the template has feature `n` (bit `n` of the engine's feature word `T`, which gates bits of the
+    /// ShaderKey: docs/shaders.md §6.2): byte `n + 1` of its shader-state node, 0 or 1. `None` where the node has no
+    /// such byte or it is neither.
+    pub fn feature(&self, n: usize) -> Option<bool> {
+        match self.feature_node.get(n.checked_add(1)?)? {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        }
     }
 
     /// The program the pixel key `key` names.

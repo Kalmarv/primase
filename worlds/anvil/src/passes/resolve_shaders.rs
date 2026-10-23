@@ -4,7 +4,7 @@
 //! `bake-anvil-material` still carries its own recipes until it is moved onto the binding.
 //!
 //! - **Program.** The Material's template permutation ([`AnvilShaders`], read with `Placer::with_shaders`) for the
-//!   G-buffer pass of a plain draw: the pixel key [`gbuffer_pixel_key`] composes from the Material's flags (a
+//!   G-buffer pass of a plain draw: the pixel key [`gbuffer_key`] composes from the Material's flags (a
 //!   Material that sets a flag the template's feature word gates is left unbound, naming it), and the vertex key of
 //!   `vertex-layout=N`, the vertex layout number of the meshes drawn with it (bits 17 to 21 of the key: the mesh's, not
 //!   the Material's, so the caller states it; `none` binds the pixel stage only). Each program's interface is lifted
@@ -44,7 +44,6 @@ use primase_core::shader::{
 };
 use primase_core::{ColorSpace, Component, Entity, Name, Semantic, Texture, World};
 
-use super::gbuffer_pixel_key;
 use crate::components::{
     AnvilMaterial, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags, MaterialValue,
 };
@@ -99,6 +98,62 @@ impl ResolveAnvilShaders {
             layout.ok_or("vertex-layout is required: the vertex layout number of the meshes drawn (bits 17 to 21 of the vertex key), or none")?,
         ))
     }
+}
+
+/// The G-buffer pass's number, in the key's bits 22 to 29.
+const GBUFFER: u32 = 1;
+
+/// The pixel ShaderKey the engine's key composer gives the G-buffer pass of a plain draw of a Material with the flags
+/// `f` of a template with the features `tables` (docs/shaders.md §6.2, read from the engine): the pass in bits 22 to
+/// 29, then each Material flag sets its bit only where the template's feature word allows it:
+/// - `0x40`: `TwoSided` and `FlipNormalOnBackFace` both set, and feature 12;
+/// - `0x2`: `AlphaDisplayMode` 2, and feature 13;
+/// - `0x4`: `LayerMaterial`, and feature 10; `0x20` also with a blend mode other than 0 (only with `0x4`);
+/// - `0x10`: boolean 34 (`42452A12`), and features 3 and 4 (`T & 0x18 == 0x18`).
+///
+/// The draw's bits (vertex pulling, reduced material levels, the mesh's per-instance features, the eight variant
+/// subsets) are those of a plain draw: none. A template whose feature bytes are not 0 or 1 is refused. (The
+/// `bake-anvil-material` pass has its own [`super::gbuffer_pixel_key`], which refuses the gated flags instead.)
+pub fn gbuffer_key(f: &MaterialFlags, tables: &AnvilShaders) -> Result<u32, String> {
+    if f.blend_mode > 0xF || f.alpha_display_mode > 3 {
+        return Err("a blend or alpha display mode wider than the engine's field".into());
+    }
+    let mut set = [false; 35];
+    for (s, &b) in set.iter_mut().zip(&f.booleans) {
+        *s = match b {
+            0 => false,
+            1 => true,
+            _ => return Err("a boolean stored as neither 0 nor 1".into()),
+        };
+    }
+    let feature = |n: usize| {
+        tables
+            .feature(n)
+            .ok_or_else(|| format!("the template's feature {n} is neither 0 nor 1"))
+    };
+    let mut key = GBUFFER << 22;
+    if set[MaterialFlags::TWO_SIDED] && set[MaterialFlags::FLIP_NORMAL_ON_BACK_FACE] && feature(12)? {
+        key |= 0x40;
+    }
+    if f.alpha_display_mode == 2 && feature(13)? {
+        key |= 0x2;
+    }
+    if set[MaterialFlags::LAYER_MATERIAL] && feature(10)? {
+        key |= 0x4;
+        if f.blend_mode != 0 {
+            key |= 0x20;
+        }
+    }
+    if set[MaterialFlags::BOOLEAN_42452A12] && feature(3)? && feature(4)? {
+        key |= 0x10;
+    }
+    Ok(key)
+}
+
+/// The vertex key of the pair a pixel key `pixel` belongs to, for vertex layout `layout`: the Material-flag bits (1 to
+/// 5, and 0) occur in the pixel stage's keys only, the layout number (bits 17 to 21) in the vertex stage's only.
+pub fn gbuffer_vertex_key(pixel: u32, layout: u32) -> u32 {
+    (pixel & !0x3F) | (layout << 17)
 }
 
 /// The shading class byte a template's G-buffer programs write (docs/material-spec.md §14, §15.4, shaders notes):
@@ -386,14 +441,17 @@ impl Pass for ResolveAnvilShaders {
                 continue;
             };
             let template = m.template_name.clone().unwrap_or_default();
-            let pixel_key = match gbuffer_pixel_key(&m.flags) {
+            let pixel_key = match world.get::<AnvilShaders>(tables).map_or_else(
+                || Err("the template's shader tables are gone".to_owned()),
+                |t| gbuffer_key(&m.flags, t),
+            ) {
                 Ok(k) => k,
                 Err(why) => {
                     bump(&format!("materials left unbound: {why}"), 1, &mut counts);
                     continue;
                 }
             };
-            let vertex_key = self.vertex_layout.map(|n| pixel_key | (n << 17));
+            let vertex_key = self.vertex_layout.map(|n| gbuffer_vertex_key(pixel_key, n));
             let mut stages = Vec::new();
             let mut pixel_shader = None;
             for (is_vertex, key) in [(false, Some(pixel_key)), (true, vertex_key)] {
@@ -855,5 +913,125 @@ mod tests {
             .unwrap();
         assert_eq!(p, ResolveAnvilShaders::new(UnsetTexture::Leave, Some(2)));
         assert_eq!(p.options()["vertex-layout"], "2");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "hand-worked fixtures")]
+mod key_tests {
+    use super::*;
+
+    /// A template whose feature node has the given features set (byte 0, the object's, then one byte per feature).
+    fn template(features: &[usize]) -> AnvilShaders {
+        let mut node = vec![1u8; 1];
+        node.resize(54, 0);
+        for &n in features {
+            node[n + 1] = 1;
+        }
+        AnvilShaders {
+            pixel: Vec::new(),
+            vertex: Vec::new(),
+            programs: Vec::new(),
+            feature_node: node,
+        }
+    }
+
+    fn flags(set: &[usize], blend: u32, alpha_display: u32) -> MaterialFlags {
+        let mut booleans = [0u8; 35];
+        for &j in set {
+            booleans[j] = 1;
+        }
+        MaterialFlags {
+            blend_mode: blend,
+            alpha_display_mode: alpha_display,
+            alpha_test_value: 0,
+            booleans,
+        }
+    }
+
+    /// Each gated bit, with the gate open and shut (docs/shaders.md §6.2's table, worked by hand).
+    #[test]
+    fn a_flag_sets_its_key_bit_only_where_the_templates_feature_allows_it() {
+        let plain = 1 << 22;
+        let both_sides = [MaterialFlags::TWO_SIDED, MaterialFlags::FLIP_NORMAL_ON_BACK_FACE];
+        // TwoSided alone never; with FlipNormalOnBackFace, 0x40 only through feature 12
+        assert_eq!(
+            gbuffer_key(&flags(&[MaterialFlags::TWO_SIDED], 0, 0), &template(&[12])),
+            Ok(plain)
+        );
+        assert_eq!(gbuffer_key(&flags(&both_sides, 0, 0), &template(&[])), Ok(plain));
+        assert_eq!(
+            gbuffer_key(&flags(&both_sides, 0, 0), &template(&[12])),
+            Ok(plain | 0x40)
+        );
+        // AlphaDisplayMode 2: 0x2 through feature 13
+        assert_eq!(gbuffer_key(&flags(&[], 0, 2), &template(&[])), Ok(plain));
+        assert_eq!(gbuffer_key(&flags(&[], 0, 2), &template(&[13])), Ok(plain | 0x2));
+        assert_eq!(gbuffer_key(&flags(&[], 0, 1), &template(&[13])), Ok(plain));
+        // LayerMaterial: 0x4 through feature 10, with 0x20 beside it for a blend mode
+        let layer = [MaterialFlags::LAYER_MATERIAL];
+        assert_eq!(gbuffer_key(&flags(&layer, 0, 0), &template(&[])), Ok(plain));
+        assert_eq!(
+            gbuffer_key(&flags(&layer, 0, 0), &template(&[10])),
+            Ok(plain | 0x4)
+        );
+        assert_eq!(
+            gbuffer_key(&flags(&layer, 3, 0), &template(&[10])),
+            Ok(plain | 0x24)
+        );
+        assert_eq!(gbuffer_key(&flags(&layer, 3, 0), &template(&[])), Ok(plain));
+        // boolean 42452A12: 0x10 only with features 3 and 4 both
+        let b = [MaterialFlags::BOOLEAN_42452A12];
+        assert_eq!(gbuffer_key(&flags(&b, 0, 0), &template(&[3])), Ok(plain));
+        assert_eq!(
+            gbuffer_key(&flags(&b, 0, 0), &template(&[3, 4])),
+            Ok(plain | 0x10)
+        );
+        // everything at once
+        let all = [
+            MaterialFlags::TWO_SIDED,
+            MaterialFlags::FLIP_NORMAL_ON_BACK_FACE,
+            MaterialFlags::LAYER_MATERIAL,
+            MaterialFlags::BOOLEAN_42452A12,
+        ];
+        assert_eq!(
+            gbuffer_key(&flags(&all, 1, 2), &template(&[3, 4, 10, 12, 13])),
+            Ok(plain | 0x40 | 0x2 | 0x24 | 0x10)
+        );
+    }
+
+    #[test]
+    fn a_stored_value_the_engine_does_not_read_is_refused() {
+        assert!(gbuffer_key(&flags(&[], 16, 0), &template(&[])).is_err());
+        assert!(gbuffer_key(&flags(&[], 0, 4), &template(&[])).is_err());
+        let mut f = flags(&[], 0, 0);
+        f.booleans[7] = 2;
+        assert!(gbuffer_key(&f, &template(&[])).is_err());
+        // a feature byte that is neither 0 nor 1, where a flag asks for it
+        let mut t = template(&[]);
+        t.feature_node[13] = 5;
+        let both = flags(
+            &[MaterialFlags::TWO_SIDED, MaterialFlags::FLIP_NORMAL_ON_BACK_FACE],
+            0,
+            0,
+        );
+        assert!(gbuffer_key(&both, &t).unwrap_err().contains("feature 12"));
+        // and one it does not ask for is not read
+        assert_eq!(gbuffer_key(&flags(&[], 0, 0), &t), Ok(1 << 22));
+    }
+
+    /// The vertex stage's key keeps the shared bits (pass, 0x40, the feature flags) and takes the layout number, and
+    /// drops the Material-flag bits only the pixel stage's keys have.
+    #[test]
+    fn the_vertex_key_drops_the_pixel_stages_flag_bits_and_takes_the_layout() {
+        assert_eq!(gbuffer_vertex_key(0x40_0000, 0), 0x40_0000);
+        assert_eq!(
+            gbuffer_vertex_key(0x40_0000 | 0x40 | 0x24 | 0x2, 3),
+            0x40_0000 | 0x40 | (3 << 17)
+        );
+        assert_eq!(
+            gbuffer_vertex_key(0x40_0000 | 0x10 | 0x1, 11),
+            0x40_0000 | (11 << 17)
+        );
     }
 }

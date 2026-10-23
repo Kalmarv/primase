@@ -765,9 +765,51 @@ pub fn permutations(body: &[u8]) -> Result<Vec<Permutation<'_>>, PermutationErro
     Ok(out)
 }
 
+/// The class of a template's `CompiledMaterialTemplate` record, which follows its shader-state node.
+pub const COMPILED_MATERIAL_TEMPLATE: u32 = 0x3B9B_7477;
+
+/// Why a template's shader-state node can't be read.
+#[derive(Debug, thiserror::Error)]
+pub enum FeatureError {
+    #[error("{0} shader-state nodes (class 0xB4FD3A4C), not one")]
+    Nodes(usize),
+    #[error("the shader-state node at {0} is not followed by a CompiledMaterialTemplate record")]
+    Unterminated(usize),
+}
+
+/// The body of a template's shader-state node (class `0xB4FD3A4C`, the `FeaturePreset` node of the notes), as stored:
+/// the bytes between its class word and the class word of the `CompiledMaterialTemplate` record that follows it (54
+/// bytes on all 432 templates). The first is the object's byte, then one byte per template feature, 0 or 1: the
+/// engine's feature word `T` of the key composer (docs/shaders.md §6.2) has feature n at byte n + 1. Established by
+/// the census of `tests/template_features.rs`: on all 432 templates the bytes for T bits 3 and 4 (key bits 0x400,
+/// 0x800 and 0x200), 9 (0x1000), 10 (LayerMaterial's 0x4 and 0x20), 11 (the forward pass's 0x8), 12 (0x40), 13 (0x2)
+/// and 15 (0x80) are set exactly where the template stores a permutation key with the bit they gate.
+pub fn feature_node(body: &[u8]) -> Result<&[u8], FeatureError> {
+    let class = SHADER_STATE.to_le_bytes();
+    let mut nodes = body
+        .windows(4)
+        .enumerate()
+        .filter(|(_, w)| *w == class)
+        .map(|(at, _)| at);
+    let (Some(at), None) = (nodes.next(), nodes.next()) else {
+        return Err(FeatureError::Nodes(
+            body.windows(4).filter(|w| *w == class).count(),
+        ));
+    };
+    let start = at.saturating_add(4);
+    let next = COMPILED_MATERIAL_TEMPLATE.to_le_bytes();
+    let end = body
+        .get(start..)
+        .and_then(|rest| rest.windows(4).position(|w| w == next))
+        .map(|p| start.saturating_add(p))
+        .ok_or(FeatureError::Unterminated(at))?;
+    body.get(start..end).ok_or(FeatureError::Unterminated(at))
+}
+
 /// A template's permutations ([`permutations`]) as the tables of its [`AnvilShaders`]: each stage's keys, sorted, and
-/// each program's container once, however many permutations name it.
-pub fn shader_tables(read: &[Permutation<'_>]) -> crate::components::AnvilShaders {
+/// each program's container once, however many permutations name it; `feature_node` its shader-state node's body
+/// ([`feature_node`]).
+pub fn shader_tables(read: &[Permutation<'_>], feature_node: &[u8]) -> crate::components::AnvilShaders {
     let mut programs: Vec<(usize, Vec<u8>)> = Vec::new();
     let (mut pixel, mut vertex) = (Vec::new(), Vec::new());
     for p in read {
@@ -789,6 +831,7 @@ pub fn shader_tables(read: &[Permutation<'_>]) -> crate::components::AnvilShader
         pixel,
         vertex,
         programs: programs.into_iter().map(|(_, p)| p).collect(),
+        feature_node: feature_node.to_vec(),
     }
 }
 
@@ -839,7 +882,11 @@ mod tests {
             permutation(Stage::Vertex, 3, 100, a),
             permutation(Stage::Pixel, 4, 300, c),
         ];
-        let t = shader_tables(&read);
+        let t = shader_tables(&read, &[0, 1, 0, 1]);
+        assert_eq!(
+            (t.feature(0), t.feature(1), t.feature(2), t.feature(3)),
+            (Some(true), Some(false), Some(true), None)
+        );
         assert_eq!(t.programs, [a.to_vec(), b.to_vec(), c.to_vec()]);
         assert_eq!(
             (t.vertex.as_slice(), t.pixel.as_slice()),

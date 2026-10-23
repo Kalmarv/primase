@@ -124,6 +124,12 @@ pub enum Error {
         #[source]
         source: crate::read::template::PermutationError,
     },
+    #[error("{at:?}: {source}")]
+    Features {
+        at: At,
+        #[source]
+        source: crate::read::template::FeatureError,
+    },
     #[error(transparent)]
     TextureMap(#[from] crate::read::textures::Error),
     #[error("{at:?}: {source}")]
@@ -774,11 +780,12 @@ impl<'a> Placer<'a> {
             return Ok(e);
         }
         let read = template::permutations(body).map_err(|source| Error::Permutations { at, source })?;
+        let features = template::feature_node(body).map_err(|source| Error::Features { at, source })?;
         let e = self.world.spawn();
         if let Some(name) = self.name(at) {
             self.world.insert(e, Name(name));
         }
-        self.world.insert(e, template::shader_tables(&read));
+        self.world.insert(e, template::shader_tables(&read, features));
         self.shaders.insert(id, e);
         Ok(e)
     }

@@ -38,7 +38,7 @@ fn both_stages_are_kept() {
         for entry in entries {
             let body = archive.resource(At { forge: 0, entry }).expect("template").body;
             let read = template::permutations(&body).expect("permutations");
-            let tables = template::shader_tables(&read);
+            let tables = template::shader_tables(&read, template::feature_node(&body).expect("node"));
             templates += 1;
             for (stage, table) in [(Stage::Pixel, &tables.pixel), (Stage::Vertex, &tables.vertex)] {
                 let keys: BTreeSet<u32> = table.iter().map(|&(k, _)| k).collect();

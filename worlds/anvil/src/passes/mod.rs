@@ -20,7 +20,8 @@ pub use material::{
     AlphaChoice, Decals1Cutout, Emission, LowerAnvilMaterial, ShaderUv, fake_river_albedo, world_uv_rows,
 };
 pub use resolve_shaders::{
-    ResolveAnvilShaders, UnsetTexture, material_constants, render_state, shading_class,
+    ResolveAnvilShaders, UnsetTexture, gbuffer_key, gbuffer_vertex_key, material_constants, render_state,
+    shading_class,
 };
 pub use select::{CollisionOnly, Keep, Overlap, SelectAnvilEntities};
 pub use splat::{Splat, SplatUv};
