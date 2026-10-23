@@ -245,12 +245,14 @@ fn chain_of(scene: &Scene, joints: &mut BTreeMap<i64, SceneJoint>, t: i64) -> Re
 /// are one rig and characters under one parent are not. Rigs of the same joints (names, parents, rests) share one
 /// skeleton definition. Joints are in path id order (`JointId` their position), each with its local
 /// position, rotation and scale as stored, in the world frame; the rig sits where its top joint's parent does (the
-/// identity for a scene root). One entry per renderer, and the number of skeletons and joints made.
+/// identity for a scene root; relative to the root Transform `root` of a prefab read). One entry per renderer, and the
+/// number of skeletons and joints made.
 fn build_rigs(
     w: &mut World,
     scene: &Scene,
     skins: &[&RendererSkin],
     animators: &BTreeSet<i64>,
+    root: Option<i64>,
 ) -> Result<Rigs> {
     let mut joints: BTreeMap<i64, SceneJoint> = BTreeMap::new();
     // each renderer's joint set
@@ -354,9 +356,13 @@ fn build_rigs(
                 }
             })
             .collect();
-        let at = match joints[&top].father {
-            Some(parent) => UNITY.transform(&transform_of(&scene.world_of(parent)?)),
-            None => Transform::IDENTITY,
+        // the rig sits where its top joint's parent does: in the file, or relative to the prefab's root GameObject
+        let at = match (joints[&top].father, root) {
+            (Some(parent), Some(root)) => scene
+                .relative_to(parent, root)
+                .map_or(Transform::IDENTITY, |m| UNITY.transform(&transform_of(&m))),
+            (Some(parent), None) => UNITY.transform(&transform_of(&scene.world_of(parent)?)),
+            (None, _) => Transform::IDENTITY,
         };
         let skeleton = match shared.get(&format!("{list:?}")) {
             Some(&skeleton) => skeleton,
@@ -720,13 +726,18 @@ impl Builder<'_> {
         w: &mut World,
         scene: &Scene,
         joint_of: &BTreeMap<i64, (Entity, Entity, JointId)>,
+        root: Option<i64>,
     ) -> Result<()> {
         let mut data: BTreeMap<ObjRef, Option<ClipData>> = BTreeMap::new();
         let mut made: BTreeMap<(ObjRef, Entity), Option<Entity>> = BTreeMap::new();
         let mut bound: BTreeSet<(Entity, Entity)> = BTreeSet::new();
         let mut controllers: BTreeMap<ObjRef, Vec<ObjRef>> = BTreeMap::new();
-        for animator in scene.animators(self.player)? {
+        for animator in scene.animators_under(self.player, root)? {
             let Some(controller) = &animator.controller else {
+                self.notice(
+                    "Animators without a controller (the clips they play are chosen at run time by scripts; not bound)",
+                    1,
+                );
                 continue;
             };
             let Some(tp) = scene.transform_of(animator.game_object) else {
@@ -1251,8 +1262,44 @@ pub fn read_level_with(
     options: &LevelOptions,
     w: &mut World,
 ) -> Result<LevelReport> {
+    read_scene(player, level, None, options, w)
+}
+
+/// A character: the Animator `animator` (see [`Scene::characters`]) with everything below its GameObject, read into
+/// `w` as a prefab: its renderers (skinned ones with their skeletons, rigs and skins) placed relative to that
+/// GameObject, its colliders, and the clips of its AnimatorController bound to its rigs. The file may be a scene or
+/// an assets file holding the prefab; no terrains, lights or cameras are read.
+pub fn read_character(
+    player: &Player,
+    animator: &ObjRef,
+    options: &LevelOptions,
+    w: &mut World,
+) -> Result<LevelReport> {
+    let scene = Scene::read(player, &animator.file)?;
+    let found = scene
+        .animators(player)?
+        .into_iter()
+        .find(|a| a.animator == *animator)
+        .ok_or_else(|| {
+            invalid(format!(
+                "{}/{} is no Animator of its file",
+                animator.file, animator.path_id
+            ))
+        })?;
+    read_scene(player, &animator.file, Some(found.game_object), options, w)
+}
+
+/// The level `level`, or only the GameObject `root` of it and its descendants (a prefab).
+fn read_scene(
+    player: &Player,
+    level: &str,
+    root: Option<i64>,
+    options: &LevelOptions,
+    w: &mut World,
+) -> Result<LevelReport> {
     let scene = Scene::read(player, level)?;
-    let (renderers, skipped) = scene.renderers(player)?;
+    let root_tp = root.and_then(|go| scene.transform_of(go));
+    let (renderers, skipped) = scene.renderers_under(player, root)?;
     let mut b = Builder::new(
         player,
         LevelReport {
@@ -1260,7 +1307,7 @@ pub fn read_level_with(
             ..LevelReport::default()
         },
     );
-    let groups = scene.lod_groups_under(player, None)?;
+    let groups = scene.lod_groups_under(player, root)?;
     let mut roles = lod_roles(&renderers, &groups, &mut b.report);
     // terrains, and the renderers of their trees
     let mut trees: Vec<((Entity, usize), Renderer)> = Vec::new();
@@ -1269,7 +1316,12 @@ pub fn read_level_with(
     // a disabled terrain collider makes no tree colliders: its flag joins their state
     let mut terrain_collider_off: BTreeMap<Entity, Vec<OffFlag>> = BTreeMap::new();
     let mut prefabs: BTreeMap<String, Scene> = BTreeMap::new();
-    for t in scene.terrains(player)? {
+    let terrains = if root.is_none() {
+        scene.terrains(player)?
+    } else {
+        Vec::new()
+    };
+    for t in terrains {
         let td = TerrainData::read(player, &t.data)?;
         let e = w.spawn();
         if t.draw_trees {
@@ -1437,12 +1489,12 @@ pub fn read_level_with(
     if !candidates.is_empty() {
         let skins: Vec<&RendererSkin> = candidates.iter().map(|(_, s)| *s).collect();
         let animators: BTreeSet<i64> = scene
-            .animators(player)?
+            .animators_under(player, root)?
             .iter()
             .filter(|a| a.controller.is_some())
             .filter_map(|a| scene.transform_of(a.game_object))
             .collect();
-        let made = build_rigs(w, &scene, &skins, &animators)?;
+        let made = build_rigs(w, &scene, &skins, &animators, root_tp)?;
         b.report.skeletons = made.skeletons;
         b.report.joints = made.joints;
         joint_of = made.of_joint;
@@ -1792,10 +1844,10 @@ pub fn read_level_with(
     }
     // the clips of the Animators that animate the skeletons made: a clip lowered for each skeleton, bound to its rig
     if !joint_of.is_empty() {
-        b.bind_clips(w, &scene, &joint_of)?;
+        b.bind_clips(w, &scene, &joint_of, root)?;
     }
     // colliders: the scene's, then the terrain trees'
-    for c in scene.colliders_under(player, None)? {
+    for c in scene.colliders_under(player, root)? {
         let u = b.collider(&c)?;
         let e = w.spawn();
         w.insert(e, Name(c.path.clone()));
@@ -1829,8 +1881,17 @@ pub fn read_level_with(
         b.condition(w, e, literals, "colliders");
         b.report.tree_colliders += 1;
     }
-    let lights = scene.lights(player)?;
-    let settings = scene.render_settings(player)?;
+    // a prefab has no lights, cameras or render settings of its own
+    let lights = if root.is_none() {
+        scene.lights(player)?
+    } else {
+        Vec::new()
+    };
+    let settings = if root.is_none() {
+        scene.render_settings(player)?
+    } else {
+        None
+    };
     let sun = settings.as_ref().and_then(|s| s.sun.clone());
     let mut sun_entity = None;
     for l in &lights {
@@ -1866,7 +1927,11 @@ pub fn read_level_with(
         b.condition(w, e, literals, "lights");
     }
     b.report.lights = lights.len();
-    let cameras = scene.cameras(player)?;
+    let cameras = if root.is_none() {
+        scene.cameras(player)?
+    } else {
+        Vec::new()
+    };
     for c in &cameras {
         let e = w.spawn();
         w.insert(e, Name(c.path.clone()));

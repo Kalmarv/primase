@@ -166,6 +166,14 @@ pub struct Animator {
     pub enabled: bool,
 }
 
+/// A character: an Animator with skinned renderers on its GameObject or below it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Character {
+    pub animator: Animator,
+    /// The SkinnedMeshRenderers on the Animator's GameObject and its descendants.
+    pub skinned_renderers: usize,
+}
+
 /// A skinned renderer's bones: the Transforms (path ids in the renderer's file) its mesh's bone slots name, in slot
 /// order, and its root bone; a null entry stays `None`.
 #[derive(Clone, Debug, PartialEq)]
@@ -530,6 +538,39 @@ impl Scene {
         }))
     }
 
+    /// The characters of the file: its Animators with skinned renderers below them, in the order of its object table.
+    pub fn characters(&self, player: &Player) -> Result<Vec<Character>> {
+        let file = self.file.as_str();
+        let r = |pid: i64| ObjRef {
+            file: file.to_owned(),
+            path_id: pid,
+        };
+        let mut skinned = Vec::new();
+        for o in &player.file(file)?.objects {
+            if player.class_name(&r(o.path_id)) == Some("SkinnedMeshRenderer") {
+                let go = path_id(&player.decode(&r(o.path_id))?, "m_GameObject")?;
+                skinned.extend(self.transform_of(go));
+            }
+        }
+        let mut out = Vec::new();
+        for animator in self.animators(player)? {
+            let Some(tp) = self.transform_of(animator.game_object) else {
+                continue;
+            };
+            let count = skinned
+                .iter()
+                .filter(|&&s| self.relative_to(s, tp).is_some())
+                .count();
+            if count > 0 {
+                out.push(Character {
+                    animator,
+                    skinned_renderers: count,
+                });
+            }
+        }
+        Ok(out)
+    }
+
     /// The names of the GameObjects from the child of Transform `root` down to Transform `tp` joined by `/` (empty
     /// for `root` itself): a path as an Animator's clips name their targets. `None` when `root` is not `tp` or one of
     /// its ancestors.
@@ -554,6 +595,18 @@ impl Scene {
 
     /// The Animators of the file, in the order of its object table.
     pub fn animators(&self, player: &Player) -> Result<Vec<Animator>> {
+        self.animators_under(player, None)
+    }
+
+    /// The Animators on the GameObject `root` and its descendants (a prefab's), all of the file's with `None`.
+    pub fn animators_under(&self, player: &Player, root: Option<i64>) -> Result<Vec<Animator>> {
+        let root_tp = match root {
+            Some(go) => Some(
+                self.transform_of(go)
+                    .ok_or_else(|| invalid(format!("GameObject {go} has no transform")))?,
+            ),
+            None => None,
+        };
         let file = self.file.as_str();
         let r = |pid: i64| ObjRef {
             file: file.to_owned(),
@@ -569,6 +622,9 @@ impl Scene {
             let Some(tp) = self.transform_of(go) else {
                 continue;
             };
+            if root_tp.is_some_and(|r| self.relative_to(tp, r).is_none()) {
+                continue;
+            }
             let pointer = |k: &str| -> Result<Option<ObjRef>> {
                 a.get(k)
                     .map(|p| player.resolve(file, p))
