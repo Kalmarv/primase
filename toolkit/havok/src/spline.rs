@@ -39,7 +39,7 @@
 //! index drives no bone.
 
 use crate::animation::{Animation, Binding, QsTransform, Skeleton, SplineData, Tracks};
-use crate::{Result, invalid};
+use crate::{Error, Result, invalid};
 
 /// The knots and degree a spline track's control points are evaluated with.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -614,12 +614,21 @@ fn block(r: &mut Reader, tracks: usize, s: &SplineData, index: usize) -> Result<
     let masks = (0..tracks).map(|_| mask(r)).collect::<Result<Vec<_>>>()?;
     r.pad(4)?;
     let mut out = Vec::with_capacity(tracks);
-    for m in masks {
-        let position = vector(r, m.position_flags, m.position)?;
+    for (track, m) in masks.into_iter().enumerate() {
+        // a failure names where it is: the block, the track and which of its three parts
+        let at = |part: &'static str| {
+            move |e: Error| {
+                invalid(
+                    e.offset,
+                    format!("block {index} track {track} {part}: {}", e.detail),
+                )
+            }
+        };
+        let position = vector(r, m.position_flags, m.position).map_err(at("position"))?;
         r.pad(4)?;
-        let rotation = rotation(r, m.rotation_flags, m.rotation)?;
+        let rotation = rotation(r, m.rotation_flags, m.rotation).map_err(at("rotation"))?;
         r.pad(4)?;
-        let scale = vector(r, m.scale_flags, m.scale)?;
+        let scale = vector(r, m.scale_flags, m.scale).map_err(at("scale"))?;
         r.pad(4)?;
         out.push(Track {
             position,

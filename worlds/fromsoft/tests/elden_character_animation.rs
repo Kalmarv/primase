@@ -146,5 +146,59 @@ fn elden_ring_clips_move_onto_the_model_by_the_games_own_rule() -> Result<()> {
     let (clips, key_times, pairs, _) = check("c2030", "a000_000000;a000_041000", &decoder, &install)?;
     assert_eq!((clips, pairs), (2, 184));
     assert!(key_times > 100);
+    // M3: a character whose own anibnd holds only the skeleton and the load lists of its divisions
+    // (`c2010_div00.blf`, `c2010_div01.blf` name `c2010_div00.anibnd`, `c2010_div01.anibnd`: 82 and 86 animations)
+    let (clips, key_times, pairs, _) = check("c2010", "a000_000000;a000_003010", &decoder, &install)?;
+    assert_eq!((clips, pairs), (2, 126));
+    assert!(key_times > 100);
+    Ok(())
+}
+
+/// M3: the animation binders of a character are the ones its markers (`.txt`, or `.blf` in Elden Ring) name; the one
+/// animation of the install the reader refuses says where (`c2030/a001_009000`: a NaN stored in the scale of the bone
+/// `R_Egg`, a leaf bone of the held item).
+#[test]
+fn elden_ring_divisions_are_read_from_the_blf_markers_and_a_refusal_names_its_bone() -> Result<()> {
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let mut w = World::new();
+    let report = read_character_with(
+        &install,
+        "c2010",
+        &decoder,
+        CharacterOptions {
+            animations: Some("c2010".into()),
+        },
+        &mut w,
+    )?;
+    let a = report.animations.unwrap();
+    assert_eq!(a.companions, ["c2010_div00", "c2010_div01"]);
+    assert_eq!((a.bones, a.animations), (126, 168));
+    assert!(a.refused.is_empty(), "{:?}", a.refused);
+    let mut w = World::new();
+    let report = read_character_with(
+        &install,
+        "c2030",
+        &decoder,
+        CharacterOptions {
+            animations: Some("c2030".into()),
+        },
+        &mut w,
+    )?;
+    let a = report.animations.unwrap();
+    let why = a.refused.keys().next().unwrap();
+    assert!(
+        why.contains("track 119 scale") && why.contains("the track drives the bone R_Egg"),
+        "{:?}",
+        a.refused
+    );
     Ok(())
 }

@@ -2,11 +2,14 @@
 //! (`skeleton.hkx`) as a `core.skeleton` of its own and each animation as a `havok.animation` (the spline compressed
 //! tracks as stored, the binding that says which bone each drives), one entity each, named by the file (`a000_003000`).
 //!
-//! A binder can name more binders its animations are in: the player's (`c0000.anibnd`) holds a skeleton, event files
+//! A binder can name more binders its animations are in: Sekiro's player (`c0000.anibnd`) holds a skeleton, event files
 //! and a load-order marker (`c0000_a000_hi.txt`) for each of the binders that hold the animations (`c0000_a000_hi.anibnd`,
-//! ...). Those are listed by the data: a marker member of the binder named `<id>_<set>` whose binder the archive holds
-//! is read too, in the order the binder lists them, its animations binding the skeleton by name as any other. Markers
-//! of other characters (`delayload_c0000_c1020.txt`) name no binder of this one and stay unread.
+//! ...); Elden Ring's characters keep theirs in divisions (`c2010.anibnd` holds the skeleton and `c2010_div00.blf`,
+//! `c2010_div01.blf`, the load lists of `c2010_div00.anibnd` and `c2010_div01.anibnd`; the player's markers are `.txt`
+//! as Sekiro's). Those are listed by the data: a marker member (`.txt` or `.blf`) of the binder named `<id>_<set>`
+//! whose binder the archive holds is read too, in the order the binder lists them, its animations binding the skeleton
+//! by name as any other. Markers of other characters (`delayload_c0000_c1020.txt`) name no binder of this one and stay
+//! unread.
 //!
 //! Nothing is lowered here: a program chooses what the clips are (`lower-havok-clips`: what stands in for a component a
 //! track does not state, the keys for each frame, which animations, the root motion) and how they reach the model's
@@ -71,8 +74,8 @@ fn binder_path(stem: &str) -> String {
     format!("/chr/{stem}.anibnd.dcx")
 }
 
-/// The binders a binder's marker members name as this character's (`<id>_<set>.txt` with an archive binder of that
-/// name), in the binder's order, each once.
+/// The binders a binder's marker members name as this character's (`<id>_<set>.txt` or `.blf` with an archive binder of
+/// that name), in the binder's order, each once.
 fn companions(archive: &Archive, id: &str, binder: &Binder) -> Vec<String> {
     let prefix = format!("{id}_");
     let mut out: Vec<String> = Vec::new();
@@ -81,7 +84,7 @@ fn companions(archive: &Archive, id: &str, binder: &Binder) -> Vec<String> {
             continue;
         };
         let file = file_name(name);
-        let Some(set) = file.strip_suffix(".txt") else {
+        let Some(set) = file.strip_suffix(".txt").or_else(|| file.strip_suffix(".blf")) else {
             continue;
         };
         if set.starts_with(&prefix) && archive.contains(&binder_path(set)) && !out.iter().any(|o| o == set) {
@@ -123,7 +126,11 @@ fn hold(
             continue;
         }
         if !lower.ends_with(".hkx") {
-            if !markers.iter().any(|m| file_name(name) == format!("{m}.txt")) {
+            if !markers.iter().any(|m| {
+                [".txt", ".blf"]
+                    .iter()
+                    .any(|ext| file_name(name) == format!("{m}{ext}"))
+            }) {
                 report.unread.push(file_name(name));
             }
             continue;

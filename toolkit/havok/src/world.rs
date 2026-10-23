@@ -24,7 +24,7 @@ use primase_core::{
     Property, Rest, RootMotion, RootSpace, Skeleton as CoreSkeleton, World,
 };
 
-use crate::animation::{Container, QsTransform, ReferenceFrame, Skeleton, Tracks};
+use crate::animation::{Binding, Container, QsTransform, ReferenceFrame, Skeleton, Tracks};
 use crate::invalid;
 use crate::spline::{Absent, Fallback, SplineAnimation};
 
@@ -167,7 +167,7 @@ pub fn insert_animation(
     if !matches!(animation.tracks, Tracks::Spline(_)) {
         return Ok(None);
     }
-    let spline = SplineAnimation::parse(animation)?;
+    let spline = SplineAnimation::parse(animation).map_err(|e| name_the_bone(e, binding, havok))?;
     if binding.transform_track_to_bone.len() != animation.transform_tracks {
         return Err(invalid(
             0,
@@ -199,6 +199,26 @@ pub fn insert_animation(
     );
     w.insert(e, Name(name.to_owned()));
     Ok(Some(e))
+}
+
+/// A spline error that names a track ("block 0 track 119 scale: ...") also names the bone `binding` has that track
+/// drive in `havok`, so the refusal of an animation says which bone's data it is.
+fn name_the_bone(e: crate::Error, binding: &Binding, havok: &Skeleton) -> crate::Error {
+    let bone = e
+        .detail
+        .split_once(" track ")
+        .and_then(|(_, rest)| rest.split(' ').next())
+        .and_then(|t| t.parse::<usize>().ok())
+        .and_then(|t| binding.transform_track_to_bone.get(t))
+        .and_then(|&b| usize::try_from(b).ok())
+        .and_then(|b| havok.bones.get(b));
+    match bone {
+        Some(bone) => invalid(
+            e.offset,
+            format!("{} (the track drives the bone {})", e.detail, bone.name),
+        ),
+        None => e,
+    }
 }
 
 /// Which animations `lower-havok-clips` lowers.
@@ -968,6 +988,54 @@ mod tests {
         manager.run(&mut w, &pipeline, &mut report).unwrap();
         assert!(w.has::<Clip>(e));
         assert_eq!(w.verify_components(), vec![]);
+    }
+
+    /// A refusal that names a track names the bone it drives (the one refused Elden Ring animation: block 0 track 119
+    /// scale of `c2030/a001_009000`, a leaf bone `R_Egg`, stored with NaN bounds).
+    #[test]
+    fn a_refused_track_names_the_bone_it_drives() {
+        let skeleton = Skeleton {
+            name: "c0".into(),
+            parents: vec![-1, 0],
+            bones: ["Master", "R_Egg"]
+                .map(|n| crate::animation::Bone {
+                    name: n.into(),
+                    lock_translation: false,
+                })
+                .to_vec(),
+            reference_pose: vec![rest([0.0; 3]), rest([0.0; 3])],
+            reference_floats: vec![],
+            float_slots: vec![],
+        };
+        let binding = Binding {
+            original_skeleton_name: "c0".into(),
+            animation: Some(0),
+            transform_track_to_bone: vec![0, 1],
+            float_track_to_slot: vec![],
+            partition_indices: vec![],
+            blend_hint: 0,
+        };
+        let e = name_the_bone(
+            invalid(0x4214, "block 0 track 1 scale: a stored float is not finite"),
+            &binding,
+            &skeleton,
+        );
+        assert!(
+            e.detail.ends_with("(the track drives the bone R_Egg)"),
+            "{}",
+            e.detail
+        );
+        assert_eq!(e.offset, 0x4214);
+        // an error that names no track, or a track the binding lacks, is passed on as it is
+        for detail in [
+            "the block runs past the animation data",
+            "block 0 track 9 scale: x",
+        ] {
+            assert_eq!(
+                name_the_bone(invalid(1, detail), &binding, &skeleton).detail,
+                detail
+            );
+        }
     }
 
     #[test]
