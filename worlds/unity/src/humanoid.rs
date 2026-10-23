@@ -1031,8 +1031,13 @@ mod tests {
     fn the_trunks_frame_and_centre_of_mass() {
         let h = trunk();
         let o = posed_origins(&h, &[0.0; MUSCLES]).unwrap();
+        // the pose's translations are f32 (-0.4 is stored as -0.4000000059604645)
         assert_eq!(o[0], Some([0.0; 3]));
-        assert_eq!(o[14], Some([-0.4, 0.5, 0.0]));
+        let arm = o[14].unwrap();
+        assert!(
+            (0..3).all(|i| (arm[i] - [-0.4, 0.5, 0.0][i]).abs() < 1e-6),
+            "{arm:?}"
+        );
         let axes = body_axes(&o).unwrap();
         for (axis, want) in axes
             .iter()
