@@ -18,8 +18,8 @@ pub struct Vertex {
     pub colors: Vec<[f32; 4]>,
     /// A SpeedTree vertex's stored members in layout order, each as its format gives it to a vertex program (four
     /// lanes, unused ones zero): half floats as floats, normalized unsigned bytes as `x / 255`, floats as stored.
-    /// What each member stands for is the game's shader's, not the layout's semantic: nothing else of the vertex is
-    /// set.
+    /// What each member stands for is the game's shader's, not the layout's semantic: the position, normal, one
+    /// tangent and one UV set are set from them ([`super::speedtree_layout`]), a billboard card's are not.
     pub speedtree: Vec<[f32; 4]>,
 }
 
@@ -74,6 +74,29 @@ impl Vertex {
             at += n;
         }
         Ok(())
+    }
+
+    /// A SpeedTree vertex's attributes from its stored members (indices into [`Vertex::speedtree`], the roles
+    /// [`super::SpeedTreeLayout::Geometry`] names): the position and UV0 as stored, the normal unpacked, and the
+    /// tangent of the ordinary programs' convention. A SpeedTree pixel program bends the normal by its normal map's
+    /// `x` along the stored tangent `T` and its `y` along `-w (N × T)`, `w` the 1 its vertex program passes; an
+    /// ordinary one bends it by `x` along `w (N × T')` and `y` along `T'`. `T' = T × N` with `w` 1 is the same frame
+    /// where `T` is perpendicular to `N` (the stored pairs are within a byte's precision of it).
+    pub(super) fn speedtree_attributes(&mut self, position: usize, uv: usize, normal: usize, tangent: usize) {
+        let unpack = |m: [f32; 4]| [m[0] * 2. - 1., m[1] * 2. - 1., m[2] * 2. - 1.];
+        let p = self.speedtree[position];
+        let t = self.speedtree[uv];
+        let n = unpack(self.speedtree[normal]);
+        let s = unpack(self.speedtree[tangent]);
+        self.position = [p[0], p[1], p[2]];
+        self.uvs = vec![[t[0], t[1], 0.]];
+        self.normal = n;
+        self.tangents = vec![[
+            s[1] * n[2] - s[2] * n[1],
+            s[2] * n[0] - s[0] * n[2],
+            s[0] * n[1] - s[1] * n[0],
+            1.,
+        ]];
     }
 
     pub(super) fn read(&mut self, data: &[u8], members: &[Member], uv_factor: f32) -> Result<()> {

@@ -100,8 +100,9 @@ const SEKIRO_CLASSES: &ClassTable = &[
 
 /// Elden Ring's families, from its material binaries' shader names: skies and cloud cards (`M[Sky9]`,
 /// `M[Sky]_Cloudiness_A`, `M[Clouds5]`, `M[DistantClouds]_001`, `M[Atmosphere][Clouds]_001`), light shafts, shadow
-/// proxies (`C[AMSN]_Shadow`), water (`M[Water][river]`, `M[MuddyWater]`, `M[Waterfall2]`), mesh decals
-/// (`M[AMSN_V]_MeshDecalBlend`) and translucent foliage (`M[AMSN_V][Ov_N][Translucency]`).
+/// proxies (`C[AMSN]_Shadow`), SpeedTree's billboard cards (`SpeedTree_billboard`), water (`M[Water][river]`,
+/// `M[MuddyWater]`, `M[Waterfall2]`), mesh decals (`M[AMSN_V]_MeshDecalBlend`) and translucent foliage
+/// (`M[AMSN_V][Ov_N][Translucency]`).
 const ELDEN_CLASSES: &ClassTable = &[
     (
         Target::Shader,
@@ -122,6 +123,11 @@ const ELDEN_CLASSES: &ClassTable = &[
         Target::Shader,
         Pattern::Suffix("_Shadow"),
         Class::Skip(SkipClass::Shadow),
+    ),
+    (
+        Target::Shader,
+        Pattern::Prefix("SpeedTree_billboard"),
+        Class::Skip(SkipClass::Billboard),
     ),
     (Target::Shader, Pattern::Contains("Water"), Class::Water),
     (Target::Shader, Pattern::Contains("MeshDecal"), Class::Decal),

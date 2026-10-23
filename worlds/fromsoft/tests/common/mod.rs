@@ -5,10 +5,10 @@ use primase_core::pass::{PassManager, PassRegistry, RunReport};
 
 /// The geometry the earlier reader produced by itself, as explicit choices: distant backdrops left out, static
 /// meshes posed, the finest level of detail, each material's UV tiling applied, windings repaired from the stored
-/// normals, degenerate triangles dropped, sky cards, light volumes and shadow proxies left out, blocker cards
-/// recorded rather than drawn.
+/// normals, degenerate triangles dropped, sky cards, light volumes, shadow proxies and billboard cards left out,
+/// blocker cards recorded rather than drawn.
 pub const LEGACY_GEOMETRY: &str = "drop-fromsoft-far, fromsoft-apply-rigid-skinning, \
-    lower-fromsoft-geometry{pose=rigid,uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow,blocker-cards=record}, \
+    lower-fromsoft-geometry{pose=rigid,uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow+billboard,blocker-cards=record}, \
     select-lod{form=finest}";
 
 /// The collision the earlier reader produced by itself, as explicit choices: map collision parts of hit filters 8 and

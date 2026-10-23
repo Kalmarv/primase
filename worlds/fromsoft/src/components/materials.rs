@@ -21,15 +21,24 @@ pub enum SkipClass {
     /// Shadow-only proxies.
     #[serde(rename = "shadow proxy")]
     Shadow,
+    /// SpeedTree billboard cards: far stand-ins whose program turns them to the camera (no position of their own).
+    #[serde(rename = "billboard card")]
+    Billboard,
 }
 impl SkipClass {
-    pub const ALL: [SkipClass; 3] = [SkipClass::Sky, SkipClass::LightVolume, SkipClass::Shadow];
-    /// The word a pass option names it by (`sky`, `light-volume`, `shadow`).
+    pub const ALL: [SkipClass; 4] = [
+        SkipClass::Sky,
+        SkipClass::LightVolume,
+        SkipClass::Shadow,
+        SkipClass::Billboard,
+    ];
+    /// The word a pass option names it by (`sky`, `light-volume`, `shadow`, `billboard`).
     pub fn word(self) -> &'static str {
         match self {
             SkipClass::Sky => "sky",
             SkipClass::LightVolume => "light-volume",
             SkipClass::Shadow => "shadow",
+            SkipClass::Billboard => "billboard",
         }
     }
     /// The class an option word names.

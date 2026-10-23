@@ -142,7 +142,8 @@ pub struct Bone {
 pub struct Model {
     pub bones: Vec<Bone>,
     pub version: u32,
-    /// A SpeedTree model ([`is_speedtree`]): its vertices carry their stored members in [`Vertex::speedtree`] only.
+    /// A SpeedTree model ([`is_speedtree`]): its vertices carry their stored members in [`Vertex::speedtree`], and
+    /// the attributes its programs read from them ([`speedtree_layout`]).
     pub speedtree: bool,
     pub layouts: Vec<Vec<Member>>,
     pub materials: Vec<Material>,
@@ -550,6 +551,27 @@ impl Model {
                     }
                 }
             }
+            if speedtree {
+                // one stored stream per mesh: the members' indices are its layout's
+                let &[(l, ..)] = &streams[..] else {
+                    return Err(invalid(
+                        v.format,
+                        o,
+                        "a SpeedTree mesh with other than one vertex buffer",
+                    ));
+                };
+                if let SpeedTreeLayout::Geometry {
+                    position,
+                    uv,
+                    normal,
+                    tangent,
+                } = speedtree_layout(&layouts[l])?
+                {
+                    for vert in &mut vertices {
+                        vert.speedtree_attributes(position, uv, normal, tangent);
+                    }
+                }
+            }
             let mut mesh_faces = Vec::new();
             for f in face_refs {
                 let fs = faces[f]
@@ -590,7 +612,67 @@ impl Model {
 /// Whether a FLVER stores SpeedTree vegetation: the high half of its header word at 0x68 is 0x8000. Its layouts' members
 /// name their stream and whether the file stores them ([`Member::stored`]), with offsets per stream; [`Model::read`]
 /// reads the stored ones into [`Vertex::speedtree`] (the reference reader, SoulsFormatsNEXT ee1dd61, refuses every
-/// one of Elden Ring's 119).
+/// one of Elden Ring's 119) and the vertex's attributes from them ([`speedtree_layout`]).
 pub fn is_speedtree(data: &[u8]) -> bool {
     data.starts_with(b"FLVER\0L\0") && data.get(0x6a..0x6c) == Some(&[0x00, 0x80][..])
+}
+
+/// What a SpeedTree layout's stored members are to the game's SpeedTree vertex programs ([`speedtree_layout`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpeedTreeLayout {
+    /// Branches, fronds and leaves: the indices, among the stored members, of the rest position (`xyz`), UV0 (`xy`),
+    /// the normal and the SpeedTree tangent (unsigned bytes, unpacked as `x * 2 - 1`).
+    Geometry {
+        position: usize,
+        uv: usize,
+        normal: usize,
+        tangent: usize,
+    },
+    /// A billboard card (`Float4` UV2, `Float2` UV3): its program turns the card to the camera and picks its image
+    /// in the atlas by the view's angle, so its vertices have no position of their own.
+    Billboard,
+}
+
+/// The roles of a SpeedTree layout's stored members, as Elden Ring's SpeedTree G-buffer vertex programs read them:
+/// with the per-instance stream an identity instance (position 0, scale 1, basis vectors x and y, the level-of-detail
+/// blend at the finest level) and the wind off, each program outputs `Half4` UV2's `xyz` as the position, `Half4`
+/// UV3's `xy` as the texture coordinate, and its layout's two `UByte4Norm` members, in order, as the normal and the
+/// tangent (`tests/speedtree.rs` runs every mesh's own program on its vertices). The billboard cards' layout is
+/// [`SpeedTreeLayout::Billboard`]; another layout is refused.
+pub fn speedtree_layout(members: &[Member]) -> Result<SpeedTreeLayout> {
+    let stored: Vec<&Member> = members.iter().filter(|m| m.stored).collect();
+    let refused = || {
+        invalid(
+            "FLVER SpeedTree layout",
+            0,
+            "stored members of no known SpeedTree layout",
+        )
+    };
+    let uv = |index: u32, kind: u32| {
+        stored
+            .iter()
+            .position(|m| m.semantic == 5 && m.index == index && m.kind == kind)
+    };
+    if stored.len() == 2 && uv(2, 3) == Some(0) && uv(3, 1) == Some(1) {
+        return Ok(SpeedTreeLayout::Billboard);
+    }
+    let (Some(position), Some(texture)) = (uv(2, 0x2e), uv(3, 0x2e)) else {
+        return Err(refused());
+    };
+    let bytes: Vec<usize> = (0..stored.len()).filter(|&k| stored[k].kind == 0x13).collect();
+    let &[normal, tangent] = &bytes[..] else {
+        return Err(refused());
+    };
+    if stored
+        .iter()
+        .any(|m| m.semantic != 5 || !matches!(m.kind, 0x13 | 0x2d | 0x2e))
+    {
+        return Err(refused());
+    }
+    Ok(SpeedTreeLayout::Geometry {
+        position,
+        uv: texture,
+        normal,
+        tangent,
+    })
 }

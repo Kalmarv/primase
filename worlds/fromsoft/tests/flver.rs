@@ -273,17 +273,29 @@ fn a_mesh_without_face_sets_or_buffers_is_empty_and_its_sentinel_bounds_are_unch
     assert!(Model::read(&bad).is_err());
 }
 
-/// The fixture as a SpeedTree model: two members of an instance stream the file does not store (stream 1, modifier
-/// 0x8000, `Float4` at 0 and 16), then the stored stream: a `Half4` at 0 and a `Float4` at 8 (24 bytes, the buffer's
-/// stride); each vertex stores the halves 1, 2, 3, 0 and the floats 4, 5, 6, 7 (plus its index in the last).
+/// The fixture as a SpeedTree model, with six layout members (40 bytes inserted at 400, after the fixture's four member
+/// records; the offsets at or past it move): two members of an instance stream the file does not store (stream 1,
+/// modifier 0x8000, `Float4` at 0 and 16), then the stored stream (24 bytes, the buffer's stride) as a branch's layout
+/// stores it: `Half4` UV2 at 0 (the position), `Half4` UV3 at 8 (the texture coordinate), `UByte4Norm` UV4 and UV5 at
+/// 16 and 20 (the normal and the tangent). Vertex `i` stores the position `i == 1` along x and `i == 2` along y
+/// (halves, 0.5 in w), the coordinate (0.5, 0.25), the normal bytes 255, 0, 0 and the tangent bytes 0, 0, 255.
 fn speedtree_fixture() -> Vec<u8> {
-    let mut b = fixture();
+    let f = fixture();
+    let mut b = f[..400].to_vec();
+    b.extend([0; 40]);
+    b.extend(&f[400..]);
+    for (o, v) in [(12, 448), (128, 408), (132, 410), (196, 400), (204, 404)] {
+        put(&mut b, o, v + 40);
+    }
+    put(&mut b, 272, 6);
     b[0x6a..0x6c].copy_from_slice(&[0x00, 0x80]);
     for (i, (word, offset, kind)) in [
         (0x8000_0001u32, 0, 3),
         (0x8000_0001, 16, 3),
         (0, 0, 0x2e),
-        (0, 8, 3),
+        (0, 8, 0x2e),
+        (0, 16, 0x13),
+        (0, 20, 0x13),
     ]
     .into_iter()
     .enumerate()
@@ -296,13 +308,15 @@ fn speedtree_fixture() -> Vec<u8> {
         put(&mut b, o + 16, i as u32);
     }
     for i in 0..3 {
-        let o = 454 + i * 24;
-        for (j, h) in [0x3c00u16, 0x4000, 0x4200, 0].into_iter().enumerate() {
+        let o = 494 + i * 24;
+        let one = |on: bool| if on { 0x3c00u16 } else { 0 };
+        for (j, h) in [one(i == 1), one(i == 2), 0, 0x3800, 0x3800, 0x3400, 0, 0]
+            .into_iter()
+            .enumerate()
+        {
             b[o + j * 2..o + j * 2 + 2].copy_from_slice(&h.to_le_bytes());
         }
-        for (j, x) in [4f32, 5., 6., 7. + i as f32].into_iter().enumerate() {
-            put(&mut b, o + 8 + j * 4, x.to_bits());
-        }
+        b[o + 16..o + 24].copy_from_slice(&[255, 0, 0, 0, 0, 0, 255, 0]);
     }
     b
 }
@@ -316,16 +330,61 @@ fn a_speedtree_model_keeps_its_stored_members_and_lists_the_instance_stream() {
         .collect();
     assert_eq!(
         stored,
-        [(false, 0, 3), (false, 16, 3), (true, 0, 0x2e), (true, 8, 3)]
+        [
+            (false, 0, 3),
+            (false, 16, 3),
+            (true, 0, 0x2e),
+            (true, 8, 0x2e),
+            (true, 16, 0x13),
+            (true, 20, 0x13)
+        ]
     );
     for (i, v) in m.meshes[0].vertices.iter().enumerate() {
-        assert_eq!(v.speedtree, [[1., 2., 3., 0.], [4., 5., 6., 7. + i as f32]]);
-        // nothing else of a SpeedTree vertex is set
-        assert_eq!(v.position, [0.; 3]);
-        assert!(v.uvs.is_empty());
+        let at = |on: bool| if on { 1. } else { 0. };
+        assert_eq!(
+            v.speedtree,
+            [
+                [at(i == 1), at(i == 2), 0., 0.5],
+                [0.5, 0.25, 0., 0.],
+                [1., 0., 0., 0.],
+                [0., 0., 1., 0.]
+            ]
+        );
     }
-    // its members are its shader's: no geometry is decoded from them
-    assert!(m.decode(0, 0).unwrap_err().to_string().contains("SpeedTree"));
+}
+#[test]
+fn a_speedtree_vertex_takes_its_attributes_from_the_members_its_programs_read() {
+    let m = Model::read(&speedtree_fixture()).unwrap();
+    let v = &m.meshes[0].vertices[1];
+    assert_eq!(v.position, [1., 0., 0.]);
+    assert_eq!(v.uvs, [[0.5, 0.25, 0.]]);
+    // the bytes unpacked as x * 2 - 1
+    assert_eq!(v.normal, [1., -1., -1.]);
+    // the tangent of the ordinary convention: the stored one (-1, -1, 1) crossed with the normal, w 1
+    assert_eq!(v.tangents, [[2., 0., 2., 1.]]);
+    // and the geometry decodes as an ordinary model's: positions mirrored in z, the normal of unit length
+    let part = m.decode(0, 0).unwrap().unwrap();
+    assert_eq!(part.mesh.positions[1], [1., 0., 0.]);
+    assert_eq!(part.mesh.uv[1], [0.5, 0.25]);
+    let s = 1. / 3f32.sqrt();
+    for (got, want) in part.mesh.normals[1].iter().zip([s, -s, s]) {
+        assert!((got - want).abs() < 1e-6, "{:?}", part.mesh.normals[1]);
+    }
+}
+#[test]
+fn a_speedtree_billboard_card_is_read_and_refused_as_geometry() {
+    // the stored stream as a billboard's: Float4 UV2 at 0 and Float2 UV3 at 16 (the same 24 bytes)
+    let mut b = speedtree_fixture();
+    put(&mut b, 272, 4);
+    put(&mut b, 320 + 2 * 20 + 8, 3);
+    put(&mut b, 320 + 3 * 20 + 4, 16);
+    put(&mut b, 320 + 3 * 20 + 8, 1);
+    let m = Model::read(&b).unwrap();
+    let v = &m.meshes[0].vertices[0];
+    assert_eq!(v.speedtree.len(), 2);
+    assert_eq!(v.position, [0.; 3]);
+    assert!(v.uvs.is_empty() && v.tangents.is_empty());
+    assert!(m.decode(0, 0).unwrap_err().to_string().contains("billboard"));
 }
 #[test]
 fn speedtree_layouts_are_read_strictly() {
@@ -337,10 +396,19 @@ fn speedtree_layouts_are_read_strictly() {
     let mut b = speedtree_fixture();
     put(&mut b, 320 + 3 * 20 + 4, 12);
     assert!(Model::read(&b).unwrap_err().to_string().contains("noncontiguous"));
-    // a stored type the SpeedTree vertex does not decode (Float3 at 0; the stride no longer adds up either way)
+    // a stored type the SpeedTree vertex does not decode (UByte4 at 16: the same size, not one it reads)
     let mut b = speedtree_fixture();
-    put(&mut b, 320 + 2 * 20 + 8, 0x11);
+    put(&mut b, 320 + 4 * 20 + 8, 0x11);
     assert!(Model::read(&b).is_err());
+    // a layout of no known roles: one UByte4Norm member, the other a Half2
+    let mut b = speedtree_fixture();
+    put(&mut b, 320 + 5 * 20 + 8, 0x2d);
+    assert!(
+        Model::read(&b)
+            .unwrap_err()
+            .to_string()
+            .contains("SpeedTree layout")
+    );
     // the same layout in an ordinary model is refused: its instance members are not contiguous with the stored ones
     let mut b = speedtree_fixture();
     b[0x6a..0x6c].copy_from_slice(&[0, 0]);

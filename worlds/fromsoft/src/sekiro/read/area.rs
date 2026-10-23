@@ -2,14 +2,13 @@
 //! materials, texture files, layered-shader programs, collision files and bodies, lights, hang edges and spawn points,
 //! selected and in the world frame, as source records. What differs between the games and is not stated by their files
 //! (where a map keeps its files, how objects are found, tile parents) is [`crate::Game`]'s; what Elden Ring's read does
-//! not cover yet (material binaries and the textures they bind, asset collision, world states, spawn points, SpeedTree
-//! models) is in its notices.
+//! not cover yet (world states, materials without a definition) is in its notices.
 use super::{collision, extras, objects, shaders, shadows, states, textures};
 use crate::sekiro::source::{self, Region};
 use crate::{
     Archive, Binder, Game, Install, Result,
     dcx::Decoder,
-    flver::{Model, is_speedtree},
+    flver::Model,
     invalid, materials,
     msb::{MapLayout, PartKind},
     mtd::MaterialDefinition,
@@ -84,9 +83,6 @@ pub struct Report {
     pub unread_metaparams: Vec<String>,
     /// Distinct placed models (`obj/<model>`, `asset/<model>`, `<map>/<model>`) the archive does not hold.
     pub missing_models: Vec<String>,
-    /// Distinct placed models stored as SpeedTree FLVERs, which the reader does not decode, and their placements.
-    pub speedtree_models: Vec<String>,
-    pub skipped_speedtree: usize,
     /// The larger maps whose parts for this map were read (`parents: include`), and those parts.
     pub parent_maps: Vec<String>,
     pub parent_placements: usize,
@@ -122,12 +118,6 @@ impl Report {
             out.push(listed(
                 "placed models not found in the archive",
                 &self.missing_models,
-            ));
-        }
-        if !self.speedtree_models.is_empty() {
-            out.push(listed(
-                "SpeedTree models not decoded: their placements are not read",
-                &self.speedtree_models,
             ));
         }
         if !self.missing_shader_bundles.is_empty() {
@@ -184,11 +174,6 @@ impl Report {
                 self.skipped_empty,
                 NoticeKind::Unsupported,
                 "placements of models whose face sets use no vertex",
-            ),
-            (
-                self.skipped_speedtree,
-                NoticeKind::Unsupported,
-                "placements of SpeedTree models, not read",
             ),
             (
                 self.undefined_materials,
@@ -446,9 +431,8 @@ struct Placed {
     offset: [f64; 2],
 }
 
-/// [`read_area`] for `install`'s game: what differs is [`crate::Game`]'s. Elden Ring's read does not resolve material
-/// binaries, read asset collision, world states or spawn points, or decode SpeedTree models yet; each is in the
-/// report's notices.
+/// [`read_area`] for `install`'s game: what differs is [`crate::Game`]'s. Elden Ring's read does not read world states
+/// yet (`states` other than none is refused); materials without a definition are counted in the report's notices.
 pub fn read_game_area(
     install: &Install,
     area: &str,
@@ -593,10 +577,6 @@ pub fn read_game_area(
             report.missing_models.push(key);
             continue;
         };
-        if is_speedtree(&f.bytes) {
-            report.speedtree_models.push(key);
-            continue;
-        }
         // each collision file where it is: a member of the model's binder, or of a binder of its own
         let mut collision = Vec::new();
         for source in &collision_files {
@@ -671,10 +651,6 @@ pub fn read_game_area(
             },
         );
     }
-    let speedtree: BTreeSet<&String> = report.speedtree_models.iter().collect();
-    let skipped_speedtree = placements.iter().filter(|p| speedtree.contains(&p.key)).count();
-    placements.retain(|p| !speedtree.contains(&p.key));
-    report.skipped_speedtree = skipped_speedtree;
     // a larger map's part moves into the read map's frame by its centre's offset there, in f64 rounded once
     let placed = placements
         .iter()

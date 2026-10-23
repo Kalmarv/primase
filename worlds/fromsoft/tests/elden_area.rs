@@ -1,8 +1,8 @@
 //! Elden Ring maps read through the shared area read ([`sekiro::read_game_area`]) against SoulsFormatsNEXT's reading of
 //! the same layouts (`msb.jsonl` of `oracles.soulsformats.elden/format`): the Academy of Raya Lucaria (m14_00_00_00, a
 //! legacy dungeon) by itself, and the Shaded Castle tile (m60_39_54_00) with its parent tiles' parts for it. Every map
-//! piece and asset part the reference lists is accounted for (a placement, or a model the archive lacks, a SpeedTree
-//! model or a model whose face sets use no vertex), and each placement stands at the part's stored position, moved by
+//! piece and asset part the reference lists is accounted for (a placement, or a model the archive lacks or whose face
+//! sets use no vertex; SpeedTree models are placed like any other), and each placement stands at the part's stored position, moved by
 //! its parent tile's offset where a parent places it: translation exact, with the core frame's z reversed.
 use primase_core::{Instance, Source, Transform, World};
 use primase_fromsoft::{Game, Install, Keys, dcx::Decoder, sekiro};
@@ -90,12 +90,11 @@ fn every_placed_part_is_accounted_for() -> Result<()> {
         }
         let unplaced = reference.len();
         println!(
-            "{map}: {placed} placements ({} from {:?}), {unplaced} parts not placed (models missing {}, SpeedTree \
-             {}, empty {}), {} prototypes, {} materials ({} undefined), collision {} files {} triangles",
+            "{map}: {placed} placements ({} from {:?}), {unplaced} parts not placed (models missing {}, empty {}), \
+             {} prototypes, {} materials ({} undefined), collision {} files {} triangles",
             report.parent_placements,
             report.parent_maps,
             report.skipped_missing,
-            report.skipped_speedtree,
             report.skipped_empty,
             report.prototypes,
             report.materials,
@@ -110,8 +109,8 @@ fn every_placed_part_is_accounted_for() -> Result<()> {
         assert_eq!(placed, report.placements);
         assert_eq!(
             unplaced,
-            report.skipped_missing + report.skipped_speedtree + report.skipped_empty,
-            "{map}: every part not placed is a model missing, SpeedTree or empty"
+            report.skipped_missing + report.skipped_empty,
+            "{map}: every part not placed is a model missing or empty"
         );
     }
     Ok(())

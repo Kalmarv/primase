@@ -129,20 +129,42 @@ half of the header word at 0x68). A SpeedTree layout member's first word is its 
 (low half) and a modifier (high half): 0x8000 marks a member of a stream the file does
 not store, offsets count per stream (`Member::stored`, `Member::offset`). Elden Ring's
 119 SpeedTree models all declare the same unstored stream, a `Float4` position and two
-`Float4` UV members that the game's SpeedTree vertex programs read as the instance's
-position and basis (they build a basis from TEXCOORD0 and 1 and multiply TEXCOORD2
-through it), so it is supplied per instance at draw time: the data block holds exactly
-the stored stream's buffers, the face indices and alignment. A vertex buffer's stride is
-its stored members'; `Model::read` decodes them into `Vertex::speedtree` as the input
-assembler gives them to the vertex program (`Half4`/`Half2` 0x2e/0x2d as half floats,
-`UByte4Norm` 0x13 as x / 255, `Float4`/`Float2` as stored) and sets nothing else of the
-vertex; `Model::decode` refuses a SpeedTree model, whose members are its shaders'. In
-these files (header word at 0x68 with 5 in its low half) a GX list terminator's length
-counts its padding only, as SoulsFormatsNEXT reads it. SoulsFormatsNEXT ee1dd61 refuses
-every one of the 119 ("Index was out of range"), so no independent decoder checks them:
-the stored stream's first member (UV2, `Half4` in every layout but the billboard cards')
-read as halves lies inside each model's header bounds in all 119 (read as 16-bit
-integers, in none).
+`Float4` UV members: the per-instance data the game supplies at draw time (translation
+and scale, two basis vectors whose cross product is the third, and in the first's `w`
+the blend between the stored coarser position and the finest). The data block holds
+exactly the stored stream's buffers, the face indices and alignment. A vertex buffer's
+stride is its stored members'; `Model::read` decodes them into `Vertex::speedtree` as the
+input assembler gives them to a vertex program (`Half4`/`Half2` 0x2e/0x2d as half
+floats, `UByte4Norm` 0x13 as x / 255, `Float4`/`Float2` as stored). In these files
+(header word at 0x68 with 5 in its low half) a GX list terminator's length counts its
+padding only, as SoulsFormatsNEXT reads it. SoulsFormatsNEXT ee1dd61 refuses every one
+of the 119 ("Index was out of range"), so no independent decoder checks the members.
+
+What the members are is the game's SpeedTree vertex programs' (`flver::speedtree_layout`):
+`Half4` UV2's `xyz` is the position (its `w` and UV3's `zw` the coarser level's position,
+which the programs blend toward by the instance's blend), `Half4`
+UV3's `xy` the texture coordinate, the layout's two `UByte4Norm` members the normal and
+the tangent (`x * 2 - 1`); `Model::read` sets the vertex's position, normal, UV0 and
+tangent from them, the tangent in the ordinary programs' convention (`T × N`, `w` 1:
+an ordinary pixel program bends its normal by the normal map's `x` along `w (N × T)` and
+`y` along `T`, a SpeedTree one by `x` along `T` and `y` along `-w (N × T)`). Each mesh
+is one level of detail (its one face set's flags: 0 to 2, and 3 for the billboard
+card), so the geometry lowers as an ordinary model's. The billboard cards (`Float4`
+UV2, `Float2` UV3, shader `SpeedTree_billboard`) are turned to the camera by their
+program, which also picks their atlas image by the view's angle: they have no position
+of their own, `Model::decode` refuses them, and their material is the `billboard` class
+(`leave-out=billboard`). `tests/speedtree.rs` runs every SpeedTree mesh's own G-buffer
+vertex program (lifted, on the executor) on each of its vertices with an identity
+instance at the finest level and the wind off (the wind block's fourth row's `y` set to
+1, with which every program outputs the stored position as it stands), and requires the decoded position and UV to be its
+outputs exactly and the normal and tangent within 1e-6. The programs of the three
+meshes of AEG801_258 drawn with `SpeedTree_5030f_w31a187` and `SpeedTree_5030ff8_w31a187` read their layout's
+`Half4` UV5 as the normal (it holds values up to 15.6, or zeros, not a direction),
+while the layout's two `UByte4Norm` members are a unit normal and tangent, perpendicular
+to each other: those meshes' normals and tangents are the layout's, not compared. The
+collision of the same assets checks the frame: the position as stored lies nearest its
+own collision (101 of the 106 with collision; for the other five the best of the 48
+signed axis permutations is within 0.02 m of it), mirrored in z farther (median 0.165 m against 0.064 m).
 
 `Model::geometry(materials)` selects the first LOD0 face set per mesh, compacts
 vertices in first-use order, converts through the core frame, normalizes stored
@@ -382,8 +404,8 @@ whose layouts place the small tile's big assets as `<tile>-<part>` in their own 
 set to `Include` also reads those parts, moved into the map's frame by that offset. The map layout's generation says
 the rest (part kinds: Sekiro's objects, Elden Ring's assets; spawn regions).
 
-Elden Ring's read does not yet read world states (`states: event` is refused) or lower SpeedTree models (their
-placements are left out, by model): each is in `Report::notices`. `tests/elden_area.rs` accounts for every map
+Elden Ring's read does not yet read world states (`states: event` is refused): it is in `Report::notices`. SpeedTree
+models are placed like any other. `tests/elden_area.rs` accounts for every map
 piece and asset part of the Academy of Raya Lucaria (m14_00_00_00) and of the Shaded Castle tile with its parents
 against SoulsFormatsNEXT's layouts, translations exact.
 
@@ -466,7 +488,7 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   `fromsoft.layer_inputs`. `pose=rigid|stored` is required (which model is lowered);
   its other options default to the source as stored: `uv-tiling=keep|apply` (recorded per material as
   `fromsoft.uv_tiling`), `winding=stored|normals`, `degenerates=keep|drop`,
-  `leave-out=sky+light-volume+shadow`, `blocker-cards=draw|record`. Motion-blur
+  `leave-out=sky+light-volume+shadow+billboard`, `blocker-cards=draw|record`. Motion-blur
   face sets, vertex colours and UV sets beyond UV0 are not lowered and are counted.
 - `lower-fromsoft-lights{candela-per-power=...,spot-blend=...}` makes `core.light` from the BTL
   records: colour bytes read as sRGB, intensity by the program's calibration (no
@@ -509,7 +531,7 @@ The collision and geometry the earlier reader produced by itself are this explic
 composition: `lower-fromsoft-collision{hit-filters=8+27,water=22+36,leave-out=29+40,reach=50},
 lower-fromsoft-object-collision{resolution=high,convex=tessellate,leave-out=22+29+36+40,leave-out-motion=2,convex-surface=render,reach=50},
 drop-fromsoft-far, fromsoft-apply-rigid-skinning,
-lower-fromsoft-geometry{pose=rigid,uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow,blocker-cards=record},
+lower-fromsoft-geometry{pose=rigid,uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow+billboard,blocker-cards=record},
 select-lod{form=finest}`. On m11_01 it reproduces that reader's placements, meshes
 (streams, indices, material identities), collision, lights, joined ledges and
 travel markers exactly.

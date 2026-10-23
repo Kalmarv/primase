@@ -143,17 +143,16 @@ impl LowerFromSoftGeometry {
             o.get(k).map(String::as_str).ok_or_else(|| {
                 format!(
                     "{k} is required: pose=rigid|stored, uv-tiling=keep|apply, winding=stored|normals, \
-                     degenerates=keep|drop, leave-out= (sky+light-volume+shadow, empty for none), \
+                     degenerates=keep|drop, leave-out= (sky+light-volume+shadow+billboard, empty for none), \
                      blocker-cards=draw|record"
                 )
             })
         };
         let mut leave_out = BTreeSet::new();
         for class in get("leave-out")?.split('+').filter(|c| !c.is_empty()) {
-            leave_out.insert(
-                materials::SkipClass::from_word(class)
-                    .ok_or_else(|| format!("leave-out class {class} is not sky, light-volume or shadow"))?,
-            );
+            leave_out.insert(materials::SkipClass::from_word(class).ok_or_else(|| {
+                format!("leave-out class {class} is not sky, light-volume, shadow or billboard")
+            })?);
         }
         Ok(LowerFromSoftGeometry {
             pose: Pose::parse("pose", get("pose")?)?,

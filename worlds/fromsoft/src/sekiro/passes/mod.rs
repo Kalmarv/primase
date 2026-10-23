@@ -80,7 +80,7 @@ pub fn register(registry: &mut PassRegistry) {
             ("uv-tiling", "apply"),
             ("winding", "normals"),
             ("degenerates", "drop"),
-            ("leave-out", "sky+light-volume+shadow"),
+            ("leave-out", "sky+light-volume+shadow+billboard"),
             ("blocker-cards", "record"),
         ],
     );
