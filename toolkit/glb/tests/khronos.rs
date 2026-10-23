@@ -1,8 +1,8 @@
-//! The reader against Khronos glTF-Sample-Assets (`PRIMASE_KHRONOS_GLTF`: one folder per model, the model's `.glb` or
-//! `.gltf` with its buffers, and `expected.json` that pygltflib wrote from the same file). The files are third-party
-//! and independent of this reader: every mesh must read, every attribute and morph target must have the element count
-//! and, where `expected.json` gives them, the bounds pygltflib saw, the default weights, the animation samplers'
-//! counts and time range, and the skins' inverse bind matrices must match.
+//! The reader against Khronos glTF-Sample-Assets (`oracles.khronos.general/sample-assets`: one folder per model, the
+//! model's `.glb` or `.gltf` with its buffers, and `expected.json` that pygltflib wrote from the same file). The files
+//! are third-party and independent of this reader: every mesh must read, every attribute and morph target must have the
+//! element count and, where `expected.json` gives them, the bounds pygltflib saw, the default weights, the animation
+//! samplers' counts and time range, and the skins' inverse bind matrices must match.
 
 // Test code: helpers outside #[test] functions unwrap too (clippy.toml allows it only inside them).
 #![allow(clippy::unwrap_used)]
@@ -293,7 +293,11 @@ fn check_model(root: &std::path::Path, name: &str) -> Seen {
 }
 
 fn root() -> Option<PathBuf> {
-    primase_testdata::real_data("PRIMASE_KHRONOS_GLTF")
+    primase_testdata::oracle(
+        primase_testdata::OracleSet::Khronos,
+        primase_testdata::Game::General,
+        "sample-assets",
+    )
 }
 
 macro_rules! model {
