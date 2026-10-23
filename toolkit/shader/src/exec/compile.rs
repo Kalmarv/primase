@@ -178,7 +178,7 @@ pub(super) fn compile(p: &Program, info: &naga::valid::ModuleInfo) -> Result<Exe
                     let Loc::Local(o) = loc else { return None };
                     let mut p: Prov = [None; 4];
                     for (l, slot) in p.iter_mut().enumerate().take(n as usize) {
-                        *slot = Some(*local_src.get(&(o + l as u32))?);
+                        *slot = local_src.get(&(o + l as u32)).copied();
                     }
                     Some(p)
                 }),

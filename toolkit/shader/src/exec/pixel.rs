@@ -432,10 +432,18 @@ impl Backend for SlotBackend<'_> {
         }
         Ok(out)
     }
-    fn buffer_words(&mut self, _view: ResourceId) -> Result<u32, String> {
-        // the sampler answers reads by element and cannot say how many there are: no out-of-range read is caught
-        // here, the sampler's own error stops it
-        Ok(u32::MAX)
+    fn buffer_words(&mut self, view: ResourceId) -> Result<u32, String> {
+        let slot = self.slot(view)?;
+        // without the sampler saying how long the buffer is, no read is out of range: its own error stops it
+        let Some(elements) = self.sampler.buffer_elements(slot) else {
+            return Ok(u32::MAX);
+        };
+        let per = match self.buffers.get(&view) {
+            Some(BufferKind::Typed(_)) => 4,
+            Some(BufferKind::Structured { stride }) => (stride / 4).max(1),
+            _ => 1,
+        };
+        Ok(elements.saturating_mul(per))
     }
 }
 

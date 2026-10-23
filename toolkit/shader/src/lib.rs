@@ -125,6 +125,13 @@ pub trait Sampler {
         Err(format!("t{slot}: no structured buffer given"))
     }
 
+    /// How many elements the buffer view at bind slot `slot` has, where the sampler knows. A program that reads past the
+    /// end gets zeros (D3D's rule) when this is stated; when it is not, no read is taken for out of range.
+    fn buffer_elements(&mut self, slot: u32) -> Option<u32> {
+        let _ = slot;
+        None
+    }
+
     /// A sample of any texture: 1D, 3D or cube, with a texel offset, a gather or a comparison. A plain 2D sample
     /// (or a 2D array's layer) goes to [`Sampler::sample`]; anything else is refused unless the sampler answers it.
     fn sample_image(&mut self, request: exec::ImageSample<u32>) -> std::result::Result<[f32; 4], String> {

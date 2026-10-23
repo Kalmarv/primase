@@ -52,21 +52,21 @@ impl Hashing {
 impl Sampler for Hashing {
     fn sample(&mut self, r: Sample) -> Result<[f32; 4], String> {
         self.requests += 1;
-        let fold = |seed: u64, g: &[[f32; 2]; 2]| {
-            g.iter()
-                .flatten()
-                .fold(seed, |a, x| mix64(a ^ u64::from(x.to_bits())))
-        };
+        // a NaN has one bit pattern here: which payload an operation leaves is not defined
+        let bits = |x: f32| u64::from(if x.is_nan() { 0x7fc0_0000 } else { x.to_bits() });
+        let fold = |seed: u64, g: &[[f32; 2]; 2]| g.iter().flatten().fold(seed, |a, x| mix64(a ^ bits(*x)));
         let lod = match r.lod {
             primase_shader::Lod::Implicit => 1,
-            primase_shader::Lod::Bias(b) => mix64(2 ^ u64::from(b.to_bits()) << 8),
-            primase_shader::Lod::Level(l) => mix64(3 ^ u64::from(l.to_bits()) << 8),
+            primase_shader::Lod::Bias(b) => mix64(2 ^ bits(b) << 8),
+            primase_shader::Lod::Level(l) => mix64(3 ^ bits(l) << 8),
             primase_shader::Lod::Gradients(g) => fold(4, &g),
-            primase_shader::Lod::GradientsBias(g, b) => fold(5 ^ u64::from(b.to_bits()) << 8, &g),
+            primase_shader::Lod::GradientsBias(g, b) => fold(5 ^ bits(b) << 8, &g),
         };
+        // a sampler rounds the layer the program gives; the lifted program already rounds and clamps it
+        let layer = r.layer.map_or(7, |l| bits(l.round_ties_even().max(0.0)));
         let seed = mix64(u64::from(r.texture) << 32 | u64::from(r.sampler))
-            ^ mix64(u64::from(r.uv[0].to_bits()) << 32 | u64::from(r.uv[1].to_bits()))
-            ^ mix64(r.layer.map_or(7, |l| u64::from(l.to_bits())))
+            ^ mix64(bits(r.uv[0]) << 32 | bits(r.uv[1]))
+            ^ mix64(layer)
             ^ lod;
         Ok(Self::lanes(seed).map(|w| {
             // a sample is a float: integers become small floats
@@ -80,6 +80,10 @@ impl Sampler for Hashing {
     }
     fn load(&mut self, r: Load) -> Result<[u32; 4], String> {
         self.requests += 1;
+        // a buffer or texture of 65,536 texels: a read outside it is zeros, as D3D defines
+        if r.texel.iter().any(|&t| !(0..65536).contains(&t)) || !(0..16).contains(&r.mip) {
+            return Ok([0; 4]);
+        }
         let seed = u64::from(r.texture) << 40
             ^ (r.texel[0] as u64) << 24
             ^ (r.texel[1] as u64) << 12
@@ -87,8 +91,14 @@ impl Sampler for Hashing {
             ^ (r.mip as u64) << 50;
         Ok(Self::lanes(mix64(seed)))
     }
+    fn buffer_elements(&mut self, _slot: u32) -> Option<u32> {
+        Some(65536)
+    }
     fn structured(&mut self, slot: u32, element: u32, offset: u32) -> Result<u32, String> {
         self.requests += 1;
+        if element >= 65536 {
+            return Ok(0);
+        }
         Ok(Self::lanes(u64::from(slot) << 40 ^ u64::from(element) << 12 ^ u64::from(offset))[0])
     }
 }
@@ -235,8 +245,17 @@ fn quad_lane(shader: &dyn PixelShader, c: &Case, k: usize) -> Vec<[u32; 4]> {
     inputs
 }
 
-fn refs(c: &Case) -> Vec<(u32, &[[u32; 4]])> {
-    c.buffers.iter().map(|(s, v)| (*s, v.as_slice())).collect()
+/// The buffers as `shader` takes them: each as long as the shader says (the evaluator wants its declared rows exactly,
+/// a lifted program's array may be longer), the contents the same word for word.
+fn refs<'a>(c: &'a Case, shader: &dyn PixelShader) -> Vec<(u32, &'a [[u32; 4]])> {
+    shader
+        .constant_buffers()
+        .iter()
+        .filter_map(|&(slot, rows)| {
+            let (_, v) = c.buffers.iter().find(|(s, _)| *s == slot)?;
+            Some((slot, &v[..(rows as usize).min(v.len())]))
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -251,6 +270,8 @@ struct Tally {
     mask_differs: usize,
     evaluator_refuses: BTreeMap<String, usize>,
     executor_refuses: BTreeMap<String, usize>,
+    /// The programs the executor refused where the evaluator ran.
+    executor_refusing: BTreeMap<String, String>,
     both_refuse: usize,
     /// By program: how many lanes or discards differ, and the first.
     mismatches: BTreeMap<String, (usize, String)>,
@@ -345,13 +366,19 @@ fn run_program(name: &str, bytes: &[u8], cases: u32, t: &mut Tally) {
         let case = case(&reference, &executor, c);
         let zero = vec![[[0u32; 4]; 2]; case.inputs.len()];
         // scalar
-        let e =
-            reference.execute_with_derivatives(&case.inputs, &zero, &refs(&case), &mut Hashing::default());
-        let x = executor.execute_with_derivatives(&case.inputs, &zero, &refs(&case), &mut Hashing::default());
+        let run = |s: &dyn PixelShader| {
+            s.execute_with_derivatives(&case.inputs, &zero, &refs(&case, s), &mut Hashing::default())
+        };
+        let (e, x) = (run(&reference), run(&executor));
         match (e, x) {
             (Ok(e), Ok(x)) => compare(&format!("{name} case {c}"), &e, &x, t),
             (Err(e), Ok(_)) => *t.evaluator_refuses.entry(shape(&e)).or_default() += 1,
-            (Ok(_), Err(x)) => *t.executor_refuses.entry(shape(&x)).or_default() += 1,
+            (Ok(_), Err(x)) => {
+                *t.executor_refuses.entry(shape(&x)).or_default() += 1;
+                t.executor_refusing
+                    .entry(name.to_owned())
+                    .or_insert_with(|| x.to_string());
+            }
             (Err(_), Err(_)) => t.both_refuse += 1,
         }
         // quad
@@ -359,7 +386,7 @@ fn run_program(name: &str, bytes: &[u8], cases: u32, t: &mut Tally) {
         let quad = |s: &dyn PixelShader| {
             s.execute_quad(
                 [&lanes[0], &lanes[1], &lanes[2], &lanes[3]],
-                &refs(&case),
+                &refs(&case, s),
                 &mut Hashing::default(),
             )
         };
@@ -404,6 +431,9 @@ fn report(title: &str, t: &Tally) {
         for (k, n) in list {
             println!("  {what} {n:5}  {k}");
         }
+    }
+    for (program, why) in t.executor_refusing.iter().take(20) {
+        println!("  EXECUTOR REFUSED {program}: {why}");
     }
     for (program, (n, first)) in &t.mismatches {
         println!("  MISMATCH {n:4} in {program}: {first}");
@@ -511,6 +541,9 @@ impl Sampler for Logging {
         self.log.push(format!("{r:?}"));
         self.inner.load(r)
     }
+    fn buffer_elements(&mut self, slot: u32) -> Option<u32> {
+        self.inner.buffer_elements(slot)
+    }
     fn structured(&mut self, slot: u32, element: u32, offset: u32) -> Result<u32, String> {
         self.log.push(format!("structured t{slot} {element} {offset}"));
         self.inner.structured(slot, element, offset)
@@ -549,19 +582,42 @@ fn trace_one_program() {
             Err(e) => println!("  error {e}"),
         }
     };
+    let mut logs: Vec<Vec<String>> = Vec::new();
     for (what, shader) in [
         ("evaluator", &reference as &dyn PixelShader),
         ("executor", &executor),
     ] {
         let mut s = Logging::default();
-        let r = shader.execute_with_derivatives(&case.inputs, &zero, &refs(&case), &mut s);
+        let r = shader.execute_with_derivatives(&case.inputs, &zero, &refs(&case, shader), &mut s);
         println!("== {what} scalar");
         show(r, &s);
         let lanes: Vec<Vec<[u32; 4]>> = (0..4).map(|k| quad_lane(&reference, &case, k)).collect();
         let mut s = Logging::default();
-        let r = shader.execute_quad([&lanes[0], &lanes[1], &lanes[2], &lanes[3]], &refs(&case), &mut s);
-        println!("== {what} quad (lane 0 shown)");
-        show(r.map(|e| e.into_iter().next().unwrap()), &s);
+        let r = shader.execute_quad(
+            [&lanes[0], &lanes[1], &lanes[2], &lanes[3]],
+            &refs(&case, shader),
+            &mut s,
+        );
+        println!("== {what} quad (lane 0 shown; {} requests)", s.log.len());
+        logs.push(std::mem::take(&mut s.log));
+        show(r.map(|e| e.into_iter().next().unwrap()), &Logging::default());
+    }
+    let at = logs[0].iter().zip(&logs[1]).position(|(a, b)| a != b);
+    match at {
+        Some(i) => {
+            println!("quad requests first differ at {i}:");
+            let from = i.saturating_sub(2);
+            for (k, (a, b)) in logs[0].iter().zip(&logs[1]).enumerate().skip(from).take(5) {
+                println!("  {k} evaluator {a}");
+                println!("  {k} executor  {b}");
+            }
+        }
+        None => println!(
+            "quad requests agree over {} entries (evaluator {}, executor {})",
+            logs[0].len().min(logs[1].len()),
+            logs[0].len(),
+            logs[1].len()
+        ),
     }
 }
 
