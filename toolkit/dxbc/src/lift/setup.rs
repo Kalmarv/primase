@@ -140,6 +140,8 @@ pub(crate) struct View {
     pub kind: Kind,
     pub load: bool,
     pub store: bool,
+    /// Atomic operations reach it: the view is a single 32-bit lane (`r32uint` or `r32sint`) and `kind` says which.
+    pub atomic: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -170,6 +172,8 @@ pub(crate) struct Setup {
     pub temps: u32,
     /// The lanes of each input register the program declares it reads.
     pub declared_inputs: BTreeMap<u32, u8>,
+    /// The registers addressed by a computed index (`dcl_index_range`): whether an output, the first register, how many.
+    pub index_ranges: Vec<(bool, u32, u32)>,
     /// The functions of a program of a stage with no entry point (see [`primase_shader::stage_functions`]).
     pub sigs: Option<Vec<primase_shader::FunctionSig>>,
     /// A hull program's phases (empty for the other stages).
@@ -203,6 +207,7 @@ impl Setup {
             indexable: Vec::new(),
             temps: 0,
             declared_inputs: BTreeMap::new(),
+            index_ranges: Vec::new(),
             sigs: None,
             phases: Vec::new(),
             declared_patch: BTreeMap::new(),
@@ -435,6 +440,7 @@ impl Setup {
                         kind,
                         load: false,
                         store: false,
+                        atomic: false,
                     }));
                 }
                 Declared::UavRaw { slot, .. } => setup.declarations.push(Declaration::UavBuffer(UavBuffer {
@@ -481,9 +487,21 @@ impl Setup {
                 // the phases (their markers and instance counts are read from the declarations as a whole), a
                 // register range the program only addresses statically, and what a hull program states of its patch
                 Declared::Other {
-                    opcode: 113..=116 | 153 | 154 | 91,
+                    opcode: 113..=116 | 153 | 154,
                     ..
                 } => {}
+                // dcl_index_range: registers the program addresses by a computed index, [operand, first, count]
+                Declared::Other {
+                    opcode: 91, words, ..
+                } => {
+                    if let [token, first, count] = words[..] {
+                        match (token >> 12) & 255 {
+                            1 => setup.index_ranges.push((false, first, count)),
+                            2 => setup.index_ranges.push((true, first, count)),
+                            _ => {}
+                        }
+                    }
+                }
                 Declared::Other {
                     opcode: 93, control, ..
                 } => gs_input = *control,
@@ -620,6 +638,18 @@ impl Setup {
                                     _ => naga::Scalar::U32,
                                 });
                             }
+                        }
+                        // atomic operations on a typed texture view make it a single 32-bit lane
+                        if let Declaration::View(v) = d
+                            && v.slot == index
+                            && let Some(a) = atomic
+                        {
+                            v.atomic = true;
+                            v.kind = if a == naga::Scalar::I32 || v.kind == Kind::I {
+                                Kind::I
+                            } else {
+                                Kind::U
+                            };
                         }
                     }
                 }

@@ -89,14 +89,18 @@ impl Lift<'_> {
                 Declaration::View(v) => {
                     // the view's own format is the binding's: the module carries four 32-bit lanes of the kind the
                     // program loads and stores, the one format that holds any of them
-                    let format = match v.kind {
-                        Kind::I => naga::StorageFormat::Rgba32Sint,
-                        Kind::U => naga::StorageFormat::Rgba32Uint,
+                    // (a view that atomics reach is one lane of 32 bits: the formats naga has image atomics for)
+                    let format = match (v.kind, v.atomic) {
+                        (Kind::I, true) => naga::StorageFormat::R32Sint,
+                        (_, true) => naga::StorageFormat::R32Uint,
+                        (Kind::I, _) => naga::StorageFormat::Rgba32Sint,
+                        (Kind::U, _) => naga::StorageFormat::Rgba32Uint,
                         _ => naga::StorageFormat::Rgba32Float,
                     };
                     let mut access = StorageAccess::empty();
                     access.set(StorageAccess::LOAD, v.load || !v.store);
                     access.set(StorageAccess::STORE, v.store);
+                    access.set(StorageAccess::ATOMIC, v.atomic);
                     let ty = self.b.ty(TypeInner::Image {
                         dim: v.dim,
                         arrayed: v.arrayed,
@@ -520,6 +524,40 @@ impl Lift<'_> {
         self.write(&ins.operands[0], picked, false)
     }
 
+    /// `sample_info dest, t<n>`: the sample count of a multisampled texture in x (0 for one that is not, and in the
+    /// other lanes), as a uint or a float by the instruction's control.
+    pub(super) fn sample_info(&mut self, ins: &Instruction) -> Result<()> {
+        if !matches!(ins.operands[1].register, crate::decode::Register::Texture) {
+            return self.refuse("the sample count of the rasterizer is the pipeline's, not the program's");
+        }
+        let slot = ins.operands[1].indices[0].base;
+        let (image, t) = self.texture(slot)?;
+        let mask = self.dest_mask(&ins.operands[0]);
+        let count = if t.multi {
+            let g = self.b.global_ptr(image);
+            Val {
+                expr: self.b.app(E::ImageQuery {
+                    image: g,
+                    query: ImageQuery::NumSamples,
+                }),
+                kind: Kind::U,
+                width: 1,
+            }
+        } else {
+            self.b.lit_u(0)
+        };
+        let zero = self.b.lit_u(0);
+        let all = self.b.compose(&[count, zero, zero, zero]);
+        let result = if ins.control & 1 != 0 {
+            all
+        } else {
+            self.b.convert(all, Kind::F)
+        };
+        let bits = self.b.bitcast(result, Kind::U);
+        let picked = self.pick(bits, &ins.operands[1], mask);
+        self.write(&ins.operands[0], picked, false)
+    }
+
     pub(super) fn resource_info(&mut self, ins: &Instruction) -> Result<()> {
         let slot = ins.operands[2].indices[0].base;
         // a typed unordered-access view has one level and a size queried without one
@@ -668,7 +706,7 @@ impl Lift<'_> {
     }
 
     /// The address lanes of a typed view's texel: its dimensions' coordinates, and an array layer after them.
-    fn view_address(&mut self, op: &Operand, v: &View) -> Result<(Val, Option<naga::Handle<E>>)> {
+    pub(super) fn view_address(&mut self, op: &Operand, v: &View) -> Result<(Val, Option<naga::Handle<E>>)> {
         let n = match v.dim {
             naga::ImageDimension::D1 => 1,
             naga::ImageDimension::D2 => 2,

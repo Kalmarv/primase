@@ -150,6 +150,15 @@ impl<'a> Lift<'a> {
                 }
             }
         }
+        // the registers of a range addressed by a computed index
+        for (output, first, count) in lift.setup.index_ranges.clone() {
+            for r in first..first.saturating_add(count) {
+                if output && !lift.outputs.contains_key(&r) {
+                    let local = lift.b.local(&format!("o{r}"), u4);
+                    lift.outputs.insert(r, local);
+                }
+            }
+        }
         // registers the output signature (or a function's results) places elements in
         for v in &lift.result_varyings() {
             if let Some(d3d) = v.provenance.d3d

@@ -531,7 +531,9 @@ impl Lift<'_> {
     pub(super) fn finish_functions(self, target: String) -> Result<Program> {
         let stage = self.setup.interface.stage;
         let module = self.b.finish_functions();
-        let limit_notes = primase_shader::compute_limit_notes(&module);
+        let mut limit_notes = primase_shader::compute_limit_notes(&module);
+        let interface = self.setup.interface.clone();
+        limit_notes.extend(primase_shader::interface_notes(&interface));
         Ok(Program {
             module,
             stage,

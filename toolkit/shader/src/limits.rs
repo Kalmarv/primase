@@ -37,3 +37,18 @@ pub fn compute_limit_notes(module: &naga::Module) -> Vec<String> {
     }
     notes
 }
+
+/// Notes for an interface that carries something WebGPU has no built-in for.
+pub fn interface_notes(interface: &crate::Interface) -> Vec<String> {
+    use crate::SystemValue::{RenderTargetArrayIndex, ViewportArrayIndex};
+    let mut notes = Vec::new();
+    let layered = |v: &crate::Varying| matches!(v.system, Some(RenderTargetArrayIndex | ViewportArrayIndex));
+    if interface.inputs.iter().chain(&interface.outputs).any(layered) {
+        notes.push(
+            "a render target array index or viewport index is carried as a flat varying: WebGPU has no built-in for \
+             it, and routing a primitive to the layer or viewport it names is the pipeline's"
+                .into(),
+        );
+    }
+    notes
+}

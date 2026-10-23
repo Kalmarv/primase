@@ -335,6 +335,12 @@ pub fn entry_io(interface: &Interface) -> Result<EntryIo, String> {
                     blend_src: None,
                     per_primitive: false,
                 },
+                // WebGPU has no layer or viewport index to read or write: the value travels as a flat varying, and
+                // routing a primitive to the layer it names is the pipeline's
+                Some(SystemValue::RenderTargetArrayIndex | SystemValue::ViewportArrayIndex) => {
+                    next_location += 1;
+                    location(stage, output, v, next_location - 1)
+                }
                 Some(system) => Binding::BuiltIn(builtin(stage, output, system).ok_or_else(|| {
                     format!("{name}: {system:?} as a {stage:?} {direction} has no built-in binding")
                 })?),

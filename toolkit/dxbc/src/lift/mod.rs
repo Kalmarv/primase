@@ -179,7 +179,9 @@ impl<'a> Lift<'a> {
             self.result_type,
             self.setup.early_depth_test,
         );
-        let limit_notes = primase_shader::compute_limit_notes(&module);
+        let mut limit_notes = primase_shader::compute_limit_notes(&module);
+        let interface = self.setup.interface.clone();
+        limit_notes.extend(primase_shader::interface_notes(&interface));
         Ok(Program {
             module,
             stage: self.stage,

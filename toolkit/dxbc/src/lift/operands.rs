@@ -21,6 +21,71 @@ impl Lift<'_> {
         }
     }
 
+    /// The `dcl_index_range` of input or output registers that holds register `base`: its first register and count.
+    fn index_range(&self, output: bool, base: u32) -> Option<(u32, u32)> {
+        self.setup
+            .index_ranges
+            .iter()
+            .find(|(o, first, count)| *o == output && (*first..first.saturating_add(*count)).contains(&base))
+            .map(|(_, first, count)| (*first, *count))
+    }
+
+    /// A register addressed by a computed index: the registers of its `dcl_index_range` as one array, indexed from the
+    /// range's first; zero outside the range, as D3D reads past a declared one.
+    fn relative_register(&mut self, op: &Operand, output: bool) -> Result<Val> {
+        let Some((first, count)) = self.index_range(output, op.indices[0].base) else {
+            return self.refuse("a register addressed by a computed index outside any dcl_index_range");
+        };
+        let index = self.index_expr(&op.indices[0].clone())?;
+        let u4 = self.u4();
+        let len = std::num::NonZeroU32::new(count).expect("a range holds registers");
+        let ty = self.b.ty(naga::TypeInner::Array {
+            base: u4,
+            size: naga::ArraySize::Constant(len),
+            stride: 16,
+        });
+        // the range's registers as a local array the index can address
+        let array = self.b.local("range", ty);
+        for (k, r) in (first..first + count).enumerate() {
+            let value = match (if output {
+                self.outputs.get(&r)
+            } else {
+                self.inputs.get(&r)
+            })
+            .copied()
+            {
+                Some(l) => {
+                    let p = self.b.local_ptr(l);
+                    self.b.load(p, Kind::U, 4)
+                }
+                None => {
+                    let z = self.b.lit_u(0);
+                    self.b.splat(z, 4)
+                }
+            };
+            let pointer = self.b.local_ptr(array);
+            let target = self.b.app(E::AccessIndex {
+                base: pointer,
+                index: k as u32,
+            });
+            self.b.store(target, value);
+        }
+        let start = self.b.lit_u(first);
+        let offset = self.b.binary(naga::BinaryOperator::Subtract, index, start);
+        let length = self.b.lit_u(count);
+        let inside = self.b.binary(naga::BinaryOperator::Less, offset, length);
+        let zero = self.b.lit_u(0);
+        let safe = self.b.select(inside, offset, zero);
+        let pointer = self.b.local_ptr(array);
+        let slot = self.b.app(E::Access {
+            base: pointer,
+            index: safe.expr,
+        });
+        let element = self.b.load(slot, Kind::U, 4);
+        let none = self.b.splat(zero, 4);
+        Ok(self.b.select(inside, element, none))
+    }
+
     /// The register's four raw lanes as a `vec4<u32>`.
     fn reg_value(&mut self, op: &Operand) -> Result<Val> {
         match op.register {
@@ -52,7 +117,7 @@ impl Lift<'_> {
             | Register::JoinInstanceId => self.id_register(op.register),
             Register::Input => {
                 if op.indices[0].relative.is_some() {
-                    return self.refuse("a relative-indexed input register");
+                    return self.relative_register(op, false);
                 }
                 let register = op.indices[0].base;
                 let Some(&local) = self.inputs.get(&register) else {
@@ -63,7 +128,7 @@ impl Lift<'_> {
             }
             Register::Output => {
                 if op.indices[0].relative.is_some() {
-                    return self.refuse("a relative-indexed output register");
+                    return self.relative_register(op, true);
                 }
                 let register = op.indices[0].base;
                 let Some(&local) = self.outputs.get(&register) else {
@@ -235,7 +300,32 @@ impl Lift<'_> {
             }
             Register::Output => {
                 if op.indices[0].relative.is_some() {
-                    return self.refuse("a relative-indexed output write");
+                    // a register of the range the index names: each is written where the index is its number
+                    let Some((first, count)) = self.index_range(true, op.indices[0].base) else {
+                        return self
+                            .refuse("an output addressed by a computed index outside any dcl_index_range");
+                    };
+                    let index = self.index_expr(&op.indices[0].clone())?;
+                    for r in first..first + count {
+                        let Some(&local) = self.outputs.get(&r) else {
+                            continue;
+                        };
+                        let number = self.b.lit_u(r);
+                        let here = self.b.binary(naga::BinaryOperator::Equal, index, number);
+                        let lanes = lanes.clone();
+                        self.b.when(here, |b| {
+                            let pointer = b.local_ptr(local);
+                            for (j, lane) in lanes.iter().enumerate() {
+                                let component = b.lane(v, j as u8);
+                                let target = b.app(E::AccessIndex {
+                                    base: pointer,
+                                    index: u32::from(*lane),
+                                });
+                                b.store(target, component);
+                            }
+                        });
+                    }
+                    return Ok(());
                 }
                 let register = op.indices[0].base;
                 let Some(&local) = self.outputs.get(&register) else {

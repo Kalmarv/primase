@@ -68,6 +68,55 @@ impl Lift<'_> {
         }
     }
 
+    /// An atomic operation on a typed texture view: naga's image atomic, which returns no old value.
+    fn view_atomic(&mut self, ins: &Instruction, slot: u32) -> Result<()> {
+        let name = ins.name();
+        let immediate = name.starts_with("imm_");
+        let ops = &ins.operands;
+        let at = usize::from(immediate);
+        if immediate && ops[0].register != Register::Null {
+            return self.refuse(
+                "the old value of an atomic operation on a texture view (naga's image atomic returns none)",
+            );
+        }
+        let fun = match name.trim_start_matches("imm_").trim_start_matches("atomic_") {
+            "iadd" => AtomicFunction::Add,
+            "and" => AtomicFunction::And,
+            "or" => AtomicFunction::InclusiveOr,
+            "xor" => AtomicFunction::ExclusiveOr,
+            "imax" | "umax" => AtomicFunction::Max,
+            "imin" | "umin" => AtomicFunction::Min,
+            other => return self.refuse(format!("atomic operation {other} on a texture view")),
+        };
+        let (global, v) = self
+            .resources
+            .views
+            .get(&slot)
+            .copied()
+            .expect("the caller found the view");
+        let (coordinate, layer) = self.view_address(&ops[at + 1], &v)?;
+        let kind = v.kind;
+        let value = self.read(&ops[at + 2], 1, kind)?;
+        let coordinate = self.b.bitcast_to(coordinate, Kind::I);
+        let array_index = layer.map(|l| {
+            let layer = Val {
+                expr: l,
+                kind: Kind::U,
+                width: 1,
+            };
+            self.b.bitcast_to(layer, Kind::I).expr
+        });
+        let image = self.b.global_ptr(global);
+        self.b.push(Statement::ImageAtomic {
+            image,
+            coordinate: coordinate.expr,
+            array_index,
+            fun,
+            value: value.expr,
+        });
+        Ok(())
+    }
+
     /// The word of a raw address (a byte offset), or of a structured one (an element and a byte offset in it): one
     /// operand, the structured pair in its x and y (the atomics), or two (the loads and stores).
     fn word_address(&mut self, mem: &Mem, address: &[&Operand]) -> Result<Val> {
@@ -282,6 +331,10 @@ impl Lift<'_> {
         let ops = &ins.operands;
         // [old,] resource, address, source [, second source]
         let at = usize::from(immediate);
+        let slot = ops[at].indices.first().map_or(0, |i| i.base);
+        if ops[at].register == Register::Uav && self.resources.views.contains_key(&slot) {
+            return self.view_atomic(ins, slot);
+        }
         let mem = self.memory(&ops[at])?;
         let Some(scalar) = mem.atomic else {
             return self.refuse("an atomic operation on memory the lifter did not make atomic");
