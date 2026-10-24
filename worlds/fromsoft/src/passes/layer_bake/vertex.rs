@@ -478,9 +478,7 @@ mod tests {
             count: 1,
             component: 2,
         }]);
-        let refused = VertexStage::new(&shader, &binding, false, &frame)
-            .err()
-            .expect("refused");
+        let refused = VertexStage::new(&shader, &binding, false, &frame).expect_err("refused");
         assert!(
             refused.to_string().contains("lanes the bake cannot feed"),
             "{refused}"
