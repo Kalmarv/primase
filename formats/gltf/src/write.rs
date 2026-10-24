@@ -30,8 +30,8 @@
 //!   aside), so a reader that ignores the extension shows one plausible layer. The extension is only in
 //!   `extensionsUsed`. A primitive drawn with a layered material but lacking its weight attribute is counted. Its
 //!   `version` is 2 with per-pixel channels or the over composition, 3 with the height composition
-//!   (`"composition": {"height": {"contrast": c}}` and `weights.heights`, a source per slot), so an older consumer
-//!   doesn't draw it as the form it knows.
+//!   (`"composition": {"height": {"contrast": c}}` and `weights.heights`, a source per slot), 4 with a power channel
+//!   (`{"power": {"v": source, "exponent": n}}`), so an older consumer doesn't draw it as the form it knows.
 //! - **Textures**: a `core.texture` embeds its largest level as deterministic RGBA8 PNG (identical images embedded
 //!   once). Normal maps must already be green-up with stored Z; use the explicit normalization pass first. The writer
 //!   reads no file: a texture still only a `core.texture_file` is skipped and counted (a reader's load step,
@@ -1676,9 +1676,18 @@ impl Writer<'_> {
             host.insert("extras".into(), extras);
         }
         let mut ext = Map::new();
-        // version 2: per-pixel channels or the over composition; 3: the height composition. An older consumer must not
-        // draw it as the version it knows
+        // version 2: per-pixel channels or the over composition; 3: the height composition; 4: a power channel. An
+        // older consumer must not draw it as the version it knows
+        let power = layered
+            .weights
+            .channels
+            .iter()
+            .flatten()
+            .any(|c| matches!(c, Channel::Power { .. }));
         match layered.weights.composition {
+            _ if power => {
+                ext.insert("version".into(), json!(4));
+            }
             Composition::Height { .. } => {
                 ext.insert("version".into(), json!(3));
             }
@@ -1759,6 +1768,7 @@ impl Writer<'_> {
                 let (v, m) = (source(v)?, source(m)?);
                 json!({"threshold": {"v": v, "m": m, "k": self.factors(e, k)?}})
             }
+            Channel::Power { v, exponent } => json!({"power": {"v": source(v)?, "exponent": exponent}}),
         })
     }
 

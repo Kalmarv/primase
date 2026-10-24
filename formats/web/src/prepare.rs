@@ -321,6 +321,7 @@ fn sources_mut(c: &mut Channel) -> Vec<&mut Source> {
         Channel::Source(s) => vec![s],
         Channel::Lerp { a, b, t } => vec![a, b, t],
         Channel::Threshold { v, m, .. } => vec![v, m],
+        Channel::Power { v, .. } => vec![v],
     }
 }
 

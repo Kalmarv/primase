@@ -154,6 +154,29 @@ pub enum Channel {
         m: Source,
         k: [f32; 4],
     },
+    /// `v^exponent` ([`power`]), `exponent` 1 to 16.
+    Power {
+        v: Source,
+        exponent: u8,
+    },
+}
+
+/// The largest exponent of [`Channel::Power`].
+pub const POWER_LIMIT: u8 = 16;
+
+/// `v^exponent` in f32 in a stated order, so a program computing it alike gives the same bits: by squaring where
+/// `exponent` is a power of two (`v^8` is three squarings, as a program's `(1 - a)^8` is written), otherwise by
+/// multiplying `v` in from the left (`((v * v) * v) * ...`).
+pub fn power(v: f32, exponent: u8) -> f32 {
+    if exponent.is_power_of_two() {
+        let mut x = v;
+        for _ in 0..exponent.trailing_zeros() {
+            x *= x;
+        }
+        x
+    } else {
+        (1..exponent).fold(v, |x, _| x * v)
+    }
 }
 
 impl Channel {
@@ -163,6 +186,7 @@ impl Channel {
             Channel::Source(s) => vec![s],
             Channel::Lerp { a, b, t } => vec![a, b, t],
             Channel::Threshold { v, m, .. } => vec![v, m],
+            Channel::Power { v, .. } => vec![v],
         }
     }
     /// The channel's value from its sources' values (in [`Channel::sources`] order).
@@ -174,12 +198,26 @@ impl Channel {
                 let (v, m) = (values[0], values[1]);
                 (k[0] + k[1] * v + k[2] * m + k[3] * v * m).clamp(0.0, 1.0)
             }
+            Channel::Power { exponent, .. } => power(values[0], *exponent),
+        }
+    }
+
+    /// Its own checks (its sources' apart): a threshold's factors finite, a power's exponent 1 to [`POWER_LIMIT`].
+    pub fn check(&self) -> Result<(), String> {
+        match self {
+            Channel::Threshold { k, .. } if !k.iter().all(|x| x.is_finite()) => {
+                Err(format!("threshold {k:?} is not finite"))
+            }
+            Channel::Power { exponent, .. } if !(1..=POWER_LIMIT).contains(exponent) => {
+                Err(format!("power exponent {exponent} is not 1 to {POWER_LIMIT}"))
+            }
+            _ => Ok(()),
         }
     }
 }
 
 /// A weight or height source's own checks: a vertex channel within 0..=3, a mask texture alive with finite weights.
-fn check_source(world: &World, what: &str, s: &Source) -> Result<(), String> {
+pub(crate) fn check_source(world: &World, what: &str, s: &Source) -> Result<(), String> {
     match s {
         Source::Vertex { channel, .. } if *channel > 3 => {
             Err(format!("{what}: vertex channel {channel} past 3"))
@@ -279,11 +317,7 @@ impl Component for LayeredMaterial {
                 return Err(format!("{} channels for a mapping of {want}", channels.len()));
             }
             for (i, c) in channels.iter().enumerate() {
-                if let Channel::Threshold { k, .. } = c
-                    && !k.iter().all(|x| x.is_finite())
-                {
-                    return Err(format!("channel {i}: threshold {k:?} is not finite"));
-                }
+                c.check().map_err(|e| format!("channel {i}: {e}"))?;
                 for s in c.sources() {
                     check_source(world, &format!("channel {i}"), s)?;
                 }

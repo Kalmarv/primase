@@ -10,6 +10,7 @@ use crate::components::{
     TextureFile, Tile, Transform,
 };
 use crate::convert::{PartScope, PartitionPlan};
+use crate::detail::DetailedMaterial;
 use crate::draw_order::DrawOrder;
 use crate::environment::Environment;
 use crate::layered::LayeredMaterial;
@@ -58,7 +59,7 @@ macro_rules! declared {
 declared! {
     components: Collider, Heightfield, Name, Source, Transform, Instance, Shadows, Mesh, Texture, Light, Collision,
         TextureFile, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, Marker, Curve, MaterialUsage,
-        PbrMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, Skin, Morphs, RigInstance,
+        PbrMaterial, DetailedMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, Skin, Morphs, RigInstance,
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding,
         TextureLayers;
     resources: PartScope, PartitionPlan, Environment, StateAssignment, Surfaces, Threads,

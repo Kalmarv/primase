@@ -7,6 +7,7 @@ pub mod asset;
 pub mod clip;
 pub mod components;
 pub mod convert;
+pub mod detail;
 mod environment;
 pub use environment::{Ambient, AmbientLight, Environment};
 pub mod frame;
@@ -68,6 +69,7 @@ pub mod vector;
 pub mod world;
 
 pub use components::*;
+pub use detail::DetailedMaterial;
 pub use json::JsonError;
 pub use layered::{Layer, LayerWeights, LayeredMaterial, WeightMapping};
 pub use texformat::TexFormat;
