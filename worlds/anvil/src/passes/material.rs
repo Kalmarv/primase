@@ -1235,6 +1235,7 @@ impl Pass for LowerAnvilMaterial {
             DrawOrder::NAME,
             Name::NAME,
             AnvilWorldUv::NAME,
+            crate::components::AnvilRenderStatus::NAME,
         ]
     }
     fn modifies(&self) -> &[&'static str] {
@@ -1264,7 +1265,14 @@ impl Pass for LowerAnvilMaterial {
                 continue;
             };
             let name = m.template_name.clone().unwrap_or_default();
+            let earlier_refusal = w.get::<crate::components::AnvilRenderStatus>(e)
+                .filter(|status| status.unsupported).map(|status| status.reason.clone());
             let i = Inputs { m: &m };
+            let mut placeholder_used = false;
+            let mut placeholder = || {
+                placeholder_used = true;
+                neutral_placeholder()
+            };
             let alpha_mode = match self.alpha {
                 AlphaChoice::Opaque => AlphaMode::Opaque,
                 AlphaChoice::Mask(cutoff) => AlphaMode::Mask { cutoff },
@@ -2068,6 +2076,19 @@ impl Pass for LowerAnvilMaterial {
                     placeholder()
                 }
             };
+            w.insert(e, crate::components::AnvilRenderStatus {
+                source: format!("Material {:#x}", m.index_id),
+                template: Some(name.clone()),
+                unsupported: placeholder_used && !layered,
+                reason: if placeholder_used && !layered {
+                    format!("{name}: material recipe refused or unavailable; see this pass's named omissions{}",
+                        earlier_refusal.map_or_else(String::new, |why| format!("; {why}")))
+                } else if name == "MAD_FakeForest" {
+                    "authored untextured canopy/proxy; COLOR_0 decoded with pow(saturate(c), 2.2); a triangle-only form is an authored near-distance stand-in".into()
+                } else {
+                    format!("{name}: source material lowered{}", if layered { " as a layered blend" } else { " as PBR" })
+                },
+            });
             if !layered {
                 if matches!(name.as_str(), "MAD_Decals1" | "MAD_Decals1_Graffiti")
                     && self.alpha == AlphaChoice::Prelude
@@ -2605,7 +2626,7 @@ pub fn fake_river_albedo(a: f64, s: f64) -> [f64; 3] {
     })
 }
 
-fn placeholder() -> PbrMaterial {
+fn neutral_placeholder() -> PbrMaterial {
     PbrMaterial {
         base_color: [0.5, 0.5, 0.5, 1.0],
         metallic: 0.0,

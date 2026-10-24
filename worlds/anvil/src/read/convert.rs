@@ -65,6 +65,8 @@ pub struct ForgeFile {
 /// volumes and far content, not what stands in a section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Levels {
+    /// All authored levels, including global far-view lists. The caller must spatially select their contents.
+    All,
     /// Level 0 only.
     Finest,
     /// Every level but the coarsest. An object larger than a level-0 cell is listed only at a coarser level.
@@ -74,6 +76,7 @@ pub enum Levels {
 impl Levels {
     fn reads(self, level: u32, levels: u32) -> bool {
         match self {
+            Levels::All => true,
             Levels::Finest => level == 0,
             Levels::AllButCoarsest => level.saturating_add(1) < levels,
         }
@@ -267,7 +270,9 @@ impl AnvilReader {
     }
 
     /// Reads the terrain under the stated rectangle into `world`.
-    fn read_terrain(&mut self, world: &mut World, t: &TerrainSelection) -> Result<Entity> {
+    /// Read exactly the caller's terrain extent. Programs that select placements first can use this after `load`,
+    /// avoiding both discarded terrain and a guessed margin around a cell's rectangle.
+    pub fn read_terrain(&mut self, world: &mut World, t: &TerrainSelection) -> Result<Entity> {
         let layer = self
             .find(Kind::TerrainNodeLayer, |n| {
                 t.layer.as_deref().is_none_or(|l| l == n)

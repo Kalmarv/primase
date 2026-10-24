@@ -49,10 +49,13 @@ pub enum Kind {
     FloorHeightData,
     DecalModel,
     Skeleton,
+    Impostor,
+    LayeredSky,
+    WorldAmbiance,
 }
 
 /// Every kind, in declaration order.
-pub const KINDS: [Kind; 24] = [
+pub const KINDS: [Kind; 27] = [
     Kind::Mesh,
     Kind::Material,
     Kind::MaterialTemplate,
@@ -77,6 +80,9 @@ pub const KINDS: [Kind; 24] = [
     Kind::FloorHeightData,
     Kind::DecalModel,
     Kind::Skeleton,
+    Kind::Impostor,
+    Kind::LayeredSky,
+    Kind::WorldAmbiance,
 ];
 
 impl Kind {
@@ -112,6 +118,9 @@ impl Kind {
             Kind::FloorHeightData => FLOOR_HEIGHT_DATA,
             Kind::DecalModel => DDECAL_MODEL,
             Kind::Skeleton => SKELETON,
+            Kind::Impostor => crate::read::impostor::IMPOSTOR,
+            Kind::LayeredSky => crate::read::sky::LAYERED_SKY,
+            Kind::WorldAmbiance => crate::read::sky::WORLD_AMBIANCE,
         }
     }
 
@@ -142,6 +151,9 @@ impl Kind {
             Kind::FloorHeightData => "FloorHeightData",
             Kind::DecalModel => "DDecalModel",
             Kind::Skeleton => "Skeleton",
+            Kind::Impostor => "Impostor",
+            Kind::LayeredSky => "LayeredSky",
+            Kind::WorldAmbiance => "WorldAmbiance",
         }
     }
 }

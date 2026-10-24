@@ -122,6 +122,9 @@ impl Pass for LowerAnvilWorldUv {
     fn requires(&self) -> &[&'static str] {
         &[AnvilWorldUv::NAME, Mesh::NAME]
     }
+    fn may_lack_inputs(&self) -> bool {
+        true
+    }
     fn provides(&self) -> &[&'static str] {
         &[Mesh::NAME]
     }

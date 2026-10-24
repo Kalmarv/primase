@@ -2,6 +2,9 @@
 
 use primase_core::{Component, Entity, World};
 
+mod impostor;
+pub use impostor::{AnvilImpostor, AnvilRenderStatus, AnvilSpotLight, AnvilSky, AnvilFarClass, AnvilFarSelected, AnvilFarTerrain, AnvilSkyControllers, AnvilEnvironment, AnvilFog, AnvilSurfaceBake};
+
 /// A MeshShape's triangle geometry ([`crate::read::mesh_shape::Geometry`]) on its prototype: positions converted into
 /// core's frame through the frame the reader was given (stated by the program, as the shape's units and frame are not
 /// established), faces as position-index triangles (reversed when that frame mirrors, so their fronts stay), and each
@@ -319,9 +322,9 @@ impl Component for AnvilCollisionOnly {
 }
 
 /// A placement whose MeshInstanceData is a fake (`anvil.fake`: its `IsFake` set; docs/placement.md §19.4): its
-/// `FakeMeshIndex` and `IsNearFake`. On Riders Republic exactly the far terrain's cells (`MAD_USNAT_FarFake_<n>_Cell`,
-/// the index `n`), which stand in for the near ground at a distance: a program leaves them out where it draws the
-/// ground itself, or keeps them as a horizon.
+/// `FakeMeshIndex` and `IsNearFake`. On Riders Republic these identify `MAD_USNAT_FarFake_<n>_Cell` merged object
+/// proxies (the index `n`), not the ground. Coarser terrain supplies far ground. A program must resolve their overlap
+/// with real objects separately; `select-anvil-far-view` omits a merged proxy cell overlapping its near rectangle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AnvilFake {
     pub mesh_index: u32,

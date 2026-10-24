@@ -573,6 +573,9 @@ fn recipe_of(template: &str) -> Option<&'static Recipe> {
 
 const RECIPES: &[Recipe] = &[
     ROCKS,
+    // material-spec §27.4 / verify_m17.py: the same property and texture roles as Rocks;
+    // the program itself writes layout A and takes roughness from the detail normal's alpha.
+    Recipe { template: "MAD_Tex1_UniqueNormal", ..ROCKS },
     UNIQUE_NORMAL_GRADIENT,
     ROAD,
     UNIQUE_NORMAL_DIFFUSE_BLEND,
@@ -630,7 +633,7 @@ impl Choice for UnstatedAddress {
 }
 
 impl UnstatedAddress {
-    fn unstated(self) -> Unstated {
+    pub(super) fn unstated(self) -> Unstated {
         match self {
             UnstatedAddress::Refuse => Unstated::Refuse,
             UnstatedAddress::Wrap => Unstated::Assume(Address::Wrap),
@@ -772,7 +775,7 @@ pub const BAKE_ANVIL_MATERIAL: PassSpec = PassSpec {
 /// §12.2) where `t` and the speeds are 0 (`(su, 0, tu, 0)`, `(0, sv, tv, 0)`: a rotation's rows were matched to 5
 /// digits only, and the time term isn't known). A bound property neither the Material nor its template (its
 /// Operator's default) sets, or a UV transform of another form, is an error naming it.
-fn material_rows(m: &AnvilMaterial) -> Result<BTreeMap<u32, [f32; 4]>, String> {
+pub(super) fn material_rows(m: &AnvilMaterial) -> Result<BTreeMap<u32, [f32; 4]>, String> {
     // the Material's property of the binding's key, else the template's default for the binding
     let value = |key: u32, binding: MaterialBinding| {
         m.values
@@ -937,6 +940,15 @@ impl BakeAnvilMaterial {
             constants
                 .set_words(3, row.saturating_mul(4), &v.map(f32::to_bits))
                 .map_err(|e| e.to_string())?;
+        }
+        if recipe.terrain.is_some() {
+            // The virtual page table/sediment views are the explicit uniform stand-ins below. Keep their affine
+            // coordinates finite even for the UniqueNormal sibling, whose program reads the same engine rows.
+            for (row,value) in [(47,[1.0f32,0.0,0.0,0.0]),(48,[1.0,1.0,0.0,0.0])] {
+                if buffers.iter().any(|&(slot,words)|slot==0 && words>=(row+1)*4) {
+                    constants.set_words(0,row*4,&value.map(f32::to_bits)).map_err(|e|e.to_string())?;
+                }
+            }
         }
         // a pattern is baked in the shader's own UV: its Material's transform the identity
         if let Some((p, _, _)) = &period {
@@ -1245,7 +1257,7 @@ impl Pass for BakeAnvilMaterial {
         o
     }
     fn provides(&self) -> &[&'static str] {
-        &[PbrMaterial::NAME, Texture::NAME, VertexColor::NAME]
+        &[PbrMaterial::NAME, Texture::NAME, VertexColor::NAME, crate::components::AnvilRenderStatus::NAME]
     }
     fn removes(&self) -> &[&'static str] {
         &[AnvilMaterial::NAME]
@@ -1295,6 +1307,11 @@ impl Pass for BakeAnvilMaterial {
             let baked = match baked {
                 Ok(b) => b,
                 Err(why) => {
+                    let source = format!("Material {:#x}", m.index_id);
+                    w.insert(e, crate::components::AnvilRenderStatus {
+                        source, template: Some(template.clone()), unsupported: true,
+                        reason: format!("{template}: own-program bake refused: {why}"),
+                    });
                     log.omit(
                         &format!(
                             "{} Materials not baked (left to lower-anvil-material): {why}",
@@ -1385,6 +1402,10 @@ impl Pass for BakeAnvilMaterial {
                 },
             );
             w.insert(e, VertexColor::Ignored);
+            w.insert(e, crate::components::AnvilRenderStatus {
+                source: "bake-anvil-material".into(), template: Some(template.clone()), unsupported: false,
+                reason: format!("{template}: own G-buffer program baked at {} x {}; engine inputs and sampling choices are recorded in the pass options and approximation log", self.size, self.size),
+            });
             log.count(&format!("{} Materials baked", template), 1);
             if baked.cutoff.is_some() {
                 log.count(&format!("{template} Materials baked with their alpha cut-out"), 1);

@@ -18,7 +18,8 @@
 //!   Entities read). What each instance places is the caller's stated [`InstancedLevels`].
 //! - In more than one slot, in the LODSelectorInstance itself or in an ImpostorInstanceData: not seen, refused.
 //!
-//! Levels referring to an Impostor are counted, not placed. An Entity or EntityGroup whose `IsHidden` or `IsPhantom`
+//! Impostor levels retain their authored cards and owned atlases in `AnvilImpostor`, including forms reached through
+//! a selector; lowering chooses their static representation. An Entity or EntityGroup whose `IsHidden` or `IsPhantom`
 //! is set isn't placed at all ([`Placed::hidden_or_phantom`]): on Riders Republic those are UI, HUD and editor helpers
 //! (docs/placement.md §19.1). A Visual whose MeshInstanceData is a fake (`IsFake`: the far terrain's cells) places as
 //! any other, each placement marked [`AnvilFake`] for the program to leave out or keep.
@@ -58,6 +59,8 @@ use crate::read::entity::{
     SkeletonBinding, Slot, StoredEntity, StoredEntityGroup, Visual, query,
 };
 use crate::read::grass::{GRASS_PATTERN_LIBRARY, StoredGrassLibrary};
+use crate::components::AnvilImpostor;
+use crate::read::impostor::{IMPOSTOR, StoredImpostor};
 use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use crate::read::material::{Payload, StoredMaterial, StoredTextureSet};
 use crate::read::mesh::{MATERIAL, MESH, StoredMesh, max_culling_distance};
@@ -79,6 +82,8 @@ use crate::read::water::{StoredWater, WATER_COMPONENT};
 /// Why an Entity can't be placed.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("{at:?}: Impostor: {why}")]
+    Impostor { at: At, why: String },
     #[error(transparent)]
     Archive(#[from] crate::read::archive::Error),
     #[error("{at:?}: type {found:#010x}, not {what}")]
@@ -763,6 +768,11 @@ impl<'a> Placer<'a> {
         if let Some(name) = self.name(at) {
             self.world.insert(e, Name(name));
         }
+        if mesh.materials.iter().any(|&id| entry_name(self.archive, id)
+            .is_some_and(|name| matches!(name.as_str(), "MAD_MAT_FakeForest" | "MAD_MAT_FakeForest_triangle")))
+        {
+            self.world.insert(e, crate::components::AnvilFarClass::Canopy);
+        }
         self.world.insert(e, mesh);
         Ok(e)
     }
@@ -1253,6 +1263,17 @@ impl<'a> Placer<'a> {
         Ok(textures::read_texture_map(self.archive, self.world, id)?)
     }
 
+    /// Read an Impostor's own atlas references as well as its card table. They are independent of the Mesh proxy.
+    fn impostor(
+        &mut self, at: At, id: u64, body: &[u8], placed: &mut Placed,
+    ) -> Result<Entity, Error> {
+        let stored = StoredImpostor::parse(body).map_err(|why| Error::Impostor { at, why })?;
+        let textures = stored.maps.map(|map| map.and_then(|map| self.texture(map.id, placed)));
+        let entity = self.prototype(at);
+        self.world.insert(entity, AnvilImpostor { index_id: id, frame: self.frame, stored, textures });
+        Ok(entity)
+    }
+
     /// The mesh levels of the object `id` names, read once.
     fn levels(&mut self, id: u64, placed: &mut Placed) -> Result<Option<Levels>, Error> {
         if let Some(levels) = self.objects.get(&id) {
@@ -1277,6 +1298,7 @@ impl<'a> Placer<'a> {
             Some(at) => {
                 let r = self.archive.resource(at)?;
                 match r.type_id {
+                    IMPOSTOR => Some(vec![(0, self.impostor(at, id, &r.body, placed)?)]),
                     MESH => {
                         let culling = max_culling_distance(&r.body);
                         if culling > 0.0 {
@@ -1327,7 +1349,23 @@ impl<'a> Placer<'a> {
                                         }
                                     }
                                 }
-                                _ => placed.impostor_levels = placed.impostor_levels.saturating_add(1),
+                                Some((m, r)) if r.type_id == IMPOSTOR => {
+                                    match self.impostor(m, reference, &r.body, placed) {
+                                        Ok(entity) => {
+                                            levels.push((level, entity));
+                                            distances.levels.push((level, s.levels.get(usize::from(level))
+                                                .map_or(0.0, |l| l.switch_distance())));
+                                        }
+                                        Err(error) => {
+                                            placed.refused.push((reference, error.to_string()));
+                                            self.refused_levels.insert((id, level));
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    placed.refused.push((reference,
+                                        format!("LOD {level}: resource is missing or is neither Mesh nor Impostor")));
+                                }
                             }
                         }
                         if !levels.is_empty() {
@@ -1358,6 +1396,12 @@ impl<'a> Placer<'a> {
             }
             if let Some(mesh) = self.world.get::<AnvilMesh>(own).cloned() {
                 self.world.insert(p, mesh);
+            }
+            if let Some(impostor) = self.world.get::<AnvilImpostor>(own).cloned() {
+                self.world.insert(p, impostor);
+            }
+            if let Some(class) = self.world.get::<crate::components::AnvilFarClass>(own).copied() {
+                self.world.insert(p, class);
             }
             let forms = forms
                 .iter()
@@ -1438,8 +1482,8 @@ impl<'a> Placer<'a> {
 
     /// The Mesh or LODSelector at `at` placed once, at the origin: what a Visual of an Entity places, without an owner
     /// (no matrix, bounds, DataLayerActions or material overrides). A Mesh is its one level; a LODSelector every mesh
-    /// level it names, as an Entity's Visual without instances places them (levels referring to an Impostor are
-    /// counted in [`Placed::impostor_levels`]). Its Materials are read where the placer reads them
+    /// level it names, including authored Impostor levels, as an Entity's Visual without instances places them.
+    /// Its Materials are read where the placer reads them
     /// ([`Placer::with_materials`]). `None` where no level of it could be read (recorded in `placed`).
     pub fn place_object(&mut self, at: At, placed: &mut Placed) -> Result<Option<Entity>, Error> {
         self.place_object_following(at, None, placed)
@@ -1468,11 +1512,11 @@ impl<'a> Placer<'a> {
                 what: "an entry of its forge",
             });
         };
-        if found != MESH && found != LOD_SELECTOR {
+        if found != MESH && found != LOD_SELECTOR && found != IMPOSTOR {
             return Err(Error::Type {
                 at,
                 found,
-                what: "a Mesh or LODSelector",
+                what: "a Mesh, LODSelector or Impostor",
             });
         }
         let Some(levels) = self.levels(id, placed)? else {
@@ -1927,6 +1971,46 @@ impl<'a> Placer<'a> {
             .chain(e.decals().map(|v| (v, true, None)))
             .chain(grass.iter().map(|(v, g)| (v, false, Some(*g))))
         {
+            if let Shown::Raw { kind: crate::read::entity::LIGHT_INSTANCE, bytes, id } = &v.instance {
+                let read = (|| -> Result<(u64, crate::read::light::StoredSpotLight), String> {
+                    let id = crate::read::light::instance_reference(bytes)?;
+                    let at = self.archive.find(id).ok_or("light reference is absent from the archive")?;
+                    let resource = self.archive.resource(at).map_err(|e| e.to_string())?;
+                    if resource.type_id != crate::read::light::SPOT_LIGHT {
+                        return Err(format!("light {id:#x} is type {:#x}, not SpotLight", resource.type_id));
+                    }
+                    Ok((id, crate::read::light::StoredSpotLight::parse(&resource.body)?))
+                })();
+                match read {
+                    Ok((index_id, stored)) => {
+                        let light = self.world.spawn();
+                        self.world.insert(light, Name(name.clone()));
+                        self.world.insert(light, self.frame.transform(&transform(&e.matrix, e.scale)));
+                        self.world.insert(light, crate::components::AnvilSpotLight { index_id, stored });
+                        if let Some(layers) = &layers { self.world.insert(light, layers.clone()); }
+                        if let Some(state) = state { self.world.insert(light, state); }
+                        self.world.insert(light, bounds);
+                        placed.placements.push(light);
+                    }
+                    Err(why) => placed.refused.push((*id, why)),
+                }
+                continue;
+            }
+            if let Shown::Raw { kind, id, .. } = &v.instance {
+                let marker = self.world.spawn();
+                self.world.insert(marker, Name(name.clone()));
+                self.world.insert(marker, self.frame.transform(&transform(&e.matrix, e.scale)));
+                let target = v.object.and_then(|r| entry_name(self.archive, r.id));
+                self.world.insert(marker, crate::components::AnvilRenderStatus {
+                    source: format!("Visual instance {id:#x}"), template: None, unsupported: true,
+                    reason: format!("Visual instance class {kind:#010x}, target {target:?}: runtime-generated visual; no static geometry decoded"),
+                });
+                if let Some(layers) = &layers { self.world.insert(marker, layers.clone()); }
+                if let Some(state) = state { self.world.insert(marker, state); }
+                self.world.insert(marker, bounds);
+                placed.placements.push(marker);
+                continue;
+            }
             let shows = shows(v, at)?;
             let fake = shows.fake;
             let found = match v.object {
@@ -2051,6 +2135,24 @@ impl<'a> Placer<'a> {
                     placed.static_decals = placed.static_decals.saturating_add(1);
                 }
             }
+        }
+        // Runtime effects retain a spatial, named explanation rather than becoming a silently empty catalog row.
+        // Their emission timing and property programs are not static geometry, so no particle picture is invented.
+        for component in &e.components {
+            if !matches!(component.kind, 0xD2BF_93A6 | 0x713F_0C7D) { continue; }
+            let marker = self.world.spawn();
+            let class = crate::read::component_types::component_name(component.kind).unwrap_or("effect");
+            self.world.insert(marker, Name(format!("{name}: {class}")));
+            self.world.insert(marker, self.frame.transform(&transform(&e.matrix, e.scale)));
+            self.world.insert(marker, primase_core::Marker { kind: "effect-emitter".into(), ground: None, yaw: None });
+            self.world.insert(marker, crate::components::AnvilRenderStatus {
+                source: format!("component {:#x}", component.id), template: None, unsupported: true,
+                reason: format!("{class}: runtime emitter/property program; marked at its authored transform; particle simulation and FX property evaluation unavailable"),
+            });
+            if let Some(layers) = &layers { self.world.insert(marker, layers.clone()); }
+            if let Some(state) = state { self.world.insert(marker, state); }
+            self.world.insert(marker, bounds);
+            placed.placements.push(marker);
         }
         // the grass setup: the GrassComponent as stored and the library it names, on an entity of its own
         for c in &e.components {
