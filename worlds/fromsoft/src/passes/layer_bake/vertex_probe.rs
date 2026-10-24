@@ -20,7 +20,9 @@ use primase_core::shader::{
 };
 use primase_shader::Program;
 use primase_shader::flow::{At, Node, NodeId, Values};
-use primase_shader_exec::{Backend, Element, Executable, ImageSample, Resources, Runner};
+use primase_shader_exec::{
+    Backend, Element, Executable, ImageLoad, ImageQuery, ImageSample, Resources, Runner,
+};
 use std::collections::BTreeSet;
 
 /// The position the probe gives the program, and the camera it moves to.
@@ -37,7 +39,7 @@ pub enum CameraForm {
     Plain,
 }
 
-/// A backend that answers every read with zero: no instance table, no texture.
+/// A backend that answers every read with zero: no instance table, no texture (a texture is one texel).
 struct Zeros;
 
 impl Backend for Zeros {
@@ -46,6 +48,13 @@ impl Backend for Zeros {
     }
     fn read_buffer(&mut self, _view: ResourceId, _word: u32, _count: u8) -> Result<[u32; 4], String> {
         Ok([0; 4])
+    }
+    // a texture the program loads from or asks the size of (a vertex texture of its own): one texel of zeros
+    fn load(&mut self, _request: ImageLoad<Element>) -> Result<[u32; 4], String> {
+        Ok([0; 4])
+    }
+    fn query(&mut self, _request: ImageQuery<Element>) -> Result<[u32; 4], String> {
+        Ok([1; 4])
     }
     fn buffer_words(&mut self, _view: ResourceId) -> Result<u32, String> {
         Ok(1 << 20)
