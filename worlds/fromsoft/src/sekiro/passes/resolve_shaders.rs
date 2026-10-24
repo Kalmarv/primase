@@ -346,6 +346,11 @@ fn run(
                 if vertex.palette_rows {
                     *policies.entry(PALETTE_ROWS_RULE.to_owned()).or_default() += 1;
                 }
+                if vertex.palette_bound {
+                    *policies
+                        .entry(crate::layer_bake::resolve::PALETTE_BOUND_POLICY.to_owned())
+                        .or_default() += 1;
+                }
                 stages.push(vertex.stage);
             }
             None => t.without_vertex += 1,

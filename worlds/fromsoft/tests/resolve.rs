@@ -34,6 +34,7 @@ const PROGRAM: &[u8] = include_bytes!("fixtures/layered.dxbc");
 const SAT_PROGRAM: &[u8] = include_bytes!("fixtures/layered_sat.dxbc");
 const VERTEX_PROGRAM: &[u8] = include_bytes!("fixtures/layered_vs.dxbc");
 const SKIN_PROGRAM: &[u8] = include_bytes!("fixtures/layered_skin_vs.dxbc");
+const SKIN_DXIL_PROGRAM: &[u8] = include_bytes!("fixtures/layered_skin_vs.dxil");
 /// layered_vs.dxbc with the camera taken from the world position before the matrix (tests/fixtures/layered_vs.hlsl, RELATIVE).
 const RELATIVE_PROGRAM: &[u8] = include_bytes!("fixtures/layered_rel_vs.dxbc");
 
@@ -938,6 +939,51 @@ fn a_further_coordinate_set_and_tangent_set_are_unknown_not_layer_members() {
         .find(|i| i.label.name.eq_ignore_ascii_case("TEXCOORD") && i.label.index == 1)
         .unwrap();
     assert_eq!(member.role, InputRole::Stream(Semantic::Color(1)));
+}
+
+/// The joints' palette and the cloth-cancel palette of an Elden Ring (DXIL) skinned program are bound at 256 matrices of
+/// three rows, 12,288 bytes, which the program declares as fewer (the capture `ercap3`: see
+/// [`primase_fromsoft::layer_bake::resolve::PALETTE_JOINTS`]); Sekiro's (DXBC) state none, for lack of a capture of its
+/// palette's size.
+#[test]
+fn an_elden_ring_palette_is_bound_larger_than_declared_and_sekiros_states_none() {
+    let entity = World::default().spawn();
+    let resolve =
+        |shader: Shader| primase_fromsoft::layer_bake::resolve::resolve_vertex(&shader, entity).unwrap();
+    let dxil = {
+        let program = primase_dxil::lift(SKIN_DXIL_PROGRAM).unwrap();
+        Shader {
+            format: ShaderFormat::Dxil,
+            bytecode: SKIN_DXIL_PROGRAM.to_vec(),
+            interface: program.interface,
+        }
+    };
+    let bound = resolve(dxil);
+    // the bound is a policy the caller counts, not a read of the model
+    assert!(bound.palette_bound);
+    let stage = bound.stage;
+    let buffer_of = |name: &str| {
+        let c = stage
+            .constants
+            .iter()
+            .find(|c| c.name.as_deref() == Some(name))
+            .unwrap();
+        c.resource
+    };
+    let palette = buffer_of("VC_aObjMatrix");
+    let cancel = buffer_of("VC_aClothCancelObjMatrix");
+    assert_ne!(palette, cancel);
+    for resource in [palette, cancel] {
+        assert_eq!(stage.bound_size(resource), Some(256 * 3 * 16));
+    }
+    // each buffer once, and only the palettes'
+    assert_eq!(stage.constant_buffers.len(), 2);
+    let sekiro = resolve(dxbc_shader(
+        SKIN_PROGRAM,
+        primase_dxbc::reflection(SKIN_PROGRAM).unwrap(),
+    ));
+    assert!(!sekiro.palette_bound);
+    assert!(sekiro.stage.constant_buffers.is_empty());
 }
 
 /// A program the run does not decide is taken as camera-relative, said by a reason the caller counts: here a program whose

@@ -4,6 +4,7 @@
 // is taken through one of VC_aClothCancelObjMatrix's matrices (a second, short palette the real programs apply first). It
 // computes nothing meaningful beyond the blend.
 //   fxc /T vs_5_0 /E main /Fo layered_skin_vs.dxbc layered_skin_vs.hlsl
+//   dxc -T vs_6_0 -E main -Fo layered_skin_vs.dxil layered_skin_vs.hlsl   (Elden Ring's programs are DXIL)
 struct Instance
 {
     float4 mWorld[3];

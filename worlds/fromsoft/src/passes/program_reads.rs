@@ -32,7 +32,7 @@
 //! a fade) is not a material slot's coverage.
 use crate::metaparam::{Metaparam, Texture, texture_number};
 use primase_core::shader::{Resource, ResourceId, ResourceKind, ShaderFormat};
-use primase_shader::Program;
+use primase_shader::{BoundSizes, Program};
 use primase_shader::flow::{BinaryOperator, Node, NodeId, Op, Read, UnaryOperator, Values};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -82,9 +82,14 @@ pub struct Reads {
 
 /// A program's container of `format` (a game's [`crate::Game::shader_format`]) lifted: DXBC or DXIL.
 pub fn lift(format: ShaderFormat, bytes: &[u8]) -> Result<Program, String> {
+    lift_with(format, bytes, &BoundSizes::new())
+}
+
+/// [`lift`] with the constant buffers `bound` names bound at the sizes it states (a stage's [`BoundSizes::of`]).
+pub fn lift_with(format: ShaderFormat, bytes: &[u8], bound: &BoundSizes) -> Result<Program, String> {
     match format {
-        ShaderFormat::Dxbc => primase_dxbc::lift(bytes).map_err(|e| e.to_string()),
-        ShaderFormat::Dxil => primase_dxil::lift(bytes).map_err(|e| e.to_string()),
+        ShaderFormat::Dxbc => primase_dxbc::lift_with(bytes, bound).map_err(|e| e.to_string()),
+        ShaderFormat::Dxil => primase_dxil::lift_with(bytes, bound).map_err(|e| e.to_string()),
         other => Err(format!("a FromSoftware program of format {other:?}")),
     }
 }

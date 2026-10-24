@@ -8,10 +8,10 @@ use crate::metaparam::Metaparam;
 use crate::{Result, invalid};
 use primase_core::Entity;
 use primase_core::shader::{
-    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, DepthState,
-    FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, MatrixLines, ObjectParameter,
-    OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, Stage,
-    StageBinding, TargetState, TextureBinding, TextureSource, ViewParameter,
+    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantBufferBinding, ConstantRole,
+    DepthState, FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, MatrixLines, ObjectParameter,
+    OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, Stage, StageBinding,
+    TargetState, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_shader::matrix::{Unshown, state_lines};
 use primase_shader::{D3dClass, Interface, Program, Resource, ScalarType, SystemValue};
@@ -865,6 +865,7 @@ pub fn resolve(
             constants,
             textures: bindings,
             buffers: Vec::new(),
+            constant_buffers: Vec::new(),
             outputs,
         },
         policies,
@@ -1161,6 +1162,23 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
     let graph = program.as_ref().map_err(Clone::clone).and_then(Program::graph);
     state_lines(graph.as_ref().map_err(String::as_str), interface, &mut constants);
     let palette_rows = palette_rows_by_rule(&mut constants);
+    // the buffers of the joints' palettes are bound larger than the program declares
+    let mut constant_buffers: Vec<ConstantBufferBinding> = Vec::new();
+    if let Some(bound) = palette_bound_size(shader.format) {
+        for c in &constants {
+            if matches!(
+                c.role,
+                ConstantRole::Object(ObjectParameter::BonePalette | ObjectParameter::ClothCancelPalette)
+            ) && !constant_buffers.iter().any(|b| b.resource == c.resource)
+            {
+                constant_buffers.push(ConstantBufferBinding {
+                    resource: c.resource,
+                    bound_size: Some(bound),
+                });
+            }
+        }
+    }
+    let palette_bound = !constant_buffers.is_empty();
     Ok(VertexBinding {
         stage: StageBinding {
             stage: Stage::Vertex,
@@ -1170,10 +1188,12 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
             constants,
             textures: Vec::new(),
             buffers: Vec::new(),
+            constant_buffers,
             outputs: Vec::new(),
         },
         undecided,
         palette_rows,
+        palette_bound,
     })
 }
 
@@ -1200,6 +1220,31 @@ fn palette_rows_by_rule(constants: &mut [ConstantBinding]) -> bool {
     ruled
 }
 
+/// The joints a byte of `BLENDINDICES` addresses, the most a palette of Elden Ring's skinned programs holds.
+pub const PALETTE_JOINTS: u32 = 256;
+
+/// The policy a consumer counts when a stage states a joint palette's bound ([`PALETTE_JOINTS`] matrices of three 16-byte
+/// rows, 12,288 bytes) for a DXIL program: the size is not read from the model.
+///
+/// Elden Ring's skinned programs declare the palette (`VC_aObjMatrix`) and the cloth-cancel palette
+/// (`VC_aClothCancelObjMatrix`) as two matrices (six rows), and D3D12 bounds a constant buffer read by the view the draw
+/// binds, not by the declaration. The capture `ercap3` of the running game (colour
+/// `scratch/elden-ring/parity/gap/colour-ercap3-records.json`, `readbacks[].cbvs[]`, `extent`
+/// `descriptor_SizeInBytes`) binds register 5 with 12,288 bytes in the 20 readbacks of the skinned program
+/// `b51c251219ab7269` (draws 4297, 4301, 4306, 4313 and 5316 to 5331: 244, 244, ..., 253 of the 256 matrices non-zero, the
+/// last at index 255) and with 3,072 bytes (64 matrices, 61 non-zero, the last at index 62) in the one readback of the
+/// skinned program `94c0b95ba49885bb` (draw 1020). The engine binds a different size for different draws, probably what
+/// the model needs, and what decides it is not established here. So the bound stated is the largest observed, which is the
+/// most a byte index addresses; a consumer that fills fewer matrices leaves the rest zero, as the engine's unwritten rows
+/// read. Sekiro's programs (DXBC) declare the same six rows, and no capture of its palette's size exists
+/// (`cache/sekiro/cb11-capture` reads only the texture scroll buffer, VS slot 11), so Sekiro states no bound.
+pub const PALETTE_BOUND_POLICY: &str = "joint palette bound stated at 256 matrices (12,288 bytes), the largest observed in a capture of Elden Ring (the engine binds 64 in one skinned draw and 256 in 20 others; the model's own size is not read)";
+
+/// The bound stated for the palettes of a program of `format`, or none.
+fn palette_bound_size(format: primase_core::shader::ShaderFormat) -> Option<u32> {
+    (format == primase_core::shader::ShaderFormat::Dxil).then_some(PALETTE_JOINTS * 3 * 16)
+}
+
 /// A vertex program's binding ([`resolve_vertex`]) and what the caller must count.
 #[derive(Clone, Debug)]
 pub struct VertexBinding {
@@ -1209,6 +1254,8 @@ pub struct VertexBinding {
     pub undecided: Option<String>,
     /// Whether the joints' palette's lines are stated by [`PALETTE_ROWS_RULE`], which the caller counts.
     pub palette_rows: bool,
+    /// Whether the stage states a bound for its palettes ([`PALETTE_BOUND_POLICY`]), which the caller counts.
+    pub palette_bound: bool,
 }
 
 /// A reason with its numbers as `N` (offsets and counts differ program to program; the reason does not).

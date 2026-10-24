@@ -132,11 +132,24 @@ pub(crate) fn program_executor(
     format: primase_core::shader::ShaderFormat,
     bytecode: &[u8],
 ) -> Result<ProgramShader> {
+    program_executor_bound(format, bytecode, &primase_shader::BoundSizes::new())
+}
+
+/// [`program_executor`] with the constant buffers `bound` names bound at the sizes it states (a stage's
+/// [`primase_shader::BoundSizes::of`]).
+pub(crate) fn program_executor_bound(
+    format: primase_core::shader::ShaderFormat,
+    bytecode: &[u8],
+    bound: &primase_shader::BoundSizes,
+) -> Result<ProgramShader> {
     use primase_core::shader::ShaderFormat;
     match format {
-        ShaderFormat::Dxbc => executor(bytecode),
+        ShaderFormat::Dxbc => {
+            ProgramShader::new(primase_dxbc::lift_with(bytecode, bound).map_err(lifting)?).map_err(evaluation)
+        }
         other => ProgramShader::new(
-            crate::passes::program_reads::lift(other, bytecode).map_err(|e| invalid("program lift", 0, e))?,
+            crate::passes::program_reads::lift_with(other, bytecode, bound)
+                .map_err(|e| invalid("program lift", 0, e))?,
         )
         .map_err(evaluation),
     }
@@ -257,7 +270,9 @@ pub(crate) fn frozen_words(
                 }
             };
             policies.insert(BIND_POSE_POLICY.into(), 1);
-            (0..64).flat_map(|_| element.iter().copied()).collect()
+            (0..super::resolve::PALETTE_JOINTS)
+                .flat_map(|_| element.iter().copied())
+                .collect()
         }
         ConstantRole::Object(ObjectParameter::InstanceColour) => bits(&frame.instance_colour),
         ConstantRole::Object(

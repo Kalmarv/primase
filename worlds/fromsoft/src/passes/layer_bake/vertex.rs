@@ -107,7 +107,11 @@ impl VertexStage {
         ground: bool,
         frame: &FrozenFrame,
     ) -> Result<Self> {
-        let lifted = super::binding::program_executor(vertex.format, &vertex.bytecode)?;
+        let lifted = super::binding::program_executor_bound(
+            vertex.format,
+            &vertex.bytecode,
+            &primase_shader::BoundSizes::of(stage),
+        )?;
         let demand = primase_shader::flow::VertexDemand::of_programs(lifted.program(), pixel)
             .map_err(|e| invalid("vertex demand", 0, e))?;
         let pixel_lanes = demand
@@ -145,7 +149,12 @@ impl VertexStage {
                 continue;
             };
             let start = c.offset as usize / 4;
-            for (i, w) in words.iter().take(c.size as usize / 4).enumerate() {
+            // a constant fills its bytes, and a buffer the source binds larger than the program declares (a joint palette)
+            // the whole bound
+            let span = stage
+                .bound_size(c.resource)
+                .map_or(c.size, |bound| bound.saturating_sub(c.offset).max(c.size));
+            for (i, w) in words.iter().take(span as usize / 4).enumerate() {
                 let at = start + i;
                 if let Some(row) = rows.get_mut(at / 4) {
                     row[at % 4] = *w;
