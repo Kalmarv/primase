@@ -16,6 +16,7 @@ use serde_json::Value;
 
 use crate::layered::{Channel, Source, check_source};
 use crate::pbr::TextureRef;
+use crate::shader::ScalarEncoding;
 use crate::{Component, Entity, JsonError, World};
 
 /// A material's detail form (component `pbr.detail`).
@@ -45,7 +46,8 @@ pub enum DetailMix {
 /// - albedo `(1 - f) * C * colour`, reflectance (F0) `lerp(dielectric_f0, C, f)`
 /// - normal: `xy = 2 * N.xy - 1`, `z = sqrt(1 - min(dot(xy, xy), 1))` of the base's `xy`, then `xy += normal_strength *
 ///   (2 * lerp(K0.xy, K1.xy, w) - 1)`: tangent space, unnormalised
-/// - gloss `saturate(2 * N.z * lerp(K0.z + gloss_bias[0], K1.z + gloss_bias[1], w))`
+/// - gloss: `saturate(2 * N.z * lerp(K0.z + gloss_bias[0], K1.z + gloss_bias[1], w))` as the program stores it, decoded by
+///   `gloss_encoding` (the smoothness the lighting reads)
 /// - alpha `saturate(D0.a * A.a)`
 ///
 /// The operations are [`TwoDetailLerp::evaluate`]'s, in its order.
@@ -69,6 +71,8 @@ pub struct TwoDetailLerp {
     pub dielectric_f0: f32,
     /// Linear RGB the albedo is multiplied by.
     pub colour: [f32; 3],
+    /// How the program stores the gloss in its G-buffer (the binding's `Gloss` encoding).
+    pub gloss_encoding: ScalarEncoding,
 }
 
 /// The texture samples of one pixel of a [`TwoDetailLerp`], each a texture's four lanes as sampled.
@@ -162,8 +166,9 @@ impl TwoDetailLerp {
             base[1] + self.normal_strength * detail(1),
             z,
         ];
-        let gloss =
+        let stored =
             (2.0 * n[2] * lerp(k0[2] + self.gloss_bias[0], k1[2] + self.gloss_bias[1], w)).clamp(0.0, 1.0);
+        let gloss = self.gloss_encoding.decode(stored);
         let alpha = (d0[3] * a[3]).clamp(0.0, 1.0);
         DetailSurface {
             albedo,
@@ -231,6 +236,9 @@ impl Component for DetailedMaterial {
                     return Err("a detail mix constant is not finite".into());
                 }
                 mix.mask.check().map_err(|e| format!("mask: {e}"))?;
+                mix.gloss_encoding
+                    .check()
+                    .map_err(|e| format!("gloss encoding: {e}"))?;
                 for s in mix.mask.sources() {
                     check_source(world, "mask", s)?;
                 }
@@ -289,6 +297,7 @@ mod tests {
             reflectance_bias: [0.125, 0.75],
             dielectric_f0: 0.03,
             colour: [1., 1., 0.5],
+            gloss_encoding: ScalarEncoding::LINEAR,
         }
     }
 
@@ -330,6 +339,46 @@ mod tests {
         let gloss = 2. * 0.5 * (1. + (0. - 1.) * w);
         assert_eq!(out.gloss, gloss.clamp(0., 1.));
         assert_eq!(out.alpha, 0.5);
+    }
+
+    /// The gloss is computed as the program stores it and decoded by the stated encoding (Sekiro's: the square root of
+    /// the stored value, times 0.95); an encoding of power 0 is refused.
+    #[test]
+    fn the_gloss_is_decoded_by_its_encoding() {
+        let mut world = World::new();
+        let linear = mix(&mut world);
+        let encoding = ScalarEncoding {
+            power: 1,
+            root: 2,
+            scale_bits: 0.95f32.to_bits(),
+        };
+        let encoded = TwoDetailLerp {
+            gloss_encoding: encoding,
+            ..linear.clone()
+        };
+        let s = TwoDetailSamples {
+            base_colour: [0.1, 0.2, 0.05, 0.5],
+            base_normal: [0.5, 0.5, 0.25, 0.75],
+            base_mask: [0.5, 0., 0., 0.],
+            detail_colour: [[0.5; 4], [0.5; 4]],
+            detail_normal: [[0.5, 0.5, 0.75, 0.], [0.5, 0.5, 0.5, 0.]],
+        };
+        let weight = [1. - s.base_normal[3]];
+        let stored = linear.evaluate(&s, &weight).gloss;
+        assert!(stored > 0. && stored < 1.);
+        let gloss = encoded.evaluate(&s, &weight).gloss;
+        assert_eq!(gloss, encoding.decode(stored));
+        assert_eq!(gloss, stored.sqrt() * 0.95);
+        let e = world.spawn();
+        let bad = DetailedMaterial {
+            mix: DetailMix::TwoDetailLerp(TwoDetailLerp {
+                gloss_encoding: ScalarEncoding { power: 0, ..encoding },
+                ..linear
+            }),
+            lowering: SurfaceLowering::GlossReflectance,
+            frozen: Vec::new(),
+        };
+        assert!(bad.verify(e, &world).unwrap_err().contains("gloss encoding"));
     }
 
     /// A power of two is taken by squaring and any other exponent by multiplying in from the left; an exponent of 0 or

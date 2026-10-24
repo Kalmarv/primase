@@ -3,18 +3,20 @@
 //! any texture holds. The detail form of a material ([`primase_core::detail`]) is read and proven from such runs.
 //!
 //! The program is resolved as the bake resolves it ([`resolve`], no metaparam: the engine's constants by their roles,
-//! frozen as the program bake freezes them, [`layer_bake::program_constants`]). The material's own words are the
-//! caller's ([`ProgramProbe::material`], [`ProgramProbe::set_word`]): the program reads them as named fields or
-//! through `SAT_MtdParam` ([`MaterialForm`]). The inputs are frozen as stated in [`ProgramProbe::frozen`], the texture
-//! coordinate sets all the probe's coordinate.
+//! frozen as the program bake freezes them, [`layer_bake::program_constants`]), for a material
+//! ([`ProgramProbe::with_material`]) or none ([`ProgramProbe::new`]). The material's own words
+//! ([`ProgramProbe::material`]) are as the binding writes them, and the caller may set them ([`ProgramProbe::set_words`]):
+//! the program reads them as named fields or through `SAT_MtdParam` ([`MaterialForm`]). The engine's own textures read as
+//! the bake reads them ([`ProgramProbe::engine`]). The inputs are frozen as stated in [`ProgramProbe::frozen`], the
+//! texture coordinate sets all the probe's coordinate.
 use std::collections::BTreeMap;
 
 use primase_core::World;
-use primase_core::shader::{OutputBinding, ShaderFormat};
+use primase_core::shader::{ConstantRole, OutputBinding, ShaderFormat, TextureSource};
 use primase_shader_exec::evaluate::Constants;
 use primase_shader_exec::{Layout, PixelShader, ProgramShader, Sampler};
 
-use crate::layer_bake::resolve::{Unbound, resolve};
+use crate::layer_bake::resolve::{ProgramTexture, Unbound, program_texture, register, resolve, textures_of};
 use crate::layer_bake::{self, FrozenFrame};
 use crate::materials::LayeredMaterial;
 use crate::{Result, invalid};
@@ -56,9 +58,18 @@ pub struct ProgramProbe {
     registers: Vec<[u32; 4]>,
     uv: Vec<UvLane>,
     pub form: MaterialForm,
+    /// The words the material sets: its named fields or `SAT_MtdParam`, and the constants the binding takes from the
+    /// material or leaves unknown (the alpha reference excepted, frozen as the bake freezes it).
     pub material: Vec<MaterialWords>,
+    /// The program's other named constants: the engine's, as the bake freezes them
+    /// ([`layer_bake::program_constants`]).
+    pub engine_fields: Vec<MaterialWords>,
     /// The binding's outputs, by role and target.
     pub outputs: Vec<OutputBinding>,
+    /// The engine's own textures ([`ProgramTexture::Engine`]: the decal textures of the `_Paint` programs), by register,
+    /// each the value the bake reads it as (the binding's default, its reason counted in [`ProgramProbe::policies`]):
+    /// the answer a caller gives them, the rest of the program's textures being the material's.
+    pub engine: BTreeMap<u32, [f32; 4]>,
     /// Each input frozen, and the value it is frozen to: what a result shown from these runs holds constant.
     pub frozen: Vec<String>,
     /// What the binding counted.
@@ -94,10 +105,7 @@ impl ProgramProbe {
     /// Sekiro's DXBC pixel program `bytes`, resolved as the bake resolves it with no material stated, its material's words
     /// zero until set.
     pub fn new(bytes: &[u8]) -> Result<Self> {
-        let shader = layer_bake::program_executor(ShaderFormat::Dxbc, bytes)?;
-        let mut world = World::default();
-        let program = world.spawn();
-        let material = LayeredMaterial {
+        let unstated = LayeredMaterial {
             mtd: "probe".into(),
             definition: crate::mtd::MaterialDefinition {
                 shader: String::new(),
@@ -108,6 +116,16 @@ impl ProgramProbe {
             },
             bindings: BTreeMap::new(),
         };
+        Self::with_material(bytes, &unstated)
+    }
+
+    /// Sekiro's DXBC pixel program `bytes` bound as the bake binds it for `material`: its material's words the
+    /// material's, as the one binding writes them (a colour times its intensity), those it states none for zero until
+    /// set.
+    pub fn with_material(bytes: &[u8], material: &LayeredMaterial) -> Result<Self> {
+        let shader = layer_bake::program_executor(ShaderFormat::Dxbc, bytes)?;
+        let mut world = World::default();
+        let program = world.spawn();
         let resolution = resolve(
             &shader,
             program,
@@ -144,11 +162,68 @@ impl ProgramProbe {
             word: f.offset,
             words: f.words,
         });
-        let (form, material) = match (named.is_empty(), sat) {
+        let (form, mut words) = match (named.is_empty(), sat) {
             (false, _) => (MaterialForm::Named, named),
             (true, Some(sat)) => (MaterialForm::Sat, vec![sat]),
             (true, None) => (MaterialForm::None, Vec::new()),
         };
+        // the constants the binding takes from the material, or leaves unknown where it states none, are the
+        // material's too (a parameter the engine names `FC_*`, such as the diffuse colour `FC_DifMapMulCol`)
+        for c in &resolution.stage.constants {
+            let (ConstantRole::Material(_) | ConstantRole::Unknown { .. }) = c.role else {
+                continue;
+            };
+            // the alpha reference the bake freezes ([`layer_bake::ALPHA_TEST_POLICY`]) stays frozen
+            let Some(name) = c.name.clone().filter(|n| n != "FC_AlphaRef") else {
+                continue;
+            };
+            let Some(f) = layout.fields.get(&name) else {
+                continue;
+            };
+            if !words.iter().any(|m| m.name == name) {
+                words.push(MaterialWords {
+                    name,
+                    buffer: f.buffer,
+                    word: f.offset,
+                    words: f.words,
+                });
+            }
+        }
+        let engine_fields = layout
+            .fields
+            .iter()
+            .filter(|(n, _)| {
+                !n.ends_with("_PADDING") && *n != "SAT_MtdParam" && !words.iter().any(|m| m.name == **n)
+            })
+            .map(|(n, f)| MaterialWords {
+                name: n.clone(),
+                buffer: f.buffer,
+                word: f.offset,
+                words: f.words,
+            })
+            .collect();
+        let mut engine = BTreeMap::new();
+        for resource in textures_of(&interface) {
+            if let ProgramTexture::Engine(name) = program_texture(&material.view(), resource) {
+                let value = resolution
+                    .stage
+                    .textures
+                    .iter()
+                    .find(|b| b.resource == resource.id)
+                    .and_then(|b| match b.source {
+                        TextureSource::Default { value, .. } => Some(value),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        invalid(
+                            "detail probe",
+                            0,
+                            format!("engine texture {name} is not bound to a value"),
+                        )
+                    })?;
+                engine.insert(register(resource)?, value);
+            }
+        }
         let mut registers = vec![[0u32; 4]; shader.input_count()];
         let mut uv = Vec::new();
         let mut frozen = Vec::new();
@@ -191,8 +266,10 @@ impl ProgramProbe {
             registers,
             uv,
             form,
-            material,
+            material: words,
+            engine_fields,
             outputs: resolution.stage.outputs,
+            engine,
             frozen,
             policies,
         })
@@ -208,6 +285,18 @@ impl ProgramProbe {
         self.constants
             .set_words(buffer, word, words)
             .map_err(|e| invalid("detail probe", e.at, e.detail))
+    }
+
+    /// The `count` words of the buffer `buffer` from word `word`, as set; `None` past the buffer.
+    pub fn words(&self, buffer: u32, word: u32, count: u32) -> Option<Vec<u32>> {
+        let (_, rows) = self
+            .constants
+            .buffers()
+            .iter()
+            .find(|(slot, _)| *slot == buffer)?;
+        (word..word + count)
+            .map(|w| rows.get(w as usize / 4).map(|row| row[w as usize % 4]))
+            .collect()
     }
 
     /// Freezes the used input `name``index` to `value` instead (a single-lane coordinate a vertex stage passes, to see
