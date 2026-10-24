@@ -5,8 +5,10 @@ use crate::materials::Material;
 use crate::metaparam::Metaparam;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::shader::{Shader, ShaderBinding, ShaderFormat};
+use primase_core::shader::{Shader, ShaderBinding, ShaderFormat, Stage};
 use primase_core::{ColorSpace, Component, Entity, Mesh, Name, Semantic, TexRole, Texture, World};
+use primase_shader::ProgramGraph;
+use primase_shader::output_uses::bind_output_uses;
 use primase_shader_exec::PixelShader;
 use primase_shader_exec::ProgramShader;
 use std::collections::BTreeMap;
@@ -17,8 +19,10 @@ use std::collections::BTreeMap;
 /// from it), one `core.texture` entity per bound texture file and colour space (the DDS as stored: block data, every
 /// mip), and a `core.shader_binding` on the material: the material's own constants as the words the program reads,
 /// the engine's per-view, per-frame and per-object values as roles (never values), the sampler state the source
-/// states (none), each texture slot and the G-buffer's outputs by their role. A material whose program the reader
-/// does not hold is counted and left unbound.
+/// states (none), each texture slot and the G-buffer's outputs by their role (a lane the layout leaves Unknown is
+/// Coverage where the program's discard tests what it writes there, Opacity where the target's blend weighs by its alpha:
+/// [`primase_shader::output_uses`], counted by program family). A material whose program the reader does not hold is
+/// counted and left unbound.
 ///
 /// The option is required: it says what a texture slot with no texture, or whose file the reader does not hold,
 /// becomes. `preview` gives it a stated colour for its role (a mid-grey albedo, a flat normal, zero elsewhere), a
@@ -192,8 +196,9 @@ fn run(
             Some((e, m.clone(), kind))
         })
         .collect();
-    // the programs read once, each its own entity
-    let mut shaders: BTreeMap<String, (Entity, ProgramShader)> = BTreeMap::new();
+    // the programs read once, each its own entity, with its value graph (or why there is none)
+    let mut shaders: BTreeMap<String, (Entity, ProgramShader, Result<ProgramGraph, String>)> =
+        BTreeMap::new();
     // the textures spawned, by stem and colour space
     let mut textures: BTreeMap<(String, bool), Entity> = BTreeMap::new();
     // the vertex programs, each its own entity with the interface read once, by file name
@@ -203,6 +208,8 @@ fn run(
     let draws = draws(world);
     let mut tally: BTreeMap<&'static str, Tally> = BTreeMap::new();
     let mut policies: BTreeMap<String, u64> = BTreeMap::new();
+    // the output lanes the program's discards or its target's blend show a use for, by role and program family
+    let mut uses: BTreeMap<(&'static str, String), u64> = BTreeMap::new();
     let mut program_names = BTreeMap::new();
     for (name, code) in programs {
         program_names
@@ -274,9 +281,10 @@ fn run(
                     interface: PixelShader::interface(&parsed).clone(),
                 },
             );
-            shaders.insert(name.clone(), (entity, parsed));
+            let graph = parsed.program().graph();
+            shaders.insert(name.clone(), (entity, parsed, graph));
         }
-        let (shader_entity, parsed) = &shaders[&name];
+        let (shader_entity, parsed, graph) = &shaders[&name];
         let metaparam = bundle_entity
             .and_then(|e| parameters.get(&e))
             .and_then(Option::as_ref);
@@ -387,6 +395,29 @@ fn run(
         if state.depth.is_some_and(|d| !d.write) {
             t.without_depth_write += 1;
         }
+        // the lanes left Unknown that the program's discards or the target's blend show a use for
+        if let Some(pixel) = stages.iter_mut().find(|s| s.stage == Stage::Pixel) {
+            let bound = bind_output_uses(
+                &mut pixel.outputs,
+                PixelShader::interface(parsed),
+                graph.as_ref().ok(),
+                &state,
+            );
+            let family = format!(
+                "{}{}",
+                material.pass(),
+                if material.alpha_reference() > 0 {
+                    "_[A]"
+                } else {
+                    ""
+                }
+            );
+            for (role, lanes) in [("Coverage", bound.coverage), ("Opacity", bound.opacity)] {
+                if lanes > 0 {
+                    *uses.entry((role, family.clone())).or_default() += u64::from(lanes);
+                }
+            }
+        }
         world.insert(material_entity, ShaderBinding { stages, state });
         t.bound += 1;
     }
@@ -460,6 +491,12 @@ fn run(
                 t.without_skin,
             );
         }
+    }
+    for ((role, family), lanes) in uses {
+        log.count(
+            &format!("pixel output lanes made {role} by the program's discard or the target's blend, over the materials bound ({family} programs)"),
+            lanes,
+        );
     }
     log.count("shader programs", (shaders.len() + vertex_shaders.len()) as u64);
     log.count("bound texture files", textures.len() as u64);

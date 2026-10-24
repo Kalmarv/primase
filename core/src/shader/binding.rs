@@ -708,6 +708,12 @@ pub enum OutputRole {
     },
     /// The finished colour of a forward pass.
     Colour,
+    /// Whether the fragment is kept: a value a discard of the program tests (the lane's written value is among what the
+    /// discard's conditions are made of), so the surface is cut where the test fails. Not a fraction.
+    Coverage,
+    /// How opaque the surface is (1 opaque) as the target's blend takes it: the alpha lane of a target whose stated
+    /// blend weighs the colour by the source alpha.
+    Opacity,
     /// Lanes the program writes that no role is established for, with why: what the source's evidence shows of them
     /// (what reads them, or that nothing examined does). Never empty.
     Unknown {
