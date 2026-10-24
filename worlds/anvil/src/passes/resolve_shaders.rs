@@ -22,7 +22,8 @@
 //!   Material's property, else the template's default for the binding). A property neither sets, and a UV transform
 //!   that moves or rotates (the time term and the product order are not established), is `Unknown` with the reason.
 //!   The rows of `cb3` no binding covers are `Unknown`. The other constant buffers (`cb0` per frame, `cb1` per view,
-//!   `cb2` per draw) are the engine's: the program is lifted and only the lanes it reads are bound (a program reads a
+//!   `cb2` per draw) are the engine's: the program is lifted and only the lanes it reads are bound
+//!   ([`primase_shader::WordsRead`]: the words its outputs, discards and writes are made of; a program reads a
 //!   few rows of buffers of some hundred; the rest are counted as left out, a buffer indexed by a computed value is one
 //!   `Unknown` constant). The rows the notes establish have roles where the vocabulary has one: `cb1[37]`
 //!   (`1/W, 1/H, W, H`) the `InverseViewportSize` in its lanes x, y and the `ViewportSize` in z, w, `cb1[39].x` the `Exposure`, `cb2[8..12]` and `cb2[12..16]` the object's `WorldViewProjection` and its `PreviousFrame` one,
@@ -76,7 +77,7 @@ use primase_core::shader::{
     VariantKey, Varying, ViewParameter,
 };
 use primase_core::{ColorSpace, Component, Entity, MaterialVariants, Mesh, Name, Semantic, Texture, World};
-use primase_shader::ConstantReads;
+use primase_shader::WordsRead;
 
 use crate::components::{
     AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags,
@@ -437,7 +438,7 @@ fn engine_constants(
     register: u32,
     resource: ResourceId,
     size: u32,
-    reads: Result<&ConstantReads, &str>,
+    reads: Result<&WordsRead, &str>,
     m: &AnvilMaterial,
     counts: &mut BTreeMap<String, u64>,
 ) -> Vec<ConstantBinding> {
@@ -465,7 +466,8 @@ fn engine_constants(
             ));
         }
     };
-    let (rows, dynamic) = reads.rows_of(0, register);
+    let buffer = reads.buffer_at(0, register);
+    let (rows, dynamic) = buffer.map_or((Vec::new(), false), |b| (reads.rows(b), reads.indexed(b)));
     if dynamic {
         bump(
             "engine constant buffers a program indexes by a computed value, bound whole and Unknown",
@@ -502,7 +504,7 @@ fn engine_constants(
             }
             continue;
         }
-        let lanes = reads.lanes_of(0, register, row);
+        let lanes = buffer.map_or_else(Vec::new, |b| reads.lanes(b, row));
         let mut covered = [false; 4];
         for (first, count, role) in engine_tile(register, row, reference) {
             if !(first..first + count).any(|lane| lanes.contains(&lane)) {
@@ -643,8 +645,8 @@ impl Pass for ResolveAnvilShaders {
             .map(|(e, m)| (e, m.clone()))
             .collect();
         let mut programs: BTreeMap<(Entity, bool, u32), Result<Entity, String>> = BTreeMap::new();
-        // each program's constant reads, or why they could not be taken (the lift's error)
-        let mut reads_of: BTreeMap<Entity, Result<ConstantReads, String>> = BTreeMap::new();
+        // each program's constant reads, or why they could not be taken (the lift's or the value graph's error)
+        let mut reads_of: BTreeMap<Entity, Result<WordsRead, String>> = BTreeMap::new();
         // the vertex layout number (`anvil.layout.kind`) of every mesh drawn with each Material
         let mut layouts_of: BTreeMap<Entity, std::collections::BTreeSet<u8>> = BTreeMap::new();
         for (_, mesh) in world.iter::<AnvilMesh>() {
@@ -788,8 +790,9 @@ impl Pass for ResolveAnvilShaders {
                             .get::<Shader>(shader)
                             .ok_or_else(|| "a resolved shader entity without its shader".to_owned())?;
                         primase_dxbc::lift(&s.bytecode)
-                            .map(|p| ConstantReads::of_module(p.module, |b| (b.group, b.binding)))
-                            .map_err(|e| format!("the lift: {e}"))
+                            .map_err(|e| format!("the lift: {e}"))?
+                            .constant_reads()
+                            .map_err(|e| format!("the value graph: {e}"))
                     })
                     .clone();
                 bound.push(self.stage_binding(
@@ -895,7 +898,7 @@ impl ResolveAnvilShaders {
         shader: Entity,
         interface: &Interface,
         vertex_bound: bool,
-        reads: Result<&ConstantReads, &str>,
+        reads: Result<&WordsRead, &str>,
         counts: &mut BTreeMap<String, u64>,
     ) -> StageBinding {
         let bump = |what: &str, counts: &mut BTreeMap<String, u64>| {
@@ -1553,7 +1556,7 @@ mod key_tests {
     #[test]
     fn the_engine_buffers_bind_the_lanes_the_program_reads() {
         let program = primase_dxbc::lift(LIFTED).unwrap();
-        let reads = ConstantReads::of_module(program.module.clone(), |b| (b.group, b.binding));
+        let reads = program.constant_reads().unwrap();
         let m = material(Vec::new(), Vec::new(), Vec::new());
         let mut found_buffer = false;
         for r in &program.interface.resources {
@@ -1566,7 +1569,8 @@ mod key_tests {
             found_buffer = true;
             let mut counts = BTreeMap::new();
             let bound = engine_constants(bind.register, r.id, layout.size, Ok(&reads), &m, &mut counts);
-            let (rows, dynamic) = reads.rows_of(0, bind.register);
+            let buffer = reads.buffer_at(0, bind.register).unwrap();
+            let (rows, dynamic) = (reads.rows(buffer), reads.indexed(buffer));
             if dynamic {
                 assert_eq!(bound.len(), 1);
                 assert_eq!(bound[0].size, layout.size);
@@ -1574,7 +1578,7 @@ mod key_tests {
             }
             // every lane read is inside a binding, and a binding of an Unknown run holds only lanes that were read
             for row in &rows {
-                for lane in reads.lanes_of(0, bind.register, *row) {
+                for lane in reads.lanes(buffer, *row) {
                     let at = row * 16 + lane * 4;
                     assert!(
                         bound.iter().any(|c| c.offset <= at && at < c.offset + c.size),
@@ -1589,7 +1593,7 @@ mod key_tests {
             {
                 for at in (c.offset..c.offset + c.size).step_by(4) {
                     assert!(
-                        reads.reads(0, bind.register, at, 4),
+                        reads.reads(buffer, at, 4),
                         "cb{} byte {at} is bound Unknown and not read",
                         bind.register
                     );
@@ -1612,9 +1616,7 @@ mod key_tests {
         m.flags.booleans[MaterialFlags::ALPHA_TEST_ENABLED] = 1;
         let mut counts = BTreeMap::new();
         // a program that reads cb2[18].y gets the Material's reference, the 128 / 255 of a Material with the test on
-        let reads = ConstantReads::of_module(primase_dxbc::lift(LIFTED).unwrap().module, |b| {
-            (b.group, b.binding)
-        });
+        let reads = primase_dxbc::lift(LIFTED).unwrap().constant_reads().unwrap();
         let _ = engine_constants(2, ResourceId(0), 18 * 16 + 16, Ok(&reads), &m, &mut counts);
         let tile = |reference: f32| engine_tile(2, 18, reference).remove(0);
         assert_eq!(

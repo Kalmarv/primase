@@ -19,7 +19,6 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
 use primase_core::shader::{Shader, ShaderBinding, Stage};
 use primase_core::{Instance, World};
-use primase_shader::ConstantReads;
 use primase_testdata::{Game, install};
 
 #[test]
@@ -81,12 +80,16 @@ fn how_the_programs_read_the_engine_buffers() {
             continue;
         };
         programs += 1;
-        let reads = ConstantReads::of_module(lifted.module, |b| (b.group, b.binding));
+        let Ok(reads) = lifted.constant_reads() else {
+            continue;
+        };
         for register in 0..3 {
-            let (rows, _) = reads.rows_of(0, register);
-            for row in rows {
+            let Some(buffer) = reads.buffer_at(0, register) else {
+                continue;
+            };
+            for row in reads.rows(buffer) {
                 let entry = lanes.entry((stage, register, row)).or_default();
-                for lane in reads.lanes_of(0, register, row) {
+                for lane in reads.lanes(buffer, row) {
                     entry[lane as usize] += 1;
                 }
             }

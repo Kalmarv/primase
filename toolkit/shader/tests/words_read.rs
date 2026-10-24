@@ -41,6 +41,11 @@ fn a_program_that_loads_whole_registers_reads_only_the_lanes_it_uses() {
     assert!(!reads.reads(pass, 996 * 4, 64 * 4), "the 16 rows between");
     let set = buffer(&program, 0);
     assert_eq!(reads.words(set).collect::<Vec<_>>(), [0]);
+    // as rows of four lanes: the clip rows whole, the camera's row without its w
+    assert_eq!(reads.rows(pass), [245, 246, 247, 248, 265]);
+    assert_eq!(reads.lanes(pass, 265), [0, 1, 2]);
+    assert_eq!(reads.lanes(pass, 246), [0, 1, 2, 3]);
+    assert!(reads.lanes(pass, 250).is_empty());
     // the same by D3D bind point (space 0)
     assert_eq!(reads.buffer_at(0, 4), Some(pass));
     assert!(reads.reads_at(0, 4, 1062 * 4, 4));

@@ -93,6 +93,23 @@ impl WordsRead {
         self.words.get(&buffer).into_iter().flatten().copied()
     }
 
+    /// The rows (registers of four lanes) of `buffer` with a word read at a place the program states, in order.
+    pub fn rows(&self, buffer: ResourceId) -> Vec<u32> {
+        let mut rows: Vec<u32> = self.words(buffer).map(|w| w / 4).collect();
+        rows.dedup();
+        rows
+    }
+
+    /// The lanes read of row `row` of `buffer`, in order.
+    pub fn lanes(&self, buffer: ResourceId, row: u32) -> Vec<u32> {
+        self.words
+            .get(&buffer)
+            .into_iter()
+            .flat_map(|words| words.range(row.saturating_mul(4)..row.saturating_mul(4).saturating_add(4)))
+            .map(|w| w % 4)
+            .collect()
+    }
+
     /// Whether `buffer` is read at an index computed at run time: any of its words may be read.
     pub fn indexed(&self, buffer: ResourceId) -> bool {
         self.indexed.contains(&buffer)
