@@ -24,10 +24,10 @@
 //! - **Viewport.** `x = X + (x/w + 1) / 2 * W`, `y = Y + (1 - y/w) / 2 * H` (y down), `z = MinDepth + z/w * (MaxDepth -
 //!   MinDepth)`.
 //! - **Rasterization.** Positions are snapped to 1/256 of a pixel (16.8 fixed point), as D3D's 8 bits of sub-pixel
-//!   precision (15.16), to the nearest and saturating at the format's range (3.2.4.1). A pixel is drawn when its
-//!   centre is inside the triangle, or on an edge that is a top or a left edge. The facing is the sign of the snapped
-//!   area: with y down a clockwise triangle is front facing unless the state says counter-clockwise; culling drops the
-//!   facing it names; a zero-area triangle draws nothing.
+//!   precision (15.16), to the nearest with a tie to even and saturating at the format's range (3.2.4.1). A pixel is
+//!   drawn when its centre is inside the triangle, or on an edge that is a top or a left edge. The facing is the sign
+//!   of the snapped area: with y down a clockwise triangle is front facing unless the state says counter-clockwise;
+//!   culling drops the facing it names; a zero-area triangle draws nothing.
 //! - **Interpolation.** At the pixel centre, from the snapped positions: perspective-correct (the default), linear in
 //!   screen space (`noperspective`) or the provoking vertex's value (`nointerpolation`, integers; the triangle's first
 //!   vertex). Centroid and sample interpolation are the centre's (one sample a pixel). Depth is linear in screen space
@@ -530,9 +530,10 @@ impl<'a> DrawShader<'a> {
 /// The 16.8 fixed point's range in 1/256 pixels: 16 signed integer bits, 8 fractional (3.2.4.1).
 const FIXED: [i64; 2] = [-(1 << 23), (1 << 23) - 1];
 
-/// A screen coordinate in 16.8 fixed point: to the nearest, saturating at the format's range (3.2.4.1).
+/// A screen coordinate in 16.8 fixed point: to the nearest, a tie to even, saturating at the format's range (3.2.4.1's
+/// reference conversion; WARP takes the tie to even too, on exec_warp_draw's tie cases).
 fn fixed(x: f64) -> i64 {
-    ((x * 256.).round() as i64).clamp(FIXED[0], FIXED[1])
+    ((x * 256.).round_ties_even() as i64).clamp(FIXED[0], FIXED[1])
 }
 
 /// Twice the signed area of `a`, `b`, `p` in fixed point: positive when `p` is right of `a -> b` (y down). With every
@@ -846,10 +847,15 @@ mod tests {
     }
 
     #[test]
-    fn snapping_rounds_to_the_nearest_and_saturates() {
+    fn snapping_rounds_to_the_nearest_a_tie_to_even_and_saturates() {
         assert_eq!(fixed(100.25), 25664);
         assert_eq!(fixed(1. / 1024.), 0);
         assert_eq!(fixed(3. / 1024.), 1);
+        // a tie goes to the even step, either way from zero
+        assert_eq!(fixed(1152.5 / 256.), 1152);
+        assert_eq!(fixed(1153.5 / 256.), 1154);
+        assert_eq!(fixed(-1152.5 / 256.), -1152);
+        assert_eq!(fixed(1. / 512.), 0);
         assert_eq!(fixed(1e30), FIXED[1]);
         assert_eq!(fixed(-1e30), FIXED[0]);
         assert_eq!(fixed(f64::INFINITY), FIXED[1]);

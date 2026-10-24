@@ -118,8 +118,8 @@ fn cases() -> Vec<DrawCase> {
     // a vertical left edge and a horizontal top edge exactly halfway between two 16.8 fixed-point steps (x * 256 =
     // 1152.5, y * 256 = 896.5; the values are dyadic, so the clip coordinates are exact in f32): rounded half away from
     // zero the edge is 1/256 past the centres of column 4 (row 3) and leaves them out; rounded to even it passes
-    // through them, and the top-left rule draws them. Which rounding the snap takes (3.2.4.1's reference is
-    // ties-to-even, 0.6 ULP allowed) is what these two settle
+    // through them, and the top-left rule draws them. WARP draws them: the snap takes ties to even (3.2.4.1's
+    // reference conversion; it allows 0.6 ULP)
     let tie = 4.5 + 1.0 / 512.0;
     let tie_x = vec![
         v(at(tie, 2.25, 0.5, 1.0), red, [0.0, 0.0], 1.0),
