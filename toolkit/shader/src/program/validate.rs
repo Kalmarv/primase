@@ -53,25 +53,31 @@ pub const CAPABILITIES: naga::valid::Capabilities = naga::valid::Capabilities::C
     .union(naga::valid::Capabilities::STORAGE_TEXTURE_BINDING_ARRAY_NON_UNIFORM_INDEXING)
     .union(naga::valid::Capabilities::MESH_SHADER);
 
+/// naga's validation of a module, with the capabilities a program may use. The error is naga's, with every source in
+/// its chain.
+pub(crate) fn module_info(module: &naga::Module) -> Result<naga::valid::ModuleInfo, String> {
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), CAPABILITIES)
+        .validate(module)
+        .map_err(|e| {
+            // naga's error says where in a chain of sources; keep all of it
+            let mut text = e.as_inner().to_string();
+            let mut source = std::error::Error::source(e.as_inner());
+            while let Some(inner) = source {
+                text.push_str(": ");
+                text.push_str(&inner.to_string());
+                source = inner.source();
+            }
+            text
+        })
+}
+
 /// Check `program`: naga's validation of its module, then the program rules. Every problem found is returned.
 pub fn validate(program: &Program) -> Result<naga::valid::ModuleInfo, Vec<Problem>> {
     let mut problems = Vec::new();
-    let info = match naga::valid::Validator::new(naga::valid::ValidationFlags::all(), CAPABILITIES)
-        .validate(&program.module)
-    {
+    let info = match module_info(&program.module) {
         Ok(info) => Some(info),
-        Err(e) => {
-            {
-                // naga's error says where in a chain of sources; keep all of it
-                let mut text = e.as_inner().to_string();
-                let mut source = std::error::Error::source(e.as_inner());
-                while let Some(inner) = source {
-                    text.push_str(": ");
-                    text.push_str(&inner.to_string());
-                    source = inner.source();
-                }
-                problems.push(Problem::Module(text));
-            }
+        Err(text) => {
+            problems.push(Problem::Module(text));
             None
         }
     };

@@ -34,6 +34,7 @@ mod text;
 mod validate;
 
 pub use io::{EntryIo, FnItem, FunctionSig, IoItem, IoType, entry_io, mesh_vertex_io, stage_functions};
+pub(crate) use validate::module_info;
 pub use validate::{Problem, validate};
 
 use std::collections::BTreeSet;
@@ -155,6 +156,9 @@ pub enum Error {
     /// A writer cannot express the program and refuses it rather than approximate.
     #[error("{writer} cannot write this program: {detail}")]
     Unsupported { writer: &'static str, detail: String },
+    /// The pipeline a program is written for asks what the program cannot meet ([`crate::emit::Pipeline`]).
+    #[error("the pipeline cannot take this program: {0}")]
+    Pipeline(String),
 }
 
 impl Program {

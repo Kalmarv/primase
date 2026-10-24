@@ -1,6 +1,10 @@
 //! Writers: a [`Program`] as source text for another API. A writer that cannot express a program refuses it with the
 //! reason; it never approximates.
 
+mod pipeline;
+
+pub use pipeline::{ClipVaryings, Pipeline, Written, wgsl_for};
+
 use crate::{Program, ProgramError as Error};
 
 /// The program as WGSL, by naga's WGSL backend. The program is validated first; a program the validator or the
@@ -19,6 +23,12 @@ use crate::{Program, ProgramError as Error};
 /// tessellator) is refused by name: a consumer that tessellates writes its own program from these (see
 /// [`wgsl_functions`] for the functions as text).
 pub fn wgsl(program: &Program) -> Result<String, Error> {
+    writable(program)?;
+    wgsl_functions(program)
+}
+
+/// Whether WGSL has an entry point for the program's stage ([`wgsl`]'s refusal).
+fn writable(program: &Program) -> Result<(), Error> {
     if crate::stage_functions(&program.interface)
         .map_err(Error::Invalid)?
         .is_some()
@@ -36,21 +46,29 @@ pub fn wgsl(program: &Program) -> Result<String, Error> {
             ),
         });
     }
-    wgsl_functions(program)
+    if program.stage.is_ray_tracing() {
+        return Err(ray_tracing(program));
+    }
+    Ok(())
+}
+
+/// The refusal of a ray tracing program's WGSL.
+fn ray_tracing(program: &Program) -> Error {
+    Error::Unsupported {
+        writer: "wgsl",
+        detail: format!(
+            "a {:?} program has no WGSL form: WebGPU has no ray tracing pipeline, and the program's operations \
+             ({}) are the pipeline's",
+            program.stage,
+            crate::rt::OPERATIONS.join(", ")
+        ),
+    }
 }
 
 /// The module as WGSL whatever its stage: for a program of a stage with no entry point, its functions, to be read.
 pub fn wgsl_functions(program: &Program) -> Result<String, Error> {
     if program.stage.is_ray_tracing() {
-        return Err(Error::Unsupported {
-            writer: "wgsl",
-            detail: format!(
-                "a {:?} program has no WGSL form: WebGPU has no ray tracing pipeline, and the program's \
-                 operations ({}) are the pipeline's",
-                program.stage,
-                crate::rt::OPERATIONS.join(", ")
-            ),
-        });
+        return Err(ray_tracing(program));
     }
     module_text(program)
 }
