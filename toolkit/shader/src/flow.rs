@@ -798,6 +798,18 @@ impl<'a> Walker<'a> {
         Ok(self.typifier.get(h, &self.module.types).clone())
     }
 
+    /// Whether expression `h` is a resource handle: a global in the handle address space (a texture, a sampler, an array
+    /// of them) or an element of one. A handle is read where a resource is named ([`Walker::image`]), never as lanes.
+    fn is_handle(&self, h: Handle<Expression>) -> bool {
+        match self.function.expressions[h] {
+            Expression::GlobalVariable(g) => {
+                self.module.global_variables[g].space == naga::AddressSpace::Handle
+            }
+            Expression::Access { base, .. } | Expression::AccessIndex { base, .. } => self.is_handle(base),
+            _ => false,
+        }
+    }
+
     /// The number of lanes of expression `h`'s value.
     fn width_of(&mut self, h: Handle<Expression>) -> Result<usize, String> {
         let ty = self.ty(h)?;
@@ -889,7 +901,7 @@ impl<'a> Walker<'a> {
                 lanes(out)
             }
             Expression::AccessIndex { base, index } => {
-                if is_pointer(&self.ty(base)?) {
+                if is_pointer(&self.ty(base)?) || self.is_handle(base) {
                     return Ok(Val::Pointer);
                 }
                 let ty = self.ty(base)?;
@@ -898,7 +910,7 @@ impl<'a> Walker<'a> {
                 lanes(v.get(range).ok_or("an access past the value")?.to_vec())
             }
             Expression::Access { base, index } => {
-                if is_pointer(&self.ty(base)?) {
+                if is_pointer(&self.ty(base)?) || self.is_handle(base) {
                     return Ok(Val::Pointer);
                 }
                 let ty = self.ty(base)?;

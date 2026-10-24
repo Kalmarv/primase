@@ -376,3 +376,52 @@ fn an_atomic_on_thread_group_memory_is_followed() {
         "no add of the counter and the index in what the writes are made of"
     );
 }
+
+/// A texture picked from an array by an index the program computes (`resource_arrays.hlsl`, dxc's `-T ps_6_0` and
+/// `-T ps_6_6`): the value graph builds (the element of an array of resources is a handle, which is read where the
+/// resource is named, not a value), and each read of the array is a texel of the array's resource with the index among
+/// its controls.
+#[test]
+fn a_texture_picked_from_an_array_by_a_run_time_index_is_a_texel_of_the_array_with_the_index_as_a_control() {
+    for (name, bytes) in [
+        (
+            "ps_6_0",
+            &include_bytes!("../../dxil/tests/fixtures/resource_arrays.dxil")[..],
+        ),
+        (
+            "ps_6_6",
+            &include_bytes!("../../dxil/tests/fixtures/resource_arrays.66.dxil")[..],
+        ),
+    ] {
+        let program = primase_dxil::lift(bytes).expect("dxc's program lifts");
+        let values = Values::of_program(&program).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let tex = program
+            .interface
+            .resources
+            .iter()
+            .find(|r| r.count == 4 && matches!(r.kind, primase_shader::ResourceKind::Texture { .. }))
+            .unwrap_or_else(|| panic!("{name}: the array of four textures"));
+        // each read of the array: how, and whether its first control (the element) is a number or something computed
+        let reads: Vec<(Read, bool)> = values
+            .reached_from(values.roots())
+            .into_iter()
+            .filter_map(|id| match values.node(id) {
+                Node::Texel {
+                    resource,
+                    read,
+                    controls,
+                    ..
+                } if *resource == Some(tex.id) => {
+                    let element = controls.first().map(|&c| values.node(c));
+                    Some((*read, element.is_some_and(|n| !matches!(n, Node::Literal(_)))))
+                }
+                _ => None,
+            })
+            .collect();
+        // `tex[which.x].SampleLevel(..)` and `tex[which.x + 1].Load(..)` name their element by a computed value,
+        // `tex[2].SampleLevel(..)` by a number
+        assert!(reads.contains(&(Read::Sample, true)), "{name}: {reads:?}");
+        assert!(reads.contains(&(Read::Sample, false)), "{name}: {reads:?}");
+        assert!(reads.contains(&(Read::Load, true)), "{name}: {reads:?}");
+    }
+}
