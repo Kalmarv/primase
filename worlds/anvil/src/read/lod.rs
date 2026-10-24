@@ -24,7 +24,9 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::fields::LE;
 use crate::read::reference::{self, Reference};
+use primase_bytes::{Cursor, Field, FieldError};
 
 /// A record type: equals the CRC-32 of the ASCII string `LODSelector` (the name a label).
 pub const LOD_SELECTOR: u32 = 0x51DC_6B80;
@@ -36,8 +38,8 @@ pub const LEVELS: usize = 5;
 /// Why a LODSelector body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("LODSelector body: {have} bytes, shorter than its {what}")]
-    Short { what: &'static str, have: usize },
+    #[error("LODSelector body: {0}")]
+    Short(#[from] FieldError),
     #[error("LODSelector {what}: {found}, only {read} is read")]
     Value {
         what: &'static str,
@@ -86,45 +88,6 @@ pub struct StoredLodSelector {
     pub trailer: [u8; 6],
 }
 
-/// Little-endian fields read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
-}
-
-impl Cursor<'_> {
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let short = Error::Short {
-            what,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(N).ok_or(Error::Short {
-            what,
-            have: self.b.len(),
-        })?;
-        let s: [u8; N] = self
-            .b
-            .get(self.at..end)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn u8(&mut self, what: &'static str) -> Result<u8, Error> {
-        let [b] = self.array::<1>(what)?;
-        Ok(b)
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
-    fn u64(&mut self, what: &'static str) -> Result<u64, Error> {
-        Ok(u64::from_le_bytes(self.array(what)?))
-    }
-    fn f32(&mut self, what: &'static str) -> Result<f32, Error> {
-        Ok(f32::from_le_bytes(self.array(what)?))
-    }
-}
-
 impl StoredLevel {
     /// Its `SwitchDistance`: the level's far limit.
     pub fn switch_distance(&self) -> f32 {
@@ -154,8 +117,8 @@ impl StoredLodSelector {
 
     /// The body parsed.
     pub fn parse(body: &[u8]) -> Result<StoredLodSelector, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        let first = c.u8("first byte")?;
+        let mut c = Cursor::new(body);
+        let first = c.u8().field("first byte")?;
         if first != 1 {
             return Err(Error::Value {
                 what: "first byte",
@@ -163,12 +126,12 @@ impl StoredLodSelector {
                 read: "1",
             });
         }
-        let head = c.u32("head")?;
-        let head_rest = c.array::<7>("head")?;
+        let head = c.u32(LE).field("head")?;
+        let head_rest = c.array::<7>().field("head")?;
         let mut levels = Vec::with_capacity(LEVELS);
         for _ in 0..LEVELS {
-            let level_head = c.u64("level")?;
-            let marker = c.u32("level marker")?;
+            let level_head = c.u64(LE).field("level")?;
+            let marker = c.u32(LE).field("level marker")?;
             if marker != LOD_DESCRIPTOR {
                 return Err(Error::Value {
                     what: "level marker",
@@ -176,21 +139,18 @@ impl StoredLodSelector {
                     read: "0xA360319A",
                 });
             }
-            let reference =
-                reference::parse(c.array::<{ reference::LENGTH }>("reference")?).map_err(Error::Reference)?;
-            let floats = [c.f32("level")?, c.f32("level")?, c.f32("level")?];
-            let bytes_34 = c.array::<5>("level")?;
-            let u32_39 = c.u32("level")?;
-            let count = c.u32("level count")?;
-            let count = usize::try_from(count).unwrap_or(usize::MAX);
-            if count > body.len() / 4 {
-                return Err(Error::Short {
-                    what: "level's counted u32s",
-                    have: body.len(),
-                });
-            }
+            let reference = reference::parse(c.array::<{ reference::LENGTH }>().field("reference")?)
+                .map_err(Error::Reference)?;
+            let floats = [
+                c.f32(LE).field("level")?,
+                c.f32(LE).field("level")?,
+                c.f32(LE).field("level")?,
+            ];
+            let bytes_34 = c.array::<5>().field("level")?;
+            let u32_39 = c.u32(LE).field("level")?;
+            let count = c.count(LE, 4).field("level's counted u32s")?;
             let words = (0..count)
-                .map(|_| c.u32("level's counted u32"))
+                .map(|_| c.u32(LE).field("level's counted u32"))
                 .collect::<Result<_, _>>()?;
             levels.push(StoredLevel {
                 head: level_head,
@@ -199,13 +159,13 @@ impl StoredLodSelector {
                 bytes_34,
                 u32_39,
                 words,
-                last: c.u8("level")?,
+                last: c.u8().field("level")?,
             });
         }
-        let d = c.u32("dependency count")?;
+        let d = c.u32(LE).field("dependency count")?;
         let mut dependencies = Vec::new();
         for _ in 0..d {
-            let tag = c.u8("dependency")?;
+            let tag = c.u8().field("dependency")?;
             if tag != 0 {
                 return Err(Error::Value {
                     what: "dependency tag",
@@ -213,9 +173,9 @@ impl StoredLodSelector {
                     read: "0",
                 });
             }
-            dependencies.push(c.u64("dependency")?);
+            dependencies.push(c.u64(LE).field("dependency")?);
         }
-        let again = c.u32("second dependency count")?;
+        let again = c.u32(LE).field("second dependency count")?;
         if again != d {
             return Err(Error::Value {
                 what: "second dependency count",
@@ -224,10 +184,10 @@ impl StoredLodSelector {
             });
         }
         let dependency_words = (0..d)
-            .map(|_| c.u32("dependency word"))
+            .map(|_| c.u32(LE).field("dependency word"))
             .collect::<Result<_, _>>()?;
-        let trailer = c.array::<6>("last bytes")?;
-        let left = body.len().saturating_sub(c.at);
+        let trailer = c.array::<6>().field("last bytes")?;
+        let left = body.len().saturating_sub(c.position());
         if left != 0 {
             return Err(Error::Trailing(left));
         }

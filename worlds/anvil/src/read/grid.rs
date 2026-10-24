@@ -23,6 +23,9 @@
     clippy::cast_possible_truncation
 )]
 
+use primase_bytes::{Cursor, Field};
+
+use crate::read::fields::{BodyError, LE, body_error, count, end, expect, object, reference};
 use crate::read::reference::{self, Reference};
 
 /// A record type: the CRC-32 of `World`.
@@ -41,118 +44,10 @@ const GRID_CELL: u32 = 0x3435_AD40;
 /// Why a grid body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("grid body: {have} bytes, shorter than its {what} at {at}")]
-    Short {
-        what: &'static str,
-        at: usize,
-        have: usize,
-    },
-    #[error("grid {what}: {found:#x} at {at}, not {read}")]
-    Value {
-        what: &'static str,
-        at: usize,
-        found: u64,
-        read: &'static str,
-    },
-    #[error("grid reference at {at}: {source}")]
-    Reference {
-        at: usize,
-        #[source]
-        source: reference::Error,
-    },
-    #[error("grid body: {0} bytes after its end")]
-    Trailing(usize),
+    #[error("grid {0}")]
+    Body(#[from] BodyError),
 }
-
-/// Little-endian fields read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
-}
-
-impl Cursor<'_> {
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let short = Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(N).ok_or(Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        })?;
-        let s: [u8; N] = self
-            .b
-            .get(self.at..end)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn u16(&mut self, what: &'static str) -> Result<u16, Error> {
-        Ok(u16::from_le_bytes(self.array(what)?))
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
-    fn i32(&mut self, what: &'static str) -> Result<i32, Error> {
-        Ok(i32::from_le_bytes(self.array(what)?))
-    }
-    fn u64(&mut self, what: &'static str) -> Result<u64, Error> {
-        Ok(u64::from_le_bytes(self.array(what)?))
-    }
-    /// A u32 count of items of `each` bytes the rest of the body can hold.
-    fn count(&mut self, what: &'static str, each: usize) -> Result<usize, Error> {
-        let at = self.at;
-        let n = usize::try_from(self.u32(what)?).unwrap_or(usize::MAX);
-        let left = self.b.len().saturating_sub(self.at);
-        if n.checked_mul(each.max(1)).is_none_or(|bytes| bytes > left) {
-            return Err(Error::Value {
-                what,
-                at,
-                found: u64::try_from(n).unwrap_or(u64::MAX),
-                read: "a count the body can hold",
-            });
-        }
-        Ok(n)
-    }
-    fn expect(&mut self, what: &'static str, want: u64, width: usize) -> Result<(), Error> {
-        let at = self.at;
-        let found = match width {
-            1 => u64::from(u8::from_le_bytes(self.array(what)?)),
-            4 => u64::from(self.u32(what)?),
-            _ => self.u64(what)?,
-        };
-        if found == want {
-            Ok(())
-        } else {
-            Err(Error::Value {
-                what,
-                at,
-                found,
-                read: "the grammar's value",
-            })
-        }
-    }
-    /// An embedded object's header: a u64 id and its type, which must be `kind`.
-    fn object(&mut self, what: &'static str, kind: u32) -> Result<u64, Error> {
-        let id = self.u64(what)?;
-        self.expect(what, u64::from(kind), 4)?;
-        Ok(id)
-    }
-    fn reference(&mut self) -> Result<Option<Reference>, Error> {
-        let at = self.at;
-        reference::parse(self.array::<{ reference::LENGTH }>("reference")?)
-            .map_err(|source| Error::Reference { at, source })
-    }
-    fn end(&self) -> Result<(), Error> {
-        match self.b.len().saturating_sub(self.at) {
-            0 => Ok(()),
-            left => Err(Error::Trailing(left)),
-        }
-    }
-}
+body_error!(Error, Error::Body);
 
 /// A GridLayout as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,26 +74,26 @@ pub struct GridDescription {
 
 /// A World's GridDescriptions, from the start of its body; `words` is the stated length of each GridLayout's u16 run.
 pub fn grid_descriptions(body: &[u8], words: usize) -> Result<Vec<GridDescription>, Error> {
-    let mut c = Cursor { b: body, at: 0 };
-    c.expect("World first byte", 1, 1)?;
-    let n = c.count("GridDescription count", 0x30)?;
+    let mut c = Cursor::new(body);
+    expect(&mut c, "World first byte", 1, 1)?;
+    let n = count(&mut c, "GridDescription count", 0x30)?;
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
-        let id = c.object("GridDescription", GRID_DESCRIPTION)?;
-        c.expect("GridLayout id", 0, 8)?;
-        c.expect("GridLayout type", u64::from(GRID_LAYOUT), 4)?;
+        let id = object(&mut c, "GridDescription", GRID_DESCRIPTION)?;
+        expect(&mut c, "GridLayout id", 0, 8)?;
+        expect(&mut c, "GridLayout type", u64::from(GRID_LAYOUT), 4)?;
         let words = (0..words)
-            .map(|_| c.u16("GridLayout run"))
+            .map(|_| c.u16(LE).field("GridLayout run"))
             .collect::<Result<Vec<_>, _>>()?;
-        let cell_size = c.i32("GridLayout cell size")?;
+        let cell_size = c.i32(LE).field("GridLayout cell size")?;
         let bottom_left = [
-            c.i32("GridLayout bottom left")?,
-            c.i32("GridLayout bottom left")?,
-            c.i32("GridLayout bottom left")?,
+            c.i32(LE).field("GridLayout bottom left")?,
+            c.i32(LE).field("GridLayout bottom left")?,
+            c.i32(LE).field("GridLayout bottom left")?,
         ];
-        let dimension = c.i32("GridLayout dimension")?;
-        let after = c.array::<3>("GridLayout")?;
-        let partition = c.reference()?;
+        let dimension = c.i32(LE).field("GridLayout dimension")?;
+        let after = c.array::<3>().field("GridLayout")?;
+        let partition = reference(&mut c)?;
         out.push(GridDescription {
             id,
             layout: GridLayout {
@@ -225,19 +120,19 @@ pub struct StoredGridPartition {
 
 impl StoredGridPartition {
     pub fn parse(body: &[u8]) -> Result<StoredGridPartition, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        c.expect("GridPartition first byte", 1, 1)?;
-        let levels = c.u32("level count")?;
-        let n = c.count("cell count", 21)?;
+        let mut c = Cursor::new(body);
+        expect(&mut c, "GridPartition first byte", 1, 1)?;
+        let levels = c.u32(LE).field("level count")?;
+        let n = count(&mut c, "cell count", 21)?;
         let mut cells = Vec::with_capacity(n);
         for _ in 0..n {
-            c.expect("GridCell id", 0, 8)?;
-            c.expect("GridCell type", u64::from(GRID_CELL), 4)?;
-            c.expect("GridCell byte", 0, 1)?;
-            cells.push(c.u64("GridCell data block")?);
+            expect(&mut c, "GridCell id", 0, 8)?;
+            expect(&mut c, "GridCell type", u64::from(GRID_CELL), 4)?;
+            expect(&mut c, "GridCell byte", 0, 1)?;
+            cells.push(c.u64(LE).field("GridCell data block")?);
         }
-        c.expect("GridPartition end", 0, 4)?;
-        c.end()?;
+        expect(&mut c, "GridPartition end", 0, 4)?;
+        end(&c)?;
         Ok(StoredGridPartition { levels, cells })
     }
 }
@@ -255,22 +150,22 @@ pub struct StoredGridCellDataBlock {
 
 impl StoredGridCellDataBlock {
     pub fn parse(body: &[u8]) -> Result<StoredGridCellDataBlock, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        c.expect("GridCellDataBlock first byte", 1, 1)?;
-        let n = c.count("object count", reference::LENGTH)?;
+        let mut c = Cursor::new(body);
+        expect(&mut c, "GridCellDataBlock first byte", 1, 1)?;
+        let n = count(&mut c, "object count", reference::LENGTH)?;
         let mut objects = Vec::with_capacity(n);
         for _ in 0..n {
-            let at = c.at;
-            objects.push(c.reference()?.ok_or(Error::Value {
+            let at = c.position();
+            objects.push(reference(&mut c)?.ok_or(BodyError::Value {
                 what: "listed reference",
                 at,
                 found: 3,
                 read: "a reference (tag 1)",
             })?);
         }
-        let word = c.u32("word after the objects")?;
-        let key = c.u64("key")?;
-        c.end()?;
+        let word = c.u32(LE).field("word after the objects")?;
+        let key = c.u64(LE).field("key")?;
+        end(&c)?;
         Ok(StoredGridCellDataBlock { objects, word, key })
     }
 }
@@ -388,7 +283,10 @@ mod tests {
         let read = StoredGridPartition::parse(&p).expect("partition");
         assert_eq!((read.levels, read.cells), (1, vec![0, 0x1F_4C36_9681]));
         p.push(0);
-        assert!(matches!(StoredGridPartition::parse(&p), Err(Error::Trailing(1))));
+        assert!(matches!(
+            StoredGridPartition::parse(&p),
+            Err(Error::Body(BodyError::Trailing(1)))
+        ));
         // the USNAT block Cell00001_DataBlock, whole
         let b = [
             1, 1, 0, 0, 0, 1, 1, 0x48, 0x44, 0xF0, 0x1B, 0xD4, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,

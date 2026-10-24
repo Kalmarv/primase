@@ -1000,6 +1000,7 @@ dependencies = [
 name = "primase-anvil"
 version = "0.1.0"
 dependencies = [
+ "primase-bytes",
  "primase-compress",
  "primase-core",
  "primase-dxbc",

@@ -8,6 +8,7 @@ pub mod convert;
 pub mod data;
 pub mod ddecal;
 pub mod entity;
+pub mod fields;
 pub mod floor;
 pub mod forge;
 pub mod grass;

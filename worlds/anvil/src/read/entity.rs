@@ -28,7 +28,9 @@
 )]
 
 use crate::read::component_types::is_component_type;
+use crate::read::fields::{BodyError, LE, body_error, count, end, expect, object, reference};
 use crate::read::reference::{self, Reference};
+use primase_bytes::{Field, View};
 
 /// A record type: equals the CRC-32 of the ASCII string `Entity` (the name a label).
 pub const ENTITY: u32 = 0x0984_415E;
@@ -77,19 +79,8 @@ const GRASS_SETTINGS: u32 = 0x3BE0_5B93;
 /// Why an Entity body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Entity body: {have} bytes, shorter than its {what} at {at}")]
-    Short {
-        what: &'static str,
-        at: usize,
-        have: usize,
-    },
-    #[error("Entity {what}: {found:#x} at {at}, not {read}")]
-    Value {
-        what: &'static str,
-        at: usize,
-        found: u64,
-        read: &'static str,
-    },
+    #[error("Entity {0}")]
+    Body(#[from] BodyError),
     #[error("Entity component {index}: type {kind:08X} has no length rule")]
     Component { index: usize, kind: u32 },
     #[error(
@@ -107,15 +98,8 @@ pub enum Error {
     },
     #[error("Entity Visual: instance data type {0:08X} isn't read")]
     Instance(u32),
-    #[error("Entity reference at {at}: {source}")]
-    Reference {
-        at: usize,
-        #[source]
-        source: reference::Error,
-    },
-    #[error("Entity body: {0} bytes after its end")]
-    Trailing(usize),
 }
+body_error!(Error, Error::Body);
 
 /// A bounding volume as stored: its id, two corners and a u32.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -371,15 +355,7 @@ impl CollisionFilter {
                     .checked_mul(8)
                     .and_then(|o| o.checked_add(at))
                     .unwrap_or(usize::MAX);
-                let word = bytes
-                    .get(from..from.saturating_add(8))
-                    .and_then(|w| <[u8; 8]>::try_from(w).ok())
-                    .map(u64::from_le_bytes)
-                    .ok_or(Error::Short {
-                        what: "RigidBody bit slot",
-                        at: from,
-                        have: bytes.len(),
-                    })?;
+                let word = View::new(bytes).u64(from, LE).field("RigidBody bit slot")?;
                 match word {
                     0 => {}
                     1 => {
@@ -388,34 +364,29 @@ impl CollisionFilter {
                             .unwrap_or(0)
                     }
                     found => {
-                        return Err(Error::Value {
+                        return Err(BodyError::Value {
                             what: "RigidBody bit slot",
                             at: from,
                             found,
                             read: "0 or 1",
-                        });
+                        }
+                        .into());
                     }
                 }
             }
             Ok(bits)
         };
-        let ground = match bytes.get(797) {
-            Some(0) => false,
-            Some(1) => true,
-            Some(&found) => {
-                return Err(Error::Value {
+        let ground = match View::new(bytes).u8(797).field("RigidBody IsGround")? {
+            0 => false,
+            1 => true,
+            found => {
+                return Err(BodyError::Value {
                     what: "RigidBody IsGround",
                     at: 797,
                     found: u64::from(found),
                     read: "0 or 1",
-                });
-            }
-            None => {
-                return Err(Error::Short {
-                    what: "RigidBody IsGround",
-                    at: 797,
-                    have: bytes.len(),
-                });
+                }
+                .into());
             }
         };
         Ok(CollisionFilter {
@@ -471,115 +442,56 @@ pub struct StoredEntity {
     pub hierarchy: Option<Vec<u8>>,
 }
 
-/// Little-endian fields read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
+/// The body's cursor ([`primase_bytes::Cursor`]), with this record's grammar as methods.
+struct Cursor<'a>(primase_bytes::Cursor<'a>);
+
+impl<'a> Cursor<'a> {
+    fn new(b: &'a [u8]) -> Self {
+        Cursor(primase_bytes::Cursor::new(b))
+    }
+    /// A cursor over `b` at `at`, refused past its end (naming `what`).
+    fn at(b: &'a [u8], at: usize, what: &'static str) -> Result<Self, primase_bytes::FieldError> {
+        let mut c = Cursor::new(b);
+        c.seek(at).field(what)?;
+        Ok(c)
+    }
+}
+
+impl<'a> std::ops::Deref for Cursor<'a> {
+    type Target = primase_bytes::Cursor<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Cursor<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl Cursor<'_> {
-    fn take(&mut self, n: usize, what: &'static str) -> Result<&[u8], Error> {
-        let short = Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(n).ok_or(Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        })?;
-        let s = self.b.get(self.at..end).ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let at = self.at;
-        self.take(N, what)?.try_into().map_err(|_| Error::Short {
-            what,
-            at,
-            have: self.b.len(),
-        })
-    }
-    fn u8(&mut self, what: &'static str) -> Result<u8, Error> {
-        let [b] = self.array::<1>(what)?;
-        Ok(b)
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
-    fn u64(&mut self, what: &'static str) -> Result<u64, Error> {
-        Ok(u64::from_le_bytes(self.array(what)?))
-    }
-    fn f32(&mut self, what: &'static str) -> Result<f32, Error> {
-        Ok(f32::from_le_bytes(self.array(what)?))
-    }
-    fn count(&mut self, what: &'static str, each: usize) -> Result<usize, Error> {
-        let at = self.at;
-        let n = usize::try_from(self.u32(what)?).unwrap_or(usize::MAX);
-        if n.checked_mul(each.max(1))
-            .is_none_or(|bytes| bytes > self.b.len())
-        {
-            return Err(Error::Value {
-                what,
-                at,
-                found: u64::try_from(n).unwrap_or(u64::MAX),
-                read: "a count the body can hold",
-            });
-        }
-        Ok(n)
-    }
-    fn expect(&mut self, what: &'static str, want: u64, width: usize) -> Result<(), Error> {
-        let at = self.at;
-        let found = match width {
-            1 => u64::from(self.u8(what)?),
-            4 => u64::from(self.u32(what)?),
-            _ => self.u64(what)?,
-        };
-        if found == want {
-            Ok(())
-        } else {
-            Err(Error::Value {
-                what,
-                at,
-                found,
-                read: "the grammar's value",
-            })
-        }
-    }
-    /// Nothing left after the grammar.
-    fn end(&self) -> Result<(), Error> {
-        match self.b.len().saturating_sub(self.at) {
-            0 => Ok(()),
-            left => Err(Error::Trailing(left)),
-        }
-    }
-    /// An embedded object's header: a u64 id and its type, which must be `kind`.
-    fn object(&mut self, what: &'static str, kind: u32) -> Result<u64, Error> {
-        let id = self.u64(what)?;
-        self.expect(what, u64::from(kind), 4)?;
-        Ok(id)
-    }
     /// A GameplayContextDisabler's condition node (04, a u64, its type): an operator (0x025AD7F9: a byte, an op
     /// 0, 1 or 2, a count n, n child nodes) or a leaf (0x0FA689EF: 2 bytes, a u64). False where its type is neither
     /// or it nests deeper than the notes saw (2).
     fn condition(&mut self, depth: usize) -> Result<bool, Error> {
-        self.expect("condition node", 4, 1)?;
-        self.u64("condition node")?;
-        match self.u32("condition node type")? {
+        expect(self, "condition node", 4, 1)?;
+        self.u64(LE).field("condition node")?;
+        match self.u32(LE).field("condition node type")? {
             0x025A_D7F9 if depth < 2 => {
-                self.take(1, "condition operator")?;
-                let at = self.at;
-                let op = self.u32("condition operator")?;
+                self.take(1).field("condition operator")?;
+                let at = self.position();
+                let op = self.u32(LE).field("condition operator")?;
                 if op > 2 {
-                    return Err(Error::Value {
+                    return Err(BodyError::Value {
                         what: "condition operator",
                         at,
                         found: u64::from(op),
                         read: "0, 1 or 2",
-                    });
+                    }
+                    .into());
                 }
-                let n = self.count("condition operator count", 23)?;
+                let n = count(self, "condition operator count", 23)?;
                 for _ in 0..n {
                     if !self.condition(depth.saturating_add(1))? {
                         return Ok(false);
@@ -588,7 +500,7 @@ impl Cursor<'_> {
                 Ok(true)
             }
             0x0FA6_89EF => {
-                self.take(10, "condition leaf")?;
+                self.take(10).field("condition leaf")?;
                 Ok(true)
             }
             _ => Ok(false),
@@ -597,61 +509,57 @@ impl Cursor<'_> {
     fn matrix(&mut self) -> Result<[f32; 16], Error> {
         let mut m = [0.0; 16];
         for x in &mut m {
-            *x = self.f32("matrix")?;
+            *x = self.f32(LE).field("matrix")?;
         }
         Ok(m)
     }
     fn matrices(&mut self) -> Result<Vec<[f32; 16]>, Error> {
-        let n = self.count("instance count", 64)?;
+        let n = count(self, "instance count", 64)?;
         (0..n).map(|_| self.matrix()).collect()
     }
     fn bounds(&mut self) -> Result<BoundingVolume, Error> {
-        let id = self.object("bounding volume", BOUNDING_VOLUME)?;
+        let id = object(self, "bounding volume", BOUNDING_VOLUME)?;
         let mut f = [0.0f32; 6];
         for x in &mut f {
-            *x = self.f32("bounding volume")?;
+            *x = self.f32(LE).field("bounding volume")?;
         }
         let [a, b, c, d, e, g] = f;
         Ok(BoundingVolume {
             id,
             min: [a, b, c],
             max: [d, e, g],
-            word: self.u32("bounding volume")?,
+            word: self.u32(LE).field("bounding volume")?,
         })
-    }
-    fn reference(&mut self) -> Result<Option<Reference>, Error> {
-        let at = self.at;
-        reference::parse(self.array::<{ reference::LENGTH }>("reference")?)
-            .map_err(|source| Error::Reference { at, source })
     }
     fn mesh_instance(&mut self, id: u64) -> Result<MeshInstance, Error> {
         let instances = self.matrices()?;
         let bounds = self.bounds()?;
-        let reserved = self.array::<16>("MeshInstanceData")?;
-        self.expect("CompiledMeshInstance", 0x4368_101B, 4)?;
-        let compiled = self.array::<17>("CompiledMeshInstance")?;
-        let a = self.count("material-info count", 41)?;
+        let reserved = self.array::<16>().field("MeshInstanceData")?;
+        expect(self, "CompiledMeshInstance", 0x4368_101B, 4)?;
+        let compiled = self.array::<17>().field("CompiledMeshInstance")?;
+        let a = count(self, "material-info count", 41)?;
         let mut material_infos = Vec::with_capacity(a);
         for _ in 0..a {
-            self.expect("material info", 0, 1)?;
-            self.object("material info", 0x995B_FBF5)?;
-            self.expect("material info", 2, 1)?;
-            let owner = self.u64("material info")?;
-            self.expect("material info", 0, 1)?;
-            let source = self.u64("material info")?;
-            let at = self.at;
-            if !matches!(self.array::<2>("material info")?, [1, 1 | 4]) {
-                return Err(Error::Value {
+            expect(self, "material info", 0, 1)?;
+            object(self, "material info", 0x995B_FBF5)?;
+            expect(self, "material info", 2, 1)?;
+            let owner = self.u64(LE).field("material info")?;
+            expect(self, "material info", 0, 1)?;
+            let source = self.u64(LE).field("material info")?;
+            let at = self.position();
+            if !matches!(self.array::<2>().field("material info")?, [1, 1 | 4]) {
+                return Err(BodyError::Value {
                     what: "material info replacement tag",
                     at,
                     found: 0,
                     read: "01 01 or 01 04",
-                });
+                }
+                .into());
             }
-            let replacement = self.u64("material info")?;
+            let replacement = self.u64(LE).field("material info")?;
             material_infos.push([owner, source, replacement]);
         }
-        let b = self.count("instance bounds count", 40)?;
+        let b = count(self, "instance bounds count", 40)?;
         let instance_bounds = (0..b).map(|_| self.bounds()).collect::<Result<_, _>>()?;
         Ok(MeshInstance {
             id,
@@ -665,33 +573,41 @@ impl Cursor<'_> {
     }
     /// The Visual's 125-byte tail: a u32, a u32, `03`, 116 bytes.
     fn visual_tail(&mut self) -> Result<Vec<u8>, Error> {
-        let start = self.at;
-        self.take(8, "Visual tail")?;
-        self.expect("Visual tail handle", 3, 1)?;
-        self.take(116, "Visual tail")?;
-        Ok(self.b.get(start..self.at).unwrap_or_default().to_vec())
+        let start = self.position();
+        self.take(8).field("Visual tail")?;
+        expect(self, "Visual tail handle", 3, 1)?;
+        self.take(116).field("Visual tail")?;
+        Ok(self
+            .bytes()
+            .get(start..self.position())
+            .unwrap_or_default()
+            .to_vec())
     }
     /// A Visual's head, the object it names and its instance's id and type (which must be `kind`): the start of a
     /// grass Visual, whose instance has the MeshInstanceData's fields.
     fn grass_head(&mut self, kind: u32) -> Result<([u8; 4], Option<Reference>, u64), Error> {
-        let head = self.array::<4>("GrassVisual")?;
-        let object = self.reference()?;
-        self.expect("GrassVisual instance tag", 0, 1)?;
-        let id = self.object("GrassVisual instance", kind)?;
-        Ok((head, object, id))
+        let head = self.array::<4>().field("GrassVisual")?;
+        let named = reference(self)?;
+        expect(self, "GrassVisual instance tag", 0, 1)?;
+        let id = object(self, "GrassVisual instance", kind)?;
+        Ok((head, named, id))
     }
     /// A GrassVisual's body: [`GrassVisual`].
     fn grass_visual(&mut self) -> Result<GrassVisual, Error> {
         let (head, object, id) = self.grass_head(GRASS_VISUAL_INSTANCE)?;
         let instance = self.mesh_instance(id)?;
-        let n = self.count("GrassVisualInstance range count", 2)?;
+        let n = count(self, "GrassVisualInstance range count", 2)?;
         let ranges = (0..n)
-            .map(|_| Ok(u16::from_le_bytes(self.array::<2>("GrassVisualInstance range")?)))
+            .map(|_| {
+                Ok(u16::from_le_bytes(
+                    self.array::<2>().field("GrassVisualInstance range")?,
+                ))
+            })
             .collect::<Result<Vec<_>, Error>>()?;
         // GrassImposterProperties: a null pointer on all 46
-        self.expect("GrassImposterProperties pointer", 3, 1)?;
+        expect(self, "GrassImposterProperties pointer", 3, 1)?;
         let tail = self.visual_tail()?;
-        let model = self.u8("GrassModelID")?;
+        let model = self.u8().field("GrassModelID")?;
         Ok(GrassVisual {
             head,
             object,
@@ -704,19 +620,13 @@ impl Cursor<'_> {
     }
     /// An AnimComponent's body over the extent that ends at `end`: [`AnimBinding`].
     fn anim_binding(&mut self, end: usize) -> Result<AnimBinding, Error> {
-        let head = self.array::<4>("AnimComponent")?;
-        let n = self.count("AnimComponent animation count", reference::LENGTH)?;
+        let head = self.array::<4>().field("AnimComponent")?;
+        let n = count(self, "AnimComponent animation count", reference::LENGTH)?;
         let mut animations = Vec::with_capacity(n);
         for _ in 0..n {
-            animations.push(self.reference()?);
+            animations.push(reference(self)?);
         }
-        let tail = self.b.get(self.at..end).ok_or(Error::Short {
-            what: "AnimComponent",
-            at: self.at,
-            have: self.b.len(),
-        })?;
-        let tail = tail.to_vec();
-        self.at = end;
+        let tail = self.take_to(end).field("AnimComponent")?.to_vec();
         Ok(AnimBinding {
             head,
             animations,
@@ -725,28 +635,28 @@ impl Cursor<'_> {
     }
     /// A SkeletonComponent's body: [`SkeletonBinding`].
     fn skeleton_binding(&mut self) -> Result<SkeletonBinding, Error> {
-        let head = self.array::<4>("SkeletonComponent")?;
-        let main = self.reference()?;
-        let n = self.count("SkeletonComponent addon count", reference::LENGTH)?;
+        let head = self.array::<4>().field("SkeletonComponent")?;
+        let main = reference(self)?;
+        let n = count(self, "SkeletonComponent addon count", reference::LENGTH)?;
         let mut addons = Vec::with_capacity(n);
         for _ in 0..n {
-            let at = self.at;
-            addons.push(self.reference()?.ok_or(Error::Value {
+            let at = self.position();
+            addons.push(reference(self)?.ok_or(BodyError::Value {
                 what: "SkeletonComponent addon",
                 at,
                 found: 0,
                 read: "a reference to a Skeleton",
             })?);
         }
-        let expression_pack = self.reference()?;
-        let m = self.count("SkeletonComponent track count", 20)?;
+        let expression_pack = reference(self)?;
+        let m = count(self, "SkeletonComponent track count", 20)?;
         let mut tracks = Vec::with_capacity(m);
         for _ in 0..m {
-            let id = self.object("AnimTrackDefinition", ANIM_TRACK_DEFINITION)?;
-            tracks.push((id, self.array::<8>("AnimTrackDefinition")?));
+            let id = object(self, "AnimTrackDefinition", ANIM_TRACK_DEFINITION)?;
+            tracks.push((id, self.array::<8>().field("AnimTrackDefinition")?));
         }
-        let wind_id = self.object("WindForce", WIND_FORCE)?;
-        let wind_force = (wind_id, self.array::<12>("WindForce")?);
+        let wind_id = object(self, "WindForce", WIND_FORCE)?;
+        let wind_force = (wind_id, self.array::<12>().field("WindForce")?);
         Ok(SkeletonBinding {
             head,
             main,
@@ -760,34 +670,25 @@ impl Cursor<'_> {
     /// rule, so the library reference and the settings object are found from the Visual tail's end, and the
     /// ManagedEntities (a u32 count and that many 9-byte links, the body's last field) from the end.
     fn grass_setup(&mut self, end: usize) -> Result<GrassSetup, Error> {
-        let (head, object, id) = self.grass_head(GRASS_INSTANCE)?;
+        let (head, named, id) = self.grass_head(GRASS_INSTANCE)?;
         let instance = self.mesh_instance(id)?;
         // the settings object's type, 12 bytes after the library reference, 125 after the Visual tail's start
-        let settings_type = (self.at..end)
+        let settings_type = (self.position()..end)
             .find(|&at| self.word_at(at) == Some(GRASS_SETTINGS))
-            .ok_or(Error::Value {
+            .ok_or(BodyError::Value {
                 what: "GrassSettings",
-                at: self.at,
+                at: self.position(),
                 found: 0,
                 read: "an object of type 0x3BE05B93",
             })?;
         let settings_id_at = settings_type.saturating_sub(8);
         let library_at = settings_id_at.saturating_sub(reference::LENGTH);
         let tail_at = library_at.saturating_sub(125);
-        let extra = self
-            .b
-            .get(self.at..tail_at)
-            .ok_or(Error::Short {
-                what: "GrassInstance",
-                at: self.at,
-                have: self.b.len(),
-            })?
-            .to_vec();
-        self.at = tail_at;
+        let extra = self.take_to(tail_at).field("GrassInstance")?.to_vec();
         let tail = self.visual_tail()?;
-        let library = self.reference()?;
-        let settings_id = self.object("GrassSettings", GRASS_SETTINGS)?;
-        let body_at = self.at;
+        let library = reference(self)?;
+        let settings_id = object(self, "GrassSettings", GRASS_SETTINGS)?;
+        let body_at = self.position();
         // ManagedEntities: the count whose links fill the rest of the body
         let links_at = (body_at..end)
             .find(|&at| {
@@ -800,27 +701,27 @@ impl Cursor<'_> {
                     && (0..k).all(|j| {
                         at.checked_add(4)
                             .and_then(|a| a.checked_add(j.checked_mul(9)?))
-                            .and_then(|a| self.b.get(a))
+                            .and_then(|a| self.bytes().get(a))
                             .is_some_and(|&t| matches!(t, 0 | 1))
                     })
             })
-            .ok_or(Error::Value {
+            .ok_or(BodyError::Value {
                 what: "GrassComponent ManagedEntities",
                 at: body_at,
                 found: 0,
                 read: "a count of 9-byte links ending the body",
             })?;
-        let settings = self.b.get(body_at..links_at).unwrap_or_default().to_vec();
-        self.at = links_at;
-        let k = self.count("ManagedEntities count", 9)?;
+        let settings = self.bytes().get(body_at..links_at).unwrap_or_default().to_vec();
+        self.seek(links_at).field("GrassComponent ManagedEntities")?;
+        let k = count(self, "ManagedEntities count", 9)?;
         let mut entities = Vec::with_capacity(k);
         for _ in 0..k {
             self.link_tag("ManagedEntities link")?;
-            entities.push(self.u64("ManagedEntities link")?);
+            entities.push(self.u64(LE).field("ManagedEntities link")?);
         }
         Ok(GrassSetup {
             head,
-            object,
+            object: named,
             id,
             instance,
             instance_extra: extra,
@@ -832,10 +733,10 @@ impl Cursor<'_> {
         })
     }
     fn visual(&mut self) -> Result<Visual, Error> {
-        let head = self.array::<4>("Visual")?;
-        let object = self.reference()?;
-        let at = self.at;
-        match self.u8("Visual instance tag")? {
+        let head = self.array::<4>().field("Visual")?;
+        let object = reference(self)?;
+        let at = self.position();
+        match self.u8().field("Visual instance tag")? {
             0 => {}
             3 => {
                 return Ok(Visual {
@@ -846,28 +747,29 @@ impl Cursor<'_> {
                 });
             }
             found => {
-                return Err(Error::Value {
+                return Err(BodyError::Value {
                     what: "Visual instance tag",
                     at,
                     found: u64::from(found),
                     read: "0, or 3 (none)",
-                });
+                }
+                .into());
             }
         }
-        let id = self.u64("Visual instance")?;
-        let kind = self.u32("Visual instance type")?;
+        let id = self.u64(LE).field("Visual instance")?;
+        let kind = self.u32(LE).field("Visual instance type")?;
         let (instance, tail) = match kind {
             LOD_SELECTOR_INSTANCE => {
                 let instances = self.matrices()?;
                 let bounds = self.bounds()?;
-                let selector = self.array::<10>("LODSelectorInstance selector")?;
+                let selector = self.array::<10>().field("LODSelectorInstance selector")?;
                 let mut slots = Vec::with_capacity(5);
                 for _ in 0..5 {
-                    slots.push(match self.u8("slot tag")? {
+                    slots.push(match self.u8().field("slot tag")? {
                         3 => Slot::None,
                         0 => {
-                            let slot_id = self.u64("slot")?;
-                            match self.u32("slot type")? {
+                            let slot_id = self.u64(LE).field("slot")?;
+                            match self.u32(LE).field("slot type")? {
                                 MESH_INSTANCE_DATA => Slot::Mesh(self.mesh_instance(slot_id)?),
                                 IMPOSTOR_INSTANCE_DATA => {
                                     let instances = self.matrices()?;
@@ -876,19 +778,20 @@ impl Cursor<'_> {
                                         id: slot_id,
                                         instances,
                                         bounds,
-                                        reference: self.array::<10>("impostor reference")?,
+                                        reference: self.array::<10>().field("impostor reference")?,
                                     })
                                 }
                                 other => return Err(Error::Instance(other)),
                             }
                         }
                         tag => {
-                            return Err(Error::Value {
+                            return Err(BodyError::Value {
                                 what: "slot tag",
-                                at: self.at.saturating_sub(1),
+                                at: self.position().saturating_sub(1),
                                 found: u64::from(tag),
                                 read: "3 or 0",
-                            });
+                            }
+                            .into());
                         }
                     });
                 }
@@ -903,15 +806,19 @@ impl Cursor<'_> {
             }
             MESH_INSTANCE_DATA => (Instance::Mesh(self.mesh_instance(id)?), self.visual_tail()?),
             LIGHT_INSTANCE => {
-                let bytes = self.take(311, "LightInstance")?.to_vec();
+                let bytes = self.take(311).field("LightInstance")?.to_vec();
                 (Instance::Raw { kind, id, bytes }, Vec::new())
             }
             SPLASH_FX_INSTANCE_DATA => {
-                let start = self.at;
+                let start = self.position();
                 self.matrices()?;
                 self.bounds()?;
-                self.take(10, "SplashFXInstanceData reference")?;
-                let bytes = self.b.get(start..self.at).unwrap_or_default().to_vec();
+                self.take(10).field("SplashFXInstanceData reference")?;
+                let bytes = self
+                    .bytes()
+                    .get(start..self.position())
+                    .unwrap_or_default()
+                    .to_vec();
                 (Instance::Raw { kind, id, bytes }, self.visual_tail()?)
             }
             other => return Err(Error::Instance(other)),
@@ -925,123 +832,127 @@ impl Cursor<'_> {
     }
     /// A component body other than a Visual, stepped over by its type's rule; `None` where the type has none.
     fn raw_component(&mut self, kind: u32) -> Result<Option<Vec<u8>>, Error> {
-        let start = self.at;
+        let start = self.position();
         match kind {
             // RigidBodyComponent: 826 bytes, a handle (03, or 05 and a u64), a u32 0, a PhysicsActivityZone object and its
             // ActivityZoneDesc array (a count and that many 27-byte items: an id, 0x56F0AAEA, a u32 enum, two f32 and
             // three bytes; the registry's class; count 0 on every body but one, an NPC puppet's with 2)
             0xC177_D702 => {
-                self.take(826, "RigidBodyComponent")?;
-                match self.u8("RigidBodyComponent handle")? {
+                self.take(826).field("RigidBodyComponent")?;
+                match self.u8().field("RigidBodyComponent handle")? {
                     3 => {}
                     5 => {
-                        self.u64("RigidBodyComponent handle")?;
+                        self.u64(LE).field("RigidBodyComponent handle")?;
                     }
                     found => {
-                        return Err(Error::Value {
+                        return Err(BodyError::Value {
                             what: "RigidBodyComponent handle",
-                            at: self.at.saturating_sub(1),
+                            at: self.position().saturating_sub(1),
                             found: u64::from(found),
                             read: "3 or 5",
-                        });
+                        }
+                        .into());
                     }
                 }
-                self.expect("RigidBodyComponent", 0, 4)?;
-                self.object("RigidBodyComponent", 0x18D5_28B6)?;
-                let zones = self.count("PhysicsActivityZone count", 27)?;
-                self.take(zones.saturating_mul(27), "PhysicsActivityZone")?;
+                expect(self, "RigidBodyComponent", 0, 4)?;
+                object(self, "RigidBodyComponent", 0x18D5_28B6)?;
+                let zones = count(self, "PhysicsActivityZone count", 27)?;
+                self.take(zones.saturating_mul(27)).field("PhysicsActivityZone")?;
             }
             // AmbientEffectGeneratorComponent: 4 bytes, a count c, 87 c bytes, 4 bytes
             0x713F_0C7D => {
-                self.take(4, "component")?;
-                let c = self.count("component count", 87)?;
-                self.take(c.saturating_mul(87), "component")?;
-                self.take(4, "component")?;
+                self.take(4).field("component")?;
+                let c = count(self, "component count", 87)?;
+                self.take(c.saturating_mul(87)).field("component")?;
+                self.take(4).field("component")?;
             }
             // MaterialOverrider: 4 bytes, a count d, d OverrideDefinitions, 10 bytes
             0x78A1_3BF7 => {
-                self.take(4, "MaterialOverrider")?;
-                let d = self.count("MaterialOverrider count", 31)?;
+                self.take(4).field("MaterialOverrider")?;
+                let d = count(self, "MaterialOverrider count", 31)?;
                 for _ in 0..d {
-                    self.object("OverrideDefinition", 0x49FC_D7BF)?;
-                    self.take(19, "OverrideDefinition")?;
+                    object(self, "OverrideDefinition", 0x49FC_D7BF)?;
+                    self.take(19).field("OverrideDefinition")?;
                 }
-                self.take(10, "MaterialOverrider")?;
+                self.take(10).field("MaterialOverrider")?;
             }
             // GuidanceSystem: 4 bytes, N GuidanceObjects (an object, 29 bytes), 12 bytes, a counted run of 2-byte
             // items, an EdgeFilter (40), a Partitioner (46 + 2k, its u16 p at +12 and u32 k at +14), p + 1 PartNodes
             // (an object, 12 bytes), a byte
             0x55AF_1C3E => {
-                self.take(4, "GuidanceSystem")?;
-                let n = self.count("GuidanceSystem object count", 41)?;
+                self.take(4).field("GuidanceSystem")?;
+                let n = count(self, "GuidanceSystem object count", 41)?;
                 for _ in 0..n {
-                    self.object("GuidanceObject", 0x344F_A659)?;
-                    self.take(29, "GuidanceObject")?;
+                    object(self, "GuidanceObject", 0x344F_A659)?;
+                    self.take(29).field("GuidanceObject")?;
                 }
-                self.take(12, "GuidanceSystem")?;
-                let m = self.count("GuidanceSystem run count", 2)?;
-                self.take(m.saturating_mul(2), "GuidanceSystem run")?;
-                self.take(40, "EdgeFilter")?;
-                self.take(12, "Partitioner")?;
-                let p = usize::from(u16::from_le_bytes(self.array::<2>("Partitioner")?));
-                let k = self.count("Partitioner count", 2)?;
-                self.take(k.saturating_mul(2).saturating_add(28), "Partitioner")?;
+                self.take(12).field("GuidanceSystem")?;
+                let m = count(self, "GuidanceSystem run count", 2)?;
+                self.take(m.saturating_mul(2)).field("GuidanceSystem run")?;
+                self.take(40).field("EdgeFilter")?;
+                self.take(12).field("Partitioner")?;
+                let p = usize::from(u16::from_le_bytes(self.array::<2>().field("Partitioner")?));
+                let k = count(self, "Partitioner count", 2)?;
+                self.take(k.saturating_mul(2).saturating_add(28))
+                    .field("Partitioner")?;
                 for _ in 0..=p {
-                    self.object("PartNode", 0x5374_195C)?;
-                    self.take(12, "PartNode")?;
+                    object(self, "PartNode", 0x5374_195C)?;
+                    self.take(12).field("PartNode")?;
                 }
-                self.take(1, "GuidanceSystem")?;
+                self.take(1).field("GuidanceSystem")?;
             }
             // HoudiniDecalInstancerComponent: 212 bytes, an object, R references, S items (00, an object, 3 bytes, a
             // count k, 100 k bytes), 46 bytes
             // StaticDDecalComponent (0x5B413085) and its subclass HoudiniDecalInstancerComponent, which stores nothing more:
             // the same body
             0x4148_CD56 | 0x5B41_3085 => {
-                self.take(212, "HoudiniDecalInstancerComponent")?;
-                self.object("HoudiniDecalInstancerComponent", 0xB43F_ECF1)?;
-                let r = self.count("HoudiniDecalInstancerComponent references", 10)?;
-                self.take(r.saturating_mul(10), "HoudiniDecalInstancerComponent references")?;
-                let items = self.count("HoudiniDecalInstancerComponent items", 20)?;
+                self.take(212).field("HoudiniDecalInstancerComponent")?;
+                object(self, "HoudiniDecalInstancerComponent", 0xB43F_ECF1)?;
+                let r = count(self, "HoudiniDecalInstancerComponent references", 10)?;
+                self.take(r.saturating_mul(10))
+                    .field("HoudiniDecalInstancerComponent references")?;
+                let items = count(self, "HoudiniDecalInstancerComponent items", 20)?;
                 for _ in 0..items {
-                    self.expect("HoudiniDecalInstancerComponent item", 0, 1)?;
-                    self.object("HoudiniDecalInstancerComponent item", 0x1ADB_43B0)?;
-                    self.take(3, "HoudiniDecalInstancerComponent item")?;
-                    let k = self.count("HoudiniDecalInstancerComponent item count", 100)?;
-                    self.take(k.saturating_mul(100), "HoudiniDecalInstancerComponent item")?;
+                    expect(self, "HoudiniDecalInstancerComponent item", 0, 1)?;
+                    object(self, "HoudiniDecalInstancerComponent item", 0x1ADB_43B0)?;
+                    self.take(3).field("HoudiniDecalInstancerComponent item")?;
+                    let k = count(self, "HoudiniDecalInstancerComponent item count", 100)?;
+                    self.take(k.saturating_mul(100))
+                        .field("HoudiniDecalInstancerComponent item")?;
                 }
-                self.take(46, "HoudiniDecalInstancerComponent")?;
+                self.take(46).field("HoudiniDecalInstancerComponent")?;
             }
             // StartingGridComponent: 4 bytes, a count n, n 78-byte objects (GameplayPositionWithLocal: the notes'
             // 8 + 78 n on 1,362 of 1,362)
             0x1725_EC54 => {
-                self.take(4, "component")?;
-                let n = self.count("component count", 78)?;
-                self.take(n.saturating_mul(78), "component")?;
+                self.take(4).field("component")?;
+                let n = count(self, "component count", 78)?;
+                self.take(n.saturating_mul(78)).field("component")?;
             }
             // QuestInteractiveComponent: 89 bytes, a null handle 03, an EventListener's 13 bytes (the notes: 532 of 532; a 120-byte form with
             // another byte there is seen 4 times, without a rule)
             0x733E_6F5A => {
-                self.take(89, "component")?;
-                if self.u8("component handle")? != 3 {
+                self.take(89).field("component")?;
+                if self.u8().field("component handle")? != 3 {
                     return Ok(None);
                 }
-                self.take(13, "component")?;
+                self.take(13).field("component")?;
             }
             // UICheckpointController: 51 bytes (the notes: the next component's header exactly there on 18,259 of
             // 18,259)
             0x4CB6_2343 => {
-                self.take(51, "UICheckpointController")?;
+                self.take(51).field("UICheckpointController")?;
             }
             // CheckpointComponent: 4 bytes, a count k, k inline objects (00, a u64, a type, its body), 226 bytes; each
             // object's size by its type, observed on every body measured (the notes: 18,085 of 18,395 groups holding
             // it then parse to their end); a type outside the table has no rule
             0x69D5_E169 => {
-                self.take(4, "CheckpointComponent")?;
-                let k = self.count("CheckpointComponent count", 41)?;
+                self.take(4).field("CheckpointComponent")?;
+                let k = count(self, "CheckpointComponent count", 41)?;
                 for _ in 0..k {
-                    self.expect("CheckpointComponent object", 0, 1)?;
-                    self.u64("CheckpointComponent object")?;
-                    let size: usize = match self.u32("CheckpointComponent object type")? {
+                    expect(self, "CheckpointComponent object", 0, 1)?;
+                    self.u64(LE).field("CheckpointComponent object")?;
+                    let size: usize = match self.u32(LE).field("CheckpointComponent object type")? {
                         0xB0AE_57CB => 56,
                         0x66D1_487D => 53,
                         0x0AB1_C905 | 0x0F5F_CE90 => 49,
@@ -1056,309 +967,320 @@ impl Cursor<'_> {
                         0x74E3_8111 => 73,
                         _ => return Ok(None),
                     };
-                    self.take(size.saturating_sub(13), "CheckpointComponent object")?;
+                    self.take(size.saturating_sub(13))
+                        .field("CheckpointComponent object")?;
                 }
-                self.take(226, "CheckpointComponent")?;
+                self.take(226).field("CheckpointComponent")?;
             }
             // FakeWaterMeshComponent: 4 bytes, a reference (its FakeWaterComponentChunk), a FakeWaterMeshInstance
             // (00, an object, a count k and 64 k bytes), a bounding volume, 10 bytes, the 125-byte Visual tail, 3 vec4,
             // a u32, a vertex count V, a u32, V 8-byte vertices (4 f16), an index count I, a u32, I u16 indices (the
             // notes: 274 + 8 V + 2 I, the one sequential end on 512 of 512)
             0x961F_3B5D => {
-                self.take(14, "FakeWaterMeshComponent")?;
-                self.expect("FakeWaterMeshInstance", 0, 1)?;
-                self.object("FakeWaterMeshInstance", 0xC345_7872)?;
-                let k = self.count("FakeWaterMeshInstance count", 64)?;
-                self.take(k.saturating_mul(64), "FakeWaterMeshInstance")?;
-                self.take(40 + 10 + 125 + 48 + 4, "FakeWaterMeshComponent")?;
-                let v = self.count("FakeWaterMeshComponent vertex count", 8)?;
-                self.take(4, "FakeWaterMeshComponent")?;
-                self.take(v.saturating_mul(8), "FakeWaterMeshComponent vertices")?;
-                let i = self.count("FakeWaterMeshComponent index count", 2)?;
-                self.take(4, "FakeWaterMeshComponent")?;
-                self.take(i.saturating_mul(2), "FakeWaterMeshComponent indices")?;
+                self.take(14).field("FakeWaterMeshComponent")?;
+                expect(self, "FakeWaterMeshInstance", 0, 1)?;
+                object(self, "FakeWaterMeshInstance", 0xC345_7872)?;
+                let k = count(self, "FakeWaterMeshInstance count", 64)?;
+                self.take(k.saturating_mul(64)).field("FakeWaterMeshInstance")?;
+                self.take(40 + 10 + 125 + 48 + 4)
+                    .field("FakeWaterMeshComponent")?;
+                let v = count(self, "FakeWaterMeshComponent vertex count", 8)?;
+                self.take(4).field("FakeWaterMeshComponent")?;
+                self.take(v.saturating_mul(8))
+                    .field("FakeWaterMeshComponent vertices")?;
+                let i = count(self, "FakeWaterMeshComponent index count", 2)?;
+                self.take(4).field("FakeWaterMeshComponent")?;
+                self.take(i.saturating_mul(2))
+                    .field("FakeWaterMeshComponent indices")?;
             }
             // AutoFakeOrchestratorComponent: 4 bytes, n SubMeshFakeIndexSpans (an object, a count m, m FakeIndexSpans
             // of an object and two u32), a count p and 8 p bytes, 9 bytes (the notes: the one sequential end on 4,052
             // of 4,052)
             0xD4B4_4556 => {
-                self.take(4, "AutoFakeOrchestratorComponent")?;
-                let n = self.count("AutoFakeOrchestratorComponent count", 16)?;
+                self.take(4).field("AutoFakeOrchestratorComponent")?;
+                let n = count(self, "AutoFakeOrchestratorComponent count", 16)?;
                 for _ in 0..n {
-                    self.object("SubMeshFakeIndexSpans", 0x2AFD_2E35)?;
-                    let m = self.count("SubMeshFakeIndexSpans count", 20)?;
+                    object(self, "SubMeshFakeIndexSpans", 0x2AFD_2E35)?;
+                    let m = count(self, "SubMeshFakeIndexSpans count", 20)?;
                     for _ in 0..m {
-                        self.object("FakeIndexSpan", 0xE747_72BA)?;
-                        self.take(8, "FakeIndexSpan")?;
+                        object(self, "FakeIndexSpan", 0xE747_72BA)?;
+                        self.take(8).field("FakeIndexSpan")?;
                     }
                 }
-                let p = self.count("AutoFakeOrchestratorComponent run", 8)?;
-                self.take(p.saturating_mul(8), "AutoFakeOrchestratorComponent run")?;
-                self.take(9, "AutoFakeOrchestratorComponent")?;
+                let p = count(self, "AutoFakeOrchestratorComponent run", 8)?;
+                self.take(p.saturating_mul(8))
+                    .field("AutoFakeOrchestratorComponent run")?;
+                self.take(9).field("AutoFakeOrchestratorComponent")?;
             }
             // DominoComponent: 4 bytes, a u32, an AIScriptInstance (00, an object), 2 bytes, a reference (its script),
             // a count n, n parameters, 21 bytes (the notes: 2,384 of 2,626 bodies end there); a parameter's value by its
             // kind (W's low byte), a value kind or embedded class outside the rule has none
             0xBE71_1F06 => {
-                self.take(8, "DominoComponent")?;
-                self.expect("AIScriptInstance", 0, 1)?;
-                self.object("AIScriptInstance", 0x5EFD_B48C)?;
-                self.take(12, "DominoComponent")?;
-                let n = self.count("DominoComponent parameter count", 82)?;
+                self.take(8).field("DominoComponent")?;
+                expect(self, "AIScriptInstance", 0, 1)?;
+                object(self, "AIScriptInstance", 0x5EFD_B48C)?;
+                self.take(12).field("DominoComponent")?;
+                let n = count(self, "DominoComponent parameter count", 82)?;
                 for _ in 0..n {
-                    self.expect("DominoScriptInstanceParameter", 0, 1)?;
-                    self.object("DominoScriptInstanceParameter", 0xEE14_E8BE)?;
-                    self.expect("DominoDataProviderData", 0, 1)?;
-                    self.object("DominoDataProviderData", 0x295E_9B7D)?;
-                    self.object("DominoDynamic", 0x1A24_BE34)?;
-                    self.expect("DominoDynamic", 3, 4)?;
-                    self.object("DominoType", 0x86F5_9438)?;
-                    let kind = self.u32("DominoType kind")? & 0xFF;
-                    let class = self.u32("DominoType class")?;
-                    self.take(4, "DominoType")?;
-                    self.expect("Value", 0xDCB6_7730, 4)?;
-                    self.expect("Value class", u64::from(class), 4)?;
-                    self.take(8, "Value")?;
+                    expect(self, "DominoScriptInstanceParameter", 0, 1)?;
+                    object(self, "DominoScriptInstanceParameter", 0xEE14_E8BE)?;
+                    expect(self, "DominoDataProviderData", 0, 1)?;
+                    object(self, "DominoDataProviderData", 0x295E_9B7D)?;
+                    object(self, "DominoDynamic", 0x1A24_BE34)?;
+                    expect(self, "DominoDynamic", 3, 4)?;
+                    object(self, "DominoType", 0x86F5_9438)?;
+                    let kind = self.u32(LE).field("DominoType kind")? & 0xFF;
+                    let class = self.u32(LE).field("DominoType class")?;
+                    self.take(4).field("DominoType")?;
+                    expect(self, "Value", 0xDCB6_7730, 4)?;
+                    expect(self, "Value class", u64::from(class), 4)?;
+                    self.take(8).field("Value")?;
                     match kind {
                         0x1C => {
-                            self.take(10, "Value reference")?;
+                            self.take(10).field("Value reference")?;
                         }
                         0x12 => {
-                            self.expect("Value object", 0, 1)?;
-                            self.u64("Value object")?;
+                            expect(self, "Value object", 0, 1)?;
+                            self.u64(LE).field("Value object")?;
                         }
                         0x1D => {
-                            let m = self.count("Value list", 9)?;
+                            let m = count(self, "Value list", 9)?;
                             for _ in 0..m {
-                                self.expect("Value list item", 0, 1)?;
-                                self.u64("Value list item")?;
+                                expect(self, "Value list item", 0, 1)?;
+                                self.u64(LE).field("Value list item")?;
                             }
                         }
                         0x00 => {
-                            self.take(1, "Value")?;
+                            self.take(1).field("Value")?;
                         }
                         0x16 => {
-                            self.u64("Value embedded object")?;
-                            let size = match self.u32("Value embedded class")? {
+                            self.u64(LE).field("Value embedded object")?;
+                            let size = match self.u32(LE).field("Value embedded class")? {
                                 0x7E42_F87F => 52,
                                 0xB7DE_E7C7 => 84,
                                 _ => return Ok(None),
                             };
-                            self.take(size, "Value embedded object")?;
+                            self.take(size).field("Value embedded object")?;
                         }
                         _ => return Ok(None),
                     }
-                    self.take(13, "DominoScriptInstanceParameter")?;
+                    self.take(13).field("DominoScriptInstanceParameter")?;
                 }
-                self.take(21, "DominoComponent")?;
+                self.take(21).field("DominoComponent")?;
             }
             // WaterComponent: 4 bytes, a reference (its WaterMesh), a WaterMeshInstance (00, an object, a count k and
             // 64 k bytes), a bounding volume, 10 bytes, the 125-byte Visual tail, a RiverQuadTree (an object, 2 vec4, a
             // byte, n 61-byte nodes), a byte, m 49-byte WaterPatchDescs, 3 references (the notes: 290 + 61 n + 49 m, the
             // one sequential end on 36 of 36)
             0x996D_F94F => {
-                self.take(14, "WaterComponent")?;
-                self.expect("WaterMeshInstance", 0, 1)?;
-                self.object("WaterMeshInstance", 0xC15B_678F)?;
-                let k = self.count("WaterMeshInstance count", 64)?;
-                self.take(k.saturating_mul(64), "WaterMeshInstance")?;
-                self.take(40 + 10 + 125, "WaterComponent")?;
-                self.object("RiverQuadTree", 0x92DB_01AE)?;
-                self.take(33, "RiverQuadTree")?;
-                let n = self.count("RiverQuadTree node count", 61)?;
-                self.take(n.saturating_mul(61), "RiverQuadTreeNode")?;
-                self.take(1, "WaterComponent")?;
-                let m = self.count("WaterPatchDesc count", 49)?;
-                self.take(m.saturating_mul(49), "WaterPatchDesc")?;
-                self.take(30, "WaterComponent")?;
+                self.take(14).field("WaterComponent")?;
+                expect(self, "WaterMeshInstance", 0, 1)?;
+                object(self, "WaterMeshInstance", 0xC15B_678F)?;
+                let k = count(self, "WaterMeshInstance count", 64)?;
+                self.take(k.saturating_mul(64)).field("WaterMeshInstance")?;
+                self.take(40 + 10 + 125).field("WaterComponent")?;
+                object(self, "RiverQuadTree", 0x92DB_01AE)?;
+                self.take(33).field("RiverQuadTree")?;
+                let n = count(self, "RiverQuadTree node count", 61)?;
+                self.take(n.saturating_mul(61)).field("RiverQuadTreeNode")?;
+                self.take(1).field("WaterComponent")?;
+                let m = count(self, "WaterPatchDesc count", 49)?;
+                self.take(m.saturating_mul(49)).field("WaterPatchDesc")?;
+                self.take(30).field("WaterComponent")?;
             }
             // AnimatedEntityComponent: 4 bytes, a count n, n 66-byte AnimationParameters, a byte (the notes: 9 + 66 n,
             // the one sequential end or the next component's header on 2,041 of 2,041)
             0x2996_CA50 => {
-                self.take(4, "AnimatedEntityComponent")?;
-                let n = self.count("AnimatedEntityComponent count", 66)?;
-                self.take(n.saturating_mul(66), "AnimationParameters")?;
-                self.take(1, "AnimatedEntityComponent")?;
+                self.take(4).field("AnimatedEntityComponent")?;
+                let n = count(self, "AnimatedEntityComponent count", 66)?;
+                self.take(n.saturating_mul(66)).field("AnimationParameters")?;
+                self.take(1).field("AnimatedEntityComponent")?;
             }
             // 0xE139F584 (unnamed): 4 bytes, an EventListener (an object, a byte, a count n: only 0 read, 13 bytes), a
             // flag byte, k ids (01, a u64), 9 bytes, a SoundInstance (00, an object, 52 bytes) (the notes: 113 + 9 k,
             // the one sequential end or the next component's header on 1,990 of 2,014; the rest hold objects in the
             // EventListener, without a rule)
             0xE139_F584 => {
-                self.take(4, "component")?;
-                self.object("EventListener", 0x2E8B_5553)?;
-                self.take(1, "EventListener")?;
-                if self.u32("EventListener count")? != 0 {
+                self.take(4).field("component")?;
+                object(self, "EventListener", 0x2E8B_5553)?;
+                self.take(1).field("EventListener")?;
+                if self.u32(LE).field("EventListener count")? != 0 {
                     return Ok(None);
                 }
-                self.take(14, "EventListener")?;
-                let k = self.count("component ids", 9)?;
-                self.take(k.saturating_mul(9), "component ids")?;
-                self.take(9, "component")?;
-                self.expect("SoundInstance", 0, 1)?;
-                self.object("SoundInstance", 0x7E42_F87F)?;
-                self.take(52, "SoundInstance")?;
+                self.take(14).field("EventListener")?;
+                let k = count(self, "component ids", 9)?;
+                self.take(k.saturating_mul(9)).field("component ids")?;
+                self.take(9).field("component")?;
+                expect(self, "SoundInstance", 0, 1)?;
+                object(self, "SoundInstance", 0x7E42_F87F)?;
+                self.take(52).field("SoundInstance")?;
             }
             // BulkComponent (crowds): 4 bytes, BulkSettings (an object, a u32), a BulkRandomCompositionTemplate (00, an
             // object, an f32), t 36-byte BulkTemplates, a u32, an f32, c 45-byte members, 4 bytes, a 04-tagged object
             // and a byte, k BulkStates (an object, 9 bytes, a reference), 37 bytes, k SoundInstances (an object, 52
             // bytes), f f32, 17 bytes (the notes: the one sequential end on 2,481 of 2,481)
             0x3083_58A4 => {
-                self.take(4, "BulkComponent")?;
-                self.object("BulkSettings", 0x4404_F7CC)?;
-                self.take(4, "BulkSettings")?;
-                self.expect("BulkRandomCompositionTemplate", 0, 1)?;
-                self.object("BulkRandomCompositionTemplate", 0x3E7C_FA88)?;
-                self.take(4, "BulkRandomCompositionTemplate")?;
-                let t = self.count("BulkTemplate count", 36)?;
+                self.take(4).field("BulkComponent")?;
+                object(self, "BulkSettings", 0x4404_F7CC)?;
+                self.take(4).field("BulkSettings")?;
+                expect(self, "BulkRandomCompositionTemplate", 0, 1)?;
+                object(self, "BulkRandomCompositionTemplate", 0x3E7C_FA88)?;
+                self.take(4).field("BulkRandomCompositionTemplate")?;
+                let t = count(self, "BulkTemplate count", 36)?;
                 for _ in 0..t {
-                    self.expect("BulkTemplate", 0, 1)?;
-                    self.object("BulkTemplate", 0x3621_488A)?;
-                    self.take(14, "BulkTemplate")?;
-                    self.expect("BulkTemplate", 0, 1)?;
-                    self.take(8, "BulkTemplate")?;
+                    expect(self, "BulkTemplate", 0, 1)?;
+                    object(self, "BulkTemplate", 0x3621_488A)?;
+                    self.take(14).field("BulkTemplate")?;
+                    expect(self, "BulkTemplate", 0, 1)?;
+                    self.take(8).field("BulkTemplate")?;
                 }
-                self.take(8, "BulkComponent")?;
-                let c = self.count("BulkComponent member count", 45)?;
+                self.take(8).field("BulkComponent")?;
+                let c = count(self, "BulkComponent member count", 45)?;
                 for _ in 0..c {
-                    self.object("BulkComponent member", 0x7A98_3CEC)?;
-                    self.take(33, "BulkComponent member")?;
+                    object(self, "BulkComponent member", 0x7A98_3CEC)?;
+                    self.take(33).field("BulkComponent member")?;
                 }
-                self.take(4, "BulkComponent")?;
-                self.expect("BulkComponent object", 4, 1)?;
-                self.object("BulkComponent object", 0xEACA_451C)?;
-                self.take(1, "BulkComponent")?;
-                let k = self.count("BulkState count", 31)?;
+                self.take(4).field("BulkComponent")?;
+                expect(self, "BulkComponent object", 4, 1)?;
+                object(self, "BulkComponent object", 0xEACA_451C)?;
+                self.take(1).field("BulkComponent")?;
+                let k = count(self, "BulkState count", 31)?;
                 for _ in 0..k {
-                    self.object("BulkState", 0x7888_7331)?;
-                    self.take(19, "BulkState")?;
+                    object(self, "BulkState", 0x7888_7331)?;
+                    self.take(19).field("BulkState")?;
                 }
-                self.take(37, "BulkComponent")?;
+                self.take(37).field("BulkComponent")?;
                 for _ in 0..k {
-                    self.object("SoundInstance", 0x7E42_F87F)?;
-                    self.take(52, "SoundInstance")?;
+                    object(self, "SoundInstance", 0x7E42_F87F)?;
+                    self.take(52).field("SoundInstance")?;
                 }
-                let f = self.count("BulkComponent floats", 4)?;
-                self.take(f.saturating_mul(4), "BulkComponent floats")?;
-                self.take(17, "BulkComponent")?;
+                let f = count(self, "BulkComponent floats", 4)?;
+                self.take(f.saturating_mul(4)).field("BulkComponent floats")?;
+                self.take(17).field("BulkComponent")?;
             }
             // FXComponent: 4 bytes, an object, 6 bytes, a reference (its FX), an f32, an object, a u32, n parameters
             // (a u32 id, a u32, a u16, a u16 kind, a u32, the value by its kind: 0x0A an f32, 0x0D a vec4; another
             // kind has no rule), 11 bytes (the notes: 67 + the parameters', the one sequential end or the next
             // component's header on every one of the 1,089 bodies reached)
             0xD2BF_93A6 => {
-                self.take(4, "FXComponent")?;
-                self.object("FXComponent", 0x1159_8A66)?;
-                self.take(20, "FXComponent")?;
-                self.object("FXComponent", 0x32D3_3700)?;
-                self.take(4, "FXComponent")?;
-                let n = self.count("FXComponent parameter count", 16)?;
+                self.take(4).field("FXComponent")?;
+                object(self, "FXComponent", 0x1159_8A66)?;
+                self.take(20).field("FXComponent")?;
+                object(self, "FXComponent", 0x32D3_3700)?;
+                self.take(4).field("FXComponent")?;
+                let n = count(self, "FXComponent parameter count", 16)?;
                 for _ in 0..n {
-                    self.take(10, "FXComponent parameter")?;
-                    let kind = u16::from_le_bytes(self.array::<2>("FXComponent parameter kind")?);
-                    self.take(4, "FXComponent parameter")?;
+                    self.take(10).field("FXComponent parameter")?;
+                    let kind = u16::from_le_bytes(self.array::<2>().field("FXComponent parameter kind")?);
+                    self.take(4).field("FXComponent parameter")?;
                     match kind {
-                        0x0A => self.take(4, "FXComponent parameter value")?,
-                        0x0D => self.take(16, "FXComponent parameter value")?,
+                        0x0A => self.take(4).field("FXComponent parameter value")?,
+                        0x0D => self.take(16).field("FXComponent parameter value")?,
                         _ => return Ok(None),
                     };
                 }
-                self.take(11, "FXComponent")?;
+                self.take(11).field("FXComponent")?;
             }
             // 0x341877D6 (unnamed): 4 bytes, a count n, n 109-byte items, each from a 04-tagged 0x30C186C4 object (the
             // notes: 8 + 109 n, the one sequential end on 190 of 190; the rest of an item, 0x518AFC74 and IsLocked
             // objects with references, not named)
             0x3418_77D6 => {
-                self.take(4, "component")?;
-                let n = self.count("component count", 109)?;
+                self.take(4).field("component")?;
+                let n = count(self, "component count", 109)?;
                 for _ in 0..n {
-                    self.expect("component item", 4, 1)?;
-                    self.object("component item", 0x30C1_86C4)?;
-                    self.take(96, "component item")?;
+                    expect(self, "component item", 4, 1)?;
+                    object(self, "component item", 0x30C1_86C4)?;
+                    self.take(96).field("component item")?;
                 }
             }
             // 0xEEF3F11F (unnamed): 9 bytes (the notes: 00 01 00 00, a u32 0, 03 on 483 of 483)
             0xEEF3_F11F => {
-                self.take(9, "component")?;
+                self.take(9).field("component")?;
             }
             // BreakableComponent: 4 bytes, a u32 (only 0 read), k ids (01, a u64), m ids, a 102-byte audio blocks (an
             // AudioEventSeed object first: 00, a u64, 0x561E06FC), 20 bytes (the notes: k 3, m 1, a 1 on all 1,070,
             // 178 bytes, the next component's header there on 1,070 of 1,070; other counts read as counts, not seen)
             0x44F8_FD99 => {
-                self.take(4, "BreakableComponent")?;
-                if self.u32("BreakableComponent")? != 0 {
+                self.take(4).field("BreakableComponent")?;
+                if self.u32(LE).field("BreakableComponent")? != 0 {
                     return Ok(None);
                 }
                 for what in ["BreakableComponent ids", "BreakableComponent ids"] {
-                    let k = self.count(what, 9)?;
+                    let k = count(self, what, 9)?;
                     for _ in 0..k {
-                        self.expect(what, 1, 1)?;
-                        self.u64(what)?;
+                        expect(self, what, 1, 1)?;
+                        self.u64(LE).field(what)?;
                     }
                 }
-                let a = self.count("BreakableComponent audio count", 102)?;
+                let a = count(self, "BreakableComponent audio count", 102)?;
                 for _ in 0..a {
-                    self.expect("AudioEventSeed", 0, 1)?;
-                    self.object("AudioEventSeed", 0x561E_06FC)?;
-                    self.take(89, "BreakableComponent audio")?;
+                    expect(self, "AudioEventSeed", 0, 1)?;
+                    object(self, "AudioEventSeed", 0x561E_06FC)?;
+                    self.take(89).field("BreakableComponent audio")?;
                 }
-                self.take(20, "BreakableComponent")?;
+                self.take(20).field("BreakableComponent")?;
             }
             // GameplayContextDisablerComponent: 4 bytes, a condition tree, m (a byte 00 or 01, a u64) (the notes: the
             // one sequential end on 99 of 99 measured, the next component's header on the other 2,216 of 2,315)
             0xBB7F_5B1D => {
-                self.take(4, "GameplayContextDisablerComponent")?;
+                self.take(4).field("GameplayContextDisablerComponent")?;
                 if !self.condition(0)? {
                     return Ok(None);
                 }
-                let m = self.count("GameplayContextDisablerComponent count", 9)?;
+                let m = count(self, "GameplayContextDisablerComponent count", 9)?;
                 for _ in 0..m {
                     let what = "GameplayContextDisablerComponent item";
-                    let at = self.at;
-                    let found = self.u8(what)?;
+                    let at = self.position();
+                    let found = self.u8().field(what)?;
                     if found > 1 {
-                        return Err(Error::Value {
+                        return Err(BodyError::Value {
                             what,
                             at,
                             found: u64::from(found),
                             read: "0 or 1",
-                        });
+                        }
+                        .into());
                     }
-                    self.u64(what)?;
+                    self.u64(LE).field(what)?;
                 }
             }
             // OutOfBoundsVisualComponent (the notes: 169 on 716 of 716)
             0x2994_1A30 => {
-                self.take(169, "component")?;
+                self.take(169).field("component")?;
             }
             // fixed sizes, observed on every body measured
             0x5139_1C93 => {
-                self.take(12, "component")?;
+                self.take(12).field("component")?;
             }
             0x7F0A_4643 => {
-                self.take(14, "component")?;
+                self.take(14).field("component")?;
             }
             0x2AA1_79AB => {
-                self.take(17, "component")?;
+                self.take(17).field("component")?;
             }
             0xADF1_D5E6 => {
-                self.take(450, "component")?;
+                self.take(450).field("component")?;
             }
             0xA8AB_FC79 => {
-                self.take(46, "component")?;
+                self.take(46).field("component")?;
             }
             0x064C_1BFA => {
-                self.take(24, "component")?;
+                self.take(24).field("component")?;
             }
             0x8167_852B => {
-                self.take(426, "component")?;
+                self.take(426).field("component")?;
             }
             0xA703_3693 => {
-                self.take(9, "component")?;
+                self.take(9).field("component")?;
             }
             _ => return Ok(None),
         }
-        Ok(Some(self.b.get(start..self.at).unwrap_or_default().to_vec()))
+        Ok(Some(
+            self.bytes()
+                .get(start..self.position())
+                .unwrap_or_default()
+                .to_vec(),
+        ))
     }
 }
 
@@ -1374,9 +1296,9 @@ impl StoredEntity {
     ///
     /// [`COMPONENT_TYPES`]: crate::read::component_types::COMPONENT_TYPES
     pub fn parse(body: &[u8]) -> Result<StoredEntity, Error> {
-        let mut c = Cursor { b: body, at: 0 };
+        let mut c = Cursor::new(body);
         let e = entity(&mut c, false)?;
-        c.end()?;
+        end(&c)?;
         Ok(e)
     }
 
@@ -1440,10 +1362,10 @@ impl StoredEntityGroup {
     /// The body parsed: the Entity grammar, a u32 count c, c references (none of them `03`), a u32 count m, m links
     /// (`00` and a u64) and a u32.
     pub fn parse(body: &[u8]) -> Result<StoredEntityGroup, Error> {
-        let mut c = Cursor { b: body, at: 0 };
+        let mut c = Cursor::new(body);
         let entity = entity(&mut c, true)?;
         let (members, links, word) = c.members()?;
-        c.end()?;
+        end(&c)?;
         Ok(StoredEntityGroup {
             entity,
             members,
@@ -1485,12 +1407,12 @@ impl Cursor<'_> {
             GRASS_COMPONENT => self
                 .grass_setup(end)
                 .ok()
-                .filter(|_| self.at == end)
+                .filter(|_| self.position() == end)
                 .map(|g| ComponentBody::GrassSetup(Box::new(g))),
             SKELETON_COMPONENT => self
                 .skeleton_binding()
                 .ok()
-                .filter(|_| self.at == end)
+                .filter(|_| self.position() == end)
                 .map(|b| ComponentBody::Skeleton(Box::new(b))),
             ANIM_COMPONENT => self
                 .anim_binding(end)
@@ -1502,31 +1424,37 @@ impl Cursor<'_> {
 
     /// A link's tag byte, `00` or `01`.
     fn link_tag(&mut self, what: &'static str) -> Result<(), Error> {
-        let at = self.at;
-        match self.u8(what)? {
+        let at = self.position();
+        match self.u8().field(what)? {
             0 | 1 => Ok(()),
-            found => Err(Error::Value {
+            found => Err(BodyError::Value {
                 what,
                 at,
                 found: u64::from(found),
                 read: "0 or 1",
-            }),
+            }
+            .into()),
         }
     }
 
     /// A component's header: its tag (4, or 0), id and type.
     fn component_header(&mut self) -> Result<(u8, u64, u32), Error> {
-        let at = self.at;
-        let tag = self.u8("component tag")?;
+        let at = self.position();
+        let tag = self.u8().field("component tag")?;
         if !matches!(tag, 0 | 4) {
-            return Err(Error::Value {
+            return Err(BodyError::Value {
                 what: "component tag",
                 at,
                 found: u64::from(tag),
                 read: "4 or 0",
-            });
+            }
+            .into());
         }
-        Ok((tag, self.u64("component")?, self.u32("component type")?))
+        Ok((
+            tag,
+            self.u64(LE).field("component")?,
+            self.u32(LE).field("component type")?,
+        ))
     }
 
     /// A component's body by its type's rule, from the cursor (`start`); `None` where the type has no rule (the
@@ -1541,15 +1469,10 @@ impl Cursor<'_> {
                     return Ok(None);
                 };
                 let at = start.saturating_add(SHAPE_AT);
-                let shape: [u8; reference::LENGTH] = bytes
-                    .get(SHAPE_AT..SHAPE_AT.saturating_add(reference::LENGTH))
-                    .and_then(|r| r.try_into().ok())
-                    .ok_or(Error::Short {
-                        what: "RigidBodyComponent shape",
-                        at,
-                        have: bytes.len(),
-                    })?;
-                let shape = reference::parse(shape).map_err(|source| Error::Reference { at, source })?;
+                let shape = View::with_origin(&bytes, start)
+                    .array::<{ reference::LENGTH }>(SHAPE_AT)
+                    .field("RigidBodyComponent shape")?;
+                let shape = reference::parse(shape).map_err(|source| BodyError::Reference { at, source })?;
                 ComponentBody::RigidBody { shape, bytes }
             }
             _ => match self.raw_component(kind)? {
@@ -1561,7 +1484,7 @@ impl Cursor<'_> {
 
     /// The u32 at `at`, if the body holds it.
     fn word_at(&self, at: usize) -> Option<u32> {
-        self.b
+        self.bytes()
             .get(at..at.checked_add(4)?)
             .and_then(|w| <[u8; 4]>::try_from(w).ok())
             .map(u32::from_le_bytes)
@@ -1569,7 +1492,7 @@ impl Cursor<'_> {
 
     /// Whether a component's header lies at `at`: a tag 4 or 0 and the type of a component class.
     fn is_component_header(&self, at: usize) -> bool {
-        self.b.get(at).is_some_and(|&t| matches!(t, 0 | 4))
+        self.bytes().get(at).is_some_and(|&t| matches!(t, 0 | 4))
             && at
                 .checked_add(9)
                 .and_then(|w| self.word_at(w))
@@ -1578,35 +1501,38 @@ impl Cursor<'_> {
 
     /// An Entity's tail from the cursor.
     fn entity_tail(&mut self) -> Result<EntityTail, Error> {
-        let run = self.array::<43>("run")?;
-        let word = self.u32("word before the scale")?;
-        let scale = self.f32("scale")?;
+        let run = self.array::<43>().field("run")?;
+        let word = self.u32(LE).field("word before the scale")?;
+        let scale = self.f32(LE).field("scale")?;
         let bounds = self.bounds()?;
-        self.object("EntityDescriptor", ENTITY_DESCRIPTOR)?;
-        let descriptor = self.array::<13>("EntityDescriptor")?;
-        self.object("DataLayerFilter", 0xDB1D_406E)?;
-        let k = self.count("DataLayerAction count", 25)?;
+        object(self, "EntityDescriptor", ENTITY_DESCRIPTOR)?;
+        let descriptor = self.array::<13>().field("EntityDescriptor")?;
+        object(self, "DataLayerFilter", 0xDB1D_406E)?;
+        let k = count(self, "DataLayerAction count", 25)?;
         let mut data_layers = Vec::with_capacity(k);
         for _ in 0..k {
-            self.object("DataLayerAction", 0xE315_93E1)?;
-            self.expect("DataLayerAction", 0, 1)?;
-            data_layers.push((self.u64("DataLayerAction")?, self.u32("DataLayerAction")?));
+            object(self, "DataLayerAction", 0xE315_93E1)?;
+            expect(self, "DataLayerAction", 0, 1)?;
+            data_layers.push((
+                self.u64(LE).field("DataLayerAction")?,
+                self.u32(LE).field("DataLayerAction")?,
+            ));
         }
-        let m = self.count("DataLayerFilter link count", 9)?;
+        let m = count(self, "DataLayerFilter link count", 9)?;
         let mut links = Vec::with_capacity(m);
         for _ in 0..m {
             self.link_tag("DataLayerFilter link")?;
-            links.push(self.u64("DataLayerFilter link")?);
+            links.push(self.u64(LE).field("DataLayerFilter link")?);
         }
-        let tail = match self.u8("tail")? {
+        let tail = match self.u8().field("tail")? {
             3 => Tail::End,
             0 => {
-                let id = self.object("GameStateData", 0x7313_743E)?;
-                let word = self.u32("GameStateData")?;
-                let l1 = self.count("GameStateData first run", 1)?;
-                let first = self.take(l1, "GameStateData first run")?.to_vec();
-                let l2 = self.count("GameStateData second run", 1)?;
-                let second = self.take(l2, "GameStateData second run")?.to_vec();
+                let id = object(self, "GameStateData", 0x7313_743E)?;
+                let word = self.u32(LE).field("GameStateData")?;
+                let l1 = count(self, "GameStateData first run", 1)?;
+                let first = self.take(l1).field("GameStateData first run")?.to_vec();
+                let l2 = count(self, "GameStateData second run", 1)?;
+                let second = self.take(l2).field("GameStateData second run")?.to_vec();
                 Tail::GameState {
                     id,
                     word,
@@ -1615,12 +1541,13 @@ impl Cursor<'_> {
                 }
             }
             found => {
-                return Err(Error::Value {
+                return Err(BodyError::Value {
                     what: "tail",
-                    at: self.at.saturating_sub(1),
+                    at: self.position().saturating_sub(1),
                     found: u64::from(found),
                     read: "3 or 0",
-                });
+                }
+                .into());
             }
         };
         Ok(EntityTail {
@@ -1638,44 +1565,50 @@ impl Cursor<'_> {
     /// An EntityGroup's members from the cursor: a count c, c references (none of them `03`), a count m, m links (`00`
     /// and a u64) and a u32.
     fn members(&mut self) -> Result<(Vec<Reference>, Vec<u64>, u32), Error> {
-        let n = self.count("member count", reference::LENGTH)?;
+        let n = count(self, "member count", reference::LENGTH)?;
         let mut members = Vec::with_capacity(n);
         for _ in 0..n {
-            let at = self.at;
-            members.push(self.reference()?.ok_or(Error::Value {
+            let at = self.position();
+            members.push(reference(self)?.ok_or(BodyError::Value {
                 what: "member reference",
                 at,
                 found: 3,
                 read: "a reference (tag 1)",
             })?);
         }
-        let m = self.count("member link count", 9)?;
+        let m = count(self, "member link count", 9)?;
         let mut links = Vec::with_capacity(m);
         for _ in 0..m {
             self.link_tag("member link")?;
-            links.push(self.u64("member link")?);
+            links.push(self.u64(LE).field("member link")?);
         }
-        let word = self.u32("last word")?;
+        let word = self.u32(LE).field("last word")?;
         Ok((members, links, word))
     }
 
     /// Where an Entity's tail begins, searching from `from`: the first place where the bounding volume's and the
     /// descriptor's types lie where the tail puts them and the tail, then a group's members, end the body.
     fn tail_start(&self, from: usize, group: bool) -> Option<usize> {
-        let last = self.b.len().checked_sub(TAIL_DESCRIPTOR_TYPE.saturating_add(4))?;
+        let last = self
+            .bytes()
+            .len()
+            .checked_sub(TAIL_DESCRIPTOR_TYPE.saturating_add(4))?;
         (from..=last).find(|&at| {
             self.word_at(at.saturating_add(TAIL_BOUNDS_TYPE)) == Some(BOUNDING_VOLUME)
                 && self.word_at(at.saturating_add(TAIL_DESCRIPTOR_TYPE)) == Some(ENTITY_DESCRIPTOR)
                 && {
-                    let mut tail = Cursor { b: self.b, at };
-                    tail.entity_tail().is_ok() && (!group || tail.members().is_ok()) && tail.end().is_ok()
+                    let mut tail = Cursor::new(self.bytes());
+                    tail.seek(at).is_ok()
+                        && tail.entity_tail().is_ok()
+                        && (!group || tail.members().is_ok())
+                        && end(&tail).is_ok()
                 }
         })
     }
 
     /// The u64 at `at`, if the body holds it.
     fn u64_at(&self, at: usize) -> Option<u64> {
-        self.b
+        self.bytes()
             .get(at..at.checked_add(8)?)
             .and_then(|w| <[u8; 8]>::try_from(w).ok())
             .map(u64::from_le_bytes)
@@ -1696,7 +1629,7 @@ impl Cursor<'_> {
     ) -> Result<Vec<Component>, Error> {
         let (index, kind) = blocked;
         let first = self.component_header()?;
-        let first_end = self.at;
+        let first_end = self.position();
         let end = self
             .tail_start(first_end, group)
             .ok_or(Error::NoTail { index, kind })?;
@@ -1714,7 +1647,7 @@ impl Cursor<'_> {
         // objects have `00`) and of an id near the first's (a payload's bytes have another) narrows them, alone or
         // together, to the count where they can
         if heads.len().saturating_add(1) > count {
-            let tag = |at: &usize| self.b.get(*at) == Some(&first.0);
+            let tag = |at: &usize| self.bytes().get(*at) == Some(&first.0);
             let near = |at: &usize| {
                 let number = |id| component_number(id);
                 self.u64_at(at.saturating_add(1))
@@ -1745,32 +1678,26 @@ impl Cursor<'_> {
         for next in heads.iter().map(|&h| Some(h)).chain([None]) {
             let body_end = next.unwrap_or(end);
             let (tag, id, kind) = header;
-            let bytes = self.b.get(body_start..body_end).ok_or(Error::Short {
-                what: "component",
-                at: body_start,
-                have: self.b.len(),
-            })?;
-            let mut part = Cursor {
-                b: self.b.get(..body_end).unwrap_or(self.b),
-                at: body_start,
-            };
+            let bytes = Cursor::at(self.bytes(), body_start, "component")?
+                .take_to(body_end)
+                .field("component")?;
+            // the component read within its extent
+            let within = self.bytes().get(..body_end).unwrap_or(self.bytes());
+            let mut part = Cursor::at(within, body_start, "component")?;
             let body = match part.component_body(kind, body_start) {
-                Ok(Some(body)) if part.at == body_end => body,
-                _ => Cursor {
-                    b: part.b,
-                    at: body_start,
-                }
-                .by_extent(kind, body_end)
-                .unwrap_or_else(|| ComponentBody::Unread(bytes.to_vec())),
+                Ok(Some(body)) if part.position() == body_end => body,
+                _ => Cursor::at(within, body_start, "component")?
+                    .by_extent(kind, body_end)
+                    .unwrap_or_else(|| ComponentBody::Unread(bytes.to_vec())),
             };
             out.push(Component { tag, id, kind, body });
             if let Some(h) = next {
-                let mut head = Cursor { b: self.b, at: h };
+                let mut head = Cursor::at(self.bytes(), h, "component header")?;
                 header = head.component_header()?;
-                body_start = head.at;
+                body_start = head.position();
             }
         }
-        self.at = end;
+        self.seek(end).field("component")?;
         Ok(out)
     }
 
@@ -1781,21 +1708,18 @@ impl Cursor<'_> {
         let mut components = Vec::with_capacity(count);
         while components.len() < count {
             let (tag, id, kind) = self.component_header()?;
-            let start = self.at;
+            let start = self.position();
             match self.component_body(kind, start)? {
                 Some(body) => components.push(Component { tag, id, kind, body }),
                 None => return Ok(Err((components.len(), kind))),
             }
         }
         let tail = self.entity_tail()?;
-        let mut rest = Cursor {
-            b: self.b,
-            at: self.at,
-        };
+        let mut rest = Cursor::at(self.bytes(), self.position(), "Entity tail")?;
         if group {
             rest.members()?;
         }
-        rest.end()?;
+        end(&rest)?;
         Ok(Ok((components, tail)))
     }
 }
@@ -1825,30 +1749,31 @@ const HIERARCHY_HANDLE: u32 = 0x709F_B9D4;
 /// An Entity's grammar from its first byte through its tail; `group` where the Entity is an EntityGroup's (its
 /// members follow the tail).
 fn entity(c: &mut Cursor<'_>, group: bool) -> Result<StoredEntity, Error> {
-    c.expect("first byte", 1, 1)?;
-    let at = c.at;
-    let hierarchy = match c.u8("second byte")? {
+    expect(c, "first byte", 1, 1)?;
+    let at = c.position();
+    let hierarchy = match c.u8().field("second byte")? {
         3 => None,
         0 => {
-            let start = c.at;
-            c.object("Hierarchy", HIERARCHY)?;
-            c.take(64, "Hierarchy")?;
-            c.object("HierarchyHandle", HIERARCHY_HANDLE)?;
-            c.take(4 + 9, "HierarchyHandle")?;
-            Some(c.b.get(start..c.at).unwrap_or_default().to_vec())
+            let start = c.position();
+            object(c, "Hierarchy", HIERARCHY)?;
+            c.take(64).field("Hierarchy")?;
+            object(c, "HierarchyHandle", HIERARCHY_HANDLE)?;
+            c.take(4 + 9).field("HierarchyHandle")?;
+            Some(c.bytes().get(start..c.position()).unwrap_or_default().to_vec())
         }
         found => {
-            return Err(Error::Value {
+            return Err(BodyError::Value {
                 what: "second byte",
                 at,
                 found: u64::from(found),
                 read: "3 or 0",
-            });
+            }
+            .into());
         }
     };
     let matrix = c.matrix()?;
-    let n = c.count("component count", 13)?;
-    let start = c.at;
+    let n = count(c, "component count", 13)?;
+    let start = c.position();
     // the types' rules where they all read and the tail then ends the body, else the components' own headers delimit
     // them
     let (components, t) = match c.by_rules(n, group) {
@@ -1858,7 +1783,7 @@ fn entity(c: &mut Cursor<'_>, group: bool) -> Result<StoredEntity, Error> {
                 Ok(Err(blocked)) => *blocked,
                 _ => (0, 0),
             };
-            c.at = start;
+            c.seek(start).field("Entity components")?;
             let components = c.delimited_components(n, group, blocked)?;
             (components, c.entity_tail()?)
         }

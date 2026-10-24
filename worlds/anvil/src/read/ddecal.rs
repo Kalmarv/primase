@@ -22,6 +22,9 @@
     clippy::cast_possible_truncation
 )]
 
+use primase_bytes::{Cursor, Field};
+
+use crate::read::fields::{BodyError, body_error, count, end, expect, object, reference};
 use crate::read::reference::{self, Reference};
 
 /// A component type: HoudiniDecalInstancerComponent.
@@ -36,27 +39,10 @@ pub const DDECAL_MODEL: u32 = 0x5056_3D58;
 /// Why a deferred decal body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("deferred decal body: {have} bytes, shorter than its {what} at {at}")]
-    Short {
-        what: &'static str,
-        at: usize,
-        have: usize,
-    },
-    #[error("deferred decal {what}: {found:#x} at {at}, not the grammar's value")]
-    Value {
-        what: &'static str,
-        at: usize,
-        found: u64,
-    },
-    #[error("deferred decal reference at {at}: {source}")]
-    Reference {
-        at: usize,
-        #[source]
-        source: reference::Error,
-    },
-    #[error("deferred decal body: {0} bytes after its end")]
-    Trailing(usize),
+    #[error("deferred decal {0}")]
+    Body(#[from] BodyError),
 }
+body_error!(Error, Error::Body);
 
 /// One 100-byte record, as stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,115 +129,32 @@ impl StoredDecalModel {
     }
 }
 
-/// Bytes read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
-}
-
-impl Cursor<'_> {
-    fn take(&mut self, n: usize, what: &'static str) -> Result<&[u8], Error> {
-        let short = Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(n).ok_or(Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        })?;
-        let s = self.b.get(self.at..end).ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let at = self.at;
-        let s = self.take(N, what)?;
-        s.try_into().map_err(|_| Error::Short {
-            what,
-            at,
-            have: s.len(),
-        })
-    }
-    fn u8(&mut self, what: &'static str) -> Result<u8, Error> {
-        Ok(u8::from_le_bytes(self.array(what)?))
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
-    fn u64(&mut self, what: &'static str) -> Result<u64, Error> {
-        Ok(u64::from_le_bytes(self.array(what)?))
-    }
-    fn expect(&mut self, what: &'static str, want: u64, found: u64, at: usize) -> Result<(), Error> {
-        if want == found {
-            Ok(())
-        } else {
-            Err(Error::Value { what, at, found })
-        }
-    }
-    fn object(&mut self, what: &'static str, kind: u32) -> Result<u64, Error> {
-        let id = self.u64(what)?;
-        let at = self.at;
-        let found = self.u32(what)?;
-        self.expect(what, u64::from(kind), u64::from(found), at)?;
-        Ok(id)
-    }
-    /// A count of items at least `each` bytes long, bounded by what is left.
-    fn count(&mut self, what: &'static str, each: usize) -> Result<usize, Error> {
-        let at = self.at;
-        let n = usize::try_from(self.u32(what)?).unwrap_or(usize::MAX);
-        let left = self.b.len().saturating_sub(self.at);
-        if n.checked_mul(each).is_none_or(|need| need > left) {
-            return Err(Error::Short {
-                what,
-                at,
-                have: self.b.len(),
-            });
-        }
-        Ok(n)
-    }
-    fn reference(&mut self) -> Result<Option<Reference>, Error> {
-        let at = self.at;
-        let bytes = self.array::<{ reference::LENGTH }>("reference")?;
-        reference::parse(bytes).map_err(|source| Error::Reference { at, source })
-    }
-    fn end(&self) -> Result<(), Error> {
-        match self.b.len().saturating_sub(self.at) {
-            0 => Ok(()),
-            left => Err(Error::Trailing(left)),
-        }
-    }
-}
-
 impl StoredDeferredDecals {
     /// The component body parsed (see the module documentation).
     pub fn parse(body: &[u8]) -> Result<StoredDeferredDecals, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        let head = c.take(212, "head")?.to_vec();
-        let library = c.object("StaticDDecalLibrary", 0xB43F_ECF1)?;
-        let r = c.count("models", reference::LENGTH)?;
+        let mut c = Cursor::new(body);
+        let head = c.take(212).field("head")?.to_vec();
+        let library = object(&mut c, "StaticDDecalLibrary", 0xB43F_ECF1)?;
+        let r = count(&mut c, "models", reference::LENGTH)?;
         let mut models = Vec::with_capacity(r);
         for _ in 0..r {
-            models.push(c.reference()?);
+            models.push(reference(&mut c)?);
         }
-        let s = c.count("items", 20)?;
+        let s = count(&mut c, "items", 20)?;
         let mut items = Vec::with_capacity(s);
         for _ in 0..s {
-            let at = c.at;
-            let tag = c.u8("item")?;
-            c.expect("item tag", 0, u64::from(tag), at)?;
-            let id = c.object("DDecalStaticInstancers", 0x1ADB_43B0)?;
-            let bytes = c.array::<3>("item")?;
-            let k = c.count("records", 100)?;
+            expect(&mut c, "item tag", 0, 1)?;
+            let id = object(&mut c, "DDecalStaticInstancers", 0x1ADB_43B0)?;
+            let bytes = c.array::<3>().field("item")?;
+            let k = count(&mut c, "records", 100)?;
             let mut decals = Vec::with_capacity(k);
             for _ in 0..k {
-                decals.push(StoredDecal(c.array::<100>("record")?));
+                decals.push(StoredDecal(c.array::<100>().field("record")?));
             }
             items.push(StoredDecalItem { id, bytes, decals });
         }
-        let tail = c.take(46, "tail")?.to_vec();
-        c.end()?;
+        let tail = c.take(46).field("tail")?.to_vec();
+        end(&c)?;
         Ok(StoredDeferredDecals {
             head,
             library,
@@ -265,15 +168,18 @@ impl StoredDeferredDecals {
 impl StoredDecalModel {
     /// The DDecalModel body parsed (see the module documentation).
     pub fn parse(body: &[u8]) -> Result<StoredDecalModel, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        let at = c.at;
-        let first = c.u8("first byte")?;
-        c.expect("first byte", 1, u64::from(first), at)?;
-        let byte = c.u8("byte")?;
-        let textures = [c.reference()?, c.reference()?, c.reference()?, c.reference()?];
-        let flags = c.array::<20>("flags")?;
-        let parameters = c.take(53, "parameters")?.to_vec();
-        c.end()?;
+        let mut c = Cursor::new(body);
+        expect(&mut c, "first byte", 1, 1)?;
+        let byte = c.u8().field("byte")?;
+        let textures = [
+            reference(&mut c)?,
+            reference(&mut c)?,
+            reference(&mut c)?,
+            reference(&mut c)?,
+        ];
+        let flags = c.array::<20>().field("flags")?;
+        let parameters = c.take(53).field("parameters")?.to_vec();
+        end(&c)?;
         Ok(StoredDecalModel {
             byte,
             textures,

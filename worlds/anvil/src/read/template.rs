@@ -38,6 +38,9 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::fields::LE;
+use primase_bytes::Cursor;
+
 /// A record type: equals the CRC-32 of the ASCII string `MaterialTemplate` (the name a label).
 pub use crate::read::material::MATERIAL_TEMPLATE;
 
@@ -108,18 +111,16 @@ pub fn bindings(body: &[u8]) -> Result<Vec<Binding>, BindingError> {
         if w != marker {
             continue;
         }
-        let mut c = Cursor { b: body, at };
-        let mut word = || c.take(4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+        let mut c = Cursor::new(body);
+        c.seek(at).map_err(|_| BindingError::Short(at))?;
+        let mut word = || c.u32(LE).ok();
         let short = BindingError::Short(at);
         let (Some(_), Some(key), Some(f1), Some(f2), Some(f3), Some(f4)) =
             (word(), word(), word(), word(), word(), word())
         else {
             return Err(short);
         };
-        let bytes: [u8; crate::read::reference::LENGTH] = c
-            .take(crate::read::reference::LENGTH)
-            .and_then(|b| b.try_into().ok())
-            .ok_or(BindingError::Short(at))?;
+        let bytes: [u8; crate::read::reference::LENGTH] = c.array().map_err(|_| BindingError::Short(at))?;
         let target = match bytes {
             [0, ..] => Target::Stored(bytes),
             _ => Target::Reference(
@@ -127,10 +128,8 @@ pub fn bindings(body: &[u8]) -> Result<Vec<Binding>, BindingError> {
                     .map_err(|source| BindingError::Reference { at, source })?,
             ),
         };
-        let after =
-            c.b.get(c.at..c.at.saturating_add(8).min(c.b.len()))
-                .unwrap_or_default()
-                .to_vec();
+        // up to 8 bytes after the record, as many as the body holds
+        let after = c.take(c.remaining().min(8)).unwrap_or_default().to_vec();
         out.push(Binding {
             at,
             key,
@@ -161,14 +160,15 @@ impl TextureParameter {
     /// The record whose marker is at `at` of `body`: refused where its byte or third word isn't 0 or a reference
     /// doesn't read.
     pub fn parse(body: &[u8], at: usize) -> Result<TextureParameter, BindingError> {
-        let mut c = Cursor { b: body, at };
+        let mut c = Cursor::new(body);
+        c.seek(at).map_err(|_| BindingError::Short(at))?;
         let short = BindingError::Short(at);
         let (Some(marker), Some(zero), Some(channel), Some(slot), Some(third)) = (
-            c.u32(),
-            c.take(1).and_then(|b| b.first().copied()),
-            c.u32(),
-            c.u32(),
-            c.u32(),
+            c.u32(LE).ok(),
+            c.u8().ok(),
+            c.u32(LE).ok(),
+            c.u32(LE).ok(),
+            c.u32(LE).ok(),
         ) else {
             return Err(short);
         };
@@ -176,10 +176,8 @@ impl TextureParameter {
             return Err(BindingError::Parameter(at));
         }
         let mut reference = || -> Result<Option<crate::read::reference::Reference>, BindingError> {
-            let bytes: [u8; crate::read::reference::LENGTH] = c
-                .take(crate::read::reference::LENGTH)
-                .and_then(|b| b.try_into().ok())
-                .ok_or(BindingError::Short(at))?;
+            let bytes: [u8; crate::read::reference::LENGTH] =
+                c.array().map_err(|_| BindingError::Short(at))?;
             crate::read::reference::parse(bytes).map_err(|source| BindingError::Reference { at, source })
         };
         let set = reference()?;
@@ -486,78 +484,56 @@ pub enum Error {
     Several(usize, Vec<usize>),
 }
 
-/// Fields read in order, `None` past the body.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
+/// A length-prefixed string and its 0 terminator (none after an empty one); `None` where it doesn't read whole.
+fn string(c: &mut Cursor) -> Option<Vec<u8>> {
+    let n = usize::try_from(c.u32(LE).ok()?).ok()?;
+    let s = c.take(n).ok()?.to_vec();
+    if n > 0 && c.u8().ok()? != 0 {
+        return None;
+    }
+    Some(s)
 }
 
-impl Cursor<'_> {
-    fn take(&mut self, n: usize) -> Option<&[u8]> {
-        let end = self.at.checked_add(n)?;
-        let s = self.b.get(self.at..end)?;
-        self.at = end;
-        Some(s)
+/// A u32 count of strings, each at least 4 bytes, and them; `None` where they don't read whole.
+fn strings(c: &mut Cursor) -> Option<Vec<Vec<u8>>> {
+    let n = c.count(LE, 4).ok()?;
+    (0..n).map(|_| string(c)).collect()
+}
+
+/// A descriptor at the cursor; `None` where one doesn't read whole (the search for the run tries each candidate).
+fn descriptor(c: &mut Cursor) -> Option<Descriptor> {
+    let at = c.position();
+    if c.u64(LE).ok()? != 0 || c.u32(LE).ok()? != DESCRIPTOR {
+        return None;
     }
-    fn u32(&mut self) -> Option<u32> {
-        self.take(4)?.try_into().ok().map(u32::from_le_bytes)
-    }
-    fn u64(&mut self) -> Option<u64> {
-        self.take(8)?.try_into().ok().map(u64::from_le_bytes)
-    }
-    fn string(&mut self) -> Option<Vec<u8>> {
-        let n = usize::try_from(self.u32()?).ok()?;
-        let s = self.take(n)?.to_vec();
-        if n > 0 && self.take(1)? != [0] {
-            return None;
-        }
-        Some(s)
-    }
-    fn strings(&mut self) -> Option<Vec<Vec<u8>>> {
-        let n = usize::try_from(self.u32()?).ok()?;
-        if n > self.b.len() / 4 {
-            return None;
-        }
-        (0..n).map(|_| self.string()).collect()
-    }
-    fn descriptor(&mut self) -> Option<Descriptor> {
-        let at = self.at;
-        if self.u64()? != 0 || self.u32()? != DESCRIPTOR {
-            return None;
-        }
-        let [byte] = self.take(1)? else {
-            return None;
-        };
-        let byte = *byte;
-        let link = self.u64()?;
-        let word = self.u32()?;
-        let strings = [self.string()?, self.string()?, self.string()?];
-        let keys = self.strings()?;
-        let values = self.strings()?;
-        Some(Descriptor {
-            at,
-            byte,
-            link,
-            word,
-            strings,
-            keys,
-            values,
-        })
-    }
+    let byte = c.u8().ok()?;
+    let link = c.u64(LE).ok()?;
+    let word = c.u32(LE).ok()?;
+    let strings_ = [string(c)?, string(c)?, string(c)?];
+    let keys = strings(c)?;
+    let values = strings(c)?;
+    Some(Descriptor {
+        at,
+        byte,
+        link,
+        word,
+        strings: strings_,
+        keys,
+        values,
+    })
 }
 
 /// The run of n descriptors whose count is the u32 before `first`, if it reads whole.
 fn run(body: &[u8], first: usize) -> Option<Vec<Descriptor>> {
     let count_at = first.checked_sub(4)?;
-    let mut c = Cursor {
-        b: body,
-        at: count_at,
-    };
-    let n = usize::try_from(c.u32()?).ok()?;
-    if n == 0 || n > body.len() / 37 {
+    let mut c = Cursor::new(body);
+    c.seek(count_at).ok()?;
+    // a descriptor is at least 37 bytes
+    let n = c.count(LE, 37).ok()?;
+    if n == 0 {
         return None;
     }
-    (0..n).map(|_| c.descriptor()).collect()
+    (0..n).map(|_| descriptor(&mut c)).collect()
 }
 
 /// The template body's descriptor run: the one place where a u32 count is followed by that many descriptors read

@@ -27,6 +27,8 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::fields::LE;
+use primase_bytes::{Cursor, Field, FieldError};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -88,8 +90,8 @@ pub enum Error {
     Name(usize),
     #[error("entries {first} and {second} share the index id {id:#x}")]
     DuplicateId { id: u64, first: usize, second: usize },
-    #[error("{0}: shorter than its layout")]
-    Short(&'static str),
+    #[error("{0}")]
+    Short(#[from] FieldError),
 }
 
 /// The file header, before DataHeader1.
@@ -189,20 +191,20 @@ impl Forge {
     pub fn read<R: Read + Seek>(r: &mut R) -> Result<Forge, Error> {
         let file_size = r.seek(SeekFrom::End(0))?;
         let head_bytes = at(r, file_size, "the file header", 0, FILE_HEADER)?;
-        let mut head = Fields::new("the file header", &head_bytes);
-        let magic: [u8; 9] = head.take()?;
+        let mut head = Cursor::new(&head_bytes);
+        let magic: [u8; 9] = head.array().field("the file header")?;
         if magic != MAGIC {
             return Err(Error::Magic(magic));
         }
-        let version = head.i32()?;
+        let version = head.i32(LE).field("the file header")?;
         if version != VERSION {
             return Err(Error::Version(version));
         }
         let header = FileHeader {
             version,
-            header_size: head.u64()?,
-            unknown_15: head.i64()?,
-            unknown_1d: head.i32()?,
+            header_size: head.u64(LE).field("the file header")?,
+            unknown_15: head.i64(LE).field("the file header")?,
+            unknown_1d: head.i32(LE).field("the file header")?,
         };
         let start = i64::try_from(header.header_size).map_err(|_| Error::OutOfFile {
             what: "DataHeader1",
@@ -211,14 +213,19 @@ impl Forge {
             file: file_size,
         })?;
         let d1_bytes = at(r, file_size, "DataHeader1", start, DATA_HEADER_1)?;
-        let mut f = Fields::new("DataHeader1", &d1_bytes);
+        let mut f = Cursor::new(&d1_bytes);
         let data_header_1 = DataHeader1 {
-            entries: f.i32()?,
-            unknown_04: [f.i32()?, f.i32()?, f.i32()?, f.i32()?],
-            unknown_14: f.i64()?,
-            max_files_for_this_index: f.i32()?,
-            unknown_20: f.i32()?,
-            offset_to_data: f.i64()?,
+            entries: f.i32(LE).field("DataHeader1")?,
+            unknown_04: [
+                f.i32(LE).field("DataHeader1")?,
+                f.i32(LE).field("DataHeader1")?,
+                f.i32(LE).field("DataHeader1")?,
+                f.i32(LE).field("DataHeader1")?,
+            ],
+            unknown_14: f.i64(LE).field("DataHeader1")?,
+            max_files_for_this_index: f.i32(LE).field("DataHeader1")?,
+            unknown_20: f.i32(LE).field("DataHeader1")?,
+            offset_to_data: f.i64(LE).field("DataHeader1")?,
         };
         let d2_bytes = at(
             r,
@@ -227,16 +234,16 @@ impl Forge {
             data_header_1.offset_to_data,
             DATA_HEADER_2,
         )?;
-        let mut f = Fields::new("DataHeader2", &d2_bytes);
+        let mut f = Cursor::new(&d2_bytes);
         let data_header_2 = DataHeader2 {
-            index_count: f.i32()?,
-            unknown_04: f.i32()?,
-            offset_to_index_table: f.i64()?,
-            offset_to_next_data_section: f.i64()?,
-            index_start: f.i32()?,
-            index_end: f.i32()?,
-            offset_to_name_table: f.i64()?,
-            unknown_28: f.i64()?,
+            index_count: f.i32(LE).field("DataHeader2")?,
+            unknown_04: f.i32(LE).field("DataHeader2")?,
+            offset_to_index_table: f.i64(LE).field("DataHeader2")?,
+            offset_to_next_data_section: f.i64(LE).field("DataHeader2")?,
+            index_start: f.i32(LE).field("DataHeader2")?,
+            index_end: f.i32(LE).field("DataHeader2")?,
+            offset_to_name_table: f.i64(LE).field("DataHeader2")?,
+            unknown_28: f.i64(LE).field("DataHeader2")?,
         };
         let count = counts(&data_header_1, &data_header_2)?;
         let table = |r: &mut R, what: &'static str, offset: i64, record: u64| {
@@ -268,11 +275,11 @@ impl Forge {
             .0
             .iter()
             .map(|b| {
-                let mut f = Fields::new("an index record", b);
+                let mut f = Cursor::new(b);
                 Ok(IndexRecord {
-                    offset: f.i64()?,
-                    id: f.u64()?,
-                    size: f.i32()?,
+                    offset: f.i64(LE).field("an index record")?,
+                    id: f.u64(LE).field("an index record")?,
+                    size: f.i32(LE).field("an index record")?,
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -400,17 +407,20 @@ fn check_entry(k: usize, e: &IndexRecord, file: u64) -> Result<(), Error> {
 
 /// Name record `k` from its 192 bytes.
 fn name_record(k: usize, b: &[u8]) -> Result<NameRecord, Error> {
-    let mut f = Fields::new("a name record", b);
-    let size = f.i32()?;
-    let id = f.u64()?;
-    let unknown_0c = f.i32()?;
-    let type_id = f.u32()?;
-    let unknown_14 = [f.i32()?, f.i32()?];
-    let unknown_1c = f.i32()?;
-    let unknown_20 = f.i32()?;
-    let unknown_24 = f.i32()?;
-    let timestamp = f.i32()?;
-    let stored: [u8; 128] = f.take()?;
+    let mut f = Cursor::new(b);
+    let size = f.i32(LE).field("a name record")?;
+    let id = f.u64(LE).field("a name record")?;
+    let unknown_0c = f.i32(LE).field("a name record")?;
+    let type_id = f.u32(LE).field("a name record")?;
+    let unknown_14 = [
+        f.i32(LE).field("a name record")?,
+        f.i32(LE).field("a name record")?,
+    ];
+    let unknown_1c = f.i32(LE).field("a name record")?;
+    let unknown_20 = f.i32(LE).field("a name record")?;
+    let unknown_24 = f.i32(LE).field("a name record")?;
+    let timestamp = f.i32(LE).field("a name record")?;
+    let stored: [u8; 128] = f.array().field("a name record")?;
     let end = stored.iter().position(|&c| c == 0).unwrap_or(stored.len());
     let name = stored
         .get(..end)
@@ -428,7 +438,13 @@ fn name_record(k: usize, b: &[u8]) -> Result<NameRecord, Error> {
         unknown_24,
         timestamp,
         name,
-        unknown_ac: [f.i32()?, f.i32()?, f.i32()?, f.i32()?, f.i32()?],
+        unknown_ac: [
+            f.i32(LE).field("a name record")?,
+            f.i32(LE).field("a name record")?,
+            f.i32(LE).field("a name record")?,
+            f.i32(LE).field("a name record")?,
+            f.i32(LE).field("a name record")?,
+        ],
     })
 }
 
@@ -455,39 +471,4 @@ fn at<R: Read + Seek>(
     r.seek(SeekFrom::Start(start))?;
     r.read_exact(&mut buf)?;
     Ok(buf)
-}
-
-/// Little-endian fields read in order from a record's bytes.
-struct Fields<'a> {
-    what: &'static str,
-    bytes: &'a [u8],
-    at: usize,
-}
-
-impl<'a> Fields<'a> {
-    fn new(what: &'static str, bytes: &'a [u8]) -> Fields<'a> {
-        Fields { what, bytes, at: 0 }
-    }
-    fn take<const N: usize>(&mut self) -> Result<[u8; N], Error> {
-        let end = self.at.checked_add(N).ok_or(Error::Short(self.what))?;
-        let field = self
-            .bytes
-            .get(self.at..end)
-            .and_then(|b| <[u8; N]>::try_from(b).ok())
-            .ok_or(Error::Short(self.what))?;
-        self.at = end;
-        Ok(field)
-    }
-    fn i32(&mut self) -> Result<i32, Error> {
-        self.take().map(i32::from_le_bytes)
-    }
-    fn u32(&mut self) -> Result<u32, Error> {
-        self.take().map(u32::from_le_bytes)
-    }
-    fn i64(&mut self) -> Result<i64, Error> {
-        self.take().map(i64::from_le_bytes)
-    }
-    fn u64(&mut self) -> Result<u64, Error> {
-        self.take().map(u64::from_le_bytes)
-    }
 }

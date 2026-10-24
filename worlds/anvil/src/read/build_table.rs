@@ -40,7 +40,9 @@
 use crate::components::{
     BuildColumn, BuildLink, BuildProperty, BuildResources, BuildRow, BuildValue, PathNode, StoredBuildTable,
 };
+use crate::read::fields::{BodyError, LE, body_error, count, expect};
 use crate::read::reference::{self, Reference};
+use primase_bytes::{Field, View};
 
 /// A record type: the CRC-32 of `BuildTable`.
 pub const BUILD_TABLE: u32 = 0x22EC_BE63;
@@ -69,19 +71,8 @@ const OBJECTS: [(u32, usize); 5] = [
 /// Why a BuildTable body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("build table: {have} bytes, shorter than its {what} at {at}")]
-    Short {
-        what: &'static str,
-        at: usize,
-        have: usize,
-    },
-    #[error("build table {what}: {found:#x} at {at}, not {read}")]
-    Value {
-        what: &'static str,
-        at: usize,
-        found: u64,
-        read: &'static str,
-    },
+    #[error("build table {0}")]
+    Body(#[from] BodyError),
     #[error("build table value of kind {kind:#x} at {at} isn't read")]
     Kind { kind: u32, at: usize },
     #[error("build table object of class {class:#010x} at {at} isn't read")]
@@ -93,175 +84,116 @@ pub enum Error {
     #[error(transparent)]
     Reference(#[from] reference::Error),
 }
+body_error!(Error, Error::Body);
 
-/// Little-endian fields read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
+/// The body's cursor ([`primase_bytes::Cursor`]), with this record's grammar as methods.
+struct Cursor<'a>(primase_bytes::Cursor<'a>);
+
+impl<'a> Cursor<'a> {
+    fn new(b: &'a [u8]) -> Self {
+        Cursor(primase_bytes::Cursor::new(b))
+    }
+}
+
+impl<'a> std::ops::Deref for Cursor<'a> {
+    type Target = primase_bytes::Cursor<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Cursor<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl<'a> Cursor<'a> {
-    fn take(&mut self, n: usize, what: &'static str) -> Result<&'a [u8], Error> {
-        let short = |at, have| Error::Short { what, at, have };
-        let end = self
-            .at
-            .checked_add(n)
-            .ok_or_else(|| short(self.at, self.b.len()))?;
-        let s = self
-            .b
-            .get(self.at..end)
-            .ok_or_else(|| short(self.at, self.b.len()))?;
-        self.at = end;
-        Ok(s)
-    }
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let at = self.at;
-        self.take(N, what)?.try_into().map_err(|_| Error::Short {
-            what,
-            at,
-            have: self.b.len(),
-        })
-    }
-    fn u8(&mut self, what: &'static str) -> Result<u8, Error> {
-        let [b] = self.array::<1>(what)?;
-        Ok(b)
-    }
-    fn u16(&mut self, what: &'static str) -> Result<u16, Error> {
-        Ok(u16::from_le_bytes(self.array(what)?))
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
-    fn u64(&mut self, what: &'static str) -> Result<u64, Error> {
-        Ok(u64::from_le_bytes(self.array(what)?))
-    }
-    fn f32(&mut self, what: &'static str) -> Result<f32, Error> {
-        Ok(f32::from_le_bytes(self.array(what)?))
-    }
-    fn expect(&mut self, what: &'static str, want: u32) -> Result<(), Error> {
-        let at = self.at;
-        let found = self.u32(what)?;
-        if found == want {
-            Ok(())
-        } else {
-            Err(Error::Value {
-                what,
-                at,
-                found: u64::from(found),
-                read: "the grammar's class",
-            })
-        }
-    }
-    /// A count of items of at least `each` bytes the rest of the body can hold.
-    fn count(&mut self, what: &'static str, each: usize) -> Result<usize, Error> {
-        let at = self.at;
-        let n = usize::try_from(self.u32(what)?).unwrap_or(usize::MAX);
-        let left = self.b.len().saturating_sub(self.at);
-        if n.checked_mul(each.max(1)).is_none_or(|bytes| bytes > left) {
-            return Err(Error::Value {
-                what,
-                at,
-                found: u64::try_from(n).unwrap_or(u64::MAX),
-                read: "a count the body can hold",
-            });
-        }
-        Ok(n)
-    }
     fn link(&mut self, what: &'static str) -> Result<BuildLink, Error> {
         Ok(BuildLink {
-            tag: self.u8(what)?,
-            id: self.u64(what)?,
+            tag: self.u8().field(what)?,
+            id: self.u64(LE).field(what)?,
         })
-    }
-    /// An embedded object's id (`id_zero`: it must be 0) and class.
-    fn object(&mut self, what: &'static str, class: u32, id_zero: bool) -> Result<u64, Error> {
-        let at = self.at;
-        let id = self.u64(what)?;
-        if id_zero && id != 0 {
-            return Err(Error::Value {
-                what,
-                at,
-                found: id,
-                read: "an object id of 0",
-            });
-        }
-        self.expect(what, class)?;
-        Ok(id)
     }
     /// The bytes of an object value's body by its class.
     fn body(&mut self, class: u32, what: &'static str) -> Result<&'a [u8], Error> {
-        let at = self.at;
+        let at = self.position();
         let (_, n) = OBJECTS
             .iter()
             .find(|(c, _)| *c == class)
             .ok_or(Error::Class { class, at })?;
-        self.take(*n, what)
+        Ok(self.take(*n).field(what)?)
     }
     /// A typed value: class, u16, kind, u16 and the kind's bytes.
     fn typed(&mut self, what: &'static str) -> Result<BuildValue, Error> {
-        let class = self.u32(what)?;
-        let before = self.u16(what)?;
-        let kind_at = self.at;
-        let kind = self.u32(what)?;
-        let after = self.u16(what)?;
-        let start = self.at;
+        let class = self.u32(LE).field(what)?;
+        let before = self.u16(LE).field(what)?;
+        let kind_at = self.position();
+        let kind = self.u32(LE).field(what)?;
+        let after = self.u16(LE).field(what)?;
+        let start = self.position();
         match kind & 0x3F {
             0x00..=0x03 => {
-                self.take(1, what)?;
+                self.take(1).field(what)?;
             }
             0x04 | 0x05 => {
-                self.take(2, what)?;
+                self.take(2).field(what)?;
             }
             0x06 | 0x07 | 0x0A | 0x19 => {
-                self.take(4, what)?;
+                self.take(4).field(what)?;
             }
             0x08 | 0x09 | 0x0B | 0x11 | 0x1F => {
-                self.take(8, what)?;
+                self.take(8).field(what)?;
             }
             0x0C => {
-                self.take(12, what)?;
+                self.take(12).field(what)?;
             }
             0x0D | 0x0E => {
-                self.take(16, what)?;
+                self.take(16).field(what)?;
             }
             0x10 => {
-                self.take(64, what)?;
+                self.take(64).field(what)?;
             }
             0x12 => {
-                self.take(9, what)?;
+                self.take(9).field(what)?;
             }
             0x1C => {
-                self.take(reference::LENGTH, what)?;
+                self.take(reference::LENGTH).field(what)?;
             }
             // an embedded object: id, class, body
             0x13 | 0x16 => {
-                self.u64(what)?;
-                let c = self.u32(what)?;
+                self.u64(LE).field(what)?;
+                let c = self.u32(LE).field(what)?;
                 self.body(c, what)?;
             }
             // a pointer: `03` none, `00` or `04` an object, other tags a reference of 9 bytes
-            0x14 | 0x15 => match self.u8(what)? {
+            0x14 | 0x15 => match self.u8().field(what)? {
                 3 => {}
                 0 | 4 => {
-                    self.u64(what)?;
-                    let c = self.u32(what)?;
+                    self.u64(LE).field(what)?;
+                    let c = self.u32(LE).field(what)?;
                     self.body(c, what)?;
                 }
                 1 | 2 | 5 => {
-                    self.take(8, what)?;
+                    self.take(8).field(what)?;
                 }
                 other => {
-                    return Err(Error::Value {
+                    return Err(BodyError::Value {
                         what,
-                        at: self.at.saturating_sub(1),
+                        at: self.position().saturating_sub(1),
                         found: u64::from(other),
                         read: "a pointer tag",
-                    });
+                    }
+                    .into());
                 }
             },
             _ => return Err(Error::Kind { kind, at: kind_at }),
         }
-        let value = self.b.get(start..self.at).unwrap_or_default().to_vec();
+        let value = self
+            .bytes()
+            .get(start..self.position())
+            .unwrap_or_default()
+            .to_vec();
         Ok(BuildValue {
             class,
             before,
@@ -325,15 +257,8 @@ impl BuildColumn {
         if *class != MATERIAL_SOLVER {
             return Ok(None);
         }
-        let short = || Error::Short {
-            what: "material solver link",
-            at: 41,
-            have: body.len(),
-        };
-        let link = body.get(41..50).ok_or_else(short)?;
-        let (_, id) = link.split_first().ok_or_else(short)?;
-        let id: [u8; 8] = id.try_into().map_err(|_| short())?;
-        let id = u64::from_le_bytes(id);
+        // the link at 41: a tag byte, then the id
+        let id = View::new(body).u64(42, LE).field("material solver link")?;
         Ok((id != 0).then_some(id))
     }
 }
@@ -347,11 +272,9 @@ impl BuildValue {
                 want: "reference",
             });
         }
-        let bytes: [u8; reference::LENGTH] = self.value.as_slice().try_into().map_err(|_| Error::Short {
-            what: "reference",
-            at: 0,
-            have: self.value.len(),
-        })?;
+        let bytes = View::new(&self.value)
+            .array::<{ reference::LENGTH }>(0)
+            .field("reference")?;
         Ok(reference::parse(bytes)?)
     }
 
@@ -363,16 +286,10 @@ impl BuildValue {
                 want: "link",
             });
         }
-        let short = || Error::Short {
-            what: "link",
-            at: 0,
-            have: self.value.len(),
-        };
-        let (tag, id) = self.value.split_first().ok_or_else(short)?;
-        let id: [u8; 8] = id.try_into().map_err(|_| short())?;
+        let v = View::new(&self.value);
         Ok(BuildLink {
-            tag: *tag,
-            id: u64::from_le_bytes(id),
+            tag: v.u8(0).field("link")?,
+            id: v.u64(1, LE).field("link")?,
         })
     }
 }
@@ -380,40 +297,41 @@ impl BuildValue {
 impl StoredBuildTable {
     /// The body parsed, consumed to its last byte.
     pub fn parse(body: &[u8]) -> Result<StoredBuildTable, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        let at = c.at;
-        let first = c.u8("first byte")?;
+        let mut c = Cursor::new(body);
+        let at = c.position();
+        let first = c.u8().field("first byte")?;
         if first != 1 {
-            return Err(Error::Value {
+            return Err(BodyError::Value {
                 what: "first byte",
                 at,
                 found: u64::from(first),
                 read: "1",
-            });
+            }
+            .into());
         }
-        let count = c.count("column count", 12)?;
-        let mut columns = Vec::with_capacity(count);
-        for _ in 0..count {
+        let k = count(&mut c, "column count", 12)?;
+        let mut columns = Vec::with_capacity(k);
+        for _ in 0..k {
             columns.push(column(&mut c)?);
         }
-        let count = c.count("row count", 12)?;
-        let mut rows = Vec::with_capacity(count);
-        for _ in 0..count {
+        let k = count(&mut c, "row count", 12)?;
+        let mut rows = Vec::with_capacity(k);
+        for _ in 0..k {
             rows.push(row(&mut c)?);
         }
-        let flags = c.array::<4>("flags")?;
-        let count = c.count("resources count", 12)?;
-        let mut resources = Vec::with_capacity(count);
-        for _ in 0..count {
-            let id = c.u64("resources id")?;
-            c.expect("resources class", DYNAMIC_RESOURCES)?;
-            let n = c.count("link count", 9)?;
+        let flags = c.array::<4>().field("flags")?;
+        let k = count(&mut c, "resources count", 12)?;
+        let mut resources = Vec::with_capacity(k);
+        for _ in 0..k {
+            let id = c.u64(LE).field("resources id")?;
+            expect(&mut c, "resources class", u64::from(DYNAMIC_RESOURCES), 4)?;
+            let n = count(&mut c, "link count", 9)?;
             let links = (0..n)
                 .map(|_| c.link("resource link"))
                 .collect::<Result<Vec<_>, _>>()?;
             resources.push(BuildResources { id, links });
         }
-        let left = body.len().saturating_sub(c.at);
+        let left = body.len().saturating_sub(c.position());
         if left != 0 {
             return Err(Error::Trailing(left));
         }
@@ -427,48 +345,56 @@ impl StoredBuildTable {
 }
 
 fn column(c: &mut Cursor<'_>) -> Result<BuildColumn, Error> {
-    let id = c.u64("column id")?;
-    c.expect("column class", BUILD_COLUMN)?;
-    let apply_id = c.u64("apply id")?;
-    c.expect("apply class", APPLY_PASS_BIT_FIELD)?;
-    let apply_bits = c.u8("apply bits")?;
-    c.object("path", PROPERTY_PATH, true)?;
-    let nodes = c.count("node count", 12)?;
+    let id = c.u64(LE).field("column id")?;
+    expect(c, "column class", u64::from(BUILD_COLUMN), 4)?;
+    let apply_id = c.u64(LE).field("apply id")?;
+    expect(c, "apply class", u64::from(APPLY_PASS_BIT_FIELD), 4)?;
+    let apply_bits = c.u8().field("apply bits")?;
+    // an embedded object of id 0
+    expect(c, "path", 0, 8)?;
+    expect(c, "path", u64::from(PROPERTY_PATH), 4)?;
+    let nodes = count(c, "node count", 12)?;
     let mut path = Vec::with_capacity(nodes);
     for _ in 0..nodes {
-        c.object("node", PROPERTY_PATH_NODE, true)?;
-        let fields = c.take(NODE_FIELDS, "node fields")?.to_vec();
-        let solver = match c.u8("solver tag")? {
+        // an embedded object of id 0
+        expect(c, "node", 0, 8)?;
+        expect(c, "node", u64::from(PROPERTY_PATH_NODE), 4)?;
+        let fields = c.take(NODE_FIELDS).field("node fields")?.to_vec();
+        let solver = match c.u8().field("solver tag")? {
             3 => None,
             0 => {
-                c.u64("solver id")?;
-                let class = c.u32("solver class")?;
-                let at = c.at;
+                c.u64(LE).field("solver id")?;
+                let class = c.u32(LE).field("solver class")?;
+                let at = c.position();
                 let (_, n) = SOLVERS
                     .iter()
                     .find(|(k, _)| *k == class)
                     .ok_or(Error::Class { class, at })?;
-                Some((class, c.take(*n, "solver body")?.to_vec()))
+                Some((class, c.take(*n).field("solver body")?.to_vec()))
             }
             other => {
-                return Err(Error::Value {
+                return Err(BodyError::Value {
                     what: "solver tag",
-                    at: c.at.saturating_sub(1),
+                    at: c.position().saturating_sub(1),
                     found: u64::from(other),
                     read: "3 or 0",
-                });
+                }
+                .into());
             }
         };
         path.push(PathNode { fields, solver });
     }
-    let path_bytes = c.array::<2>("path bytes")?;
+    let path_bytes = c.array::<2>().field("path bytes")?;
     let fields = [
-        c.u32("column field")?,
-        c.u32("column field")?,
-        c.u32("column field")?,
+        c.u32(LE).field("column field")?,
+        c.u32(LE).field("column field")?,
+        c.u32(LE).field("column field")?,
     ];
     let table = c.link("column table")?;
-    let header = [c.u32("column header")?, c.u32("column header")?];
+    let header = [
+        c.u32(LE).field("column header")?,
+        c.u32(LE).field("column header")?,
+    ];
     let declared = c.typed("declared value")?;
     Ok(BuildColumn {
         id,
@@ -484,28 +410,31 @@ fn column(c: &mut Cursor<'_>) -> Result<BuildColumn, Error> {
 }
 
 fn row(c: &mut Cursor<'_>) -> Result<BuildRow, Error> {
-    let id = c.u64("row id")?;
-    c.expect("row class", BUILD_ROW)?;
+    let id = c.u64(LE).field("row id")?;
+    expect(c, "row class", u64::from(BUILD_ROW), 4)?;
     let table = c.link("row table")?;
-    let weight = c.f32("weight")?;
-    c.object("tag", BUILD_TAG, true)?;
-    let condition = c.u32("condition")?;
-    let tags_id = c.u64("tags id")?;
-    c.expect("tags class", BUILD_TAGS)?;
-    let at = c.at;
-    let tags = c.u32("tag count")?;
+    let weight = c.f32(LE).field("weight")?;
+    // an embedded object of id 0
+    expect(c, "tag", 0, 8)?;
+    expect(c, "tag", u64::from(BUILD_TAG), 4)?;
+    let condition = c.u32(LE).field("condition")?;
+    let tags_id = c.u64(LE).field("tags id")?;
+    expect(c, "tags class", u64::from(BUILD_TAGS), 4)?;
+    let at = c.position();
+    let tags = c.u32(LE).field("tag count")?;
     if tags != 0 {
-        return Err(Error::Value {
+        return Err(BodyError::Value {
             what: "tag count",
             at,
             found: u64::from(tags),
             read: "0",
-        });
+        }
+        .into());
     }
-    let n = c.count("property count", 16)?;
+    let n = count(c, "property count", 16)?;
     let mut properties = Vec::with_capacity(n);
     for _ in 0..n {
-        let column = c.u32("property column")?;
+        let column = c.u32(LE).field("property column")?;
         let value = c.typed("property value")?;
         properties.push(BuildProperty { column, value });
     }

@@ -13,6 +13,9 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::fields::{BodyError, LE, body_error, count, expect, object};
+use primase_bytes::{Cursor, Field};
+
 pub use crate::components::{
     GrassModelSettings, StoredGrassGroup, StoredGrassLibrary, StoredGrassModel, StoredGrassRule,
 };
@@ -39,120 +42,23 @@ const BOUNDING_VOLUME: u32 = 0x4AEC_3476;
 /// Why a library body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("grass library: {have} bytes, shorter than its {what} at {at}")]
-    Short {
-        what: &'static str,
-        at: usize,
-        have: usize,
-    },
-    #[error("grass library {what}: {found:#x} at {at}, not {read}")]
-    Value {
-        what: &'static str,
-        at: usize,
-        found: u64,
-        read: &'static str,
-    },
+    #[error("grass library {0}")]
+    Body(#[from] BodyError),
 }
-
-/// Little-endian fields read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
-}
-
-impl Cursor<'_> {
-    fn take(&mut self, n: usize, what: &'static str) -> Result<&[u8], Error> {
-        let short = Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(n).ok_or(Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        })?;
-        let s = self.b.get(self.at..end).ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let at = self.at;
-        self.take(N, what)?.try_into().map_err(|_| Error::Short {
-            what,
-            at,
-            have: self.b.len(),
-        })
-    }
-    fn u8(&mut self, what: &'static str) -> Result<u8, Error> {
-        let [b] = self.array::<1>(what)?;
-        Ok(b)
-    }
-    fn u16(&mut self, what: &'static str) -> Result<u16, Error> {
-        Ok(u16::from_le_bytes(self.array(what)?))
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
-    fn u64(&mut self, what: &'static str) -> Result<u64, Error> {
-        Ok(u64::from_le_bytes(self.array(what)?))
-    }
-    fn f32(&mut self, what: &'static str) -> Result<f32, Error> {
-        Ok(f32::from_le_bytes(self.array(what)?))
-    }
-    fn expect(&mut self, what: &'static str, want: u64, width: usize) -> Result<(), Error> {
-        let at = self.at;
-        let found = match width {
-            1 => u64::from(self.u8(what)?),
-            4 => u64::from(self.u32(what)?),
-            _ => self.u64(what)?,
-        };
-        if found == want {
-            Ok(())
-        } else {
-            Err(Error::Value {
-                what,
-                at,
-                found,
-                read: "the grammar's value",
-            })
-        }
-    }
-    /// An object's header: its id, whose type must be `kind`.
-    fn object(&mut self, what: &'static str, kind: u32) -> Result<u64, Error> {
-        let id = self.u64(what)?;
-        self.expect(what, u64::from(kind), 4)?;
-        Ok(id)
-    }
-    /// A count of items of `each` bytes the rest of the body can hold.
-    fn count(&mut self, what: &'static str, each: usize) -> Result<usize, Error> {
-        let at = self.at;
-        let n = usize::try_from(self.u32(what)?).unwrap_or(usize::MAX);
-        let left = self.b.len().saturating_sub(self.at);
-        if n.checked_mul(each.max(1)).is_none_or(|bytes| bytes > left) {
-            return Err(Error::Value {
-                what,
-                at,
-                found: u64::try_from(n).unwrap_or(u64::MAX),
-                read: "a count the body can hold",
-            });
-        }
-        Ok(n)
-    }
-}
+body_error!(Error, Error::Body);
 
 impl StoredGrassLibrary {
     /// The body parsed, consumed to its last byte.
     pub fn parse(body: &[u8]) -> Result<StoredGrassLibrary, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        c.expect("first byte", 1, 1)?;
-        let n = c.count("model count", 132)?;
-        c.expect("model array", 0, 1)?;
+        let mut c = Cursor::new(body);
+        expect(&mut c, "first byte", 1, 1)?;
+        let n = count(&mut c, "model count", 132)?;
+        expect(&mut c, "model array", 0, 1)?;
         let mut models = Vec::with_capacity(n);
         for _ in 0..n {
-            let id = c.object("GrassModel", GRASS_MODEL)?;
+            let id = object(&mut c, "GrassModel", GRASS_MODEL)?;
             let mut settings = {
-                let f = |c: &mut Cursor<'_>| c.f32("GrassModel");
+                let f = |c: &mut Cursor<'_>| c.f32(LE).field("GrassModel");
                 GrassModelSettings {
                     z_offset: f(&mut c)?,
                     height_scale_for_occlusion: f(&mut c)?,
@@ -160,22 +66,22 @@ impl StoredGrassLibrary {
                     root_height: f(&mut c)?,
                     softness: f(&mut c)?,
                     normal_bend_factor: f(&mut c)?,
-                    visible_virtual_lod_count: c.u8("GrassModel")?,
-                    texture_atlas_element_count: c.u8("GrassModel")?,
-                    raycast_translucency: c.u32("GrassModel")?,
-                    imposter_shader_start_model_lod_index: c.array("GrassModel")?,
-                    imposter_lookat_ratio: c.f32("GrassModel")?,
-                    unnamed: c.array("GrassModel")?,
+                    visible_virtual_lod_count: c.u8().field("GrassModel")?,
+                    texture_atlas_element_count: c.u8().field("GrassModel")?,
+                    raycast_translucency: c.u32(LE).field("GrassModel")?,
+                    imposter_shader_start_model_lod_index: c.array().field("GrassModel")?,
+                    imposter_lookat_ratio: c.f32(LE).field("GrassModel")?,
+                    unnamed: c.array().field("GrassModel")?,
                     switch_distances: [0.0; 4],
                 }
             };
             settings.switch_distances = switch_distances(&settings.unnamed);
-            let bounds_id = c.object("GrassModel bounds", BOUNDING_VOLUME)?;
+            let bounds_id = object(&mut c, "GrassModel bounds", BOUNDING_VOLUME)?;
             let mut bounds = [0.0f32; 6];
             for v in &mut bounds {
-                *v = c.f32("GrassModel bounds")?;
+                *v = c.f32(LE).field("GrassModel bounds")?;
             }
-            let bounds_rest = c.array("GrassModel bounds")?;
+            let bounds_rest = c.array().field("GrassModel bounds")?;
             models.push(StoredGrassModel {
                 id,
                 settings,
@@ -184,39 +90,41 @@ impl StoredGrassLibrary {
                 bounds_rest,
             });
         }
-        c.expect("word after the models", 0, 4)?;
+        expect(&mut c, "word after the models", 0, 4)?;
         let mut groups = Vec::new();
         // the groups run on while an object of type GrassPattern follows; the 443 bytes after them begin with a table
         // of 256 bytes
-        while c.b.get(c.at.saturating_add(8)..c.at.saturating_add(12)) == Some(&GRASS_PATTERN.to_le_bytes()) {
-            let id = c.object("GrassPattern", GRASS_PATTERN)?;
-            let r = c.count("rule count", 94)?;
-            c.expect("GrassPattern byte", 0, 1)?;
+        while c
+            .bytes()
+            .get(c.position().saturating_add(8)..c.position().saturating_add(12))
+            == Some(&GRASS_PATTERN.to_le_bytes())
+        {
+            let id = object(&mut c, "GrassPattern", GRASS_PATTERN)?;
+            let r = count(&mut c, "rule count", 94)?;
+            expect(&mut c, "GrassPattern byte", 0, 1)?;
             let mut rules = Vec::with_capacity(r);
             for _ in 0..r {
-                let id = c.object("GrassPatternElement", GRASS_PATTERN_ELEMENT)?;
+                let id = object(&mut c, "GrassPatternElement", GRASS_PATTERN_ELEMENT)?;
                 rules.push(StoredGrassRule {
                     id,
-                    model: c.u16("GrassPatternElement")?,
-                    tiling_log_count: c.u8("GrassPatternElement")?,
-                    density: c.f32("GrassPatternElement")?,
-                    tilt_factor: c.f32("GrassPatternElement")?,
-                    scaling_enabled: c.u8("GrassPatternElement")? != 0,
-                    scale_a: c.f32("GrassPatternElement")?,
-                    scale_b: c.f32("GrassPatternElement")?,
-                    height_scaling_enabled: c.u8("GrassPatternElement")? != 0,
-                    height_scale_a: c.f32("GrassPatternElement")?,
-                    height_scale_b: c.f32("GrassPatternElement")?,
-                    unnamed_f32: c.f32("GrassPatternElement")?,
-                    unnamed: c.array("GrassPatternElement")?,
+                    model: c.u16(LE).field("GrassPatternElement")?,
+                    tiling_log_count: c.u8().field("GrassPatternElement")?,
+                    density: c.f32(LE).field("GrassPatternElement")?,
+                    tilt_factor: c.f32(LE).field("GrassPatternElement")?,
+                    scaling_enabled: c.u8().field("GrassPatternElement")? != 0,
+                    scale_a: c.f32(LE).field("GrassPatternElement")?,
+                    scale_b: c.f32(LE).field("GrassPatternElement")?,
+                    height_scaling_enabled: c.u8().field("GrassPatternElement")? != 0,
+                    height_scale_a: c.f32(LE).field("GrassPatternElement")?,
+                    height_scale_b: c.f32(LE).field("GrassPatternElement")?,
+                    unnamed_f32: c.f32(LE).field("GrassPatternElement")?,
+                    unnamed: c.array().field("GrassPatternElement")?,
                 });
             }
             groups.push(StoredGrassGroup { id, rules });
         }
-        let table = c.array::<256>("table")?;
-        let rest = c
-            .take(c.b.len().saturating_sub(c.at), "the bytes after the table")?
-            .to_vec();
+        let table = c.array::<256>().field("table")?;
+        let rest = c.take(c.remaining()).field("the bytes after the table")?.to_vec();
         Ok(StoredGrassLibrary {
             models,
             groups,

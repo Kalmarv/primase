@@ -51,6 +51,8 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::fields::LE;
+use primase_bytes::{Field, FieldError, View};
 use std::ops::Range;
 
 pub use crate::components::{StoredMeshBone, StoredSkin};
@@ -93,12 +95,8 @@ pub const MATERIAL: u32 = 0x85C8_17C3;
 /// Why a Mesh body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Mesh body: {have} bytes, shorter than its {what} at {at}")]
-    Short {
-        what: &'static str,
-        at: usize,
-        have: usize,
-    },
+    #[error("Mesh body: {0}")]
+    Short(#[from] FieldError),
     #[error("Mesh body: {found:#010x} at {at}, not the compiled mesh marker 0xFC9E1595")]
     Marker { found: u32, at: usize },
     #[error(
@@ -296,23 +294,23 @@ impl StoredMeshBone {
     /// An 81-byte record ([`StoredMesh::records_81`]); refused when its object id isn't 0, its class isn't `MeshBone`
     /// or its last byte isn't a bool.
     pub fn parse(record: &[u8; 81]) -> Result<StoredMeshBone, Error> {
-        let mut c = Cursor { b: record, at: 0 };
-        let id = u64::from_le_bytes(c.array("MeshBone id")?);
-        let class = c.u32("MeshBone class")?;
+        let mut c = Cursor::new(record);
+        let id = u64::from_le_bytes(c.array().field("MeshBone id")?);
+        let class = c.u32(LE).field("MeshBone class")?;
         if id != 0 || class != MESH_BONE {
             return Err(Error::Bone {
                 index: 0,
                 why: format!("object id {id} of class {class:#010x}, not 0 of MeshBone {MESH_BONE:#010x}"),
             });
         }
-        let bone_id = c.u32("MeshBone BoneID")?;
+        let bone_id = c.u32(LE).field("MeshBone BoneID")?;
         let mut initial_matrix_inverse = [[0.0; 4]; 4];
         for row in &mut initial_matrix_inverse {
             for v in row.iter_mut() {
-                *v = f32::from_le_bytes(c.array("MeshBone InitialMatrixInverse")?);
+                *v = f32::from_le_bytes(c.array().field("MeshBone InitialMatrixInverse")?);
             }
         }
-        let [used] = c.array::<1>("MeshBone IsUsedBySubMeshes")?;
+        let [used] = c.array::<1>().field("MeshBone IsUsedBySubMeshes")?;
         if used > 1 {
             return Err(Error::Bone {
                 index: 0,
@@ -389,42 +387,32 @@ struct Head {
     bounds: [[f32; 3]; 2],
 }
 
-/// Little-endian fields read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
+/// The body's cursor ([`primase_bytes::Cursor`]), with this record's grammar as methods.
+struct Cursor<'a>(primase_bytes::Cursor<'a>);
+
+impl<'a> Cursor<'a> {
+    fn new(b: &'a [u8]) -> Self {
+        Cursor(primase_bytes::Cursor::new(b))
+    }
+}
+
+impl<'a> std::ops::Deref for Cursor<'a> {
+    type Target = primase_bytes::Cursor<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Cursor<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl<'a> Cursor<'a> {
-    fn take(&mut self, n: usize, what: &'static str) -> Result<&'a [u8], Error> {
-        let short = Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(n).ok_or(Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        })?;
-        let s = self.b.get(self.at..end).ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let s = self.take(N, what)?;
-        s.try_into().map_err(|_| Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        })
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
     /// A u32 that must be `want`, refused as a tail field otherwise.
     fn marker(&mut self, what: &'static str, want: u32) -> Result<(), Error> {
-        let found = self.u32(what)?;
+        let found = self.u32(LE).field(what)?;
         if found == want {
             Ok(())
         } else {
@@ -435,8 +423,8 @@ impl<'a> Cursor<'a> {
         }
     }
     /// A u32 that must be the range count `n`.
-    fn count(&mut self, what: &'static str, n: usize) -> Result<(), Error> {
-        let found = self.u32(what)?;
+    fn range_count(&mut self, what: &'static str, n: usize) -> Result<(), Error> {
+        let found = self.u32(LE).field(what)?;
         if usize::try_from(found).ok() == Some(n) {
             Ok(())
         } else {
@@ -448,7 +436,7 @@ impl<'a> Cursor<'a> {
     }
     /// A byte length read as a usize.
     fn length(&mut self, what: &'static str) -> Result<usize, Error> {
-        usize::try_from(self.u32(what)?).map_err(|_| Error::Buffer {
+        usize::try_from(self.u32(LE).field(what)?).map_err(|_| Error::Buffer {
             what,
             why: "length past this machine".into(),
         })
@@ -456,12 +444,12 @@ impl<'a> Cursor<'a> {
     /// A `MeshPrimitive` entry after its marker, with the 8 bytes after it when `rest`.
     fn primitive(&mut self, rest: bool) -> Result<StoredPrimitive, Error> {
         self.marker("MeshPrimitive marker", MESH_PRIMITIVE)?;
-        let vertex_base = self.u32("MeshPrimitive vertex base")?;
-        let reserved = self.u32("MeshPrimitive")?;
-        let vertex_count = self.u32("MeshPrimitive vertex count")?;
-        let first_index = self.u32("MeshPrimitive first index")?;
-        let triangle_count = self.u32("MeshPrimitive triangle count")?;
-        let version = self.u32("MeshPrimitive version")?;
+        let vertex_base = self.u32(LE).field("MeshPrimitive vertex base")?;
+        let reserved = self.u32(LE).field("MeshPrimitive")?;
+        let vertex_count = self.u32(LE).field("MeshPrimitive vertex count")?;
+        let first_index = self.u32(LE).field("MeshPrimitive first index")?;
+        let triangle_count = self.u32(LE).field("MeshPrimitive triangle count")?;
+        let version = self.u32(LE).field("MeshPrimitive version")?;
         if version != 1 {
             return Err(Error::Tail {
                 what: "MeshPrimitive version",
@@ -475,7 +463,7 @@ impl<'a> Cursor<'a> {
             first_index,
             triangle_count,
             rest: if rest {
-                Some(self.array::<8>("MeshPrimitive")?)
+                Some(self.array::<8>().field("MeshPrimitive")?)
             } else {
                 None
             },
@@ -497,7 +485,7 @@ impl<'a> Cursor<'a> {
                     why: format!("{length} bytes, not {per} for each of {vertices} vertices"),
                 });
             }
-            Ok(self.take(length, what)?.to_vec())
+            Ok(self.take(length).field(what)?.to_vec())
         };
         Ok((
             stream("positions stream", positions)?,
@@ -514,7 +502,7 @@ impl<'a> Cursor<'a> {
         }
         Ok(StoredVertices {
             stride,
-            bytes: self.take(vertex_bytes, "vertex buffer")?.to_vec(),
+            bytes: self.take(vertex_bytes).field("vertex buffer")?.to_vec(),
         })
     }
     /// The index buffer: its byte length, then indices of `width` bytes (2 or 4) in whole triangles.
@@ -526,7 +514,7 @@ impl<'a> Cursor<'a> {
                 why: format!("{index_bytes} bytes, not whole triangles of {width}-byte indices"),
             });
         }
-        let raw = self.take(index_bytes, "index buffer")?;
+        let raw = self.take(index_bytes).field("index buffer")?;
         Ok(if width == 2 {
             raw.as_chunks::<2>()
                 .0
@@ -543,32 +531,32 @@ impl<'a> Cursor<'a> {
     }
     /// The material list for `n` ranges, which must end the body.
     fn material_list(&mut self, n: usize) -> Result<MaterialList, Error> {
-        self.count("range count before the descriptors", n)?;
-        let head = self.array::<8>("bytes before the descriptors")?;
+        self.range_count("range count before the descriptors", n)?;
+        let head = self.array::<8>().field("bytes before the descriptors")?;
         let mut descriptors = Vec::with_capacity(n);
         for _ in 0..n {
             self.marker("material descriptor marker", MATERIAL_DESCRIPTOR)?;
-            let head = self.array::<4>("material descriptor")?;
-            let [z0, v0, v1, z1] = self.array::<4>("material descriptor vertex count")?;
+            let head = self.array::<4>().field("material descriptor")?;
+            let [z0, v0, v1, z1] = self.array::<4>().field("material descriptor vertex count")?;
             if [z0, z1] != [0, 0] {
                 return Err(Error::Tail {
                     what: "material descriptor vertex count",
                     why: format!("bytes {z0} and {z1} either side of it: only 0 is read"),
                 });
             }
-            let material = u64::from_le_bytes(self.array::<8>("material descriptor ClassID")?);
+            let material = u64::from_le_bytes(self.array::<8>().field("material descriptor ClassID")?);
             descriptors.push(MaterialDescriptor {
                 head,
                 vertex_count: u16::from_le_bytes([v0, v1]),
                 material,
-                rest: self.array::<8>("material descriptor")?,
+                rest: self.array::<8>().field("material descriptor")?,
             });
         }
-        self.count("range count after the descriptors", n)?;
-        let groups_head = self.array::<6>("bytes before the groups")?;
+        self.range_count("range count after the descriptors", n)?;
+        let groups_head = self.array::<6>().field("bytes before the groups")?;
         let mut groups = Vec::with_capacity(n);
         for d in &descriptors {
-            let g = self.array::<31>("group")?;
+            let g = self.array::<31>().field("group")?;
             let id = |at: usize| {
                 g.get(at..at.saturating_add(8))
                     .and_then(|b| b.try_into().ok())
@@ -587,11 +575,11 @@ impl<'a> Cursor<'a> {
             }
             groups.push(g);
         }
-        let trailer = self.array::<20>("last bytes")?;
-        if self.at != self.b.len() {
+        let trailer = self.array::<20>().field("last bytes")?;
+        if self.position() != self.bytes().len() {
             return Err(Error::Tail {
                 what: "end",
-                why: format!("{} bytes after its last 20", self.b.len().saturating_sub(self.at)),
+                why: format!("{} bytes after its last 20", self.remaining()),
             });
         }
         Ok(MaterialList {
@@ -640,24 +628,18 @@ pub fn max_culling_distance(body: &[u8]) -> f32 {
 impl StoredMesh {
     /// A Mesh resource's body (its [`crate::read::data::Resource::body`]).
     pub fn parse(body: &[u8]) -> Result<StoredMesh, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        let head = c.array::<20>("head")?;
+        let mut c = Cursor::new(body);
+        let head = c.array::<20>().field("head")?;
         let count = head
             .get(16..20)
             .and_then(|w| w.try_into().ok())
             .map_or(0, u32::from_le_bytes);
         let count = usize::try_from(count).unwrap_or(usize::MAX);
-        if count > body.len() / 81 {
-            return Err(Error::Short {
-                what: "81-byte records",
-                at: RECORDS,
-                have: body.len(),
-            });
-        }
+        primase_bytes::checked_span(RECORDS, count, 81, body.len()).field("81-byte records")?;
         let records_81 = (0..count)
-            .map(|_| c.array::<81>("81-byte record"))
+            .map(|_| c.array::<81>().field("81-byte record"))
             .collect::<Result<Vec<_>, _>>()?;
-        let bounds_block = c.array::<41>("bounds block")?;
+        let bounds_block = c.array::<41>().field("bounds block")?;
         let bound = |at: usize| -> [f32; 3] {
             bounds_block
                 .get(at..at.saturating_add(12))
@@ -665,8 +647,8 @@ impl StoredMesh {
                 .map_or([0.0; 3], f32s)
         };
         let bounds = [bound(0), bound(16)];
-        let marker = c.at;
-        let found = c.u32("compiled mesh marker")?;
+        let marker = c.position();
+        let found = c.u32(LE).field("compiled mesh marker")?;
         if found != COMPILED_MESH {
             return Err(Error::Marker { found, at: marker });
         }
@@ -676,9 +658,9 @@ impl StoredMesh {
             bounds_block,
             bounds,
         };
-        let [flags] = c.array::<1>("compiled mesh layout byte")?;
-        let compiled_flags = c.array::<8>("compiled mesh")?;
-        let id = c.u32("compiled mesh layout")?;
+        let [flags] = c.array::<1>().field("compiled mesh layout byte")?;
+        let compiled_flags = c.array::<8>().field("compiled mesh")?;
+        let id = c.u32(LE).field("compiled mesh layout")?;
         match (id, flags) {
             (RANGED, 0) => Self::ranged(body, c, marker, head, compiled_flags),
             (MESH_DATA, 3) => Self::inline(c, head, compiled_flags),
@@ -694,15 +676,11 @@ impl StoredMesh {
         compiled_flags: [u8; 8],
     ) -> Result<StoredMesh, Error> {
         // the compiled head is kept whole, from its marker
-        let compiled_head = body
-            .get(marker..marker.saturating_add(75))
-            .ok_or(Error::Short {
-                what: "compiled mesh head",
-                at: marker,
-                have: body.len(),
-            })?
+        let compiled_head = View::new(body)
+            .slice(marker, 75)
+            .field("compiled mesh head")?
             .to_vec();
-        c.at = marker.saturating_add(75);
+        c.seek(marker.saturating_add(75)).field("compiled mesh head")?;
         let word = |at: usize| -> u32 {
             compiled_head
                 .get(at..at.saturating_add(4))
@@ -729,26 +707,29 @@ impl StoredMesh {
         }
         let mut records = Vec::with_capacity(n);
         for index in 0..n {
-            let id = c.u32("range record id")?;
+            let id = c.u32(LE).field("range record id")?;
             if id != RANGE_RECORD {
                 return Err(Error::Record {
                     index,
                     why: format!("id {id:#010x}, not 0x07B19A87"),
                 });
             }
-            let [version, p0, p1, p2] = c.array::<4>("range record version")?;
+            let [version, p0, p1, p2] = c.array::<4>().field("range record version")?;
             if version != 1 {
                 return Err(Error::Record {
                     index,
                     why: format!("version {version}, not 1"),
                 });
             }
-            let first_index = c.u32("range record first index")?;
-            let vertex_base = c.u32("range record vertex base")?;
+            let first_index = c.u32(LE).field("range record first index")?;
+            let vertex_base = c.u32(LE).field("range record vertex base")?;
             let extension = if index.checked_add(1) == Some(n) {
                 None
             } else {
-                Some([c.u32("range record extension")?, c.u32("range record extension")?])
+                Some([
+                    c.u32(LE).field("range record extension")?,
+                    c.u32(LE).field("range record extension")?,
+                ])
             };
             records.push(RangeRecord {
                 pad: [p0, p1, p2],
@@ -761,23 +742,25 @@ impl StoredMesh {
         let vertices = c.vertices(vertex_bytes, stride)?;
         let (positions_stream, skin_stream) = c.streams(vertices.len(), positions_stride, skin_stride)?;
         let indices = c.indices(2)?;
-        let block_bytes = c.u32("block length")?;
+        let block_bytes = c.u32(LE).field("block length")?;
         if usize::try_from(block_bytes).ok() != n.checked_mul(32) {
             return Err(Error::Tail {
                 what: "block length",
                 why: format!("{block_bytes}, not 32 for each of {n} ranges"),
             });
         }
-        let blocks = (0..n).map(|_| c.array::<32>("block")).collect::<Result<_, _>>()?;
-        let blocks_gap = c.array::<8>("bytes before MeshData")?;
+        let blocks = (0..n)
+            .map(|_| c.array::<32>().field("block"))
+            .collect::<Result<_, _>>()?;
+        let blocks_gap = c.array::<8>().field("bytes before MeshData")?;
         c.marker("MeshData marker", MESH_DATA)?;
-        let mesh_data = c.array::<18>("MeshData")?;
+        let mesh_data = c.array::<18>().field("MeshData")?;
         let primitives = (0..n)
             .map(|k| c.primitive(k.saturating_add(1) < n))
             .collect::<Result<_, _>>()?;
         let mut run = || -> Result<Vec<u8>, Error> {
             let length = c.length("tail run length")?;
-            Ok(c.take(length, "tail run")?.to_vec())
+            Ok(c.take(length).field("tail run")?.to_vec())
         };
         let runs = [run()?, run()?, run()?, run()?];
         let materials = c.material_list(n)?;
@@ -806,9 +789,9 @@ impl StoredMesh {
     }
 
     fn inline(mut c: Cursor<'_>, head: Head, compiled_flags: [u8; 8]) -> Result<StoredMesh, Error> {
-        let declaration = c.array::<6>("MeshData declaration")?;
-        let n = usize::try_from(c.u32("MeshData object count")?).unwrap_or(usize::MAX);
-        if n == 0 || n > c.b.len() / 36 {
+        let declaration = c.array::<6>().field("MeshData declaration")?;
+        let n = usize::try_from(c.u32(LE).field("MeshData object count")?).unwrap_or(usize::MAX);
+        if n == 0 || n > c.bytes().len() / 36 {
             return Err(Error::Tail {
                 what: "MeshData object count",
                 why: format!("{n}: not a count the body can hold"),
@@ -816,7 +799,7 @@ impl StoredMesh {
         }
         let mut primitives = Vec::with_capacity(n);
         for _ in 0..n {
-            if c.array::<8>("object record")? != [0; 8] {
+            if c.array::<8>().field("object record")? != [0; 8] {
                 return Err(Error::Tail {
                     what: "object record",
                     why: "its first 8 bytes aren't 0".into(),
@@ -1250,7 +1233,8 @@ mod tests {
 
     fn refused_as(body: &[u8]) -> &'static str {
         match StoredMesh::parse(body) {
-            Err(Error::Tail { what, .. } | Error::Short { what, .. } | Error::Buffer { what, .. }) => what,
+            Err(Error::Tail { what, .. } | Error::Buffer { what, .. }) => what,
+            Err(Error::Short(e)) => e.what,
             other => panic!("not refused: {other:?}"),
         }
     }

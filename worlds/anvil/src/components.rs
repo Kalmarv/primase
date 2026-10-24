@@ -1417,12 +1417,8 @@ pub struct StoredAnimation {
 /// Why an Animation body or a track's values can't be read (`read::animation` names it `Error`).
 #[derive(Debug, thiserror::Error)]
 pub enum AnimationError {
-    #[error("animation body: {have} bytes, shorter than its {what} at {at}")]
-    Short {
-        what: &'static str,
-        at: usize,
-        have: usize,
-    },
+    #[error("animation body: {0}")]
+    Short(#[from] primase_bytes::FieldError),
     #[error("animation {what}: {found:#x} at {at}, not {read}")]
     Value {
         what: &'static str,
@@ -1430,6 +1426,8 @@ pub enum AnimationError {
         found: u64,
         read: &'static str,
     },
+    #[error("animation reference at {at}: {why}")]
+    Reference { at: usize, why: String },
     #[error("animation track {track}: tag {tag:#04x} is kind {kind}, whose value width isn't read")]
     Kind { track: usize, tag: u8, kind: u8 },
     #[error("animation track {track}: {why}")]

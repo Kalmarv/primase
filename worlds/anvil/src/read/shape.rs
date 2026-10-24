@@ -22,7 +22,9 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::fields::{BodyError, LE, body_error, count, end, expect, f32s, reference};
 use crate::read::reference::{self, Reference};
+use primase_bytes::{Cursor, Field};
 
 /// A record type: the CRC-32 of `SphereShape`.
 pub const SPHERE_SHAPE: u32 = 0xFA3F_7A18;
@@ -36,115 +38,10 @@ pub const REFERENCE_LIST_SHAPE: u32 = 0x2D67_5BA2;
 /// Why a shape body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("shape body: {have} bytes, shorter than its {what} at {at}")]
-    Short {
-        what: &'static str,
-        at: usize,
-        have: usize,
-    },
-    #[error("shape {what}: {found:#x} at {at}, not {read}")]
-    Value {
-        what: &'static str,
-        at: usize,
-        found: u64,
-        read: &'static str,
-    },
-    #[error("shape reference at {at}: {source}")]
-    Reference {
-        at: usize,
-        #[source]
-        source: reference::Error,
-    },
-    #[error("shape body: {0} bytes after its end")]
-    Trailing(usize),
+    #[error("shape {0}")]
+    Body(#[from] BodyError),
 }
-
-/// Little-endian fields read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
-}
-
-impl Cursor<'_> {
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let short = Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(N).ok_or(Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        })?;
-        let s: [u8; N] = self
-            .b
-            .get(self.at..end)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
-    fn f32(&mut self, what: &'static str) -> Result<f32, Error> {
-        Ok(f32::from_le_bytes(self.array(what)?))
-    }
-    fn vec4(&mut self, what: &'static str) -> Result<[f32; 4], Error> {
-        Ok([self.f32(what)?, self.f32(what)?, self.f32(what)?, self.f32(what)?])
-    }
-    fn matrix(&mut self, what: &'static str) -> Result<[f32; 16], Error> {
-        let mut m = [0.0f32; 16];
-        for x in &mut m {
-            *x = self.f32(what)?;
-        }
-        Ok(m)
-    }
-    fn expect(&mut self, what: &'static str, want: u64, width: usize) -> Result<(), Error> {
-        let at = self.at;
-        let found = match width {
-            1 => u64::from(u8::from_le_bytes(self.array(what)?)),
-            _ => u64::from(self.u32(what)?),
-        };
-        if found == want {
-            Ok(())
-        } else {
-            Err(Error::Value {
-                what,
-                at,
-                found,
-                read: "the grammar's value",
-            })
-        }
-    }
-    fn reference(&mut self) -> Result<Option<Reference>, Error> {
-        let at = self.at;
-        reference::parse(self.array::<{ reference::LENGTH }>("reference")?)
-            .map_err(|source| Error::Reference { at, source })
-    }
-    /// A u32 count of items of `each` bytes the rest of the body can hold.
-    fn count(&mut self, what: &'static str, each: usize) -> Result<usize, Error> {
-        let at = self.at;
-        let n = usize::try_from(self.u32(what)?).unwrap_or(usize::MAX);
-        let left = self.b.len().saturating_sub(self.at);
-        if n.checked_mul(each).is_none_or(|bytes| bytes > left) {
-            return Err(Error::Value {
-                what,
-                at,
-                found: u64::try_from(n).unwrap_or(u64::MAX),
-                read: "a count the body can hold",
-            });
-        }
-        Ok(n)
-    }
-    fn end(&self) -> Result<(), Error> {
-        match self.b.len().saturating_sub(self.at) {
-            0 => Ok(()),
-            left => Err(Error::Trailing(left)),
-        }
-    }
-}
+body_error!(Error, Error::Body);
 
 /// A SphereShape as stored.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -156,15 +53,15 @@ pub struct StoredSphere {
 
 impl StoredSphere {
     pub fn parse(body: &[u8]) -> Result<StoredSphere, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        c.expect("first byte", 1, 1)?;
-        c.expect("word", 0, 4)?;
+        let mut c = Cursor::new(body);
+        expect(&mut c, "first byte", 1, 1)?;
+        expect(&mut c, "word", 0, 4)?;
         let s = StoredSphere {
-            centre: c.vec4("centre")?,
-            radius: c.f32("radius")?,
-            material: c.reference()?,
+            centre: f32s::<4>(&mut c, "centre")?,
+            radius: c.f32(LE).field("radius")?,
+            material: reference(&mut c)?,
         };
-        c.end()?;
+        end(&c)?;
         Ok(s)
     }
 }
@@ -180,16 +77,16 @@ pub struct StoredCapsule {
 
 impl StoredCapsule {
     pub fn parse(body: &[u8]) -> Result<StoredCapsule, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        c.expect("first byte", 1, 1)?;
-        c.expect("word", 0, 4)?;
+        let mut c = Cursor::new(body);
+        expect(&mut c, "first byte", 1, 1)?;
+        expect(&mut c, "word", 0, 4)?;
         let s = StoredCapsule {
-            a: c.vec4("end")?,
-            b: c.vec4("end")?,
-            radius: c.f32("radius")?,
-            material: c.reference()?,
+            a: f32s::<4>(&mut c, "end")?,
+            b: f32s::<4>(&mut c, "end")?,
+            radius: c.f32(LE).field("radius")?,
+            material: reference(&mut c)?,
         };
-        c.end()?;
+        end(&c)?;
         Ok(s)
     }
 }
@@ -207,19 +104,19 @@ pub struct StoredBox {
 
 impl StoredBox {
     pub fn parse(body: &[u8]) -> Result<StoredBox, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        c.expect("first byte", 1, 1)?;
-        let [byte] = c.array::<1>("second byte")?;
+        let mut c = Cursor::new(body);
+        expect(&mut c, "first byte", 1, 1)?;
+        let [byte] = c.array::<1>().field("second byte")?;
         for _ in 0..3 {
-            c.expect("zero byte", 0, 1)?;
+            expect(&mut c, "zero byte", 0, 1)?;
         }
         let s = StoredBox {
             byte,
-            half_extents: c.vec4("half extents")?,
-            matrix: c.matrix("matrix")?,
-            material: c.reference()?,
+            half_extents: f32s::<4>(&mut c, "half extents")?,
+            matrix: f32s::<16>(&mut c, "matrix")?,
+            material: reference(&mut c)?,
         };
-        c.end()?;
+        end(&c)?;
         Ok(s)
     }
 }
@@ -238,41 +135,46 @@ pub struct StoredReferenceList {
 
 impl StoredReferenceList {
     pub fn parse(body: &[u8]) -> Result<StoredReferenceList, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        c.expect("first byte", 1, 1)?;
-        c.expect("word", 0, 4)?;
-        let n = c.count("child count", reference::LENGTH)?;
+        let mut c = Cursor::new(body);
+        expect(&mut c, "first byte", 1, 1)?;
+        expect(&mut c, "word", 0, 4)?;
+        let n = count(&mut c, "child count", reference::LENGTH)?;
         let mut children = Vec::with_capacity(n);
         for _ in 0..n {
-            let at = c.at;
-            children.push(c.reference()?.ok_or(Error::Value {
+            let at = c.position();
+            children.push(reference(&mut c)?.ok_or(BodyError::Value {
                 what: "child reference",
                 at,
                 found: 3,
                 read: "a reference (tag 1)",
             })?);
         }
-        let count = |c: &mut Cursor<'_>, what, each| -> Result<(), Error> {
-            let at = c.at;
-            let m = c.count(what, each)?;
+        let held = |c: &mut Cursor<'_>, what, each| -> Result<(), Error> {
+            let at = c.position();
+            let m = count(c, what, each)?;
             if m == n {
                 Ok(())
             } else {
-                Err(Error::Value {
+                Err(BodyError::Value {
                     what,
                     at,
                     found: u64::try_from(m).unwrap_or(u64::MAX),
                     read: "the child count",
-                })
+                }
+                .into())
             }
         };
-        count(&mut c, "matrix count", 64)?;
-        let matrices = (0..n).map(|_| c.matrix("matrix")).collect::<Result<_, _>>()?;
-        count(&mut c, "vector count", 16)?;
-        let vectors = (0..n).map(|_| c.vec4("vector")).collect::<Result<_, _>>()?;
-        let min = c.vec4("minimum")?;
-        let max = c.vec4("maximum")?;
-        c.end()?;
+        held(&mut c, "matrix count", 64)?;
+        let matrices = (0..n)
+            .map(|_| f32s::<16>(&mut c, "matrix"))
+            .collect::<Result<_, _>>()?;
+        held(&mut c, "vector count", 16)?;
+        let vectors = (0..n)
+            .map(|_| f32s::<4>(&mut c, "vector"))
+            .collect::<Result<_, _>>()?;
+        let min = f32s::<4>(&mut c, "minimum")?;
+        let max = f32s::<4>(&mut c, "maximum")?;
+        end(&c)?;
         Ok(StoredReferenceList {
             children,
             matrices,
@@ -302,7 +204,10 @@ mod tests {
             ([1.0, 2.0, 3.0, 0.0], 0.5, Some(0x74F7_311D))
         );
         b.push(0);
-        assert!(matches!(StoredSphere::parse(&b), Err(Error::Trailing(1))));
+        assert!(matches!(
+            StoredSphere::parse(&b),
+            Err(Error::Body(BodyError::Trailing(1)))
+        ));
         // one child at the identity
         let mut l = vec![
             1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 7, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,

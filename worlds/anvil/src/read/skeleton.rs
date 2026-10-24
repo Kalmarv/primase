@@ -31,7 +31,8 @@
 )]
 
 pub use crate::components::{StoredBone, StoredPose, StoredPoseBone, StoredPoseGroup, StoredSkeleton};
-use crate::read::reference::{self, Reference};
+use crate::read::fields::{BodyError, LE, body_error, count, end, expect, f32s, object, reference};
+use primase_bytes::Field;
 
 /// A record type: the CRC-32 of `Skeleton`.
 pub const SKELETON: u32 = 0x24AE_CB7C;
@@ -47,145 +48,62 @@ const REFLEX3_CONSTRAINTS: u32 = 0x8E3F_B47A;
 /// Why a Skeleton body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("skeleton body: {have} bytes, shorter than its {what} at {at}")]
-    Short {
-        what: &'static str,
-        at: usize,
-        have: usize,
-    },
-    #[error("skeleton {what}: {found:#x} at {at}, not {read}")]
-    Value {
-        what: &'static str,
-        at: usize,
-        found: u64,
-        read: &'static str,
-    },
-    #[error("skeleton reference at {at}: {source}")]
-    Reference {
-        at: usize,
-        #[source]
-        source: reference::Error,
-    },
-    #[error("skeleton body: {0} bytes after its end")]
-    Trailing(usize),
+    #[error("skeleton {0}")]
+    Body(#[from] BodyError),
+}
+body_error!(Error, Error::Body);
+
+/// The body's cursor ([`primase_bytes::Cursor`]), with this record's grammar as methods.
+struct Cursor<'a>(primase_bytes::Cursor<'a>);
+
+impl<'a> Cursor<'a> {
+    fn new(b: &'a [u8]) -> Self {
+        Cursor(primase_bytes::Cursor::new(b))
+    }
 }
 
-/// Little-endian fields read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
+impl<'a> std::ops::Deref for Cursor<'a> {
+    type Target = primase_bytes::Cursor<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Cursor<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl Cursor<'_> {
-    fn take(&mut self, n: usize, what: &'static str) -> Result<&[u8], Error> {
-        let short = Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(n).ok_or(Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        })?;
-        let s = self.b.get(self.at..end).ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let at = self.at;
-        self.take(N, what)?.try_into().map_err(|_| Error::Short {
-            what,
-            at,
-            have: self.b.len(),
-        })
-    }
-    fn u8(&mut self, what: &'static str) -> Result<u8, Error> {
-        let [b] = self.array::<1>(what)?;
-        Ok(b)
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
-    fn u64(&mut self, what: &'static str) -> Result<u64, Error> {
-        Ok(u64::from_le_bytes(self.array(what)?))
-    }
-    fn f32(&mut self, what: &'static str) -> Result<f32, Error> {
-        Ok(f32::from_le_bytes(self.array(what)?))
-    }
-    fn f32x4(&mut self, what: &'static str) -> Result<[f32; 4], Error> {
-        Ok([self.f32(what)?, self.f32(what)?, self.f32(what)?, self.f32(what)?])
-    }
-    fn expect(&mut self, what: &'static str, want: u64, width: usize) -> Result<(), Error> {
-        let at = self.at;
-        let found = match width {
-            1 => u64::from(self.u8(what)?),
-            4 => u64::from(self.u32(what)?),
-            _ => self.u64(what)?,
-        };
-        if found == want {
-            Ok(())
-        } else {
-            Err(Error::Value {
-                what,
-                at,
-                found,
-                read: "the grammar's value",
-            })
-        }
-    }
-    /// An embedded object's header: a u64 id, whose type must be `kind`.
-    fn object(&mut self, what: &'static str, kind: u32) -> Result<u64, Error> {
-        let id = self.u64(what)?;
-        self.expect(what, u64::from(kind), 4)?;
-        Ok(id)
-    }
-    /// A count of items of `each` bytes the rest of the body can hold.
-    fn count(&mut self, what: &'static str, each: usize) -> Result<usize, Error> {
-        let at = self.at;
-        let n = usize::try_from(self.u32(what)?).unwrap_or(usize::MAX);
-        let left = self.b.len().saturating_sub(self.at);
-        if n.checked_mul(each.max(1)).is_none_or(|bytes| bytes > left) {
-            return Err(Error::Value {
-                what,
-                at,
-                found: u64::try_from(n).unwrap_or(u64::MAX),
-                read: "a count the body can hold",
-            });
-        }
-        Ok(n)
-    }
     /// A pointer to a bone read before: `03` (none) or `02` and its id.
     fn bone_pointer(&mut self, what: &'static str) -> Result<Option<u64>, Error> {
-        let at = self.at;
-        match self.u8(what)? {
+        let at = self.position();
+        match self.u8().field(what)? {
             3 => Ok(None),
-            2 => Ok(Some(self.u64(what)?)),
-            found => Err(Error::Value {
+            2 => Ok(Some(self.u64(LE).field(what)?)),
+            found => Err(BodyError::Value {
                 what,
                 at,
                 found: u64::from(found),
                 read: "3 (none) or 2 (a reference)",
-            }),
+            }
+            .into()),
         }
-    }
-    fn reference(&mut self) -> Result<Option<Reference>, Error> {
-        let at = self.at;
-        reference::parse(self.array::<{ reference::LENGTH }>("reference")?)
-            .map_err(|source| Error::Reference { at, source })
     }
     /// An object pointer whose class stores no field or a byte buffer: `03`, or a tag (`00` or `04`) and the header.
     fn optional_object(&mut self, what: &'static str, kind: u32) -> Result<Option<u64>, Error> {
-        let at = self.at;
-        match self.u8(what)? {
+        let at = self.position();
+        match self.u8().field(what)? {
             3 => Ok(None),
-            0 | 4 => Ok(Some(self.object(what, kind)?)),
-            found => Err(Error::Value {
+            0 | 4 => Ok(Some(object(self, what, kind)?)),
+            found => Err(BodyError::Value {
                 what,
                 at,
                 found: u64::from(found),
                 read: "3 (none) or an object",
-            }),
+            }
+            .into()),
         }
     }
 }
@@ -193,41 +111,44 @@ impl Cursor<'_> {
 impl StoredSkeleton {
     /// The body parsed, consumed to its last byte.
     pub fn parse(body: &[u8]) -> Result<StoredSkeleton, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        c.expect("first byte", 1, 1)?;
-        let kind = c.u32("kind")?;
-        let n = c.count("bone count", 13)?;
+        let mut c = Cursor::new(body);
+        expect(&mut c, "first byte", 1, 1)?;
+        let kind = c.u32(LE).field("kind")?;
+        let n = count(&mut c, "bone count", 13)?;
         let mut bones = Vec::with_capacity(n);
         for _ in 0..n {
-            let at = c.at;
-            match c.u8("bone tag")? {
+            let at = c.position();
+            match c.u8().field("bone tag")? {
                 0 | 4 => {}
                 found => {
-                    return Err(Error::Value {
+                    return Err(BodyError::Value {
                         what: "bone tag",
                         at,
                         found: u64::from(found),
                         read: "0 or 4",
-                    });
+                    }
+                    .into());
                 }
             }
-            let id = c.object("Bone", BONE)?;
-            let name_hash = c.u32("bone name hash")?;
+            let id = object(&mut c, "Bone", BONE)?;
+            let name_hash = c.u32(LE).field("bone name hash")?;
             let parent = c.bone_pointer("bone parent")?;
             let mirror = c.bone_pointer("bone mirror")?;
-            c.expect("BoneDisplayData pointer", 3, 1)?;
-            let global_position = c.f32x4("GlobalPosition")?;
-            let global_rotation = c.f32x4("global rotation")?;
-            let local_position = c.f32x4("LocalPosition")?;
-            let local_rotation = c.f32x4("local rotation")?;
-            let flag = c.u8("bone flag")?;
-            let bone_kind = c.u32("bone kind")?;
-            c.expect("BoneModifier count", 0, 4)?;
-            let h = c.count("bone hash count", 4)?;
-            let hashes = (0..h).map(|_| c.u32("bone hash")).collect::<Result<_, _>>()?;
-            let kind2 = c.u32("bone kind 2")?;
-            let unnamed = c.f32("bone float")?;
-            let key = c.u32("bone key")?;
+            expect(&mut c, "BoneDisplayData pointer", 3, 1)?;
+            let global_position = f32s::<4>(&mut c, "GlobalPosition")?;
+            let global_rotation = f32s::<4>(&mut c, "global rotation")?;
+            let local_position = f32s::<4>(&mut c, "LocalPosition")?;
+            let local_rotation = f32s::<4>(&mut c, "local rotation")?;
+            let flag = c.u8().field("bone flag")?;
+            let bone_kind = c.u32(LE).field("bone kind")?;
+            expect(&mut c, "BoneModifier count", 0, 4)?;
+            let h = count(&mut c, "bone hash count", 4)?;
+            let hashes = (0..h)
+                .map(|_| c.u32(LE).field("bone hash"))
+                .collect::<Result<_, _>>()?;
+            let kind2 = c.u32(LE).field("bone kind 2")?;
+            let unnamed = c.f32(LE).field("bone float")?;
+            let key = c.u32(LE).field("bone key")?;
             bones.push(StoredBone {
                 id,
                 name_hash,
@@ -246,25 +167,25 @@ impl StoredSkeleton {
             });
         }
         let root = c.bone_pointer("root")?;
-        let position = c.f32x4("skeleton position")?;
-        let rotation = c.f32x4("skeleton rotation")?;
-        let body_part_mapping = c.reference()?.map(|r| r.id);
-        let groups = c.count("pose group count", 12)?;
+        let position = f32s::<4>(&mut c, "skeleton position")?;
+        let rotation = f32s::<4>(&mut c, "skeleton rotation")?;
+        let body_part_mapping = reference(&mut c)?.map(|r| r.id);
+        let groups = count(&mut c, "pose group count", 12)?;
         let mut pose_groups = Vec::with_capacity(groups);
         for _ in 0..groups {
-            let id = c.object("SkeletonPoseGroup", SKELETON_POSE_GROUP)?;
-            let poses_n = c.count("pose count", 12)?;
+            let id = object(&mut c, "SkeletonPoseGroup", SKELETON_POSE_GROUP)?;
+            let poses_n = count(&mut c, "pose count", 12)?;
             let mut poses = Vec::with_capacity(poses_n);
             for _ in 0..poses_n {
-                let id = c.object("SkeletonPose", SKELETON_POSE)?;
-                let value = c.f32("pose value")?;
-                let bones_n = c.count("pose bone count", 28)?;
+                let id = object(&mut c, "SkeletonPose", SKELETON_POSE)?;
+                let value = c.f32(LE).field("pose value")?;
+                let bones_n = count(&mut c, "pose bone count", 28)?;
                 let mut pose_bones = Vec::with_capacity(bones_n);
                 for _ in 0..bones_n {
-                    let id = c.object("SkeletonPoseBone", SKELETON_POSE_BONE)?;
+                    let id = object(&mut c, "SkeletonPoseBone", SKELETON_POSE_BONE)?;
                     pose_bones.push(StoredPoseBone {
                         id,
-                        bytes: c.array::<16>("SkeletonPoseBone")?,
+                        bytes: c.array::<16>().field("SkeletonPoseBone")?,
                     });
                 }
                 poses.push(StoredPose {
@@ -276,22 +197,27 @@ impl StoredSkeleton {
             pose_groups.push(StoredPoseGroup { id, poses });
         }
         let ik_data = c.optional_object("IKData", IK_DATA)?;
-        let look_at = c.reference()?.map(|r| r.id);
-        c.expect("ReflexSystem pointer", 3, 1)?;
-        let floats = [c.f32("skeleton float")?, c.f32("skeleton float")?];
+        let look_at = reference(&mut c)?.map(|r| r.id);
+        expect(&mut c, "ReflexSystem pointer", 3, 1)?;
+        let floats = [
+            c.f32(LE).field("skeleton float")?,
+            c.f32(LE).field("skeleton float")?,
+        ];
         let reflex3 = match c.optional_object("Reflex3SkeletonConstraints", REFLEX3_CONSTRAINTS)? {
             None => None,
             Some(id) => {
-                let len = c.count("Reflex3SkeletonConstraints bytes", 1)?;
-                Some((id, c.take(len, "Reflex3SkeletonConstraints bytes")?.to_vec()))
+                let len = count(&mut c, "Reflex3SkeletonConstraints bytes", 1)?;
+                Some((
+                    id,
+                    c.take(len).field("Reflex3SkeletonConstraints bytes")?.to_vec(),
+                ))
             }
         };
-        let h = c.count("skeleton hash count", 4)?;
-        let hashes = (0..h).map(|_| c.u32("skeleton hash")).collect::<Result<_, _>>()?;
-        match c.b.len().saturating_sub(c.at) {
-            0 => {}
-            left => return Err(Error::Trailing(left)),
-        }
+        let h = count(&mut c, "skeleton hash count", 4)?;
+        let hashes = (0..h)
+            .map(|_| c.u32(LE).field("skeleton hash"))
+            .collect::<Result<_, _>>()?;
+        end(&c)?;
         Ok(StoredSkeleton {
             kind,
             bones,

@@ -21,7 +21,9 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::fields::{BodyError, LE, body_error, count, end, reference};
 use crate::read::reference::{self, Reference};
+use primase_bytes::{Cursor, Field, View};
 
 /// A record type: the CRC-32 of `TerrainMaterialBank`.
 pub const TERRAIN_MATERIAL_BANK: u32 = 0x4BE9_4285;
@@ -44,86 +46,10 @@ const INDEX_AT: usize = 198;
 /// Why a bank or material can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("terrain material body: {have} bytes, shorter than its {what} at {at}")]
-    Short {
-        what: &'static str,
-        at: usize,
-        have: usize,
-    },
-    #[error("terrain material {what}: {found:#x} at {at}, not {read}")]
-    Value {
-        what: &'static str,
-        at: usize,
-        found: u64,
-        read: &'static str,
-    },
-    #[error("terrain material reference at {at}: {source}")]
-    Reference {
-        at: usize,
-        #[source]
-        source: reference::Error,
-    },
-    #[error("terrain material body: {0} bytes after its end")]
-    Trailing(usize),
+    #[error("terrain material {0}")]
+    Body(#[from] BodyError),
 }
-
-/// Bytes read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
-}
-
-impl Cursor<'_> {
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let short = Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(N).ok_or(Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        })?;
-        let s: [u8; N] = self
-            .b
-            .get(self.at..end)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn reference(&mut self) -> Result<Option<Reference>, Error> {
-        let at = self.at;
-        reference::parse(self.array::<{ reference::LENGTH }>("reference")?)
-            .map_err(|source| Error::Reference { at, source })
-    }
-    /// A u32 count and that many references, none of them `03`.
-    fn references(&mut self, what: &'static str) -> Result<Vec<Reference>, Error> {
-        let at = self.at;
-        let n = usize::try_from(u32::from_le_bytes(self.array(what)?)).unwrap_or(usize::MAX);
-        let left = self.b.len().saturating_sub(self.at);
-        if n.checked_mul(reference::LENGTH).is_none_or(|bytes| bytes > left) {
-            return Err(Error::Value {
-                what,
-                at,
-                found: u64::try_from(n).unwrap_or(u64::MAX),
-                read: "a count the body can hold",
-            });
-        }
-        (0..n)
-            .map(|_| {
-                let at = self.at;
-                self.reference()?.ok_or(Error::Value {
-                    what,
-                    at,
-                    found: 3,
-                    read: "a reference (tag 1)",
-                })
-            })
-            .collect()
-    }
-}
+body_error!(Error, Error::Body);
 
 /// A TerrainMaterialBank as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,26 +63,25 @@ pub struct StoredMaterialBank {
 
 impl StoredMaterialBank {
     pub fn parse(body: &[u8]) -> Result<StoredMaterialBank, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        let [first] = c.array::<1>("first byte")?;
+        let mut c = Cursor::new(body);
+        let [first] = c.array::<1>().field("first byte")?;
         if first != 1 {
-            return Err(Error::Value {
+            return Err(BodyError::Value {
                 what: "first byte",
                 at: 0,
                 found: u64::from(first),
                 read: "1",
-            });
+            }
+            .into());
         }
         let bank = StoredMaterialBank {
-            details: c.references("detail references")?,
-            materials: c.references("material references")?,
-            regions: c.references("region references")?,
-            last: c.reference()?,
+            details: references(&mut c, "detail references")?,
+            materials: references(&mut c, "material references")?,
+            regions: references(&mut c, "region references")?,
+            last: reference(&mut c)?,
         };
-        match body.len().saturating_sub(c.at) {
-            0 => Ok(bank),
-            left => Err(Error::Trailing(left)),
-        }
+        end(&c)?;
+        Ok(bank)
     }
 }
 
@@ -177,33 +102,24 @@ pub struct StoredTerrainMaterial {
 impl StoredTerrainMaterial {
     pub fn parse(body: &[u8]) -> Result<StoredTerrainMaterial, Error> {
         if body.len() != MATERIAL_BYTES {
-            return Err(Error::Value {
+            return Err(BodyError::Value {
                 what: "length",
                 at: 0,
                 found: u64::try_from(body.len()).unwrap_or(u64::MAX),
                 read: "202",
-            });
+            }
+            .into());
         }
-        let f32_at = |at: usize| {
-            let mut c = Cursor { b: body, at };
-            c.array("f32").map(f32::from_le_bytes)
-        };
-        let (uv_scale, f32_6) = (f32_at(UV_SCALE_AT)?, f32_at(F32_6_AT)?);
-        let mut c = Cursor {
-            b: body,
-            at: TEXTURE_SET_AT,
-        };
-        let texture_set = Some(u64::from_le_bytes(c.array("texture set id")?)).filter(|&id| id != 0);
-        let mut c = Cursor {
-            b: body,
-            at: COLLISION_AT,
-        };
-        let collision_material = c.reference()?;
-        let mut c = Cursor {
-            b: body,
-            at: INDEX_AT,
-        };
-        let index = u32::from_le_bytes(c.array("index")?);
+        let v = View::new(body);
+        let (uv_scale, f32_6) = (
+            v.f32(UV_SCALE_AT, LE).field("f32")?,
+            v.f32(F32_6_AT, LE).field("f32")?,
+        );
+        let texture_set = Some(v.u64(TEXTURE_SET_AT, LE).field("texture set id")?).filter(|&id| id != 0);
+        let mut c = Cursor::new(body);
+        c.seek(COLLISION_AT).field("collision material")?;
+        let collision_material = reference(&mut c)?;
+        let index = v.u32(INDEX_AT, LE).field("index")?;
         Ok(StoredTerrainMaterial {
             bytes: body.to_vec(),
             uv_scale,
@@ -213,4 +129,20 @@ impl StoredTerrainMaterial {
             index,
         })
     }
+}
+
+/// A u32 count of references the rest of the body holds, each one present (tag 1).
+fn references(c: &mut Cursor, what: &'static str) -> Result<Vec<Reference>, BodyError> {
+    let n = count(c, what, reference::LENGTH)?;
+    (0..n)
+        .map(|_| {
+            let at = c.position();
+            reference(c)?.ok_or(BodyError::Value {
+                what,
+                at,
+                found: 3,
+                read: "a reference (tag 1)",
+            })
+        })
+        .collect()
 }

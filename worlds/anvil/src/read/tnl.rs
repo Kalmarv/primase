@@ -20,6 +20,9 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::fields::{BodyError, LE, body_error, check, end};
+use primase_bytes::{Cursor, Field};
+
 /// A record type: the CRC-32 of `TerrainNodeLayer`.
 pub const TERRAIN_NODE_LAYER: u32 = 0xDCE0_537E;
 /// A record type: the CRC-32 of `TNLChunk`.
@@ -28,86 +31,10 @@ pub const TNL_CHUNK: u32 = 0x4A05_4F51;
 /// Why a node layer or chunk body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("terrain body: {have} bytes, shorter than its {what} at {at}")]
-    Short {
-        what: &'static str,
-        at: usize,
-        have: usize,
-    },
-    #[error("terrain {what}: {found:#x} at {at}, not {read}")]
-    Value {
-        what: &'static str,
-        at: usize,
-        found: u64,
-        read: &'static str,
-    },
-    #[error("terrain body: {0} bytes after its end")]
-    Trailing(usize),
+    #[error("terrain {0}")]
+    Body(#[from] BodyError),
 }
-
-/// Little-endian fields read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
-}
-
-impl Cursor<'_> {
-    fn take(&mut self, n: usize, what: &'static str) -> Result<&[u8], Error> {
-        let short = Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(n).ok_or(Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        })?;
-        let s = self.b.get(self.at..end).ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let mut a = [0u8; N];
-        a.copy_from_slice(self.take(N, what)?);
-        Ok(a)
-    }
-    fn u16(&mut self, what: &'static str) -> Result<u16, Error> {
-        Ok(u16::from_le_bytes(self.array(what)?))
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
-    fn u64(&mut self, what: &'static str) -> Result<u64, Error> {
-        Ok(u64::from_le_bytes(self.array(what)?))
-    }
-    fn f32(&mut self, what: &'static str) -> Result<f32, Error> {
-        Ok(f32::from_le_bytes(self.array(what)?))
-    }
-    fn expect(&mut self, what: &'static str, want: u64, found: u64, at: usize) -> Result<(), Error> {
-        if found == want {
-            Ok(())
-        } else {
-            Err(Error::Value {
-                what,
-                at,
-                found,
-                read: "the grammar's value",
-            })
-        }
-    }
-    /// A u32 length and that many bytes.
-    fn block(&mut self, what: &'static str) -> Result<Vec<u8>, Error> {
-        let n = usize::try_from(self.u32(what)?).unwrap_or(usize::MAX);
-        Ok(self.take(n, what)?.to_vec())
-    }
-    fn end(&self) -> Result<(), Error> {
-        match self.b.len().saturating_sub(self.at) {
-            0 => Ok(()),
-            left => Err(Error::Trailing(left)),
-        }
-    }
-}
+body_error!(Error, Error::Body);
 
 /// One item of a node layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,30 +57,30 @@ pub struct StoredNodeLayer {
 
 impl StoredNodeLayer {
     pub fn parse(body: &[u8]) -> Result<StoredNodeLayer, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        let at = c.at;
-        let first = c.array::<1>("first byte")?;
-        c.expect("first byte", 1, u64::from(first[0]), at)?;
-        let n = c.u32("item count")?;
+        let mut c = Cursor::new(body);
+        let at = c.position();
+        let first = c.array::<1>().field("first byte")?;
+        check("first byte", at, 1, u64::from(first[0]))?;
+        let n = c.u32(LE).field("item count")?;
         let mut items = Vec::new();
         for _ in 0..n {
-            let word = c.u16("item")?;
-            let constant = c.array::<10>("item")?;
-            let position = c.u32("item position")?;
-            let at = c.at;
-            let zero = c.array::<1>("item byte")?;
-            c.expect("item byte", 0, u64::from(zero[0]), at)?;
+            let word = c.u16(LE).field("item")?;
+            let constant = c.array::<10>().field("item")?;
+            let position = c.u32(LE).field("item position")?;
+            let at = c.position();
+            let zero = c.array::<1>().field("item byte")?;
+            check("item byte", at, 0, u64::from(zero[0]))?;
             items.push(LayerItem {
                 word,
                 constant,
                 position,
-                chunk: c.u64("item chunk")?,
+                chunk: c.u64(LE).field("item chunk")?,
             });
         }
-        let at = c.at;
-        let again = c.u32("item count again")?;
-        c.expect("item count again", u64::from(n), u64::from(again), at)?;
-        c.end()?;
+        let at = c.position();
+        let again = c.u32(LE).field("item count again")?;
+        check("item count again", at, u64::from(n), u64::from(again))?;
+        end(&c)?;
         Ok(StoredNodeLayer { items })
     }
 }
@@ -204,39 +131,40 @@ pub struct StoredTnlChunk {
 
 impl StoredTnlChunk {
     pub fn parse(body: &[u8]) -> Result<StoredTnlChunk, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        let first = c.array::<1>("first byte")?;
-        c.expect("first byte", 1, u64::from(first[0]), 0)?;
-        let length = c.u32("length")?;
-        c.expect(
+        let mut c = Cursor::new(body);
+        let first = c.array::<1>().field("first byte")?;
+        check("first byte", 0, 1, u64::from(first[0]))?;
+        let length = c.u32(LE).field("length")?;
+        check(
             "length",
+            1,
             u64::try_from(body.len().saturating_sub(5)).unwrap_or(u64::MAX),
             u64::from(length),
-            1,
         )?;
-        let magic = c.u16("magic")?;
-        c.expect("magic", 0xFEED, u64::from(magic), 5)?;
-        let tag = c.u16("tag")?;
+        let magic = c.u16(LE).field("magic")?;
+        check("magic", 5, 0xFEED, u64::from(magic))?;
+        let tag = c.u16(LE).field("tag")?;
         if tag != 0x1C14 && tag != 0x9C14 {
-            return Err(Error::Value {
+            return Err(BodyError::Value {
                 what: "tag",
                 at: 7,
                 found: u64::from(tag),
                 read: "0x1C14 or 0x9C14",
-            });
+            }
+            .into());
         }
-        let blocks = [(); 9].map(|()| c.block("block"));
+        let blocks = [(); 9].map(|()| block(&mut c, "block"));
         let [b0, b1, b2, b3, b4, b5, b6, b7, b8] = blocks;
         let blocks = [b0?, b1?, b2?, b3?, b4?, b5?, b6?, b7?, b8?];
-        let a = c.f32("a")?;
-        let b = c.f32("b")?;
-        let mask = c.array::<32>("mask")?;
+        let a = c.f32(LE).field("a")?;
+        let b = c.f32(LE).field("b")?;
+        let mask = c.array::<32>().field("mask")?;
         let tenth = if tag == 0x9C14 {
-            Some(c.block("tenth block")?)
+            Some(block(&mut c, "tenth block")?)
         } else {
             None
         };
-        c.end()?;
+        end(&c)?;
         Ok(StoredTnlChunk {
             tag,
             blocks,
@@ -252,6 +180,12 @@ impl StoredTnlChunk {
         let (byte, bit) = (usize::from(value / 8), value % 8);
         self.mask.get(byte).is_some_and(|m| m >> bit & 1 == 1)
     }
+}
+
+/// A u32 length, then that many bytes.
+fn block(c: &mut Cursor, what: &'static str) -> Result<Vec<u8>, BodyError> {
+    let n = c.u32(LE).field(what)?;
+    Ok(c.take(n as usize).field(what)?.to_vec())
 }
 
 #[cfg(test)]

@@ -35,6 +35,8 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::fields::LE;
+use primase_bytes::{Cursor, Field, FieldError};
 use primase_core::TexFormat;
 
 pub use crate::read::material::TEXTURE_MAP;
@@ -115,8 +117,8 @@ pub fn storage(code: u32) -> Option<Storage> {
 /// Why a TextureMap body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("TextureMap body: {have} bytes, shorter than its {what}")]
-    Short { what: &'static str, have: usize },
+    #[error("TextureMap body: {0}")]
+    Short(#[from] FieldError),
     #[error("TextureMap {what}: {found}, only {read} is read")]
     Value {
         what: &'static str,
@@ -167,53 +169,11 @@ pub struct StoredTextureMap {
     pub pixels: Vec<u8>,
 }
 
-/// Little-endian fields read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
-}
-
-impl Cursor<'_> {
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let short = Error::Short {
-            what,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(N).ok_or(Error::Short {
-            what,
-            have: self.b.len(),
-        })?;
-        let s: [u8; N] = self
-            .b
-            .get(self.at..end)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
-    /// A u32 that must be `read`.
-    fn only(&mut self, what: &'static str, read: u32) -> Result<(), Error> {
-        let found = self.u32(what)?;
-        if found == read {
-            Ok(())
-        } else {
-            Err(Error::Value {
-                what,
-                found: u64::from(found),
-                read: u64::from(read),
-            })
-        }
-    }
-}
-
 impl StoredTextureMap {
     /// The body parsed.
     pub fn parse(body: &[u8]) -> Result<StoredTextureMap, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        let [flag] = c.array::<1>("first byte")?;
+        let mut c = Cursor::new(body);
+        let [flag] = c.array::<1>().field("first byte")?;
         if flag != 1 {
             return Err(Error::Value {
                 what: "first byte",
@@ -221,12 +181,12 @@ impl StoredTextureMap {
                 read: 1,
             });
         }
-        let width = c.u32("width")?;
-        let height = c.u32("height")?;
-        let depth = c.u32("u32 at 9")?;
-        let array_size = c.u32("u32 at 13")?;
-        let format = c.u32("format")?;
-        let dimension = c.u32("u32 at 21")?;
+        let width = c.u32(LE).field("width")?;
+        let height = c.u32(LE).field("height")?;
+        let depth = c.u32(LE).field("u32 at 9")?;
+        let array_size = c.u32(LE).field("u32 at 13")?;
+        let format = c.u32(LE).field("format")?;
+        let dimension = c.u32(LE).field("u32 at 21")?;
         if !(1..=3).contains(&dimension) {
             return Err(Error::Value {
                 what: "u32 at 21 (dimension)",
@@ -234,13 +194,13 @@ impl StoredTextureMap {
                 read: 1,
             });
         }
-        let field_25 = c.u32("u32 at 25")?;
-        let mip_count = c.u32("mip count")?;
-        let head_rest = c.array::<14>("bytes after the mip count")?;
-        let count = c.u32("reference count")?;
+        let field_25 = c.u32(LE).field("u32 at 25")?;
+        let mip_count = c.u32(LE).field("mip count")?;
+        let head_rest = c.array::<14>().field("bytes after the mip count")?;
+        let count = c.u32(LE).field("reference count")?;
         let mut references = Vec::new();
         for _ in 0..count {
-            let [tag] = c.array::<1>("reference tag")?;
+            let [tag] = c.array::<1>().field("reference tag")?;
             if tag != 0 {
                 return Err(Error::Value {
                     what: "reference tag",
@@ -249,10 +209,10 @@ impl StoredTextureMap {
                 });
             }
             references.push(MipReference {
-                id: u64::from_le_bytes(c.array::<8>("reference")?),
+                id: u64::from_le_bytes(c.array::<8>().field("reference")?),
             });
         }
-        if count == 0 && body.get(c.at..) == Some(&[3][..]) {
+        if count == 0 && body.get(c.position()..) == Some(&[3][..]) {
             return Ok(StoredTextureMap {
                 width,
                 height,
@@ -269,9 +229,9 @@ impl StoredTextureMap {
                 pixels: Vec::new(),
             });
         }
-        let references_end = Some(c.array::<9>("bytes after the references")?);
-        c.only("compiled header marker", COMPILED_TEXTURE_MAP)?;
-        c.only("compiled header", 1)?;
+        let references_end = Some(c.array::<9>().field("bytes after the references")?);
+        only(&mut c, "compiled header marker", COMPILED_TEXTURE_MAP)?;
+        only(&mut c, "compiled header", 1)?;
         let again = [
             ("width", width),
             ("height", height),
@@ -283,14 +243,14 @@ impl StoredTextureMap {
             ("u32 at 25", field_25),
         ];
         for (what, stored) in again {
-            let found = c.u32(what)?;
+            let found = c.u32(LE).field(what)?;
             if found != stored {
                 return Err(Error::Compiled { what, found, stored });
             }
         }
-        let compiled_rest = c.array::<16>("compiled header")?;
-        let length = c.u32("pixel byte length")?;
-        let pixels = body.get(c.at..).unwrap_or_default();
+        let compiled_rest = c.array::<16>().field("compiled header")?;
+        let length = c.u32(LE).field("pixel byte length")?;
+        let pixels = body.get(c.position()..).unwrap_or_default();
         if usize::try_from(length).ok() != Some(pixels.len()) {
             return Err(Error::Pixels {
                 why: format!("{length} bytes stated, {} ending the body", pixels.len()),
@@ -369,6 +329,20 @@ impl StoredTextureMap {
             at = end;
         }
         (at == self.pixels.len()).then_some(out)
+    }
+}
+
+/// A u32 that must be `read`.
+fn only(c: &mut Cursor, what: &'static str, read: u32) -> Result<(), Error> {
+    let found = c.u32(LE).field(what)?;
+    if found == read {
+        Ok(())
+    } else {
+        Err(Error::Value {
+            what,
+            found: u64::from(found),
+            read: u64::from(read),
+        })
     }
 }
 

@@ -70,6 +70,34 @@
 pub use crate::components::{
     AnimationError as Error, StoredAnimation, StoredEcl, StoredEvents, StoredTrack, Times, Values,
 };
+use crate::read::fields::{BodyError, LE, count, expect};
+
+/// The grammar's refusals as the animation error names them.
+impl From<BodyError> for Error {
+    fn from(e: BodyError) -> Self {
+        match e {
+            BodyError::Short(f) => Error::Short(f),
+            BodyError::Value {
+                what,
+                at,
+                found,
+                read,
+            } => Error::Value {
+                what,
+                at,
+                found,
+                read,
+            },
+            BodyError::Reference { at, source } => Error::Reference {
+                at,
+                why: source.to_string(),
+            },
+            BodyError::Trailing(n) => Error::Trailing(n),
+        }
+    }
+}
+
+use primase_bytes::Field;
 
 /// A record type: the CRC-32 of `Animation`.
 pub const ANIMATION: u32 = 0x0FA3_067F;
@@ -267,118 +295,60 @@ impl StoredTrack {
     }
 }
 
-/// Little-endian fields read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
+/// The body's cursor ([`primase_bytes::Cursor`]), with this record's grammar as methods.
+struct Cursor<'a>(primase_bytes::Cursor<'a>);
+
+impl<'a> Cursor<'a> {
+    fn new(b: &'a [u8]) -> Self {
+        Cursor(primase_bytes::Cursor::new(b))
+    }
+}
+
+impl<'a> std::ops::Deref for Cursor<'a> {
+    type Target = primase_bytes::Cursor<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Cursor<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl<'a> Cursor<'a> {
-    fn take(&mut self, n: usize, what: &'static str) -> Result<&'a [u8], Error> {
-        let short = Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(n).ok_or(Error::Short {
-            what,
-            at: self.at,
-            have: self.b.len(),
-        })?;
-        let s = self.b.get(self.at..end).ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], Error> {
-        let at = self.at;
-        self.take(N, what)?.try_into().map_err(|_| Error::Short {
-            what,
-            at,
-            have: self.b.len(),
-        })
-    }
-    fn u8(&mut self, what: &'static str) -> Result<u8, Error> {
-        let [b] = self.array::<1>(what)?;
-        Ok(b)
-    }
-    fn u16(&mut self, what: &'static str) -> Result<u16, Error> {
-        Ok(u16::from_le_bytes(self.array(what)?))
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
-    fn u64(&mut self, what: &'static str) -> Result<u64, Error> {
-        Ok(u64::from_le_bytes(self.array(what)?))
-    }
-    fn f32(&mut self, what: &'static str) -> Result<f32, Error> {
-        Ok(f32::from_le_bytes(self.array(what)?))
-    }
-    fn expect(&mut self, what: &'static str, want: u64, width: usize) -> Result<(), Error> {
-        let at = self.at;
-        let found = match width {
-            1 => u64::from(self.u8(what)?),
-            4 => u64::from(self.u32(what)?),
-            _ => self.u64(what)?,
-        };
-        if found == want {
-            Ok(())
-        } else {
-            Err(Error::Value {
-                what,
-                at,
-                found,
-                read: "the grammar's value",
-            })
-        }
-    }
-    /// A count of items of `each` bytes the rest of the body can hold.
-    fn count(&mut self, what: &'static str, each: usize) -> Result<usize, Error> {
-        let at = self.at;
-        let n = usize::try_from(self.u32(what)?).unwrap_or(usize::MAX);
-        let left = self.b.len().saturating_sub(self.at);
-        if n.checked_mul(each.max(1)).is_none_or(|bytes| bytes > left) {
-            return Err(Error::Value {
-                what,
-                at,
-                found: u64::try_from(n).unwrap_or(u64::MAX),
-                read: "a count the body can hold",
-            });
-        }
-        Ok(n)
-    }
     /// A counted array of `each`-byte items, as the bytes.
     fn counted(&mut self, what: &'static str, each: usize) -> Result<&'a [u8], Error> {
-        let n = self.count(what, each)?;
-        self.take(n.saturating_mul(each), what)
+        let n = count(self, what, each)?;
+        Ok(self.take(n.saturating_mul(each)).field(what)?)
     }
     /// Where an `AnimTrackData` pointer lies at or after the cursor: `00`, a u64, the type, a u32 and a count of
     /// mappings of the type [`MAPPING`] for as many as the count says.
     fn find_track_data(&self) -> Option<usize> {
         let needle = ANIM_TRACK_DATA.to_le_bytes();
-        let mut from = self.at;
+        let mut from = self.position();
         loop {
-            let rest = self.b.get(from..)?;
+            let rest = self.bytes().get(from..)?;
             let found = rest.windows(4).position(|w| w == needle)?.checked_add(from)?;
             from = found.checked_add(1)?;
-            let Some(start) = found.checked_sub(9).filter(|&s| s >= self.at) else {
+            let Some(start) = found.checked_sub(9).filter(|&s| s >= self.position()) else {
                 continue;
             };
-            if self.b.get(start) != Some(&0) {
+            if self.bytes().get(start) != Some(&0) {
                 continue;
             }
-            let mut probe = Cursor {
-                b: self.b,
-                at: found.checked_add(4)?,
-            };
-            let valid = (|| -> Result<bool, Error> {
-                probe.u32("track data")?;
-                let n = probe.count("mapping count", 16)?;
+            let mut probe = primase_bytes::Cursor::new(self.bytes());
+            probe.seek(found.checked_add(4)?).ok()?;
+            let valid = (|| -> Result<bool, BodyError> {
+                probe.u32(LE).field("track data")?;
+                let n = count(&mut probe, "mapping count", 16)?;
                 for _ in 0..n {
-                    probe.u64("mapping")?;
-                    if probe.u32("mapping type")? != MAPPING {
+                    probe.u64(LE).field("mapping")?;
+                    if probe.u32(LE).field("mapping type")? != MAPPING {
                         return Ok(false);
                     }
-                    probe.u32("mapping")?;
+                    probe.u32(LE).field("mapping")?;
                 }
                 Ok(true)
             })();
@@ -411,11 +381,11 @@ impl StoredAnimation {
 
     /// The body parsed, consumed to its last byte.
     pub fn parse(body: &[u8]) -> Result<StoredAnimation, Error> {
-        let mut c = Cursor { b: body, at: 0 };
-        c.expect("first byte", 1, 1)?;
-        let length = c.f32("Length")?;
-        let id_hash = c.u32("F4F597FF")?;
-        let f2 = c.u32("322B96B8")?;
+        let mut c = Cursor::new(body);
+        expect(&mut c, "first byte", 1, 1)?;
+        let length = c.f32(LE).field("Length")?;
+        let id_hash = c.u32(LE).field("F4F597FF")?;
+        let f2 = c.u32(LE).field("322B96B8")?;
         let mut arrays: [Vec<u16>; 2] = Default::default();
         for a in &mut arrays {
             *a = c
@@ -426,40 +396,40 @@ impl StoredAnimation {
                 .map(|w| u16::from_le_bytes(*w))
                 .collect();
         }
-        let flags = c.array::<4>("booleans")?;
-        let count = c.u32("event count")?;
-        let events = if count == 0 {
+        let flags = c.array::<4>().field("booleans")?;
+        let event_count = c.u32(LE).field("event count")?;
+        let events = if event_count == 0 {
             StoredEvents {
-                count,
+                count: event_count,
                 bytes: Vec::new(),
             }
         } else {
-            let start = c.at;
-            let at = c.find_track_data().ok_or(Error::NoTrackData(count))?;
-            c.at = at;
+            let start = c.position();
+            let at = c.find_track_data().ok_or(Error::NoTrackData(event_count))?;
+            c.seek(at).field("AnimTrackData pointer")?;
             StoredEvents {
-                count,
+                count: event_count,
                 bytes: body.get(start..at).unwrap_or_default().to_vec(),
             }
         };
-        c.expect("AnimTrackData pointer", 0, 1)?;
-        let track_data_id = c.u64("AnimTrackData")?;
-        c.expect("AnimTrackData type", u64::from(ANIM_TRACK_DATA), 4)?;
-        let track_data_hash = c.u32("567530C5")?;
-        let n = c.count("mapping count", 16)?;
+        expect(&mut c, "AnimTrackData pointer", 0, 1)?;
+        let track_data_id = c.u64(LE).field("AnimTrackData")?;
+        expect(&mut c, "AnimTrackData type", u64::from(ANIM_TRACK_DATA), 4)?;
+        let track_data_hash = c.u32(LE).field("567530C5")?;
+        let n = count(&mut c, "mapping count", 16)?;
         let mut mappings = Vec::with_capacity(n);
         for _ in 0..n {
-            c.u64("mapping id")?;
-            c.expect("mapping type", u64::from(MAPPING), 4)?;
-            mappings.push(c.u32("mapping")?);
+            c.u64(LE).field("mapping id")?;
+            expect(&mut c, "mapping type", u64::from(MAPPING), 4)?;
+            mappings.push(c.u32(LE).field("mapping")?);
         }
-        let track_data_tail = c.u16("66A6DC91")?;
-        let at = c.at;
-        let ecl = match c.u8("ECLAnimation pointer")? {
+        let track_data_tail = c.u16(LE).field("66A6DC91")?;
+        let at = c.position();
+        let ecl = match c.u8().field("ECLAnimation pointer")? {
             3 => None,
             0 => {
-                let id = c.u64("TTECLAnimation")?;
-                c.expect("TTECLAnimation type", u64::from(TTECL_ANIMATION), 4)?;
+                let id = c.u64(LE).field("TTECLAnimation")?;
+                expect(&mut c, "TTECLAnimation type", u64::from(TTECL_ANIMATION), 4)?;
                 Some(StoredEcl {
                     id,
                     animation: c.counted("TTECLAnimation bytes", 1)?.to_vec(),
@@ -481,31 +451,33 @@ impl StoredAnimation {
                 })
             }
             found => {
-                return Err(Error::Value {
+                return Err(BodyError::Value {
                     what: "ECLAnimation pointer",
                     at,
                     found: u64::from(found),
                     read: "3 (none) or 0 (an object)",
-                });
+                }
+                .into());
             }
         };
         let buffer = c.counted("B832D26F", 1)?.to_vec();
-        let cb4e = c.u32("CB4E5F18")?;
-        let tracks_at = c.at;
-        let tracks_n = usize::try_from(c.u32("track count")?).unwrap_or(usize::MAX);
+        let cb4e = c.u32(LE).field("CB4E5F18")?;
+        let tracks_at = c.position();
+        let tracks_n = usize::try_from(c.u32(LE).field("track count")?).unwrap_or(usize::MAX);
         if tracks_n != mappings.len() {
-            return Err(Error::Value {
+            return Err(BodyError::Value {
                 what: "track count",
                 at: tracks_at,
                 found: u64::try_from(tracks_n).unwrap_or(u64::MAX),
                 read: "the number of mappings",
-            });
+            }
+            .into());
         }
         let mut tracks = Vec::with_capacity(tracks_n);
         for track in 0..tracks_n {
             tracks.push(Self::track(&mut c, track)?);
         }
-        match body.len().saturating_sub(c.at) {
+        match body.len().saturating_sub(c.position()) {
             0 => {}
             left => return Err(Error::Trailing(left)),
         }
@@ -529,9 +501,9 @@ impl StoredAnimation {
 
     fn track(c: &mut Cursor<'_>, track: usize) -> Result<StoredTrack, Error> {
         let why = |why: String| Error::Track { track, why };
-        let tag = c.u8("track tag")?;
-        let a = c.u32("track size")?;
-        let keys = c.u32("track key count")?;
+        let tag = c.u8().field("track tag")?;
+        let a = c.u32(LE).field("track size")?;
+        let keys = c.u32(LE).field("track key count")?;
         let kind = tag.checked_div(3).unwrap_or(0);
         let width = value_width(kind).ok_or(Error::Kind { track, tag, kind })?;
         if keys == 0 {
@@ -539,9 +511,10 @@ impl StoredAnimation {
         }
         let n = usize::try_from(keys).map_err(|_| why("key count past this machine".into()))?;
         let times = match tag.checked_rem(3).unwrap_or(0) {
-            0 => Times::U8(c.take(n.saturating_sub(1), "u8 key times")?.to_vec()),
+            0 => Times::U8(c.take(n.saturating_sub(1)).field("u8 key times")?.to_vec()),
             1 => Times::U16(
-                c.take(n.saturating_sub(1).saturating_mul(2), "u16 key times")?
+                c.take(n.saturating_sub(1).saturating_mul(2))
+                    .field("u16 key times")?
                     .as_chunks::<2>()
                     .0
                     .iter()
@@ -549,12 +522,12 @@ impl StoredAnimation {
                     .collect(),
             ),
             _ => {
-                let marker = c.u8("key mask marker")?;
+                let marker = c.u8().field("key mask marker")?;
                 let bytes = usize::from(marker & 0x3F);
                 if marker < 0x40 || !(1..=8).contains(&bytes) {
                     return Err(why(format!("key mask marker {marker:#04x}")));
                 }
-                let mask = c.take(bytes, "key mask")?;
+                let mask = c.take(bytes).field("key mask")?;
                 let set: u32 = mask.iter().map(|b| b.count_ones()).sum();
                 if set != keys {
                     return Err(why(format!("a key mask of {set} frames for {keys} keys")));
@@ -565,7 +538,7 @@ impl StoredAnimation {
                 }
             }
         };
-        let values = c.take(n.saturating_mul(width), "track values")?.to_vec();
+        let values = c.take(n.saturating_mul(width)).field("track values")?.to_vec();
         let length = times.stored_bytes().saturating_add(values.len());
         let near = usize::try_from(a).unwrap_or(usize::MAX);
         if near.abs_diff(length) > 8 {

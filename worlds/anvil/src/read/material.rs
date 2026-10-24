@@ -18,8 +18,10 @@
 )]
 
 use crate::components::MaterialFlags;
+use crate::read::fields::LE;
 pub use crate::read::mesh::MATERIAL;
 use crate::read::reference::{self, Reference};
+use primase_bytes::{Cursor, Field, FieldError};
 
 /// A record type: equals the CRC-32 of the ASCII string `TextureSet` (the name a label).
 pub const TEXTURE_SET: u32 = 0xD70E_6670;
@@ -129,54 +131,14 @@ pub enum Payload {
 /// Why a Material body can't be read whole.
 #[derive(Debug, thiserror::Error)]
 pub enum MaterialError {
-    #[error("Material body: {have} bytes, shorter than its {what}")]
-    Short { what: &'static str, have: usize },
+    #[error("Material body: {0}")]
+    Short(#[from] FieldError),
     #[error("Material prefix: {0}")]
     Prefix(#[from] Error),
     #[error("Material property {index}: {why}")]
     Property { index: usize, why: String },
     #[error("Material body: {0} bytes after its last property")]
     Trailing(usize),
-}
-
-/// Little-endian fields read in order, each bounded.
-struct Cursor<'a> {
-    b: &'a [u8],
-    at: usize,
-}
-
-impl Cursor<'_> {
-    fn array<const N: usize>(&mut self, what: &'static str) -> Result<[u8; N], MaterialError> {
-        let short = MaterialError::Short {
-            what,
-            have: self.b.len(),
-        };
-        let end = self.at.checked_add(N).ok_or(MaterialError::Short {
-            what,
-            have: self.b.len(),
-        })?;
-        let s: [u8; N] = self
-            .b
-            .get(self.at..end)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(short)?;
-        self.at = end;
-        Ok(s)
-    }
-    fn u32(&mut self, what: &'static str) -> Result<u32, MaterialError> {
-        Ok(u32::from_le_bytes(self.array(what)?))
-    }
-    fn f32(&mut self, what: &'static str) -> Result<f32, MaterialError> {
-        Ok(f32::from_le_bytes(self.array(what)?))
-    }
-    fn reference(&mut self, index: usize) -> Result<Option<Reference>, MaterialError> {
-        reference::parse(self.array::<{ reference::LENGTH }>("reference")?).map_err(|e| {
-            MaterialError::Property {
-                index,
-                why: e.to_string(),
-            }
-        })
-    }
 }
 
 impl StoredMaterial {
@@ -198,22 +160,17 @@ impl StoredMaterial {
     /// The body parsed.
     pub fn parse(body: &[u8]) -> Result<StoredMaterial, MaterialError> {
         let prefix = StoredReferences::parse(body)?;
-        let mut c = Cursor { b: body, at: 21 };
-        let unread = c.array::<102>("102 bytes after the references")?.to_vec();
-        let count = usize::try_from(c.u32("property count")?).unwrap_or(usize::MAX);
-        if count > body.len() / 16 {
-            return Err(MaterialError::Short {
-                what: "property records",
-                have: body.len(),
-            });
-        }
+        let mut c = Cursor::new(body);
+        c.seek(21).field("102 bytes after the references")?;
+        let unread = c.array::<102>().field("102 bytes after the references")?.to_vec();
+        let count = c.count(LE, 16).field("property records")?;
         let mut properties = Vec::with_capacity(count);
         for index in 0..count {
-            let key = c.u32("property key")?;
-            let class = c.u32("property class")?;
-            let [z0, z1] = c.array::<2>("property")?;
-            let kind = c.u32("property type")?;
-            let [z2, z3] = c.array::<2>("property")?;
+            let key = c.u32(LE).field("property key")?;
+            let class = c.u32(LE).field("property class")?;
+            let [z0, z1] = c.array::<2>().field("property")?;
+            let kind = c.u32(LE).field("property type")?;
+            let [z2, z3] = c.array::<2>().field("property")?;
             if [z0, z1, z2, z3] != [0; 4] {
                 return Err(MaterialError::Property {
                     index,
@@ -221,8 +178,8 @@ impl StoredMaterial {
                 });
             }
             let echo = |c: &mut Cursor<'_>| -> Result<[u8; 8], MaterialError> {
-                let head = c.array::<8>("property payload")?;
-                let again = c.u32("property class again")?;
+                let head = c.array::<8>().field("property payload")?;
+                let again = c.u32(LE).field("property class again")?;
                 if again != class {
                     return Err(MaterialError::Property {
                         index,
@@ -232,23 +189,26 @@ impl StoredMaterial {
                 Ok(head)
             };
             let payload = match (class, kind) {
-                (0, 7) => Payload::Int(i32::from_le_bytes(c.array::<4>("property payload")?)),
-                (0, 10) => Payload::Float(c.f32("property payload")?),
+                (0, 7) => Payload::Int(i32::from_le_bytes(c.array::<4>().field("property payload")?)),
+                (0, 10) => Payload::Float(c.f32(LE).field("property payload")?),
                 (0, 13) => Payload::Float4([
-                    c.f32("property payload")?,
-                    c.f32("property payload")?,
-                    c.f32("property payload")?,
-                    c.f32("property payload")?,
+                    c.f32(LE).field("property payload")?,
+                    c.f32(LE).field("property payload")?,
+                    c.f32(LE).field("property payload")?,
+                    c.f32(LE).field("property payload")?,
                 ]),
                 (0x7D08_460D, 19) => {
                     let head = echo(&mut c)?;
-                    let [byte] = c.array::<1>("property payload")?;
+                    let [byte] = c.array::<1>().field("property payload")?;
                     let words = [
-                        c.u32("property payload")?,
-                        c.u32("property payload")?,
-                        c.u32("property payload")?,
+                        c.u32(LE).field("property payload")?,
+                        c.u32(LE).field("property payload")?,
+                        c.u32(LE).field("property payload")?,
                     ];
-                    let references = [c.reference(index)?, c.reference(index)?];
+                    let references = [
+                        property_reference(&mut c, index)?,
+                        property_reference(&mut c, index)?,
+                    ];
                     Payload::Texture {
                         head,
                         byte,
@@ -260,19 +220,19 @@ impl StoredMaterial {
                     let head = echo(&mut c)?;
                     let mut floats = [0.0; 8];
                     for f in &mut floats {
-                        *f = c.f32("property payload")?;
+                        *f = c.f32(LE).field("property payload")?;
                     }
                     Payload::Floats8 {
                         head,
                         floats,
-                        bytes: c.array::<3>("property payload")?,
+                        bytes: c.array::<3>().field("property payload")?,
                     }
                 }
                 (0xECE5_D96C, 19) => {
                     let head = echo(&mut c)?;
                     let mut floats = [0.0; 6];
                     for f in &mut floats {
-                        *f = c.f32("property payload")?;
+                        *f = c.f32(LE).field("property payload")?;
                     }
                     Payload::Floats6 { head, floats }
                 }
@@ -280,7 +240,7 @@ impl StoredMaterial {
                     let head = echo(&mut c)?;
                     Payload::Raw45 {
                         head,
-                        rest: c.array::<33>("property payload")?.to_vec(),
+                        rest: c.array::<33>().field("property payload")?.to_vec(),
                     }
                 }
                 _ => {
@@ -297,9 +257,8 @@ impl StoredMaterial {
                 payload,
             });
         }
-        let left = body.len().saturating_sub(c.at);
-        if left != 0 {
-            return Err(MaterialError::Trailing(left));
+        if c.remaining() != 0 {
+            return Err(MaterialError::Trailing(c.remaining()));
         }
         Ok(StoredMaterial {
             references: prefix.references,
@@ -377,6 +336,16 @@ impl StoredTextureSet {
             last: u32::from_le_bytes([*l0, *l1, *l2, *l3]),
         })
     }
+}
+
+/// A reference in property `index`'s payload.
+fn property_reference(c: &mut Cursor, index: usize) -> Result<Option<Reference>, MaterialError> {
+    reference::parse(c.array::<{ reference::LENGTH }>().field("reference")?).map_err(|e| {
+        MaterialError::Property {
+            index,
+            why: e.to_string(),
+        }
+    })
 }
 
 #[cfg(test)]
