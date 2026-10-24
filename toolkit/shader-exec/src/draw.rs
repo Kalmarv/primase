@@ -9,15 +9,18 @@
 //! - **Linking.** A pixel program input reads the vertex program output of the same semantic and index (names compared
 //!   without case), component by component; `SV_Position` is the pixel's position, `SV_IsFrontFace` the triangle's
 //!   facing. An input no output carries is an error.
-//! - **Clipping.** A triangle is clipped to `0 <= z <= w` (depth clipping), to `w > 0` and, in x and y, to a guard band
-//!   (section 15.4 of the D3D11.3 specification clips x and y to `-w..w` "or arbitrarily wider range if implementation
-//!   uses a guard band"). The band here is the range of the rasterizer's fixed point, `-32768..=32767` pixels on
-//!   screen (15.6.1: 16.8 fixed point, "approximately [-32768 … 32767] range", the viewport's bounds), so a vertex
-//!   near the camera plane, whose screen position is far outside, is snapped only after clipping brings it in: what a
-//!   triangle covers in the targets is the unclipped triangle's. The outputs of a vertex made by clipping are the
-//!   clip-space blend of the edge's two ends. A triangle with a NaN position after clipping draws nothing (15.4); one
-//!   with an infinity becomes NaN where clipping cuts it, which 15.4 allows ("may or may not result in a discarded
-//!   primitive").
+//! - **Clipping.** A triangle is clipped to `0 <= z <= w` (depth clipping) and to `-w <= x <= w`, `-w <= y <= w`: the
+//!   viewport, section 15.4 of the D3D11.3 specification's clip volume. 15.4 allows a guard band ("or arbitrarily
+//!   wider range if implementation uses a guard band"); WARP uses none (a triangle cut 16.25 pixels past the viewport
+//!   instead of at it puts the pixels it draws up to 1e-4 off WARP's), so a vertex clipping makes on a side of the
+//!   viewport is snapped like any other. A vertex near the camera plane, whose screen position is far outside, is
+//!   snapped only after clipping brings it in. A plane `w >= 1e-6` keeps a division by `w` finite where the others meet
+//!   at the camera. A vertex clipping makes holds its weights on the triangle's three vertices in clip space, and its
+//!   outputs are the triangle's by the interpolation of the input they feed: perspective-correct ones by those weights,
+//!   the screen-linear ones (`noperspective`) by the weights of its screen position (a clip-space weight times the
+//!   vertex's w, normalised), and flat ones the provoking vertex's. A triangle with a NaN position after clipping draws
+//!   nothing (15.4); one with an infinity becomes NaN where clipping cuts it, which 15.4 allows ("may or may not result
+//!   in a discarded primitive").
 //! - **Viewport.** `x = X + (x/w + 1) / 2 * W`, `y = Y + (1 - y/w) / 2 * H` (y down), `z = MinDepth + z/w * (MaxDepth -
 //!   MinDepth)`.
 //! - **Rasterization.** Positions are snapped to 1/256 of a pixel (16.8 fixed point), as D3D's 8 bits of sub-pixel
@@ -182,11 +185,21 @@ struct Shaded {
     outputs: Vec<[u32; 4]>,
 }
 
-/// A vertex in the rasterizer: clip-space position, the varyings as floats (bits kept for flat ones), screen position.
+/// A vertex in the rasterizer: its clip-space position and its weights on the drawn triangle's three vertices in clip
+/// space (a vertex of the triangle weighs itself one; one clipping makes, the blend of its edge's ends).
 #[derive(Clone, Debug)]
 struct ClipVertex {
     clip: [f32; 4],
-    outputs: Vec<[u32; 4]>,
+    weights: [f64; 3],
+}
+
+/// The weights of the screen position of a point whose clip-space weights on a triangle are `clip` and whose
+/// vertices' w are `w`: each clip-space weight times its vertex's w, normalised (a screen position is the clip-space
+/// one over its w, so it is the blend of the vertices' screen positions by these).
+fn screen_weights(clip: [f64; 3], w: [f64; 3]) -> [f64; 3] {
+    let scaled = [clip[0] * w[0], clip[1] * w[1], clip[2] * w[2]];
+    let sum = scaled[0] + scaled[1] + scaled[2];
+    scaled.map(|x| x / sum)
 }
 
 impl<'a> DrawShader<'a> {
@@ -301,8 +314,8 @@ impl<'a> DrawShader<'a> {
         let mut stats = DrawStats::default();
         for triangle in indices.as_chunks::<3>().0 {
             stats.triangles += 1;
-            let mut corners = Vec::with_capacity(3);
-            for &i in triangle {
+            let mut drawn = [0usize; 3];
+            for (k, &i) in triangle.iter().enumerate() {
                 let i = i as usize;
                 let input = vertices.get(i).ok_or_else(|| {
                     error(format!(
@@ -317,15 +330,20 @@ impl<'a> DrawShader<'a> {
                         outputs: e.outputs,
                     });
                 }
-                let s = shaded[i].as_ref().expect("shaded above");
-                corners.push(ClipVertex {
-                    clip: s.position,
-                    outputs: s.outputs.clone(),
-                });
+                drawn[k] = i;
             }
-            // the provoking vertex's outputs, for flat inputs: the triangle's first, whatever clipping makes
-            let provoking = corners[0].outputs.clone();
-            let polygon = clip(corners, &state.viewport);
+            let original = drawn.map(|i| shaded[i].as_ref().expect("shaded above"));
+            let corners = (0..3)
+                .map(|k| {
+                    let mut weights = [0.; 3];
+                    weights[k] = 1.;
+                    ClipVertex {
+                        clip: original[k].position,
+                        weights,
+                    }
+                })
+                .collect();
+            let polygon = clip(corners);
             if polygon.len() < 3 {
                 stats.clipped_away += 1;
                 continue;
@@ -336,15 +354,7 @@ impl<'a> DrawShader<'a> {
             }
             for k in 1..polygon.len() - 1 {
                 let tri = [&polygon[0], &polygon[k], &polygon[k + 1]];
-                self.raster(
-                    tri,
-                    &provoking,
-                    pixel_buffers,
-                    sampler,
-                    state,
-                    surface,
-                    &mut stats,
-                )?;
+                self.raster(tri, original, pixel_buffers, sampler, state, surface, &mut stats)?;
             }
         }
         Ok(stats)
@@ -354,7 +364,7 @@ impl<'a> DrawShader<'a> {
     fn raster(
         &self,
         tri: [&ClipVertex; 3],
-        provoking: &[[u32; 4]],
+        original: [&Shaded; 3],
         buffers: &[(u32, &[[u32; 4]])],
         sampler: &mut dyn Sampler,
         state: &Rasterizer,
@@ -391,7 +401,7 @@ impl<'a> DrawShader<'a> {
                     depths[l] = z;
                     self.inputs_at(
                         tri,
-                        provoking,
+                        original,
                         b,
                         &setup.inv_w,
                         [px as f32 + 0.5, py as f32 + 0.5, z],
@@ -446,12 +456,13 @@ impl<'a> DrawShader<'a> {
         Ok(())
     }
 
-    /// The pixel program's input registers at a pixel of barycentrics `b` (weights of tri's vertices).
+    /// The pixel program's input registers at a pixel of barycentrics `b` (weights of `tri`'s vertices), `tri` a
+    /// triangle of the clipped polygon of the drawn triangle `original` (whose first vertex is the provoking one).
     #[allow(clippy::too_many_arguments)]
     fn inputs_at(
         &self,
         tri: [&ClipVertex; 3],
-        provoking: &[[u32; 4]],
+        original: [&Shaded; 3],
         b: [f64; 3],
         inv_w: &[f64; 3],
         position: [f32; 3],
@@ -464,6 +475,17 @@ impl<'a> DrawShader<'a> {
         let pw: [f64; 3] = [b[0] * inv_w[0], b[1] * inv_w[1], b[2] * inv_w[2]];
         let sum = pw[0] + pw[1] + pw[2];
         let persp = pw.map(|x| x / sum);
+        // the same weights on the drawn triangle's vertices: perspective-correct through each vertex's clip-space
+        // weights, screen-linear through the weights of its screen position
+        let corner_w = original.map(|v| f64::from(v.position[3]));
+        let (mut on_persp, mut on_linear) = ([0f64; 3], [0f64; 3]);
+        for (k, v) in tri.iter().enumerate() {
+            let screen = screen_weights(v.weights, corner_w);
+            for i in 0..3 {
+                on_persp[i] += persp[k] * v.weights[i];
+                on_linear[i] += b[k] * screen[i];
+            }
+        }
         for s in &self.sources {
             match s {
                 Source::Position { register, lanes } => {
@@ -484,25 +506,18 @@ impl<'a> DrawShader<'a> {
                 } => {
                     for (k, to) in to_lanes.iter().enumerate() {
                         let Some(from) = from_lanes.get(k) else { continue };
-                        let value = |v: &ClipVertex| {
-                            f64::from(f32::from_bits(
-                                v.outputs.get(*from_register).map_or(0, |r| r[*from as usize]),
-                            ))
+                        let word =
+                            |v: &Shaded| v.outputs.get(*from_register).map_or(0, |r| r[*from as usize]);
+                        let blend = |weights: [f64; 3]| {
+                            let v: f64 = (0..3)
+                                .map(|i| weights[i] * f64::from(f32::from_bits(word(original[i]))))
+                                .sum();
+                            (v as f32).to_bits()
                         };
                         let word = match mode {
-                            InterpMode::Flat => {
-                                provoking.get(*from_register).map_or(0, |r| r[*from as usize])
-                            }
-                            InterpMode::Perspective => {
-                                let v = persp[0] * value(tri[0])
-                                    + persp[1] * value(tri[1])
-                                    + persp[2] * value(tri[2]);
-                                (v as f32).to_bits()
-                            }
-                            InterpMode::Linear => {
-                                let v = b[0] * value(tri[0]) + b[1] * value(tri[1]) + b[2] * value(tri[2]);
-                                (v as f32).to_bits()
-                            }
+                            InterpMode::Flat => word(original[0]),
+                            InterpMode::Perspective => blend(on_persp),
+                            InterpMode::Linear => blend(on_linear),
                         };
                         into[*to_register][*to as usize] = word;
                     }
@@ -512,8 +527,6 @@ impl<'a> DrawShader<'a> {
     }
 }
 
-/// The guard band x and y are clipped to, in pixels on screen: the range of the rasterizer's 16.8 fixed point.
-const GUARD_BAND: [f64; 2] = [-32768., 32767.];
 /// The 16.8 fixed point's range in 1/256 pixels: 16 signed integer bits, 8 fractional (3.2.4.1).
 const FIXED: [i64; 2] = [-(1 << 23), (1 << 23) - 1];
 
@@ -624,27 +637,20 @@ impl Setup {
     }
 }
 
-/// Clip a triangle to `0 <= z <= w`, `w > 0` and the guard band through `viewport`: the polygon left, as clip-space
-/// vertices whose outputs are the blend of the edge's ends (an empty list when nothing is left).
-fn clip(triangle: Vec<ClipVertex>, viewport: &Viewport) -> Vec<ClipVertex> {
-    // a screen position times w is linear in clip space (x w = (X + W / 2) w + W / 2 x, y w = (Y + H / 2) w - H / 2
-    // y), so each side of the band is a plane there, whatever the viewport
-    let (half_w, half_h) = (f64::from(viewport.width) / 2., f64::from(viewport.height) / 2.);
-    let (centre_x, centre_y) = (f64::from(viewport.x) + half_w, f64::from(viewport.y) + half_h);
+/// Clip a triangle to `0 <= z <= w`, `w >= 1e-6` and the viewport (`-w <= x, y <= w`): the polygon left, as
+/// clip-space vertices with their weights on the triangle's (an empty list when nothing is left).
+fn clip(triangle: Vec<ClipVertex>) -> Vec<ClipVertex> {
     let w = |c: &[f32; 4]| f64::from(c[3]);
-    let x = |c: &[f32; 4]| centre_x * w(c) + half_w * f64::from(c[0]);
-    let y = |c: &[f32; 4]| centre_y * w(c) - half_h * f64::from(c[1]);
-    let [low, high] = GUARD_BAND;
     // each plane as the signed distance of a vertex: kept where >= 0
     type Plane<'a> = &'a dyn Fn(&[f32; 4]) -> f64;
     let planes: [Plane; 7] = [
         &|c| f64::from(c[2]),
         &|c| w(c) - f64::from(c[2]),
         &|c| w(c) - 1e-6,
-        &|c| x(c) - low * w(c),
-        &|c| high * w(c) - x(c),
-        &|c| y(c) - low * w(c),
-        &|c| high * w(c) - y(c),
+        &|c| w(c) + f64::from(c[0]),
+        &|c| w(c) - f64::from(c[0]),
+        &|c| w(c) + f64::from(c[1]),
+        &|c| w(c) - f64::from(c[1]),
     ];
     let mut polygon = triangle;
     for plane in planes {
@@ -672,17 +678,12 @@ fn clip(triangle: Vec<ClipVertex>, viewport: &Viewport) -> Vec<ClipVertex> {
     polygon
 }
 
-/// The point at `t` from `a` to `b` in clip space, its outputs blended alike (as floats).
+/// The point at `t` from `a` to `b` in clip space, its weights blended alike.
 fn blend(a: &ClipVertex, b: &ClipVertex, t: f64) -> ClipVertex {
-    let mix = |x: f32, y: f32| (f64::from(x) + (f64::from(y) - f64::from(x)) * t) as f32;
-    let clip = [0, 1, 2, 3].map(|k| mix(a.clip[k], b.clip[k]));
-    let outputs = a
-        .outputs
-        .iter()
-        .zip(&b.outputs)
-        .map(|(x, y)| [0, 1, 2, 3].map(|k| mix(f32::from_bits(x[k]), f32::from_bits(y[k])).to_bits()))
-        .collect();
-    ClipVertex { clip, outputs }
+    let clip = [0, 1, 2, 3]
+        .map(|k| (f64::from(a.clip[k]) + (f64::from(b.clip[k]) - f64::from(a.clip[k])) * t) as f32);
+    let weights = [0, 1, 2].map(|i| a.weights[i] + (b.weights[i] - a.weights[i]) * t);
+    ClipVertex { clip, weights }
 }
 
 #[cfg(test)]
@@ -706,11 +707,22 @@ mod tests {
     }
 
     fn clipped(corners: [[f32; 4]; 3]) -> Vec<ClipVertex> {
-        let triangle = corners.map(|clip| ClipVertex {
-            clip,
-            outputs: Vec::new(),
+        let mut k = 0;
+        let triangle = corners.map(|clip| {
+            let mut weights = [0.; 3];
+            weights[k] = 1.;
+            k += 1;
+            ClipVertex { clip, weights }
         });
-        clip(triangle.to_vec(), &VIEWPORT)
+        clip(triangle.to_vec())
+    }
+
+    /// A clip-space position on screen, in pixels of the target.
+    fn on_screen(c: [f64; 4]) -> [f64; 2] {
+        [
+            (c[0] / c[3] + 1.) * 0.5 * SIZE as f64,
+            (1. - c[1] / c[3]) * 0.5 * SIZE as f64,
+        ]
     }
 
     /// How many times each pixel of the target is covered by the triangles of the clipped polygon.
@@ -735,12 +747,12 @@ mod tests {
     }
 
     #[test]
-    fn a_vertex_near_the_camera_plane_is_clipped_to_the_guard_band() {
-        // c, at w = 1e-7, is cut by the w plane to a vertex about 8e9 pixels right of the target (and a fifth of that
-        // up), past what 16.8 fixed point holds and what the edge function's products hold in i64; the band brings it
-        // in to x = 32767 on the same line, where saturating it alone would turn it to (32768, -32768). The triangle
-        // seen from the target is a, b and the point at infinity along (5, -1): the centres with 42.25 < x + 5 y <
-        // 78.25 right of a -> b (x - y > -5.75). No pixel centre is within 0.04 pixels of its edges.
+    fn a_vertex_near_the_camera_plane_is_clipped_to_the_viewport() {
+        // c, at w = 1e-7, is about 8e9 pixels right of the target (and a fifth of that up), past what 16.8 fixed point
+        // holds and what the edge function's products hold in i64; the viewport's sides cut its edges inside the
+        // target. The triangle seen from the target is a, b and the point at infinity along (5, -1): the centres with
+        // 42.25 < x + 5 y < 78.25 right of a -> b (x - y > -5.75). No pixel centre is within 0.04 pixels of its
+        // edges, and snapping the cut vertices moves an edge by under 1/256 of a pixel.
         let a = at(2.25, 8., 0.5, 1.);
         let b = at(8.25, 14., 0.5, 1.);
         let c = [1e3, 2e2, 0., 1e-7];
@@ -753,20 +765,66 @@ mod tests {
             .collect();
         assert_eq!(coverage(&polygon), expected);
         for v in &polygon {
-            let w = f64::from(v.clip[3]);
-            let x = (f64::from(v.clip[0]) / w + 1.) * 0.5 * SIZE as f64;
-            let y = (1. - f64::from(v.clip[1]) / w) * 0.5 * SIZE as f64;
-            for screen in [x, y] {
+            for screen in on_screen(v.clip.map(f64::from)) {
                 assert!(
-                    (GUARD_BAND[0] - 1. ..=GUARD_BAND[1] + 1.).contains(&screen),
-                    "{screen} past the band"
+                    (-1e-3..=SIZE as f64 + 1e-3).contains(&screen),
+                    "{screen} past the viewport"
                 );
             }
         }
     }
 
+    /// A vertex clipping makes is the blend of the triangle's vertices by its weights in clip space, and of their
+    /// screen positions by its screen weights ([`screen_weights`]): what a perspective-correct and a screen-linear
+    /// output of it are blended by. Where the ends of a cut edge have different w the two differ: the viewport's right
+    /// side cuts both edges to the far vertex (w = 1e-7) about 1e-3 of the way along in clip space, and its weight on
+    /// screen is 1e-7 times that (the ratio of the ends' w).
     #[test]
-    fn a_triangle_inside_the_band_is_not_clipped() {
+    fn a_cut_vertex_holds_its_weights_in_clip_space_and_on_screen() {
+        let corners = [
+            at(2.25, 8., 0.5, 1.),
+            at(8.25, 14., 0.5, 1.),
+            [1e3, 2e2, 0., 1e-7],
+        ];
+        let polygon = clipped(corners);
+        let corner_w = corners.map(|c| f64::from(c[3]));
+        let mut cut = 0;
+        for v in &polygon {
+            let in_clip: [f64; 4] =
+                std::array::from_fn(|k| (0..3).map(|i| v.weights[i] * f64::from(corners[i][k])).sum());
+            for (k, (blended, kept)) in in_clip.iter().zip(v.clip).enumerate() {
+                let kept = f64::from(kept);
+                assert!(
+                    (blended - kept).abs() <= 1e-6 * kept.abs().max(1.),
+                    "clip lane {k}: {blended} from the weights, {kept} kept"
+                );
+            }
+            let screen = screen_weights(v.weights, corner_w);
+            let far = on_screen(corners[2].map(f64::from));
+            let near = [0, 1].map(|i| on_screen(corners[i].map(f64::from)));
+            let at = on_screen(v.clip.map(f64::from));
+            for axis in 0..2 {
+                let blended = screen[0] * near[0][axis] + screen[1] * near[1][axis] + screen[2] * far[axis];
+                assert!(
+                    (blended - at[axis]).abs() <= 1e-3,
+                    "screen axis {axis}: {blended} from the weights, {} kept",
+                    at[axis]
+                );
+            }
+            if v.weights[2] > 0. && v.weights[2] < 1. {
+                cut += 1;
+                assert!(
+                    v.weights[2] < 1e-2 && screen[2] < 1e-6 * v.weights[2],
+                    "{:?} {screen:?}",
+                    v.weights
+                );
+            }
+        }
+        assert_eq!(cut, 2, "{polygon:?}");
+    }
+
+    #[test]
+    fn a_triangle_inside_the_viewport_is_not_clipped() {
         let corners = [
             at(1., 14., 0.5, 1.),
             at(8., 1.5, 0.5, 3.),
