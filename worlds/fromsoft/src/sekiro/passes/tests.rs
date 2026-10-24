@@ -607,6 +607,7 @@ fn the_fromsoft_passes_register_by_name() {
     let names = [
         "bake-fromsoft-layers",
         "bake-fromsoft-materials",
+        "derive-fromsoft-detail",
         "drop-fromsoft-far",
         "drop-fromsoft-texture-transforms",
         "fromsoft-apply-rigid-skinning",
@@ -622,6 +623,7 @@ fn the_fromsoft_passes_register_by_name() {
     ];
     assert_eq!(format!("{reg:?}"), format!("{names:?}"));
     let free = [
+        "derive-fromsoft-detail",
         "drop-fromsoft-far",
         "drop-fromsoft-texture-transforms",
         "fromsoft-apply-rigid-skinning",
