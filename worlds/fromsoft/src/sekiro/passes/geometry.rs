@@ -5,8 +5,15 @@
 //! indices, which index the skeleton directly when the mesh has no palette) and `Weights(0)` (as stored), and each form
 //! a `core.skin` binding them to that skeleton, every joint a slot with the inverse of its rest in the skeleton's space
 //! as its inverse bind (dynamic vertices are stored in that bind pose), the weights
-//! `EngineNormalizes { floor: `[`SKIN_WEIGHT_FLOOR`]` }` (the game's rule, below) and the deformation linear. A mesh with a palette (palette-relative indices) or a
-//! static mesh (vertices in their bone's space) in a bound model is refused: neither is established for these files.
+//! `EngineNormalizes { floor: `[`SKIN_WEIGHT_FLOOR`]` }` (the game's rule, below) and the deformation linear. A
+//! static mesh (`dynamic` 0) of a bound model has each vertex in the space of the one bone its NORMAL.w names, which
+//! moves it rigidly (SoulsFormats' FLVER2 mesh and Smithbox's FLVER renderer state the same rule): it is posed into
+//! the bind pose by that bone's rest, as `fromsoft-apply-rigid-skinning` poses it
+//! ([`crate::passes::rigid::pose_static_mesh`]), and each vertex gets `Joints(0)` that bone and `Weights(0)` 1, so the
+//! skin moves it with the bone exactly. Refused, by name: a dynamic mesh with a palette (palette-relative indices), a
+//! static mesh with a palette (its NORMAL.w would name a palette entry) or with no normal W (its bone is then its
+//! node, which is not read), and a static vertex whose NORMAL.w names no bone or that states other weights than one
+//! of 1: none of them is established for these files.
 use super::blockers::BlockerCards;
 use crate::components::models::{RigidModel, SkeletonOf, SourceModel};
 use crate::flver::{FaceSetKind, Model, Part};
@@ -452,17 +459,19 @@ impl LowerFromSoftGeometry {
                 );
             }
         }
+        let posed;
+        let model = if out.palette.is_some() && model.meshes.iter().any(|m| !m.dynamic) {
+            posed = bind_static_meshes(model, log).map_err(|e| format!("{prototype:?}: {e}"))?;
+            &posed
+        } else {
+            model
+        };
         let wide = model.bones.len() > 256;
         let mut mesh_levels = Vec::new();
         for (index, mesh) in model.meshes.iter().enumerate() {
-            if out.palette.is_some() && (!mesh.palette.is_empty() || !mesh.dynamic) {
+            if out.palette.is_some() && mesh.dynamic && !mesh.palette.is_empty() {
                 return Err(format!(
-                    "{prototype:?}: mesh {index} is {} in a model bound to a skeleton: not established for these files",
-                    if mesh.dynamic {
-                        "palette-relative"
-                    } else {
-                        "static (vertices in their bone's space)"
-                    }
+                    "{prototype:?}: mesh {index} is palette-relative in a model bound to a skeleton: not established for these files"
                 ));
             }
             let entity = *slots
@@ -545,12 +554,21 @@ impl LowerFromSoftGeometry {
                 }
                 let skinned = out.palette.is_some();
                 if skinned {
-                    let vertex = |k: &u32| &mesh.vertices[*k as usize];
+                    // a dynamic vertex's influences as stored; a static one's the bone its NORMAL.w names, at 1
+                    // (`bind_static_meshes` made sure it names one)
+                    let influences = |k: &u32| {
+                        let v = &mesh.vertices[*k as usize];
+                        if mesh.dynamic {
+                            (v.bone_indices, v.bone_weights)
+                        } else {
+                            ([v.normal_w as u16, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])
+                        }
+                    };
                     if let Some(bad) = part.source_vertices.iter().find_map(|k| {
-                        let v = vertex(k);
-                        v.bone_indices
+                        let (joints, weights) = influences(k);
+                        joints
                             .iter()
-                            .zip(v.bone_weights)
+                            .zip(weights)
                             .find(|&(&j, w)| w > 0.0 && out.unbound.contains(&(j as usize)))
                             .map(|(&j, _)| j)
                     }) {
@@ -558,7 +576,7 @@ impl LowerFromSoftGeometry {
                             "{prototype:?}: a vertex of mesh {index} is weighted to joint {bad}, whose rest has no inverse"
                         ));
                     }
-                    let joints = part.source_vertices.iter().map(|k| vertex(k).bone_indices);
+                    let joints = part.source_vertices.iter().map(|k| influences(k).0);
                     streams.insert(
                         Semantic::Joints(0),
                         if wide {
@@ -569,12 +587,7 @@ impl LowerFromSoftGeometry {
                     );
                     streams.insert(
                         Semantic::Weights(0),
-                        Stream::F32x4(
-                            part.source_vertices
-                                .iter()
-                                .map(|k| vertex(k).bone_weights)
-                                .collect(),
-                        ),
+                        Stream::F32x4(part.source_vertices.iter().map(|k| influences(k).1).collect()),
                     );
                 }
                 let out = out.levels.entry(level).or_default();
@@ -607,6 +620,64 @@ impl LowerFromSoftGeometry {
         }
         Ok(out)
     }
+}
+
+/// `model` with its static meshes posed into the bind pose by the bone each vertex's NORMAL.w names (see the module
+/// documentation), for a model bound to a skeleton: a static mesh with a palette, a static vertex whose NORMAL.w names
+/// no bone and one that states other weights than one of 1 are refused.
+fn bind_static_meshes(model: &Model, log: &mut PassLog) -> Result<Model, String> {
+    let worlds = crate::pose::bone_matrices(&model.bones)?;
+    // whether a mesh's layout stores a normal with a W (every normal member the reader decodes but Float3): without
+    // one a static mesh's bone is its node, which is not read
+    let normal_w: Vec<bool> = model
+        .meshes
+        .iter()
+        .map(|m| {
+            m.layouts
+                .iter()
+                .filter_map(|&l| model.layouts.get(l))
+                .flatten()
+                .any(|member| member.semantic == 3 && member.stored && member.kind != 2)
+        })
+        .collect();
+    let mut posed = model.clone();
+    for (index, mesh) in posed.meshes.iter_mut().enumerate() {
+        if mesh.dynamic {
+            continue;
+        }
+        if !normal_w[index] {
+            return Err(format!(
+                "mesh {index} is static and its layout stores no normal W naming its bone (its node, which is not read, would): not established for these files"
+            ));
+        }
+        if !mesh.palette.is_empty() {
+            return Err(format!(
+                "mesh {index} is static with a bone palette in a model bound to a skeleton (its NORMAL.w would name a palette entry): not established for these files"
+            ));
+        }
+        for v in &mesh.vertices {
+            if usize::try_from(v.normal_w).map_or(true, |b| b >= worlds.len()) {
+                return Err(format!(
+                    "mesh {index} is static and a vertex's NORMAL.w {} names no bone of the {}",
+                    v.normal_w,
+                    worlds.len()
+                ));
+            }
+            let weights: Vec<f32> = v.bone_weights.iter().copied().filter(|&w| w != 0.0).collect();
+            if !weights.is_empty() && weights != [1.0] {
+                return Err(format!(
+                    "mesh {index} is static and a vertex states the weights {:?}: a static vertex follows one bone at 1",
+                    v.bone_weights
+                ));
+            }
+        }
+        crate::passes::rigid::pose_static_mesh(mesh, &worlds, log)?;
+        log.count(
+            "static meshes of a bound model bound rigidly to the bone their vertices' NORMAL.w names",
+            1,
+        );
+    }
+    Ok(posed)
 }
 
 /// The UV sets beyond the first, as `TexCoord(n)` in the order the vertex layout stores them (a four component UV member

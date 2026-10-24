@@ -3,8 +3,8 @@
 //! or non-unit explicit weights requested for rigid lowering are refused. Dynamic
 //! meshes are animated at runtime: their model-space bind pose is preserved and
 //! counted, not submitted to this rigid-only transformation.
-use crate::flver::Model;
-use crate::pose::{ID, affine_point, bone_matrices};
+use crate::flver::{Mesh, Model};
+use crate::pose::{ID, Matrix, affine_point, bone_matrices};
 pub use crate::pose::{posed_bounds, posed_positions};
 use primase_core::{
     Component, Linear, World,
@@ -74,58 +74,68 @@ pub fn lower_model(source: &Model, log: &mut PassLog) -> Result<Model, String> {
     let worlds = bone_matrices(&source.bones)?;
     let mut output = source.clone();
     for m in &mut output.meshes {
-        let mut mirrored = Vec::with_capacity(m.vertices.len());
-        for v in &mut m.vertices {
-            if m.dynamic {
-                log.count("model-space bind vertices", 1);
-                mirrored.push(false);
-                continue;
+        if m.dynamic {
+            if !m.vertices.is_empty() {
+                log.count("model-space bind vertices", m.vertices.len() as u64);
             }
-            let matrix = usize::try_from(v.normal_w).ok().and_then(|i| worlds.get(i));
-            let Some(matrix) = matrix else {
-                log.count("unbound model-space vertices", 1);
-                mirrored.push(false);
-                continue;
-            };
-            if *matrix == ID {
-                mirrored.push(false);
-                continue;
-            }
-            // normals by the inverse transpose and tangents by the bone's 3x3 part, of unit length, as core turns
-            // local space
-            let l = Linear::of_f64([matrix[0], matrix[1], matrix[2]]);
-            if l.singular() {
-                return Err("singular rigid bone transform".into());
-            }
-            v.position = affine_point(matrix, v.position.map(f64::from)).map(|x| x as f32);
-            v.normal = l.normal(v.normal).expect("not singular");
-            for t in &mut v.tangents {
-                *t = l.tangent(*t).expect("not singular");
-            }
-            if v.position
-                .iter()
-                .chain(&v.normal)
-                .chain(v.tangents.iter().flatten())
-                .any(|x| !x.is_finite())
-            {
-                return Err("nonfinite rigid result".into());
-            }
-            mirrored.push(l.mirrors());
-            log.count("rigid vertices transformed", 1);
+            continue;
         }
-        for f in &mut m.faces {
-            if mirrored.iter().any(|&m| m) {
-                let mut indices = f.triangulate();
-                for t in indices.as_chunks_mut::<3>().0 {
-                    if mirrored[t[0] as usize] {
-                        t.swap(1, 2);
-                    }
-                }
-                f.indices = indices;
-                f.strip = false;
-            }
-        }
+        pose_static_mesh(m, &worlds, log)?;
     }
     log.count("models lowered", 1);
     Ok(output)
+}
+
+/// Pose the static mesh `m` into model space: each vertex by the matrix of the bone its NORMAL.w names (`worlds`,
+/// [`bone_matrices`]), its normal by the inverse transpose and its tangents by the 3x3 part; a vertex whose NORMAL.w
+/// names no bone stays as stored (counted), and a triangle whose first vertex a mirroring bone moved has its winding
+/// reversed. The rule [`lower_model`] applies and the stored-pose lowering binds a static mesh by.
+pub(crate) fn pose_static_mesh(m: &mut Mesh, worlds: &[Matrix], log: &mut PassLog) -> Result<(), String> {
+    let mut mirrored = Vec::with_capacity(m.vertices.len());
+    for v in &mut m.vertices {
+        let matrix = usize::try_from(v.normal_w).ok().and_then(|i| worlds.get(i));
+        let Some(matrix) = matrix else {
+            log.count("unbound model-space vertices", 1);
+            mirrored.push(false);
+            continue;
+        };
+        if *matrix == ID {
+            mirrored.push(false);
+            continue;
+        }
+        // normals by the inverse transpose and tangents by the bone's 3x3 part, of unit length, as core turns
+        // local space
+        let l = Linear::of_f64([matrix[0], matrix[1], matrix[2]]);
+        if l.singular() {
+            return Err("singular rigid bone transform".into());
+        }
+        v.position = affine_point(matrix, v.position.map(f64::from)).map(|x| x as f32);
+        v.normal = l.normal(v.normal).expect("not singular");
+        for t in &mut v.tangents {
+            *t = l.tangent(*t).expect("not singular");
+        }
+        if v.position
+            .iter()
+            .chain(&v.normal)
+            .chain(v.tangents.iter().flatten())
+            .any(|x| !x.is_finite())
+        {
+            return Err("nonfinite rigid result".into());
+        }
+        mirrored.push(l.mirrors());
+        log.count("rigid vertices transformed", 1);
+    }
+    for f in &mut m.faces {
+        if mirrored.iter().any(|&m| m) {
+            let mut indices = f.triangulate();
+            for t in indices.as_chunks_mut::<3>().0 {
+                if mirrored[t[0] as usize] {
+                    t.swap(1, 2);
+                }
+            }
+            f.indices = indices;
+            f.strip = false;
+        }
+    }
+    Ok(())
 }

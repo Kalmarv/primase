@@ -633,3 +633,157 @@ fn the_fromsoft_passes_register_by_name() {
         assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");
     }
 }
+
+/// A two-bone model (a root and an arm raised 1 m and turned a quarter about X) with one static mesh whose vertices
+/// name the arm by NORMAL.w, in a layout whose normal member (`kind`) does or does not carry a W.
+fn static_arm(normal_kind: u32, palette: Vec<u32>, normal_w: i32) -> crate::flver::Model {
+    use crate::flver::{Bone, FaceSet, Member, Mesh as FlverMesh, Model, Vertex};
+    let member = |semantic, kind, offset| Member {
+        unknown: 0,
+        stored: true,
+        offset,
+        kind,
+        semantic,
+        index: 0,
+    };
+    let vertex = |position| Vertex {
+        position,
+        normal: [0., 1., 0.],
+        normal_w,
+        ..Default::default()
+    };
+    Model {
+        version: 0x2001a,
+        speedtree: false,
+        layouts: vec![vec![member(0, 2, 0), member(3, normal_kind, 12)]],
+        materials: vec![crate::flver::Material {
+            name: "fixture".into(),
+            mtd: "fixture.mtd".into(),
+            gx: vec![],
+            textures: vec![],
+        }],
+        bones: vec![
+            Bone {
+                name: "root".into(),
+                translation: [0.; 3],
+                rotation: [0.; 3],
+                scale: [1.; 3],
+                parent: -1,
+            },
+            Bone {
+                name: "arm".into(),
+                translation: [0., 1., 0.],
+                rotation: [std::f32::consts::FRAC_PI_2, 0., 0.],
+                scale: [1.; 3],
+                parent: 0,
+            },
+        ],
+        meshes: vec![FlverMesh {
+            dynamic: false,
+            material: 0,
+            palette,
+            layouts: vec![0],
+            vertices: vec![vertex([0., 0., 0.]), vertex([1., 0., 0.]), vertex([0., 0., 1.])],
+            faces: vec![FaceSet {
+                flags: 0,
+                strip: false,
+                cull: true,
+                indices: vec![0, 1, 2],
+            }],
+        }],
+    }
+}
+
+/// `model` as one prototype of a world, with its material and, when `bound`, its skeleton (as the character reader
+/// makes it).
+fn arm_world(model: crate::flver::Model, bound: bool) -> (World, Entity) {
+    use crate::components::models::{SkeletonOf, SourceModel};
+    let mut world = World::new();
+    let material = world.spawn();
+    world.insert(material, materials::resolve(&model.materials[0], None, |_| false));
+    let prototype = world.spawn();
+    world.insert(
+        prototype,
+        PrototypeSource {
+            id: "c9999".into(),
+            far: false,
+        },
+    );
+    world.insert(prototype, crate::sekiro::source::MaterialSlots(vec![material]));
+    if bound {
+        let skeleton = world.spawn();
+        world.insert(skeleton, crate::pose::skeleton(&model));
+        world.insert(prototype, SkeletonOf(skeleton));
+    }
+    world.insert(prototype, SourceModel(model));
+    (world, prototype)
+}
+
+fn lower_arm(pose: Pose) -> LowerFromSoftGeometry {
+    LowerFromSoftGeometry {
+        pose,
+        uv_tiling: Tiling::Keep,
+        winding: Winding::Stored,
+        degenerates: Degenerates::Keep,
+        leave_out: Default::default(),
+        blocker_cards: Cards::Draw,
+        speedtree_frame: SpeedTreeFrame::Program,
+    }
+}
+
+fn positions(world: &World, prototype: Entity) -> Vec<[f32; 3]> {
+    match &world.get::<Mesh>(prototype).expect("lowered").primitives()[0].streams[&Semantic::Position] {
+        Stream::F32x3(p) => p.clone(),
+        other => panic!("positions {other:?}"),
+    }
+}
+
+/// A static mesh of a model bound to a skeleton (Sekiro's c9001, wp_a_0711) lowers with its skin: posed into the
+/// bind pose where `fromsoft-apply-rigid-skinning` and `pose=rigid` put it, every vertex following the bone its
+/// NORMAL.w names at weight 1, so the skin moves it with that bone.
+#[test]
+fn a_static_mesh_of_a_bound_model_follows_its_bone() {
+    let (mut stored, prototype) = arm_world(static_arm(0x13, vec![], 1), true);
+    let mut log = PassLog::default();
+    lower_arm(Pose::Stored).run(&mut stored, &mut log).unwrap();
+    let primitive = &stored.get::<Mesh>(prototype).unwrap().primitives()[0];
+    assert_eq!(
+        primitive.streams[&Semantic::Joints(0)],
+        Stream::U8x4(vec![[1, 0, 0, 0]; 3])
+    );
+    assert_eq!(
+        primitive.streams[&Semantic::Weights(0)],
+        Stream::F32x4(vec![[1., 0., 0., 0.]; 3])
+    );
+    assert_eq!(
+        log.counts["static meshes of a bound model bound rigidly to the bone their vertices' NORMAL.w names"],
+        1
+    );
+
+    let (mut rigid, rigid_prototype) = arm_world(static_arm(0x13, vec![], 1), false);
+    let mut log = PassLog::default();
+    crate::passes::rigid::ApplyRigidSkinning
+        .run(&mut rigid, &mut log)
+        .unwrap();
+    lower_arm(Pose::Rigid).run(&mut rigid, &mut log).unwrap();
+    assert_eq!(positions(&stored, prototype), positions(&rigid, rigid_prototype));
+    // the arm's rest moved the vertices: they are not as stored
+    assert_ne!(positions(&stored, prototype)[1], [1., 0., 0.]);
+}
+
+/// What is not established stays refused, by name: a static mesh with a palette, one whose layout stores no normal W
+/// (Float3: its bone would be its node, which is not read) and a NORMAL.w that names no bone.
+#[test]
+fn a_static_mesh_of_a_bound_model_is_refused_where_its_bone_is_not_stated() {
+    for (model, says) in [
+        (static_arm(0x13, vec![1], 0), "static with a bone palette"),
+        (static_arm(2, vec![], 1), "stores no normal W"),
+        (static_arm(0x13, vec![], 7), "NORMAL.w 7 names no bone of the 2"),
+    ] {
+        let (mut world, _) = arm_world(model, true);
+        let e = lower_arm(Pose::Stored)
+            .run(&mut world, &mut PassLog::default())
+            .unwrap_err();
+        assert!(e.contains(says), "{e}");
+    }
+}
