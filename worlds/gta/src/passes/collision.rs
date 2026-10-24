@@ -494,6 +494,13 @@ impl Soup {
     /// A geometry bound's polygons in its own space.
     fn geometry(&mut self, g: &crate::rage::bounds::Geometry, log: &mut PassLog) {
         let v = &g.vertices;
+        // the reader allows polygons with no material table (their indices all 0): which surface they are isn't stated
+        if !g.polygons.is_empty() && g.materials.is_empty() {
+            log.approximate(
+                "geometry bounds with polygons and no material table: their polygons surface 0, the material table's first",
+                1,
+            );
+        }
         let material = |i: usize| -> u8 {
             let m = usize::from(g.polygon_materials.get(i).copied().unwrap_or(0));
             g.materials.get(m).map_or(0, |m| (m[0] & 0xFF) as u8)
