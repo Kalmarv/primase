@@ -501,7 +501,7 @@ mod tests {
         }
     }
 
-    /// `unwrap_rsa` end to end where the plaintext fits (blocks of 100 bytes, exponents 1 and 3): the bytes are the
+    /// `unwrap_rsa` end to end where the plaintext fits (blocks of 60 bytes, exponents 1 and 3: below 2^1440): the bytes are the
     /// reference's for an odd modulus (Montgomery) and an even one (`BigUint::modpow`); a block at or above the modulus
     /// is refused on both paths, and so is a plaintext of the full 256 bytes.
     #[test]
@@ -509,8 +509,8 @@ mod tests {
         let mut state = 0x2545_f491_4f6c_dd1du64;
         let mut small = Vec::new();
         for _ in 0..16 {
-            let mut block = vec![0u8; 156];
-            block.extend((0..100).map(|_| {
+            let mut block = vec![0u8; 196];
+            block.extend((0..60).map(|_| {
                 state ^= state << 13;
                 state ^= state >> 7;
                 state ^= state << 17;
