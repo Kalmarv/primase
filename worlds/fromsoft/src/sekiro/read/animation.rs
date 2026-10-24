@@ -172,6 +172,38 @@ fn hold(
     Ok(held)
 }
 
+/// The names of the animations character `id` has (`a000_003000`), in binder order, as [`read`] would read them,
+/// without reading any: the `.hkx` members of `chr/<id>.anibnd` and of the binders its markers name, except the
+/// skeleton (`skeleton.hkx`). `None` when the archive has no such binder. Whether a file is a tagfile that reads is
+/// `read`'s to say (its report refuses the others by reason): this names what the binders hold.
+pub fn clip_names(archive: &Archive, decoder: &Decoder<'_>, id: &str) -> Result<Option<Vec<String>>> {
+    let path = binder_path(id);
+    if !archive.contains(&path) {
+        return Ok(None);
+    }
+    let main = Binder::read(&archive.read(&path, decoder)?, decoder)?;
+    let mut binders = vec![];
+    for set in companions(archive, id, &main) {
+        binders.push(Binder::read(
+            &archive.read(&binder_path(&set), decoder)?,
+            decoder,
+        )?);
+    }
+    let mut names: Vec<String> = Vec::new();
+    for binder in std::iter::once(&main).chain(&binders) {
+        for f in &binder.files {
+            let Some(name) = f.name.as_deref() else {
+                continue;
+            };
+            let file = stem(name);
+            if file_name(name).ends_with(".hkx") && file != "skeleton" && !names.contains(&file) {
+                names.push(file);
+            }
+        }
+    }
+    Ok(Some(names))
+}
+
 /// Read `chr/<id>.anibnd` of the archive (and the binders its markers name) into `w`, which holds the character's
 /// model: `None` when the archive has no such binder. The skeleton and animations are in the world's frame by
 /// [`crate::pose`]'s source frame.

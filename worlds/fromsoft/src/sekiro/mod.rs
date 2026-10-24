@@ -14,7 +14,7 @@ pub use passes::collision;
 pub use passes::extras;
 pub use passes::object_collision as objects;
 pub use passes::{blockers, layers, lights, normals, pbr, settings};
-pub use read::animation::{AnimationReport, Animations};
+pub use read::animation::{AnimationReport, Animations, clip_names};
 pub use read::area::{Options, Parents, Report, StateClasses, read_area, read_game_area, world_bounds};
 pub use read::character::{
     CharacterOptions, CharacterReader, CharacterReport, animation_notices, part_forms, read_character,
