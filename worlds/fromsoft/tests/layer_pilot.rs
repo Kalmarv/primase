@@ -162,6 +162,7 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
             }
             let theirs = Raw {
                 pixels: targets,
+                discarded: ours.discarded.clone(),
                 instructions: 0,
                 samples: 0,
             };
