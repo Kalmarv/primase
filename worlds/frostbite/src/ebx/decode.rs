@@ -6,6 +6,7 @@ use super::{
     ImportReference, Instance, Object, Pointer, ReflectionGroup, TypeDescriptor, TypeRef, Value,
 };
 use crate::{Result, bad};
+use primase_bytes::Endian;
 
 const RIFF: u32 = 0x4646_4952; // "RIFF" read little-endian
 const EBX: u32 = 0x4542_5800;
@@ -23,83 +24,50 @@ pub(crate) fn align_up(v: usize, a: usize) -> usize {
     if a <= 1 { v } else { v.div_ceil(a) * a }
 }
 
-/// A bounds-checked little-endian cursor over the document's bytes.
-struct Cursor<'a> {
-    d: &'a [u8],
-    pos: usize,
+/// The document's cursor ([`primase_bytes::Cursor`]), with its strings, counts and extents as methods.
+struct Cursor<'a>(primase_bytes::Cursor<'a>);
+
+impl<'a> std::ops::Deref for Cursor<'a> {
+    type Target = primase_bytes::Cursor<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Cursor<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl<'a> Cursor<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let end = self
-            .pos
-            .checked_add(n)
-            .filter(|&e| e <= self.d.len())
-            .ok_or_else(|| {
-                bad(
-                    "read",
-                    self.pos,
-                    format!("{n} bytes past the end ({})", self.d.len()),
-                )
-            })?;
-        let s = &self.d[self.pos..end];
-        self.pos = end;
-        Ok(s)
-    }
-    fn arr<const N: usize>(&mut self) -> Result<[u8; N]> {
-        let s = self.take(N)?;
-        let mut a = [0; N];
-        a.copy_from_slice(s);
-        Ok(a)
-    }
-    fn u8(&mut self) -> Result<u8> {
-        Ok(self.arr::<1>()?[0])
-    }
-    fn u16(&mut self) -> Result<u16> {
-        Ok(u16::from_le_bytes(self.arr()?))
-    }
-    fn u32(&mut self) -> Result<u32> {
-        Ok(u32::from_le_bytes(self.arr()?))
-    }
-    fn u32be(&mut self) -> Result<u32> {
-        Ok(u32::from_be_bytes(self.arr()?))
-    }
-    fn i32(&mut self) -> Result<i32> {
-        Ok(i32::from_le_bytes(self.arr()?))
-    }
-    fn u64(&mut self) -> Result<u64> {
-        Ok(u64::from_le_bytes(self.arr()?))
-    }
-    fn i64(&mut self) -> Result<i64> {
-        Ok(i64::from_le_bytes(self.arr()?))
-    }
-    fn seek(&mut self, p: usize) -> Result<()> {
-        if p > self.d.len() {
-            return Err(bad("seek", p, format!("past the end ({})", self.d.len())));
-        }
-        self.pos = p;
-        Ok(())
+    fn new(d: &'a [u8]) -> Self {
+        Cursor(primase_bytes::Cursor::new(d))
     }
     fn nonnegative(&mut self, what: &'static str) -> Result<usize> {
-        let at = self.pos;
-        let v = self.i32()?;
+        let at = self.position();
+        let v = self.i32(Endian::Little)?;
         usize::try_from(v).map_err(|_| bad(what, at, "count cannot be negative"))
     }
     /// That `count` records of `stride` bytes fit before `end`.
     fn ensure(&self, end: usize, count: usize, stride: usize, what: &'static str) -> Result<()> {
-        if self.pos > end || count > (end - self.pos) / stride {
-            return Err(bad(what, self.pos, format!("{count} records exceed their chunk")));
+        if self.position() > end || count > (end - self.position()) / stride {
+            return Err(bad(
+                what,
+                self.position(),
+                format!("{count} records exceed their chunk"),
+            ));
         }
         Ok(())
     }
     fn c_string(&mut self) -> Result<Vec<u8>> {
-        let rest = &self.d[self.pos..];
+        let rest = &self.bytes()[self.position()..];
         let n = rest
             .iter()
             .position(|&b| b == 0)
-            .ok_or_else(|| bad("string", self.pos, "unterminated"))?;
+            .ok_or_else(|| bad("string", self.position(), "unterminated"))?;
         let s = rest[..n].to_vec();
-        self.pos += n + 1;
+        self.take(n + 1)?;
         Ok(s)
     }
 }
@@ -112,29 +80,29 @@ struct Chunk {
 }
 
 fn read_chunks(r: &mut Cursor) -> Result<Vec<Chunk>> {
-    if r.u32()? != RIFF {
+    if r.u32(Endian::Little)? != RIFF {
         return Err(bad("RIFF", 0, "not a RIFF document"));
     }
-    let riff_end = r.u32()? as usize + 8;
-    if riff_end != r.d.len() {
+    let riff_end = r.u32(Endian::Little)? as usize + 8;
+    if riff_end != r.bytes().len() {
         return Err(bad(
             "RIFF",
             4,
-            format!("size {riff_end} does not match the stream ({})", r.d.len()),
+            format!("size {riff_end} does not match the stream ({})", r.bytes().len()),
         ));
     }
-    let form = r.u32be()?;
+    let form = r.u32(Endian::Big)?;
     if form != EBX && form != EBXS {
         return Err(bad("RIFF", 8, format!("form {form:#x} is not EBX or EBXS")));
     }
     let mut chunks = Vec::new();
-    while r.pos < riff_end {
-        if r.d.len() - r.pos < 8 {
-            return Err(bad("RIFF", r.pos, "truncated chunk header"));
+    while r.position() < riff_end {
+        if r.bytes().len() - r.position() < 8 {
+            return Err(bad("RIFF", r.position(), "truncated chunk header"));
         }
-        let id = r.u32be()?;
-        let size = r.u32()? as usize;
-        let begin = r.pos;
+        let id = r.u32(Endian::Big)?;
+        let size = r.u32(Endian::Little)? as usize;
+        let begin = r.position();
         if size > riff_end - begin {
             return Err(bad("RIFF", begin, "chunk exceeds its document"));
         }
@@ -174,35 +142,35 @@ fn validate_data_offset(doc: &Document, offset: u32, required: usize, what: &'st
 
 fn read_fixup(r: &mut Cursor, c: Chunk, doc: &mut Document) -> Result<()> {
     r.seek(c.begin)?;
-    doc.file_guid = r.arr()?;
+    doc.file_guid = r.array()?;
     let types = r.nonnegative("EFIX type")?;
     r.ensure(c.end, types, 16, "EFIX type")?;
     for _ in 0..types {
-        doc.fixup_type_guids.push(r.arr()?);
+        doc.fixup_type_guids.push(r.array()?);
     }
     let sigs = r.nonnegative("EFIX signature")?;
     if sigs > types {
-        return Err(bad("EFIX signature", r.pos, "more signatures than types"));
+        return Err(bad("EFIX signature", r.position(), "more signatures than types"));
     }
     r.ensure(c.end, sigs, 4, "EFIX signature")?;
     for _ in 0..sigs {
-        doc.fixup_type_signatures.push(r.u32()?);
+        doc.fixup_type_signatures.push(r.u32(Endian::Little)?);
     }
     let exported = r.nonnegative("EFIX exported instance")?;
     let instances = r.nonnegative("EFIX instance")?;
     if exported > instances {
         return Err(bad(
             "EFIX instance",
-            r.pos,
+            r.position(),
             "exported count exceeds the instances",
         ));
     }
     r.ensure(c.end, instances, 4, "EFIX instance")?;
     for i in 0..instances {
-        let offset = r.u32()?;
+        let offset = r.u32(Endian::Little)?;
         validate_data_offset(doc, offset, 2, "EFIX instance")?;
         let at = doc.data_start + offset as usize;
-        let class_ref = u16::from_le_bytes([r.d[at], r.d[at + 1]]);
+        let class_ref = u16::from_le_bytes([r.bytes()[at], r.bytes()[at + 1]]);
         if usize::from(class_ref) >= doc.fixup_type_guids.len() {
             return Err(bad(
                 "EFIX instance",
@@ -225,7 +193,7 @@ fn read_fixup(r: &mut Cursor, c: Chunk, doc: &mut Document) -> Result<()> {
         r.ensure(c.end, n, 4, what)?;
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
-            let o = r.u32()?;
+            let o = r.u32(Endian::Little)?;
             validate_data_offset(doc, o, width, what)?;
             out.push(o);
         }
@@ -237,26 +205,26 @@ fn read_fixup(r: &mut Cursor, c: Chunk, doc: &mut Document) -> Result<()> {
     r.ensure(c.end, imports, 32, "EFIX import")?;
     for _ in 0..imports {
         doc.imports.push(ImportReference {
-            file_guid: r.arr()?,
-            class_guid: r.arr()?,
+            file_guid: r.array()?,
+            class_guid: r.array()?,
         });
     }
     doc.import_offsets = offsets(r, doc, "EFIX import relocation", 8)?;
     doc.type_info_offsets = offsets(r, doc, "EFIX type-info reference", 8)?;
-    if c.end - r.pos < 12 {
-        return Err(bad("EFIX", r.pos, "truncated section offsets"));
+    if c.end - r.position() < 12 {
+        return Err(bad("EFIX", r.position(), "truncated section offsets"));
     }
-    doc.arrays_offset = r.u32()?;
-    doc.boxed_values_offset = r.u32()?;
-    doc.strings_offset = r.u32()?;
+    doc.arrays_offset = r.u32(Endian::Little)?;
+    doc.boxed_values_offset = r.u32(Endian::Little)?;
+    doc.strings_offset = r.u32(Endian::Little)?;
     validate_data_offset(doc, doc.arrays_offset, 0, "EFIX array section")?;
     validate_data_offset(doc, doc.boxed_values_offset, 0, "EFIX boxed-value section")?;
     validate_data_offset(doc, doc.strings_offset, 0, "EFIX string section")?;
-    if r.pos < c.end {
+    if r.position() < c.end {
         doc.boxed_reference_offsets = offsets(r, doc, "EFIX boxed reference", 16)?;
     }
-    if r.pos != c.end {
-        return Err(bad("EFIX", r.pos, "unexpected bytes at its end"));
+    if r.position() != c.end {
+        return Err(bad("EFIX", r.position(), "unexpected bytes at its end"));
     }
     Ok(())
 }
@@ -267,10 +235,16 @@ fn read_extra(r: &mut Cursor, c: Chunk, doc: &mut Document) -> Result<()> {
     let boxed = r.nonnegative("EBXX boxed value")?;
     r.ensure(c.end, arrays.saturating_add(boxed), 16, "EBXX")?;
     let record = |r: &mut Cursor, what: &'static str| -> Result<(u32, u32, u32, u16, u16)> {
-        let offset = r.u32()?;
-        let at = r.pos;
-        let count = u32::try_from(r.i32()?).map_err(|_| bad(what, at, "negative count"))?;
-        let v = (offset, count, r.u32()?, r.u16()?, r.u16()?);
+        let offset = r.u32(Endian::Little)?;
+        let at = r.position();
+        let count = u32::try_from(r.i32(Endian::Little)?).map_err(|_| bad(what, at, "negative count"))?;
+        let v = (
+            offset,
+            count,
+            r.u32(Endian::Little)?,
+            r.u16(Endian::Little)?,
+            r.u16(Endian::Little)?,
+        );
         validate_data_offset(doc, offset, 0, what)?;
         Ok(v)
     };
@@ -297,8 +271,8 @@ fn read_extra(r: &mut Cursor, c: Chunk, doc: &mut Document) -> Result<()> {
             raw: Vec::new(),
         });
     }
-    if r.pos != c.end {
-        return Err(bad("EBXX", r.pos, "unexpected bytes at its end"));
+    if r.position() != c.end {
+        return Err(bad("EBXX", r.position(), "unexpected bytes at its end"));
     }
     doc.arrays = array_records;
     doc.boxed_values = boxed_records;
@@ -329,18 +303,18 @@ fn read_reflection(
     r.ensure(c.end, nsig, 20, "reflection signature")?;
     let mut ids = Vec::with_capacity(nsig);
     for _ in 0..nsig {
-        ids.push((r.arr::<16>()?, r.u32()?));
+        ids.push((r.array::<16>()?, r.u32(Endian::Little)?));
     }
     let ntypes = r.nonnegative("reflection type")?;
     r.ensure(c.end, ntypes, 16, "reflection type")?;
     for i in 0..ntypes {
-        let at = r.pos;
-        let name_hash = r.u32()?;
-        let field_index = r.i32()?;
-        let field_count = r.u16()?;
-        let encoded_type = r.u16()? >> 1;
-        let size = r.u16()?;
-        let alignment = r.u16()?;
+        let at = r.position();
+        let name_hash = r.u32(Endian::Little)?;
+        let field_index = r.i32(Endian::Little)?;
+        let field_count = r.u16(Endian::Little)?;
+        let encoded_type = r.u16(Endian::Little)? >> 1;
+        let size = r.u16(Endian::Little)?;
+        let alignment = r.u16(Endian::Little)?;
         if alignment > 255 {
             return Err(bad("reflection type", at, "alignment is unsupported"));
         }
@@ -360,10 +334,10 @@ fn read_reflection(
     let nfields = r.nonnegative("reflection field")?;
     r.ensure(c.end, nfields, 12, "reflection field")?;
     for _ in 0..nfields {
-        let name_hash = r.u32()?;
-        let data_offset = r.u32()?;
-        let encoded_type = r.u16()? >> 1;
-        let class_ref = r.u16()?;
+        let name_hash = r.u32(Endian::Little)?;
+        let data_offset = r.u32(Endian::Little)?;
+        let encoded_type = r.u16(Endian::Little)? >> 1;
+        let class_ref = r.u16(Endian::Little)?;
         doc.fields.push(FieldDescriptor {
             name: String::new(),
             name_hash,
@@ -387,24 +361,24 @@ fn read_reflection(
     r.ensure(c.end, ngroups, 12, "reflection group")?;
     for _ in 0..ngroups {
         doc.reflection_groups.push(ReflectionGroup {
-            hash: r.u32()?,
-            count: r.u32()?,
-            first: r.u32()?,
+            hash: r.u32(Endian::Little)?,
+            count: r.u32(Endian::Little)?,
+            first: r.u32(Endian::Little)?,
         });
     }
     let nmap = r.nonnegative("reflection mapping")?;
     r.ensure(c.end, nmap, 8, "reflection mapping")?;
-    r.seek(r.pos + nmap * 8)?;
+    r.take(nmap * 8)?;
     if hashed {
         let nnames = r.nonnegative("reflection name")?;
         r.ensure(c.end, nnames, 8, "reflection name")?;
         // a later record of the same hash replaces an earlier one, as in ReSkate's map
         let mut names = BTreeMap::new();
         for _ in 0..nnames {
-            let h = r.u32()?;
-            names.insert(h, r.u32()? as usize);
+            let h = r.u32(Endian::Little)?;
+            names.insert(h, r.u32(Endian::Little)? as usize);
         }
-        let strings = r.pos;
+        let strings = r.position();
         let lookup = |h: u32| -> Result<String> {
             let o = names.get(&h).ok_or_else(|| {
                 bad(
@@ -413,7 +387,7 @@ fn read_reflection(
                     format!("{h:#x} is missing from {} names", names.len()),
                 )
             })?;
-            string_at(r.d, strings + o, c.end)
+            string_at(r.bytes(), strings + o, c.end)
         };
         for t in &mut doc.types {
             t.name = lookup(t.name_hash)?;
@@ -422,12 +396,12 @@ fn read_reflection(
             f.name = lookup(f.name_hash)?;
         }
     } else {
-        let strings = r.pos;
+        let strings = r.position();
         for t in &mut doc.types {
-            t.name = string_at(r.d, strings + t.name_hash as usize, c.end)?;
+            t.name = string_at(r.bytes(), strings + t.name_hash as usize, c.end)?;
         }
         for f in &mut doc.fields {
-            f.name = string_at(r.d, strings + f.name_hash as usize, c.end)?;
+            f.name = string_at(r.bytes(), strings + f.name_hash as usize, c.end)?;
         }
     }
     Ok(ids)
@@ -520,7 +494,7 @@ impl<'a> Values<'a> {
     fn field(&mut self, f: &FieldDescriptor, position: usize) -> Result<Value> {
         if f.is_array() {
             self.r.seek(position)?;
-            let disp = self.r.i32()?;
+            let disp = self.r.i32(Endian::Little)?;
             let target = position as i64 + i64::from(disp);
             let low = (self.doc.data_start + 4) as i64;
             let high = self.doc.data_end as i64;
@@ -529,15 +503,15 @@ impl<'a> Values<'a> {
             }
             let target = target as usize;
             self.r.seek(target - 4)?;
-            let count =
-                usize::try_from(self.r.i32()?).map_err(|_| bad("EBX array", target - 4, "negative count"))?;
+            let count = usize::try_from(self.r.i32(Endian::Little)?)
+                .map_err(|_| bad("EBX array", target - 4, "negative count"))?;
             if count > self.doc.data_end - target {
                 return Err(bad("EBX array", target, format!("{count} elements exceed EBXD")));
             }
             self.r.seek(target)?;
             let mut items = Vec::with_capacity(count);
             for _ in 0..count {
-                let element = self.r.pos;
+                let element = self.r.position();
                 items.push(self.value(f.ty(), f.class_ref, element)?);
                 match f.ty() {
                     FieldType::Structure => {
@@ -549,7 +523,7 @@ impl<'a> Values<'a> {
                         self.r.seek(element + usize::from(t.size))?;
                     }
                     FieldType::Pointer | FieldType::CString => {
-                        let p = align_up(self.r.pos, 8);
+                        let p = align_up(self.r.position(), 8);
                         self.r.seek(p)?;
                     }
                     _ => {}
@@ -567,33 +541,33 @@ impl<'a> Values<'a> {
             FieldType::Boolean => Value::Bool(r.u8()? != 0),
             FieldType::Int8 => Value::Int(i64::from(r.u8()? as i8)),
             FieldType::UInt8 => Value::UInt(u64::from(r.u8()?)),
-            FieldType::Int16 => Value::Int(i64::from(r.u16()? as i16)),
-            FieldType::UInt16 => Value::UInt(u64::from(r.u16()?)),
-            FieldType::Int32 | FieldType::Enumeration => Value::Int(i64::from(r.i32()?)),
-            FieldType::UInt32 => Value::UInt(u64::from(r.u32()?)),
-            FieldType::Int64 => Value::Int(r.i64()?),
-            FieldType::UInt64 => Value::UInt(r.u64()?),
-            FieldType::Float32 => Value::Float(f64::from(f32::from_le_bytes(r.arr()?))),
-            FieldType::Float64 => Value::Float(f64::from_le_bytes(r.arr()?)),
-            FieldType::Guid => Value::Guid(r.arr()?),
-            FieldType::Sha1 => Value::Sha1(r.arr()?),
-            FieldType::ResourceRef => Value::Resource(r.u64()?),
+            FieldType::Int16 => Value::Int(i64::from(r.u16(Endian::Little)? as i16)),
+            FieldType::UInt16 => Value::UInt(u64::from(r.u16(Endian::Little)?)),
+            FieldType::Int32 | FieldType::Enumeration => Value::Int(i64::from(r.i32(Endian::Little)?)),
+            FieldType::UInt32 => Value::UInt(u64::from(r.u32(Endian::Little)?)),
+            FieldType::Int64 => Value::Int(r.i64(Endian::Little)?),
+            FieldType::UInt64 => Value::UInt(r.u64(Endian::Little)?),
+            FieldType::Float32 => Value::Float(f64::from(f32::from_le_bytes(r.array()?))),
+            FieldType::Float64 => Value::Float(f64::from_le_bytes(r.array()?)),
+            FieldType::Guid => Value::Guid(r.array()?),
+            FieldType::Sha1 => Value::Sha1(r.array()?),
+            FieldType::ResourceRef => Value::Resource(r.u64(Endian::Little)?),
             FieldType::String => {
                 let raw = r.take(32)?;
                 let n = raw.iter().position(|&b| b == 0).unwrap_or(32);
                 Value::Str(raw[..n].to_vec())
             }
             FieldType::CString => {
-                let disp = r.u32()?;
+                let disp = r.u32(Endian::Little)?;
                 Value::Str(self.relative_string(position, disp)?)
             }
             FieldType::FileRef => {
-                let disp = r.u32()?;
+                let disp = r.u32(Endian::Little)?;
                 r.take(4)?;
                 Value::Str(self.relative_string(position, disp)?)
             }
             FieldType::Pointer => {
-                let encoded = r.i32()?;
+                let encoded = r.i32(Endian::Little)?;
                 if encoded == 0 {
                     Value::Pointer(Pointer::Null)
                 } else if encoded & 1 != 0 {
@@ -612,7 +586,7 @@ impl<'a> Values<'a> {
                 }
             }
             FieldType::TypeRef | FieldType::Delegate => {
-                let encoded = r.u32()?;
+                let encoded = r.u32(Endian::Little)?;
                 r.take(4)?;
                 if encoded == 0 {
                     Value::TypeRef(TypeRef {
@@ -639,9 +613,9 @@ impl<'a> Values<'a> {
                 }
             }
             FieldType::BoxedValueRef => {
-                let encoded_type = r.u32()?;
+                let encoded_type = r.u32(Endian::Little)?;
                 r.take(4)?;
-                let disp = r.i64()?;
+                let disp = r.i64(Endian::Little)?;
                 let target = (position + 8) as i64 + disp - self.doc.data_start as i64;
                 self.boxed_slots.push((position - self.doc.data_start) as u32);
                 Value::Boxed(BoxedRef {
@@ -663,20 +637,20 @@ impl<'a> Values<'a> {
         if !(self.doc.data_start as u64..self.doc.data_end as u64).contains(&target) {
             return Err(bad("EBX string", base, "displacement exceeds EBXD"));
         }
-        let saved = self.r.pos;
+        let saved = self.r.position();
         self.r.seek(target as usize)?;
         let s = self.r.c_string()?;
-        if self.r.pos > self.doc.data_end {
+        if self.r.position() > self.doc.data_end {
             return Err(bad("EBX string", target as usize, "exceeds EBXD"));
         }
-        self.r.pos = saved;
+        self.r.seek(saved)?;
         Ok(s)
     }
 }
 
 /// Reads an EBX document into typed values.
 pub fn read(bytes: &[u8]) -> Result<Document> {
-    let mut r = Cursor { d: bytes, pos: 0 };
+    let mut r = Cursor::new(bytes);
     let chunks = read_chunks(&mut r)?;
     let data = one_chunk(&chunks, EBXD, "EBXD", true)?.ok_or_else(|| bad("EBXD", 0, "missing"))?;
     let fixup = one_chunk(&chunks, EFIX, "EFIX", true)?.ok_or_else(|| bad("EFIX", 0, "missing"))?;
@@ -693,7 +667,7 @@ pub fn read(bytes: &[u8]) -> Result<Document> {
         return Err(bad("EBXD", data.begin, "alignment exceeds the chunk"));
     }
     r.seek(8)?;
-    let serialized_layout = r.u32be()? == EBXS;
+    let serialized_layout = r.u32(Endian::Big)? == EBXS;
     let mut doc = Document {
         file_guid: [0; 16],
         root_type: String::new(),
@@ -753,7 +727,7 @@ pub fn read(bytes: &[u8]) -> Result<Document> {
         }
         let mut v = Values {
             d: bytes,
-            r: Cursor { d: bytes, pos: 0 },
+            r: Cursor::new(bytes),
             doc: &doc,
             array_hashes,
             instance_at,
@@ -801,9 +775,9 @@ pub fn read(bytes: &[u8]) -> Result<Document> {
 
 /// The document's own GUID (what another document's import names it by), without reading the rest.
 pub fn read_file_guid(bytes: &[u8]) -> Result<[u8; 16]> {
-    let mut r = Cursor { d: bytes, pos: 0 };
+    let mut r = Cursor::new(bytes);
     let chunks = read_chunks(&mut r)?;
     let c = one_chunk(&chunks, EFIX, "EFIX", true)?.ok_or_else(|| bad("EFIX", 0, "missing"))?;
     r.seek(c.begin)?;
-    r.arr()
+    Ok(r.array()?)
 }

@@ -9,6 +9,8 @@
 //! every writer is the counterpart of the reader: an unmodified Patch read and written again is byte-identical.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+use primase_bytes::Endian;
+
 pub mod binding;
 pub mod bundle;
 pub mod bytecode;
@@ -82,6 +84,27 @@ pub fn bad(what: &'static str, offset: usize, detail: impl Into<String>) -> Erro
     }
 }
 
+/// A read past the data ([`primase_bytes`]): `what`'s error at the read's offset, naming how many bytes there are.
+pub(crate) fn past_end(what: &'static str, e: primase_bytes::BoundsError) -> Error {
+    let at = usize::try_from(e.absolute()).unwrap_or(usize::MAX);
+    match e {
+        primase_bytes::BoundsError::OutOfBounds { length, total, .. } => {
+            bad(what, at, format!("{length} bytes past the end ({total} bytes)"))
+        }
+        primase_bytes::BoundsError::LengthOverflow { count, stride, .. } => {
+            bad(what, at, format!("{count} entries of {stride} bytes overflow"))
+        }
+    }
+}
+
+/// A read past a document's bytes through [`primase_bytes::Cursor`] (the EBX decoder's): its error at the read's
+/// offset.
+impl From<primase_bytes::BoundsError> for Error {
+    fn from(e: primase_bytes::BoundsError) -> Self {
+        past_end("read", e)
+    }
+}
+
 /// Bounds-checked fixed-size reads, little and big endian.
 #[derive(Debug)]
 pub struct Rd<'a> {
@@ -95,41 +118,52 @@ impl<'a> Rd<'a> {
     }
 
     pub fn bytes(&self, at: usize, n: usize) -> Result<&'a [u8]> {
-        primase_bytes::View::new(self.data).slice(at, n).map_err(|_| {
-            bad(
-                self.what,
-                at,
-                format!("{n} bytes past the end ({} bytes)", self.data.len()),
-            )
-        })
+        primase_bytes::View::new(self.data)
+            .slice(at, n)
+            .map_err(|e| past_end(self.what, e))
     }
 
     pub fn arr<const N: usize>(&self, at: usize) -> Result<[u8; N]> {
-        let mut a = [0u8; N];
-        a.copy_from_slice(self.bytes(at, N)?);
-        Ok(a)
+        primase_bytes::View::new(self.data)
+            .array(at)
+            .map_err(|e| past_end(self.what, e))
     }
 
     pub fn u8(&self, at: usize) -> Result<u8> {
-        Ok(self.arr::<1>(at)?[0])
+        primase_bytes::View::new(self.data)
+            .u8(at)
+            .map_err(|e| past_end(self.what, e))
     }
     pub fn u16le(&self, at: usize) -> Result<u16> {
-        Ok(u16::from_le_bytes(self.arr(at)?))
+        self.number(at, Endian::Little, primase_bytes::View::u16)
     }
     pub fn u32le(&self, at: usize) -> Result<u32> {
-        Ok(u32::from_le_bytes(self.arr(at)?))
+        self.number(at, Endian::Little, primase_bytes::View::u32)
     }
     pub fn u64le(&self, at: usize) -> Result<u64> {
-        Ok(u64::from_le_bytes(self.arr(at)?))
+        self.number(at, Endian::Little, primase_bytes::View::u64)
     }
     pub fn u32be(&self, at: usize) -> Result<u32> {
-        Ok(u32::from_be_bytes(self.arr(at)?))
+        self.number(at, Endian::Big, primase_bytes::View::u32)
     }
     pub fn i32be(&self, at: usize) -> Result<i32> {
-        Ok(i32::from_be_bytes(self.arr(at)?))
+        self.number(at, Endian::Big, primase_bytes::View::i32)
     }
     pub fn u64be(&self, at: usize) -> Result<u64> {
-        Ok(u64::from_be_bytes(self.arr(at)?))
+        self.number(at, Endian::Big, primase_bytes::View::u64)
+    }
+    /// A number at `at` in byte order `e`, read by `read`.
+    fn number<T>(
+        &self,
+        at: usize,
+        e: Endian,
+        read: fn(
+            &primase_bytes::View<'a>,
+            usize,
+            Endian,
+        ) -> std::result::Result<T, primase_bytes::BoundsError>,
+    ) -> Result<T> {
+        read(&primase_bytes::View::new(self.data), at, e).map_err(|err| past_end(self.what, err))
     }
     /// A zero-terminated Latin-1 string starting at `at`.
     pub fn cstr(&self, at: usize) -> Result<String> {

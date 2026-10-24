@@ -18,7 +18,8 @@
 //! payload is recomputed on writing (and checked on reading), so it is not a field.
 
 use crate::cas::CasRaw;
-use crate::{Rd, Result, bad, capacity};
+use crate::{Result, bad, capacity, past_end};
+use primase_bytes::Endian;
 use primase_compress::Compressor;
 use sha1::{Digest, Sha1};
 
@@ -141,47 +142,46 @@ pub struct Fbmod {
     pub payloads: Vec<Vec<u8>>,
 }
 
+/// The mod's bytes read in order ([`primase_bytes::Cursor`], little-endian), a read past them refused as the mod's.
 struct Cur<'a> {
-    rd: Rd<'a>,
-    pos: usize,
+    c: primase_bytes::Cursor<'a>,
 }
 
 impl<'a> Cur<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let b = self.rd.bytes(self.pos, n)?;
-        self.pos += n;
-        Ok(b)
+        self.c.take(n).map_err(|e| past_end(W, e))
     }
     fn arr<const N: usize>(&mut self) -> Result<[u8; N]> {
-        let a = self.rd.arr(self.pos)?;
-        self.pos += N;
-        Ok(a)
+        self.c.array().map_err(|e| past_end(W, e))
     }
     fn u8(&mut self) -> Result<u8> {
-        Ok(self.arr::<1>()?[0])
+        self.c.u8().map_err(|e| past_end(W, e))
     }
     fn u32(&mut self) -> Result<u32> {
-        Ok(u32::from_le_bytes(self.arr()?))
+        self.c.u32(Endian::Little).map_err(|e| past_end(W, e))
     }
     fn i32(&mut self) -> Result<i32> {
-        Ok(i32::from_le_bytes(self.arr()?))
+        self.c.i32(Endian::Little).map_err(|e| past_end(W, e))
     }
     fn u64(&mut self) -> Result<u64> {
-        Ok(u64::from_le_bytes(self.arr()?))
+        self.c.u64(Endian::Little).map_err(|e| past_end(W, e))
+    }
+    fn position(&self) -> usize {
+        self.c.position()
     }
     fn count(&mut self, min_bytes: usize) -> Result<usize> {
         let n = self.u32()? as usize;
-        capacity(W, n, min_bytes, self.rd.data.len().saturating_sub(self.pos))
+        capacity(W, n, min_bytes, self.c.remaining())
     }
     fn string(&mut self) -> Result<String> {
-        let at = self.pos;
-        let rest = self.rd.data.get(at..).unwrap_or_default();
+        let at = self.position();
+        let rest = self.c.bytes().get(at..).unwrap_or_default();
         let end = rest
             .iter()
             .position(|&b| b == 0)
             .ok_or_else(|| bad(W, at, "unterminated string"))?;
         let s = std::str::from_utf8(&rest[..end]).map_err(|_| bad(W, at, "string is not UTF-8"))?;
-        self.pos += end + 1;
+        self.take(end + 1)?;
         Ok(s.to_owned())
     }
     fn u32s(&mut self) -> Result<Vec<u32>> {
@@ -199,8 +199,7 @@ fn sha1(data: &[u8]) -> [u8; 20] {
 /// of the file, and bytes after them.
 pub fn read(bytes: &[u8]) -> Result<Fbmod> {
     let mut c = Cur {
-        rd: Rd::new(bytes, W),
-        pos: 0,
+        c: primase_bytes::Cursor::new(bytes),
     };
     if c.arr::<8>()? != MAGIC {
         return Err(bad(W, 0, "not a FROSTY mod"));
@@ -221,12 +220,12 @@ pub fn read(bytes: &[u8]) -> Result<Fbmod> {
         details.push(c.string()?);
     }
     let [title, author, category, mod_version, description, link]: [String; 6] =
-        details.try_into().map_err(|_| bad(W, c.pos, "details"))?;
+        details.try_into().map_err(|_| bad(W, c.position(), "details"))?;
     // kind, index, name terminator, bundle count
     let n = c.count(10)?;
     let mut entries = Vec::with_capacity(n);
     for _ in 0..n {
-        let at = c.pos;
+        let at = c.position();
         let kind = c.u8()?;
         let index = c.i32()?;
         let name = c.string()?;
@@ -291,14 +290,19 @@ pub fn read(bytes: &[u8]) -> Result<Fbmod> {
             at,
         ));
     }
-    if c.pos != table_at {
+    if c.position() != table_at {
         return Err(bad(
             W,
-            c.pos,
+            c.position(),
             format!("entries end here, payload table at {table_at:#x}"),
         ));
     }
-    let mut spans = Vec::with_capacity(capacity(W, payload_count, 16, bytes.len().saturating_sub(c.pos))?);
+    let mut spans = Vec::with_capacity(capacity(
+        W,
+        payload_count,
+        16,
+        bytes.len().saturating_sub(c.position()),
+    )?);
     for _ in 0..payload_count {
         spans.push((c.u64()?, c.u64()?));
     }
@@ -308,21 +312,21 @@ pub fn read(bytes: &[u8]) -> Result<Fbmod> {
         if offset != next {
             return Err(bad(
                 W,
-                c.pos,
+                c.position(),
                 format!("payload {i} at {offset:#x}, expected {next:#x}"),
             ));
         }
         next = offset
             .checked_add(size)
-            .ok_or_else(|| bad(W, c.pos, format!("payload {i} size")))?;
-        let size = usize::try_from(size).map_err(|_| bad(W, c.pos, format!("payload {i} size")))?;
+            .ok_or_else(|| bad(W, c.position(), format!("payload {i} size")))?;
+        let size = usize::try_from(size).map_err(|_| bad(W, c.position(), format!("payload {i} size")))?;
         payloads.push(c.take(size)?.to_vec());
     }
-    if c.pos != bytes.len() {
+    if c.position() != bytes.len() {
         return Err(bad(
             W,
-            c.pos,
-            format!("{} bytes after the last payload", bytes.len() - c.pos),
+            c.position(),
+            format!("{} bytes after the last payload", bytes.len() - c.position()),
         ));
     }
     let mut out = Vec::with_capacity(entries.len());
