@@ -29,11 +29,11 @@
 //! An hour mask of zero means always on, as GTA does.
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::state::{Clause, Condition, Literal};
-use primase_core::{Entity, Instance, Light, LightKind, Name, Source, Transform, World};
+use primase_core::{Entity, Instance, Light, LightKind, Linear, Name, Source, Transform, World};
 
 use crate::components::GTA;
 use crate::components::{GtaLight, GtaLights, GtaSkeleton};
-use crate::passes::pose::Pose;
+use crate::passes::pose;
 use crate::passes::rect::{GroundRect, Hour, X0, X1, Y0, Y1};
 
 /// Which lights `lower-gta-lights` places, by their hours.
@@ -114,12 +114,6 @@ pub const LOWER_GTA_LIGHTS: PassSpec = PassSpec {
     ],
     make: |g| Ok(Box::new(LowerGtaLights::from_given(g)?)),
 };
-
-/// `v` taken by `pose` (rows `[x, y, z, translation]`), with its translation when `w` is 1.
-fn posed(pose: &Pose, v: [f32; 3], w: f32) -> [f32; 3] {
-    pose.map(|r| r[0] * v[0] + r[1] * v[1] + r[2] * v[2] + r[3] * w)
-}
-
 fn linear(c: u8) -> f32 {
     primase_image::srgb_to_linear(f64::from(c) / 255.0) as f32
 }
@@ -198,7 +192,10 @@ impl Pass for LowerGtaLights {
                 let (position, direction) = match bone {
                     Some(b) => {
                         log.count("lights placed by their bone's pose", 1);
-                        (posed(b, l.position, 1.0), posed(b, l.direction, 0.0))
+                        (
+                            pose::transform(b, l.position, 1.0),
+                            pose::transform(b, l.direction, 0.0),
+                        )
                     }
                     None => {
                         if l.bone_id != 0 {
@@ -214,11 +211,7 @@ impl Pass for LowerGtaLights {
                     log.count("lights outside the region", 1);
                     continue;
                 }
-                let dir = {
-                    let d = GTA.direction(direction);
-                    let m: [f32; 3] = std::array::from_fn(|r| (0..3).map(|c| t.cols[c][r] * d[c]).sum());
-                    m
-                };
+                let dir = Linear::of(t).point(GTA.direction(direction));
                 let kind = match l.kind {
                     2 => {
                         let (a, b) = (l.cone_inner_angle, l.cone_outer_angle);

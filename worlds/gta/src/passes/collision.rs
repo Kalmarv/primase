@@ -233,27 +233,6 @@ struct Soup {
     materials: Vec<u8>,
 }
 
-/// `p` through a child transform (columns x, y, z, translation).
-fn place(t: &[[f32; 3]; 4], p: [f32; 3]) -> [f32; 3] {
-    std::array::from_fn(|i| {
-        (f64::from(t[3][i]) + (0..3).map(|j| f64::from(t[j][i]) * f64::from(p[j])).sum::<f64>()) as f32
-    })
-}
-
-/// The determinant of a transform's linear part (columns x, y, z).
-fn determinant(t: &[[f32; 3]; 4]) -> f64 {
-    let c = |j: usize, i: usize| f64::from(t[j][i]);
-    c(0, 0) * (c(1, 1) * c(2, 2) - c(2, 1) * c(1, 2)) - c(1, 0) * (c(0, 1) * c(2, 2) - c(2, 1) * c(0, 2))
-        + c(2, 0) * (c(0, 1) * c(1, 2) - c(1, 1) * c(0, 2))
-}
-
-const IDENTITY: [[f32; 3]; 4] = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0., 0., 0.]];
-
-fn compose(a: &[[f32; 3]; 4], b: &[[f32; 3]; 4]) -> [[f32; 3]; 4] {
-    let lin = |v: [f32; 3]| -> [f32; 3] { std::array::from_fn(|i| (0..3).map(|j| a[j][i] * v[j]).sum()) };
-    [lin(b[0]), lin(b[1]), lin(b[2]), place(a, b[3])]
-}
-
 /// Unit sphere approximations: an octahedron subdivided once (18 vertices, 32 triangles), scaled per use.
 fn sphere_mesh() -> (Vec<[f32; 3]>, Vec<[u32; 3]>) {
     let mut v: Vec<[f32; 3]> = vec![
@@ -329,16 +308,13 @@ impl Soup {
     }
 
     /// An axis-aligned box.
-    fn add_aabb(&mut self, lo: [f32; 3], hi: [f32; 3], t: &[[f32; 3]; 4], material: u8) {
+    fn add_aabb(&mut self, lo: [f32; 3], hi: [f32; 3], material: u8) {
         let c = |x: bool, y: bool, z: bool| {
-            place(
-                t,
-                [
-                    if x { hi[0] } else { lo[0] },
-                    if y { hi[1] } else { lo[1] },
-                    if z { hi[2] } else { lo[2] },
-                ],
-            )
+            [
+                if x { hi[0] } else { lo[0] },
+                if y { hi[1] } else { lo[1] },
+                if z { hi[2] } else { lo[2] },
+            ]
         };
         self.add_cuboid(
             [
@@ -444,11 +420,10 @@ impl Soup {
 
     /// `local`'s triangles placed by `t`, into this soup; through a mirror (a negative determinant) each triangle's
     /// order is reversed, so its front stays counter-clockwise.
-    fn place_from(&mut self, local: &Soup, t: &[[f32; 3]; 4]) {
+    fn place_from(&mut self, local: &Soup, t: &Transform) {
         let base = self.positions.len() as u32;
-        self.positions
-            .extend(local.positions.iter().map(|p| place(t, *p)));
-        let mirrored = determinant(t) < 0.0;
+        self.positions.extend(local.positions.iter().map(|p| t.apply(*p)));
+        let mirrored = t.determinant() < 0.0;
         self.triangles.extend(local.triangles.iter().map(|tri| {
             let [a, b, c] = tri.map(|i| i + base);
             if mirrored { [a, c, b] } else { [a, b, c] }
@@ -459,7 +434,7 @@ impl Soup {
     /// A bound placed by `t` (GTA frame), into this soup. A leaf is built in its own space (its spheres, capsules and
     /// cylinders tessellated there) and its vertices placed by `t`, so a scaled or sheared transform shapes them as it
     /// does the triangles beside them.
-    fn bound(&mut self, b: &Bound, t: &[[f32; 3]; 4], volumes: FlaggedVolumes, log: &mut PassLog) {
+    fn bound(&mut self, b: &Bound, t: &Transform, volumes: FlaggedVolumes, log: &mut PassLog) {
         match &b.contents {
             Contents::Geometry(g) => {
                 let mut local = Soup::default();
@@ -484,7 +459,12 @@ impl Soup {
                     for (what, _) in &flagged {
                         log.count(&format!("composite children flagged {what}, kept"), 1);
                     }
-                    self.bound(&c.bound, &compose(t, &c.transform), volumes, log);
+                    self.bound(
+                        &c.bound,
+                        &t.compose(&Transform { cols: c.transform }),
+                        volumes,
+                        log,
+                    );
                 }
             }
             Contents::Primitive => {
@@ -498,11 +478,11 @@ impl Soup {
                     }
                     3 => {
                         log.count("box bounds as their box", 1);
-                        local.add_aabb(h.box_min, h.box_max, &IDENTITY, m);
+                        local.add_aabb(h.box_min, h.box_max, m);
                     }
                     _ => {
                         log.approximate("capsule, disc and cylinder bounds as their bounding boxes", 1);
-                        local.add_aabb(h.box_min, h.box_max, &IDENTITY, m);
+                        local.add_aabb(h.box_min, h.box_max, m);
                     }
                 }
                 self.place_from(&local, t);
@@ -631,7 +611,7 @@ impl Pass for LowerGtaCollision {
         for e in holders {
             let mut soup = Soup::default();
             let raw = w.remove::<GtaBounds>(e).expect("bounds");
-            soup.bound(&raw.bound, &IDENTITY, self.volumes, log);
+            soup.bound(&raw.bound, &Transform::IDENTITY, self.volumes, log);
             let c = soup.collision(&names, &mut surfaces, inside, log)?;
             if c.triangles.is_empty() {
                 log.count("bounds with no triangle in the region, left out", 1);
@@ -699,7 +679,7 @@ impl Pass for LowerGtaEmbeddedCollision {
             let mut soup = Soup::default();
             soup.bound(
                 &w.get::<GtaEmbeddedBounds>(e).expect("bounds").bound,
-                &IDENTITY,
+                &Transform::IDENTITY,
                 self.volumes,
                 log,
             );
@@ -793,7 +773,9 @@ mod tests {
         sphere.header.sphere_centre = [0.0; 3];
         sphere.header.sphere_radius = 1.0;
         for x in [1.0, -1.0] {
-            let t = [[x, 0., 0.], [0., 1., 0.], [0., 0., 1.], [5., 0., 0.]];
+            let t = Transform {
+                cols: [[x, 0., 0.], [0., 1., 0.], [0., 0., 1.], [5., 0., 0.]],
+            };
             let mut soup = Soup::default();
             soup.bound(&sphere, &t, FlaggedVolumes::KEEP, &mut PassLog::default());
             assert_eq!(soup.triangles.len(), 32);
@@ -866,7 +848,7 @@ mod tests {
             b.header.kind = kind;
             Child {
                 bound: Box::new(b),
-                transform: IDENTITY,
+                transform: Transform::IDENTITY.cols,
                 flags: [flags, 0],
                 flags_2: [0, 0],
             }
@@ -911,7 +893,7 @@ mod tests {
             );
             let mut soup = Soup::default();
             let mut log = PassLog::default();
-            soup.bound(&root, &IDENTITY, volumes, &mut log);
+            soup.bound(&root, &Transform::IDENTITY, volumes, &mut log);
             // box 12, sphere 32, capsule as its box 12, each kept flagged box 12
             assert_eq!(soup.triangles.len(), 12 + 32 + 12 + 12 * kept, "{options}");
             assert_eq!(
@@ -1147,7 +1129,12 @@ mod tests {
                 flags_2: [0, 0],
             }]);
             let mut soup = Soup::default();
-            soup.bound(&root, &IDENTITY, FlaggedVolumes::KEEP, &mut PassLog::default());
+            soup.bound(
+                &root,
+                &Transform::IDENTITY,
+                FlaggedVolumes::KEEP,
+                &mut PassLog::default(),
+            );
             for (axis, [lo, hi]) in want.iter().enumerate() {
                 let got = [
                     soup.positions

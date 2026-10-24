@@ -126,7 +126,8 @@ fn keep_length(stored: [f32; 3], turned: [f64; 3]) -> [f32; 3] {
     turned.map(|v| (v * k) as f32)
 }
 
-fn transform(r: &Pose, v: [f32; 3], w: f64) -> [f32; 3] {
+/// `v` with homogeneous `w` (1 a point, 0 a direction) through the pose, in f64 and rounded once.
+pub(crate) fn transform(r: &Pose, v: [f32; 3], w: f64) -> [f32; 3] {
     r.map(|row| {
         (f64::from(row[0]) * f64::from(v[0])
             + f64::from(row[1]) * f64::from(v[1])

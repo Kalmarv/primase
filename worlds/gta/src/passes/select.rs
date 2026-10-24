@@ -150,7 +150,7 @@ impl SelectRegion {
             return true;
         }
         let (c, h) = box_centre_half(a);
-        let centre = point(t, c);
+        let centre = t.apply(c);
         let half = half_extent(t, h);
         if !(half[0] <= REACH && half[1] <= REACH) {
             return false;
@@ -168,10 +168,6 @@ fn box_centre_half(a: &GtaArchetype) -> ([f32; 3], [f32; 3]) {
         std::array::from_fn(|i| (a.bb_min[i] + a.bb_max[i]) * 0.5),
         std::array::from_fn(|i| (a.bb_max[i] - a.bb_min[i]) * 0.5),
     )
-}
-
-fn point(t: &Transform, p: [f32; 3]) -> [f32; 3] {
-    std::array::from_fn(|i| t.cols[3][i] + t.cols[0][i] * p[0] + t.cols[1][i] * p[1] + t.cols[2][i] * p[2])
 }
 
 fn half_extent(t: &Transform, h: [f32; 3]) -> [f32; 3] {
@@ -346,7 +342,7 @@ impl Pass for SelectRegion {
                 continue;
             }
             let (cc, h) = box_centre_half(&c.arch);
-            let centre = point(&c.t, cc);
+            let centre = c.t.apply(cc);
             let mut half = half_extent(&c.t, h);
             if !(half[0] <= REACH && half[1] <= REACH) {
                 continue;
@@ -363,7 +359,7 @@ impl Pass for SelectRegion {
         let mut extent: Option<[f32; 4]> = None;
         for c in kept.iter().filter(|c| !drop.contains_key(&c.entity)) {
             let (cc, h) = box_centre_half(&c.arch);
-            let (centre, half) = (point(&c.t, cc), half_extent(&c.t, h));
+            let (centre, half) = (c.t.apply(cc), half_extent(&c.t, h));
             let (lo, hi) = if half[0] <= REACH && half[1] <= REACH {
                 (
                     [centre[0] - half[0], centre[1] - half[1]],
