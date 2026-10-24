@@ -8,7 +8,7 @@ use primase_core::{
     JointMap, Property, Rest, RigInstance, Skeleton, World,
 };
 
-use crate::pose::{Affine, Trs, affine, compose, evaluate, inverse, model_transforms, transform};
+use crate::pose::{Affine, Trs, affine, compose, evaluate, inverse, model_transforms};
 
 /// What `map-clip` does with a channel on a joint the map does not list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,8 +55,14 @@ pub enum Reparented {
 /// a clip bound (`core.clip_binding`) to a rig of the source skeleton: map, then bind. A clip of deltas
 /// ([`AdditiveReference::Identity`]) is mapped like any other (its values are unchanged, so it adds the same deltas to the
 /// target's joints), holds no source rest for the joints it does not drive (it adds nothing there), and is refused where a
-/// pair's hierarchy differs and `reparented=model-space` would re-key it (a delta has no model-space pose); a clip additive
-/// to a pose or a frame of a clip is refused, as its reference is not remapped. A pair whose hierarchy differs
+/// pair's hierarchy differs and `reparented=model-space` re-keys it (the joint's key is taken from the source posed at its
+/// rest plus the deltas and kept as a delta from the target's rest, an approximation counted); a clip additive to a pose or
+/// a frame of a clip is refused, as its reference is not remapped.
+///
+/// A clip this pass cannot map (it drives several skeletons, a joint the map does not list with `unmapped=refuse`, a pair
+/// whose hierarchy differs with `reparented=refuse`, a binding to a rig of the source skeleton, an additive reference) is
+/// left as it is on the source skeleton and reported through `PassLog::omit` (unsupported) with its reason; the other
+/// clips are mapped. Only a pass-wide fault (a joint map without a skeleton, two maps from one skeleton) is an error. A pair whose hierarchy differs
 /// is refused with `reparented=refuse` (the joints a clip drives) and moved by its model-space pose with
 /// `reparented=model-space` (every such pair, driven or not: the joint takes the source joint's model-space pose at
 /// each of the clip's key times, as local keys from its target parent's pose; see [`Reparented`]). A map's
@@ -211,175 +217,187 @@ impl Pass for MapClip {
             .collect();
         let clips: Vec<Entity> = w.iter::<Clip>().map(|(e, _)| e).collect();
         for c in clips {
-            let clip = w.get::<Clip>(c).ok_or("a clip is gone")?;
-            let skeletons: BTreeSet<Entity> = clip
-                .channels
-                .iter()
-                .filter_map(|ch| match ch.target {
-                    ClipTarget::Joint { skeleton, .. } => Some(skeleton),
-                    _ => None,
-                })
-                .collect();
-            let Some((from, map)) = skeletons.iter().find_map(|s| maps.get(s).map(|m| (*s, m))) else {
-                continue;
-            };
-            if skeletons.len() > 1 {
-                return Err(format!("clip {c:?} drives several skeletons"));
-            }
-            // an additive clip's reference is a pose or a frame of a clip of the source skeleton: not remapped here; a clip
-            // of deltas ([`AdditiveReference::Identity`]) has none
-            let deltas = clip.additive == Some(AdditiveReference::Identity);
-            if clip.additive.is_some() && !deltas {
-                return Err(format!("clip {c:?} is additive: not mapped"));
-            }
-            if let Some(&(_, rig)) = bound.iter().find(|(clip, rig)| {
-                *clip == c && w.get::<RigInstance>(*rig).is_some_and(|r| r.skeleton == from)
-            }) {
-                return Err(format!(
-                    "clip {c:?} is bound to rig {rig:?} of the source skeleton: map the clip, then bind it"
-                ));
-            }
-            if self.rests == Rests::Source
-                && self.reparented == Reparented::Refuse
-                && let Some((&a, &b)) = map.pairs.iter().find(|(a, b)| !map.corresponds(**a, **b))
-            {
-                return Err(refuse(a, b));
-            }
-            // the pairs whose hierarchy differs, moved by their model-space pose
-            let baked: BTreeSet<JointId> = match self.reparented {
-                Reparented::Refuse => BTreeSet::new(),
-                Reparented::ModelSpace => map
-                    .pairs
+            // one clip this pass cannot map is left as it is and reported, not an error of the pass: the other clips
+            // are still mapped
+            let outcome = (|| -> Result<(), String> {
+                let clip = w.get::<Clip>(c).ok_or("the clip is gone")?;
+                let skeletons: BTreeSet<Entity> = clip
+                    .channels
                     .iter()
-                    .filter(|(a, b)| !map.corresponds(**a, **b))
-                    .map(|(a, _)| *a)
-                    .collect(),
-            };
-            if deltas && !baked.is_empty() {
-                return Err(format!(
-                    "clip {c:?} is additive: its deltas are not re-keyed by a model-space pose (reparented=model-space)"
-                ));
-            }
-            let clip_for_keys = clip.clone();
-            let mut mapped = clip.clone();
-            let mut dropped = 0u64;
-            let mut channels = Vec::with_capacity(mapped.channels.len());
-            let mut driven: BTreeSet<(JointId, Property)> = BTreeSet::new();
-            for mut ch in mapped.channels {
-                if let ClipTarget::Joint { joint, .. } = ch.target {
-                    if baked.contains(&joint) {
-                        // replaced by the keys below
-                        continue;
-                    }
-                    let Some(&target) = map.pairs.get(&joint) else {
-                        match self.unmapped {
-                            Unmapped::Refuse => {
-                                return Err(format!(
-                                    "clip {c:?} drives joint {joint:?}, which the map does not list"
-                                ));
-                            }
-                            Unmapped::Drop => {
-                                dropped += 1;
-                                continue;
-                            }
-                        }
-                    };
-                    if !map.corresponds(joint, target) {
-                        return Err(refuse(joint, target));
-                    }
-                    ch.target = ClipTarget::Joint {
-                        skeleton: map.to,
-                        joint: target,
-                    };
-                    driven.insert((target, ch.property));
+                    .filter_map(|ch| match ch.target {
+                        ClipTarget::Joint { skeleton, .. } => Some(skeleton),
+                        _ => None,
+                    })
+                    .collect();
+                let Some((from, map)) = skeletons.iter().find_map(|s| maps.get(s).map(|m| (*s, m))) else {
+                    return Ok(());
+                };
+                if skeletons.len() > 1 {
+                    return Err("it drives several skeletons".to_owned());
                 }
-                channels.push(ch);
-            }
-            if !baked.is_empty() {
-                let keys = model_space_keys(&clip_for_keys, from, map, &baked)?;
-                for k in keys {
-                    channels.push(Channel {
-                        target: ClipTarget::Joint {
-                            skeleton: map.to,
-                            joint: k.joint,
-                        },
-                        property: k.property,
-                        interpolation: Interpolation::Linear,
-                        times: k.times,
-                        values: k.values,
-                    });
-                    driven.insert((k.joint, k.property));
+                // an additive clip's reference is a pose or a frame of a clip of the source skeleton: not remapped here; a clip
+                // of deltas ([`AdditiveReference::Identity`]) has none
+                let deltas = clip.additive == Some(AdditiveReference::Identity);
+                if clip.additive.is_some() && !deltas {
+                    return Err(
+                        "it is additive to a pose or a frame of a clip, whose reference is not remapped"
+                            .to_owned(),
+                    );
                 }
-                log.count(
-                    "joints moved by the source's model-space pose at the clip's keys (their parent is not the source parent's target)",
-                    baked.len() as u64,
-                );
-                log.approximate(
-                    "joints whose hierarchy differs are keyed at the clip's key times; between keys their local transforms interpolate, not the source's model-space pose",
-                    baked.len() as u64,
-                );
-            }
-            // the target follows the source: undriven mapped joints held at the source's rests
-            let mut held = 0u64;
-            // a clip of deltas adds nothing where it has no channel: no rest is held for it
-            if self.rests == Rests::Source && !deltas {
-                for (&a, &b) in &map.pairs {
-                    let src = Trs::of(&map.from_rest[&a]).map_err(|e| format!("joint {a:?}: {e}"))?;
-                    // a target rest with no TRS form (a bone scaled to nothing) differs from every source rest
-                    let dst = Trs::of(&map.to_rest[&b]).ok();
-                    let away = |n: usize| vec![f64::INFINITY; n];
-                    let parts = [
-                        (
-                            Property::Translation,
-                            src.translation.to_vec(),
-                            dst.map_or_else(|| away(3), |d| d.translation.to_vec()),
-                            false,
-                        ),
-                        (
-                            Property::Rotation,
-                            src.rotation.to_vec(),
-                            dst.map_or_else(|| away(4), |d| d.rotation.to_vec()),
-                            true,
-                        ),
-                        (
-                            Property::Scale,
-                            src.scale.to_vec(),
-                            dst.map_or_else(|| away(3), |d| d.scale.to_vec()),
-                            false,
-                        ),
-                    ];
-                    let mut any = false;
-                    for (property, s, d, rotation) in parts {
-                        if driven.contains(&(b, property)) || apart(&s, &d, rotation) <= REST_TOLERANCE {
+                if let Some(&(_, rig)) = bound.iter().find(|(clip, rig)| {
+                    *clip == c && w.get::<RigInstance>(*rig).is_some_and(|r| r.skeleton == from)
+                }) {
+                    return Err(format!(
+                        "it is bound to rig {rig:?} of the source skeleton: map the clip, then bind it"
+                    ));
+                }
+                if self.rests == Rests::Source
+                    && self.reparented == Reparented::Refuse
+                    && let Some((&a, &b)) = map.pairs.iter().find(|(a, b)| !map.corresponds(**a, **b))
+                {
+                    return Err(refuse(a, b));
+                }
+                // the pairs whose hierarchy differs, moved by their model-space pose
+                let baked: BTreeSet<JointId> = match self.reparented {
+                    Reparented::Refuse => BTreeSet::new(),
+                    Reparented::ModelSpace => map
+                        .pairs
+                        .iter()
+                        .filter(|(a, b)| !map.corresponds(**a, **b))
+                        .map(|(a, _)| *a)
+                        .collect(),
+                };
+                let clip_for_keys = clip.clone();
+                let mut mapped = clip.clone();
+                let mut dropped = 0u64;
+                let mut channels = Vec::with_capacity(mapped.channels.len());
+                let mut driven: BTreeSet<(JointId, Property)> = BTreeSet::new();
+                for mut ch in mapped.channels {
+                    if let ClipTarget::Joint { joint, .. } = ch.target {
+                        if baked.contains(&joint) {
+                            // replaced by the keys below
                             continue;
                         }
+                        let Some(&target) = map.pairs.get(&joint) else {
+                            match self.unmapped {
+                                Unmapped::Refuse => {
+                                    return Err(format!(
+                                        "it drives joint {joint:?}, which the map does not list (unmapped=refuse)"
+                                    ));
+                                }
+                                Unmapped::Drop => {
+                                    dropped += 1;
+                                    continue;
+                                }
+                            }
+                        };
+                        if !map.corresponds(joint, target) {
+                            return Err(refuse(joint, target));
+                        }
+                        ch.target = ClipTarget::Joint {
+                            skeleton: map.to,
+                            joint: target,
+                        };
+                        driven.insert((target, ch.property));
+                    }
+                    channels.push(ch);
+                }
+                if !baked.is_empty() {
+                    let keys = model_space_keys(&clip_for_keys, from, map, &baked, deltas)?;
+                    for k in keys {
                         channels.push(Channel {
                             target: ClipTarget::Joint {
                                 skeleton: map.to,
-                                joint: b,
+                                joint: k.joint,
                             },
-                            property,
-                            interpolation: Interpolation::Step,
-                            times: vec![0.0],
-                            values: s.iter().map(|&x| x as f32).collect(),
+                            property: k.property,
+                            interpolation: Interpolation::Linear,
+                            times: k.times,
+                            values: k.values,
                         });
-                        any = true;
+                        driven.insert((k.joint, k.property));
                     }
-                    held += u64::from(any);
-                }
-            }
-            mapped.channels = channels;
-            log.count("clips mapped onto another skeleton", 1);
-            if held > 0 {
-                log.count("undriven joints held at the source skeleton's rest", held);
-            }
-            if dropped > 0 {
-                log.omit(
-                    "clip channels on joints the map does not list (unmapped=drop)",
-                    dropped,
+                    log.count(
+                    "joints moved by the source's model-space pose at the clip's keys (their parent is not the source parent's target)",
+                    baked.len() as u64,
                 );
+                    log.approximate(
+                    "joints whose hierarchy differs are keyed at the clip's key times; between keys their local transforms interpolate, not the source's model-space pose",
+                    baked.len() as u64,
+                );
+                    if deltas {
+                        log.approximate(
+                        "joints of a clip of deltas whose hierarchy differs are keyed from the source posed at its rest plus the deltas, measured at the source's rest pose, as deltas from the target's rest; added to another base they are not the source's pose there",
+                        baked.len() as u64,
+                    );
+                    }
+                }
+                // the target follows the source: undriven mapped joints held at the source's rests
+                let mut held = 0u64;
+                // a clip of deltas adds nothing where it has no channel: no rest is held for it
+                if self.rests == Rests::Source && !deltas {
+                    for (&a, &b) in &map.pairs {
+                        let src = Trs::of(&map.from_rest[&a]).map_err(|e| format!("joint {a:?}: {e}"))?;
+                        // a target rest with no TRS form (a bone scaled to nothing) differs from every source rest
+                        let dst = Trs::of(&map.to_rest[&b]).ok();
+                        let away = |n: usize| vec![f64::INFINITY; n];
+                        let parts = [
+                            (
+                                Property::Translation,
+                                src.translation.to_vec(),
+                                dst.map_or_else(|| away(3), |d| d.translation.to_vec()),
+                                false,
+                            ),
+                            (
+                                Property::Rotation,
+                                src.rotation.to_vec(),
+                                dst.map_or_else(|| away(4), |d| d.rotation.to_vec()),
+                                true,
+                            ),
+                            (
+                                Property::Scale,
+                                src.scale.to_vec(),
+                                dst.map_or_else(|| away(3), |d| d.scale.to_vec()),
+                                false,
+                            ),
+                        ];
+                        let mut any = false;
+                        for (property, s, d, rotation) in parts {
+                            if driven.contains(&(b, property)) || apart(&s, &d, rotation) <= REST_TOLERANCE {
+                                continue;
+                            }
+                            channels.push(Channel {
+                                target: ClipTarget::Joint {
+                                    skeleton: map.to,
+                                    joint: b,
+                                },
+                                property,
+                                interpolation: Interpolation::Step,
+                                times: vec![0.0],
+                                values: s.iter().map(|&x| x as f32).collect(),
+                            });
+                            any = true;
+                        }
+                        held += u64::from(any);
+                    }
+                }
+                mapped.channels = channels;
+                log.count("clips mapped onto another skeleton", 1);
+                if held > 0 {
+                    log.count("undriven joints held at the source skeleton's rest", held);
+                }
+                if dropped > 0 {
+                    log.omit(
+                        "clip channels on joints the map does not list (unmapped=drop)",
+                        dropped,
+                    );
+                }
+                w.insert(c, mapped);
+                Ok(())
+            })();
+            if let Err(why) = outcome {
+                log.omit(&format!("clips left unmapped on the source skeleton: {why}"), 1);
             }
-            w.insert(c, mapped);
         }
         Ok(())
     }
@@ -403,6 +421,7 @@ fn model_space_keys(
     from: Entity,
     map: &Map,
     baked: &BTreeSet<JointId>,
+    deltas: bool,
 ) -> Result<Vec<Keyed>, String> {
     let mut times: Vec<f32> = clip
         .channels
@@ -479,7 +498,21 @@ fn model_space_keys(
                 }
                 None => target[&b],
             };
-            let trs = Trs::of(&Rest::Affine(transform(&local))).map_err(|e| format!("joint {b:?}: {e}"))?;
+            let mut trs = Trs::of_affine(&local).map_err(|e| format!("joint {b:?}: {e}"))?;
+            if deltas {
+                // a clip of deltas adds to the target's rest: the key is what turns the rest into the posed joint
+                let at_rest = Trs::of(&map.to_rest[&b]).map_err(|e| format!("joint {b:?}'s rest: {e}"))?;
+                if at_rest.scale.contains(&0.0) {
+                    return Err(format!(
+                        "joint {b:?}: a delta of a scale from a rest scale of zero"
+                    ));
+                }
+                trs = Trs {
+                    translation: std::array::from_fn(|k| trs.translation[k] - at_rest.translation[k]),
+                    rotation: crate::quat::mul(crate::quat::inverse(at_rest.rotation), trs.rotation),
+                    scale: std::array::from_fn(|k| trs.scale[k] / at_rest.scale[k]),
+                };
+            }
             keys.entry(b).or_default().push(trs);
         }
     }
@@ -689,24 +722,136 @@ mod tests {
         }
     }
 
+    /// The reasons a pass left clips unmapped, as reported (`PassLog::omit`, unsupported).
+    fn left_unmapped(report: &RunReport) -> Vec<String> {
+        report.steps[0]
+            .log
+            .omitted
+            .keys()
+            .filter(|k| k.starts_with("clips left unmapped"))
+            .cloned()
+            .collect()
+    }
+
+    /// A clip the pass cannot map is left as it is on the source skeleton and reported with its reason: the pass does not
+    /// fail, and the clips it can map are mapped.
     #[test]
-    fn map_clip_refuses_what_it_cannot_map_exactly() {
+    fn map_clip_leaves_a_clip_it_cannot_map_exactly_and_reports_why() {
         // 3 -> 40: 40's parent is 10, not 2's target 20
-        let (mut w, ..) = world(&[(1, 10), (2, 20), (3, 40)]);
-        let err = run(&mut w, "map-clip{unmapped=refuse,rests=target,reparented=refuse}").unwrap_err();
-        assert!(err.contains("does not map to the target's parent"), "{err}");
-        // 3 unmapped: refused, or dropped and counted
+        let (mut w, a, _, clip) = world(&[(1, 10), (2, 20), (3, 40)]);
+        let before = w.get::<Clip>(clip).unwrap().clone();
+        let report = run(&mut w, "map-clip{unmapped=refuse,rests=target,reparented=refuse}").unwrap();
+        let why = left_unmapped(&report);
+        assert!(
+            why.len() == 1 && why[0].contains("does not map to the target's parent"),
+            "{why:?}"
+        );
+        assert_eq!(
+            w.get::<Clip>(clip).unwrap(),
+            &before,
+            "the clip is left as it was"
+        );
+        assert!(
+            w.get::<Clip>(clip)
+                .unwrap()
+                .channels
+                .iter()
+                .all(|c| matches!(c.target, ClipTarget::Joint { skeleton, .. } if skeleton == a))
+        );
+        // 3 unmapped: left and reported, or dropped and counted
         let (mut w, _, _, clip) = world(&[(1, 10), (2, 20)]);
-        let err = run(&mut w, "map-clip{unmapped=refuse,rests=target,reparented=refuse}").unwrap_err();
-        assert!(err.contains("which the map does not list"), "{err}");
+        let report = run(&mut w, "map-clip{unmapped=refuse,rests=target,reparented=refuse}").unwrap();
+        let why = left_unmapped(&report);
+        assert!(
+            why.len() == 1 && why[0].contains("which the map does not list"),
+            "{why:?}"
+        );
         let report = run(&mut w, "map-clip{unmapped=drop,rests=target,reparented=refuse}").unwrap();
         assert_eq!(w.get::<Clip>(clip).unwrap().channels.len(), 1);
         assert_eq!(
             report.steps[0].log.omitted["clip channels on joints the map does not list (unmapped=drop)"],
             1
         );
-        // a clip of deltas is mapped with its values unchanged, holds no source rest for the joints it does not drive, and
-        // is refused where model-space re-keying would apply
+        // an additive clip's reference is not remapped
+        let (mut w, _, _, clip) = world(&[(1, 10), (2, 20), (3, 30)]);
+        let reference = w.spawn();
+        let plain = w.get::<Clip>(clip).unwrap().clone();
+        w.insert(reference, plain);
+        w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::ClipFrame {
+            clip: reference,
+            time: 0.0,
+        });
+        let report = run(&mut w, "map-clip{unmapped=refuse,rests=target,reparented=refuse}").unwrap();
+        let why = left_unmapped(&report);
+        assert!(why.len() == 1 && why[0].contains("additive"), "{why:?}");
+        // bound to a rig of the source skeleton: map first
+        let (mut w, a, _, clip) = world(&[(1, 10), (2, 20), (3, 30)]);
+        let rig = w.spawn();
+        w.insert(rig, RigInstance { skeleton: a });
+        w.insert(rig, Transform::IDENTITY);
+        let bind = w.spawn();
+        w.insert(
+            bind,
+            ClipBinding {
+                clip,
+                rig: Some(rig),
+                meshes: Vec::new(),
+            },
+        );
+        let report = run(&mut w, "map-clip{unmapped=refuse,rests=target,reparented=refuse}").unwrap();
+        let why = left_unmapped(&report);
+        assert!(
+            why.len() == 1 && why[0].contains("map the clip, then bind it"),
+            "{why:?}"
+        );
+    }
+
+    /// One clip among good ones that the pass cannot map does not fail the pass: the good ones are mapped onto the target,
+    /// the bad one stays on the source skeleton and is reported once, with its reason.
+    #[test]
+    fn one_unmappable_clip_among_good_ones_leaves_the_good_ones_mapped() {
+        let (mut w, a, b, bad) = world(&[(1, 10), (2, 20)]);
+        // `bend` drives joint 3, which this map does not list; the two others drive joint 2 only
+        let mut good = Vec::new();
+        for name in ["good one", "good two"] {
+            let e = w.spawn();
+            let mut clip = w.get::<Clip>(bad).unwrap().clone();
+            clip.name = name.into();
+            clip.channels.truncate(1);
+            w.insert(e, clip);
+            good.push(e);
+        }
+        assert_eq!(w.verify_components(), vec![]);
+        let report = run(&mut w, "map-clip{unmapped=refuse,rests=target,reparented=refuse}").unwrap();
+        for e in good {
+            let clip = w.get::<Clip>(e).unwrap();
+            assert!(
+                clip.channels
+                    .iter()
+                    .all(|c| matches!(c.target, ClipTarget::Joint { skeleton, .. } if skeleton == b)),
+                "{}",
+                clip.name
+            );
+        }
+        assert!(
+            w.get::<Clip>(bad)
+                .unwrap()
+                .channels
+                .iter()
+                .all(|c| matches!(c.target, ClipTarget::Joint { skeleton, .. } if skeleton == a))
+        );
+        assert_eq!(
+            report.steps[0].log.counts["clips mapped onto another skeleton"],
+            2
+        );
+        let why = left_unmapped(&report);
+        assert!(why.len() == 1 && why[0].contains("joint"), "{why:?}");
+        assert_eq!(report.steps[0].log.omitted[&why[0]], 1);
+    }
+
+    /// A clip of deltas is mapped with its values unchanged and holds no source rest for the joints it does not drive.
+    #[test]
+    fn map_clip_maps_a_clip_of_deltas_without_holding_rests() {
         let (mut w, _, b, clip) = world(&[(1, 10), (2, 20), (3, 30)]);
         w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::Identity);
         let before = w.get::<Clip>(clip).unwrap().channels.clone();
@@ -731,35 +876,78 @@ mod tests {
             );
             assert!(matches!(m.target, ClipTarget::Joint { skeleton, .. } if skeleton == b));
         }
-        let (mut w, _, _, clip) = world(&[(1, 10), (2, 20), (3, 40)]);
+    }
+
+    /// A clip of deltas on a pair whose hierarchy differs (joint 3 maps to 40, under 10 and not under 3's parent's target 20):
+    /// hand-worked. The source posed at its rest plus the deltas: joint 3's local translation is its rest (0, 1, 0) plus the
+    /// delta, (0, 1, 0) at 0 s and (0, 1.5, 0) at 1 s, and joint 2 turns a quarter about z by 1 s, so joint 3 stands at
+    /// (0, 3, 0) at 0 s and (-2.5, 1, 0) at 1 s in the model, a quarter turn about z at 1 s. Joint 40 takes that pose under 10
+    /// (at the origin, unturned); as deltas from its rest, (0, 5, 0) unturned, (0, -2, 0) and (-2.5, -4, 0), the turn at 1 s.
+    #[test]
+    fn a_clip_of_deltas_on_a_pair_whose_hierarchy_differs_is_keyed_as_deltas_from_the_targets_rest() {
+        let (mut w, _, b, clip) = world(&[(1, 10), (2, 20), (3, 40)]);
         w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::Identity);
-        let err = run(
+        let report = run(
             &mut w,
-            "map-clip{unmapped=refuse,rests=target,reparented=model-space}",
+            "map-clip{unmapped=refuse,rests=source,reparented=model-space}",
         )
-        .unwrap_err();
-        assert!(err.contains("not re-keyed by a model-space pose"), "{err}");
-        // an additive clip's reference is not remapped: refused, as retarget-clip does
-        let (mut w, _, _, clip) = world(&[(1, 10), (2, 20), (3, 30)]);
-        w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::ClipFrame { clip, time: 0.0 });
-        let err = run(&mut w, "map-clip{unmapped=refuse,rests=target,reparented=refuse}").unwrap_err();
-        assert!(err.contains("additive"), "{err}");
-        // bound to a rig of the source skeleton: map first
-        let (mut w, a, _, clip) = world(&[(1, 10), (2, 20), (3, 30)]);
-        let rig = w.spawn();
-        w.insert(rig, RigInstance { skeleton: a });
-        w.insert(rig, Transform::IDENTITY);
-        let bind = w.spawn();
-        w.insert(
-            bind,
-            ClipBinding {
-                clip,
-                rig: Some(rig),
-                meshes: Vec::new(),
-            },
+        .unwrap();
+        assert!(left_unmapped(&report).is_empty(), "{:?}", left_unmapped(&report));
+        let mapped = w.get::<Clip>(clip).unwrap();
+        assert_eq!(mapped.additive, Some(AdditiveReference::Identity));
+        let of = |joint: u32, property: Property| {
+            mapped
+                .channels
+                .iter()
+                .find(|c| {
+                    c.property == property
+                        && matches!(c.target, ClipTarget::Joint { skeleton, joint: j } if skeleton == b && j == JointId(joint))
+                })
+                .unwrap_or_else(|| panic!("no {property:?} channel on joint {joint}"))
+        };
+        let close =
+            |a: &[f32], e: &[f32]| a.len() == e.len() && a.iter().zip(e).all(|(x, y)| (x - y).abs() < 1e-5);
+        let t = of(40, Property::Translation);
+        assert_eq!(t.times, [0.0, 1.0]);
+        assert!(
+            close(&t.values, &[0.0, -2.0, 0.0, -2.5, -4.0, 0.0]),
+            "{:?}",
+            t.values
         );
-        let err = run(&mut w, "map-clip{unmapped=refuse,rests=target,reparented=refuse}").unwrap_err();
-        assert!(err.contains("map the clip, then bind it"), "{err}");
+        let r = of(40, Property::Rotation);
+        assert!(
+            close(&r.values, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, S, S]),
+            "{:?}",
+            r.values
+        );
+        // the clip states no scale, so no key of the joint's scale is a change: exactly 1, whatever the turn
+        let scale = of(40, Property::Scale);
+        assert!(
+            scale.values.iter().all(|&v| v == 1.0),
+            "{:?} at {:?}",
+            scale.values,
+            scale.times
+        );
+        // joint 2 maps as it was: its own key, unchanged
+        assert!(close(
+            &of(20, Property::Rotation).values,
+            &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, S, S]
+        ));
+        // no rest is held for a clip of deltas, and the approximation names what it assumes
+        assert!(
+            !report.steps[0]
+                .log
+                .counts
+                .contains_key("undriven joints held at the source skeleton's rest")
+        );
+        assert!(report.steps[0].log.approximations.keys().any(|k| {
+            k.contains("clip of deltas whose hierarchy differs")
+                && k.contains("measured at the source's rest pose")
+        }));
+    }
+
+    #[test]
+    fn map_clip_refuses_what_is_wrong_with_the_pass() {
         // a joint mapped twice is refused by the map's own check
         let (mut w, ..) = world(&[(1, 10), (2, 20)]);
         let (m, _) = w.iter::<JointMap>().next().unwrap();
@@ -954,12 +1142,17 @@ mod tests {
         }
     }
 
-    /// Without the option the clip that drives a reparented joint is refused, as before.
+    /// Without the option the clip that drives a reparented joint is left unmapped with the reason, as a clip this pass cannot
+    /// map exactly is.
     #[test]
-    fn a_reparented_joint_the_clip_drives_is_refused_without_model_space() {
+    fn a_reparented_joint_the_clip_drives_is_left_unmapped_without_model_space() {
         let (mut w, _, _, _) = reparented_world(true);
-        let err = run(&mut w, "map-clip{unmapped=refuse,rests=target,reparented=refuse}").unwrap_err();
-        assert!(err.contains("a different hierarchy"), "{err}");
+        let report = run(&mut w, "map-clip{unmapped=refuse,rests=target,reparented=refuse}").unwrap();
+        let why = left_unmapped(&report);
+        assert!(
+            why.len() == 1 && why[0].contains("a different hierarchy"),
+            "{why:?}"
+        );
         let e = run(
             &mut reparented_world(true).0,
             "map-clip{unmapped=refuse,rests=target}",

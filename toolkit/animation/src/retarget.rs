@@ -252,219 +252,235 @@ impl Pass for RetargetClip {
             .collect();
         let clips: Vec<Entity> = w.iter::<Clip>().map(|(e, _)| e).collect();
         for c in clips {
-            let clip = w.get::<Clip>(c).ok_or("a clip is gone")?.clone();
-            let skeletons: BTreeSet<Entity> = clip
-                .channels
-                .iter()
-                .filter_map(|ch| match ch.target {
-                    ClipTarget::Joint { skeleton, .. } => Some(skeleton),
-                    _ => None,
-                })
-                .collect();
-            let candidates: Vec<&JointMap> = maps.iter().filter(|m| skeletons.contains(&m.from)).collect();
-            let map = match candidates.as_slice() {
-                [] => continue,
-                [m] => *m,
-                _ => return Err(format!("clip {c:?}: several joint maps from its skeleton")),
-            };
-            if skeletons.len() > 1 {
-                return Err(format!("clip {c:?} drives several skeletons"));
-            }
-            let deltas = clip.additive == Some(AdditiveReference::Identity);
-            if clip.additive.is_some() && !deltas {
-                return Err(format!("clip {c:?} is additive: not retargeted"));
-            }
-            if deltas && self.reference == Reference::Aligned {
-                return Err(format!(
-                    "clip {c:?} is additive: its deltas are added to the target's rest, which reference=aligned does not \
-                     measure from: use reference=rest"
-                ));
-            }
-            if bound.iter().any(|(clip, rig)| {
-                *clip == c && w.get::<RigInstance>(*rig).is_some_and(|r| r.skeleton == map.from)
-            }) {
-                return Err(format!(
-                    "clip {c:?} is bound to a rig of the source skeleton: retarget, then bind"
-                ));
-            }
-            let source = w
-                .get::<Skeleton>(map.from)
-                .ok_or("the map's source is no skeleton")?;
-            let target = w
-                .get::<Skeleton>(map.to)
-                .ok_or("the map's target is no skeleton")?;
-            let pairs: BTreeMap<JointId, JointId> = map.pairs.iter().copied().collect();
-            let source_ref = model_transforms(source, &locals(source, None)).map_err(|e| e.0)?;
-            let target_ref_local = reference_locals(self.reference, &source_ref, target, &pairs)?;
-            let target_ref = {
-                let rests: BTreeMap<JointId, Rest> = target_ref_local
+            // one clip this pass cannot retarget is left as it is and reported, not an error of the pass: the other clips
+            // are still retargeted
+            let outcome = (|| -> Result<(), String> {
+                let clip = w.get::<Clip>(c).ok_or("the clip is gone")?.clone();
+                let skeletons: BTreeSet<Entity> = clip
+                    .channels
                     .iter()
-                    .map(|(j, m)| (*j, Rest::Affine(crate::pose::transform(m))))
+                    .filter_map(|ch| match ch.target {
+                        ClipTarget::Joint { skeleton, .. } => Some(skeleton),
+                        _ => None,
+                    })
                     .collect();
-                model_transforms(target, &rests).map_err(|e| e.0)?
-            };
-            let order = parents_first(target)?;
-            let target_parent: BTreeMap<JointId, Option<JointId>> =
-                target.joints.iter().map(|j| (j.id, j.parent)).collect();
-            // the root: the mapped joint every other mapped joint is below (the first in parents-first order, checked)
-            let first = order
-                .iter()
-                .map(|&i| target.joints[i].id)
-                .find(|j| pairs.values().any(|t| t == j));
-            let below = |mut at: JointId, top: JointId| loop {
-                if at == top {
-                    break true;
+                let candidates: Vec<&JointMap> =
+                    maps.iter().filter(|m| skeletons.contains(&m.from)).collect();
+                let map = match candidates.as_slice() {
+                    [] => return Ok(()),
+                    [m] => *m,
+                    _ => return Err("several joint maps start from its skeleton".to_owned()),
+                };
+                if skeletons.len() > 1 {
+                    return Err("it drives several skeletons".to_owned());
                 }
-                match target_parent[&at] {
-                    Some(p) => at = p,
-                    None => break false,
+                let deltas = clip.additive == Some(AdditiveReference::Identity);
+                if clip.additive.is_some() && !deltas {
+                    return Err(
+                        "it is additive to a pose or a frame of a clip, whose reference is not retargeted"
+                            .to_owned(),
+                    );
                 }
-            };
-            let root = match first {
-                Some(r) if pairs.values().all(|&t| below(t, r)) => Some(r),
-                Some(r) if self.translation == Translation::Root => {
-                    return Err(format!(
-                        "clip {c:?}: the mapped joints have no common root (joint {r:?} is not above all of them): \
-                         translation=none moves none"
-                    ));
+                if deltas && self.reference == Reference::Aligned {
+                    return Err(
+                    "it is a clip of deltas, added to the target's rest, which reference=aligned does not measure from: use reference=rest"
+                        .to_owned(),
+                );
                 }
-                _ => None,
-            };
-            let back: BTreeMap<JointId, JointId> = pairs.iter().map(|(a, b)| (*b, *a)).collect();
-            let scale = match (self.translation, root) {
-                (Translation::Root, Some(r)) => {
-                    let (s, t) = (source_ref[&back[&r]][3][1], target_ref[&r][3][1]);
-                    if s.abs() < 1e-9 {
-                        return Err("the source root's reference height is 0: no scale for its motion".into());
+                if bound.iter().any(|(clip, rig)| {
+                    *clip == c && w.get::<RigInstance>(*rig).is_some_and(|r| r.skeleton == map.from)
+                }) {
+                    return Err("it is bound to a rig of the source skeleton: retarget, then bind".to_owned());
+                }
+                let source = w
+                    .get::<Skeleton>(map.from)
+                    .ok_or("the map's source is no skeleton")?;
+                let target = w
+                    .get::<Skeleton>(map.to)
+                    .ok_or("the map's target is no skeleton")?;
+                let pairs: BTreeMap<JointId, JointId> = map.pairs.iter().copied().collect();
+                let source_ref = model_transforms(source, &locals(source, None)).map_err(|e| e.0)?;
+                let target_ref_local = reference_locals(self.reference, &source_ref, target, &pairs)?;
+                let target_ref = {
+                    let rests: BTreeMap<JointId, Rest> = target_ref_local
+                        .iter()
+                        .map(|(j, m)| (*j, Rest::Affine(crate::pose::transform(m))))
+                        .collect();
+                    model_transforms(target, &rests).map_err(|e| e.0)?
+                };
+                let order = parents_first(target)?;
+                let target_parent: BTreeMap<JointId, Option<JointId>> =
+                    target.joints.iter().map(|j| (j.id, j.parent)).collect();
+                // the root: the mapped joint every other mapped joint is below (the first in parents-first order, checked)
+                let first = order
+                    .iter()
+                    .map(|&i| target.joints[i].id)
+                    .find(|j| pairs.values().any(|t| t == j));
+                let below = |mut at: JointId, top: JointId| loop {
+                    if at == top {
+                        break true;
                     }
-                    if t.abs() < 1e-9 {
+                    match target_parent[&at] {
+                        Some(p) => at = p,
+                        None => break false,
+                    }
+                };
+                let root = match first {
+                    Some(r) if pairs.values().all(|&t| below(t, r)) => Some(r),
+                    Some(r) if self.translation == Translation::Root => {
                         return Err(format!(
-                            "the target root {r:?}'s reference height is 0: its motion would scale to nothing"
+                            "the mapped joints have no common root (joint {r:?} is not above all of them): \
+                         translation=none moves none"
                         ));
                     }
-                    t / s
+                    _ => None,
+                };
+                let back: BTreeMap<JointId, JointId> = pairs.iter().map(|(a, b)| (*b, *a)).collect();
+                let scale = match (self.translation, root) {
+                    (Translation::Root, Some(r)) => {
+                        let (s, t) = (source_ref[&back[&r]][3][1], target_ref[&r][3][1]);
+                        if s.abs() < 1e-9 {
+                            return Err(
+                                "the source root's reference height is 0: no scale for its motion".into()
+                            );
+                        }
+                        if t.abs() < 1e-9 {
+                            return Err(format!(
+                                "the target root {r:?}'s reference height is 0: its motion would scale to nothing"
+                            ));
+                        }
+                        t / s
+                    }
+                    _ => 0.0,
+                };
+                // key times: every key of the clip
+                let mut times: Vec<f32> = clip
+                    .channels
+                    .iter()
+                    .flat_map(|ch| ch.times.iter().copied())
+                    .collect();
+                times.sort_by(f32::total_cmp);
+                times.dedup();
+                let mut rotations: BTreeMap<JointId, Vec<f32>> = BTreeMap::new();
+                let mut root_translation: Vec<f32> = Vec::new();
+                for &t in &times {
+                    let posed = evaluate(&clip, map.from, source, None, f64::from(t)).map_err(|e| e.0)?;
+                    let src =
+                        model_transforms(source, &locals(source, Some(&posed.pose))).map_err(|e| e.0)?;
+                    let mut model: BTreeMap<JointId, Affine> = BTreeMap::new();
+                    for &i in &order {
+                        let j = &target.joints[i];
+                        let parent = j.parent.map(|p| model[&p]);
+                        let rest_model = match parent {
+                            Some(p) => compose(&p, &target_ref_local[&j.id]),
+                            None => target_ref_local[&j.id],
+                        };
+                        let Some(&s) = back.get(&j.id) else {
+                            model.insert(j.id, rest_model);
+                            continue;
+                        };
+                        let turn = quat::mul(rotation(&src[&s]), quat::inverse(rotation(&source_ref[&s])));
+                        let q = quat::mul(turn, rotation(&target_ref[&j.id]));
+                        let mut position = rest_model[3];
+                        if Some(j.id) == root && self.translation == Translation::Root {
+                            position = std::array::from_fn(|k| {
+                                target_ref[&j.id][3][k] + scale * (src[&s][3][k] - source_ref[&s][3][k])
+                            });
+                        }
+                        let m = with_rotation(position, q, &rest_model);
+                        let l = match parent {
+                            Some(p) => compose(
+                                &inverse(&p).ok_or("a joint's model transform has no inverse")?,
+                                &m,
+                            ),
+                            None => m,
+                        };
+                        let trs = Trs::of(&Rest::Affine(crate::pose::transform(&l)))
+                            .map_err(|e| format!("joint {:?} ({}): {}", j.id, j.name, e.0))?;
+                        // a clip of deltas keeps the joint's turn and the root's move from the target's rest (the reference)
+                        let (turned, moved) = if deltas {
+                            let at_rest =
+                                Trs::of(&Rest::Affine(crate::pose::transform(&target_ref_local[&j.id])))
+                                    .map_err(|e| format!("joint {:?} ({}): {}", j.id, j.name, e.0))?;
+                            (
+                                quat::mul(quat::inverse(at_rest.rotation), trs.rotation),
+                                std::array::from_fn(|k| trs.translation[k] - at_rest.translation[k]),
+                            )
+                        } else {
+                            (trs.rotation, trs.translation)
+                        };
+                        let keys = rotations.entry(j.id).or_default();
+                        // q and -q turn alike: keep each key on the side of the one before, for a reader that does not
+                        // take the shorter arc between keys
+                        let mut q = turned.map(|x| x as f32);
+                        if let Some(p) = keys.last_chunk::<4>()
+                            && p.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>() < 0.0
+                        {
+                            q = q.map(|x| -x);
+                        }
+                        keys.extend(q);
+                        if Some(j.id) == root && self.translation == Translation::Root {
+                            root_translation.extend(moved.map(|x| x as f32));
+                        }
+                        model.insert(j.id, m);
+                    }
                 }
-                _ => 0.0,
-            };
-            // key times: every key of the clip
-            let mut times: Vec<f32> = clip
-                .channels
-                .iter()
-                .flat_map(|ch| ch.times.iter().copied())
-                .collect();
-            times.sort_by(f32::total_cmp);
-            times.dedup();
-            let mut rotations: BTreeMap<JointId, Vec<f32>> = BTreeMap::new();
-            let mut root_translation: Vec<f32> = Vec::new();
-            for &t in &times {
-                let posed = evaluate(&clip, map.from, source, None, f64::from(t)).map_err(|e| e.0)?;
-                let src = model_transforms(source, &locals(source, Some(&posed.pose))).map_err(|e| e.0)?;
-                let mut model: BTreeMap<JointId, Affine> = BTreeMap::new();
-                for &i in &order {
-                    let j = &target.joints[i];
-                    let parent = j.parent.map(|p| model[&p]);
-                    let rest_model = match parent {
-                        Some(p) => compose(&p, &target_ref_local[&j.id]),
-                        None => target_ref_local[&j.id],
-                    };
-                    let Some(&s) = back.get(&j.id) else {
-                        model.insert(j.id, rest_model);
-                        continue;
-                    };
-                    let turn = quat::mul(rotation(&src[&s]), quat::inverse(rotation(&source_ref[&s])));
-                    let q = quat::mul(turn, rotation(&target_ref[&j.id]));
-                    let mut position = rest_model[3];
-                    if Some(j.id) == root && self.translation == Translation::Root {
-                        position = std::array::from_fn(|k| {
-                            target_ref[&j.id][3][k] + scale * (src[&s][3][k] - source_ref[&s][3][k])
-                        });
-                    }
-                    let m = with_rotation(position, q, &rest_model);
-                    let l = match parent {
-                        Some(p) => compose(
-                            &inverse(&p).ok_or("a joint's model transform has no inverse")?,
-                            &m,
-                        ),
-                        None => m,
-                    };
-                    let trs = Trs::of(&Rest::Affine(crate::pose::transform(&l)))
-                        .map_err(|e| format!("joint {:?} ({}): {}", j.id, j.name, e.0))?;
-                    // a clip of deltas keeps the joint's turn and the root's move from the target's rest (the reference)
-                    let (turned, moved) = if deltas {
-                        let at_rest =
-                            Trs::of(&Rest::Affine(crate::pose::transform(&target_ref_local[&j.id])))
-                                .map_err(|e| format!("joint {:?} ({}): {}", j.id, j.name, e.0))?;
-                        (
-                            quat::mul(quat::inverse(at_rest.rotation), trs.rotation),
-                            std::array::from_fn(|k| trs.translation[k] - at_rest.translation[k]),
-                        )
-                    } else {
-                        (trs.rotation, trs.translation)
-                    };
-                    let keys = rotations.entry(j.id).or_default();
-                    // q and -q turn alike: keep each key on the side of the one before, for a reader that does not
-                    // take the shorter arc between keys
-                    let mut q = turned.map(|x| x as f32);
-                    if let Some(p) = keys.last_chunk::<4>()
-                        && p.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>() < 0.0
-                    {
-                        q = q.map(|x| -x);
-                    }
-                    keys.extend(q);
-                    if Some(j.id) == root && self.translation == Translation::Root {
-                        root_translation.extend(moved.map(|x| x as f32));
-                    }
-                    model.insert(j.id, m);
+                let mut channels: Vec<Channel> = clip
+                    .channels
+                    .iter()
+                    .filter(|ch| !matches!(ch.target, ClipTarget::Joint { .. }))
+                    .cloned()
+                    .collect();
+                for (j, values) in rotations {
+                    channels.push(Channel {
+                        target: ClipTarget::Joint {
+                            skeleton: map.to,
+                            joint: j,
+                        },
+                        property: Property::Rotation,
+                        interpolation: Interpolation::Linear,
+                        times: times.clone(),
+                        values,
+                    });
                 }
-            }
-            let mut channels: Vec<Channel> = clip
-                .channels
-                .iter()
-                .filter(|ch| !matches!(ch.target, ClipTarget::Joint { .. }))
-                .cloned()
-                .collect();
-            for (j, values) in rotations {
-                channels.push(Channel {
-                    target: ClipTarget::Joint {
-                        skeleton: map.to,
-                        joint: j,
-                    },
-                    property: Property::Rotation,
-                    interpolation: Interpolation::Linear,
-                    times: times.clone(),
-                    values,
-                });
-            }
-            if let (Some(r), false) = (root, root_translation.is_empty()) {
-                channels.push(Channel {
-                    target: ClipTarget::Joint {
-                        skeleton: map.to,
-                        joint: r,
-                    },
-                    property: Property::Translation,
-                    interpolation: Interpolation::Linear,
-                    times: times.clone(),
-                    values: root_translation,
-                });
-            }
-            let mapped_joints = pairs.len() as u64;
-            let mut out = clip;
-            out.channels = channels;
-            w.insert(c, out);
-            log.approximate("clips retargeted onto a skeleton of other proportions", 1);
-            if deltas {
-                log.approximate(
-                    "additive clips retargeted by their effect on the rest pose, kept as deltas from the target's rest",
+                if let (Some(r), false) = (root, root_translation.is_empty()) {
+                    channels.push(Channel {
+                        target: ClipTarget::Joint {
+                            skeleton: map.to,
+                            joint: r,
+                        },
+                        property: Property::Translation,
+                        interpolation: Interpolation::Linear,
+                        times: times.clone(),
+                        values: root_translation,
+                    });
+                }
+                let mapped_joints = pairs.len() as u64;
+                let mut out = clip;
+                out.channels = channels;
+                w.insert(c, out);
+                log.approximate("clips retargeted onto a skeleton of other proportions", 1);
+                if deltas {
+                    log.approximate(
+                    "additive clips retargeted by their effect on the rest pose (the deltas measured at the source's rest pose), kept as deltas from the target's rest; added to another base they are not the source's pose there",
                     1,
                 );
-            }
-            log.approximate(
-                "retargeted joint keys, slerped between the clip's key times",
-                mapped_joints * times.len() as u64,
-            );
-            if self.reference == Reference::Aligned {
+                }
                 log.approximate(
-                    "target reference poses built by aligning mapped bones to the source's",
+                    "retargeted joint keys, slerped between the clip's key times",
+                    mapped_joints * times.len() as u64,
+                );
+                if self.reference == Reference::Aligned {
+                    log.approximate(
+                        "target reference poses built by aligning mapped bones to the source's",
+                        1,
+                    );
+                }
+                Ok(())
+            })();
+            if let Err(why) = outcome {
+                log.omit(
+                    &format!("clips left unretargeted on the source skeleton: {why}"),
                     1,
                 );
             }
@@ -658,12 +674,14 @@ mod tests {
     fn a_target_root_at_height_zero_is_refused() {
         let (mut w, target, _) = world();
         w.get_mut::<Skeleton>(target).unwrap().joints[0].rest = trs([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-        let err = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap_err();
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap();
+        let why = left_unretargeted(&report);
         assert!(
-            err.contains("target root") && err.contains("height is 0"),
-            "{err}"
+            why.len() == 1 && why[0].contains("target root") && why[0].contains("height is 0"),
+            "{why:?}"
         );
-        run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap();
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap();
+        assert!(left_unretargeted(&report).is_empty());
     }
 
     /// Two mapped limbs under an unmapped root have no mapped joint above both: translation=root has nothing to move
@@ -674,12 +692,14 @@ mod tests {
         w.get_mut::<Skeleton>(target).unwrap().joints[2].parent = Some(JointId(10));
         let (map, _) = w.iter::<JointMap>().next().unwrap();
         w.get_mut::<JointMap>(map).unwrap().pairs.remove(0);
-        let err = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap_err();
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap();
+        let why = left_unretargeted(&report);
         assert!(
-            err.contains("no common root") && err.contains("translation=none"),
-            "{err}"
+            why.len() == 1 && why[0].contains("no common root") && why[0].contains("translation=none"),
+            "{why:?}"
         );
-        run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap();
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap();
+        assert!(left_unretargeted(&report).is_empty());
         assert!(w.get::<Clip>(clip).unwrap().channels.iter().any(
             |ch| matches!(ch.target, ClipTarget::Joint { skeleton, joint } if skeleton == target && joint == JointId(30))
         ));
@@ -727,8 +747,12 @@ mod tests {
             rotation: [0.0, 0.0, 0.0, 1.0],
             scale: [0.0, 1.0, 1.0],
         };
-        let err = run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap_err();
-        assert!(err.contains("JointId(20)") && err.contains("j20"), "{err}");
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap();
+        let why = left_unretargeted(&report);
+        assert!(
+            why.len() == 1 && why[0].contains("JointId(20)") && why[0].contains("j20"),
+            "{why:?}"
+        );
     }
 
     /// A clip of deltas, retargeted with both rests alike (the target's arm unturned): the arm's quarter turn about z and the
@@ -794,19 +818,79 @@ mod tests {
                 .keys()
                 .any(|k| k.contains("additive clips retargeted"))
         );
-        // reference=aligned builds a pose that is not the rest the deltas are added to
+        // reference=aligned builds a pose that is not the rest the deltas are added to: the clip is left, with the reason
         let (mut w, _, clip) = world();
         w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::Identity);
-        let err = run(&mut w, "retarget-clip{reference=aligned,translation=root}").unwrap_err();
-        assert!(err.contains("use reference=rest"), "{err}");
+        let report = run(&mut w, "retarget-clip{reference=aligned,translation=root}").unwrap();
+        let why = left_unretargeted(&report);
+        assert!(why.len() == 1 && why[0].contains("use reference=rest"), "{why:?}");
+    }
+
+    /// The reasons a pass left clips unretargeted, as reported (`PassLog::omit`, unsupported).
+    fn left_unretargeted(report: &RunReport) -> Vec<String> {
+        report.steps[0]
+            .log
+            .omitted
+            .keys()
+            .filter(|k| k.starts_with("clips left unretargeted"))
+            .cloned()
+            .collect()
+    }
+
+    /// One clip among good ones that the pass cannot retarget does not fail the pass: the good one is retargeted onto the
+    /// target and the bad one stays on the source skeleton, reported once with its reason.
+    #[test]
+    fn one_unretargetable_clip_among_good_ones_leaves_the_good_one_retargeted() {
+        let (mut w, target, good) = world();
+        let source_of = |w: &World, e: Entity| {
+            w.get::<Clip>(e)
+                .unwrap()
+                .channels
+                .iter()
+                .find_map(|c| match c.target {
+                    ClipTarget::Joint { skeleton, .. } => Some(skeleton),
+                    _ => None,
+                })
+        };
+        let source = source_of(&w, good).unwrap();
+        let bad = w.spawn();
+        let mut clip = w.get::<Clip>(good).unwrap().clone();
+        clip.name = "additive to a frame".into();
+        clip.additive = Some(AdditiveReference::ClipFrame {
+            clip: good,
+            time: 0.0,
+        });
+        w.insert(bad, clip);
+        assert_eq!(w.verify_components(), vec![]);
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap();
+        assert_eq!(
+            source_of(&w, good),
+            Some(target),
+            "the good clip drives the target"
+        );
+        assert_eq!(
+            source_of(&w, bad),
+            Some(source),
+            "the bad clip is left on the source skeleton"
+        );
+        let why = left_unretargeted(&report);
+        assert!(why.len() == 1 && why[0].contains("additive"), "{why:?}");
+        assert_eq!(report.steps[0].log.omitted[&why[0]], 1);
     }
 
     #[test]
-    fn retarget_clip_refuses_what_it_does_not_do() {
+    fn retarget_clip_refuses_what_is_wrong_with_the_options() {
         let (mut w, _, clip) = world();
-        w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::ClipFrame { clip, time: 0.0 });
-        let err = run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap_err();
-        assert!(err.contains("additive"), "{err}");
+        let reference = w.spawn();
+        let plain = w.get::<Clip>(clip).unwrap().clone();
+        w.insert(reference, plain);
+        w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::ClipFrame {
+            clip: reference,
+            time: 0.0,
+        });
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap();
+        let why = left_unretargeted(&report);
+        assert!(why.len() == 1 && why[0].contains("additive"), "{why:?}");
         let (mut w, ..) = world();
         for (bad, why) in [
             ("retarget-clip{reference=rest}", "translation is required: "),
