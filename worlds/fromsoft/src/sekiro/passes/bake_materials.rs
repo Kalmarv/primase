@@ -14,6 +14,8 @@ use std::collections::BTreeSet;
 /// keep its source UV tiling. The source material and shader binding remain available to a game-program renderer.
 /// Unsupported programs retain their lowered material, with a refusal reason. Layer-weight materials belong to
 /// `bake-fromsoft-layers`, which groups their vertex weights; this pass does not replace that result with one weight.
+/// The square bake requests the largest bound source texture edge, limited by `max-size`; each allocation and cap
+/// is reported. This follows native texture density, not the density of repeated detail layers.
 /// The static frame uses a flat tangent frame, white vertex colour, coincident UV sets and no per-light gloss term.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BakeFromSoftMaterials {
@@ -112,6 +114,27 @@ impl Pass for BakeFromSoftMaterials {
                 }
             };
             let name = format!("baked_{}", source.identity_digest().map_err(|e| e.to_string())?);
+            let material_name = world.get::<Name>(entity).map_or(name.as_str(), |n| n.0.as_str());
+            let allocation = format!(
+                "program bake {material_name} ({name}): source maxima {}x{}, requested {}x{}, allocated {}x{}",
+                baked.source_size[0],
+                baked.source_size[1],
+                baked.requested_size,
+                baked.requested_size,
+                baked.size,
+                baked.size,
+            );
+            log.count(&allocation, 1);
+            if baked.size < baked.requested_size {
+                log.approximate(&format!("native texture density capped: {allocation}"), 1);
+            }
+            if baked.source_size == [0; 2] {
+                log.approximate("no bound image dimensions; program bake uses max-size", 1);
+            }
+            log.approximate(
+                "program bake follows native texture dimensions; tiled detail can lose density",
+                1,
+            );
             for (k, n) in baked.policies {
                 log.approximate(&k, n);
             }

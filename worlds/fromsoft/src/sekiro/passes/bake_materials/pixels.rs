@@ -16,6 +16,8 @@ use std::{collections::BTreeMap, sync::Arc};
 
 pub(super) struct Baked {
     pub size: u32,
+    pub requested_size: u32,
+    pub source_size: [u32; 2],
     pub albedo: Vec<u8>,
     pub normal: Vec<u8>,
     pub orm: Vec<u8>,
@@ -167,7 +169,7 @@ pub(super) fn bake(
         }
     }
     let mut textures = BTreeMap::new();
-    let mut largest = 0;
+    let mut source_size = [0; 2];
     for t in &stage.textures {
         let resource = core
             .interface
@@ -179,7 +181,8 @@ pub(super) fn bake(
                 let texture = world
                     .get::<Texture>(*texture)
                     .ok_or("bound texture has no pixels")?;
-                largest = largest.max(texture.width).max(texture.height);
+                source_size[0] = source_size[0].max(texture.width);
+                source_size[1] = source_size[1].max(texture.height);
                 let use_sampler = SamplerUse::of(sampler, Unstated::Assume(Address::Wrap))?;
                 if sampler.wrap[..2].contains(&None) {
                     *policies
@@ -204,7 +207,9 @@ pub(super) fn bake(
         };
         textures.insert(slot, value);
     }
-    let size = if largest == 0 { cap } else { cap.min(largest) };
+    let largest = source_size[0].max(source_size[1]);
+    let requested_size = if largest == 0 { cap } else { largest };
+    let size = cap.min(requested_size);
     let vertex = vertex.ok_or("no resolved vertex program to derive pixel inputs")?;
     let vertex_shader = world
         .get::<Shader>(vertex.shader)
@@ -280,6 +285,8 @@ pub(super) fn bake(
         .transpose()?;
     let mut result = Baked {
         size,
+        requested_size,
+        source_size,
         albedo: Vec::new(),
         normal: Vec::new(),
         orm: Vec::new(),
