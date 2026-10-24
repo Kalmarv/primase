@@ -278,7 +278,7 @@ fn the_spawn_place_is_stated() {
     let mut registry = PassRegistry::new();
     primase_reskate::register(&mut registry);
     let e = registry.parse("place-reskate-spawn").unwrap_err().to_string();
-    assert!(e.contains("the spawn's place is required"), "{e}");
+    assert!(e.contains("one of at or east is required"), "{e}");
     for program in [
         "place-reskate-spawn{at=centre}",
         "place-reskate-spawn{east=10,north=-4}",
