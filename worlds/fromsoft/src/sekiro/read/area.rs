@@ -45,13 +45,16 @@ pub struct Options {
 pub struct ObjectAnimations {
     /// Whether the binders were asked for ([`Options::object_animations`]).
     pub asked: bool,
-    /// Kept object models that have an animation binder (a member of the model's binder, or one beside it).
+    /// Kept object models that have an animation binder (an `.anibnd` member of the model's binder).
     pub animated: usize,
     /// Kept object models read without one.
     pub still: usize,
     /// Havok skeleton bones and clips read, over all the binders.
     pub bones: usize,
     pub clips: usize,
+    /// Events put on those clips from the binders' `.tae` files, and the records no clip matched.
+    pub events: usize,
+    pub tae_unmatched: usize,
     /// Binders that could not be read, as `<model>: <why>`.
     pub unreadable: Vec<String>,
     /// Files of the binders not read, by reason (the animation reader's own), with how many.
@@ -395,6 +398,22 @@ impl Report {
                     NoticeKind::Selection,
                     "object models with an animation binder: its Havok skeleton and clips are read into the world",
                     animations.animated as u64,
+                ));
+            }
+            if animations.events > 0 {
+                out.push(Notice::new(
+                    stage,
+                    NoticeKind::Selection,
+                    "object animation events (.tae) put on their clips (fromsoft.clip_events)",
+                    animations.events as u64,
+                ));
+            }
+            if animations.tae_unmatched > 0 {
+                out.push(Notice::new(
+                    stage,
+                    NoticeKind::Unsupported,
+                    "object event records (.tae) that no clip read is numbered as",
+                    animations.tae_unmatched as u64,
                 ));
             }
             if !animations.unreadable.is_empty() {
@@ -1016,6 +1035,8 @@ pub fn read_game_area(
                             Ok(read) => {
                                 report.object_animation.bones += read.report.bones;
                                 report.object_animation.clips += read.report.animations;
+                                report.object_animation.events += read.report.events;
+                                report.object_animation.tae_unmatched += read.report.tae_unmatched;
                                 for (why, files) in read.report.refused {
                                     *report.object_animation.refused.entry(why).or_default() += files.len();
                                 }

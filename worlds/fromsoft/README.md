@@ -542,6 +542,33 @@ maps store, group, key and value. Core states fog and exposure (`core.atmosphere
 fill them yet, since the fog and tone keys, and the units of their values, are known only
 from that census. Until then the fog, tone and exposure fields are read and counted.
 
+A character's or part's files are kept beyond the model and its clips:
+
+- The FLVER's dummy polygons are `fromsoft.dummies` on the prototype (`flver::Dummy`: position, forward and upward
+  directions, the reference id, the parent and attach bones, colour bytes, two flags and two unexplained words, as
+  stored) and `core.sockets` on the skeleton: a socket for each dummy that places, on its attach bone (else its parent
+  bone), at its position taken in the parent bone's space (the model's where the parent is -1), by position alone. One
+  that names a bone the model lacks, follows none, or stands at no finite place is left out and counted
+  (`CharacterReport::dummies_unplaced`). Which reference id is which attach point is the game's, not the file's.
+- The `.tae` event files of an animation binder (`tae::Tae`, version `0x1000D`, Sekiro's and Elden Ring's) are read: each
+  animation's record is put on the animation's entity as `fromsoft.clip_events` (the events with their type, their start
+  and end in seconds, the word after the type and their parameter bytes, and the record's mini header), found by the
+  animation's number (`a000_003000` is the record numbered 3000, `a050_003000` the one numbered 50003000:
+  `tae::clip_animation_id`). The report counts the records no animation matches and the animations no record matches
+  (`AnimationReport::tae_unmatched`, `clips_without_events`); `tests/character_census.rs` prints the first numbers of
+  each beside the first names so the rule can be read against the install. The event types are the file's numbers;
+  their names are the game's templates, which the file does not carry. An object's binder (`o252050.tae`) is read the
+  same way with `object_animations`.
+- The cloth companion files (`.clm2`, `clm2::Clm2`: for each mesh of the FLVER a list of `[i16, i16]` entries whose
+  meaning SoulsFormatsNEXT does not know) that go with a form are `fromsoft.cloth` on its prototype, as stored.
+- A character whose display masks need the NPC param also reads each row's descriptive fields from the same file
+  (`param::NpcStats`: `behaviorVariationId`, `nameId`, `turnVellocity` (sic, degrees a second), `hitHeight`, `hitRadius`,
+  `weight`, `hitYOffset`, `hp`, `mp`, `getSoul`, at the offsets `Game::npc_stats` states from Paramdex's
+  `NpcParam.xml`) as the resource `fromsoft.npc_stats`; the row's other several hundred fields are not read. A layout
+  the offsets are not for leaves them unread, said in `CharacterReport::npc_stats_unread`.
+- Not read: the Havok physics and ragdoll files of a character binder beyond what `unread` names, and what the TAE
+  event types mean.
+
 Passes (`sekiro::passes::register`), each choosing explicitly:
 
 - `drop-fromsoft-far` leaves out the distant-backdrop placements and prototypes.

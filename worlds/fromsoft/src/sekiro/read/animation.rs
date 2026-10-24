@@ -14,6 +14,12 @@
 //! by name as any other. Markers of other characters (`delayload_c0000_c1020.txt`) name no binder of this one and stay
 //! unread.
 //!
+//! A binder's event file (`c1010.tae`, an object's `o252050.tae`) is read too ([`crate::tae`]): the record of each
+//! animation read is put on its entity as `fromsoft.clip_events` (the events with their times and parameter bytes as
+//! stored), found by the animation's number (`a000_003000` is the record numbered 3000; [`crate::tae::clip_animation_id`]).
+//! The report counts the records no animation matches and the animations no record matches, so a numbering that does not
+//! hold shows as counts, not as silence.
+//!
 //! Nothing is lowered here: a program chooses what the clips are (`lower-havok-clips`: what stands in for a component a
 //! track does not state, the keys for each frame, which animations, the root motion) and how they reach the model's
 //! skeleton (`correspond-skeletons`, `map-clip`). The Havok skeleton is in the FLVER's frame (the reference poses of the
@@ -22,7 +28,8 @@
 //!
 //! What the reader does not read is named: animations that are not spline compressed (one interleaved one in the
 //! install), files that are not tagfiles of a supported SDK (one 2015.1 file), animations binding a skeleton the binder
-//! does not hold, an animation named as one already read, and the `.tae` event file.
+//! does not hold, an animation named as one already read, and an event file of a version other than Sekiro's and Elden
+//! Ring's.
 
 use std::collections::BTreeMap;
 
@@ -31,6 +38,8 @@ use primase_havok::animation::{Container, Skeleton, container};
 use primase_havok::world::{HavokAnimation, insert_animation, insert_skeleton};
 use primase_havok::{Compendium, Tagfile};
 
+use crate::sekiro::character_data::ClipEvents;
+use crate::tae::{self, Tae};
 use crate::{Archive, Binder, Result, dcx::Decoder};
 
 /// What reading a character's animation binders found.
@@ -48,8 +57,19 @@ pub struct AnimationReport {
     pub absent_components: Vec<String>,
     /// Files not read, by reason, each with the stems of its first few.
     pub refused: BTreeMap<String, Vec<String>>,
-    /// Members of the binders this reader does not read (`c1010.tae`, ...), by name.
+    /// Members of the binders this reader does not read (markers of other characters, ...), by name.
     pub unread: Vec<String>,
+    /// Event files (`c1010.tae`) read.
+    pub tae_files: usize,
+    /// Animation records those files hold.
+    pub tae_animations: usize,
+    /// Of those, the ones no animation read is numbered as (see [`crate::tae::clip_animation_id`]): events of an
+    /// animation the binders do not hold, or a numbering the rule does not match.
+    pub tae_unmatched: usize,
+    /// Animations read that no record of the event files is numbered as.
+    pub clips_without_events: usize,
+    /// Events put on animations (`fromsoft.clip_events`).
+    pub events: usize,
 }
 
 /// The entities a read made: the Havok skeleton and each animation.
@@ -100,10 +120,12 @@ fn companions(archive: &Archive, id: &str, binder: &Binder) -> Vec<String> {
     out
 }
 
-/// What one binder holds: its skeletons, and its animation containers by file stem, each with where it was read from.
+/// What one binder holds: its skeletons, its animation containers by file stem, each with where it was read from, and
+/// its event files (`.tae`) by file name.
 struct Held {
     skeletons: Vec<Skeleton>,
     animations: Vec<(String, Origin, Container)>,
+    events: Vec<(String, Tae)>,
 }
 
 /// Read the tagfiles of `binder` (one that names a marker for a binder in `markers` is not unread).
@@ -125,11 +147,23 @@ fn hold(
     let mut held = Held {
         skeletons: Vec::new(),
         animations: Vec::new(),
+        events: Vec::new(),
     };
     for f in &binder.files {
         let name = f.name.as_deref().unwrap_or("");
         let lower = crate::names::fold(name);
         if lower.ends_with(".compendium") {
+            continue;
+        }
+        if lower.ends_with(".tae") {
+            let file = file_name(name);
+            match Tae::read(&decoder.decode_if_dcx(&f.bytes)?) {
+                Ok(tae) => {
+                    report.tae_files += 1;
+                    held.events.push((file, tae));
+                }
+                Err(e) => refuse(report, &format!("event file not read: {e}"), &file),
+            }
             continue;
         }
         if !lower.ends_with(".hkx") {
@@ -279,7 +313,7 @@ pub(super) fn object_binder(decoder: &Decoder<'_>, binder: &Binder) -> Result<Op
 
 /// Put what the binders `held` (in read order) hold into `w`: the skeletons, each once by name (`<id> havok
 /// skeleton`), and the animations binding them, what is refused named in `report`.
-fn insert(held: Vec<Held>, id: &str, report: AnimationReport, w: &mut World) -> Result<Animations> {
+fn insert(mut held: Vec<Held>, id: &str, report: AnimationReport, w: &mut World) -> Result<Animations> {
     let mut out = Animations {
         report,
         ..Animations::default()
@@ -295,6 +329,12 @@ fn insert(held: Vec<Held>, id: &str, report: AnimationReport, w: &mut World) -> 
         out.skeleton.get_or_insert(entity);
         skeletons.insert(s.name.clone(), (entity, s.clone()));
     }
+    // the event files of every binder, in read order, and which of their animations an animation read matched
+    let mut records: Vec<(String, Tae)> = Vec::new();
+    for h in &mut held {
+        records.append(&mut h.events);
+    }
+    let mut matched: std::collections::BTreeSet<(usize, i64)> = std::collections::BTreeSet::new();
     let mut read_names: BTreeMap<String, usize> = BTreeMap::new();
     for (set, (file, origin, c)) in held
         .into_iter()
@@ -340,6 +380,31 @@ fn insert(held: Vec<Held>, id: &str, report: AnimationReport, w: &mut World) -> 
                             .push(format!("{} of {bone} in {file}", u.part));
                     }
                 }
+                // the events of the animation of this number, from the first event file that has a record of it
+                let record = tae::clip_animation_id(&file).and_then(|n| {
+                    records
+                        .iter()
+                        .enumerate()
+                        .find_map(|(i, (name, t))| t.animation(n).map(|a| (i, name, a)))
+                });
+                match record {
+                    Some((i, name, a)) => {
+                        out.report.events += a.events.len();
+                        matched.insert((i, a.id));
+                        w.insert(
+                            e,
+                            ClipEvents {
+                                file: name.clone(),
+                                animation: a.id,
+                                header: a.header.clone(),
+                                file_name: a.file_name.clone(),
+                                events: a.events.clone(),
+                            },
+                        );
+                    }
+                    None if !records.is_empty() => out.report.clips_without_events += 1,
+                    None => {}
+                }
                 read_names.insert(file, set);
                 out.report.animations += 1;
                 out.animations.push(e);
@@ -356,6 +421,8 @@ fn insert(held: Vec<Held>, id: &str, report: AnimationReport, w: &mut World) -> 
             ),
         }
     }
+    out.report.tae_animations = records.iter().map(|(_, t)| t.animations.len()).sum();
+    out.report.tae_unmatched = out.report.tae_animations - matched.len();
     Ok(out)
 }
 

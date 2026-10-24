@@ -97,12 +97,31 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
             origin.file
         );
     }
+    // the event file is read, not left: its records are on the animations they are numbered as
     assert!(
-        animations.unread.iter().any(|f| f.ends_with(".tae")),
+        animations.unread.iter().all(|f| !f.ends_with(".tae")),
         "{:?}",
         animations.unread
     );
-    assert!(!report.notices().is_empty());
+    assert!(animations.tae_files >= 1, "{animations:?}");
+    assert!(animations.events > 0, "{animations:?}");
+    println!(
+        "c1010 events: {} files, {} records ({} matched no animation), {} animations without a record, {} events",
+        animations.tae_files,
+        animations.tae_animations,
+        animations.tae_unmatched,
+        animations.clips_without_events,
+        animations.events
+    );
+    for (e, events) in w.iter::<primase_fromsoft::sekiro::character_data::ClipEvents>() {
+        let name = &w.get::<Name>(e).unwrap().0;
+        assert_eq!(
+            primase_fromsoft::tae::clip_animation_id(name),
+            Some(events.animation),
+            "{name} carries the record {}",
+            events.animation
+        );
+    }
 
     // A2
     let mut registry = PassRegistry::new();

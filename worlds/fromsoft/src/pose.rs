@@ -124,6 +124,81 @@ pub(crate) fn bone_matrices(bones: &[Bone]) -> Result<Vec<Matrix>, String> {
         .collect()
 }
 
+/// `p` in the space of the affine map `m`: the point whose image under `m` is `p`. `None` where `m` has no inverse (a
+/// bone scaled to nothing).
+pub(crate) fn inverse_point(m: &Matrix, p: [f64; 3]) -> Option<[f64; 3]> {
+    let [a, b, c, t] = *m;
+    let cross = |u: [f64; 3], v: [f64; 3]| {
+        [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ]
+    };
+    let dot = |u: [f64; 3], v: [f64; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    let det = dot(a, cross(b, c));
+    if !det.is_finite() || det.abs() < 1e-12 {
+        return None;
+    }
+    let d = [p[0] - t[0], p[1] - t[1], p[2] - t[2]];
+    Some([
+        dot(cross(b, c), d) / det,
+        dot(cross(c, a), d) / det,
+        dot(cross(a, b), d) / det,
+    ])
+}
+
+/// A model's dummy polygons as sockets on its skeleton (`core.sockets`; joint `i` is bone `i`, see [`skeleton`]), each
+/// where the dummy stands in the model at rest and following the bone it is attached to: the dummy's position is taken
+/// in the space of its parent bone where it has one (SoulsFormatsNEXT: "initially transformed to" it) and in the
+/// model's where it has none; the socket's joint is its attach bone, else its parent bone. The socket is the point
+/// alone, in the joint's space; the dummy's forward and upward directions are not lowered (they stay in
+/// `fromsoft.dummies`). Named `dummy <reference id>`; the ids number the sockets in file order.
+///
+/// Also the indices of the dummies that were left out: one that names a bone the model does not have, or no bone at all
+/// to follow, or a bone with no inverse, or a position that is not finite.
+pub(crate) fn dummy_sockets(model: &Model) -> Result<(primase_core::Sockets, Vec<usize>), String> {
+    let worlds = bone_matrices(&model.bones)?;
+    let bone = |i: i16| usize::try_from(i).ok();
+    let mut sockets = Vec::new();
+    let mut left_out = Vec::new();
+    for (i, d) in model.dummies.iter().enumerate() {
+        let parent = bone(d.parent_bone);
+        let attach = bone(d.attach_bone);
+        let placed = (|| {
+            if d.position.iter().any(|x| !x.is_finite()) {
+                return None;
+            }
+            let at = d.position.map(f64::from);
+            let in_model = match parent {
+                Some(p) => affine_point(worlds.get(p)?, at),
+                // -1: the dummy is already in the model's space; another negative number is no bone
+                None if d.parent_bone == -1 => at,
+                None => return None,
+            };
+            let joint = attach.or(parent).filter(|&j| j < worlds.len())?;
+            let [x, y, z] = inverse_point(&worlds[joint], in_model)?;
+            Some((joint, [x as f32, y as f32, z as f32]))
+        })();
+        let Some((joint, t)) = placed else {
+            left_out.push(i);
+            continue;
+        };
+        let offset = primase_core::Rest::Affine(Transform {
+            cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], t],
+        })
+        .converted(&FRAME)
+        .matrix();
+        sockets.push(primase_core::Socket {
+            id: primase_core::SocketId(i as u32),
+            name: format!("dummy {}", d.reference_id),
+            joint: primase_core::JointId(joint as u32),
+            offset,
+        });
+    }
+    Ok((primase_core::Sockets(sockets), left_out))
+}
+
 /// The bone a static mesh's vertices follow: each its own, named by its NORMAL.w, when the mesh's layout stores a
 /// normal W ([`Model::stores_normal_w`]); else every vertex the mesh's node (its `NodeIndex`), when that names one of
 /// the model's bones; else none (`Unbound`, with the node as stored: -1 or past the bones; Elden Ring's files have
@@ -285,6 +360,76 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn dummy(position: [f32; 3], parent_bone: i16, attach_bone: i16) -> crate::flver::Dummy {
+        crate::flver::Dummy {
+            position,
+            forward: [0.0, 0.0, 1.0],
+            upward: [0.0, 1.0, 0.0],
+            reference_id: 120,
+            parent_bone,
+            attach_bone,
+            color: [255; 4],
+            flag1: false,
+            use_upward_vector: false,
+            unk30: 0,
+            unk34: 0,
+        }
+    }
+
+    /// A dummy is a socket on the bone it follows, at the place it stands: in its parent bone's space where it has a
+    /// parent, in the model's where the parent is -1; one naming a bone the model lacks, or following none, is left out.
+    #[test]
+    fn a_dummy_is_a_socket_on_the_bone_it_follows_at_the_place_it_stands() {
+        let flat = |name: &str, translation: [f32; 3], parent: i16| Bone {
+            name: name.into(),
+            translation,
+            rotation: [0.0; 3],
+            scale: [1.0; 3],
+            parent,
+        };
+        let model = Model {
+            bones: vec![flat("root", [1.0, 0.0, 0.0], -1), flat("hand", [0.0, 2.0, 0.0], 0)],
+            dummies: vec![
+                // the hand's own origin, which stands at (1, 2, 0) in the model
+                dummy([0.0; 3], 1, 1),
+                // a point of the model's space, following the hand
+                dummy([5.0, 5.0, 5.0], -1, 1),
+                // a parent the model does not have
+                dummy([0.0; 3], 7, 1),
+                // no bone to follow
+                dummy([0.0; 3], -1, -1),
+                // a position that is not a number
+                dummy([f32::NAN, 0.0, 0.0], 1, 1),
+            ],
+            version: 0x2001a,
+            speedtree: false,
+            layouts: vec![],
+            materials: vec![],
+            meshes: vec![],
+        };
+        let (sockets, left_out) = dummy_sockets(&model).unwrap();
+        assert_eq!(left_out, [2, 3, 4]);
+        assert_eq!(sockets.0.len(), 2);
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5);
+        let (first, second) = (&sockets.0[0], &sockets.0[1]);
+        assert_eq!((first.id, first.joint, first.name.as_str()), (primase_core::SocketId(0), primase_core::JointId(1), "dummy 120"));
+        assert!(near(first.offset.cols[3], [0.0; 3]), "{:?}", first.offset);
+        // (5, 5, 5) is (4, 3, 5) from the hand in the file's frame, (4, 3, -5) in the world's
+        assert_eq!((second.id, second.joint), (primase_core::SocketId(1), primase_core::JointId(1)));
+        assert!(near(second.offset.cols[3], [4.0, 3.0, -5.0]), "{:?}", second.offset);
+    }
+
+    /// The point whose image under an affine map is a given point; none where the map is singular.
+    #[test]
+    fn a_point_is_found_in_the_space_of_a_map_that_has_an_inverse() {
+        let m = compose(&local(&bone(-1, 2.0, 0.4)), &local(&bone(-1, -1.0, -0.3)));
+        let p = [0.3, -1.2, 2.5];
+        let image = affine_point(&m, p);
+        let back = inverse_point(&m, image).unwrap();
+        assert!(back.iter().zip(p).all(|(a, b)| (a - b).abs() < 1e-9), "{back:?}");
+        assert!(inverse_point(&[[1., 0., 0.], [0., 0., 0.], [0., 0., 1.], [0.; 3]], p).is_none());
     }
 
     /// A chain of every bone a model can hold (an i16 parent) is one composition a bone, not a walk up the whole chain

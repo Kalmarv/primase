@@ -47,8 +47,11 @@
 //! It places nothing (`place-assets` does, by the program's choice), joins nothing (the parts of a character keep
 //! their own skeletons and bindings as stored; `assemble-character` relates them by the rule a program states) and
 //! chooses no level of detail, outfit or pose. A part's bones are stored with the parent they have in that part: a
-//! bone whose parent the part does not hold is a root there. What the files hold that it does not read is a notice: the
-//! FLVER's dummies (attach points), the Havok skeleton and cloth beside the FLVER, and the animation binder.
+//! bone whose parent the part does not hold is a root there. The FLVER's dummy polygons (attach points) are kept as stored
+//! on the prototype (`fromsoft.dummies`) and placed as `core.sockets` on its skeleton; the cloth companion files
+//! (`.clm2`) that go with a form are kept on its prototype (`fromsoft.cloth`); a character whose masks need the NPC param
+//! also reads each row's descriptive fields (`fromsoft.npc_stats`, [`crate::param::NpcStats`]). What the files hold that it
+//! does not read is a notice: the other members of the binders, by name.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -59,6 +62,7 @@ use super::animation::{self, AnimationReport};
 use super::area::game_material_definitions;
 use super::{shaders, textures};
 use crate::components::models::{SkeletonOf, SourceModel};
+use crate::sekiro::character_data;
 use crate::sekiro::source;
 use crate::{Archive, Binder, Game, Install, Result, dcx::Decoder, flver::Model, invalid, materials};
 
@@ -79,6 +83,14 @@ pub struct CharacterReport {
     pub masked_meshes: usize,
     /// Members of the binders this reader does not read, by name.
     pub unread: Vec<String>,
+    /// The model's dummy polygons (`fromsoft.dummies`), and of them the ones left out of its sockets (they name a bone
+    /// the model lacks, follow none, or stand nowhere).
+    pub dummies: usize,
+    pub dummies_unplaced: usize,
+    /// The model's cloth companion files read (`fromsoft.cloth`).
+    pub cloth_files: usize,
+    /// Why the NPC param's descriptive fields were not read, where its rows were.
+    pub npc_stats_unread: Option<String>,
     /// Shaders its materials name whose bundle the install does not hold.
     pub missing_shader_bundles: Vec<String>,
     /// Shader bundles its materials bind whose metaparam is of a version the reader does not read.
@@ -97,7 +109,11 @@ impl CharacterReport {
         for (items, reason) in [
             (
                 &self.unread,
-                "character files not read (Havok skeleton, cloth, animation binder)",
+                "character binder members not read (named below)",
+            ),
+            (
+                &self.npc_stats_unread.iter().cloned().collect::<Vec<String>>(),
+                "NPC param descriptive fields not read (the display masks were)",
             ),
             (
                 &self.missing_shader_bundles,
@@ -123,6 +139,24 @@ impl CharacterReport {
                     |n, name| n.example(name.clone()),
                 ));
             }
+        }
+        if self.dummies_unplaced > 0 {
+            out.push(Notice::new(
+                "fromsoft character",
+                NoticeKind::Unsupported,
+                "dummy polygons left out of the model's sockets (they name a bone the model lacks, follow no bone, or \
+                 stand at no finite place); they stay in fromsoft.dummies",
+                self.dummies_unplaced as u64,
+            ));
+        }
+        if self.dummies > self.dummies_unplaced {
+            out.push(Notice::new(
+                "fromsoft character",
+                NoticeKind::Approximation,
+                "dummy polygons placed as sockets by position alone, in the space of their parent bone and following \
+                 their attach bone; their forward and upward directions stay in fromsoft.dummies",
+                (self.dummies - self.dummies_unplaced) as u64,
+            ));
         }
         if let Some(a) = &self.animations {
             out.extend(animation_notices(a));
@@ -161,11 +195,31 @@ pub fn animation_notices(a: &AnimationReport) -> Vec<Notice> {
             Notice::new(
                 "fromsoft animations",
                 NoticeKind::Unsupported,
-                "animation binder members not read (event files, markers of other characters, ...)",
+                "animation binder members not read (markers of other characters, ...)",
                 a.unread.len() as u64,
             ),
             |n, f| n.example(f.clone()),
         ));
+    }
+    for (count, reason) in [
+        (
+            a.tae_unmatched,
+            "event records (.tae) that no animation read is numbered as: their events are not on any clip (an animation \
+             the binders do not hold, or a numbering other than aGGG_NNNNNN = GGG * 1000000 + NNNNNN)",
+        ),
+        (
+            a.clips_without_events,
+            "animations read that no event record is numbered as (they carry no events)",
+        ),
+    ] {
+        if count > 0 {
+            out.push(Notice::new(
+                "fromsoft animations",
+                NoticeKind::Unsupported,
+                reason,
+                count as u64,
+            ));
+        }
     }
     out
 }
@@ -464,6 +518,8 @@ struct Reading<'a> {
     material_shaders: Vec<(Entity, String)>,
     /// The NPC param's rows, once a character with display masks is read.
     npc_rows: Option<Vec<crate::param::NpcRow>>,
+    /// The descriptive fields of those rows, or why they were not read.
+    npc_stats: Option<std::result::Result<Vec<crate::param::NpcStats>, String>>,
     /// Each form read so far and the binder it is of: two of one name are refused.
     forms: BTreeMap<String, String>,
 }
@@ -484,6 +540,7 @@ impl<'a> Reading<'a> {
             bundles: shaders::Bundles::default(),
             material_shaders: Vec::new(),
             npc_rows: None,
+            npc_stats: None,
             forms: BTreeMap::new(),
         })
     }
@@ -592,7 +649,18 @@ impl<'a> Reading<'a> {
         };
         report.masked_meshes = marks.iter().flatten().filter(|m| !m.is_empty()).count();
         if report.masked_meshes > 0 && self.npc_rows.is_none() {
-            self.npc_rows = Some(super::params::read_npc_param(&self.install, archive, decoder)?.rows);
+            let param = super::params::read_param(&self.install, archive, decoder, "NpcParam.param")?;
+            self.npc_rows =
+                Some(crate::param::NpcParam::from_param(&param, &self.install.game.npc_param())?.rows);
+            // the descriptive fields come from the same file; a layout they do not match is said, and the rows' masks
+            // (which refused it above if it were another) still stand
+            self.npc_stats = Some(
+                crate::param::NpcStats::from_param(&param, &self.install.game.npc_stats())
+                    .map_err(|e| e.to_string()),
+            );
+        }
+        if let Some(Err(why)) = &self.npc_stats {
+            report.npc_stats_unread = Some(why.clone());
         }
         let definitions = &self.definitions;
         // textures: what the binder embeds, a character's own texbnd, the texbnds of the other characters its
@@ -707,17 +775,29 @@ impl<'a> Reading<'a> {
         // a member not read is named on the report of the form it goes with ([`member_form`]); one that goes with none,
         // on the first form's
         let bases: Vec<&str> = forms.iter().map(|f| f.base.as_str()).collect();
+        let mut cloth = Vec::new();
         for f in &binder.files {
             let member_name = f.name.as_deref().unwrap_or("");
             let read = forms.iter().any(|g| std::ptr::eq(f, g.flver))
                 || f.bytes.starts_with(b"TPF\0")
                 || own_animations.is_some_and(|a| std::ptr::eq(f, a));
             if !read && member_form(&member_stem(member_name), &bases).unwrap_or(0) == index {
-                report.unread.push(crate::names::fold(
-                    member_name.rsplit(['/', '\\']).next().unwrap_or(member_name),
-                ));
+                let leaf = crate::names::fold(member_name.rsplit(['/', '\\']).next().unwrap_or(member_name));
+                // a cloth companion is read as stored; one that does not read is named with its reason
+                if leaf.ends_with(".clm2") {
+                    match crate::clm2::Clm2::read(&decoder.decode_if_dcx(&f.bytes)?) {
+                        Ok(clm2) => cloth.push(character_data::ClothFile {
+                            file: leaf,
+                            meshes: clm2.meshes,
+                        }),
+                        Err(e) => report.unread.push(format!("{leaf} ({e})")),
+                    }
+                    continue;
+                }
+                report.unread.push(leaf);
             }
         }
+        report.cloth_files = cloth.len();
         if let Item::Character(id) = item
             && animations.is_none()
             && textures::has(archive, &format!("/chr/{id}.anibnd.dcx"))
@@ -806,10 +886,25 @@ impl<'a> Reading<'a> {
         let prototype = w.spawn();
         w.insert(prototype, Name(name.to_owned()));
         w.insert(prototype, Source(key.clone()));
+        // the dummy polygons as stored, and as sockets on the skeleton where they place (a model whose bones do not
+        // compose is the geometry pass's error, not this one's)
+        report.dummies = model.dummies.len();
+        if !model.dummies.is_empty() {
+            w.insert(prototype, character_data::Dummies(model.dummies.clone()));
+            if let Ok((sockets, left_out)) = crate::pose::dummy_sockets(&model) {
+                report.dummies_unplaced = left_out.len();
+                if !sockets.0.is_empty() {
+                    w.insert(skeleton, sockets);
+                }
+            }
+        }
         w.insert(prototype, SourceModel(model));
         w.insert(prototype, source::MaterialSlots(slots));
         if let Some(marks) = marks {
             w.insert(prototype, source::MeshMasks(marks));
+        }
+        if !cloth.is_empty() {
+            w.insert(prototype, character_data::Cloth(cloth));
         }
         w.insert(
             prototype,
@@ -853,6 +948,9 @@ impl<'a> Reading<'a> {
         w.insert_resource(source::ShaderPrograms(self.programs));
         if let Some(rows) = self.npc_rows {
             w.insert_resource(source::NpcRows(rows));
+        }
+        if let Some(Ok(stats)) = self.npc_stats {
+            w.insert_resource(character_data::NpcStatRows(stats));
         }
         self.bundles.spawn(w, &self.material_shaders);
     }

@@ -3,6 +3,7 @@
 
 pub mod bhd;
 mod bytes;
+pub mod clm2;
 pub mod collision;
 mod elden;
 pub mod emevd;
