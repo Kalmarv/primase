@@ -41,6 +41,7 @@ const OFFSET_PROGRAM: &[u8] = include_bytes!("fixtures/layered_off_vs.dxbc");
 
 /// layered_vs.dxbc with the cloth permutation's shape (tests/fixtures/layered_vs.hlsl, CLOTH).
 const CLOTH_PROGRAM: &[u8] = include_bytes!("fixtures/layered_cloth_vs.dxbc");
+const LINING_PROGRAM: &[u8] = include_bytes!("fixtures/layered_lining_vs.dxbc");
 
 /// A DXBC vertex program as the pass holds it.
 fn dxbc_shader(bytes: &[u8], interface: primase_core::shader::Interface) -> Shader {
@@ -816,6 +817,55 @@ fn the_cloth_permutations_inputs_and_switch_are_stated() {
         switch.role,
         ConstantRole::Object(ObjectParameter::ClothSimulation)
     );
+}
+
+/// The Lining_S2 family's inputs the lowered geometry cannot feed: a third coordinate set of integers (TEXCOORD1, which
+/// the layered programs read as four floats, a Byte4C member) and a second tangent set (TANGENT2) are unknown, each with
+/// the reason, and are not taken for the layered members.
+#[test]
+fn a_further_coordinate_set_and_tangent_set_are_unknown_not_layer_members() {
+    let interface = primase_dxbc::reflection(LINING_PROGRAM).unwrap();
+    let entity = World::default().spawn();
+    let stage = primase_fromsoft::layer_bake::resolve::resolve_vertex(
+        &dxbc_shader(LINING_PROGRAM, interface),
+        entity,
+    )
+    .unwrap()
+    .stage;
+    let role = |name: &str| {
+        stage
+            .inputs
+            .iter()
+            .find(|i| format!("{}{}", i.label.name, i.label.index) == name)
+            .map(|i| i.role.clone())
+            .unwrap()
+    };
+    let why = |name: &str| match role(name) {
+        InputRole::Unknown { why } => why,
+        other => panic!("{name} is {other:?}, not unknown"),
+    };
+    assert!(
+        why("TEXCOORD1").contains("further coordinate set"),
+        "{}",
+        why("TEXCOORD1")
+    );
+    assert!(
+        why("TANGENT2").contains("further tangent set"),
+        "{}",
+        why("TANGENT2")
+    );
+    // the layered programs' float members keep their streams
+    let layered = primase_dxbc::reflection(VERTEX_PROGRAM).unwrap();
+    let layered =
+        primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(VERTEX_PROGRAM, layered), entity)
+            .unwrap()
+            .stage;
+    let member = layered
+        .inputs
+        .iter()
+        .find(|i| i.label.name.eq_ignore_ascii_case("TEXCOORD") && i.label.index == 1)
+        .unwrap();
+    assert_eq!(member.role, InputRole::Stream(Semantic::Color(1)));
 }
 
 /// A program the run does not decide is taken as camera-relative, said by a reason the caller counts: here a program whose

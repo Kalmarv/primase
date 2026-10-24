@@ -7,6 +7,9 @@
 //   fxc /T vs_5_0 /E main /D RELATIVE /Fo layered_rel_vs.dxbc layered_vs.hlsl
 //   fxc /T vs_5_0 /E main /D OFFSET /Fo layered_off_vs.dxbc layered_vs.hlsl
 //   fxc /T vs_5_0 /E main /D CLOTH /Fo layered_cloth_vs.dxbc layered_vs.hlsl
+//   fxc /T vs_5_0 /E main /D LINING /Fo layered_lining_vs.dxbc layered_vs.hlsl
+// With LINING the program has the shape of the Lining_S2 family: TEXCOORD1 is a pair of integers (a third coordinate set)
+// where the layered programs take four floats (a Byte4C member), and a second tangent, TANGENT2, is read.
 // With CLOTH the program has the cloth permutation's shape: the switch VC_isEnableCloth (cbMatDynParam) chooses between the
 // palette and the instance's world rows, the tangent's w comes from a one-byte BINORMAL0 input, and POSITION1 is declared
 // and never read.
@@ -57,7 +60,12 @@ struct Input
     uint4 tangent : TANGENT0;
     float4 colour : COLOR1;
     int4 uv : TEXCOORD0;
+#ifdef LINING
+    int2 uv1 : TEXCOORD1;
+    uint4 tangent2 : TANGENT2;
+#else
     float4 m1 : TEXCOORD1;
+#endif
     float4 m2 : TEXCOORD2;
     float4 m3 : TEXCOORD3;
     float4 m4 : TEXCOORD4;
@@ -110,7 +118,11 @@ Output main(Input i)
 #endif
     o.uv = float4(float2(i.uv.xy) * VC_TexScroll_0.xy / 2048.0 + VC_TexScroll_0.zw,
                   float2(i.uv.zw) * VC_TexScroll_1.xy / 2048.0 + VC_TexScroll_1.zw);
+#ifdef LINING
+    o.weights = float4(i.uv1.x, i.tangent2.x, i.m4.x, i.m5.y);
+#else
     o.weights = float4(i.m1.x, i.m2.z, i.m4.x, i.m5.y);
+#endif
     o.tint = float4(i.m3.xyz, i.colour.x);
     o.detail = float4(i.m6.z, 0, 0, 0);
     return o;

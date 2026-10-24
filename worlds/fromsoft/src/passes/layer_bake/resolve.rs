@@ -946,7 +946,10 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                     },
                 ]),
                 ("COLOR", 1, _) => InputRole::Stream(SECOND_COLOUR),
-                ("TEXCOORD", n @ 1..=6, _) => InputRole::Stream(Semantic::Color(n as u8)),
+                // the Byte4C members of the layered programs, four floats each; a coordinate pair of integers is another input
+                ("TEXCOORD", n @ 1..=6, _) if v.value.scalar == ScalarType::Float => {
+                    InputRole::Stream(Semantic::Color(n as u8))
+                }
                 // the skinned permutation's joint indices and weights
                 ("BLENDINDICES", 0, _) => InputRole::Stream(Semantic::Joints(0)),
                 ("BLENDWEIGHT", 0, _) => InputRole::Stream(Semantic::Weights(0)),
@@ -969,6 +972,16 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                         why: "declared by the program and never read".into(),
                     }
                 }
+                // the lowered geometry keeps one tangent set and two coordinate sets (the packed pair of TEXCOORD0)
+                ("TANGENT", 1.., _) => InputRole::Unknown {
+                    why: "a further tangent set (bytes decoded like TANGENT0's); the lowered geometry keeps one".into(),
+                },
+                ("TEXCOORD", 1.., _) => InputRole::Unknown {
+                    why: format!(
+                        "a further coordinate set ({:?} x{}); the lowered geometry keeps two",
+                        v.value.scalar, v.value.width
+                    ),
+                },
                 _ => InputRole::Unknown {
                     why: "no stream of the lowered geometry carries it".into(),
                 },
