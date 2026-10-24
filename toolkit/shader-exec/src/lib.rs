@@ -20,13 +20,14 @@ pub mod draw;
 pub mod evaluate;
 mod periodic;
 pub use evaluate::{
-    Evaluation, Field, Grid, Image, Input, Invocation, Lane, Layout, Raw, Texture, evaluate, evaluate_raw,
-    evaluate_raw_with, evaluate_with,
+    Evaluation, Field, Grid, Input, Invocation, Lane, Layout, Raw, evaluate, evaluate_raw, evaluate_raw_with,
+    evaluate_with,
 };
 pub use periodic::{evaluate_periodic, evaluate_periodic_with};
 pub mod texture;
 pub mod views;
 pub use texture::{Filtering, SampledTexture, SamplerUse, Unstated};
+pub use views::{Absent, Image, View, Views};
 
 use primase_shader::Interface;
 
@@ -202,6 +203,21 @@ pub enum Lod {
     GradientsBias([[f32; 2]; 2], f32),
 }
 
+impl From<ImageLod> for Lod {
+    /// A 2D sample's level of detail as the image request states it (its gradients' u and v).
+    fn from(lod: ImageLod) -> Self {
+        match lod {
+            ImageLod::Implicit => Lod::Implicit,
+            ImageLod::Bias(bias) => Lod::Bias(bias),
+            ImageLod::Level(level) => Lod::Level(level),
+            ImageLod::Gradients(g) => Lod::Gradients([[g[0][0], g[0][1]], [g[1][0], g[1][1]]]),
+            ImageLod::GradientsBias(g, bias) => {
+                Lod::GradientsBias([[g[0][0], g[0][1]], [g[1][0], g[1][1]]], bias)
+            }
+        }
+    }
+}
+
 /// A sample request of a 2D texture (or a 2D array's layer).
 #[derive(Clone, Copy, Debug)]
 pub struct Sample {
@@ -295,21 +311,12 @@ pub trait Sampler {
                 request.texture
             ));
         }
-        let lod = match request.lod {
-            ImageLod::Implicit => Lod::Implicit,
-            ImageLod::Bias(bias) => Lod::Bias(bias),
-            ImageLod::Level(level) => Lod::Level(level),
-            ImageLod::Gradients(g) => Lod::Gradients([[g[0][0], g[0][1]], [g[1][0], g[1][1]]]),
-            ImageLod::GradientsBias(g, bias) => {
-                Lod::GradientsBias([[g[0][0], g[0][1]], [g[1][0], g[1][1]]], bias)
-            }
-        };
         self.sample(Sample {
             texture: request.texture,
             sampler: request.sampler,
             uv: [request.coord[0], request.coord[1]],
             layer: request.layer,
-            lod,
+            lod: Lod::from(request.lod),
         })
     }
     /// A texel load of any texture. A 2D or 3D one (or a 2D array's layer) goes to [`Sampler::load`].

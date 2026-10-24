@@ -25,7 +25,7 @@ use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
 use primase_shader_exec::ProgramShader;
 use primase_shader_exec::{
-    Grid, Input, Invocation, Layout, PixelShader, Texture, evaluate::Constants, evaluate_raw,
+    Grid, Input, Invocation, Layout, PixelShader, View, Views, evaluate::Constants, evaluate_raw,
 };
 use primase_testdata::{Game, install, keys};
 
@@ -77,10 +77,11 @@ fn target_two_decodes_to_the_materials_specular_parameters() {
             .set_words(10, 1, &[specular.to_bits(), colour.to_bits()])
             .unwrap();
         constants.set_words(10, 4, &mask.map(f32::to_bits)).unwrap();
-        let textures: BTreeMap<u32, Texture> = PixelShader::textures(&shader)
+        let textures: BTreeMap<u32, View> = PixelShader::textures(&shader)
             .iter()
-            .map(|&slot| (slot, Texture::Constant([1.0; 4])))
+            .map(|&slot| (slot, View::Constant([1.0; 4])))
             .collect();
+        let textures = Views::refusing(textures);
         let mut inputs = BTreeMap::new();
         for v in &PixelShader::interface(&shader).inputs {
             let value = match (v.label.name.to_ascii_uppercase().as_str(), v.label.index) {

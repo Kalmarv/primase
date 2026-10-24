@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use primase_image::sampling::Address;
-use primase_shader_exec::{Input, Lane, Texture, evaluate::Constants};
+use primase_shader_exec::{Input, Lane, View, Views, evaluate::Constants};
 use serde_json::json;
 
 use crate::{Result, invalid};
@@ -86,21 +86,23 @@ pub struct PipelineState {
 
 impl PixelState {
     /// The textures as the executor samples them.
-    pub(super) fn evaluated_textures(&self) -> BTreeMap<u32, Texture> {
-        self.textures
-            .iter()
-            .map(|(&slot, t)| {
-                (
-                    slot,
-                    match t {
-                        SlotTexture::Image(image) => {
-                            Texture::Image(image.clone() as Arc<dyn primase_shader_exec::Image>)
-                        }
-                        SlotTexture::Constant(value) => Texture::Constant(*value),
-                    },
-                )
-            })
-            .collect()
+    pub(super) fn evaluated_textures(&self) -> Views {
+        Views::refusing(
+            self.textures
+                .iter()
+                .map(|(&slot, t)| {
+                    (
+                        slot,
+                        match t {
+                            SlotTexture::Image(image) => {
+                                View::Image(image.clone() as Arc<dyn primase_shader_exec::Image>)
+                            }
+                            SlotTexture::Constant(value) => View::Constant(*value),
+                        },
+                    )
+                })
+                .collect(),
+        )
     }
 
     /// The inputs as the executor takes them.

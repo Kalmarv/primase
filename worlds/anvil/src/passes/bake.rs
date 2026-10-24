@@ -985,7 +985,7 @@ impl BakeAnvilMaterial {
         for &(slot, value) in recipe.engine {
             let ao = recipe.terrain.is_some_and(|t| t.ao_texture == slot);
             let value = if ao { self.terrain_ao } else { value };
-            textures.insert(slot, primase_shader_exec::Texture::Constant([value; 4]));
+            textures.insert(slot, primase_shader_exec::View::Constant([value; 4]));
         }
         let slots: Vec<u32> = if recipe.zones {
             PixelShader::textures(&shader)
@@ -1015,7 +1015,7 @@ impl BakeAnvilMaterial {
                     _ => None,
                 };
                 if let Some(v) = fixed {
-                    textures.insert(75 + slot, primase_shader_exec::Texture::Constant(v));
+                    textures.insert(75 + slot, primase_shader_exec::View::Constant(v));
                     continue;
                 }
             }
@@ -1025,12 +1025,12 @@ impl BakeAnvilMaterial {
                     s == slot && row.is_none_or(|r| rows.get(&r).is_some_and(|v| v[0] == 0.0))
                 }) =>
                 {
-                    textures.insert(75 + slot, primase_shader_exec::Texture::Constant([0.0; 4]));
+                    textures.insert(75 + slot, primase_shader_exec::View::Constant([0.0; 4]));
                     continue;
                 }
                 // resolved to none: white, as `unset=white` states
                 None => {
-                    textures.insert(75 + slot, primase_shader_exec::Texture::Constant([1.0; 4]));
+                    textures.insert(75 + slot, primase_shader_exec::View::Constant([1.0; 4]));
                     continue;
                 }
             };
@@ -1055,7 +1055,7 @@ impl BakeAnvilMaterial {
             if recipe.coverage == Some(slot) {
                 coverage_image = Some(image.clone());
             }
-            textures.insert(75 + slot, primase_shader_exec::Texture::Image(image));
+            textures.insert(75 + slot, primase_shader_exec::View::Image(image));
         }
         // the cut-out: the coverage texture's alpha against the Material's `AlphaTestValue`, where it tests alpha
         // (the discard of the alpha-tested permutations: `alpha - reference < 0`)
@@ -1070,7 +1070,7 @@ impl BakeAnvilMaterial {
             .map(|_| f32::from(m.flags.alpha_test_value) / 255.0);
         if recipe.skin {
             let tone = self.skin_tone.ok_or("no skin-tone")?;
-            textures.insert(70, primase_shader_exec::Texture::Buffer(skin_record(tone)));
+            textures.insert(70, primase_shader_exec::View::Typed(skin_record(tone)));
         }
         let constant = |v: [f32; 4]| Input::Constant(v);
         let mut inputs = BTreeMap::from([
@@ -1083,6 +1083,7 @@ impl BakeAnvilMaterial {
         if let Some(colour) = recipe.vertex_colour {
             inputs.insert(("COLOR".to_owned(), 0), constant(colour.value));
         }
+        let textures = primase_shader_exec::Views::refusing(textures);
         let raw = evaluate_raw_with(
             primase_core::parallel::Threads::of(w),
             &shader,

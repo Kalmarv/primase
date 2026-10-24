@@ -4,7 +4,7 @@
 //! limits.
 use primase_shader::{D3dSignature, Interface, Label, ScalarType, Stage, Value, Varying, VaryingProvenance};
 use primase_shader_exec::{
-    Execution, Input, Layout, PixelShader, Sampler, Texture, evaluate::Constants, evaluate_periodic,
+    Execution, Input, Layout, PixelShader, Sampler, Views, evaluate::Constants, evaluate_periodic,
 };
 use std::collections::BTreeMap;
 
@@ -83,7 +83,7 @@ fn bake(f: fn(f32, f32) -> f32, cells: u32, texels: u32) -> Vec<f32> {
     let e = evaluate_periodic(
         &s,
         &Constants::new(&Layout::default()),
-        &BTreeMap::<u32, Texture>::new(),
+        &Views::refusing(BTreeMap::new()),
         &inputs,
         cells,
         texels,
@@ -171,7 +171,7 @@ fn sizes_are_checked_and_unwritten_targets_are_none() {
     let s = shader(|u, _| u);
     let inputs = BTreeMap::from([(("TEXCOORD".to_owned(), 0), Input::GridUv)]);
     let constants = Constants::new(&Layout::default());
-    let textures = BTreeMap::<u32, Texture>::new();
+    let textures = Views::refusing(BTreeMap::new());
     let run = |cells, texels| {
         evaluate_periodic(
             &s,
@@ -205,7 +205,7 @@ fn on_any_thread_count_the_bake_is_the_serial_one() {
             primase_core::parallel::Threads::new(n).unwrap(),
             &s,
             &Constants::new(&Layout::default()),
-            &BTreeMap::<u32, Texture>::new(),
+            &Views::refusing(BTreeMap::new()),
             &inputs,
             3,
             5,

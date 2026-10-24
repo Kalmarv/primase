@@ -7,7 +7,7 @@ use primase_shader::{
 };
 use primase_shader_exec::ProgramShader;
 use primase_shader_exec::{
-    Execution, Field, Grid, Image, Input, Lane, Layout, PixelShader, Sampler, Texture, evaluate,
+    Execution, Field, Grid, Image, Input, Lane, Layout, PixelShader, Sampler, View, Views, evaluate,
     evaluate::Constants,
 };
 use std::collections::BTreeMap;
@@ -70,7 +70,7 @@ fn constants(layout: &Layout) -> Constants {
 
 #[test]
 fn both_bytecodes_evaluate_the_fixture_as_worked_out() {
-    let textures = BTreeMap::from([(3, Texture::Image(Arc::new(Coordinates)))]);
+    let textures = Views::refusing(BTreeMap::from([(3, View::Image(Arc::new(Coordinates)))]));
     for (name, shader) in shaders() {
         let layout = Layout::of(shader.as_ref()).unwrap();
         // cbuffer Material: tint at byte 0 (4 words), tiling at 16 (2), strength packed after it at 24 (1); the
@@ -122,7 +122,7 @@ fn both_bytecodes_evaluate_the_fixture_as_worked_out() {
 
 #[test]
 fn what_the_program_needs_and_is_not_given_is_refused() {
-    let textures = BTreeMap::from([(3, Texture::Constant([1.; 4]))]);
+    let textures = Views::refusing(BTreeMap::from([(3, View::Constant([1.; 4]))]));
     let grid = Grid {
         size: 2,
         period: [1., 1.],
@@ -144,7 +144,7 @@ fn what_the_program_needs_and_is_not_given_is_refused() {
             message(evaluate(
                 shader,
                 &c,
-                &BTreeMap::new(),
+                &Views::refusing(BTreeMap::new()),
                 &inputs(),
                 grid,
                 &[(0, 15)]
@@ -335,7 +335,7 @@ fn quads_give_the_scalar_outputs_and_their_footprints() {
     let targets = [(0, 15), (2, 15)];
     for size in [2, 3] {
         let footprints = Arc::new(Footprints::default());
-        let textures = BTreeMap::from([(3, Texture::Image(footprints.clone()))]);
+        let textures = Views::refusing(BTreeMap::from([(3, View::Image(footprints.clone()))]));
         let grid = Grid {
             size,
             period: [1., 1.],
@@ -482,21 +482,21 @@ fn a_constant_texture_answers_loads() {
         period: [1.; 2],
     };
     let constants = Constants::new(&Layout::default());
-    let run = |texture: Texture| {
+    let run = |texture: View| {
         primase_shader_exec::evaluate_raw(
             &shader,
             &constants,
-            &BTreeMap::from([(0, texture)]),
+            &Views::refusing(BTreeMap::from([(0, texture)])),
             &BTreeMap::new(),
             grid,
             &[(0, 15)],
             primase_shader_exec::Invocation::Scalar,
         )
     };
-    let raw = run(Texture::Constant([0.25, -1., 0., 2.])).unwrap();
+    let raw = run(View::Constant([0.25, -1., 0., 2.])).unwrap();
     let bits = [0.25f32, -1., 0., 2.].map(f32::to_bits);
     assert!(raw.pixels[0].iter().all(|&p| p == (bits, 15)));
-    assert!(run(Texture::Image(Arc::new(Coordinates))).is_err());
+    assert!(run(View::Image(Arc::new(Coordinates))).is_err());
 }
 
 /// A buffer answers a load with the element at the texel's x (here 1), as its four words; a load past its end is an
@@ -515,18 +515,18 @@ fn a_buffer_answers_loads_by_element() {
         period: [1.; 2],
     };
     let constants = Constants::new(&Layout::default());
-    let run = |texture: Texture| {
+    let run = |texture: View| {
         primase_shader_exec::evaluate_raw(
             &shader,
             &constants,
-            &BTreeMap::from([(0, texture)]),
+            &Views::refusing(BTreeMap::from([(0, texture)])),
             &BTreeMap::new(),
             grid,
             &[(0, 15)],
             primase_shader_exec::Invocation::Scalar,
         )
     };
-    let raw = run(Texture::Buffer(Arc::from([[1, 2, 3, 4], [5, 6, 7, 8]]))).unwrap();
+    let raw = run(View::Typed(Arc::from([[1, 2, 3, 4], [5, 6, 7, 8]]))).unwrap();
     assert!(raw.pixels[0].iter().all(|&p| p == ([5, 6, 7, 8], 15)));
-    assert!(run(Texture::Buffer(Arc::from([[1, 2, 3, 4]]))).is_err());
+    assert!(run(View::Typed(Arc::from([[1, 2, 3, 4]]))).is_err());
 }

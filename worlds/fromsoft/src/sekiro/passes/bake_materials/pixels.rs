@@ -194,11 +194,11 @@ pub(super) fn bake(
                         .entry("sampler LOD bias omitted by base-mip bake".into())
                         .or_default() += 1;
                 }
-                primase_shader_exec::Texture::Image(image(texture, use_sampler)?)
+                primase_shader_exec::View::Image(image(texture, use_sampler)?)
             }
             TextureSource::Default { value, why } => {
                 *policies.entry(why.clone()).or_default() += 1;
-                primase_shader_exec::Texture::Constant(*value)
+                primase_shader_exec::View::Constant(*value)
             }
             TextureSource::Frame(frame) => {
                 return Err(format!("frame texture {frame:?} cannot be baked as a material"));
@@ -207,6 +207,7 @@ pub(super) fn bake(
         };
         textures.insert(slot, value);
     }
+    let textures = primase_shader_exec::Views::refusing(textures);
     let largest = source_size[0].max(source_size[1]);
     let requested_size = if largest == 0 { cap } else { largest };
     let size = cap.min(requested_size);

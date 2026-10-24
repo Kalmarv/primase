@@ -13,7 +13,7 @@
 //! E(x)) bakes exactly; any other is changed in the first cell of each axis only, to the blend above.
 
 use crate::evaluate::Constants;
-use crate::{Error, Evaluation, Grid, Input, PixelShader, Texture, evaluate_with};
+use crate::{Error, Evaluation, Grid, Input, PixelShader, Views, evaluate_with};
 use primase_core::parallel::Threads;
 use std::collections::BTreeMap;
 
@@ -33,7 +33,7 @@ fn error(detail: impl Into<String>) -> Error {
 pub fn evaluate_periodic(
     shader: &dyn PixelShader,
     constants: &Constants,
-    textures: &BTreeMap<u32, Texture>,
+    textures: &Views,
     inputs: &BTreeMap<(String, u32), Input>,
     cells: u32,
     texels: u32,
@@ -58,7 +58,7 @@ pub fn evaluate_periodic_with(
     threads: Threads,
     shader: &dyn PixelShader,
     constants: &Constants,
-    textures: &BTreeMap<u32, Texture>,
+    textures: &Views,
     inputs: &BTreeMap<(String, u32), Input>,
     cells: u32,
     texels: u32,

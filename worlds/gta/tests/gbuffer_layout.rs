@@ -24,7 +24,7 @@ use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
 use primase_shader_exec::ProgramShader;
 use primase_shader_exec::{
-    Grid, Input, Invocation, Layout, PixelShader, Texture, evaluate::Constants, evaluate_raw,
+    Grid, Input, Invocation, Layout, PixelShader, View, Views, evaluate::Constants, evaluate_raw,
 };
 use primase_testdata::{Game, install, keys};
 
@@ -114,10 +114,11 @@ fn run_written(shader: &ProgramShader, s: Setup) -> Result<(Vec<[f32; 4]>, bool)
             .set_words(slot, 0, &vec![s.word.to_bits(); words as usize])
             .map_err(|e| e.to_string())?;
     }
-    let textures: BTreeMap<u32, Texture> = PixelShader::textures(shader)
+    let textures: BTreeMap<u32, View> = PixelShader::textures(shader)
         .iter()
-        .map(|&slot| (slot, Texture::Constant([s.texel; 4])))
+        .map(|&slot| (slot, View::Constant([s.texel; 4])))
         .collect();
+    let textures = Views::refusing(textures);
     // a tangent orthogonal to the normal, and the bitangent
     let n = s.normal;
     let t = unit([-n[1], n[0], 0.0]);

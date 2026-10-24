@@ -9,8 +9,8 @@
 use primase_core::parallel::Threads;
 use primase_shader_exec::evaluate::Constants;
 use primase_shader_exec::{
-    Error, Execution, Grid, Image, Input, Invocation, Layout, PixelShader, ProgramShader, Raw, Sampler,
-    Texture, evaluate_raw_with,
+    Error, Execution, Grid, Image, Input, Invocation, Layout, PixelShader, ProgramShader, Raw, Sampler, View,
+    Views, evaluate_raw_with,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -47,8 +47,8 @@ impl Image for Coordinates {
     }
 }
 
-fn textures() -> BTreeMap<u32, Texture> {
-    BTreeMap::from([(0, Texture::Image(Arc::new(Coordinates)))])
+fn textures() -> Views {
+    Views::refusing(BTreeMap::from([(0, View::Image(Arc::new(Coordinates)))]))
 }
 
 /// `threshold` (the sampling side) and `budget` (past which a pixel's loop does not end), as rows.
@@ -144,13 +144,10 @@ fn invocations_in_lockstep_run_as_each_runs_alone() {
     }
 }
 
-/// [`Texture`]s by slot as a [`Sampler`]: the fixture samples t0 only.
-fn textures_sample(
-    textures: &BTreeMap<u32, Texture>,
-    s: primase_shader_exec::Sample,
-) -> Result<[f32; 4], String> {
-    match textures.get(&s.texture) {
-        Some(Texture::Image(image)) => image.sample(s.uv, s.lod),
+/// The [`Views`] as a [`Sampler`]: the fixture samples t0 only.
+fn textures_sample(textures: &Views, s: primase_shader_exec::Sample) -> Result<[f32; 4], String> {
+    match textures.views.get(&s.texture) {
+        Some(View::Image(image)) => image.sample(s.uv, s.lod),
         _ => Err(format!("t{} has no texture", s.texture)),
     }
 }

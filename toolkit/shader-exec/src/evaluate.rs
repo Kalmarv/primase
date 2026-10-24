@@ -2,10 +2,9 @@
 //! program reads (constant layout and values, a texture per sampled slot, a value per used input) and which output
 //! registers it wants; the evaluator has no game names and no policy, and refuses what it is not given.
 
-use crate::{Error, Load, PixelShader, Sample, Sampler};
+use crate::{Absent, Error, PixelShader, Views};
 use primase_shader::{ConstantType, D3dClass, Interface, Member, ResourceKind};
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use primase_core::parallel::Threads;
 
@@ -199,51 +198,6 @@ impl Constants {
     }
 }
 
-/// A texture the caller samples itself (its footprint, addressing, filtering and transfer are its own policy), by the
-/// level of detail the program states ([`crate::Lod`]).
-pub trait Image: Send + Sync + std::fmt::Debug {
-    fn sample(&self, uv: [f32; 2], lod: crate::Lod) -> Result<[f32; 4], String>;
-}
-/// What a texture slot samples.
-#[derive(Clone, Debug)]
-pub enum Texture {
-    Image(Arc<dyn Image>),
-    /// One value everywhere: what a sample returns, and a load the value's bits (as a float view returns them).
-    Constant([f32; 4]),
-    /// A buffer of four-word elements: what a load of element `x` returns (an element past the end is an error); a
-    /// sample is an error.
-    Buffer(Arc<[[u32; 4]]>),
-}
-
-/// The textures by slot, answering samples and loads.
-struct Bound<'t>(&'t BTreeMap<u32, Texture>);
-
-impl Sampler for Bound<'_> {
-    fn sample(&mut self, s: Sample) -> Result<[f32; 4], String> {
-        match self.0.get(&s.texture) {
-            Some(Texture::Image(_)) if s.layer.is_some() => {
-                Err(format!("t{}: an array layer of an image", s.texture))
-            }
-            Some(Texture::Image(image)) => image.sample(s.uv, s.lod),
-            Some(Texture::Constant(c)) => Ok(*c),
-            Some(Texture::Buffer(_)) => Err(format!("t{}: a sample of a buffer", s.texture)),
-            None => Err(format!("t{} has no texture", s.texture)),
-        }
-    }
-    fn load(&mut self, l: Load) -> Result<[u32; 4], String> {
-        match self.0.get(&l.texture) {
-            Some(Texture::Constant(c)) => Ok(c.map(f32::to_bits)),
-            Some(Texture::Image(_)) => Err(format!("t{}: a load of an image", l.texture)),
-            Some(Texture::Buffer(elements)) => usize::try_from(l.texel[0])
-                .ok()
-                .and_then(|i| elements.get(i))
-                .copied()
-                .ok_or_else(|| format!("t{}: element {} of {}", l.texture, l.texel[0], elements.len())),
-            None => Err(format!("t{} has no texture", l.texture)),
-        }
-    }
-}
-
 /// One component of an input.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Lane {
@@ -327,13 +281,14 @@ pub struct Raw {
 }
 
 /// Evaluate `shader` over the grid as `invocation` says, keeping each requested output's bits and written lanes per
-/// pixel ([`Raw`]). `textures` are by bind slot (`t<n>`); a slot the program samples without one is an error.
-/// `inputs` are by (semantic, index), compared case-insensitively; a used input without one is an error. `targets`
-/// are (output register, component mask).
+/// pixel ([`Raw`]). `textures` are the views by bind slot (`t<n>`); where they refuse what they do not hold
+/// ([`Absent::Refuse`]), a slot the program samples without one is an error. `inputs` are by (semantic, index),
+/// compared case-insensitively; a used input without one is an error. `targets` are (output register, component
+/// mask).
 pub fn evaluate_raw(
     shader: &dyn PixelShader,
     constants: &Constants,
-    textures: &BTreeMap<u32, Texture>,
+    textures: &Views,
     inputs: &BTreeMap<(String, u32), Input>,
     grid: Grid,
     targets: &[(u32, u8)],
@@ -359,7 +314,7 @@ pub fn evaluate_raw_with(
     threads: Threads,
     shader: &dyn PixelShader,
     constants: &Constants,
-    textures: &BTreeMap<u32, Texture>,
+    textures: &Views,
     inputs: &BTreeMap<(String, u32), Input>,
     grid: Grid,
     targets: &[(u32, u8)],
@@ -371,7 +326,10 @@ pub fn evaluate_raw_with(
             "grid size must be 1..=4096 and its period finite and positive",
         ));
     }
-    if let Some(slot) = shader.textures().iter().find(|s| !textures.contains_key(s)) {
+    // a table that refuses what it does not hold refuses a slot the program samples before the run
+    if textures.absent == Absent::Refuse
+        && let Some(slot) = shader.textures().iter().find(|s| !textures.views.contains_key(s))
+    {
         return Err(error(0, format!("t{slot} is sampled but has no texture")));
     }
     if targets.iter().any(|&(_, mask)| mask == 0 || mask > 15) {
@@ -437,7 +395,7 @@ pub fn evaluate_raw_with(
         r
     };
     let row = |y: u32| -> Result<Kept, Error> {
-        let mut sampler = Bound(textures);
+        let mut sampler = textures;
         let mut out = Kept::default();
         let mut keep = |pixel: usize, result: &crate::Execution| {
             out.instructions += result.instructions as u64;
@@ -524,14 +482,14 @@ pub fn evaluate_raw_with(
     })
 }
 
-/// Evaluate `shader` once per grid pixel ([`Invocation::Scalar`]). `textures` are by bind slot (`t<n>`); a slot the
-/// program samples without one is an error. `inputs` are by (semantic, index), compared case-insensitively; a used
+/// Evaluate `shader` once per grid pixel ([`Invocation::Scalar`]). `textures` are as [`evaluate_raw`] takes them.
+/// `inputs` are by (semantic, index), compared case-insensitively; a used
 /// input without one is an error. `targets` are (output register, required component mask); a target written at some
 /// pixels only is an error.
 pub fn evaluate(
     shader: &dyn PixelShader,
     constants: &Constants,
-    textures: &BTreeMap<u32, Texture>,
+    textures: &Views,
     inputs: &BTreeMap<(String, u32), Input>,
     grid: Grid,
     targets: &[(u32, u8)],
@@ -545,7 +503,7 @@ pub fn evaluate_with(
     threads: Threads,
     shader: &dyn PixelShader,
     constants: &Constants,
-    textures: &BTreeMap<u32, Texture>,
+    textures: &Views,
     inputs: &BTreeMap<(String, u32), Input>,
     grid: Grid,
     targets: &[(u32, u8)],

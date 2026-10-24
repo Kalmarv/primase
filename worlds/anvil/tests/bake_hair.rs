@@ -311,11 +311,12 @@ fn kept_by_the_alpha_tested_program(w: &World, m: &AnvilMaterial, size: u32) -> 
     let mut textures = BTreeMap::new();
     textures.insert(
         75,
-        primase_shader_exec::Texture::Image(std::sync::Arc::new(Atlas(image))),
+        primase_shader_exec::View::Image(std::sync::Arc::new(Atlas(image))),
     );
     for slot in [76, 77] {
-        textures.insert(slot, primase_shader_exec::Texture::Constant([1.0; 4]));
+        textures.insert(slot, primase_shader_exec::View::Constant([1.0; 4]));
     }
+    let textures = primase_shader_exec::Views::refusing(textures);
     let constant = |v: [f32; 4]| Input::Constant(v);
     let inputs = BTreeMap::from([
         (("SV_Position".to_owned(), 0), constant([0.0, 0.0, 0.0, 1.0])),

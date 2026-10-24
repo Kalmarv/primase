@@ -150,7 +150,7 @@ fn bake(
     threads: Threads,
     shader: &(dyn PixelShader + Sync),
     constants: &primase_shader_exec::evaluate::Constants,
-    textures: &BTreeMap<u32, primase_shader_exec::Texture>,
+    textures: &primase_shader_exec::Views,
     cells: u32,
     texels: u32,
 ) -> std::result::Result<Block, String> {
@@ -368,7 +368,7 @@ impl LowerSkatebirdVoronoi {
                             1,
                         );
                     }
-                    primase_shader_exec::Texture::Image(Arc::new(
+                    primase_shader_exec::View::Image(Arc::new(
                         sampled_texture(t, u)
                             .map_err(|err| format!("{property}: {err}"))?
                             .with_footprintless_level(FOOTPRINTLESS_LEVEL)?,
@@ -390,7 +390,7 @@ impl LowerSkatebirdVoronoi {
                                 ),
                                 1,
                             );
-                            primase_shader_exec::Texture::Constant(texel)
+                            primase_shader_exec::View::Constant(texel)
                         }
                         None => {
                             return Ok(Err(format!(
@@ -403,6 +403,7 @@ impl LowerSkatebirdVoronoi {
             };
             textures.insert(slot, texture);
         }
+        let textures = primase_shader_exec::Views::refusing(textures);
         // the bindings the evaluation runs with: the material's, the extraction's, and any left zero
         let lights = {
             let mut probe = mc.constants.clone();
