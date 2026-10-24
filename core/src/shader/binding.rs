@@ -327,9 +327,19 @@ pub enum BufferTable {
     /// matrix after another, so element `i` of the buffer is row `i % rows` of matrix `i / rows`; the elements are
     /// four floats, 16 bytes.
     ObjectMatrices { rows: u8 },
+    /// [`BufferTable::ObjectMatrices`] with one header element before each matrix: the same rows and row convention, `rows`
+    /// rows of four floats after a header element of four words, so element `i` of the buffer is the header of matrix
+    /// `i / (rows + 1)` when `i % (rows + 1)` is 0 and row `i % (rows + 1) - 1` of it otherwise.
+    ///
+    /// The program reads flags from the header's first word: its bit 0 with a 16-bit offset in bits 1 to 16, and its bit 18,
+    /// each put the rows later by that many elements. A consumer writes every header as zero, which puts the rows directly
+    /// after it. That the zero header is that layout is what a program run against such a table gave (identity rows after
+    /// a zero header gave the position back), not something the engine documents.
+    HeaderedMatrices { rows: u8 },
     /// One record per instance drawn, `stride` 32-bit words each, in instance order: word `matrix_start` of a record is
-    /// the index, in elements of the table `matrices` (a [`BufferTable::ObjectMatrices`] of the same stage), of the
-    /// instance's first row. The program adds the indices of the matrices it takes (a joint's, a model's own) to it.
+    /// the index, in elements of the table `matrices` (a [`BufferTable::ObjectMatrices`] or a
+    /// [`BufferTable::HeaderedMatrices`] of the same stage), of the instance's first element: its first row, or its header
+    /// for a headered table. The program adds the indices of the matrices it takes (a joint's, a model's own) to it.
     Instances {
         stride: u8,
         matrix_start: u8,
@@ -986,7 +996,9 @@ impl StageBinding {
                     ));
                 }
                 BufferSource::Unknown { .. } => {}
-                BufferSource::Table(BufferTable::ObjectMatrices { rows }) => {
+                BufferSource::Table(
+                    BufferTable::ObjectMatrices { rows } | BufferTable::HeaderedMatrices { rows },
+                ) => {
                     if !(3..=4).contains(rows) {
                         return Err(format!(
                             "buffer slot {} holds matrices of {rows} rows, not 3 or 4",
@@ -1025,7 +1037,9 @@ impl StageBinding {
                         other.resource == *matrices
                             && matches!(
                                 other.source,
-                                BufferSource::Table(BufferTable::ObjectMatrices { .. })
+                                BufferSource::Table(
+                                    BufferTable::ObjectMatrices { .. } | BufferTable::HeaderedMatrices { .. }
+                                )
                             )
                     };
                     if !self.buffers.iter().any(is_matrices) {
@@ -1437,6 +1451,12 @@ mod tests {
             source: BufferSource::Table(BufferTable::ObjectMatrices { rows }),
         }
     }
+    fn headered(resource: u32, rows: u8) -> BufferBinding {
+        BufferBinding {
+            resource: ResourceId(resource),
+            source: BufferSource::Table(BufferTable::HeaderedMatrices { rows }),
+        }
+    }
     fn instances(resource: u32, stride: u8, matrix_start: u8, table: u32) -> BufferBinding {
         BufferBinding {
             resource: ResourceId(resource),
@@ -1505,6 +1525,27 @@ mod tests {
             buffer_binding(s, vec![matrices(10, 4), unknown("the engine fills it")]),
         );
         assert_eq!(w.get::<ShaderBinding>(m).unwrap().verify(m, &w), Ok(()));
+        // a headered table is a matrix table: records may name it, and it has the same rows and element rules
+        w.insert(
+            m,
+            buffer_binding(s, vec![headered(10, 3), instances(11, 2, 1, 10)]),
+        );
+        assert_eq!(w.get::<ShaderBinding>(m).unwrap().verify(m, &w), Ok(()));
+        let json = w.get::<ShaderBinding>(m).unwrap().to_json().unwrap().unwrap();
+        assert_eq!(
+            json["stages"][0]["buffers"][0]["source"],
+            serde_json::json!({"table": {"headered_matrices": {"rows": 3}}})
+        );
+        for (buffers, message) in [
+            (vec![headered(10, 5)], "not 3 or 4"),
+            (vec![headered(11, 3)], "has elements of 8"),
+            (vec![headered(10, 3), matrices(10, 3)], "bound twice"),
+            (vec![headered(0, 3)], "is not a buffer"),
+        ] {
+            w.insert(m, buffer_binding(s, buffers.clone()));
+            let err = w.get::<ShaderBinding>(m).unwrap().verify(m, &w).unwrap_err();
+            assert!(err.contains(message), "{buffers:?}: {err}");
+        }
     }
 
     /// A world with a shader, a texture and a material carrying the binding built from them.
