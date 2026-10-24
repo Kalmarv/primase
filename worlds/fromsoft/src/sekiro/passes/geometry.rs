@@ -731,6 +731,11 @@ impl Pass for LowerFromSoftGeometry {
             ),
         ])
     }
+    /// A read may hold no model to lower (an area of collision alone, or whose only models were the distant backdrop
+    /// `drop-fromsoft-far` left out): nothing to lower, the step recorded as skipped.
+    fn may_lack_inputs(&self) -> bool {
+        true
+    }
     fn requires(&self) -> &[&'static str] {
         match self.pose {
             Pose::Rigid => &[RigidModel::NAME, MaterialSlots::NAME],
