@@ -205,6 +205,7 @@ pub(super) fn frozen_words(
             ViewParameter::View
             | ViewParameter::Projection
             | ViewParameter::ViewProjection
+            | ViewParameter::CameraRelativeViewProjection
             | ViewParameter::InverseView
             | ViewParameter::InverseProjection,
         ) => bits(&frame.view_matrix),
