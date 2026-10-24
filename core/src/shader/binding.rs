@@ -764,7 +764,27 @@ pub struct StageBinding {
     /// source that states none, whose buffers a consumer takes as [`StageBinding::buffer`] says: unknown, with the
     /// reason it prints.
     pub buffers: Vec<BufferBinding>,
+    /// The constant buffers the source binds at other than their declared size ([`ConstantBufferBinding`]); a buffer
+    /// with no entry is bound at its declared size.
+    pub constant_buffers: Vec<ConstantBufferBinding>,
     pub outputs: Vec<OutputBinding>,
+}
+
+/// What the source states of how it binds a constant buffer of the program, beyond what its constants are.
+///
+/// A program declares a constant buffer at the size it indexes it, and a source can bind more: D3D12 bounds a constant
+/// buffer read by the size of the view the draw binds (the CBV's `SizeInBytes`), not by the shader's declaration, so a
+/// skinning palette a program declares as two matrices is bound as the hundreds the draw uploads, and a joint index past
+/// the declaration reads the palette, not zero. A lifter takes the rows of a buffer's uniform array from the bound size
+/// when it has one (`primase_shader::BoundSizes`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ConstantBufferBinding {
+    /// A constant buffer resource of the shader.
+    pub resource: ResourceId,
+    /// The bytes the source binds the buffer with, more than the program declares and a whole number of 16-byte rows;
+    /// `None` is the declared size. Where the engine binds different sizes for different draws, the largest it binds:
+    /// a consumer that fills fewer rows leaves the rest zero.
+    pub bound_size: Option<u32>,
 }
 
 /// A blend factor.
@@ -1163,7 +1183,8 @@ impl StageBinding {
                 }
             }
         }
-        self.verify_buffers(interface).map_err(at)
+        self.verify_buffers(interface).map_err(at)?;
+        self.verify_constant_buffers(interface).map_err(at)
     }
 
     /// What buffer `resource` of the program holds: its entry, or, where the source states no buffers for the stage,
@@ -1176,6 +1197,42 @@ impl StageBinding {
             .unwrap_or_else(|| BufferSource::Unknown {
                 why: "the source states no buffers for this stage".into(),
             })
+    }
+
+    /// The constant buffers the source states a binding for: each a constant buffer of the shader, once, bound at a whole
+    /// number of rows no smaller than the program declares.
+    fn verify_constant_buffers(&self, interface: &Interface) -> Result<(), String> {
+        for (n, c) in self.constant_buffers.iter().enumerate() {
+            let Some(ResourceKind::ConstantBuffer { layout }) =
+                interface.resource(c.resource).map(|r| &r.kind)
+            else {
+                return Err(format!("resource {} is not a constant buffer", c.resource.0));
+            };
+            if self.constant_buffers[..n]
+                .iter()
+                .any(|before| before.resource == c.resource)
+            {
+                return Err(format!("constant buffer {} is bound twice", c.resource.0));
+            }
+            if let Some(bytes) = c.bound_size
+                && (bytes % 16 != 0 || bytes < layout.size)
+            {
+                return Err(format!(
+                    "constant buffer {} is bound at {bytes} bytes: not a whole number of 16-byte rows, or smaller than the {} the program declares",
+                    c.resource.0, layout.size
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The bytes the constant buffer `resource` is bound with where the source states a size, else `None` (its
+    /// declared size).
+    pub fn bound_size(&self, resource: ResourceId) -> Option<u32> {
+        self.constant_buffers
+            .iter()
+            .find(|c| c.resource == resource)
+            .and_then(|c| c.bound_size)
     }
 
     /// The buffer slots: each a buffer of the shader, bound once, a matrix table of 16-byte elements, and an instance
@@ -1605,6 +1662,7 @@ mod tests {
                     },
                 }],
                 buffers: Vec::new(),
+                constant_buffers: Vec::new(),
                 outputs: vec![
                     OutputBinding {
                         label: Label {
@@ -1669,6 +1727,7 @@ mod tests {
                 constants: Vec::new(),
                 textures: Vec::new(),
                 buffers,
+                constant_buffers: Vec::new(),
                 outputs: Vec::new(),
             }],
             state: RenderState::default(),
@@ -1807,6 +1866,53 @@ mod tests {
             (vec![headered(0, 3)], "is not a buffer"),
         ] {
             w.insert(m, buffer_binding(s, buffers.clone()));
+            let err = w.get::<ShaderBinding>(m).unwrap().verify(m, &w).unwrap_err();
+            assert!(err.contains(message), "{buffers:?}: {err}");
+        }
+    }
+
+    /// The constant buffers a source binds larger than the program declares: a constant buffer of the shader, once, in whole
+    /// rows and no smaller than the declaration (16 bytes here); `None` is the declared size.
+    #[test]
+    fn a_constant_buffer_is_bound_at_a_whole_number_of_rows_no_smaller_than_declared() {
+        let mut w = World::new();
+        let (s, m) = (w.spawn(), w.spawn());
+        w.insert(s, buffer_shader());
+        let bound = |resource: u32, bound_size| ConstantBufferBinding {
+            resource: ResourceId(resource),
+            bound_size,
+        };
+        let with = |constant_buffers: Vec<ConstantBufferBinding>| {
+            let mut b = buffer_binding(s, Vec::new());
+            b.stages[0].constant_buffers = constant_buffers;
+            b
+        };
+        w.insert(m, with(vec![bound(0, Some(12_288))]));
+        let binding = w.get::<ShaderBinding>(m).unwrap();
+        assert_eq!(binding.verify(m, &w), Ok(()));
+        assert_eq!(binding.stages[0].bound_size(ResourceId(0)), Some(12_288));
+        let json = binding.to_json().unwrap().unwrap();
+        assert_eq!(
+            json["stages"][0]["constant_buffers"][0],
+            serde_json::json!({"resource": 0, "bound_size": 12288})
+        );
+        // the declared size, and a buffer with no entry
+        w.insert(m, with(vec![bound(0, None)]));
+        let binding = w.get::<ShaderBinding>(m).unwrap();
+        assert_eq!(binding.verify(m, &w), Ok(()));
+        assert_eq!(binding.stages[0].bound_size(ResourceId(0)), None);
+        assert_eq!(binding.stages[0].bound_size(ResourceId(10)), None);
+        for (buffers, message) in [
+            (vec![bound(10, Some(64))], "is not a constant buffer"),
+            (vec![bound(99, Some(64))], "is not a constant buffer"),
+            (vec![bound(0, Some(32)), bound(0, None)], "bound twice"),
+            (vec![bound(0, Some(40))], "not a whole number of 16-byte rows"),
+            (
+                vec![bound(0, Some(0))],
+                "smaller than the 16 the program declares",
+            ),
+        ] {
+            w.insert(m, with(buffers.clone()));
             let err = w.get::<ShaderBinding>(m).unwrap().verify(m, &w).unwrap_err();
             assert!(err.contains(message), "{buffers:?}: {err}");
         }

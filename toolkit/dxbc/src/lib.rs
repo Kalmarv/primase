@@ -10,7 +10,7 @@ mod opcodes;
 mod reflection;
 pub use decode::{Index, decode};
 pub use decode::{Instruction, Operand, Register, Selection};
-pub use lift::{LIFTER_VERSION, lift};
+pub use lift::{LIFTER_VERSION, lift, lift_with};
 pub use reflection::{
     SignatureElement, patch_signature_elements, reflection, resource_reflection, signature_elements,
     signatures,

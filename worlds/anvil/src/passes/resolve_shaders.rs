@@ -1027,6 +1027,7 @@ impl ResolveAnvilShaders {
             constants,
             textures: bindings,
             buffers: Vec::new(),
+            constant_buffers: Vec::new(),
             outputs,
         }
     }

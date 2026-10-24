@@ -43,12 +43,19 @@ pub const LIFTER_VERSION: u32 = 5;
 /// carry (a wide integer, a resource array, an irreducible loop, an operation it has no meaning for) is an `Err` naming
 /// the bit offset of the instruction and the reason.
 pub fn lift(container: &[u8]) -> Result<Program> {
-    let mut program = lift_program(container)?;
+    lift_with(container, &primase_shader::BoundSizes::new())
+}
+
+/// [`lift`] with the constant buffers `bound` names bound at the size it states: their uniform arrays have the rows of
+/// that size, so a read past the declaration and inside the bound is the buffer's, and the interface's layout is the
+/// bound size.
+pub fn lift_with(container: &[u8], bound: &primase_shader::BoundSizes) -> Result<Program> {
+    let mut program = lift_program(container, bound)?;
     program.provenance.source_hash = Some(primase_shader::source_hash(container));
     Ok(program)
 }
 
-fn lift_program(container: &[u8]) -> Result<Program> {
+fn lift_program(container: &[u8], bound: &primase_shader::BoundSizes) -> Result<Program> {
     let chunks = crate::parts(container)?;
     let module = crate::reflection::module(&chunks, b"DXIL")?.ok_or_else(|| error(0, "no DXIL part"))?;
     let part = crate::program(
@@ -79,7 +86,10 @@ fn lift_program(container: &[u8]) -> Result<Program> {
     };
     let mut functions = vec![entry];
     functions.extend(patch_constant);
-    let setup = setup::Setup::new(&chunks, &module, &functions)?;
+    let mut setup = setup::Setup::new(&chunks, &module, &functions)?;
+    bound
+        .apply(&mut setup.interface)
+        .map_err(|why| error(0, format!("bound sizes: {why}")))?;
     let target = format!(
         "{}_{}_{}",
         match part.program_version >> 16 {

@@ -1063,6 +1063,7 @@ impl ResolveUnityShaders {
             constants,
             textures,
             buffers: Vec::new(),
+            constant_buffers: Vec::new(),
             outputs,
         }
     }

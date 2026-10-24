@@ -703,6 +703,7 @@ impl ResolveGtaShaders {
             constants,
             textures,
             buffers: Vec::new(),
+            constant_buffers: Vec::new(),
             outputs,
         })
     }

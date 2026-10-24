@@ -22,11 +22,11 @@ use serde::Serialize;
 
 pub use binding::{
     AddressMode, AlphaTest, Blend, BlendEquation, BlendFactor, BlendOp, BufferBinding, BufferSource,
-    BufferTable, Compare, ConstantBinding, ConstantRole, Cull, DepthBias, DepthState, Fill, FrameParameter,
-    FrameTexture, InputBinding, InputRole, KeyPart, LaneStream, MatrixLines, NormalEncoding, NormalSpace,
-    ObjectMatrix, ObjectParameter, Occluded, OutputBinding, OutputRole, RenderState, SamplerState,
-    ScalarEncoding, ShaderBinding, StageBinding, Stencil, StencilFace, StencilOp, TargetState,
-    TextureBinding, TextureSource, Unshown, VariantKey, ViewParameter,
+    BufferTable, Compare, ConstantBinding, ConstantBufferBinding, ConstantRole, Cull, DepthBias, DepthState,
+    Fill, FrameParameter, FrameTexture, InputBinding, InputRole, KeyPart, LaneStream, MatrixLines,
+    NormalEncoding, NormalSpace, ObjectMatrix, ObjectParameter, Occluded, OutputBinding, OutputRole,
+    RenderState, SamplerState, ScalarEncoding, ShaderBinding, StageBinding, Stencil, StencilFace, StencilOp,
+    TargetState, TextureBinding, TextureSource, Unshown, VariantKey, ViewParameter,
 };
 pub use interface::{
     D3dSignature, DomainFacts, GeometryFacts, GsInput, GsOutput, HitGroup, HitGroupKind, HullFacts,

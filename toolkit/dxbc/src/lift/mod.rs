@@ -43,12 +43,19 @@ pub const LIFTER_VERSION: u32 = 6;
 /// Lift a DXBC container's program. A pixel or vertex program of Shader Model 4 or 5 is the scope; everything else,
 /// and every instruction or declaration the lifter does not carry, is an `Err` naming the word and the reason.
 pub fn lift(bytes: &[u8]) -> Result<Program> {
-    let mut program = lift_program(bytes)?;
+    lift_with(bytes, &primase_shader::BoundSizes::new())
+}
+
+/// [`lift`] with the constant buffers `bound` names bound at the size it states: their uniform arrays have the rows of
+/// that size, so a read past the declaration and inside the bound is the buffer's, and the interface's layout is the
+/// bound size.
+pub fn lift_with(bytes: &[u8], bound: &primase_shader::BoundSizes) -> Result<Program> {
+    let mut program = lift_program(bytes, bound)?;
     program.provenance.source_hash = Some(primase_shader::source_hash(bytes));
     Ok(program)
 }
 
-fn lift_program(bytes: &[u8]) -> Result<Program> {
+fn lift_program(bytes: &[u8], bound: &primase_shader::BoundSizes) -> Result<Program> {
     let directory = crate::parts(bytes)?;
     let code = directory
         .iter()
@@ -76,7 +83,8 @@ fn lift_program(bytes: &[u8]) -> Result<Program> {
         crate::decode::ProgramType::Geometry => Stage::Geometry,
         crate::decode::ProgramType::Domain => Stage::Domain,
     };
-    let setup = setup::Setup::new(bytes, &decoded, stage)?;
+    let mut setup = setup::Setup::new(bytes, &decoded, stage)?;
+    setup.bind_sizes(bound)?;
     let mut lift = Lift::new(&decoded, stage, setup)?;
     if let Some(sigs) = lift.setup.sigs.clone() {
         for sig in &sigs {

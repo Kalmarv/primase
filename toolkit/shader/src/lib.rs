@@ -11,6 +11,7 @@
 //! Running a program is `primase-shader-exec`, which depends on this crate.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod bound;
 pub mod build;
 pub mod d3d;
 pub mod emit;
@@ -30,6 +31,7 @@ pub use primase_core::shader::{
     TextureDim, Value, Varying, VaryingProvenance,
 };
 mod refusal;
+pub use bound::BoundSizes;
 pub use limits::{WEBGPU_BASELINE, compute_limit_notes, interface_notes};
 pub use program::{
     ClipDepth, Conventions, D3dModes, EntryIo, Error as ProgramError, FnItem, FunctionSig, IoItem, IoType,

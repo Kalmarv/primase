@@ -8,7 +8,7 @@ mod lift;
 pub mod module;
 pub mod rdat;
 pub mod reflection;
-pub use lift::{LIFTER_VERSION, lift};
+pub use lift::{LIFTER_VERSION, lift, lift_with};
 pub use reflection::interface;
 
 /// A DXIL program or container refused or unreadable: the bit it is at (in the bitcode, or eight times a byte of the

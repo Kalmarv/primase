@@ -205,6 +205,22 @@ pub(crate) struct Setup {
 }
 
 impl Setup {
+    /// Bind the constant buffers `bound` names at the sizes it states: the interface's layouts, and the rows of the
+    /// buffers' declarations with them.
+    pub(crate) fn bind_sizes(&mut self, bound: &primase_shader::BoundSizes) -> Result<()> {
+        bound
+            .apply(&mut self.interface)
+            .map_err(|why| error(0, format!("bound sizes: {why}")))?;
+        for (resource, d) in self.interface.resources.iter().zip(self.declarations.iter_mut()) {
+            if let (ResourceKind::ConstantBuffer { layout }, Declaration::ConstantBuffer { rows, .. }) =
+                (&resource.kind, d)
+            {
+                *rows = (*rows).max(layout.size.div_ceil(16));
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn empty() -> Self {
         Self {
             interface: Interface {
