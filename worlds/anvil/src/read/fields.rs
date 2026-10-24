@@ -5,7 +5,7 @@
 //! The numbers themselves are the cursor's (`c.u32(LE).field("what")?`): a failed read names its field and its exact
 //! offset ([`primase_bytes::FieldError`]).
 
-use primase_bytes::{Cursor, Endian, Field, FieldError};
+use primase_bytes::{BoundsError, Cursor, Endian, Field, FieldError};
 
 use crate::read::reference::{self, Reference};
 
@@ -13,7 +13,7 @@ use crate::read::reference::{self, Reference};
 pub(crate) const LE: Endian = Endian::Little;
 
 /// Why a body doesn't read, in the grammar's terms; a reader's error puts its record's name in front.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum BodyError {
     /// A field runs past the body, or its records' size overflows.
     #[error("body: {0}")]
@@ -35,6 +35,22 @@ pub enum BodyError {
     /// Bytes left after what the grammar reads.
     #[error("body: {0} bytes after its end")]
     Trailing(usize),
+}
+
+impl BodyError {
+    /// Why without where: the field and what is wrong with it, the same for every body that fails alike (refusals are
+    /// counted by it).
+    pub fn reason(&self) -> String {
+        match self {
+            Self::Short(e) => match e.bounds {
+                BoundsError::LengthOverflow { .. } => format!("{}: its entries' size overflows", e.what),
+                BoundsError::OutOfBounds { .. } => format!("{}: runs past the end", e.what),
+            },
+            Self::Value { what, read, .. } => format!("{what}: not {read}"),
+            Self::Reference { source, .. } => format!("reference: {source}"),
+            Self::Trailing(_) => "body: bytes after its end".to_owned(),
+        }
+    }
 }
 
 /// A reader's error from a failed field read, through its [`BodyError`] variant.

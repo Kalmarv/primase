@@ -4,7 +4,9 @@
 use std::collections::{HashMap, HashSet};
 
 use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::entity::{BOUNDING_VOLUME, ComponentBody, SKELETON_COMPONENT, StoredEntity};
+use primase_anvil::read::entity::{
+    BOUNDING_VOLUME, ComponentBody, Refusal, SKELETON_COMPONENT, StoredEntity,
+};
 use primase_anvil::read::listing::Kind;
 use primase_anvil::read::lod::StoredLodSelector;
 use primase_anvil::read::mesh::StoredMesh;
@@ -111,8 +113,29 @@ fn a_skeleton_component_that_does_not_end_where_its_headers_say_is_refused_with_
     let entity = entity_body(1, &component(4, 0x2_0000_0001, SKELETON_COMPONENT, &body));
     let e = StoredEntity::parse(&entity).expect("entity");
     assert!(
-        matches!(&e.components[0].body, ComponentBody::Refused { bytes, why } if *bytes == body && why.contains("not at the extent"))
+        matches!(&e.components[0].body, ComponentBody::Refused { bytes, why: Refusal::Ends { at, end } } if *bytes == body && at + 1 == *end)
     );
+}
+
+#[test]
+fn refusals_alike_but_for_their_positions_have_one_reason() {
+    let refused = |extra: usize| {
+        let mut body = skeleton_component(0x0177_B6B7_756A, &[], &[]);
+        body.extend(std::iter::repeat_n(0xAA, extra));
+        let entity = entity_body(1, &component(4, 0x2_0000_0001, SKELETON_COMPONENT, &body));
+        match StoredEntity::parse(&entity)
+            .expect("entity")
+            .components
+            .remove(0)
+            .body
+        {
+            ComponentBody::Refused { why, .. } => why,
+            other => panic!("not refused: {other:?}"),
+        }
+    };
+    let (one, two) = (refused(1), refused(2));
+    assert_ne!(one.to_string(), two.to_string());
+    assert_eq!(one.reason(), two.reason());
 }
 
 fn open() -> Option<Archive> {

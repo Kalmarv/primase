@@ -77,7 +77,7 @@ const GRASS_INSTANCE: u32 = 0x9C95_4A88;
 const GRASS_SETTINGS: u32 = 0x3BE0_5B93;
 
 /// Why an Entity body can't be read.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("Entity {0}")]
     Body(#[from] BodyError),
@@ -100,6 +100,46 @@ pub enum Error {
     Instance(u32),
 }
 body_error!(Error, Error::Body);
+
+impl Error {
+    /// Why without where ([`BodyError::reason`]): the same for every body that fails alike.
+    pub fn reason(&self) -> String {
+        match self {
+            Self::Body(e) => e.reason(),
+            Self::Component { kind, .. } => format!("type {kind:08X} has no length rule"),
+            Self::NoTail { kind, .. } => {
+                format!("type {kind:08X} has no length rule and the tail is not found after it")
+            }
+            Self::Headers { kind, .. } => {
+                format!(
+                    "type {kind:08X} has no length rule and the component headers following aren't the count's"
+                )
+            }
+            Self::Instance(_) => self.to_string(),
+        }
+    }
+}
+
+/// Why a component's rule refused the bytes within its extent.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Refusal {
+    /// The rule's read failed.
+    #[error("{0}")]
+    Rule(Error),
+    /// The rule read to `at`, not to the extent's `end`.
+    #[error("its rule ends at {at}, not at the extent's end {end}")]
+    Ends { at: usize, end: usize },
+}
+
+impl Refusal {
+    /// Why without where: the same for every component refused alike (they are counted by it).
+    pub fn reason(&self) -> String {
+        match self {
+            Self::Rule(e) => e.reason(),
+            Self::Ends { .. } => "its rule doesn't end at the extent's end".to_owned(),
+        }
+    }
+}
 
 /// A bounding volume as stored: its id, two corners and a u32.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -323,11 +363,10 @@ pub enum ComponentBody {
     /// A component whose bytes no rule here reads, kept as stored: its type has no length rule, its extent the
     /// headers' (an Entity's components are delimited by their tag, id and type headers: see [`StoredEntity::parse`]).
     Unread(Vec<u8>),
-    /// A component of a type read here whose rule refused the bytes within its extent (an error, or an end other than
-    /// the extent's), kept as stored with why.
+    /// A component of a type read here whose rule refused the bytes within its extent, kept as stored with why.
     Refused {
         bytes: Vec<u8>,
-        why: String,
+        why: Refusal,
     },
 }
 
@@ -1407,27 +1446,27 @@ const ENTITY_DESCRIPTOR: u32 = 0x6012_1A9E;
 impl Cursor<'_> {
     /// A component's body over the extent that ends at `end`, for the types read only so (no length rule); `None`
     /// where the type has none or the body does not read to `end`.
-    fn by_extent(&mut self, kind: u32, end: usize) -> Option<Result<ComponentBody, String>> {
+    fn by_extent(&mut self, kind: u32, end: usize) -> Option<Result<ComponentBody, Refusal>> {
         let ends = |at: usize| {
             if at == end {
                 Ok(())
             } else {
-                Err(format!("its rule ends at {at}, not at the extent's end {end}"))
+                Err(Refusal::Ends { at, end })
             }
         };
         Some(match kind {
-            GRASS_COMPONENT => self.grass_setup(end).map_err(|e| e.to_string()).and_then(|g| {
+            GRASS_COMPONENT => self.grass_setup(end).map_err(Refusal::Rule).and_then(|g| {
                 ends(self.position())?;
                 Ok(ComponentBody::GrassSetup(Box::new(g)))
             }),
-            SKELETON_COMPONENT => self.skeleton_binding().map_err(|e| e.to_string()).and_then(|b| {
+            SKELETON_COMPONENT => self.skeleton_binding().map_err(Refusal::Rule).and_then(|b| {
                 ends(self.position())?;
                 Ok(ComponentBody::Skeleton(Box::new(b)))
             }),
             ANIM_COMPONENT => self
                 .anim_binding(end)
                 .map(|b| ComponentBody::Anim(Box::new(b)))
-                .map_err(|e| e.to_string()),
+                .map_err(Refusal::Rule),
             _ => return None,
         })
     }

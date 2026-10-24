@@ -54,8 +54,8 @@ use crate::read::ddecal::{
     DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, STATIC_DDECAL, StoredDecalModel, StoredDeferredDecals,
 };
 use crate::read::entity::{
-    CollisionFilter, ComponentBody, ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, SkeletonBinding,
-    Slot, StoredEntity, StoredEntityGroup, Visual, query,
+    CollisionFilter, ComponentBody, ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, Refusal,
+    SkeletonBinding, Slot, StoredEntity, StoredEntityGroup, Visual, query,
 };
 use crate::read::grass::{GRASS_PATTERN_LIBRARY, StoredGrassLibrary};
 use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
@@ -276,8 +276,15 @@ pub struct Placed {
     /// sound and trigger components nothing here reads. A Visual or RigidBodyComponent among them is not placed.
     pub unread_components: BTreeMap<u32, u64>,
     /// The components of types read here whose rule refused their bytes ([`ComponentBody::Refused`]), kept as stored,
-    /// by type and why, once per owner placed.
-    pub refused_components: BTreeMap<(u32, String), u64>,
+    /// once per owner placed: by type and reason ([`Refusal::reason`], why without the positions).
+    pub refused_components: BTreeMap<(u32, String), Refusals>,
+}
+
+/// The components refused for one reason: how many, and the first in full.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusals {
+    pub count: u64,
+    pub first: Refusal,
 }
 
 /// The column-major 4x4 `m` as a transform, its linear part times `s`.
@@ -1840,10 +1847,14 @@ impl<'a> Placer<'a> {
             match &c.body {
                 ComponentBody::Unread(_) => *placed.unread_components.entry(c.kind).or_default() += 1,
                 ComponentBody::Refused { why, .. } => {
-                    *placed
+                    placed
                         .refused_components
-                        .entry((c.kind, why.clone()))
-                        .or_default() += 1;
+                        .entry((c.kind, why.reason()))
+                        .or_insert_with(|| Refusals {
+                            count: 0,
+                            first: why.clone(),
+                        })
+                        .count += 1;
                 }
                 _ => {}
             }
