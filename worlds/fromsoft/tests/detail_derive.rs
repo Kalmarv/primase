@@ -1,9 +1,11 @@
-//! The detail-blend equation read from Sekiro's own programs ([`primase_fromsoft::detail_derive`]): the switch-13
-//! programs prove with a material's words bound as the bake binds them, and the programs of another form are refused
-//! naming what differs. Needs the Sekiro shader corpus (`oracles.corpus/sekiro/shaders`); skipped without it.
+//! The detail-blend equation read from Sekiro's own programs ([`primase_fromsoft::detail_derive`]): the switch 0, 13 and
+//! 6 programs (one, two and three details) prove with a material's words bound as the bake binds them, and the programs
+//! of another form are refused naming what differs. Needs the Sekiro shader corpus (`oracles.corpus/sekiro/shaders`);
+//! skipped without it.
 use std::path::{Path, PathBuf};
 
-use primase_fromsoft::detail_derive::{BOUND_UNITS, derive};
+use primase_core::detail::ReflectanceTerm;
+use primase_fromsoft::detail_derive::{BOUND_UNITS, DetailSlots, derive};
 use primase_fromsoft::detail_probe::ProgramProbe;
 use primase_fromsoft::materials::LayeredMaterial;
 use primase_fromsoft::mtd::{MaterialDefinition, Parameter, Value};
@@ -40,8 +42,9 @@ fn program(name: &str) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
 
 const FIELD: &str = "Character_AMSN__DetailBlend__snp_0_";
 
-/// A DetailBlend material stating every field the switch-13 equation reads, its second detail's colour as
-/// `P_LG_M_9000_bottoms1.mtd` states it (1 at an intensity of 1.2) and its first's at an intensity of 3.
+/// A DetailBlend material stating every field the switch 0, 13 and 6 equations read, its second detail's colour as
+/// `P_LG_M_9000_bottoms1.mtd` states it (1 at an intensity of 1.2), its first's at an intensity of 3 and its third's at
+/// 2.
 fn material() -> LayeredMaterial {
     let floats = |v: &[f32]| Value::Float(v.to_vec());
     let parameters = [
@@ -49,10 +52,14 @@ fn material() -> LayeredMaterial {
         (format!("{FIELD}color_0-Intensity"), floats(&[3.])),
         (format!("{FIELD}color_5"), floats(&[1., 1., 1.])),
         (format!("{FIELD}color_5-Intensity"), floats(&[1.2])),
+        (format!("{FIELD}color_2"), floats(&[0.4, 0.5, 0.6])),
+        (format!("{FIELD}color_2-Intensity"), floats(&[2.])),
         (format!("{FIELD}float_0"), floats(&[0.25])),
         (format!("{FIELD}float_15"), floats(&[-0.1])),
+        (format!("{FIELD}float_13"), floats(&[0.125])),
         (format!("{FIELD}float_2"), floats(&[0.5])),
         (format!("{FIELD}float_16"), floats(&[0.75])),
+        (format!("{FIELD}float_5"), floats(&[0.375])),
         (format!("{FIELD}float_10"), floats(&[0.6])),
         ("g_DiffuseMapColor".to_owned(), floats(&[0.9, 0.85, 0.8])),
     ];
@@ -72,83 +79,102 @@ fn material() -> LayeredMaterial {
     }
 }
 
-/// Switch 13 (plain and with the decal textures of `_Paint`): the textures' parts read from the program, every constant
-/// solved and proven, each the word it reads as the binding writes it. The second tint is the gain (4.55, measured) times
+/// Switches 0, 13 and 6, one, two and three details (plain and with the decal textures of `_Paint`): the textures' parts
+/// read from the program, every constant solved and proven, each the word it reads as the binding writes it, the first
+/// detail's reflectance term the one reading the base mask. The second detail's tint is the gain (4.55, measured) times
 /// the colour times its intensity, so the gain is measured on top of the intensity, never folded with it.
 #[test]
-fn switch_13_proves_with_the_materials_words() -> TestResult {
-    for name in [
-        "Character_AMSN__DetailBlend__13_Gbuf.ppo",
-        "Character_AMSN__DetailBlend__13_Paint_Gbuf.ppo",
-    ] {
-        let Some(bytes) = program(name)? else {
-            return Ok(());
-        };
-        let mut probe = ProgramProbe::with_material(&bytes, &material())?;
-        // the binding writes the colour times its intensity
-        let field = probe
-            .material
-            .iter()
-            .find(|m| m.name == format!("{FIELD}color_5"))
-            .ok_or("no color_5 field")?
-            .clone();
-        let words = probe
-            .words(field.buffer, field.word, 3)
-            .ok_or("color_5 past its buffer")?;
-        assert_eq!(words, vec![1.2f32.to_bits(); 3], "{name}: color_5 as bound");
-        let d = derive(&mut probe, 7).map_err(|e| format!("{name}: {e}"))?;
-        assert_eq!(
-            (d.roles.base_colour, d.roles.base_normal, d.roles.base_mask),
-            (1, 2, 8),
-            "{name}"
-        );
-        assert_eq!(
-            (d.roles.detail_colour, d.roles.detail_normal),
-            ([0, 3], [11, 5]),
-            "{name}"
-        );
-        assert!(
-            d.proof.largest.values().all(|&u| u <= BOUND_UNITS),
-            "{name}: {:?}",
-            d.proof.largest
-        );
-        let disagreements: Vec<_> = d.disagreements().collect();
-        assert!(disagreements.is_empty(), "{name}: {disagreements:?}");
-        // every constant but the dielectric reflectance reads one word; that is the program's own
-        for f in &d.fields {
-            match f.constant.as_str() {
-                "dielectric_f0" => assert!(f.fields.is_empty() && f.solved == 0.03, "{name}: {f:?}"),
-                _ => assert!(f.fields.len() == 1 && f.agrees() == Some(true), "{name}: {f:?}"),
+fn one_two_and_three_details_prove_with_the_materials_words() -> TestResult {
+    let detail = |colour, normal| DetailSlots { colour, normal };
+    // the one-detail program's base and detail colour enter only as a product; at the same tiling (the material states
+    // none) the detail is the one it samples first
+    let cases = [
+        ("0", vec![detail(0, 11)]),
+        ("13", vec![detail(0, 11), detail(3, 5)]),
+        ("6", vec![detail(0, 11), detail(3, 5), detail(9, 13)]),
+    ];
+    for (switch, details) in cases {
+        for variant in ["", "_Paint"] {
+            let name = format!("Character_AMSN__DetailBlend__{switch}{variant}_Gbuf.ppo");
+            let Some(bytes) = program(&name)? else {
+                return Ok(());
+            };
+            let mut probe = ProgramProbe::with_material(&bytes, &material())?;
+            let d = derive(&mut probe, 7).map_err(|e| format!("{name}: {e}"))?;
+            assert_eq!(
+                (d.roles.base_colour, d.roles.base_normal, d.roles.base_mask),
+                (1, 2, 8),
+                "{name}"
+            );
+            assert_eq!(d.roles.details, details, "{name}");
+            assert!(
+                d.proof.largest.values().all(|&u| u <= BOUND_UNITS),
+                "{name}: {:?}",
+                d.proof.largest
+            );
+            for (j, t) in d.constants.details.iter().enumerate() {
+                assert_eq!(
+                    matches!(t.reflectance, ReflectanceTerm::MaskPlusBias(_)),
+                    j == 0,
+                    "{name}: detail {j}'s reflectance term {:?}",
+                    t.reflectance
+                );
+            }
+            let disagreements: Vec<_> = d.disagreements().collect();
+            assert!(disagreements.is_empty(), "{name}: {disagreements:?}");
+            // every constant but the dielectric reflectance reads one word; that is the program's own
+            for f in &d.fields {
+                match f.constant.as_str() {
+                    "dielectric_f0" => assert!(f.fields.is_empty() && f.solved == 0.03, "{name}: {f:?}"),
+                    _ => assert!(f.fields.len() == 1 && f.agrees() == Some(true), "{name}: {f:?}"),
+                }
+            }
+            let fold = d.fold.ok_or("the fold was not measured")?;
+            assert!(
+                (fold.gain - 4.55).abs() <= 4. * f32::EPSILON * 4.55,
+                "{name}: gain {}",
+                fold.gain
+            );
+            assert!(fold.largest <= BOUND_UNITS, "{name}: fold {}", fold.largest);
+            if details.len() >= 2 {
+                // the binding writes the colour times its intensity, and the gain is measured on top of it
+                let field = probe
+                    .material
+                    .iter()
+                    .find(|m| m.name == format!("{FIELD}color_5"))
+                    .ok_or("no color_5 field")?
+                    .clone();
+                let words = probe
+                    .words(field.buffer, field.word, 3)
+                    .ok_or("color_5 past its buffer")?;
+                assert_eq!(words, vec![1.2f32.to_bits(); 3], "{name}: color_5 as bound");
+                let tint1 = d
+                    .fields
+                    .iter()
+                    .find(|f| f.constant == "tint[1][0]")
+                    .ok_or("no tint[1][0]")?;
+                assert_eq!(tint1.fields, vec![(format!("{FIELD}color_5"), 0)], "{name}");
+                assert!(
+                    (d.constants.details[1].tint[0] - 4.55 * 1.2).abs() <= 8. * f32::EPSILON * 5.46,
+                    "{name}: tint {:?}",
+                    d.constants.details[1].tint
+                );
             }
         }
-        let tint1 = d
-            .fields
-            .iter()
-            .find(|f| f.constant == "tint[1][0]")
-            .ok_or("no tint[1][0]")?;
-        assert_eq!(tint1.fields, vec![(format!("{FIELD}color_5"), 0)], "{name}");
-        let fold = d.fold.ok_or("the fold was not measured")?;
-        assert!(
-            (fold.gain - 4.55).abs() <= 4. * f32::EPSILON * 4.55,
-            "{name}: gain {}",
-            fold.gain
-        );
-        assert!(fold.largest <= BOUND_UNITS, "{name}: fold {}", fold.largest);
-        assert!(
-            (d.constants.tint[1][0] - 4.55 * 1.2).abs() <= 8. * f32::EPSILON * 5.46,
-            "{name}: tint {:?}",
-            d.constants.tint
-        );
     }
     Ok(())
 }
 
-/// The programs of another form are refused, each naming its difference from the switch-13 equation.
+/// The programs of another form are refused, each naming its difference from the equation.
 #[test]
 fn other_forms_are_refused_naming_the_difference() -> TestResult {
     for (name, reason) in [
         (
             "Character_AMSN__DetailBlend__14_Gbuf.ppo",
+            "the base colour multiplies one detail only",
+        ),
+        (
+            "Character_AMSN__DetailBlend__4_Gbuf.ppo",
             "the base colour multiplies one detail only",
         ),
         (
@@ -160,7 +186,15 @@ fn other_forms_are_refused_naming_the_difference() -> TestResult {
             "the mask is not the base normal's (1 - N.a)^8",
         ),
         (
+            "Character_AMSN__DetailBlend__3_Gbuf.ppo",
+            "the reflectance term of detail 2 reads the base mask",
+        ),
+        (
             "Character_AMSN__DetailBlend__13_PhantomLite_Gbuf.ppo",
+            "(FC_PhantomDiffColor)",
+        ),
+        (
+            "Character_AMSN__DetailBlend__0_PhantomLite_Gbuf.ppo",
             "(FC_PhantomDiffColor)",
         ),
     ] {
