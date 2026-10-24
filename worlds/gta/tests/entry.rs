@@ -31,6 +31,67 @@ fn f32s(v: &Value) -> Vec<u32> {
         .collect()
 }
 
+/// Standalone vehicle modifications have no map archetype or embedded textures. CodeWalker's InitGtxds preloads
+/// vehshare, and TryGetRenderable consults that resident lookup after the local dictionary chain. These stock
+/// fragments name vehicle_generic_* maps held there, without a texture-parent relationship of their own.
+#[test]
+fn standalone_vehicle_modifications_resolve_their_resident_textures() {
+    use primase_core::Source;
+    use primase_gta::components::GtaParam;
+
+    let (Some(dir), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
+        return;
+    };
+    let source = GtaSource::open(&dir, &keys).expect("install");
+    let cases = [
+        ("polcaracara_wingb.yft", "polcaracara_mods.rpf"),
+        ("tulip_bumf_b.yft", "tulip_mods.rpf"),
+        ("rapidgt3_bumf_b.yft", "rapidgt3_mods.rpf"),
+        ("thrax_hoodbdg.yft", "thrax_mods.rpf"),
+        ("kamacho_fbumper_1a.yft", "kamacho_mods.rpf"),
+    ];
+    for (name, archive) in cases {
+        let file = source
+            .install()
+            .listing()
+            .find(|f| f.name == name && f.path.contains(archive))
+            .expect("the stock modification");
+        let (world, report) = source.read_entry(file.file).expect("the fragment");
+        let mut found = std::collections::BTreeSet::new();
+        let mut missing = Vec::new();
+        for (_, shader) in world.iter::<GtaShader>() {
+            for (_, value) in &shader.params {
+                if let GtaParam::Texture {
+                    name: Some(name),
+                    texture,
+                } = value
+                {
+                    if let Some(texture) = texture {
+                        found.insert(name.as_str());
+                        if name.starts_with("vehicle_generic") {
+                            let path = &world.get::<Source>(*texture).expect("texture source").0;
+                            assert!(path.contains("\\vehshare.ytd#"), "{name}: {path}");
+                        }
+                    } else {
+                        missing.push(name.clone());
+                    }
+                }
+            }
+        }
+        println!("{name}: resolved names {found:?}; missing {missing:?}; {report:?}");
+        // All five fragments name these four maps. Other references (such as blank or the Tulip mesh maps) are
+        // not in the resident dictionaries: they remain reported, outside the resident lookup's coverage.
+        for shared in [
+            "vehicle_generic_detail2",
+            "vehicle_generic_detail2_normal",
+            "vehicle_generic_detail_spec",
+            "vehicle_genericmud_car",
+        ] {
+            assert!(found.contains(shared), "{name}: resident {shared} is missing");
+        }
+    }
+}
+
 #[test]
 fn drawables_textures_and_the_rest_read_as_themselves() {
     let (Some(dir), Some(keys), Some(resources)) = (

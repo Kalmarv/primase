@@ -18,7 +18,7 @@
 //!   drawable's own (a ydr's; no drawable dictionary entry of the install has one).
 //! - A material per (drawable, shader) with [`GtaShader`]: every parameter by stored name, textures resolved the way
 //!   the game looks them up: the drawable's own dictionary, then the archetype's texture dictionary, then that
-//!   dictionary's parents ([`TextureParents`]), then the resident detail dictionary ([`RESIDENT`]).
+//!   dictionary's parents ([`TextureParents`]), then the resident shared dictionaries ([`RESIDENT`]).
 //! - A texture entity per (dictionary, texture): `core.texture` (blocks as stored, levels split, colour space from the
 //!   format; role `Other` until a pass knows which sampler reads it), `core.name`, `core.source`.
 #![allow(
@@ -58,10 +58,12 @@ use crate::read::archive::keys::Keys;
 use crate::read::gtxd::TextureParents;
 use crate::{Result, invalid};
 
-/// The resident detail dictionary searched last (`x64a.rpf\textures\mapdetail.ytd`, the global textures folder): detail
-/// maps (`env_*`) are bound by name and no parent chain reaches it. In Legion it is the only dictionary holding all four
-/// detail textures the chains missed (188 others hold scattered copies); CodeWalker also keeps it resident.
-const RESIDENT: &str = "mapdetail";
+/// Shared dictionaries searched after a drawable's own dictionary chain. CodeWalker 485d56b's
+/// `GameFileCache.InitGtxds` preloads mapdetail then vehshare into its resident texture-name lookup;
+/// `AddTextureLookups` replaces a name already present, so vehshare is searched first here.
+/// `Renderer.TryGetRenderable` consults this lookup after the drawable's dictionaries and their parents.
+/// This includes vehicle_generic_* maps even for fragments with no map archetype or parent chain.
+const RESIDENT: [&str; 2] = ["vehshare", "mapdetail"];
 
 /// One map state's asset lookup: its archive set (the live files) and its texture dictionary parents.
 #[derive(Clone, Copy, Debug)]
@@ -129,11 +131,11 @@ impl Lookup<'_> {
     }
 
     /// The texture dictionaries the game searches after a drawable's own, by name hash: the archetype's, that
-    /// dictionary's parents ([`TextureParents::chain`]), then the resident detail dictionary ([`RESIDENT`]).
+    /// dictionary's parents ([`TextureParents::chain`]), then the resident shared dictionaries ([`RESIDENT`]).
     pub fn texture_dictionaries(&self, txd: u32) -> Vec<u32> {
         std::iter::once(txd)
             .chain(self.parents.chain(txd))
-            .chain(std::iter::once(primase_hash::joaat(RESIDENT.as_bytes())))
+            .chain(RESIDENT.map(|name| primase_hash::joaat(name.as_bytes())))
             .collect()
     }
 
@@ -940,6 +942,50 @@ mod tests {
     use crate::rage::drawable::{Element, Geometry};
     use crate::rage::sga::BufferFormat;
     use primase_core::{Semantic, Stream};
+
+    /// A hand-worked dictionary chain: local files precede the global lookup. CodeWalker loads vehshare after
+    /// mapdetail and overwrites duplicate resident names, so its global precedence is vehshare then mapdetail.
+    #[test]
+    fn local_texture_dictionaries_precede_both_resident_dictionaries() {
+        use crate::read::archive::archive_set::{ArchiveSet, FileRef};
+        use crate::read::assets::{AssetNames, Lookup};
+        use crate::read::gtxd::TextureParents;
+        let hash = |name: &str| primase_hash::joaat(name.as_bytes());
+        let set = ArchiveSet::made_up(
+            &["own.ytd", "parent.ytd", "vehshare.ytd", "mapdetail.ytd"],
+            &[
+                ("ytd", 10, 0),
+                ("ytd", 11, 1),
+                ("ytd", hash("vehshare"), 2),
+                ("ytd", hash("mapdetail"), 3),
+            ],
+        );
+        let parents = TextureParents {
+            parents: [(10, 11), (11, 12)].into(),
+            ..TextureParents::default()
+        };
+        let lookup = Lookup {
+            set: &set,
+            parents: &parents,
+        };
+        assert_eq!(
+            lookup.texture_dictionaries(10),
+            [10, 11, 12, hash("vehshare"), hash("mapdetail")]
+        );
+        // The payload identity must include the resident files too, including an absent intermediate parent.
+        let payload = lookup.payload(AssetNames {
+            asset_type: 2,
+            asset_name: 42,
+            drawable_dictionary: 0,
+            texture_dictionary: 10,
+        });
+        let file = |entry| Some(FileRef { archive: 0, entry });
+        assert_eq!(payload.textures, [file(0), file(1), None, file(2), file(3)]);
+        assert_eq!(
+            lookup.texture_dictionaries(0),
+            [0, hash("vehshare"), hash("mapdetail")]
+        );
+    }
 
     /// An install path splits into its archive chain and file; a dictionary entry's hash leads the item.
     #[test]

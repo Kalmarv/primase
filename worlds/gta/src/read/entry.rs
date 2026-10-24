@@ -278,7 +278,7 @@ impl GtaSource {
 }
 
 /// An archetype for a drawable no live map types file names: its asset and nothing else, in particular no texture
-/// dictionary (the drawable's own textures and the resident detail dictionary are all its materials can find).
+/// dictionary (the drawable's own textures and the resident shared dictionaries are all its materials can find).
 pub(crate) fn made_archetype(asset_type: i32, asset_name: u32, dictionary: u32) -> GtaArchetype {
     GtaArchetype {
         ytyp: String::new(),
