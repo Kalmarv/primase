@@ -7,6 +7,7 @@
 //! one byte per cell, 0 a hole (none stored: no holes). Alphamaps hold four layer weights per texel (RGBA), texel
 //! row 0 at z = 0 as Unity stores rows.
 
+use crate::components::check_heightmap;
 use crate::read::player::{ObjRef, Player};
 use crate::read::value::{Array, Value};
 use crate::{Result, invalid};
@@ -105,45 +106,26 @@ fn pptrs(player: &Player, file: &str, items: &[Value], field: Option<&str>) -> R
 }
 
 impl TerrainData {
-    /// Read the TerrainData `r` of `player`.
+    /// Read the TerrainData `r` of `player`, its heightmap as [`check_heightmap`] requires.
     pub fn read(player: &Player, r: &ObjRef) -> Result<Self> {
         let t = player.decode(r)?;
         let hm = get(&t, "m_Heightmap")?;
-        let resolution = int(hm, "m_Resolution")? as u32;
+        let resolution = int(hm, "m_Resolution")?;
+        let resolution = u32::try_from(resolution)
+            .map_err(|_| invalid(format!("terrain: resolution {resolution} is not a sample count")))?;
         let heights = match get(hm, "m_Heights")? {
             Value::Array(Array::I16(h)) => h.clone(),
             _ => return Err(invalid("terrain: m_Heights is not 16-bit")),
         };
-        let n = resolution as usize;
-        if heights.len() != n * n {
-            return Err(invalid(format!(
-                "terrain: {} heights for resolution {resolution}",
-                heights.len()
-            )));
-        }
-        let holes = match hm.get("m_Holes") {
-            Some(Value::Array(Array::U8(h))) if !h.is_empty() => {
-                if h.len() != (n - 1) * (n - 1) {
-                    return Err(invalid(format!(
-                        "terrain: {} holes for {} cells",
-                        h.len(),
-                        (n - 1) * (n - 1)
-                    )));
-                }
-                Some(h.clone())
-            }
+        let holes: Option<Vec<u8>> = match hm.get("m_Holes") {
+            Some(Value::Array(Array::U8(h))) if !h.is_empty() => Some(h.clone()),
             Some(Value::Array(Array::Bool(h))) if !h.is_empty() => {
-                if h.len() != (n - 1) * (n - 1) {
-                    return Err(invalid(format!(
-                        "terrain: {} holes for {} cells",
-                        h.len(),
-                        (n - 1) * (n - 1)
-                    )));
-                }
                 Some(h.iter().map(|&b| u8::from(b)).collect())
             }
             _ => None,
         };
+        check_heightmap(resolution, &heights, holes.as_deref())
+            .map_err(|e| invalid(format!("terrain: {e}")))?;
         let splat = get(&t, "m_SplatDatabase")?;
         let detail = get(&t, "m_DetailDatabase")?;
         let trees = list(detail, "m_TreeInstances")?
@@ -220,5 +202,38 @@ impl TerrainLayerData {
                 vec(&l, "m_MaskMapRemapMax", rgba)?,
             ],
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::MAX_HEIGHT;
+
+    /// A heightmap has at least one cell, its samples within 0..=32766, and one hole per cell where it has holes;
+    /// resolution 0 and 1 are refused before any cell count is taken.
+    #[test]
+    fn a_heightmap_is_checked_before_its_cells_are_counted() {
+        assert!(check_heightmap(2, &[0, 1, 2, MAX_HEIGHT], None).is_ok());
+        assert!(check_heightmap(2, &[0; 4], Some(&[1])).is_ok());
+        for resolution in [0, 1] {
+            assert_eq!(
+                check_heightmap(resolution, &[], Some(&[])).unwrap_err(),
+                format!("resolution {resolution}: a heightmap has at least 2 x 2 samples")
+            );
+        }
+        assert_eq!(
+            check_heightmap(2, &[0; 3], None).unwrap_err(),
+            "3 heights for resolution 2"
+        );
+        assert_eq!(
+            check_heightmap(2, &[0, 0, -1, 0], None).unwrap_err(),
+            "height sample 2 (row 1, column 0) is -1, outside 0..=32766"
+        );
+        assert!(check_heightmap(2, &[0, 0, 0, i16::MAX], None).is_err());
+        assert_eq!(
+            check_heightmap(3, &[0; 9], Some(&[1; 3])).unwrap_err(),
+            "3 holes for 4 cells"
+        );
     }
 }
