@@ -635,10 +635,10 @@ pub const DECLARED: &[Declared] = &[
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok-soup"),
-        status: Status::Blocked,
+        status: Status::Live,
         gate: true,
         about: r#"an independent decoder's raw triangle soup of each `havok` tagfile, `<name>.hkx.soup`; schema in toolkit/havok/README.md; worlds/fromsoft/tests/collision.rs"#,
-        source: r#"no independent producer: Sekiro's Havok 2016.2 compressed meshes have no third-party decoder (HKLib refuses SDK 20160200; Havoc gives the mesh tree as stored, undecoded; Smithbox's decoder needs HKLib's 2018 objects)"#,
+        source: r#"independent: a clean-room decoder written from the data alone (no primase decoding code, no third-party code), the primase-oracles harness dumps/havok-soup (5f6dde8, Python standard library) run over `corpus.sekiro/havok`; its README states the format facts and its counts.tsv the per-file triangles"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Sekiro, "object-hkx"),

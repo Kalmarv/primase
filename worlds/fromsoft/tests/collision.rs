@@ -1,7 +1,23 @@
 //! Compare raw collision soups with an independent decoder's (`havok-soup`, one per `havok` tagfile). No smoothing,
 //! surface selection, or frame lowering is part of this raw-file comparison.
+//!
+//! Triangle count, order and material are compared exactly. A position is compared within a bound, because the two
+//! decoders do the dequantization's arithmetic differently: this one in f32 as the stored values are (a shared vertex's
+//! `min + q * (max - min) / (2^21 - 1)`, three roundings over the domain's extent and one over the result; a packed vertex's
+//! `q * scale + offset`, two), the oracle in f64 rounded once to f32. Neither is shown to be the engine's arithmetic. Over a
+//! domain whose largest coordinate magnitude is `m`, that is at most `4 * EPSILON * m` apart, and the body's pose (composed
+//! in f64, applied in f32) adds at most as much again: [`BOUND`] `* EPSILON * m`. The oracle's positions lie within the domain
+//! padded by its 0.01 margin, so `m` is taken as the file's largest oracle coordinate magnitude plus [`PAD`]. A decoding
+//! difference (a wrong bit width, domain, codec or index) moves a position by a quantization step or more, at least
+//! `m / 2^22`, which is about 30 times the bound.
 use primase_fromsoft::collision;
 use primase_havok::Compendium;
+
+/// The position bound in units of `EPSILON * m` (the module comment derives it).
+const BOUND: f32 = 8.;
+/// The domain's margin beyond its mesh, at least the 0.01 the files store.
+const PAD: f32 = 0.02;
+
 #[test]
 fn castle_raw_soups() -> Result<(), Box<dyn std::error::Error>> {
     let Some(dir) = primase_testdata::oracle(
@@ -31,6 +47,7 @@ fn castle_raw_soups() -> Result<(), Box<dyn std::error::Error>> {
     let mut count = 0;
     let mut triangles = 0;
     let mut unmapped = 0;
+    let (mut positions, mut inexact, mut widest) = (0, 0, 0f32);
     for path in files.iter().filter(|p| p.extension().is_some_and(|e| e == "hkx")) {
         let soup = collision::read_map(&std::fs::read(path)?, Some(&comp))
             .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -39,10 +56,32 @@ fn castle_raw_soups() -> Result<(), Box<dyn std::error::Error>> {
         let n = u32::from_le_bytes(oracle[..4].try_into()?) as usize;
         assert_eq!(n, soup.triangles.len(), "{}", path.display());
         assert_eq!(oracle.len(), 4 + n * 40);
-        for (i, &actual) in soup.triangles.iter().flatten().flatten().enumerate() {
-            let expected = f32::from_le_bytes(oracle[4 + i * 4..8 + i * 4].try_into()?);
-            assert_eq!(actual, expected, "{} position {i}", path.display());
+        let expected: Vec<f32> = oracle[4..4 + n * 36]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&b| f32::from_le_bytes(b))
+            .collect();
+        let m = expected.iter().fold(0f32, |m, e| m.max(e.abs())) + PAD;
+        let unit = f32::EPSILON * m;
+        for (i, (&actual, &expected)) in soup
+            .triangles
+            .iter()
+            .flatten()
+            .flatten()
+            .zip(&expected)
+            .enumerate()
+        {
+            let apart = (actual - expected).abs() / unit;
+            assert!(
+                apart <= BOUND,
+                "{} position {i}: {actual} against {expected}, {apart} * EPSILON * {m} apart",
+                path.display()
+            );
+            inexact += usize::from(actual != expected);
+            widest = widest.max(apart);
         }
+        positions += expected.len();
         for (i, &actual) in soup.materials.iter().enumerate() {
             let start = 4 + n * 36 + i * 4;
             let expected = i32::from_le_bytes(oracle[start..start + 4].try_into()?);
@@ -55,7 +94,7 @@ fn castle_raw_soups() -> Result<(), Box<dyn std::error::Error>> {
     }
     assert!(count > 0);
     eprintln!(
-        "collision files {count}, triangles {triangles}, unmapped {unmapped}, invalid material keys {invalid_keys}: exact"
+        "collision files {count}, triangles {triangles}, unmapped {unmapped}, invalid material keys {invalid_keys}: counts, order and materials exact; positions {positions}, {inexact} not exact, widest {widest} * EPSILON * m (bound {BOUND})"
     );
     Ok(())
 }

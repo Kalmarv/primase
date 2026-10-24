@@ -64,5 +64,7 @@ compressed-mesh gate: one area's map collision binder written loose by
 `.compendium`. The FromSoft raw-soup gate additionally reads
 `oracles.corpus.sekiro/havok-soup`, an independent decoder's `<name>.hkx.soup` for
 each tagfile: little-endian u32 triangle count, count*9 f32 positions, then count
-i32 material IDs. No decoder independent of this one exists yet, so that set is
-blocked. No game assets or oracle binaries are distributed.
+i32 material IDs, written by the clean-room decoder of the primase-oracles harness
+`dumps/havok-soup`. Counts, triangle order and materials compare exactly; positions
+within a bound derived from the two decoders' different dequantization arithmetic
+(the test states it). No game assets or oracle binaries are distributed.
