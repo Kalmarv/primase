@@ -21,6 +21,7 @@ pub fn register(reg: &mut PassRegistry) {
     for spec in [
         &crate::atlas::PACK_TEXTURE_ATLAS,
         &crate::modes::SET_MATERIAL_MODES,
+        &crate::bleed::BLEED_ALPHA_COLORS,
         &crate::cap::CAP_TEXTURES,
         &crate::cutouts::CLIP_ALPHA_CUTOUTS,
         &BAKE_LAYER_CHANNELS,
@@ -327,6 +328,7 @@ mod tests {
         let names = [
             "bake-layer-channels",
             "bake-normal-scale",
+            "bleed-alpha-colors",
             "cap-textures",
             "clip-alpha-cutouts",
             "lower-textures-rgba8",
@@ -341,6 +343,7 @@ mod tests {
         let free = [
             "bake-layer-channels",
             "bake-normal-scale",
+            "bleed-alpha-colors",
             "lower-textures-rgba8",
             "normalize-normals",
         ];

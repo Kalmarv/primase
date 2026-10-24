@@ -4,6 +4,8 @@
 
 mod atlas;
 pub use atlas::{GUTTER, PACK_TEXTURE_ATLAS, PackTextureAtlas};
+mod bleed;
+pub use bleed::{BLEED_ALPHA_COLORS, BleedAlphaColors, nearest_visible};
 mod cap;
 pub use cap::{Beyond, CAP_TEXTURES, CapMode, CapRole, CapTextures, Capped, NormalDownscale, cap_texture};
 mod channels;
@@ -44,6 +46,7 @@ use thiserror::Error;
 /// any of them retires those entries. A test keeps the list equal to the `src` folder.
 pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/atlas.rs", include_bytes!("atlas.rs")),
+    ("image/bleed.rs", include_bytes!("bleed.rs")),
     ("image/cap.rs", include_bytes!("cap.rs")),
     ("image/channels.rs", include_bytes!("channels.rs")),
     ("image/cutout_field.rs", include_bytes!("cutout_field.rs")),
