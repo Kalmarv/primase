@@ -9,18 +9,18 @@
 //! - [`directional_light`]: the built-in renderer's forward globals for one directional light and nothing else (the
 //!   caller's choice of light; ambient, probes and shadows stated off), returning the fields it set so the caller
 //!   reports the bindings it evaluates with.
-//! - [`UnityImage`]: a texture as a Unity shader samples it.
+//! - [`sampled_texture`]: a texture as a Unity shader samples it.
 //!
 //! Struct fields (instancing's per-draw arrays) are not laid out: a variant drawn without instancing reads none.
 
 use std::collections::BTreeMap;
 
 use primase_core::{ColorSpace, Texture};
+use primase_image::sampling::{Address, Levels, Transfer};
 use primase_image::srgb_to_linear;
-use primase_shader_exec::{Field, Layout, evaluate::Constants};
-use primase_texcodec::TexDecoder;
+use primase_shader_exec::{Field, Filtering, Layout, SampledTexture, SamplerUse, evaluate::Constants};
 
-use crate::components::{Shape, UnityMaterial, UnityProgramVariant};
+use crate::components::{Shape, UnityMaterial, UnityProgramVariant, UnityTexture};
 use crate::{Result, invalid};
 
 /// A program bound to its layout.
@@ -169,143 +169,50 @@ pub fn directional_light(c: &mut Constants, towards: [f32; 3], color: [f32; 3]) 
     Ok(set)
 }
 
-/// How a Unity texture addresses a coordinate outside 0-1 (`TextureWrapMode`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Address {
-    Repeat,
-    Clamp,
-    Mirror,
-    MirrorOnce,
-}
-
-impl Address {
-    fn of(mode: i64) -> Address {
-        match mode {
+/// A texture as a Unity shader samples it ([`SampledTexture`]): its rows as the GPU holds them (Unity's v runs up,
+/// row 0 at v = 0, where the world stores the top row first), each axis addressed by its `TextureWrapMode` (0 repeat, 1
+/// clamp, 2 mirror, 3 mirror once), filtered by its `FilterMode` (0 point and 1 bilinear at the nearest level, 2
+/// trilinear between levels), its `m_MipBias` added to the level of detail, an sRGB texture's colour decoded before
+/// filtering. A wrap or filter mode Unity does not define is refused by its number. A sample at an implicit level
+/// without a quad footprint is refused unless the caller states the level it takes
+/// ([`SampledTexture::with_footprintless_level`]).
+pub fn sampled_texture(t: &Texture, unity: &UnityTexture) -> Result<SampledTexture> {
+    let address = |axis: usize| -> Result<Address> {
+        Ok(match unity.wrap[axis] {
+            0 => Address::Wrap,
             1 => Address::Clamp,
             2 => Address::Mirror,
             3 => Address::MirrorOnce,
-            _ => Address::Repeat,
-        }
-    }
-
-    /// Texel index `i` of a row of `n`, addressed.
-    fn index(self, i: i64, n: u32) -> usize {
-        let n = i64::from(n);
-        let i = match self {
-            Address::Repeat => i.rem_euclid(n),
-            Address::Clamp => i.clamp(0, n - 1),
-            Address::Mirror => {
-                let m = i.rem_euclid(2 * n);
-                if m < n { m } else { 2 * n - 1 - m }
-            }
-            Address::MirrorOnce => {
-                let m = if i < 0 { -i - 1 } else { i };
-                m.clamp(0, n - 1)
-            }
-        };
-        i as usize
-    }
-}
-
-/// A texture as a Unity shader samples it: the UV origin bottom-left (the world stores rows top first), each axis
-/// addressed by the texture's wrap mode, texels linear (an sRGB texture's colour decoded, as the GPU does). The filter
-/// is the texture's (`FilterMode`): point takes the nearest texel of the nearest mip, bilinear interpolates within the
-/// nearest mip, trilinear also between the two nearest mips. The mip is that of the sample's gradients (the larger
-/// footprint, in texels, of d/dx and d/dy), the largest when the sample states none.
-#[derive(Debug)]
-pub struct UnityImage {
-    /// Width, height and linear RGBA texels (top row first) of every mip, largest first.
-    levels: Vec<(u32, u32, Vec<[f32; 4]>)>,
-    address: [Address; 2],
-    filter: i64,
-}
-
-impl UnityImage {
-    /// `t` (decoded from its format) with `wrap` (u, v) and `filter` as Unity's `TextureWrapMode` and `FilterMode`.
-    pub fn new(t: &Texture, wrap: [i64; 2], filter: i64) -> Result<UnityImage> {
-        let srgb = t.color_space == ColorSpace::Srgb;
-        let mut levels = Vec::with_capacity(t.levels.len());
-        for (i, level) in t.levels.iter().enumerate() {
-            let shift = u32::try_from(i).unwrap_or(u32::MAX);
-            let w = t.width.checked_shr(shift).unwrap_or(0).max(1);
-            let h = t.height.checked_shr(shift).unwrap_or(0).max(1);
-            let px = primase_texcodec::Decoder::default()
-                .decode_rgba8(t.format, w, h, level)
-                .map_err(|e| invalid(format!("decoding a texture to sample: {e}")))?;
-            let texel = |p: &[u8; 4]| {
-                let c = |x: u8| {
-                    let x = f64::from(x) / 255.0;
-                    (if srgb { srgb_to_linear(x) } else { x }) as f32
-                };
-                [c(p[0]), c(p[1]), c(p[2]), f32::from(p[3]) / 255.0]
-            };
-            levels.push((w, h, px.as_chunks::<4>().0.iter().map(texel).collect()));
-        }
-        if levels.is_empty() {
-            return Err(invalid("a texture without levels to sample"));
-        }
-        Ok(UnityImage {
-            levels,
-            address: [Address::of(wrap[0]), Address::of(wrap[1])],
-            filter,
-        })
-    }
-
-    /// Mip `l` at `uv` (Unity's: v up), nearest or bilinear.
-    fn level(&self, l: usize, [u, v]: [f32; 2], bilinear: bool) -> [f32; 4] {
-        let (w, h, px) = &self.levels[l];
-        let at = |x: i64, y: i64| {
-            let x = self.address[0].index(x, *w);
-            // v up: texel row y from the bottom is world row h - 1 - y
-            let y = *h as usize - 1 - self.address[1].index(y, *h);
-            px[y * *w as usize + x]
-        };
-        let (fx, fy) = (f64::from(u) * f64::from(*w), f64::from(v) * f64::from(*h));
-        if !bilinear {
-            return at(fx.floor() as i64, fy.floor() as i64);
-        }
-        let (x, y) = (fx - 0.5, fy - 0.5);
-        let (x0, y0) = (x.floor(), y.floor());
-        let (tx, ty) = ((x - x0) as f32, (y - y0) as f32);
-        let (x0, y0) = (x0 as i64, y0 as i64);
-        let (a, b, c, d) = (at(x0, y0), at(x0 + 1, y0), at(x0, y0 + 1), at(x0 + 1, y0 + 1));
-        std::array::from_fn(|k| {
-            let bottom = a[k] + (b[k] - a[k]) * tx;
-            let top = c[k] + (d[k] - c[k]) * tx;
-            bottom + (top - bottom) * ty
-        })
-    }
-}
-
-impl primase_shader_exec::Image for UnityImage {
-    fn sample(&self, uv: [f32; 2], lod: primase_shader_exec::Lod) -> std::result::Result<[f32; 4], String> {
-        let (w, h, _) = self.levels[0];
-        let texels = |d: [f32; 2]| (f64::from(d[0]) * f64::from(w)).hypot(f64::from(d[1]) * f64::from(h));
-        let lod = match lod {
-            primase_shader_exec::Lod::Gradients([dx, dy]) => {
-                texels(dx).max(texels(dy)).max(1e-12).log2().max(0.0)
-            }
-            primase_shader_exec::Lod::GradientsBias([dx, dy], b) => {
-                (texels(dx).max(texels(dy)).max(1e-12).log2() + f64::from(b)).max(0.0)
-            }
-            // a scalar evaluation has no footprint: the implicit level is the finest, plus a stated bias or level
-            primase_shader_exec::Lod::Implicit => 0.0,
-            primase_shader_exec::Lod::Bias(b) => f64::from(b).max(0.0),
-            primase_shader_exec::Lod::Level(l) => f64::from(l).max(0.0),
-        };
-        let last = self.levels.len() - 1;
-        Ok(match self.filter {
-            0 => self.level((lod.round() as usize).min(last), uv, false),
-            1 => self.level((lod.round() as usize).min(last), uv, true),
-            _ => {
-                let l0 = (lod.floor() as usize).min(last);
-                let l1 = (l0 + 1).min(last);
-                let t = (lod - lod.floor()) as f32;
-                let (a, b) = (self.level(l0, uv, true), self.level(l1, uv, true));
-                std::array::from_fn(|k| a[k] + (b[k] - a[k]) * t)
+            other => {
+                return Err(invalid(format!(
+                    "TextureWrapMode {other} along {}, which Unity does not define",
+                    ["u", "v"][axis]
+                )));
             }
         })
-    }
+    };
+    let filtering = match unity.filter {
+        0 => Filtering::Point,
+        1 => Filtering::Bilinear,
+        2 => Filtering::Trilinear,
+        other => {
+            return Err(invalid(format!(
+                "FilterMode {other}, which Unity does not define"
+            )));
+        }
+    };
+    let transfer = match t.color_space {
+        ColorSpace::Srgb => Transfer::SrgbColour,
+        ColorSpace::Linear => Transfer::Stored,
+    };
+    let levels = Levels::of(t)
+        .and_then(Levels::rows_reversed)
+        .map_err(|e| invalid(format!("decoding a texture to sample: {e}")))?;
+    let sampler = SamplerUse {
+        address: [address(0)?, address(1)?],
+        mip_lod_bias: Some(unity.mip_bias),
+    };
+    SampledTexture::new(levels, transfer, sampler, filtering).map_err(invalid)
 }
 
 #[cfg(test)]
@@ -313,73 +220,104 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+    use crate::components::UnityObject;
     use primase_core::{TexFormat, TexRole};
-    use primase_shader_exec::Image;
+    use primase_shader_exec::{Image, Lod};
 
-    fn texture(width: u32, height: u32, rows_top_first: &[[u8; 4]], space: ColorSpace) -> Texture {
+    fn texture(width: u32, height: u32, levels: &[&[[u8; 4]]], space: ColorSpace) -> Texture {
         Texture {
             width,
             height,
             format: TexFormat::Rgba8Unorm,
-            levels: vec![rows_top_first.concat()],
+            levels: levels
+                .iter()
+                .map(|rows_top_first| rows_top_first.concat())
+                .collect(),
             color_space: space,
             role: TexRole::Other,
             normal: None,
         }
     }
 
+    fn unity(wrap: [i64; 2], filter: i64, mip_bias: f32) -> UnityTexture {
+        UnityTexture {
+            texture: UnityObject {
+                file: "sharedassets0.assets".into(),
+                path_id: 1,
+            },
+            format: 4,
+            srgb: false,
+            usage: 0,
+            wrap,
+            filter,
+            mip_bias,
+            not_decoded: None,
+        }
+    }
+
     /// A 2x2 texture whose top row (world) is red and green, bottom row blue and white: Unity's v = 0.25 is the
     /// bottom row; repeat wraps, clamp holds the edge; point sampling takes a texel, bilinear halfway mixes.
     #[test]
-    fn a_unity_image_samples_with_v_up_and_its_wrap() {
+    fn a_unity_texture_samples_with_v_up_and_its_wrap() {
         let t = texture(
             2,
             2,
-            &[
+            &[&[
                 [255, 0, 0, 255],
                 [0, 255, 0, 255],
                 [0, 0, 255, 255],
                 [255, 255, 255, 255],
-            ],
+            ]],
             ColorSpace::Linear,
         );
-        let point = UnityImage::new(&t, [0, 1], 0).unwrap();
+        let base = Lod::Level(0.0);
+        let point = sampled_texture(&t, &unity([0, 1], 0, 0.0)).unwrap();
+        assert_eq!(point.sample([0.25, 0.25], base).unwrap(), [0., 0., 1., 1.]);
+        assert_eq!(point.sample([0.25, 0.75], base).unwrap(), [1., 0., 0., 1.]);
+        // u repeats: 1.25 is 0.25; v clamps: 1.5 is the top row
+        assert_eq!(point.sample([1.25, 1.5], base).unwrap(), [1., 0., 0., 1.]);
+        let bilinear = sampled_texture(&t, &unity([0, 0], 1, 0.0)).unwrap();
+        assert_eq!(bilinear.sample([0.5, 0.5], base).unwrap(), [0.5, 0.5, 0.5, 1.]);
+        // an implicit level without a footprint is the caller's to state
+        assert!(point.sample([0.25, 0.25], Lod::Implicit).is_err());
+        let stated = point.with_footprintless_level(0.0).unwrap();
         assert_eq!(
-            point
-                .sample([0.25, 0.25], primase_shader_exec::Lod::Implicit)
-                .unwrap(),
+            stated.sample([0.25, 0.25], Lod::Implicit).unwrap(),
             [0., 0., 1., 1.]
         );
-        assert_eq!(
-            point
-                .sample([0.25, 0.75], primase_shader_exec::Lod::Implicit)
-                .unwrap(),
-            [1., 0., 0., 1.]
-        );
-        // u repeats: 1.25 is 0.25; v clamps: 1.5 is the top row
-        assert_eq!(
-            point
-                .sample([1.25, 1.5], primase_shader_exec::Lod::Implicit)
-                .unwrap(),
-            [1., 0., 0., 1.]
-        );
-        let bilinear = UnityImage::new(&t, [0, 0], 1).unwrap();
-        let mid = bilinear
-            .sample([0.5, 0.5], primase_shader_exec::Lod::Implicit)
-            .unwrap();
-        assert_eq!(mid, [0.5, 0.5, 0.5, 1.]);
     }
 
     /// sRGB texels are decoded to linear.
     #[test]
-    fn an_srgb_image_samples_linear() {
-        let t = texture(1, 1, &[[128, 128, 128, 128]], ColorSpace::Srgb);
-        let s = UnityImage::new(&t, [0, 0], 0)
+    fn an_srgb_texture_samples_linear() {
+        let t = texture(1, 1, &[&[[128, 128, 128, 128]]], ColorSpace::Srgb);
+        let s = sampled_texture(&t, &unity([0, 0], 0, 0.0))
             .unwrap()
-            .sample([0.5, 0.5], primase_shader_exec::Lod::Implicit)
+            .sample([0.5, 0.5], Lod::Level(0.0))
             .unwrap();
         assert!((s[0] - srgb_to_linear(128.0 / 255.0) as f32).abs() < 1e-6);
         assert!((s[3] - 128.0 / 255.0).abs() < 1e-6);
+    }
+
+    /// The texture's mip bias moves the level it is sampled at; a wrap or filter mode Unity does not define is
+    /// refused, never read as repeat or trilinear.
+    #[test]
+    fn the_mip_bias_applies_and_undefined_modes_are_refused() {
+        let black = [0, 0, 0, 255];
+        let t = texture(2, 2, &[&[black; 4], &[[255; 4]]], ColorSpace::Linear);
+        let at = |bias: f32| {
+            sampled_texture(&t, &unity([0, 0], 0, bias))
+                .unwrap()
+                .sample([0.25, 0.25], Lod::Level(0.0))
+                .unwrap()[0]
+        };
+        assert_eq!((at(0.0), at(1.0)), (0.0, 1.0));
+        for (wrap, filter) in [([4, 0], 1), ([0, -1], 1), ([0, 0], 3)] {
+            let e = sampled_texture(&t, &unity(wrap, filter, 0.0))
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("which Unity does not define"), "{e}");
+        }
     }
 
     #[test]

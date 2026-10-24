@@ -1482,6 +1482,7 @@ mod tests {
                 usage: 0,
                 wrap: [0, 0],
                 filter: 1,
+                mip_bias: 0.0,
                 not_decoded: None,
             },
         );

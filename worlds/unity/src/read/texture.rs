@@ -38,6 +38,8 @@ pub struct UnityTexture {
     pub wrap: [i64; 2],
     /// FilterMode (0 point, 1 bilinear, 2 trilinear).
     pub filter: i64,
+    /// `m_MipBias`: added to the level of detail the texture is sampled at.
+    pub mip_bias: f32,
     /// All levels, largest first, bottom row first.
     pub data: Vec<u8>,
 }
@@ -52,6 +54,12 @@ fn int(v: &Value, k: &str) -> Result<i64> {
     v.get(k)
         .and_then(Value::as_i64)
         .ok_or_else(|| invalid(format!("texture: no integer {k}")))
+}
+
+fn float(v: &Value, k: &str) -> Result<f32> {
+    v.get(k)
+        .and_then(Value::as_f32)
+        .ok_or_else(|| invalid(format!("texture: no float {k}")))
 }
 
 /// How a TextureFormat is stored, as a world format: the same bytes, or RGB24 widened to RGBA8 (alpha 255).
@@ -120,6 +128,7 @@ impl UnityTexture {
             usage: int(&t, "m_LightmapFormat")?,
             wrap: [int(settings, "m_WrapU")?, int(settings, "m_WrapV")?],
             filter: int(settings, "m_FilterMode")?,
+            mip_bias: float(settings, "m_MipBias")?,
             data,
         })
     }
@@ -240,6 +249,7 @@ mod tests {
             usage: 0,
             wrap: [0, 0],
             filter: 1,
+            mip_bias: 0.0,
             data,
         }
     }

@@ -98,6 +98,8 @@ pub struct UnityTexture {
     pub wrap: [i64; 2],
     /// FilterMode.
     pub filter: i64,
+    /// `m_MipBias`: added to the level of detail it is sampled at.
+    pub mip_bias: f32,
     pub not_decoded: Option<String>,
 }
 

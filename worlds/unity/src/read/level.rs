@@ -1158,6 +1158,7 @@ impl Builder<'_> {
                 usage: t.usage,
                 wrap: t.wrap,
                 filter: t.filter,
+                mip_bias: t.mip_bias,
                 not_decoded,
             },
         );

@@ -14,7 +14,9 @@
 //! it, counted). The evaluation grid, (K + 1) x texels a side, is at most 4096, an option beyond it refused.
 //!
 //! The bake (approximated, counted): [`primase_shader_exec::evaluate_periodic`] over a block of K x K cells of the map's
-//! coordinate at the map's own texel density (up to `max-texels`), its first cell cross-faded so the block tiles. The
+//! coordinate at the map's own texel density (up to `max-texels`), its first cell cross-faded so the block tiles. Each
+//! texture is sampled as Unity samples it ([`primase_unity::bind::sampled_texture`]); the grid is evaluated one pixel at
+//! a time, so a sample at an implicit level has no quad footprint and takes the finest level plus its bias. The
 //! program's output is lit, so the surface comes out of five evaluations, each with one white directional light (x,
 //! -x, y, -y, z) and nothing else ([`primase_unity::bind::directional_light`]: ambient, light probes and shadows off),
 //! the tangent frame the identity and the world position zero, `_Color` white: each is max(0, n.l) x albedo, so per
@@ -43,7 +45,7 @@ use primase_core::pbr::{PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World};
 use primase_image::linear_to_srgb;
 use primase_shader_exec::{Input, Lane, PixelShader};
-use primase_unity::bind::{UnityImage, bind, constants, directional_light};
+use primase_unity::bind::{bind, constants, directional_light, sampled_texture};
 use primase_unity::components::{UnityMaterial, UnityPrograms, UnityTexEnv, UnityTexture};
 
 /// The shader this pass bakes.
@@ -51,6 +53,10 @@ pub const VORONOI: &str = "Bumped Specular Voronoi";
 
 /// The largest evaluation grid a side ([`primase_shader_exec::evaluate`]'s bound).
 const GRID: u32 = 4096;
+
+/// The level of detail a texture sample at an implicit level takes: the bake evaluates one pixel at a time, with no
+/// quad footprint, at the map's own texel density, so the finest level (plus a bias the program or texture states).
+const FOOTPRINTLESS_LEVEL: f32 = 0.0;
 
 /// The five lights, towards the light: x, -x, y, -y, z.
 const LIGHTS: [[f32; 3]; 5] = [
@@ -103,8 +109,8 @@ fn tiling(m: &UnityMaterial, property: &str) -> ([f32; 2], [f32; 2]) {
 
 /// What a texture property of a material is to the bake.
 enum Source<'a> {
-    /// Its texture's pixels, with its sampler (wrap, filter).
-    Pixels(&'a Texture, [i64; 2], i64),
+    /// Its texture's pixels, with its sampler settings.
+    Pixels(&'a Texture, &'a UnityTexture),
     /// Unset on the material: the shader's declared default.
     Unset,
     /// Named, but the world holds no pixels for it: why.
@@ -122,7 +128,8 @@ fn source<'a>(w: &'a World, m: &UnityMaterial, property: &str) -> Source<'a> {
         return Source::Missing("names an object not read as a texture");
     };
     match (w.get::<Texture>(e), w.get::<UnityTexture>(e)) {
-        (Some(t), u) => Source::Pixels(t, u.map_or([0, 0], |u| u.wrap), u.map_or(1, |u| u.filter)),
+        (Some(t), Some(u)) => Source::Pixels(t, u),
+        (Some(_), None) => Source::Missing("names a texture without its sampler settings (unity.texture)"),
         (None, _) => Source::Missing("names a texture whose pixels were not decoded"),
     }
 }
@@ -350,8 +357,10 @@ impl LowerSkatebirdVoronoi {
                 )));
             };
             let texture = match source(w, m, property) {
-                Source::Pixels(t, wrap, filter) => primase_shader_exec::Texture::Image(Arc::new(
-                    UnityImage::new(t, wrap, filter).map_err(|err| err.to_string())?,
+                Source::Pixels(t, u) => primase_shader_exec::Texture::Image(Arc::new(
+                    sampled_texture(t, u)
+                        .map_err(|err| format!("{property}: {err}"))?
+                        .with_footprintless_level(FOOTPRINTLESS_LEVEL)?,
                 )),
                 Source::Missing(why) => return Ok(Err(format!("{property} {why}"))),
                 Source::Unset => {
@@ -416,7 +425,7 @@ impl LowerSkatebirdVoronoi {
             );
         }
         let size = |property: &str| match source(w, m, property) {
-            Source::Pixels(t, _, _) => Some(t.width.max(t.height)),
+            Source::Pixels(t, _) => Some(t.width.max(t.height)),
             _ => None,
         };
         let (colour, bump) = (size("_MainTex"), size("_BumpMap"));
@@ -507,6 +516,13 @@ impl LowerSkatebirdVoronoi {
                 "{VORONOI}: stochastic tiling baked as a {0} x {0}-cell block that tiles, its first cell \
                  cross-faded; Lambert, diffuse only",
                 self.cells
+            ),
+            1,
+        );
+        log.approximate(
+            &format!(
+                "{VORONOI}: samples at an implicit level evaluated without a quad's footprint, at level \
+                 {FOOTPRINTLESS_LEVEL} plus their bias"
             ),
             1,
         );
