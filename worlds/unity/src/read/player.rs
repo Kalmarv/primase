@@ -371,12 +371,32 @@ impl Player {
     }
 
     /// The quality levels of `globalgamemanagers`' QualitySettings, in order, each with its name and the skin weights
-    /// it allows; none when the player has no QualitySettings. Which level is current is a runtime setting (the player's
-    /// `m_CurrentQuality` is only the editor's default), so a consumer states the level it wants where levels differ.
+    /// it allows; none when the player has no QualitySettings. Which level is current at run time is not data a
+    /// consumer can read (see [`Player::default_quality`]), so a consumer states the level it wants where levels differ.
     pub fn quality_levels(&self) -> Result<Vec<QualityLevel>> {
+        match self.quality_settings()? {
+            Some(settings) => levels_of(&settings),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// The name of the level the build was made with: the level `m_CurrentQuality` of the player's QualitySettings
+    /// indexes (the three players read so far hold the top or only level). It is what the build states, not what the
+    /// game runs at: a game may change its quality level at run time. `None` when the player has no QualitySettings or
+    /// states no `m_CurrentQuality`; an index outside the levels is an error. (The per-platform default
+    /// `m_PerPlatformDefaultQuality` is not in a player: SkateBIRD, Sledding Game and PEAK carry none.)
+    pub fn default_quality(&self) -> Result<Option<String>> {
+        let Some(settings) = self.quality_settings()? else {
+            return Ok(None);
+        };
+        current_level(&settings, &levels_of(&settings)?)
+    }
+
+    /// The decoded QualitySettings of `globalgamemanagers`, `None` when the player has none.
+    fn quality_settings(&self) -> Result<Option<Value>> {
         const FILE: &str = "globalgamemanagers";
         let Some(f) = self.files.get(FILE) else {
-            return Ok(Vec::new());
+            return Ok(None);
         };
         let mut found = None;
         for o in &f.objects {
@@ -391,49 +411,7 @@ impl Player {
                 found = Some(self.decode(&r)?);
             }
         }
-        let Some(settings) = found else {
-            return Ok(Vec::new());
-        };
-        let levels = match settings.get("m_QualitySettings") {
-            Some(Value::Array(Array::Values(levels))) => levels.as_slice(),
-            Some(Value::Array(a)) if a.is_empty() => &[],
-            _ => {
-                return Err(invalid(format!(
-                    "{FILE}: QualitySettings without m_QualitySettings"
-                )));
-            }
-        };
-        levels
-            .iter()
-            .map(|q| {
-                let name = q
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| invalid("a quality level without a name"))?
-                    .to_owned();
-                let weights = q
-                    .get("skinWeights")
-                    .and_then(Value::as_i64)
-                    .ok_or_else(|| invalid(format!("quality level {name}: no skinWeights")))?;
-                let field = |k: &str| -> Result<&Value> {
-                    q.get(k)
-                        .ok_or_else(|| invalid(format!("quality level {name}: no {k}")))
-                };
-                Ok(QualityLevel {
-                    skin_weights: SkinWeights::from_setting(weights)?,
-                    shadows: field("shadows")?
-                        .as_i64()
-                        .ok_or_else(|| invalid(format!("quality level {name}: shadows is not a number")))?,
-                    shadow_distance: field("shadowDistance")?.as_f32().ok_or_else(|| {
-                        invalid(format!("quality level {name}: shadowDistance is not a number"))
-                    })?,
-                    shadow_cascades: field("shadowCascades")?.as_i64().ok_or_else(|| {
-                        invalid(format!("quality level {name}: shadowCascades is not a number"))
-                    })?,
-                    name,
-                })
-            })
-            .collect()
+        Ok(found)
     }
 
     /// The object a `PPtr` (`m_FileID`, `m_PathID`) found in `file` points at; `None` for a null pointer.
@@ -468,5 +446,113 @@ impl Player {
             file: target,
             path_id: pid,
         }))
+    }
+}
+
+/// The quality levels a decoded QualitySettings lists, in order.
+fn levels_of(settings: &Value) -> Result<Vec<QualityLevel>> {
+    const FILE: &str = "globalgamemanagers";
+    let levels = match settings.get("m_QualitySettings") {
+        Some(Value::Array(Array::Values(levels))) => levels.as_slice(),
+        Some(Value::Array(a)) if a.is_empty() => &[],
+        _ => {
+            return Err(invalid(format!(
+                "{FILE}: QualitySettings without m_QualitySettings"
+            )));
+        }
+    };
+    levels
+        .iter()
+        .map(|q| {
+            let name = q
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("a quality level without a name"))?
+                .to_owned();
+            let weights = q
+                .get("skinWeights")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| invalid(format!("quality level {name}: no skinWeights")))?;
+            let field = |k: &str| -> Result<&Value> {
+                q.get(k)
+                    .ok_or_else(|| invalid(format!("quality level {name}: no {k}")))
+            };
+            Ok(QualityLevel {
+                skin_weights: SkinWeights::from_setting(weights)?,
+                shadows: field("shadows")?
+                    .as_i64()
+                    .ok_or_else(|| invalid(format!("quality level {name}: shadows is not a number")))?,
+                shadow_distance: field("shadowDistance")?.as_f32().ok_or_else(|| {
+                    invalid(format!("quality level {name}: shadowDistance is not a number"))
+                })?,
+                shadow_cascades: field("shadowCascades")?.as_i64().ok_or_else(|| {
+                    invalid(format!("quality level {name}: shadowCascades is not a number"))
+                })?,
+                name,
+            })
+        })
+        .collect()
+}
+
+/// The name of the level a decoded QualitySettings' `m_CurrentQuality` indexes among `levels`, `None` where it states none.
+fn current_level(settings: &Value, levels: &[QualityLevel]) -> Result<Option<String>> {
+    let Some(current) = settings.get("m_CurrentQuality") else {
+        return Ok(None);
+    };
+    let index = current
+        .as_i64()
+        .ok_or_else(|| invalid("QualitySettings: m_CurrentQuality is not a number"))?;
+    usize::try_from(index)
+        .ok()
+        .and_then(|i| levels.get(i))
+        .map(|level| Some(level.name.clone()))
+        .ok_or_else(|| {
+            invalid(format!(
+                "QualitySettings: m_CurrentQuality {index} is not one of its {} levels",
+                levels.len()
+            ))
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn level(name: &str) -> QualityLevel {
+        QualityLevel {
+            name: name.to_owned(),
+            skin_weights: SkinWeights::from_setting(4).expect("a skin weights setting"),
+            shadows: 2,
+            shadow_distance: 50.0,
+            shadow_cascades: 4,
+        }
+    }
+
+    fn settings(current: Option<Value>) -> Value {
+        Value::Struct(
+            current
+                .map(|v| (Arc::<str>::from("m_CurrentQuality"), v))
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    /// The level the build was made with is the one `m_CurrentQuality` indexes; a player that states none has none, and
+    /// an index outside the levels is refused, not clamped.
+    #[test]
+    fn the_default_quality_is_the_level_m_current_quality_indexes() {
+        let levels = [level("Low"), level("Mid"), level("High")];
+        let name = |v| current_level(&settings(Some(v)), &levels);
+        assert_eq!(name(Value::Int(2)).unwrap().as_deref(), Some("High"));
+        assert_eq!(name(Value::UInt(0)).unwrap().as_deref(), Some("Low"));
+        assert_eq!(current_level(&settings(None), &levels).unwrap(), None);
+        for out in [Value::Int(3), Value::Int(-1), Value::UInt(99)] {
+            let error = name(out).unwrap_err().to_string();
+            assert!(error.contains("m_CurrentQuality"), "{error}");
+        }
+        assert!(name(Value::String("2".into())).is_err());
+        assert!(current_level(&settings(Some(Value::Int(0))), &[]).is_err());
     }
 }
