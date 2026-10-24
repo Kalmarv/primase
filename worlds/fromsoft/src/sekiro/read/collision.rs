@@ -43,6 +43,18 @@ fn leaf(name: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// The file of the area's collision binder that collision model `model` names (`h533700` in `m60_53_37_00`:
+/// `h60_53_37_00_533700.hkx`, lowercase as [`leaf`] compares the binder's names), `None` for a model not named `h<n>`.
+/// The `h` is matched in either case, as the game's names are not case-sensitive: Elden Ring's m60_53_37_00 names one
+/// of its six collision models `H533700`. (FromSoftware names are to be folded by one shared rule, round 8's R8-C;
+/// this match is the one this reader makes.)
+fn collision_file(area: &str, model: &str) -> Option<String> {
+    let (first, suffix) = model.split_at_checked(1)?;
+    first
+        .eq_ignore_ascii_case("h")
+        .then(|| format!("h{}_{suffix}.hkx", &area[1..]).to_ascii_lowercase())
+}
+
 /// Read every collision file the area's MSB collision parts name, of every hit filter, as `fromsoft.map_collision`
 /// entities in file-name order; with `states`, each part's clause.
 pub fn read(
@@ -64,19 +76,14 @@ pub fn read(
             .model
             .and_then(|i| layout.models.get(i))
             .ok_or_else(|| invalid("collision", part.index, "missing collision model"))?;
-        let suffix = model
-            .name
-            .strip_prefix('h')
+        let file = collision_file(area, &model.name)
             .ok_or_else(|| invalid("collision", part.index, "unexpected collision model name"))?;
         *report.parts_by_filter.entry(filter).or_default() += 1;
-        named
-            .entry(format!("h{}_{suffix}.hkx", &area[1..]))
-            .or_default()
-            .push(CollisionPart {
-                name: part.name.clone(),
-                hit_filter: filter,
-                condition: states.as_deref_mut().and_then(|s| s.clause(part)),
-            });
+        named.entry(file).or_default().push(CollisionPart {
+            name: part.name.clone(),
+            hit_filter: filter,
+            condition: states.as_deref_mut().and_then(|s| s.clause(part)),
+        });
     }
     let base = format!("{folder}/h{}", &area[1..]);
     let binder = Binder::read_split(
@@ -145,4 +152,26 @@ pub fn read(
     }
     report.missing_files = named.into_keys().collect();
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A collision model names its file in the area's binder whatever the case of its `h`; a model named otherwise
+    /// names none.
+    #[test]
+    fn a_collision_models_file_is_named_whatever_the_case_of_its_h() {
+        let area = "m60_53_37_00";
+        assert_eq!(
+            collision_file(area, "h533750").as_deref(),
+            Some("h60_53_37_00_533750.hkx")
+        );
+        assert_eq!(
+            collision_file(area, "H533700").as_deref(),
+            Some("h60_53_37_00_533700.hkx")
+        );
+        assert_eq!(collision_file(area, "m533700"), None);
+        assert_eq!(collision_file(area, ""), None);
+    }
 }
