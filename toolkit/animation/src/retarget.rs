@@ -1,6 +1,7 @@
 //! `retarget-clip`: clips moved onto a skeleton of other proportions and another rest pose, an approximation that
 //! states its choices and reports them (the exact case is `map-clip`).
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
@@ -25,8 +26,9 @@ pub enum Reference {
 /// What the target's root does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Translation {
-    /// The root-most mapped joint moves as the source's does from its reference, scaled by the ratio of their
-    /// reference heights.
+    /// Every tree-root (a mapped joint with no mapped joint above it) that the clips move is placed by its source joint's
+    /// displacement from its reference, all by one scale (the sum of their target reference heights over the sum of
+    /// their source reference heights); a tree-root no clip moves is held at its rest.
     Root,
     /// No joint moves: every target joint keeps its rest translation.
     None,
@@ -75,8 +77,8 @@ pub const RETARGET_CLIP: PassSpec = PassSpec {
         ),
         OptionSpec::choice::<Translation>(
             "translation",
-            "which joint moves: none (every target joint keeps its rest translation), or the root-most mapped joint, \
-             scaled by the reference heights",
+            "which joints move: none (every target joint keeps its rest translation), or the tree-roots (mapped joints \
+             with no mapped joint above them) the clips move, scaled by one ratio of reference heights",
         ),
     ],
     make: |g| {
@@ -225,6 +227,243 @@ fn reference_locals(
     Ok(local)
 }
 
+/// A tree-root further than this from its reference position (metres, in the source's model space) at some key of some
+/// clip of the pass is moved by the clips: 0.1 mm is above the rounding of f32 positions composed down a chain (a few
+/// micrometres at the sizes of a body, so a still root is never taken for a moving one) and below any motion anyone
+/// sees.
+pub const ANIMATED_ROOT_THRESHOLD: f64 = 1e-4;
+
+/// A moved root whose own target/source reference-height ratio differs from the common scale by more than this share
+/// of it is reported as of unequal proportion: the common scale puts it that far (of its displacement) from where its
+/// own ratio would. 5% is a body whose parts differ in proportion by more than a few centimetres in a metre.
+pub const UNEQUAL_PROPORTION_TOLERANCE: f64 = 0.05;
+
+/// What a map alone decides (the clips only for which roots move), for one `core.joint_map`.
+struct Prepared {
+    source: Skeleton,
+    target: Skeleton,
+    /// Target joint to the source joint it is paired with.
+    back: BTreeMap<JointId, JointId>,
+    source_ref: BTreeMap<JointId, Affine>,
+    target_ref_local: BTreeMap<JointId, Affine>,
+    target_ref: BTreeMap<JointId, Affine>,
+    /// The target joints, parents first.
+    order: Vec<usize>,
+    /// With `translation=root`: the tree-roots (mapped target joints with no mapped joint above them) the clips move,
+    /// each placed by its source joint's displacement times the scale.
+    animated: BTreeSet<JointId>,
+    /// That scale, or why there is none.
+    scale: Result<f64, String>,
+}
+
+impl RetargetClip {
+    fn prepare(
+        &self,
+        w: &World,
+        map: &JointMap,
+        clips: &[Entity],
+        log: &mut PassLog,
+    ) -> Result<Prepared, String> {
+        let source = w
+            .get::<Skeleton>(map.from)
+            .ok_or("the map's source is no skeleton")?
+            .clone();
+        let target = w
+            .get::<Skeleton>(map.to)
+            .ok_or("the map's target is no skeleton")?
+            .clone();
+        let pairs: BTreeMap<JointId, JointId> = map.pairs.iter().copied().collect();
+        let back: BTreeMap<JointId, JointId> = pairs.iter().map(|(a, b)| (*b, *a)).collect();
+        let source_ref = model_transforms(&source, &locals(&source, None)).map_err(|e| e.0)?;
+        let target_ref_local = reference_locals(self.reference, &source_ref, &target, &pairs)?;
+        let target_ref = {
+            let rests: BTreeMap<JointId, Rest> = target_ref_local
+                .iter()
+                .map(|(j, m)| (*j, Rest::Affine(crate::pose::transform(m))))
+                .collect();
+            model_transforms(&target, &rests).map_err(|e| e.0)?
+        };
+        let order = parents_first(&target)?;
+        let (animated, scale) = if self.translation == Translation::Root {
+            self.place_roots(
+                w,
+                map,
+                clips,
+                &source,
+                &target,
+                &back,
+                &source_ref,
+                &target_ref,
+                log,
+            )
+        } else {
+            (BTreeSet::new(), Ok(1.0))
+        };
+        Ok(Prepared {
+            source,
+            target,
+            back,
+            source_ref,
+            target_ref_local,
+            target_ref,
+            order,
+            animated,
+            scale,
+        })
+    }
+
+    /// The tree-roots of the target (mapped joints with no mapped joint above them) that the clips move, and the one
+    /// scale of their motion: the sum of their target reference heights over the sum of their source reference
+    /// heights. A tree-root no clip moves is held at its rest and has no translation. Counted and reported.
+    #[allow(clippy::too_many_arguments)]
+    fn place_roots(
+        &self,
+        w: &World,
+        map: &JointMap,
+        clips: &[Entity],
+        source: &Skeleton,
+        target: &Skeleton,
+        back: &BTreeMap<JointId, JointId>,
+        source_ref: &BTreeMap<JointId, Affine>,
+        target_ref: &BTreeMap<JointId, Affine>,
+        log: &mut PassLog,
+    ) -> (BTreeSet<JointId>, Result<f64, String>) {
+        let parent: BTreeMap<JointId, Option<JointId>> =
+            target.joints.iter().map(|j| (j.id, j.parent)).collect();
+        let mapped_above = |mut at: JointId| {
+            while let Some(p) = parent[&at] {
+                if back.contains_key(&p) {
+                    return true;
+                }
+                at = p;
+            }
+            false
+        };
+        let roots: Vec<JointId> = target
+            .joints
+            .iter()
+            .map(|j| j.id)
+            .filter(|j| back.contains_key(j) && !mapped_above(*j))
+            .collect();
+        // moved by some clip: the root's source joint, posed at every key of every clip that drives the source
+        // skeleton alone, is further from its reference than the threshold (a clip that cannot be evaluated adds
+        // nothing here and is left unretargeted with its own reason below)
+        let mut animated: BTreeSet<JointId> = BTreeSet::new();
+        'clips: for &c in clips {
+            let Some(clip) = w.get::<Clip>(c) else {
+                continue;
+            };
+            let drives: BTreeSet<Entity> = clip
+                .channels
+                .iter()
+                .filter_map(|ch| match ch.target {
+                    ClipTarget::Joint { skeleton, .. } => Some(skeleton),
+                    _ => None,
+                })
+                .collect();
+            if drives != BTreeSet::from([map.from]) {
+                continue;
+            }
+            let mut times: Vec<f32> = clip
+                .channels
+                .iter()
+                .flat_map(|ch| ch.times.iter().copied())
+                .collect();
+            times.sort_by(f32::total_cmp);
+            times.dedup();
+            for t in times {
+                if animated.len() == roots.len() {
+                    break 'clips;
+                }
+                let Ok(posed) = evaluate(clip, map.from, source, None, f64::from(t)) else {
+                    continue 'clips;
+                };
+                let Ok(src) = model_transforms(source, &locals(source, Some(&posed.pose))) else {
+                    continue 'clips;
+                };
+                for r in &roots {
+                    let s = back[r];
+                    let moved = (0..3)
+                        .map(|k| (src[&s][3][k] - source_ref[&s][3][k]).powi(2))
+                        .sum::<f64>()
+                        .sqrt();
+                    if moved > ANIMATED_ROOT_THRESHOLD {
+                        animated.insert(*r);
+                    }
+                }
+            }
+        }
+        log.count(
+            "tree roots of the target moved by the clips (placed by their source joints)",
+            animated.len() as u64,
+        );
+        log.count(
+            "tree roots of the target no clip moves (held at their rest)",
+            (roots.len() - animated.len()) as u64,
+        );
+        if animated.is_empty() {
+            return (animated, Ok(1.0));
+        }
+        let height_t = |r: &JointId| target_ref[r][3][1];
+        let height_s = |r: &JointId| source_ref[&back[r]][3][1];
+        let (sum_t, sum_s) = animated
+            .iter()
+            .fold((0.0, 0.0), |(t, s), r| (t + height_t(r), s + height_s(r)));
+        if sum_s.abs() < 1e-9 {
+            return (
+                animated,
+                Err("the source roots the clips move have reference heights that sum to 0: no scale for their motion"
+                    .to_owned()),
+            );
+        }
+        if sum_t.abs() < 1e-9 {
+            return (
+                animated,
+                Err("the target roots the clips move have reference heights that sum to 0: their motion would scale to nothing"
+                    .to_owned()),
+            );
+        }
+        let k = sum_t / sum_s;
+        let mut unequal: Vec<String> = Vec::new();
+        for r in &animated {
+            let (t, s) = (height_t(r), height_s(r));
+            if t.abs() < 1e-9 || s.abs() < 1e-9 {
+                continue;
+            }
+            let own = t / s;
+            if (own / k - 1.0).abs() > UNEQUAL_PROPORTION_TOLERANCE {
+                let name = target
+                    .joints
+                    .iter()
+                    .find(|j| j.id == *r)
+                    .map_or("?", |j| j.name.as_str());
+                unequal.push(format!("{name} {own:.3}"));
+            }
+        }
+        log.approximate(
+            &format!(
+                "root motion of {} tree roots scaled by one ratio k = {k:.4} (the sum of their target reference heights over the sum of their source reference heights)",
+                animated.len()
+            ),
+            1,
+        );
+        if !unequal.is_empty() {
+            let shown: Vec<&str> = unequal.iter().take(8).map(String::as_str).collect();
+            let more = unequal.len().saturating_sub(shown.len());
+            log.approximate(
+                &format!(
+                    "roots of unequal proportion (own target/source reference height ratio differs from k by more than {:.0}%): {}{}",
+                    UNEQUAL_PROPORTION_TOLERANCE * 100.0,
+                    shown.join(", "),
+                    if more > 0 { format!(" and {more} more") } else { String::new() }
+                ),
+                unequal.len() as u64,
+            );
+        }
+        (animated, Ok(k))
+    }
+}
+
 impl Pass for RetargetClip {
     fn name(&self) -> &'static str {
         "retarget-clip"
@@ -251,7 +490,10 @@ impl Pass for RetargetClip {
             .filter_map(|(_, b)| b.rig.map(|r| (b.clip, r)))
             .collect();
         let clips: Vec<Entity> = w.iter::<Clip>().map(|(e, _)| e).collect();
-        for c in clips {
+        // what depends on a map alone (its references, the roots the clips move and the scale of their motion) is worked
+        // out once per map, the first time a clip needs it
+        let mut prepared: BTreeMap<(Entity, Entity), Result<Prepared, String>> = BTreeMap::new();
+        for &c in &clips {
             // one clip this pass cannot retarget is left as it is and reported, not an error of the pass: the other clips
             // are still retargeted
             let outcome = (|| -> Result<(), String> {
@@ -292,67 +534,23 @@ impl Pass for RetargetClip {
                 }) {
                     return Err("it is bound to a rig of the source skeleton: retarget, then bind".to_owned());
                 }
-                let source = w
-                    .get::<Skeleton>(map.from)
-                    .ok_or("the map's source is no skeleton")?;
-                let target = w
-                    .get::<Skeleton>(map.to)
-                    .ok_or("the map's target is no skeleton")?;
-                let pairs: BTreeMap<JointId, JointId> = map.pairs.iter().copied().collect();
-                let source_ref = model_transforms(source, &locals(source, None)).map_err(|e| e.0)?;
-                let target_ref_local = reference_locals(self.reference, &source_ref, target, &pairs)?;
-                let target_ref = {
-                    let rests: BTreeMap<JointId, Rest> = target_ref_local
-                        .iter()
-                        .map(|(j, m)| (*j, Rest::Affine(crate::pose::transform(m))))
-                        .collect();
-                    model_transforms(target, &rests).map_err(|e| e.0)?
+                let prep = match prepared.entry((map.from, map.to)) {
+                    Entry::Occupied(o) => o.into_mut(),
+                    Entry::Vacant(v) => v.insert(self.prepare(w, map, &clips, log)),
                 };
-                let order = parents_first(target)?;
-                let target_parent: BTreeMap<JointId, Option<JointId>> =
-                    target.joints.iter().map(|j| (j.id, j.parent)).collect();
-                // the root: the mapped joint every other mapped joint is below (the first in parents-first order, checked)
-                let first = order
-                    .iter()
-                    .map(|&i| target.joints[i].id)
-                    .find(|j| pairs.values().any(|t| t == j));
-                let below = |mut at: JointId, top: JointId| loop {
-                    if at == top {
-                        break true;
-                    }
-                    match target_parent[&at] {
-                        Some(p) => at = p,
-                        None => break false,
-                    }
-                };
-                let root = match first {
-                    Some(r) if pairs.values().all(|&t| below(t, r)) => Some(r),
-                    Some(r) if self.translation == Translation::Root => {
-                        return Err(format!(
-                            "the mapped joints have no common root (joint {r:?} is not above all of them): \
-                         translation=none moves none"
-                        ));
-                    }
-                    _ => None,
-                };
-                let back: BTreeMap<JointId, JointId> = pairs.iter().map(|(a, b)| (*b, *a)).collect();
-                let scale = match (self.translation, root) {
-                    (Translation::Root, Some(r)) => {
-                        let (s, t) = (source_ref[&back[&r]][3][1], target_ref[&r][3][1]);
-                        if s.abs() < 1e-9 {
-                            return Err(
-                                "the source root's reference height is 0: no scale for its motion".into()
-                            );
-                        }
-                        if t.abs() < 1e-9 {
-                            return Err(format!(
-                                "the target root {r:?}'s reference height is 0: its motion would scale to nothing"
-                            ));
-                        }
-                        t / s
-                    }
-                    _ => 0.0,
-                };
+                let Prepared {
+                    source,
+                    target,
+                    back,
+                    source_ref,
+                    target_ref_local,
+                    target_ref,
+                    order,
+                    animated,
+                    scale,
+                } = prep.as_ref().map_err(String::clone)?;
+                let scale = scale.clone()?;
+                let pairs_len = back.len() as u64;
                 // key times: every key of the clip
                 let mut times: Vec<f32> = clip
                     .channels
@@ -362,13 +560,13 @@ impl Pass for RetargetClip {
                 times.sort_by(f32::total_cmp);
                 times.dedup();
                 let mut rotations: BTreeMap<JointId, Vec<f32>> = BTreeMap::new();
-                let mut root_translation: Vec<f32> = Vec::new();
+                let mut root_translation: BTreeMap<JointId, Vec<f32>> = BTreeMap::new();
                 for &t in &times {
                     let posed = evaluate(&clip, map.from, source, None, f64::from(t)).map_err(|e| e.0)?;
                     let src =
                         model_transforms(source, &locals(source, Some(&posed.pose))).map_err(|e| e.0)?;
                     let mut model: BTreeMap<JointId, Affine> = BTreeMap::new();
-                    for &i in &order {
+                    for &i in order {
                         let j = &target.joints[i];
                         let parent = j.parent.map(|p| model[&p]);
                         let rest_model = match parent {
@@ -382,7 +580,7 @@ impl Pass for RetargetClip {
                         let turn = quat::mul(rotation(&src[&s]), quat::inverse(rotation(&source_ref[&s])));
                         let q = quat::mul(turn, rotation(&target_ref[&j.id]));
                         let mut position = rest_model[3];
-                        if Some(j.id) == root && self.translation == Translation::Root {
+                        if animated.contains(&j.id) {
                             position = std::array::from_fn(|k| {
                                 target_ref[&j.id][3][k] + scale * (src[&s][3][k] - source_ref[&s][3][k])
                             });
@@ -419,8 +617,11 @@ impl Pass for RetargetClip {
                             q = q.map(|x| -x);
                         }
                         keys.extend(q);
-                        if Some(j.id) == root && self.translation == Translation::Root {
-                            root_translation.extend(moved.map(|x| x as f32));
+                        if animated.contains(&j.id) {
+                            root_translation
+                                .entry(j.id)
+                                .or_default()
+                                .extend(moved.map(|x| x as f32));
                         }
                         model.insert(j.id, m);
                     }
@@ -443,7 +644,7 @@ impl Pass for RetargetClip {
                         values,
                     });
                 }
-                if let (Some(r), false) = (root, root_translation.is_empty()) {
+                for (r, values) in root_translation {
                     channels.push(Channel {
                         target: ClipTarget::Joint {
                             skeleton: map.to,
@@ -452,10 +653,10 @@ impl Pass for RetargetClip {
                         property: Property::Translation,
                         interpolation: Interpolation::Linear,
                         times: times.clone(),
-                        values: root_translation,
+                        values,
                     });
                 }
-                let mapped_joints = pairs.len() as u64;
+                let mapped_joints = pairs_len;
                 let mut out = clip;
                 out.channels = channels;
                 w.insert(c, out);
@@ -668,8 +869,8 @@ mod tests {
         assert!(near(root0, [0.0, 2.0, 0.0]) && near(root1, [0.0, 2.0, 0.0]));
     }
 
-    /// A target whose root stands at the ground (height 0) has no ratio to scale the source's root motion by: refused
-    /// by name, not retargeted to a root that never moves.
+    /// A target whose moved root stands at the ground (height 0) has no ratio to scale the source's root motion by:
+    /// refused by name, not retargeted to a root that never moves.
     #[test]
     fn a_target_root_at_height_zero_is_refused() {
         let (mut w, target, _) = world();
@@ -677,32 +878,296 @@ mod tests {
         let report = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap();
         let why = left_unretargeted(&report);
         assert!(
-            why.len() == 1 && why[0].contains("target root") && why[0].contains("height is 0"),
+            why.len() == 1 && why[0].contains("target roots") && why[0].contains("sum to 0"),
             "{why:?}"
         );
         let report = run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap();
         assert!(left_unretargeted(&report).is_empty());
     }
 
-    /// Two mapped limbs under an unmapped root have no mapped joint above both: translation=root has nothing to move
-    /// and is refused; translation=none retargets their rotations.
+    /// Two mapped limbs under an unmapped joint are each a tree-root (no mapped joint above them): translation=root
+    /// places both by their source joints, and the unmapped joint above them keeps its rest and has no channel.
     #[test]
-    fn mapped_joints_without_a_common_root_are_refused_for_root_translation() {
+    fn mapped_joints_under_an_unmapped_joint_are_each_placed_by_their_source() {
         let (mut w, target, clip) = world();
         w.get_mut::<Skeleton>(target).unwrap().joints[2].parent = Some(JointId(10));
         let (map, _) = w.iter::<JointMap>().next().unwrap();
         w.get_mut::<JointMap>(map).unwrap().pairs.remove(0);
         let report = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap();
+        assert!(left_unretargeted(&report).is_empty());
+        let log = &report.steps[0].log;
+        assert_eq!(
+            log.counts["tree roots of the target moved by the clips (placed by their source joints)"],
+            2
+        );
+        let moved: BTreeSet<JointId> = w
+            .get::<Clip>(clip)
+            .unwrap()
+            .channels
+            .iter()
+            .filter_map(|ch| match ch.target {
+                ClipTarget::Joint { joint, .. } if ch.property == Property::Translation => Some(joint),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(moved, BTreeSet::from([JointId(20), JointId(30)]));
+    }
+
+    /// Source: hips (1) at y=1 with a leg (2) and a torso (3) 0.4 above them, and a prop (4) standing apart at x=3.
+    /// Target, twice as tall, built as c3000's model skeleton is: hips (10) with a leg (20), but the torso (30) a root
+    /// of its own at y=2.8 (not under the hips) and the prop (40) at x=6. `torso_height` is the target torso's y.
+    /// Clip "walk" moves the source hips (and with them the leg and the torso) by (1, 0, 2) over a second and turns the
+    /// torso a quarter turn about x; clip "wave" moves only the prop, by (0, 0, 1). (world, target, [walk, wave])
+    fn two_trees(torso_height: f32) -> (World, Entity, [Entity; 2]) {
+        let mut w = World::new();
+        let id = [0.0, 0.0, 0.0, 1.0];
+        let source = w.spawn();
+        w.insert(
+            source,
+            Skeleton {
+                joints: vec![
+                    joint(1, None, trs([0.0, 1.0, 0.0], id)),
+                    joint(2, Some(1), trs([0.2, -0.5, 0.0], id)),
+                    joint(3, Some(1), trs([0.0, 0.4, 0.0], id)),
+                    joint(4, None, trs([3.0, 0.0, 0.0], id)),
+                ],
+            },
+        );
+        let target = w.spawn();
+        w.insert(
+            target,
+            Skeleton {
+                joints: vec![
+                    joint(10, None, trs([0.0, 2.0, 0.0], id)),
+                    joint(20, Some(10), trs([0.4, -1.0, 0.0], id)),
+                    joint(30, None, trs([0.0, torso_height, 0.0], id)),
+                    joint(40, None, trs([6.0, 0.0, 0.0], id)),
+                ],
+            },
+        );
+        let m = w.spawn();
+        w.insert(
+            m,
+            JointMap {
+                from: source,
+                to: target,
+                pairs: vec![
+                    (JointId(1), JointId(10)),
+                    (JointId(2), JointId(20)),
+                    (JointId(3), JointId(30)),
+                    (JointId(4), JointId(40)),
+                ],
+            },
+        );
+        let channel = |joint: u32, property, values: Vec<f32>| Channel {
+            target: ClipTarget::Joint {
+                skeleton: source,
+                joint: JointId(joint),
+            },
+            property,
+            interpolation: Interpolation::Linear,
+            times: vec![0.0, 1.0],
+            values,
+        };
+        let clip = |name: &str, channels: Vec<Channel>| Clip {
+            name: name.into(),
+            duration: 1.0,
+            extrapolation: Extrapolation::Hold,
+            channels,
+            root_motion: None,
+            additive: None,
+        };
+        let walk = w.spawn();
+        w.insert(
+            walk,
+            clip(
+                "walk",
+                vec![
+                    channel(1, Property::Translation, vec![0.0, 1.0, 0.0, 1.0, 1.0, 2.0]),
+                    channel(3, Property::Rotation, vec![0.0, 0.0, 0.0, 1.0, S, 0.0, 0.0, S]),
+                ],
+            ),
+        );
+        let wave = w.spawn();
+        w.insert(
+            wave,
+            clip(
+                "wave",
+                vec![channel(
+                    4,
+                    Property::Translation,
+                    vec![3.0, 0.0, 0.0, 3.0, 0.0, 1.0],
+                )],
+            ),
+        );
+        assert_eq!(w.verify_components(), vec![]);
+        (w, target, [walk, wave])
+    }
+
+    fn target_model(w: &World, target: Entity, clip: Entity, t: f64) -> BTreeMap<JointId, Affine> {
+        let s = w.get::<Skeleton>(target).unwrap();
+        let e = evaluate(w.get::<Clip>(clip).unwrap(), target, s, None, t).unwrap();
+        model_transforms(s, &locals(s, Some(&e.pose))).unwrap()
+    }
+
+    fn translated(w: &World, clip: Entity) -> BTreeMap<JointId, Vec<f32>> {
+        w.get::<Clip>(clip)
+            .unwrap()
+            .channels
+            .iter()
+            .filter_map(|ch| match ch.target {
+                ClipTarget::Joint { joint, .. } if ch.property == Property::Translation => {
+                    Some((joint, ch.values.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The hips and the torso (a root of its own in the target, under the hips in the source) both move, by the same
+    /// source displacement times the one scale (the sum of their target heights over the sum of their source heights,
+    /// (2 + 2.8) / (1 + 1.4) = 2): the torso stays where the source's offset above the hips, doubled, puts it, not at its
+    /// rest; the prop no clip moves has no translation and stays at its rest. Counted: 2 moved, 1 held.
+    #[test]
+    fn two_animated_trees_move_together_and_a_prop_no_clip_moves_is_held() {
+        let (mut w, target, [walk, wave]) = two_trees(2.8);
+        w.despawn(wave); // the wave clip moves the prop: left out here
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap();
+        assert!(left_unretargeted(&report).is_empty());
+        let moved: BTreeSet<JointId> = translated(&w, walk).keys().copied().collect();
+        assert_eq!(moved, BTreeSet::from([JointId(10), JointId(30)]));
+        for (t, hips) in [
+            (0.0, [0.0, 2.0, 0.0]),
+            (0.5, [1.0, 2.0, 2.0]),
+            (1.0, [2.0, 2.0, 4.0]),
+        ] {
+            let m = target_model(&w, target, walk, t);
+            assert!(
+                near(m[&JointId(10)][3], hips),
+                "hips at {t}: {:?}",
+                m[&JointId(10)][3]
+            );
+            // the torso keeps the offset above the hips the source's has, doubled
+            let torso: [f64; 3] = std::array::from_fn(|k| m[&JointId(30)][3][k] - m[&JointId(10)][3][k]);
+            assert!(
+                near(torso, [0.0, 0.8, 0.0]),
+                "torso above the hips at {t}: {torso:?}"
+            );
+            assert!(near(m[&JointId(40)][3], [6.0, 0.0, 0.0]), "prop at {t}");
+        }
+        // the torso's turn is kept (a quarter turn about x at the end)
+        let m = target_model(&w, target, walk, 1.0);
+        assert!(
+            near(m[&JointId(30)][1], [0.0, 0.0, 1.0]),
+            "{:?}",
+            m[&JointId(30)][1]
+        );
+        let log = &report.steps[0].log;
+        assert_eq!(
+            log.counts["tree roots of the target moved by the clips (placed by their source joints)"],
+            2
+        );
+        assert_eq!(
+            log.counts["tree roots of the target no clip moves (held at their rest)"],
+            1
+        );
+        assert!(
+            log.approximations
+                .keys()
+                .any(|k| k.starts_with("root motion of 2 tree roots scaled by one ratio k = 2.0000")),
+            "{:?}",
+            log.approximations
+        );
+        assert!(
+            !log.approximations
+                .keys()
+                .any(|k| k.starts_with("roots of unequal proportion")),
+            "{:?}",
+            log.approximations
+        );
+    }
+
+    /// Which roots move is decided over the whole pass: the wave clip moves only the prop, so the prop is moved for
+    /// both clips (the walk clip holds it at its rest with a channel, the wave clip moves it by the doubled
+    /// displacement), and the scale does not change from clip to clip.
+    #[test]
+    fn the_roots_the_pass_moves_are_decided_over_every_clip() {
+        let (mut w, target, [walk, wave]) = two_trees(2.8);
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap();
+        assert!(left_unretargeted(&report).is_empty());
+        let log = &report.steps[0].log;
+        assert_eq!(
+            log.counts["tree roots of the target moved by the clips (placed by their source joints)"],
+            3
+        );
+        assert_eq!(
+            log.counts["tree roots of the target no clip moves (held at their rest)"],
+            0
+        );
+        let walked = translated(&w, walk);
+        assert_eq!(
+            walked.keys().copied().collect::<Vec<_>>(),
+            [JointId(10), JointId(30), JointId(40)]
+        );
+        assert!(
+            walked[&JointId(40)].chunks(3).all(|v| v == [6.0, 0.0, 0.0]),
+            "{:?}",
+            walked[&JointId(40)]
+        );
+        let m = target_model(&w, target, wave, 1.0);
+        assert!(
+            near(m[&JointId(40)][3], [6.0, 0.0, 2.0]),
+            "{:?}",
+            m[&JointId(40)][3]
+        );
+        // the hips do not move in the wave clip
+        assert!(
+            near(m[&JointId(10)][3], [0.0, 2.0, 0.0]),
+            "{:?}",
+            m[&JointId(10)][3]
+        );
+    }
+
+    /// A moved root whose own height ratio is not the common scale is named: the torso stands at 2.2 instead of 2.8, so
+    /// k = (2 + 2.2) / 2.4 = 1.75 and the hips' own ratio 2.0 and the torso's 1.571 are each more than 5% from it.
+    #[test]
+    fn roots_of_unequal_proportion_are_named() {
+        let (mut w, _, [_, wave]) = two_trees(2.2);
+        w.despawn(wave);
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap();
+        let log = &report.steps[0].log;
+        let (reason, n) = log
+            .approximations
+            .iter()
+            .find(|(k, _)| k.starts_with("roots of unequal proportion"))
+            .expect("the unequal roots are reported");
+        assert!(
+            reason.contains("j10 2.000") && reason.contains("j30 1.571"),
+            "{reason}"
+        );
+        assert_eq!(*n, 2);
+        assert!(
+            log.approximations.keys().any(|k| k.contains("k = 1.7500")),
+            "{:?}",
+            log.approximations
+        );
+    }
+
+    /// Moved roots standing at the ground have no scale to move by: every clip is left unretargeted with the reason, and
+    /// translation=none still retargets them.
+    #[test]
+    fn moved_roots_with_no_height_leave_every_clip_unretargeted_with_the_reason() {
+        let (mut w, target, _) = two_trees(0.0);
+        w.get_mut::<Skeleton>(target).unwrap().joints[0].rest = trs([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap();
         let why = left_unretargeted(&report);
         assert!(
-            why.len() == 1 && why[0].contains("no common root") && why[0].contains("translation=none"),
+            why.len() == 1 && why[0].contains("target roots") && why[0].contains("sum to 0"),
             "{why:?}"
         );
+        assert_eq!(report.steps[0].log.omitted.values().sum::<u64>(), 2);
         let report = run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap();
         assert!(left_unretargeted(&report).is_empty());
-        assert!(w.get::<Clip>(clip).unwrap().channels.iter().any(
-            |ch| matches!(ch.target, ClipTarget::Joint { skeleton, joint } if skeleton == target && joint == JointId(30))
-        ));
     }
 
     /// Hand-worked: with the target arm rest turned -45 degrees about z, source angles 0, 145 and 305 become target
