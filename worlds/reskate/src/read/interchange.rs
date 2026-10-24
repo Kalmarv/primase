@@ -510,23 +510,7 @@ impl Reader<'_> {
             None => STANDARD_SURFACES.len(),
             Some(list) if list.is_empty() => STANDARD_SURFACES.len(),
             Some(list) => {
-                if list.len() > 128 {
-                    return Err(bad("surfaces: more than 128"));
-                }
-                for (i, n) in list.iter().enumerate() {
-                    if let Some(p) = n.strip_prefix("packed:") {
-                        match p.trim().parse::<i32>() {
-                            Ok(v) if v >= 0 && v & 0x3f == 0x20 => {}
-                            _ => {
-                                return Err(bad(format!(
-                                    "surfaces[{i}]: '{n}' is not a Studio packed material (n << 6 | 32)"
-                                )));
-                            }
-                        }
-                    } else if !STANDARD_SURFACES.contains(&n.as_str()) {
-                        return Err(bad(format!("surfaces[{i}]: unknown surface '{n}'")));
-                    }
-                }
+                SceneSurface::check_list(list).map_err(bad)?;
                 list.len()
             }
         };

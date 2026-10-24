@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::components::{
-    AlphaMode, CollisionMode as SceneMode, Domain, MarkerKind, MaterialClass, SkateCollision,
+    AlphaMode, CollisionMode as SceneMode, Domain, MarkerKind, MaterialClass, SceneSurface, SkateCollision,
     SkateGrindCurve, SkateLight, SkateMarker, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype,
     SkateScene, SkateTexture, SkateWater, Snap, SnapMode as SceneSnap, SoupRef, Wrap,
 };
@@ -672,14 +672,16 @@ impl<'a> Scene<'a> {
             .resource::<SkateScene>()
             .ok_or_else(|| Error::Scene("the world holds no skate scene".into()))?;
         let mut surfaces = SurfaceTable::default();
+        // each scene surface is a standard one (the table's first entries, in the same order) or a packed material
         let surf_map: Vec<usize> = match &sc.surfaces {
             Some(list) if !list.is_empty() => list
                 .iter()
-                .map(|n| match n.strip_prefix("packed:") {
-                    Some(p) => surfaces.packed(p.trim().parse::<i32>().unwrap_or(32)),
-                    None => STANDARD_SURFACES.iter().position(|s| s.0 == n).unwrap_or(0),
+                .map(|n| match SceneSurface::parse(n) {
+                    Ok(SceneSurface::Standard(i)) => Ok(i),
+                    Ok(SceneSurface::Packed(p)) => Ok(surfaces.packed(p)),
+                    Err(why) => Err(Error::Scene(format!("skate.scene surfaces: {why}"))),
                 })
-                .collect(),
+                .collect::<Result<_>>()?,
             _ => (0..STANDARD_SURFACES.len()).collect(),
         };
         let mut textures = BTreeMap::new();
@@ -1588,6 +1590,34 @@ mod tests {
             .map(|e| e.to_string())
             .unwrap_or_default();
         assert!(error.contains("priority 16") && error.contains("0-15"), "{error}");
+    }
+
+    /// A scene surface the writer has no surface for (an unknown name, a packed value that is not a Studio packed
+    /// material) is refused, naming it, never written as the first standard surface or as `packed:32`; the standard
+    /// table lists the components' standard surfaces, in their order (a standard surface's index is its row).
+    #[test]
+    fn an_unknown_scene_surface_is_refused_by_name() {
+        for (name, why) in [
+            ("lava", "unknown surface 'lava'"),
+            ("packed:x", "'packed:x' is not a Studio packed material"),
+            ("packed:33", "'packed:33' is not a Studio packed material"),
+        ] {
+            let mut world = World::new();
+            world.insert_resource(SkateScene {
+                name: "surfaces".into(),
+                surfaces: Some(vec!["concrete".into(), name.into()]),
+                ..Default::default()
+            });
+            let error = Scene::from_world(&world, std::path::Path::new("."))
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(error.contains(&format!("surfaces[1]: {why}")), "{error}");
+        }
+        assert_eq!(
+            STANDARD_SURFACES.map(|s| s.0),
+            crate::components::STANDARD_SURFACES
+        );
     }
 
     /// A mirrored or sheared placement is refused, and the error names the pass that bakes it into geometry.

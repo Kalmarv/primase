@@ -120,6 +120,45 @@ pub const STANDARD_SURFACES: [&str; 17] = [
     "roofing",
 ];
 
+/// A name in [`SkateScene::surfaces`]: a standard surface's, or a Studio packed material (`packed:<n << 6 | 32>`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SceneSurface {
+    /// The index of a [`STANDARD_SURFACES`] name.
+    Standard(usize),
+    /// A packed material value, `n << 6 | 32` with `n >= 0`.
+    Packed(i32),
+}
+
+impl SceneSurface {
+    /// `name` read as a scene surface; any other name, or a packed value that is not a Studio packed material, is
+    /// refused, naming it.
+    pub fn parse(name: &str) -> std::result::Result<SceneSurface, String> {
+        if let Some(p) = name.strip_prefix("packed:") {
+            return match p.trim().parse::<i32>() {
+                Ok(v) if v >= 0 && v & 0x3f == 0x20 => Ok(SceneSurface::Packed(v)),
+                _ => Err(format!("'{name}' is not a Studio packed material (n << 6 | 32)")),
+            };
+        }
+        STANDARD_SURFACES
+            .iter()
+            .position(|s| *s == name)
+            .map(SceneSurface::Standard)
+            .ok_or_else(|| format!("unknown surface '{name}'"))
+    }
+
+    /// A scene's `surfaces` list checked: at most 128 (a soup's surface byte has 7 bits for them), each one
+    /// [`SceneSurface::parse`] reads.
+    pub fn check_list(list: &[String]) -> std::result::Result<(), String> {
+        if list.len() > 128 {
+            return Err("surfaces: more than 128".into());
+        }
+        for (i, n) in list.iter().enumerate() {
+            SceneSurface::parse(n).map_err(|why| format!("surfaces[{i}]: {why}"))?;
+        }
+        Ok(())
+    }
+}
+
 /// A file inside the scene folder, as the manifest names it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FileRef {
@@ -233,6 +272,10 @@ impl Resource for SkateScene {
     const NAME: &'static str = "skate.scene";
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
+    }
+    /// Its surfaces are scene surfaces ([`SceneSurface::check_list`]).
+    fn verify(&self, _w: &primase_core::World) -> Result<(), String> {
+        self.surfaces.as_deref().map_or(Ok(()), SceneSurface::check_list)
     }
 }
 
@@ -1582,6 +1625,28 @@ impl Component for SkateSoup {
 mod tests {
     use super::*;
     use primase_core::{Mesh, MeshFile, Primitive, Topology};
+
+    /// A scene surface is a standard surface's name (its index) or a Studio packed material, `n << 6 | 32`; anything
+    /// else is refused by name, and a scene whose list holds one fails its verification.
+    #[test]
+    fn scene_surfaces_are_standard_names_or_packed_materials() {
+        assert_eq!(SceneSurface::parse("asphalt"), Ok(SceneSurface::Standard(2)));
+        assert_eq!(SceneSurface::parse("packed: 96"), Ok(SceneSurface::Packed(96)));
+        for bad in ["Asphalt", "", "packed:", "packed:-32", "packed:97", "packed:1e3"] {
+            assert!(SceneSurface::parse(bad).is_err(), "{bad}");
+        }
+        assert!(SceneSurface::check_list(&vec!["default".to_owned(); 129]).is_err());
+        let scene = |list: &[&str]| SkateScene {
+            surfaces: Some(list.iter().map(|s| (*s).to_owned()).collect()),
+            ..SkateScene::default()
+        };
+        let w = primase_core::World::new();
+        assert_eq!(scene(&["default", "packed:3424"]).verify(&w), Ok(()));
+        assert_eq!(
+            scene(&["default", "snow"]).verify(&w),
+            Err("surfaces[1]: unknown surface 'snow'".to_owned())
+        );
+    }
 
     fn primitive() -> Primitive {
         Primitive {
