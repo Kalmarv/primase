@@ -2,8 +2,12 @@
 //! `i` covering `[i, i + 1)`, `uv` scaled by the level's size, minus a half), each axis's address mode, the colour's
 //! transfer before filtering, at a level the caller picks. Two precisions, each a fixed order of operations: f64
 //! ([`Levels::bilinear`]) and f32 over texels decoded once ([`Decoded::bilinear`]). The texel a coordinate falls in
-//! ([`Levels::point`]). A level of detail from a sample's footprint ([`footprint_lod`]), and the two levels around it
-//! mixed ([`Levels::trilinear`]) or the nearest one taken ([`Levels::nearest_level`]).
+//! ([`Levels::point`], [`Decoded::point`]). A level of detail from a sample's footprint ([`footprint_lod`]), and the
+//! two levels around it mixed ([`Levels::trilinear`]) or the nearest one taken ([`Levels::nearest_level`]).
+//!
+//! [`Decoded`] is one level of float texels, 2D or 3D: an RGBA8 level decoded once ([`Levels::decoded`]), or texels a
+//! caller holds as floats ([`Decoded::from_texels`], [`Decoded::volume`]). A volume filters linearly between the eight
+//! texels about a coordinate ([`Decoded::linear_3d`]) or takes the one it falls in ([`Decoded::point_3d`]).
 
 use primase_core::{ColorSpace, TexRole, Texture};
 
@@ -196,6 +200,7 @@ impl Levels {
         Decoded {
             width: w as usize,
             height: h as usize,
+            depth: 1,
             texels,
         }
     }
@@ -284,21 +289,93 @@ impl Subtexel {
     }
 }
 
-/// One level's texels in f32, their transfer applied.
+/// One level's texels in f32, their transfer applied: a 2D level (`depth` 1) or a volume, row by row and slice by
+/// slice.
 #[derive(Clone, Debug)]
 pub struct Decoded {
     width: usize,
     height: usize,
+    depth: usize,
     texels: Vec<[f32; 4]>,
 }
 
+/// A texel coordinate in f32 that is finite and within an i32's range, else refused.
+fn texel_coordinate_f32(x: f32) -> Result<f32> {
+    if !x.is_finite() || x.abs() >= 2147483520.0 {
+        return Err(Error::Invalid(
+            "sampled texture: nonfinite or excessive texel coordinate".into(),
+        ));
+    }
+    Ok(x)
+}
+
 impl Decoded {
+    /// A 2D level of `width` x `height` float texels, row 0 first, as the caller holds them (no transfer: the values
+    /// are filtered as they are). No texel, or a count other than the size's, is refused.
+    pub fn from_texels(width: u32, height: u32, texels: Vec<[f32; 4]>) -> Result<Decoded> {
+        Decoded::volume(width, height, 1, texels)
+    }
+
+    /// A volume of `width` x `height` x `depth` float texels, slice 0 first and each slice row 0 first. No texel, or a
+    /// count other than the size's, is refused.
+    pub fn volume(width: u32, height: u32, depth: u32, texels: Vec<[f32; 4]>) -> Result<Decoded> {
+        let count = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|n| n.checked_mul(depth as usize))
+            .filter(|&n| n > 0)
+            .ok_or_else(|| Error::Invalid("sampled texture: invalid dimensions".into()))?;
+        if texels.len() != count {
+            return Err(Error::Invalid(format!(
+                "sampled texture: {} texels for {width} x {height} x {depth}",
+                texels.len()
+            )));
+        }
+        Ok(Decoded {
+            width: width as usize,
+            height: height as usize,
+            depth: depth as usize,
+            texels,
+        })
+    }
+
     pub fn dimensions(&self) -> [usize; 2] {
         [self.width, self.height]
+    }
+    /// The slices of a volume: 1 for a 2D level.
+    pub fn depth(&self) -> usize {
+        self.depth
     }
     pub fn decoded_bytes(&self) -> usize {
         self.texels.len() * 16
     }
+
+    /// The texel at (x, y, z), if the level holds one there: no addressing, a load's view of the level.
+    pub fn texel(&self, x: i64, y: i64, z: i64) -> Option<[f32; 4]> {
+        let inside = |i: i64, n: usize| usize::try_from(i).ok().filter(|&i| i < n);
+        let (x, y, z) = (
+            inside(x, self.width)?,
+            inside(y, self.height)?,
+            inside(z, self.depth)?,
+        );
+        Some(self.texels[(z * self.height + y) * self.width + x])
+    }
+
+    fn at(&self, x: usize, y: usize, z: usize) -> [f32; 4] {
+        self.texels[(z * self.height + y) * self.width + x]
+    }
+
+    /// A 2D sample of a volume is refused: which slice it reads is not the level's to say.
+    fn plane(&self) -> Result<()> {
+        if self.depth == 1 {
+            Ok(())
+        } else {
+            Err(Error::Invalid(format!(
+                "sampled texture: a 2D sample of a volume of {} slices",
+                self.depth
+            )))
+        }
+    }
+
     /// Bilinear at `uv`, in f32 (the coordinate, the weights `(1 - t)` and `t` per axis, and the sum over the four
     /// texels row by row); a coordinate that isn't finite or past an i32's range is refused.
     pub fn bilinear(&self, uv: [f32; 2], address: [Address; 2]) -> Result<[f32; 4]> {
@@ -306,13 +383,9 @@ impl Decoded {
     }
     /// [`Decoded::bilinear`] with the texel coordinate resolved to `subtexel` precision before the weights are taken.
     pub fn bilinear_at(&self, uv: [f32; 2], address: [Address; 2], subtexel: Subtexel) -> Result<[f32; 4]> {
-        let x = subtexel.resolve(uv[0] * self.width as f32 - 0.5);
-        let y = subtexel.resolve(uv[1] * self.height as f32 - 0.5);
-        if !x.is_finite() || !y.is_finite() || x.abs() >= 2147483520.0 || y.abs() >= 2147483520.0 {
-            return Err(Error::Invalid(
-                "sampled texture: nonfinite or excessive texel coordinate".into(),
-            ));
-        }
+        self.plane()?;
+        let x = texel_coordinate_f32(subtexel.resolve(uv[0] * self.width as f32 - 0.5))?;
+        let y = texel_coordinate_f32(subtexel.resolve(uv[1] * self.height as f32 - 0.5))?;
         let (ix, iy) = (x.floor() as i64, y.floor() as i64);
         let (tx, ty) = (x - ix as f32, y - iy as f32);
         let mut result = [0.; 4];
@@ -322,7 +395,64 @@ impl Decoded {
                 let yy = address[1].index(iy + dy, self.height as u32);
                 let weight = (if dx == 1 { tx } else { 1. - tx }) * (if dy == 1 { ty } else { 1. - ty });
                 for (c, out) in result.iter_mut().enumerate() {
-                    *out += self.texels[yy * self.width + xx][c] * weight;
+                    *out += self.at(xx, yy, 0)[c] * weight;
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// The texel `uv` falls in (texel `i` covering `[i, i + 1)` after scaling by the size), addressed, in f32: point
+    /// filtering. A coordinate that isn't finite or past an i32's range is refused.
+    pub fn point(&self, uv: [f32; 2], address: [Address; 2]) -> Result<[f32; 4]> {
+        self.plane()?;
+        let x = texel_coordinate_f32(uv[0] * self.width as f32)?;
+        let y = texel_coordinate_f32(uv[1] * self.height as f32)?;
+        Ok(self.at(
+            address[0].index(x.floor() as i64, self.width as u32),
+            address[1].index(y.floor() as i64, self.height as u32),
+            0,
+        ))
+    }
+
+    /// The texel of a volume (or a 2D level, one slice) that `uvw` falls in, addressed along each axis, in f32.
+    pub fn point_3d(&self, uvw: [f32; 3], address: [Address; 3]) -> Result<[f32; 4]> {
+        let size = [self.width, self.height, self.depth];
+        let mut index = [0usize; 3];
+        for axis in 0..3 {
+            let x = texel_coordinate_f32(uvw[axis] * size[axis] as f32)?;
+            index[axis] = address[axis].index(x.floor() as i64, size[axis] as u32);
+        }
+        Ok(self.at(index[0], index[1], index[2]))
+    }
+
+    /// Linear between the eight texels about `uvw` in a volume, in f32: the coordinate per axis (scaled by the size,
+    /// minus a half, resolved to `subtexel` precision), the weights `(1 - t)` and `t` per axis multiplied x, then y,
+    /// then z, and the sum over the texels slice by slice, row by row. A coordinate that isn't finite or past an i32's
+    /// range is refused.
+    pub fn linear_3d(&self, uvw: [f32; 3], address: [Address; 3], subtexel: Subtexel) -> Result<[f32; 4]> {
+        let size = [self.width, self.height, self.depth];
+        let mut base = [0i64; 3];
+        let mut t = [0f32; 3];
+        for axis in 0..3 {
+            let x = texel_coordinate_f32(subtexel.resolve(uvw[axis] * size[axis] as f32 - 0.5))?;
+            base[axis] = x.floor() as i64;
+            t[axis] = x - base[axis] as f32;
+        }
+        let weight = |d: i64, t: f32| if d == 1 { t } else { 1. - t };
+        let mut result = [0.; 4];
+        for dz in 0..2 {
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let texel = self.at(
+                        address[0].index(base[0] + dx, self.width as u32),
+                        address[1].index(base[1] + dy, self.height as u32),
+                        address[2].index(base[2] + dz, self.depth as u32),
+                    );
+                    let w = weight(dx, t[0]) * weight(dy, t[1]) * weight(dz, t[2]);
+                    for (c, out) in result.iter_mut().enumerate() {
+                        *out += texel[c] * w;
+                    }
                 }
             }
         }
@@ -471,6 +601,84 @@ mod tests {
             levels: vec![vec![0; 12]],
         };
         assert!(short.rows_reversed().is_err());
+    }
+
+    /// Float texels as held: a 2 x 2 level point-sampled (the texel a coordinate falls in, addressed) and bilinear
+    /// (the middle is the mean of the four); a count other than the size's, or no texel, is refused; a 2D sample of a
+    /// volume is refused.
+    #[test]
+    fn float_texels_point_and_bilinear() {
+        let red_green = vec![
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0, 1.0],
+        ];
+        let d = Decoded::from_texels(2, 2, red_green.clone()).unwrap();
+        let (wrap, clamp) = ([Address::Wrap; 2], [Address::Clamp; 2]);
+        assert_eq!(d.point([0.25, 0.25], clamp).unwrap(), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(d.point([0.75, 0.25], clamp).unwrap(), [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(d.point([0.25, 0.75], clamp).unwrap(), [0.0, 1.0, 0.0, 1.0]);
+        // past the edges: clamped to the edge texel, wrapped round
+        assert_eq!(d.point([1.75, -3.0], clamp).unwrap(), [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(d.point([1.25, 0.25], wrap).unwrap(), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(d.point([-0.25, 0.25], wrap).unwrap(), [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(d.bilinear([0.5, 0.5], clamp).unwrap(), [0.5, 0.5, 0.0, 1.0]);
+        assert_eq!(d.bilinear([0.375, 0.25], clamp).unwrap(), [0.25, 0.0, 0.0, 1.0]);
+        // values past 0..1 are filtered as they are
+        let hdr = Decoded::from_texels(2, 1, vec![[-2.0; 4], [6.0; 4]]).unwrap();
+        assert_eq!(hdr.bilinear([0.5, 0.5], clamp).unwrap(), [2.0; 4]);
+        assert!(Decoded::from_texels(2, 2, red_green[..3].to_vec()).is_err());
+        assert!(Decoded::from_texels(0, 2, Vec::new()).is_err());
+        assert!(d.point([f32::NAN, 0.5], clamp).is_err());
+        let volume = Decoded::volume(1, 1, 2, vec![[0.0; 4], [1.0; 4]]).unwrap();
+        assert!(volume.point([0.5, 0.5], clamp).is_err());
+        assert!(volume.bilinear([0.5, 0.5], clamp).is_err());
+    }
+
+    /// A 2 x 2 x 2 volume whose texel (x, y, z) is (x, y, z, 1): point sampling takes the texel a coordinate falls in;
+    /// linear filtering between the eight texels gives the coordinate's position between their centres, clamped at the
+    /// edges and wrapped round; the texel a load reads is the one at its index, none past the size.
+    #[test]
+    fn volumes_point_linear_and_texels() {
+        let texels: Vec<[f32; 4]> = (0..8)
+            .map(|i| [(i % 2) as f32, (i / 2 % 2) as f32, (i / 4) as f32, 1.0])
+            .collect();
+        let v = Decoded::volume(2, 2, 2, texels).unwrap();
+        assert_eq!(v.depth(), 2);
+        let (wrap, clamp) = ([Address::Wrap; 3], [Address::Clamp; 3]);
+        assert_eq!(
+            v.point_3d([0.75, 0.25, 0.75], clamp).unwrap(),
+            [1.0, 0.0, 1.0, 1.0]
+        );
+        assert_eq!(
+            v.point_3d([0.25, 1.25, -0.25], wrap).unwrap(),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+        // halfway between the centres on every axis, a quarter of the way along x, at a corner's centre
+        let exact = Subtexel::Exact;
+        assert_eq!(v.linear_3d([0.5; 3], clamp, exact).unwrap(), [0.5, 0.5, 0.5, 1.0]);
+        assert_eq!(
+            v.linear_3d([0.375, 0.25, 0.25], clamp, exact).unwrap(),
+            [0.25, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            v.linear_3d([0.25, 0.25, 0.75], clamp, exact).unwrap(),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+        // at the left edge: clamped it is the edge texel, wrapped it blends the far one in
+        assert_eq!(v.linear_3d([0.0, 0.25, 0.25], clamp, exact).unwrap()[0], 0.0);
+        assert_eq!(v.linear_3d([0.0, 0.25, 0.25], wrap, exact).unwrap()[0], 0.5);
+        assert!(v.linear_3d([0.5, f32::INFINITY, 0.5], clamp, exact).is_err());
+        assert_eq!(v.texel(1, 0, 1), Some([1.0, 0.0, 1.0, 1.0]));
+        assert_eq!(v.texel(2, 0, 0), None);
+        assert_eq!(v.texel(0, -1, 0), None);
+        assert_eq!(v.texel(0, 0, 2), None);
+        // a 2D level is one slice
+        let d = Decoded::from_texels(1, 1, vec![[3.0; 4]]).unwrap();
+        assert_eq!(d.point_3d([0.5; 3], clamp).unwrap(), [3.0; 4]);
+        assert_eq!(d.texel(0, 0, 0), Some([3.0; 4]));
+        assert_eq!(d.texel(0, 0, 1), None);
     }
 
     /// A coordinate that isn't finite, or whose texel is past an i32's range, is refused, never sampled (NaN texels)
