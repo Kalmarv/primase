@@ -299,11 +299,8 @@ const LEVEL_SUFFIXES: [&str; 2] = ["_l", "_m"];
 
 /// A binder member's file name after its last separator, lowercased, without its extension.
 fn member_stem(name: &str) -> String {
-    let file = name
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(name)
-        .to_ascii_lowercase();
+    let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let file = crate::names::fold(file);
     match file.rsplit_once('.') {
         Some((stem, _)) => stem.to_owned(),
         None => file,
@@ -716,13 +713,9 @@ impl<'a> Reading<'a> {
                 || f.bytes.starts_with(b"TPF\0")
                 || own_animations.is_some_and(|a| std::ptr::eq(f, a));
             if !read && member_form(&member_stem(member_name), &bases).unwrap_or(0) == index {
-                report.unread.push(
-                    member_name
-                        .rsplit(['/', '\\'])
-                        .next()
-                        .unwrap_or(member_name)
-                        .to_lowercase(),
-                );
+                report.unread.push(crate::names::fold(
+                    member_name.rsplit(['/', '\\']).next().unwrap_or(member_name),
+                ));
             }
         }
         if let Item::Character(id) = item
