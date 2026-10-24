@@ -9,6 +9,19 @@ use serde::Serialize;
 
 use crate::components::UnityObject;
 
+/// The hash Unity's Animator data names things by (a state, a layer, a parameter, a binding's path): the CRC-32 (the zlib one)
+/// of the name's bytes.
+pub fn name_hash(name: &str) -> u32 {
+    let mut crc = !0u32;
+    for byte in name.bytes() {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xEDB8_8320 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    !crc
+}
+
 /// A transform as Mecanim stores it (`xform`): translation, rotation as a quaternion `[x, y, z, w]` and scale.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Xform {

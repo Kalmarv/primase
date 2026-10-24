@@ -42,12 +42,14 @@
 
 pub mod animator;
 pub mod bind;
+pub mod blend_tree;
 pub mod clipdata;
 pub mod components;
 pub mod humanoid;
 pub mod passes;
 mod read;
 pub mod shader;
+pub mod state_pose;
 
 pub use passes::{
     draw_keywords, drawn, lower, lower_ambient, lower_collision, lower_lights, lower_terrain, resolve_shaders,

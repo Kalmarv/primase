@@ -286,14 +286,7 @@ impl ClipData {
 /// The hash a clip's binding names a path by: the CRC-32 (the zlib one) of the path of GameObject names below the
 /// Animator's GameObject, empty for the GameObject itself.
 pub fn path_hash(path: &str) -> u32 {
-    let mut crc = !0u32;
-    for byte in path.bytes() {
-        crc ^= u32::from(byte);
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xEDB8_8320 & 0u32.wrapping_sub(crc & 1));
-        }
-    }
-    !crc
+    crate::animator::name_hash(path)
 }
 
 /// The clips an AnimatorController lists (`m_AnimationClips`), in order, null entries left out.

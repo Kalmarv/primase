@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 primase-core.workspace = true
+primase-animation.workspace = true
 primase-vertex.workspace = true
 primase-meshops.workspace = true
 primase-texcodec.workspace = true
@@ -17,7 +18,6 @@ primase-image.workspace = true
 primase-shader.workspace = true
 primase-shader-exec.workspace = true
 primase-dxbc.workspace = true
-primase-animation.workspace = true
 thiserror.workspace = true
 half.workspace = true
 primase-compress.workspace = true
