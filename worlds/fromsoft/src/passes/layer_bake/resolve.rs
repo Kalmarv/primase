@@ -938,11 +938,14 @@ fn texture_scroll_set(name: &str) -> Option<u8> {
 /// - no output roles: its outputs reach the pixel stage by label.
 pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> {
     use super::vertex_probe::{
-        CameraForm, camera_form, flat_constants, inputs_read, lifted, palette_indexed_by_vertex,
+        CameraForm, camera_form, flat_constants, inputs_read, palette_indexed_by_vertex,
     };
     use primase_core::Semantic;
     let interface = &shader.interface;
-    let read = inputs_read(shader);
+    // the program, lifted once: what it shows of itself (its value graph and a run) is read from it, and an error stays as
+    // the reason of what needs it
+    let program = crate::passes::program_reads::lift(shader.format, &shader.bytecode);
+    let read = program.as_ref().map_err(Clone::clone).and_then(inputs_read);
     let inputs = interface
         .inputs
         .iter()
@@ -1023,8 +1026,10 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
         .collect();
     // what the program shows of itself: its value graph (which buffers a vertex stream indexes) and a run (whether it takes
     // the camera away from the world position); an error stays as the reason of the constants that need it
-    let program = lifted(shader);
-    let camera = camera_form(shader);
+    let camera = program
+        .as_ref()
+        .map_err(|e| format!("the program does not lift: {e}"))
+        .and_then(camera_form);
     let mut undecided = None;
     let mut constants = Vec::new();
     for resource in &interface.resources {

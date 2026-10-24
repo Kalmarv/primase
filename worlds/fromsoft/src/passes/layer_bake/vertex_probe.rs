@@ -15,7 +15,7 @@
 //! [`palette_indexed_by_vertex`] reads in the value graph whether a constant buffer is indexed by a vertex stream, as a
 //! joint palette is, or only by the instance, as the object matrices of an unskinned draw are.
 
-use primase_core::shader::{BufferLayout, ResourceId, ResourceKind, ScalarType, Shader, ShaderFormat, Stage};
+use primase_core::shader::{BufferLayout, ResourceId, ResourceKind, ScalarType};
 use primase_shader::Program;
 use primase_shader::flow::{At, Node, NodeId, Values};
 use primase_shader_exec::probe::{ProbeRun, VertexProbe, Zeros};
@@ -35,15 +35,6 @@ pub enum CameraForm {
     Plain,
 }
 
-/// The program of a shader, lifted from its bytecode.
-fn lift(shader: &Shader) -> Result<Program, String> {
-    match shader.format {
-        ShaderFormat::Dxbc => primase_dxbc::lift(&shader.bytecode).map_err(|e| e.to_string()),
-        ShaderFormat::Dxil => primase_dxil::lift(&shader.bytecode).map_err(|e| e.to_string()),
-        other => Err(format!("a {other:?} program")),
-    }
-}
-
 /// Every constant of a buffer's layout, the members of a structure (the instance record, an array of them) by their own
 /// names at their own offsets in the first element: name, byte offset, size.
 pub(crate) fn flat_constants(layout: &BufferLayout) -> Vec<(String, u32, Option<u32>)> {
@@ -61,14 +52,10 @@ pub(crate) fn flat_constants(layout: &BufferLayout) -> Vec<(String, u32, Option<
     flat
 }
 
-/// Whether the clip position of the vertex program `shader` is of a world with the camera at its origin, by running it with
-/// the matrix, the palettes and the camera at the values of the module documentation ([`VertexProbe`]).
-pub fn camera_form(shader: &Shader) -> Result<CameraForm, String> {
-    if shader.interface.stage != Stage::Vertex {
-        return Err("the shader is not a vertex program".into());
-    }
-    let program = lift(shader).map_err(|e| format!("the program does not lift: {e}"))?;
-    let probe = VertexProbe::new(program)?;
+/// Whether the clip position of the vertex program `program` is of a world with the camera at its origin, by running it
+/// with the matrix, the palettes and the camera at the values of the module documentation ([`VertexProbe`]).
+pub fn camera_form(program: &Program) -> Result<CameraForm, String> {
+    let probe = VertexProbe::new(program.clone())?;
     let iface = &probe.program().interface;
     let inputs: Vec<[u32; 4]> = iface
         .inputs
@@ -168,9 +155,8 @@ pub fn palette_indexed_by_vertex(program: &Program, buffer: ResourceId) -> Resul
 
 /// The inputs of `shader` its results are made of ([`Values::roots`]), by label (the name in capitals and the index):
 /// an input declared and never read is not in it. `Err` when the graph cannot be built.
-pub fn inputs_read(shader: &Shader) -> Result<BTreeSet<(String, u32)>, String> {
-    let program = lift(shader)?;
-    let values = Values::of_program(&program).map_err(|e| format!("the value graph: {e}"))?;
+pub fn inputs_read(program: &Program) -> Result<BTreeSet<(String, u32)>, String> {
+    let values = Values::of_program(program).map_err(|e| format!("the value graph: {e}"))?;
     Ok(values
         .reached_from(values.roots())
         .into_iter()
@@ -182,9 +168,4 @@ pub fn inputs_read(shader: &Shader) -> Result<BTreeSet<(String, u32)>, String> {
             _ => None,
         })
         .collect())
-}
-
-/// The lifted program of `shader` (for callers that read its value graph beside the run).
-pub fn lifted(shader: &Shader) -> Result<Program, String> {
-    lift(shader)
 }

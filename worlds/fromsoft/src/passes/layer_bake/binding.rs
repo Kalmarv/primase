@@ -135,15 +135,10 @@ pub(crate) fn program_executor(
     use primase_core::shader::ShaderFormat;
     match format {
         ShaderFormat::Dxbc => executor(bytecode),
-        ShaderFormat::Dxil => {
-            ProgramShader::new(primase_dxil::lift(bytecode).map_err(|e| invalid("program lift", 0, e))?)
-                .map_err(evaluation)
-        }
-        other => Err(invalid(
-            "program lift",
-            0,
-            format!("a FromSoftware program of format {other:?}"),
-        )),
+        other => ProgramShader::new(
+            crate::passes::program_reads::lift(other, bytecode).map_err(|e| invalid("program lift", 0, e))?,
+        )
+        .map_err(evaluation),
     }
 }
 
