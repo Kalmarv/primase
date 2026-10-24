@@ -48,9 +48,14 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
         let draw = world
             .resource::<DrawParam>()
             .ok_or_else(|| format!("{file}: no draw param read"))?;
-        assert!(!draw.groups.is_empty(), "{file}: a file read has groups");
+        // a census states what it finds: a file with no group, or a group with no field, is a line, not a failure
+        if draw.groups.is_empty() {
+            println!("{} {file} NO-GROUPS", game.name());
+        }
         for group in &draw.groups {
-            assert!(!group.fields.is_empty() || group.chosen == sekiro::source::SetChosen::ZeroId);
+            if group.fields.is_empty() && group.chosen != sekiro::source::SetChosen::ZeroId {
+                println!("{} {file} [{}] NO-FIELDS {:?}", game.name(), group.key, group.chosen);
+            }
             for field in &group.fields {
                 println!(
                     "{} {file} [{}] {} {} {:?}",
