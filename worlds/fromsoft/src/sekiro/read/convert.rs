@@ -8,7 +8,7 @@
 //! resident while the conversion runs, whatever the part size. A prototype's box before any pass is its stored model's posed box in the world frame, the extent the
 //! read's region rule uses. What the read left out or could not find ([`super::area::Report::notices`]) is the
 //! reader's notices; a load takes nothing from the source and notices nothing.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use primase_core::convert::{Notice, Reader, Report, Result};
@@ -16,7 +16,6 @@ use primase_core::{Entity, World};
 
 use super::area::{Options, read_game_area};
 use crate::Install;
-use crate::components::models::SourceModel;
 use crate::dcx::Decoder;
 use crate::materials::Material;
 use crate::sekiro::source::{ShaderPrograms, TexturePayloads};
@@ -58,6 +57,8 @@ pub struct AreaReader<'a> {
     options: Options,
     /// The read's notices, until the conversion takes them.
     pending: Vec<Notice>,
+    /// Each prototype's box, as the read took it (`area::Report::prototype_boxes`).
+    boxes: BTreeMap<Entity, Option<[[f64; 3]; 2]>>,
 }
 
 impl<'a> AreaReader<'a> {
@@ -80,6 +81,7 @@ impl<'a> AreaReader<'a> {
             decoder,
             options,
             pending: Vec::new(),
+            boxes: BTreeMap::new(),
         }
     }
 
@@ -126,6 +128,11 @@ impl Reader for AreaReader<'_> {
             &self.options,
             &mut world,
         )?;
+        self.boxes = r
+            .prototype_boxes
+            .iter()
+            .map(|(&e, b)| (e, b.map(|b| b.map(|c| c.map(f64::from)))))
+            .collect();
         Ok((world, self.record(&r)))
     }
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)> {
@@ -145,12 +152,9 @@ impl Reader for AreaReader<'_> {
     fn notices(&mut self) -> Vec<Notice> {
         std::mem::take(&mut self.pending)
     }
-    fn prototype_box(&self, world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
-        let model = &world.get::<SourceModel>(prototype)?.0;
-        super::area::world_bounds(model)
-            .ok()
-            .flatten()
-            .map(|b| b.map(|c| c.map(f64::from)))
+    /// The box the read took for it (a model whose box can't be computed refuses the read).
+    fn prototype_box(&self, _world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
+        self.boxes.get(&prototype).copied().flatten()
     }
 }
 

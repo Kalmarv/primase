@@ -771,6 +771,8 @@ pub struct CharacterReader<'a> {
     decoder: Decoder<'a>,
     options: CharacterOptions,
     pending: Vec<Notice>,
+    /// Each prototype's box, taken as it was read ([`super::area::world_bounds`]).
+    boxes: BTreeMap<Entity, Option<[[f64; 3]; 2]>>,
 }
 
 /// What a [`CharacterReader`] reads.
@@ -789,6 +791,7 @@ impl<'a> CharacterReader<'a> {
             decoder,
             options: CharacterOptions::default(),
             pending: Vec::new(),
+            boxes: BTreeMap::new(),
         }
     }
 
@@ -806,6 +809,7 @@ impl<'a> CharacterReader<'a> {
             decoder,
             options: CharacterOptions::default(),
             pending: Vec::new(),
+            boxes: BTreeMap::new(),
         }
     }
 }
@@ -861,6 +865,15 @@ impl Reader for CharacterReader<'_> {
         if let (Some(line), Some(of)) = (animation_line, &self.options.animations) {
             report.push(("fromsoft character".into(), format!("{of}: {line}")));
         }
+        // each prototype's box, as read: a model whose box can't be computed refuses the read
+        self.boxes = world
+            .iter::<SourceModel>()
+            .map(|(e, m)| {
+                let b = super::area::world_bounds(&m.0)
+                    .map_err(|why| invalid("FromSoftware model", 0, format!("{e:?}: its box: {why}")))?;
+                Ok((e, b.map(|b| b.map(|c| c.map(f64::from)))))
+            })
+            .collect::<Result<_>>()?;
         Ok((world, report))
     }
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> ConvertResult<(World, ConvertReport)> {
@@ -874,12 +887,9 @@ impl Reader for CharacterReader<'_> {
     fn notices(&mut self) -> Vec<Notice> {
         std::mem::take(&mut self.pending)
     }
-    fn prototype_box(&self, world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
-        let model = &world.get::<SourceModel>(prototype)?.0;
-        super::area::world_bounds(model)
-            .ok()
-            .flatten()
-            .map(|b| b.map(|c| c.map(f64::from)))
+    /// The box the read took for it (a model whose box can't be computed refuses the read).
+    fn prototype_box(&self, _world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
+        self.boxes.get(&prototype).copied().flatten()
     }
 }
 

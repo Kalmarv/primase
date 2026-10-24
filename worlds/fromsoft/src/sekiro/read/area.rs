@@ -83,6 +83,9 @@ pub struct Report {
     pub unread_metaparams: Vec<String>,
     /// Distinct placed models (`obj/<model>`, `asset/<model>`, `<map>/<model>`) the archive does not hold.
     pub missing_models: Vec<String>,
+    /// Each prototype's box as the region rule took it ([`world_bounds`]; `None` for a model that uses no vertex), by
+    /// its entity: what [`convert::AreaReader`] gives as the prototype's box.
+    pub prototype_boxes: BTreeMap<primase_core::Entity, Option<[[f32; 3]; 2]>>,
     /// The larger maps whose parts for this map were read (`parents: include`), and those parts.
     pub parent_maps: Vec<String>,
     pub parent_placements: usize,
@@ -737,6 +740,7 @@ pub fn read_game_area(
             .is_some_and(|model| game.far_model(model));
         let e = world.spawn();
         world.insert(e, Name(key.split_once('/').expect("key").1.to_owned()));
+        report.prototype_boxes.insert(e, proto.bounds);
         world.insert(e, crate::components::models::SourceModel(proto.model));
         world.insert(e, source::MaterialSlots(slots));
         world.insert(e, source::PrototypeSource { id: key.clone(), far });
