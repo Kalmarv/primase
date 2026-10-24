@@ -78,7 +78,8 @@ pub use world::{
 /// Register core's generic passes by their declarations, as every crate registers its own: a program builds its
 /// registry from these. What each takes: [`pass::PassRegistry::describe`], or the declaration ([`SELECT_LOD`],
 /// [`DROP_OPTIONAL`], [`PLACE_SPAWN`], [`PLACE_ASSETS`], [`SELECT_ASSETS`], [`PARTITION_BY_ASSET`],
-/// [`state::RESOLVE_STATE`], [`state::SELECT_OUTFIT`], [`translate::TRANSLATE_WORLD`]).
+/// [`state::RESOLVE_STATE`], [`state::SELECT_OUTFIT`], [`shader::SELECT_VARIANT`],
+/// [`translate::TRANSLATE_WORLD`]).
 pub fn register(reg: &mut pass::PassRegistry) {
     for spec in [
         &SELECT_LOD,
@@ -89,6 +90,7 @@ pub fn register(reg: &mut pass::PassRegistry) {
         &PARTITION_BY_ASSET,
         &state::RESOLVE_STATE,
         &state::SELECT_OUTFIT,
+        &shader::SELECT_VARIANT,
         &translate::TRANSLATE_WORLD,
     ] {
         reg.add(spec);
@@ -113,10 +115,17 @@ mod tests {
             "select-assets",
             "select-lod",
             "select-outfit",
+            "select-variant",
             "translate-world",
         ];
         assert_eq!(format!("{reg:?}"), format!("{names:?}"));
-        let requiring = ["select-assets", "select-lod", "select-outfit", "translate-world"];
+        let requiring = [
+            "select-assets",
+            "select-lod",
+            "select-outfit",
+            "select-variant",
+            "translate-world",
+        ];
         for name in names {
             assert_eq!(reg.requires_options(name), requiring.contains(&name), "{name}");
             let described = reg

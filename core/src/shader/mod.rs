@@ -16,6 +16,7 @@ mod binding;
 mod interface;
 mod program;
 mod resource;
+mod select_variant;
 
 use serde::Serialize;
 
@@ -37,6 +38,7 @@ pub use resource::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, Majorness, Member,
     Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, StorageTarget, TextureDim,
 };
+pub use select_variant::{SELECT_VARIANT, SelectVariant};
 
 /// How a shader program's bytes are encoded, for every game and target (the way [`crate::TexFormat`] is for texture
 /// bytes). Only the encoding lives here; reading one is the job of the crate that knows it (`primase-dxbc`,
