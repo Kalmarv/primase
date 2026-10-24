@@ -13,8 +13,9 @@
 //! "must reach". [`link`] takes a pixel program's flow back through the vertex program that feeds it.
 //!
 //! Not followed, and stated: a write to a storage buffer or image into a later read of it (a read is the resource's
-//! own value), and an atomic's change to memory (a later load sees the last plain store). What each such write is
-//! made of is kept ([`Values::writes`]), so a source that reaches only a write is still found. Refused with an error, never dropped: a call (the lifters emit one function), and the ray-query and
+//! own value), nor an atomic's change to such memory. What each such write is made of is kept ([`Values::writes`]), so
+//! a source that reaches only a write is still found. An atomic on memory the walk follows (thread-group memory) is
+//! followed: a later load sees what it left, the operation of the old value and the operand. Refused with an error, never dropped: a call (the lifters emit one function), and the ray-query and
 //! cooperative-matrix expressions.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -1302,6 +1303,35 @@ impl<'a> Walker<'a> {
         Ok(out)
     }
 
+    /// What an atomic `fun` leaves in a lane that held `before`, given `with` (and, for an exchange that compares,
+    /// `compare`).
+    fn atomic(
+        &mut self,
+        fun: &naga::AtomicFunction,
+        before: NodeId,
+        with: NodeId,
+        compare: Option<NodeId>,
+    ) -> NodeId {
+        use naga::AtomicFunction as F;
+        let binary = |op| Op::Binary(op);
+        match fun {
+            F::Add => self.op(binary(BinaryOperator::Add), vec![before, with]),
+            F::Subtract => self.op(binary(BinaryOperator::Subtract), vec![before, with]),
+            F::And => self.op(binary(BinaryOperator::And), vec![before, with]),
+            F::InclusiveOr => self.op(binary(BinaryOperator::InclusiveOr), vec![before, with]),
+            F::ExclusiveOr => self.op(binary(BinaryOperator::ExclusiveOr), vec![before, with]),
+            F::Min => self.op(Op::Math(MathFunction::Min), vec![before, with]),
+            F::Max => self.op(Op::Math(MathFunction::Max), vec![before, with]),
+            F::Exchange { .. } => match compare {
+                None => with,
+                Some(compare) => {
+                    let equal = self.op(binary(BinaryOperator::Equal), vec![before, compare]);
+                    self.op(Op::Select, vec![equal, with, before])
+                }
+            },
+        }
+    }
+
     /// A write not followed into a later read: what it is made of, under the conditions it is under.
     fn write(&mut self, mut made: Vec<NodeId>) {
         made.extend(&self.control);
@@ -1316,6 +1346,11 @@ impl<'a> Walker<'a> {
     ) -> Result<(), String> {
         let place = self.place(pointer, state)?;
         let value = self.lanes(value, state)?;
+        self.store_lanes(place, value, state)
+    }
+
+    /// `value` stored at `place` ([`Walker::store`] once both are taken).
+    fn store_lanes(&mut self, place: Place, value: Vec<NodeId>, state: &mut State) -> Result<(), String> {
         let mut memory = match place.root {
             Root::Local(l) => state
                 .locals
@@ -1570,14 +1605,34 @@ impl<'a> Walker<'a> {
                     value,
                     result,
                 } => {
-                    let mut made = self.place(*pointer, &state)?.index;
-                    for operand in [value].into_iter().chain(compared(fun)) {
-                        made.extend(self.lanes(*operand, &state)?);
-                    }
+                    let place = self.place(*pointer, &state)?;
+                    let operand = self.lanes(*value, &state)?;
+                    let compare = match compared(fun) {
+                        Some(c) => Some(self.lanes(*c, &state)?),
+                        None => None,
+                    };
+                    let mut made = place.index.clone();
+                    made.extend(&operand);
+                    made.extend(compare.iter().flatten());
                     self.write(made);
+                    let old = self.load(*pointer, &state)?;
                     if let Some(result) = result {
-                        let lanes = self.load(*pointer, &state)?;
-                        self.cache[result.index()] = Some(Val::Lanes(lanes));
+                        self.cache[result.index()] = Some(Val::Lanes(old.clone()));
+                    }
+                    // memory the walk follows (thread-group memory) holds what the atomic leaves there for a later load
+                    if let Root::Global(g) = place.root
+                        && self.followed(g)
+                    {
+                        let new = old
+                            .iter()
+                            .zip(&operand)
+                            .enumerate()
+                            .map(|(k, (&before, &with))| {
+                                let compare = compare.as_ref().and_then(|c| c.get(k).copied());
+                                self.atomic(fun, before, with, compare)
+                            })
+                            .collect();
+                        self.store_lanes(place, new, &mut state)?;
                     }
                 }
                 Statement::WorkGroupUniformLoad { pointer, result } => {

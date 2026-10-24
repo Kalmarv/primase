@@ -341,3 +341,38 @@ fn a_call_is_refused_not_dropped() {
     let err = Flow::of_program(&program).unwrap_err();
     assert!(err.contains("call to helper"), "{err}");
 }
+
+/// An atomic on thread-group memory is followed: dxc's compute program adds its group index to `counter` with
+/// `InterlockedAdd(counter, index)` and later writes `tile[63 - index] + counter` to a buffer, so what that write is made
+/// of holds the add of the counter's earlier value and the index.
+#[test]
+fn an_atomic_on_thread_group_memory_is_followed() {
+    let program = primase_dxil::lift(include_bytes!("../../dxil/tests/fixtures/compute_basic.dxil"))
+        .expect("dxc's program lifts");
+    let values = Values::of_program(&program).expect("the value graph");
+    let index = program
+        .interface
+        .inputs
+        .iter()
+        .position(|v| v.system == Some(primase_shader::SystemValue::GroupIndex))
+        .expect("SV_GroupIndex");
+    let reached = values.reached_from(values.writes().iter().flatten().copied());
+    let added = reached.iter().any(|&id| match values.node(id) {
+        Node::Op {
+            op: Op::Binary(primase_shader::flow::BinaryOperator::Add),
+            operands,
+        } => {
+            operands
+                .iter()
+                .any(|&o| matches!(values.node(o), Node::Merge { .. }))
+                && operands
+                    .iter()
+                    .any(|&o| matches!(values.node(o), Node::Input { input, .. } if *input == index))
+        }
+        _ => false,
+    });
+    assert!(
+        added,
+        "no add of the counter and the index in what the writes are made of"
+    );
+}
