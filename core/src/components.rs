@@ -166,15 +166,13 @@ impl Transform {
 
     /// What the basis does besides rotating, scaling and translating, the one meaning every reader, writer and mesh operation
     /// that classifies a placement shares: with `u_i = c_i / |c_i|`, degenerate when some `|c_i| <` [`DEGENERATE_BASIS`] or
-    /// `|det| <=` [`DEGENERATE_BASIS`] `|c0||c1||c2|`; sheared when some `|u_i . u_j| >` [`SHEAR_TOLERANCE`]; mirrored when
+    /// `|det| <=` [`DEGENERATE_BASIS`] `|c0||c1||c2|` (or the determinant is not a number); sheared when some `|u_i . u_j| >` [`SHEAR_TOLERANCE`]; mirrored when
     /// `det < 0`. Computed in f64.
     pub fn classify(&self) -> TransformKind {
         let c: [[f64; 3]; 3] = std::array::from_fn(|i| self.cols[i].map(f64::from));
         let len: [f64; 3] = std::array::from_fn(|i| dot(c[i], c[i]).sqrt());
         let det = dot(c[0], cross(c[1], c[2]));
-        if len.iter().any(|&l| l < DEGENERATE_BASIS)
-            || det.abs() <= DEGENERATE_BASIS * len[0] * len[1] * len[2]
-        {
+        if degenerate(&c, det) {
             return TransformKind::Degenerate;
         }
         let u: [[f64; 3]; 3] = std::array::from_fn(|i| c[i].map(|x| x / len[i]));
@@ -190,6 +188,16 @@ impl Transform {
             TransformKind::Regular
         }
     }
+}
+
+/// Whether the basis with columns `c` and determinant `det` is degenerate ([`Transform::classify`]): some axis
+/// shorter than [`DEGENERATE_BASIS`], or `|det| <=` [`DEGENERATE_BASIS`] `|c0||c1||c2|`, or a determinant that isn't
+/// a number.
+fn degenerate(c: &[[f64; 3]; 3], det: f64) -> bool {
+    let len: [f64; 3] = std::array::from_fn(|i| dot(c[i], c[i]).sqrt());
+    det.is_nan()
+        || len.iter().any(|&l| l < DEGENERATE_BASIS)
+        || det.abs() <= DEGENERATE_BASIS * len[0] * len[1] * len[2]
 }
 
 /// The position of the first non-finite value, as an error.
@@ -217,7 +225,8 @@ fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 ///
 /// Points go through `M`; normals through `M^-T` with the determinant's sign kept (they stay on the side they were
 /// on) and directions through `M`, both then of unit length (zero stays zero); a tangent's w (the bitangent sign) and
-/// a triangle's winding flip when the determinant is negative ([`Linear::mirrors`]).
+/// a triangle's winding flip when the determinant is negative ([`Linear::mirrors`]). A singular map
+/// ([`Linear::singular`]) turns no normal or tangent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Linear {
     c: [[f64; 3]; 3],
@@ -234,7 +243,12 @@ impl Linear {
 
     /// The map with these columns (images of local +X, +Y, +Z).
     pub fn new(cols: [[f32; 3]; 3]) -> Linear {
-        let c: [[f64; 3]; 3] = cols.map(|col| col.map(f64::from));
+        Linear::of_f64(cols.map(|col| col.map(f64::from)))
+    }
+
+    /// The map with these columns held in f64: a part composed in f64 (a chain of bone transforms) taken as it is,
+    /// not rounded to f32 first.
+    pub fn of_f64(c: [[f64; 3]; 3]) -> Linear {
         let cof = [cross(c[1], c[2]), cross(c[2], c[0]), cross(c[0], c[1])];
         let det = dot(c[0], cof[0]);
         Linear { c, cof, det }
@@ -249,9 +263,17 @@ impl Linear {
         self.det
     }
 
-    /// The columns of `M^-1` (the transpose of the cofactors over the determinant); `None` for a singular map.
+    /// Whether the map has no inverse to turn normals and tangents by: its basis is degenerate, as
+    /// [`Transform::classify`] says of a transform with this linear part (or its determinant is not finite). The one
+    /// rule [`Linear::normal`], [`Linear::tangent`] and [`Linear::inverse_columns`] answer `None` by.
+    pub fn singular(&self) -> bool {
+        !self.det.is_finite() || degenerate(&self.c, self.det)
+    }
+
+    /// The columns of `M^-1` (the transpose of the cofactors over the determinant); `None` for a singular map
+    /// ([`Linear::singular`]).
     pub fn inverse_columns(&self) -> Option<[[f64; 3]; 3]> {
-        if self.det == 0.0 || !self.det.is_finite() {
+        if self.singular() {
             return None;
         }
         // row i of M^-1 is cof[i] / det (c1 x c2 dotted with c0 is det, with c1 and c2 it is 0): column j holds
@@ -301,17 +323,25 @@ impl Linear {
         Self::apply(&self.c, p.map(f64::from)).map(|x| x as f32)
     }
 
-    /// `M^-T n` times the determinant's sign, of unit length.
-    pub fn normal(&self, n: [f32; 3]) -> [f32; 3] {
+    /// `M^-T n` times the determinant's sign, of unit length (zero stays zero); `None` under a singular map
+    /// ([`Linear::singular`]), which turns no normal.
+    pub fn normal(&self, n: [f32; 3]) -> Option<[f32; 3]> {
+        if self.singular() {
+            return None;
+        }
         let v = Self::apply(&self.cof, n.map(f64::from)).map(|x| x * self.det.signum());
-        unit(v)
+        Some(unit(v))
     }
 
-    /// `M t` of unit length; w negated under a mirror.
-    pub fn tangent(&self, t: [f32; 4]) -> [f32; 4] {
+    /// `M t` of unit length (zero stays zero), w negated under a mirror; `None` under a singular map
+    /// ([`Linear::singular`]).
+    pub fn tangent(&self, t: [f32; 4]) -> Option<[f32; 4]> {
+        if self.singular() {
+            return None;
+        }
         let v = unit(Self::apply(&self.c, [t[0], t[1], t[2]].map(f64::from)));
         let w = if self.mirrors() { -t[3] } else { t[3] };
-        [v[0], v[1], v[2], w]
+        Some([v[0], v[1], v[2], w])
     }
 }
 
@@ -616,15 +646,26 @@ impl std::fmt::Debug for Mesh {
 impl Component for Mesh {
     const NAME: &'static str = "core.mesh";
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
-    /// Positions, normals and tangents mapped ([`crate::Linear`]); triangles reversed under a mirror.
+    /// Positions, normals and tangents mapped ([`crate::Linear`]); triangles reversed under a mirror. A mesh with
+    /// normals or tangents cannot follow a singular map ([`crate::Linear::singular`]): unsupported.
     fn apply_linear(&self, l: &crate::Linear) -> crate::world::Linearity<Self> {
         let mut m = self.clone();
         for p in &mut m.primitives {
             for (sem, st) in &mut p.streams {
                 match (sem, st) {
                     (Semantic::Position, Stream::F32x3(v)) => v.iter_mut().for_each(|x| *x = l.point(*x)),
-                    (Semantic::Normal, Stream::F32x3(v)) => v.iter_mut().for_each(|x| *x = l.normal(*x)),
-                    (Semantic::Tangent, Stream::F32x4(v)) => v.iter_mut().for_each(|x| *x = l.tangent(*x)),
+                    // a singular map turns no normal or tangent: the mesh cannot follow it
+                    (Semantic::Normal | Semantic::Tangent, _) if l.singular() => {
+                        return crate::world::Linearity::Unsupported;
+                    }
+                    (Semantic::Normal, Stream::F32x3(v)) => {
+                        v.iter_mut()
+                            .for_each(|x| *x = l.normal(*x).expect("not singular"));
+                    }
+                    (Semantic::Tangent, Stream::F32x4(v)) => {
+                        v.iter_mut()
+                            .for_each(|x| *x = l.tangent(*x).expect("not singular"));
+                    }
                     (Semantic::Position | Semantic::Normal | Semantic::Tangent, _) => {
                         return crate::world::Linearity::Unsupported;
                     }
@@ -1676,6 +1717,48 @@ mod tests {
         assert_eq!(c.apply(p), outer.apply(inner.apply(p)));
         assert_eq!(Transform::IDENTITY.compose(&inner), inner);
         assert_eq!(inner.compose(&Transform::IDENTITY), inner);
+    }
+
+    /// One singular rule: a map is singular when a transform with its part classifies as degenerate. It then turns no
+    /// normal or tangent and has no inverse, and a mesh with normals cannot follow it; an invertible map's normals and
+    /// tangents come out of unit length, the tangent's w flipped under a mirror.
+    #[test]
+    fn a_singular_map_turns_no_normal_or_tangent() {
+        let near_flat = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 1e-7]];
+        for cols in [
+            [[0.0; 3]; 3],
+            [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            near_flat,
+        ] {
+            let l = Linear::new(cols);
+            let t = Transform {
+                cols: [cols[0], cols[1], cols[2], [0.0; 3]],
+            };
+            assert!(l.singular(), "{cols:?}");
+            assert_eq!(t.classify(), TransformKind::Degenerate, "{cols:?}");
+            assert_eq!(l.normal([0.0, 0.0, 1.0]), None);
+            assert_eq!(l.tangent([1.0, 0.0, 0.0, 1.0]), None);
+            assert_eq!(l.inverse_columns(), None);
+        }
+        let flat = Linear::new([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]]);
+        let mut streams = BTreeMap::new();
+        streams.insert(Semantic::Position, Stream::F32x3(vec![[0.0; 3]; 3]));
+        streams.insert(Semantic::Normal, Stream::F32x3(vec![[0.0, 0.0, 1.0]; 3]));
+        let mesh = Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams,
+            indices: None,
+            material: None,
+        }]);
+        assert!(matches!(
+            mesh.apply_linear(&flat),
+            crate::world::Linearity::Unsupported
+        ));
+        // scaled by 2 and mirrored in x: unit normals and tangents, w flipped
+        let l = Linear::of_f64([[-2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]]);
+        assert!(!l.singular() && l.mirrors());
+        assert_eq!(l.normal([1.0, 0.0, 0.0]), Some([-1.0, 0.0, 0.0]));
+        assert_eq!(l.tangent([0.0, 3.0, 0.0, 1.0]), Some([0.0, 1.0, 0.0, -1.0]));
     }
 
     #[test]
