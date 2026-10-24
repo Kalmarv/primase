@@ -1,10 +1,10 @@
-//! Execute the resolved pixel stage and decode only the roles its binding declares.
+//! Execute the resolved pixel stage and decode only the roles its binding declares, through primase's one reading of a
+//! program's outputs as a surface (`primase_core::shader::surface`).
 use crate::layer_bake::{self, FrozenFrame};
 use primase_core::parallel::Threads;
 use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
-use primase_core::shader::{
-    NormalEncoding, NormalSpace, OutputBinding, OutputRole, Shader, StageBinding, TextureSource,
-};
+use primase_core::shader::surface::{Base, Place, Surface};
+use primase_core::shader::{NormalSpace, OutputBinding, OutputRole, Shader, StageBinding, TextureSource};
 use primase_core::{ColorSpace, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer};
 use primase_shader_exec::{
@@ -60,47 +60,24 @@ fn target(shader: &dyn PixelShader, output: &OutputBinding) -> Result<(u32, u8),
     let d3d = varying.provenance.d3d.ok_or("output has no register")?;
     Ok((d3d.register, output.lanes))
 }
-/// The lanes of `output` that `mask` names at `pixel`, in lane order, and how many: written and finite, else an error.
-fn lanes(raw: &Raw, output: usize, pixel: usize, mask: u8) -> Result<([f32; 4], usize), String> {
+/// The four values of the output a term is placed in at `pixel`: the term's lanes written and finite, else an error.
+/// The other lanes are as the evaluation left them; a term reads only its own.
+fn values(raw: &Raw, place: Place, pixel: usize) -> Result<[f32; 4], String> {
+    let (output, mask) = (place.output, place.lanes);
     let (words, written) = raw.pixels[output][pixel];
     if written & mask != mask {
         return Err(format!("output {output} lacks lanes {mask:x} at texel {pixel}"));
     }
-    let mut values = [0.; 4];
-    let mut count = 0;
-    for c in (0..4).filter(|c| mask & (1 << c) != 0) {
-        let v = f32::from_bits(words[c]);
-        if !v.is_finite() {
-            return Err("nonfinite G-buffer output".into());
-        }
-        values[count] = v;
-        count += 1;
+    let values = words.map(f32::from_bits);
+    if (0..4).any(|c| mask & (1 << c) != 0 && !values[c].is_finite()) {
+        return Err("nonfinite G-buffer output".into());
     }
-    Ok((values, count))
+    Ok(values)
 }
-fn normal(encoded: &[f32], encoding: NormalEncoding, space: NormalSpace) -> Result<[u8; 4], String> {
-    if encoded.len() != 3 || !matches!(space, NormalSpace::World | NormalSpace::View) {
-        return Err("normal is not a three-lane world/view normal".into());
-    }
-    let bias = match encoding {
-        NormalEncoding::Xyz => 0.,
-        NormalEncoding::XyzUnorm => 0.5,
-        NormalEncoding::XyzBiased { bias_bits } => f32::from_bits(bias_bits),
-        _ => return Err("unsupported normal encoding".into()),
-    };
-    let scale = if encoding == NormalEncoding::Xyz { 1. } else { 2. };
-    let n: [f32; 3] = std::array::from_fn(|i| (encoded[i] - bias) * scale);
-    let length = n.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if length <= 1e-8 {
-        return Err("zero G-buffer normal".into());
-    }
+/// A unit world or view normal in the baked texture's bytes.
+fn normal(n: [f32; 3]) -> [u8; 4] {
     // Frozen N=(0,1,0), T=(1,0,0), cross(N,T)=(0,0,-1). Restore the source normal convention.
-    Ok([
-        byte(-n[2] / length * 0.5 + 0.5),
-        byte(n[0] / length * 0.5 + 0.5),
-        byte(n[1] / length * 0.5 + 0.5),
-        255,
-    ])
+    [byte(-n[2] * 0.5 + 0.5), byte(n[0] * 0.5 + 0.5), byte(n[1] * 0.5 + 0.5), 255]
 }
 
 /// The resolved values both the cache key and the evaluation consume. Entity identities never enter the key.
@@ -109,12 +86,9 @@ pub(super) struct Prepared<'a> {
     pub vertex: &'a Shader,
     pub shader: primase_shader_exec::ProgramShader,
     pub outputs: Vec<&'a OutputBinding>,
-    pub albedo: usize,
-    pub normal_index: usize,
-    pub rough: usize,
-    pub metal: Option<usize>,
-    pub specular: Option<usize>,
-    pub emission: Option<usize>,
+    /// The outputs read as a surface: every place is a position in `outputs`, and it has the albedo, the normal and the
+    /// roughness the bake needs, and the metallic or the reflectance.
+    pub surface: Surface,
     pub policies: BTreeMap<String, u64>,
     pub constants: primase_shader_exec::evaluate::Constants,
     pub textures: BTreeMap<u32, BoundTexture>,
@@ -169,18 +143,25 @@ pub(super) fn prepare<'a>(
             )
         })
         .collect();
-    let index = |predicate: fn(&OutputRole) -> bool| outputs.iter().position(|o| predicate(&o.role));
-    let albedo = index(|r| matches!(r, OutputRole::Albedo))
-        .ok_or_else(|| super::colour::refusal(shader.program(), stage))?;
-    let normal_index = index(|r| matches!(r, OutputRole::Normal { .. })).ok_or("no normal output role")?;
-    let rough = index(|r| matches!(r, OutputRole::Gloss { .. } | OutputRole::Roughness))
-        .ok_or("no gloss/roughness output role")?;
-    let metal = index(|r| matches!(r, OutputRole::Metallic));
-    let specular = index(|r| matches!(r, OutputRole::Reflectance { .. }));
-    if metal.is_none() && specular.is_none() {
+    let surface = Surface::read(outputs.iter().map(|o| (o.lanes, &o.role)));
+    if let Some(why) = surface.refused.first() {
+        return Err(format!("output role whose lanes do not fit it: {why}"));
+    }
+    match surface.base {
+        Some(Base::Albedo(place)) if place.width() == 3 => {}
+        Some(Base::Albedo(_)) => return Err("albedo role is not RGB".into()),
+        _ => return Err(super::colour::refusal(shader.program(), stage)),
+    }
+    let normal = surface.normal.ok_or("no normal output role")?;
+    if !matches!(normal.space, NormalSpace::World | NormalSpace::View) {
+        return Err("normal is not a world/view normal".into());
+    }
+    if surface.roughness.is_none() {
+        return Err("no gloss/roughness output role".into());
+    }
+    if surface.metallic.is_none() && surface.reflectance.is_none() {
         return Err("neither metallic nor reflectance output role".into());
     }
-    let emission = index(|r| matches!(r, OutputRole::Emission { .. }));
     let mut policies = BTreeMap::new();
     let frame = FrozenFrame::static_bake(time);
     let constants = layer_bake::program_constants(&shader, &core.interface, stage, &frame, &mut policies)
@@ -288,12 +269,7 @@ pub(super) fn prepare<'a>(
         vertex: vertex_shader,
         shader,
         outputs,
-        albedo,
-        normal_index,
-        rough,
-        metal,
-        specular,
-        emission,
+        surface,
         policies,
         constants,
         textures,
@@ -313,13 +289,8 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
         pixel: _,
         vertex: _,
         shader,
-        outputs,
-        albedo,
-        normal_index,
-        rough,
-        metal,
-        specular,
-        emission,
+        outputs: _,
+        surface,
         policies,
         constants,
         textures,
@@ -352,13 +323,7 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
         return Err("program still discards texels with alpha test disabled".into());
     }
     let surfaces = Decode {
-        outputs: &outputs,
-        albedo,
-        normal: normal_index,
-        rough,
-        metal,
-        specular,
-        emission,
+        surface: &surface,
         alpha: alpha.as_ref(),
         base_alpha,
         size,
@@ -375,7 +340,7 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
         emission: surfaces.emission,
         policies,
     };
-    if specular.is_some() && metal.is_none() {
+    if surface.reflectance.is_some() && surface.metallic.is_none() {
         result.policies.insert(
             "decoded reflectance represented by PBR specular workflow; diffuse energy model approximated"
                 .into(),
@@ -398,17 +363,11 @@ struct Surfaces {
     emission: Option<Vec<[f32; 3]>>,
 }
 
-/// How a bake's evaluated targets decode into its surface channels: which target holds which role, the texture whose
-/// alpha (times `base_alpha`) is the albedo's, and the grid's side.
+/// How a bake's evaluated targets decode into its surface channels: the surface its outputs are read as (each place a
+/// position among the evaluated targets, in the order the evaluation keeps them, with the terms [`prepare`] requires),
+/// the texture whose alpha (times `base_alpha`) is the albedo's, and the grid's side.
 struct Decode<'a> {
-    /// The evaluated targets, in the order the evaluation keeps them.
-    outputs: &'a [&'a OutputBinding],
-    albedo: usize,
-    normal: usize,
-    rough: usize,
-    metal: Option<usize>,
-    specular: Option<usize>,
-    emission: Option<usize>,
+    surface: &'a Surface,
     alpha: Option<&'a (Arc<SampledTexture>, Option<UvTransform>)>,
     base_alpha: f32,
     size: u32,
@@ -422,8 +381,8 @@ impl Decode<'_> {
         let decoded = primase_core::parallel::map(threads, &rows, |_, &y| self.row(raw, y))
             .map_err(|p| format!("decoding row {}: {}", rows[p.item], p.message))?;
         let mut all = Surfaces {
-            specular: self.specular.map(|_| Vec::new()),
-            emission: self.emission.map(|_| Vec::new()),
+            specular: self.surface.reflectance.map(|_| Vec::new()),
+            emission: self.surface.emission.map(|_| Vec::new()),
             ..Surfaces::default()
         };
         for row in decoded {
@@ -448,8 +407,8 @@ impl Decode<'_> {
             albedo: Vec::with_capacity(4 * n),
             normal: Vec::with_capacity(4 * n),
             orm: Vec::with_capacity(4 * n),
-            specular: self.specular.map(|_| Vec::with_capacity(4 * n)),
-            emission: self.emission.map(|_| Vec::with_capacity(n)),
+            specular: self.surface.reflectance.map(|_| Vec::with_capacity(4 * n)),
+            emission: self.surface.emission.map(|_| Vec::with_capacity(n)),
         };
         for x in 0..n {
             self.texel(raw, y as usize * n + x, &mut out)?;
@@ -460,12 +419,12 @@ impl Decode<'_> {
     /// Texel `p`'s channels, appended to `out`.
     fn texel(&self, raw: &Raw, p: usize, out: &mut Surfaces) -> Result<(), String> {
         let size = self.size as usize;
-        let value = |i: usize| lanes(raw, i, p, self.outputs[i].lanes);
-        let (a, count) = value(self.albedo)?;
-        if count != 3 {
-            return Err("albedo role is not RGB".into());
-        }
-        out.albedo.extend(a[..3].iter().copied().map(colour));
+        let s = self.surface;
+        let (Some(base), Some(normal_term), Some(roughness)) = (s.base, s.normal, s.roughness) else {
+            return Err("the surface lacks an albedo, a normal or a roughness".into());
+        };
+        let a = base.colour(values(raw, base.place(), p)?);
+        out.albedo.extend(a.map(colour));
         let uv = [(p % size) as f32 + 0.5, (p / size) as f32 + 0.5].map(|x| x / size as f32);
         let opacity = if let Some((t, transform)) = self.alpha {
             layer_bake::sample(t, transform.map_or(uv, |t| t.apply(uv))).map_err(|e| e.to_string())?[3]
@@ -473,43 +432,23 @@ impl Decode<'_> {
             1.
         };
         out.albedo.push(byte(opacity * self.base_alpha));
-        let OutputRole::Normal { encoding, space } = self.outputs[self.normal].role else {
-            unreachable!()
-        };
-        let (n, count) = value(self.normal)?;
-        out.normal.extend(normal(&n[..count], encoding, space)?);
-        let (r, count) = value(self.rough)?;
-        if count != 1 {
-            return Err("roughness/gloss role is not scalar".into());
-        }
-        let r = match self.outputs[self.rough].role {
-            OutputRole::Gloss { encoding } => 1. - encoding.decode(r[0]),
-            _ => r[0],
-        };
-        let m = if let Some(i) = self.metal {
-            let (m, count) = value(i)?;
-            if count != 1 {
-                return Err("metallic role is not scalar".into());
-            }
-            m[0]
-        } else {
-            0.
+        let n = normal_term
+            .decode(values(raw, normal_term.place, p)?)
+            .ok_or("zero G-buffer normal")?;
+        out.normal.extend(normal(n));
+        let r = roughness.decode(values(raw, roughness.term().place, p)?);
+        let m = match s.metallic {
+            Some(t) => t.decode(values(raw, t.place, p)?, 0),
+            None => 0.,
         };
         if !r.is_finite() || !m.is_finite() {
             return Err("nonfinite decoded surface channel".into());
         }
         out.orm.extend([255, byte(r), byte(m), 255]);
-        if let Some(i) = self.specular {
-            let OutputRole::Reflectance { encoding } = self.outputs[i].role else {
-                unreachable!()
-            };
-            let (f0, count) = value(i)?;
-            if count != 3 {
-                return Err("reflectance role is not RGB".into());
-            }
+        if let Some(t) = s.reflectance {
+            let f0 = t.colour(values(raw, t.place, p)?);
             let specular = out.specular.as_mut().expect("allocated reflectance");
-            for v in &f0[..3] {
-                let v = encoding.decode(*v);
+            for v in f0 {
                 if !v.is_finite() {
                     return Err("nonfinite reflectance".into());
                 }
@@ -517,19 +456,9 @@ impl Decode<'_> {
             }
             specular.push(255);
         }
-        if let Some(i) = self.emission {
-            let OutputRole::Emission { encoding } = self.outputs[i].role else {
-                unreachable!()
-            };
-            let (e, count) = value(i)?;
-            if count != 3 {
-                return Err("emission role is not RGB".into());
-            }
-            out.emission.as_mut().expect("allocated emission").push([
-                encoding.decode(e[0]),
-                encoding.decode(e[1]),
-                encoding.decode(e[2]),
-            ]);
+        if let Some(e) = s.emission {
+            let light = e.decode(values(raw, e.term().place, p)?, a);
+            out.emission.as_mut().expect("allocated emission").push(light);
         }
         Ok(())
     }
@@ -538,7 +467,7 @@ impl Decode<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_core::shader::{Label, ScalarEncoding};
+    use primase_core::shader::{Label, NormalEncoding, ScalarEncoding};
 
     fn target(name: &str, lanes: u8, role: OutputRole) -> OutputBinding {
         OutputBinding {
@@ -603,15 +532,16 @@ mod tests {
         }
     }
 
-    fn decode<'a>(outputs: &'a [&'a OutputBinding], size: u32) -> Decode<'a> {
+    /// The targets read as a surface: every role in its own target, 0 to 5.
+    fn surface(outputs: &[&OutputBinding]) -> Surface {
+        let surface = Surface::read(outputs.iter().map(|o| (o.lanes, &o.role)));
+        assert!(surface.refused.is_empty(), "{:?}", surface.refused);
+        surface
+    }
+
+    fn decode(surface: &Surface, size: u32) -> Decode<'_> {
         Decode {
-            outputs,
-            albedo: 0,
-            normal: 1,
-            rough: 2,
-            metal: Some(3),
-            specular: Some(4),
-            emission: Some(5),
+            surface,
             alpha: None,
             base_alpha: 0.5,
             size,
@@ -629,10 +559,11 @@ mod tests {
         let outputs: Vec<&OutputBinding> = targets.iter().collect();
         let size = 9;
         let raw = raw(size, |_, t| targets[t].lanes);
-        let one = decode(&outputs, size as u32)
+        let surface = surface(&outputs);
+        let one = decode(&surface, size as u32)
             .surfaces(&raw, Threads::ONE)
             .unwrap();
-        let four = decode(&outputs, size as u32)
+        let four = decode(&surface, size as u32)
             .surfaces(&raw, Threads::new(4).unwrap())
             .unwrap();
         assert_eq!(one, four);
@@ -656,9 +587,10 @@ mod tests {
             (47, 1) => 0b0001,
             _ => targets[t].lanes,
         });
+        let surface = surface(&outputs);
         for threads in [Threads::ONE, Threads::new(4).unwrap()] {
             assert_eq!(
-                decode(&outputs, size as u32).surfaces(&raw, threads),
+                decode(&surface, size as u32).surfaces(&raw, threads),
                 Err("output 0 lacks lanes 7 at texel 20".into())
             );
         }

@@ -28,7 +28,7 @@
 //!   by a pass.
 //! - `writers_read_only`: a writer's entry points take the world read-only.
 //! - `real_data_variables_are_declared`: a `PRIMASE_*` name in the workspace's sources is the configuration's (read by
-//!   `toolkit/testdata` only: `PRIMASE_DATA`, `PRIMASE_DEBUG` and, for this release, the older names) or a test's
+//!   `toolkit/testdata` only: `PRIMASE_DATA` and `PRIMASE_DEBUG`) or a test's
 //!   handoff to its own child process; CONTRIBUTING.md's real-data tables and `primase-data.example.toml` agree with
 //!   the registry. Names are whole string literals, so the scan sees every one: a name a format string builds
 //!   (`PRIMASE_{x}`) fails. `real_data_queries_are_declared`: every typed query names a declared file by a literal
@@ -1793,12 +1793,8 @@ const CHILD_HANDOFFS: &[&str] = &[
 
 #[test]
 fn real_data_variables_are_declared() {
-    // primase-testdata reads the configuration's variables and, for this release, the older names
-    // (primase_testdata::legacy::OLDER); anywhere else a PRIMASE_* name is a child process's handoff
-    let configuration: BTreeSet<&str> = ["PRIMASE_DATA", "PRIMASE_DEBUG", primase_testdata::config::REQUIRE]
-        .into_iter()
-        .chain(primase_testdata::legacy::OLDER.iter().map(|(n, _)| *n))
-        .collect();
+    // primase-testdata reads the configuration's variables; anywhere else a PRIMASE_* name is a child process's handoff
+    let configuration: BTreeSet<&str> = ["PRIMASE_DATA", "PRIMASE_DEBUG"].into_iter().collect();
     let mut unknown = Vec::new();
     let mut built = Vec::new();
     for m in members() {

@@ -617,7 +617,7 @@ impl LaneAffine {
 
 /// The cube-map faces of [`NormalEncoding::CubeFace`] by face index: the axis of the major component and, for lanes 0
 /// and 1, the axis and sign of the normal's component each holds.
-const CUBE_FACES: [(usize, [(usize, f64); 2]); 6] = [
+pub(super) const CUBE_FACES: [(usize, [(usize, f64); 2]); 6] = [
     (0, [(2, -1.0), (1, -1.0)]),
     (0, [(2, 1.0), (1, -1.0)]),
     (1, [(0, 1.0), (2, 1.0)]),

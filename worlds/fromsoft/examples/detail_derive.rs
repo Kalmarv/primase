@@ -4,8 +4,8 @@
 //! those that disagree), and the tint fold's cost.
 //!
 //! `cargo run --release -p primase-fromsoft --example detail_derive -- <folder of Sekiro .ppo> [name filter]`: the
-//! shader corpus's `programs/sekiro-ps` (`PRIMASE_SHADER_CORPUS_SEKIRO`), the filter `DetailBlend` by default. A block a
-//! program, then the totals.
+//! shader corpus's `programs/sekiro-ps` (the real-data configuration's `oracles.corpus.sekiro/shaders`), the filter
+//! `DetailBlend` by default. A block a program, then the totals.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

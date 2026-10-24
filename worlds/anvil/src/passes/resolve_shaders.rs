@@ -1607,6 +1607,70 @@ mod key_tests {
         assert_eq!(of(None, 3), [(0b1111, OutputRole::unknown("…"))]);
     }
 
+    /// The G-buffer read as a surface (`primase_core::shader::surface`), the one reading a viewer's composite takes, by
+    /// shading class: target 0 the albedo and, opaque, the roughness in w; target 1 the diamond normal and, in w, the
+    /// metalness for class 1 or the occlusion of every light for classes 3 to 5; class 1's emission is target 2's z,
+    /// one lane that scales the albedo. A blended material has no roughness, and the classes 3 to 5 no metalness and
+    /// no emission.
+    #[test]
+    fn the_gbuffer_is_read_as_a_surface_by_shading_class() {
+        use primase_core::shader::surface::{Base, Emission, Place, Roughness, Surface, Term};
+        let program = primase_dxbc::lift(LIFTED).unwrap();
+        let read = |class: Option<u8>, opaque: bool| -> (Surface, Vec<u32>) {
+            let outputs = output_bindings(&program.interface, class, opaque);
+            let targets = outputs
+                .iter()
+                .map(|o| {
+                    let n = program.interface.outputs.iter().position(|v| v.label == o.label).unwrap();
+                    u32::try_from(n).unwrap()
+                })
+                .collect();
+            (Surface::read(outputs.iter().map(|o| (o.lanes, &o.role))), targets)
+        };
+        let at = |targets: &[u32], place: Place| (targets[place.output], place.lanes);
+        let linear = ScalarEncoding::LINEAR;
+
+        let (metal, targets) = read(Some(1), true);
+        assert!(metal.refused.is_empty(), "{:?}", metal.refused);
+        let Some(Base::Albedo(albedo)) = metal.base else {
+            panic!("an albedo: {:?}", metal.base)
+        };
+        assert_eq!(at(&targets, albedo), (0, 0b0111));
+        let Some(Roughness::Roughness(roughness)) = metal.roughness else {
+            panic!("a roughness: {:?}", metal.roughness)
+        };
+        assert_eq!((at(&targets, roughness.place), roughness.encoding), ((0, 0b1000), linear));
+        let normal = metal.normal.unwrap();
+        assert_eq!(
+            (at(&targets, normal.place), normal.encoding),
+            ((1, 0b0111), NormalEncoding::OctahedralDiamond)
+        );
+        let metallic: Term = metal.metallic.unwrap();
+        assert_eq!(at(&targets, metallic.place), (1, 0b1000));
+        let Some(Emission::OfAlbedo(emission)) = metal.emission else {
+            panic!("one lane of emission: {:?}", metal.emission)
+        };
+        assert_eq!(at(&targets, emission.place), (2, 0b0100));
+        assert_eq!(at(&targets, metal.occlusion.unwrap().place), (3, 0b0001));
+        assert_eq!((metal.reflectance, metal.specular), (None, None));
+        // the diamond normal decodes what its encoder stores, the emission scales the albedo
+        let lanes = NormalEncoding::encode_octahedral_diamond([0.0, 0.0, 1.0], 5).map(|b| f32::from(b) / 255.0);
+        let up = normal.decode([lanes[0], lanes[1], lanes[2], 0.4]).unwrap();
+        assert!(up[2] > 0.999, "{up:?}");
+        assert_eq!(
+            metal.emission.unwrap().decode([0.0, 0.0, 2.0, 0.0], [0.25, 0.5, 1.0]),
+            [0.5, 1.0, 2.0]
+        );
+
+        let (rock, targets) = read(Some(5), true);
+        assert_eq!(at(&targets, rock.occlusion.unwrap().place), (1, 0b1000));
+        assert_eq!((rock.metallic, rock.emission), (None, None));
+        assert!(rock.roughness.is_some() && rock.normal.is_some() && rock.base.is_some());
+
+        let (blended, _) = read(Some(5), false);
+        assert_eq!(blended.roughness, None);
+    }
+
     /// Only the lanes a program reads of the engine's buffers are bound, each with the role the notes establish or an
     /// Unknown with a reason; the rows it does not read are counted as left out. Held to the lanes the lifted program
     /// takes, on the lifter's D3D fixture.

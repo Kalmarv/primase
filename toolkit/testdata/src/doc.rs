@@ -1,8 +1,6 @@
 //! CONTRIBUTING.md's real-data tables, made from the registry ([`tables`]): the architecture check compares the
 //! document's block with them, so the two cannot drift.
-use crate::query::Query;
 use crate::registry::{self, Status};
-use crate::{config, legacy};
 
 /// The line before the tables in CONTRIBUTING.md.
 pub const BEGIN: &str =
@@ -29,8 +27,8 @@ fn table(out: &mut String, title: &str, header: &[&str], rows: impl IntoIterator
     out.push('\n');
 }
 
-/// The tables, between [`BEGIN`] and [`END`]: the configuration's keys, the oracle sets, every declared file, the
-/// debug keys and, for one release, what each older `PRIMASE_*` name stands for.
+/// The tables, between [`BEGIN`] and [`END`]: the configuration's keys, the oracle sets, every declared file and the
+/// debug keys.
 pub fn tables() -> String {
     let mut out = format!("{BEGIN}\n\n");
     let gate = |g: bool| if g { "yes" } else { "-" }.to_owned();
@@ -68,7 +66,6 @@ pub fn tables() -> String {
             let status = match d.status {
                 Status::Live => "live".to_owned(),
                 Status::Blocked => "blocked".to_owned(),
-                Status::Retired => "retired".to_owned(),
                 Status::Unheld { why } => format!("unheld: {}", cell(why)),
             };
             vec![
@@ -87,25 +84,6 @@ pub fn tables() -> String {
         registry::DEBUG
             .iter()
             .map(|(k, about)| vec![format!("`{k}`"), cell(about)]),
-    );
-    table(
-        &mut out,
-        "Older names (this release only)",
-        &["name", "stands for"],
-        legacy::OLDER
-            .iter()
-            .map(|(name, q)| {
-                let stands = match q {
-                    Query::Retired => "retired".to_owned(),
-                    Query::Debug(k) => format!("debug key `{k}`"),
-                    q => format!("`{}`", q.key()),
-                };
-                vec![format!("`{name}`"), stands]
-            })
-            .chain([vec![
-                format!("`{}`", config::REQUIRE),
-                "`[run] require` (`1`: `all`)".to_owned(),
-            ]]),
     );
     out.push_str(END);
     out.push('\n');

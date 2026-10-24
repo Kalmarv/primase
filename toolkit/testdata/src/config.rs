@@ -18,9 +18,8 @@
 //! threads = '1'                     # the threads a heavy real-data test's work may use (one by default)
 //! ```
 //!
-//! Every section and key is optional; an unknown section or key is an error (a typo must not skip quietly). For one
-//! release the older flat map of `PRIMASE_*` names to strings is read too ([`crate::legacy`]): each of its names
-//! becomes the file or folder it stood for, and says so once.
+//! Every section and key is optional; an unknown section or key is an error (a typo must not skip quietly), and so is
+//! the older flat map of `PRIMASE_*` names to strings.
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -42,8 +41,6 @@ pub(crate) struct Config {
     pub seed: Option<u64>,
     /// `[run] threads`: the threads a heavy real-data test's work may use.
     pub threads: Option<std::num::NonZeroUsize>,
-    /// What older `PRIMASE_*` names gave, by the query key they stand for ([`crate::legacy`]), with the old name.
-    pub legacy: BTreeMap<String, (OsString, &'static str)>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -73,17 +70,6 @@ fn section_keys(section: &str) -> Option<Vec<&'static str>> {
     }
 }
 
-/// The older switch `[run] require` stands for, in the environment or the flat file.
-pub const REQUIRE: &str = "PRIMASE_REQUIRE_REAL_DATA";
-
-/// `[run] require` from the older switch's value: `1` was every input, `gate` the landing gate's.
-fn older_require(value: &str) -> String {
-    match value {
-        "1" => "all".to_owned(),
-        other => other.to_owned(),
-    }
-}
-
 impl Config {
     /// The configuration `PRIMASE_DATA` (read through `environment`) names, read with `read`; empty when unset.
     pub(crate) fn load(
@@ -99,13 +85,6 @@ impl Config {
             config.parse(&path, &text)?;
             config.file = Some(path);
         }
-        // older names set in the environment win over the file, as they did
-        for (name, value) in crate::legacy::from_environment(environment) {
-            config.legacy_name(name, value);
-        }
-        if let Some(value) = environment(REQUIRE) {
-            config.require = Some(older_require(&value.to_string_lossy()));
-        }
         Ok(config)
     }
 
@@ -115,23 +94,10 @@ impl Config {
             detail,
         };
         let table: toml::Table = toml::from_str(text).map_err(|e| invalid(e.to_string()))?;
-        let flat = table.values().all(|v| v.is_str());
-        if flat && !table.is_empty() {
-            // the older flat map of PRIMASE_* names to strings (crate::legacy::OLDER)
-            for (name, value) in &table {
-                let value = value.as_str().unwrap_or_default();
-                if name == REQUIRE {
-                    self.require = Some(older_require(value));
-                    continue;
-                }
-                // a name the table does not hold (a child process's handoff, work not merged) is passed over: the
-                // older format read only the names asked for
-                let Some(&(older, _)) = crate::legacy::OLDER.iter().find(|(n, _)| n == name) else {
-                    continue;
-                };
-                self.legacy_name(older, OsString::from(value));
-            }
-            return Ok(());
+        if !table.is_empty() && table.values().all(|v| v.is_str()) {
+            return Err(invalid(
+                "the older flat map of PRIMASE_* names: write the structured sections".into(),
+            ));
         }
         for (section, body) in &table {
             let Some(keys) = section_keys(section) else {
@@ -176,50 +142,24 @@ impl Config {
         }
         Ok(())
     }
-
-    /// An older name's value, filed under the query key it stands for.
-    fn legacy_name(&mut self, name: &'static str, value: OsString) {
-        if let Some(query) = crate::legacy::translate(name) {
-            self.legacy.insert(query.key(), (value, name));
-        }
-    }
 }
 
-/// Check `text` as a configuration file in the structured format (the example file's check): its sections and keys
-/// known, its values strings, `[run] require` one of `gate` and `all`, `[run] gate` one of `smoke` and `full`, `[run]
-/// seed` a whole number, `[run] threads` a whole number from 1. The older flat map is refused.
+/// Check `text` as a configuration file (the example file's check): its sections and keys known, its values strings,
+/// `[run] require` one of `gate` and `all`, `[run] gate` one of `smoke` and `full`, `[run] seed` a whole number, `[run]
+/// threads` a whole number from 1. The older flat map is refused.
 pub fn validate(text: &str) -> Result<(), ConfigError> {
-    let path = Path::new("(text)");
-    let flat =
-        toml::from_str::<toml::Table>(text).is_ok_and(|t| !t.is_empty() && t.values().all(|v| v.is_str()));
-    if flat {
-        return Err(ConfigError::Invalid {
-            path: path.to_owned(),
-            detail: "the older flat map of PRIMASE_* names: write the structured sections".into(),
-        });
-    }
-    Config::default().parse(path, text)
+    Config::default().parse(Path::new("(text)"), text)
 }
 
-impl Config {
-    /// The value `PRIMASE_DEBUG` (read through `environment`) gives `key` (`key=value;key=value`), else what an older
-    /// switch's name gave it.
-    pub(crate) fn debug(&self, environment: &impl Fn(&str) -> Option<OsString>, key: &str) -> Option<String> {
-        assert!(
-            DEBUG.iter().any(|(k, _)| *k == key),
-            "debug key {key} is not declared in toolkit/testdata/src/registry.rs"
-        );
-        if let Some(all) = environment("PRIMASE_DEBUG") {
-            for pair in all.to_string_lossy().split(';') {
-                if let Some((k, v)) = pair.split_once('=')
-                    && k.trim() == key
-                {
-                    return Some(v.trim().to_owned());
-                }
-            }
-        }
-        self.legacy
-            .get(&format!("debug.{key}"))
-            .map(|(v, _)| v.to_string_lossy().into_owned())
-    }
+/// The value `PRIMASE_DEBUG` (read through `environment`) gives `key` (`key=value;key=value`).
+pub(crate) fn debug(environment: &impl Fn(&str) -> Option<OsString>, key: &str) -> Option<String> {
+    assert!(
+        DEBUG.iter().any(|(k, _)| *k == key),
+        "debug key {key} is not declared in toolkit/testdata/src/registry.rs"
+    );
+    let all = environment("PRIMASE_DEBUG")?;
+    all.to_string_lossy().split(';').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        (k.trim() == key).then(|| v.trim().to_owned())
+    })
 }

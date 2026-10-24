@@ -377,8 +377,6 @@ pub enum Status {
     /// producer is gone): `source` names the replacement. It is a landing-gate input, so a gate run without it fails:
     /// its tests never pass by skipping.
     Blocked,
-    /// Its owner retired the obligation: an older name only ([`crate::legacy`]), never declared here.
-    Retired,
     /// The obligation stands and the input is acceptable, but no machine here holds it (`why`: an install the owner
     /// does not have). Never a landing-gate input: where it is not there, its tests skip naming `why`, whatever
     /// `[run] require` says; a machine that comes to hold it configures it as any other.
