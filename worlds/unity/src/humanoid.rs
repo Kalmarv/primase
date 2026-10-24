@@ -51,6 +51,16 @@
 //! The skeleton of an avatar lacking optional bones (a chest, shoulders) is placed by the same rules over the bones it
 //! has; no avatar read here lacks one, so that is unchecked.
 //!
+//! **The bones' translations** are the avatar's: every human bone but the hips gets a constant translation channel from the
+//! translation the avatar's human skeleton states for it, whatever the scene's Transform has. The editor does this
+//! (Unity 6000.6.4f1, `HumanPoseHandler.SetHumanPose` on an avatar rebuilt from the frog's HumanDescription, the scene's
+//! `toe.L` moved to 0.1 after the avatar was built: both poses read the toe back at the avatar's 0.0503881574, not at the
+//! 0.1 the scene had; `unity/mecanim/README.md` of the oracles), and the frog's game scene differs from its avatar only at
+//! the toes (the Transforms have 0.070169, the avatar 0.050388, in the foot's frame; every other human bone agrees to
+//! 2e-7). That the Animator does the same at run time is inferred from this, not tested. The lowering reports the bones
+//! the avatar moves and by how far ([`HumanoidLowering::translation_changes`]); a Transform position curve of the clip on
+//! the joint is kept in place of the avatar's translation (counted).
+//!
 //! **What is not evaluated**: the IK goals and the fingers' muscles (no avatar read here has finger bones, so the
 //! formula for them, the same, has no oracle). Each is counted by the lowering.
 
@@ -59,7 +69,7 @@ use primase_core::vector::{V3 as Vec3, add, cross, dot, scale as scaled, sub, un
 use primase_core::{Channel, ClipTarget, Entity, Interpolation, JointId, Property, Rest};
 
 use crate::animator::{AvatarAxes, AvatarHuman, UnityAvatar, Xform};
-use crate::clipdata::{ClipData, Curve, Track};
+use crate::clipdata::{ClipData, Curve, RigBone, Track};
 use crate::components::UNITY;
 
 /// How many muscles Unity has (`HumanTrait.MuscleCount`).
@@ -517,6 +527,12 @@ pub struct HumanoidLowering {
     pub missing_root_curves: usize,
     /// Human bones of the avatar whose joint the rig lacks, by name.
     pub unresolved_bones: Vec<&'static str>,
+    /// Human bones (the hips apart) whose translation the avatar's human skeleton states differently from the scene's Transform,
+    /// each with the distance (in the scene's units). Every human bone is given the avatar's translation; this is where that
+    /// moves it.
+    pub translation_changes: Vec<(&'static str, f64)>,
+    /// Human bones whose avatar translation was not given because the clip has a Transform position curve for the joint.
+    pub translations_kept_from_curves: usize,
 }
 
 /// `times` sampled by `evaluate`, with keys added by bisection between neighbours wherever `blend` of their values is
@@ -613,6 +629,14 @@ fn rotation_channel(skeleton: Entity, joint: JointId, keys: Vec<(f64, Quat)>) ->
     }
 }
 
+/// The translation the avatar's human skeleton states for the bone at skeleton node `node`, and how far it is from `rest`, the
+/// translation the scene's Transform has (both in Unity's frame). `None` for an avatar with no pose for the node.
+fn avatar_translation(human: &AvatarHuman, node: i64, rest: Vec3) -> Option<(Vec3, f64)> {
+    let t = human.pose.get(usize::try_from(node).ok()?)?.t.map(f64::from);
+    let d = sub(t, rest);
+    Some((t, dot(d, d).sqrt()))
+}
+
 /// The translation channel of `joint` from keys.
 fn translation_channel(skeleton: Entity, joint: JointId, keys: Vec<(f64, Vec3)>) -> Channel {
     let mut times = Vec::with_capacity(keys.len());
@@ -638,7 +662,7 @@ impl ClipData {
     pub fn humanoid_channels(
         &self,
         avatar: &UnityAvatar,
-        resolve: &dyn Fn(u32) -> Option<(Entity, JointId)>,
+        resolve: &dyn Fn(u32) -> Option<RigBone>,
     ) -> (Vec<Channel>, HumanoidLowering) {
         let mut report = HumanoidLowering::default();
         let Some(human) = &avatar.human else {
@@ -701,7 +725,7 @@ impl ClipData {
             let Some(path) = usize::try_from(node).ok().and_then(|n| human.skeleton.ids.get(n)) else {
                 continue;
             };
-            let Some((skeleton, joint)) = resolve(*path) else {
+            let Some((skeleton, joint, rest)) = resolve(*path) else {
                 report.unresolved_bones.push(name);
                 continue;
             };
@@ -711,6 +735,15 @@ impl ClipData {
             report.bones += 1;
             report.keys += keys.len();
             channels.push(rotation_channel(skeleton, joint, keys));
+            // the bone's translation: the avatar's human skeleton states it, and Unity writes it to the bone whatever the scene
+            // has there (see the module documentation)
+            if let Some((t, moved)) = avatar_translation(human, node, rest) {
+                if moved > 0.0 {
+                    report.translation_changes.push((name, moved));
+                }
+                report.keys += 1;
+                channels.push(translation_channel(skeleton, joint, vec![(0.0, t)]));
+            }
         }
         // the hips: placed by the body's position and orientation
         if let Some(hips) = Hips::new(avatar, human)
@@ -718,7 +751,7 @@ impl ClipData {
         {
             match resolve(*path) {
                 None => report.unresolved_bones.push(BONE_NAMES[0]),
-                Some((skeleton, joint)) => {
+                Some((skeleton, joint, _)) => {
                     let at_rest = hips.rest_position();
                     let placed = |t: f64| -> Option<(Quat, Vec3)> {
                         let value = |i: usize, default: f64| {
@@ -885,6 +918,32 @@ mod tests {
         // a bone with no shared twist is not wrapped: the shoulder's swing at 4 is not its swing at 0
         let shoulder = |v: f64| bone_rotation(&h, 12, &muscles(&[(38, v)])).unwrap();
         assert!(between(shoulder(0.0), shoulder(1.0)) > 1e-3);
+    }
+
+    /// Every human bone takes the translation the avatar's human skeleton states, whatever the scene has: the distance is how far
+    /// that moves the bone, 0 where they agree; an avatar with no pose for the node states none.
+    #[test]
+    fn a_human_bone_takes_the_avatars_translation_and_says_how_far_that_moves_it() {
+        let mut h = human(-1.0, 1.0, [1.0; 3]);
+        h.pose = vec![
+            Xform {
+                t: [0.0; 3],
+                q: IDENTITY,
+                s: [1.0; 3],
+            },
+            Xform {
+                t: [0.0, 0.050388, 0.0],
+                q: IDENTITY,
+                s: [1.0; 3],
+            },
+        ];
+        let (t, moved) = avatar_translation(&h, 1, [0.0, 0.070169, 0.0]).unwrap();
+        assert_eq!(t, [0.0, f64::from(0.050388f32), 0.0]);
+        assert!((moved - (0.070169 - 0.050388)).abs() < 1e-6, "{moved}");
+        let (_, moved) = avatar_translation(&h, 1, t).unwrap();
+        assert_eq!(moved, 0.0, "the scene agrees: nothing moves");
+        assert_eq!(avatar_translation(&h, 5, t), None, "no node 5");
+        assert_eq!(avatar_translation(&h, -1, t), None);
     }
 
     /// A slerp at the ends and the angle between rotations.

@@ -44,6 +44,7 @@ use primase_core::{
 };
 
 use crate::animator::{UnityAnimator, UnityAnimatorController, UnityAvatar};
+use crate::clipdata::RigBone;
 use crate::components::{
     ColliderMesh, UNITY, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape, UnityLight,
     UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings, UnityRenderer,
@@ -439,7 +440,7 @@ fn build_rigs(
 
 /// A rig's skeleton, its joints by the hash of their path below the Animator's GameObject, and, for a humanoid avatar,
 /// by the hash of their path below the avatar's root.
-type Rig = (Entity, BTreeMap<u32, JointId>, BTreeMap<u32, JointId>);
+type Rig = (Entity, BTreeMap<u32, JointId>, BTreeMap<u32, (JointId, [f64; 3])>);
 
 /// What a renderer is in its scene's LODGroups.
 #[derive(Clone, Debug, Default)]
@@ -856,8 +857,10 @@ impl Builder<'_> {
                         }
                         let _ = depth;
                         for &(t, joint) in &joints {
-                            if let Some(path) = scene.path_below(t, d) {
-                                bones.insert(path_hash(&path), joint);
+                            if let Some(path) = scene.path_below(t, d)
+                                && let Some(scene_joint) = scene.joint(t)?
+                            {
+                                bones.insert(path_hash(&path), (joint, scene_joint.translation));
                             }
                         }
                     }
@@ -936,13 +939,14 @@ impl Builder<'_> {
                     let entity = match made.get(&key) {
                         Some(e) => *e,
                         None => {
-                            let bone_joint = |hash: u32| bones.get(&hash).map(|j| (skeleton, *j));
+                            let bone_joint =
+                                |hash: u32| bones.get(&hash).map(|(j, rest)| (skeleton, *j, *rest));
                             let (lowered, report) = d.lower(
                                 &|hash| hashes.get(&hash).map(|j| (skeleton, *j)),
                                 &|path, shape| morphs.get(&(path, shape)).map(|&(_, g, id)| (g, id)),
                                 humanoid
                                     .as_ref()
-                                    .map(|a| (a, &bone_joint as &dyn Fn(u32) -> Option<(Entity, JointId)>)),
+                                    .map(|a| (a, &bone_joint as &dyn Fn(u32) -> Option<RigBone>)),
                             )?;
                             if let Some(h) = &report.humanoid {
                                 self.report.humanoid_clips += 1;

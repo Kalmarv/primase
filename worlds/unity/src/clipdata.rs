@@ -138,10 +138,14 @@ pub struct ClipData {
     pub worst_continuity_error: f32,
 }
 
+/// A humanoid bone's joint in the rig: its skeleton, the joint, and the translation the scene gives it (the Transform's local
+/// position, in Unity's frame).
+pub type RigBone = (Entity, JointId, [f64; 3]);
+
 /// A humanoid avatar with the way to find the joint of a bone by the hash of its path below the avatar's root.
 pub type HumanoidRig<'a> = (
     &'a crate::animator::UnityAvatar,
-    &'a dyn Fn(u32) -> Option<(Entity, JointId)>,
+    &'a dyn Fn(u32) -> Option<RigBone>,
 );
 
 /// What lowering a clip did: channels made, bindings left out by reason.
@@ -379,11 +383,16 @@ impl ClipData {
             channels.push(channel);
         }
         if let Some((avatar, bone_resolve)) = humanoid {
-            let (bones, lowering) = self.humanoid_channels(avatar, bone_resolve);
+            let (bones, mut lowering) = self.humanoid_channels(avatar, bone_resolve);
             for channel in bones {
                 if let ClipTarget::Joint { joint, .. } = channel.target
                     && !seen.insert((joint, channel.property))
                 {
+                    // a Transform position curve on a humanoid bone is the clip's own word about its translation
+                    if channel.property == Property::Translation {
+                        lowering.translations_kept_from_curves += 1;
+                        continue;
+                    }
                     return Err(invalid(format!(
                         "{}: a humanoid bone's rotation and a Transform rotation curve for one joint ({joint:?})",
                         self.name
