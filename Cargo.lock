@@ -1024,6 +1024,7 @@ version = "0.1.0"
 name = "primase-cache"
 version = "0.1.0"
 dependencies = [
+ "primase-core",
  "sha2",
 ]
 
@@ -1149,6 +1150,7 @@ dependencies = [
  "num-bigint",
  "primase-animation",
  "primase-bytes",
+ "primase-cache",
  "primase-compress",
  "primase-core",
  "primase-dds",

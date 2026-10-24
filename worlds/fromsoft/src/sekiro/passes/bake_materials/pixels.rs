@@ -13,6 +13,7 @@ use primase_shader_exec::{
 use primase_texcodec::TexDecoder;
 use std::{collections::BTreeMap, sync::Arc};
 
+#[derive(Debug)]
 pub(super) struct Baked {
     pub size: u32,
     pub requested_size: u32,
@@ -102,14 +103,52 @@ fn normal(encoded: &[f32], encoding: NormalEncoding, space: NormalSpace) -> Resu
     ])
 }
 
-pub(super) fn bake(
-    world: &World,
-    stage: &StageBinding,
+/// The resolved values both the cache key and the evaluation consume. Entity identities never enter the key.
+pub(super) struct Prepared<'a> {
+    pub pixel: &'a Shader,
+    pub vertex: &'a Shader,
+    pub shader: primase_shader_exec::ProgramShader,
+    pub outputs: Vec<&'a OutputBinding>,
+    pub albedo: usize,
+    pub normal_index: usize,
+    pub rough: usize,
+    pub metal: Option<usize>,
+    pub specular: Option<usize>,
+    pub emission: Option<usize>,
+    pub policies: BTreeMap<String, u64>,
+    pub constants: primase_shader_exec::evaluate::Constants,
+    pub textures: BTreeMap<u32, BoundTexture>,
+    pub inputs: BTreeMap<(String, u32), Input>,
+    pub targets: Vec<(u32, u8)>,
+    pub size: u32,
+    pub requested_size: u32,
+    pub source_size: [u32; 2],
+    pub alpha: Option<(Arc<SampledTexture>, Option<UvTransform>)>,
+    pub base_alpha: f32,
+    pub sample_time: f32,
+}
+
+pub(super) enum BoundTexture {
+    Image(Arc<SampledTexture>),
+    Constant([f32; 4]),
+}
+impl BoundTexture {
+    fn view(&self) -> primase_shader_exec::View {
+        match self {
+            Self::Image(image) => primase_shader_exec::View::Image(image.clone()),
+            Self::Constant(value) => primase_shader_exec::View::Constant(*value),
+        }
+    }
+}
+
+pub(super) fn prepare<'a>(
+    world: &'a World,
+    stage: &'a StageBinding,
     vertex: Option<&StageBinding>,
     previous: &PbrMaterial,
     cap: u32,
     time: f32,
-) -> Result<Baked, String> {
+) -> Result<Prepared<'a>, String> {
     let core = world
         .get::<Shader>(stage.shader)
         .ok_or("bound program is absent")?;
@@ -172,11 +211,11 @@ pub(super) fn bake(
                         .entry("sampler LOD bias omitted by base-mip bake".into())
                         .or_default() += 1;
                 }
-                primase_shader_exec::View::Image(image(texture, use_sampler)?)
+                BoundTexture::Image(image(texture, use_sampler)?)
             }
             TextureSource::Default { value, why } => {
                 *policies.entry(why.clone()).or_default() += 1;
-                primase_shader_exec::View::Constant(*value)
+                BoundTexture::Constant(*value)
             }
             TextureSource::Frame(frame) => {
                 return Err(format!("frame texture {frame:?} cannot be baked as a material"));
@@ -185,7 +224,6 @@ pub(super) fn bake(
         };
         textures.insert(slot, value);
     }
-    let textures = primase_shader_exec::Views::refusing(textures);
     let largest = source_size[0].max(source_size[1]);
     let requested_size = if largest == 0 { cap } else { largest };
     let size = cap.min(requested_size);
@@ -230,6 +268,72 @@ pub(super) fn bake(
         .iter()
         .map(|o| target(&shader, o))
         .collect::<Result<Vec<_>, _>>()?;
+    let alpha = previous
+        .base_color_texture
+        .map(|r| {
+            if r.texcoord != 0 {
+                return Err("alpha uses a secondary UV set".to_owned());
+            }
+            let t = world.get::<Texture>(r.texture).ok_or("alpha texture is absent")?;
+            let address = r.wrap.map(|w| match w {
+                Wrap::Repeat => Address::Wrap,
+                Wrap::Mirror => Address::Mirror,
+                Wrap::Clamp => Address::Clamp,
+            });
+            Ok((image(t, SamplerUse::addressed(address))?, r.transform))
+        })
+        .transpose()?;
+    Ok(Prepared {
+        pixel: core,
+        vertex: vertex_shader,
+        shader,
+        outputs,
+        albedo,
+        normal_index,
+        rough,
+        metal,
+        specular,
+        emission,
+        policies,
+        constants,
+        textures,
+        inputs,
+        targets,
+        size,
+        requested_size,
+        source_size,
+        alpha,
+        base_alpha: previous.base_color[3],
+        sample_time: time,
+    })
+}
+
+pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, String> {
+    let Prepared {
+        pixel: _,
+        vertex: _,
+        shader,
+        outputs,
+        albedo,
+        normal_index,
+        rough,
+        metal,
+        specular,
+        emission,
+        policies,
+        constants,
+        textures,
+        inputs,
+        targets,
+        size,
+        requested_size,
+        source_size,
+        alpha,
+        base_alpha,
+        sample_time: _,
+    } = prepared;
+    let textures =
+        primase_shader_exec::Views::refusing(textures.iter().map(|(&slot, t)| (slot, t.view())).collect());
     let raw = evaluate_raw_with(
         Threads::of(world),
         &shader,
@@ -247,21 +351,6 @@ pub(super) fn bake(
     if raw.discarded.iter().any(|x| *x) {
         return Err("program still discards texels with alpha test disabled".into());
     }
-    let alpha = previous
-        .base_color_texture
-        .map(|r| {
-            if r.texcoord != 0 {
-                return Err("alpha uses a secondary UV set".to_owned());
-            }
-            let t = world.get::<Texture>(r.texture).ok_or("alpha texture is absent")?;
-            let address = r.wrap.map(|w| match w {
-                Wrap::Repeat => Address::Wrap,
-                Wrap::Mirror => Address::Mirror,
-                Wrap::Clamp => Address::Clamp,
-            });
-            Ok((image(t, SamplerUse::addressed(address))?, r.transform))
-        })
-        .transpose()?;
     let surfaces = Decode {
         outputs: &outputs,
         albedo,
@@ -271,7 +360,7 @@ pub(super) fn bake(
         specular,
         emission,
         alpha: alpha.as_ref(),
-        base_alpha: previous.base_color[3],
+        base_alpha,
         size,
     }
     .surfaces(&raw, Threads::of(world))?;

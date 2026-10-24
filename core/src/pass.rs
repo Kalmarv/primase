@@ -36,6 +36,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+pub mod memo;
+
 pub use crate::ledger::{Conservation, Gap, Measure};
 pub use crate::pass_options::{Choice, Given, OptionSpec, PassSpec};
 use crate::world::{Component, Entity, Resource, World};

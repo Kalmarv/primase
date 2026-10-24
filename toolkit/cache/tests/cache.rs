@@ -152,3 +152,21 @@ fn processes_share_a_directory() {
     assert_eq!(entries(&dir).len(), 16);
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn write_errors_are_counted_once_by_put() {
+    let dir = fresh("write-errors");
+    let cache = Cache::open(&dir, 1 << 20).unwrap();
+    // A file where the shard directory belongs makes writes fail on every platform.
+    fs::write(dir.join("v1").join(&key(1).hex()[..2]), b"occupied").unwrap();
+    assert!(cache.put(&key(1), b"value").is_err());
+    assert_eq!(cache.stats().write_errors, 1);
+    assert_eq!(
+        cache.get_or_put::<()>(&key(1), || Ok(b"value".to_vec())).unwrap(),
+        b"value"
+    );
+    assert_eq!(cache.stats().write_errors, 2);
+    primase_core::pass::memo::Store::put(&cache, &primase_core::pass::memo::Key(key(1).bytes()), b"value");
+    assert_eq!(cache.stats().write_errors, 3);
+    fs::remove_dir_all(dir).unwrap();
+}

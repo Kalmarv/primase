@@ -1,4 +1,5 @@
 //! Static texture-space material bake from resolved game programs. The binding owns the G-buffer layout.
+mod cache;
 mod colour;
 mod pixels;
 
@@ -10,7 +11,7 @@ use primase_core::shader::{ShaderBinding, Stage};
 use primase_core::{ColorSpace, Component, Mesh, Name, TexFormat, TexRole, Texture, World};
 use std::collections::BTreeSet;
 
-/// `bake-fromsoft-materials{max-size=N,sample-time=S}`: replace lowered surface channels with the resolved pixel
+/// `bake-fromsoft-materials{max-size=N,sample-time=S,cache=off|on}`: replace lowered surface channels with the resolved pixel
 /// program's outputs over UV0. Run after resolve and material lowering, before normal conversion. Geometry must
 /// keep its source UV tiling. The source material and shader binding remain available to a game-program renderer.
 /// Unsupported programs retain their lowered material, with a refusal reason. Layer-weight materials belong to
@@ -19,18 +20,29 @@ use std::collections::BTreeSet;
 /// counts aggregate by source/requested/allocated dimensions, without material names. The source width and height
 /// are independent maxima across bound images and may come from different images. This follows native texture
 /// density, not the density of repeated detail layers.
+/// Caching is off by default: the pass chooses no storage and performs no filesystem work. `cache=on` uses
+/// the caller's optional `core.pass_memo` service; without that service the pass still computes every result.
+/// The program owns the store and its error statistics, size limit and trimming policy. Hits replay the exact
+/// material planes and report; hits/misses count enabled lookups, including refused misses.
 /// The static frame uses a flat tangent frame, white vertex colour, coincident UV sets and no per-light gloss term.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BakeFromSoftMaterials {
     max_size: PixelCap,
     sample_time: Seconds,
+    cache: bool,
 }
 impl BakeFromSoftMaterials {
     pub fn new(max_size: PixelCap, sample_time: Seconds) -> Self {
         Self {
             max_size,
             sample_time,
+            cache: false,
         }
+    }
+    /// Use the caller's memo service when enabled; the constructor leaves caching off.
+    pub fn with_cache(mut self, enabled: bool) -> Self {
+        self.cache = enabled;
+        self
     }
 }
 pub const BAKE_FROMSOFT_MATERIALS: PassSpec = PassSpec {
@@ -38,12 +50,19 @@ pub const BAKE_FROMSOFT_MATERIALS: PassSpec = PassSpec {
     options: &[
         OptionSpec::required("max-size", "512", "pixels, 1 to 4096: largest baked edge"),
         OptionSpec::required("sample-time", "0", "seconds: static material frame"),
+        OptionSpec::optional("cache", "off", "on or off: use the caller's memo store", "off"),
     ],
     make: |g| {
-        Ok(Box::new(BakeFromSoftMaterials::new(
+        let mut pass = BakeFromSoftMaterials::new(
             PixelCap::parse("max-size", g.required("max-size"))?,
             Seconds::parse("sample-time", g.required("sample-time"))?,
-        )))
+        );
+        pass = pass.with_cache(match g.optional("cache").unwrap_or("off") {
+            "off" => false,
+            "on" => true,
+            value => return Err(format!("cache={value}: expected on or off")),
+        });
+        Ok(Box::new(pass))
     },
 };
 
@@ -55,6 +74,7 @@ impl Pass for BakeFromSoftMaterials {
         Options::from([
             ("max-size".into(), self.max_size.to_string()),
             ("sample-time".into(), self.sample_time.to_string()),
+            ("cache".into(), if self.cache { "on" } else { "off" }.into()),
         ])
     }
     /// Neither `core.shader_binding` nor `pbr.material` is required: a material whose program the reader does not hold
@@ -78,6 +98,13 @@ impl Pass for BakeFromSoftMaterials {
         "static flat tangent frame and white vertex colour; secondary UV sets replaced by UV0; base-mip bilinear sampling; per-light gloss correction omitted; UNORM8 output quantization"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let memo = if self.cache {
+            world.resource::<primase_core::pass::memo::Memo>().cloned()
+        } else {
+            None
+        };
+        log.count("program bake cache hits", 0);
+        log.count("program bake cache misses", 0);
         let drawn: BTreeSet<_> = world
             .iter::<Mesh>()
             .flat_map(|(_, m)| m.primitives().iter().filter_map(|p| p.material))
@@ -107,16 +134,20 @@ impl Pass for BakeFromSoftMaterials {
             {
                 return Err("bake-fromsoft-materials requires geometry uv-tiling=keep".into());
             }
-            let baked = match pixels::bake(
+            let baked = match pixels::prepare(
                 world,
                 stage,
                 binding.stage(Stage::Vertex),
                 &material,
                 self.max_size.get(),
                 self.sample_time.get(),
-            ) {
+            )
+            .map_err(cache::Error::Refused)
+            .and_then(|prepared| cache::bake(prepared, world, memo.as_ref(), log))
+            {
                 Ok(b) => b,
-                Err(e) => {
+                Err(cache::Error::Failed(e)) => return Err(e),
+                Err(cache::Error::Refused(e)) => {
                     log.approximate(
                         &format!("program bake refused; lowered material retained: {e}"),
                         1,
@@ -125,29 +156,7 @@ impl Pass for BakeFromSoftMaterials {
                 }
             };
             let name = format!("baked_{}", source.identity_digest().map_err(|e| e.to_string())?);
-            let allocation = format!(
-                "program bake density: independent source width/height maxima {}x{}, requested {}x{}, allocated {}x{}",
-                baked.source_size[0],
-                baked.source_size[1],
-                baked.requested_size,
-                baked.requested_size,
-                baked.size,
-                baked.size,
-            );
-            log.count(&allocation, 1);
-            if baked.size < baked.requested_size {
-                log.approximate(&format!("native texture density capped: {allocation}"), 1);
-            }
-            if baked.source_size == [0; 2] {
-                log.approximate("no bound image dimensions; program bake uses max-size", 1);
-            }
-            log.approximate(
-                "program bake follows native texture dimensions; tiled detail can lose density",
-                1,
-            );
-            for (k, n) in baked.policies {
-                log.approximate(&k, n);
-            }
+            baked.report(log);
             let add = |world: &mut World, suffix: &str, bytes, role, color_space, normal| {
                 let e = world.spawn();
                 world.insert(e, Name(format!("{name}_{suffix}")));
@@ -198,21 +207,19 @@ impl Pass for BakeFromSoftMaterials {
                 color_texture: Some(add(world, "f0", rgb, TexRole::Color, ColorSpace::Srgb, None)),
                 ..Specular::default()
             });
-            if let Some(rgb) = baked.emission {
-                let (texture, strength, zeroed) =
-                    super::pbr::emissive_from_linear(baked.size, baked.size, &rgb)
-                        .map_err(|e| e.to_string())?;
-                let e = world.spawn();
-                world.insert(e, Name(format!("{name}_emission")));
-                world.insert(e, texture);
-                material.emissive_texture = Some(TextureRef::new(e));
+            if let Some((rgba, strength)) = baked.emission {
+                material.emissive_texture = Some(add(
+                    world,
+                    "emission",
+                    rgba,
+                    TexRole::Color,
+                    ColorSpace::Srgb,
+                    None,
+                ));
                 material.emissive = [1.; 3];
                 material.emissive_strength = strength;
-                log.count("nonzero baked emission texels quantized black", zeroed);
             }
             world.insert(entity, material);
-            log.count("materials baked from their G-buffer program", 1);
-            log.count("program bake texels", u64::from(baked.size).pow(2));
         }
         Ok(())
     }

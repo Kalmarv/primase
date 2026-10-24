@@ -3,6 +3,9 @@
 //! folder it names (the program's choice); the library has no default
 //! location and reads no environment. Only [`Cache`] (module `disk`) touches files: the steps it serves are handed
 //! one by their caller.
+//! For pass memoization, the program inserts `Memo::new(Arc::new(cache), build)` (`primase_core::pass::memo`, `build` the primase revision it was built against) as a world resource;
+//! [`Cache`] implements that store interface. Passes see only content keys and bytes. The program retains an
+//! `Arc` when it needs to read [`Cache::stats`] or call [`Cache::trim`] at the end of the run.
 //!
 //! - **Keys** ([`KeyBuilder`]): SHA-256 over a domain name and tagged, length-prefixed fields, so two different inputs
 //!   cannot meet by concatenation, plus the operation's versions: an explicit version, a hash of the source code that
@@ -35,6 +38,11 @@ pub(crate) const HEADER: usize = 4 + 4 + 32 + 8 + 32;
 pub struct Key(pub(crate) [u8; 32]);
 
 impl Key {
+    /// The SHA-256 digest, for a caller's storage interface.
+    pub fn bytes(self) -> [u8; 32] {
+        self.0
+    }
+
     pub fn hex(&self) -> String {
         self.0.iter().map(|b| format!("{b:02x}")).collect()
     }

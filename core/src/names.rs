@@ -19,6 +19,7 @@ use crate::marker::{Curve, Marker};
 use crate::material_usage::MaterialUsage;
 use crate::morphs::Morphs;
 use crate::parallel::Threads;
+use crate::pass::memo::Memo;
 use crate::pbr::PbrMaterial;
 use crate::priority::Priority;
 use crate::provenance::Provenance;
@@ -62,7 +63,7 @@ declared! {
         PbrMaterial, DetailedMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, Skin, Morphs, RigInstance,
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding,
         TextureLayers;
-    resources: PartScope, PartitionPlan, Environment, StateAssignment, Surfaces, Threads,
+    resources: PartScope, PartitionPlan, Environment, StateAssignment, Surfaces, Threads, Memo,
 }
 
 #[cfg(test)]

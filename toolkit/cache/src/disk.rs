@@ -27,6 +27,17 @@ pub struct Cache {
     temp_counter: AtomicU64,
 }
 
+/// The disk adapter for pass memoization. The program opens it and supplies it as a run service.
+impl primase_core::pass::memo::Store for Cache {
+    fn get(&self, key: &primase_core::pass::memo::Key) -> Option<Vec<u8>> {
+        Cache::get(self, &Key(key.0))
+    }
+
+    fn put(&self, key: &primase_core::pass::memo::Key, value: &[u8]) {
+        let _ = Cache::put(self, &Key(key.0), value);
+    }
+}
+
 impl Cache {
     /// Use `dir` (created if missing), keeping it under `max_bytes`.
     pub fn open(dir: impl AsRef<Path>, max_bytes: u64) -> io::Result<Self> {
@@ -88,44 +99,50 @@ impl Cache {
 
     /// Store `value` for `key`. Another process storing the same key at the same time is not an error.
     pub fn put(&self, key: &Key, value: &[u8]) -> io::Result<()> {
-        let path = self.path(key);
-        let dir = path.parent().expect("entry path has a folder");
-        fs::create_dir_all(dir)?;
-        let temp = dir.join(format!(
-            ".tmp-{}-{}",
-            std::process::id(),
-            self.temp_counter.fetch_add(1, Ordering::Relaxed)
-        ));
-        let entry = entry(key, value);
-        let written = (|| {
-            let mut f = fs::File::create(&temp)?;
-            f.write_all(&entry)?;
-            f.sync_all()
-        })();
-        if let Err(e) = written {
-            let _ = fs::remove_file(&temp);
-            return Err(e);
-        }
-        if let Err(e) = fs::rename(&temp, &path) {
-            let _ = fs::remove_file(&temp);
-            // lost a race with a writer of the same key (Windows refuses to replace an open file): fine if that
-            // entry is whole
-            let theirs = fs::read(&path).ok();
-            if !theirs.is_some_and(|b| verify(key, &b).is_some()) {
+        let result = (|| {
+            let path = self.path(key);
+            let dir = path.parent().expect("entry path has a folder");
+            fs::create_dir_all(dir)?;
+            let temp = dir.join(format!(
+                ".tmp-{}-{}",
+                std::process::id(),
+                self.temp_counter.fetch_add(1, Ordering::Relaxed)
+            ));
+            let entry = entry(key, value);
+            let written = (|| {
+                let mut f = fs::File::create(&temp)?;
+                f.write_all(&entry)?;
+                f.sync_all()
+            })();
+            if let Err(e) = written {
+                let _ = fs::remove_file(&temp);
                 return Err(e);
             }
-            return Ok(());
+            if let Err(e) = fs::rename(&temp, &path) {
+                let _ = fs::remove_file(&temp);
+                // lost a race with a writer of the same key (Windows refuses to replace an open file): fine if that
+                // entry is whole
+                let theirs = fs::read(&path).ok();
+                if !theirs.is_some_and(|b| verify(key, &b).is_some()) {
+                    return Err(e);
+                }
+                return Ok(());
+            }
+            let n = entry.len() as u64;
+            self.count(|s| {
+                s.written += 1;
+                s.written_bytes += n;
+            });
+            if self.since_trim.fetch_add(n, Ordering::Relaxed) + n > self.max_bytes / 10 {
+                self.since_trim.store(0, Ordering::Relaxed);
+                let _ = self.trim();
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            self.count(|s| s.write_errors += 1);
         }
-        let n = entry.len() as u64;
-        self.count(|s| {
-            s.written += 1;
-            s.written_bytes += n;
-        });
-        if self.since_trim.fetch_add(n, Ordering::Relaxed) + n > self.max_bytes / 10 {
-            self.since_trim.store(0, Ordering::Relaxed);
-            let _ = self.trim();
-        }
-        Ok(())
+        result
     }
 
     /// The cached value for `key`, or `compute`'s, stored. A failure to store is counted, not returned: the value is
@@ -139,9 +156,7 @@ impl Cache {
             return Ok(v);
         }
         let v = compute()?;
-        if self.put(key, &v).is_err() {
-            self.count(|s| s.write_errors += 1);
-        }
+        let _ = self.put(key, &v);
         Ok(v)
     }
 
