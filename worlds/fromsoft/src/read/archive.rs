@@ -183,6 +183,17 @@ pub struct Archive {
     pub absent: Vec<&'static str>,
 }
 impl Archive {
+    /// An archive of `game` that holds nothing: for a reader test that must read none of it.
+    #[cfg(test)]
+    pub(crate) fn empty(game: Game) -> Self {
+        Self {
+            root: PathBuf::new(),
+            game,
+            entries: BTreeMap::new(),
+            headers: Vec::new(),
+            absent: Vec::new(),
+        }
+    }
     /// Sekiro's archives, with the published keys.
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         let keys = Keys::published(Game::Sekiro).expect("Sekiro's keys are published");

@@ -56,7 +56,9 @@ fn collision_file(area: &str, model: &str) -> Option<String> {
 }
 
 /// Read every collision file the area's MSB collision parts name, of every hit filter, as `fromsoft.map_collision`
-/// entities in file-name order; with `states`, each part's clause.
+/// entities in file-name order; with `states`, each part's clause. An area whose MSB has no collision part has nothing
+/// to read, and its binder is not opened: Elden Ring's m60_22_22_01 holds three map pieces and no collision part, and
+/// no archive holds an `h60_22_22_01.hkxbhd`.
 pub fn read(
     archive: &Archive,
     decoder: &Decoder<'_>,
@@ -84,6 +86,9 @@ pub fn read(
             hit_filter: filter,
             condition: states.as_deref_mut().and_then(|s| s.clause(part)),
         });
+    }
+    if named.is_empty() {
+        return Ok(report);
     }
     let base = format!("{folder}/h{}", &area[1..]);
     let binder = Binder::read_split(
@@ -157,6 +162,36 @@ pub fn read(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::msb::Generation;
+
+    /// An area with no collision part reads no collision and opens no binder: the archive holds none.
+    #[test]
+    fn an_area_with_no_collision_part_reads_no_binder() {
+        let layout = MapLayout {
+            generation: &Generation::SEKIRO,
+            models: Vec::new(),
+            parts: Vec::new(),
+            map_offsets: Vec::new(),
+            sections: Vec::new(),
+        };
+        let mut world = World::default();
+        let decoder = Decoder {
+            oodle: None,
+            max_output: 1 << 20,
+        };
+        let report = read(
+            &Archive::empty(crate::Game::EldenRing),
+            &decoder,
+            "/map/m60/m60_22_22_01",
+            "m60_22_22_01",
+            &layout,
+            None,
+            &mut world,
+        )
+        .unwrap();
+        assert_eq!((report.files, report.missing_files.len()), (0, 0));
+        assert_eq!(world.entities().count(), 0);
+    }
 
     /// A collision model names its file in the area's binder whatever the case of its `h`; a model named otherwise
     /// names none.
