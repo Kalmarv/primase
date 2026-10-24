@@ -3,7 +3,7 @@
 use primase_core::{Component, Entity, World};
 
 mod impostor;
-pub use impostor::{AnvilImpostor, AnvilRenderStatus, AnvilSpotLight, AnvilSky, AnvilFarClass, AnvilFarSelected, AnvilFarTerrain, AnvilSkyControllers, AnvilEnvironment, AnvilFog, AnvilSurfaceBake};
+pub use impostor::{AnvilImpostor, AnvilRenderStatus, AnvilSpotLight, AnvilSky, AnvilFarClass, AnvilFarSelected, AnvilFarTerrain, AnvilSkyControllers, AnvilSurfaceBake};
 
 /// A MeshShape's triangle geometry ([`crate::read::mesh_shape::Geometry`]) on its prototype: positions converted into
 /// core's frame through the frame the reader was given (stated by the program, as the shape's units and frame are not

@@ -16,7 +16,7 @@ pub struct Atmosphere {
 }
 
 /// Distance fog: the light of a surface at distance `d` metres from the camera is mixed with `colour` by the fraction
-/// the [`FogFalloff`] gives at `d`, and nothing else (no height, no light scattering towards the sun).
+/// the [`FogFalloff`] gives along the camera ray. This does not describe scattering towards the sun.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Fog {
     /// Linear RGB of the fog where it is fully opaque, at the scale of `core.light` colours times intensity of 1 lux
@@ -32,6 +32,11 @@ pub enum FogFalloff {
     Exponential { density: f32 },
     /// 0 up to `start`, 1 from `end`, linear between; metres, `start < end`.
     Linear { start: f32, end: f32 },
+    /// Uniform density inside a horizontal slab, zero outside it. `bottom` and `top` are absolute world Y heights
+    /// in metres (`bottom < top`), in core's Y-up frame. Replace by `1 - exp(-density * inside)` where `inside` is
+    /// the length in metres of the camera-to-surface segment inside that slab; `density` is per metre. This is
+    /// extinction and a constant fog colour, not a height-dependent density gradient or anisotropic scattering.
+    ExponentialHeightSlab { density: f32, bottom: f32, top: f32 },
 }
 
 /// The camera's exposure: scene light is scaled by `2^stops` before any tone curve. 0 leaves it as it is. This is a
@@ -60,6 +65,11 @@ impl Atmosphere {
                     return Err(format!(
                         "linear fog from {start} to {end} is not finite, from at least 0 to a later end"
                     ));
+                }
+                FogFalloff::ExponentialHeightSlab { density, bottom, top }
+                    if !(density.is_finite() && density >= 0. && bottom.is_finite() && top.is_finite() && bottom < top) =>
+                {
+                    return Err(format!("fog slab density {density}, bottom {bottom}, top {top} requires finite nonnegative density and bottom < top"));
                 }
                 _ => {}
             }
@@ -159,5 +169,13 @@ mod tests {
         }
         w.insert_resource(Atmosphere::default());
         assert!(w.verify_resources().is_empty());
+    }
+
+    #[test]
+    fn height_slab_uses_absolute_heights_including_below_the_origin() {
+        assert!(fog(FogFalloff::ExponentialHeightSlab { density: 0.01, bottom: -40., top: 200. }).check().is_ok());
+        for (density, bottom, top) in [(0.01, 2., 2.), (-0.01, 0., 2.), (0.01, f32::NAN, 2.)] {
+            assert!(fog(FogFalloff::ExponentialHeightSlab { density, bottom, top }).check().is_err());
+        }
     }
 }

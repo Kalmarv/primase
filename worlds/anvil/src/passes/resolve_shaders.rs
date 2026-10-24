@@ -214,6 +214,7 @@ pub fn shading_class(template: &str) -> Option<u8> {
         | "MAD_Tex1_UGE"
         | "MAD_Cliffs_TriPlanar"
         | "MAD_Tex1_UniqueNormal"
+        | "MAD_Tex1_UniqueNormalGrad_Triplanar"
         | "MAD_Tex1_UniqueNormal_DiffuseBlend"
         | "MAD_Tex1_Graffiti_Monster"
         | "MAD_Tex1_Graffiti_Mode" => Some(1),

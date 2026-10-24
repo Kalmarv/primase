@@ -1,11 +1,18 @@
 //! Static source time/weather curves and authored scattering tables. The automatic elevation(hour) formula is
 //! unknown: retain the source's manual elevation and report it, rather than calling a morning dump value noon.
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial,Shading};
 use primase_core::{Component,Mesh,Name,Primitive,Semantic,Stream,Topology,Transform,World,Light,LightKind};
-use crate::components::{AnvilEnvironment,AnvilFog,AnvilRenderStatus,AnvilSky,AnvilSkyControllers};
+use crate::components::{AnvilRenderStatus,AnvilSky,AnvilSkyControllers};
+
+/// Temporary evaluated sky, not another world environment. Only the optional asset sphere needs its panorama;
+/// consumers of the prepared world use core.environment and core.atmosphere.
+struct StaticSky {
+    description:String, width:u32, height:u32, radiance:Vec<[f32;4]>,
+    towards_sun:[f32;3], sunlight:[f32;3], ambient:[f32;3],
+    fog:Option<primase_core::Fog>, notices:Vec<String>,
+}
 
 #[derive(Clone,Debug)]
 pub struct LowerAnvilSky {pub hour:f32,pub weather:f32,pub resolution:usize,pub sphere:bool}
@@ -28,12 +35,13 @@ pub const LOWER_ANVIL_SKY:PassSpec=PassSpec{
     },
 };
 impl LowerAnvilSky {
-    fn environment(&self,source:&AnvilSky,controllers:Option<&AnvilSkyControllers>)->Result<AnvilEnvironment,String>{
+    fn environment(&self,source:&AnvilSky,controllers:Option<&AnvilSkyControllers>)->Result<StaticSky,String>{
         let sky=&source.stored;let time=self.hour*120.0;
         let value=|path:&[&str]|->Result<Option<[f32;4]>,String>{controllers.map(|c|c.time_of_day.value(path,time)).transpose().map(Option::flatten)};
         let scalar=|name:&str,fallback:f32|->Result<f32,String>{Ok(value(&["LayeredSky",name])?.map_or(fallback,|v|v[0]))};
         let mut notices=vec!["clouds, moon, stars, forecast and effect simulation omitted".into()];
         notices.push("source colours/intensities treated as relative linear radiance; photometric calibration and post-process exposure/grading not reproduced".into());
+        notices.push("core.environment uses the scattering LUT's upper-hemisphere mean as flat ambient; directional sky radiance/reflections are approximated, not a retained source panorama".into());
         if controllers.is_none(){notices.push("time/weather controller absent: authored LayeredSky defaults retained".into());}
         let azimuth=scalar("SunLightAzimuth",sky.sun_azimuth)?;
         let tilt=scalar("SunTiltAngle",sky.sun_tilt)?;
@@ -58,8 +66,9 @@ impl LowerAnvilSky {
             value(&["Fog","VolumetricFog","PhaseFunction"])?) {
             (Some(a),Some(d),Some(bottom),Some(top),Some(phase))=>{
                 if d[0]<0.0 || bottom[0]>=top[0] || a[..3].iter().any(|v|*v<0.0){return Err("sky: invalid source fog slab".into());}
-                notices.push("source fog density/albedo/bounds: exponential slab preview; phase, dense-fog noise, shadows and multiple scattering omitted".into());
-                Some(AnvilFog{albedo:[a[0],a[1],a[2]],density:d[0],bottom:bottom[0],top:top[0],phase:phase[0]})
+                notices.push(format!("source volumetric fog: density treated as inverse metres, ENU altitude bounds as core Y heights, albedo times hemisphere ambient as constant in-scatter; phase {} and dense-fog noise, shadows and multiple scattering omitted",phase[0]));
+                Some(primase_core::Fog{colour:[a[0],a[1],a[2]],falloff:primase_core::FogFalloff::ExponentialHeightSlab{
+                    density:d[0],bottom:bottom[0],top:top[0]}})
             },
             (None,None,None,None,None)=>None,
             _=>return Err("sky: incomplete Fog/VolumetricFog controller inputs".into()),
@@ -79,9 +88,10 @@ impl LowerAnvilSky {
             }
         }
         if weight>0.0{ambient=ambient.map(|v|v/weight);}
-        Ok(AnvilEnvironment{description:format!("{} at {}h: source scattering + static time/weather curves; authored manual sun elevation",
+        let fog=fog.map(|mut fog|{fog.colour=std::array::from_fn(|k|fog.colour[k]*ambient[k]);fog});
+        Ok(StaticSky{description:format!("{} at {}h: source scattering + static time/weather curves; authored manual sun elevation",
             controllers.map_or("LayeredSky",|c|c.look.as_str()),self.hour),
-            width:width as u32,height:height as u32,radiance:Arc::new(radiance),
+            width:width as u32,height:height as u32,radiance,
             towards_sun:primase_core::frame::SourceFrame::ENU.direction(sun),sunlight,ambient,fog,notices})
     }
 }
@@ -100,7 +110,7 @@ impl LowerAnvilSky {
         Track{path:path.iter().map(|s|primase_hash::crc32(s.as_bytes())).collect(),kind:0x8BE9_C203,
             times:vec![0,2880],values:vec![value,value],path_flags:[0;2],binding:0,trailer:[0;5]}
     }
-    #[test]fn source_controller_colour_and_fog_reach_the_shared_radiance_environment(){
+    #[test]fn source_controller_colour_and_fog_reach_the_core_resources(){
         let controls=AnvilSkyControllers{look:"fixture".into(),weather:None,time_of_day:Controller{tracks:vec![
             track(&["LayeredSky","SunlightColor"],[1.0,0.5,0.25,1.0]),
             track(&["LayeredSky","SunLightElevation"],[0.317,0.0,0.0,0.0]),
@@ -112,10 +122,17 @@ impl LowerAnvilSky {
         let pass=LowerAnvilSky{hour:12.0,weather:0.0,resolution:8,sphere:false};
         let env=pass.environment(&source(),Some(&controls)).unwrap();
         assert_eq!(env.sunlight,[1.0,0.5,0.25]);assert_eq!(env.radiance.len(),32);
-        assert_eq!(env.fog.unwrap().density,0.001);
+        assert!(matches!(env.fog.as_ref().unwrap().falloff,primase_core::FogFalloff::ExponentialHeightSlab{density,bottom:10.0,top:1000.0} if density==0.001));
         assert!(env.ambient.iter().all(|v|v.is_finite() && *v>0.0));
         assert!((env.towards_sun[1]-0.5).abs()<1e-6,"0.317 is a controller parameter, not elevation");
         assert!(env.notices.iter().any(|s|s.contains("SunPositionMode")));
+        let mut world=World::new();let e=world.spawn();world.insert(e,source());world.insert(e,controls);
+        pass.run(&mut world,&mut PassLog::default()).unwrap();
+        let environment=world.resource::<primase_core::Environment>().unwrap();
+        assert_eq!(world.get::<Light>(environment.sun.unwrap()).unwrap().color,[1.0,0.5,0.25]);
+        let atmosphere=world.resource::<primase_core::Atmosphere>().unwrap();
+        assert_eq!(atmosphere.fog,env.fog);
+        assert!(atmosphere.exposure.is_none(),"no Anvil exposure-unit contract has been established");
     }
     #[test]fn scattering_interpolation_wraps_midnight(){
         let mut source=source();let bright=source.stored.keyframes[0].clone();
@@ -135,8 +152,8 @@ impl Pass for LowerAnvilSky{
         ("preview".into(),if self.sphere{"sphere"}else{"environment"}.into())])}
     fn may_lack_inputs(&self)->bool{true}
     fn requires(&self)->&[&'static str]{&[AnvilSky::NAME]}
-    fn provides(&self)->&[&'static str]{&[AnvilEnvironment::NAME,AnvilRenderStatus::NAME,Mesh::NAME,PbrMaterial::NAME,Transform::NAME,Name::NAME,Light::NAME]}
-    fn modifies(&self)->&[&'static str]{&["core.environment",AnvilRenderStatus::NAME,AnvilEnvironment::NAME]}
+    fn provides(&self)->&[&'static str]{&["core.environment","core.atmosphere",AnvilRenderStatus::NAME,Mesh::NAME,PbrMaterial::NAME,Transform::NAME,Name::NAME,Light::NAME,primase_core::Source::NAME]}
+    fn modifies(&self)->&[&'static str]{&["core.environment","core.atmosphere",AnvilRenderStatus::NAME]}
     fn approximates(&self)-> &'static str{"static source defaults; authored manual sun elevation (automatic mode unresolved); no clouds, moon, stars, forecast, or volumetric fog simulation"}
     fn run(&self,world:&mut World,log:&mut PassLog)->Result<(),String>{
         let ids:Vec<_>=world.iter::<AnvilSky>().map(|(e,_)|e).collect();
@@ -146,16 +163,18 @@ impl Pass for LowerAnvilSky{
                 Ok(e)=>e,Err(reason)=>{world.insert(entity,AnvilRenderStatus{source:"LayeredSky".into(),template:None,reason:reason.clone(),unsupported:true});log.omit(&reason,1);continue;}
             };
             for notice in &environment.notices{log.approximate(notice,1);}
-            // Also publish the established generic meanings for non-lab consumers. The panorama/fog retain their
-            // source-specific semantics until core has those meanings; no second generic Environment type.
+            // Publish one set of established meanings for every consumer; the source data stays on AnvilSky.
             let sun=world.spawn();
             world.insert(sun,Name("LayeredSky static source sun (authored manual elevation)".into()));
+            world.insert(sun,primase_core::Source(environment.description.clone()));
             world.insert(sun,Light{kind:LightKind::Directional,color:environment.sunlight,intensity:1.0,
                 range:None,cast_shadows:None});
             world.insert(sun,Transform::facing([0.0;3],environment.towards_sun.map(|v|-v))
                 .ok_or("sky: invalid authored sun direction")?);
             world.insert_resource(primase_core::Environment{sun:Some(sun),ambient:Some(primase_core::Ambient{
                 intensity:1.0,light:primase_core::AmbientLight::Flat(environment.ambient)})});
+            // No exposure track's units have been established for Anvil: leave exposure unstated, not guessed.
+            world.insert_resource(primase_core::Atmosphere{fog:environment.fog.clone(),exposure:None});
             if self.sphere{
                 let material=world.spawn();world.insert(material,PbrMaterial{base_color:[1.0;4],metallic:0.0,roughness:1.0,
                     double_sided:true,shading:Shading::Unlit,..Default::default()});
@@ -175,7 +194,7 @@ impl Pass for LowerAnvilSky{
                         (Semantic::Color(0),Stream::F32x4(colours))])}]));world.insert(entity,Transform::IDENTITY);
             }
             world.insert(entity,AnvilRenderStatus{source:environment.description.clone(),template:None,unsupported:false,reason:environment.notices.join("; ")});
-            world.insert(entity,environment);log.count("source static sky environments",1);
+            log.count("source static sky environments",1);
         }
         Ok(())
     }

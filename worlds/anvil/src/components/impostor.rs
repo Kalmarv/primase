@@ -23,36 +23,6 @@ impl Component for AnvilSkyControllers {
         (bytes(&self.time_of_day)+self.weather.as_ref().map_or(0,bytes)) as u64
     }
 }
-/// Source-derived static lighting. The scene uses the same radiance panorama for background, diffuse SH and
-/// roughness-prefiltered reflections; no LDR sky-colour approximation or GIDyn-as-baked-light interpretation.
-#[derive(Clone,Debug,PartialEq)]
-pub struct AnvilEnvironment {
-    pub description:String,
-    pub width:u32,
-    pub height:u32,
-    pub radiance:std::sync::Arc<Vec<[f32;4]>>,
-    pub towards_sun:[f32;3],
-    pub sunlight:[f32;3],
-    pub ambient:[f32;3],
-    pub fog:Option<AnvilFog>,
-    pub notices:Vec<String>,
-}
-#[derive(Clone,Debug,PartialEq)]
-pub struct AnvilFog {
-    pub albedo:[f32;3],pub density:f32,pub bottom:f32,pub top:f32,pub phase:f32,
-}
-impl Component for AnvilEnvironment {
-    const NAME:&'static str="anvil.environment";
-    const GEOMETRY:primase_core::Geometry=primase_core::Geometry::None;
-    fn payload_bytes(&self)->u64{(self.radiance.len()*16) as u64}
-    fn to_json(&self)->Result<Option<serde_json::Value>,primase_core::JsonError>{
-        Ok(Some(serde_json::json!({"source":self.description,"width":self.width,"height":self.height,
-            "towards_sun":self.towards_sun,"sunlight":self.sunlight,"ambient":self.ambient,
-            "fog":self.fog.as_ref().map(|f|serde_json::json!({"albedo":f.albedo,"density":f.density,
-                "bottom":f.bottom,"top":f.top,"phase":f.phase})),"notices":self.notices})))
-    }
-}
-
 /// Coarse terrain held separately so the near-terrain lowering cannot accidentally lower full coarse rectangles.
 /// The near source is referenced only until the ring has sampled its exact boundary.
 #[derive(Clone, Debug, PartialEq)]

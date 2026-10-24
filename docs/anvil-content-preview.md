@@ -90,7 +90,7 @@ UniqueNormal placeholder and the absence of a conversion-local Classic path. Reu
 pixel program, which writes layout A and detail-normal-alpha roughness. No new colour formula is substituted.
 `bake-anvil-surface` is the surface-domain executor, first used by Cliffs_TriPlanar. It resolves the template's
 feature-gated G-buffer key, material rows and texture roles, checks all constant reads, and evaluates 2×2 quads
-over actual placement positions/normals/COLOR0. The program performs projection and blending. Normals are decoded
+over actual placement positions/normals and the template's original vertex inputs. The program performs projection and blending. Normals are decoded
 from its packed output class and rebased into each triangle's atlas tangent frame. Class 1 and every kept target
 must match the established contract; unknown varyings, engine constants and resources retain named failures.
 There is no catch-all zero binding for unknown engine inputs. The only stand-ins are the stated uniform terrain
@@ -100,9 +100,21 @@ Each triangle has a private chart and propagated gutters. The caller chooses tex
 capacity failures refuse rather than silently lowering density. Each affected placement gets a separate prototype
 and derived material. `AnvilSurfaceBake` links back to the original material so census counts retain template
 and distinct source identity. Stored source programs/textures remain available. Alpha-tested/blended surfaces,
-mirrored/sheared/nonuniform placements, variants and unsupported extra streams are named refusals. The three
-UniqueNormalGrad_Triplanar materials and RawTerrainBlend's engine virtual textures remain unsupported: their
-different input contracts were not established by the reused evidence. Other unknown templates keep their names.
+mirrored/sheared/nonuniform placements, variants and unsupported extra streams are named refusals. Capacity is
+checked before input image decode or program execution. Original UV0/COLOR0 are preserved on remapped vertices;
+the derived PBR material samples its private atlas through UV1, so the retained Game program still gets its masks.
+
+The three UniqueNormalGrad_Triplanar materials now have their own surface contract, read from the existing
+`rr-materials/audit/mat17/MAD_Tex1_UniqueNormalGrad_Triplanar.txt` and
+`rr-materials/recipes/MAD_Tex1_UniqueNormalGrad_Triplanar/ps_400000.dxbc.asm`, alongside material-spec §27.14.10.
+Its TEXCOORD0 is original mask/dirt UV, TEXCOORD1 is source normal, TEXCOORD2 source world position, TEXCOORD6
+static clip. It does not use Cliffs' COLOR0. t75–t80 resolve through the template's six stored roles; cb3 values
+remain the template/material values. cb1[0].xyz is the caller-stated static camera above the primitive centre
+(`camera-distance=1000000` in the lab). The own program computes DetailBlendRange; no cb3 value is overridden
+to suppress the distance term. This is static detail blending, not the viewing camera changing every frame.
+The registry shading class is 1. Unknown engine constants/resources still refuse by name. MAD_OutBorder and
+RawTerrainBlend's engine virtual textures remain unsupported; their full input/output contracts are not established.
+These are written contracts, not new successful draws or a new material census.
 
 `AnvilFarTerrain` holds coarse nodes separately from near `AnvilTerrain`. The lab reads levels 5/4/3 for its
 explicit far_view option; no extra coarse rectangle is accidentally lowered as near splat. The ring uses the
@@ -120,11 +132,19 @@ explicit static scalar. Full property-path suffixes disambiguate cloud/fog names
 LayeredSky now retains its authored sun mode/angles/intensity and Mie defaults, and interpolates stored radiance
 tables across the midnight boundary. The lab states Clear_Day at noon, weather input zero, for USNAT maps.
 
-The source emits one shared HDR panorama for background, diffuse SH and roughness-prefiltered reflection,
-source sunlight, a hemispherical ambient mean, and source fog albedo/density/bounds/phase. Established generic
-sun/ambient meanings also go to `core.environment`; source-specific radiance/fog remain `anvil.environment`.
+The source now emits only generic resources: sunlight and hemispherical mean ambient in `core.environment`,
+fog in `core.atmosphere`. The duplicate AnvilEnvironment/AnvilFog components and lab-only source_environment
+route are removed. A private temporary panorama is used for integration and the optional asset sphere only.
+Consequently the environment preview is a flat mean-ambient approximation, not the original directional
+scattering panorama or probe. This reduction is stated in the source notice and renderer environment report.
+The explicit Studio/image choices still belong to the viewer. Exposure stays None for Anvil: no stored exposure
+track's units have been established, and no camera multiplier is invented from sun intensity.
 Clouds, moon, stars, forecast, GI relighting and effects are omitted with notices. Fog is an explicitly approximate
-exponential slab, not the game's volumetric simulation. Photometric calibration/post-process grading are omitted.
+exponential slab, not the game's volumetric simulation. `FogFalloff::ExponentialHeightSlab` integrates the camera
+segment's length inside absolute Y-up bottom/top metre bounds, density per metre, zero outside. Fog colour is
+source albedo times the evaluated hemispherical ambient. Density-to-engine-unit equivalence and constant
+in-scattering are stated approximations; source phase, noise, shadows and multiple scattering are omitted.
+Photometric calibration/post-process grading are omitted.
 
 **Unresolved, explicitly:** lighting.md §7 proves the controller's 0.317 is not noon sun elevation, and the world
 dump's 51.29 belongs to 08:42:30. The SunPositionMode elevation(hour) formula remains unknown. This code uses the
@@ -133,5 +153,5 @@ Consequently this is a source-driven static preview, not a verified reproduction
 
 Additional written fixtures cover controller first-key times/interpolation, source colour/fog, midnight LUT
 interpolation, surface chart derivatives/class decoding, zipper boundary coverage, coarse height scaling and
-colour clipping. The lab adds preparation-order and source-panorama Before-generation fixtures. All remain
+colour clipping. The lab adds preparation-order, generic-environment Before-generation and three-falloff/exposure fixtures. All remain
 unrun under write-only mode; no new successful material count, image comparison or memory reduction is claimed.
