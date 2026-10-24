@@ -247,7 +247,7 @@ pub fn parse_water(bytes: &[u8]) -> Result<WaterFile> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::components::water::area;
+    use primase_meshops::twice_signed_area;
 
     #[test]
     fn water_xml_reads_its_three_kinds_of_quads() {
@@ -322,7 +322,7 @@ pub(crate) mod tests {
         assert_eq!(counts, vec![("w.xml".to_string(), [1, 0, 0])]);
         let s = surfaces(&w);
         assert_eq!(s.len(), 1);
-        assert!(s[0].quad.invisible && (area(&s[0].outline) / 2.0 - 100.0).abs() < 1e-3);
+        assert!(s[0].quad.invisible && (twice_signed_area(&s[0].outline) / 2.0 - 100.0).abs() < 1e-3);
         assert_eq!(w.iter::<StateAxis>().count(), 0);
         assert_eq!(w.iter::<Condition>().count(), 0);
         assert_eq!(w.iter::<GtaWater>().count(), 1);

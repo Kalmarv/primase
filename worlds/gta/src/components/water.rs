@@ -1,6 +1,7 @@
 //! GTA's water as the reader keeps it: a water surface (`gta.water_surface`: a quad as stored, with its outline)
 //! and the rest of its file (`gta.water`: the calming and wave quads), as the files store them.
 use primase_core::{Component, JsonError};
+use primase_meshops::twice_signed_area;
 
 use super::GTA;
 
@@ -69,20 +70,10 @@ pub fn outline(q: &WaterQuad) -> Vec<[f32; 2]> {
         3 => vec![c[1], c[3], c[2]],
         _ => vec![c[0], c[1], c[3]],
     };
-    if area(&p) < 0.0 {
+    if twice_signed_area(&p) < 0.0 {
         p.reverse();
     }
     p
-}
-
-/// Twice the signed area of a polygon (positive: counter-clockwise).
-pub(crate) fn area(p: &[[f32; 2]]) -> f32 {
-    (0..p.len())
-        .map(|i| {
-            let (a, b) = (p[i], p[(i + 1) % p.len()]);
-            a[0] * b[1] - b[0] * a[1]
-        })
-        .sum()
 }
 
 /// One water surface to draw: a water quad's outline (GTA ground coordinates, counter-clockwise from above; the whole
@@ -151,7 +142,10 @@ mod tests {
         // type 3: corners 1 3 2, without (minX, minY)
         assert!(!outline(&quad(3)).contains(&[0.0, 0.0]));
         for k in 0..=4 {
-            assert!(area(&outline(&quad(k))) > 0.0, "type {k} counter-clockwise");
+            assert!(
+                twice_signed_area(&outline(&quad(k))) > 0.0,
+                "type {k} counter-clockwise"
+            );
         }
     }
 }

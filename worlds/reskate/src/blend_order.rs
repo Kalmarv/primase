@@ -147,29 +147,20 @@ struct ClipVertex {
 }
 
 /// `poly` clipped to the side of the line `x = k` (`along_y`: `y = k`) where the coordinate is above `k`
-/// (`keep_above`) or below it, the new vertices' weights interpolated (Sutherland-Hodgman, one edge).
+/// (`keep_above`) or below it ([`primase_meshops::clip_half_plane`]), a crossing's position and weights interpolated.
 fn clip_edge(poly: &[ClipVertex], along_y: bool, k: f32, keep_above: bool) -> Vec<ClipVertex> {
-    let side = |v: &ClipVertex| {
-        let c = if along_y { v.y } else { v.x };
-        if keep_above { c - k } else { k - c }
-    };
-    let mut out = Vec::with_capacity(poly.len() + 1);
-    for (i, a) in poly.iter().enumerate() {
-        let b = &poly[(i + 1) % poly.len()];
-        let (da, db) = (side(a), side(b));
-        if da >= 0.0 {
-            out.push(*a);
-        }
-        if (da >= 0.0) != (db >= 0.0) {
-            let t = da / (da - db);
-            out.push(ClipVertex {
-                b: std::array::from_fn(|j| a.b[j] + (b.b[j] - a.b[j]) * t),
-                x: a.x + (b.x - a.x) * t,
-                y: a.y + (b.y - a.y) * t,
-            });
-        }
-    }
-    out
+    primase_meshops::clip_half_plane(
+        poly,
+        |v: &ClipVertex| {
+            let c = if along_y { v.y } else { v.x };
+            if keep_above { c - k } else { k - c }
+        },
+        |a, b, t| ClipVertex {
+            b: std::array::from_fn(|j| a.b[j] + (b.b[j] - a.b[j]) * t),
+            x: a.x + (b.x - a.x) * t,
+            y: a.y + (b.y - a.y) * t,
+        },
+    )
 }
 
 /// A part's triangles cut on a grid of `cell`-metre squares in the horizontal plane (x, y), with borders at whole

@@ -2426,11 +2426,12 @@ impl MapWriter {
         let (mut pos, mut nrm, mut uv, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::<u32>::new());
         for q in quads {
             let z = q.z;
-            let mut cs = crate::passes::water::clip_rect(&q.corners, bounds);
-            if cs != q.corners {
+            let corners: Vec<[f32; 2]> = q.corners.iter().map(|&(x, y)| [x, y]).collect();
+            let mut cs = primase_meshops::clip_convex_to_rect(&corners, bounds);
+            if cs != corners {
                 self.r.water_cut_at_limit += 1;
             }
-            let a = crate::passes::water::signed_area2(&cs);
+            let a = primase_meshops::twice_signed_area(&cs);
             if cs.len() < 3 || a == 0.0 {
                 self.r.water_without_area += 1;
                 continue;
@@ -2440,9 +2441,9 @@ impl MapWriter {
             }
             let v0 = (pos.len() / 3) as u32;
             for c in &cs {
-                pos.extend_from_slice(&[c.0 - origin.x, c.1 - origin.y, z]);
+                pos.extend_from_slice(&[c[0] - origin.x, c[1] - origin.y, z]);
                 nrm.extend_from_slice(&[0.0, 0.0, 1.0]);
-                uv.extend_from_slice(&[c.0 * 0.05, -c.1 * 0.05]);
+                uv.extend_from_slice(&[c[0] * 0.05, -c[1] * 0.05]);
             }
             for i in 1..cs.len() - 1 {
                 idx.extend_from_slice(&[v0, v0 + i as u32, v0 + i as u32 + 1]);

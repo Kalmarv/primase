@@ -30,37 +30,17 @@ use primase_core::{
 use primase_image::Srgba8;
 
 use crate::components::GTA;
-use crate::components::water::{GtaWater, GtaWaterSurface, area};
+use crate::components::water::{GtaWater, GtaWaterSurface};
 use crate::passes::rect::{GroundRect, X0, X1, Y0, Y1};
 use crate::passes::select::RegionExtent;
+use primase_meshops::twice_signed_area;
 
-/// A convex polygon clipped to the rectangle `[x0, y0, x1, y1]` (Sutherland-Hodgman); empty when nothing is inside.
+/// A convex outline clipped to the rectangle `[x0, y0, x1, y1]` ([`primase_meshops::clip_convex_to_rect`]); empty
+/// when what is left has fewer than three corners or less than half of 1e-6 m2 (twice its area under 1e-6): a surface
+/// that only touches the region is left out.
 pub fn clip(p: &[[f32; 2]], r: [f32; 4]) -> Vec<[f32; 2]> {
-    let mut out = p.to_vec();
-    // each edge of the rectangle: axis, bound, keep the side above (true) or below
-    for (axis, bound, above) in [
-        (0, r[0], true),
-        (0, r[2], false),
-        (1, r[1], true),
-        (1, r[3], false),
-    ] {
-        let inside = |v: [f32; 2]| if above { v[axis] >= bound } else { v[axis] <= bound };
-        let input = std::mem::take(&mut out);
-        for i in 0..input.len() {
-            let (a, b) = (input[i], input[(i + 1) % input.len()]);
-            if inside(a) {
-                out.push(a);
-            }
-            if inside(a) != inside(b) {
-                let t = (bound - a[axis]) / (b[axis] - a[axis]);
-                out.push([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]);
-            }
-        }
-        if out.is_empty() {
-            break;
-        }
-    }
-    if out.len() < 3 || area(&out).abs() < 1e-6 {
+    let out = primase_meshops::clip_convex_to_rect(p, r);
+    if out.len() < 3 || twice_signed_area(&out).abs() < 1e-6 {
         Vec::new()
     } else {
         out
@@ -406,11 +386,14 @@ mod tests {
     #[test]
     fn clipping_keeps_the_part_inside_the_region() {
         let c = clip(&outline(&quad(0)), [5.0, -5.0, 15.0, 10.0]);
-        assert!((area(&c) / 2.0 - 50.0).abs() < 1e-4, "5 x 10 left: {c:?}");
+        assert!(
+            (twice_signed_area(&c) / 2.0 - 50.0).abs() < 1e-4,
+            "5 x 10 left: {c:?}"
+        );
         assert!(clip(&outline(&quad(0)), [20.0, 0.0, 30.0, 10.0]).is_empty());
         // a corner triangle half in the region: the part of triangle 0 1 2 with x <= 5 is a trapezoid of 150
         let t = clip(&outline(&quad(1)), [0.0, 0.0, 5.0, 20.0]);
-        assert!((area(&t) / 2.0 - 75.0).abs() < 1e-3, "{t:?}");
+        assert!((twice_signed_area(&t) / 2.0 - 75.0).abs() < 1e-3, "{t:?}");
     }
 
     fn select(region: [f32; 4], clip: &str) -> Box<dyn Pass> {
@@ -455,7 +438,7 @@ mod tests {
             let s = surfaces(&w);
             assert_eq!(s.len(), 1);
             assert!(
-                (area(&s[0].outline) / 2.0 - area_left).abs() < 1e-3,
+                (twice_signed_area(&s[0].outline) / 2.0 - area_left).abs() < 1e-3,
                 "{clip}: {:?}",
                 s[0].outline
             );

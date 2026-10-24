@@ -24,6 +24,7 @@ use std::path::Path;
 
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, World};
+use primase_meshops::{clip_convex_to_rect, twice_signed_area};
 
 use crate::assembly::{bounds, writer_placements};
 use crate::components::{MaterialClass, SkateContentBounds, SkateMaterial, SkateScene, SkateWater};
@@ -198,59 +199,6 @@ pub const PREPARE_RESKATE_WATER: PassSpec = PassSpec {
     make: |g| Ok(Box::new(PrepareReskateWater::from_given(g)?)),
 };
 
-/// Sutherland-Hodgman, one step: `p` cut at `k` along x (or y), keeping the side above (or below) it.
-fn clip_half(p: &[(f32, f32)], along_y: bool, k: f32, keep_above: bool) -> Vec<(f32, f32)> {
-    let mut o = Vec::with_capacity(p.len() + 1);
-    for i in 0..p.len() {
-        let (a, b) = (p[i], p[(i + 1) % p.len()]);
-        let (mut da, mut db) = (
-            (if along_y { a.1 } else { a.0 }) - k,
-            (if along_y { b.1 } else { b.0 }) - k,
-        );
-        if !keep_above {
-            da = -da;
-            db = -db;
-        }
-        if da >= 0.0 {
-            o.push(a);
-        }
-        if (da > 0.0 && db < 0.0) || (da < 0.0 && db > 0.0) {
-            let t = da / (da - db);
-            o.push(if along_y {
-                (a.0 + (b.0 - a.0) * t, k)
-            } else {
-                (k, a.1 + (b.1 - a.1) * t)
-            });
-        }
-    }
-    o
-}
-
-/// `p` clipped to `[x0, y0, x1, y1]`: x from below, x from above, y from below, y from above.
-pub(crate) fn clip_rect(p: &[(f32, f32)], [x0, y0, x1, y1]: [f32; 4]) -> Vec<(f32, f32)> {
-    clip_half(
-        &clip_half(
-            &clip_half(&clip_half(p, false, x0, true), false, x1, false),
-            true,
-            y0,
-            true,
-        ),
-        true,
-        y1,
-        false,
-    )
-}
-
-/// Twice the signed area of outline `p`.
-pub(crate) fn signed_area2(p: &[(f32, f32)]) -> f32 {
-    let mut a = 0f32;
-    for i in 0..p.len() {
-        let (q, n) = (p[i], p[(i + 1) % p.len()]);
-        a += q.0 * n.1 - n.0 * q.1;
-    }
-    a
-}
-
 /// Whether outline `p` turns one way only (collinear corners allowed).
 fn convex(p: &[(f32, f32)]) -> bool {
     let n = p.len();
@@ -385,7 +333,8 @@ impl Pass for PrepareReskateWater {
         for e in water {
             let s = w.get::<SkateWater>(e).expect("listed");
             let height = s.height.unwrap_or(0.0) as f32;
-            let q = WaterQuad::of(s.corners.iter().map(|c| (c[0], c[1])).collect(), height);
+            let corners = s.corners.clone();
+            let q = WaterQuad::of(corners.iter().map(|c| (c[0], c[1])).collect(), height);
             let touches = !(f64::from(q.x1) <= r[0]
                 || f64::from(q.x0) >= r[2]
                 || f64::from(q.y1) <= r[1]
@@ -401,18 +350,18 @@ impl Pass for PrepareReskateWater {
                     1,
                 );
             }
-            let cs = clip_rect(&q.corners, grown);
-            // the doc's, the count's and the tests' threshold is an area of 1 m2, and signed_area2 is twice the area
-            if cs.len() < 3 || signed_area2(&cs).abs() / 2.0 < 1.0 {
+            let cs = clip_convex_to_rect(&corners, grown);
+            // the doc's, the count's and the tests' threshold is an area of 1 m2
+            if cs.len() < 3 || twice_signed_area(&cs).abs() / 2.0 < 1.0 {
                 log.count("water surfaces left out: less than 1 m2 within the margin", 1);
                 w.despawn(e);
                 continue;
             }
-            if cs != q.corners {
+            if cs != corners {
                 log.count("water surfaces clipped to the extent and its margin", 1);
             }
             let s = w.get_mut::<SkateWater>(e).expect("listed");
-            s.corners = cs.into_iter().map(|(x, y)| [x, y]).collect();
+            s.corners = cs;
             log.count("water surfaces kept", 1);
         }
         Ok(())

@@ -230,21 +230,13 @@ fn unit(a: P) -> P {
     a.map(|x| x / l)
 }
 
-/// `polygon` cut to where `f` is at least 0 (`f` linear), in order.
+/// `polygon` cut to where `f` is at least 0 (`f` linear), in order ([`primase_meshops::clip_half_plane`]).
 fn clip(polygon: &[P], f: impl Fn(P) -> f64) -> Vec<P> {
-    let mut out = Vec::with_capacity(polygon.len() + 2);
-    for (k, &a) in polygon.iter().enumerate() {
-        let b = polygon[(k + 1) % polygon.len()];
-        let (fa, fb) = (f(a), f(b));
-        if fa >= 0.0 {
-            out.push(a);
-        }
-        if (fa >= 0.0) != (fb >= 0.0) {
-            let s = fa / (fa - fb);
-            out.push(std::array::from_fn(|i| a[i] + (b[i] - a[i]) * s));
-        }
-    }
-    out
+    primase_meshops::clip_half_plane(
+        polygon,
+        |&p| f(p),
+        |a, b, s| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * s),
+    )
 }
 
 /// One decal's draped pieces: its triangles' vertices (source frame, before the lift), each triangle's ground normal
