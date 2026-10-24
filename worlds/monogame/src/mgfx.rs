@@ -213,9 +213,7 @@ impl<'a> Reader<'a> {
     }
 
     fn array<const N: usize>(&mut self) -> Result<[u8; N]> {
-        let mut a = [0; N];
-        a.copy_from_slice(self.bytes(N)?);
-        Ok(a)
+        self.content.array().map_err(effect)
     }
 
     /// A count: an i32 that is not negative and cannot promise more items than there are bytes left (each item is at

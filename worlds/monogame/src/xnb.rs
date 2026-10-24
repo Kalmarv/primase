@@ -19,7 +19,7 @@
     clippy::cast_possible_truncation
 )]
 
-use primase_bytes::{BoundsError, Cursor};
+use primase_bytes::{BoundsError, Cursor, Endian};
 
 /// The compression a compressed XNB's flags name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -424,34 +424,32 @@ impl<'a> Content<'a> {
         Ok(self.cursor.take(n)?)
     }
 
-    fn array<const N: usize>(&mut self) -> Result<[u8; N]> {
-        let mut a = [0; N];
-        a.copy_from_slice(self.bytes(N)?);
-        Ok(a)
+    pub(crate) fn array<const N: usize>(&mut self) -> Result<[u8; N]> {
+        Ok(self.cursor.array()?)
     }
 
     pub fn u8(&mut self) -> Result<u8> {
-        Ok(u8::from_le_bytes(self.array()?))
+        Ok(self.cursor.u8()?)
     }
 
     pub fn i16(&mut self) -> Result<i16> {
-        Ok(i16::from_le_bytes(self.array()?))
+        Ok(self.cursor.i16(Endian::Little)?)
     }
 
     pub fn u16(&mut self) -> Result<u16> {
-        Ok(u16::from_le_bytes(self.array()?))
+        Ok(self.cursor.u16(Endian::Little)?)
     }
 
     pub fn i32(&mut self) -> Result<i32> {
-        Ok(i32::from_le_bytes(self.array()?))
+        Ok(self.cursor.i32(Endian::Little)?)
     }
 
     pub fn u32(&mut self) -> Result<u32> {
-        Ok(u32::from_le_bytes(self.array()?))
+        Ok(self.cursor.u32(Endian::Little)?)
     }
 
     pub fn f32(&mut self) -> Result<f32> {
-        Ok(f32::from_le_bytes(self.array()?))
+        Ok(self.cursor.f32(Endian::Little)?)
     }
 
     /// A 7-bit encoded unsigned integer (.NET `Read7BitEncodedInt`): low groups first, at most five bytes, the
