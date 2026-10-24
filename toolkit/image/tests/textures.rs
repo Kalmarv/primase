@@ -261,7 +261,7 @@ fn rebuild_projects_outside_the_disk_and_matches_hand_worked_blues() {
 #[test]
 fn normalize_normals_runs_on_a_world_without_textures() {
     let mut registry = pass::PassRegistry::new();
-    registry.register("normalize-normals", |_| Ok(Box::new(NormalizeNormals)));
+    registry.add(&primase_image::NORMALIZE_NORMALS);
     let pipeline = registry.parse("normalize-normals").unwrap();
     let manager = pass::PassManager::new(registry);
     let mut w = World::new();

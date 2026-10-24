@@ -251,31 +251,15 @@ pub trait Pass: Send + Sync {
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String>;
 }
 
-/// Makes a pass from its options; unknown or bad options are an error.
-pub type PassFactory = fn(&Options) -> Result<Box<dyn Pass>, String>;
-
-/// How the registry makes a pass: a factory that checks its own options, or a declaration ([`PassSpec`]) whose options
-/// the registry checks first.
-#[derive(Clone, Copy)]
-enum Maker {
-    Factory(PassFactory),
-    Spec(&'static PassSpec),
-}
-
-/// The passes a manager knows, by name.
+/// The passes a manager knows, by name: each by its declaration ([`PassSpec`]).
 #[derive(Default)]
 pub struct PassRegistry {
-    /// Each pass's maker and the options it is made with when nobody gives any (none, or the example of a pass whose
-    /// options have no defaults: [`PassRegistry::register_requiring`], [`PassSpec::example`]).
-    factories: BTreeMap<&'static str, (Maker, Options)>,
-    /// The passes registered with required options ([`PassRegistry::register_requiring`], or a declaration with a
-    /// required option or group: [`PassSpec::requires_options`]).
-    requiring: BTreeSet<&'static str>,
+    specs: BTreeMap<&'static str, &'static PassSpec>,
 }
 
 impl fmt::Debug for PassRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.factories.keys()).finish()
+        f.debug_list().entries(self.specs.keys()).finish()
     }
 }
 
@@ -284,42 +268,15 @@ impl PassRegistry {
         Self::default()
     }
 
-    /// Register a pass. Panics when the name is taken, the factory does not make that pass with no options, or the
-    /// pass legalizes a name it neither requires, removes nor modifies.
-    pub fn register(&mut self, name: &'static str, factory: PassFactory) {
-        self.register_requiring(name, factory, &[]);
-    }
-
-    /// Register a pass whose options have no defaults (a choice the program makes, as a partition's cell size): the
-    /// declaration checks of [`PassRegistry::register`], and the planner reading its declarations, make it with
-    /// `example` options; a pipeline that leaves them out fails to parse with the factory's reason, and a plan that
-    /// chooses it without the caller's options for it is an error: the example is never run.
-    pub fn register_requiring(&mut self, name: &'static str, factory: PassFactory, example: &[(&str, &str)]) {
-        let options: Options = example
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect();
-        let made = factory(&options).unwrap_or_else(|e| panic!("pass {name} with options {options:?}: {e}"));
-        declarations_hold(name, &*made);
-        if !options.is_empty() {
-            self.requiring.insert(name);
-        }
-        assert!(
-            self.factories
-                .insert(name, (Maker::Factory(factory), options))
-                .is_none(),
-            "pass {name} registered twice"
-        );
-    }
-
     /// Register a pass by its declaration: the registry checks every pipeline's options against it before the pass is
     /// made ([`PassSpec::check`]), makes it from the examples to read its declarations ([`PassSpec::example`]; a pass
-    /// with a required option is never run so, as [`PassRegistry::register_requiring`]), and says what it takes
-    /// ([`PassRegistry::describe`]). Panics, as [`PassRegistry::register`] does, when the name is taken or the pass's
-    /// declarations disagree, and when the declaration is wrong ([`PassSpec`]: a key twice, a group of one, a choice
-    /// with no values), the pass is not made from its examples, or what it prints back
-    /// ([`Pass::options`]) holds an undeclared key, leaves out a required option or a group, or does not make a pass
-    /// that prints the same.
+    /// with a required option is never run so: a pipeline that leaves the option out fails to parse, and a plan that
+    /// chooses the pass without the caller's options for it is an error), and says what it takes
+    /// ([`PassRegistry::describe`]). Panics when the name is taken, the declaration is wrong ([`PassSpec`]: a key
+    /// twice, a group of one, a choice with no values, an optional option that says nothing of its absence), the pass
+    /// is not made from its examples or is not the pass named, it legalizes a name it neither requires, removes nor
+    /// modifies, or what it prints back ([`Pass::options`]) holds an undeclared key, leaves out a required option or a
+    /// group, or does not make a pass that prints the same.
     pub fn add(&mut self, spec: &'static PassSpec) {
         let name = spec.name;
         spec.validate();
@@ -340,56 +297,43 @@ impl PassRegistry {
             printed,
             "pass {name}: made from what it prints, it prints otherwise"
         );
-        if spec.requires_options() {
-            self.requiring.insert(name);
-        }
         assert!(
-            self.factories
-                .insert(name, (Maker::Spec(spec), example))
-                .is_none(),
+            self.specs.insert(name, spec).is_none(),
             "pass {name} registered twice"
         );
     }
 
-    /// What pass `name` takes, from its declaration ([`PassSpec::describe`]); `None` for a pass registered with a
-    /// factory, whose options only it knows.
+    /// What pass `name` takes, from its declaration ([`PassSpec::describe`]); `None` for a pass not registered.
     pub fn describe(&self, name: &str) -> Option<String> {
-        match self.factories.get(name)?.0 {
-            Maker::Spec(spec) => Some(spec.describe()),
-            Maker::Factory(_) => None,
-        }
+        self.specs.get(name).map(|spec| spec.describe())
     }
 
-    /// Whether `name` was registered with required options: made with its example only to read its declarations,
-    /// never to run.
+    /// Whether `name` was registered with required options ([`PassSpec::requires_options`]): made with its example only
+    /// to read its declarations, never to run.
     pub fn requires_options(&self, name: &str) -> bool {
-        self.requiring.contains(name)
+        self.specs.get(name).is_some_and(|spec| spec.requires_options())
     }
 
     /// Every registered pass's name, in order.
     pub fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.factories.keys().copied()
+        self.specs.keys().copied()
     }
 
-    /// The pass `name` made with the options it was registered with (none, or a required-option pass's example).
+    /// The pass `name` made with its declaration's example options (none, or a required-option pass's example).
     pub fn make_registered(&self, name: &str) -> Result<Box<dyn Pass>, Error> {
-        let (_, example) = self
-            .factories
+        let spec = self
+            .specs
             .get(name)
             .ok_or_else(|| Error::UnknownPass(name.to_owned()))?;
-        self.make(name, example)
+        self.make(name, &spec.example())
     }
 
     pub fn make(&self, name: &str, options: &Options) -> Result<Box<dyn Pass>, Error> {
-        let (maker, _) = self
-            .factories
+        let spec = self
+            .specs
             .get(name)
             .ok_or_else(|| Error::UnknownPass(name.to_owned()))?;
-        match maker {
-            Maker::Factory(f) => f(options),
-            Maker::Spec(spec) => spec.instance(options),
-        }
-        .map_err(|message| Error::Options {
+        spec.instance(options).map_err(|message| Error::Options {
             pass: name.to_owned(),
             message,
         })
@@ -407,12 +351,15 @@ impl PassRegistry {
     /// Every registered pass, by name, made with its options in `options` (its registered example when it is not
     /// listed there). Options for a pass that is not registered are an error.
     fn instances(&self, options: &PassOptions) -> Result<Vec<Box<dyn Pass>>, Error> {
-        if let Some(name) = options.keys().find(|n| !self.factories.contains_key(n.as_str())) {
+        if let Some(name) = options.keys().find(|n| !self.specs.contains_key(n.as_str())) {
             return Err(Error::UnknownPass(name.clone()));
         }
-        self.factories
+        self.specs
             .iter()
-            .map(|(name, (_, example))| self.make(name, options.get(*name).unwrap_or(example)))
+            .map(|(name, spec)| match options.get(*name) {
+                Some(given) => self.make(name, given),
+                None => self.make(name, &spec.example()),
+            })
             .collect()
     }
 }
@@ -2357,9 +2304,11 @@ mod tests {
             Ok(())
         }
     }
-    fn load(_: &Options) -> std::result::Result<Box<dyn Pass>, String> {
-        Ok(Box::new(Load))
-    }
+    const LOAD: PassSpec = PassSpec {
+        name: "load",
+        options: &[],
+        make: |_| Ok(Box::new(Load)),
+    };
 
     /// toy.layered -> toy.pbr, needs the mesh (bakes per vertex), option `size`.
     struct Bake {
@@ -2398,16 +2347,22 @@ mod tests {
             Ok(())
         }
     }
-    fn bake(o: &Options) -> std::result::Result<Box<dyn Pass>, String> {
-        let mut size = 1024;
-        for (k, v) in o {
-            match k.as_str() {
-                "size" => size = v.parse().map_err(|_| format!("size {v:?} is not a number"))?,
-                _ => return Err(format!("unknown option {k}")),
-            }
-        }
-        Ok(Box::new(Bake { size }))
-    }
+    const BAKE: PassSpec = PassSpec {
+        name: "bake",
+        options: &[OptionSpec::optional(
+            "size",
+            "512",
+            "texels: the baked texture's size",
+            "1024",
+        )],
+        make: |g| {
+            let size = match g.optional("size") {
+                Some(v) => v.parse().map_err(|_| format!("size {v:?} is not a number"))?,
+                None => 1024,
+            };
+            Ok(Box::new(Bake { size }))
+        },
+    };
 
     /// A cheaper-looking but worse way to drop toy.layered (priority -1): lowers it straight to nothing useful.
     struct Drop;
@@ -2433,9 +2388,11 @@ mod tests {
             Ok(())
         }
     }
-    fn drop_layers(_: &Options) -> std::result::Result<Box<dyn Pass>, String> {
-        Ok(Box::new(Drop))
-    }
+    const DROP_LAYERS: PassSpec = PassSpec {
+        name: "drop-layers",
+        options: &[],
+        make: |_| Ok(Box::new(Drop)),
+    };
 
     /// Adds a name it does not declare.
     struct Sneaky;
@@ -2449,17 +2406,19 @@ mod tests {
             Ok(())
         }
     }
-    fn sneaky(_: &Options) -> std::result::Result<Box<dyn Pass>, String> {
-        Ok(Box::new(Sneaky))
-    }
+    const SNEAKY: PassSpec = PassSpec {
+        name: "sneaky",
+        options: &[],
+        make: |_| Ok(Box::new(Sneaky)),
+    };
 
     fn registry(with_drop: bool) -> PassRegistry {
         let mut r = PassRegistry::new();
-        r.register("load", load);
-        r.register("bake", bake);
-        r.register("sneaky", sneaky);
+        r.add(&LOAD);
+        r.add(&BAKE);
+        r.add(&SNEAKY);
         if with_drop {
-            r.register("drop-layers", drop_layers);
+            r.add(&DROP_LAYERS);
         }
         r
     }
@@ -3228,8 +3187,18 @@ mod tests {
     fn a_pass_that_legalizes_in_place_lowers_failing_values() {
         let even = Target::new("even").dynamic_typed::<Mesh>(|m| m.0 % 2 == 0);
         let mut r = PassRegistry::new();
-        r.register("evens", |_| Ok(Box::new(Evens { legalizes: true })));
-        r.register("touch", |_| Ok(Box::new(Evens { legalizes: false })));
+        const EVENS: PassSpec = PassSpec {
+            name: "evens",
+            options: &[],
+            make: |_| Ok(Box::new(Evens { legalizes: true })),
+        };
+        r.add(&EVENS);
+        const TOUCH: PassSpec = PassSpec {
+            name: "touch",
+            options: &[],
+            make: |_| Ok(Box::new(Evens { legalizes: false })),
+        };
+        r.add(&TOUCH);
         let m = PassManager::new(r);
         let mut w = mesh_world(3);
         let report = m
@@ -3245,16 +3214,21 @@ mod tests {
         assert_eq!(report.pipeline, "");
         // a pass that lowers a dynamic name but keeps its values as they are cannot fix them
         let mut r = PassRegistry::new();
-        r.register("keeps", |_| {
-            Ok(Box::new(Decl {
-                name: "keeps",
-                requires: &["toy.mesh"],
-                provides: &["toy.pbr"],
-                removes: &[],
-                modifies: &[],
-                legalizes: &["toy.mesh"],
-            }))
-        });
+        const KEEPS: PassSpec = PassSpec {
+            name: "keeps",
+            options: &[],
+            make: |_| {
+                Ok(Box::new(Decl {
+                    name: "keeps",
+                    requires: &["toy.mesh"],
+                    provides: &["toy.pbr"],
+                    removes: &[],
+                    modifies: &[],
+                    legalizes: &["toy.mesh"],
+                }))
+            },
+        };
+        r.add(&KEEPS);
         let err = PassManager::new(r)
             .convert(&mut mesh_world(3), &even, Mode::Partial, &PassOptions::new())
             .unwrap_err();
@@ -3268,7 +3242,12 @@ mod tests {
     #[test]
     fn a_lowering_that_keeps_its_source() {
         let mut r = PassRegistry::new();
-        r.register("lower-keep", |_| Ok(Box::new(LowerKeep)));
+        const LOWER_KEEP: PassSpec = PassSpec {
+            name: "lower-keep",
+            options: &[],
+            make: |_| Ok(Box::new(LowerKeep)),
+        };
+        r.add(&LOWER_KEEP);
         let m = PassManager::new(r);
         let mut w = World::new();
         let e = w.spawn();
@@ -3315,17 +3294,22 @@ mod tests {
     fn a_name_a_planned_pass_provides_is_lowered_after_it() {
         // load provides toy.mesh, which the target carries but draws only lowered
         let mut r = PassRegistry::new();
-        r.register("load", load);
-        r.register("lower-mesh", |_| {
-            Ok(Box::new(Decl {
-                name: "lower-mesh",
-                requires: &["toy.mesh"],
-                provides: &["toy.pbr"],
-                removes: &[],
-                modifies: &[],
-                legalizes: &["toy.mesh"],
-            }))
-        });
+        r.add(&LOAD);
+        const LOWER_MESH: PassSpec = PassSpec {
+            name: "lower-mesh",
+            options: &[],
+            make: |_| {
+                Ok(Box::new(Decl {
+                    name: "lower-mesh",
+                    requires: &["toy.mesh"],
+                    provides: &["toy.pbr"],
+                    removes: &[],
+                    modifies: &[],
+                    legalizes: &["toy.mesh"],
+                }))
+            },
+        };
+        r.add(&LOWER_MESH);
         let t = Target::new("t")
             .illegal("toy.file")
             .lower_and_carry("toy.mesh")
@@ -3345,17 +3329,22 @@ mod tests {
     fn a_removal_that_is_a_side_effect_is_not_a_lowering() {
         // a-weld drops the file link of the meshes it rewrites; name order prefers it, but it lowers only toy.mesh
         let mut r = PassRegistry::new();
-        r.register("load", load);
-        r.register("a-weld", |_| {
-            Ok(Box::new(Decl {
-                name: "a-weld",
-                requires: &["toy.mesh"],
-                provides: &[],
-                removes: &["toy.file"],
-                modifies: &["toy.mesh"],
-                legalizes: &["toy.mesh"],
-            }))
-        });
+        r.add(&LOAD);
+        const A_WELD: PassSpec = PassSpec {
+            name: "a-weld",
+            options: &[],
+            make: |_| {
+                Ok(Box::new(Decl {
+                    name: "a-weld",
+                    requires: &["toy.mesh"],
+                    provides: &[],
+                    removes: &["toy.file"],
+                    modifies: &["toy.mesh"],
+                    legalizes: &["toy.mesh"],
+                }))
+            },
+        };
+        r.add(&A_WELD);
         let mut w = world();
         let e = w.entities().next().unwrap();
         w.insert(e, Mesh(2));
@@ -3453,11 +3442,21 @@ mod tests {
         assert!(matches!(err, Error::Options { .. }), "{err}");
         // declarations come from the pass made with its options
         let mut r = PassRegistry::new();
-        r.register("optional", |o| {
-            Ok(Box::new(Optional {
-                lowers: o.get("lowers").is_some_and(|v| v == "true"),
-            }))
-        });
+        const OPTIONAL: PassSpec = PassSpec {
+            name: "optional",
+            options: &[OptionSpec::optional(
+                "lowers",
+                "true",
+                "true: it lowers toy.layered",
+                "it lowers nothing",
+            )],
+            make: |g| {
+                Ok(Box::new(Optional {
+                    lowers: g.optional("lowers").is_some_and(|v| v == "true"),
+                }))
+            },
+        };
+        r.add(&OPTIONAL);
         let m = PassManager::new(r);
         let t = Target::new("t").illegal("toy.layered").carry_unknown();
         let mut w = World::new();
@@ -3575,8 +3574,13 @@ mod tests {
         // load makes Mesh(3) from File(3); the target wants even meshes: only once the mesh exists does the check
         // see it, so convert plans again on the world the first pipeline produced
         let mut r = PassRegistry::new();
-        r.register("load", load);
-        r.register("evens", |_| Ok(Box::new(Evens { legalizes: true })));
+        r.add(&LOAD);
+        const EVENS: PassSpec = PassSpec {
+            name: "evens",
+            options: &[],
+            make: |_| Ok(Box::new(Evens { legalizes: true })),
+        };
+        r.add(&EVENS);
         let m = PassManager::new(r);
         let t = Target::new("even")
             .illegal("toy.file")
@@ -3595,7 +3599,7 @@ mod tests {
         assert_eq!(report.pipeline, "load");
         // a produced value no pass can fix is refused after the round that made it
         let mut r = PassRegistry::new();
-        r.register("load", load);
+        r.add(&LOAD);
         let err = PassManager::new(r)
             .convert(&mut w_with_file(5), &t, Mode::Partial, &PassOptions::new())
             .unwrap_err();
@@ -3680,8 +3684,8 @@ mod tests {
         for requires in [false, true] {
             let mut r = PassRegistry::new();
             // name order chooses a-only for toy.a first; z-both, chosen for toy.b, also takes toy.a
-            r.register("a-only", if requires { strip_a_req } else { strip_a });
-            r.register("z-both", if requires { strip_both_req } else { strip_both });
+            r.add(if requires { &STRIP_A_REQ } else { &STRIP_A });
+            r.add(if requires { &STRIP_BOTH_REQ } else { &STRIP_BOTH });
             let mut w = ab_world();
             let report = PassManager::new(r)
                 .convert(&mut w, &t, Mode::Partial, &PassOptions::new())
@@ -3695,34 +3699,50 @@ mod tests {
             assert!(w.component_names().is_empty());
         }
     }
-    fn strip_a(_: &Options) -> std::result::Result<Box<dyn Pass>, String> {
-        Ok(Box::new(Strip {
-            name: "a-only",
-            both: false,
-            requires: false,
-        }))
-    }
-    fn strip_a_req(_: &Options) -> std::result::Result<Box<dyn Pass>, String> {
-        Ok(Box::new(Strip {
-            name: "a-only",
-            both: false,
-            requires: true,
-        }))
-    }
-    fn strip_both(_: &Options) -> std::result::Result<Box<dyn Pass>, String> {
-        Ok(Box::new(Strip {
-            name: "z-both",
-            both: true,
-            requires: false,
-        }))
-    }
-    fn strip_both_req(_: &Options) -> std::result::Result<Box<dyn Pass>, String> {
-        Ok(Box::new(Strip {
-            name: "z-both",
-            both: true,
-            requires: true,
-        }))
-    }
+    const STRIP_A: PassSpec = PassSpec {
+        name: "a-only",
+        options: &[],
+        make: |_| {
+            Ok(Box::new(Strip {
+                name: "a-only",
+                both: false,
+                requires: false,
+            }))
+        },
+    };
+    const STRIP_A_REQ: PassSpec = PassSpec {
+        name: "a-only",
+        options: &[],
+        make: |_| {
+            Ok(Box::new(Strip {
+                name: "a-only",
+                both: false,
+                requires: true,
+            }))
+        },
+    };
+    const STRIP_BOTH: PassSpec = PassSpec {
+        name: "z-both",
+        options: &[],
+        make: |_| {
+            Ok(Box::new(Strip {
+                name: "z-both",
+                both: true,
+                requires: false,
+            }))
+        },
+    };
+    const STRIP_BOTH_REQ: PassSpec = PassSpec {
+        name: "z-both",
+        options: &[],
+        make: |_| {
+            Ok(Box::new(Strip {
+                name: "z-both",
+                both: true,
+                requires: true,
+            }))
+        },
+    };
 
     /// Requires toy.x, removes its letter (toy.a or toy.b) and adds one to every toy.x, which it provides and
     /// modifies.
@@ -3766,25 +3786,30 @@ mod tests {
     #[test]
     fn two_passes_that_provide_and_modify_one_name_do_not_form_a_cycle() {
         let t = Target::new("t").illegal("toy.a").illegal("toy.b").legal("toy.x");
-        let bump_a: PassFactory = |_| {
-            Ok(Box::new(Bump {
-                name: "bump-a",
-                b: false,
-            }))
+        const BUMP_A: PassSpec = PassSpec {
+            name: "bump-a",
+            options: &[],
+            make: |_| {
+                Ok(Box::new(Bump {
+                    name: "bump-a",
+                    b: false,
+                }))
+            },
         };
-        let bump_b: PassFactory = |_| {
-            Ok(Box::new(Bump {
-                name: "bump-b",
-                b: true,
-            }))
+        const BUMP_B: PassSpec = PassSpec {
+            name: "bump-b",
+            options: &[],
+            make: |_| {
+                Ok(Box::new(Bump {
+                    name: "bump-b",
+                    b: true,
+                }))
+            },
         };
-        for order in [
-            [("bump-a", bump_a), ("bump-b", bump_b)],
-            [("bump-b", bump_b), ("bump-a", bump_a)],
-        ] {
+        for order in [[&BUMP_A, &BUMP_B], [&BUMP_B, &BUMP_A]] {
             let mut r = PassRegistry::new();
-            for (name, f) in order {
-                r.register(name, f);
+            for spec in order {
+                r.add(spec);
             }
             let mut w = ab_world();
             let e = w.entities().next().unwrap();
@@ -3866,7 +3891,12 @@ mod tests {
     #[test]
     fn a_resource_value_rule_is_planned_and_checked() {
         let mut r = PassRegistry::new();
-        r.register("classify", |_| Ok(Box::new(Classify)));
+        const CLASSIFY: PassSpec = PassSpec {
+            name: "classify",
+            options: &[],
+            make: |_| Ok(Box::new(Classify)),
+        };
+        r.add(&CLASSIFY);
         let m = PassManager::new(r);
         let mut w = table_world(vec![Some(3), None]);
         let report = m
@@ -3929,16 +3959,21 @@ mod tests {
     fn a_refused_value_names_its_rule() {
         // `lazy` claims to legalize toy.mesh in place but changes nothing: the check after the pipeline names the rule
         let mut r = PassRegistry::new();
-        r.register("lazy", |_| {
-            Ok(Box::new(Decl {
-                name: "lazy",
-                requires: &["toy.mesh"],
-                provides: &[],
-                removes: &[],
-                modifies: &["toy.mesh"],
-                legalizes: &["toy.mesh"],
-            }))
-        });
+        const LAZY: PassSpec = PassSpec {
+            name: "lazy",
+            options: &[],
+            make: |_| {
+                Ok(Box::new(Decl {
+                    name: "lazy",
+                    requires: &["toy.mesh"],
+                    provides: &[],
+                    removes: &[],
+                    modifies: &["toy.mesh"],
+                    legalizes: &["toy.mesh"],
+                }))
+            },
+        };
+        r.add(&LAZY);
         let t = Target::new("even").check::<Mesh>("even meshes", |m| m.0 % 2 == 0);
         let err = PassManager::new(r)
             .convert(&mut mesh_world(3), &t, Mode::Partial, &PassOptions::new())
@@ -3953,8 +3988,18 @@ mod tests {
     #[test]
     fn a_pass_that_provides_a_settled_name_after_it_refuses_the_pipeline() {
         let mut r = PassRegistry::new();
-        r.register("classify", |_| Ok(Box::new(Classify)));
-        r.register("add-row", |_| Ok(Box::new(AddRow)));
+        const CLASSIFY: PassSpec = PassSpec {
+            name: "classify",
+            options: &[],
+            make: |_| Ok(Box::new(Classify)),
+        };
+        r.add(&CLASSIFY);
+        const ADD_ROW: PassSpec = PassSpec {
+            name: "add-row",
+            options: &[],
+            make: |_| Ok(Box::new(AddRow)),
+        };
+        r.add(&ADD_ROW);
         let m = PassManager::new(r);
         // add-row after classify would leave a row unclassified: refused before anything runs
         let mut w = table_world(vec![None]);

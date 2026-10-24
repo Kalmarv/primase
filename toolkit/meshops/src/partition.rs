@@ -813,7 +813,12 @@ mod tests {
         use primase_core::pass::{Mode, PassManager, PassOptions, PassRegistry, RunReport, Target};
         let mut reg = PassRegistry::new();
         crate::register(&mut reg);
-        reg.register("lower-raw", |_| Ok(Box::new(LowerRaw)));
+        const LOWER_RAW: PassSpec = PassSpec {
+            name: "lower-raw",
+            options: &[],
+            make: |_| Ok(Box::new(LowerRaw)),
+        };
+        reg.add(&LOWER_RAW);
         let manager = PassManager::new(reg);
         let target = Target::new("t").illegal("test.raw").carry_unknown();
         let mut w = World::new();

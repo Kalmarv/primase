@@ -1465,18 +1465,6 @@ fn referenced(t: &[Tok]) -> BTreeSet<String> {
     out
 }
 
-/// The names given to `register("...", ...)` and `register_requiring("...", ...)` calls.
-fn registered(t: &[Tok]) -> BTreeSet<String> {
-    t.windows(3)
-        .filter_map(|w| match (&w[0], &w[1], &w[2]) {
-            (Tok::Ident(f), Tok::Punct('('), Tok::Str(s)) if f == "register" || f == "register_requiring" => {
-                Some(s.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Public functions whose signature returns a `PassLog`: their names.
 fn lowerings(t: &[Tok]) -> Vec<String> {
     let mut out = Vec::new();
@@ -1599,7 +1587,6 @@ fn component_geometry_hooks() {
 #[test]
 fn passes_registered() {
     let members = members();
-    let mut registry = BTreeSet::new();
     let (mut declared, mut taken) = (Vec::new(), BTreeSet::new());
     let mut crates = Vec::new();
     for m in &members {
@@ -1611,20 +1598,18 @@ fn passes_registered() {
             })
             .collect();
         for (_, t) in &files {
-            registry.extend(registered(t));
             declared.extend(declarations(t));
             taken.extend(referenced(t));
         }
         crates.push((m.clone(), files));
     }
-    // a declared pass counts as registered when library code takes its declaration by reference (`reg.add(&X)`, or a
-    // list of `&X` a registration adds)
-    registry.extend(
-        declared
-            .into_iter()
-            .filter(|(constant, _)| taken.contains(constant))
-            .map(|(_, name)| name),
-    );
+    // a pass is registered by its declaration: it counts when library code takes the declaration by reference
+    // (`reg.add(&X)`, or a list of `&X` a registration adds)
+    let registry: BTreeSet<String> = declared
+        .into_iter()
+        .filter(|(constant, _)| taken.contains(constant))
+        .map(|(_, name)| name)
+        .collect();
     let mut found = BTreeSet::new();
     for (m, files) in &crates {
         let mut run_by_passes = BTreeSet::new();

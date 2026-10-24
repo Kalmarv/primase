@@ -15,7 +15,6 @@ use std::path::PathBuf;
 use primase_core::World;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_gltf::{GroupBy, WriteOptions, write_file};
-use primase_image::NormalizeNormals;
 use primase_reskate::components::SkateScene;
 
 type BoxError = Box<dyn std::error::Error>;
@@ -32,10 +31,7 @@ fn registry() -> PassRegistry {
     reg.add(&primase_core::SELECT_LOD);
     primase_meshops::register(&mut reg);
     reg.add(&primase_core::DROP_OPTIONAL);
-    reg.register("normalize-normals", |o| match o.keys().next() {
-        Some(k) => Err(format!("unknown option {k}")),
-        None => Ok(Box::new(NormalizeNormals)),
-    });
+    reg.add(&primase_image::NORMALIZE_NORMALS);
     reg
 }
 

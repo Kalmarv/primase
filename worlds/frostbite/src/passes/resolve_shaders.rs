@@ -40,7 +40,7 @@
 
 use std::collections::BTreeSet;
 
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::shader::{
     ConstantBinding, ConstantRole, D3dClass, InputBinding, InputRole, Interface, KeyPart, OutputBinding,
     OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, ShaderBinding, Stage,
@@ -61,15 +61,12 @@ use crate::permutation::Kind;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ResolveFrostbiteShaders;
 
-impl ResolveFrostbiteShaders {
-    /// From its options (it has none).
-    pub fn from_options(o: &primase_core::pass::Options) -> Result<Self, String> {
-        match o.keys().next() {
-            Some(k) => Err(format!("unknown option {k}")),
-            None => Ok(ResolveFrostbiteShaders),
-        }
-    }
-}
+/// `resolve-frostbite-shaders`' declaration ([`primase_core::pass::PassRegistry::add`]): it takes no options.
+pub const RESOLVE_FROSTBITE_SHADERS: PassSpec = PassSpec {
+    name: "resolve-frostbite-shaders",
+    options: &[],
+    make: |_| Ok(Box::new(ResolveFrostbiteShaders)),
+};
 
 impl Pass for ResolveFrostbiteShaders {
     fn name(&self) -> &'static str {
@@ -869,8 +866,12 @@ mod tests {
 
     #[test]
     fn the_pass_has_no_options() {
-        assert!(ResolveFrostbiteShaders::from_options(&primase_core::pass::Options::new()).is_ok());
+        assert!(
+            RESOLVE_FROSTBITE_SHADERS
+                .instance(&primase_core::pass::Options::new())
+                .is_ok()
+        );
         let o = primase_core::pass::Options::from([("x".to_owned(), "y".to_owned())]);
-        assert!(ResolveFrostbiteShaders::from_options(&o).is_err());
+        assert!(RESOLVE_FROSTBITE_SHADERS.instance(&o).is_err());
     }
 }

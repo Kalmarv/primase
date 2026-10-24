@@ -10,7 +10,7 @@ use primase_core::convert::{
     ConvertError, Finished, Notice, NoticeKind, Part, PartScope, PartSize, PartSource, PartitionGroup,
     PartitionPlan, PlannedParts, Reader, Report, Result, Writer, convert, convert_parts,
 };
-use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, Target};
+use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, PassSpec, Pipeline, Target};
 use primase_core::{Component, Entity, Instance, Name, Resource, World};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -335,13 +335,78 @@ impl Pass for ToyPartition {
     }
 }
 
+/// The toy passes, by their declarations: none takes options.
+const TOY_SELECT: PassSpec = PassSpec {
+    name: "toy-select",
+    options: &[],
+    make: |_| Ok(Box::new(ToySelect)),
+};
+
+const TOY_PASS: PassSpec = PassSpec {
+    name: "toy-pass",
+    options: &[],
+    make: |_| Ok(Box::new(ToyPass)),
+};
+
+const TOY_LOWER_RAW: PassSpec = PassSpec {
+    name: "toy-lower-raw",
+    options: &[],
+    make: |_| Ok(Box::new(ToyLowerRaw)),
+};
+
+const TOY_LOWER: PassSpec = PassSpec {
+    name: "toy-lower",
+    options: &[],
+    make: |_| Ok(Box::new(ToyLower)),
+};
+
+const TOY_PARTITION: PassSpec = PassSpec {
+    name: "toy-partition",
+    options: &[],
+    make: |_| Ok(Box::new(ToyPartition)),
+};
+
+const TOY_PER_PLACEMENT: PassSpec = PassSpec {
+    name: "toy-per-placement",
+    options: &[],
+    make: |_| Ok(Box::new(ToyPerPlacement)),
+};
+
+const TOY_FAIL: PassSpec = PassSpec {
+    name: "toy-fail",
+    options: &[],
+    make: |_| Ok(Box::new(ToyFail)),
+};
+
+const TOY_NOTE_THEN_FAIL: PassSpec = PassSpec {
+    name: "toy-note-then-fail",
+    options: &[],
+    make: |_| Ok(Box::new(ToyNoteThenFail)),
+};
+
+const TOY_UNPLACE: PassSpec = PassSpec {
+    name: "toy-unplace",
+    options: &[],
+    make: |_| Ok(Box::new(ToyUnplace)),
+};
+
+const TOY_ADD_RES: PassSpec = PassSpec {
+    name: "toy-add-res",
+    options: &[],
+    make: |_| Ok(Box::new(ToyAddRes)),
+};
+
+const TWO_CELLS: PassSpec = PassSpec {
+    name: "two-cells",
+    options: &[],
+    make: |_| Ok(Box::new(TwoCells)),
+};
+
 fn manager(select: &str) -> (PassManager, Pipeline, Pipeline) {
     let mut r = PassRegistry::new();
-    r.register("toy-select", |_| Ok(Box::new(ToySelect)));
-    r.register("toy-pass", |_| Ok(Box::new(ToyPass)));
-    r.register("toy-lower-raw", |_| Ok(Box::new(ToyLowerRaw)));
-    r.register("toy-lower", |_| Ok(Box::new(ToyLower)));
-    r.register("toy-partition", |_| Ok(Box::new(ToyPartition)));
+    for spec in [&TOY_SELECT, &TOY_PASS, &TOY_LOWER_RAW, &TOY_LOWER, &TOY_PARTITION] {
+        r.add(spec);
+    }
     let (select, passes) = (r.parse(select).unwrap(), r.parse("toy-pass").unwrap());
     (PassManager::new(r).with_pass_checks(true), select, passes)
 }
@@ -733,15 +798,19 @@ impl Pass for ToyAddRes {
 
 fn manager_with(select: &str, passes: &str) -> (PassManager, Pipeline, Pipeline) {
     let mut r = PassRegistry::new();
-    r.register("toy-select", |_| Ok(Box::new(ToySelect)));
-    r.register("toy-pass", |_| Ok(Box::new(ToyPass)));
-    r.register("toy-partition", |_| Ok(Box::new(ToyPartition)));
-    r.register("toy-per-placement", |_| Ok(Box::new(ToyPerPlacement)));
-    r.register("toy-fail", |_| Ok(Box::new(ToyFail)));
-    r.register("toy-note-then-fail", |_| Ok(Box::new(ToyNoteThenFail)));
-    r.register("toy-unplace", |_| Ok(Box::new(ToyUnplace)));
-    r.register("toy-add-res", |_| Ok(Box::new(ToyAddRes)));
-    r.register("two-cells", |_| Ok(Box::new(TwoCells)));
+    for spec in [
+        &TOY_SELECT,
+        &TOY_PASS,
+        &TOY_PARTITION,
+        &TOY_PER_PLACEMENT,
+        &TOY_FAIL,
+        &TOY_NOTE_THEN_FAIL,
+        &TOY_UNPLACE,
+        &TOY_ADD_RES,
+        &TWO_CELLS,
+    ] {
+        r.add(spec);
+    }
     let (select, passes) = (r.parse(select).unwrap(), r.parse(passes).unwrap());
     (PassManager::new(r).with_pass_checks(true), select, passes)
 }

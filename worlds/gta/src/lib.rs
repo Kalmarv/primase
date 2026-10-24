@@ -203,9 +203,7 @@ mod tests {
         let mut r = PassRegistry::new();
         r.add(&primase_core::SELECT_LOD);
         r.add(&primase_core::state::RESOLVE_STATE);
-        r.register("normalize-normals", |_| {
-            Ok(Box::new(primase_image::NormalizeNormals))
-        });
+        r.add(&primase_image::NORMALIZE_NORMALS);
         crate::register(&mut r);
         let m = PassManager::new(r);
         let rect = "x0=0,y0=0,x1=1,y1=1";
