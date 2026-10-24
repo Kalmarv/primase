@@ -497,7 +497,7 @@ mod tests {
         let mut reg = primase_core::pass::PassRegistry::new();
         crate::register(&mut reg);
         let pass = reg.make_registered("lower-gltf-materials").unwrap();
-        assert_eq!(pass.provides(), [PbrMaterial::NAME]);
+        assert_eq!(pass.provides(), [PbrMaterial::NAME, DetailedMaterial::NAME]);
         let mut o = Options::new();
         o.insert("x".into(), "1".into());
         assert!(reg.make("lower-gltf-materials", &o).is_err());
