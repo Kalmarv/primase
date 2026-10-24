@@ -360,6 +360,21 @@ pub fn resolve(
         let (role, binding) = role_and_binding(material, &slots, resource)?;
         let found = match binding {
             Some(b) => texture(&b.texture, role == "AlbedoMap")?,
+            None if game == crate::Game::EldenRing => {
+                let found = match default_texture(metaparam, resource) {
+                    Some(d) => texture(&d, role == "AlbedoMap")?,
+                    None => None,
+                };
+                if found.is_some() {
+                    *policies
+                        .entry(
+                            "material slots bound to the metaparam's default texture (the material binds nothing there)"
+                                .to_owned(),
+                        )
+                        .or_default() += 1;
+                }
+                found
+            }
             None => None,
         };
         // the slot's tiling, in its row of FC_TextureTilingScale: Elden Ring's as its own rule says ([`elden_tiling`]);
@@ -1018,12 +1033,7 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
 /// not the `N` of `Texture2D_N` (both name the texture: its slot is the register), so the group is found by the name.
 fn elden_tiling(material: &MaterialView<'_>, metaparam: Option<&Metaparam>, resource: &Resource) -> [f32; 4] {
     let n = texture_slot(resource).ok();
-    let number = |name: &str| -> Option<u32> {
-        let rest = &name[name.find("Texture2D_")? + "Texture2D_".len()..];
-        rest[..rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len())]
-            .parse()
-            .ok()
-    };
+    let number = crate::metaparam::texture_number;
     let sampler = match material.definition {
         crate::materials::DefinitionRef::Matbin(m) => m
             .samplers
@@ -1051,6 +1061,19 @@ fn elden_tiling(material: &MaterialView<'_>, metaparam: Option<&Metaparam>, reso
         }
     };
     centred(sampler.or_else(group).unwrap_or([1.; 2]))
+}
+
+/// The texture Elden Ring binds when the material leaves `resource` unbound: the shader metaparam's default for
+/// the same `Texture2D_N`, by its stem. The reader retains the authored texture payload, so its stored texels and
+/// the slot's colour transfer determine the value. The Stormveil capture (ercap3) ties the empty DetailBlend slots'
+/// uploaded mip hashes to these system textures. An explicit binding still takes precedence if its payload is missing.
+fn default_texture(metaparam: Option<&Metaparam>, resource: &Resource) -> Option<String> {
+    let n = texture_slot(resource).ok()?;
+    metaparam?
+        .textures
+        .iter()
+        .find(|t| crate::metaparam::texture_number(&t.name) == Some(n) && !t.default_texture.is_empty())
+        .map(|t| crate::materials::stem(&t.default_texture))
 }
 
 /// A tiling scale as Elden Ring writes it: each axis scaled about the texture's centre, `(u, v, (1 - u) / 2,
@@ -1127,9 +1150,7 @@ mod tests {
         }
     }
 
-    /// Captured words of Elden Ring's SAT parameters from the material binaries' values: an srgb colour raised to 2.2
-    /// before its intensity (`C[c3251]_BD_Cloth`'s colour 4 at intensity 1, `P[BD_M_1360]_fabric`'s colour 1 at 3.5),
-    /// a colour without the flag times its intensity only, a bool as the integer's bits.
+    /// Captured rows of Elden Ring's FC_TextureTilingScale: each axis scaled about the texture's centre.
     #[test]
     fn tiling_rows_are_centred_as_the_capture_shows() {
         // C[c3251]_BD's leather detail (its sampler's 10), C[c3251]_Shield's bark (24 by 48), C[c3251]_HD's
@@ -1140,6 +1161,9 @@ mod tests {
         assert_eq!(centred([1., 1.]), [1., 1., 0., 0.]);
     }
 
+    /// Captured words of Elden Ring's SAT parameters from the material binaries' values: an srgb colour raised to 2.2
+    /// before its intensity (`C[c3251]_BD_Cloth`'s colour 4 at intensity 1, `P[BD_M_1360]_fabric`'s colour 1 at 3.5),
+    /// a colour without the flag times its intensity only, a bool as the integer's bits.
     #[test]
     fn sat_parameters_are_written_as_the_capture_shows() {
         let close = |words: Vec<u32>, want: &[f32]| {

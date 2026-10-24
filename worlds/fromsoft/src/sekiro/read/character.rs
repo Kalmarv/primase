@@ -551,18 +551,21 @@ impl<'a> Reading<'a> {
                 })
             })
             .collect();
-        let wanted: BTreeSet<String> = resolved
-            .iter()
-            .flat_map(|m| m.bindings.values().map(|b| b.texture.clone()))
-            .filter(|t| catalog.entries.contains_key(t))
-            .collect();
-        let payloads = catalog.load(archive, decoder, &wanted)?;
         let wanted_shaders: BTreeSet<String> = resolved
             .iter()
             .filter(|m| m.definition.is_some())
             .map(|m| m.shader.clone())
             .collect();
         self.bundles.read(archive, decoder, self.game, &wanted_shaders)?;
+        // the bound textures, and those the engine binds to the slots a material binds nothing to (Elden Ring's
+        // metaparam defaults)
+        let wanted: BTreeSet<String> = resolved
+            .iter()
+            .flat_map(|m| m.bindings.values().map(|b| b.texture.clone()))
+            .chain(self.bundles.default_textures(self.game, &resolved))
+            .filter(|t| catalog.entries.contains_key(t))
+            .collect();
+        let payloads = catalog.load(archive, decoder, &wanted)?;
         let programs = self
             .bundles
             .layered_programs(resolved.iter().filter_map(|m| m.layered.as_ref()))?;

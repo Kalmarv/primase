@@ -12,6 +12,15 @@ use crate::{
 
 const FORMAT: &str = "METAPARAM";
 
+/// The `N` of a `Texture2D_N` in a texture slot's or a program resource's name: the number both name a texture by
+/// (`C_DetailBlend__snp_Texture2D_7_AlbedoMap` and the program's `C_DetailBlend_snp_0_Texture2D_7`). A slot's
+/// [`Texture::slot`] is its register, not this number.
+pub fn texture_number(name: &str) -> Option<u32> {
+    let (_, rest) = name.split_once("Texture2D_")?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
 /// A texture slot the shader declares.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Texture {

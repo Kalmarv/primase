@@ -690,9 +690,16 @@ pub fn read_game_area(
             }
         }
     }
-    let payloads = catalog.load(&archive, decoder, &wanted)?;
     let mut bundles = shaders::Bundles::default();
     bundles.read(&archive, decoder, game, &wanted_shaders)?;
+    // the textures the engine binds to the slots a material binds nothing to (Elden Ring's metaparam defaults)
+    wanted.extend(
+        bundles
+            .default_textures(game, prototypes.values().flat_map(|p| &p.materials))
+            .into_iter()
+            .filter(|t| catalog.entries.contains_key(t)),
+    );
+    let payloads = catalog.load(&archive, decoder, &wanted)?;
     let programs = bundles.layered_programs(layered.into_iter())?;
     report.textures = payloads.len();
     report.shader_programs = programs.len();

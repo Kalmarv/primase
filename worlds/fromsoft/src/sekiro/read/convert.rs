@@ -158,13 +158,22 @@ impl Reader for AreaReader<'_> {
     }
 }
 
-/// Keep in `part` only the source files its materials bind: their bindings' texture files and their layered
+/// Keep in `part` only the source files its materials bind: their bindings' texture files, the default textures the
+/// engine binds to the slots they bind nothing to ([`super::shaders::unbound_defaults`]), and their layered
 /// definitions' programs. Returns how many of each it keeps.
 pub(super) fn scope_sources(part: &mut World) -> Result<(usize, usize)> {
+    use crate::sekiro::source::{MaterialShader, ShaderBundle};
     let mut textures = BTreeSet::new();
     let mut programs = BTreeSet::new();
-    for (_, m) in part.iter::<Material>() {
+    for (e, m) in part.iter::<Material>() {
         textures.extend(m.bindings.values().map(|b| b.texture.clone()));
+        if let Some(bundle) = part
+            .get::<MaterialShader>(e)
+            .and_then(|s| part.get::<ShaderBundle>(s.0))
+            && let Some(meta) = &bundle.parameters
+        {
+            textures.extend(super::shaders::unbound_defaults(bundle.game, m, meta));
+        }
         if let Some(l) = &m.layered {
             textures.extend(l.bindings.values().map(|b| b.texture.clone()));
             programs.insert(l.program_name()?);

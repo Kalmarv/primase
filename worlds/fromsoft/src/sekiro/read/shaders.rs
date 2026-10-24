@@ -28,7 +28,49 @@ pub(super) struct Bundles {
     pub unread_metaparams: BTreeSet<String>,
 }
 
+/// The default textures (stems) of the slots `material` binds nothing to, as its shader's metaparam `meta` states them
+/// (a slot's `default_texture`: `SYSTEX_Dummy_a`, `_n`, `_m`, `SYSTEX_Dummy_BlackAlpha_a`), where `game`'s engine binds
+/// them there: Elden Ring's ([`crate::layer_bake::resolve::resolve`] binds what a read keeps of them). A slot is the
+/// material's when one of its bindings names the slot's `Texture2D_N`. Empty for another game and for a material
+/// without a definition.
+pub(crate) fn unbound_defaults(
+    game: Game,
+    material: &crate::materials::Material,
+    meta: &Metaparam,
+) -> Vec<String> {
+    use crate::metaparam::texture_number;
+    if game != Game::EldenRing || material.definition.is_none() {
+        return Vec::new();
+    }
+    let bound: BTreeSet<u32> = material
+        .bindings
+        .keys()
+        .filter_map(|k| texture_number(k))
+        .collect();
+    meta.textures
+        .iter()
+        .filter(|t| {
+            !t.default_texture.is_empty() && texture_number(&t.name).is_some_and(|n| !bound.contains(&n))
+        })
+        .map(|t| crate::materials::stem(&t.default_texture))
+        .collect()
+}
+
 impl Bundles {
+    /// The default textures of the slots `materials` bind nothing to ([`unbound_defaults`]), by their shaders'
+    /// metaparams. Read the bundles first.
+    pub fn default_textures<'a>(
+        &self,
+        game: Game,
+        materials: impl IntoIterator<Item = &'a crate::materials::Material>,
+    ) -> BTreeSet<String> {
+        materials
+            .into_iter()
+            .filter_map(|m| Some((m, self.bundles.get(&m.shader)?.parameters.as_ref()?)))
+            .flat_map(|(m, meta)| unbound_defaults(game, m, meta))
+            .collect()
+    }
+
     /// Read the bundles of `shaders` that are not already in `self`, from the game's bundle binders in order: a later
     /// binder is read only while a wanted shader is still not found.
     pub fn read(

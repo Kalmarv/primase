@@ -30,7 +30,7 @@
 //!
 //! What it does not read is named in [`Reads::left_out`]: a discard against an engine texture (the screen-door dither of
 //! a fade) is not a material slot's coverage.
-use crate::metaparam::{Metaparam, Texture};
+use crate::metaparam::{Metaparam, Texture, texture_number};
 use primase_core::shader::{Resource, ResourceId, ResourceKind, ShaderFormat};
 use primase_shader::Program;
 use primase_shader::flow::{BinaryOperator, Node, NodeId, Op, Read, UnaryOperator, Values};
@@ -125,13 +125,6 @@ pub fn slot_of(resource: &Resource, meta: &Metaparam) -> Option<(u32, SlotMatch)
         .iter()
         .any(|t| u32::from(t.slot) == register)
         .then_some((register, SlotMatch::Register))
-}
-
-/// The `N` of a `Texture2D_N` in a resource's or a slot's name.
-fn texture_number(name: &str) -> Option<u32> {
-    let (_, rest) = name.split_once("Texture2D_")?;
-    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().ok()
 }
 
 /// An input component: its element's name and index, and the component.
