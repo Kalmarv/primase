@@ -17,12 +17,22 @@
 //!
 //! Other materials keep their glTF meaning: base colour, metal, roughness, emission, alpha mode, double-sidedness and
 //! texture coordinates as stored. A transparent node (a name containing `Transparent`,
-//! [`crate::components::StuntboostDraw::Transparent`]) draws, as `transparent=blend`, with blended copies of its
-//! materials, their alpha multiplied by the node's `Transparent(alpha)`: one copy per material and alpha, given to the
-//! node as a `core.material_variants` variant of its prototype, so the opaque nodes sharing a material (in STUNTBOOST
-//! the glass and curtains draw with the level's bake material) keep it unchanged. As `opaque`, transparent nodes draw
-//! as stored. Both options are the program's, stated (no
-//! default). Wrap is glTF's repeat; the samplers' filters stay in the dialect.
+//! [`crate::components::StuntboostDraw::Transparent`]) draws, as `transparent=blend`, with copies of its materials
+//! made for its `Transparent(alpha)`: one copy per material and alpha, given to the node as a `core.material_variants`
+//! variant of its prototype, so the opaque nodes sharing a material (in STUNTBOOST the glass and curtains draw with the
+//! level's bake material) keep it unchanged. The game's `Transparent` entity multiplies the colour it draws with
+//! (`Render.fx`'s `Color`, all four channels) by the alpha, and only an alpha below 1 goes to its back-to-front
+//! transparency batch:
+//! - alpha up to 1: a blended copy, its base colour alpha multiplied by the node's (the game's colour times alpha is
+//!   that fade, premultiplied).
+//! - alpha above 1 (`hang_sack=Transparent(1.5)`, in 18 levels): not a transparency. The game draws the node at once,
+//!   opaque, its colour brightened by the factor. Where the material's colour is its emission over a black base (a
+//!   bake material lowered as `emission`), the copy stays opaque and its `emissive_strength` takes the factor, which
+//!   is exact. A base colour holds at most 1 (`pbr.material`), so a node whose material carries its colour there
+//!   keeps the stored material, counted as an approximation on the node.
+//!
+//! As `opaque`, transparent nodes draw as stored. Both options are the program's, stated (no default). Wrap is
+//! glTF's repeat; the samplers' filters stay in the dialect.
 
 use std::collections::BTreeMap;
 
@@ -120,6 +130,9 @@ impl Pass for LowerStuntboostMaterials {
     fn modifies(&self) -> &[&'static str] {
         &[Instance::NAME, MaterialVariants::NAME]
     }
+    fn approximates(&self) -> &'static str {
+        "a transparent node's colour multiplier above 1 on a material whose colour is its base colour (at most 1): drawn at the stored colour"
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let baked_level = w
             .iter::<StuntboostNode>()
@@ -173,16 +186,39 @@ impl Pass for LowerStuntboostMaterials {
             w.insert(e, pbr);
         }
         if self.transparent == Transparent::Blend {
-            blend_transparent_nodes(w, log);
+            transparent_nodes(w, log);
         }
         Ok(())
     }
 }
 
-/// Each transparent node draws with blended copies of its materials: per (material, alpha) one copy (the material's
-/// `pbr.material`, blended, its base colour alpha multiplied by the node's), and per (prototype, alpha) one variant of
-/// the prototype naming the copies, which the node's placement takes.
-fn blend_transparent_nodes(w: &mut World, log: &mut PassLog) {
+/// The approximation counted on a node whose `Transparent(alpha)` above 1 brightens a material that carries its colour
+/// in the base colour, which holds at most 1.
+pub const BRIGHTER_NOT_CARRIED: &str = "transparent nodes whose colour multiplier above 1 is not carried (a base colour holds at most 1): drawn opaque at the stored colour";
+
+/// The copy of `pbr` a node's `Transparent(alpha)` draws with (see the module documentation), or `None` when the node
+/// draws with `pbr` itself: an alpha above 1 on a material whose colour is in its base colour.
+fn transparent_copy(pbr: &PbrMaterial, alpha: f32) -> Option<PbrMaterial> {
+    let mut copy = pbr.clone();
+    if alpha <= 1.0 {
+        copy.alpha_mode = AlphaMode::Blend;
+        copy.base_color[3] *= alpha;
+        return Some(copy);
+    }
+    let emission_over_black =
+        pbr.base_color[..3] == [0.0; 3] && (pbr.emissive_texture.is_some() || pbr.emissive != [0.0; 3]);
+    if !emission_over_black {
+        return None;
+    }
+    copy.emissive_strength *= alpha;
+    Some(copy)
+}
+
+/// Each transparent node draws with copies of its materials for its alpha ([`transparent_copy`]): per (material,
+/// alpha) one copy, and per (prototype, alpha) one variant of the prototype naming the copies, which the node's
+/// placement takes. A primitive whose material has no copy draws its own; a prototype none of whose materials has one
+/// gains no variant.
+fn transparent_nodes(w: &mut World, log: &mut PassLog) {
     let nodes: Vec<(Entity, Entity, f32)> = w
         .iter::<StuntboostNode>()
         .filter_map(|(e, n)| {
@@ -192,12 +228,14 @@ fn blend_transparent_nodes(w: &mut World, log: &mut PassLog) {
             Some((e, w.get::<Instance>(e)?.prototype, alpha.unwrap_or(1.0)))
         })
         .collect();
-    // copies by (material, alpha bits); variants by (prototype, alpha bits)
-    let mut copies: BTreeMap<(Entity, u32), Entity> = BTreeMap::new();
-    let mut variants: BTreeMap<(Entity, u32), u32> = BTreeMap::new();
+    // copies by (material, alpha bits), `None` where the material draws itself; variants by (prototype, alpha bits),
+    // `None` where no material of the prototype has a copy, with whether a material of it was left uncarried
+    let mut copies: BTreeMap<(Entity, u32), Option<Entity>> = BTreeMap::new();
+    let mut variants: BTreeMap<(Entity, u32), (Option<u32>, bool)> = BTreeMap::new();
     for (e, prototype, alpha) in nodes {
+        let brighter = alpha > 1.0;
         let key = (prototype, alpha.to_bits());
-        let variant = match variants.get(&key) {
+        let (variant, uncarried) = match variants.get(&key) {
             Some(&v) => v,
             None => {
                 let Some(materials) = w
@@ -210,37 +248,65 @@ fn blend_transparent_nodes(w: &mut World, log: &mut PassLog) {
                 table.0.resize(materials.len(), BTreeMap::new());
                 // the next variant number this prototype has not used
                 let v = table.0.iter().flat_map(|m| m.keys()).max().map_or(1, |v| v + 1);
+                let (mut used, mut uncarried) = (false, false);
                 for (i, m) in materials.iter().enumerate() {
                     let Some(m) = *m else { continue };
                     let copy = match copies.get(&(m, alpha.to_bits())) {
                         Some(&c) => c,
                         None => {
-                            let Some(mut pbr) = w.get::<PbrMaterial>(m).cloned() else {
-                                continue;
-                            };
-                            pbr.alpha_mode = AlphaMode::Blend;
-                            pbr.base_color[3] *= alpha;
-                            let name = w.get::<Name>(m).map_or("", |n| n.0.as_str()).to_owned();
-                            let c = w.spawn();
-                            w.insert(c, pbr);
-                            w.insert(c, Name(format!("{name} (transparent {alpha})")));
-                            copies.insert((m, alpha.to_bits()), c);
-                            log.count("blended material copies made for transparent nodes", 1);
-                            c
+                            let made = w
+                                .get::<PbrMaterial>(m)
+                                .and_then(|pbr| transparent_copy(pbr, alpha));
+                            let made = made.map(|pbr| {
+                                let name = w.get::<Name>(m).map_or("", |n| n.0.as_str()).to_owned();
+                                let c = w.spawn();
+                                w.insert(c, pbr);
+                                w.insert(c, Name(format!("{name} (transparent {alpha})")));
+                                log.count(
+                                    if brighter {
+                                        "brightened emission copies made for transparent nodes with an alpha above 1"
+                                    } else {
+                                        "blended material copies made for transparent nodes"
+                                    },
+                                    1,
+                                );
+                                c
+                            });
+                            copies.insert((m, alpha.to_bits()), made);
+                            made
                         }
                     };
-                    if let Some(slot) = table.0.get_mut(i) {
-                        slot.insert(v, copy);
+                    match (copy, table.0.get_mut(i)) {
+                        (Some(copy), Some(slot)) => {
+                            slot.insert(v, copy);
+                            used = true;
+                        }
+                        (None, _) => uncarried |= brighter && w.has::<PbrMaterial>(m),
+                        (Some(_), None) => {}
                     }
                 }
-                w.insert(prototype, table);
-                variants.insert(key, v);
-                v
+                let v = used.then(|| {
+                    w.insert(prototype, table);
+                    v
+                });
+                variants.insert(key, (v, uncarried));
+                (v, uncarried)
             }
         };
+        if uncarried {
+            log.approximate_on(e, BRIGHTER_NOT_CARRIED, 1);
+        }
+        let Some(variant) = variant else { continue };
         if let Some(i) = w.get_mut::<Instance>(e) {
             i.variant = variant;
         }
-        log.count("transparent nodes drawn with blended copies", 1);
+        log.count(
+            if brighter {
+                "transparent nodes with an alpha above 1 drawn with brightened emission copies"
+            } else {
+                "transparent nodes drawn with blended copies"
+            },
+            1,
+        );
     }
 }

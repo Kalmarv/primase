@@ -356,6 +356,86 @@ fn a_transparent_node_blends_a_copy_not_the_shared_material() {
     );
 }
 
+/// `hang_sack=Transparent(1.5)` (18 STUNTBOOST levels) draws with the room's bake material, which the game brightens by
+/// 1.5 and draws opaque. Lowered as emission, the sack's copy carries the factor in its emission strength, opaque; the
+/// shared material is unchanged.
+#[test]
+fn an_alpha_above_one_brightens_an_emission_copy_opaque() {
+    let mut w = World::new();
+    let part = w.spawn();
+    let atlas = w.spawn();
+    let bake = material(&mut w, "bake_mat_0", Some(atlas));
+    let mesh = prototype(&mut w, bake);
+    let floor = node(&mut w, part, "bake_0_object", Some(mesh));
+    let sack = node(&mut w, part, "hang_sack=Transparent(1.5).001", Some(mesh));
+    let mut log = PassLog::default();
+    LowerStuntboostMaterials {
+        baked: Baked::Emission,
+        transparent: Transparent::Blend,
+    }
+    .run(&mut w, &mut log)
+    .unwrap();
+    let shared = w.get::<PbrMaterial>(bake).unwrap().clone();
+    assert_eq!(shared.emissive_strength, 1.0);
+    assert_eq!(w.get::<Instance>(floor).unwrap().variant, 0);
+    let i = w.get::<Instance>(sack).unwrap();
+    assert_ne!(i.variant, 0);
+    let copy = w.get::<MaterialVariants>(mesh).unwrap().0[0][&i.variant];
+    let brightened = w.get::<PbrMaterial>(copy).unwrap();
+    assert_eq!(brightened.alpha_mode, AlphaMode::Opaque);
+    assert_eq!(brightened.base_color, shared.base_color);
+    assert_eq!(brightened.emissive_strength, 1.5);
+    assert_eq!(brightened.emissive_texture, shared.emissive_texture);
+    assert_eq!(
+        log.counts
+            .get("brightened emission copies made for transparent nodes with an alpha above 1"),
+        Some(&1)
+    );
+    assert!(log.approximations.is_empty(), "{:?}", log.approximations);
+}
+
+/// The same sack with the atlas as base colour: a base colour holds at most 1, so the node draws opaque with the
+/// shared material and the factor it does not carry is an approximation on the node. Through the pass manager with its
+/// checks on, every material verifies (this was the lab's `base colour [1.0, 1.0, 1.0, 1.5] is not within 0-1`).
+#[test]
+fn an_alpha_above_one_on_a_base_colour_is_counted_not_clamped() {
+    use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
+    let mut w = World::new();
+    let part = w.spawn();
+    let atlas = w.spawn();
+    let bake = material(&mut w, "bake_mat_0", Some(atlas));
+    let mesh = prototype(&mut w, bake);
+    let sack = node(&mut w, part, "hang_sack=Transparent(1.5).001", Some(mesh));
+    let glass = node(&mut w, part, "window_glass=Transparent(0.5)", Some(mesh));
+    let manager = PassManager::new(PassRegistry::new()).with_pass_checks(true);
+    let pipeline = Pipeline {
+        passes: vec![Box::new(LowerStuntboostMaterials {
+            baked: Baked::BaseColour,
+            transparent: Transparent::Blend,
+        })],
+    };
+    let mut report = RunReport::default();
+    manager.run(&mut w, &pipeline, &mut report).unwrap();
+    assert_eq!(w.get::<Instance>(sack).unwrap().variant, 0);
+    assert_ne!(w.get::<Instance>(glass).unwrap().variant, 0);
+    for (_, m) in w.iter::<PbrMaterial>() {
+        assert!(
+            m.base_color.iter().all(|c| (0.0..=1.0).contains(c)),
+            "{:?}",
+            m.base_color
+        );
+    }
+    let log = &report.steps[0].log;
+    let reason = materials::BRIGHTER_NOT_CARRIED;
+    assert_eq!(log.approximations.get(reason), Some(&1));
+    assert_eq!(log.approximated_on.get(reason), Some(&BTreeSet::from([sack])));
+    assert_eq!(
+        log.counts
+            .get("blended material copies made for transparent nodes"),
+        Some(&1)
+    );
+}
+
 /// The four lowerings in a pipeline through the pass manager with its checks on: every effect each has (collision
 /// added, spawns made markers and others left out, blended copies and variants, placements taken off and nodes
 /// despawned) is one it declares.
