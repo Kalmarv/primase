@@ -3,10 +3,14 @@
 //! and the filtering a caller states ([`Filtering`]).
 //!
 //! The filtering is the caller's policy: what a source states of its sampler's filter may be absent or not modelled, so
-//! a bake says how it filters (the base level bilinear, or trilinear by the footprint) and reports it. The addressing
-//! and the bias are the binding's data: an axis whose addressing the sampler state leaves unstated is the caller's
-//! stated assumption ([`Unstated`]), never a silent wrap, and a stated bias is applied where the level of detail is
-//! computed, or named as not applied ([`SampledTexture::unhonoured`]).
+//! a bake says how it filters (the base level bilinear, point or bilinear at the nearest level, or trilinear) and
+//! reports it. The addressing and the bias are the binding's data: an axis whose addressing the sampler state leaves
+//! unstated is the caller's stated assumption ([`Unstated`]), never a silent wrap, and a stated bias is applied where
+//! the level of detail is computed, or named as not applied ([`SampledTexture::unhonoured`]).
+//!
+//! The level of detail is the quad footprint's, or the level the program states. A sample at an implicit level outside
+//! a quad (an evaluation one pixel at a time) has no footprint: it is refused, unless the caller states the level such
+//! a sample takes ([`SampledTexture::with_footprintless_level`]).
 
 use primase_core::shader::{AddressMode, SamplerState};
 use primase_image::sampling::{Address, Decoded, Levels, Subtexel, Transfer, footprint_lod};
@@ -19,12 +23,44 @@ pub enum Filtering {
     /// The base level only, whatever level of detail the program asks for: bilinear in f32 over texels decoded once,
     /// the texel coordinate resolved to `subtexel` precision ([`Decoded::bilinear_at`]).
     BaseBilinear { subtexel: Subtexel },
-    /// The two stored levels about the level of detail mixed, each bilinear in f64 ([`Levels::trilinear`]). The level
-    /// is the quad footprint's ([`footprint_lod`]: the program's bias, clamped to Direct3D's -16..15.99, then the
-    /// sampler's stated bias, added to the footprint's base-2 logarithm) or the level the program states plus the
-    /// sampler's stated bias (Direct3D's `sample_l` honours the sampler's MipLODBias). An implicit level without a
-    /// footprint is refused.
+    /// The texel the coordinate falls in, of the stored level nearest the level of detail ([`Levels::point`],
+    /// [`Levels::nearest_level`]), in f64: a point filter with a point mip filter.
+    Point,
+    /// Bilinear in f64 ([`Levels::bilinear`]) in the stored level nearest the level of detail: a linear filter with a
+    /// point mip filter.
+    Bilinear,
+    /// The two stored levels about the level of detail mixed, each bilinear in f64 ([`Levels::trilinear`]).
     Trilinear,
+}
+
+impl Filtering {
+    /// The level of detail [`Filtering::Point`], [`Filtering::Bilinear`] and [`Filtering::Trilinear`] sample at: the
+    /// quad footprint's ([`footprint_lod`]: the program's bias, clamped to Direct3D's -16..15.99, then the sampler's
+    /// bias, added to the footprint's base-2 logarithm), or the level the program states plus the sampler's bias
+    /// (Direct3D's `sample_l` honours the sampler's MipLODBias). Without a footprint, an implicit level is
+    /// `footprintless` (plus the program's clamped bias, then the sampler's), refused when the caller states none.
+    fn level_of_detail(
+        lod: Lod,
+        size: [u32; 2],
+        sampler_bias: f64,
+        footprintless: Option<f32>,
+    ) -> Result<f64, String> {
+        let [w, h] = size;
+        let grad = |g: [[f32; 2]; 2]| g.map(|d| d.map(f64::from));
+        let program = |b: f32| f64::from(b.clamp(-16.0, 15.99));
+        let without = || {
+            footprintless
+                .map(f64::from)
+                .ok_or_else(|| "an implicit level without a quad's footprint".to_owned())
+        };
+        Ok(match lod {
+            Lod::Gradients(g) => footprint_lod(w, h, grad(g), sampler_bias),
+            Lod::GradientsBias(g, b) => footprint_lod(w, h, grad(g), program(b) + sampler_bias),
+            Lod::Level(l) => f64::from(l) + sampler_bias,
+            Lod::Implicit => without()? + sampler_bias,
+            Lod::Bias(b) => without()? + program(b) + sampler_bias,
+        })
+    }
 }
 
 /// What an addressing axis the sampler state leaves unstated is.
@@ -105,6 +141,8 @@ pub struct SampledTexture {
     transfer: Transfer,
     sampler: SamplerUse,
     filtering: Filtering,
+    /// The level an implicit-level sample without a footprint takes, when the caller states one.
+    footprintless: Option<f32>,
     /// The base level decoded once, for [`Filtering::BaseBilinear`].
     base: Option<Decoded>,
 }
@@ -128,15 +166,32 @@ impl SampledTexture {
         }
         let base = match filtering {
             Filtering::BaseBilinear { .. } => Some(levels.decoded(0, transfer)),
-            Filtering::Trilinear => None,
+            Filtering::Point | Filtering::Bilinear | Filtering::Trilinear => None,
         };
         Ok(SampledTexture {
             levels,
             transfer,
             sampler,
             filtering,
+            footprintless: None,
             base,
         })
+    }
+
+    /// The same texture with `level` the level of detail of an implicit-level sample that has no quad footprint (an
+    /// evaluation one pixel at a time): the caller's stated assumption, which it reports. A level that isn't finite
+    /// is refused.
+    pub fn with_footprintless_level(mut self, level: f32) -> Result<SampledTexture, String> {
+        if !level.is_finite() {
+            return Err(format!("footprintless level {level} is not finite"));
+        }
+        self.footprintless = Some(level);
+        Ok(self)
+    }
+
+    /// The level an implicit-level sample without a footprint takes, if the caller stated one.
+    pub fn footprintless_level(&self) -> Option<f32> {
+        self.footprintless
     }
 
     pub fn levels(&self) -> &Levels {
@@ -185,34 +240,32 @@ impl SampledTexture {
 impl Image for SampledTexture {
     fn sample(&self, uv: [f32; 2], lod: Lod) -> Result<[f32; 4], String> {
         let address = self.sampler.address;
-        match (self.filtering, &self.base) {
+        let level = || {
+            Filtering::level_of_detail(
+                lod,
+                [self.levels.width, self.levels.height],
+                self.sampler.mip_lod_bias.map_or(0.0, f64::from),
+                self.footprintless,
+            )
+        };
+        let (at, levels, transfer) = ([f64::from(uv[0]), f64::from(uv[1])], &self.levels, self.transfer);
+        let v = match (self.filtering, &self.base) {
             (Filtering::BaseBilinear { subtexel }, Some(base)) => {
-                base.bilinear_at(uv, address, subtexel).map_err(|e| e.to_string())
+                return base.bilinear_at(uv, address, subtexel).map_err(|e| e.to_string());
             }
             (Filtering::BaseBilinear { .. }, None) => {
                 unreachable!("a base-level texture decodes its base when made")
             }
-            (Filtering::Trilinear, _) => {
-                let (w, h) = (self.levels.width, self.levels.height);
-                let grad = |g: [[f32; 2]; 2]| g.map(|d| d.map(f64::from));
-                let sampler = self.sampler.mip_lod_bias.map_or(0.0, f64::from);
-                let lod = match lod {
-                    Lod::Gradients(g) => footprint_lod(w, h, grad(g), sampler),
-                    Lod::GradientsBias(g, b) => {
-                        footprint_lod(w, h, grad(g), f64::from(b.clamp(-16.0, 15.99)) + sampler)
-                    }
-                    Lod::Level(l) => f64::from(l) + sampler,
-                    Lod::Implicit | Lod::Bias(_) => {
-                        return Err("an implicit level without a quad's footprint".into());
-                    }
-                };
-                let v = self
-                    .levels
-                    .trilinear([f64::from(uv[0]), f64::from(uv[1])], lod, address, self.transfer)
-                    .map_err(|e| e.to_string())?;
-                Ok(v.map(|c| c as f32))
-            }
+            (Filtering::Point, _) => levels
+                .nearest_level(level()?)
+                .and_then(|l| levels.point(l, at, address, transfer)),
+            (Filtering::Bilinear, _) => levels
+                .nearest_level(level()?)
+                .and_then(|l| levels.bilinear(l, at, address, transfer)),
+            (Filtering::Trilinear, _) => levels.trilinear(at, level()?, address, transfer),
         }
+        .map_err(|e| e.to_string())?;
+        Ok(v.map(|c| c as f32))
     }
 }
 
@@ -327,5 +380,42 @@ mod tests {
             base.unhonoured(),
             Some("stated sampler bias not applied (base level)")
         );
+    }
+
+    /// Point and bilinear filtering read the stored level nearest the level of detail (a half rounds up); an implicit
+    /// level without a footprint is refused unless the caller states the level it takes, and a program's bias then
+    /// adds to that level.
+    #[test]
+    fn nearest_level_filters_and_a_stated_footprintless_level() {
+        // two levels: 2 x 2 with columns black and white, 1 x 1 grey
+        let levels = Levels {
+            width: 2,
+            height: 2,
+            levels: vec![[[0, 0, 0, 255], [255; 4]].concat().repeat(2), vec![128; 4]],
+        };
+        let make = |filtering| {
+            SampledTexture::new(
+                levels.clone(),
+                Transfer::Stored,
+                SamplerUse::addressed([Address::Wrap; 2]),
+                filtering,
+            )
+            .unwrap()
+        };
+        let grey = 128.0 / 255.0;
+        let point = make(Filtering::Point);
+        assert_eq!(point.sample([0.25, 0.25], Lod::Level(0.0)).unwrap()[0], 0.0);
+        assert_eq!(point.sample([0.75, 0.25], Lod::Level(0.49)).unwrap()[0], 1.0);
+        assert_eq!(point.sample([0.25, 0.25], Lod::Level(0.5)).unwrap()[0], grey);
+        let bilinear = make(Filtering::Bilinear);
+        assert_eq!(bilinear.sample([0.5, 0.5], Lod::Level(0.4)).unwrap()[0], 0.5);
+        assert_eq!(bilinear.sample([0.5, 0.5], Lod::Level(0.6)).unwrap()[0], grey);
+        assert!(point.sample([0.25, 0.25], Lod::Implicit).is_err());
+        assert!(point.sample([0.25, 0.25], Lod::Bias(0.0)).is_err());
+        let stated = make(Filtering::Point).with_footprintless_level(1.0).unwrap();
+        assert_eq!(stated.footprintless_level(), Some(1.0));
+        assert_eq!(stated.sample([0.25, 0.25], Lod::Implicit).unwrap()[0], grey);
+        assert_eq!(stated.sample([0.25, 0.25], Lod::Bias(-1.0)).unwrap()[0], 0.0);
+        assert!(make(Filtering::Point).with_footprintless_level(f32::NAN).is_err());
     }
 }

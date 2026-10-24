@@ -1,8 +1,9 @@
 //! Sampling a decoded texture: each policy the caller's, stated. Bilinear filtering between texel centres (a texel
 //! `i` covering `[i, i + 1)`, `uv` scaled by the level's size, minus a half), each axis's address mode, the colour's
 //! transfer before filtering, at a level the caller picks. Two precisions, each a fixed order of operations: f64
-//! ([`Levels::bilinear`]) and f32 over texels decoded once ([`Decoded::bilinear`]). A level of detail from a sample's
-//! footprint ([`footprint_lod`]) and the two levels around it mixed ([`Levels::trilinear`]).
+//! ([`Levels::bilinear`]) and f32 over texels decoded once ([`Decoded::bilinear`]). The texel a coordinate falls in
+//! ([`Levels::point`]). A level of detail from a sample's footprint ([`footprint_lod`]), and the two levels around it
+//! mixed ([`Levels::trilinear`]) or the nearest one taken ([`Levels::nearest_level`]).
 
 use primase_core::{ColorSpace, TexRole, Texture};
 
@@ -87,6 +88,25 @@ impl Levels {
         })
     }
 
+    /// Each level's rows in reverse order: the texture as a source whose v runs up holds it, row 0 at v = 0 (Unity's
+    /// textures, stored bottom row first, which the world stores top row first). Addressing then applies about the
+    /// source's own origin, as its sampler does. A level that isn't its size's whole rows is refused.
+    pub fn rows_reversed(mut self) -> Result<Levels> {
+        for i in 0..self.levels.len() {
+            let (w, h) = self.size(i);
+            let row = w as usize * 4;
+            let level = &mut self.levels[i];
+            if level.len() != row * h as usize {
+                return Err(Error::Invalid(format!(
+                    "sampled texture: level {i} holds {} bytes, not {h} rows of {w} texels",
+                    level.len()
+                )));
+            }
+            *level = level.chunks_exact(row).rev().flatten().copied().collect();
+        }
+        Ok(self)
+    }
+
     /// Level `level`'s size: the base halved per level, at least 1.
     pub fn size(&self, level: usize) -> (u32, u32) {
         let s = u32::try_from(level).unwrap_or(31);
@@ -115,12 +135,7 @@ impl Levels {
         transfer: Transfer,
     ) -> Result<[f64; 4]> {
         let (w, h) = self.size(level);
-        let (x, y) = (uv[0] * f64::from(w) - 0.5, uv[1] * f64::from(h) - 0.5);
-        if !x.is_finite() || !y.is_finite() || x.abs() >= 2147483520.0 || y.abs() >= 2147483520.0 {
-            return Err(Error::Invalid(
-                "sampled texture: nonfinite or excessive texel coordinate".into(),
-            ));
-        }
+        let (x, y) = texel_coordinate([uv[0] * f64::from(w) - 0.5, uv[1] * f64::from(h) - 0.5])?;
         let (fx, fy) = (x.floor(), y.floor());
         let (tx, ty) = (x - fx, y - fy);
         let (ix, iy) = (fx as i64, fy as i64);
@@ -143,6 +158,24 @@ impl Levels {
         Ok(out)
     }
 
+    /// The texel of level `level` that `uv` falls in (texel `i` covering `[i, i + 1)` after scaling by the level's
+    /// size), in f64: point filtering. A coordinate that isn't finite or past an i32's range is refused.
+    pub fn point(
+        &self,
+        level: usize,
+        uv: [f64; 2],
+        address: [Address; 2],
+        transfer: Transfer,
+    ) -> Result<[f64; 4]> {
+        let (w, h) = self.size(level);
+        let (x, y) = texel_coordinate([uv[0] * f64::from(w), uv[1] * f64::from(h)])?;
+        let t = self.texel(level, x.floor() as i64, y.floor() as i64, address);
+        Ok(std::array::from_fn(|c| match transfer {
+            Transfer::SrgbColour if c < 3 => srgb8_to_linear(t[c]),
+            _ => f64::from(t[c]) / 255.0,
+        }))
+    }
+
     /// Level `level` decoded once to f32 by `transfer`, for [`Decoded::bilinear`].
     pub fn decoded(&self, level: usize, transfer: Transfer) -> Decoded {
         let (w, h) = self.size(level);
@@ -163,6 +196,16 @@ impl Levels {
             texels,
         }
     }
+}
+
+/// A texel coordinate `[x, y]` that is finite and within an i32's range, else refused.
+fn texel_coordinate([x, y]: [f64; 2]) -> Result<(f64, f64)> {
+    if !x.is_finite() || !y.is_finite() || x.abs() >= 2147483520.0 || y.abs() >= 2147483520.0 {
+        return Err(Error::Invalid(
+            "sampled texture: nonfinite or excessive texel coordinate".into(),
+        ));
+    }
+    Ok((x, y))
 }
 
 /// The level of detail of a footprint: the UV's screen derivatives `gradients` (d/dx, then d/dy) in texels of a
@@ -199,6 +242,18 @@ impl Levels {
         }
         let b = self.bilinear((l0 + 1).min(last), uv, address, transfer)?;
         Ok(std::array::from_fn(|c| a[c] + (b[c] - a[c]) * f))
+    }
+
+    /// The stored level nearest the level of detail `lod`, as a point mip filter picks it: `floor(lod + 0.5)` (a half
+    /// rounds up), clamped to the stored levels. A level of detail that isn't a number is refused.
+    pub fn nearest_level(&self, lod: f64) -> Result<usize> {
+        if lod.is_nan() {
+            return Err(Error::Invalid(
+                "sampled texture: a level of detail that isn't a number".into(),
+            ));
+        }
+        let last = self.levels.len().saturating_sub(1);
+        Ok((lod + 0.5).floor().clamp(0.0, last as f64) as usize)
     }
 }
 
@@ -373,6 +428,46 @@ mod tests {
         let at = |lod| l.trilinear([0.5, 0.5], lod, wrap, Transfer::Stored).unwrap()[0];
         assert_eq!((at(-1.0), at(0.25), at(1.0), at(7.0)), (0.0, 0.25, 1.0, 1.0));
         assert!(l.trilinear([0.5, 0.5], f64::NAN, wrap, Transfer::Stored).is_err());
+    }
+
+    /// Point filtering takes the texel a coordinate falls in, addressed, its transfer applied; the nearest level
+    /// rounds a half up and clamps to the stored levels; reversed rows put the bottom row at v = 0 in every level.
+    #[test]
+    fn point_filtering_nearest_levels_and_reversed_rows() {
+        // 2 x 2, rows top first: black, white / grey, white; then a 1 x 1 level
+        let l = Levels {
+            width: 2,
+            height: 2,
+            levels: vec![[[0; 4], [255; 4], [128; 4], [255; 4]].concat(), vec![64; 4]],
+        };
+        let (wrap, clamp) = ([Address::Wrap; 2], [Address::Clamp; 2]);
+        let at = |l: &Levels, uv: [f64; 2], a| l.point(0, uv, a, Transfer::Stored).unwrap()[0];
+        assert_eq!(at(&l, [0.25, 0.25], wrap), 0.0);
+        assert_eq!(at(&l, [0.5, 0.25], wrap), 1.0);
+        assert_eq!(at(&l, [0.25, 0.75], wrap), 128.0 / 255.0);
+        // past the left edge: wrapped to the right texel, clamped to the left one
+        assert_eq!(
+            (at(&l, [-0.25, 0.25], wrap), at(&l, [-0.25, 0.25], clamp)),
+            (1.0, 0.0)
+        );
+        let c = l.point(0, [0.25, 0.75], wrap, Transfer::SrgbColour).unwrap();
+        assert_eq!(c[0], crate::srgb8_to_linear(128));
+        assert!(l.point(0, [f64::NAN, 0.0], wrap, Transfer::Stored).is_err());
+        assert_eq!(
+            [-3.0, 0.49, 0.5, 1.2, 9.0].map(|lod| l.nearest_level(lod).unwrap()),
+            [0, 0, 1, 1, 1]
+        );
+        assert!(l.nearest_level(f64::NAN).is_err());
+        let up = l.clone().rows_reversed().unwrap();
+        assert_eq!(at(&up, [0.25, 0.25], wrap), 128.0 / 255.0);
+        assert_eq!(at(&up, [0.25, 0.75], wrap), 0.0);
+        assert_eq!(up.levels[1], vec![64; 4]);
+        let short = Levels {
+            width: 2,
+            height: 2,
+            levels: vec![vec![0; 12]],
+        };
+        assert!(short.rows_reversed().is_err());
     }
 
     /// A coordinate that isn't finite, or whose texel is past an i32's range, is refused, never sampled (NaN texels)
