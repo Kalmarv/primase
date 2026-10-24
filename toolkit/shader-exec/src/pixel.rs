@@ -45,6 +45,9 @@ pub struct ProgramShader {
     members: Vec<Member>,
     input_count: usize,
     output_count: usize,
+    /// A vertex program's result member that is its clip-space position (`SV_Position`), which has no place in the
+    /// register view: [`ProgramShader::execute_vertex`] returns it apart.
+    position: Option<usize>,
     /// Each constant buffer: bind slot, resource, rows.
     constants: Vec<(u32, ResourceId, u32)>,
     constant_buffers: Vec<(u32, u32)>,
@@ -146,6 +149,10 @@ impl ProgramShader {
         }
         let mut members = Vec::new();
         let mut output_count = 0;
+        let position = interface
+            .outputs
+            .iter()
+            .position(|v| program.stage == Stage::Vertex && v.system == Some(SystemValue::ClipPosition));
         for v in &interface.outputs {
             let name = Program::varying_name(&v.label);
             // depth, coverage and stencil have no output register
@@ -227,6 +234,7 @@ impl ProgramShader {
             members,
             input_count,
             output_count,
+            position,
             constants,
             constant_buffers,
             textures,
@@ -648,6 +656,30 @@ impl PixelShader for ProgramShader {
 }
 
 impl ProgramShader {
+    /// Run a vertex program once on its input registers (the vertex's attributes): its varyings in the register view,
+    /// as [`PixelShader::execute`] gives them, and its clip-space position (`SV_Position`) as f32 bits. A program that
+    /// is not a vertex program, or writes no position, refuses.
+    pub fn execute_vertex(
+        &self,
+        inputs: &[[u32; 4]],
+        buffers: &[(u32, &[[u32; 4]])],
+        sampler: &mut dyn Sampler,
+    ) -> Result<(Execution, [u32; 4]), Error> {
+        let at = self
+            .position
+            .ok_or_else(|| error("not a vertex program that writes a position"))?;
+        let bound = self.bound(buffers)?;
+        let arguments = self.arguments_of(inputs)?;
+        let mut backend = self.backend(sampler);
+        let scratch = take(&self.scalar_scratch).unwrap_or_else(|| Scratch::new(&self.executable));
+        let mut runner = Runner::<1>::with_scratch(&self.executable, &bound, &mut backend, None, scratch);
+        let output = runner.run([&arguments]);
+        give_back(&self.scalar_scratch, runner.into_scratch());
+        let [output] = output.map_err(error)?;
+        let position = output.values.get(at).copied().unwrap_or([0; 4]);
+        Ok((self.execution(output), position))
+    }
+
     /// [`PixelShader::execute_lanes`] without its second run: the invocations in lockstep, 16 at a time, and on an
     /// error the one the lockstep run met (of whichever invocation met one first in lockstep, which need not be the
     /// first to fail alone).

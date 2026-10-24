@@ -16,6 +16,7 @@
 
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod draw;
 pub mod evaluate;
 mod periodic;
 pub use evaluate::{
