@@ -612,6 +612,9 @@ fn lower_materials(
                     r.transform = Some(transform(applied, b)?);
                 }
                 p.normal_texture = Some(r);
+            } else if p.normal_texture.is_none() && pv.normal.is_some() {
+                // a normal map the material names and the install does not hold: drawn with the surface normal alone
+                log.approximate_on(e, "named normal texture not in the install: flat normal", 1);
             }
             p.alpha_mode = crate::materials::alpha_mode(
                 &m,
@@ -629,7 +632,17 @@ fn lower_materials(
             } else if let Some(name) = pv.normal.as_ref().filter(|name| payloads.contains_key(*name)) {
                 let normal = read(payloads, name)?;
                 // a metallic map the install does not hold is as absent as one the material does not bind
-                let metal = binding(&m, "MetallicMap").filter(|b| payloads.contains_key(&b.texture));
+                let metal = binding(&m, "MetallicMap");
+                let metal = if metal.is_some_and(|b| !payloads.contains_key(&b.texture)) {
+                    log.approximate_on(
+                        e,
+                        "named metallic texture not in the install: the material's metallic factor",
+                        1,
+                    );
+                    None
+                } else {
+                    metal
+                };
                 let mut metal_sampler = None;
                 if let Some(b) = metal {
                     let t = read(payloads, &b.texture)?;
@@ -698,6 +711,12 @@ fn lower_materials(
                     log.approximate("dielectric F0 0.03 represented by glTF 0.04", 1);
                     log.approximate("metal resampled at normal base-mip texel centers", 1);
                 }
+            } else if pv.normal.is_some() {
+                log.approximate_on(
+                    e,
+                    "named normal texture not in the install: roughness and metal packing skipped; retained target roughness",
+                    1,
+                );
             } else {
                 log.approximate("missing normal gloss; retained target roughness", 1);
             }
@@ -935,6 +954,92 @@ mod tests {
             log.approximated_on["missing base texture: preview fallback colour"],
             BTreeSet::from([bare])
         );
+    }
+    /// A normal or metallic map the material names and the install does not hold is no error: the material is drawn
+    /// without it, and the log keeps the entity with the reason.
+    #[test]
+    fn a_named_normal_or_metallic_texture_the_install_lacks_is_named_in_its_approximations() {
+        let mut world = World::new();
+        let slot = |kind: &str, path: &str| crate::flver::Texture {
+            path: path.into(),
+            kind: kind.into(),
+            ..Default::default()
+        };
+        let declared = |kind: &str| crate::mtd::Texture {
+            kind: kind.into(),
+            uv_number: 0,
+            shader_data_index: 0,
+            path: String::new(),
+            extra: vec![],
+        };
+        let definition = crate::mtd::MaterialDefinition {
+            shader: "MetallicTex".into(),
+            description: String::new(),
+            parameters: vec![],
+            textures: vec![
+                declared("Texture2D_3_NormalMap"),
+                declared("Texture2D_4_MetallicMap"),
+            ],
+            block_lengths: vec![],
+        };
+        let m = crate::materials::resolve(
+            &crate::flver::Material {
+                name: "named".into(),
+                mtd: "named.mtd".into(),
+                gx: vec![],
+                textures: vec![
+                    slot("Texture2D_3_NormalMap", "n_n.tga"),
+                    slot("Texture2D_4_MetallicMap", "n_m.tga"),
+                ],
+            },
+            Some(&definition),
+            |_| true,
+        );
+        let e = world.spawn();
+        world.insert(e, m);
+        let log = lower(&mut world, &BTreeMap::<String, Vec<u8>>::new(), None, WATER).unwrap();
+        let normal = "named normal texture not in the install: flat normal";
+        let packing = "named normal texture not in the install: roughness and metal packing skipped; retained target roughness";
+        assert_eq!(log.approximations[normal], 1);
+        assert_eq!(log.approximated_on[normal], BTreeSet::from([e]));
+        assert_eq!(log.approximated_on[packing], BTreeSet::from([e]));
+        assert!(world.get::<PbrMaterial>(e).unwrap().normal_texture.is_none());
+
+        // a metallic map alone missing, the normal held: the packing runs on the normal and the metal is the factor
+        let mut held = World::new();
+        let m = crate::materials::resolve(
+            &crate::flver::Material {
+                name: "metal".into(),
+                mtd: "metal.mtd".into(),
+                gx: vec![],
+                textures: vec![
+                    slot("Texture2D_3_NormalMap", "n_n.tga"),
+                    slot("Texture2D_4_MetallicMap", "n_m.tga"),
+                ],
+            },
+            Some(&definition),
+            |_| true,
+        );
+        let e = held.spawn();
+        held.insert(e, m);
+        let mut dds = Vec::new();
+        {
+            let t = Texture {
+                width: 1,
+                height: 1,
+                format: TexFormat::Rgba8Unorm,
+                levels: vec![vec![128, 128, 128, 255]],
+                color_space: ColorSpace::Linear,
+                role: TexRole::Mask,
+                normal: None,
+            };
+            dds.extend(primase_dds::write_dx10(&t).unwrap());
+        }
+        let payloads = BTreeMap::from([("n_n".to_owned(), dds)]);
+        let log = lower(&mut held, &payloads, None, WATER).unwrap();
+        let metal = "named metallic texture not in the install: the material's metallic factor";
+        assert_eq!(log.approximated_on[metal], BTreeSet::from([e]));
+        assert!(!log.approximations.contains_key(normal));
     }
     #[test]
     fn gloss_matches_deferred_ggx_alpha() {
