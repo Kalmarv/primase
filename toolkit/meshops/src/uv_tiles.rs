@@ -43,8 +43,11 @@ use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
 use primase_core::skin::Skin;
 use primase_core::{
-    Entity, Influences, MaterialVariants, Mesh, MeshFile, Name, Primitive, Semantic, Stream, Topology,
-    VertexBlend, World,
+    Entity, Influences, Mesh, MeshFile, Primitive, Semantic, Stream, Topology, VertexBlend, World,
+};
+
+use crate::point_blend::{
+    Bary, Corner, Key, Replacement, blend_streams, describe, drawn_with, replace_primitives, tidy,
 };
 
 /// The most tiles one triangle may cross; a triangle crossing more is refused (its pieces would number about that).
@@ -87,91 +90,11 @@ pub const SPLIT_UV_TILES: PassSpec = PassSpec {
     make: |g| Ok(Box::new(SplitUvTiles::from_given(g)?)),
 };
 
-/// A point of a source triangle as a combination of its corners, in a canonical form (sources ascending, none with
-/// weight 0 but padding) so equal points are equal values: the weld key, and what makes the cut of a shared edge the
-/// same from both sides.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Bary {
-    src: [u32; 3],
-    w: [f32; 3],
-}
-
-impl Bary {
-    fn corner(v: u32) -> Bary {
-        Bary {
-            src: [v; 3],
-            w: [1.0, 0.0, 0.0],
-        }
-    }
-
-    fn key(&self) -> Key {
-        (self.src, self.w.map(f32::to_bits))
-    }
-
-    fn blend(&self) -> VertexBlend {
-        VertexBlend {
-            sources: self.src,
-            weights: self.w,
-        }
-    }
-
-    /// `(1 - t) a + t b`, canonical.
-    fn lerp(a: &Bary, b: &Bary, t: f64) -> Bary {
-        let mut terms: Vec<(u32, f64)> = Vec::with_capacity(6);
-        terms.extend(a.blend().terms().map(|(s, w)| (s, (1.0 - t) * f64::from(w))));
-        terms.extend(b.blend().terms().map(|(s, w)| (s, t * f64::from(w))));
-        terms.sort_by_key(|&(s, _)| s);
-        let mut merged: Vec<(u32, f64)> = Vec::with_capacity(3);
-        for (s, w) in terms {
-            match merged.last_mut() {
-                Some(last) if last.0 == s => last.1 += w,
-                _ => merged.push((s, w)),
-            }
-        }
-        merged.retain(|&(_, w)| w > 0.0);
-        debug_assert!(
-            merged.len() <= 3,
-            "a point of a triangle combines at most its three corners"
-        );
-        let first = merged.first().map_or(0, |&(s, _)| s);
-        let mut out = Bary {
-            src: [first; 3],
-            w: [0.0; 3],
-        };
-        for (k, (s, w)) in merged.into_iter().take(3).enumerate() {
-            out.src[k] = s;
-            out.w[k] = w as f32;
-        }
-        out
-    }
-}
-
-/// A vertex of a polygon being clipped: its point and its coordinates (exact on the line it was cut at).
-#[derive(Clone, Copy, Debug)]
-struct Corner {
-    at: Bary,
-    uv: [f64; 2],
-}
-
-impl Corner {
-    /// The point where edge `a`-`b` crosses `uv[axis] = k`, computed from the edge's ends in a fixed order so both
-    /// triangles sharing the edge get the same point.
-    fn cut(a: &Corner, b: &Corner, axis: usize, k: f64) -> Corner {
-        let (a, b) = if a.at.key() <= b.at.key() { (a, b) } else { (b, a) };
-        let t = ((k - a.uv[axis]) / (b.uv[axis] - a.uv[axis])).clamp(0.0, 1.0);
-        let other = 1 - axis;
-        let mut uv = [0.0; 2];
-        uv[axis] = k;
-        uv[other] = (1.0 - t) * a.uv[other] + t * b.uv[other];
-        Corner {
-            at: Bary::lerp(&a.at, &b.at, t),
-            uv,
-        }
-    }
-
-    fn same(&self, other: &Corner) -> bool {
-        self.at.key() == other.at.key()
-    }
+/// The point where edge `a`-`b` crosses `uv[axis] = k`, its coordinate on the line exact.
+fn cut_at_line(a: &Corner, b: &Corner, axis: usize, k: f64) -> Corner {
+    let mut c = Corner::cut_at(a, b, |a, b| (k - a.uv[axis]) / (b.uv[axis] - a.uv[axis]));
+    c.uv[axis] = k;
+    c
 }
 
 /// `poly` (convex, in order) cut at `uv[axis] = k` into the part at or below and the part at or above, each without
@@ -188,18 +111,11 @@ fn split_at(poly: &[Corner], axis: usize, k: f64) -> (Option<Vec<Corner>>, Optio
             high.push(*cur);
         }
         if (c < k && d > k) || (c > k && d < k) {
-            let cut = Corner::cut(cur, next, axis, k);
+            let cut = cut_at_line(cur, next, axis, k);
             low.push(cut);
             high.push(cut);
         }
     }
-    let tidy = |mut p: Vec<Corner>| {
-        p.dedup_by(|a, b| a.same(b));
-        while p.len() > 1 && p[0].same(&p[p.len() - 1]) {
-            p.pop();
-        }
-        (p.len() >= 3).then_some(p)
-    };
     (tidy(low), tidy(high))
 }
 
@@ -232,9 +148,6 @@ fn pieces(poly: Vec<Corner>, axis: usize) -> Vec<(i64, Vec<Corner>)> {
     out
 }
 
-/// A point's canonical form: its sources and the bits of its weights.
-type Key = ([u32; 3], [u32; 3]);
-
 /// Output vertices in first-use order, one per point and tile.
 #[derive(Default)]
 struct Vertices {
@@ -256,7 +169,8 @@ impl Vertices {
 
 /// What splitting one primitive made.
 struct Split {
-    primitive: Primitive,
+    streams: BTreeMap<Semantic, Stream>,
+    indices: Vec<u32>,
     blends: Vec<VertexBlend>,
     influences: Option<Influences>,
     triangles_before: u64,
@@ -332,303 +246,29 @@ fn split_primitive(
     }
     let blends: Vec<VertexBlend> = out.points.iter().map(|(b, _)| b.blend()).collect();
     let interpolated = blends.iter().filter(|b| b.terms().count() > 1).count() as u64;
-    let mut streams = BTreeMap::new();
-    let mut normals_cancelled = 0;
-    for (sem, stream) in &p.streams {
-        let made = match sem {
-            Semantic::Joints(_) | Semantic::Weights(_) => continue,
-            Semantic::TexCoord(s) if *s == set => {
-                Stream::F32x2(out.points.iter().map(|(_, uv)| *uv).collect())
-            }
-            _ => blend_stream(*sem, stream, &blends, &mut normals_cancelled, what)?,
-        };
-        streams.insert(*sem, made);
-    }
-    let (skin, influences, skin_interpolated) = blend_skin(p, influences, &blends, what)?;
-    streams.extend(skin);
+    let blended = blend_streams(p, &blends, influences, what)?;
+    let mut streams = blended.streams;
+    streams.insert(
+        Semantic::TexCoord(set),
+        Stream::F32x2(out.points.iter().map(|(_, uv)| *uv).collect()),
+    );
     Ok(Split {
-        primitive: Primitive {
-            topology: p.topology,
-            streams,
-            indices: Some(tris),
-            material: p.material,
-        },
+        streams,
+        indices: tris,
         blends,
-        influences,
+        influences: blended.influences,
         triangles_before: (indices.len() / 3) as u64,
         vertices_before: n as u64,
         interpolated,
-        skin_interpolated,
-        normals_cancelled,
+        skin_interpolated: blended.skin_interpolated,
+        normals_cancelled: blended.normals_cancelled,
     })
-}
-
-/// `v[..3]` as a unit vector; `None` when it is too short to have a direction.
-fn unit3(v: &[f64]) -> Option<[f64; 3]> {
-    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    (len > 1e-12).then(|| [v[0] / len, v[1] / len, v[2] / len])
-}
-
-/// One stream (not joints or weights) of the new vertices.
-fn blend_stream(
-    sem: Semantic,
-    stream: &Stream,
-    blends: &[VertexBlend],
-    cancelled: &mut u64,
-    what: &str,
-) -> Result<Stream, String> {
-    macro_rules! floats {
-        ($v:expr, $n:literal, $kind:ident) => {{
-            let mut out: Vec<[f32; $n]> = Vec::with_capacity(blends.len());
-            for b in blends {
-                let mut terms = b.terms();
-                let (first, w0) = terms
-                    .next()
-                    .ok_or_else(|| format!("{what}: a vertex combines nothing"))?;
-                let mut sum = $v[first as usize].map(|x| f64::from(x) * f64::from(w0));
-                let mut single = true;
-                for (s, w) in terms {
-                    single = false;
-                    for (acc, x) in sum.iter_mut().zip($v[s as usize]) {
-                        *acc += f64::from(x) * f64::from(w);
-                    }
-                }
-                let mut value = if single {
-                    $v[first as usize]
-                } else {
-                    sum.map(|x| x as f32)
-                };
-                if !single && matches!(sem, Semantic::Normal | Semantic::Tangent) {
-                    if let (Some(xyz), Some(dst)) = (sum.get(..3), value.get_mut(..3)) {
-                        match unit3(xyz) {
-                            Some(u) => dst.iter_mut().zip(u).for_each(|(d, u)| *d = u as f32),
-                            None => {
-                                // opposite normals: the corner with the most weight keeps its own
-                                let nearest = b
-                                    .terms()
-                                    .fold((first, -1.0f32), |m, (s, w)| if w > m.1 { (s, w) } else { m })
-                                    .0;
-                                if let Some(own) = $v[nearest as usize].get(..3) {
-                                    dst.copy_from_slice(own);
-                                }
-                                *cancelled += 1;
-                            }
-                        }
-                    }
-                }
-                out.push(value);
-            }
-            Stream::$kind(out)
-        }};
-    }
-    if sem == Semantic::Tangent
-        && let Stream::F32x4(v) = stream
-    {
-        for b in blends {
-            let mut ws = b.terms().map(|(s, _)| v[s as usize][3].to_bits());
-            let first = ws.next();
-            if ws.any(|w| Some(w) != first) {
-                return Err(format!(
-                    "{what}: the tangents of a triangle's corners differ in w (handedness), so a tangent between them has none"
-                ));
-            }
-        }
-    }
-    Ok(match stream {
-        Stream::F32x2(v) => floats!(v, 2, F32x2),
-        Stream::F32x3(v) => floats!(v, 3, F32x3),
-        Stream::F32x4(v) => {
-            let mut s = floats!(v, 4, F32x4);
-            if sem == Semantic::Tangent
-                && let Stream::F32x4(o) = &mut s
-            {
-                for (o, b) in o.iter_mut().zip(blends) {
-                    if let Some((src, _)) = b.terms().next() {
-                        o[3] = v[src as usize][3];
-                    }
-                }
-            }
-            s
-        }
-        Stream::U8x4(v) => Stream::U8x4(
-            blends
-                .iter()
-                .map(|b| round_mix(b, |s| v[s as usize].map(f64::from), 255.0).map(|x| x as u8))
-                .collect(),
-        ),
-        Stream::U16x4(v) => Stream::U16x4(
-            blends
-                .iter()
-                .map(|b| round_mix(b, |s| v[s as usize].map(f64::from), 65535.0).map(|x| x as u16))
-                .collect(),
-        ),
-    })
-}
-
-/// The blend of integer 4-vectors, rounded to nearest and kept within `0..=max`.
-fn round_mix(b: &VertexBlend, at: impl Fn(u32) -> [f64; 4], max: f64) -> [f64; 4] {
-    let mut sum = [0.0; 4];
-    for (s, w) in b.terms() {
-        for (acc, x) in sum.iter_mut().zip(at(s)) {
-            *acc += x * f64::from(w);
-        }
-    }
-    sum.map(|x| x.round().clamp(0.0, max))
-}
-
-/// A vertex's influences: slot and weight, strongest first.
-type Influence = Vec<(u32, f32)>;
-
-/// The joint and weight streams of the new vertices, the primitive's new influences and how many vertices have
-/// interpolated weights that differ from their corners'.
-#[allow(clippy::type_complexity)]
-fn blend_skin(
-    p: &Primitive,
-    influences: Option<Influences>,
-    blends: &[VertexBlend],
-    what: &str,
-) -> Result<(Vec<(Semantic, Stream)>, Option<Influences>, u64), String> {
-    let has_streams = p
-        .streams
-        .keys()
-        .any(|s| matches!(s, Semantic::Joints(_) | Semantic::Weights(_)));
-    let sets = match influences {
-        Some(Influences::Streams { sets }) => usize::from(sets),
-        Some(Influences::SingleIndex) => 1,
-        _ if has_streams => {
-            return Err(format!(
-                "{what}: joint or weight streams without influences naming them"
-            ));
-        }
-        _ => return Ok((Vec::new(), influences, 0)),
-    };
-    let single_index = influences == Some(Influences::SingleIndex);
-    let mut joints: Vec<Vec<[u32; 4]>> = Vec::new();
-    let mut weights: Vec<Vec<[f32; 4]>> = Vec::new();
-    let mut wide = false;
-    for k in 0..sets as u8 {
-        match p.streams.get(&Semantic::Joints(k)) {
-            Some(Stream::U8x4(v)) => joints.push(v.iter().map(|j| j.map(u32::from)).collect()),
-            Some(Stream::U16x4(v)) => {
-                wide = true;
-                joints.push(v.iter().map(|j| j.map(u32::from)).collect());
-            }
-            _ => return Err(format!("{what}: Joints({k}) is not an integer stream")),
-        }
-        if single_index {
-            continue;
-        }
-        weights.push(match p.streams.get(&Semantic::Weights(k)) {
-            Some(Stream::F32x4(v)) => v.clone(),
-            Some(Stream::U8x4(v)) => v.iter().map(|w| w.map(|x| f32::from(x) / 255.0)).collect(),
-            Some(Stream::U16x4(v)) => v.iter().map(|w| w.map(|x| f32::from(x) / 65535.0)).collect(),
-            _ => return Err(format!("{what}: Weights({k}) is not a four-value stream")),
-        });
-    }
-    // a source vertex's influences as stored (every lane, in order), and those with a weight, strongest first
-    let raw = |v: u32| -> Influence {
-        if single_index {
-            return vec![(joints[0][v as usize][0], 1.0)];
-        }
-        let mut lanes = Vec::with_capacity(sets * 4);
-        for (js, ws) in joints.iter().zip(&weights) {
-            lanes.extend(js[v as usize].into_iter().zip(ws[v as usize]));
-        }
-        lanes
-    };
-    let strongest = |v: u32| -> Influence {
-        let mut all: Influence = raw(v).into_iter().filter(|&(_, w)| w > 0.0).collect();
-        all.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-        all
-    };
-    let mut per_vertex: Vec<Influence> = Vec::with_capacity(blends.len());
-    let mut differing = 0;
-    for b in blends {
-        let terms: Vec<(u32, f32)> = b.terms().collect();
-        // a copy of one vertex, or a point whose corners all carry the same influences, keeps them as stored
-        let first = strongest(terms[0].0);
-        if terms[1..].iter().all(|&(s, _)| strongest(s) == first) {
-            per_vertex.push(raw(terms[0].0));
-            continue;
-        }
-        differing += 1;
-        let mut mix: BTreeMap<u32, f64> = BTreeMap::new();
-        for &(s, w) in &terms {
-            for (slot, weight) in strongest(s) {
-                *mix.entry(slot).or_default() += f64::from(w) * f64::from(weight);
-            }
-        }
-        let mut mixed: Influence = mix.into_iter().map(|(s, w)| (s, w as f32)).collect();
-        mixed.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-        per_vertex.push(mixed);
-    }
-    let needed = per_vertex
-        .iter()
-        .map(|i| i.len().div_ceil(4))
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    let stays_single = single_index && per_vertex.iter().all(|i| i.len() <= 1);
-    if stays_single {
-        let slots = per_vertex.iter().map(|i| i.first().map_or(0, |&(s, _)| s));
-        let stream = if wide {
-            Stream::U16x4(slots.map(|s| [s as u16, 0, 0, 0]).collect())
-        } else {
-            Stream::U8x4(slots.map(|s| [s as u8, 0, 0, 0]).collect())
-        };
-        return Ok((vec![(Semantic::Joints(0), stream)], influences, differing));
-    }
-    let new_sets = needed.max(if single_index { 1 } else { sets });
-    let new_sets_u8 = u8::try_from(new_sets).map_err(|_| format!("{what}: more influence sets than fit"))?;
-    let mut out = Vec::new();
-    for k in 0..new_sets {
-        let lane = |v: &Influence, j: usize| -> (u32, f32) {
-            v.get(k * 4 + j)
-                .copied()
-                .unwrap_or((v.first().map_or(0, |&(s, _)| s), 0.0))
-        };
-        let js: Vec<[u32; 4]> = per_vertex
-            .iter()
-            .map(|v| std::array::from_fn(|j| lane(v, j).0))
-            .collect();
-        let ws: Vec<[f32; 4]> = per_vertex
-            .iter()
-            .map(|v| std::array::from_fn(|j| lane(v, j).1))
-            .collect();
-        let joints = if wide {
-            Stream::U16x4(js.iter().map(|j| j.map(|s| s as u16)).collect())
-        } else {
-            Stream::U8x4(js.iter().map(|j| j.map(|s| s as u8)).collect())
-        };
-        out.push((Semantic::Joints(k as u8), joints));
-        out.push((Semantic::Weights(k as u8), Stream::F32x4(ws)));
-    }
-    Ok((out, Some(Influences::Streams { sets: new_sets_u8 }), differing))
-}
-
-/// What a primitive is: its entity (by name when it has one) and index.
-fn describe(w: &World, e: Entity, i: usize) -> String {
-    match w.get::<Name>(e) {
-        Some(n) => format!("{e:?} {:?} primitive {i}", n.0),
-        None => format!("{e:?} primitive {i}"),
-    }
 }
 
 /// Whether a primitive is split: its material checks, or why it is left.
 enum Verdict {
     Split,
     Left(&'static str),
-}
-
-/// The materials `e`'s primitive `i` is drawn with (its own and its variants').
-fn drawn_with(w: &World, e: Entity, i: usize, p: &Primitive) -> Vec<Entity> {
-    let mut ms: Vec<Entity> = p.material.into_iter().collect();
-    if let Some(v) = w.get::<MaterialVariants>(e).and_then(|v| v.0.get(i)) {
-        ms.extend(v.values().copied());
-    }
-    ms.sort();
-    ms.dedup();
-    ms
 }
 
 /// Whether the textures sampling `set` allow cutting a primitive that leaves 0-1 on `leaves`, naming what does not.
@@ -754,51 +394,42 @@ impl Pass for SplitUvTiles {
                 });
             }
         }
-        let mut by_entity: BTreeMap<Entity, Vec<Planned>> = BTreeMap::new();
+        let (mut replacements, mut reports) = (Vec::new(), Vec::new());
         for pl in plan {
-            by_entity.entry(pl.entity).or_default().push(pl);
+            let s = pl.split;
+            replacements.push(Replacement {
+                entity: pl.entity,
+                primitive: pl.primitive,
+                streams: s.streams,
+                indices: s.indices,
+                blends: s.blends,
+                influences: s.influences,
+            });
+            reports.push((
+                s.triangles_before,
+                s.vertices_before,
+                s.interpolated,
+                s.skin_interpolated,
+                s.normals_cancelled,
+            ));
         }
-        for (e, planned) in by_entity {
-            for pl in &planned {
-                w.blend_vertices(e, pl.primitive, &pl.split.blends)?;
-            }
-            w.edit_mesh(e, |mesh| {
-                for pl in &planned {
-                    let mut target = mesh
-                        .primitive_mut(pl.primitive)
-                        .ok_or_else(|| format!("{e:?}: primitive {} vanished", pl.primitive))?;
-                    let fields = target.fields();
-                    *fields.streams = pl.split.primitive.streams.clone();
-                    *fields.indices = pl.split.primitive.indices.clone();
-                }
-                Ok(None)
-            })?;
-            if let Some(skin) = w.get_mut::<Skin>(e) {
-                for pl in &planned {
-                    if let Some(slot) = skin.influences.get_mut(pl.primitive) {
-                        *slot = pl.split.influences;
-                    }
-                }
-            }
-            w.remove::<MeshFile>(e);
-            for pl in planned {
-                let s = pl.split;
-                let after = s.primitive.vertex_count() as u64;
-                log.count("primitives split", 1);
-                log.count("triangles before", s.triangles_before);
-                log.count(
-                    "triangles after",
-                    s.primitive.indices.as_ref().map_or(0, |i| i.len() as u64 / 3),
-                );
-                log.count("vertices before", s.vertices_before);
-                log.count("vertices after", after);
-                log.count("vertices interpolated at tile lines", s.interpolated);
-                log.approximate("skinned vertices with interpolated weights", s.skin_interpolated);
-                log.approximate(
-                    "blended normals that cancel, the nearest corner's kept",
-                    s.normals_cancelled,
-                );
-            }
+        let after: Vec<(u64, u64)> = replacements
+            .iter()
+            .map(|r| (r.indices.len() as u64 / 3, r.blends.len() as u64))
+            .collect();
+        replace_primitives(w, replacements)?;
+        for ((tb, vb, interpolated, skin, cancelled), (ta, va)) in reports.into_iter().zip(after) {
+            log.count("primitives split", 1);
+            log.count("triangles before", tb);
+            log.count("triangles after", ta);
+            log.count("vertices before", vb);
+            log.count("vertices after", va);
+            log.count("vertices interpolated at tile lines", interpolated);
+            log.approximate("skinned vertices with interpolated weights", skin);
+            log.approximate(
+                "blended normals that cancel, the nearest corner's kept",
+                cancelled,
+            );
         }
         Ok(())
     }

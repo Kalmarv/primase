@@ -61,6 +61,7 @@ mod shadow_casting;
 pub use shadow_casting::{SET_SHADOW_CASTING, SetShadowCasting};
 mod split;
 pub use split::{SPLIT_BY_COLLISION, SplitByCollision};
+pub mod point_blend;
 mod texcoords;
 mod uv_tiles;
 pub use uv_tiles::{MAX_TILES_PER_TRIANGLE, SPLIT_UV_TILES, SplitUvTiles};

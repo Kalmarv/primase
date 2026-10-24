@@ -7,6 +7,9 @@ pub use atlas::{GUTTER, PACK_TEXTURE_ATLAS, PackTextureAtlas};
 mod cap;
 pub use cap::{Beyond, CAP_TEXTURES, CapMode, CapRole, CapTextures, Capped, NormalDownscale, cap_texture};
 mod channels;
+mod cutout_field;
+mod cutouts;
+pub use cutouts::{CLIP_ALPHA_CUTOUTS, ClipAlphaCutouts};
 mod frames;
 mod jpeg;
 pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels, map_rgba8_levels_with};
@@ -43,6 +46,8 @@ pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/atlas.rs", include_bytes!("atlas.rs")),
     ("image/cap.rs", include_bytes!("cap.rs")),
     ("image/channels.rs", include_bytes!("channels.rs")),
+    ("image/cutout_field.rs", include_bytes!("cutout_field.rs")),
+    ("image/cutouts.rs", include_bytes!("cutouts.rs")),
     ("image/frames.rs", include_bytes!("frames.rs")),
     ("image/jpeg.rs", include_bytes!("jpeg.rs")),
     ("image/layers.rs", include_bytes!("layers.rs")),
