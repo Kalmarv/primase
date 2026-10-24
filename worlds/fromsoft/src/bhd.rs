@@ -10,6 +10,7 @@ use aes::{
     cipher::{Array, BlockCipherDecrypt, KeyInit},
 };
 use num_bigint::BigUint;
+use primase_core::parallel::Threads;
 /// Half-open byte range. (-1,-1) in an archive is an explicitly disabled range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Range {
@@ -223,6 +224,15 @@ impl Montgomery {
 /// bytes. This is the archive signature envelope, not PKCS#1 encryption. The modulus' Montgomery context is made
 /// once for all the blocks; an even modulus (no key has one) is computed by `BigUint::modpow`.
 pub fn unwrap_rsa(input: &[u8], modulus: &[u8], exponent: &[u8]) -> Result<Vec<u8>> {
+    unwrap_rsa_with(Threads::ONE, input, modulus, exponent)
+}
+
+/// The blocks a thread unwraps at a time: enough that a block's work (about 50 us) outweighs handing it out.
+const BLOCKS_PER_TASK: usize = 64;
+
+/// [`unwrap_rsa`] with the blocks unwrapped on `threads`, in groups ([`BLOCKS_PER_TASK`]) joined in order: the same
+/// bytes on any count, and the first failing block's error, as one thread meets it.
+pub fn unwrap_rsa_with(threads: Threads, input: &[u8], modulus: &[u8], exponent: &[u8]) -> Result<Vec<u8>> {
     if input.is_empty() || !input.len().is_multiple_of(256) || modulus.len() != 256 {
         return Err(invalid("RSA", 0, "expected 256-byte blocks and modulus"));
     }
@@ -232,8 +242,8 @@ pub fn unwrap_rsa(input: &[u8], modulus: &[u8], exponent: &[u8]) -> Result<Vec<u
         return Err(invalid("RSA", 0, "zero public key"));
     }
     let context = n.bit(0).then(|| Montgomery::new(modulus, &n));
-    let mut out = vec![0; input.len() / 256 * 255];
-    for (i, b) in input.as_chunks::<256>().0.iter().enumerate() {
+    // block `i` into its 255-byte slot of `out`
+    let unwrap = |i: usize, b: &[u8; 256], slot: &mut [u8]| -> Result<()> {
         let p = match &context {
             Some(context) => {
                 let x = limbs_of(b);
@@ -256,7 +266,32 @@ pub fn unwrap_rsa(input: &[u8], modulus: &[u8], exponent: &[u8]) -> Result<Vec<u
         if p.len() > 255 {
             return Err(invalid("RSA", i * 256, "plaintext exceeds 255 bytes"));
         }
-        out[(i + 1) * 255 - p.len()..(i + 1) * 255].copy_from_slice(&p);
+        slot[255 - p.len()..].copy_from_slice(&p);
+        Ok(())
+    };
+    let blocks = input.as_chunks::<256>().0;
+    let groups: Vec<(usize, &[[u8; 256]])> = blocks
+        .chunks(BLOCKS_PER_TASK)
+        .enumerate()
+        .map(|(g, blocks)| (g * BLOCKS_PER_TASK, blocks))
+        .collect();
+    let done = primase_core::parallel::map(threads, &groups, |_, &(first, blocks)| {
+        let mut out = vec![0; blocks.len() * 255];
+        for (k, (b, slot)) in blocks.iter().zip(out.as_chunks_mut::<255>().0).enumerate() {
+            unwrap(first + k, b, slot)?;
+        }
+        Ok::<_, crate::Error>(out)
+    })
+    .map_err(|p| {
+        invalid(
+            "RSA",
+            groups[p.item].0 * 256,
+            format!("unwrapping: {}", p.message),
+        )
+    })?;
+    let mut out = Vec::with_capacity(blocks.len() * 255);
+    for group in done {
+        out.extend(group?);
     }
     Ok(out)
 }
@@ -537,6 +572,41 @@ mod tests {
             full[0] = 1;
             full[255] = 1;
             assert!(unwrap_rsa(&full, &modulus, &[1]).is_err(), "a 256-byte plaintext");
+        }
+    }
+
+    /// 200 blocks (three groups and a part) unwrap to the same bytes on one thread and on four, and the error of
+    /// two failing blocks is the first one's, with its offset, on both.
+    #[test]
+    fn the_blocks_unwrap_the_same_on_any_thread_count() {
+        let (modulus, exponent) = crate::keys::SEKIRO[0];
+        let mut state = 0x1234_5678_9abc_def1u64;
+        let mut input = Vec::new();
+        for _ in 0..200 {
+            let mut block = vec![0u8; 196];
+            block.extend((0..60).map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            }));
+            input.extend(block);
+        }
+        // exponent 3 keeps a 60-byte block's plaintext in 255 bytes, whatever the key's own exponent
+        let one = unwrap_rsa_with(Threads::ONE, &input, modulus, &[3]).unwrap();
+        let four = unwrap_rsa_with(Threads::new(4).unwrap(), &input, modulus, &[3]).unwrap();
+        assert_eq!(one, four);
+        assert_eq!(one, reference(&input, modulus, &[3]));
+        let _ = exponent;
+        for at in [150usize, 70] {
+            input[at * 256..(at + 1) * 256].copy_from_slice(&[0xff; 256]);
+        }
+        for threads in [Threads::ONE, Threads::new(4).unwrap()] {
+            let e = unwrap_rsa_with(threads, &input, modulus, &[3]).unwrap_err();
+            assert!(
+                matches!(&e, crate::Error::Invalid { offset, detail, .. } if *offset == 70 * 256 && detail.contains("exceeds modulus")),
+                "{e:?}"
+            );
         }
     }
 }

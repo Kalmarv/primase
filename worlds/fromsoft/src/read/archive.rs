@@ -6,11 +6,12 @@
 pub use crate::bhd::{PathHash, path_hash, path_hash64};
 use crate::{
     Game, Result,
-    bhd::{Entry, Header, unwrap_rsa},
+    bhd::{Entry, Header, unwrap_rsa_with},
     dcx::Decoder,
     game::{ArchivePair, KeySource},
     invalid,
 };
+use primase_core::parallel::Threads;
 use std::{
     collections::BTreeMap,
     io::{Read, Seek, SeekFrom},
@@ -142,6 +143,8 @@ pub struct Install {
     pub root: PathBuf,
     pub game: Game,
     pub keys: Keys,
+    /// The threads opening its archives may use (the index files' RSA blocks): the program states them; one by default.
+    pub threads: Threads,
 }
 impl Install {
     /// A Sekiro install, with the published keys.
@@ -150,6 +153,7 @@ impl Install {
             root: root.into(),
             game: Game::Sekiro,
             keys: Keys::published(Game::Sekiro).expect("Sekiro's keys are published"),
+            threads: Threads::ONE,
         }
     }
     pub fn new(root: impl Into<PathBuf>, game: Game, keys: Keys) -> Self {
@@ -157,11 +161,17 @@ impl Install {
             root: root.into(),
             game,
             keys,
+            threads: Threads::ONE,
         }
+    }
+    /// The same install opened on `threads` ([`Install::threads`]).
+    pub fn with_threads(mut self, threads: Threads) -> Self {
+        self.threads = threads;
+        self
     }
     /// Its archives.
     pub fn open(&self) -> Result<Archive> {
-        Archive::open_game(&self.root, self.game, &self.keys)
+        Archive::open_game_with(self.threads, &self.root, self.game, &self.keys)
     }
 }
 
@@ -202,6 +212,10 @@ impl Archive {
     /// `game`'s archives under `root`, each index unwrapped with its pair's key in `keys`. An entry hash present in
     /// two pairs is an error.
     pub fn open_game(root: impl AsRef<Path>, game: Game, keys: &Keys) -> Result<Self> {
+        Self::open_game_with(Threads::ONE, root, game, keys)
+    }
+    /// [`Archive::open_game`] with each index file's RSA blocks unwrapped on `threads`: the same archive on any count.
+    pub fn open_game_with(threads: Threads, root: impl AsRef<Path>, game: Game, keys: &Keys) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         let set = game.archives();
         let mut entries = BTreeMap::new();
@@ -216,7 +230,7 @@ impl Archive {
             let (n, e) = keys
                 .get(pair.stem)
                 .ok_or_else(|| invalid("RSA", 0, format!("no key for {}", pair.stem)))?;
-            let plain = unwrap_rsa(&std::fs::read(&bhd)?, n, e)?;
+            let plain = unwrap_rsa_with(threads, &std::fs::read(&bhd)?, n, e)?;
             let header = Header::read(&plain, &set.record)?;
             let size = std::fs::metadata(root.join(format!("{}.bdt", pair.stem)))?.len();
             for entry in &header.entries {
