@@ -25,8 +25,8 @@ pub use binding::{
     BufferTable, Compare, ConstantBinding, ConstantBufferBinding, ConstantRole, Cull, DepthBias, DepthState,
     Fill, FrameParameter, FrameTexture, InputBinding, InputRole, KeyPart, LaneStream, MatrixLines,
     NormalEncoding, NormalSpace, ObjectMatrix, ObjectParameter, Occluded, OutputBinding, OutputRole,
-    RenderState, SamplerState, ScalarEncoding, ShaderBinding, StageBinding, Stencil, StencilFace, StencilOp,
-    TargetState, TextureBinding, TextureSource, Unshown, VariantKey, ViewParameter,
+    RenderState, SamplerState, ScalarEncoding, ShaderBinding, SkinPrefix, StageBinding, Stencil, StencilFace,
+    StencilOp, TargetState, TextureBinding, TextureSource, Unshown, VariantKey, ViewParameter,
 };
 pub use interface::{
     D3dSignature, DomainFacts, GeometryFacts, GsInput, GsOutput, HitGroup, HitGroupKind, HullFacts,

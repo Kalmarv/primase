@@ -37,7 +37,8 @@
 //!   pass, so they come from the program, not from a fixed offset.
 //!   Its buffers are stated by running the program ([`super::buffer_tables`]): when it reads an instance table and a matrix
 //!   table the way the probe documents, they are [`BufferTable::Instances`] and [`BufferTable::HeaderedMatrices`] (three
-//!   rows); every other buffer of a vertex stage, and every buffer of a program the probe finds nothing in, is `Unknown`
+//!   rows right after the header) or, for a program that skins, [`BufferTable::SkinnedMatrices`] (a translation element
+//!   after the header, then each joint's three rows); every other buffer of a vertex stage, and every buffer of a program the probe finds nothing in, is `Unknown`
 //!   with the reason.
 //! - **Textures.** A slot the binding sets name is the depot block's parameter of that name, and the parameter's link
 //!   ([`FrostbiteMaterial::textures`], made by [`Source::resolve_textures`](crate::folder::Source::resolve_textures))
@@ -66,12 +67,12 @@ use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::shader::{
     BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, D3dClass, InputBinding,
     InputRole, Interface, KeyPart, ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId,
-    ResourceKind, SamplerState, Shader, ShaderBinding, Stage, StageBinding, SystemValue, TextureBinding,
-    TextureDim, TextureSource, VariantKey,
+    ResourceKind, SamplerState, Shader, ShaderBinding, SkinPrefix, Stage, StageBinding, SystemValue,
+    TextureBinding, TextureDim, TextureSource, VariantKey,
 };
 use primase_core::{Component, Entity, Lods, Semantic, Texture, TextureLayers, World};
 
-use super::buffer_tables::{TableRoles, probe_tables};
+use super::buffer_tables::{MatrixLayout, SkinInputs, TableRoles, probe_tables_with};
 use super::clip_position::{ClipRows, cut_out, shader_clip_rows, state_clip_roles};
 use crate::binding::{Bindings, Group};
 use crate::components::{
@@ -336,7 +337,10 @@ fn bind_material(
             }
             let bindings = sets.map(FrostbiteBindings::bindings);
             for (i, (stage, shader, program)) in shaders.iter().enumerate() {
-                let vertex = (*stage == Stage::Vertex).then(|| vertex_roles_of(clips, *shader, program, log));
+                let vertex = (*stage == Stage::Vertex).then(|| {
+                    let skin = skin_inputs(&program.interface, layout);
+                    vertex_roles_of(clips, *shader, program, skin, log)
+                });
                 let mut bound = stage_binding(
                     *stage,
                     *shader,
@@ -502,7 +506,13 @@ struct VertexRoles {
 type ClipCache = BTreeMap<Entity, VertexRoles>;
 
 /// The roles of the vertex program `shader`; the log counts each program once, by what was found.
-fn vertex_roles_of(cache: &mut ClipCache, entity: Entity, shader: &Shader, log: &mut PassLog) -> VertexRoles {
+fn vertex_roles_of(
+    cache: &mut ClipCache,
+    entity: Entity,
+    shader: &Shader,
+    skin: Option<SkinInputs>,
+    log: &mut PassLog,
+) -> VertexRoles {
     cache
         .entry(entity)
         .or_insert_with(|| {
@@ -516,7 +526,7 @@ fn vertex_roles_of(cache: &mut ClipCache, entity: Entity, shader: &Shader, log: 
                 1,
             );
             let tables = match clip {
-                Some((_, rows)) => probe_tables(shader, rows),
+                Some((_, rows)) => probe_tables_with(shader, rows, skin),
                 None => Err("the clip position is not the camera-relative form the table probe needs".to_owned()),
             };
             log.count(
@@ -532,6 +542,27 @@ fn vertex_roles_of(cache: &mut ClipCache, entity: Entity, shader: &Shader, log: 
         .clone()
 }
 
+/// The inputs of `interface` the mesh's blend weights and joint indices feed (the vertex inputs whose role is
+/// `Stream(Weights(0))` and `Stream(Joints(0))` by the permutation's input layout), if the program has both.
+fn skin_inputs(interface: &Interface, layout: Option<&InputLayout>) -> Option<SkinInputs> {
+    let roles = vertex_inputs(interface, layout, &mut PassLog::default());
+    // the roles are of the non-system inputs, in order: back to indices in the interface's inputs
+    let at = |semantic: Semantic| -> Option<usize> {
+        let role = roles.iter().position(|r| r.role == InputRole::Stream(semantic))?;
+        interface
+            .inputs
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.system.is_none())
+            .nth(role)
+            .map(|(k, _)| k)
+    };
+    Some(SkinInputs {
+        weights: at(Semantic::Weights(0))?,
+        joints: at(Semantic::Joints(0))?,
+    })
+}
+
 /// The buffer slots of a vertex stage: the instance and matrix tables the probe found, as the roles [`BufferTable`] gives
 /// them; every other buffer of the program, and every buffer of a program the probe found nothing in, is `Unknown` with the
 /// reason.
@@ -540,7 +571,15 @@ fn buffer_bindings(interface: &Interface, tables: &Result<TableRoles, String>) -
     if let Ok(t) = tables {
         buffers.push(BufferBinding {
             resource: t.matrices,
-            source: BufferSource::Table(BufferTable::HeaderedMatrices { rows: 3 }),
+            source: BufferSource::Table(match t.layout {
+                MatrixLayout::Plain => BufferTable::HeaderedMatrices { rows: 3 },
+                MatrixLayout::Skinned { prefix, joint_stride } => BufferTable::SkinnedMatrices {
+                    rows: 3,
+                    joint_stride,
+                    prefix,
+                    first: SkinPrefix::Translation,
+                },
+            }),
         });
         buffers.push(BufferBinding {
             resource: t.instances,

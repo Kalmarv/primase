@@ -445,15 +445,52 @@ pub enum BufferTable {
     /// after it. That the zero header is that layout is what a program run against such a table gave (identity rows after
     /// a zero header gave the position back), not something the engine documents.
     HeaderedMatrices { rows: u8 },
+    /// The block of an instance whose program skins, in a table of elements of four floats each (the shape every one of
+    /// the five skinned vertex programs of the hat's materials reads, measured by running each against tables filled to
+    /// tell the parts apart):
+    ///
+    /// - a header element, as [`BufferTable::HeaderedMatrices`] (the instance record names it);
+    /// - the first prefix element, `X`, `1 + offset` elements after the header, where `offset` is the header's bit 0 and
+    ///   16-bit offset in bits 1 to 16 (zero when the bit is clear): its meaning is `first`;
+    /// - the other prefix elements, `X + 1` to `X + prefix - 1`: none of the five programs reads them. A program that
+    ///   reads one is not described by this role (a consumer fills them with zeros);
+    /// - then the joints' matrices, `joint_stride` elements apart, joint `j`'s `rows` rows starting at element
+    ///   `X + prefix + bit18 + joint_stride * j`, where `bit18` is the header's bit 18 (the rows are one element later
+    ///   when it is set; `X` is not).
+    ///
+    /// The position of a vertex is the sum, over its influences, of the weight times the joint's matrix applied to the
+    /// position (the rows as [`ObjectParameter::BonePalette`] has them), then `first`. A consumer writes a zero header
+    /// (no offset, no bit 18), which puts `X` directly after the header and the first joint's rows `prefix` elements
+    /// after `X`.
+    SkinnedMatrices {
+        /// Rows of one joint's matrix: three (an affine transform without its last row) or four.
+        rows: u8,
+        /// Elements from one joint's first row to the next joint's.
+        joint_stride: u8,
+        /// Elements from `X` to the first joint's first row when the header's bit 18 is clear.
+        prefix: u8,
+        /// What `X` holds.
+        first: SkinPrefix,
+    },
     /// One record per instance drawn, `stride` 32-bit words each, in instance order: word `matrix_start` of a record is
     /// the index, in elements of the table `matrices` (a [`BufferTable::ObjectMatrices`] or a
-    /// [`BufferTable::HeaderedMatrices`] of the same stage), of the instance's first element: its first row, or its header
-    /// for a headered table. The program adds the indices of the matrices it takes (a joint's, a model's own) to it.
+    /// [`BufferTable::HeaderedMatrices`] or [`BufferTable::SkinnedMatrices`] of the same stage), of the instance's first element:
+    /// its first row, or its header for a headered table. The program adds the indices of the matrices it takes (a joint's, a model's own) to it.
     Instances {
         stride: u8,
         matrix_start: u8,
         matrices: ResourceId,
     },
+}
+
+/// What the first prefix element of a [`BufferTable::SkinnedMatrices`] holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum SkinPrefix {
+    /// The xyz lanes are added, once and unweighted, to the position the weighted sum of the joints' transforms gives
+    /// (so a vertex at `p` with one influence of weight `w` ends at `w * (M p) + xyz`); the w lane is not read.
+    Translation,
 }
 
 /// Where a normal vector is expressed.
@@ -1262,7 +1299,9 @@ impl StageBinding {
                 }
                 BufferSource::Unknown { .. } => {}
                 BufferSource::Table(
-                    BufferTable::ObjectMatrices { rows } | BufferTable::HeaderedMatrices { rows },
+                    BufferTable::ObjectMatrices { rows }
+                    | BufferTable::HeaderedMatrices { rows }
+                    | BufferTable::SkinnedMatrices { rows, .. },
                 ) => {
                     if !(3..=4).contains(rows) {
                         return Err(format!(
@@ -1277,6 +1316,23 @@ impl StageBinding {
                             "buffer slot {} holds matrix rows of 16 bytes and has elements of {stride}",
                             b.resource.0
                         ));
+                    }
+                    if let BufferSource::Table(BufferTable::SkinnedMatrices {
+                        joint_stride, prefix, ..
+                    }) = &b.source
+                    {
+                        if joint_stride < rows {
+                            return Err(format!(
+                                "buffer slot {} holds joints {joint_stride} elements apart with {rows} rows each",
+                                b.resource.0
+                            ));
+                        }
+                        if *prefix == 0 {
+                            return Err(format!(
+                                "buffer slot {} holds skinned matrices with no prefix element for what it says the                                  first one holds",
+                                b.resource.0
+                            ));
+                        }
                     }
                 }
                 BufferSource::Table(BufferTable::Instances {
@@ -1303,7 +1359,9 @@ impl StageBinding {
                             && matches!(
                                 other.source,
                                 BufferSource::Table(
-                                    BufferTable::ObjectMatrices { .. } | BufferTable::HeaderedMatrices { .. }
+                                    BufferTable::ObjectMatrices { .. }
+                                        | BufferTable::HeaderedMatrices { .. }
+                                        | BufferTable::SkinnedMatrices { .. }
                                 )
                             )
                     };
@@ -1745,6 +1803,17 @@ mod tests {
             source: BufferSource::Table(BufferTable::HeaderedMatrices { rows }),
         }
     }
+    fn skinned(resource: u32, rows: u8, joint_stride: u8, prefix: u8) -> BufferBinding {
+        BufferBinding {
+            resource: ResourceId(resource),
+            source: BufferSource::Table(BufferTable::SkinnedMatrices {
+                rows,
+                joint_stride,
+                prefix,
+                first: SkinPrefix::Translation,
+            }),
+        }
+    }
     fn instances(resource: u32, stride: u8, matrix_start: u8, table: u32) -> BufferBinding {
         BufferBinding {
             resource: ResourceId(resource),
@@ -1838,6 +1907,37 @@ mod tests {
             json["stages"][0]["buffers"][0]["source"],
             serde_json::json!({"table": {"headered_matrices": {"rows": 3}}})
         );
+        // a skinned block is a matrix table too, with the joints no closer than their rows and a prefix to describe
+        w.insert(
+            m,
+            buffer_binding(s, vec![skinned(10, 3, 3, 3), instances(11, 2, 1, 10), rest()]),
+        );
+        assert_eq!(w.get::<ShaderBinding>(m).unwrap().verify(m, &w), Ok(()));
+        let json = w.get::<ShaderBinding>(m).unwrap().to_json().unwrap().unwrap();
+        assert_eq!(
+            json["stages"][0]["buffers"][0]["source"],
+            serde_json::json!({"table": {"skinned_matrices": {
+                "rows": 3, "joint_stride": 3, "prefix": 3, "first": "translation"
+            }}})
+        );
+        for (buffers, message) in [
+            (
+                vec![skinned(10, 3, 2, 3), instances(11, 2, 1, 10), rest()],
+                "elements apart with 3 rows",
+            ),
+            (
+                vec![skinned(10, 3, 3, 0), instances(11, 2, 1, 10), rest()],
+                "no prefix element",
+            ),
+            (
+                vec![skinned(10, 5, 5, 3), instances(11, 2, 1, 10), rest()],
+                "not 3 or 4",
+            ),
+        ] {
+            w.insert(m, buffer_binding(s, buffers.clone()));
+            let err = w.get::<ShaderBinding>(m).unwrap().verify(m, &w).unwrap_err();
+            assert!(err.contains(message), "{buffers:?}: {err}");
+        }
         // a stage that states buffers states every one; one that states none leaves each unknown with that reason
         w.insert(
             m,
