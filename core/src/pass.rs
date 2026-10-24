@@ -461,6 +461,46 @@ impl Pipeline {
     pub fn check(&self) -> Result<()> {
         check_settled(&self.passes)
     }
+
+    /// The passes a run would refuse for a required name absent, in a world holding the component and resource names
+    /// `present` before it runs, and the names held after the passes that can run: each pass in order, with what the
+    /// passes before it provide added. That is the declarations' answer, not a run's: a pass may add less than it
+    /// provides and take away less than it removes, so every name provided is taken as added and every name removed as
+    /// kept. A pass that may lack its inputs and finds none of them is skipped, as a run skips it, and provides nothing;
+    /// one that finds some but not all is refused, as a run refuses it ([`Pass::may_lack_inputs`]). A refused pass
+    /// provides nothing: the passes after it are checked as if it were left out, where a run would stop at it.
+    pub fn unfed(&self, present: &BTreeSet<String>) -> Unfed {
+        let mut held = present.clone();
+        let mut passes = Vec::new();
+        for p in &self.passes {
+            let missing: Vec<&'static str> = p
+                .requires()
+                .iter()
+                .copied()
+                .filter(|&r| !held.contains(r))
+                .collect();
+            if p.may_lack_inputs() && !p.requires().is_empty() && missing.len() == p.requires().len() {
+                continue;
+            }
+            if missing.is_empty() {
+                held.extend(p.provides().iter().map(|&n| n.to_owned()));
+            } else {
+                passes.push((pass_text(p.as_ref()), missing));
+            }
+        }
+        Unfed { passes, held }
+    }
+}
+
+/// What [`Pipeline::unfed`] finds of a pipeline in a world.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unfed {
+    /// Each pass a run would refuse for a required name absent: its text and the names it lacks, in pipeline order;
+    /// empty when every pass can run or is skipped.
+    pub passes: Vec<(String, Vec<&'static str>)>,
+    /// The names held after the passes that can run: those present before, with what each such pass provides. The
+    /// world a following pipeline is checked against.
+    pub held: BTreeSet<String>,
 }
 
 impl fmt::Display for Pipeline {
@@ -2459,6 +2499,76 @@ mod tests {
             std::thread::sleep(Duration::from_millis(self.0));
             Ok(())
         }
+    }
+
+    /// A pipeline's unfed passes are those a run would refuse, each with the names it lacks, checked with what the
+    /// passes before it provide; what it holds after counts only the passes that can run.
+    #[test]
+    fn unfed_passes_are_named_with_what_they_lack_and_the_names_held_after() {
+        let names = |n: &[&str]| n.iter().map(|s| (*s).to_owned()).collect::<BTreeSet<String>>();
+        let load_then_bake = || Pipeline {
+            passes: vec![Box::new(Load), Box::new(Bake { size: 1024 })],
+        };
+        // load provides the mesh bake needs; a removed name is taken as kept
+        assert_eq!(
+            load_then_bake().unfed(&names(&["toy.file", "toy.layered"])),
+            Unfed {
+                passes: Vec::new(),
+                held: names(&["toy.file", "toy.layered", "toy.mesh", "toy.pbr"]),
+            }
+        );
+        // no file: load is refused, and bake, after it, lacks the mesh load would have provided; neither adds a name
+        assert_eq!(
+            load_then_bake().unfed(&names(&["toy.layered"])),
+            Unfed {
+                passes: vec![
+                    ("load".to_owned(), vec!["toy.file"]),
+                    ("bake".to_owned(), vec!["toy.mesh"])
+                ],
+                held: names(&["toy.layered"]),
+            }
+        );
+        // a pass that may lack its inputs is skipped when it finds none, providing nothing, and refused when it finds
+        // some
+        struct Either;
+        impl Pass for Either {
+            fn name(&self) -> &'static str {
+                "either"
+            }
+            fn requires(&self) -> &[&'static str] {
+                &["toy.mesh", "toy.pbr"]
+            }
+            fn provides(&self) -> &[&'static str] {
+                &["toy.lit"]
+            }
+            fn may_lack_inputs(&self) -> bool {
+                true
+            }
+            fn run(&self, _: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+                Ok(())
+            }
+        }
+        let either = || Pipeline {
+            passes: vec![Box::new(Either)],
+        };
+        assert_eq!(
+            either().unfed(&names(&[])),
+            Unfed {
+                passes: Vec::new(),
+                held: names(&[]),
+            }
+        );
+        assert_eq!(
+            either().unfed(&names(&["toy.mesh"])).passes,
+            [("either".to_owned(), vec!["toy.pbr"])]
+        );
+        assert_eq!(
+            either().unfed(&names(&["toy.mesh", "toy.pbr"])),
+            Unfed {
+                passes: Vec::new(),
+                held: names(&["toy.lit", "toy.mesh", "toy.pbr"]),
+            }
+        );
     }
 
     /// Each step's time is measured around its own run (a 30 ms run is at least 30 ms, the manager's checks apart);
