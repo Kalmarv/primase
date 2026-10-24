@@ -12,7 +12,8 @@ pub use decode::{Index, decode};
 pub use decode::{Instruction, Operand, Register, Selection};
 pub use lift::{LIFTER_VERSION, lift};
 pub use reflection::{
-    SignatureElement, patch_signature_elements, reflection, signature_elements, signatures,
+    SignatureElement, patch_signature_elements, reflection, resource_reflection, signature_elements,
+    signatures,
 };
 
 /// A DXBC program or container refused or unreadable: the word it is at and why ([`primase_shader::Refusal`]).

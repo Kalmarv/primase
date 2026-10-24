@@ -434,6 +434,21 @@ impl Binding {
     }
 }
 
+/// A container's reflection ([`reflection`]) where it has one this reader reads: `None` where it has no RDEF chunk, or
+/// its RDEF's target isn't an SM5.0 pixel or vertex program (a compute program or an earlier model: the lift then
+/// names its resources from their declarations, as without reflection). An RDEF of a target it reads that doesn't
+/// parse is an error, never taken as absent.
+pub fn resource_reflection(bytes: &[u8]) -> Result<Option<Interface>> {
+    let directory = crate::parts(bytes)?;
+    let Some(rdef) = directory.iter().find(|c| &c.kind == b"RDEF") else {
+        return Ok(None);
+    };
+    match View(rdef.data).u32(16)? {
+        0xffff_0500 | 0xfffe_0500 => reflection(bytes).map(Some),
+        _ => Ok(None),
+    }
+}
+
 /// Read a container's RDEF resource and constant-buffer metadata and its ISGN/OSGN signatures.
 pub fn reflection(bytes: &[u8]) -> Result<Interface> {
     let directory = crate::parts(bytes)?;

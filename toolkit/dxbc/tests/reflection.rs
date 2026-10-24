@@ -276,3 +276,28 @@ fn reflected_bindings_match_independent_disassembly() -> Result<(), Box<dyn std:
     );
     Ok(())
 }
+
+/// Reflection where the container has one this reader reads: none without an RDEF chunk or with a target it doesn't
+/// read (a compute program's), the reflection of an SM5.0 pixel program's, and an error, never none, for one of
+/// those that doesn't parse.
+#[test]
+fn a_reflection_is_read_where_it_is_one_this_reader_reads() {
+    let good = fixture(&rdef());
+    assert!(primase_dxbc::resource_reflection(&good).unwrap().is_some());
+    let mut compute = rdef();
+    set(&mut compute, 16, 0x4353_0500);
+    assert!(
+        primase_dxbc::resource_reflection(&fixture(&compute))
+            .unwrap()
+            .is_none()
+    );
+    // the resource records past the chunk's end
+    let mut broken = rdef();
+    set(&mut broken, 12, 4096);
+    assert!(primase_dxbc::resource_reflection(&fixture(&broken)).is_err());
+    // the RDEF chunk under another tag: none
+    let mut without = good.clone();
+    let at = without.windows(4).position(|w| w == b"RDEF").unwrap();
+    without[at..at + 4].copy_from_slice(b"STAT");
+    assert!(primase_dxbc::resource_reflection(&without).unwrap().is_none());
+}

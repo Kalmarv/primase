@@ -14,7 +14,7 @@ use primase_shader::{
 };
 
 use crate::decode::{Declared, Decoded, Register, Selection};
-use crate::{Result, error, reflection, signature_elements};
+use crate::{Result, error, resource_reflection, signature_elements};
 
 /// A phase of a hull program: the control-point phase, or a fork or join phase of its patch-constant function, with
 /// the words of the token stream it covers and how many instances it runs.
@@ -1018,8 +1018,9 @@ impl Setup {
         // outputs: a stage's depth hint is a plain depth output in the module
         setup.interface = interface;
 
-        // resources, in declaration order; reflection names them and lays out the constant buffers
-        let rdef = reflection(bytes).ok();
+        // resources, in declaration order; reflection, where the container has one this reader reads, names them and
+        // lays out the constant buffers (one that doesn't parse is refused, not taken as absent)
+        let rdef = resource_reflection(bytes).map_err(|e| refuse(format!("reflection: {e}")))?;
         for (i, d) in setup.declarations.iter_mut().enumerate() {
             let (class, register, kind, default_name) = match d {
                 Declaration::ConstantBuffer { slot, rows } => (
