@@ -1,5 +1,7 @@
 //! MTD material definitions, with bounded nested blocks and strict Shift-JIS.
-use crate::{Result, bytes::View, invalid};
+use primase_bytes::Endian;
+
+use crate::{Result, invalid};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub enum Value {
@@ -36,49 +38,43 @@ pub struct MaterialDefinition {
     pub block_lengths: Vec<BlockLength>,
 }
 struct Cursor<'a> {
-    view: View<'a>,
-    pos: usize,
+    /// The file, read in order (little-endian).
+    c: primase_bytes::Cursor<'a>,
     stack: Vec<(usize, usize, u32)>,
     blocks: Vec<BlockLength>,
 }
 impl Cursor<'_> {
     fn bytes(&mut self, n: usize) -> Result<&[u8]> {
-        let end = self
-            .pos
-            .checked_add(n)
-            .ok_or_else(|| invalid("MTD", self.pos, "size overflow"))?;
-        if end > self.view.data.len() {
-            return Err(invalid("MTD", self.pos, "read beyond block"));
-        }
-        let result = self.view.slice(self.pos, n)?;
-        self.pos = end;
-        Ok(result)
+        let at = self.c.position();
+        self.c
+            .take(n)
+            .map_err(|_| invalid("MTD", at, "read beyond block"))
     }
     fn u32(&mut self) -> Result<u32> {
-        Ok(u32::from_le_bytes(self.bytes(4)?.try_into().expect("four bytes")))
+        let at = self.c.position();
+        self.c
+            .u32(Endian::Little)
+            .map_err(|_| invalid("MTD", at, "read beyond block"))
     }
     fn expect(&mut self, n: u32) -> Result<()> {
-        let at = self.pos;
+        let at = self.c.position();
         if self.u32()? != n {
             return Err(invalid("MTD", at, "unexpected field"));
         }
         Ok(())
     }
     fn count(&mut self, stride: usize) -> Result<usize> {
-        let at = self.pos;
-        let n = self.u32()? as usize;
-        let remaining = self.view.data.len() - self.pos;
-        if n > remaining / stride {
-            return Err(invalid("MTD", at, "count exceeds block"));
-        }
-        Ok(n)
+        let at = self.c.position();
+        self.c
+            .count(Endian::Little, stride)
+            .map_err(|_| invalid("MTD", at, "count exceeds block"))
     }
     fn marker(&mut self, expected: u8) -> Result<()> {
-        let at = self.pos;
+        let at = self.c.position();
         if self.bytes(1)?[0] != expected {
             return Err(invalid("MTD", at, "marker"));
         }
-        let padding = (4 - self.pos % 4) % 4;
+        let padding = (4 - self.c.position() % 4) % 4;
         if self.bytes(padding)?.iter().any(|b| *b != 0) {
             return Err(invalid("MTD", at, "nonzero alignment"));
         }
@@ -86,7 +82,7 @@ impl Cursor<'_> {
     }
     fn string(&mut self, marker: u8) -> Result<String> {
         let n = self.count(1)?;
-        let at = self.pos;
+        let at = self.c.position();
         let s = encoding_rs::SHIFT_JIS
             .decode_without_bom_handling_and_without_replacement(self.bytes(n)?)
             .ok_or_else(|| invalid("MTD", at, "malformed Shift-JIS string"))?
@@ -97,11 +93,11 @@ impl Cursor<'_> {
     fn block(&mut self, kind: u32, versions: &[u32], marker: u8) -> Result<u32> {
         self.expect(0)?;
         let len = self.u32()? as usize;
-        self.stack.push((self.pos, len, kind));
+        self.stack.push((self.c.position(), len, kind));
         self.expect(kind)?;
         let version = self.u32()?;
         if !versions.contains(&version) {
-            return Err(invalid("MTD", self.pos - 4, "block version"));
+            return Err(invalid("MTD", self.c.position() - 4, "block version"));
         }
         self.marker(marker)?;
         Ok(version)
@@ -110,17 +106,17 @@ impl Cursor<'_> {
         let (start, declared, kind) = self
             .stack
             .pop()
-            .ok_or_else(|| invalid("MTD", self.pos, "block nesting"))?;
+            .ok_or_else(|| invalid("MTD", self.c.position(), "block nesting"))?;
         self.blocks.push(BlockLength {
             start,
             kind,
             declared,
-            consumed: self.pos - start,
+            consumed: self.c.position() - start,
         });
         Ok(())
     }
     fn float(&mut self) -> Result<f32> {
-        let at = self.pos;
+        let at = self.c.position();
         let x = f32::from_bits(self.u32()?);
         if !x.is_finite() {
             return Err(invalid("MTD", at, "non-finite parameter"));
@@ -134,19 +130,14 @@ impl MaterialDefinition {
     /// made: typed counts/markers determine boundaries, always within the file.
     pub fn read(data: &[u8]) -> Result<Self> {
         let mut c = Cursor {
-            view: View {
-                data,
-                format: "MTD",
-                be: false,
-            },
-            pos: 0,
+            c: primase_bytes::Cursor::new(data),
             stack: vec![],
             blocks: vec![],
         };
         c.block(0, &[3], 1)?;
         c.block(1, &[2], 0xb0)?;
         if c.string(0x34)? != "MTD " {
-            return Err(invalid("MTD", c.pos, "magic"));
+            return Err(invalid("MTD", c.c.position(), "magic"));
         }
         c.expect(1000)?;
         c.end()?;
@@ -172,7 +163,7 @@ impl MaterialDefinition {
                 "float2" => (0x1002, 0xca, 2),
                 "float3" => (0x1002, 0xca, 3),
                 "float4" => (0x1002, 0xca, 4),
-                _ => return Err(invalid("MTD", c.pos, format!("parameter type {kind}"))),
+                _ => return Err(invalid("MTD", c.c.position(), format!("parameter type {kind}"))),
             };
             c.block(block, &[1], marker)?;
             c.expect(n)?;
@@ -180,7 +171,7 @@ impl MaterialDefinition {
                 match c.bytes(1)?[0] {
                     0 => Value::Bool(false),
                     1 => Value::Bool(true),
-                    _ => return Err(invalid("MTD", c.pos - 1, "boolean")),
+                    _ => return Err(invalid("MTD", c.c.position() - 1, "boolean")),
                 }
             } else if block == 0x1001 {
                 Value::Int((0..n).map(|_| c.u32().map(|x| x as i32)).collect::<Result<_>>()?)
@@ -227,8 +218,8 @@ impl MaterialDefinition {
         c.marker(4)?;
         c.expect(0)?;
         c.end()?;
-        if c.pos != data.len() {
-            return Err(invalid("MTD", c.pos, "trailing bytes"));
+        if c.c.position() != data.len() {
+            return Err(invalid("MTD", c.c.position(), "trailing bytes"));
         }
         Ok(Self {
             shader,

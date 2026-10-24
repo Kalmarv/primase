@@ -1,3 +1,5 @@
+use primase_bytes::{BoundsError, Endian};
+
 use crate::{Result, invalid};
 pub(crate) struct View<'a> {
     pub data: &'a [u8],
@@ -5,47 +7,42 @@ pub(crate) struct View<'a> {
     pub be: bool,
 }
 impl<'a> View<'a> {
+    /// Its byte order: big-endian where the file says so (`be`), else little.
+    fn endian(&self) -> Endian {
+        if self.be { Endian::Big } else { Endian::Little }
+    }
+    /// A read at `o` that runs past the data, as this format's error.
+    fn short(&self, o: usize, e: BoundsError) -> crate::Error {
+        let detail = match e {
+            BoundsError::LengthOverflow { .. } => "size overflow",
+            BoundsError::OutOfBounds { .. } => "short input",
+        };
+        invalid(self.format, o, detail)
+    }
     pub fn slice(&self, o: usize, n: usize) -> Result<&'a [u8]> {
-        primase_bytes::View::new(self.data).slice(o, n).map_err(|e| {
-            let detail = match e {
-                primase_bytes::BoundsError::LengthOverflow { .. } => "size overflow",
-                primase_bytes::BoundsError::OutOfBounds { .. } => "short input",
-            };
-            invalid(self.format, o, detail)
-        })
+        primase_bytes::View::new(self.data)
+            .slice(o, n)
+            .map_err(|e| self.short(o, e))
     }
     pub fn u8(&self, o: usize) -> Result<u8> {
-        Ok(self.slice(o, 1)?[0])
+        primase_bytes::View::new(self.data)
+            .u8(o)
+            .map_err(|e| self.short(o, e))
     }
     pub fn u16(&self, o: usize) -> Result<u16> {
-        let b = self.slice(o, 2)?;
-        Ok(if self.be {
-            u16::from_be_bytes([b[0], b[1]])
-        } else {
-            u16::from_le_bytes([b[0], b[1]])
-        })
+        primase_bytes::View::new(self.data)
+            .u16(o, self.endian())
+            .map_err(|e| self.short(o, e))
     }
     pub fn u32(&self, o: usize) -> Result<u32> {
-        let b: [u8; 4] = self
-            .slice(o, 4)?
-            .try_into()
-            .map_err(|_| invalid(self.format, o, "u32"))?;
-        Ok(if self.be {
-            u32::from_be_bytes(b)
-        } else {
-            u32::from_le_bytes(b)
-        })
+        primase_bytes::View::new(self.data)
+            .u32(o, self.endian())
+            .map_err(|e| self.short(o, e))
     }
     pub fn u64(&self, o: usize) -> Result<u64> {
-        let b: [u8; 8] = self
-            .slice(o, 8)?
-            .try_into()
-            .map_err(|_| invalid(self.format, o, "u64"))?;
-        Ok(if self.be {
-            u64::from_be_bytes(b)
-        } else {
-            u64::from_le_bytes(b)
-        })
+        primase_bytes::View::new(self.data)
+            .u64(o, self.endian())
+            .map_err(|e| self.short(o, e))
     }
     pub fn size(&self, o: usize) -> Result<usize> {
         usize::try_from(self.u64(o)?).map_err(|_| invalid(self.format, o, "size overflow"))
