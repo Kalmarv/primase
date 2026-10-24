@@ -688,44 +688,53 @@ pub enum PermutationError {
         code_hash: u32,
         programs: usize,
     },
+    #[error("ShaderPermutation at {at} (key {key:#010x}): its program at {program_at} can't be read: {why}")]
+    Unread {
+        at: usize,
+        key: u32,
+        program_at: usize,
+        why: String,
+    },
 }
+
+/// A container's program stage, or why it has none a permutation can take.
+type StageRead = Result<Stage, String>;
 
 /// Every shader permutation a template body lists (CompiledMaterialTemplate's vertex and pixel ShaderPermutations:
 /// docs/shaders.md §6, docs/material-spec.md §25, read from the engine's class registry): each record a u64 0, the
 /// record type, the ShaderKey, a u32 parameter count (0 on all 177,578 the notes count: another is refused), the
 /// UCodeHash and 16 bytes, found by its first 12 bytes (the byte after it, 0 between records, isn't read). Its program is the one container ([`shaders`])
 /// whose framing stores that UCodeHash after it (each container: `0x7C7AC9C7`, its size, the container, then the
-/// UCodeHash, a u32 and a u64); one whose hash names no container or several is refused. Its stage is its program's.
+/// UCodeHash, a u32 and a u64); one whose hash names no container or several is refused, and one whose container has
+/// no pixel or vertex program (its chunks don't parse, it has no program chunk, or its program is of another stage) is
+/// refused with that reason. Its stage is its program's.
 pub fn permutations(body: &[u8]) -> Result<Vec<Permutation<'_>>, PermutationError> {
     let u32_at = |at: usize| -> Option<u32> {
         body.get(at..at.checked_add(4)?)
             .and_then(|w| w.try_into().ok())
             .map(u32::from_le_bytes)
     };
-    // each program by the hash after it
-    let mut programs: Vec<(u32, usize, &[u8], Stage)> = Vec::new();
+    // each program by the hash after it, with its stage or why it has none a permutation can take (a container with
+    // no hash after it can't be named)
+    let mut programs: Vec<(u32, usize, &[u8], StageRead)> = Vec::new();
     for (at, container) in shaders(body) {
-        let end = at.saturating_add(container.len());
-        let (Some(hash), Some(kind)) = (
-            u32_at(end),
-            primase_dxcontainer::chunks(container).ok().and_then(|c| {
-                c.into_iter()
-                    .find(|k| &k.kind == b"SHEX" || &k.kind == b"SHDR")
-                    .and_then(|k| {
-                        k.data
-                            .get(..4)
-                            .and_then(|w| w.try_into().ok())
-                            .map(u32::from_le_bytes)
-                    })
-            }),
-        ) else {
+        let Some(hash) = u32_at(at.saturating_add(container.len())) else {
             continue;
         };
-        let stage = match kind >> 16 {
-            0 => Stage::Pixel,
-            1 => Stage::Vertex,
-            _ => continue,
-        };
+        let stage = primase_dxcontainer::chunks(container)
+            .map_err(|e| format!("its chunks don't parse: {e}"))
+            .and_then(|c| {
+                c.into_iter()
+                    .find(|k| &k.kind == b"SHEX" || &k.kind == b"SHDR")
+                    .and_then(|k| k.data.get(..4).and_then(|w| w.try_into().ok()))
+                    .map(u32::from_le_bytes)
+                    .ok_or_else(|| "it has no program (SHEX or SHDR) chunk with a version".to_owned())
+            })
+            .and_then(|kind| match kind >> 16 {
+                0 => Ok(Stage::Pixel),
+                1 => Ok(Stage::Vertex),
+                other => Err(format!("its program type {other} is not a pixel or vertex one")),
+            });
         programs.push((hash, at, container, stage));
     }
     let marker = {
@@ -757,6 +766,12 @@ pub fn permutations(body: &[u8]) -> Result<Vec<Permutation<'_>>, PermutationErro
                 programs: named.len(),
             });
         };
+        let stage = stage.as_ref().map_err(|why| PermutationError::Unread {
+            at,
+            key,
+            program_at: *program_at,
+            why: why.clone(),
+        })?;
         out.push(Permutation {
             stage: *stage,
             key,
@@ -928,6 +943,58 @@ mod tests {
         t.vertex.reverse();
         t.pixel[0].1 = 3;
         assert_eq!(t.check(), Err("pixel key 0x4 names program 3 of 3".into()));
+    }
+
+    /// A DXBC container of one SHEX chunk holding the version word `version`, checksummed as a template stores it.
+    fn container(version: u32) -> Vec<u8> {
+        let mut c = b"DXBC".to_vec();
+        c.extend([0; 16]);
+        c.extend(1u32.to_le_bytes());
+        c.extend(0u32.to_le_bytes()); // the size, below
+        c.extend(1u32.to_le_bytes());
+        c.extend(36u32.to_le_bytes()); // the chunk's offset
+        c.extend(b"SHEX");
+        c.extend(8u32.to_le_bytes());
+        c.extend(version.to_le_bytes());
+        c.extend(2u32.to_le_bytes());
+        let size = u32::try_from(c.len()).expect("a small container");
+        c[24..28].copy_from_slice(&size.to_le_bytes());
+        let sum = primase_dxcontainer::checksum(&c).expect("checksum");
+        c[4..20].copy_from_slice(&sum);
+        c
+    }
+
+    /// A permutation names its program by the hash stored after the container; one whose program isn't a pixel or
+    /// vertex one is refused with the reason, not as a hash that names nothing.
+    #[test]
+    fn a_permutation_of_an_unreadable_program_is_refused_with_why() {
+        let body = |version: u32| {
+            let mut b = vec![9; 8];
+            b.extend(container(version));
+            b.extend(0xABCD_0123u32.to_le_bytes());
+            b.extend([0; 8]);
+            b.extend(SHADER_PERMUTATION.to_le_bytes());
+            b.extend(0x40_0000u32.to_le_bytes()); // the key
+            b.extend(0u32.to_le_bytes()); // no parameters
+            b.extend(0xABCD_0123u32.to_le_bytes()); // the UCodeHash
+            b.extend([0; 24]);
+            b
+        };
+        // a pixel program (type 0, SM5.0)
+        let read = body(0x0000_0050);
+        let p = permutations(&read).expect("a pixel program");
+        assert_eq!(
+            (p.len(), p[0].stage, p[0].key, p[0].at),
+            (1, Stage::Pixel, 0x40_0000, 8)
+        );
+        // a compute program (type 5)
+        let read = body(0x0005_0050);
+        let e = permutations(&read).unwrap_err().to_string();
+        assert_eq!(
+            e,
+            "ShaderPermutation at 64 (key 0x00400000): its program at 8 can't be read: its program type 5 is not a \
+             pixel or vertex one"
+        );
     }
 
     #[test]

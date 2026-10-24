@@ -437,7 +437,7 @@ fn engine_constants(
     register: u32,
     resource: ResourceId,
     size: u32,
-    reads: Option<&ConstantReads>,
+    reads: Result<&ConstantReads, &str>,
     m: &AnvilMaterial,
     counts: &mut BTreeMap<String, u64>,
 ) -> Vec<ConstantBinding> {
@@ -451,14 +451,19 @@ fn engine_constants(
             role: ConstantRole::Unknown { why },
         }]
     };
-    let Some(reads) = reads else {
-        bump(
-            "engine constant buffers of a program whose reads could not be taken, bound whole and Unknown",
-            1,
-        );
-        return whole(format!(
-            "cb{register} is the engine's per-frame, per-view or per-draw constants: no role resolved (the program's reads were not taken)"
-        ));
+    let reads = match reads {
+        Ok(reads) => reads,
+        Err(why) => {
+            bump(
+                &format!(
+                    "engine constant buffers of a program whose reads could not be taken ({why}), bound whole and Unknown"
+                ),
+                1,
+            );
+            return whole(format!(
+                "cb{register} is the engine's per-frame, per-view or per-draw constants: no role resolved (the program's reads were not taken: {why})"
+            ));
+        }
     };
     let (rows, dynamic) = reads.rows_of(0, register);
     if dynamic {
@@ -638,7 +643,8 @@ impl Pass for ResolveAnvilShaders {
             .map(|(e, m)| (e, m.clone()))
             .collect();
         let mut programs: BTreeMap<(Entity, bool, u32), Result<Entity, String>> = BTreeMap::new();
-        let mut reads_of: BTreeMap<Entity, Option<ConstantReads>> = BTreeMap::new();
+        // each program's constant reads, or why they could not be taken (the lift's error)
+        let mut reads_of: BTreeMap<Entity, Result<ConstantReads, String>> = BTreeMap::new();
         // the vertex layout number (`anvil.layout.kind`) of every mesh drawn with each Material
         let mut layouts_of: BTreeMap<Entity, std::collections::BTreeSet<u8>> = BTreeMap::new();
         for (_, mesh) in world.iter::<AnvilMesh>() {
@@ -770,10 +776,12 @@ impl Pass for ResolveAnvilShaders {
                 let reads = reads_of
                     .entry(shader)
                     .or_insert_with(|| {
-                        world
+                        let s = world
                             .get::<Shader>(shader)
-                            .and_then(|s| primase_dxbc::lift(&s.bytecode).ok())
+                            .ok_or_else(|| "a resolved shader entity without its shader".to_owned())?;
+                        primase_dxbc::lift(&s.bytecode)
                             .map(|p| ConstantReads::of_module(p.module, |b| (b.group, b.binding)))
+                            .map_err(|e| format!("the lift: {e}"))
                     })
                     .clone();
                 bound.push(self.stage_binding(
@@ -786,7 +794,7 @@ impl Pass for ResolveAnvilShaders {
                     shader,
                     &interface,
                     vertex_bound,
-                    reads.as_ref(),
+                    reads.as_ref().map_err(String::as_str),
                     &mut counts,
                 ));
             }
@@ -879,7 +887,7 @@ impl ResolveAnvilShaders {
         shader: Entity,
         interface: &Interface,
         vertex_bound: bool,
-        reads: Option<&ConstantReads>,
+        reads: Result<&ConstantReads, &str>,
         counts: &mut BTreeMap<String, u64>,
     ) -> StageBinding {
         let bump = |what: &str, counts: &mut BTreeMap<String, u64>| {
@@ -1548,7 +1556,7 @@ mod key_tests {
             }
             found_buffer = true;
             let mut counts = BTreeMap::new();
-            let bound = engine_constants(bind.register, r.id, layout.size, Some(&reads), &m, &mut counts);
+            let bound = engine_constants(bind.register, r.id, layout.size, Ok(&reads), &m, &mut counts);
             let (rows, dynamic) = reads.rows_of(0, bind.register);
             if dynamic {
                 assert_eq!(bound.len(), 1);
@@ -1598,7 +1606,7 @@ mod key_tests {
         let reads = ConstantReads::of_module(primase_dxbc::lift(LIFTED).unwrap().module, |b| {
             (b.group, b.binding)
         });
-        let _ = engine_constants(2, ResourceId(0), 18 * 16 + 16, Some(&reads), &m, &mut counts);
+        let _ = engine_constants(2, ResourceId(0), 18 * 16 + 16, Ok(&reads), &m, &mut counts);
         let tile = |reference: f32| engine_tile(2, 18, reference).remove(0);
         assert_eq!(
             tile(128.0 / 255.0).2,
