@@ -7,6 +7,7 @@
 //   dxc -T vs_6_0 -E main -Od -D SKINNED -D WEIGHTED_TRANSLATION -Fo tables_vs.skinned_weighted.dxil tables_vs.hlsl
 //   dxc -T vs_6_0 -E main -Od -D SKINNED -D STRIDE_TWO -Fo tables_vs.skinned_stride2.dxil tables_vs.hlsl
 //   dxc -T vs_6_0 -E main -Od -D SKINNED -D IGNORE_BIT18 -Fo tables_vs.skinned_bit18.dxil tables_vs.hlsl
+//   dxc -T vs_6_0 -E main -Od -D SKINNED -D SECOND_BLOCK -Fo tables_vs.skinned_second_block.dxil tables_vs.hlsl
 // A vertex program that finds its world position the way the census's instanced vertex programs do: the record of the
 // instance (the buffer at t0, one word, or two with the matrix in the last) names the element of a header in the matrix
 // table (t67), whose first word's bits move the three rows after it, and the clip position is the camera-relative form of
@@ -65,6 +66,13 @@ VO main(float3 position : POSITION0,
 #endif
     float4 p = float4(position, 1);
     float3 w = float3(0, 0, 0);
+#ifdef SECOND_BLOCK
+    // the 6848-byte hat program also reads the elements the offset flag would have put the block at, the translation and
+    // the first joint's rows, and no output moved when they were filled: read here, and added at a weight of zero
+    float4 second_translation = matrices[rec + 1];
+    float4 second_row = matrices[rec + 4];
+    w += (second_translation.xyz + second_row.xyz) * 0.0;
+#endif
     [unroll] for (uint k = 0; k < 4; k++) {
         uint at = first + JOINT_STRIDE * joints[k];
         w += weights[k] * float3(dot(matrices[at], p), dot(matrices[at + 1], p), dot(matrices[at + 2], p));

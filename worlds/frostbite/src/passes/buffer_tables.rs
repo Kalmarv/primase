@@ -219,6 +219,9 @@ impl BufferReads for Tables {
     }
 }
 
+/// What the offset flag's run says of extra elements it reads at the unshifted offsets.
+const SECOND_BLOCK_NOTE: &str = ": the extra ones are those the flag does not move, a second block no output of the program was seen to depend on when it was filled, its role unknown";
+
 /// The elements a skinned block has read: the header, the translation element after it (`offset` elements later when the
 /// header's offset flag says so) and the first joint's three rows `prefix` elements after that (one more when bit 18 is set).
 fn skinned_reads(header: u32, offset: u32, prefix: u32, bit18: u32) -> BTreeSet<u32> {
@@ -488,9 +491,20 @@ pub fn probe_tables_with(
                 )?;
                 let want = skinned_reads(header, offset, prefix32, bit18);
                 if r.buffers.elements != want {
+                    // A block read where the offset flag does not put it, as well as where it does: measured on the hat's
+                    // 6848-byte program, whose outputs did not move when every lane of that block was filled (with the
+                    // other constants zero and 0.5), so its role is not known.
+                    let unshifted = skinned_reads(header, 0, prefix32, 0);
+                    let second_block = offset > 0
+                        && want.is_subset(&r.buffers.elements)
+                        && r.buffers
+                            .elements
+                            .difference(&want)
+                            .all(|e| unshifted.contains(e));
                     return Err(format!(
-                        "with the header's {what} it reads the matrix table's elements {:?}, not {want:?}",
-                        r.buffers.elements
+                        "with the header's {what} it reads the matrix table's elements {:?}, not {want:?}{}",
+                        r.buffers.elements,
+                        if second_block { SECOND_BLOCK_NOTE } else { "" }
                     ));
                 }
             }

@@ -1464,7 +1464,7 @@ impl StageBinding {
                         }
                         if *prefix == 0 {
                             return Err(format!(
-                                "buffer slot {} holds skinned matrices with no prefix element for what it says the                                  first one holds",
+                                "buffer slot {} holds skinned matrices with no prefix element to say what the first one holds",
                                 b.resource.0
                             ));
                         }
@@ -2091,7 +2091,7 @@ mod tests {
             ),
             (
                 vec![skinned(10, 3, 3, 0), instances(11, 2, 1, 10), rest()],
-                "no prefix element",
+                "no prefix element to say what the first one holds",
             ),
             (
                 vec![skinned(10, 5, 5, 3), instances(11, 2, 1, 10), rest()],
@@ -2101,6 +2101,8 @@ mod tests {
             w.insert(m, buffer_binding(s, buffers.clone()));
             let err = w.get::<ShaderBinding>(m).unwrap().verify(m, &w).unwrap_err();
             assert!(err.contains(message), "{buffers:?}: {err}");
+            // no message holds a run of spaces (a line continuation once ate a newline inside one)
+            assert!(!err.contains("  "), "{err}");
         }
         // a stage that states buffers states every one; one that states none leaves each unknown with that reason
         w.insert(

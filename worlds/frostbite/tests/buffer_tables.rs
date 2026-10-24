@@ -18,6 +18,7 @@ const SKINNED: &[u8] = include_bytes!("fixtures/tables_vs.skinned.dxil");
 const SKINNED_WEIGHTED: &[u8] = include_bytes!("fixtures/tables_vs.skinned_weighted.dxil");
 const SKINNED_STRIDE_TWO: &[u8] = include_bytes!("fixtures/tables_vs.skinned_stride2.dxil");
 const SKINNED_BIT_18: &[u8] = include_bytes!("fixtures/tables_vs.skinned_bit18.dxil");
+const SKINNED_SECOND_BLOCK: &[u8] = include_bytes!("fixtures/tables_vs.skinned_second_block.dxil");
 
 fn shader(bytes: &[u8]) -> Shader {
     let program = primase_dxil::lift(bytes).expect("the fixture lifts");
@@ -172,4 +173,12 @@ fn a_skinned_program_that_breaks_a_proved_part_is_refused_by_the_run_that_shows_
     assert!(err.contains("fewer than a joint's three rows"), "{err}");
     let err = probed_skinned(SKINNED_BIT_18).unwrap_err();
     assert!(err.contains("with the header's bit 18 set"), "{err}");
+    // a block also read where the offset flag does not put it (the hat's 6848-byte program): refused by the flag's run, which
+    // says the extra elements are that second block and that its role is unknown
+    let err = probed_skinned(SKINNED_SECOND_BLOCK).unwrap_err();
+    assert!(err.contains("with the header's offset flag set to 2"), "{err}");
+    assert!(
+        err.contains("a second block no output of the program was seen to depend on"),
+        "{err}"
+    );
 }
