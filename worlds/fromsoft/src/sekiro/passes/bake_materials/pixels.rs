@@ -128,7 +128,8 @@ pub(super) fn bake(
         })
         .collect();
     let index = |predicate: fn(&OutputRole) -> bool| outputs.iter().position(|o| predicate(&o.role));
-    let albedo = index(|r| matches!(r, OutputRole::Albedo)).ok_or("no albedo output role")?;
+    let albedo = index(|r| matches!(r, OutputRole::Albedo))
+        .ok_or_else(|| super::colour::refusal(shader.program(), stage))?;
     let normal_index = index(|r| matches!(r, OutputRole::Normal { .. })).ok_or("no normal output role")?;
     let rough = index(|r| matches!(r, OutputRole::Gloss { .. } | OutputRole::Roughness))
         .ok_or("no gloss/roughness output role")?;

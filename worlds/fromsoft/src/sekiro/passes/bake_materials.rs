@@ -1,4 +1,5 @@
 //! Static texture-space material bake from resolved game programs. The binding owns the G-buffer layout.
+mod colour;
 mod pixels;
 
 use super::settings::{PixelCap, Seconds};
