@@ -14,7 +14,8 @@ use super::ShaderBinding;
 /// field is left as it is; a binding with no stage keyed by `field`, or none of the value `value` (a source numbers a
 /// binding's variants from 0, so bindings hold different numbers of them), is left as it is and counted. A `value`
 /// that no binding of the world carries, or a `field` none uses, is an error naming the fields and values the world
-/// does carry, and changes nothing.
+/// does carry, and changes nothing. A program only the stages left out drew (its `core.shader` entity, which nothing
+/// in the world refers to any more) is despawned, counted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelectVariant {
     pub field: String,
@@ -82,6 +83,10 @@ impl Pass for SelectVariant {
     fn modifies(&self) -> &[&'static str] {
         &[ShaderBinding::NAME]
     }
+    /// The programs only the left-out stages drew.
+    fn despawns_entities(&self) -> bool {
+        true
+    }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let mut fields: BTreeSet<&str> = BTreeSet::new();
         let mut values: BTreeSet<u32> = BTreeSet::new();
@@ -113,6 +118,8 @@ impl Pass for SelectVariant {
             ));
         }
         let chosen: Vec<_> = w.iter::<ShaderBinding>().map(|(e, b)| (e, b.clone())).collect();
+        // the programs of the stages left out, despawned below where nothing refers to them any more
+        let mut left_out = BTreeSet::new();
         for (entity, mut binding) in chosen {
             let keyed = |s: &super::StageBinding| s.variant.as_ref().is_some_and(|k| k.field == self.field);
             if !binding.stages.iter().any(keyed) {
@@ -131,6 +138,17 @@ impl Pass for SelectVariant {
                 continue;
             }
             let before = binding.stages.len();
+            left_out.extend(
+                binding
+                    .stages
+                    .iter()
+                    .filter(|s| {
+                        s.variant
+                            .as_ref()
+                            .is_some_and(|k| k.field == self.field && k.value != self.value)
+                    })
+                    .map(|s| s.shader),
+            );
             binding.stages.retain(|s| {
                 s.variant
                     .as_ref()
@@ -148,6 +166,15 @@ impl Pass for SelectVariant {
             );
             w.insert(entity, binding);
         }
+        let unreferenced = w.unreferenced();
+        let gone: Vec<_> = left_out.intersection(&unreferenced).copied().collect();
+        for &e in &gone {
+            w.despawn(e);
+        }
+        log.count(
+            "shader programs only the left-out stages drew, despawned",
+            gone.len() as u64,
+        );
         Ok(())
     }
 }
@@ -222,6 +249,37 @@ mod tests {
         assert_eq!(after.stages[0].stage, Stage::Vertex);
         assert_eq!(log.counts["bindings with one variant chosen"], 1);
         assert_eq!(log.counts["stages left out: another variant of the field"], 4);
+    }
+
+    /// The programs only the left-out stages drew are despawned; one another binding still draws stays.
+    #[test]
+    fn programs_only_the_left_out_stages_drew_are_despawned() {
+        let mut w = World::new();
+        let a = binding(&mut w, "dialect.variant", &[0, 1, 2]);
+        let stages = w.get::<ShaderBinding>(a).unwrap().stages.clone();
+        let (shared, gone) = (
+            stages[0].shader,
+            [stages[1].shader, stages[4].shader, stages[5].shader],
+        );
+        // another binding draws the first left-out program, unkeyed
+        let other = w.spawn();
+        let mut drawn = stage(&mut w, Stage::Vertex, None);
+        drawn.shader = shared;
+        w.insert(
+            other,
+            ShaderBinding {
+                stages: vec![drawn],
+                ..ShaderBinding::default()
+            },
+        );
+        let log = run(&mut w, "dialect.variant", "1").unwrap();
+        assert!(w.is_alive(shared));
+        assert!(gone.iter().all(|&e| !w.is_alive(e)));
+        assert!(stages[2..4].iter().all(|s| w.is_alive(s.shader)));
+        assert_eq!(
+            log.counts["shader programs only the left-out stages drew, despawned"],
+            3
+        );
     }
 
     #[test]
