@@ -577,6 +577,35 @@ pub enum OutputRole {
     Unknown(u32),
 }
 
+impl OutputRole {
+    /// The encoding a role's value is stored in, for the roles that state one.
+    pub fn scalar_encoding(&self) -> Option<ScalarEncoding> {
+        match *self {
+            OutputRole::Gloss { encoding }
+            | OutputRole::Occlusion { encoding, .. }
+            | OutputRole::Reflectance { encoding }
+            | OutputRole::SpecularIntensity { encoding }
+            | OutputRole::SpecularExponent { encoding }
+            | OutputRole::Emission { encoding } => Some(encoding),
+            _ => None,
+        }
+    }
+}
+
+impl ScalarEncoding {
+    /// Whether the encoding is one: a power and a root other than 0, and a finite scale.
+    pub fn check(&self) -> Result<(), String> {
+        let scale = f32::from_bits(self.scale_bits);
+        if self.power == 0 || self.root == 0 || !scale.is_finite() {
+            return Err(format!(
+                "an encoding of power {}, root {} and scale {scale}: power and root are never 0, the scale is finite",
+                self.power, self.root
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Lanes of one output varying and their role: an output's lanes may carry different things (albedo in rgb and
 /// occlusion in a), as several bindings of one label.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -908,6 +937,9 @@ impl StageBinding {
                     "output {}{} has {} lanes, not the mask {:#x}",
                     o.label.name, o.label.index, v.value.width, o.lanes
                 )));
+            }
+            if let Some(Err(why)) = o.role.scalar_encoding().map(|e| e.check()) {
+                return Err(at(format!("output {}{}: {why}", o.label.name, o.label.index)));
             }
             // one label may carry several roles, each on its own lanes
             if let Some(before) = self.outputs[..n]
@@ -1671,6 +1703,42 @@ mod tests {
         );
         w.insert(m, binding(s, t));
         (w, s, t, m)
+    }
+
+    /// An output's encoding of power or root 0, or of a scale that isn't finite, is refused, naming the output.
+    #[test]
+    fn an_encoding_of_no_power_no_root_or_no_finite_scale_is_refused() {
+        let one = 1f32.to_bits();
+        for bad in [
+            ScalarEncoding {
+                power: 0,
+                root: 1,
+                scale_bits: one,
+            },
+            ScalarEncoding {
+                power: 1,
+                root: 0,
+                scale_bits: one,
+            },
+            ScalarEncoding {
+                power: 1,
+                root: 1,
+                scale_bits: f32::INFINITY.to_bits(),
+            },
+        ] {
+            assert!(bad.check().is_err(), "{bad:?}");
+            let (mut w, _, _, m) = world();
+            let mut b = w.get::<ShaderBinding>(m).unwrap().clone();
+            b.stages[0].outputs[1].role = OutputRole::Occlusion {
+                of: Occluded::AllLight,
+                encoding: bad,
+            };
+            w.insert(m, b);
+            let err = w.get::<ShaderBinding>(m).unwrap().verify(m, &w).unwrap_err();
+            assert!(err.contains("output SV_Target0: an encoding of"), "{err}");
+        }
+        assert_eq!(ScalarEncoding::square_of(0.95).check(), Ok(()));
+        assert_eq!(ScalarEncoding::LINEAR.check(), Ok(()));
     }
 
     #[test]
