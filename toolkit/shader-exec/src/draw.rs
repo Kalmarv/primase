@@ -211,9 +211,16 @@ impl<'a> DrawShader<'a> {
                     continue;
                 }
                 Some(SystemValue::FrontFacing) => {
+                    // the signature names the lane the facing is read in: a mask of none is a malformed signature
+                    let Some(&lane) = to_lanes.first() else {
+                        return Err(error(format!(
+                            "pixel input {}{} is the facing, and its signature mask names no lane",
+                            v.label.name, v.label.index
+                        )));
+                    };
                     sources.push(Source::FrontFace {
                         register: to_register,
-                        lane: to_lanes.first().copied().unwrap_or(0),
+                        lane,
                     });
                     continue;
                 }
