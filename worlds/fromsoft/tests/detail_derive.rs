@@ -503,14 +503,34 @@ const OUTFITS: [(&str, &[&str]); 2] = [
 /// What `derive-fromsoft-detail` did to one outfit.
 #[derive(Debug, PartialEq, Default)]
 struct DetailCensus {
-    /// The detail-blend materials, by MTD.
-    candidates: Vec<String>,
+    /// The detail-blend materials.
+    candidates: usize,
     /// Those given a `pbr.detail`, by MTD.
     given: Vec<String>,
     /// Those given none, by reason.
     refused: BTreeMap<String, u64>,
     /// Slots counted as repeating where the source states no addressing, by reason.
     wraps: BTreeMap<String, u64>,
+}
+
+/// The wrap counts of `n` slots at each share past 0 to 1 (`percent`), and `within` slots inside it.
+fn wrap_counts(within: u64, beyond: &[(u32, u64)]) -> BTreeMap<String, u64> {
+    let mut out = BTreeMap::new();
+    if within > 0 {
+        out.insert(
+            primase_fromsoft::sekiro::passes::detail::UNSTATED_WRAP_UNIT.to_owned(),
+            within,
+        );
+    }
+    for (percent, n) in beyond {
+        out.insert(
+            format!(
+                "wrap not stated; Clamp would hold the texture constant beyond 0 to 1 over {percent}% of the coordinates"
+            ),
+            *n,
+        );
+    }
+    out
 }
 
 /// The outfits read from the install and lowered as the lab lowers a character up to its shader binding
@@ -545,13 +565,12 @@ fn the_pass_on_the_wolfs_outfits() -> TestResult {
         let mut c = DetailCensus::default();
         for (e, m) in world.iter::<Material>() {
             if m.shader == "Character_AMSN_[DetailBlend]" {
-                c.candidates.push(m.mtd.clone());
+                c.candidates += 1;
                 if world.get::<DetailedMaterial>(e).is_some() {
                     c.given.push(m.mtd.clone());
                 }
             }
         }
-        c.candidates.sort();
         c.given.sort();
         let given =
             "detail-blend materials given pbr.detail (their program's equation proven on their own words)";
@@ -575,11 +594,53 @@ fn the_pass_on_the_wolfs_outfits() -> TestResult {
         println!("{outfit}: {c:#?}");
         census.insert(outfit, c);
     }
-    // every number a placeholder until the census is run on the install
+    // the counts of the desktop run on adbd9051 (the Wolf's default outfit; the Ashina costume), which the pass
+    // then counted by the reasons it has now
     let expected = BTreeMap::from([
-        (OUTFITS[0].0, DetailCensus::default()),
-        (OUTFITS[1].0, DetailCensus::default()),
+        (
+            OUTFITS[0].0,
+            (
+                9,
+                vec!["P_AM_M_9000_artificialarm", "P_LG_M_9000_bottoms1"],
+                wrap_counts(5, &[(11, 7), (23, 7), (51, 3), (98, 1), (99, 1), (100, 3)]),
+            ),
+        ),
+        (
+            OUTFITS[1].0,
+            (
+                8,
+                vec!["P_AM_M_9120_artificialarm", "P_BD_M_9120_haori"],
+                wrap_counts(0, &[(11, 9), (27, 7), (70, 3), (100, 1)]),
+            ),
+        ),
     ]);
-    assert_eq!(census, expected);
+    for (outfit, c) in &census {
+        let (candidates, given, wraps) = &expected[outfit];
+        assert_eq!(c.candidates, *candidates, "{outfit}");
+        assert_eq!(
+            c.given
+                .iter()
+                .map(|m| m.trim_end_matches(".mtd"))
+                .collect::<Vec<_>>(),
+            *given,
+            "{outfit}"
+        );
+        assert_eq!(&c.wraps, wraps, "{outfit}");
+        // every material not given one is counted once, by a reason that is complete text: no Debug of a type, no
+        // value of the material
+        assert_eq!(
+            c.refused.values().sum::<u64>(),
+            (c.candidates - c.given.len()) as u64,
+            "{outfit}: {:?}",
+            c.refused
+        );
+        assert!(
+            c.refused
+                .keys()
+                .all(|k| !k.contains('{') && !k.contains('}') && !k.trim().is_empty()),
+            "{outfit}: {:?}",
+            c.refused
+        );
+    }
     Ok(())
 }

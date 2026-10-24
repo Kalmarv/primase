@@ -106,10 +106,7 @@ impl Pass for DeriveFromSoftDetail {
                     world.insert(e, d);
                     given += 1;
                 }
-                Err(why) => {
-                    let reason = why.split(':').next().unwrap_or(&why).to_owned();
-                    *refused.entry(reason).or_default() += 1;
-                }
+                Err(reason) => *refused.entry(reason).or_default() += 1,
             }
         }
         log.count(
@@ -126,7 +123,8 @@ impl Pass for DeriveFromSoftDetail {
     }
 }
 
-/// The `pbr.detail` of material `e`, or why it gets none.
+/// The `pbr.detail` of material `e`, or why it gets none: a complete reason, the same text for every material refused
+/// alike (no material's own values in it).
 fn detail(
     world: &World,
     e: Entity,
@@ -148,9 +146,9 @@ fn detail(
         },
         _ => return Err("no MTD definition".into()),
     };
-    let mut probe =
-        ProgramProbe::with_material(&shader.bytecode, &layered).map_err(|e| format!("probe: {e}"))?;
-    let equation = derive_equation(&mut probe, proof_seed(&material.mtd))?;
+    let mut probe = ProgramProbe::with_material(&shader.bytecode, &layered)
+        .map_err(|e| format!("its program cannot be probed: {e}"))?;
+    let equation = derive_equation(&mut probe, proof_seed(&material.mtd)).map_err(|e| e.reason)?;
     let texcoord = match probe.coordinate_sets().as_slice() {
         [set] => u8::try_from(*set).map_err(|_| "a coordinate set past 255")?,
         sets => {
@@ -166,19 +164,29 @@ fn detail(
         _ => [1.; 2],
     };
     if !applied.iter().all(|v| v.is_finite() && *v > 0.) {
-        return Err(format!(
-            "the applied tiling {applied:?} is not positive and finite"
-        ));
+        return Err("the tiling the geometry pass applied is not positive and finite".into());
     }
     let coordinates = material_coordinates(world, e, texcoord)?;
-    // each slot the equation reads, its texture as the binding binds it
+    // each slot the equation reads (the derivation gives a slot a role only where its texels move an output), named
+    // by its role, its texture as the binding binds it
     let roles = &equation.roles;
-    let mut slots = vec![roles.base_colour, roles.base_normal, roles.base_mask];
-    slots.extend(roles.details.iter().flat_map(|d| [d.colour, d.normal]));
-    slots.sort_unstable();
-    slots.dedup();
+    let mut slots: BTreeMap<u32, String> = BTreeMap::new();
+    for (slot, role) in [
+        (roles.base_colour, "base colour".to_owned()),
+        (roles.base_normal, "base normal".to_owned()),
+        (roles.base_mask, "base mask".to_owned()),
+    ]
+    .into_iter()
+    .chain(roles.details.iter().enumerate().flat_map(|(j, d)| {
+        [
+            (d.colour, format!("detail {j} colour")),
+            (d.normal, format!("detail {j} normal")),
+        ]
+    })) {
+        slots.entry(slot).or_insert(role);
+    }
     let mut refs: BTreeMap<u32, TextureRef> = BTreeMap::new();
-    for slot in slots {
+    for (slot, role) in slots {
         let bound = stage
             .textures
             .iter()
@@ -189,9 +197,24 @@ fn detail(
                     .and_then(|r| r.provenance.d3d)
                     .is_some_and(|d| d.register == slot)
             })
-            .ok_or_else(|| format!("slot t{slot} is not bound"))?;
-        let TextureSource::Texture { texture, sampler } = &bound.source else {
-            return Err(format!("slot t{slot} is bound to no texture"));
+            .ok_or_else(|| format!("slot t{slot}, the {role} the equation reads, is not bound"))?;
+        let (texture, sampler) = match &bound.source {
+            TextureSource::Texture { texture, sampler } => (texture, sampler),
+            TextureSource::Default { why, .. } => {
+                return Err(format!(
+                    "slot t{slot}, the {role} the equation reads, has no texture: the binding reads a constant ({why})"
+                ));
+            }
+            TextureSource::Frame(frame) => {
+                return Err(format!(
+                    "slot t{slot}, the {role} the equation reads, is the frame's {frame:?}, not a material texture"
+                ));
+            }
+            TextureSource::Missing => {
+                return Err(format!(
+                    "slot t{slot}, the {role} the equation reads, is missing and the source states no default"
+                ));
+            }
         };
         let measured = slot_transform(&probe, slot)?;
         let transform = UvTransform {
@@ -225,7 +248,7 @@ fn detail(
                 Some(AddressMode::Clamp) => Wrap::Clamp,
                 Some(other) => {
                     return Err(format!(
-                        "slot t{slot}'s addressing {other:?}: no detail wrap is it"
+                        "slot t{slot}, the {role} the equation reads, is addressed {other:?}, which no detail wrap is"
                     ));
                 }
             };

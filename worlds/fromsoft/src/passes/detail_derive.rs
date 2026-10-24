@@ -520,7 +520,7 @@ type Solved = (DetailConstants, Frame, f32);
 /// The constants of the equation as `program` computes them, read run by run with designed samples. The material's
 /// words are taken as they are (none clamped); where its tints and gain saturate the designed colour, the designed base
 /// colour is halved until no designed colour saturates (at most [`HALVINGS`] times), the scale returned.
-fn solve(program: &Program<'_>) -> Result<Solved, String> {
+fn solve(program: &Program<'_>) -> Result<Solved, NotDerived> {
     let weights = program.weights();
     let last_end = *weights.ends().last().unwrap_or(&0.);
     for halvings in 0..=HALVINGS {
@@ -540,7 +540,8 @@ fn solve(program: &Program<'_>) -> Result<Solved, String> {
     Err(format!(
         "the designed colour saturates at every scale of the base colour down to 1/{}",
         1 << HALVINGS
-    ))
+    )
+    .into())
 }
 
 /// Which detail's reflectance term reads the base mask: the one whose observed colour moves with it where it is taken
@@ -588,7 +589,7 @@ fn masked_detail(program: &Program<'_>, scale: f32) -> Result<usize, String> {
 }
 
 /// [`solve`] with the designed base colour at `scale`: `None` where a designed colour saturates.
-fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants, Frame)>, String> {
+fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants, Frame)>, NotDerived> {
     let n = program.details();
     let weights = program.weights();
     let run = |s: &Samples| program.observe(s, UV);
@@ -600,9 +601,9 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
     let full = run(&design(at_p, 100.))?;
     let s = design(at_p, 100.);
     if full.albedo.iter().any(|&a| a != 0.) {
-        return Err(format!(
-            "the albedo is {:?} where the reflectance mix is 1",
-            full.albedo
+        return Err(NotDerived::new(
+            "the albedo is not zero where the reflectance mix is 1",
+            format!("{:?}", full.albedo),
         ));
     }
     let c_p = full.reflectance;
@@ -610,8 +611,9 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
         return Ok(None);
     }
     if c_p.iter().any(|&c| c <= 0.) {
-        return Err(format!(
-            "detail {p}'s colour {c_p:?} is zero at the designed sample"
+        return Err(NotDerived::new(
+            format!("detail {p}'s colour is zero at the designed sample"),
+            format!("{c_p:?}"),
         ));
     }
     let mut tints = vec![[0f32; 3]; n];
@@ -622,9 +624,9 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
     let none = run(&design(at_p, -100.))?;
     let f0 = none.reflectance[0];
     if none.reflectance.iter().any(|&r| r != f0) {
-        return Err(format!(
-            "the dielectric reflectance {:?} is not grey",
-            none.reflectance
+        return Err(NotDerived::new(
+            "the dielectric reflectance is not grey",
+            format!("{:?}", none.reflectance),
         ));
     }
     let colour: [f32; 3] = std::array::from_fn(|i| none.albedo[i] / c_p[i]);
@@ -732,9 +734,7 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
         }
     }
     if !settled {
-        return Err(format!(
-            "the reflectance biases do not settle in {BIAS_ROUNDS} rounds"
-        ));
+        return Err(format!("the reflectance biases do not settle in {BIAS_ROUNDS} rounds").into());
     }
     // the tangent frame, from the base normal alone (the details flat): x, y and z of tangent space
     let first_end = weights.ends()[0];
@@ -828,7 +828,8 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
             if !alone {
                 return Err(format!(
                     "detail {j}'s gloss scale is a constant and no end of the weights takes it alone"
-                ));
+                )
+                .into());
             }
             let (c, b) = constant_gloss((kz, g), |k| gloss_at(k, nz))
                 .map_err(|e| format!("detail {j}'s gloss: {e}"))?;
@@ -838,8 +839,9 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
         } else if let Some((z2, g2)) = second
             && units(g / nz, g2 / z2)? > BOUND_UNITS
         {
-            return Err(format!(
-                "detail {j}'s gloss moves with the base normal's z, not in proportion ({g} at {nz}, {g2} at {z2})"
+            return Err(NotDerived::new(
+                format!("detail {j}'s gloss moves with the base normal's z, not in proportion"),
+                format!("{g} at {nz}, {g2} at {z2}"),
             ));
         }
         let mut sample = base.n;
@@ -877,7 +879,8 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
             let [j] = moving.as_slice() else {
                 return Err(format!(
                     "the alpha moves with the colour alpha of details {moving:?}, not one detail's"
-                ));
+                )
+                .into());
             };
             if !moves(&|t| t.a[3] = 0.5)? {
                 return Err("the alpha does not move with the base colour's alpha".into());
@@ -998,7 +1001,7 @@ fn compare_set(
     (s, uv): (&Samples, [f32; 2]),
     set: &str,
     largest: &mut BTreeMap<&'static str, f32>,
-) -> Result<(), String> {
+) -> Result<(), NotDerived> {
     let limit = BOUND_UNITS;
     let seen = program.observe(s, uv)?;
     let want = equation(c, 1., s);
@@ -1006,13 +1009,21 @@ fn compare_set(
     let n = want.normal;
     let world: [f32; 3] = std::array::from_fn(|i| (0..3).map(|axis| frame[axis][i] * n[axis]).sum());
     let length = (world[0] * world[0] + world[1] * world[1] + world[2] * world[2]).sqrt();
-    let mut check = |role: &'static str, got: f32, wanted: f32| -> Result<(), String> {
-        let u = units(got, wanted).map_err(|e| format!("set {set}: {role}: {e}"))?;
+    let mut check = |role: &'static str, got: f32, wanted: f32| -> Result<(), NotDerived> {
+        let u = units(got, wanted).map_err(|e| {
+            NotDerived::new(
+                format!("its {role} or the equation's is not finite on the proof's samples"),
+                format!("set {set}: {e}"),
+            )
+        })?;
         let e = largest.entry(role).or_default();
         *e = e.max(u);
         if u > limit {
-            return Err(format!(
-                "set {set}: {role} {got} where the equation gives {wanted} ({u:.0} units, past {limit:.0})"
+            return Err(NotDerived::new(
+                format!(
+                    "its equation does not hold on the proof's samples: the {role} is off past {limit:.0} units"
+                ),
+                format!("set {set}: {role} {got} where the equation gives {wanted} ({u:.0} units)"),
             ));
         }
         Ok(())
@@ -1033,7 +1044,7 @@ fn compare_set(
 /// `program` against the equation of `c` on [`PROOF_SETS`] random sample sets at random coordinates, then on
 /// [`TRANSITION_SETS`] where the weights mix: the largest difference per role of each, or the first set past
 /// [`BOUND_UNITS`] (or with an emission).
-fn prove(program: &Program<'_>, c: &DetailConstants, frame: &Frame, seed: u32) -> Result<Proof, String> {
+fn prove(program: &Program<'_>, c: &DetailConstants, frame: &Frame, seed: u32) -> Result<Proof, NotDerived> {
     let mut random = Seeded::new(seed);
     let mut largest: BTreeMap<&'static str, f32> = BTreeMap::new();
     for set in 0..PROOF_SETS {
@@ -1292,6 +1303,7 @@ fn compare_fields(
             roles,
         })
         .map(|(c, _, _)| constant_lanes(&c))
+        .map_err(|e| e.to_string())
     };
     let lanes = word_sources(probe, read)?;
     // the gain: the first tint lane over its word, where it reads one
@@ -1357,15 +1369,19 @@ fn equation_with(
     outputs: Outputs,
     roles: SlotRoles,
     seed: u32,
-) -> Result<Equation, String> {
+) -> Result<Equation, NotDerived> {
     let program = Program {
         probe,
         outputs,
         roles: &roles,
     };
     let (constants, frame, design_scale) = solve(&program)?;
-    let proof = prove(&program, &constants, &frame, seed)
-        .map_err(|e| format!("{constants:?} frame {frame:?}: {e}"))?;
+    let proof = prove(&program, &constants, &frame, seed).map_err(|e| {
+        NotDerived::new(
+            e.reason,
+            format!("{}; constants {constants:?}, frame {frame:?}", e.detail),
+        )
+    })?;
     let frozen = frozen(probe, outputs, &roles, seed)?;
     Ok(Equation {
         roles,
@@ -1517,12 +1533,61 @@ pub fn slot_transform(probe: &ProgramProbe, slot: u32) -> Result<UvTransform, St
     })
 }
 
+/// Why a program's equation is not derived ([`derive_equation`]): `reason`, the same text for every program refused
+/// alike (what a count states), and `detail`, the values that show it for this one (empty where the reason says all).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotDerived {
+    pub reason: String,
+    pub detail: String,
+}
+
+impl NotDerived {
+    fn new(reason: impl Into<String>, detail: impl Into<String>) -> Self {
+        NotDerived {
+            reason: reason.into(),
+            detail: detail.into(),
+        }
+    }
+}
+
+/// A reason that says all (the derivation's other refusals: what differs from the equation, by slot and lane).
+impl From<String> for NotDerived {
+    fn from(reason: String) -> Self {
+        NotDerived::new(reason, "")
+    }
+}
+
+impl From<&str> for NotDerived {
+    fn from(reason: &str) -> Self {
+        NotDerived::new(reason, "")
+    }
+}
+
+impl std::fmt::Display for NotDerived {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.detail.is_empty() {
+            f.write_str(&self.reason)
+        } else {
+            write!(f, "{} ({})", self.reason, self.detail)
+        }
+    }
+}
+
+impl std::error::Error for NotDerived {}
+
+/// A comparison of the program's value with the equation's where one is not finite.
+impl From<NonFinite> for NotDerived {
+    fn from(e: NonFinite) -> Self {
+        NotDerived::new("a value compared is not finite", e.to_string())
+    }
+}
+
 /// The equation of `probe`'s program, as a consumer draws it: its textures' parts read from what moves which output
 /// ([`identify`]), its constants solved, proven on [`PROOF_SETS`] random sample sets and [`TRANSITION_SETS`] where the
 /// weights mix (every role within [`BOUND_UNITS`]), and what it holds constant ([`frozen`]); an error naming what
 /// differs from the equation. The constants are not compared with the material's words here ([`derive`] does, for the
 /// census): a consumer takes the equation the proof holds.
-pub fn derive_equation(probe: &mut ProgramProbe, seed: u32) -> Result<Equation, String> {
+pub fn derive_equation(probe: &mut ProgramProbe, seed: u32) -> Result<Equation, NotDerived> {
     let outputs = outputs(probe)?;
     let roles = roles_of(probe, outputs)?;
     equation_with(probe, outputs, roles, seed)
@@ -1531,7 +1596,7 @@ pub fn derive_equation(probe: &mut ProgramProbe, seed: u32) -> Result<Equation, 
 /// [`derive_equation`], with each constant beside the material word it reads ([`FieldComparison`]) and the tint fold's
 /// cost ([`FoldCost`]): the evidence the census audits the equation by.
 pub fn derive(probe: &mut ProgramProbe, seed: u32) -> Result<Derived, String> {
-    let equation = derive_equation(probe, seed)?;
+    let equation = derive_equation(probe, seed).map_err(|e| e.to_string())?;
     let outputs = outputs(probe)?;
     let fields = compare_fields(probe, outputs, &equation.roles)?;
     let constants = &equation.constants;
@@ -2065,5 +2130,23 @@ mod tests {
         metallic[1].role = OutputRole::Metallic;
         let err = outputs_of(&varyings(), &metallic).unwrap_err();
         assert!(err.contains("is not a detail blend's"), "{err}");
+    }
+
+    /// A refusal's text is its reason (the same for every program refused alike) and, apart, the values that show it;
+    /// a reason alone displays as itself, a conversion from text states no values, and two refusals with one reason
+    /// and different values count as one reason.
+    #[test]
+    fn a_refusal_is_a_reason_and_apart_the_values() {
+        let a = NotDerived::new("the dielectric reflectance is not grey", "[0.1, 0.2, 0.3]");
+        let b = NotDerived::new("the dielectric reflectance is not grey", "[0.0, 0.0, 0.1]");
+        assert_ne!(a, b);
+        assert_eq!(a.reason, b.reason);
+        assert_eq!(
+            a.to_string(),
+            "the dielectric reflectance is not grey ([0.1, 0.2, 0.3])"
+        );
+        let c = NotDerived::from("no detail's reflectance term reads the base mask");
+        assert_eq!(c.detail, "");
+        assert_eq!(c.to_string(), "no detail's reflectance term reads the base mask");
     }
 }
