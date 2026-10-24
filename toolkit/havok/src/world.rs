@@ -20,8 +20,8 @@
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassRegistry, PassSpec};
 use primase_core::{
-    Channel, Clip, ClipTarget, Component, Entity, Extrapolation, Interpolation, Joint, JointId, Name,
-    Property, Rest, RootMotion, RootSpace, Skeleton as CoreSkeleton, World,
+    AdditiveReference, Channel, Clip, ClipTarget, Component, Entity, Extrapolation, Interpolation, Joint,
+    JointId, Name, Property, Rest, RootMotion, RootSpace, Skeleton as CoreSkeleton, World,
 };
 
 use crate::animation::{Binding, Container, QsTransform, ReferenceFrame, Skeleton, Tracks};
@@ -251,9 +251,18 @@ pub enum RootMotionUse {
 /// `absent` is what stands in for a component a track does not state (zero, the identity and one, or the bone's
 /// reference transform); `rate` is the keys for each frame the animation was authored at (1 to 16): each key is the
 /// spline sampled at its time, and a channel whose values do not change is a single key. Approximation: between keys
-/// the clip interpolates (linearly, rotations by slerp), the spline is evaluated at the keys only. An animation whose
-/// blend hint is not 0 (additive) is left out, counted, as its values are not absolute transforms. `root-motion` is
-/// [`RootMotionUse`]: what is not lowered of an animation's extracted motion is counted.
+/// the clip interpolates (linearly, rotations by slerp), the spline is evaluated at the keys only.
+///
+/// An animation whose blend hint is 1 (additive) is lowered with `additive: Identity`: its tracks' values are deltas, not
+/// absolute transforms. Measured on Elden Ring's c3000 (146 such animations, 3,950 tracks, 721 animations as control): of
+/// the stated positions that differ by more than 2 cm between the reference pose and zero, all 1,524 are nearer zero; of
+/// the stated rotations that differ by more than 10 degrees between the reference and the identity, 900 of 918 are nearer
+/// the identity (the 575 normal animations: 9,017 of 10,424 positions and 12,696 of 13,323 rotations nearer the reference).
+/// What a track does not state is then the neutral value (zero, the identity, one) whatever `absent` says: the reference
+/// transform is not a delta. Not settled: the side a Havok delta composes on (core states `R_base * R_clip`; the Havok
+/// SDK headers found, 2009 `NORMAL = 0, ADDITIVE = 1` and Skyrim SE's `kNormal, kAdditive`, state no side, and no source
+/// found names a later `ADDITIVE_DEPRECATED`). Any other blend hint is left out and reported as unsupported (`omit`).
+/// `root-motion` is [`RootMotionUse`]: what is not lowered of an animation's extracted motion is counted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LowerHavokClips {
     pub absent: Fallback,
@@ -471,13 +480,20 @@ fn root_motion(
     })
 }
 
-fn lower(a: &HavokAnimation, name: &str, pass: &LowerHavokClips) -> std::result::Result<Clip, String> {
+fn lower(
+    a: &HavokAnimation,
+    name: &str,
+    pass: &LowerHavokClips,
+    additive: bool,
+) -> std::result::Result<Clip, String> {
     let s = &a.spline;
     let times = key_times(s.num_frames, s.frame_duration, pass.rate, s.duration);
+    // a delta's absent component is no change, not the reference transform
+    let fallback = if additive { Fallback::Neutral } else { pass.absent };
     let absent = Absent {
-        position: pass.absent,
-        rotation: pass.absent,
-        scale: pass.absent,
+        position: fallback,
+        rotation: fallback,
+        scale: fallback,
     };
     let mut channels = Vec::new();
     for (track, &bone) in a.track_to_bone.iter().enumerate() {
@@ -536,7 +552,7 @@ fn lower(a: &HavokAnimation, name: &str, pass: &LowerHavokClips) -> std::result:
             )?),
             _ => None,
         },
-        additive: None,
+        additive: additive.then_some(AdditiveReference::Identity),
     })
 }
 
@@ -590,16 +606,25 @@ impl Pass for LowerHavokClips {
             }
         };
         let mut lowered = 0;
+        let mut additive_lowered = 0;
         for (e, name) in chosen {
             let a = w
                 .get::<HavokAnimation>(*e)
                 .cloned()
                 .ok_or_else(|| format!("{name}: no havok.animation"))?;
-            if a.blend_hint != 0 {
-                log.count("additive animations left out (blend hint is not 0)", 1);
-                continue;
-            }
-            let clip = lower(&a, name, self)?;
+            let additive = match a.blend_hint {
+                0 => false,
+                // the track values of a blend hint 1 animation are deltas from the identity (see the pass's documentation)
+                1 => true,
+                hint => {
+                    log.omit(
+                        &format!("animations with blend hint {hint}, whose values are not known to be absolute or deltas"),
+                        1,
+                    );
+                    continue;
+                }
+            };
+            let clip = lower(&a, name, self, additive)?;
             for u in &a.spline.unreadable {
                 let bone = a
                     .track_to_bone
@@ -631,8 +656,17 @@ impl Pass for LowerHavokClips {
                     }
                 }
             }
+            if clip.additive.is_some() {
+                additive_lowered += 1;
+            }
             w.insert(*e, clip);
             lowered += 1;
+        }
+        if additive_lowered > 0 {
+            log.approximate(
+                "additive animations (blend hint 1) lowered as deltas from the identity, composed as core.clip states;                  the side a Havok delta composes on is not verified",
+                additive_lowered,
+            );
         }
         if lowered > 0 {
             log.approximate(
@@ -801,6 +835,40 @@ mod tests {
         assert_eq!(log.approximations.values().sum::<u64>(), 1);
     }
 
+    /// A blend hint 1 animation is a clip of deltas: `additive: Identity`, its values as sampled, and what a track does not
+    /// state is the neutral value even where the caller asks for the reference (z stays 0, not the reference's 7).
+    #[test]
+    fn a_blend_hint_one_animation_is_lowered_as_deltas_from_the_identity() {
+        let frame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::PosZ], 1.0);
+        let (mut w, e, _) = world(frame, 1);
+        let log = run(
+            &mut w,
+            &[("absent", "reference"), ("rate", "1"), ("clips", "all")],
+        )
+        .unwrap();
+        let clip = w.get::<Clip>(e).unwrap();
+        assert_eq!(clip.additive, Some(AdditiveReference::Identity));
+        let position = property(clip, Property::Translation);
+        assert_eq!(position.values, [0.0, 2.0, 0.0, 5.0, 2.0, 0.0, 10.0, 2.0, 0.0]);
+        assert_eq!(property(clip, Property::Scale).values, [1.0, 1.0, 1.0]);
+        assert!(log.omitted.is_empty());
+        assert_eq!(
+            log.approximations
+                .iter()
+                .find(|(k, _)| k.contains("lowered as deltas from the identity"))
+                .map(|(_, n)| *n),
+            Some(1)
+        );
+        // a normal animation of the same data is not additive
+        let (mut w, e, _) = world(frame, 0);
+        run(
+            &mut w,
+            &[("absent", "reference"), ("rate", "1"), ("clips", "all")],
+        )
+        .unwrap();
+        assert_eq!(w.get::<Clip>(e).unwrap().additive, None);
+    }
+
     #[test]
     fn the_rate_is_keys_for_each_frame_and_absent_is_the_callers_choice() {
         let (mut w, e, _) = world(SourceFrame::new([Axis::PosX, Axis::PosY, Axis::PosZ], 1.0), 0);
@@ -843,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn options_are_required_and_checked_and_an_additive_clip_is_left_out() {
+    fn options_are_required_and_checked_and_an_unknown_blend_hint_is_left_out_as_unsupported() {
         for bad in [
             vec![("rate", "1"), ("clips", "all")],
             vec![("absent", "neutral"), ("clips", "all")],
@@ -867,9 +935,10 @@ mod tests {
         let log = run(&mut w, &[("absent", "neutral"), ("rate", "1"), ("clips", "all")]).unwrap();
         assert!(!w.has::<Clip>(e));
         assert_eq!(
-            log.counts["additive animations left out (blend hint is not 0)"],
+            log.omitted["animations with blend hint 2, whose values are not known to be absolute or deltas"],
             1
         );
+        assert!(log.counts.is_empty(), "{:?}", log.counts);
         // a name the world does not have is an error naming it
         let (mut w, _, _) = world(SourceFrame::new([Axis::PosX, Axis::PosY, Axis::PosZ], 1.0), 0);
         let e = run(

@@ -20,6 +20,8 @@
 //!   channel drives keeps its pose. With an [`AdditiveReference`] the clip's values are taken relative to the
 //!   reference and applied on top of a base pose, joint by joint in local space: `T = T_base + (T_clip - T_ref)`,
 //!   `R = R_base * R_ref^-1 * R_clip`, `S = S_base * S_clip / S_ref`; a channel the clip lacks adds nothing.
+//!   [`AdditiveReference::Identity`] is the reference of a clip whose values are already deltas (`T_ref = 0`, `R_ref` the
+//!   identity, `S_ref = 1`): `T = T_base + T_clip`, `R = R_base * R_clip`, `S = S_base * S_clip`.
 //! - Root motion is not a joint channel: [`RootMotion`] states the space it moves in and is applied (or not) by a pass.
 
 use std::collections::BTreeSet;
@@ -111,6 +113,10 @@ pub struct RootMotion {
 /// What an additive clip is relative to.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum AdditiveReference {
+    /// Nothing: the clip's values are deltas, relative to zero, the identity and one (the module documentation states
+    /// the composition). A source that stores additive animation as deltas lowers to this; no entity stands for the
+    /// reference.
+    Identity,
     /// The `core.rig_pose` held by this entity.
     Pose(Entity),
     /// Another clip's (the `core.clip` held by `clip`) values at `time` seconds.
@@ -232,7 +238,7 @@ impl Component for Clip {
         match self.additive {
             Some(AdditiveReference::Pose(e)) => out.push(e),
             Some(AdditiveReference::ClipFrame { clip, .. }) => out.push(clip),
-            None => {}
+            Some(AdditiveReference::Identity) | None => {}
         }
     }
     /// Duration finite and non-negative; each channel's property fits its target (joints take translation, rotation
