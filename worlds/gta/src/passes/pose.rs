@@ -3,16 +3,16 @@
 //! The reader keeps the bones as stored: each primitive's bone ([`GtaBones`]) and the prototype's skeleton and
 //! fragment pose ([`GtaSkeleton`]). The pass composes each bone's pose ([`crate::rage::drawable::Bones::pose`]: a fragment's
 //! own pose of the bone, else the skeleton's rest pose up to the root; rows in GTA's frame), places the posed
-//! primitives' positions by it, turns their normals and tangents with it ([`Turn`]: as positions under a
-//! rotation, normals by the inverse transpose and tangents by the pose at their stored length otherwise, a mirror
-//! flipping the handedness and reversing the triangles; a pose with no inverse flattens the model, and its normals
-//! and tangents are left out), in GTA's frame (the frame conversion is a signed permutation, so this is bit-exact with posing before it), and removes
-//! `gta.bones` (the skeleton stays). A primitive on a bone that has no pose is left as stored, counted. Every other
-//! GTA pass on meshes refuses a mesh still holding bones, so this one runs first.
+//! primitives' positions by it, turns their normals and tangents by its 3x3 part as core turns local space
+//! ([`primase_core::Linear`]: normals by the inverse transpose, tangents by the part, both of unit length; a mirror
+//! flips the handedness and reverses the triangles; a singular pose flattens the model, and its normals and tangents
+//! are left out, counted), in GTA's frame (the frame conversion is a signed permutation, so this is bit-exact with
+//! posing before it), and removes `gta.bones` (the skeleton stays). A primitive on a bone that has no pose is left as
+//! stored, counted. Every other GTA pass on meshes refuses a mesh still holding bones, so this one runs first.
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use std::collections::BTreeMap;
 
-use primase_core::{Entity, Lods, Mesh, Semantic, Stream, World};
+use primase_core::{Entity, Linear, Lods, Mesh, Semantic, Stream, World};
 
 use crate::components::GTA;
 use crate::components::{GtaBones, GtaSkeleton};
@@ -20,110 +20,9 @@ use crate::components::{GtaBones, GtaSkeleton};
 /// A model's transform in GTA's frame: rows `[x, y, z, translation]`.
 pub type Pose = [[f32; 4]; 3];
 
-/// How far from orthonormal (the largest entry of `M M^T - I`, `M` a pose's 3x3 part) a pose may be and still turn
-/// normals and tangents as it turns positions: within it, `M`'s inverse transpose equals `M` to that order (an
-/// approximation). Every pose a model of the install uses is either within 1e-4 or singular (census).
-const RIGID: f64 = 1e-4;
-
-/// How a pose turns directions.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Turn {
-    /// A rotation (orthonormal, determinant 1): normals and tangents as positions, without the translation.
-    Rigid,
-    /// Any other invertible 3x3 part: normals by its inverse transpose (rows), tangents by it, both kept at their
-    /// stored length; a negative determinant (a mirror) flips the tangent's handedness and reverses the triangles.
-    General {
-        inverse_transpose: [[f64; 3]; 3],
-        mirror: bool,
-    },
-    /// No inverse (determinant 0): the model is flattened, and its normals and tangents are not defined.
-    Singular,
-}
-
-/// A model's pose and how it turns directions.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Placing {
-    pose: Pose,
-    turn: Turn,
-}
-
-impl Placing {
-    pub fn new(pose: Pose) -> Placing {
-        let m: [[f64; 3]; 3] = std::array::from_fn(|i| std::array::from_fn(|j| f64::from(pose[i][j])));
-        // cofactors: C[i][j] = m[i+1][j+1] m[i+2][j+2] - m[i+1][j+2] m[i+2][j+1] (indices mod 3); M^-T = C / det
-        let c: [[f64; 3]; 3] = std::array::from_fn(|i| {
-            std::array::from_fn(|j| {
-                let (a, b, x, y) = ((i + 1) % 3, (i + 2) % 3, (j + 1) % 3, (j + 2) % 3);
-                m[a][x] * m[b][y] - m[a][y] * m[b][x]
-            })
-        });
-        let det: f64 = (0..3).map(|j| m[0][j] * c[0][j]).sum();
-        let scale = m.iter().flatten().fold(0f64, |a, &v| a.max(v.abs()));
-        let orth = (0..3)
-            .flat_map(|i| (0..3).map(move |j| (i, j)))
-            .map(|(i, j)| {
-                ((0..3).map(|k| m[i][k] * m[j][k]).sum::<f64>() - f64::from(u8::from(i == j))).abs()
-            })
-            .fold(0f64, f64::max);
-        let turn = if !det.is_finite() || det.abs() <= 1e-9 * scale.powi(3) {
-            Turn::Singular
-        } else if det > 0.0 && orth <= RIGID {
-            Turn::Rigid
-        } else {
-            Turn::General {
-                inverse_transpose: c.map(|row| row.map(|v| v / det)),
-                mirror: det < 0.0,
-            }
-        };
-        Placing { pose, turn }
-    }
-
-    /// A position.
-    fn point(&self, v: [f32; 3]) -> [f32; 3] {
-        transform(&self.pose, v, 1.0)
-    }
-
-    /// A normal; `None` under a singular pose.
-    fn normal(&self, n: [f32; 3]) -> Option<[f32; 3]> {
-        match self.turn {
-            Turn::Rigid => Some(transform(&self.pose, n, 0.0)),
-            Turn::General {
-                inverse_transpose, ..
-            } => Some(keep_length(n, inverse_transpose.map(|r| dot(r, n)))),
-            Turn::Singular => None,
-        }
-    }
-
-    /// A tangent with its handedness in w; `None` under a singular pose.
-    fn tangent(&self, t: [f32; 4]) -> Option<[f32; 4]> {
-        let xyz = [t[0], t[1], t[2]];
-        match self.turn {
-            Turn::Rigid => {
-                let d = transform(&self.pose, xyz, 0.0);
-                Some([d[0], d[1], d[2], t[3]])
-            }
-            Turn::General { mirror, .. } => {
-                let m = self
-                    .pose
-                    .map(|r| [f64::from(r[0]), f64::from(r[1]), f64::from(r[2])]);
-                let d = keep_length(xyz, m.map(|r| dot(r, xyz)));
-                Some([d[0], d[1], d[2], if mirror { -t[3] } else { t[3] }])
-            }
-            Turn::Singular => None,
-        }
-    }
-}
-
-fn dot(r: [f64; 3], v: [f32; 3]) -> f64 {
-    r[0] * f64::from(v[0]) + r[1] * f64::from(v[1]) + r[2] * f64::from(v[2])
-}
-
-/// `turned` scaled to the length of `stored` (as it is when it has no length).
-fn keep_length(stored: [f32; 3], turned: [f64; 3]) -> [f32; 3] {
-    let len = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    let (a, b) = (len(stored.map(f64::from)), len(turned));
-    let k = if b > 0.0 { a / b } else { 1.0 };
-    turned.map(|v| (v * k) as f32)
+/// A pose's 3x3 part as core's linear map: its columns are the images of GTA's local axes.
+pub(crate) fn linear(pose: &Pose) -> Linear {
+    Linear::new(std::array::from_fn(|j| [pose[0][j], pose[1][j], pose[2][j]]))
 }
 
 /// `v` with homogeneous `w` (1 a point, 0 a direction) through the pose, in f64 and rounded once.
@@ -192,50 +91,51 @@ impl Pass for PoseFragments {
                     log.count("primitives on a bone without a pose, left as stored", 1);
                     continue;
                 };
-                let t = Placing::new(pose);
+                let t = linear(&pose);
                 log.count("primitives posed", 1);
-                match t.turn {
-                    Turn::Rigid => {}
-                    Turn::General { mirror, .. } => {
-                        log.count("primitives posed by a pose that is not a rotation", 1);
-                        if mirror {
-                            // a mirror turns every triangle over: reverse them so their fronts stay where they were
-                            let n = p.vertex_count() as u32;
-                            for tri in p
-                                .indices_mut()
-                                .get_or_insert_with(|| (0..n).collect())
-                                .as_chunks_mut::<3>()
-                                .0
-                            {
-                                tri.swap(1, 2);
-                            }
-                            log.count("primitives posed by a mirroring pose: triangles reversed", 1);
-                        }
-                    }
-                    Turn::Singular => log.count(
+                if t.singular() {
+                    log.count(
                         "primitives posed flat (no inverse): normals and tangents left out",
                         1,
-                    ),
+                    );
+                } else {
+                    let rotation = !t.mirrors() && t.similarity().is_some_and(|s| (s - 1.0).abs() <= 1e-6);
+                    if !rotation {
+                        log.count("primitives posed by a pose that is not a rotation", 1);
+                    }
+                    if t.mirrors() {
+                        // a mirror turns every triangle over: reverse them so their fronts stay where they were
+                        let n = p.vertex_count() as u32;
+                        for tri in p
+                            .indices_mut()
+                            .get_or_insert_with(|| (0..n).collect())
+                            .as_chunks_mut::<3>()
+                            .0
+                        {
+                            tri.swap(1, 2);
+                        }
+                        log.count("primitives posed by a mirroring pose: triangles reversed", 1);
+                    }
                 }
                 if let Some(Stream::F32x3(v)) = p.streams_mut().get_mut(&Semantic::Position) {
                     for x in v.iter_mut() {
-                        *x = GTA.point(t.point(GTA.point_to_source(*x)));
+                        *x = GTA.point(transform(&pose, GTA.point_to_source(*x), 1.0));
                     }
                 }
-                if t.turn == Turn::Singular {
+                if t.singular() {
                     p.streams_mut().remove(&Semantic::Normal);
                     p.streams_mut().remove(&Semantic::Tangent);
                     continue;
                 }
                 if let Some(Stream::F32x3(v)) = p.streams_mut().get_mut(&Semantic::Normal) {
                     for x in v.iter_mut() {
-                        *x = GTA.direction(t.normal(GTA.direction_to_source(*x)).expect("invertible"));
+                        *x = GTA.direction(t.normal(GTA.direction_to_source(*x)).expect("not singular"));
                     }
                 }
                 if let Some(Stream::F32x4(v)) = p.streams_mut().get_mut(&Semantic::Tangent) {
                     for x in v.iter_mut() {
                         let s = GTA.direction_to_source([x[0], x[1], x[2]]);
-                        let u = t.tangent([s[0], s[1], s[2], x[3]]).expect("invertible");
+                        let u = t.tangent([s[0], s[1], s[2], x[3]]).expect("not singular");
                         let d = GTA.direction([u[0], u[1], u[2]]);
                         *x = [d[0], d[1], d[2], u[3]];
                     }
@@ -255,17 +155,20 @@ mod tests {
         m.map(|r| [r[0], r[1], r[2], 5.0])
     }
 
+    /// A pose turns directions by its 3x3 part as core turns local space: as positions under a rotation, normals by
+    /// the inverse transpose and tangents by the part otherwise (unit length), a mirror flipping the handedness, and
+    /// none under a singular pose.
     #[test]
     fn poses_turn_normals_by_their_inverse_transpose() {
-        // a rotation of 90 degrees about z: rigid, every direction turns as a position does
-        let r = Placing::new(pose([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]));
-        assert_eq!(r.turn, Turn::Rigid);
-        assert_eq!(r.normal([1.0, 0.0, 0.0]), Some([0.0, 1.0, 0.0]));
-        assert_eq!(r.tangent([1.0, 0.0, 0.0, -1.0]), Some([0.0, 1.0, 0.0, -1.0]));
-        assert_eq!(r.point([0.0, 0.0, 0.0]), [5.0, 5.0, 5.0]);
-        // a shear: the normal stays perpendicular to the sheared surface's tangents, at its stored length
-        let s = Placing::new(pose([[1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]));
-        assert!(matches!(s.turn, Turn::General { mirror: false, .. }));
+        // a rotation of 90 degrees about z: every direction turns as a position does
+        let r = pose([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]);
+        let l = linear(&r);
+        assert_eq!(l.normal([1.0, 0.0, 0.0]), Some([0.0, 1.0, 0.0]));
+        assert_eq!(l.tangent([1.0, 0.0, 0.0, -1.0]), Some([0.0, 1.0, 0.0, -1.0]));
+        assert_eq!(transform(&r, [0.0, 0.0, 0.0], 1.0), [5.0, 5.0, 5.0]);
+        assert_eq!(transform(&r, [1.0, 0.0, 0.0], 1.0), [5.0, 6.0, 5.0]);
+        // a shear: the normal stays perpendicular to the sheared surface's tangents
+        let s = linear(&pose([[1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]));
         // the surface x = 0 (tangents y and z) leans to x = y: its normal becomes (1, -1, 0) / sqrt 2
         let n = s.normal([1.0, 0.0, 0.0]).expect("normal");
         let (t, u) = (
@@ -287,13 +190,13 @@ mod tests {
             "{n:?}"
         );
         // a mirror flips the handedness
-        let m = Placing::new(pose([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]));
-        assert!(matches!(m.turn, Turn::General { mirror: true, .. }));
+        let m = linear(&pose([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]));
+        assert!(m.mirrors());
         assert_eq!(m.tangent([0.0, 1.0, 0.0, 1.0]), Some([0.0, 1.0, 0.0, -1.0]));
         assert_eq!(m.normal([1.0, 0.0, 0.0]), Some([-1.0, 0.0, 0.0]));
         // no inverse: no normals or tangents
-        let z = Placing::new(pose([[0.0; 3]; 3]));
-        assert_eq!(z.turn, Turn::Singular);
+        let z = linear(&pose([[0.0; 3]; 3]));
+        assert!(z.singular());
         assert_eq!(z.normal([0.0, 0.0, 1.0]), None);
         assert_eq!(z.tangent([1.0, 0.0, 0.0, 1.0]), None);
     }
