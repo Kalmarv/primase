@@ -524,14 +524,70 @@ pub enum NormalEncoding {
     XyUnorm,
     /// x, y, z stored as `n * 0.5 + bias` (the bias given by its f32 bits): decoded `(v - bias) * 2`.
     XyzBiased { bias_bits: u32 },
-    /// Octahedral mapping in two lanes, 0-1.
-    Octahedral,
+    /// Octahedral mapping in lanes 0 and 1: each stored as `e * stored.scale + stored.bias` (the producer's scale and
+    /// bias, as measured) and read back by the engine as `v * read.scale + read.bias` before the unfold (`z = 1 - |x| -
+    /// |y|`, x and y folded where z < 0, normalised). The two halves are stated as each side measures them and need not
+    /// be exact inverses: an engine may store `0.4995 e + 0.4995` and read `2 v - 1`. The common 0-1 layout is `stored`
+    /// [`LaneAffine::UNORM`] and `read` [`LaneAffine::SIGNED`].
+    Octahedral { stored: LaneAffine, read: LaneAffine },
     /// Octahedral in the diamond layout over three 8-bit UNORM lanes: lanes 0 and 1 are the low eight bits of two 9-bit
     /// coordinates `u` and `v` (`round(255 (c + 1))`, 0 to 510 over -1 to 1), lane 2's bit 1 and bit 2 their ninth bits and
     /// its bit 0 the sign of z; the lane's other five bits are not part of the normal (a payload byte, which an engine
     /// may keep a class in). `x = (u + v) / 2`, `y = (u - v) / 2`, `|z| = 1 - |x| - |y|`, normalised
     /// ([`NormalEncoding::decode_octahedral_diamond`]).
     OctahedralDiamond,
+}
+
+/// One lane's affine map, `v * scale + bias`, by the f32 bits of each so that it compares and hashes exactly; it is written
+/// as the numbers `scale` and `bias`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LaneAffine {
+    pub scale_bits: u32,
+    pub bias_bits: u32,
+}
+
+impl Serialize for LaneAffine {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut out = serializer.serialize_struct("LaneAffine", 2)?;
+        out.serialize_field("scale", &self.scale())?;
+        out.serialize_field("bias", &self.bias())?;
+        out.end()
+    }
+}
+
+impl LaneAffine {
+    /// A signed value stored in 0 to 1: `v * 0.5 + 0.5`.
+    pub const UNORM: Self = Self {
+        scale_bits: 0x3F00_0000,
+        bias_bits: 0x3F00_0000,
+    };
+
+    /// A value in 0 to 1 read back as signed: `v * 2 - 1`.
+    pub const SIGNED: Self = Self {
+        scale_bits: 0x4000_0000,
+        bias_bits: 0xBF80_0000,
+    };
+
+    pub fn new(scale: f32, bias: f32) -> Self {
+        Self {
+            scale_bits: scale.to_bits(),
+            bias_bits: bias.to_bits(),
+        }
+    }
+
+    pub fn scale(&self) -> f32 {
+        f32::from_bits(self.scale_bits)
+    }
+
+    pub fn bias(&self) -> f32 {
+        f32::from_bits(self.bias_bits)
+    }
+
+    /// `v * scale + bias`.
+    pub fn apply(&self, v: f32) -> f32 {
+        v * self.scale() + self.bias()
+    }
 }
 
 impl NormalEncoding {
@@ -1541,6 +1597,35 @@ impl Component for ShaderBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An octahedral encoding states both of its maps, by bits, and writes them as numbers; the 0-1 layout's maps are
+    /// the constants, and they invert each other.
+    #[test]
+    fn an_octahedral_encoding_states_its_stored_and_read_maps() {
+        assert_eq!(LaneAffine::UNORM, LaneAffine::new(0.5, 0.5));
+        assert_eq!(LaneAffine::SIGNED, LaneAffine::new(2.0, -1.0));
+        for e in [-1.0f32, -0.25, 0.0, 0.5, 1.0] {
+            assert_eq!(LaneAffine::SIGNED.apply(LaneAffine::UNORM.apply(e)), e);
+        }
+        let measured = NormalEncoding::Octahedral {
+            stored: LaneAffine::new(0.4995, 0.4995),
+            read: LaneAffine::SIGNED,
+        };
+        assert_ne!(
+            measured,
+            NormalEncoding::Octahedral {
+                stored: LaneAffine::UNORM,
+                read: LaneAffine::SIGNED,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(measured).unwrap(),
+            serde_json::json!({"octahedral": {
+                "stored": {"scale": 0.4995f32, "bias": 0.4995f32},
+                "read": {"scale": 2.0, "bias": -1.0},
+            }})
+        );
+    }
 
     /// The diamond octahedral store round-trips: the hand-worked axes (+z stores x = y = 255 and the sign bit; +x
     /// stores u = v = 510, both ninth bits; -y stores u = 0, v = 510), the payload kept, and a grid of normals to
