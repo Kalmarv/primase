@@ -516,6 +516,16 @@ rest pose (their animations are not read); and Elden Ring's parts that store a g
 config (the grass is not read). `tests/material_class_census.rs` and
 `tests/hit_class_census.rs` (install-gated) list every shader family by class and
 every HitMtrl class by triangles, for the tables to be checked against the install.
+Elden Ring's grass: a part's grass config (header +128, SoulsFormatsNEXT `GrassConfig`) is
+six `GrassTypeParam` row ids; `Report::grass` resolves them against `regulation.bin`'s
+grass param (`param::GrassParam`: model, simple model, flat and billboard textures, density,
+spacing; Paramdex `GrassTypeParam.xml` as Smithbox ships it, rows of at least 276 bytes,
+checked by `tests/grass_census.rs`) and the notices name the rows. No file holds a blade's
+place (the game scatters by density), so no grass is placed. SpeedTree trees are ordinary
+assets (`aeg801_*`, read with their LOD levels); their billboard cards, the far forms, have
+no position of their own (their program places them by the camera and picks an atlas image
+by the view angle) and core has no camera-facing primitive, so they stay left out
+(`leave-out=billboard`).
 `Options::object_animations` (off by default) reads the animation binder of each kept object
 model (a `.anibnd` member of its objbnd/geombnd, else a binder beside it) into the world as a
 Havok skeleton named `<model> havok skeleton` and `havok.animation` clips, counted in
