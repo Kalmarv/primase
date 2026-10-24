@@ -9,10 +9,10 @@
 //! ([`WEIGHT_SETS`]): a program's are the set whose lane of the base normal moves its outputs. Each constant of the
 //! equation is read from a run whose samples isolate it (a detail taken alone at an end of the weights, or weighed most
 //! where none is, the chain then inverted; the reflectance mix at 0 or 1 by the base mask; a lane set so the term in
-//! question is unsaturated); each detail's gloss scale is the base normal's z where its gloss moves in proportion to it,
-//! else the constant read; the alpha is the one detail's whose colour alpha moves the program's alpha, where the binding
-//! gives that lane a role (`Coverage` or `Opacity`), and none where it gives none; the program's tangent frame is read
-//! from the base normal alone. The equation is then proven against the program on random samples ([`PROOF_SETS`]) and
+//! question is unsaturated, the mix read on the colour lane where it is read most closely, [`widest`]); each detail's
+//! gloss scale is the base normal's z where its gloss moves in proportion to it, else the constant read; the alpha is
+//! the one detail's whose colour alpha moves the program's alpha, where the binding gives that lane a role (`Coverage`
+//! or `Opacity`), and none where it gives none; the program's tangent frame is read from the base normal alone. The equation is then proven against the program on random samples ([`PROOF_SETS`]) and
 //! on samples where the weights mix ([`TRANSITION_SETS`]), every decoded role compared within [`BOUND_UNITS`], and each
 //! constant is compared with the material word it reads ([`FieldComparison`]).
 use std::collections::BTreeMap;
@@ -645,13 +645,17 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
         };
         let (one, two) = (on(1.)?, on(2.)?);
         let s = design(x, 0.);
-        let k = 2;
-        let d_albedo = two.albedo[k] - one.albedo[k];
-        let d_reflectance = two.reflectance[k] - one.reflectance[k];
+        // on the lane where the colour changes most between the two base colours ([`widest`])
+        let change: [f32; 3] = std::array::from_fn(|i| {
+            (two.albedo[i] - one.albedo[i]) / colour[i] + (two.reflectance[i] - one.reflectance[i])
+        });
+        let lane = widest(change);
+        let d_albedo = two.albedo[lane] - one.albedo[lane];
+        let d_reflectance = two.reflectance[lane] - one.reflectance[lane];
         let mix = if one.albedo.iter().all(|&a| a == 0.) {
             1.
         } else {
-            let ratio = d_reflectance / (d_albedo / colour[k]);
+            let ratio = d_reflectance / (d_albedo / colour[lane]);
             ratio / (1. + ratio)
         };
         let c: [f32; 3] = std::array::from_fn(|i| {
@@ -682,9 +686,10 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
         let before = bias.clone();
         bias[p] = (|| {
             let w = weights.at(at_p);
+            let lane = widest(c_p.map(|c| c - f0));
             for m in base_masks() {
                 let o = run(&design(at_p, m))?;
-                let f = (o.reflectance[2] - f0) / (c_p[2] - f0);
+                let f = (o.reflectance[lane] - f0) / (c_p[lane] - f0);
                 if f > 0.01 && f < 0.99 {
                     if p_alone {
                         return Ok(f - m);
@@ -704,11 +709,12 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
                 for m in base_masks() {
                     let o = run(&design(x, m))?;
                     let s = design(x, m);
-                    let colour_at = {
-                        let terms = (0..n).map(|k| tints[k][2] * s.d[k][2]);
-                        (s.a[2] * chain(terms, &w)).clamp(0., 1.)
-                    };
-                    let f = (o.reflectance[2] - f0) / (colour_at - f0);
+                    let colour_at: [f32; 3] = std::array::from_fn(|i| {
+                        let terms = (0..n).map(|k| tints[k][i] * s.d[k][i]);
+                        (s.a[i] * chain(terms, &w)).clamp(0., 1.)
+                    });
+                    let lane = widest(colour_at.map(|c| c - f0));
+                    let f = (o.reflectance[lane] - f0) / (colour_at[lane] - f0);
                     if f > 0.01 && f < 0.99 {
                         let terms: Vec<f32> = (0..n).map(|k| term(k, &bias, m)).collect();
                         return Ok(unlerp(f, &terms, &w, j));
@@ -902,6 +908,13 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
         },
         frame,
     )))
+}
+
+/// The lane of `values` that is largest, the lowest on a tie: each reading of the reflectance mix is taken on the colour
+/// lane where what it divides by is largest (`C - f0` for the mix, the change of `C` for a mix read from two base
+/// colours), as the stored reflectance's rounding is divided by it.
+fn widest(values: [f32; 3]) -> usize {
+    (1..3).fold(0, |best, k| if values[k] > values[best] { k } else { best })
 }
 
 /// The scale `c` and bias `b` of a detail's gloss `2 c (k + b)` scaled by a constant, from its gloss `g` at the detail z
@@ -1794,6 +1807,15 @@ mod tests {
                 role,
             })
             .collect()
+    }
+
+    /// The widest lane is the largest, the lowest of equal ones.
+    #[test]
+    fn the_widest_lane_is_the_largest_and_the_lowest_on_a_tie() {
+        assert_eq!(widest([0.1, 0.5, 0.2]), 1);
+        assert_eq!(widest([0.1, 0.2, 0.5]), 2);
+        assert_eq!(widest([0.5, 0.5, 0.5]), 0);
+        assert_eq!(widest([0.2, 0.5, 0.5]), 1);
     }
 
     /// A constant gloss scale is read from a second detail z wherever the gloss is unsaturated: a designed gloss
