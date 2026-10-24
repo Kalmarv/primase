@@ -243,6 +243,25 @@ impl<'a> DefinitionRef<'a> {
     pub fn declares(self, kind: &str) -> bool {
         self.texture_kinds().contains(&kind)
     }
+    /// The tiling scale the definition stores for its texture slot of `Texture2D_N` number `n`
+    /// ([`crate::metaparam::texture_number`]), where it stores one that is not zero: the two floats after an MTD
+    /// texture's path (Sekiro), the two after a material binary sampler's key (Elden Ring).
+    pub fn stored_scale(self, n: u32) -> Option<[f32; 2]> {
+        let number = crate::metaparam::texture_number;
+        let scale = match self {
+            DefinitionRef::Mtd(d) => d
+                .textures
+                .iter()
+                .find(|t| number(&t.kind) == Some(n))
+                .and_then(|t| Some([*t.extra.first()?, *t.extra.get(1)?])),
+            DefinitionRef::Matbin(m) => m
+                .samplers
+                .iter()
+                .find(|s| number(&s.kind) == Some(n))
+                .map(|s| s.unknown),
+        };
+        scale.filter(|s| *s != [0.; 2])
+    }
 }
 impl Definition {
     /// The definition, borrowed ([`DefinitionRef`]).

@@ -426,54 +426,13 @@ pub fn resolve(
             }
             None => None,
         };
-        // the slot's tiling, in its row of FC_TextureTilingScale: Elden Ring's as its own rule says ([`elden_tiling`]);
-        // Sekiro's as below, uncentred (no capture of Sekiro's tiling words settles more)
-        if game == crate::Game::EldenRing {
-            constant(
-                "FC_TextureTilingScale",
-                register as usize * 4,
-                16,
-                words(&elden_tiling(material, metaparam, resource)),
-            )?;
-        } else {
-            // the uv group's `<group>_CommonUV-UVParam` where the metaparam gives the slot a uv group and the definition
-            // states that parameter, else the binding's own stored scale
-            let group_scale = uv_group(metaparam, resource).and_then(|group| {
-                match material
-                    .definition
-                    .parameter(&format!("{group}_CommonUV-UVParam"))?
-                {
-                    ParameterValue::Float(v) if v.len() >= 2 => Some([v[0], v[1]]),
-                    _ => None,
-                }
-            });
-            // the tiling: the uv group's, which the material states whether or not a texture is bound to the slot; else
-            // the binding's stored scale; else, for a preview, none
-            let scale = match (group_scale, binding) {
-                (Some(s), b) => {
-                    if b.is_some_and(|b| b.scale != [1.; 2] && b.scale != s) {
-                        *policies
-                            .entry(
-                                "texture bindings whose stored scale is not their uv group's: the uv group's bound \
-                                 (how the engine combines the two is not established)"
-                                    .to_owned(),
-                            )
-                            .or_default() += 1;
-                    }
-                    Some(s)
-                }
-                (None, Some(b)) => Some(b.scale),
-                (None, None) => (unbound == Unbound::Preview).then_some([1.; 2]),
-            };
-            if let Some(scale) = scale {
-                constant(
-                    "FC_TextureTilingScale",
-                    register as usize * 4,
-                    16,
-                    words(&[scale[0], scale[1], 0., 0.]),
-                )?;
-            }
-        }
+        // the slot's tiling, in its row of FC_TextureTilingScale, as both games' captures show it ([`tiling`])
+        constant(
+            "FC_TextureTilingScale",
+            register as usize * 4,
+            16,
+            words(&tiling(material, metaparam, resource, binding)),
+        )?;
         let source = match (found, unbound) {
             (Some(texture), _) => TextureSource::Texture {
                 texture,
@@ -1306,39 +1265,57 @@ fn uv_group<'a>(metaparam: Option<&'a Metaparam>, resource: &Resource) -> Option
         .map(|t| t.uv_group.as_str())
 }
 
-/// The row of `FC_TextureTilingScale` Elden Ring writes for the material texture `resource`, as a capture of the
-/// running game shows it (the 578 rows the programs of 160 G-buffer draw groups read, the groups tied to their material
-/// binaries by shader and bound textures): the scale the material binary's sampler of the slot stores (the two floats
-/// after its path) where it is not zero (153 rows), else the uv group's `<group>_CommonUV-UVParam` of the metaparam
-/// texture that shares the resource's `Texture2D_N` ([`uv_group`]; 425 rows; the metaparam's default where the material
-/// states none), else 1, each axis scaled about the texture's centre ([`centred`]). Every character's row matched; nine
+/// The row of `FC_TextureTilingScale` the engine writes for the material texture `resource` (bound to `binding`, where
+/// the material binds it), both games' rule as their captures show it, each axis scaled about the texture's centre
+/// ([`centred`]):
+///
+/// - the scale the FLVER's texture of the slot stores, where it is not 1;
+/// - else the scale the definition stores for the slot, where it is not zero
+///   ([`crate::materials::DefinitionRef::stored_scale`]: the floats after an MTD texture's path, after a material
+///   binary sampler's key);
+/// - else the uv group's `<group>_CommonUV-UVParam` of the metaparam texture that shares the resource's `Texture2D_N`
+///   ([`uv_group`]) as the material states it, else as the metaparam defaults it;
+/// - else 1.
+///
+/// Elden Ring: the 578 rows the programs of 160 G-buffer draw groups read, the groups tied to their material binaries by
+/// shader and bound textures: the sampler's scale 153 rows, the uv group's 425; every character's row matched, and nine
 /// rows of one map material binary, AEG099_324_ID001, did not (19, 55 and 24 captured where it states 10, 35 and 10):
-/// the draw is likely of another material with the same textures, not established.
-fn elden_tiling(material: &MaterialView<'_>, metaparam: Option<&Metaparam>, resource: &Resource) -> [f32; 4] {
+/// the draw is likely of another material with the same textures, not established. Its FLVERs store no scale but 1
+/// (`sat_field_census`), so the first step changes none of its rows.
+///
+/// Sekiro: the 483 `cbTextureTilingScale` contents of 58 pixel programs captured in an interior of Ashina (cb11-capture),
+/// each tied to the shader bundles holding its program by the program's hash, and to every MTD of those shaders with every
+/// set of texture scales the install's FLVERs store with it: of the 440 tied, the rule reproduces 301, 101 of them with
+/// a row other than 1 (every row of the Wolf's scarf, top and trousers: `P_BD_M_9040_tops1_Maffler`'s stored 18 by 6 at
+/// `Texture2D_1` and its uv group's 51 by 17 at `Texture2D_2`, which stores zero), where the uv group's scale first,
+/// else the FLVER's, uncentred, reproduced 221 (12). Every row of a scale other than 1 is centred. The stored scale before
+/// the uv group is decided by 4 contents and contradicted by none; the FLVER's before the stored one by 3 (the FLVER's
+/// times the rest fits 3 fewer); the metaparam's default decides no content. Not reproduced: 130 contents by any order
+/// (M[Multiple] 27, Fur_NTC 25, M[MultipleGround] 19, AddNormal 13, Character_AMSN 10, Character_AMSN_[DetailBlend] 10,
+/// 26 of eleven other families), and 9 with every row 1 that only the order before fits
+/// (Character_AN_Blend_AMSN_[Fresnel] 4, M[LandScape]_Mountain 4, Character_AMSN_[AO_SSS]_[Cs] 1): every MTD of their
+/// programs stores a scale other than 1 at a register captured 1, not established.
+fn tiling(
+    material: &MaterialView<'_>,
+    metaparam: Option<&Metaparam>,
+    resource: &Resource,
+    binding: Option<&Binding>,
+) -> [f32; 4] {
     let n = texture_slot(resource);
-    let number = crate::metaparam::texture_number;
-    let sampler = match material.definition {
-        crate::materials::DefinitionRef::Matbin(m) => m
-            .samplers
-            .iter()
-            .find(|s| n.is_some() && number(&s.kind) == n)
-            .map(|s| s.unknown)
-            .filter(|s| *s != [0.; 2]),
-        crate::materials::DefinitionRef::Mtd(_) => None,
-    };
+    let flver = binding.map(|b| b.scale).filter(|s| *s != [1.; 2]);
+    let stored = || material.definition.stored_scale(n?);
     let group = || {
-        let meta = metaparam?;
         let name = format!("{}_CommonUV-UVParam", uv_group(metaparam, resource)?);
         match material.definition.parameter(&name) {
             Some(ParameterValue::Float(v)) if v.len() >= 2 => Some([v[0], v[1]]),
-            _ => meta
+            _ => metaparam?
                 .mtd_params
                 .iter()
                 .find(|p| p.name == name)
                 .map(|p| [p.default[0], p.default[1]]),
         }
     };
-    centred(sampler.or_else(group).unwrap_or([1.; 2]))
+    centred(flver.or_else(stored).or_else(group).unwrap_or([1.; 2]))
 }
 
 /// The texture Elden Ring binds when the material leaves `resource` unbound: the shader metaparam's default for
@@ -1357,7 +1334,7 @@ fn default_texture(
         .map(|(_, stem)| stem)
 }
 
-/// A tiling scale as Elden Ring writes it: each axis scaled about the texture's centre, `(u, v, (1 - u) / 2,
+/// A tiling scale as both games write it: each axis scaled about the texture's centre, `(u, v, (1 - u) / 2,
 /// (1 - v) / 2)` (the program samples `uv * scale + offset`).
 fn centred([u, v]: [f32; 2]) -> [f32; 4] {
     [u, v, (1. - u) / 2., (1. - v) / 2.]

@@ -7,7 +7,9 @@
 //!
 //! It prints, per read, how many bound programs have material fields and how many of those bind none, by program;
 //! and each bound material's texture tiling (`FC_TextureTilingScale` rows by register), one `tiling` line a material,
-//! for comparing two revisions' reads.
+//! for comparing two revisions' reads. The Wolf's scarf's rows are those Sekiro's capture shows (cb11-capture), and
+//! no FLVER of c3000 stores a texture scale other than 1, so the tiling rule's first step (the FLVER's scale) changes
+//! no row of Elden Ring's captured rule.
 use primase_core::World;
 use primase_core::shader::{ConstantRole, ResourceKind, Shader, ShaderBinding};
 use primase_fromsoft::dcx::Decoder;
@@ -118,8 +120,30 @@ fn every_program_with_material_fields_binds_the_materials_parameters() -> Result
     for (what, mut world) in reads {
         let report = common::run(&mut world, "resolve-fromsoft-shaders{unbound-textures=preview}")?;
         println!("{what}: {:?}", report.steps[0].log);
-        for line in tilings(&world) {
+        let lines = tilings(&world);
+        for line in &lines {
             println!("tiling {what}: {line}");
+        }
+        if what.starts_with("Sekiro") {
+            // the scarf's program reads registers 0, 1, 2, 7, 8, 10 and 11: the capture's rows for them
+            let scarf = " P_BD_M_9040_tops1_Maffler 0:18x6 1:1x1 2:1x1 7:51x17 8:1x1 10:51x17 11:18x6";
+            if !lines.iter().any(|l| l.ends_with(scarf)) {
+                failures.push(format!("{what}: the scarf's rows are not the capture's{scarf}"));
+            }
+        } else {
+            let scaled: Vec<String> = world
+                .iter::<Material>()
+                .flat_map(|(_, m)| {
+                    m.bindings
+                        .iter()
+                        .filter(|(_, b)| b.scale != [1.; 2])
+                        .map(|(k, b)| format!("{} {k} {:?}", m.mtd, b.scale))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            if !scaled.is_empty() {
+                failures.push(format!("{what}: FLVER texture scales other than 1: {scaled:?}"));
+            }
         }
         let (with_fields, none) = census(&world)?;
         println!(

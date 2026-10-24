@@ -298,9 +298,9 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
             View(ViewParameter::InverseViewProjection),
         ),
         engine("envData", 176, 4, Object(ObjectParameter::EnvironmentData)),
-        // the tiling of t2 (unbound: 1 by 1) and t8 (the declared binding's scale), a register's four words each
+        // the tiling of t2 (unbound: 1 by 1) and t8 (the binding's FLVER scale), a register's four words each, centred
         material("FC_TextureTilingScale", 32, 16, bits(&[1., 1., 0., 0.])),
-        material("FC_TextureTilingScale", 128, 16, bits(&[2., 3., 0., 0.])),
+        material("FC_TextureTilingScale", 128, 16, bits(&[2., 3., -0.5, -1.])),
         material("M_Multiple__snp_scale", 160, 8, bits(&[0.5, 0.25])),
         // the colour times its intensity, with the fourth lane one: it fills the padding after it
         material(
@@ -436,13 +436,16 @@ fn leaving_unbound_slots_invents_nothing() {
             .iter()
             .all(|t| t.source == TextureSource::Missing)
     );
-    // the bound slot keeps its tiling (the binding states it); the unbound slot has none
+    // the tiling is the engine's row whatever is bound: the bound slot's FLVER scale, the unbound slot's 1
     let tiling: Vec<_> = constants(&resolution.stage, &shader)
         .into_iter()
         .filter(|c| c.1 == "FC_TextureTilingScale")
+        .map(|c| (c.2, c.4))
         .collect();
-    assert_eq!(tiling.len(), 1);
-    assert_eq!((tiling[0].2, &tiling[0].4), (128, &bits(&[2., 3., 0., 0.])));
+    assert_eq!(
+        tiling,
+        [(32, bits(&[1., 1., 0., 0.])), (128, bits(&[2., 3., -0.5, -1.]))]
+    );
 }
 
 fn dds(width: u32, height: u32) -> Arc<[u8]> {
@@ -1444,6 +1447,8 @@ fn a_textures_tiling_is_the_uv_group_of_its_own_texture_number() {
         mtd_params: Vec::new(),
     };
     let mut m = material();
+    // a FLVER scale of 1 leaves the slot to the uv group
+    m.bindings.get_mut("A_Texture2D_8_AlbedoMap").unwrap().scale = [1.; 2];
     for (group, scale) in [("group_3", [51., 17.]), ("group_9", [5., 5.])] {
         m.definition.parameters.push(Parameter {
             name: format!("{group}_CommonUV-UVParam"),
@@ -1468,7 +1473,86 @@ fn a_textures_tiling_is_the_uv_group_of_its_own_texture_number() {
     // rows 2 and 8, sixteen bytes each
     assert_eq!(
         tiling,
-        [(32, bits(&[5., 5., 0., 0.])), (128, bits(&[51., 17., 0., 0.]))]
+        [
+            (32, bits(&[5., 5., -2., -2.])),
+            (128, bits(&[51., 17., -25., -8.]))
+        ]
+    );
+}
+
+/// A texture's tiling is the FLVER's scale where it is not 1, else the scale the definition stores for the slot where it
+/// is not zero, else the uv group's, centred: the rows Sekiro's capture shows for the Wolf's scarf
+/// (`P_BD_M_9040_tops1_Maffler.mtd` stores 18 by 6 at `Texture2D_1`, whose uv group is 1 by 1, and zero at
+/// `Texture2D_2`, whose uv group is 51 by 17: captured `18, 6, -8.5, -2.5` and `51, 17, -25, -8`). Both games' rule.
+#[test]
+fn a_textures_tiling_is_the_flvers_then_the_stored_then_the_uv_groups() {
+    use primase_fromsoft::metaparam::{Metaparam, Texture as MetaTexture};
+    let shader = executor(PROGRAM);
+    let record = |name: &str, slot: u8, uv_group: &str| MetaTexture {
+        name: name.into(),
+        default_texture: String::new(),
+        uv_group: uv_group.into(),
+        slot,
+        kind: 1,
+        unknown_08: 0,
+        unknown_0c: -1,
+        unknown_20: 0,
+    };
+    let metaparam = Metaparam {
+        constant_buffer_size: 0,
+        shader_id: 0,
+        flags: 0,
+        gxmd_key: 0,
+        ca_param_block_size: 0,
+        ca_param_components: 0,
+        unknown_30: 0,
+        unknown_40: 0,
+        unknown_50: 0,
+        textures: vec![
+            record("M_Multiple__snp_Texture2D_8_AlbedoMap", 8, "group_2"),
+            record("M_Multiple__snp_Texture2D_2_NormalMap", 2, "group_3"),
+        ],
+        passes: Vec::new(),
+        ca_params: Vec::new(),
+        mtd_params: Vec::new(),
+    };
+    let rows = |flver: [f32; 2], game| {
+        let mut m = material();
+        m.bindings.get_mut("A_Texture2D_8_AlbedoMap").unwrap().scale = flver;
+        m.definition.textures[0].extra = vec![18., 6.];
+        m.definition.textures[1].extra = vec![0., 0.];
+        for (group, scale) in [("group_2", [1., 1.]), ("group_3", [51., 17.])] {
+            m.definition.parameters.push(Parameter {
+                name: format!("{group}_CommonUV-UVParam"),
+                value: Value::Float(scale.to_vec()),
+            });
+        }
+        let resolution = resolve(
+            &shader,
+            World::default().spawn(),
+            &m.view(),
+            game,
+            Some(&metaparam),
+            Unbound::Preview,
+            &mut |_, _| Ok(None),
+        )
+        .unwrap();
+        constants(&resolution.stage, &shader)
+            .into_iter()
+            .filter(|c| c.1 == "FC_TextureTilingScale")
+            .map(|c| (c.2, c.4))
+            .collect::<Vec<(u32, ConstantRole)>>()
+    };
+    let scarf = [
+        (32, bits(&[51., 17., -25., -8.])),
+        (128, bits(&[18., 6., -8.5, -2.5])),
+    ];
+    assert_eq!(rows([1.; 2], primase_fromsoft::Game::Sekiro), scarf);
+    assert_eq!(rows([1.; 2], primase_fromsoft::Game::EldenRing), scarf);
+    // a FLVER scale other than 1 comes first
+    assert_eq!(
+        rows([2., 3.], primase_fromsoft::Game::Sekiro)[1],
+        (128, bits(&[2., 3., -0.5, -1.]))
     );
 }
 
@@ -1733,7 +1817,7 @@ fn a_fixed_function_materials_textures_are_bound_by_their_kind_names() {
         source("g_DitherTexture"),
         TextureSource::Default { value, .. } if value == [0.5; 4]
     ));
-    // the tiling of t0 and t3 (the registers) from the bindings' scales, the colour from g_DiffuseMapColor
+    // the tiling of t0 and t3 (the registers) from the bindings' FLVER scales, centred; the colour from g_DiffuseMapColor
     let tiling: Vec<_> = constants(&resolution.stage, &shader)
         .into_iter()
         .filter(|c| c.1 == "FC_TextureTilingScale")
@@ -1741,7 +1825,7 @@ fn a_fixed_function_materials_textures_are_bound_by_their_kind_names() {
         .collect();
     assert_eq!(
         tiling,
-        [(0, bits(&[2., 3., 0., 0.])), (48, bits(&[4., 5., 0., 0.]))]
+        [(0, bits(&[2., 3., -0.5, -1.])), (48, bits(&[4., 5., -1.5, -2.]))]
     );
 }
 
