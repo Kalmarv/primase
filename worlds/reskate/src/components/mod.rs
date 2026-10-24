@@ -1525,6 +1525,23 @@ impl Component for SkateParts {
     fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
         Some(primase_core::remap_list(&self.0, from).map(SkateParts))
     }
+    /// One part per primitive of the entity's mesh: `core.mesh`'s primitives where it is loaded, else
+    /// `core.mesh_file`'s (one material entry per primitive); none without either (no geometry, or a form that draws
+    /// nothing). A count that differs would give each part's fields to another primitive, or to none.
+    fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
+        let (primitives, of) = if let Some(m) = w.get::<primase_core::Mesh>(e) {
+            (m.primitives().len(), "core.mesh's primitives")
+        } else if let Some(f) = w.get::<primase_core::MeshFile>(e) {
+            (f.materials.len(), "core.mesh_file's primitives")
+        } else {
+            (0, "primitives (no core.mesh or core.mesh_file)")
+        };
+        if self.0.len() == primitives {
+            Ok(())
+        } else {
+            Err(format!("{} parts for {primitives} {of}", self.0.len()))
+        }
+    }
 }
 
 impl Component for SkateSoup {
@@ -1558,5 +1575,53 @@ impl Component for SkateSoup {
             return Err(format!("vertex {} is not finite", i / 3));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::{Mesh, MeshFile, Primitive, Topology};
+
+    fn primitive() -> Primitive {
+        Primitive {
+            topology: Topology::Triangles,
+            streams: BTreeMap::new(),
+            indices: None,
+            material: None,
+        }
+    }
+
+    /// Parts count the primitives of the loaded mesh, else of the mesh file, else none: one more or fewer is refused.
+    #[test]
+    fn parts_are_one_per_primitive() {
+        let parts = |n: usize| SkateParts(vec![Part::default(); n]);
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(parts(0).verify(e, &w).is_ok());
+        assert_eq!(
+            parts(1).verify(e, &w).unwrap_err(),
+            "1 parts for 0 primitives (no core.mesh or core.mesh_file)"
+        );
+        w.insert(
+            e,
+            MeshFile {
+                path: "m.glb".into(),
+                mesh: 0,
+                materials: vec![None; 2],
+            },
+        );
+        assert!(parts(2).verify(e, &w).is_ok());
+        assert_eq!(
+            parts(3).verify(e, &w).unwrap_err(),
+            "3 parts for 2 core.mesh_file's primitives"
+        );
+        // a loaded mesh is what is drawn
+        w.insert(e, Mesh::new(vec![primitive(); 3]));
+        assert!(parts(3).verify(e, &w).is_ok());
+        assert_eq!(
+            parts(2).verify(e, &w).unwrap_err(),
+            "2 parts for 3 core.mesh's primitives"
+        );
     }
 }
