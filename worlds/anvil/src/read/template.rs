@@ -809,8 +809,9 @@ pub fn feature_node(body: &[u8]) -> Result<&[u8], FeatureError> {
     body.get(start..end).ok_or(FeatureError::Unterminated(at))
 }
 
-/// A template's permutations ([`permutations`]) as the tables of its [`AnvilShaders`]: each stage's keys, sorted, and
-/// each program's container once, however many permutations name it; `feature_node` its shader-state node's body
+/// A template's permutations ([`permutations`]) as the tables of its [`AnvilShaders`]: each stage's keys, sorted, a
+/// permutation listed twice with the same program kept once (a key with two programs stays twice, which
+/// [`AnvilShaders::check`] refuses), and each program's container once, however many permutations name it; `feature_node` its shader-state node's body
 /// ([`feature_node`]).
 pub fn shader_tables(read: &[Permutation<'_>], feature_node: &[u8]) -> crate::components::AnvilShaders {
     let mut programs: Vec<(usize, Vec<u8>)> = Vec::new();
@@ -828,8 +829,10 @@ pub fn shader_tables(read: &[Permutation<'_>], feature_node: &[u8]) -> crate::co
             Stage::Vertex => vertex.push((p.key, index)),
         }
     }
-    pixel.sort_unstable();
-    vertex.sort_unstable();
+    for stage in [&mut pixel, &mut vertex] {
+        stage.sort_unstable();
+        stage.dedup();
+    }
     crate::components::AnvilShaders {
         pixel,
         vertex,
@@ -904,6 +907,27 @@ mod tests {
         // the same key in both stages names each stage's own program
         assert_eq!((t.vertex(9), t.pixel(9)), (Some(a), Some(b)));
         assert_eq!((t.vertex(4), t.pixel(3)), (None, None));
+        assert_eq!(t.check(), Ok(()));
+        // a permutation listed twice with its program is kept once; a key with two programs is refused
+        let twice = [read[1].clone(), read[1].clone()];
+        assert_eq!(shader_tables(&twice, &[]).pixel, [(9, 0)]);
+        assert_eq!(shader_tables(&twice, &[]).check(), Ok(()));
+        let two_programs = [read[1].clone(), permutation(Stage::Pixel, 9, 300, c)];
+        assert_eq!(
+            shader_tables(&two_programs, &[]).check(),
+            Err("pixel keys not strictly ascending: 0x9 then 0x9".into())
+        );
+        // unsorted, and an index past the programs
+        let mut t = shader_tables(&read, &[]);
+        t.vertex.reverse();
+        assert!(
+            t.check()
+                .unwrap_err()
+                .starts_with("vertex keys not strictly ascending")
+        );
+        t.vertex.reverse();
+        t.pixel[0].1 = 3;
+        assert_eq!(t.check(), Err("pixel key 0x4 names program 3 of 3".into()));
     }
 
     #[test]

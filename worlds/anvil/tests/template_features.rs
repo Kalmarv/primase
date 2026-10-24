@@ -10,7 +10,9 @@
 //! A feature is set where its byte is not 0. The bytes are 0 or 1 but for feature 15, whose byte is 2 on 82 of the
 //! templates (on those with the pass, 22 have 1, 82 have 2 and 228 have 0, and key bit `0x80` is stored exactly where
 //! it is 1 or 2). The test holds the byte of every feature a key rule asks for to 0 or 1 (feature 15: 0, 1 or 2) and
-//! the templates to the gates, and prints the counts.
+//! the templates to the gates, and prints the counts. Every template's tables pass [`AnvilShaders::check`] too.
+//!
+//! [`AnvilShaders::check`]: primase_anvil::components::AnvilShaders::check
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::template::{self, MATERIAL_TEMPLATE};
@@ -45,6 +47,10 @@ fn feature_flags_are_set_where_the_template_stores_the_key_bit_they_gate() {
             let node = template::feature_node(&body).unwrap();
             assert_eq!(node.len(), 54, "{forge} {entry}");
             let tables = template::shader_tables(&read, node);
+            // each stage's keys once and sorted, every program held: what the lookups rely on
+            tables
+                .check()
+                .unwrap_or_else(|e| panic!("{forge} entry {entry}: {e}"));
             templates += 1;
             let has = |pass: u32, bit: u32| read.iter().any(|p| p.key >> 22 == pass && p.key & bit != 0);
             let has_any = |pass: u32| read.iter().any(|p| p.key >> 22 == pass);

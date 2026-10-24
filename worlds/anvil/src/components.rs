@@ -1084,7 +1084,8 @@ impl MaterialFlags {
 /// 22 to 29 its pass); the same key may be in both stages, each with its own program.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilShaders {
-    /// (ShaderKey, index into `programs`) of the pixel stage, sorted by key: the engine looks a key up exactly.
+    /// (ShaderKey, index into `programs`) of the pixel stage, the keys strictly ascending (each once): the engine looks
+    /// a key up exactly ([`AnvilShaders::check`]).
     pub pixel: Vec<(u32, usize)>,
     /// The same for the vertex stage.
     pub vertex: Vec<(u32, usize)>,
@@ -1096,6 +1097,26 @@ pub struct AnvilShaders {
 }
 
 impl AnvilShaders {
+    /// What the lookups rely on: each stage's keys strictly ascending (a key twice would name two programs, and an
+    /// unsorted list would miss keys it holds), and every index naming one of `programs`.
+    pub fn check(&self) -> Result<(), String> {
+        for (stage, table) in [("pixel", &self.pixel), ("vertex", &self.vertex)] {
+            if let Some(w) = table.windows(2).find(|w| w[0].0 >= w[1].0) {
+                return Err(format!(
+                    "{stage} keys not strictly ascending: {:#x} then {:#x}",
+                    w[0].0, w[1].0
+                ));
+            }
+            if let Some(&(key, index)) = table.iter().find(|&&(_, i)| i >= self.programs.len()) {
+                return Err(format!(
+                    "{stage} key {key:#x} names program {index} of {}",
+                    self.programs.len()
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn program(&self, stage: &[(u32, usize)], key: u32) -> Option<&[u8]> {
         let at = stage.binary_search_by_key(&key, |&(k, _)| k).ok()?;
         let &(_, program) = stage.get(at)?;
@@ -1129,6 +1150,10 @@ impl AnvilShaders {
 impl Component for AnvilShaders {
     const NAME: &'static str = "anvil.shaders";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    /// [`AnvilShaders::check`].
+    fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
+        self.check()
+    }
     fn payload_bytes(&self) -> u64 {
         let bytes: usize = self.programs.iter().map(Vec::len).sum();
         u64::try_from(bytes).unwrap_or(u64::MAX)
