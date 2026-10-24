@@ -616,7 +616,8 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
         &dxbc_shader(VERTEX_PROGRAM, interface.clone()),
         program,
     )
-    .unwrap();
+    .unwrap()
+    .stage;
     assert_eq!((stage.stage, stage.shader), (Stage::Vertex, program));
     let inputs: Vec<_> = stage
         .inputs
@@ -764,6 +765,34 @@ fn the_view_projection_is_camera_relative_where_the_program_subtracts_the_camera
         role_of(SKIN_PROGRAM),
         ConstantRole::View(ViewParameter::ViewProjection)
     );
+}
+
+/// A program the run does not decide is taken as camera-relative, said by a reason the caller counts: here a program whose
+/// clip position is not the position given at the identity (a constant is added to it).
+#[test]
+fn an_undecided_view_projection_is_taken_as_camera_relative_with_its_reason() {
+    let resolved = |bytes: &[u8]| {
+        let interface = primase_dxbc::reflection(bytes).unwrap();
+        let entity = World::default().spawn();
+        primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(bytes, interface), entity).unwrap()
+    };
+    let vertex = resolved(OFFSET_PROGRAM);
+    let role = vertex
+        .stage
+        .constants
+        .iter()
+        .find(|c| c.name.as_deref() == Some("VC_MatrixViewProj"))
+        .unwrap()
+        .role
+        .clone();
+    assert_eq!(
+        role,
+        ConstantRole::View(ViewParameter::CameraRelativeViewProjection)
+    );
+    let why = vertex.undecided.expect("the run does not decide it");
+    assert!(why.contains("not the position given"), "{why}");
+    // a decided program counts nothing
+    assert_eq!(resolved(VERTEX_PROGRAM).undecided, None);
 }
 
 /// The skinned permutation: its joint indices and weights are the mesh's `Joints(0)` and `Weights(0)`, and the array the
