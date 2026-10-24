@@ -1113,6 +1113,7 @@ mod tests {
             start_index: 0,
             vertex_offset: 0,
             vertices: 1,
+            bones: Vec::new(),
         }
     }
 
