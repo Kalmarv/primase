@@ -75,6 +75,22 @@ enum Pixels {
     Layered(TextureLayers),
 }
 
+/// Whether [`Source::read_entry`] reads a resource of type `t`: a texture, a ShaderBlockDepot, a CompiledBytecode
+/// resource, a shader permutation (raster or compute), a program lookup or a MeshSet. Every other type is an
+/// [`Error::Unsupported`] naming it, so a listing that offers entries to open leaves these out.
+pub fn reads_resource_type(t: u32) -> bool {
+    matches!(
+        t,
+        crate::TEXTURE
+            | depot::RTYPE
+            | bytecode::RTYPE
+            | permutation::RASTER
+            | permutation::COMPUTE
+            | lookup::PROGRAM_LOOKUP
+            | crate::MESHSET
+    )
+}
+
 fn unsupported(entry: &Listed, what: impl std::fmt::Display) -> Error {
     Error::Unsupported(format!("{} ({}): {what}", entry.name, entry.bundle))
 }
@@ -134,6 +150,7 @@ impl Source<'_> {
                 materials: Default::default(),
             })),
             (Kind::Res, Some(t)) => {
+                debug_assert!(!reads_resource_type(t), "{t:#010x} is read above");
                 return Err(unsupported(
                     entry,
                     format_args!("resource type {t:#010x} is not read"),
@@ -341,4 +358,29 @@ fn texture_shape(h: &texture::TextureHeader) -> std::result::Result<Option<Textu
         }),
         _ => return Err(format!("texture of {counts}: not a shape the reader knows")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The resource types the reader has an arm for are the ones it says it reads, and the three the lab's catalog sweep
+    /// found refused (ShaderStateAsset, GpuDeformBaseMesh and the scalp-hair wrap list) are not among them.
+    #[test]
+    fn the_resource_types_read_are_the_ones_with_an_arm() {
+        for t in [
+            crate::TEXTURE,
+            depot::RTYPE,
+            bytecode::RTYPE,
+            permutation::RASTER,
+            permutation::COMPUTE,
+            lookup::PROGRAM_LOOKUP,
+            crate::MESHSET,
+        ] {
+            assert!(reads_resource_type(t), "{t:#010x}");
+        }
+        for t in [0x2fec_6526, 0xed27_dbda, 0xf17d_dabd, 0] {
+            assert!(!reads_resource_type(t), "{t:#010x}");
+        }
+    }
 }
