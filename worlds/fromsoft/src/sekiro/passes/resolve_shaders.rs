@@ -216,24 +216,20 @@ fn run(
         let bundle = bundle_entity.and_then(|e| world.get::<ShaderBundle>(e));
         // the game whose program it is: its bundle's (Sekiro's layered programs the reader kept are Sekiro's)
         let game = bundle.map_or(crate::Game::Sekiro, |b| b.game);
-        let name = material.pass_program();
+        let requested = material.pass_program();
         // the layered programs the reader kept (DXBC), else the one the shader's bundle holds under that name
-        let program = if shaders.contains_key(&name) {
-            None
-        } else {
-            let found = programs
-                .get(&name)
-                .map(|code| (ShaderFormat::Dxbc, code.clone()))
-                .or_else(|| {
-                    bundle
-                        .and_then(|b| b.program(&name))
-                        .map(|p| (p.format, p.code.clone()))
-                });
-            if found.is_none() {
-                t.without_program += 1;
-                continue;
-            }
-            found
+        let found = programs
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(&requested))
+            .map(|(name, code)| (name.clone(), ShaderFormat::Dxbc, code.clone()))
+            .or_else(|| {
+                bundle
+                    .and_then(|b| b.program(&requested))
+                    .map(|p| (p.name.clone(), p.format, p.code.clone()))
+            });
+        let Some((name, format, bytes)) = found else {
+            t.without_program += 1;
+            continue;
         };
         if let (Some(e), Some(b)) = (bundle_entity, bundle) {
             parameters.entry(e).or_insert_with(|| b.parameters.clone());
@@ -260,7 +256,7 @@ fn run(
                 t.without_skin += 1;
             }
         }
-        if let Some((format, bytes)) = program {
+        if !shaders.contains_key(&name) {
             let parsed =
                 crate::layer_bake::program_executor(format, &bytes).map_err(|e| format!("{name}: {e}"))?;
             let entity = world.spawn();

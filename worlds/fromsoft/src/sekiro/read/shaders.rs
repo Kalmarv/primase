@@ -46,6 +46,14 @@ pub(crate) fn unbound_defaults(
 }
 
 impl Bundles {
+    /// Binder member paths follow the archive's case-insensitive naming rule. Keep the stored spelling in the record.
+    fn get(&self, shader: &str) -> Option<&ShaderBundle> {
+        self.bundles
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(shader))
+            .map(|(_, bundle)| bundle)
+    }
+
     /// The default textures of the slots `materials` bind nothing to ([`unbound_defaults`]), by their shaders'
     /// metaparams. Read the bundles first.
     pub fn default_textures<'a>(
@@ -55,7 +63,7 @@ impl Bundles {
     ) -> BTreeSet<String> {
         materials
             .into_iter()
-            .filter_map(|m| Some((m, self.bundles.get(&m.shader)?.parameters.as_ref()?)))
+            .filter_map(|m| Some((m, self.get(&m.shader)?.parameters.as_ref()?)))
             .flat_map(|(m, meta)| unbound_defaults(game, m, meta))
             .collect()
     }
@@ -71,7 +79,7 @@ impl Bundles {
     ) -> Result<()> {
         let mut wanted: BTreeSet<&String> = shaders
             .iter()
-            .filter(|s| !self.bundles.contains_key(*s) && !self.missing.contains(*s))
+            .filter(|s| self.get(s).is_none() && !self.missing.contains(*s))
             .collect();
         for path in game.shader_binders() {
             if wanted.is_empty() {
@@ -85,12 +93,12 @@ impl Bundles {
                 let Some(shader) = name.strip_suffix(".shaderbdle") else {
                     continue;
                 };
-                let Some(&key) = wanted.iter().find(|w| w.as_str() == shader) else {
+                if !wanted.iter().any(|w| w.eq_ignore_ascii_case(shader)) {
                     continue;
-                };
+                }
                 let bundle = bundle(game, shader, &file.bytes, decoder, &mut self.unread_metaparams)?;
                 self.bundles.insert(shader.to_owned(), bundle);
-                wanted.remove(key);
+                wanted.retain(|w| !w.eq_ignore_ascii_case(shader));
             }
         }
         // a shader without a bundle may be a fixed-function one, whose programs are in one binder by name
@@ -135,9 +143,9 @@ impl Bundles {
             .collect::<Result<BTreeSet<_>>>()?;
         let mut programs = BTreeMap::new();
         for family in ["M[Multiple]", "M[MultipleGround]", "M[Multiple]_Emissive"] {
-            for p in self.bundles.get(family).into_iter().flat_map(|b| &b.programs) {
-                if wanted.contains(&p.name) {
-                    programs.insert(p.name.clone(), p.code.clone());
+            for p in self.get(family).into_iter().flat_map(|b| &b.programs) {
+                for name in wanted.iter().filter(|n| n.eq_ignore_ascii_case(&p.name)) {
+                    programs.insert(name.clone(), p.code.clone());
                 }
             }
         }
@@ -155,7 +163,10 @@ impl Bundles {
             entities.insert(shader, e);
         }
         for (material, shader) in materials {
-            if let Some(&bundle) = entities.get(shader) {
+            if let Some((_, &bundle)) = entities
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(shader))
+            {
                 world.insert(*material, source::MaterialShader(bundle));
             }
         }
@@ -164,10 +175,12 @@ impl Bundles {
 
 /// Whether a shader is of the fixed-function family: the `GXFlver_` shaders have programs but no bundle.
 fn fixed_function(shader: &str) -> bool {
-    shader.starts_with("GXFlver_")
+    shader
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("GXFlver_"))
 }
 
-/// The G-buffer and forward programs of a fixed-function shader in its binder, by exact name: the pixel programs
+/// The G-buffer and forward programs of a fixed-function shader in its binder, by case-insensitive file name: the pixel programs
 /// `<shader>_Gbuf.ppo`, `<shader>_Gbuf_[A].ppo`, `<shader>_Fwd.ppo` and `<shader>_Fwd_[A].ppo` and the vertex programs
 /// `<shader>_GBuf.vpo`, `<shader>_GBuf_Skin.vpo`, `<shader>_Fwd.vpo`, `<shader>_Fwd_Skin.vpo` and their `@[cl]` permutations
 /// (the forward pass's shadow permutations, `FwdSdw` and `FwdSSdw`, are the engine's per-instance choice and not taken). The permutations of an effect the engine selects per instance (`_Bloody`, `_Burn`, `_Cm`,
@@ -191,7 +204,11 @@ fn fixed_function_programs(game: Game, shader: &str, binder: &Binder) -> Result<
     ];
     let mut programs = Vec::new();
     for (name, stage, kind) in names {
-        let Some(file) = binder.files.iter().find(|f| leaf(f.name.as_deref()) == name) else {
+        let Some(file) = binder
+            .files
+            .iter()
+            .find(|f| leaf(f.name.as_deref()).eq_ignore_ascii_case(&name))
+        else {
             continue;
         };
         let found = shader_kind(format, &file.bytes)
@@ -204,7 +221,7 @@ fn fixed_function_programs(game: Game, shader: &str, binder: &Binder) -> Result<
             ));
         }
         programs.push(ShaderProgram {
-            name,
+            name: leaf(file.name.as_deref()).to_owned(),
             stage,
             format,
             code: file.bytes.clone().into(),
@@ -290,4 +307,65 @@ fn bundle(
         programs,
         parameters,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::materials::{Definition, Material};
+
+    /// Wolf's MTDs name character_AMSN.spx, while the binder stores Character_AMSN.shaderbdle and its programs.
+    #[test]
+    fn a_lowercase_mtd_shader_links_to_the_stored_bundle_and_program_spelling() {
+        let material = Material {
+            mtd: "lowercase.mtd".into(),
+            gx: Vec::new(),
+            class: "opaque".into(),
+            skip: None,
+            cutoff: 0.5,
+            bindings: BTreeMap::new(),
+            layered: None,
+            shader: "character_AMSN".into(),
+            definition: Some(Definition::Mtd(crate::mtd::MaterialDefinition {
+                shader: r"N:\NTC\data\Material\sat\OutputData\SPX\character_AMSN.spx".into(),
+                description: String::new(),
+                parameters: Vec::new(),
+                textures: Vec::new(),
+                block_lengths: Vec::new(),
+            })),
+        };
+        let stored = ShaderBundle {
+            name: "Character_AMSN".into(),
+            game: Game::Sekiro,
+            parameters: None,
+            programs: vec![ShaderProgram {
+                name: "Character_AMSN_Gbuf.ppo".into(),
+                stage: ShaderStage::Pixel,
+                format: ShaderFormat::Dxbc,
+                code: Vec::new().into(),
+            }],
+        };
+        let bundles = Bundles {
+            bundles: BTreeMap::from([(stored.name.clone(), stored)]),
+            ..Default::default()
+        };
+        assert_eq!(bundles.get(&material.shader).unwrap().name, "Character_AMSN");
+        let mut world = World::default();
+        let entity = world.spawn();
+        bundles.spawn(&mut world, &[(entity, material.shader.clone())]);
+        let bundle_entity = world.get::<source::MaterialShader>(entity).unwrap().0;
+        let bundle = world.get::<ShaderBundle>(bundle_entity).unwrap();
+        let requested = material.view().unwrap().pass_program();
+        assert_eq!(requested, "character_AMSN_Gbuf.ppo");
+        assert_eq!(
+            bundle.program(&requested).unwrap().name,
+            "Character_AMSN_Gbuf.ppo"
+        );
+        assert_eq!(
+            world.get::<primase_core::Name>(bundle_entity).unwrap().0,
+            "Character_AMSN"
+        );
+        assert!(bundle.program("character_AMSN_Fwd.ppo").is_none());
+        assert!(bundles.get("Character_AMSN_Absent").is_none());
+    }
 }

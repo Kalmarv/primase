@@ -48,7 +48,13 @@ fn slice_a_keeps_the_bundle_of_every_shader_its_materials_name() {
         match world.get::<MaterialShader>(e) {
             Some(MaterialShader(b)) => {
                 linked += 1;
-                assert_eq!(world.get::<ShaderBundle>(*b).unwrap().name, m.shader);
+                assert!(
+                    world
+                        .get::<ShaderBundle>(*b)
+                        .unwrap()
+                        .name
+                        .eq_ignore_ascii_case(&m.shader)
+                );
             }
             None => println!("unlinked {} ({}) {:?}", m.mtd, m.shader, m.definition.is_some()),
         }
@@ -118,7 +124,13 @@ fn elden_ring_materials_link_their_shader_model_6_bundles() {
         match world.get::<MaterialShader>(e) {
             Some(MaterialShader(b)) => {
                 linked += 1;
-                assert_eq!(world.get::<ShaderBundle>(*b).unwrap().name, m.shader);
+                assert!(
+                    world
+                        .get::<ShaderBundle>(*b)
+                        .unwrap()
+                        .name
+                        .eq_ignore_ascii_case(&m.shader)
+                );
             }
             None if report.missing_shader_bundles.contains(&m.shader) => {}
             None => failures.push(format!("{} ({}): not linked", m.mtd, m.shader)),

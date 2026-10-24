@@ -698,9 +698,9 @@ pub struct ShaderBundle {
     pub parameters: Option<crate::metaparam::Metaparam>,
 }
 impl ShaderBundle {
-    /// The program stored under `name`.
+    /// The program stored under `name`, following the game's case-insensitive path lookup. The record keeps its spelling.
     pub fn program(&self, name: &str) -> Option<&ShaderProgram> {
-        self.programs.iter().find(|p| p.name == name)
+        self.programs.iter().find(|p| p.name.eq_ignore_ascii_case(name))
     }
     /// The programs of one stage, in stored order.
     pub fn stage(&self, stage: ShaderStage) -> impl Iterator<Item = &ShaderProgram> {
