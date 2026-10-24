@@ -4,9 +4,12 @@
 //! - every parameter the metaparam declares as a shader input sits at its start word, inside the program's own
 //!   `SAT_MtdParam` array, and holds the material binary's value (else the metaparam's default; a colour's first
 //!   three lanes raised to 2.2 when the metaparam states sRGB, then times its intensity; bools as integer words);
-//! - each texture's tiling takes the nonzero MATBIN sampler scale, else its UV group's CommonUV parameter (authored,
-//!   else metaparam default), else 1. The group is matched by Texture2D_N, not metaparam slot index. Both axes are
-//!   centred with offset (1 - scale) / 2, in the row indexed by the program's texture register;
+//! - each texture's tiling takes the FLVER texture's scale where it is not 1, else the nonzero MATBIN sampler scale,
+//!   else its UV group's CommonUV parameter (authored, else metaparam default), else 1. The group is matched by
+//!   Texture2D_N, not metaparam slot index. Both axes are centred with offset (1 - scale) / 2, in the row indexed by
+//!   the program's texture register. The FLVER step is the Sekiro-derived rule (its captures settled it; no Elden Ring
+//!   capture has a FLVER scale other than 1): a row it gives is checked against that rule and printed as "expected by
+//!   the Sekiro-derived rule; unverified on Elden Ring", and is not evidence of Elden Ring's behaviour;
 //! - no texture the material binary declares is bound as an engine texture (a program resource without a
 //!   `Texture2D_<n>` name falls to that branch: they are listed by name);
 //! - the outputs carry Elden Ring's G-buffer roles only ([`Game::gbuffer`]).
@@ -48,6 +51,8 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
     let layout = Game::EldenRing.gbuffer();
     let mut failures = Vec::new();
     let mut engine_textures: BTreeMap<String, usize> = BTreeMap::new();
+    // the rows whose scale the FLVER step gives, which no Elden Ring capture has settled
+    let mut flver_scale_rows: Vec<String> = Vec::new();
     for map in ["m14_00_00_00", "m60_35_46_00"] {
         let mut world = World::default();
         sekiro::read_game_area(&install, map, &decoder, &sekiro::Options::default(), &mut world)?;
@@ -199,6 +204,13 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
                     let Some((buffer, start)) = tiling_array else {
                         continue;
                     };
+                    // the scale the FLVER's texture of the slot stores, where it is not 1
+                    let flver = m
+                        .bindings
+                        .iter()
+                        .find(|(kind, _)| texture_number(kind) == Some(number))
+                        .map(|(_, b)| b.scale)
+                        .filter(|s| *s != [1.; 2]);
                     let sampler = definition
                         .samplers
                         .iter()
@@ -222,9 +234,10 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
                                 .map(|p| ([p.default[0], p.default[1]], "default CommonUV")),
                         }
                     });
-                    let ([u, v], source) = match sampler {
-                        Some(scale) => (scale, "MATBIN sampler"),
-                        None => group_scale.unwrap_or(([1.; 2], "identity")),
+                    let ([u, v], source) = match (flver, sampler) {
+                        (Some(scale), _) => (scale, "FLVER texture"),
+                        (None, Some(scale)) => (scale, "MATBIN sampler"),
+                        (None, None) => group_scale.unwrap_or(([1.; 2], "identity")),
                     };
                     let expected = [u, v, (1. - u) / 2., (1. - v) / 2.];
                     let register = shader
@@ -251,6 +264,9 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
                         continue;
                     };
                     let got: Vec<f32> = words.iter().map(|&w| f32::from_bits(w)).collect();
+                    if source == "FLVER texture" {
+                        flver_scale_rows.push(format!("{map}: {} {name}: {expected:?}", m.mtd));
+                    }
                     if got.as_slice() != expected {
                         failures.push(what(format!(
                             "{name}: tiling {got:?}, expected {expected:?} from {source}, CommonUV {group:?}"
@@ -288,6 +304,10 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
         assert!(bound > 0, "{map}: no material binary bound");
     }
     println!("engine textures (by program resource name): {engine_textures:?}");
+    println!(
+        "{} tiling rows expected by the Sekiro-derived rule; unverified on Elden Ring (FLVER texture scale other than 1): {flver_scale_rows:?}",
+        flver_scale_rows.len()
+    );
     for f in failures.iter().take(40) {
         println!("FAIL {f}");
     }
