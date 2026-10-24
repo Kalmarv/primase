@@ -259,7 +259,9 @@ pub enum RootMotionUse {
 /// the stated rotations that differ by more than 10 degrees between the reference and the identity, 900 of 918 are nearer
 /// the identity (the 575 normal animations: 9,017 of 10,424 positions and 12,696 of 13,323 rotations nearer the reference).
 /// What a track does not state is then the neutral value (zero, the identity, one) whatever `absent` says: the reference
-/// transform is not a delta. Not settled: the side a Havok delta composes on (core states `R_base * R_clip`; the Havok
+/// transform is not a delta. That is an assumption: that an untracked component of an additive animation is no delta
+/// (the files state no scale at all, and the positions or rotations of many tracks are absent), which the counted
+/// approximation names. Not settled: the side a Havok delta composes on (core states `R_base * R_clip`; the Havok
 /// SDK headers found, 2009 `NORMAL = 0, ADDITIVE = 1` and Skyrim SE's `kNormal, kAdditive`, state no side, and no source
 /// found names a later `ADDITIVE_DEPRECATED`). Any other blend hint is left out and reported as unsupported (`omit`).
 /// `root-motion` is [`RootMotionUse`]: what is not lowered of an animation's extracted motion is counted.
@@ -664,7 +666,11 @@ impl Pass for LowerHavokClips {
         }
         if additive_lowered > 0 {
             log.approximate(
-                "additive animations (blend hint 1) lowered as deltas from the identity, composed as core.clip states;                  the side a Havok delta composes on is not verified",
+                concat!(
+                    "additive animations (blend hint 1) lowered as deltas from the identity, composed as core.clip states; ",
+                    "a component a track does not state is taken as no delta, and the side a Havok delta composes on ",
+                    "is not verified"
+                ),
                 additive_lowered,
             );
         }
