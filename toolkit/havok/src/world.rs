@@ -626,7 +626,16 @@ impl Pass for LowerHavokClips {
                     continue;
                 }
             };
-            let clip = lower(&a, name, self, additive)?;
+            // one animation that cannot be lowered (a sample that fails) is left without a clip and reported with its reason:
+            // the others are still lowered
+            let clip = match lower(&a, name, self, additive) {
+                Ok(clip) => clip,
+                Err(why) => {
+                    let why = why.strip_prefix(&format!("{name}: ")).unwrap_or(&why);
+                    log.omit(&format!("animations not lowered to clips: {why}"), 1);
+                    continue;
+                }
+            };
             for u in &a.spline.unreadable {
                 let bone = a
                     .track_to_bone
@@ -843,6 +852,37 @@ mod tests {
 
     /// A blend hint 1 animation is a clip of deltas: `additive: Identity`, its values as sampled, and what a track does not
     /// state is the neutral value even where the caller asks for the reference (z stays 0, not the reference's 7).
+    /// An animation that cannot be sampled (its track list names a track the blocks do not hold) is left without a clip and
+    /// reported once with its reason; the animation beside it is still lowered.
+    #[test]
+    fn one_animation_that_fails_to_sample_does_not_stop_the_others() {
+        let (mut w, good, _) = world(SourceFrame::new([Axis::PosX, Axis::PosY, Axis::PosZ], 1.0), 0);
+        let bad = w.spawn();
+        let mut broken = w.get::<HavokAnimation>(good).unwrap().clone();
+        broken.track_to_bone = vec![1, -1, 1];
+        w.insert(bad, broken);
+        w.insert(bad, Name("a000_000001".into()));
+        let log = run(&mut w, &[("absent", "neutral"), ("rate", "1"), ("clips", "all")]).unwrap();
+        assert!(w.has::<Clip>(good));
+        assert!(!w.has::<Clip>(bad));
+        let reasons: Vec<&String> = log
+            .omitted
+            .keys()
+            .filter(|k| k.starts_with("animations not lowered to clips"))
+            .collect();
+        assert!(
+            reasons.len() == 1 && reasons[0].contains("no track 2") && !reasons[0].contains("a000_000001"),
+            "{:?}",
+            log.omitted
+        );
+        assert_eq!(log.omitted[reasons[0]], 1);
+        assert_eq!(
+            log.approximations.values().sum::<u64>(),
+            1,
+            "only the clip that was lowered is counted"
+        );
+    }
+
     #[test]
     fn a_blend_hint_one_animation_is_lowered_as_deltas_from_the_identity() {
         let frame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::PosZ], 1.0);
@@ -1023,13 +1063,14 @@ mod tests {
     }
 
     #[test]
-    fn root_motion_that_cannot_be_the_clips_is_refused_by_name() {
+    fn root_motion_that_cannot_be_the_clips_leaves_the_animation_unlowered_with_the_reason() {
         let (mut w, e, _) = world(SourceFrame::new([Axis::PosX, Axis::PosY, Axis::PosZ], 1.0), 0);
         with_motion(&mut w, e);
         let mut a = w.get::<HavokAnimation>(e).unwrap().clone();
         a.extracted_motion.as_mut().unwrap().duration = 9.0;
         w.insert(e, a.clone());
-        let err = run(
+        // the animation is left without a clip and reported with the reason, not an error of the pass
+        let log = run(
             &mut w,
             &[
                 ("absent", "neutral"),
@@ -1038,12 +1079,17 @@ mod tests {
                 ("root-motion", "translation"),
             ],
         )
-        .unwrap_err();
-        assert!(err.contains("extracted motion lasts 9"), "{err}");
+        .unwrap();
+        assert!(!w.has::<Clip>(e));
+        let why: Vec<&String> = log.omitted.keys().collect();
+        assert!(
+            why.len() == 1 && why[0].contains("extracted motion lasts 9"),
+            "{why:?}"
+        );
         a.extracted_motion.as_mut().unwrap().duration = 2.0;
         a.extracted_motion.as_mut().unwrap().up = [0.0, 2.0, 0.0, 0.0];
         w.insert(e, a);
-        let err = run(
+        let log = run(
             &mut w,
             &[
                 ("absent", "neutral"),
@@ -1052,8 +1098,10 @@ mod tests {
                 ("root-motion", "full"),
             ],
         )
-        .unwrap_err();
-        assert!(err.contains("not a unit vector"), "{err}");
+        .unwrap();
+        assert!(!w.has::<Clip>(e));
+        let why: Vec<&String> = log.omitted.keys().collect();
+        assert!(why.len() == 1 && why[0].contains("not a unit vector"), "{why:?}");
     }
 
     #[test]
