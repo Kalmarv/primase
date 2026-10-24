@@ -115,6 +115,12 @@ impl<'a> AreaReader<'a> {
         if r.draw_param.asked {
             report.push(("sekiro draw param".into(), format!("{:?}", r.draw_param)));
         }
+        if r.object_animation.asked {
+            report.push((
+                "sekiro object animations".into(),
+                format!("{:?}", r.object_animation),
+            ));
+        }
         if let Some(states) = &r.states {
             report.push(("sekiro states".into(), format!("{states:?}")));
         }

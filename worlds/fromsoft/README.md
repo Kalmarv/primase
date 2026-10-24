@@ -516,6 +516,14 @@ rest pose (their animations are not read); and Elden Ring's parts that store a g
 config (the grass is not read). `tests/material_class_census.rs` and
 `tests/hit_class_census.rs` (install-gated) list every shader family by class and
 every HitMtrl class by triangles, for the tables to be checked against the install.
+`Options::object_animations` (off by default) reads the animation binder of each kept object
+model (a `.anibnd` member of its objbnd/geombnd, else a binder beside it) into the world as a
+Havok skeleton named `<model> havok skeleton` and `havok.animation` clips, counted in
+`Report::object_animation` and the read's notices; they are not lowered onto the placements
+yet (the placed objects keep their rest pose), and the clip entities of different models
+share their file names (`a000_003000`), told apart by their `core.provenance`.
+`tests/object_animation_census.rs` (install-gated) prints what the object binders hold, so
+the lookup can be checked: the UXM dictionaries list no animation binder beside an object.
 `tests/draw_param_census.rs` (install-gated) prints every draw-param field the chosen
 maps store, group, key and value. Core states fog and exposure (`core.atmosphere`:
 `Atmosphere`, `Fog`, `FogFalloff`, `Exposure`); `lower-fromsoft-environment` does not

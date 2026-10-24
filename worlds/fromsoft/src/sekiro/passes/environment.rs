@@ -7,11 +7,15 @@
 //!
 //! The light set's fields (`LightSet ParamEditor`; the keys are the files' own):
 //! - `Directional Light Angle0` (two floats) and `Directional Light DiffColor0` (four): the sun's direction and its
-//!   diffuse colour. The angle's convention is not established. It is read as the X and Y Euler rotations, in degrees, of
-//!   a light that shines along its local -Z, placed as the map's other FromSoft rotations are (`msb::euler_transform`;
-//!   BTL spot lights are placed so): a stated approximation, counted. A colour is taken as linear RGB, the fourth float
-//!   (not used) is counted; intensity is the program's calibration (`lux-per-unit`), the colour as stored. A sun whose
-//!   colour is black (or not finite, or negative) is none, counted.
+//!   diffuse colour. The census (`tests/draw_param_census.rs`, m11_01 and m20_00) shows the angle in radians (-0.349066
+//!   and -1.570796 are -20 and -90 degrees); its axis convention is not established. It is read as the X and Y Euler
+//!   rotations of a light that shines along its local -Z, placed as the map's other FromSoft rotations are
+//!   (`msb::euler_transform`; BTL spot lights are placed so): a stated approximation, counted. A colour is taken as
+//!   linear RGB and its fourth float as the light's intensity multiplier (2.0 on m11_01's main light, 0 to 0.3 on its
+//!   fills: counted), times the program's calibration (`lux-per-unit`). A sun whose colour is black or whose multiplier
+//!   is 0 (or not finite, or negative) is none, counted. The census files store no `Hemi Color` field at all, so a
+//!   Sekiro read has no ambient from this pass; the fills (`Angle1`, `LocalLight` lights) are counted as not lowered.
+//!   Later files of a map (`_0010` ...) store only the fields they change.
 //! - `Directional Light Hemi Color Up` and `Hemi Color Down`: the ambient's sky and ground colours; the equator colour is
 //!   not stored and is taken as their mean (counted). The ambient's intensity is `lux-per-unit`, at the scale of a
 //!   directional light's (the same approximation `lower-unity-ambient` states).
@@ -57,25 +61,29 @@ pub const LOWER_FROMSOFT_ENVIRONMENT: PassSpec = PassSpec {
     make: |g| Ok(Box::new(LowerFromSoftEnvironment::from_given(g)?)),
 };
 
-/// A colour's red, green and blue, if the value is a four-float vector of finite, non-negative components.
-fn colour(value: Option<&crate::gparam::Value>) -> Option<[f32; 3]> {
+/// A colour's red, green and blue and its fourth float, if the value is a four-float vector of finite, non-negative
+/// components.
+fn colour(value: Option<&crate::gparam::Value>) -> Option<([f32; 3], f32)> {
     let crate::gparam::Value::Vec4(c) = value? else {
         return None;
     };
-    let rgb = [c[0], c[1], c[2]];
-    rgb.iter().all(|x| x.is_finite() && *x >= 0.).then_some(rgb)
+    c.iter().all(|x| x.is_finite() && *x >= 0.).then_some(([c[0], c[1], c[2]], c[3]))
 }
 
 /// Why the fields of a group are not lowered, by the group's key: what core has no place for.
 fn why_not_lowered(group: &str) -> &'static str {
     match group {
         LIGHT_SET => "specular, sharpness, occlusion, second directional and local lights: no core.light fields",
-        "FogParamEditor" | "VolumetricFog ParamEditor" | "Fog Volume" => {
-            "fog: core.atmosphere states fog, but which keys carry it and their units are not established (tests/draw_param_census.rs)"
+        "VolumetricFog ParamEditor" => {
+            "volumetric fog (a froxel volume: a fixed and a height density, sky and directional in-scatter colours with a phase): core.atmosphere's distance fog is a different model, and the density's unit (the group's GameScale) is not established"
         }
-        "Tone Map[Yebis]" | "Color Grading" | "HDR Color Correction" => {
-            "tone, exposure and colour grading: core.atmosphere states exposure in stops, but the key and its unit are not established (tests/draw_param_census.rs); core states no tone curve"
+        "FogParamEditor" | "Fog Volume" => {
+            "fog: core.atmosphere states fog, but no census file stores this group, so its keys and units are not established"
         }
+        "Tone Map[Yebis]" => {
+            "tone map: every census file enables auto exposure (adapting between its stored minimum and maximum), so no static exposure in stops exists for core.atmosphere; contrast, white balance and colour are a tone curve core states none of"
+        }
+        "Color Grading" | "ColorGrading[Yebis]" | "HDR Color Correction" => "colour grading: core states none",
         "LightScattering : ParamEditor" | "Env Map:Editor" | "EnvironmentConfig ParamEditor" | "SeaWave:Editor" => {
             "sky, scattering and environment-map references: core has no sky"
         }
@@ -101,7 +109,7 @@ impl Pass for LowerFromSoftEnvironment {
         &[Light::NAME, Environment::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "the sun's angle read as Euler rotations of a light shining along -Z; stored colours as linear; intensity by the calibration; the ambient's equator the mean of its hemispheres"
+        "the sun's angle (radians) read as Euler rotations of a light shining along -Z; stored colours as linear; intensity the colour's fourth float by the calibration; the ambient's equator the mean of its hemispheres"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let Some(env) = world.resource::<DrawParam>().cloned() else {
@@ -118,16 +126,22 @@ impl Pass for LowerFromSoftEnvironment {
                 _ => None,
             };
             match (angle, colour(set.value(DIFFUSE))) {
-                (Some(angle), Some(rgb)) if rgb.iter().any(|x| *x > 0.) => {
-                    let transform = crate::msb::euler_transform([0.; 3], [angle[0], angle[1], 0.], [1.; 3], 0)
-                        .map_err(|e| format!("the sun's angle: {e}"))?;
+                (Some(angle), Some((rgb, weight))) if weight > 0. && rgb.iter().any(|x| *x > 0.) => {
+                    // the angle is stored in radians (-0.349066 and -1.570796 are -20 and -90 degrees)
+                    let transform = crate::msb::euler_transform(
+                        [0.; 3],
+                        [angle[0].to_degrees(), angle[1].to_degrees(), 0.],
+                        [1.; 3],
+                        0,
+                    )
+                    .map_err(|e| format!("the sun's angle: {e}"))?;
                     let e = world.spawn();
                     world.insert(
                         e,
                         Light {
                             kind: LightKind::Directional,
                             color: rgb,
-                            intensity: lux,
+                            intensity: lux * weight,
                             range: None,
                             cast_shadows: None,
                         },
@@ -142,14 +156,20 @@ impl Pass for LowerFromSoftEnvironment {
                     *lowered.entry(LIGHT_SET).or_default() += 2;
                     log.count("suns lowered", 1);
                     log.approximate(
-                        "the sun's angle read as X and Y Euler rotations of a light shining along its local -Z (the light set's convention is not established)",
+                        "the sun's angle (radians, pitch then yaw) read as X and Y Euler rotations of a light shining along its local -Z (the light set's axis convention is not established)",
                         1,
                     );
                     log.approximate("stored light colours read as linear RGB", 1);
-                    log.approximate("intensity by the calibrated lux per unit of colour", 1);
+                    log.approximate(
+                        "the colour's fourth float read as the light's intensity multiplier (2.0 on the main light of m11_01, 0 to 0.3 on its fills), at the calibrated lux per unit",
+                        1,
+                    );
                 }
                 (Some(_), Some(_)) => {
-                    log.omit("directional light 0 of the light set is black: no sun", 1);
+                    log.omit(
+                        "directional light 0 of the light set is black or has intensity 0: no sun",
+                        1,
+                    );
                 }
                 _ => {
                     log.omit(
@@ -159,7 +179,7 @@ impl Pass for LowerFromSoftEnvironment {
                 }
             }
             match (colour(set.value(HEMI_UP)), colour(set.value(HEMI_DOWN))) {
-                (Some(sky), Some(ground)) => {
+                (Some((sky, _)), Some((ground, _))) => {
                     let equator = [0, 1, 2].map(|i| (sky[i] + ground[i]) / 2.);
                     ambient = Some(Ambient {
                         intensity: lux,
@@ -278,7 +298,7 @@ mod tests {
     #[test]
     fn the_light_set_becomes_the_sun_and_a_gradient_ambient_and_the_rest_is_counted() {
         let mut w = world_with(vec![
-            light_set([90., 0.], [1.0, 0.5, 0.25, 1.0]),
+            light_set([std::f32::consts::FRAC_PI_2, 0.], [1.0, 0.5, 0.25, 1.0]),
             group("FogParamEditor", 0, vec![field("Fog-Dist", Value::Float(3.0))]),
             group(
                 "Tone Map[Yebis]",
@@ -295,7 +315,7 @@ mod tests {
         let light = w.get::<Light>(sun).unwrap();
         assert_eq!(light.kind, LightKind::Directional);
         assert_eq!((light.color, light.intensity), ([1.0, 0.5, 0.25], 100.0));
-        // an X rotation of 90 degrees turns the light to shine straight down
+        // an X rotation of pi/2 radians (stored in radians) turns the light to shine straight down
         close(shines(&w, sun), [0., -1., 0.]);
         assert_eq!(w.get::<Name>(sun).unwrap().0, "sun");
         assert_eq!(
@@ -347,7 +367,7 @@ mod tests {
         let sun = w.resource::<Environment>().unwrap().sun.unwrap();
         close(shines(&w, sun), [0., 0., -1.]);
         // yaw 90 about Y: -Z turns to -X in the source frame; the world frame mirrors z only, so -Z stays on the Z axis
-        let mut w = world_with(vec![light_set([0., 90.], [1.; 4])]);
+        let mut w = world_with(vec![light_set([0., std::f32::consts::FRAC_PI_2], [1.; 4])]);
         run(&mut w, 1.0);
         let sun = w.resource::<Environment>().unwrap().sun.unwrap();
         let d = shines(&w, sun);
@@ -355,9 +375,23 @@ mod tests {
     }
 
     #[test]
+    fn the_fourth_float_of_the_colour_scales_the_suns_intensity() {
+        // m11_01_0000's main light: (0.687284, 0.757668, 0.828053) x 2.0, its angle in radians (-20 degrees pitch)
+        let mut w = world_with(vec![light_set([-0.349066, 0.0], [0.687284, 0.757668, 0.828053, 2.0])]);
+        run(&mut w, 100.0);
+        let sun = w.resource::<Environment>().unwrap().sun.unwrap();
+        let light = w.get::<Light>(sun).unwrap();
+        assert_eq!((light.color, light.intensity), ([0.687284, 0.757668, 0.828053], 200.0));
+        // a pitch of -20 degrees tilts the light by 20 degrees about the horizontal: it shines along Z, a little vertically
+        let d = shines(&w, sun);
+        assert!((d[1].abs() - 20f32.to_radians().sin()).abs() < 1e-4, "{d:?}");
+    }
+
+    #[test]
     fn a_black_unusable_or_absent_light_is_no_sun_and_counted() {
         for (diffuse, why) in [
-            ([0., 0., 0., 1.], "directional light 0 of the light set is black: no sun"),
+            ([0., 0., 0., 1.], "directional light 0 of the light set is black or has intensity 0: no sun"),
+            ([1., 1., 1., 0.], "directional light 0 of the light set is black or has intensity 0: no sun"),
             (
                 [f32::NAN, 0., 0., 1.],
                 "the light set stores no usable directional light 0 (an angle, and a finite non-negative diffuse colour): no sun",

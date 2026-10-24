@@ -44,7 +44,25 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
             draw_param: DrawParams::File(file.clone()),
             ..Default::default()
         };
-        sekiro::read_game_area(install, map, decoder, &options, &mut world)?;
+        let report = sekiro::read_game_area(install, map, decoder, &options, &mut world)?;
+        // what the reader found and left of the file: the groups it could not choose a value set for, the fields it
+        // read at no set, the other times of day, the blocks it does not interpret. It says whether an empty file is
+        // empty or unread.
+        let r = &report.draw_param;
+        println!(
+            "{} {file} REPORT version {} groups {} fields {} unchosen_groups {:?} unchosen_fields {} fields_without_set {} \
+             time_variants {} zero_id_groups {:?} unread {:?}",
+            game.name(),
+            r.version,
+            r.groups,
+            r.fields,
+            r.unchosen_groups,
+            r.unchosen_fields,
+            r.fields_without_set,
+            r.time_variants,
+            r.zero_id_groups,
+            r.unread,
+        );
         let draw = world
             .resource::<DrawParam>()
             .ok_or_else(|| format!("{file}: no draw param read"))?;

@@ -265,6 +265,116 @@ impl NpcParam {
     }
 }
 
+/// The param type [`GrassParam::from_param`] reads.
+pub const GRASS_PARAM_TYPE: &str = "GRASS_TYPE_PARAM_ST";
+
+/// The bytes of a `GRASS_TYPE_PARAM_ST` row up to the end of its last field (`model1Name`), in Paramdex's
+/// `ER/Defs/GrassTypeParam.xml` as Smithbox ships it (FormatVersion 203; fields laid out as SoulsFormats' `PARAMDEF`
+/// packs them). A row of fewer bytes is not that layout; a longer one appends fields, which are not read.
+const GRASS_ROW: usize = 276;
+
+/// One row of the grass type param: what the game grows where a map part names the row. Only the fields that say which
+/// models and textures: the placement of the blades is the game's (a density over the part's surface and a spacing).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct GrassType {
+    pub id: i32,
+    /// `lodRange`: the distance the LODs change at.
+    pub lod_range: u16,
+    /// `baseDensity` and `spacing`.
+    pub base_density: f32,
+    pub spacing: f32,
+    /// `model0Name`, `model1Name` and `simpleModelName` (empty: none).
+    pub model0: String,
+    pub model1: String,
+    pub simple_model: String,
+    /// `flatTextureName` and `billboardTextureName` (empty: none).
+    pub flat_texture: String,
+    pub billboard_texture: String,
+}
+
+/// The grass type param's rows, as far as this reader reads them.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct GrassParam {
+    pub data_version: u16,
+    pub row_size: usize,
+    pub rows: Vec<GrassType>,
+}
+
+/// A fixed-length UTF-16 string field of `chars` characters at `at`: up to its first NUL; every character printable
+/// ASCII, or the row is not this layout.
+fn fixed_string(row: &[u8], at: usize, chars: usize) -> Result<String> {
+    let bytes = row
+        .get(at..at + 2 * chars)
+        .ok_or_else(|| invalid(FORMAT, at, "string beyond the row"))?;
+    let mut text = String::new();
+    for pair in bytes.chunks_exact(2) {
+        let c = u16::from_le_bytes([pair[0], pair[1]]);
+        if c == 0 {
+            break;
+        }
+        match u8::try_from(c) {
+            Ok(b) if (0x20..0x7f).contains(&b) => text.push(char::from(b)),
+            _ => {
+                return Err(invalid(
+                    FORMAT,
+                    at,
+                    format!("character {c:#06x} in a name field: the row is not the layout read"),
+                ));
+            }
+        }
+    }
+    Ok(text)
+}
+
+impl GrassParam {
+    /// The models and textures of every row of `param`, which must be `GRASS_TYPE_PARAM_ST` with rows of at least
+    /// 276 bytes whose name fields hold printable ASCII (the one layout whose offsets are known; any other is refused).
+    pub fn from_param(param: &Param) -> Result<GrassParam> {
+        if param.param_type != GRASS_PARAM_TYPE || param.row_size < GRASS_ROW {
+            return Err(invalid(
+                FORMAT,
+                0,
+                format!(
+                    "{} version {} with rows of {} bytes, the grass param read is {GRASS_PARAM_TYPE} with rows of at least {GRASS_ROW}",
+                    param.param_type, param.data_version, param.row_size
+                ),
+            ));
+        }
+        let f32_at = |data: &[u8], at: usize| -> Result<f32> {
+            data.get(at..at + 4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .ok_or_else(|| invalid(FORMAT, at, "float beyond the row"))
+        };
+        let rows = param
+            .rows
+            .iter()
+            .map(|r| {
+                Ok(GrassType {
+                    id: r.id,
+                    lod_range: u16::from_le_bytes([r.data[0], r.data[1]]),
+                    base_density: f32_at(&r.data, 8)?,
+                    spacing: f32_at(&r.data, 204)?,
+                    model0: fixed_string(&r.data, 12, 16)?,
+                    flat_texture: fixed_string(&r.data, 44, 32)?,
+                    billboard_texture: fixed_string(&r.data, 108, 32)?,
+                    simple_model: fixed_string(&r.data, 212, 16)?,
+                    model1: fixed_string(&r.data, 244, 16)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(GrassParam {
+            data_version: param.data_version,
+            row_size: param.row_size,
+            rows,
+        })
+    }
+
+    /// The row with `id`.
+    pub fn row(&self, id: i32) -> Option<&GrassType> {
+        self.rows.iter().find(|r| r.id == id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,5 +509,52 @@ mod tests {
         stride[second..second + 8].copy_from_slice(&at.to_le_bytes());
         assert!(Param::read(&stride).is_err());
         assert!(Param::read(&stride[..40]).is_err());
+    }
+
+    fn grass_row(model0: &str, billboard: &str, density: f32) -> Vec<u8> {
+        let mut d = vec![0u8; GRASS_ROW];
+        d[0..2].copy_from_slice(&40u16.to_le_bytes());
+        d[8..12].copy_from_slice(&density.to_le_bytes());
+        d[204..208].copy_from_slice(&0.5f32.to_le_bytes());
+        for (at, text) in [(12, model0), (108, billboard), (244, "M1")] {
+            for (i, c) in text.encode_utf16().enumerate() {
+                d[at + 2 * i..at + 2 * i + 2].copy_from_slice(&c.to_le_bytes());
+            }
+        }
+        d
+    }
+
+    #[test]
+    fn grass_types_name_their_models_and_textures_and_a_row_of_another_layout_is_refused() {
+        let bytes = fixture(
+            GRASS_PARAM_TYPE,
+            1,
+            GRASS_ROW,
+            &[(10, grass_row("Grass_A", "bb_a", 1.5)), (11, grass_row("", "", 0.0))],
+        );
+        let grass = GrassParam::from_param(&Param::read(&bytes).unwrap()).unwrap();
+        let a = grass.row(10).unwrap();
+        assert_eq!(
+            (a.lod_range, a.base_density, a.spacing, a.model0.as_str(), a.model1.as_str()),
+            (40, 1.5, 0.5, "Grass_A", "M1")
+        );
+        assert_eq!((a.billboard_texture.as_str(), a.flat_texture.as_str(), a.simple_model.as_str()), ("bb_a", "", ""));
+        assert_eq!(grass.row(11).unwrap().model0, "");
+        assert!(grass.row(12).is_none());
+        // the NPC param is not a grass param, and a short row or a row of non-text name fields is another layout
+        let npc = NpcLayout {
+            data_version: 9,
+            row_size: 736,
+            mask_bytes: [330, 331, 334, 335],
+        };
+        let other = fixture(NPC_PARAM_TYPE, 9, npc.row_size, &[(1, npc_row(&npc, 1))]);
+        assert!(GrassParam::from_param(&Param::read(&other).unwrap()).is_err());
+        let short = fixture(GRASS_PARAM_TYPE, 1, GRASS_ROW - 4, &[(1, vec![0; GRASS_ROW - 4])]);
+        assert!(GrassParam::from_param(&Param::read(&short).unwrap()).is_err());
+        let mut binary = grass_row("x", "", 1.0);
+        binary[12..14].copy_from_slice(&0x1234u16.to_le_bytes());
+        let garbled = fixture(GRASS_PARAM_TYPE, 1, GRASS_ROW, &[(1, binary)]);
+        let e = GrassParam::from_param(&Param::read(&garbled).unwrap()).unwrap_err().to_string();
+        assert!(e.contains("not the layout read"), "{e}");
     }
 }

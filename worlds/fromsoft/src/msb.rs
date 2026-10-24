@@ -619,12 +619,18 @@ impl MapLayout {
 impl MapLayout {
     /// How many parts store a grass config: Elden Ring's header slot at +128 (SoulsFormats' `GrassConfig`, which its
     /// map pieces and assets may carry); Sekiro's layout has no such slot (its +128 slot is another record), so none.
-    /// Only whether a part stores one is read; what the config names is not.
+    /// Only whether a part stores one is read; what the config names is [`MapLayout::grass_configs`].
     pub fn grass_parts(&self) -> Result<usize> {
+        Ok(self.grass_configs()?.len())
+    }
+
+    /// The grass config of every part that stores one, in part order (Elden Ring's only): the six `GrassTypeParam` row
+    /// ids SoulsFormats names `GrassParamId0..5` (0 or negative: none named), as stored.
+    pub fn grass_configs(&self) -> Result<Vec<PartGrass>> {
+        let mut out = Vec::new();
         if self.generation.name != Generation::ELDEN_RING.name {
-            return Ok(0);
+            return Ok(out);
         }
-        let mut count = 0;
         for part in &self.parts {
             let data = self
                 .sections
@@ -636,10 +642,28 @@ impl MapLayout {
                 format: "MSB part",
                 be: false,
             };
-            count += usize::from(r.size(128)? != 0);
+            let at = r.size(128)?;
+            if at == 0 {
+                continue;
+            }
+            let mut ids = [0i32; 6];
+            for (i, id) in ids.iter_mut().enumerate() {
+                *id = r.u32(at + 4 * i)? as i32;
+            }
+            out.push(PartGrass { part: part.index, ids });
         }
-        Ok(count)
+        Ok(out)
     }
+}
+
+/// The grass config a part stores (SoulsFormats' `GrassConfig`, the part header's slot at +128 in Elden Ring's layout):
+/// the ids of up to six `GrassTypeParam` rows, whose model, textures and density the game grows on the part. The game
+/// scatters the grass itself; the files hold no blade's position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartGrass {
+    /// The part's index in the layout's parts ([`Part::index`]).
+    pub part: usize,
+    pub ids: [i32; 6],
 }
 
 /// Checkpoint/warp spawn region stored in the common world frame. Its facing

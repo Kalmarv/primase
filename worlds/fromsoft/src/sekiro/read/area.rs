@@ -3,7 +3,7 @@
 //! selected and in the world frame, as source records. What differs between the games and is not stated by their files
 //! (where a map keeps its files, how objects are found, tile parents) is [`crate::Game`]'s; what Elden Ring's read does
 //! not cover yet (world states, materials without a definition) is in its notices.
-use super::{collision, draw_param, extras, objects, shaders, shadows, states, textures};
+use super::{animation, collision, draw_param, extras, objects, shaders, shadows, states, textures};
 use crate::sekiro::source::{self, Region};
 use crate::{
     Archive, Binder, Game, Install, Result,
@@ -35,6 +35,44 @@ pub struct Options {
     /// The area's draw-param file ([`draw_param`]): none (default: the graphics environment is not read) or the file
     /// of this stem, one of [`draw_param::available`].
     pub draw_param: draw_param::DrawParams,
+    /// Whether the animation binder of each kept object model (Sekiro's objects, Elden Ring's assets: doors, lifts) is
+    /// read into the world beside the model: its Havok skeleton and clips, named after the model. Off by default: the
+    /// binders are more to hold in memory, and the clips are not lowered onto the placements by the read.
+    pub object_animations: bool,
+}
+/// What a read of the object models' animation binders found.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ObjectAnimations {
+    /// Whether the binders were asked for ([`Options::object_animations`]).
+    pub asked: bool,
+    /// Kept object models that have an animation binder (a member of the model's binder, or one beside it).
+    pub animated: usize,
+    /// Kept object models read without one.
+    pub still: usize,
+    /// Havok skeleton bones and clips read, over all the binders.
+    pub bones: usize,
+    pub clips: usize,
+    /// Binders that could not be read, as `<model>: <why>`.
+    pub unreadable: Vec<String>,
+    /// Files of the binders not read, by reason (the animation reader's own), with how many.
+    pub refused: BTreeMap<String, usize>,
+}
+/// The grass the parts' configs name: the `GrassTypeParam` rows (Elden Ring's) and what they hold. The game scatters the
+/// grass itself over the part by a row's density; no file holds a blade's place, so nothing is placed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GrassTypes {
+    /// Parts storing a grass config.
+    pub parts: usize,
+    /// Each row id the configs name (a negative id names none), and how many parts name it.
+    pub named: BTreeMap<i32, usize>,
+    /// The named rows the param holds.
+    pub types: BTreeMap<i32, crate::param::GrassType>,
+    /// Named rows the param does not hold.
+    pub missing: Vec<i32>,
+    /// Why the param was not read, if it was not (no key, another layout).
+    pub unresolved: Option<String>,
+    /// The param's data version and row size as stored, when it was read.
+    pub layout: Option<(u16, usize)>,
 }
 /// Whether a read brings in the parts the larger maps above it place for it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -123,8 +161,12 @@ pub struct Report {
     pub material_classes: BTreeMap<String, usize>,
     /// Placements of objects (`obj/<model>`, `asset/<model>`): drawn at their model's rest pose.
     pub object_placements: usize,
+    /// The object models' animation binders ([`Options::object_animations`]).
+    pub object_animation: ObjectAnimations,
     /// Parts of the layout that store a grass config (Elden Ring's): the grass the game grows on them is not read.
     pub grass_parts: usize,
+    /// The grass types those parts name.
+    pub grass: GrassTypes,
 }
 impl Report {
     /// What the read left out or could not find, as notices for a conversion's report.
@@ -236,13 +278,19 @@ impl Report {
             (
                 self.object_placements,
                 NoticeKind::Unsupported,
-                "placed objects are drawn at their model's rest pose: their animations (doors, lifts, any object's own \
-                 animation binder) are not read",
+                if self.object_animation.asked {
+                    "placed objects are drawn at their model's rest pose: the clips read from their animation binders \
+                     are not lowered onto the placements yet"
+                } else {
+                    "placed objects are drawn at their model's rest pose: their animations (doors, lifts, any object's \
+                     own animation binder) are not read (object_animations reads them)"
+                },
             ),
             (
                 self.grass_parts,
                 NoticeKind::Unsupported,
-                "parts storing a grass config: the grass the game grows on them is not read",
+                "parts storing a grass config: the game scatters grass over them from the grass type rows they name, by \
+                 a density; no file holds a blade's place, so no grass is placed",
             ),
             (
                 self.collision.unread_custom_primitives + self.object_collision.unread_custom_primitives,
@@ -300,6 +348,67 @@ impl Report {
             }
         }
         out.extend(self.draw_param.notices());
+        let grass = &self.grass;
+        if grass.parts > 0 {
+            if let Some(why) = &grass.unresolved {
+                out.push(
+                    Notice::new(
+                        stage,
+                        NoticeKind::Unsupported,
+                        "grass types the parts name could not be resolved (GrassTypeParam not read)",
+                        grass.named.len() as u64,
+                    )
+                    .example(why.clone()),
+                );
+            } else {
+                out.push(grass.types.values().fold(
+                    Notice::new(
+                        stage,
+                        NoticeKind::Unsupported,
+                        "grass types the parts name (GrassTypeParam rows): their models and billboard textures are \
+                         the game's, grown by density; not placed",
+                        grass.types.len() as u64,
+                    ),
+                    |n, t| {
+                        n.example(format!(
+                            "row {} model {:?} billboard {:?} density {}",
+                            t.id, t.model0, t.billboard_texture, t.base_density
+                        ))
+                    },
+                ));
+            }
+            if !grass.missing.is_empty() {
+                out.push(listed(
+                    "grass type rows the parts name that the param does not hold",
+                    &grass.missing.iter().map(i32::to_string).collect::<Vec<_>>(),
+                ));
+            }
+        }
+        let animations = &self.object_animation;
+        if animations.asked {
+            if animations.animated > 0 {
+                out.push(Notice::new(
+                    stage,
+                    NoticeKind::Selection,
+                    "object models with an animation binder: its Havok skeleton and clips are read into the world",
+                    animations.animated as u64,
+                ));
+            }
+            if !animations.unreadable.is_empty() {
+                out.push(listed(
+                    "object animation binders that could not be read",
+                    &animations.unreadable,
+                ));
+            }
+            for (why, files) in &animations.refused {
+                out.push(Notice::new(
+                    stage,
+                    NoticeKind::Unsupported,
+                    format!("object animation files not read: {why}"),
+                    *files as u64,
+                ));
+            }
+        }
         // the shadow controls' interpretation, as the read counted it
         for (reason, &count) in &self.shadows.approximations {
             out.push(Notice::new(
@@ -332,6 +441,41 @@ fn unplaced_word(kind: PartKind) -> &'static str {
         PartKind::ConnectCollision => "connect collisions",
         PartKind::MapPiece | PartKind::Object | PartKind::Asset | PartKind::Collision => "placed or read parts",
     }
+}
+
+/// The grass types the parts' configs name, resolved against the game's grass type param. A param that cannot be read
+/// (Elden Ring's lives in `regulation.bin`, whose key the install may not supply) or is of another layout is said, not
+/// an error of the area read: the parts are still counted.
+fn grass_types(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    parts: &[crate::msb::PartGrass],
+) -> GrassTypes {
+    let mut out = GrassTypes {
+        parts: parts.len(),
+        ..GrassTypes::default()
+    };
+    for id in parts.iter().flat_map(|p| p.ids).filter(|id| *id >= 0) {
+        *out.named.entry(id).or_default() += 1;
+    }
+    let param = super::params::read_param(install, archive, decoder, "GrassTypeParam.param")
+        .and_then(|param| crate::param::GrassParam::from_param(&param));
+    match param {
+        Err(why) => out.unresolved = Some(why.to_string()),
+        Ok(param) => {
+            out.layout = Some((param.data_version, param.row_size));
+            for &id in out.named.keys() {
+                match param.row(id) {
+                    Some(row) => {
+                        out.types.insert(id, row.clone());
+                    }
+                    None => out.missing.push(id),
+                }
+            }
+        }
+    }
+    out
 }
 
 fn area_name(area: &str) -> Result<String> {
@@ -378,6 +522,8 @@ struct Prototype {
     materials: Vec<materials::Material>,
     bounds: Option<[[f32; 3]; 2]>,
     collision: Vec<(String, crate::game::Resolution, Vec<u8>)>,
+    /// An object model's animation binder, if it has one and the read was asked for it.
+    animation: Option<Vec<u8>>,
 }
 
 /// Which placements (model key, transform) the read keeps, in order, by index; counted into `report` by why the
@@ -646,6 +792,12 @@ pub fn read_game_area(
                 }
             }
         }
+        // the object's animation binder, held as bytes until the model is known to be kept
+        let animation = if is_object && options.object_animations {
+            animation::object_binder(&archive, decoder, &path, &binder)?
+        } else {
+            None
+        };
         // a member by file name; `dcx`: also its compressed form
         let member = |leaf: &str, dcx: bool| {
             binder.files.iter().find(|f| {
@@ -737,6 +889,7 @@ pub fn read_game_area(
                 materials,
                 bounds,
                 collision,
+                animation,
             },
         );
     }
@@ -843,6 +996,26 @@ pub fn read_game_area(
         world.insert(e, source::PrototypeSource { id: key.clone(), far });
         if key.starts_with(&format!("{object}/")) {
             report.object_collision.models += 1;
+            report.object_animation.asked = options.object_animations;
+            if options.object_animations {
+                let model = key.split_once('/').expect("key").1;
+                match proto.animation {
+                    None => report.object_animation.still += 1,
+                    Some(bytes) => {
+                        report.object_animation.animated += 1;
+                        match animation::read_member(&bytes, decoder, model, &mut world) {
+                            Ok(read) => {
+                                report.object_animation.bones += read.report.bones;
+                                report.object_animation.clips += read.report.animations;
+                                for (why, files) in read.report.refused {
+                                    *report.object_animation.refused.entry(why).or_default() += files.len();
+                                }
+                            }
+                            Err(why) => report.object_animation.unreadable.push(format!("{model}: {why}")),
+                        }
+                    }
+                }
+            }
         }
         if !proto.collision.is_empty() {
             let files = proto
@@ -909,7 +1082,11 @@ pub fn read_game_area(
         report.far_placements += usize::from(far);
         report.object_placements += usize::from(key.starts_with(&format!("{object}/")));
     }
-    report.grass_parts = layout.grass_parts()?;
+    let grass = layout.grass_configs()?;
+    report.grass_parts = grass.len();
+    if !grass.is_empty() {
+        report.grass = grass_types(install, &archive, decoder, &grass);
+    }
     let folder = game.map_folder(&area)?;
     report.collision = collision::read(
         &archive,
