@@ -127,6 +127,9 @@ impl FaceSet {
 pub struct Mesh {
     pub dynamic: bool,
     pub material: usize,
+    /// The bone (node) the mesh stands for, as stored (`NodeIndex`, -1 for none): the bone a static mesh's vertices
+    /// follow when its layout stores no normal W to name one per vertex ([`Model::stores_normal_w`]).
+    pub node: i32,
     /// The mesh's bone palette as stored (bone indices): empty when its vertices name bones directly.
     pub palette: Vec<u32>,
     pub layouts: Vec<usize>,
@@ -463,6 +466,7 @@ impl Model {
             if material >= materials.len() {
                 return Err(invalid(v.format, o + 4, "material index"));
             }
+            let node = v.u32(o + 16)? as i32;
             let palette_len = count(&v, o + 20)?;
             let mut at = count(&v, o + 28)?;
             let start = table(&meta, &mut at, palette_len, 4)?;
@@ -489,6 +493,7 @@ impl Model {
                 meshes.push(Mesh {
                     dynamic,
                     material,
+                    node,
                     palette,
                     layouts: Vec::new(),
                     vertices: Vec::new(),
@@ -590,6 +595,7 @@ impl Model {
             meshes.push(Mesh {
                 dynamic,
                 material,
+                node,
                 palette,
                 layouts: streams.iter().map(|s| s.0).collect(),
                 vertices,
@@ -680,6 +686,18 @@ pub fn speedtree_layout(members: &[Member]) -> Result<SpeedTreeLayout> {
 }
 
 impl Model {
+    /// Whether mesh `mesh`'s layout stores a normal with a W (every normal member the reader decodes but `Float3`):
+    /// the W a static vertex names its bone by. A mesh that does not exist stores none.
+    pub fn stores_normal_w(&self, mesh: usize) -> bool {
+        self.meshes.get(mesh).is_some_and(|m| {
+            m.layouts
+                .iter()
+                .filter_map(|&l| self.layouts.get(l))
+                .flatten()
+                .any(|member| member.semantic == 3 && member.stored && member.kind != 2)
+        })
+    }
+
     /// The stored members of mesh `mesh`'s one SpeedTree layout, and its roles; `None` for an ordinary model.
     fn speedtree_mesh(&self, mesh: usize) -> Result<Option<(Vec<&Member>, SpeedTreeLayout)>> {
         if !self.speedtree {

@@ -635,8 +635,9 @@ fn the_fromsoft_passes_register_by_name() {
 }
 
 /// A two-bone model (a root and an arm raised 1 m and turned a quarter about X) with one static mesh whose vertices
-/// name the arm by NORMAL.w, in a layout whose normal member (`kind`) does or does not carry a W.
-fn static_arm(normal_kind: u32, palette: Vec<u32>, normal_w: i32) -> crate::flver::Model {
+/// name a bone by NORMAL.w, in a layout whose normal member (`kind`) does or does not carry a W, and whose node is
+/// `node`.
+fn static_arm(normal_kind: u32, palette: Vec<u32>, normal_w: i32, node: i32) -> crate::flver::Model {
     use crate::flver::{Bone, FaceSet, Member, Mesh as FlverMesh, Model, Vertex};
     let member = |semantic, kind, offset| Member {
         unknown: 0,
@@ -681,6 +682,7 @@ fn static_arm(normal_kind: u32, palette: Vec<u32>, normal_w: i32) -> crate::flve
         meshes: vec![FlverMesh {
             dynamic: false,
             material: 0,
+            node,
             palette,
             layouts: vec![0],
             vertices: vec![vertex([0., 0., 0.]), vertex([1., 0., 0.]), vertex([0., 0., 1.])],
@@ -743,7 +745,7 @@ fn positions(world: &World, prototype: Entity) -> Vec<[f32; 3]> {
 /// NORMAL.w names at weight 1, so the skin moves it with that bone.
 #[test]
 fn a_static_mesh_of_a_bound_model_follows_its_bone() {
-    let (mut stored, prototype) = arm_world(static_arm(0x13, vec![], 1), true);
+    let (mut stored, prototype) = arm_world(static_arm(0x13, vec![], 1, -1), true);
     let mut log = PassLog::default();
     lower_arm(Pose::Stored).run(&mut stored, &mut log).unwrap();
     let primitive = &stored.get::<Mesh>(prototype).unwrap().primitives()[0];
@@ -760,7 +762,7 @@ fn a_static_mesh_of_a_bound_model_follows_its_bone() {
         1
     );
 
-    let (mut rigid, rigid_prototype) = arm_world(static_arm(0x13, vec![], 1), false);
+    let (mut rigid, rigid_prototype) = arm_world(static_arm(0x13, vec![], 1, -1), false);
     let mut log = PassLog::default();
     crate::passes::rigid::ApplyRigidSkinning
         .run(&mut rigid, &mut log)
@@ -771,14 +773,55 @@ fn a_static_mesh_of_a_bound_model_follows_its_bone() {
     assert_ne!(positions(&stored, prototype)[1], [1., 0., 0.]);
 }
 
-/// What is not established stays refused, by name: a static mesh with a palette, one whose layout stores no normal W
-/// (Float3: its bone would be its node, which is not read) and a NORMAL.w that names no bone.
+/// A static mesh whose layout stores no normal W (Float3) follows its node: its NORMAL.w (read as 0) is not its bone.
+/// Bound to a skeleton it moves with the arm, its node, as the W-carrying mesh naming the arm does; posed rigidly it
+/// stands where that one does.
+#[test]
+fn a_static_mesh_without_a_normal_w_follows_its_node() {
+    let (mut named, named_prototype) = arm_world(static_arm(0x13, vec![], 1, -1), true);
+    lower_arm(Pose::Stored)
+        .run(&mut named, &mut PassLog::default())
+        .unwrap();
+    let (mut node, prototype) = arm_world(static_arm(2, vec![], 0, 1), true);
+    let mut log = PassLog::default();
+    lower_arm(Pose::Stored).run(&mut node, &mut log).unwrap();
+    let primitive = &node.get::<Mesh>(prototype).unwrap().primitives()[0];
+    assert_eq!(
+        primitive.streams[&Semantic::Joints(0)],
+        Stream::U8x4(vec![[1, 0, 0, 0]; 3])
+    );
+    assert_eq!(positions(&node, prototype), positions(&named, named_prototype));
+    assert_eq!(
+        log.counts["static meshes of a bound model bound rigidly to their node (no normal W)"],
+        1
+    );
+
+    let (mut rigid, rigid_prototype) = arm_world(static_arm(2, vec![], 0, 1), false);
+    let mut log = PassLog::default();
+    crate::passes::rigid::ApplyRigidSkinning
+        .run(&mut rigid, &mut log)
+        .unwrap();
+    assert_eq!(log.counts["static meshes following their node (no normal W)"], 1);
+    lower_arm(Pose::Rigid).run(&mut rigid, &mut log).unwrap();
+    assert_eq!(
+        positions(&rigid, rigid_prototype),
+        positions(&named, named_prototype)
+    );
+}
+
+/// What is not established stays refused, by name: a static mesh with a palette, one with no normal W whose node names
+/// no bone (a skin needs a joint) and a NORMAL.w that names no bone.
 #[test]
 fn a_static_mesh_of_a_bound_model_is_refused_where_its_bone_is_not_stated() {
+    let no_node =
+        "mesh 0 is static, stores no normal W and its NodeIndex -1 names no bone of the 2: a skin needs one";
     for (model, says) in [
-        (static_arm(0x13, vec![1], 0), "static with a bone palette"),
-        (static_arm(2, vec![], 1), "stores no normal W"),
-        (static_arm(0x13, vec![], 7), "NORMAL.w 7 names no bone of the 2"),
+        (static_arm(0x13, vec![1], 0, -1), "static with a bone palette"),
+        (static_arm(2, vec![], 0, -1), no_node),
+        (
+            static_arm(0x13, vec![], 7, -1),
+            "NORMAL.w 7 names no bone of the 2",
+        ),
     ] {
         let (mut world, _) = arm_world(model, true);
         let e = lower_arm(Pose::Stored)
@@ -786,4 +829,29 @@ fn a_static_mesh_of_a_bound_model_is_refused_where_its_bone_is_not_stated() {
             .unwrap_err();
         assert!(e.contains(says), "{e}");
     }
+}
+
+/// `fromsoft-apply-rigid-skinning` leaves a static mesh with no normal W whose node names no bone as stored (Smithbox's
+/// observed rule; an Elden Ring area has one), as an approximation on the model, rather than posing it by bone 0.
+#[test]
+fn rigid_skinning_leaves_a_static_mesh_whose_node_names_no_bone_as_stored() {
+    let model = static_arm(2, vec![], 0, 5);
+    let stored: Vec<[f32; 3]> = model.meshes[0].vertices.iter().map(|v| v.position).collect();
+    let (mut world, prototype) = arm_world(model, false);
+    let mut log = PassLog::default();
+    crate::passes::rigid::ApplyRigidSkinning
+        .run(&mut world, &mut log)
+        .unwrap();
+    let rigid = &world
+        .get::<crate::components::models::RigidModel>(prototype)
+        .unwrap()
+        .0;
+    let posed: Vec<[f32; 3]> = rigid.meshes[0].vertices.iter().map(|v| v.position).collect();
+    assert_eq!(posed, stored);
+    let reason = crate::passes::rigid::UNBOUND_NODE;
+    assert_eq!(log.approximations.get(reason), Some(&1));
+    assert_eq!(
+        log.approximated_on.get(reason),
+        Some(&std::collections::BTreeSet::from([prototype]))
+    );
 }

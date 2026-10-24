@@ -1,7 +1,9 @@
 //! Every model an area's MSB places against a SoulsFormats dump of the same FLVERs in model space (each static
 //! mesh's vertices through the bone named by NormalW, from SoulsFormats' bone transforms; the dump lists the models).
-//! Position error <=0.2 mm; inverse-transpose normal error <=2e-5 relative to max(1, component magnitude), allowing
-//! the dump's f32 matrices against our f64 evaluation. The census is complete in both directions: the models the
+//! Position error <=0.2 mm; normal direction error <=2e-5 per component: the dump's normal is the raw inverse transpose
+//! (its length follows the bone's scale), ours of unit length under a bone that moves it and as stored (a quantised
+//! normal, near unit) under an identity bone, so both are normalised before the comparison, allowing the dump's f32
+//! matrices against our f64 evaluation. The census is complete in both directions: the models the
 //! dump lists (and the ones it could not dump, with why) are exactly the models its MSB parts place, which are exactly
 //! the models our MSB reader's parts place.
 use primase_core::pass::PassLog;
@@ -121,17 +123,31 @@ fn full_castle_rigid_vertices() -> Result<()> {
         for mesh in &model.meshes {
             assert_eq!(words.next(), Some(mesh.vertices.len() as u32));
             for v in &mesh.vertices {
-                for (i, &got) in v.position.iter().chain(&v.normal).enumerate() {
-                    let want = f32::from_bits(words.next().ok_or("short oracle")?);
-                    let d = (f64::from(got) - f64::from(want)).abs();
+                let mut want = [0f64; 6];
+                for w in &mut want {
+                    *w = f64::from(f32::from_bits(words.next().ok_or("short oracle")?));
+                }
+                let mut got = [0f64; 6];
+                for (g, &x) in got.iter_mut().zip(v.position.iter().chain(&v.normal)) {
+                    *g = f64::from(x);
+                }
+                for side in [&mut want, &mut got] {
+                    let length = side[3..].iter().map(|x| x * x).sum::<f64>().sqrt();
+                    if length > 0. {
+                        for x in &mut side[3..] {
+                            *x /= length;
+                        }
+                    }
+                }
+                for (i, (got, want)) in got.into_iter().zip(want).enumerate() {
+                    let d = (got - want).abs();
                     exact += usize::from(got == want);
                     if i < 3 {
                         max_position = max_position.max(d);
                         assert!(d <= 2e-4, "{key} position {got} vs {want}");
                     } else {
-                        let d = d / f64::from(want.abs()).max(1.);
                         max_normal = max_normal.max(d);
-                        assert!(d <= 2e-5, "{key} normal {got} vs {want}");
+                        assert!(d <= 2e-5, "{key} normal {got} vs {want} (normalised)");
                     }
                 }
                 vertices += 1;
@@ -141,7 +157,7 @@ fn full_castle_rigid_vertices() -> Result<()> {
         models += 1;
     }
     println!(
-        "placed rigid models: {models} models, {vertices} vertices, {exact} exact components; max position {max_position} m, max scaled normal {max_normal}; counts {:?}",
+        "placed rigid models: {models} models, {vertices} vertices, {exact} exact components; max position {max_position} m, max normal {max_normal}; counts {:?}",
         log.counts
     );
     assert_eq!(models, dumped.len(), "every dumped model compared");

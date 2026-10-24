@@ -10,14 +10,16 @@
 //! moves it rigidly (SoulsFormats' FLVER2 mesh and Smithbox's FLVER renderer state the same rule): it is posed into
 //! the bind pose by that bone's rest, as `fromsoft-apply-rigid-skinning` poses it
 //! ([`crate::passes::rigid::pose_static_mesh`]), and each vertex gets `Joints(0)` that bone and `Weights(0)` 1, so the
-//! skin moves it with the bone exactly. Refused, by name: a dynamic mesh with a palette (palette-relative indices), a
-//! static mesh with a palette (its NORMAL.w would name a palette entry) or with no normal W (its bone is then its
-//! node, which is not read), and a static vertex whose NORMAL.w names no bone or that states other weights than one
-//! of 1: none of them is established for these files.
+//! skin moves it with the bone exactly. A static mesh whose layout stores no normal W follows its node (`NodeIndex`)
+//! the same way. Refused, by name: a dynamic mesh with a palette (palette-relative indices), a static mesh with a
+//! palette (its NORMAL.w would name a palette entry), one with no normal W whose node names no bone, and a static
+//! vertex whose NORMAL.w names no bone or that states other weights than one of 1: none of them is established for
+//! these files.
 use super::blockers::BlockerCards;
 use crate::components::models::{RigidModel, SkeletonOf, SourceModel};
 use crate::flver::{FaceSetKind, Model, Part};
 use crate::materials::{self, Material};
+use crate::pose::{StaticBones, static_bones};
 use crate::sekiro::components::lowered::{SourceMeshes, UvTiling};
 use crate::sekiro::source::{
     FaceCull, LayerInputs, MaterialShader, MaterialSlots, MeshMasks, PrototypeSource, ShaderBundle,
@@ -460,8 +462,12 @@ impl LowerFromSoftGeometry {
             }
         }
         let posed;
+        let mut static_follow = vec![None; model.meshes.len()];
         let model = if out.palette.is_some() && model.meshes.iter().any(|m| !m.dynamic) {
-            posed = bind_static_meshes(model, log).map_err(|e| format!("{prototype:?}: {e}"))?;
+            let (bound, follow) =
+                bind_static_meshes(model, log).map_err(|e| format!("{prototype:?}: {e}"))?;
+            posed = bound;
+            static_follow = follow;
             &posed
         } else {
             model
@@ -554,14 +560,13 @@ impl LowerFromSoftGeometry {
                 }
                 let skinned = out.palette.is_some();
                 if skinned {
-                    // a dynamic vertex's influences as stored; a static one's the bone its NORMAL.w names, at 1
+                    // a dynamic vertex's influences as stored; a static one's the bone it follows, at 1
                     // (`bind_static_meshes` made sure it names one)
                     let influences = |k: &u32| {
                         let v = &mesh.vertices[*k as usize];
-                        if mesh.dynamic {
-                            (v.bone_indices, v.bone_weights)
-                        } else {
-                            ([v.normal_w as u16, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])
+                        match static_follow[index].and_then(|b| b.of(v)) {
+                            Some(bone) => ([bone as u16, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]),
+                            None => (v.bone_indices, v.bone_weights),
                         }
                     };
                     if let Some(bad) = part.source_vertices.iter().find_map(|k| {
@@ -622,41 +627,32 @@ impl LowerFromSoftGeometry {
     }
 }
 
-/// `model` with its static meshes posed into the bind pose by the bone each vertex's NORMAL.w names (see the module
-/// documentation), for a model bound to a skeleton: a static mesh with a palette, a static vertex whose NORMAL.w names
-/// no bone and one that states other weights than one of 1 are refused.
-fn bind_static_meshes(model: &Model, log: &mut PassLog) -> Result<Model, String> {
+/// `model` with its static meshes posed into the bind pose by the bone each vertex follows (see the module
+/// documentation), for a model bound to a skeleton, and those bones per mesh (`None` for a dynamic one): a static mesh
+/// with a palette, one with no normal W whose node names no bone, a static vertex whose NORMAL.w names no bone and one
+/// that states other weights than one of 1 are refused.
+fn bind_static_meshes(model: &Model, log: &mut PassLog) -> Result<(Model, Vec<Option<StaticBones>>), String> {
     let worlds = crate::pose::bone_matrices(&model.bones)?;
-    // whether a mesh's layout stores a normal with a W (every normal member the reader decodes but Float3): without
-    // one a static mesh's bone is its node, which is not read
-    let normal_w: Vec<bool> = model
-        .meshes
-        .iter()
-        .map(|m| {
-            m.layouts
-                .iter()
-                .filter_map(|&l| model.layouts.get(l))
-                .flatten()
-                .any(|member| member.semantic == 3 && member.stored && member.kind != 2)
-        })
-        .collect();
     let mut posed = model.clone();
+    let mut bones = vec![None; model.meshes.len()];
     for (index, mesh) in posed.meshes.iter_mut().enumerate() {
         if mesh.dynamic {
             continue;
-        }
-        if !normal_w[index] {
-            return Err(format!(
-                "mesh {index} is static and its layout stores no normal W naming its bone (its node, which is not read, would): not established for these files"
-            ));
         }
         if !mesh.palette.is_empty() {
             return Err(format!(
                 "mesh {index} is static with a bone palette in a model bound to a skeleton (its NORMAL.w would name a palette entry): not established for these files"
             ));
         }
+        let follows = static_bones(model, index);
+        if let StaticBones::Unbound(node) = follows {
+            return Err(format!(
+                "mesh {index} is static, stores no normal W and its NodeIndex {node} names no bone of the {}: a skin needs one",
+                model.bones.len()
+            ));
+        }
         for v in &mesh.vertices {
-            if usize::try_from(v.normal_w).map_or(true, |b| b >= worlds.len()) {
+            if follows.of(v).is_none_or(|b| b >= worlds.len()) {
                 return Err(format!(
                     "mesh {index} is static and a vertex's NORMAL.w {} names no bone of the {}",
                     v.normal_w,
@@ -671,13 +667,22 @@ fn bind_static_meshes(model: &Model, log: &mut PassLog) -> Result<Model, String>
                 ));
             }
         }
-        crate::passes::rigid::pose_static_mesh(mesh, &worlds, log)?;
+        crate::passes::rigid::pose_static_mesh(mesh, follows, &worlds, log)?;
         log.count(
-            "static meshes of a bound model bound rigidly to the bone their vertices' NORMAL.w names",
+            match follows {
+                StaticBones::PerVertex => {
+                    "static meshes of a bound model bound rigidly to the bone their vertices' NORMAL.w names"
+                }
+                StaticBones::Node(_) => {
+                    "static meshes of a bound model bound rigidly to their node (no normal W)"
+                }
+                StaticBones::Unbound(_) => unreachable!("refused above"),
+            },
             1,
         );
+        bones[index] = Some(follows);
     }
-    Ok(posed)
+    Ok((posed, bones))
 }
 
 /// The UV sets beyond the first, as `TexCoord(n)` in the order the vertex layout stores them (a four component UV member

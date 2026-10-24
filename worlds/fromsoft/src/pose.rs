@@ -124,21 +124,57 @@ pub(crate) fn bone_matrices(bones: &[Bone]) -> Result<Vec<Matrix>, String> {
         .collect()
 }
 
-/// Every vertex of every mesh in model space (file frame): static vertices posed by the bone their NORMAL.w names,
-/// as [`lower_model`] poses them but whatever their weights; dynamic and unbound ones as stored. For measurements a
-/// reader makes before any pass runs (a model's extent), not a lowering.
+/// The bone a static mesh's vertices follow: each its own, named by its NORMAL.w, when the mesh's layout stores a
+/// normal W ([`Model::stores_normal_w`]); else every vertex the mesh's node (its `NodeIndex`), when that names one of
+/// the model's bones; else none (`Unbound`, with the node as stored: -1 or past the bones; Elden Ring's files have
+/// such meshes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StaticBones {
+    PerVertex,
+    Node(usize),
+    Unbound(i32),
+}
+
+impl StaticBones {
+    /// The bone vertex `v` follows (by NORMAL.w it may name none; an unbound mesh's vertices follow none).
+    pub(crate) fn of(self, v: &crate::flver::Vertex) -> Option<usize> {
+        match self {
+            StaticBones::PerVertex => usize::try_from(v.normal_w).ok(),
+            StaticBones::Node(bone) => Some(bone),
+            StaticBones::Unbound(_) => None,
+        }
+    }
+}
+
+/// How static mesh `mesh` of `model` names its bones ([`StaticBones`]).
+pub(crate) fn static_bones(model: &Model, mesh: usize) -> StaticBones {
+    if model.stores_normal_w(mesh) {
+        return StaticBones::PerVertex;
+    }
+    let node = model.meshes.get(mesh).map_or(-1, |m| m.node);
+    usize::try_from(node)
+        .ok()
+        .filter(|&b| b < model.bones.len())
+        .map_or(StaticBones::Unbound(node), StaticBones::Node)
+}
+
+/// Every vertex of every mesh in model space (file frame): static vertices posed by their bone ([`StaticBones`]), as
+/// [`lower_model`] poses them but whatever their weights; dynamic ones, and static ones whose bone is not one of the
+/// model's, as stored. For measurements a reader makes before any pass runs (a model's extent), not a lowering.
 pub fn posed_positions(source: &Model) -> Result<Vec<Vec<[f32; 3]>>, String> {
     let worlds = bone_matrices(&source.bones)?;
     Ok(source
         .meshes
         .iter()
-        .map(|m| {
+        .enumerate()
+        .map(|(index, m)| {
+            let bones = (!m.dynamic).then(|| static_bones(source, index));
             m.vertices
                 .iter()
                 .map(|v| {
-                    let matrix = (!m.dynamic)
-                        .then(|| usize::try_from(v.normal_w).ok().and_then(|i| worlds.get(i)))
-                        .flatten()
+                    let matrix = bones
+                        .and_then(|b| b.of(v))
+                        .and_then(|i| worlds.get(i))
                         .filter(|m| **m != ID);
                     match matrix {
                         Some(matrix) => affine_point(matrix, v.position.map(f64::from)).map(|x| x as f32),

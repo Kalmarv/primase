@@ -3,14 +3,22 @@ use primase_core::{
     pass::{Pass, PassLog},
 };
 use primase_fromsoft::{
-    flver::{Bone, FaceSet, Material, Mesh, Model, Vertex},
+    flver::{Bone, FaceSet, Material, Member, Mesh, Model, Vertex},
     rigid::{ApplyRigidSkinning, RigidModel, SourceModel, lower_model},
 };
+/// One bone and one static mesh whose layout stores a normal with a W (`UByte4`), so NORMAL.w names each vertex's bone.
 fn model() -> Model {
     Model {
         version: 0x2001a,
         speedtree: false,
-        layouts: vec![],
+        layouts: vec![vec![Member {
+            unknown: 0,
+            stored: true,
+            offset: 0,
+            kind: 0x13,
+            semantic: 3,
+            index: 0,
+        }]],
         materials: vec![Material {
             name: "test".into(),
             mtd: String::new(),
@@ -26,9 +34,10 @@ fn model() -> Model {
         }],
         meshes: vec![Mesh {
             dynamic: false,
+            node: -1,
             palette: vec![],
             material: 0,
-            layouts: vec![],
+            layouts: vec![0],
             vertices: vec![Vertex {
                 position: [1., 1., 1.],
                 normal: [0., 1., 0.],
@@ -58,8 +67,9 @@ fn rigid_points_normals_tangents_and_declared_pass() {
     );
     let v = &world.get::<RigidModel>(e).unwrap().0.meshes[0].vertices[0];
     assert_eq!(v.position, [3., 5., 7.]);
-    assert_eq!(v.normal, [0., 1. / 3., 0.]);
-    assert_eq!(v.tangents[0], [2., 0., 0., 1.]);
+    // the normal by the inverse transpose (0, 1/3, 0) and the tangent by the bone's part (2, 0, 0), each of unit length
+    assert_eq!(v.normal, [0., 1., 0.]);
+    assert_eq!(v.tangents[0], [1., 0., 0., 1.]);
     assert_eq!(m.meshes[0].vertices[0].position, [1.; 3]);
     assert_eq!(log.counts["rigid vertices transformed"], 1);
     pass.run(&mut world, &mut log).unwrap();
