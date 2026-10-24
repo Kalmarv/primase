@@ -266,7 +266,7 @@ fn the_finest_face_set_and_the_stored_normals_survive_lowering() -> Result<()> {
         primase_fromsoft::sekiro::passes::register(&mut reg);
         let manager = primase_core::pass::PassManager::new(reg).with_pass_checks(true);
         let pipeline = manager.registry.parse(
-            "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw}, select-lod{form=finest}",
+            "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}, select-lod{form=finest}",
         )?;
         manager.run(&mut world, &pipeline, &mut r)?;
         let (_, mesh) = world
