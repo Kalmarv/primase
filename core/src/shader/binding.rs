@@ -117,6 +117,12 @@ pub enum ObjectParameter {
     /// the pose gives, in the engine's own palette order): what a skinning program blends by the vertex's joint indices
     /// and weights.
     BonePalette,
+    /// The matrices of a second, short palette a skinned program takes the position through before
+    /// [`ObjectParameter::BonePalette`] (the engine's name for it is the cloth-cancel matrices): each three rows
+    /// of four, chosen by the same joint index plus the instance's matrix base ([`ObjectParameter::MatrixBase`]).
+    /// What it holds when the draw simulates no cloth is not established; a consumer that feeds the identity makes
+    /// the first step leave the position as it is.
+    ClothCancelPalette,
     /// The instance's environment data word (an unsigned integer the engine writes per instance; the layered programs
     /// scale it by 1/255 into the alpha lane of a G-buffer target).
     EnvironmentData,

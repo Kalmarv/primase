@@ -1,7 +1,8 @@
 // Fixture for resolve-fromsoft-shaders' skinned vertex permutation (worlds/fromsoft/tests/resolve.rs): the shape of a layered
 // shader's `_Gbuf_Skin` vertex program, as `layered_vs.hlsl` is of the unskinned one, with the joint indices and weights as
-// inputs and VC_aObjMatrix as the joints' palette (three rows of four per joint) the program blends. It computes nothing
-// meaningful beyond the blend.
+// inputs and VC_aObjMatrix as the joints' palette (three rows of four per joint) the program blends, after the position
+// is taken through one of VC_aClothCancelObjMatrix's matrices (a second, short palette the real programs apply first). It
+// computes nothing meaningful beyond the blend.
 //   fxc /T vs_5_0 /E main /Fo layered_skin_vs.dxbc layered_skin_vs.hlsl
 struct Instance
 {
@@ -16,6 +17,10 @@ cbuffer cbInstanceData : register(b4)
 cbuffer cbObjMatrix : register(b5)
 {
     float4 VC_aObjMatrix[12];
+};
+cbuffer cbClothCancelObjMatrix : register(b12)
+{
+    column_major float4x3 VC_aClothCancelObjMatrix[2];
 };
 cbuffer cbSceneParam : register(b8)
 {
@@ -67,7 +72,7 @@ Output main(Input i)
     Output o;
     float4 w = i.weights / max(dot(float4(1, 1, 1, 1), i.weights), 0.001);
     uint4 b = (i.joints + VC_InstanceData[0].matricesData.x) * 3;
-    float4 p = float4(i.position, 1);
+    float4 p = float4(mul(float4(i.position, 1), VC_aClothCancelObjMatrix[(i.joints.x + VC_InstanceData[0].matricesData.x) & 1]), 1);
     float4 row0 = VC_aObjMatrix[b.x] * w.x + VC_aObjMatrix[b.y] * w.y + VC_aObjMatrix[b.z] * w.z + VC_aObjMatrix[b.w] * w.w;
     float4 row1 = VC_aObjMatrix[b.x + 1] * w.x + VC_aObjMatrix[b.y + 1] * w.y + VC_aObjMatrix[b.z + 1] * w.z + VC_aObjMatrix[b.w + 1] * w.w;
     float4 row2 = VC_aObjMatrix[b.x + 2] * w.x + VC_aObjMatrix[b.y + 2] * w.y + VC_aObjMatrix[b.z + 2] * w.z + VC_aObjMatrix[b.w + 2] * w.w;

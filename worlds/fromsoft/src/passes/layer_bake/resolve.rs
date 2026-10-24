@@ -889,7 +889,8 @@ fn texture_scroll_set(name: &str) -> Option<u8> {
 ///   has no such stream, and what the engine then feeds is not known;
 /// - the engine's scene and object constants it names as roles (a named table of the shader family's own constant names
 ///   to the vocabulary: the view, projection and their inverses, the camera position and the screen size, and the
-///   object matrices, the skinned permutation's the joints' palette: `Object(BonePalette)`) and the texture coordinate scale and scroll (`VC_TexScroll_0` to `_3`: `Object(TextureScroll(n))`,
+///   object matrices, the skinned permutation's the joints' palette: `Object(BonePalette)`, and the cloth-cancel matrices
+///   some skinned programs apply before it: `Object(ClothCancelPalette)`) and the texture coordinate scale and scroll (`VC_TexScroll_0` to `_3`: `Object(TextureScroll(n))`,
 ///   the engine's per-model value, observed as the identity on every layered draw of a running game: see
 ///   [`super::TEXTURE_SCROLL_POLICY`]); constants the table does not name are not bound;
 /// - no output roles: its outputs reach the pixel stage by label.
@@ -992,6 +993,10 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
                 // the object matrices: one per object, or the joints' palette in the skinned permutation (the program
                 // that takes joint indices)
                 "VC_aObjMatrix" if skinned => ConstantRole::Object(ObjectParameter::BonePalette),
+                // the second palette the skinned programs of Elden Ring apply first, by its constant's own name
+                "VC_aClothCancelObjMatrix" if skinned => {
+                    ConstantRole::Object(ObjectParameter::ClothCancelPalette)
+                }
                 "VC_aObjMatrix" => ConstantRole::Object(ObjectParameter::World),
                 // `_n` for texture coordinate set n: the program multiplies the set by `xy` (a scale) and adds `zw` (a scroll
                 // offset)

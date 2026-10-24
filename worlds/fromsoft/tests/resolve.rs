@@ -735,6 +735,16 @@ fn a_skinned_vertex_program_is_bound_to_joint_streams_and_a_palette() {
         .find(|c| c.name.as_deref() == Some("VC_aObjMatrix"))
         .unwrap();
     assert_eq!(palette.role, ConstantRole::Object(ObjectParameter::BonePalette));
+    // the second palette the program applies first
+    let cancel = stage
+        .constants
+        .iter()
+        .find(|c| c.name.as_deref() == Some("VC_aClothCancelObjMatrix"))
+        .unwrap();
+    assert_eq!(
+        cancel.role,
+        ConstantRole::Object(ObjectParameter::ClothCancelPalette)
+    );
     assert_eq!(stage.unknown_constants().count(), 0);
 }
 
