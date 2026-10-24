@@ -358,52 +358,62 @@ pub fn resolve(
             ));
         }
         let (role, binding) = role_and_binding(material, &slots, resource)?;
-        // the slot's tiling: the uv group's `<group>_CommonUV-UVParam` where the metaparam gives the slot a uv group and
-        // the definition states that parameter (Elden Ring's material binaries: the renderer reads it, no program does),
-        // else the binding's own stored scale (Sekiro's)
-        let group_scale = texture_slot(resource).ok().and_then(|slot| {
-            let group = &metaparam?
-                .textures
-                .iter()
-                .find(|t| u32::from(t.slot) == slot && !t.uv_group.is_empty())?
-                .uv_group;
-            match material
-                .definition
-                .parameter(&format!("{group}_CommonUV-UVParam"))?
-            {
-                ParameterValue::Float(v) if v.len() >= 2 => Some([v[0], v[1]]),
-                _ => None,
-            }
-        });
         let found = match binding {
             Some(b) => texture(&b.texture, role == "AlbedoMap")?,
             None => None,
         };
-        // the tiling: the uv group's, which the material states whether or not a texture is bound to the slot; else
-        // the binding's stored scale; else, for a preview, none
-        let scale = match (group_scale, binding) {
-            (Some(s), b) => {
-                if b.is_some_and(|b| b.scale != [1.; 2] && b.scale != s) {
-                    *policies
-                        .entry(
-                            "texture bindings whose stored scale is not their uv group's: the uv group's bound \
-                             (how the engine combines the two is not established)"
-                                .to_owned(),
-                        )
-                        .or_default() += 1;
-                }
-                Some(s)
-            }
-            (None, Some(b)) => Some(b.scale),
-            (None, None) => (unbound == Unbound::Preview).then_some([1.; 2]),
-        };
-        if let Some(scale) = scale {
+        // the slot's tiling, in its row of FC_TextureTilingScale: Elden Ring's as its own rule says ([`elden_tiling`]);
+        // Sekiro's as below, uncentred (no capture of Sekiro's tiling words settles more)
+        if game == crate::Game::EldenRing {
             constant(
                 "FC_TextureTilingScale",
                 register as usize * 4,
                 16,
-                words(&[scale[0], scale[1], 0., 0.]),
+                words(&elden_tiling(material, metaparam, resource)),
             )?;
+        } else {
+            // the uv group's `<group>_CommonUV-UVParam` where the metaparam gives the slot a uv group and the definition
+            // states that parameter, else the binding's own stored scale
+            let group_scale = texture_slot(resource).ok().and_then(|slot| {
+                let group = &metaparam?
+                    .textures
+                    .iter()
+                    .find(|t| u32::from(t.slot) == slot && !t.uv_group.is_empty())?
+                    .uv_group;
+                match material
+                    .definition
+                    .parameter(&format!("{group}_CommonUV-UVParam"))?
+                {
+                    ParameterValue::Float(v) if v.len() >= 2 => Some([v[0], v[1]]),
+                    _ => None,
+                }
+            });
+            // the tiling: the uv group's, which the material states whether or not a texture is bound to the slot; else
+            // the binding's stored scale; else, for a preview, none
+            let scale = match (group_scale, binding) {
+                (Some(s), b) => {
+                    if b.is_some_and(|b| b.scale != [1.; 2] && b.scale != s) {
+                        *policies
+                            .entry(
+                                "texture bindings whose stored scale is not their uv group's: the uv group's bound \
+                                 (how the engine combines the two is not established)"
+                                    .to_owned(),
+                            )
+                            .or_default() += 1;
+                    }
+                    Some(s)
+                }
+                (None, Some(b)) => Some(b.scale),
+                (None, None) => (unbound == Unbound::Preview).then_some([1.; 2]),
+            };
+            if let Some(scale) = scale {
+                constant(
+                    "FC_TextureTilingScale",
+                    register as usize * 4,
+                    16,
+                    words(&[scale[0], scale[1], 0., 0.]),
+                )?;
+            }
         }
         let source = match (found, unbound) {
             (Some(texture), _) => TextureSource::Texture {
@@ -995,6 +1005,58 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
     })
 }
 
+/// The row of `FC_TextureTilingScale` Elden Ring writes for the material texture `resource`, as a capture of the
+/// running game shows it (the 578 rows the programs of 160 G-buffer draw groups read, the groups tied to their
+/// material binaries by shader and bound textures): the scale the material binary's sampler of the slot stores (the two
+/// floats after its path) where it is not zero (153 rows), else the uv group's `<group>_CommonUV-UVParam` of the
+/// metaparam texture that shares the resource's `Texture2D_N` (425 rows; the metaparam's default where the material
+/// states none), else 1, each axis scaled about the texture's centre ([`centred`]). Every character's row matched;
+/// nine rows of one map material binary, AEG099_324_ID001, did not (19, 55 and 24 captured where it states 10, 35 and
+/// 10): the draw is likely of another material with the same textures, not established. The metaparam's slot index is
+/// not the `N` of `Texture2D_N` (both name the texture: its slot is the register), so the group is found by the name.
+fn elden_tiling(material: &MaterialView<'_>, metaparam: Option<&Metaparam>, resource: &Resource) -> [f32; 4] {
+    let n = texture_slot(resource).ok();
+    let number = |name: &str| -> Option<u32> {
+        let rest = &name[name.find("Texture2D_")? + "Texture2D_".len()..];
+        rest[..rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len())]
+            .parse()
+            .ok()
+    };
+    let sampler = match material.definition {
+        crate::materials::DefinitionRef::Matbin(m) => m
+            .samplers
+            .iter()
+            .find(|s| n.is_some() && number(&s.kind) == n)
+            .map(|s| s.unknown)
+            .filter(|s| *s != [0.; 2]),
+        crate::materials::DefinitionRef::Mtd(_) => None,
+    };
+    let group = || {
+        let meta = metaparam?;
+        let group = &meta
+            .textures
+            .iter()
+            .find(|t| n.is_some() && number(&t.name) == n && !t.uv_group.is_empty())?
+            .uv_group;
+        let name = format!("{group}_CommonUV-UVParam");
+        match material.definition.parameter(&name) {
+            Some(ParameterValue::Float(v)) if v.len() >= 2 => Some([v[0], v[1]]),
+            _ => meta
+                .mtd_params
+                .iter()
+                .find(|p| p.name == name)
+                .map(|p| [p.default[0], p.default[1]]),
+        }
+    };
+    centred(sampler.or_else(group).unwrap_or([1.; 2]))
+}
+
+/// A tiling scale as Elden Ring writes it: each axis scaled about the texture's centre, `(u, v, (1 - u) / 2,
+/// (1 - v) / 2)` (the program samples `uv * scale + offset`).
+fn centred([u, v]: [f32; 2]) -> [f32; 4] {
+    [u, v, (1. - u) / 2., (1. - v) / 2.]
+}
+
 /// The words the engine writes into `SAT_MtdParam` for the parameter `p` of `value` (a colour's four lanes, its
 /// `intensity` apart; `intensity` is 1 for any other type), as a capture of Elden Ring running shows it: the 260
 /// G-buffer draw groups of a session in Limgrave whose programs read SAT parameters, 97 of them tied to their material
@@ -1045,7 +1107,7 @@ fn sat_words(game: crate::Game, p: &crate::metaparam::MtdParam, value: &[f32], i
 
 #[cfg(test)]
 mod tests {
-    use super::{sat_words, slot_name};
+    use super::{centred, sat_words, slot_name};
     use crate::Game;
     use crate::metaparam::MtdParam;
 
@@ -1066,6 +1128,16 @@ mod tests {
     /// Captured words of Elden Ring's SAT parameters from the material binaries' values: an srgb colour raised to 2.2
     /// before its intensity (`C[c3251]_BD_Cloth`'s colour 4 at intensity 1, `P[BD_M_1360]_fabric`'s colour 1 at 3.5),
     /// a colour without the flag times its intensity only, a bool as the integer's bits.
+    #[test]
+    fn tiling_rows_are_centred_as_the_capture_shows() {
+        // C[c3251]_BD's leather detail (its sampler's 10), C[c3251]_Shield's bark (24 by 48), C[c3251]_HD's
+        // leather (its uv group's 20), a slot of no scale
+        assert_eq!(centred([10., 10.]), [10., 10., -4.5, -4.5]);
+        assert_eq!(centred([24., 48.]), [24., 48., -11.5, -23.5]);
+        assert_eq!(centred([20., 20.]), [20., 20., -9.5, -9.5]);
+        assert_eq!(centred([1., 1.]), [1., 1., 0., 0.]);
+    }
+
     #[test]
     fn sat_parameters_are_written_as_the_capture_shows() {
         let close = |words: Vec<u32>, want: &[f32]| {
