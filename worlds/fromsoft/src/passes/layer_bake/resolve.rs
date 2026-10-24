@@ -79,6 +79,11 @@ pub(crate) fn role_and_binding<'a>(
     })
 }
 
+/// The count of a program whose material fields (`_snp_`) none of the material's parameters reach, by name or through
+/// `SAT_MtdParam`: those fields keep the program's zeros.
+pub const UNBOUND_MATERIAL_FIELDS: &str =
+    "programs with material fields bound to none of the material's parameters: left at frozen zero";
+
 /// The name of the engine's dither noise texture in the alpha-tested permutations (`<shader>_<switch>_Gbuf_[A].ppo`).
 pub const ENGINE_DITHER_TEXTURE: &str = "g_DitherTexture";
 
@@ -250,9 +255,10 @@ pub fn render_state(material: &LayeredMaterial) -> RenderState {
 /// space (`true`: sRGB, the albedo maps), or `None` when the reader holds no such file.
 ///
 /// A program's own layout says how it reads the material's parameters: Sekiro's name each one as a field
-/// (`<shader>_snp_*`), Elden Ring's read them from one array, `SAT_MtdParam`, where the metaparam places each at its
-/// start word in the buffer (absolute: the array starts at word 36 of the 156-byte `cbMtdParam` and the first
-/// parameter's start is 36).
+/// (`<family>_snp_*`, the name the material and the metaparam give the parameter), Elden Ring's read them from one array,
+/// `SAT_MtdParam`, where the metaparam places each at its start word in the buffer (absolute: the array starts at word
+/// 36 of the 156-byte `cbMtdParam` and the first parameter's start is 36). A program with material fields that binds
+/// none of the material's parameters by either is counted, never left at zero unsaid.
 pub fn resolve(
     shader: &ProgramShader,
     entity: Entity,
@@ -263,10 +269,6 @@ pub fn resolve(
     texture: &mut dyn FnMut(&str, bool) -> Result<Option<Entity>>,
 ) -> Result<Resolution> {
     let interface = PixelShader::interface(shader);
-    let prefix = format!(
-        "{}_snp_",
-        material.definition.shader_name().replace(['[', ']'], "_")
-    );
     let layout = Layout::of(shader).map_err(|e| invalid("layer binding", e.at, e.detail))?;
     let buffer_of = |slot: u32| -> Option<(ResourceId, u32)> {
         interface.resources.iter().find_map(|r| match &r.kind {
@@ -647,15 +649,33 @@ pub fn resolve(
             }),
         _ => None,
     });
-    // the material's own parameters, of a program that names each as a field (Sekiro's `<shader>_snp_*` constants).
-    // Sekiro's programs carry a `SAT_MtdParam` array beside them: the array is read only by a program that names none
-    // (Elden Ring's, whose members are `<shader>_snp_<switch>_*`, not this prefix)
-    let names: Vec<&String> = layout
+    // the material's own parameters, of a program that names each as a field (Sekiro's): its `_snp_` fields, when one
+    // of them is a parameter the material states or the bundle's metaparam declares. The three name a parameter alike,
+    // not after the material's shader: a `_cloth` shader's material and program both name its parameters with the
+    // base family's prefix (`P_BD_M_9040_tops1_Maffler_cloth.mtd`, shader `Character_AMSN_[DetailBlend]_cloth`, states
+    // `Character_AMSN__DetailBlend__snp_0_color_0`, the field its bundle's `_cloth_1_Gbuf.ppo` reads at byte 384).
+    // Sekiro's programs carry a `SAT_MtdParam` array beside them: the array is read only by a program none of whose
+    // fields is a stated parameter (Elden Ring's: its members are `<shader>_snp_<switch>_*` where the material binary
+    // and the metaparam say `<shader>__snp_*`)
+    let declared = |name: &str| {
+        material.definition.parameter(name).is_some()
+            || metaparam.is_some_and(|m| {
+                m.mtd_params.iter().any(|p| p.name == name) || m.ca_params.iter().any(|p| p.name == name)
+            })
+    };
+    let fields: Vec<&String> = layout
         .fields
         .keys()
-        .filter(|n| n.starts_with(&prefix) && !n.ends_with("_PADDING"))
+        .filter(|n| n.contains("_snp_") && !n.ends_with("_PADDING"))
         .collect();
-    let sat = sat.filter(|_| names.is_empty());
+    let names: Vec<&String> = if fields.iter().any(|n| declared(n)) {
+        fields.clone()
+    } else {
+        Vec::new()
+    };
+    let named = !names.is_empty();
+    let sat = sat.filter(|_| !named);
+    let mut sat_bound = 0;
     for name in names {
         let field = layout.fields[name];
         let Some(param) = material.definition.parameter(name) else {
@@ -792,7 +812,11 @@ pub fn resolve(
                 name: Some(p.name.clone()),
                 role: ConstantRole::Material(value),
             });
+            sat_bound += 1;
         }
+    }
+    if !named && sat_bound == 0 && !fields.is_empty() {
+        *policies.entry(UNBOUND_MATERIAL_FIELDS.to_owned()).or_default() += 1;
     }
     let outputs = output_bindings(interface, material.is_forward(), game);
     let inputs = interface

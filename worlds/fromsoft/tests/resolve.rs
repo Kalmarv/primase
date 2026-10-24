@@ -12,7 +12,9 @@ use primase_core::{
     Semantic, Skeleton, Skin, Slot, Stream, TexFormat, TexRole, Texture, Topology, Transform, WeightRule,
     World,
 };
-use primase_fromsoft::layer_bake::resolve::{SECOND_COLOUR, Unbound, render_state, resolve};
+use primase_fromsoft::layer_bake::resolve::{
+    SECOND_COLOUR, UNBOUND_MATERIAL_FIELDS, Unbound, render_state, resolve,
+};
 use primase_fromsoft::materials::{Binding, LayeredMaterial, Material};
 use primase_fromsoft::mtd::{self, MaterialDefinition, Parameter, Value};
 use primase_fromsoft::sekiro::source::{
@@ -178,6 +180,69 @@ fn a_program_with_a_sat_array_keeps_its_named_parameters() {
     let plain = named(PROGRAM);
     assert_eq!(plain.len(), 3);
     assert_eq!(named(SAT_PROGRAM), plain);
+}
+
+/// Constants as [`constants`] lists them.
+type Bound = Vec<(String, String, u32, u32, ConstantRole)>;
+
+/// `material()` with its definition's shader `shader` (the MTD's path to it), resolved against `bytes`: the `_snp_`
+/// constants bound, and the counts.
+fn snp_bound(
+    bytes: &[u8],
+    shader_path: &str,
+    keep: impl Fn(&Parameter) -> bool,
+) -> (Bound, BTreeMap<String, u64>) {
+    let shader = executor(bytes);
+    let mut m = material();
+    m.definition.shader = shader_path.into();
+    m.definition.parameters.retain(keep);
+    let resolution = resolve(
+        &shader,
+        World::default().spawn(),
+        &m.view(),
+        primase_fromsoft::Game::Sekiro,
+        None,
+        Unbound::Preview,
+        &mut |_, _| Ok(None),
+    )
+    .unwrap();
+    let snp = constants(&resolution.stage, &shader)
+        .into_iter()
+        .filter(|c| c.1.contains("_snp_"))
+        .collect();
+    (snp, resolution.policies)
+}
+
+/// A `_cloth` shader's material names its parameters with the base family's prefix, as its program names its fields
+/// (Sekiro's `P_BD_M_9040_tops1_Maffler_cloth.mtd`, shader `Character_AMSN_[DetailBlend]_cloth`, and that bundle's
+/// `_cloth_1_Gbuf.ppo` both say `Character_AMSN__DetailBlend__snp_0_color_0`): the fields are bound by the parameters'
+/// names, as the base shader's material binds them, not after the material's shader name.
+#[test]
+fn a_cloth_shaders_material_binds_its_programs_fields_by_the_parameters_names() {
+    let (plain, _) = snp_bound(PROGRAM, "Material/mtd/M[Multiple].mtd", |_| true);
+    let (cloth, policies) = snp_bound(PROGRAM, "Material/mtd/M[Multiple]_cloth.mtd", |_| true);
+    assert_eq!(plain.len(), 3);
+    assert_eq!(cloth, plain);
+    assert!(cloth.contains(&(
+        "Material".to_owned(),
+        "M_Multiple__snp_scale".to_owned(),
+        160,
+        8,
+        bits(&[0.5, 0.25])
+    )));
+    assert!(!policies.contains_key(UNBOUND_MATERIAL_FIELDS));
+}
+
+/// A program with material fields that none of the material's parameters reach (by name, or through a `SAT_MtdParam`
+/// array) keeps its zeros there, and says so: one count.
+#[test]
+fn a_program_whose_material_fields_bind_nothing_is_counted() {
+    let path = "Material/mtd/M[Multiple].mtd";
+    for program in [PROGRAM, SAT_PROGRAM] {
+        let (bound, policies) = snp_bound(program, path, |p| !p.name.contains("_snp_"));
+        assert_eq!(bound, []);
+        assert_eq!(policies.get(UNBOUND_MATERIAL_FIELDS), Some(&1));
+    }
 }
 
 #[test]
