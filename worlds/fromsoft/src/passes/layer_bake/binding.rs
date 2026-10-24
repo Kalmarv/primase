@@ -251,7 +251,7 @@ pub(crate) fn frozen_words(
         ConstantRole::Material(words) => words.clone(),
         // the alpha test off, every texel kept ([`ALPHA_TEST_POLICY`]): zero, negative and above-zero references alike,
         // counted where the reference would cut
-        ConstantRole::AlphaReference(reference) => {
+        ConstantRole::AlphaReference { value: reference, .. } => {
             if *reference > 0. {
                 policies.insert(ALPHA_TEST_POLICY.into(), 1);
             }
@@ -1141,7 +1141,10 @@ mod tests {
         ] {
             let mut policies = BTreeMap::new();
             let words = frozen_words(
-                &ConstantRole::AlphaReference(reference),
+                &ConstantRole::AlphaReference {
+                    value: reference,
+                    compared: primase_core::shader::AlphaComparison::Output,
+                },
                 None,
                 &frame,
                 &mut policies,

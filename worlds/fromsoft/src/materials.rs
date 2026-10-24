@@ -283,6 +283,11 @@ pub const UNBOUND_ALPHA_CUT: &str = "alpha cut from the material's g_AlphaRef: i
 /// against ([`alpha_cut`]): the program decides, and the surface is not cut.
 pub const UNTESTED_ALPHA_REFERENCE: &str = "material states an alpha reference its program does not test";
 
+/// A portable mask cannot reproduce the stochastic pre-transform comparison.
+pub const DITHERED_ALPHA_CUT: &str = "dithered alpha test lowered as a hard cutoff";
+/// The tested scalar reaches alpha through arithmetic, so cutting the output is not the original test.
+pub const TRANSFORMED_ALPHA_CUT: &str = "pre-transform alpha test lowered as a hard cutoff";
+
 /// A material's alpha cut: the cutoff its mask takes, none where it is not cut, and the count a lowering takes where
 /// the cut is not the bound program's own.
 ///
@@ -295,12 +300,12 @@ pub fn alpha_cut(
     binding: Option<&primase_core::shader::ShaderBinding>,
     material: &Material,
 ) -> (Option<f32>, Option<&'static str>) {
-    use primase_core::shader::{ConstantRole, Stage};
+    use primase_core::shader::{AlphaComparison, ConstantRole, Stage};
     match binding {
         Some(b) => {
             let stated = b.stage(Stage::Pixel).and_then(|s| {
                 s.constants.iter().find_map(|c| match c.role {
-                    ConstantRole::AlphaReference(r) => Some(r),
+                    ConstantRole::AlphaReference { value, compared } => Some((value, compared)),
                     _ => None,
                 })
             });
@@ -308,7 +313,18 @@ pub fn alpha_cut(
                 .view()
                 .is_some_and(|v| alpha_reference(v.alpha_reference()).is_some());
             match stated {
-                Some(r) => ((r > 0.).then_some(r), None),
+                Some((r, compared)) => (
+                    (r > 0.).then_some(r),
+                    if r > 0. {
+                        match compared {
+                            AlphaComparison::Output => None,
+                            AlphaComparison::Transformed => Some(TRANSFORMED_ALPHA_CUT),
+                            AlphaComparison::Dithered { .. } => Some(DITHERED_ALPHA_CUT),
+                        }
+                    } else {
+                        None
+                    },
+                ),
                 None if states => (None, Some(UNTESTED_ALPHA_REFERENCE)),
                 None => (None, None),
             }
@@ -389,7 +405,10 @@ mod tests {
                         offset: 80,
                         size: 4,
                         name: Some("FC_AlphaRef".into()),
-                        role: ConstantRole::AlphaReference(r),
+                        role: ConstantRole::AlphaReference {
+                            value: r,
+                            compared: primase_core::shader::AlphaComparison::Output,
+                        },
                         lines: None,
                     })
                     .into_iter()
@@ -420,6 +439,26 @@ mod tests {
             mode(&cutout, Some(&binding(Some(reference)))),
             (AlphaMode::Mask { cutoff: reference }, vec![])
         );
+        for (compared, policy) in [
+            (
+                primase_core::shader::AlphaComparison::Dithered { scale_word: 21 },
+                DITHERED_ALPHA_CUT,
+            ),
+            (
+                primase_core::shader::AlphaComparison::Transformed,
+                TRANSFORMED_ALPHA_CUT,
+            ),
+        ] {
+            let mut qualified = binding(Some(reference));
+            qualified.stages[0].constants[0].role = ConstantRole::AlphaReference {
+                value: reference,
+                compared,
+            };
+            assert_eq!(
+                mode(&cutout, Some(&qualified)),
+                (AlphaMode::Mask { cutoff: reference }, vec![policy.to_owned()])
+            );
+        }
         for r in [0., -5. / 255., -100.] {
             assert_eq!(
                 mode(&cutout, Some(&binding(Some(r)))),

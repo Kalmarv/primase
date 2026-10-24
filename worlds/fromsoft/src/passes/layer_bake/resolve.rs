@@ -318,17 +318,23 @@ pub fn resolve(
     let mut constants = Vec::new();
     // the program's value graph, read once: what states a matrix's lines and an alpha test's reference
     let graph = shader.program().graph();
-    // whether the program's discard compares a value it writes with the field `name`'s first word
-    let discard_compares = |name: &str| -> bool {
-        let (Some(field), Ok(graph)) = (layout.fields.get(name), &graph) else {
-            return false;
-        };
+    // The producer establishes the dither role; the generic query sees only graph resource ids and words.
+    let discard_compares = |name: &str| {
+        let field = layout.fields.get(name)?;
+        let graph = graph.as_ref().ok()?;
         let bind_point = buffer_of(field.buffer)
             .and_then(|(id, _)| interface.resource(id))
-            .and_then(|r| r.provenance.d3d);
-        bind_point
-            .and_then(|d| graph.reads.buffer_at(d.space, d.register))
-            .is_some_and(|buffer| primase_shader::output_uses::discard_compares(graph, buffer, field.offset))
+            .and_then(|r| r.provenance.d3d)?;
+        let buffer = graph.reads.buffer_at(bind_point.space, bind_point.register)?;
+        let dither = textures_of(interface).find_map(|r| {
+            if !matches!(program_texture(material, r), ProgramTexture::Engine(name) if name == ENGINE_DITHER_TEXTURE) {
+                return None;
+            }
+            let point = r.provenance.d3d?;
+            let texture = graph.interface.resources.iter().find(|g| g.provenance.d3d == Some(point))?.id;
+            Some(primase_shader::output_uses::AlphaDither { texture, scale_word: field.offset + 1 })
+        });
+        primase_shader::output_uses::discard_compares(graph, buffer, field.offset, dither)
     };
     // a constant of the layout, at `word` words into it, `size` bytes (cut where its buffer ends), by name
     let mut constant = |name: &str, word: usize, size: u32, mut role: ConstantRole| -> Result<()> {
@@ -520,8 +526,17 @@ pub fn resolve(
     // its x the alpha test's reference where the program's discard compares a value it writes with it (the material's,
     // or the engine's -100 where it states none); otherwise both words the material's
     let (x, y) = (reference(0).unwrap_or(-100.), reference(1).unwrap_or(0.));
-    if discard_compares("FC_AlphaRef") {
-        constant("FC_AlphaRef", 0, 4, ConstantRole::AlphaReference(x))?;
+    if let Some(compared) = discard_compares("FC_AlphaRef")
+        && y.is_finite()
+    {
+        // The dither texture's bake answer above is exactly 0.5. For the proved centred-product expression the
+        // perturbation is therefore zero for this finite scale; freezing the reference changes no retained alpha.
+        constant(
+            "FC_AlphaRef",
+            0,
+            4,
+            ConstantRole::AlphaReference { value: x, compared },
+        )?;
         constant("FC_AlphaRef", 1, 4, words(&[y]))?;
     } else {
         constant("FC_AlphaRef", 0, 8, words(&[x, y]))?;

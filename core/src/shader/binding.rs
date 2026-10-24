@@ -202,15 +202,30 @@ pub enum ConstantRole {
     View(ViewParameter),
     Object(ObjectParameter),
     Frame(FrameParameter),
-    /// The reference a discard of the program compares the alpha it writes against, the fragment kept where the alpha
-    /// is at least it: the material's value (a 32-bit float). The source states it only where the program's value
-    /// graph shows the discard making that comparison. A consumer that keeps every texel freezes it below any alpha; one
-    /// that carries the cut takes a reference above 0 as its cutoff.
-    AlphaReference(f32),
+    /// A reference confirmed by the program's discard graph. `compared` states whether a portable cutoff on output
+    /// alpha is the same test or an approximation. A bake freezes the reference below the alpha's range, and must
+    /// also neutralize any stated dither perturbation; the draw uses the material's original `value`.
+    AlphaReference {
+        value: f32,
+        compared: AlphaComparison,
+    },
     /// Not resolved to a role, and why.
     Unknown {
         why: String,
     },
+}
+
+/// The scalar compared against an alpha reference, proved from the program's data flow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlphaComparison {
+    /// The output alpha itself (including unchanged branch arms).
+    Output,
+    /// A scalar that reaches output alpha through arithmetic. Cutting the output is an approximation.
+    Transformed,
+    /// A pre-transform alpha plus `(dither.a - 0.5) * scale`. `scale_word` is a word offset in the reference's own
+    /// buffer. A hard cutoff on output alpha approximates the game's stochastic, pre-transform test.
+    Dithered { scale_word: u32 },
 }
 
 /// One constant: the bytes `offset..offset + size` of a constant buffer resource of the shader, named when the
@@ -309,7 +324,7 @@ impl ConstantRole {
             ),
             ConstantRole::Material(_)
             | ConstantRole::Frame(_)
-            | ConstantRole::AlphaReference(_)
+            | ConstantRole::AlphaReference { .. }
             | ConstantRole::Unknown { .. } => false,
         }
     }
@@ -1358,7 +1373,7 @@ impl StageBinding {
                 }
                 _ => {}
             }
-            if let ConstantRole::AlphaReference(r) = c.role
+            if let ConstantRole::AlphaReference { value: r, .. } = c.role
                 && (!r.is_finite() || c.size != 4)
             {
                 return Err(at(format!(

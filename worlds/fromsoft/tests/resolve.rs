@@ -1443,7 +1443,17 @@ fn an_alpha_tested_programs_discard_makes_fc_alpha_refs_x_its_reference() {
             let y = if aref == Some([128, 64]) { 64. / 255. } else { 0. };
             assert_eq!(
                 fc_alpha_ref(&shader, &alpha_material(aref)),
-                [(80, 4, ConstantRole::AlphaReference(x)), (84, 4, bits(&[y]))],
+                [
+                    (
+                        80,
+                        4,
+                        ConstantRole::AlphaReference {
+                            value: x,
+                            compared: primase_core::shader::AlphaComparison::Output
+                        }
+                    ),
+                    (84, 4, bits(&[y]))
+                ],
                 "{bytecode} {aref:?}"
             );
         }

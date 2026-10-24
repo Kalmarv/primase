@@ -53,7 +53,7 @@ pub(super) fn refusal(program: &Program, stage: &StageBinding) -> &'static str {
                 unknown |= fields.is_empty();
                 for field in fields {
                     match field.role {
-                        ConstantRole::Material(_) | ConstantRole::AlphaReference(_) => {}
+                        ConstantRole::Material(_) | ConstantRole::AlphaReference { .. } => {}
                         ConstantRole::View(_) | ConstantRole::Frame(_) | ConstantRole::Object(_) => {
                             scene = true
                         }
