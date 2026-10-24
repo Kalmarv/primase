@@ -215,8 +215,8 @@ pub(super) fn bake(
     let vertex_shader = world
         .get::<Shader>(vertex.shader)
         .ok_or("bound vertex program is absent")?;
-    let vertex =
-        layer_bake::VertexStage::new(vertex_shader, vertex, false, &frame).map_err(|e| e.to_string())?;
+    let vertex = layer_bake::VertexStage::new(vertex_shader, vertex, shader.program(), false, &frame)
+        .map_err(|e| e.to_string())?;
     let mut inputs = vertex
         .pixel_inputs(shader.interface(), &layer_bake::Inputs::default())
         .map_err(|e| e.to_string())?;

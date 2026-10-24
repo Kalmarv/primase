@@ -65,6 +65,8 @@ pub(crate) struct VertexStage {
     shader: ProgramShader,
     constants: Vec<(u32, Vec<[u32; 4]>)>,
     attributes: Vec<Attribute>,
+    /// Pixel input lanes the selected program actually reads, by semantic label.
+    pixel_lanes: BTreeMap<(String, u32), u8>,
     ground: bool,
     pub policies: BTreeMap<String, u64>,
 }
@@ -98,8 +100,21 @@ impl VertexStage {
     /// Lift the vertex program `vertex` (a `core.shader` the binding `stage` was resolved against), bind its constants as
     /// the roles say and `frame` freezes them, and plan what feeds each of its inputs. `ground`: the material is of the
     /// ground family, whose second layer weight is read from another lane.
-    pub fn new(vertex: &CoreShader, stage: &StageBinding, ground: bool, frame: &FrozenFrame) -> Result<Self> {
+    pub fn new(
+        vertex: &CoreShader,
+        stage: &StageBinding,
+        pixel: &primase_shader::Program,
+        ground: bool,
+        frame: &FrozenFrame,
+    ) -> Result<Self> {
         let lifted = super::binding::program_executor(vertex.format, &vertex.bytecode)?;
+        let demand = primase_shader::flow::VertexDemand::of_programs(lifted.program(), pixel)
+            .map_err(|e| invalid("vertex demand", 0, e))?;
+        let pixel_lanes = demand
+            .pixel
+            .iter()
+            .map(|(&i, &mask)| (label_of(&pixel.interface.inputs[i]), mask))
+            .collect();
         let mut policies = BTreeMap::new();
         // the constants: every buffer the program reads, zero where nothing states a value
         let mut constants: Vec<(u32, Vec<[u32; 4]>)> = lifted
@@ -139,8 +154,22 @@ impl VertexStage {
         }
         // what feeds each input: the role the binding states for its label
         let mut attributes = Vec::new();
-        for v in lifted.interface().inputs.iter().filter(|v| v.used) {
+        for (input, v) in lifted
+            .interface()
+            .inputs
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.used)
+        {
             let label = label_of(v);
+            let required = demand.vertex.get(&input).copied().unwrap_or(0);
+            if required == 0 {
+                policies.insert(
+                    format!("{}{} fed nothing: no pixel output reads them", label.0, label.1),
+                    1,
+                );
+                continue;
+            }
             let role = stage
                 .inputs
                 .iter()
@@ -162,7 +191,7 @@ impl VertexStage {
                 InputRole::Stream(Semantic::Color(n)) if (1..=6).contains(n) => Feed::Member(*n),
                 InputRole::Stream(s) if *s == super::resolve::SECOND_COLOUR => {
                     // only x is handed on: anything more would be a value the bake does not know
-                    if v.provenance.d3d.is_some_and(|d| d.read_write_mask & 0b1110 != 0) {
+                    if required & 0b1110 != 0 {
                         return Err(invalid(
                             "vertex binding",
                             0,
@@ -252,6 +281,7 @@ impl VertexStage {
             shader: lifted,
             constants,
             attributes,
+            pixel_lanes,
             ground,
             policies,
         })
@@ -356,6 +386,14 @@ impl VertexStage {
         let mut found = BTreeMap::new();
         for input in pixel.inputs.iter().filter(|i| i.used) {
             let label = label_of(input);
+            let needed = self.pixel_lanes.get(&label).copied().unwrap_or(0);
+            if needed == 0 {
+                found.insert(
+                    (input.label.name.clone(), input.label.index),
+                    Input::Lanes([Lane::Bits(0); 4]),
+                );
+                continue;
+            }
             let Some(out) = self
                 .shader
                 .interface()
@@ -386,6 +424,9 @@ impl VertexStage {
             }
             let mut result = [Lane::Bits(0); 4];
             for k in 0..width {
+                if needed & (1 << k) == 0 {
+                    continue;
+                }
                 let at = |r: usize| runs[r].get(sig.register as usize).map_or(0, |row| row[lanes[k]]);
                 let (c, x, y, xy) = (at(0), at(1), at(2), at(3));
                 let f = f32::from_bits;
@@ -427,6 +468,81 @@ mod tests {
     const VERTEX: &[u8] = include_bytes!("../../../tests/fixtures/layered_vs.dxbc");
     const PIXEL: &[u8] = include_bytes!("../../../tests/fixtures/layered.dxbc");
 
+    fn demanded(vertex: &[u8], pixel: &[u8], missing_position: bool) -> Result<VertexStage> {
+        let shader = CoreShader {
+            format: ShaderFormat::Dxbc,
+            bytecode: vertex.to_vec(),
+            interface: primase_dxbc::reflection(vertex).unwrap(),
+        };
+        let mut binding = resolve_vertex(&shader, World::default().spawn()).unwrap().stage;
+        if missing_position {
+            binding
+                .inputs
+                .iter_mut()
+                .find(|i| i.label.name == "POSITION")
+                .unwrap()
+                .role = InputRole::Unknown {
+                why: "fixture has no position source".into(),
+            };
+        }
+        VertexStage::new(
+            &shader,
+            &binding,
+            &primase_dxbc::lift(pixel).unwrap(),
+            false,
+            &FrozenFrame::static_bake(0.),
+        )
+    }
+
+    const DEMAND_VS: &[u8] = include_bytes!("../../../tests/fixtures/vertex_demand_vs.dxbc");
+    const DEMAND_DEAD: &[u8] = include_bytes!("../../../tests/fixtures/vertex_demand_dead_ps.dxbc");
+
+    #[test]
+    fn an_input_feeding_only_an_unused_varying_needs_no_bake_source() {
+        let vertex = demanded(DEMAND_VS, DEMAND_DEAD, false).unwrap();
+        assert!(
+            vertex
+                .policies
+                .keys()
+                .any(|p| p == "TEXCOORD1 fed nothing: no pixel output reads them")
+        );
+        let pixel = primase_dxbc::reflection(DEMAND_DEAD).unwrap();
+        let inputs = vertex.pixel_inputs(&pixel, &Inputs::default()).unwrap();
+        assert_eq!(lanes(&inputs[&("TEXCOORD".into(), 0)])[..2], [Lane::U, Lane::V]);
+        // The same missing source is required as soon as its varying reaches a pixel output.
+        let live = include_bytes!("../../../tests/fixtures/vertex_demand_live_ps.dxbc");
+        assert!(
+            demanded(DEMAND_VS, live, false)
+                .unwrap_err()
+                .to_string()
+                .contains("TEXCOORD1")
+        );
+    }
+
+    #[test]
+    fn rasterization_and_discard_dependencies_still_need_their_sources() {
+        let discard = include_bytes!("../../../tests/fixtures/vertex_demand_discard_ps.dxbc");
+        let clip = include_bytes!("../../../tests/fixtures/vertex_demand_clip_vs.dxbc");
+        assert!(
+            demanded(DEMAND_VS, discard, false)
+                .unwrap_err()
+                .to_string()
+                .contains("TEXCOORD1")
+        );
+        assert!(
+            demanded(clip, DEMAND_DEAD, false)
+                .unwrap_err()
+                .to_string()
+                .contains("TEXCOORD1")
+        );
+        assert!(
+            demanded(DEMAND_VS, DEMAND_DEAD, true)
+                .unwrap_err()
+                .to_string()
+                .contains("POSITION0")
+        );
+    }
+
     fn stage(frame: &FrozenFrame) -> Result<VertexStage> {
         let interface = primase_dxbc::reflection(VERTEX).unwrap();
         let entity = World::default().spawn();
@@ -436,7 +552,13 @@ mod tests {
             interface,
         };
         let binding = resolve_vertex(&shader, entity).unwrap().stage;
-        VertexStage::new(&shader, &binding, false, frame)
+        VertexStage::new(
+            &shader,
+            &binding,
+            &primase_dxbc::lift(PIXEL).unwrap(),
+            false,
+            frame,
+        )
     }
 
     const CLOTH: &[u8] = include_bytes!("../../../tests/fixtures/layered_cloth_vs.dxbc");
@@ -454,7 +576,14 @@ mod tests {
         let entity = World::default().spawn();
         let mut binding = resolve_vertex(&shader, entity).unwrap().stage;
         let frame = FrozenFrame::static_bake(0.);
-        let planned = VertexStage::new(&shader, &binding, false, &frame).unwrap();
+        let planned = VertexStage::new(
+            &shader,
+            &binding,
+            &primase_dxbc::lift(PIXEL).unwrap(),
+            false,
+            &frame,
+        )
+        .unwrap();
         let sign: Vec<_> = planned
             .attributes
             .iter()
@@ -478,7 +607,14 @@ mod tests {
             count: 1,
             component: 2,
         }]);
-        let refused = VertexStage::new(&shader, &binding, false, &frame).expect_err("refused");
+        let refused = VertexStage::new(
+            &shader,
+            &binding,
+            &primase_dxbc::lift(PIXEL).unwrap(),
+            false,
+            &frame,
+        )
+        .expect_err("refused");
         assert!(
             refused.to_string().contains("lanes the bake cannot feed"),
             "{refused}"
@@ -532,7 +668,14 @@ mod tests {
             interface,
         };
         let binding = resolve_vertex(&shader, entity).unwrap().stage;
-        let skinned = VertexStage::new(&shader, &binding, false, &FrozenFrame::static_bake(0.)).unwrap();
+        let skinned = VertexStage::new(
+            &shader,
+            &binding,
+            &primase_dxbc::lift(PIXEL).unwrap(),
+            false,
+            &FrozenFrame::static_bake(0.),
+        )
+        .unwrap();
         assert!(skinned.policies.contains_key(super::super::BIND_POSE_POLICY));
         let pixel = primase_dxbc::reflection(PIXEL).unwrap();
         let params = Inputs {

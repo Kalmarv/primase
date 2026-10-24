@@ -535,7 +535,13 @@ impl Prepared {
         }
         let vertex = vertex
             .map(|(core, vertex_binding)| {
-                VertexStage::new(core, vertex_binding, family == "M[MultipleGround]", frame)
+                VertexStage::new(
+                    core,
+                    vertex_binding,
+                    shader.program(),
+                    family == "M[MultipleGround]",
+                    frame,
+                )
             })
             .transpose()?;
         match &vertex {

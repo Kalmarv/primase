@@ -28,6 +28,9 @@ pub use naga::{
 
 use crate::{Interface, Label, Program, ResourceId, Stage, entry_io};
 
+mod demand;
+pub use demand::VertexDemand;
+
 /// A node of a [`Values`] graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeId(u32);
