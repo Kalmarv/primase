@@ -1,7 +1,8 @@
-//! The constants a program reads ([`primase_gta::passes::constant_reads::ConstantReads`], from the lifted program's
-//! own loads after naga's compaction) held to an independent reader of the same programs: the lanes each constant-buffer
-//! row is taken at in the program's emitted WGSL (which writes only what the program uses). Over every distinct
-//! program of the shader database that lifts, the two agree on the lanes of every row either sees.
+//! The constants a program reads ([`primase_shader::WordsRead`] of the lifted program, from its value graph) held to an
+//! independent reader of the same programs: the lanes each constant-buffer row is taken at in the program's emitted WGSL
+//! (which writes only what the program computes with). Over every distinct program of the shader database that lifts,
+//! every word the value graph reaches is a lane the code takes; the lanes the code takes that nothing the program
+//! outputs, discards or writes is made of are counted, not errors.
 //!
 //! Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
@@ -10,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::World;
 use primase_core::shader::Shader;
 use primase_gta::components::GtaEffect;
-use primase_gta::passes::constant_reads::ConstantReads;
 use primase_gta::read::source::GtaSource;
+use primase_shader::ResourceKind;
 use primase_testdata::{Game, install, keys};
 
 /// The lanes of rows a program reads, from its WGSL (the emitter writes only what the program uses; the lifted IR also
@@ -114,7 +115,7 @@ fn the_reads_agree_with_the_emitted_code() {
     let mut world = World::new();
     source.add_shader_database(&mut world).unwrap();
     let mut seen = BTreeSet::new();
-    let (mut programs, mut rows, mut dynamic_buffers) = (0usize, 0usize, 0usize);
+    let (mut programs, mut rows, mut dynamic_buffers, mut unused) = (0usize, 0usize, 0usize, 0usize);
     let mut differ: Vec<String> = Vec::new();
     for (_, effect) in world.iter::<GtaEffect>() {
         for p in &effect.programs {
@@ -125,9 +126,13 @@ fn the_reads_agree_with_the_emitted_code() {
             let Some(sh) = world.get::<Shader>(e) else {
                 continue;
             };
-            let (Ok((lanes, whole, dynamic)), Ok(mine)) =
-                (reads(&sh.bytecode), ConstantReads::of(&sh.bytecode))
-            else {
+            let Ok((lanes, whole, dynamic)) = reads(&sh.bytecode) else {
+                continue;
+            };
+            let Ok(program) = primase_dxil::lift(&sh.bytecode) else {
+                continue;
+            };
+            let Ok(mine) = program.constant_reads() else {
                 continue;
             };
             programs += 1;
@@ -140,38 +145,43 @@ fn the_reads_agree_with_the_emitted_code() {
             for (sp, rg, row) in &whole {
                 text.entry((*sp, *rg, *row)).or_default().extend(0..4);
             }
+            // every word the value graph reaches is a lane the code takes
+            for r in &program.interface.resources {
+                let (ResourceKind::ConstantBuffer { .. }, Some(d3d)) = (&r.kind, r.provenance.d3d) else {
+                    continue;
+                };
+                let (sp, rg) = (d3d.space, d3d.register);
+                if dynamic.contains(&(sp, rg)) {
+                    continue;
+                }
+                for word in mine.words(r.id) {
+                    let (row, lane) = (word / 4, word % 4);
+                    if !text.get(&(sp, rg, row)).is_some_and(|l| l.contains(&lane)) && differ.len() < 8 {
+                        differ.push(format!(
+                            "{} row ({sp},{rg},{row}): reads lane {lane}, the code takes {:?}",
+                            p.name,
+                            text.get(&(sp, rg, row))
+                        ));
+                    }
+                }
+            }
+            // the lanes the code takes and nothing is made of
             for ((sp, rg, row), l) in &text {
                 rows += 1;
                 if dynamic.contains(&(*sp, *rg)) {
                     continue;
                 }
-                let got: BTreeSet<u32> = mine.lanes_of(*sp, *rg, *row).into_iter().collect();
-                if got != *l && differ.len() < 8 {
-                    differ.push(format!(
-                        "{} row ({sp},{rg},{row}): code {l:?}, reads {got:?}",
-                        p.name
-                    ));
-                }
-            }
-            // and the reads claim nothing in a buffer the text does not touch
-            for sp_rg in [(0u32, 0u32), (0, 2), (0, 3), (0, 5), (0, 6), (0, 7), (1, 10)] {
-                for row in 0..64 {
-                    let mine_lanes = mine.lanes_of(sp_rg.0, sp_rg.1, row);
-                    if !mine_lanes.is_empty()
-                        && !dynamic.contains(&sp_rg)
-                        && !text.contains_key(&(sp_rg.0, sp_rg.1, row))
-                        && differ.len() < 8
-                    {
-                        differ.push(format!(
-                            "{} row ({},{},{row}): reads {mine_lanes:?}, the code none",
-                            p.name, sp_rg.0, sp_rg.1
-                        ));
-                    }
-                }
+                unused += l
+                    .iter()
+                    .filter(|lane| !mine.reads_at(*sp, *rg, row * 16 + *lane * 4, 4))
+                    .count();
             }
         }
     }
-    println!("{programs} programs, {rows} rows compared, {dynamic_buffers} dynamically indexed buffers");
+    println!(
+        "{programs} programs, {rows} rows compared, {dynamic_buffers} dynamically indexed buffers, {unused} lanes taken \
+         and unused"
+    );
     assert!(programs > 9_000);
     assert!(differ.is_empty(), "{differ:?}");
 }

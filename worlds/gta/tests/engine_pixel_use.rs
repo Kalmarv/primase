@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::World;
 use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaShaderTable};
-use primase_gta::passes::constant_reads::ConstantReads;
+use primase_gta::passes::resolve_shaders::constant_reads_of;
 use primase_gta::passes::resolve_shaders::value_bytes;
 use primase_gta::read::source::GtaSource;
 use primase_testdata::{Game, install, keys};
@@ -77,7 +77,7 @@ fn how_the_programs_use_the_remaining_engine_constants() {
             ) else {
                 continue;
             };
-            let Ok(reads) = ConstantReads::of(&sh.bytecode) else {
+            let Ok(reads) = constant_reads_of(&sh.bytecode) else {
                 continue;
             };
             let stage = format!("{:?}", p.stage);
@@ -98,7 +98,7 @@ fn how_the_programs_use_the_remaining_engine_constants() {
                     };
                     let offset = u32::from(c.offset);
                     let words: Vec<u32> = (0..bytes.min(16) / 4)
-                        .filter(|k| reads.reads(sp, rg, offset + 4 * k, 4))
+                        .filter(|k| reads.reads_at(sp, rg, offset + 4 * k, 4))
                         .collect();
                     if words.is_empty() {
                         continue;
@@ -152,14 +152,14 @@ fn how_the_programs_use_the_remaining_engine_constants() {
                 std::fs::write(format!("{stem}.wgsl"), format!("// {program}\n{text}")).unwrap();
                 // the constants that reader reads, by buffer and offset: which row of the WGSL is which constant
                 let table = world.get::<GtaShaderTable>(*entity).unwrap();
-                let reads = ConstantReads::of(bytes).unwrap();
+                let reads = constant_reads_of(bytes).unwrap();
                 let mut lines = String::new();
                 for (i, r) in table.0.resources.iter().enumerate() {
                     for c in table.0.constants_of(i) {
                         let (sp, rg) = (u32::from(r.space), u32::from(r.register));
                         let size = value_bytes(c.flags).unwrap_or(4);
                         let words: Vec<u32> = (0..size.min(16) / 4)
-                            .filter(|k| reads.reads(sp, rg, u32::from(c.offset) + 4 * k, 4))
+                            .filter(|k| reads.reads_at(sp, rg, u32::from(c.offset) + 4 * k, 4))
                             .collect();
                         if !words.is_empty() {
                             lines += &format!(

@@ -24,8 +24,8 @@
 //!   render state in GTA (the cutoff is a shader constant).
 //! - **Constants.** Each constant buffer a program declares is the table record at its register and space; each
 //!   constant of the record is bound at its byte offset where the program reads it
-//!   ([`constant_reads::ConstantReads`](super::constant_reads): the words its loads take after naga's compaction; a
-//!   buffer indexed by a value that is not a literal is read at every row). A constant the program does not read, or
+//!   ([`primase_shader::WordsRead`] of the program lifted again: the words its value graph reaches, however it loads
+//!   them; a buffer indexed by a value that is not a literal is read at every word). A constant the program does not read, or
 //!   one past the end of the buffer it declares, is left out, counted. A constant the effect renames (its parameter records:
 //!   [`GtaEffectParameters`]) is a material parameter, bound to the words the material stores under the new name
 //!   (`Material`), or `Unknown` where it stores none; the engine's world, view and projection matrices have the roles
@@ -71,7 +71,6 @@ use primase_core::shader::{
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
 
-use super::constant_reads::ConstantReads;
 use super::gbuffer::{self, GBufferWrites};
 use super::sampler_state;
 use super::sampler_use::{self, SamplerUses, Through};
@@ -81,6 +80,7 @@ use crate::components::{
 };
 use crate::rage::sgd2_effect::SamplerDesc;
 use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
+use primase_shader::WordsRead;
 
 /// The pixel program family whose targets the pass names roles for (`PS_DeferredTextured` and its alpha-clipped and
 /// sub-sample variants: [`gbuffer`] has the layout and how it was checked).
@@ -118,6 +118,14 @@ pub(super) fn compare(f: u8) -> Option<Compare> {
 }
 
 /// The D3D12 stencil operation as the vocabulary's.
+/// The constant words a program reads ([`WordsRead`]), its DXIL container lifted again, or why it cannot be lifted or
+/// followed.
+pub fn constant_reads_of(bytecode: &[u8]) -> Result<WordsRead, String> {
+    primase_dxil::lift(bytecode)
+        .map_err(|e| e.to_string())?
+        .constant_reads()
+}
+
 fn stencil_op(o: u8) -> Option<StencilOp> {
     Some(match o {
         1 => StencilOp::Keep,
@@ -534,7 +542,7 @@ impl ResolveGtaShaders {
         writes: Option<&Result<GBufferWrites, String>>,
         forward: bool,
         sample_uses: &mut BTreeMap<Entity, Result<SamplerUses, String>>,
-        constant_reads: &mut BTreeMap<Entity, Result<ConstantReads, String>>,
+        constant_reads: &mut BTreeMap<Entity, Result<WordsRead, String>>,
         counts: &mut Counts,
     ) -> Result<StageBinding, String> {
         let program = world
@@ -553,7 +561,7 @@ impl ResolveGtaShaders {
         // the constants the program reads: a buffer declares far more than a program uses
         let reads = constant_reads
             .entry(shader)
-            .or_insert_with(|| ConstantReads::of(&program.bytecode));
+            .or_insert_with(|| constant_reads_of(&program.bytecode));
         for r in &interface.resources {
             let Some(bind) = r.provenance.d3d else { continue };
             match (&r.kind, bind.class) {
@@ -577,7 +585,7 @@ impl ResolveGtaShaders {
                         }
                         // a program whose reads cannot be found keeps every constant its buffers declare
                         if let Ok(reads) = reads
-                            && !reads.reads(bind.space, bind.register, u32::from(c.offset), bytes)
+                            && !reads.reads_at(bind.space, bind.register, u32::from(c.offset), bytes)
                         {
                             counts.add("constants the program does not read, left out");
                             continue;
@@ -587,7 +595,7 @@ impl ResolveGtaShaders {
                             for (at, size, role) in parts {
                                 let offset = u32::from(c.offset) + at;
                                 if let Ok(reads) = reads
-                                    && !reads.reads(bind.space, bind.register, offset, size)
+                                    && !reads.reads_at(bind.space, bind.register, offset, size)
                                 {
                                     counts.add("constants the program does not read, left out");
                                     continue;
@@ -1155,7 +1163,7 @@ impl Pass for ResolveGtaShaders {
         // per program: the samplers its samples read through (lifting the program is the cost)
         let mut sample_uses: BTreeMap<Entity, Result<SamplerUses, String>> = BTreeMap::new();
         // per program: the constant-buffer words it reads
-        let mut constant_reads: BTreeMap<Entity, Result<ConstantReads, String>> = BTreeMap::new();
+        let mut constant_reads: BTreeMap<Entity, Result<WordsRead, String>> = BTreeMap::new();
         for (material, shader, effect_entity) in materials {
             // the technique asked for, or where the effect has none of that name the one its material is drawn with
             let (technique, fallback) = match world.get::<GtaEffectTechniques>(effect_entity) {

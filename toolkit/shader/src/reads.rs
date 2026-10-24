@@ -34,6 +34,8 @@ pub struct WordsRead {
     words: BTreeMap<ResourceId, BTreeSet<u32>>,
     /// The buffers read at an index computed at run time.
     indexed: BTreeSet<ResourceId>,
+    /// The constant buffers by their D3D bind point (space, register).
+    bound: BTreeMap<(u32, u32), ResourceId>,
 }
 
 impl WordsRead {
@@ -45,7 +47,15 @@ impl WordsRead {
             .filter(|r| matches!(r.kind, ResourceKind::ConstantBuffer { .. }))
             .map(|r| r.id)
             .collect();
-        let mut out = WordsRead::default();
+        let mut out = WordsRead {
+            bound: interface
+                .resources
+                .iter()
+                .filter(|r| buffers.contains(&r.id))
+                .filter_map(|r| r.provenance.d3d.map(|d| ((d.space, d.register), r.id)))
+                .collect(),
+            ..WordsRead::default()
+        };
         let mut seen = BTreeSet::new();
         let mut stack: Vec<NodeId> = values
             .outputs()
@@ -86,6 +96,18 @@ impl WordsRead {
     /// Whether `buffer` is read at an index computed at run time: any of its words may be read.
     pub fn indexed(&self, buffer: ResourceId) -> bool {
         self.indexed.contains(&buffer)
+    }
+
+    /// The constant buffer at the D3D bind point (`space`, `register`), if the program declares one there.
+    pub fn buffer_at(&self, space: u32, register: u32) -> Option<ResourceId> {
+        self.bound.get(&(space, register)).copied()
+    }
+
+    /// [`WordsRead::reads`] of the constant buffer at the D3D bind point (`space`, `register`): false where the program
+    /// declares none there.
+    pub fn reads_at(&self, space: u32, register: u32, offset: u32, bytes: u32) -> bool {
+        self.buffer_at(space, register)
+            .is_some_and(|buffer| self.reads(buffer, offset, bytes))
     }
 
     /// Whether the program reads any of the `bytes` bytes at `offset` of `buffer`.

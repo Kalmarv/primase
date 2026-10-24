@@ -41,6 +41,11 @@ fn a_program_that_loads_whole_registers_reads_only_the_lanes_it_uses() {
     assert!(!reads.reads(pass, 996 * 4, 64 * 4), "the 16 rows between");
     let set = buffer(&program, 0);
     assert_eq!(reads.words(set).collect::<Vec<_>>(), [0]);
+    // the same by D3D bind point (space 0)
+    assert_eq!(reads.buffer_at(0, 4), Some(pass));
+    assert!(reads.reads_at(0, 4, 1062 * 4, 4));
+    assert!(!reads.reads_at(0, 4, 1063 * 4, 4));
+    assert!(!reads.reads_at(1, 4, 1062 * 4, 4), "no buffer at space 1");
 }
 
 #[test]
