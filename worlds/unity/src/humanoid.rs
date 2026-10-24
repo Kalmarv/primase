@@ -57,7 +57,9 @@
 //! `toe.L` moved to 0.1 after the avatar was built: both poses read the toe back at the avatar's 0.0503881574, not at the
 //! 0.1 the scene had; `unity/mecanim/README.md` of the oracles), and the frog's game scene differs from its avatar only at
 //! the toes (the Transforms have 0.070169, the avatar 0.050388, in the foot's frame; every other human bone agrees to
-//! 2e-7). That the Animator does the same at run time is inferred from this, not tested. The lowering reports the bones
+//! 2e-7). With the avatar's translations the toes' difference from the editor over the frog's 35 clips (210 poses) went from
+//! 0.0198 to under 2e-9 (every other human bone's is 6.5e-9 at most, the hips' 1.6e-3 is their fitted placement) and the
+//! rotations are the same to the digit. That the Animator does the same at run time is inferred from this, not tested. The lowering reports the bones
 //! the avatar moves and by how far ([`HumanoidLowering::translation_changes`]); a Transform position curve of the clip on
 //! the joint is kept in place of the avatar's translation (counted).
 //!
