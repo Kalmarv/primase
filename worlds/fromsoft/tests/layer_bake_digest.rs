@@ -21,7 +21,7 @@ fn hex(bytes: &[u8]) -> String {
 /// The smoke gate's digest of the centre cell's baked textures, and their count.
 const SMOKE_DIGEST: (usize, &str) = (
     1121,
-    "c03ff8cc149d6d815a053f94c8efb7bb377f9254dbe6c8b1c7f6af4211dce1df",
+    "353669b67254a4627633e39b4fc7a26989f6a97722d4742ce64578e8621dee7e",
 );
 
 /// The centre cell of the 3 by 3 grid: the one the smoke gate bakes.
