@@ -108,6 +108,13 @@ fn cases() -> Vec<DrawCase> {
         v([0.2, 0.9, -0.5, 1.0], green, [0.5, 1.0], 1.0),
         v(at(14.0, 12.0, 0.5, 1.0), blue, [1.0, 0.0], 1.0),
     ];
+    // a triangle with a vertex near the camera plane (w = 1e-7): cut by the w plane, it is about 8e9 pixels right of
+    // the targets, so x and y are clipped to the guard band before the positions are snapped
+    let near_w = vec![
+        v(at(2.25, 8.0, 0.5, 1.0), red, [0.0, 0.0], 1.0),
+        v(at(8.25, 14.0, 0.5, 1.0), green, [1.0, 0.0], 1.0),
+        v([1e3, 2e2, 0.0, 1e-7], blue, [0.5, 1.0], 1.0),
+    ];
     let one = |name, ps, vertices: &Vec<Vertex>, targets: Vec<u32>| DrawCase {
         name,
         ps,
@@ -138,6 +145,7 @@ fn cases() -> Vec<DrawCase> {
         },
         one("discard", "discard", &perspective, vec![0]),
         one("near", "colour", &near, vec![0, 1]),
+        one("near_w", "colour", &near_w, vec![0, 1]),
         one("derivatives", "derivatives", &perspective, vec![0, 1]),
         one("texture", "texture", &perspective, vec![0]),
     ]
