@@ -11,6 +11,10 @@ use crate::{Program, ProgramError as Error};
 /// out ([`crate::D3dModes`]) are plain operations in the text; the denormal flush is the source's expectation, which
 /// WGSL leaves to the implementation.
 ///
+/// What the text holds is stated beside it, so a consumer never reads it back: where each varying is (its location
+/// and interpolation, the clip distances' one member) is [`crate::entry_io`]'s, which resources it declares and never
+/// uses [`Program::unread_resources`], and which constant words it reads [`Program::constant_reads`].
+///
 /// A program of a stage WGSL has no entry point for (a hull, domain or geometry program, a vertex program that feeds a
 /// tessellator) is refused by name: a consumer that tessellates writes its own program from these (see
 /// [`wgsl_functions`] for the functions as text).
@@ -54,15 +58,7 @@ pub fn wgsl_functions(program: &Program) -> Result<String, Error> {
 /// The module as WGSL text whatever its stage, for a program's text form: a ray tracing program too, which no consumer
 /// is offered as WGSL ([`wgsl_functions`] refuses it).
 pub(crate) fn module_text(program: &Program) -> Result<String, Error> {
-    let info = program.validate().map_err(|problems| {
-        Error::Invalid(
-            problems
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("; "),
-        )
-    })?;
+    let info = program.validated()?;
     naga::back::wgsl::write_string(&program.module, &info, naga::back::wgsl::WriterFlags::empty()).map_err(
         |e| Error::Unsupported {
             writer: "wgsl",

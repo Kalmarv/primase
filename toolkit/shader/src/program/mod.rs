@@ -36,6 +36,8 @@ mod validate;
 pub use io::{EntryIo, FnItem, FunctionSig, IoItem, IoType, entry_io, mesh_vertex_io, stage_functions};
 pub use validate::{Problem, validate};
 
+use std::collections::BTreeSet;
+
 use naga::{Handle, Module};
 
 use crate::{Interface, ResourceId, ShaderFormat, Stage};
@@ -161,6 +163,29 @@ impl Program {
         self.bindings.iter().find(|(r, _)| *r == id).map(|(_, g)| *g)
     }
 
+    /// The resources the entry point never names: no expression it computes with refers to their global, once naga's
+    /// compaction has dropped the expressions no statement uses (as a writer leaves them out). A writer still declares
+    /// them, so a pipeline built from the text binds them, but the program neither reads nor writes them. An error is
+    /// the validator's: a module that does not validate is not compacted.
+    pub fn unread_resources(&self) -> Result<BTreeSet<ResourceId>, Error> {
+        self.validated()?;
+        let mut module = self.module.clone();
+        naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
+        // compaction renumbers the globals it keeps: a resource's global is found again by its name and binding
+        let kept = |g: &naga::GlobalVariable| {
+            module
+                .global_variables
+                .iter()
+                .any(|(_, k)| k.name == g.name && k.binding == g.binding)
+        };
+        Ok(self
+            .bindings
+            .iter()
+            .filter(|(_, g)| !kept(&self.module.global_variables[*g]))
+            .map(|(id, _)| *id)
+            .collect())
+    }
+
     /// The name the entry point's argument or the result structure's member for a varying has: the label's name
     /// followed by its index.
     pub fn varying_name(label: &crate::Label) -> String {
@@ -171,6 +196,19 @@ impl Program {
     /// resources against the globals), every [`Problem`] found.
     pub fn validate(&self) -> Result<naga::valid::ModuleInfo, Vec<Problem>> {
         validate(self)
+    }
+
+    /// [`Program::validate`] as one error, its problems joined.
+    pub(crate) fn validated(&self) -> Result<naga::valid::ModuleInfo, Error> {
+        self.validate().map_err(|problems| {
+            Error::Invalid(
+                problems
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        })
     }
 
     /// The stable text form: a header stating the interface, resources, conventions, modes and provenance, then the

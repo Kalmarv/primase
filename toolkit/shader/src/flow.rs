@@ -13,7 +13,8 @@
 //! "must reach". [`link`] takes a pixel program's flow back through the vertex program that feeds it.
 //!
 //! Not followed, and stated: a write to a storage buffer or image into a later read of it (a read is the resource's
-//! own value). Refused with an error, never dropped: a call (the lifters emit one function), and the ray-query and
+//! own value), and an atomic's change to memory (a later load sees the last plain store). What each such write is
+//! made of is kept ([`Values::writes`]), so a source that reaches only a write is still found. Refused with an error, never dropped: a call (the lifters emit one function), and the ray-query and
 //! cooperative-matrix expressions.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -139,6 +140,8 @@ pub struct Values {
     outputs: BTreeMap<(usize, u8), NodeId>,
     /// The conditions guarding each discard, outermost first; empty for one taken unconditionally.
     discards: Vec<Vec<NodeId>>,
+    /// What each write not followed into a later read is made of.
+    writes: Vec<Vec<NodeId>>,
 }
 
 impl Values {
@@ -169,6 +172,13 @@ impl Values {
     /// The conditions guarding each discard, outermost first (empty: taken whenever it is reached).
     pub fn discards(&self) -> &[Vec<NodeId>] {
         &self.discards
+    }
+
+    /// What each write the graph does not follow into a later read is made of, in program order: a storage buffer's
+    /// or image's (its value, its address's run-time indices or coordinate) and an atomic's (its operands and its
+    /// address's indices), each with the conditions it is under, outermost first.
+    pub fn writes(&self) -> &[Vec<NodeId>] {
+        &self.writes
     }
 
     /// The nodes `id` is made of, as [`Node`] lists them: operands, a texel's coordinate and controls, an index, a
@@ -456,6 +466,14 @@ struct Place {
     runtime_sized: bool,
 }
 
+/// The value an atomic exchange compares with, if it has one.
+fn compared(fun: &naga::AtomicFunction) -> Option<&Handle<Expression>> {
+    match fun {
+        naga::AtomicFunction::Exchange { compare } => compare.as_ref(),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Root {
     Local(Handle<naga::LocalVariable>),
@@ -494,6 +512,7 @@ struct Walker<'a> {
     result_lanes: Vec<Option<(usize, u8)>>,
     returns: Vec<(Vec<NodeId>, Vec<NodeId>)>,
     discards: Vec<Vec<NodeId>>,
+    writes: Vec<Vec<NodeId>>,
     control: Vec<NodeId>,
     targets: Vec<Target>,
     resources: BTreeMap<Handle<naga::GlobalVariable>, ResourceId>,
@@ -519,6 +538,7 @@ impl<'a> Walker<'a> {
             result_lanes: Vec::new(),
             returns: Vec::new(),
             discards: Vec::new(),
+            writes: Vec::new(),
             control: Vec::new(),
             targets: Vec::new(),
             resources: program.bindings.iter().map(|(id, g)| (*g, *id)).collect(),
@@ -615,6 +635,7 @@ impl<'a> Walker<'a> {
             nodes: self.nodes,
             outputs,
             discards: self.discards,
+            writes: self.writes,
         })
     }
 
@@ -1259,6 +1280,12 @@ impl<'a> Walker<'a> {
         Ok(out)
     }
 
+    /// A write not followed into a later read: what it is made of, under the conditions it is under.
+    fn write(&mut self, mut made: Vec<NodeId>) {
+        made.extend(&self.control);
+        self.writes.push(made);
+    }
+
     fn store(
         &mut self,
         pointer: Handle<Expression>,
@@ -1277,8 +1304,12 @@ impl<'a> Walker<'a> {
                 Some(lanes) => lanes.clone(),
                 None => self.global_lanes(g)?,
             },
-            // a write to a storage buffer or image: not followed into a later read of it (module documentation)
-            Root::Global(_) => return Ok(()),
+            // a write to a storage buffer or image: not followed into a later read of it (module documentation), what
+            // it is made of kept
+            Root::Global(_) => {
+                self.write(value.iter().chain(&place.index).copied().collect());
+                return Ok(());
+            }
         };
         if place.runtime_sized {
             return Err("a run-time sized array in memory the program writes".into());
@@ -1484,9 +1515,44 @@ impl<'a> Walker<'a> {
                 }
                 Statement::ControlBarrier(_) | Statement::MemoryBarrier(_) => {}
                 Statement::Store { pointer, value } => self.store(*pointer, *value, &mut state)?,
-                // a write to an image: not followed into a later read of it (module documentation)
-                Statement::ImageStore { .. } | Statement::ImageAtomic { .. } => {}
-                Statement::Atomic { pointer, result, .. } => {
+                // a write to an image, an atomic: not followed into a later read (module documentation), what it is
+                // made of kept
+                Statement::ImageStore {
+                    coordinate,
+                    array_index,
+                    value,
+                    ..
+                } => {
+                    let mut made = self.lanes(*coordinate, &state)?;
+                    for operand in array_index.iter().chain([value]) {
+                        made.extend(self.lanes(*operand, &state)?);
+                    }
+                    self.write(made);
+                }
+                Statement::ImageAtomic {
+                    coordinate,
+                    array_index,
+                    fun,
+                    value,
+                    ..
+                } => {
+                    let mut made = self.lanes(*coordinate, &state)?;
+                    for operand in array_index.iter().chain([value]).chain(compared(fun)) {
+                        made.extend(self.lanes(*operand, &state)?);
+                    }
+                    self.write(made);
+                }
+                Statement::Atomic {
+                    pointer,
+                    fun,
+                    value,
+                    result,
+                } => {
+                    let mut made = self.place(*pointer, &state)?.index;
+                    for operand in [value].into_iter().chain(compared(fun)) {
+                        made.extend(self.lanes(*operand, &state)?);
+                    }
+                    self.write(made);
                     if let Some(result) = result {
                         let lanes = self.load(*pointer, &state)?;
                         self.cache[result.index()] = Some(Val::Lanes(lanes));

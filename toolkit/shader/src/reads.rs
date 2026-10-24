@@ -1,5 +1,12 @@
 //! Which constants of its constant buffers a program reads.
 //!
+//! [`WordsRead`] is the answer from the value graph ([`crate::flow::Values`]): the words its outputs, discards and
+//! writes are made of, by buffer. It is word-granular however the program loads (a lifted DXIL program loads a whole
+//! register and takes lanes afterwards, so a load says nothing of which lanes count). [`Program::constant_reads`] is it
+//! for a program.
+//!
+//! [`ConstantReads`] is the older answer from the loads of the compacted module, row and lane, by the bind point the
+//! caller derives from the lifter's binding: still used by the worlds that take it, until each moves to [`WordsRead`].
 //! A program's buffers declare far more than it uses: an engine's per-frame buffers hold some hundred vectors and a
 //! program reads a handful. A lifter writes one load per row it touches and then takes lanes of it, and also takes lanes
 //! the program never uses; naga's compaction drops the expressions no statement uses, so what is left is what the program
@@ -12,6 +19,95 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use naga::Expression;
+
+use crate::flow::{At, Node, NodeId, Values};
+use crate::{Interface, Program, ResourceId, ResourceKind};
+
+/// The words of each constant buffer a program's results are made of: every word some output lane, discard condition
+/// or write ([`Values::writes`]) of the value graph reaches back to, at the word's place in the buffer (row `r`, lane
+/// `l` is word `4r + l`). A buffer read at an index computed at run time may be read at any word. A word a computation
+/// reads and nothing uses is not read. The reads are what the program may use, not what it must: a word multiplied by
+/// zero at run time still counts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WordsRead {
+    /// The words read at places the program states, by buffer.
+    words: BTreeMap<ResourceId, BTreeSet<u32>>,
+    /// The buffers read at an index computed at run time.
+    indexed: BTreeSet<ResourceId>,
+}
+
+impl WordsRead {
+    /// The words `values` reads of the constant buffers of `interface` (the program's).
+    pub fn of_values(values: &Values, interface: &Interface) -> WordsRead {
+        let buffers: BTreeSet<ResourceId> = interface
+            .resources
+            .iter()
+            .filter(|r| matches!(r.kind, ResourceKind::ConstantBuffer { .. }))
+            .map(|r| r.id)
+            .collect();
+        let mut out = WordsRead::default();
+        let mut seen = BTreeSet::new();
+        let mut stack: Vec<NodeId> = values
+            .outputs()
+            .values()
+            .copied()
+            .chain(values.discards().iter().flatten().copied())
+            .chain(values.writes().iter().flatten().copied())
+            .collect();
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Node::Global {
+                resource: Some(r),
+                at,
+            } = values.node(id)
+                && buffers.contains(r)
+            {
+                match at {
+                    At::Component(word) => {
+                        out.words.entry(*r).or_default().insert(*word);
+                    }
+                    At::Indexed { .. } => {
+                        out.indexed.insert(*r);
+                    }
+                }
+            }
+            stack.extend(values.operands(id));
+        }
+        out
+    }
+
+    /// The words of `buffer` read at places the program states, in order (none when it reads none).
+    pub fn words(&self, buffer: ResourceId) -> impl Iterator<Item = u32> + '_ {
+        self.words.get(&buffer).into_iter().flatten().copied()
+    }
+
+    /// Whether `buffer` is read at an index computed at run time: any of its words may be read.
+    pub fn indexed(&self, buffer: ResourceId) -> bool {
+        self.indexed.contains(&buffer)
+    }
+
+    /// Whether the program reads any of the `bytes` bytes at `offset` of `buffer`.
+    pub fn reads(&self, buffer: ResourceId, offset: u32, bytes: u32) -> bool {
+        if self.indexed(buffer) {
+            return true;
+        }
+        let (first, last) = (offset / 4, offset.saturating_add(bytes.max(1) - 1) / 4);
+        self.words
+            .get(&buffer)
+            .is_some_and(|words| words.range(first..=last).next().is_some())
+    }
+}
+
+impl Program {
+    /// The constant-buffer words the program reads ([`WordsRead`]). An error is the value graph's: what it cannot
+    /// follow ([`Values::of_program`]); a caller that must not leave out a word the program reads then takes every
+    /// word as read.
+    pub fn constant_reads(&self) -> Result<WordsRead, String> {
+        Values::of_program(self).map(|values| WordsRead::of_values(&values, &self.interface))
+    }
+}
 
 /// The constant-buffer words a program reads, by the buffer's bind point (space, register).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
