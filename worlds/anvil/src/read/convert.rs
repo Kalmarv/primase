@@ -753,5 +753,18 @@ fn read_notices(
             })
             .collect(),
     );
+    push(
+        NoticeKind::Unsupported,
+        "components whose rule refused their bytes, kept as stored and not read",
+        placed.refused_components.values().sum(),
+        placed
+            .refused_components
+            .iter()
+            .map(|((kind, why), n)| {
+                let name = component_name(*kind).unwrap_or("a type outside the registry's components");
+                format!("{name} ({kind:#010x}): {why} x {n}")
+            })
+            .collect(),
+    );
     out
 }

@@ -320,11 +320,15 @@ pub enum ComponentBody {
     Anim(Box<AnimBinding>),
     /// A type stepped over by its length rule, its bytes kept as stored.
     Raw(Vec<u8>),
-    /// A component whose bytes no rule here reads, kept as stored: its type has no length rule, or a rule of a type
-    /// read here did not end where the headers of the components around it say it does. Where its type has no rule
-    /// its extent is the headers' (an Entity's components are delimited by their tag, id and type headers: see
-    /// [`StoredEntity::parse`]).
+    /// A component whose bytes no rule here reads, kept as stored: its type has no length rule, its extent the
+    /// headers' (an Entity's components are delimited by their tag, id and type headers: see [`StoredEntity::parse`]).
     Unread(Vec<u8>),
+    /// A component of a type read here whose rule refused the bytes within its extent (an error, or an end other than
+    /// the extent's), kept as stored with why.
+    Refused {
+        bytes: Vec<u8>,
+        why: String,
+    },
 }
 
 pub use crate::components::{layer, query};
@@ -1321,7 +1325,8 @@ impl StoredEntity {
             | ComponentBody::Skeleton(_)
             | ComponentBody::Anim(_)
             | ComponentBody::Raw(_)
-            | ComponentBody::Unread(_) => None,
+            | ComponentBody::Unread(_)
+            | ComponentBody::Refused { .. } => None,
         })
     }
 
@@ -1402,24 +1407,29 @@ const ENTITY_DESCRIPTOR: u32 = 0x6012_1A9E;
 impl Cursor<'_> {
     /// A component's body over the extent that ends at `end`, for the types read only so (no length rule); `None`
     /// where the type has none or the body does not read to `end`.
-    fn by_extent(&mut self, kind: u32, end: usize) -> Option<ComponentBody> {
-        match kind {
-            GRASS_COMPONENT => self
-                .grass_setup(end)
-                .ok()
-                .filter(|_| self.position() == end)
-                .map(|g| ComponentBody::GrassSetup(Box::new(g))),
-            SKELETON_COMPONENT => self
-                .skeleton_binding()
-                .ok()
-                .filter(|_| self.position() == end)
-                .map(|b| ComponentBody::Skeleton(Box::new(b))),
+    fn by_extent(&mut self, kind: u32, end: usize) -> Option<Result<ComponentBody, String>> {
+        let ends = |at: usize| {
+            if at == end {
+                Ok(())
+            } else {
+                Err(format!("its rule ends at {at}, not at the extent's end {end}"))
+            }
+        };
+        Some(match kind {
+            GRASS_COMPONENT => self.grass_setup(end).map_err(|e| e.to_string()).and_then(|g| {
+                ends(self.position())?;
+                Ok(ComponentBody::GrassSetup(Box::new(g)))
+            }),
+            SKELETON_COMPONENT => self.skeleton_binding().map_err(|e| e.to_string()).and_then(|b| {
+                ends(self.position())?;
+                Ok(ComponentBody::Skeleton(Box::new(b)))
+            }),
             ANIM_COMPONENT => self
                 .anim_binding(end)
-                .ok()
-                .map(|b| ComponentBody::Anim(Box::new(b))),
-            _ => None,
-        }
+                .map(|b| ComponentBody::Anim(Box::new(b)))
+                .map_err(|e| e.to_string()),
+            _ => return None,
+        })
     }
 
     /// A link's tag byte, `00` or `01`.
@@ -1686,9 +1696,14 @@ impl Cursor<'_> {
             let mut part = Cursor::at(within, body_start, "component")?;
             let body = match part.component_body(kind, body_start) {
                 Ok(Some(body)) if part.position() == body_end => body,
-                _ => Cursor::at(within, body_start, "component")?
-                    .by_extent(kind, body_end)
-                    .unwrap_or_else(|| ComponentBody::Unread(bytes.to_vec())),
+                _ => match Cursor::at(within, body_start, "component")?.by_extent(kind, body_end) {
+                    Some(Ok(body)) => body,
+                    Some(Err(why)) => ComponentBody::Refused {
+                        bytes: bytes.to_vec(),
+                        why,
+                    },
+                    None => ComponentBody::Unread(bytes.to_vec()),
+                },
             };
             out.push(Component { tag, id, kind, body });
             if let Some(h) = next {

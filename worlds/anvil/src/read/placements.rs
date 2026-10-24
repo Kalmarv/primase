@@ -275,6 +275,9 @@ pub struct Placed {
     /// The components kept as stored bytes ([`ComponentBody::Unread`]), by type, once per owner placed: gameplay, UI,
     /// sound and trigger components nothing here reads. A Visual or RigidBodyComponent among them is not placed.
     pub unread_components: BTreeMap<u32, u64>,
+    /// The components of types read here whose rule refused their bytes ([`ComponentBody::Refused`]), kept as stored,
+    /// by type and why, once per owner placed.
+    pub refused_components: BTreeMap<(u32, String), u64>,
 }
 
 /// The column-major 4x4 `m` as a transform, its linear part times `s`.
@@ -1834,8 +1837,15 @@ impl<'a> Placer<'a> {
             placed.hidden_or_phantom = placed.hidden_or_phantom.saturating_add(1);
         }
         for c in &e.components {
-            if matches!(c.body, ComponentBody::Unread(_)) {
-                *placed.unread_components.entry(c.kind).or_default() += 1;
+            match &c.body {
+                ComponentBody::Unread(_) => *placed.unread_components.entry(c.kind).or_default() += 1,
+                ComponentBody::Refused { why, .. } => {
+                    *placed
+                        .refused_components
+                        .entry((c.kind, why.clone()))
+                        .or_default() += 1;
+                }
+                _ => {}
             }
         }
         let name = self.name(at).unwrap_or_default();
@@ -2176,9 +2186,13 @@ impl<'a> Placer<'a> {
         // collision: each RigidBodyComponent's shape at its owner's T R (an EntityGroup's merged shape spans its
         // instances: the notes, docs/skate-plan.md), where the owner's scale is 1; an instanced Entity's at each of its
         // instances, where the caller states so
-        let mut instance_sets = e
-            .visuals()
-            .filter_map(|v| shows(v, at).ok().and_then(|s| s.instances).map(|(_, i)| i));
+        let mut sets = Vec::new();
+        for v in e.visuals() {
+            if let Some((_, i)) = shows(v, at)?.instances {
+                sets.push(i);
+            }
+        }
+        let mut instance_sets = sets.into_iter();
         let instances = match (instance_sets.next(), group) {
             (Some(first), false) => {
                 if instance_sets.any(|other| other != first) {

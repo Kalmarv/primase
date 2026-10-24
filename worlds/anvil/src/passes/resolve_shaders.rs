@@ -745,7 +745,15 @@ impl Pass for ResolveAnvilShaders {
                 let key = if has(key) {
                     key
                 } else {
-                    gbuffer_vertex_key(pixel_key & !DISCARD_VARIANT, u32::from(kind))
+                    let plain = gbuffer_vertex_key(pixel_key & !DISCARD_VARIANT, u32::from(kind));
+                    if plain != key {
+                        bump(
+                            "vertex layouts of discard-variant materials drawn by the plain variant's vertex program (the template stores no vertex permutation for the discard variant: inferred, not read)",
+                            1,
+                            &mut counts,
+                        );
+                    }
+                    plain
                 };
                 match program(world, &mut programs, &template, tables, true, key) {
                     Ok(e) => stages.push((

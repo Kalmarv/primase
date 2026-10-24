@@ -105,12 +105,14 @@ fn a_skeleton_component_reads_its_main_addons_tracks_and_wind_force() {
 }
 
 #[test]
-fn a_skeleton_component_that_does_not_end_where_its_headers_say_stays_unread() {
+fn a_skeleton_component_that_does_not_end_where_its_headers_say_is_refused_with_why() {
     let mut body = skeleton_component(0x0177_B6B7_756A, &[], &[]);
     body.push(0xAA);
     let entity = entity_body(1, &component(4, 0x2_0000_0001, SKELETON_COMPONENT, &body));
     let e = StoredEntity::parse(&entity).expect("entity");
-    assert_eq!(e.components[0].body, ComponentBody::Unread(body));
+    assert!(
+        matches!(&e.components[0].body, ComponentBody::Refused { bytes, why } if *bytes == body && why.contains("not at the extent"))
+    );
 }
 
 fn open() -> Option<Archive> {
