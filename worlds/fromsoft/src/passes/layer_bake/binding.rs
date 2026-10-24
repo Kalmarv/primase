@@ -225,9 +225,10 @@ pub(super) fn frozen_words(
             policies.insert(INSTANCE_DATA_POLICY.into(), 1);
             bits(&frame.clip_plane)
         }
-        ConstantRole::Object(ObjectParameter::BonePalette) => {
+        // the joints' palette, and the cloth-cancel matrices a skinned program applies before it: at the bind pose every
+        // matrix is the identity, the palette's words as many as any buffer holds
+        ConstantRole::Object(ObjectParameter::BonePalette | ObjectParameter::ClothCancelPalette) => {
             policies.insert(BIND_POSE_POLICY.into(), 1);
-            // every joint's matrix the identity: the palette's words, as many as any buffer holds
             (0..64).flat_map(|_| bits(&frame.world)).collect()
         }
         ConstantRole::Object(ObjectParameter::InstanceColour) => bits(&frame.instance_colour),
