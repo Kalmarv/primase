@@ -175,15 +175,18 @@ impl VertexStage {
                 InputRole::Unknown { why }
                     if matches!((label.0.as_str(), label.1), ("BINORMAL", 0) | ("TANGENT", 2)) =>
                 {
-                    // These are the first missing inputs of the observed cloth vertex sets. Keep the
-                    // refusal: this diagnosis supplies neither a role nor a duplicate rest-pose stream.
+                    // BINORMAL0 supplies the tangent-sign byte separately in the inspected programs.
+                    // TANGENT2 is also read by non-cloth permutations. Neither has a source role yet;
+                    // do not diagnose missing simulation data from an unsupported vertex input.
+                    let missing = if label.0 == "BINORMAL" {
+                        "separate tangent-sign byte has no source role"
+                    } else {
+                        "additional tangent input has no source role"
+                    };
                     return Err(invalid(
                         "vertex binding",
                         0,
-                        format!(
-                            "input {}{}: no producer: cloth vertex set not read ({why})",
-                            label.0, label.1
-                        ),
+                        format!("input {}{}: {missing} ({why})", label.0, label.1),
                     ));
                 }
                 other => {
