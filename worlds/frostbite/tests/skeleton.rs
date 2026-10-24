@@ -71,15 +71,15 @@ fn the_hat_buckets_meshes_are_linked_to_the_character_skeleton_by_their_bone_lis
     let scope = Scope::new(&scope_bundles);
     let materials = src.materials(&scope).unwrap();
     let mut w = World::new();
-    // every skeleton asset of the configuration
-    let mut skeletons = 0;
-    for entry in config.entries().filter(|e| {
-        e.kind == Kind::Ebx && e.name.starts_with("animation/dingo/") && e.name.ends_with("_skeleton")
-    }) {
-        src.read_entry(config, &entry, &mut w).unwrap();
-        skeletons += 1;
-    }
-    assert_eq!(w.iter::<FrostbiteSkeleton>().count(), skeletons);
+    // every skeleton asset of the scope: nine of the configuration bundle and the level's skateboard
+    let skeletons = src.read_skeletons(&scope, &mut w).unwrap();
+    assert_eq!(skeletons.len(), 10);
+    assert_eq!(w.iter::<FrostbiteSkeleton>().count(), 10);
+    let in_config = config
+        .entries()
+        .filter(|e| e.kind == Kind::Ebx && e.name.ends_with("_skeleton"))
+        .count();
+    assert_eq!(in_config, 9);
     let counts: std::collections::BTreeMap<String, usize> = w
         .iter::<FrostbiteSkeleton>()
         .map(|(_, s)| (s.name.clone(), s.joints.len()))

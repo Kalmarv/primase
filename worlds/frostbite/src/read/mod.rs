@@ -7,4 +7,5 @@ pub mod folder;
 mod geometry;
 pub mod listing;
 pub mod program;
+mod skeleton;
 pub mod textures;
