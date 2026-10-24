@@ -10,7 +10,12 @@
 //!   number as the candela or lux of a renderer that reads `KHR_lights_punctual` at face value). A light whose intensity
 //!   is negative (URP has no light that darkens a surface in `core.light`'s terms) or not finite, or that is not finite
 //!   at the calibration, has no punctual form: it is left out and counted, each by which;
-//! - range: URP's range, where its attenuation reaches zero; a directional light has none;
+//! - range: where URP's attenuation reaches zero. URP squares the stored range and floors the square at 0.0001
+//!   (`1 / max(0.0001, range^2)`: Unity-Technologies/Graphics, `Packages/com.unity.render-pipelines.universal/Runtime/
+//!   UniversalRenderPipelineCore.cs`, `GetPunctualLightDistanceAttenuation`, line 1745 on master), so a negative range
+//!   reaches as far as its magnitude and one below 0.01 reaches 0.01, each counted; an infinite one has no falloff to
+//!   zero, so no range (counted); a range that isn't a number makes URP's attenuation not a number, so the light is
+//!   left out (counted). A directional light has none;
 //! - a spot's cone: URP's spot angles are full cone angles in degrees, so `outer = spot_angle / 2` and
 //!   `inner = inner_spot_angle / 2`, in radians (outer clamped to pi / 2, inner to outer);
 //! - shadows: `m_Shadows.m_Type` none (0) does not cast, hard (1) and soft (2) do; softness is a renderer setting;
@@ -104,7 +109,36 @@ pub fn lower_unity_lights(w: &mut World, candela_per_unit: f32) -> Result<PassLo
         if l.color_temperature.is_some() {
             log.approximate("light colour temperature not applied", 1);
         }
-        let range = (kind != LightKind::Directional && l.range > 0.0).then_some(l.range);
+        let range = match kind {
+            LightKind::Directional => None,
+            _ if l.range.is_nan() => {
+                log.count(
+                    "point and spot lights whose range is not a number (URP's attenuation is not), left out",
+                    1,
+                );
+                continue;
+            }
+            _ if l.range.is_infinite() => {
+                log.count("point and spot lights of infinite range: no range", 1);
+                None
+            }
+            _ => {
+                // URP's `max(0.0001, range^2)`: the range it squares, or the 0.01 that floor is
+                let reach = if l.range * l.range > 0.0001 {
+                    l.range.abs()
+                } else {
+                    0.0001f32.sqrt()
+                };
+                if reach != l.range {
+                    log.count(
+                        "point and spot lights whose stored range is negative or below 0.01, at the range URP's \
+                         attenuation reaches",
+                        1,
+                    );
+                }
+                Some(reach)
+            }
+        };
         w.insert(
             e,
             Light {
@@ -310,6 +344,42 @@ mod tests {
         let mut l = w.get::<UnityLight>(e).unwrap().clone();
         l.intensity = intensity;
         w.insert(e, l);
+    }
+
+    /// A point light's range is where URP's attenuation reaches zero, `1 / max(0.0001, range^2)`: its magnitude, at
+    /// least 0.01; infinite has no range; one that isn't a number is left out; each other than the stored one counted.
+    #[test]
+    fn a_range_is_the_one_urps_attenuation_reaches() {
+        let mut w = World::new();
+        let ranges = [10.0, -5.0, 0.0, 0.005, f32::INFINITY, f32::NAN];
+        let lights: Vec<Entity> = ranges
+            .iter()
+            .map(|&range| {
+                let e = light(&mut w, 2);
+                let mut l = w.get::<UnityLight>(e).unwrap().clone();
+                l.range = range;
+                w.insert(e, l);
+                e
+            })
+            .collect();
+        let log = lower_unity_lights(&mut w, 1.0).unwrap();
+        let range = |e: Entity| w.get::<Light>(e).map(|l| l.range);
+        assert_eq!(range(lights[0]), Some(Some(10.0)));
+        assert_eq!(range(lights[1]), Some(Some(5.0)));
+        assert_eq!(range(lights[2]), Some(Some(0.0001f32.sqrt())));
+        assert_eq!(range(lights[3]), Some(Some(0.0001f32.sqrt())));
+        assert_eq!(range(lights[4]), Some(None));
+        assert_eq!(range(lights[5]), None);
+        assert_eq!(
+            log.counts["point and spot lights whose stored range is negative or below 0.01, at the range URP's \
+                        attenuation reaches"],
+            3
+        );
+        assert_eq!(log.counts["point and spot lights of infinite range: no range"], 1);
+        assert_eq!(
+            log.counts["point and spot lights whose range is not a number (URP's attenuation is not), left out"],
+            1
+        );
     }
 
     #[test]
